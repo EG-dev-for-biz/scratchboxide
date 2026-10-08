@@ -341,30 +341,32 @@ inline PbrTextureSet synthesizeManifoldPbrParallel(
                     float uRot = u * cosAngle - v * sinAngle;
                     float vRot = (u * sinAngle + v * cosAngle) * anisoStretch;
 
-                    // Multi-scale procedural fields
-                    float fbm = FastNoise3D::fbm(
+                    // Multi-scale procedural fields using high-performance 2D noise kernels
+                    float fbm = FastNoise3D::fbm2D(
                         uRot * desc.fissureScale,
                         vRot * desc.fissureScale,
-                        static_cast<float>(seed),
-                        static_cast<int>(std::clamp(desc.fbmOctaves, 1.0f, 8.0f)),
+                        seed,
+                        static_cast<int>(std::clamp(desc.fbmOctaves, 1.0f, 6.0f)),
+                        2.0f,
                         desc.fbmGain
                     );
 
-                    float worley = FastNoise3D::worley(
+                    float worley = FastNoise3D::worley2D(
                         u * desc.fissureScale * 1.5f,
                         v * desc.fissureScale * 1.5f,
-                        static_cast<float>(seed + 101)
+                        seed + 101
                     );
 
-                    float grain = FastNoise3D::perlin(
+                    float grain = FastNoise3D::perlin2D(
                         u * 64.0f,
                         v * 64.0f,
-                        static_cast<float>(seed + 202)
+                        seed + 202
                     );
 
                     // Continuous heightfield synthesis
                     float baseH = (1.0f - desc.cellularWeight) * fbm + desc.cellularWeight * (1.0f - worley);
-                    float fissureCrevice = std::pow(std::abs(fbm - 0.5f) * 2.0f, 1.8f);
+                    float creviceRaw = std::clamp(std::abs(fbm - 0.5f) * 2.0f, 0.0f, 1.0f);
+                    float fissureCrevice = (creviceRaw * creviceRaw) * (1.0f + 0.2f * (1.0f - creviceRaw));
                     float hVal = baseH - desc.fissureDepth * (1.0f - fissureCrevice) + desc.microPorosity * 0.12f * (grain - 0.5f);
                     hVal = std::clamp(hVal, 0.0f, 1.0f);
 

@@ -2636,8 +2636,15 @@ int main(int argc, char** argv) {
         const loader = new GLTFLoader();
 
         objects.forEach(obj => {
-            const uri = obj.content?.durableUri;
-            if (!uri) return;
+            const rawUri = obj.content?.durableUri;
+            if (!rawUri) return;
+            let uri = rawUri;
+            if (uri.startsWith('/') && !uri.startsWith('/models/') && !uri.startsWith('/tiles/') && !uri.startsWith('/api/') && !uri.startsWith('/panoramas/')) {
+                const fileName = uri.split('/').pop();
+                if (fileName && (fileName.endsWith('.glb') || fileName.endsWith('.gltf'))) {
+                    uri = `/models/${fileName}`;
+                }
+            }
             const isSplat = obj.content?.type === 'gaussian-splat' || !!uri.match(/\.(splat|spz)($|\?)/i);
             const isGltf = !!uri.match(/\.(glb|gltf)($|\?)/i);
             if (!isSplat && !isGltf) return;

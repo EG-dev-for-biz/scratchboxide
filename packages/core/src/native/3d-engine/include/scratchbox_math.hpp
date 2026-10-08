@@ -578,6 +578,78 @@ public:
 
         return std::sqrt(minDist);
     }
+
+    static inline float grad2D(int hashVal, float x, float y) {
+        int h = hashVal & 7;
+        float u = h < 4 ? x : y;
+        float v = h < 4 ? y : x;
+        return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
+    }
+
+    static float perlin2D(float x, float y, uint32_t seed = 1337) {
+        int X = static_cast<int>(std::floor(x));
+        int Y = static_cast<int>(std::floor(y));
+
+        x -= std::floor(x);
+        y -= std::floor(y);
+
+        float u = fade(x);
+        float v = fade(y);
+
+        auto h2 = [&](int ix, int iy) {
+            uint32_t ux = static_cast<uint32_t>(ix);
+            uint32_t uy = static_cast<uint32_t>(iy);
+            return static_cast<int>(hash(seed ^ (ux + (uy * 57u))));
+        };
+
+        int aa = h2(X, Y);
+        int ab = h2(X, Y + 1);
+        int ba = h2(X + 1, Y);
+        int bb = h2(X + 1, Y + 1);
+
+        float x1 = std::lerp(grad2D(aa, x, y), grad2D(ba, x - 1, y), u);
+        float x2 = std::lerp(grad2D(ab, x, y - 1), grad2D(bb, x - 1, y - 1), u);
+        return std::lerp(x1, x2, v);
+    }
+
+    static float fbm2D(float x, float y, uint32_t seed = 1337, int octaves = 4, float lacunarity = 2.0f, float gain = 0.5f) {
+        float sum = 0.0f;
+        float amp = 1.0f;
+        float freq = 1.0f;
+        float maxAmp = 0.0f;
+
+        for (int i = 0; i < octaves; ++i) {
+            sum += perlin2D(x * freq, y * freq, seed + i * 31) * amp;
+            maxAmp += amp;
+            amp *= gain;
+            freq *= lacunarity;
+        }
+
+        return maxAmp > 0.0f ? (sum / maxAmp) : 0.0f;
+    }
+
+    static float worley2D(float x, float y, uint32_t seed = 42) {
+        int xi = static_cast<int>(std::floor(x));
+        int yi = static_cast<int>(std::floor(y));
+
+        float minDist = 1e9f;
+
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                int cx = xi + dx;
+                int cy = yi + dy;
+
+                uint32_t h = hash(seed ^ (cx * 73856093 ^ cy * 19349663));
+                float fx = cx + static_cast<float>(h & 1023) / 1024.0f;
+                float fy = cy + static_cast<float>((h >> 10) & 1023) / 1024.0f;
+
+                float distSq = (x - fx) * (x - fx) + (y - fy) * (y - fy);
+                minDist = std::min(minDist, distSq);
+            }
+        }
+
+        return std::sqrt(minDist);
+    }
 };
 
 } // namespace math

@@ -1333,23 +1333,49 @@ def validate_scene(scene_or_mesh: Any, auto_heal: bool = True) -> Dict[str, Any]
 
         min_y = min(v.position.y for v in verts)
 
-        # Check if submesh is a wheel or cylindrical disc
-        is_wheel_tag = any(k in tag for k in ("wheel", "tire", "roller", "rim"))
-        is_disc_geom = (vy < 0.60 * min(vx, vz)) and (max(vx, vz) > 0.005)
+        # Only audit submeshes that are explicitly designated as wheels or rollers
+        excluded_non_wheel = (
+            "hull", "wing", "foil", "box", "chassis", "floor", "diffuser",
+            "splitter", "canard", "cockpit", "monocoque", "strut", "stanchion",
+            "intake", "endplate", "flap", "plank", "assembly", "mirror",
+            "light", "exhaust", "body", "cowl", "panel", "hood", "spoiler"
+        )
+        if any(ex in tag for ex in excluded_non_wheel):
+            continue
+
+        is_explicit_wheel = any(k in tag for k in ("wheel", "tire", "roller", "rim"))
+        if not is_explicit_wheel:
+            continue
+
+        # Check if already in an upright lateral or longitudinal rolling stance:
+        # Lateral rolling wheel (axis X): vx is axial thickness, vy and vz form the circular profile.
+        is_already_lateral = (vx < 0.70 * min(vy, vz)) and (abs(vy - vz) / max(1e-6, max(vy, vz)) < 0.35)
+        # Longitudinal rolling wheel (axis Z): vz is axial thickness, vx and vy form the circular profile.
+        is_already_longitudinal = (vz < 0.70 * min(vx, vy)) and (abs(vx - vy) / max(1e-6, max(vx, vy)) < 0.35)
+
+        if is_already_lateral or is_already_longitudinal:
+            continue
+
+        # Detect if wheel is lying flat horizontally like a pancake (axial thickness along Y, radial in X-Z)
+        is_circular_in_xz = (abs(vx - vz) / max(1e-6, max(vx, vz)) < 0.25) and (max(vx, vz) > 0.005)
+        is_flat_pancake_wheel = (vy < 0.50 * min(vx, vz)) and is_circular_in_xz
 
         # Near ground level?
-        is_ground_adjacent = min_y < (total_scene_height * 0.35)
+        is_ground_adjacent = min_y < (total_scene_height * 0.45)
 
-        if (is_wheel_tag or is_disc_geom) and (vy < 0.60 * min(vx, vz)) and is_ground_adjacent:
+        if is_flat_pancake_wheel and is_ground_adjacent:
             msg = f"Wheel/roller '{tag}' has vertical symmetry axis (lying flat horizontally on ground)."
             violations.append(msg)
-            if auto_heal and hasattr(sub, "rotate_z"):
+            if auto_heal and hasattr(sub, "rotate_z") and hasattr(sub, "translate"):
+                # Rotate strictly around the wheel's local centroid, NEVER world origin (0, 0, 0)
+                sub.translate(-cx, -cy, -cz)
                 sub.rotate_z(90.0)
-                # Re-compute min Y and seat bottom on ground
+                sub.translate(cx, cy, cz)
+                # Re-compute min Y and seat bottom on ground if sunken
                 new_min_y = min(v.position.y for v in sub.vertices)
                 if new_min_y < 0.0:
                     sub.translate(0.0, -new_min_y, 0.0)
-                auto_healed.append(f"Auto-rotated '{tag}' 90 degrees around Z to upright lateral rolling stance.")
+                auto_healed.append(f"Auto-rotated '{tag}' 90 degrees around local centroid to upright rolling stance.")
 
     # 2. Audit Primary Hull for Planar Box-Stacking Anti-Pattern
     largest_sub = None

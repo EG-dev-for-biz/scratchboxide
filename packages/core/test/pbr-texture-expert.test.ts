@@ -196,62 +196,86 @@ describe('PBR Texture Expert - Procedural Realism & glTF ORM Architecture', () =
         });
     });
 
-    describe('Browser PBR Texture Expert Service & Three.js Binding', () => {
-        it('synthesizes DataTextures for Three.js viewport rendering', () => {
-            const pack = PbrTextureExpertService.synthesizeTextures('weathered_concrete', {
-                width: 32,
-                height: 32
-            });
-
-            expect(pack.albedoTexture).toBeInstanceOf(THREE.DataTexture);
-            expect(pack.normalTexture).toBeInstanceOf(THREE.DataTexture);
-            expect(pack.ormTexture).toBeInstanceOf(THREE.DataTexture);
-            expect(pack.albedoTexture.colorSpace).toBe(THREE.SRGBColorSpace);
-            expect(pack.normalTexture.colorSpace).toBe(THREE.NoColorSpace);
-            expect(pack.ormTexture.colorSpace).toBe(THREE.NoColorSpace);
+    describe('Browser PBR Texture Expert Service (Pure Viewport Enhancer)', () => {
+        it('has eliminated all Three.js procedural texture methods (zero DataTexture generation)', () => {
+            expect((PbrTextureExpertService as any).synthesizeTextures).toBeUndefined();
+            expect((PbrTextureExpertService as any).synthesizeRaw).toBeUndefined();
+            expect((PbrTextureExpertService as any).createDataTexture).toBeUndefined();
+            expect((PbrTextureExpertService as any).layerPbrSets).toBeUndefined();
         });
 
-        it('height-blends and reorients normals for layered materials', () => {
-            const substrate = PbrTextureExpertService.synthesizeRaw('hammered_copper', { width: 16, height: 16 });
-            const topcoat = PbrTextureExpertService.synthesizeRaw('chipped_paint_rust', { width: 16, height: 16 });
+        it('computes metric texel density UV repeats from mesh bounding box', () => {
+            const geom = new THREE.BoxGeometry(4, 2, 4);
+            const mesh = new THREE.Mesh(geom);
 
-            const mask = new Float32Array(16 * 16);
-            for (let i = 0; i < mask.length; i++) {
-                mask[i] = i % 2 === 0 ? 1.0 : 0.0;
-            }
-
-            const layered = PbrTextureExpertService.layerPbrSets(substrate, topcoat, mask, {
-                transitionSharpness: 10.0
-            });
-
-            expect(layered.width).toBe(16);
-            expect(layered.height).toBe(16);
-            expect(layered.ormRgba.length).toBe(16 * 16 * 4);
-            expect(layered.albedoRgba.length).toBe(16 * 16 * 4);
+            const [repU, repV] = PbrTextureExpertService.computeMeshTexelRepeats(mesh, 1024, 1024, 512);
+            // spanH = max(4, 4) = 4; spanV = 2
+            // repU = (4 * 512) / 1024 = 2.0
+            // repV = (2 * 512) / 1024 = 1.0
+            expect(repU).toBeCloseTo(2.0, 2);
+            expect(repV).toBeCloseTo(1.0, 2);
         });
 
-        it('applies PBR texture pack directly to a Three.js MeshPhysicalMaterial with ORM', () => {
+        it('applies loaded PBR textures directly to a Three.js MeshPhysicalMaterial with ORM routing', () => {
             const geom = new THREE.BoxGeometry(1, 1, 1);
             const initialMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
             const mesh = new THREE.Mesh(geom, initialMat);
 
-            const pack = PbrTextureExpertService.synthesizeTextures('brushed_titanium', {
-                width: 16,
-                height: 16
-            });
+            const mockAlbedo = new THREE.Texture();
+            const mockNormal = new THREE.Texture();
+            const mockOrm = new THREE.Texture();
 
-            PbrTextureExpertService.applyToMesh(mesh, pack, [3, 3]);
+            PbrTextureExpertService.applyToMesh(mesh, {
+                albedoTexture: mockAlbedo,
+                normalTexture: mockNormal,
+                ormTexture: mockOrm
+            }, [3, 3]);
 
             expect(mesh.material).toBeInstanceOf(THREE.MeshPhysicalMaterial);
             const pbrMat = mesh.material as THREE.MeshPhysicalMaterial;
 
-            expect(pbrMat.map).toBe(pack.albedoTexture);
-            expect(pbrMat.normalMap).toBe(pack.normalTexture);
+            expect(pbrMat.map).toBe(mockAlbedo);
+            expect(pbrMat.normalMap).toBe(mockNormal);
             // Verify single ORM texture is assigned to roughnessMap, metalnessMap, and aoMap
-            expect(pbrMat.roughnessMap).toBe(pack.ormTexture);
-            expect(pbrMat.metalnessMap).toBe(pack.ormTexture);
-            expect(pbrMat.aoMap).toBe(pack.ormTexture);
+            expect(pbrMat.roughnessMap).toBe(mockOrm);
+            expect(pbrMat.metalnessMap).toBe(mockOrm);
+            expect(pbrMat.aoMap).toBe(mockOrm);
             expect(pbrMat.aoMapIntensity).toBe(1.0);
+        });
+
+        it('configures master-class physical dielectric IOR and GLSL shader hooks via applyExpertPbrToMesh', () => {
+            const geom = new THREE.BoxGeometry(2, 2, 2);
+            const mesh = new THREE.Mesh(geom);
+
+            PbrTextureExpertService.applyExpertPbrToMesh(mesh, {}, {
+                enableToksvig: true,
+                enableAntiTiling: true,
+                enableWeathering: true,
+                weathering: {
+                    dirtIntensity: 0.4
+                },
+                normalScale: 1.8,
+                clearcoat: 0.6
+            });
+
+            const pbrMat = mesh.material as THREE.MeshPhysicalMaterial;
+            expect(pbrMat.ior).toBeCloseTo(1.5, 4);
+            expect(pbrMat.reflectivity).toBeCloseTo(0.5, 4);
+            expect(pbrMat.normalScale.x).toBe(1.8);
+            expect(pbrMat.clearcoat).toBe(0.6);
+            expect(pbrMat.onBeforeCompile).toBeDefined();
+
+            // Simulate Three.js shader compilation hook
+            const mockShader: any = {
+                uniforms: {},
+                fragmentShader: '#include <roughnessmap_fragment>\n#include <aomap_fragment>'
+            };
+            pbrMat.onBeforeCompile!(mockShader, {} as any);
+
+            expect(mockShader.uniforms.uTexelDensity).toBeDefined();
+            expect(mockShader.fragmentShader).toContain('Toksvig Specular Filtering');
+            expect(mockShader.fragmentShader).toContain('hash22_expert');
+            expect(mockShader.fragmentShader).toContain('Cavity Grime');
         });
     });
 });

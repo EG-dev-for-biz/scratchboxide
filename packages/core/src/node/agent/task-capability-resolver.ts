@@ -186,7 +186,9 @@ export class TaskCapabilityResolver {
 
         const isAnalyticalGroomSplat = /groom|hair\s*strand|fur(?:ry)?(?:\s+(?:creature|star|sphere|monster|animal|surface))?|biophysical\s*(?:hair|groom)|volumetric\s*fur|analytical\s*splat|splat[\s\w-]{0,30}groom|harmonic\s*(?:star|creature)|marschner/i.test(lower);
 
-        const isNeuralImageTo3D = !isAnalyticalGroomSplat && !isSceneOrEnvironment && ((/image-to-3d|photo\s+to\s+3d|picture\s+to\s+mesh|2d\s+to\s+3d|trellis|triposr|sv3d|crm|hunyuan3d/i.test(lower) &&
+        const isLocalSf3DOrganicProp = /(?:local\s*)?(?:sf3d|stable[\s-]fast[\s-]3d)|(?:small\s*)?organic\s*(?:prop|object|asset|geometry|mesh)|(?:no[_-]?pbr|clay[\s-]mode)[\s\w-]{0,30}(?:prop|object|organic|sf3d)|(?:mushroom|coral|shell|seashell|fruit|rock|stone\s*pebble|statuette|ornament|biomorphic)[\s\w-]{0,30}(?:from\s+(?:image|photo)|to\s+3d|mesh|local)/i.test(lower);
+
+        const isNeuralImageTo3D = !isAnalyticalGroomSplat && !isLocalSf3DOrganicProp && !isSceneOrEnvironment && ((/image-to-3d|photo\s+to\s+3d|picture\s+to\s+mesh|2d\s+to\s+3d|trellis|triposr|sv3d|crm|hunyuan3d/i.test(lower) &&
             !/point\s*correspondence|keypoint|pnp|solvepnp|feature\s*match|optical\s*center|resect/i.test(lower)) ||
             ((lower.includes('image') || lower.includes('photo') || options.hasInputImage) && (lower.includes('reconstruct 3d') || lower.includes('generate 3d mesh') || lower.includes('convert to 3d mesh'))));
 
@@ -369,6 +371,21 @@ export class TaskCapabilityResolver {
                     targetTool: 'splat_synthesize_analytical_groom',
                     targetService: 'AnalyticalGroomSplatService',
                     details: 'Invoke splat_synthesize_analytical_groom with continuous dimensional parameters (harmonic frequencies, amplitudes, grooming dimensions) to stream binary SPZ directly into 3d-scene.'
+                };
+            } else if (isLocalSf3DOrganicProp) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'python-3d-engine';
+                nativeCapabilities.push('Local Stable Fast 3D Organic Prop Engine (LocalSf3DService)');
+                nativeCapabilities.push('Fast no_pbr 18% Studio Grey Clay Geometry Extraction (< 500ms)');
+                nativeCapabilities.push('Metric Physical Grounding & Contact Plane Snapping (targetScaleMeters, groundCut)');
+                nativeCapabilities.push('In-App Agent Tool: generate_local_sf3d_organic_prop');
+                rationale = 'Native Local SF3D Service executes local Stable Fast 3D inference directly on desktop (Apple Silicon Metal/MPS, CUDA, or CPU) in < 500ms with dedicated no_pbr mode, bypassing UV unwrapping and neural texture baking to produce 18% Studio Grey Clay geometry with metric scale grounding and flat contact planes.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'generate_local_sf3d_organic_prop or LocalSf3DService',
+                    targetTool: 'generate_local_sf3d_organic_prop',
+                    targetService: 'LocalSf3DService',
+                    details: 'Invoke generate_local_sf3d_organic_prop with imagePath, noPbr=true, and targetScaleMeters to synthesize a local organic 3D prop and mount it into the 3d-scene stage.'
                 };
             } else if (isNeuralImageTo3D) {
                 canSolveNatively = false;

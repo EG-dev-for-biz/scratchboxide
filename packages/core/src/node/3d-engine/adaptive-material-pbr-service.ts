@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as zlib from 'zlib';
 import { spawn } from 'child_process';
 import {
     AdaptiveMaterialSchema,
@@ -709,7 +710,68 @@ export class AdaptiveMaterialPbrService {
     }
 
     /**
-     * Encodes raw RGBA buffer into JPEG or PNG via ffmpeg.
+     * Fast in-process PNG encoding for raw RGBA buffers using zlib Deflate.
+     */
+    public static encodePngSync(rgbaBuf: Buffer, width: number, height: number): Buffer {
+        const rowLen = width * 4;
+        const filtered = Buffer.alloc(height * (rowLen + 1));
+        for (let y = 0; y < height; y++) {
+            const srcOffset = y * rowLen;
+            const dstOffset = y * (rowLen + 1);
+            filtered[dstOffset] = 0; // Filter 0: None
+            rgbaBuf.copy(filtered, dstOffset + 1, srcOffset, srcOffset + rowLen);
+        }
+
+        const compressed = zlib.deflateSync(filtered, { level: 1 });
+
+        const crcTable = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) {
+            let c = n;
+            for (let k = 0; k < 8; k++) {
+                c = ((c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1));
+            }
+            crcTable[n] = c;
+        }
+
+        const calcCrc = (buf: Buffer): number => {
+            let c = 0xffffffff;
+            for (let i = 0; i < buf.length; i++) {
+                c = (c >>> 8) ^ crcTable[(c ^ buf[i]) & 0xff];
+            }
+            return (c ^ 0xffffffff) >>> 0;
+        };
+
+        const makeChunk = (type: string, data: Buffer): Buffer => {
+            const typeBuf = Buffer.from(type, 'ascii');
+            const lenBuf = Buffer.alloc(4);
+            lenBuf.writeUInt32BE(data.length, 0);
+            const toCrc = Buffer.concat([typeBuf, data]);
+            const crcBuf = Buffer.alloc(4);
+            crcBuf.writeUInt32BE(calcCrc(toCrc), 0);
+            return Buffer.concat([lenBuf, toCrc, crcBuf]);
+        };
+
+        const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const ihdr = Buffer.alloc(13);
+        ihdr.writeUInt32BE(width, 0);
+        ihdr.writeUInt32BE(height, 4);
+        ihdr[8] = 8; // 8-bit depth
+        ihdr[9] = 6; // RGBA color type
+        ihdr[10] = 0; // compression
+        ihdr[11] = 0; // filter
+        ihdr[12] = 0; // interlace
+
+        return Buffer.concat([
+            sig,
+            makeChunk('IHDR', ihdr),
+            makeChunk('IDAT', compressed),
+            makeChunk('IEND', Buffer.alloc(0))
+        ]);
+    }
+
+    /**
+     * Encodes raw RGBA buffer into JPEG or PNG.
+     * Uses fast in-process zlib for PNG, ffmpeg for JPEG.
      */
     public static encodeFromRgba(
         rgbaBuf: Buffer,
@@ -718,20 +780,26 @@ export class AdaptiveMaterialPbrService {
         isPng: boolean,
         quality = 2
     ): Promise<Buffer> {
+        if (isPng) {
+            try {
+                const pngBuf = AdaptiveMaterialPbrService.encodePngSync(rgbaBuf, width, height);
+                return Promise.resolve(pngBuf);
+            } catch (err) {
+                return Promise.reject(err);
+            }
+        }
+
         return new Promise((resolve, reject) => {
             const args = [
                 '-v', 'error',
                 '-f', 'rawvideo',
                 '-pix_fmt', 'rgba',
                 '-s', `${width}x${height}`,
-                '-i', 'pipe:0'
+                '-i', 'pipe:0',
+                '-q:v', `${quality}`,
+                '-f', 'mjpeg',
+                'pipe:1'
             ];
-
-            if (isPng) {
-                args.push('-f', 'image2', '-c:v', 'png', 'pipe:1');
-            } else {
-                args.push('-q:v', `${quality}`, '-f', 'mjpeg', 'pipe:1');
-            }
 
             const proc = spawn('ffmpeg', args);
             const chunks: Buffer[] = [];

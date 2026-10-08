@@ -25,9 +25,13 @@ export * from './universal-3d-structure-tools';
 export * from './python-3d-tools';
 export * from './image-to-pbr-tools';
 export * from './turnaround-tools';
+export * from './pbr-material-tools';
+export * from './local-sf3d-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
+import { LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers } from './local-sf3d-tools';
+import { PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers } from './pbr-material-tools';
 import { TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers } from './turnaround-tools';
 import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools';
@@ -112,6 +116,8 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
     ...COMFYUI_TOOL_DECLARATIONS,
     ...IMAGE_TO_PBR_TOOL_DECLARATIONS,
+    ...PBR_MATERIAL_TOOL_DECLARATIONS,
+    ...LOCAL_SF3D_TOOL_DECLARATIONS,
     ...TURNAROUND_TOOL_DECLARATIONS,
     ...LENS_TOOL_DECLARATIONS,
     ...BROWSER_TOOL_DECLARATIONS
@@ -143,6 +149,8 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...analyticalGroomHandlers,
     ...comfyuiHandlers,
     ...imageToPbrHandlers,
+    ...pbrMaterialHandlers,
+    ...localSf3DHandlers,
     ...lensHandlers,
     ...browserHandlers,
     ...botanicalTreeHandlers

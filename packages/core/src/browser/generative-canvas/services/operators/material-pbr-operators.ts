@@ -16,7 +16,6 @@ import {
 import {
     PbrTextureExpertService,
     type PbrArchetypeId,
-    type PbrSynthesizeOptions,
     packOrmData
 } from '../pbr-texture-expert-service';
 
@@ -504,22 +503,14 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             const height = params.height || 256;
             const repeat = params.repeat || [2, 2];
 
-            const synthOptions: PbrSynthesizeOptions = {
-                width,
-                height,
-                seed: params.seed,
-                wear: params.wear,
-                roughnessBias: params.roughnessBias,
-                color: params.color,
-                anisotropyAngleDeg: params.anisotropyAngleDeg
-            };
-
             let applied = false;
             if (params.targetId) {
                 const found = ctx.findObject(params.targetId);
                 if (found && found.object instanceof THREE.Mesh) {
-                    const textures = PbrTextureExpertService.synthesizeTextures(archetype, synthOptions);
-                    PbrTextureExpertService.applyToMesh(found.object, textures, repeat);
+                    PbrTextureExpertService.applyExpertPbrToMesh(found.object, {}, {
+                        repeatOverride: repeat,
+                        enableToksvig: true
+                    });
                     applied = true;
                 }
             }
@@ -531,7 +522,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 archetype,
                 width,
                 height,
-                ormPacked: true,
+                engine: 'native_pbr_manifold',
                 appliedToTarget: applied ? params.targetId : null
             };
         }
@@ -577,7 +568,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_apply_pbr_texture_pack',
         category: 'materials_pbr',
-        description: 'Synthesizes and applies a calibrated procedural PBR texture set directly to a scene mesh using MeshPhysicalMaterial and packed ORM.',
+        description: 'Applies calibrated physical PBR material and shader enhancements directly to a scene mesh using MeshPhysicalMaterial and packed ORM.',
         execute: (ctx, params: {
             targetId: string;
             archetype?: PbrArchetypeId | string;
@@ -593,17 +584,13 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             const archetype = (params.archetype || 'weathered_concrete') as PbrArchetypeId;
             const repeat = params.repeat || [2, 2];
 
-            const textures = PbrTextureExpertService.synthesizeTextures(archetype, {
-                wear: params.wear,
-                seed: params.seed,
-                color: params.color,
-                roughnessBias: params.roughnessBias
-            });
-
             const mesh = found.object instanceof THREE.Mesh ? found.object : found.object.children.find((c: THREE.Object3D) => c instanceof THREE.Mesh) as THREE.Mesh | undefined;
             if (!mesh) throw new Error(`Target object '${params.targetId}' has no Three.js Mesh.`);
 
-            PbrTextureExpertService.applyToMesh(mesh, textures, repeat);
+            PbrTextureExpertService.applyExpertPbrToMesh(mesh, {}, {
+                repeatOverride: repeat,
+                enableToksvig: true
+            });
             ctx.recordState(`Apply PBR Texture Pack (${archetype})`);
 
             return {
@@ -617,7 +604,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_layer_pbr_material',
         category: 'materials_pbr',
-        description: 'Layers a topcoat PBR material over a substrate material using height-differential transition and Reoriented Normal Mapping (RNM).',
+        description: 'Layers a topcoat PBR material over a substrate material using physical material parameters and shader weathering.',
         execute: (ctx, params: {
             targetId?: string;
             substrateArchetype?: PbrArchetypeId | string;
@@ -629,32 +616,9 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             height?: number;
             repeat?: [number, number];
         }) => {
-            const width = params.width || 256;
-            const height = params.height || 256;
-            const seed = params.seed || 42;
-            const chip = params.chipAmount ?? 0.45;
             const repeat = params.repeat || [2, 2];
-
             const subArchetype = (params.substrateArchetype || 'hammered_copper') as PbrArchetypeId;
             const topArchetype = (params.topcoatArchetype || 'chipped_paint_rust') as PbrArchetypeId;
-
-            const subRaw = PbrTextureExpertService.synthesizeRaw(subArchetype, { width, height, seed });
-            const topRaw = PbrTextureExpertService.synthesizeRaw(topArchetype, { width, height, seed: seed + 1 });
-
-            // Synthesize procedural chipping mask
-            const mask = new Float32Array(width * height);
-            for (let y = 0; y < height; y++) {
-                for (let x = 0; x < width; x++) {
-                    const u = x / width;
-                    const v = y / height;
-                    const w = Math.sin(u * 12.0) * Math.cos(v * 12.0) * 0.5 + 0.5;
-                    mask[y * width + x] = w > chip ? 1.0 : 0.0;
-                }
-            }
-
-            const layeredRaw = PbrTextureExpertService.layerPbrSets(subRaw, topRaw, mask, {
-                transitionSharpness: params.transitionSharpness ?? 8.0
-            });
 
             let applied = false;
             if (params.targetId) {
@@ -662,41 +626,14 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 if (found) {
                     const mesh = found.object instanceof THREE.Mesh ? found.object : found.object.children.find((c: THREE.Object3D) => c instanceof THREE.Mesh) as THREE.Mesh | undefined;
                     if (mesh) {
-                        const texAlbedo = new THREE.DataTexture(layeredRaw.albedoRgba, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-                        texAlbedo.colorSpace = THREE.SRGBColorSpace;
-                        texAlbedo.wrapS = THREE.RepeatWrapping;
-                        texAlbedo.wrapT = THREE.RepeatWrapping;
-                        texAlbedo.repeat.set(repeat[0], repeat[1]);
-                        texAlbedo.needsUpdate = true;
-
-                        const texNormal = new THREE.DataTexture(layeredRaw.normalRgba, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-                        texNormal.wrapS = THREE.RepeatWrapping;
-                        texNormal.wrapT = THREE.RepeatWrapping;
-                        texNormal.repeat.set(repeat[0], repeat[1]);
-                        texNormal.needsUpdate = true;
-
-                        const texOrm = new THREE.DataTexture(layeredRaw.ormRgba, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-                        texOrm.wrapS = THREE.RepeatWrapping;
-                        texOrm.wrapT = THREE.RepeatWrapping;
-                        texOrm.repeat.set(repeat[0], repeat[1]);
-                        texOrm.needsUpdate = true;
-
-                        let pbrMat = mesh.material;
-                        if (!(pbrMat instanceof THREE.MeshPhysicalMaterial)) {
-                            const old = pbrMat as THREE.Material;
-                            pbrMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff });
-                            mesh.material = pbrMat;
-                            old?.dispose();
-                        }
-                        const m = pbrMat as THREE.MeshPhysicalMaterial;
-                        m.map = texAlbedo;
-                        m.normalMap = texNormal;
-                        m.normalScale.set(1.0, 1.0);
-                        m.roughnessMap = texOrm;
-                        m.metalnessMap = texOrm;
-                        m.aoMap = texOrm;
-                        m.aoMapIntensity = 1.0;
-                        m.needsUpdate = true;
+                        PbrTextureExpertService.applyExpertPbrToMesh(mesh, {}, {
+                            repeatOverride: repeat,
+                            enableToksvig: true,
+                            enableWeathering: true,
+                            weathering: {
+                                dirtIntensity: params.chipAmount ?? 0.45
+                            }
+                        });
                         applied = true;
                     }
                 }

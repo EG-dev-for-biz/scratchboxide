@@ -69,155 +69,38 @@ export interface SbTerrainClassificationResult {
 // Procedural Bump Texture Synthesizers (DOM & Headless / SSR Safe)
 // ============================================================================
 
-function createHeadlessDataTexture(
-    width: number,
-    height: number,
-    generator: (x: number, y: number) => number
-): THREE.DataTexture {
-    const size = width * height;
-    const data = new Uint8Array(4 * size);
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-            const idx = (y * width + x) * 4;
-            const val = Math.max(0, Math.min(255, Math.floor(generator(x, y))));
-            data[idx] = val;
-            data[idx + 1] = val;
-            data[idx + 2] = val;
-            data[idx + 3] = 255;
-        }
-    }
-    const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.needsUpdate = true;
-    return tex;
-}
-
 /**
- * Procedural Volcanic Rock Strata Bump Texture:
- * Simulates stratified sedimentary/volcanic bedding with sinusoidal shear and high-frequency noise.
+ * Procedural Volcanic Rock Strata Texture Stub (Texture slot):
+ * Provides standard repeat-wrapped texture binding without client-side canvas synthesis.
  */
 export function createProceduralRockStrataTexture(width = 256, height = 256): THREE.Texture {
-    if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
-        try {
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                ctx.fillStyle = '#808080';
-                ctx.fillRect(0, 0, width, height);
-                for (let y = 0; y < height; y++) {
-                    const band = Math.sin(y * 0.15) * 20 + Math.sin(y * 0.4) * 12;
-                    for (let x = 0; x < width; x += 4) {
-                        const noise = (Math.random() - 0.5) * 35;
-                        const val = Math.max(0, Math.min(255, 128 + band + noise));
-                        ctx.fillStyle = `rgb(${val},${val},${val})`;
-                        ctx.fillRect(x, y, 4, 1);
-                    }
-                }
-                const tex = new THREE.CanvasTexture(canvas);
-                tex.wrapS = THREE.RepeatWrapping;
-                tex.wrapT = THREE.RepeatWrapping;
-                tex.repeat.set(8, 8);
-                return tex;
-            }
-        } catch {
-            // Fall back to headless data texture
-        }
-    }
-
-    const tex = createHeadlessDataTexture(width, height, (x, y) => {
-        const band = Math.sin(y * 0.15) * 20 + Math.sin(y * 0.4) * 12;
-        const noise = (Math.sin(x * 0.3 + y * 0.2) + Math.cos(x * 0.7 - y * 0.5)) * 15;
-        return 128 + band + noise;
-    });
+    const tex = new THREE.Texture();
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(8, 8);
     return tex;
 }
 
 /**
- * Procedural Grass & Soil Micro-Dappled Bump Texture:
- * Simulates fine vegetative turf fibers and soil grain.
+ * Procedural Grass & Soil Texture Stub:
+ * Provides standard repeat-wrapped texture binding without client-side canvas synthesis.
  */
 export function createProceduralGrassTexture(width = 256, height = 256): THREE.Texture {
-    if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
-        try {
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                const imgData = ctx.createImageData(width, height);
-                const data = imgData.data;
-                for (let i = 0; i < data.length; i += 4) {
-                    const n = Math.floor(100 + Math.random() * 80);
-                    data[i] = n;
-                    data[i + 1] = n;
-                    data[i + 2] = n;
-                    data[i + 3] = 255;
-                }
-                ctx.putImageData(imgData, 0, 0);
-                const tex = new THREE.CanvasTexture(canvas);
-                tex.wrapS = THREE.RepeatWrapping;
-                tex.wrapT = THREE.RepeatWrapping;
-                tex.repeat.set(16, 16);
-                return tex;
-            }
-        } catch {
-            // Fall back to headless data texture
-        }
-    }
-
-    const tex = createHeadlessDataTexture(width, height, (x, y) => {
-        return 100 + (Math.sin(x * 12.3 + y * 7.1) * 0.5 + 0.5) * 80;
-    });
+    const tex = new THREE.Texture();
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(16, 16);
     return tex;
 }
 
 /**
- * Procedural Roman Basalt Cobblestone (Sampietrini) / Paver Bump Texture:
- * Simulates running-bond rectangular pavers with recessed mortar joints.
+ * Procedural Roman Basalt Cobblestone / Paver Texture Stub:
+ * Provides standard repeat-wrapped texture binding without client-side canvas synthesis.
  */
 export function createProceduralCobblestoneTexture(width = 256, height = 256, cellSize = 16): THREE.Texture {
-    if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
-        try {
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                ctx.fillStyle = '#a0a0a0';
-                ctx.fillRect(0, 0, width, height);
-                ctx.fillStyle = '#404040';
-                for (let y = 0; y < height; y += cellSize) {
-                    const shift = (Math.floor(y / cellSize) % 2) * (cellSize / 2);
-                    ctx.fillRect(0, y, width, 2);
-                    for (let x = 0; x < width; x += cellSize) {
-                        const cx = (x + shift) % width;
-                        ctx.fillRect(cx, y, 2, cellSize);
-                    }
-                }
-                const tex = new THREE.CanvasTexture(canvas);
-                tex.wrapS = THREE.RepeatWrapping;
-                tex.wrapT = THREE.RepeatWrapping;
-                tex.repeat.set(16, 16);
-                return tex;
-            }
-        } catch {
-            // Fall back to headless data texture
-        }
-    }
-
-    const tex = createHeadlessDataTexture(width, height, (x, y) => {
-        const row = Math.floor(y / cellSize);
-        const shift = (row % 2) * (cellSize / 2);
-        const col = Math.floor((x + shift) % width / cellSize);
-        const isJointY = (y % cellSize) < 2;
-        const isJointX = ((x + shift) % cellSize) < 2;
-        return (isJointY || isJointX) ? 64 : 160;
-    });
+    const tex = new THREE.Texture();
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(16, 16);
     return tex;
 }
@@ -335,34 +218,25 @@ export class SbTerrainGroundEngine {
         this.grassGroup.clear();
         this.pavementGroup.clear();
 
-        // 1. Resolve PBR Materials with Procedural Bump Maps
-        const rockBump = createProceduralRockStrataTexture();
+        // 1. Resolve PBR Materials with Authentic Physical Parameters (Zero Canvas Generative Primitives)
         const rockMat = options.customRockMaterial || new THREE.MeshStandardMaterial({
             color: 0x584e42, // Volcanic Tufa / Granite
             roughness: 0.94,
             metalness: 0.04,
-            bumpMap: rockBump,
-            bumpScale: 0.12,
             side: THREE.DoubleSide
         });
 
-        const grassBump = createProceduralGrassTexture();
         const grassMat = options.customGrassMaterial || new THREE.MeshStandardMaterial({
             color: 0x446c24, // Mediterranean Lawn / Turf
             roughness: 0.88,
             metalness: 0.02,
-            bumpMap: grassBump,
-            bumpScale: 0.08,
             side: THREE.DoubleSide
         });
 
-        const pavementBump = createProceduralCobblestoneTexture();
         const pavementMat = options.customPavementMaterial || new THREE.MeshStandardMaterial({
             color: 0x555960, // Basalt Cobblestone Pavers
             roughness: 0.80,
             metalness: 0.08,
-            bumpMap: pavementBump,
-            bumpScale: 0.06,
             side: THREE.DoubleSide
         });
 

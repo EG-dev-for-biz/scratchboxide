@@ -14,8 +14,7 @@ import {
     calculateStandoffCamera
 } from '../src/browser/generative-canvas/primitives/scene3d/autoFraming';
 import {
-    getPresetConfig,
-    getProceduralPbrTextures
+    getPresetConfig
 } from '../src/browser/generative-canvas/primitives/scene3d/proceduralPbrTextures';
 
 describe('Scene 3D Auto-Framing & Standoff Camera', () => {
@@ -96,37 +95,29 @@ describe('Scene 3D Auto-Framing & Standoff Camera', () => {
     });
 });
 
-describe('Procedural PBR Textures & Material Presets', () => {
-    it('resolves mudbrick weathered preset with procedural normal and roughness maps', () => {
+describe('Procedural PBR Material Presets (Pure Physical Config)', () => {
+    it('resolves mudbrick weathered preset with physical roughness and normal scale parameters', () => {
         const cfg = getPresetConfig('mudbrick_weathered');
         expect(cfg).not.toBeNull();
         expect(cfg!.roughness).toBeGreaterThan(0.8);
         expect(cfg!.metalness).toBeLessThan(0.05);
-
-        const textures = getProceduralPbrTextures('mudbrick_weathered');
-        expect(textures.normalMap).toBeInstanceOf(THREE.DataTexture);
-        expect(textures.roughnessMap).toBeInstanceOf(THREE.DataTexture);
-        expect(textures.normalMap.image.width).toBe(128);
-        expect(textures.normalMap.image.data.length).toBe(128 * 128 * 4);
+        expect(cfg!.normalScale).toBe(0.8);
     });
 
-    it('resolves hammered gold preset with high metallic and hammered dimple normal map', () => {
+    it('resolves hammered gold preset with high metallic and low roughness', () => {
         const cfg = getPresetConfig('hammered_gold');
         expect(cfg).not.toBeNull();
         expect(cfg!.metalness).toBeGreaterThan(0.9);
         expect(cfg!.roughness).toBeLessThan(0.4);
-
-        const textures = getProceduralPbrTextures('hammered_gold');
-        expect(textures.normalMap).toBeInstanceOf(THREE.DataTexture);
+        expect(cfg!.clearcoat).toBe(0.2);
     });
 
-    it('resolves alpine snow preset with transmission, clearcoat and sparkling normal map', () => {
+    it('resolves alpine snow preset with transmission, clearcoat and dielectric IOR', () => {
         const cfg = getPresetConfig('alpine_snow');
         expect(cfg).not.toBeNull();
         expect(cfg!.clearcoat).toBeGreaterThan(0.4);
         expect(cfg!.transmission).toBeGreaterThan(0.1);
-
-        const textures = getProceduralPbrTextures('alpine_snow');
-        expect(textures.normalMap).toBeInstanceOf(THREE.DataTexture);
+        expect(cfg!.ior).toBe(1.31);
     });
 });
+

@@ -81,7 +81,7 @@ public/**/*.ply
 public/**/*.mp4
 public/**/*.webm
 public/**/*.mov
-public/tiles/
+**/public/tiles/
 # Test execution outputs, visual verification screenshots, and test artifacts
 test-results/
 **/test-results/

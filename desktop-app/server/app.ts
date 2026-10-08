@@ -370,6 +370,15 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         }
     }
 
+    const build3dPython = path.resolve(process.cwd(), 'build', '3d-python');
+    const repoBuild3dPython = path.resolve(process.cwd(), '..', 'build', '3d-python');
+    if (fs.existsSync(build3dPython)) {
+        app.use('/build/3d-python', express.static(build3dPython));
+    }
+    if (fs.existsSync(repoBuild3dPython)) {
+        app.use('/build/3d-python', express.static(repoBuild3dPython));
+    }
+
     // Trigger asynchronous background asset hydration for showcase demos
     const hydratorScript = path.resolve(process.cwd(), 'scripts', 'hydrate_demo_assets.cjs');
     if (fs.existsSync(hydratorScript)) {

@@ -13,7 +13,7 @@ import type { RendererStack } from './types';
 import { removeAndDispose } from './types';
 
 import type { PbrTextureSet } from '../../canvas-types';
-import { getPresetConfig, getProceduralPbrTextures } from './proceduralPbrTextures';
+import { getPresetConfig } from './proceduralPbrTextures';
 
 export interface CustomMeshDefinition {
     id?: string;
@@ -105,7 +105,6 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
 
     const presetName = def.material?.preset || (def.pbrTextures as any)?.preset;
     const presetConfig = presetName ? getPresetConfig(presetName) : null;
-    const proceduralTextures = presetName ? getProceduralPbrTextures(presetName) : null;
 
     if (def.pbrTextures) {
         const pbr = def.pbrTextures;
@@ -119,6 +118,10 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
                 color: (def.material?.color ?? presetConfig?.color ?? 0xffffff) as any,
                 metalness: def.material?.metalness ?? presetConfig?.metalness ?? 0.1,
                 roughness: def.material?.roughness ?? presetConfig?.roughness ?? 0.5,
+                clearcoat: def.material?.clearcoat ?? presetConfig?.clearcoat ?? 0.0,
+                clearcoatRoughness: def.material?.clearcoatRoughness ?? presetConfig?.clearcoatRoughness ?? 0.0,
+                ior: def.material?.ior ?? presetConfig?.ior ?? 1.5,
+                transmission: def.material?.transmission ?? presetConfig?.transmission ?? 0.0,
                 wireframe: !!def.material?.wireframe
             });
             oldMat?.dispose();
@@ -131,16 +134,6 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         const roughnessSrc = pbr.roughnessUrl || pbr.roughnessMap;
         const metallicSrc = pbr.metallicUrl || pbr.metalnessMap;
         const aoSrc = pbr.aoUrl || pbr.aoMap;
-
-        // Apply procedural maps if sources not explicitly provided
-        if (proceduralTextures?.normalMap && !normalSrc && !pbrMat.normalMap) {
-            pbrMat.normalMap = proceduralTextures.normalMap;
-            const ns = presetConfig?.normalScale ?? 0.6;
-            pbrMat.normalScale.set(ns, ns);
-        }
-        if (proceduralTextures?.roughnessMap && !roughnessSrc && !ormSrc && !pbrMat.roughnessMap) {
-            pbrMat.roughnessMap = proceduralTextures.roughnessMap;
-        }
 
         if (ormSrc) {
             loader.load(ormSrc, (tex) => {

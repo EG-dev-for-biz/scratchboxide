@@ -433,8 +433,8 @@ int main(int argc, char** argv) {
                 seed.toString(),
                 outPrefix
             ], {
-                timeout: 30000,
-                maxBuffer: 64 * 1024 * 1024
+                timeout: Math.max(60000, Math.round(((width * height) / (1024 * 1024)) * 30000)),
+                maxBuffer: 256 * 1024 * 1024
             });
 
             const parsed = JSON.parse(stdout.trim());

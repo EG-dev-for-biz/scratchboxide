@@ -286,29 +286,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             env: customEnv
         });
 
-        // 2b. ADA Self-Healing Failover: If script execution fails, synthesize compliant ADA Hero Object
-        if (!result.success) {
-            console.warn('[execute_3d_python_script] Primary script execution failed:', result.errorDetails || result.stderr);
-            try {
-                const queryText = (typeof args.description === 'string' && args.description.trim())
-                    ? args.description.trim()
-                    : (locationQuery || 'Adaptive Hero Object');
-                console.log(`[execute_3d_python_script] Synthesizing ADA Hero Object fallback for: "${queryText}"`);
-                const heroContract = synthesizeAdaptiveHeroObjectContract(queryText);
-                const heroScript = generateAdaptiveHeroPythonSource(heroContract);
-                const retryResult = await runner.runScript(heroScript, {
-                    timeoutMs,
-                    env: customEnv
-                });
-                if (retryResult.success) {
-                    console.log(`[execute_3d_python_script] ADA Hero Object fallback succeeded in ${retryResult.executionTimeMs}ms!`);
-                    result = retryResult;
-                    effectiveScript = heroScript;
-                }
-            } catch (err: any) {
-                console.warn('[execute_3d_python_script] ADA auto-remediation error:', err?.message || err);
-            }
-        }
+        // Per User Directive: No silent fallbacks or synthetic substitutes.
+        // If a script fails, let the caller see the exact error and diagnostics immediately.
 
         if (!result.success) {
             return {

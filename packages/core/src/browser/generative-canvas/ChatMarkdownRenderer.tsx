@@ -425,8 +425,8 @@ function parseTextSegment(rawSegment: string, blocks: MarkdownBlock[]) {
             flushQuote();
         }
 
-        // Bullet List (- or *)
-        const bulletMatch = line.match(/^[\*\-]\s+(.*)$/);
+        // Bullet List (- or * or • or +)
+        const bulletMatch = line.match(/^[\*\-•\u2022\u25E6\u25AA\u25B8\+]\s+(.*)$/);
         if (bulletMatch) {
             flushParagraph();
             if (currentListItems.length > 0 && currentListType !== 'bullet') {
@@ -552,9 +552,10 @@ export interface InlineMarkdownProps {
     text: string;
     onOpenInBrowser?: (url: string, title?: string) => void;
     onOpenWikilink?: (target: string, anchor?: string) => void;
+    onPromptAction?: (prompt: string) => void;
 }
 
-export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBrowser, onOpenWikilink }) => {
+export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBrowser, onOpenWikilink, onPromptAction }) => {
     if (!text || typeof text !== 'string') return null;
 
     // Pattern to match inline images (![alt](url)), wikilinks ([[target]]), code (`code`), bold (**bold**), italic (*italic*), and links ([title](url))
@@ -658,24 +659,45 @@ export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBr
             if (linkMatch) {
                 const linkTitle = linkMatch[1];
                 const linkUrl = linkMatch[2];
-                parts.push(
-                    <a
-                        key={`link-${keyIdx++}`}
-                        href={linkUrl}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="sb-chat-link"
-                        onClick={e => {
-                            if (onOpenInBrowser) {
+                const isPromptAction = linkUrl.startsWith('prompt:') || linkUrl.startsWith('action:');
+                if (isPromptAction && onPromptAction) {
+                    const promptVal = decodeURIComponent(linkUrl.replace(/^(?:prompt|action):/, '')) || linkTitle;
+                    parts.push(
+                        <button
+                            key={`action-${keyIdx++}`}
+                            type="button"
+                            className="sb-chat-action-pill"
+                            onClick={e => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                onOpenInBrowser(linkUrl, linkTitle);
-                            }
-                        }}
-                    >
-                        {linkTitle}
-                    </a>
-                );
+                                onPromptAction(promptVal);
+                            }}
+                            title={`Click to select: "${promptVal}"`}
+                        >
+                            <span className="sb-chat-action-pill-icon">✦</span>
+                            <span className="sb-chat-action-pill-text">{linkTitle}</span>
+                        </button>
+                    );
+                } else {
+                    parts.push(
+                        <a
+                            key={`link-${keyIdx++}`}
+                            href={linkUrl}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="sb-chat-link"
+                            onClick={e => {
+                                if (onOpenInBrowser) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    onOpenInBrowser(linkUrl, linkTitle);
+                                }
+                            }}
+                        >
+                            {linkTitle}
+                        </a>
+                    );
+                }
             } else {
                 parts.push(matchedStr);
             }

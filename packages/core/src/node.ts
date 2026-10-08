@@ -92,6 +92,12 @@ export {
     type ImageToPbrPlaneOptions,
     type ImageToPbrPlaneResult
 } from './node/3d-engine/image-to-adaptive-pbr-service';
+export {
+    LocalSf3DService,
+    type LocalSf3DOptions,
+    type LocalSf3DResult,
+    type LocalSf3DBounds
+} from './node/3d-engine/local-sf3d-service';
 export type {
     AdaptiveMaterialSchema,
     IntrinsicSignalMetrics,

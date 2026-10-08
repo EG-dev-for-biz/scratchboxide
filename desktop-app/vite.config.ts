@@ -118,6 +118,8 @@ export default defineConfig(({ mode }) => {
         '/3d': apiProxy(),
         '/spatial': apiProxy(),
         '/models': apiProxy(),
+        '/tiles': apiProxy(),
+        '/build': apiProxy(),
         '/cpp': apiProxy(),
         '^/(?!index\\.html$).*\\.html$': {
           target: API_TARGET,
