@@ -1220,7 +1220,7 @@ export class Google3DTileBlockoutPipelineService {
           tiles.update();
           renderer.render(scene, camera);
           sampleSettled++;
-          await new Promise(r => requestAnimationFrame(r));
+          await new Promise(r => { requestAnimationFrame(r); setTimeout(r, 20); });
         }
       }
 
@@ -1363,7 +1363,7 @@ export class Google3DTileBlockoutPipelineService {
             stableCount = 0;
           }
 
-          await new Promise(r => requestAnimationFrame(r));
+          await new Promise(r => { requestAnimationFrame(r); setTimeout(r, 20); });
         }
 
         const settleTimeMs = Date.now() - settleStart;
@@ -1468,7 +1468,7 @@ export class Google3DTileBlockoutPipelineService {
         } else {
           multiStableCount = 0;
         }
-        await new Promise(r => requestAnimationFrame(r));
+        await new Promise(r => { requestAnimationFrame(r); setTimeout(r, 20); });
       }
 
       // Extract high-resolution 3D tile mesh and export as binary .glb
@@ -1956,6 +1956,9 @@ export class Google3DTileBlockoutPipelineService {
           '--proxy-bypass-list=*',
           '--use-gl=angle',
           '--use-angle=metal',
+          '--run-all-compositor-stages-before-draw',
+          '--disable-gpu-vsync',
+          '--disable-frame-rate-limit',
           `--window-size=${request.lodQuality?.resolutionWidth ?? 1280},${request.lodQuality?.resolutionHeight ?? 720}`,
           `http://127.0.0.1:${actualPort}/${runnerFileName}?mode=${encodeURIComponent(request.atmosphere?.renderMode || 'clay')}`
         ];

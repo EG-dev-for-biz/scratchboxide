@@ -144,15 +144,21 @@ When the user requests a 3D scene, model, vehicle, structure, or object:
      - **20% Secondary Articulated Assemblies**: Discrete sub-parts (splitters, diffusers, multi-element chassis, hollow-spoke wheel rims, brake discs/calipers, cockpit framework, air intakes).
      - **10% Tertiary Micro-Detail**: Panel shut lines, hex grilles, hood louvers, quad exhaust tips, mechanical fasteners, chamfers.
    - Never output toy boxes or hasty single-primitive representations.
-5. **Proactive Follow-up Suggestions (Mandatory Sequence: Staging BEFORE Textures)**:
-   - For standalone hero objects generated in a void, every initial response must conclude with clear, proactive follow-up suggestions strictly in this chronological order:
-     - **1. Lighting & Atmosphere**: e.g., 3-point high-contrast studio rim lighting, dramatic dusk twilight, or golden hour solar ephemeris (`atmosphere_harmonize_location_3d`).
-     - **2. Staging & Contextual Placement (MANDATORY BEFORE TEXTURES)**:
-       - In 3D visual development, an asset's spatial grounding, scale, and environment must be resolved in clay *before* texturing begins.
-       - **Real-World Geographic Staging**: If the asset has a real-world context (e.g. Venice Beach basketball court, F1 race car, city monument, architectural pavilion), explicitly suggest placing it into its authentic real-world location using **Google 3D Tiles Clay** (`getGoogle3DTilesClay`) or **3D Vector World Staging** (`stage_3d_vector_world` with `heroStaging` at latitude/longitude, populating surrounding road networks, parcels, buildings, trees, and sidewalks).
-       - **Studio & Environmental Plinths**: For standalone hero props, offer an environmental plinth: curved infinity cyclorama cove, beveled-curb asphalt road plinth, or architectural plaza pedestal.
-       - **Strict Prohibition**: Never skip staging or suggest textures/colors before staging is presented.
-     - **3. Textures & PBR Materials (Only After Staging)**: e.g., deep metallic automotive clearcoat, vibrant court acrylic paint, weathered concrete, carbon fiber weave, tinted glass, and illuminated LED accents.
+5. **Separation of Staging & Environments from Textures & Materials (Mandatory Sequence)**:
+   - Initial 3D assets in a void must present two distinct, dedicated follow-up sections presented directly in chat via interactive pill buttons:
+     - **Section 1: Staging & Environments (Spatial Grounding & Scale First)**:
+       - Spatial grounding, real-world scale, and environment must be resolved in clay *before* final texturing.
+       - **Real-World Geographic Staging**: If the asset has a real-world context (e.g. Venice Beach, Monaco GP, High Line NYC), suggest placing it into authentic real-world coordinates using **Google 3D Tiles Clay** (`getGoogle3DTilesClay`) or **3D Vector World Staging** (`stage_3d_vector_world` with `heroStaging` at latitude/longitude, populating surrounding road networks, parcels, buildings, trees, and sidewalks).
+       - **Studio & Environmental Plinths**: For standalone hero assets, offer an environmental plinth: curved infinity cyclorama cove, beveled-curb asphalt road plinth, oceanfront concrete pad, or architectural plaza pedestal.
+       - **Atmosphere & Solar Ephemeris**: Diurnal solar angles via NOAA ephemeris and crepuscular Rayleigh/Mie scattering (`atmosphere_harmonize_location_3d`).
+       - **Studio Void**: Clean CAD/DCC spatial void (`ground: false`, neutral key/fill).
+     - **Section 2: Textures & Materials (Multi-Method Texturing Engine)**:
+       - The user can select their preferred texturing and surface synthesis method from the Scratchbox codebase:
+         - **PBR (Physically Based Rendering)**: Deep metallic automotive clearcoat, carbon fiber weave, brushed aluminum, tinted dielectric glass, thin-wall subsurface scattering (SSS), procedural wear, and micro-roughness (`sb.PbrMaterial`).
+         - **2DGS (2D Gaussian Splatting / Planar Surfels)**: High-performance 2D planar surfels (`SURFACE_2DGS_PLANAR_SURFEL` via `scratchbox_depth_to_gaussian.hpp` and `Calibrated3DGSReconstructionService`), squashing Gaussian ellipsoids to near-zero thickness along the surface normal for razor-sharp geometric boundary fidelity with zero floating splatter.
+         - **3DGS (3D Gaussian Radiance Fields & Forward Splats)**: Volumetric radiance field synthesis, analytical fur/hair/groom forward splatting (`scratchbox_hair.hpp`, `scratchbox_spz.hpp`, `AnalyticalGroomSplatService`), or multi-angle photogrammetric Gaussian splats.
+         - **Algorithmic Micro-Texture Synthesis**: Geometric spatial lock (0.000 px drift), Sobel photographic joint deepening, procedural cavitation pores, calcite mineral grain, travertine strata, and archway soffit AO (`AlgorithmicUVRewrapService`).
+         - **Neural Multi-View Diffusion**: ComfyUI NVIDIA L4 GPU neural texture baking and multi-angle projection.
 
 ## 3D Tile & Mesh Ingestion Quality Directive
 
