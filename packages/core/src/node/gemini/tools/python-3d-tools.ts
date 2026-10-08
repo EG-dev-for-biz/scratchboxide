@@ -249,10 +249,9 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             effectiveLocation = locationQuery || locIntent.landmarkName;
         } else if (effectiveLocation) {
             locIntent = detectRealWorldLocationIntent(effectiveLocation);
-        } else {
-            const desc = (typeof args.description === 'string') ? args.description : '';
-            const detected = detectRealWorldLocationIntent(`${desc} ${script}`);
-            if (detected?.isRealWorld && detected.landmarkName) {
+        } else if (typeof args.description === 'string' && args.description.trim()) {
+            const detected = detectRealWorldLocationIntent(args.description);
+            if (detected?.isRealWorld && detected.landmarkName && detected.elevationSource !== 'online_geocoding_required') {
                 effectiveLocation = detected.landmarkName;
                 locIntent = detected;
             }
@@ -387,16 +386,34 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             ? `Real-World Geospatial Staging | [${resolvedGeoAnchor.lat.toFixed(4)}°, ${resolvedGeoAnchor.lng.toFixed(4)}°] | Studio Grey Clay Grounding`
             : `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`;
 
+        let durableHeroUri: string | undefined = undefined;
+        if (result.glbPath && fs.existsSync(result.glbPath)) {
+            const fileName = path.basename(result.glbPath);
+            const repoRoot = process.env.SCRATCHBOX_ROOT || process.cwd();
+            const targetDirs = [
+                path.resolve(repoRoot, 'desktop-app/public/models'),
+                path.resolve(repoRoot, 'public/models')
+            ];
+            for (const tDir of targetDirs) {
+                try {
+                    if (!fs.existsSync(tDir)) fs.mkdirSync(tDir, { recursive: true });
+                    fs.copyFileSync(result.glbPath, path.join(tDir, fileName));
+                } catch { }
+            }
+            durableHeroUri = `/models/${fileName}`;
+        }
+
         const stagedObjects = [
-            ...(result.glbPath ? [{
+            ...(durableHeroUri ? [{
                 id: `hero-${Date.now()}`,
                 content: {
                     type: '3d-model',
-                    durableUri: result.glbPath,
+                    durableUri: durableHeroUri,
                     mimeType: 'model/gltf-binary',
                     metadata: {
                         role: 'hero',
-                        description: desc
+                        description: desc,
+                        originalPath: result.glbPath
                     }
                 },
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },

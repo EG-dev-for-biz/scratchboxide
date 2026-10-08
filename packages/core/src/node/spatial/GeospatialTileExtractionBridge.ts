@@ -95,6 +95,21 @@ export class GeospatialTileExtractionBridge {
     const tileGlbPath = path.join(outputDir, `${safeSlug}_tiles.glb`);
     const manifestPath = path.join(outputDir, `${safeSlug}_manifest.json`);
 
+    // Check disk cache for already extracted 3D tile GLB and manifest
+    if (fs.existsSync(tileGlbPath) && fs.existsSync(manifestPath)) {
+      try {
+        const cachedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        return {
+          success: true,
+          manifest: cachedManifest,
+          manifestPath,
+          glbPath: tileGlbPath
+        };
+      } catch {
+        // Corrupted cache, re-fetch
+      }
+    }
+
     // 1. Fetch 3D tiles (using full texture or studio grey clay)
     let tileResult;
     if (options.mode === 'clay') {
