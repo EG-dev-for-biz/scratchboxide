@@ -36,13 +36,14 @@ export interface AdaptiveHeroSynthesisOptions {
     titleOverride?: string;
     renderMode?: 'clay' | 'pbr' | 'wireframe';
     targetComplexity?: 'high' | 'ultra';
+    parameterOverrides?: Partial<ContinuousPhysicalParameters>;
 }
 
 /**
  * Continuous physical analysis of a prompt to extract continuous spatial parameters
  * without relying on closed taxonomies or noun dictionaries.
  */
-interface ContinuousPhysicalParameters {
+export interface ContinuousPhysicalParameters {
     scaleLength: number;
     scaleWidth: number;
     scaleHeight: number;
@@ -176,7 +177,11 @@ export function synthesizeAdaptiveHeroObjectContract(
     prompt: string,
     options?: AdaptiveHeroSynthesisOptions
 ): Adaptive3DObjectContract {
-    const p = analyzeContinuousParameters(prompt, options?.seed);
+    const analyzed = analyzeContinuousParameters(prompt, options?.seed);
+    const p: ContinuousPhysicalParameters = {
+        ...analyzed,
+        ...(options?.parameterOverrides || {})
+    };
     const halfL = p.scaleLength * 0.5;
     const halfW = p.scaleWidth * 0.5;
     const halfH = p.scaleHeight * 0.5;

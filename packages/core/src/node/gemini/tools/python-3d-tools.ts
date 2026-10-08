@@ -171,7 +171,12 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 location: {
                     type: 'STRING',
-                    description: 'Optional real-world location query or coordinates (e.g. "Eiffel Tower, Paris", "Colosseum, Rome"). When provided, the engine automatically ingests leaf-LOD 3D tiles, runs the shape extraction pipeline to segment terrain, buildings, and vegetation clusters, and injects them into sb.geospatial.load_location() for procedural population.'
+                    description: 'Optional real-world location query or landmark name (e.g. "Eiffel Tower, Paris", "Monaco GP Circuit"). When provided, the engine automatically ingests leaf-LOD 3D tiles, runs the shape extraction pipeline to segment terrain, buildings, and vegetation clusters, and injects them into sb.geospatial.load_location() for procedural population.'
+                },
+                coordinates: {
+                    type: 'ARRAY',
+                    items: { type: 'NUMBER' },
+                    description: 'Optional explicit WGS-84 geodetic coordinates [latitude, longitude] (e.g. [43.7384, 7.4246] or [40.7308, -73.9973]). In accordance with ADA Zero-Presets, whenever a novel, unlisted, or specific coordinate location is specified, supply coordinates directly to anchor geospatial 3D tiles without relying on static landmark dictionaries.'
                 },
                 description: {
                     type: 'STRING',
@@ -209,13 +214,43 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
         let extractedManifest: ExtractedLocationManifest | undefined;
         let extractedGlbPath: string | undefined;
 
-        // Auto-detect location if not explicitly provided in args.location
+        // Parse explicit geodetic coordinates if provided (e.g. args.coordinates: [lat, lng])
+        const rawCoords = args.coordinates;
+        let explicitCoords: { lat: number; lng: number; elevation?: number } | undefined;
+        if (Array.isArray(rawCoords) && rawCoords.length >= 2) {
+            const lat = Number(rawCoords[0]);
+            const lng = Number(rawCoords[1]);
+            const elevation = rawCoords.length >= 3 ? Number(rawCoords[2]) : undefined;
+            if (!isNaN(lat) && !isNaN(lng)) {
+                explicitCoords = { lat, lng, elevation };
+            }
+        } else if (rawCoords && typeof rawCoords === 'object') {
+            const rc = rawCoords as any;
+            if (typeof rc.lat === 'number' && typeof rc.lng === 'number') {
+                explicitCoords = { lat: rc.lat, lng: rc.lng, elevation: rc.elevation };
+            }
+        }
+
+        // Auto-detect location if not explicitly provided in args.location or args.coordinates
         let effectiveLocation = locationQuery;
         let locIntent: ReturnType<typeof detectRealWorldLocationIntent> | undefined;
 
-        if (effectiveLocation) {
+        if (explicitCoords) {
+            locIntent = {
+                isRealWorld: true,
+                landmarkName: locationQuery || `Coordinates (${explicitCoords.lat.toFixed(4)}, ${explicitCoords.lng.toFixed(4)})`,
+                lat: explicitCoords.lat,
+                lng: explicitCoords.lng,
+                elevation: explicitCoords.elevation ?? 0,
+                elevationSource: 'explicit_coordinates',
+                datum: 'MSL_EGM96',
+                query: `${explicitCoords.lat}, ${explicitCoords.lng}`
+            };
+            effectiveLocation = locationQuery || locIntent.landmarkName;
+        } else if (effectiveLocation) {
             locIntent = detectRealWorldLocationIntent(effectiveLocation);
         } else {
+            const desc = (typeof args.description === 'string') ? args.description : '';
             const detected = detectRealWorldLocationIntent(`${desc} ${script}`);
             if (detected?.isRealWorld && detected.landmarkName) {
                 effectiveLocation = detected.landmarkName;
@@ -224,10 +259,13 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
         }
 
         // 1. If location is requested or detected, run pre-flight tile extraction pipeline in clay mode
-        if (effectiveLocation) {
+        if (effectiveLocation || explicitCoords) {
             try {
                 const extractionBridge = GeospatialTileExtractionBridge.getInstance();
-                const extractResult = await extractionBridge.ingestAndExtract(effectiveLocation, { mode: 'clay' });
+                const target = explicitCoords
+                    ? { lat: explicitCoords.lat, lng: explicitCoords.lng, elevation: explicitCoords.elevation, formattedAddress: effectiveLocation }
+                    : effectiveLocation;
+                const extractResult = await extractionBridge.ingestAndExtract(target, { mode: 'clay' });
                 if (extractResult.success) {
                     extractedManifest = extractResult.manifest;
                     extractedGlbPath = extractResult.glbPath;
@@ -330,7 +368,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
 
         const isRealWorld = !!effectiveLocation;
         const resolvedLocName = locIntent?.landmarkName || effectiveLocation;
-        const resolvedGeoAnchor = (locIntent?.isRealWorld) ? {
+        const resolvedGeoAnchor = (locIntent?.isRealWorld && locIntent.lat !== 0) ? {
             lat: locIntent.lat,
             lng: locIntent.lng,
             elevation: locIntent.elevation,
@@ -338,15 +376,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             datum: locIntent.datum || 'MSL_EGM96',
             active: true,
             landmarkName: resolvedLocName
-        } : (isRealWorld ? {
-            lat: 40.7829,
-            lng: -73.9654,
-            elevation: 25.0,
-            elevationSource: 'google_elevation',
-            datum: 'MSL_EGM96',
-            active: true,
-            landmarkName: resolvedLocName
-        } : undefined);
+        } : undefined;
 
         const stagedTitle = isRealWorld && !desc.toLowerCase().includes('staged')
             ? `${desc} — Staged in ${resolvedLocName}`

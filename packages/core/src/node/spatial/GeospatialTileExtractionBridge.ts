@@ -10,7 +10,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay } from './Google3DTileBlockoutPipelineService';
+import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, GeoAnchor } from './Google3DTileBlockoutPipelineService';
 import { Universal3DObjectSeparationService, UniversalSeparatedScene, UniversalSeparatedObject } from './Universal3DObjectSeparationService';
 
 export interface ExtractedVegetationAnchor {
@@ -73,9 +73,10 @@ export class GeospatialTileExtractionBridge {
 
   /**
    * Ingest real-world location tiles and run shape extraction pipeline.
+   * Supports both query string and explicit WGS-84 GeoAnchor geodetic coordinates.
    */
   public async ingestAndExtract(
-    query: string,
+    queryOrCoords: string | GeoAnchor,
     options: {
       outputDir?: string;
       mode?: 'full_texture' | 'clay';
@@ -87,26 +88,30 @@ export class GeospatialTileExtractionBridge {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    const safeSlug = query.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40);
+    const querySlug = typeof queryOrCoords === 'string'
+      ? queryOrCoords
+      : `${queryOrCoords.formattedAddress || 'geo'}_${queryOrCoords.lat.toFixed(4)}_${queryOrCoords.lng.toFixed(4)}`;
+    const safeSlug = querySlug.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40);
     const tileGlbPath = path.join(outputDir, `${safeSlug}_tiles.glb`);
     const manifestPath = path.join(outputDir, `${safeSlug}_manifest.json`);
 
     // 1. Fetch 3D tiles (using full texture or studio grey clay)
     let tileResult;
     if (options.mode === 'clay') {
-      tileResult = await getGoogle3DTilesClay(query, {
+      tileResult = await getGoogle3DTilesClay(queryOrCoords, {
         outputGlbPath: tileGlbPath,
         offlineMock: options.mockExecution
       });
     } else {
-      tileResult = await getGoogle3DTilesFullTexture(query, {
+      tileResult = await getGoogle3DTilesFullTexture(queryOrCoords, {
         outputGlbPath: tileGlbPath,
         offlineMock: options.mockExecution
       });
     }
 
     if (!tileResult.success || !tileResult.glbPath || !fs.existsSync(tileResult.glbPath)) {
-      throw new Error(`Failed to ingest 3D tiles for "${query}"`);
+      const targetDesc = typeof queryOrCoords === 'string' ? queryOrCoords : `lat: ${queryOrCoords.lat}, lng: ${queryOrCoords.lng}`;
+      throw new Error(`Failed to ingest 3D tiles for "${targetDesc}"`);
     }
 
     // 2. Separate shapes via Universal3DObjectSeparationService

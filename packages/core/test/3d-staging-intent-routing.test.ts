@@ -5,6 +5,8 @@ import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis
 import { synthesize3DFallback } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { synthesizeRawContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 import { synthesizeAdaptiveHeroObjectContract } from '../src/common/spatial/adaptive-hero-synthesizer';
+import { Google3DTileService, detectRealWorldLocationIntent } from '../src/browser/generative-canvas/services/Google3DTileService';
+import { python3DHandlers } from '../src/node/gemini/tools/python-3d-tools';
 import type { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () => {
@@ -255,6 +257,79 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             const wheelRims = (heroContract.revolvedHarmonics || []).filter(h => h.id.startsWith('wheel_rim'));
             expect(wheelRims.length).toBe(4);
             expect(heroContract.materialAttributes?.renderMode).toBe('clay');
+        });
+    });
+
+    describe('4. ADA Standards & Zero-Preset Open-Domain Invariants', () => {
+        const tileService = Google3DTileService.getInstance();
+
+        it('does NOT silently fall back to San Francisco when a novel/unresolvable location is requested', async () => {
+            // resolveLocationSync should report isResolved: false, NOT silently inject San Francisco coords
+            const syncResult = tileService.resolveLocationSync('unknown extraterrestrial geothermal base alpha');
+            expect(syncResult.isResolved).toBe(false);
+            expect(syncResult.lat).toBe(0);
+            expect(syncResult.lng).toBe(0);
+
+            // Asynchronous resolveLocation should reject with an ADA-actionable error instead of defaulting
+            await expect(tileService.resolveLocation('unknown fictitious underwater metropolis 404'))
+                .rejects
+                .toThrow(/ADA Zero-Presets|Could not resolve geodetic coordinates/);
+        });
+
+        it('ingests open-domain geodetic coordinates directly via bracketed strings', () => {
+            const result = tileService.resolveLocationSync('[43.7384, 7.4246]');
+            expect(result.isResolved).toBe(true);
+            expect(result.lat).toBeCloseTo(43.7384, 4);
+            expect(result.lng).toBeCloseTo(7.4246, 4);
+            expect(result.elevationSource).toBe('explicit_coordinates');
+        });
+
+        it('detects real-world intent from raw WGS-84 coordinate strings in prompts', () => {
+            const detected = detectRealWorldLocationIntent('build 3d formula 1 car around [43.7384, 7.4246] in clay');
+            expect(detected).toBeDefined();
+            expect(detected?.isRealWorld).toBe(true);
+            expect(detected?.lat).toBeCloseTo(43.7384, 4);
+            expect(detected?.lng).toBeCloseTo(7.4246, 4);
+        });
+
+        it('supports direct geodetic coordinates [lat, lng] in execute_3d_python_script without static dictionaries', async () => {
+            // Passing explicit coordinates directly in tool arguments
+            const outcome = await python3DHandlers.execute_3d_python_script({
+                script: 'import scratchbox as sb\nscene = sb.Scene()\nsb.io.write_glb(OUTPUT_GLB_PATH, scene)',
+                location: 'Circuit de Monaco Waterfront',
+                coordinates: [43.7384, 7.4246],
+                description: 'F1 race car staged in Monaco'
+            });
+
+            expect(outcome.status).toBe('completed');
+            const payload = outcome.resultPayload as any;
+            expect(payload.success).toBe(true);
+            expect(payload.geoAnchor).toBeDefined();
+            expect(payload.geoAnchor.lat).toBeCloseTo(43.7384, 4);
+            expect(payload.geoAnchor.lng).toBeCloseTo(7.4246, 4);
+            expect(payload.geoAnchor.elevationSource).toBe('explicit_coordinates');
+            expect(payload.artifact.data.subtitle).toContain('43.7384');
+        });
+
+        it('respects ContinuousPhysicalParameters overrides in synthesizeAdaptiveHeroObjectContract (Alien Planet Test)', () => {
+            // An entity the developer never conceived of with continuous parameter overrides
+            const novelPrompt = 'Bioluminescent geothermal mycelium forest spire';
+            const heroContract = synthesizeAdaptiveHeroObjectContract(novelPrompt, {
+                parameterOverrides: {
+                    scaleLength: 7.5,
+                    scaleWidth: 3.8,
+                    scaleHeight: 12.0,
+                    superellipseExponent: 3.5,
+                    appendageCount: 8
+                }
+            });
+
+            // Overrides must directly govern continuous dimensions
+            expect(heroContract.boundingScaleMeters[0]).toBeCloseTo(3.8, 1);  // Width
+            expect(heroContract.boundingScaleMeters[1]).toBeCloseTo(12.0, 1); // Height
+            expect(heroContract.boundingScaleMeters[2]).toBeCloseTo(7.5, 1);  // Length
+            expect(heroContract.primaryHull.stations[0].superellipseExponent).toBeCloseTo(3.5, 1);
+            expect(heroContract.revolvedHarmonics?.length).toBeGreaterThanOrEqual(1);
         });
     });
 });

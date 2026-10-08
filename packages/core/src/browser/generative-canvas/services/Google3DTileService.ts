@@ -64,8 +64,18 @@ export interface TileIngestionResult {
   glbBuffer?: ArrayBuffer;
 }
 
-// Built-in offline geodetic fallback registry for instant zero-latency resolution
-const GLOBAL_LANDMARK_REGISTRY: Record<string, { lat: number; lng: number; elevation: number; name: string }> = {
+/**
+ * ADA Architectural Invariant: OFFLINE_TEST_FIXTURE_COORDINATES
+ *
+ * Strictly designated as an offline fallback cache for unit/integration tests and zero-latency local development.
+ * Under Adaptive Domain Architecture (ADA) Pillar 2 ("Zero Closed Taxonomies / Never Accumulate Noun Dictionaries")
+ * and the Zero-Presets invariant, production runtime must NEVER rely on static dictionary lookups.
+ * Geodetic coordinates are resolved dynamically through:
+ * 1. Direct LLM-supplied geodetic coordinates in tool arguments ({ coordinates: [lat, lng] }) or prompts.
+ * 2. Google Vector Tiles and Photorealistic 3D Tiles geospatial querying.
+ * 3. Dynamic geocoding via GoogleMapsService.
+ */
+export const OFFLINE_TEST_FIXTURE_COORDINATES: Record<string, { lat: number; lng: number; elevation: number; name: string }> = {
   // New York
   'the plaza hotel nyc': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
   'the plaza hotel new york': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
@@ -218,6 +228,9 @@ const GLOBAL_LANDMARK_REGISTRY: Record<string, { lat: number; lng: number; eleva
   'sony pictures studios': { lat: 34.0205, lng: -118.3967, elevation: 28.13, name: 'Sony Pictures Studios, CA' }
 };
 
+// Backwards-compatibility alias for test suites and offline fixtures
+export const GLOBAL_LANDMARK_REGISTRY = OFFLINE_TEST_FIXTURE_COORDINATES;
+
 export interface RealWorldLocationIntent {
   isRealWorld: boolean;
   landmarkName: string;
@@ -335,8 +348,9 @@ export function detectRealWorldLocationIntent(
   // Exclude purely generic non-geographic, space, or extraterrestrial prompts unless coordinates are explicitly given
   const isGenericNonGeo = /\b(?:outer space|solar system|planets?|galaxy|orbit(?:ing)?|molecule|molecular|atoms?|quantum|dna|particle simulation|mars|moon|lunar|asteroid|sci-fi|cyberpunk|spacecraft|rover)\b/i.test(prompt);
 
-  // Check direct coordinate string pattern
-  const coordMatch = combined.match(/(?:lat|latitude)?:?\s*([-+]?[0-9]*\.?[0-9]+)[,\s]+(?:lng|lon|longitude)?:?\s*([-+]?[0-9]*\.?[0-9]+)/i);
+  // Check direct coordinate string pattern (e.g. "37.7955, -122.3937", "[40.7308, -73.9973]", or "lat: 40.7308, lng: -73.9973")
+  const cleanCoords = combined.replace(/[\[\]\(\)]/g, ' ');
+  const coordMatch = cleanCoords.match(/(?:lat|latitude)?:?\s*([-+]?[0-9]*\.?[0-9]+)[,\s]+(?:lng|lon|longitude)?:?\s*([-+]?[0-9]*\.?[0-9]+)/i);
   if (coordMatch) {
     const lat = parseFloat(coordMatch[1]);
     const lng = parseFloat(coordMatch[2]);
@@ -348,7 +362,7 @@ export function detectRealWorldLocationIntent(
         lat,
         lng,
         elevation,
-        elevationSource: 'google_elevation',
+        elevationSource: 'explicit_coordinates',
         datum: 'MSL_EGM96',
         query: `${lat}, ${lng}`
       };
@@ -360,7 +374,7 @@ export function detectRealWorldLocationIntent(
   }
 
   // Sort entries by key length descending so specific multi-word landmarks match first
-  const sortedLandmarks = Object.entries(GLOBAL_LANDMARK_REGISTRY).sort((a, b) => b[0].length - a[0].length);
+  const sortedLandmarks = Object.entries(OFFLINE_TEST_FIXTURE_COORDINATES).sort((a, b) => b[0].length - a[0].length);
 
   // Check known landmark/city matches
   for (const [key, item] of sortedLandmarks) {
@@ -374,7 +388,7 @@ export function detectRealWorldLocationIntent(
         lat: item.lat,
         lng: item.lng,
         elevation: item.elevation,
-        elevationSource: 'google_elevation',
+        elevationSource: 'offline_test_fixture',
         datum: 'MSL_EGM96',
         query: item.name
       };
@@ -403,7 +417,7 @@ export function detectRealWorldLocationIntent(
       const blacklist = ['me', 'us', 'the scene', 'a building', 'something', 'a world', 'a room', 'an object', 'a cube', 'a sphere', 'generic', 'blank'];
       if (stripped.length >= 2 && !blacklist.includes(stripped.toLowerCase())) {
         const resolved = Google3DTileService.getInstance().resolveLocationSync(target);
-        const isKnown = resolved.landmarkName && resolved.landmarkName !== target && resolved.landmarkName !== 'San Francisco';
+        const isKnown = Boolean(resolved.isResolved && resolved.lat !== 0);
         const isRecognizedTarget = sortedLandmarks.some(([k]) => {
           if (k.length <= 3) {
             return new RegExp(`\\b${k}\\b`, 'i').test(target);
@@ -415,7 +429,7 @@ export function detectRealWorldLocationIntent(
         if (isKnown || isRecognizedTarget || hasCityQualifier) {
           return {
             isRealWorld: true,
-            landmarkName: resolved.landmarkName || target,
+            landmarkName: (resolved.isResolved ? resolved.landmarkName : undefined) || target,
             lat: resolved.lat,
             lng: resolved.lng,
             elevation: resolved.elevation,
@@ -444,7 +458,7 @@ export class Google3DTileService {
    */
   public resolveLocationSync(
     queryOrCoords: string | { lat: number; lng: number; elevation?: number }
-  ): { lat: number; lng: number; elevation: number; elevationSource?: string; datum?: string; landmarkName?: string; formattedAddress?: string } {
+  ): { lat: number; lng: number; elevation: number; elevationSource?: string; datum?: string; landmarkName?: string; formattedAddress?: string; isResolved: boolean } {
     if (typeof queryOrCoords === 'object') {
       const elevation = queryOrCoords.elevation !== undefined
         ? queryOrCoords.elevation
@@ -453,16 +467,18 @@ export class Google3DTileService {
         lat: queryOrCoords.lat,
         lng: queryOrCoords.lng,
         elevation,
-        elevationSource: 'google_elevation',
+        elevationSource: 'explicit_coordinates',
         datum: 'MSL_EGM96',
-        landmarkName: `Geo (${queryOrCoords.lat.toFixed(4)}, ${queryOrCoords.lng.toFixed(4)})`
+        landmarkName: `Geo (${queryOrCoords.lat.toFixed(4)}, ${queryOrCoords.lng.toFixed(4)})`,
+        isResolved: true
       };
     }
 
     const cleanQuery = queryOrCoords.trim().toLowerCase();
 
-    // Check direct coordinate string format e.g. "37.7955, -122.3937"
-    const coordMatch = cleanQuery.match(/^([-+]?[0-9]*\.?[0-9]+)[,\s]+([-+]?[0-9]*\.?[0-9]+)(?:[,\s]+([-+]?[0-9]*\.?[0-9]+))?$/);
+    // Check direct coordinate string format e.g. "37.7955, -122.3937" or "[37.7955, -122.3937]"
+    const cleanCoords = cleanQuery.replace(/[\[\]\(\)]/g, ' ').trim();
+    const coordMatch = cleanCoords.match(/^([-+]?[0-9]*\.?[0-9]+)[,\s]+([-+]?[0-9]*\.?[0-9]+)(?:[,\s]+([-+]?[0-9]*\.?[0-9]+))?$/);
     if (coordMatch) {
       const lat = parseFloat(coordMatch[1]);
       const lng = parseFloat(coordMatch[2]);
@@ -471,14 +487,15 @@ export class Google3DTileService {
         lat,
         lng,
         elevation,
-        elevationSource: 'google_elevation',
+        elevationSource: 'explicit_coordinates',
         datum: 'MSL_EGM96',
-        landmarkName: `Lat ${lat.toFixed(4)}, Lng ${lng.toFixed(4)}`
+        landmarkName: `Lat ${lat.toFixed(4)}, Lng ${lng.toFixed(4)}`,
+        isResolved: true
       };
     }
 
     // Sort entries by key length descending so specific multi-word landmarks match first
-    const sortedEntries = Object.entries(GLOBAL_LANDMARK_REGISTRY).sort((a, b) => b[0].length - a[0].length);
+    const sortedEntries = Object.entries(OFFLINE_TEST_FIXTURE_COORDINATES).sort((a, b) => b[0].length - a[0].length);
 
     const strippedQuery = cleanQuery
       .replace(/^(?:the|a|an)\s+/i, '')
@@ -493,10 +510,11 @@ export class Google3DTileService {
           lat: item.lat,
           lng: item.lng,
           elevation: item.elevation,
-          elevationSource: 'google_elevation',
+          elevationSource: 'offline_test_fixture',
           datum: 'MSL_EGM96',
           landmarkName: item.name,
-          formattedAddress: `${item.name}, Earth`
+          formattedAddress: `${item.name}, Earth`,
+          isResolved: true
         };
       }
     }
@@ -510,10 +528,11 @@ export class Google3DTileService {
           lat: item.lat,
           lng: item.lng,
           elevation: item.elevation,
-          elevationSource: 'google_elevation',
+          elevationSource: 'offline_test_fixture',
           datum: 'MSL_EGM96',
           landmarkName: item.name,
-          formattedAddress: `${item.name}, Earth`
+          formattedAddress: `${item.name}, Earth`,
+          isResolved: true
         };
       }
     }
@@ -525,21 +544,25 @@ export class Google3DTileService {
           lat: item.lat,
           lng: item.lng,
           elevation: item.elevation,
-          elevationSource: 'google_elevation',
+          elevationSource: 'offline_test_fixture',
           datum: 'MSL_EGM96',
           landmarkName: item.name,
-          formattedAddress: `${item.name}, Earth`
+          formattedAddress: `${item.name}, Earth`,
+          isResolved: true
         };
       }
     }
 
+    // ADA Invariant: Never silently default to San Francisco!
+    // Return unresolved status so callers can request coordinates or trigger dynamic geocoding.
     return {
-      lat: 37.7749,
-      lng: -122.4194,
-      elevation: 10.0,
-      elevationSource: 'google_elevation',
+      lat: 0,
+      lng: 0,
+      elevation: 0,
+      elevationSource: 'unresolved',
       datum: 'MSL_EGM96',
-      landmarkName: queryOrCoords || 'San Francisco'
+      landmarkName: queryOrCoords || 'Unresolved Location',
+      isResolved: false
     };
   }
 
@@ -548,16 +571,17 @@ export class Google3DTileService {
    */
   public async resolveLocation(
     queryOrCoords: string | { lat: number; lng: number; elevation?: number }
-  ): Promise<{ lat: number; lng: number; elevation: number; landmarkName?: string; formattedAddress?: string }> {
+  ): Promise<{ lat: number; lng: number; elevation: number; landmarkName?: string; formattedAddress?: string; isResolved: boolean }> {
     if (typeof queryOrCoords === 'object') {
-      return this.resolveLocationSync(queryOrCoords);
+      const res = this.resolveLocationSync(queryOrCoords);
+      return { ...res, isResolved: true };
     }
 
     const cleanQuery = queryOrCoords.trim().toLowerCase();
 
-    // Direct check
+    // Direct check against offline fixtures or coordinate strings
     const syncRes = this.resolveLocationSync(cleanQuery);
-    if (syncRes.landmarkName !== cleanQuery && syncRes.landmarkName !== 'San Francisco') {
+    if (syncRes.isResolved && syncRes.lat !== 0) {
       return syncRes;
     }
 
@@ -579,14 +603,17 @@ export class Google3DTileService {
           lng: geoResult.lng,
           elevation: elev,
           landmarkName: geoResult.formattedAddress || queryOrCoords,
-          formattedAddress: geoResult.formattedAddress
+          formattedAddress: geoResult.formattedAddress,
+          isResolved: true
         };
       }
     } catch {
-      // Ignore network errors and fall back to default
+      // Ignore network errors and continue to throw
     }
 
-    return syncRes;
+    throw new Error(
+      `[Google3DTileService] Could not resolve geodetic coordinates for "${queryOrCoords}". In accordance with ADA Zero-Presets, provide explicit geodetic coordinates [lat, lng] or verify Google Maps API key / network connectivity.`
+    );
   }
 
   /**
@@ -599,6 +626,12 @@ export class Google3DTileService {
         ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
         : 'san francisco ferry building')
     );
+
+    if (!geo.isResolved && options.lat === undefined) {
+      throw new Error(
+        `[Google3DTileService] Could not resolve geodetic coordinates for "${options.query}". In accordance with ADA Zero-Presets, provide explicit geodetic coordinates { lat, lng } or verify Google Maps tile availability.`
+      );
+    }
 
     const zoom = options.zoom ?? 17;
     const radius = options.radiusMeters ?? 160;
