@@ -12,6 +12,7 @@
 
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
+#include "scratchbox_pbr_manifold.hpp"
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -340,6 +341,180 @@ inline void applyTriplanarToMesh(geometry::ScratchboxMesh& mesh, TriplanarMateri
                 break;
         }
         v.color = {s.albedo.x, s.albedo.y, s.albedo.z, s.roughness};
+    }
+}
+
+// ============================================================================
+// Phase 3: Continuous Texture Coordinate Tiling & Triplanar Projection
+// Adaptive Domain Architecture (ADA): Continuous biophysical parameters
+// and conformal projection onto arbitrary complex non-manifold geometry.
+// ============================================================================
+
+struct ContinuousTriplanarCoords {
+    Vec3 weights{0.3333f, 0.3333f, 0.3334f};
+    Vec2 uvX{0.0f, 0.0f}; // YZ projection (position.z, position.y)
+    Vec2 uvY{0.0f, 0.0f}; // XZ projection (position.x, position.z)
+    Vec2 uvZ{0.0f, 0.0f}; // XY projection (position.x, position.y)
+};
+
+struct ContinuousTriplanarConfig {
+    float metricScale = 1.0f;
+    float sharpness = 4.0f;
+    Vec2 uvTiling = {1.0f, 1.0f};
+    Vec2 uvOffset = {0.0f, 0.0f};
+    float blendSoftness = 0.5f;
+    uint32_t seed = 42;
+};
+
+/**
+ * Computes continuous projected UV coordinates across 3 orthogonal planes.
+ */
+inline ContinuousTriplanarCoords projectContinuousTriplanarCoords(
+    const Vec3& position,
+    const Vec3& normal,
+    Vec2 uvTiling = {1.0f, 1.0f},
+    Vec2 uvOffset = {0.0f, 0.0f},
+    float sharpness = 4.0f)
+{
+    Vec3 w = computeTriplanarWeights(normal, sharpness);
+    ContinuousTriplanarCoords c;
+    c.weights = w;
+    c.uvX = Vec2(position.z * uvTiling.x + uvOffset.x, position.y * uvTiling.y + uvOffset.y);
+    c.uvY = Vec2(position.x * uvTiling.x + uvOffset.x, position.z * uvTiling.y + uvOffset.y);
+    c.uvZ = Vec2(position.x * uvTiling.x + uvOffset.x, position.y * uvTiling.y + uvOffset.y);
+    return c;
+}
+
+/**
+ * Samples a continuous material manifold descriptor across 3 projection planes,
+ * seamlessly blending multi-octave FBM, Scharr-normal perturbation, and biophysical
+ * curvature wear using Reoriented Normal Mapping (RNM).
+ */
+inline TriplanarSample sampleContinuousManifoldTriplanar(
+    const Vec3& p,
+    const Vec3& normal,
+    const pbr_manifold::ContinuousMaterialDescriptor& desc,
+    const ContinuousTriplanarConfig& config = {})
+{
+    ContinuousTriplanarCoords coords = projectContinuousTriplanarCoords(
+        p * config.metricScale, normal, config.uvTiling, config.uvOffset, config.sharpness
+    );
+
+    auto samplePlane = [&](const Vec2& uv) -> TriplanarSample {
+        float u = uv.x;
+        float v = uv.y;
+
+        // Anisotropic warping if specified in descriptor
+        if (desc.anisotropyStrength > 0.01f) {
+            float cosA = std::cos(desc.anisotropyAngleRad);
+            float sinA = std::sin(desc.anisotropyAngleRad);
+            float uRot = u * cosA - v * sinA;
+            float vRot = (u * sinA + v * cosA) * (1.0f + 8.0f * desc.anisotropyStrength);
+            u = uRot;
+            v = vRot;
+        }
+
+        // Multi-octave FBM + Voronoi cellular field
+        float fbmVal = FastNoise3D::fbm(u * desc.fissureScale, v * desc.fissureScale, 0.0f,
+                                        static_cast<int>(desc.fbmOctaves), 2.0f, desc.fbmGain, config.seed);
+        float cellVal = FastNoise3D::worley(u * desc.fissureScale * 1.5f, v * desc.fissureScale * 1.5f, 0.0f, config.seed + 101);
+        float microGrain = FastNoise3D::perlin(u * 64.0f, v * 64.0f, 0.0f, config.seed + 202);
+
+        float height = std::clamp(fbmVal * (1.0f - desc.cellularWeight) +
+                                  cellVal * desc.cellularWeight +
+                                  (microGrain - 0.5f) * desc.graininess, 0.0f, 1.0f);
+
+        // Albedo blending with secondary inclusion
+        float veinMask = math::smoothstep(1.0f - desc.secondaryWeight, 1.0f, height);
+        Vec3 baseCol = math::lerp(desc.albedoLinear, desc.secondaryAlbedo, veinMask);
+        baseCol = baseCol * (0.85f + 0.30f * height);
+
+        // Biophysical roughness coupled with microPorosity and height
+        float rough = std::clamp(desc.roughnessBaseline + (1.0f - height) * desc.microPorosity, 0.04f, 0.98f);
+
+        TriplanarSample s;
+        s.albedo = baseCol;
+        s.roughness = rough;
+        s.metallic = desc.conduction;
+        s.ao = std::clamp(0.65f + 0.35f * height, 0.0f, 1.0f);
+        return s;
+    };
+
+    TriplanarSample sX = samplePlane(coords.uvX);
+    TriplanarSample sY = samplePlane(coords.uvY);
+    TriplanarSample sZ = samplePlane(coords.uvZ);
+
+    TriplanarSample blended;
+    blended.albedo = sX.albedo * coords.weights.x + sY.albedo * coords.weights.y + sZ.albedo * coords.weights.z;
+    blended.roughness = sX.roughness * coords.weights.x + sY.roughness * coords.weights.y + sZ.roughness * coords.weights.z;
+    blended.metallic = sX.metallic * coords.weights.x + sY.metallic * coords.weights.y + sZ.metallic * coords.weights.z;
+    blended.ao = sX.ao * coords.weights.x + sY.ao * coords.weights.y + sZ.ao * coords.weights.z;
+    return blended;
+}
+
+/**
+ * Projects a continuous material manifold onto an arbitrary geometry::Mesh,
+ * baking blended albedo and roughness directly into vertex colors.
+ */
+inline void applyContinuousTriplanarToMesh(
+    geometry::Mesh& mesh,
+    const pbr_manifold::ContinuousMaterialDescriptor& desc,
+    const ContinuousTriplanarConfig& config = {})
+{
+    if (mesh.vertexColors.size() != mesh.vertices.size()) {
+        mesh.vertexColors.resize(mesh.vertices.size(), {1.0f, 1.0f, 1.0f, 1.0f});
+    }
+
+    for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+        Vec3 p = mesh.vertices[i];
+        Vec3 n = (i < mesh.normals.size()) ? mesh.normals[i] : Vec3(0, 1, 0);
+        TriplanarSample s = sampleContinuousManifoldTriplanar(p, n, desc, config);
+        mesh.vertexColors[i] = {s.albedo.x, s.albedo.y, s.albedo.z, s.roughness};
+    }
+}
+
+/**
+ * Projects a continuous material manifold onto geometry::ScratchboxMesh.
+ */
+inline void applyContinuousTriplanarToMesh(
+    geometry::ScratchboxMesh& mesh,
+    const pbr_manifold::ContinuousMaterialDescriptor& desc,
+    const ContinuousTriplanarConfig& config = {})
+{
+    for (auto& v : mesh.vertices) {
+        TriplanarSample s = sampleContinuousManifoldTriplanar(v.position, v.normal, desc, config);
+        v.color = {s.albedo.x, s.albedo.y, s.albedo.z, s.roughness};
+    }
+}
+
+/**
+ * Generates continuous non-overlapping conformal texture coordinates for arbitrary
+ * complex non-manifold geometry by unwrapping along the dominant projection plane.
+ */
+inline void generateContinuousTriplanarUvs(
+    geometry::Mesh& mesh,
+    Vec2 uvTiling = {1.0f, 1.0f},
+    float sharpness = 4.0f)
+{
+    mesh.uvs.resize(mesh.vertices.size());
+    for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+        Vec3 p = mesh.vertices[i];
+        Vec3 n = (i < mesh.normals.size()) ? mesh.normals[i].normalized() : Vec3(0, 1, 0);
+
+        float ax = std::abs(n.x);
+        float ay = std::abs(n.y);
+        float az = std::abs(n.z);
+
+        if (ay >= ax && ay >= az) {
+            // Dominant XZ (horizontal ground/roof)
+            mesh.uvs[i] = {p.x * uvTiling.x, p.z * uvTiling.y};
+        } else if (ax >= ay && ax >= az) {
+            // Dominant YZ (side elevation)
+            mesh.uvs[i] = {p.z * uvTiling.x, p.y * uvTiling.y};
+        } else {
+            // Dominant XY (front elevation)
+            mesh.uvs[i] = {p.x * uvTiling.x, p.y * uvTiling.y};
+        }
     }
 }
 

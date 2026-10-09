@@ -158,6 +158,17 @@ namespace plant = scratchbox::plant;
 namespace inf = scratchbox::infiniti;
 namespace infiniti = scratchbox::infiniti;
 namespace infinigen = scratchbox::infiniti;
+namespace pbr_man = scratchbox::pbr_manifold;
+
+namespace scratchbox {
+// Phase 3: Continuous Texture Coordinate Tiling & Triplanar Projection Direct Integration
+using triplanar::projectContinuousTriplanarCoords;
+using triplanar::sampleContinuousManifoldTriplanar;
+using triplanar::applyContinuousTriplanarToMesh;
+using triplanar::generateContinuousTriplanarUvs;
+using triplanar::ContinuousTriplanarCoords;
+using triplanar::ContinuousTriplanarConfig;
+} // namespace scratchbox
 
 using namespace scratchbox;
 

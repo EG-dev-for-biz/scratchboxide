@@ -191,4 +191,83 @@ describe('DCC Humanoid Studio & Biophysical Skin Pipeline', () => {
             }
         }
     });
+
+    it('10. Synthesizes procedural biophysical skin and nail PBR texture sets', async () => {
+        const {
+            synthesizeBiophysicalSkinPbr,
+            synthesizeBiophysicalNailPbr
+        } = await import('../src/node/texture-processing');
+
+        // 1. Synthesize skin PBR
+        const skinMaps = synthesizeBiophysicalSkinPbr(64, 64, {
+            melaninFraction: 0.35,
+            pheomelaninRatio: 0.20,
+            vascularity: 0.30,
+            poreDensity: 32.0,
+            sulciScale: 24.0,
+            seed: 42
+        });
+
+        expect(skinMaps.albedoPng).toBeInstanceOf(Buffer);
+        expect(skinMaps.normalPng).toBeInstanceOf(Buffer);
+        expect(skinMaps.ormPng).toBeInstanceOf(Buffer);
+        expect(skinMaps.heightPng).toBeInstanceOf(Buffer);
+        expect(skinMaps.albedoPng.length).toBeGreaterThan(100);
+        expect(skinMaps.normalPng.length).toBeGreaterThan(100);
+
+        // 2. Synthesize fingernail PBR
+        const nailMaps = synthesizeBiophysicalNailPbr(64, 64, {
+            lunulaWidth: 0.22,
+            bedPinkFlush: 0.65,
+            freeEdgeWidth: 0.12,
+            striationDensity: 32.0,
+            roughnessBaseline: 0.14,
+            seed: 88
+        });
+
+        expect(nailMaps.albedoPng).toBeInstanceOf(Buffer);
+        expect(nailMaps.normalPng).toBeInstanceOf(Buffer);
+        expect(nailMaps.ormPng).toBeInstanceOf(Buffer);
+        expect(nailMaps.heightPng).toBeInstanceOf(Buffer);
+        expect(nailMaps.albedoPng.length).toBeGreaterThan(100);
+        expect(nailMaps.normalPng.length).toBeGreaterThan(100);
+    });
+
+    it('11. CineRealSkinRenderer injects cotangent normal frame and nail keratin blending', () => {
+        const material = new THREE.MeshPhysicalMaterial({
+            color: 0xdcb899,
+            roughness: 0.5
+        });
+
+        CineRealSkinRenderer.patchSkinMaterial(material, {
+            melaninFraction: 0.35,
+            subsurfaceWeight: 0.85,
+            enableNailKeratin: true,
+            nailRoughness: 0.14,
+            nailClearcoat: 0.88,
+            skinNormalScale: 1.25,
+            skinPoreScale: 18.0
+        });
+
+        const dummyShader: any = {
+            uniforms: {},
+            vertexShader: '#include <worldpos_vertex>\n',
+            fragmentShader: '#include <dithering_fragment>\n'
+        };
+        (material as any).onBeforeCompile(dummyShader, {} as any);
+
+        expect(dummyShader.uniforms.uSbSkinNormalScale.value).toBe(1.25);
+        expect(dummyShader.uniforms.uSbNailRoughness.value).toBe(0.14);
+        expect(dummyShader.uniforms.uSbNailClearcoat.value).toBe(0.88);
+        expect(dummyShader.uniforms.uSbHasNails.value).toBe(1.0);
+
+        expect(dummyShader.vertexShader).toContain('attribute float nailMask;');
+        expect(dummyShader.vertexShader).toContain('attribute vec2 nailCoord;');
+        expect(dummyShader.vertexShader).toContain('varying float vSbNailMask;');
+        expect(dummyShader.fragmentShader).toContain('getCotangentFrameSb');
+        expect(dummyShader.fragmentShader).toContain('nailFactor');
+        expect(dummyShader.fragmentShader).toContain('uSbNailAlbedoMap');
+        expect(dummyShader.fragmentShader).toContain('D_nail');
+    });
 });
+

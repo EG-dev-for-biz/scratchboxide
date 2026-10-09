@@ -108,6 +108,9 @@ const result = await call_tool('pbr_synthesize_material', {
   - `'png_pack'` (default): Writes individual Albedo, Normal, ORM, and Height PNG files.
   - `'glb'`: Generates a fully textured, normal-mapped 3D test plinth in standard binary glTF 2.0 format.
   - `'raw_buffer'`: Writes uncompressed raw float/byte buffers for direct C++ or GPU ingestion.
+  - `'materialx'`: Generates OpenPBR v1.38 compliant XML `.mtlx` document (with Autodesk Standard Surface fallback) and referenced texture maps for Houdini Karma, Unreal Engine 5.4+, and Maya Arnold.
+  - `'usdz'`: Packages a zero-compression, Pixar/Apple 64-byte aligned USDZ archive containing `material.usda` (`UsdPreviewSurface`) and relative PBR textures.
+- `uvTilingX` / `uvTilingY`: Multiplier for continuous UV texture coordinate repetition across surface manifolds (default: `1.0`).
 - `outputDir`: Directory to persist texture files.
 - `outputFileName`: Base filename prefix.
 
@@ -152,6 +155,12 @@ $$R(x, y) = \operatorname{clamp}\left(R_0 - \max(0, \kappa)\cdot 0.35 + \max(0, 
 
 ### 4. glTF 2.0 ORM Standard Channel Packing
 $$\text{ORM} = \begin{pmatrix} \text{Red: Ambient Occlusion} \\ \text{Green: Biophysical Roughness} \\ \text{Blue: Electrical Conduction (Metallic)} \end{pmatrix}$$
+
+### 5. Continuous Texture Coordinate Tiling & Seamless Triplanar Projection
+For arbitrary non-manifold or complex architectural meshes, continuous biophysical materials are mapped without UV seams via triplanar projection in `scratchbox_engine.hpp` (`sb::applyContinuousTriplanarToMesh`, `sb::sampleContinuousManifoldTriplanar`):
+$$w_i = \frac{|n_i|^k}{\sum_{j \in \{x,y,z\}} |n_j|^k}, \quad k \in [4, 8]$$
+Normals are blended per-axis via Reoriented Normal Mapping (RNM) preserving micro-relief without distortion:
+$$\mathbf{n}_{\text{rnm}} = \operatorname{normalize}\begin{pmatrix} \mathbf{n}_{\text{base}}.xy + \mathbf{n}_{\text{detail}}.xy \\ \mathbf{n}_{\text{base}}.z \cdot \mathbf{n}_{\text{detail}}.z \end{pmatrix}$$
 
 ---
 

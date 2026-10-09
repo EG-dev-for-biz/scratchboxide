@@ -18,6 +18,8 @@ import {
 } from '../../3d-engine/native-material-pbr-service';
 import { AdaptiveMaterialPbrService } from '../../3d-engine/adaptive-material-pbr-service';
 import { GltfBinaryPacker } from '../../3d-engine/gltf-binary-packer';
+import { MaterialXService } from '../../3d-engine/materialx-service';
+import { UsdzPacker } from '../../3d-engine/usdz-packer';
 import type { ContinuousMaterialDescriptor } from '../../../common/adaptive-material-types';
 
 function asString(val: unknown): string | undefined {
@@ -119,8 +121,16 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 format: {
                     type: 'STRING',
-                    description: 'Output format: "png_pack" (saves standalone PNG texture maps), "glb" (packs standard binary glTF 2.0 with displaced plane mesh), or "raw_buffer" (saves raw uncompressed binaries). Default: "png_pack".',
-                    enum: ['png_pack', 'glb', 'raw_buffer']
+                    description: 'Output format: "png_pack" (saves standalone PNG texture maps), "glb" (packs standard binary glTF 2.0 with displaced plane mesh), "raw_buffer" (saves raw uncompressed binaries), "materialx" (outputs OpenPBR v1.38 .mtlx document + PNG textures for VFX/Houdini/Maya/UE5), or "usdz" (packs Pixar/Apple 64-byte aligned USDZ archive). Default: "png_pack".',
+                    enum: ['png_pack', 'glb', 'raw_buffer', 'materialx', 'usdz']
+                },
+                uvTilingX: {
+                    type: 'NUMBER',
+                    description: 'Horizontal UV texture coordinate repetition/tiling multiplier (default: 1.0).'
+                },
+                uvTilingY: {
+                    type: 'NUMBER',
+                    description: 'Vertical UV texture coordinate repetition/tiling multiplier (default: 1.0).'
                 },
                 outputDir: {
                     type: 'STRING',
@@ -136,7 +146,7 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 planeWidthMeters: {
                     type: 'NUMBER',
-                    description: 'Metric plane width in meters when format is "glb" (default: 2.0).'
+                    description: 'Metric plane width in meters when format is "glb" or "usdz" (default: 2.0).'
                 },
                 displacementScaleMeters: {
                     type: 'NUMBER',
@@ -239,22 +249,47 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         const writtenFiles: Record<string, string> = {};
 
         // 5. Handle output formats
-        if (format === 'png_pack' || format === 'glb') {
+        if (format === 'png_pack' || format === 'glb' || format === 'materialx' || format === 'usdz') {
             // Virtual height into RGBA PNG
             const heightRgba = Buffer.alloc(width * height * 4);
+            const roughnessRgba = Buffer.alloc(width * height * 4);
+            const metallicRgba = Buffer.alloc(width * height * 4);
+            const aoRgba = Buffer.alloc(width * height * 4);
+
             for (let i = 0; i < width * height; i++) {
                 const hVal = pbrResult.heightRgb[i * 3];
                 heightRgba[i * 4 + 0] = hVal;
                 heightRgba[i * 4 + 1] = hVal;
                 heightRgba[i * 4 + 2] = hVal;
                 heightRgba[i * 4 + 3] = 255;
+
+                const rVal = pbrResult.roughnessRgb[i * 3];
+                roughnessRgba[i * 4 + 0] = rVal;
+                roughnessRgba[i * 4 + 1] = rVal;
+                roughnessRgba[i * 4 + 2] = rVal;
+                roughnessRgba[i * 4 + 3] = 255;
+
+                const mVal = pbrResult.metallicRgb[i * 3];
+                metallicRgba[i * 4 + 0] = mVal;
+                metallicRgba[i * 4 + 1] = mVal;
+                metallicRgba[i * 4 + 2] = mVal;
+                metallicRgba[i * 4 + 3] = 255;
+
+                const aVal = pbrResult.aoRgb[i * 3];
+                aoRgba[i * 4 + 0] = aVal;
+                aoRgba[i * 4 + 1] = aVal;
+                aoRgba[i * 4 + 2] = aVal;
+                aoRgba[i * 4 + 3] = 255;
             }
 
-            const [albedoPng, normalPng, ormPng, heightPng] = await Promise.all([
+            const [albedoPng, normalPng, ormPng, heightPng, roughnessPng, metallicPng, aoPng] = await Promise.all([
                 AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.albedoRgba, width, height, true),
                 AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.normalRgba, width, height, true),
                 AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.ormRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(heightRgba, width, height, true)
+                AdaptiveMaterialPbrService.encodeFromRgba(heightRgba, width, height, true),
+                AdaptiveMaterialPbrService.encodeFromRgba(roughnessRgba, width, height, true),
+                AdaptiveMaterialPbrService.encodeFromRgba(metallicRgba, width, height, true),
+                AdaptiveMaterialPbrService.encodeFromRgba(aoRgba, width, height, true)
             ]);
 
             const albedoPath = path.join(outDir, `${filePrefix}_albedo.png`);
@@ -272,7 +307,60 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             writtenFiles.orm = ormPath;
             writtenFiles.height = heightPath;
 
-            if (format === 'glb') {
+            if (format === 'materialx' || format === 'usdz') {
+                const roughnessPath = path.join(outDir, `${filePrefix}_roughness.png`);
+                const metallicPath = path.join(outDir, `${filePrefix}_metallic.png`);
+                const aoPath = path.join(outDir, `${filePrefix}_ao.png`);
+                fs.writeFileSync(roughnessPath, roughnessPng);
+                fs.writeFileSync(metallicPath, metallicPng);
+                fs.writeFileSync(aoPath, aoPng);
+                writtenFiles.roughness = roughnessPath;
+                writtenFiles.metallic = metallicPath;
+                writtenFiles.ao = aoPath;
+            }
+
+            if (format === 'materialx') {
+                const mtlxPath = path.join(outDir, `${filePrefix}.mtlx`);
+                MaterialXService.exportMaterialX({
+                    materialName: `${archetypeKey}_PBR_Material`,
+                    descriptor,
+                    outputPath: mtlxPath,
+                    uvTiling: {
+                        u: asNumber(args.uvTilingX, 1.0)!,
+                        v: asNumber(args.uvTilingY, 1.0)!
+                    },
+                    textures: {
+                        albedoFileName: `${filePrefix}_albedo.png`,
+                        normalFileName: `${filePrefix}_normal.png`,
+                        ormFileName: `${filePrefix}_orm.png`,
+                        roughnessFileName: `${filePrefix}_roughness.png`,
+                        metallicFileName: `${filePrefix}_metallic.png`,
+                        aoFileName: `${filePrefix}_ao.png`,
+                        heightFileName: `${filePrefix}_height.png`
+                    }
+                });
+                writtenFiles.materialx = mtlxPath;
+            } else if (format === 'usdz') {
+                const usdzPath = path.join(outDir, `${filePrefix}.usdz`);
+                UsdzPacker.packMaterialUsdz({
+                    materialName: `${archetypeKey}_PBR_Material`,
+                    descriptor,
+                    albedoPng,
+                    normalPng,
+                    roughnessPng,
+                    metallicPng,
+                    aoPng,
+                    ormPng,
+                    heightPng,
+                    outputPath: usdzPath,
+                    planeWidthMeters: asNumber(args.planeWidthMeters, 2.0),
+                    uvTiling: {
+                        u: asNumber(args.uvTilingX, 1.0)!,
+                        v: asNumber(args.uvTilingY, 1.0)!
+                    }
+                });
+                writtenFiles.usdz = usdzPath;
+            } else if (format === 'glb') {
                 const planeWidth = asNumber(args.planeWidthMeters, 2.0)!;
                 const planeHeight = planeWidth; // 1:1 aspect square
                 const dispScale = asNumber(args.displacementScaleMeters, 0.04)!;

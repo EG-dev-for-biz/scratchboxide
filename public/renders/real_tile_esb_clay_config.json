@@ -1,0 +1,26 @@
+{
+  "glbPath": "public/tiles/scan_studio_tile_esb_77197_98526.glb",
+  "outputDir": "public/renders/real_tile_esb_clay",
+  "width": 960,
+  "height": 540,
+  "samplesPerPixel": 16,
+  "maxBounces": 3,
+  "threads": 4,
+  "clayAlbedo": [0.65, 0.67, 0.70],
+  "clayRoughness": 0.85,
+  "clayMetallic": 0.02,
+  "groundPlane": false,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1720022400
+  },
+  "camera": {
+    "auto": {
+      "verticalFovDeg": 42.0,
+      "pitchDeg": 28.0,
+      "headingDeg": 35.0,
+      "distanceScale": 1.05
+    }
+  }
+}

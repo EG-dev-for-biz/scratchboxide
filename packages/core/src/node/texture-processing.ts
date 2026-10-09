@@ -1030,3 +1030,392 @@ export function calibrateStoneAlbedoPng(
     return encodePng(decoded.width, decoded.height, calibrated);
 }
 
+// ============================================================================
+// Biophysical Humanoid PBR Synthesis (Skin & Nail Biophysics)
+// ============================================================================
+
+export interface BiophysicalSkinPbrOptions {
+    melaninFraction?: number;   // 0.0 (pale) to 1.0 (deep complexion), default 0.35
+    pheomelaninRatio?: number;  // 0.0 (eumelanin) to 1.0 (pheomelanin), default 0.20
+    poreDensity?: number;       // Micro-pore spatial frequency (default 48.0)
+    sulciScale?: number;        // Epidermal polygonal tile frequency (default 36.0)
+    vascularity?: number;       // Subdermal capillary vascular mottling (default 0.35)
+    roughnessBaseline?: number; // Keratin stratum corneum base roughness (default 0.48)
+    normalStrength?: number;    // Tangent normal relief strength (default 2.4)
+    seed?: number;
+}
+
+export interface BiophysicalNailPbrOptions {
+    lunulaWidth?: number;       // Relative width/height of proximal crescent (default 0.22)
+    bedPinkFlush?: number;      // Vascular nail bed pink capillary intensity (default 0.65)
+    freeEdgeWidth?: number;     // Relative size of distal free edge (default 0.12)
+    striationDensity?: number;  // Longitudinal anisotropic micro-ridges (default 64.0)
+    roughnessBaseline?: number; // Hard alpha-keratin plate mirror gloss (default 0.14)
+    normalStrength?: number;    // Anisotropic tangent normal strength (default 1.8)
+    seed?: number;
+}
+
+/**
+ * Synthesizes biophysical human skin PBR texture set (Albedo, Tangent Normal, ORM, Height).
+ * Incorporates:
+ * 1. Melanin spectral absorption curve + vascular capillary mottling
+ * 2. Stratum corneum keratin sulci (polygonal Voronoi micro-grooves)
+ * 3. Eccrine sweat pore micro-depressions
+ * 4. Micro-cavity ambient occlusion and curvature-coupled roughness
+ */
+export function synthesizeBiophysicalSkinPbr(
+    width = 512,
+    height = 512,
+    options: BiophysicalSkinPbrOptions = {}
+): PbrBufferSet {
+    const seed = options.seed ?? 1337;
+    const melanin = Math.max(0.0, Math.min(1.0, options.melaninFraction ?? 0.35));
+    const pheo = Math.max(0.0, Math.min(1.0, options.pheomelaninRatio ?? 0.20));
+    const poreDensity = options.poreDensity ?? 48.0;
+    const sulciScale = options.sulciScale ?? 36.0;
+    const vascularity = options.vascularity ?? 0.35;
+    const roughnessBaseline = options.roughnessBaseline ?? 0.48;
+    const normalStrength = options.normalStrength ?? 2.4;
+
+    // Base melanin albedo calculation
+    const baseR = 0.82;
+    const baseG = 0.62;
+    const baseB = 0.52;
+    const euAbs = [1.8, 3.2, 5.5];
+    const phAbs = [0.8, 2.4, 6.2];
+    const effAbsR = (1 - pheo) * euAbs[0] + pheo * phAbs[0];
+    const effAbsG = (1 - pheo) * euAbs[1] + pheo * phAbs[1];
+    const effAbsB = (1 - pheo) * euAbs[2] + pheo * phAbs[2];
+    const skinAlbedoR = Math.max(0.02, Math.min(1.0, baseR * Math.exp(-melanin * effAbsR)));
+    const skinAlbedoG = Math.max(0.015, Math.min(1.0, baseG * Math.exp(-melanin * effAbsG)));
+    const skinAlbedoB = Math.max(0.01, Math.min(1.0, baseB * Math.exp(-melanin * effAbsB)));
+
+    const albedo = Buffer.alloc(width * height * 4);
+    const normal = Buffer.alloc(width * height * 4);
+    const roughness = Buffer.alloc(width * height * 4);
+    const metallic = Buffer.alloc(width * height * 4);
+    const ao = Buffer.alloc(width * height * 4);
+    const heightMap = Buffer.alloc(width * height * 4);
+    const heightVals = new Float32Array(width * height);
+
+    // Pass 1: Compute Heightfield and Albedo
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const u = x / width;
+            const v = y / height;
+
+            // 1. Epidermal sulci (polygonal keratin tiles)
+            const wSulci = worley2D(u * sulciScale, v * sulciScale, 0.92, seed + 10);
+            const sulciDepth = Math.pow(Math.min(1.0, Math.max(0.0, wSulci.f2_minus_f1 / 0.32)), 0.6);
+
+            // 2. Eccrine sweat pores
+            const wPore = worley2D(u * poreDensity, v * poreDensity, 0.85, seed + 20);
+            const poreDepth = Math.pow(Math.max(0.0, 1.0 - wPore.f1 / 0.22), 2.0) * 0.25;
+
+            // 3. Micro-grain (stratum corneum texture)
+            const microGrain = perlin2D(u * 128.0, v * 128.0, seed + 30) * 0.035;
+
+            // Composite micro-height
+            const hVal = Math.min(1.0, Math.max(0.0, 0.5 + (sulciDepth - 0.5) * 0.18 - poreDepth + microGrain));
+            heightVals[y * width + x] = hVal;
+
+            // 4. Subdermal vascular mottling
+            const vNoise = fbm2D(u * 12.0, v * 12.0, 3, 2.0, 0.5, seed + 40);
+            const vCell = worley2D(u * 6.0, v * 6.0, 0.8, seed + 50).f2_minus_f1;
+            const mottle = (vNoise * 0.6 + vCell * 0.4 - 0.3) * vascularity;
+
+            // Vascular hemoglobin warm bleed
+            const hemoR = 0.95;
+            const hemoG = 0.22;
+            const hemoB = 0.18;
+
+            let colR = skinAlbedoR + mottle * (hemoR - skinAlbedoR);
+            let colG = skinAlbedoG + mottle * 0.35 * (hemoG - skinAlbedoG);
+            let colB = skinAlbedoB + mottle * 0.25 * (hemoB - skinAlbedoB);
+
+            // Darken in pore bottoms and sulci crevices
+            const poreDarken = 1.0 - poreDepth * 0.55;
+            const sulciDarken = 0.92 + sulciDepth * 0.08;
+            colR = Math.max(0.0, Math.min(1.0, colR * poreDarken * sulciDarken));
+            colG = Math.max(0.0, Math.min(1.0, colG * poreDarken * sulciDarken));
+            colB = Math.max(0.0, Math.min(1.0, colB * poreDarken * sulciDarken));
+
+            const idx = (y * width + x) * 4;
+            albedo[idx] = Math.round(colR * 255);
+            albedo[idx + 1] = Math.round(colG * 255);
+            albedo[idx + 2] = Math.round(colB * 255);
+            albedo[idx + 3] = 255;
+
+            metallic[idx] = 0;
+            metallic[idx + 1] = 0;
+            metallic[idx + 2] = 0;
+            metallic[idx + 3] = 255;
+        }
+    }
+
+    // Pass 2: Normal, Roughness, and Cavity AO via 3x3 Scharr Gradient
+    const getH = (x: number, y: number): number => {
+        const px = ((x % width) + width) % width;
+        const py = ((y % height) + height) % height;
+        return heightVals[py * width + px];
+    };
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const idx = (y * width + x) * 4;
+            const hC = getH(x, y);
+            const hL = getH(x - 1, y);
+            const hR = getH(x + 1, y);
+            const hT = getH(x, y - 1);
+            const hB = getH(x, y + 1);
+
+            heightMap[idx] = Math.round(hC * 255);
+            heightMap[idx + 1] = Math.round(hC * 255);
+            heightMap[idx + 2] = Math.round(hC * 255);
+            heightMap[idx + 3] = 255;
+
+            // Scharr gradient normal
+            const dx = (getH(x + 1, y - 1) + 3.33 * hR + getH(x + 1, y + 1) - (getH(x - 1, y - 1) + 3.33 * hL + getH(x - 1, y + 1))) / 5.333;
+            const dy = (getH(x - 1, y + 1) + 3.33 * hB + getH(x + 1, y + 1) - (getH(x - 1, y - 1) + 3.33 * hT + getH(x + 1, y - 1))) / 5.333;
+
+            let nx = -dx * normalStrength;
+            let ny = -dy * normalStrength;
+            let nz = 1.0;
+            const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1.0;
+            nx /= len;
+            ny /= len;
+            nz /= len;
+
+            normal[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+            normal[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+            normal[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+            normal[idx + 3] = 255;
+
+            // Roughness: Ridge burnishing smoother, crevices and pores rougher
+            const avg = (hL + hR + hT + hB) * 0.25;
+            const concavity = Math.max(0, avg - hC);
+            const convexity = Math.max(0, hC - avg);
+            const rVal = Math.min(0.85, Math.max(0.25, roughnessBaseline - convexity * 0.8 + concavity * 1.4));
+            const rByte = Math.round(rVal * 255);
+
+            roughness[idx] = rByte;
+            roughness[idx + 1] = rByte;
+            roughness[idx + 2] = rByte;
+            roughness[idx + 3] = 255;
+
+            // Cavity AO in micro-pores and sulci
+            const aoVal = Math.min(1.0, Math.max(0.35, 1.0 - concavity * 3.5));
+            const aoByte = Math.round(aoVal * 255);
+
+            ao[idx] = aoByte;
+            ao[idx + 1] = aoByte;
+            ao[idx + 2] = aoByte;
+            ao[idx + 3] = 255;
+        }
+    }
+
+    const orm = packOrmBuffer(ao, roughness, metallic, width, height);
+
+    return {
+        albedoPng: encodePng(width, height, albedo),
+        normalPng: encodePng(width, height, normal),
+        roughnessPng: encodePng(width, height, roughness),
+        metallicPng: encodePng(width, height, metallic),
+        aoPng: encodePng(width, height, ao),
+        ormPng: encodePng(width, height, orm),
+        heightPng: encodePng(width, height, heightMap)
+    };
+}
+
+/**
+ * Synthesizes biophysical fingernail PBR texture set (Albedo, Anisotropic Normal, ORM, Height).
+ * Incorporates:
+ * 1. 4-Zone anatomical keratin morphology (Lunula, Vascular Bed, Onychodermal Band, Free Edge)
+ * 2. Longitudinal anisotropic micro-striations running along finger growth axis
+ * 3. Hard alpha-keratin high-gloss mirror surface (roughness ~0.12 - 0.16)
+ * 4. Cuticle & lateral nail groove cavity shadowing
+ */
+export function synthesizeBiophysicalNailPbr(
+    width = 512,
+    height = 512,
+    options: BiophysicalNailPbrOptions = {}
+): PbrBufferSet {
+    const seed = options.seed ?? 2026;
+    const lunulaWidth = options.lunulaWidth ?? 0.22;
+    const bedPinkFlush = options.bedPinkFlush ?? 0.65;
+    const freeEdgeWidth = options.freeEdgeWidth ?? 0.12;
+    const striationDensity = options.striationDensity ?? 64.0;
+    const roughnessBaseline = options.roughnessBaseline ?? 0.14;
+    const normalStrength = options.normalStrength ?? 1.8;
+
+    const albedo = Buffer.alloc(width * height * 4);
+    const normal = Buffer.alloc(width * height * 4);
+    const roughness = Buffer.alloc(width * height * 4);
+    const metallic = Buffer.alloc(width * height * 4);
+    const ao = Buffer.alloc(width * height * 4);
+    const heightMap = Buffer.alloc(width * height * 4);
+    const heightVals = new Float32Array(width * height);
+
+    // Pass 1: Compute Nail Heightfield and 4-Zone Morphology Albedo
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const u = x / width;   // [0, 1] across nail width (0.5 = center)
+            const v = y / height;  // [0, 1] along nail length (0 = cuticle, 1 = free edge)
+
+            const uNorm = Math.abs((u - 0.5) * 2.0); // 0 at center, 1 at lateral edges
+
+            // 1. Transverse convex arch
+            const arch = (1.0 - uNorm * uNorm) * 0.12;
+
+            // 2. Longitudinal anisotropic micro-striations along finger length
+            const s1 = Math.sin(u * striationDensity * 2.0 * Math.PI) * 0.045;
+            const s2 = Math.sin(u * striationDensity * 4.0 * Math.PI + 0.5) * 0.020;
+            const s3 = perlin2D(u * 32.0, v * 3.0, seed + 60) * 0.015;
+            const striations = s1 + s2 + s3;
+
+            // 3. Cuticle groove (v near 0) and lateral grooves (uNorm near 1)
+            const cuticleT = Math.max(0.0, Math.min(1.0, (0.06 - v) / 0.06));
+            const cuticleGroove = -0.18 * (cuticleT * cuticleT * (3.0 - 2.0 * cuticleT));
+
+            const lateralT = Math.max(0.0, Math.min(1.0, (uNorm - 0.82) / 0.18));
+            const lateralGroove = -0.20 * (lateralT * lateralT * (3.0 - 2.0 * lateralT));
+
+            const hVal = Math.min(1.0, Math.max(0.0, 0.5 + arch + striations + cuticleGroove + lateralGroove));
+            heightVals[y * width + x] = hVal;
+
+            // 4. 4-Zone Anatomical Keratin Colors
+            // Zone 1: Proximal Lunula (crescent apex at lunulaWidth)
+            const lunApex = lunulaWidth * (1.0 - uNorm * uNorm * 0.85);
+            const lunDist = (lunApex - v) / 0.04;
+            const lunMask = Math.max(0.0, Math.min(1.0, lunDist > 0 ? 1.0 : (lunDist > -1.0 ? 1.0 + lunDist : 0.0)));
+
+            // Zone 4: Distal Free Edge
+            const edgeLine = 1.0 - freeEdgeWidth * (1.0 - uNorm * uNorm * 0.15);
+            const edgeDist = (v - edgeLine) / 0.03;
+            const edgeMask = Math.max(0.0, Math.min(1.0, edgeDist > 1.0 ? 1.0 : (edgeDist > 0.0 ? edgeDist : 0.0)));
+
+            // Zone 3: Onychodermal Band
+            const bandDist = (v - (edgeLine - 0.05)) / 0.04;
+            const bandMask = Math.max(0.0, Math.min(1.0, bandDist > 0.0 && bandDist < 1.0 ? 1.0 - Math.abs(bandDist - 0.5) * 2.0 : 0.0)) * (1.0 - edgeMask);
+
+            // Palette definitions
+            const lunCol = [0.91, 0.88, 0.84]; // Creamy pale ivory lunula
+            const edgeCol = [0.93, 0.91, 0.80]; // Ivory opaque free edge
+            const bandCol = [0.84, 0.54, 0.46]; // Warm amber onychodermal band
+            const bedCol = [                    // Rosy pink vascular nail bed
+                0.87,
+                0.58 * (1.0 - bedPinkFlush * 0.28),
+                0.54 * (1.0 - bedPinkFlush * 0.38)
+            ];
+
+            // Blend 4 zones
+            let colR = bedCol[0] * (1.0 - lunMask) + lunCol[0] * lunMask;
+            let colG = bedCol[1] * (1.0 - lunMask) + lunCol[1] * lunMask;
+            let colB = bedCol[2] * (1.0 - lunMask) + lunCol[2] * lunMask;
+
+            colR = colR * (1.0 - edgeMask) + edgeCol[0] * edgeMask;
+            colG = colG * (1.0 - edgeMask) + edgeCol[1] * edgeMask;
+            colB = colB * (1.0 - edgeMask) + edgeCol[2] * edgeMask;
+
+            colR = colR * (1.0 - bandMask * 0.45) + bandCol[0] * bandMask * 0.45;
+            colG = colG * (1.0 - bandMask * 0.45) + bandCol[1] * bandMask * 0.45;
+            colB = colB * (1.0 - bandMask * 0.45) + bandCol[2] * bandMask * 0.45;
+
+            // Micro-striation tone modulation
+            const striMod = 1.0 + s1 * 0.35;
+            colR = Math.max(0.0, Math.min(1.0, colR * striMod));
+            colG = Math.max(0.0, Math.min(1.0, colG * striMod));
+            colB = Math.max(0.0, Math.min(1.0, colB * striMod));
+
+            const idx = (y * width + x) * 4;
+            albedo[idx] = Math.round(colR * 255);
+            albedo[idx + 1] = Math.round(colG * 255);
+            albedo[idx + 2] = Math.round(colB * 255);
+            albedo[idx + 3] = 255;
+
+            metallic[idx] = 0;
+            metallic[idx + 1] = 0;
+            metallic[idx + 2] = 0;
+            metallic[idx + 3] = 255;
+        }
+    }
+
+    // Pass 2: Anisotropic Scharr Normal, Hard-Keratin Roughness, and Cuticle AO
+    const getH = (x: number, y: number): number => {
+        const px = Math.max(0, Math.min(width - 1, x));
+        const py = Math.max(0, Math.min(height - 1, y));
+        return heightVals[py * width + px];
+    };
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const idx = (y * width + x) * 4;
+            const uNorm = Math.abs(((x / width) - 0.5) * 2.0);
+            const v = y / height;
+
+            const hC = getH(x, y);
+            const hL = getH(x - 1, y);
+            const hR = getH(x + 1, y);
+            const hT = getH(x, y - 1);
+            const hB = getH(x, y + 1);
+
+            heightMap[idx] = Math.round(hC * 255);
+            heightMap[idx + 1] = Math.round(hC * 255);
+            heightMap[idx + 2] = Math.round(hC * 255);
+            heightMap[idx + 3] = 255;
+
+            // Scharr gradient normal
+            const dx = (getH(x + 1, y - 1) + 3.33 * hR + getH(x + 1, y + 1) - (getH(x - 1, y - 1) + 3.33 * hL + getH(x - 1, y + 1))) / 5.333;
+            const dy = (getH(x - 1, y + 1) + 3.33 * hB + getH(x + 1, y + 1) - (getH(x - 1, y - 1) + 3.33 * hT + getH(x + 1, y - 1))) / 5.333;
+
+            let nx = -dx * normalStrength;
+            let ny = -dy * normalStrength;
+            let nz = 1.0;
+            const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1.0;
+            nx /= len;
+            ny /= len;
+            nz /= len;
+
+            normal[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+            normal[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+            normal[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+            normal[idx + 3] = 255;
+
+            // High-gloss hard keratin roughness (0.12 - 0.16) with subtle wear at free edge
+            const edgeRoughness = v > 0.88 ? (v - 0.88) * 0.08 : 0.0;
+            const borderRoughness = uNorm > 0.85 ? (uNorm - 0.85) * 0.22 : 0.0;
+            const rVal = Math.min(0.40, Math.max(0.10, roughnessBaseline + edgeRoughness + borderRoughness));
+            const rByte = Math.round(rVal * 255);
+
+            roughness[idx] = rByte;
+            roughness[idx + 1] = rByte;
+            roughness[idx + 2] = rByte;
+            roughness[idx + 3] = 255;
+
+            // Cuticle and lateral groove cavity AO
+            const cuticleAo = v < 0.06 ? (0.06 - v) / 0.06 * 0.45 : 0.0;
+            const lateralAo = uNorm > 0.85 ? (uNorm - 0.85) / 0.15 * 0.40 : 0.0;
+            const aoVal = Math.min(1.0, Math.max(0.35, 1.0 - cuticleAo - lateralAo));
+            const aoByte = Math.round(aoVal * 255);
+
+            ao[idx] = aoByte;
+            ao[idx + 1] = aoByte;
+            ao[idx + 2] = aoByte;
+            ao[idx + 3] = 255;
+        }
+    }
+
+    const orm = packOrmBuffer(ao, roughness, metallic, width, height);
+
+    return {
+        albedoPng: encodePng(width, height, albedo),
+        normalPng: encodePng(width, height, normal),
+        roughnessPng: encodePng(width, height, roughness),
+        metallicPng: encodePng(width, height, metallic),
+        aoPng: encodePng(width, height, ao),
+        ormPng: encodePng(width, height, orm),
+        heightPng: encodePng(width, height, heightMap)
+    };
+}
+
+

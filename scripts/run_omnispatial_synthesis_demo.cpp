@@ -576,18 +576,19 @@ ScratchboxMesh generateStage3FullSynthesis() {
     mesh.addTriangle(gB, gB + 1, gB + 2);
     mesh.addTriangle(gB, gB + 2, gB + 3);
 
-    // Procedural botanical street trees replacing ugly photogrammetry blobs
+    // sb-veggie Architectural Botanical Street Trees (Anatomical Branching & Transferred Envelope Normals)
     auto addProceduralTree = [&](const Vec3& pos, float hgt, float canopyR) {
-        // Trunk
+        // 1. Anatomical Fluted Trunk (Rhytidome Bark)
         uint32_t tB = static_cast<uint32_t>(mesh.vertices.size());
-        Vec4 barkCol(0.30f, 0.24f, 0.18f, 1.0f);
-        int sides = 6;
-        float trunkR = 0.25f;
+        Vec4 barkCol(0.28f, 0.22f, 0.17f, 1.0f);
+        int sides = 8;
+        float trunkR = 0.28f;
         for (int i = 0; i < sides; ++i) {
             float th = (float)i / sides * 6.28318f;
             float cosT = std::cos(th), sinT = std::sin(th);
-            mesh.addVertex({pos + Vec3(cosT * trunkR, 0, sinT * trunkR), Vec3(cosT, 0, sinT), {0, 0}, barkCol});
-            mesh.addVertex({pos + Vec3(cosT * trunkR * 0.7f, hgt * 0.55f, sinT * trunkR * 0.7f), Vec3(cosT, 0, sinT), {1, 1}, barkCol});
+            Vec3 n(cosT, 0, sinT);
+            mesh.addVertex({pos + Vec3(cosT * trunkR, 0, sinT * trunkR), n, {0, 0}, barkCol});
+            mesh.addVertex({pos + Vec3(cosT * trunkR * 0.65f, hgt * 0.45f, sinT * trunkR * 0.65f), n, {1, 1}, barkCol});
             uint32_t nextI = (i + 1) % sides;
             uint32_t i0 = tB + i * 2;
             uint32_t i1 = tB + nextI * 2;
@@ -597,26 +598,80 @@ ScratchboxMesh generateStage3FullSynthesis() {
             mesh.addTriangle(i0, i2, i3);
         }
 
-        // Spherical foliage canopy
-        Vec3 canopyC = pos + Vec3(0, hgt * 0.75f, 0);
-        uint32_t cB = static_cast<uint32_t>(mesh.vertices.size());
-        Vec4 leafCol(0.20f, 0.55f, 0.24f, 1.0f);
-        mesh.addVertex({canopyC + Vec3(0, canopyR, 0), Vec3(0, 1, 0), {0.5f, 1}, leafCol});
-        mesh.addVertex({canopyC - Vec3(0, canopyR, 0), Vec3(0, -1, 0), {0.5f, 0}, leafCol});
-        for (int i = 0; i < 8; ++i) {
-            float th = (float)i / 8 * 6.28318f;
-            Vec3 p = canopyC + Vec3(std::cos(th) * canopyR, 0, std::sin(th) * canopyR);
-            mesh.addVertex({p, (p - canopyC).normalized(), {0.5f, 0.5f}, leafCol});
-            uint32_t cur = cB + 2 + i;
-            uint32_t next = cB + 2 + ((i + 1) % 8);
-            mesh.addTriangle(cB, cur, next);
-            mesh.addTriangle(cB + 1, next, cur);
+        // 2. Scaffold Boughs (Bifurcating Primary Branches)
+        Vec3 boughOrigin = pos + Vec3(0, hgt * 0.42f, 0);
+        float boughAngles[4] = { 0.2f, 1.7f, 3.3f, 4.8f };
+        for (int b = 0; b < 4; ++b) {
+            float a = boughAngles[b];
+            Vec3 boughEnd = boughOrigin + Vec3(std::cos(a) * canopyR * 0.7f, hgt * 0.22f, std::sin(a) * canopyR * 0.7f);
+            uint32_t brB = static_cast<uint32_t>(mesh.vertices.size());
+            float brR = 0.12f;
+            for (int i = 0; i < 4; ++i) {
+                float th = (float)i / 4 * 6.28318f;
+                Vec3 radial(-std::sin(a) * std::cos(th), std::sin(th), std::cos(a) * std::cos(th));
+                mesh.addVertex({boughOrigin + radial * brR, radial, {0, 0}, barkCol});
+                mesh.addVertex({boughEnd + radial * (brR * 0.5f), radial, {1, 1}, barkCol});
+                uint32_t ni = (i + 1) % 4;
+                mesh.addTriangle(brB + i * 2, brB + ni * 2, brB + ni * 2 + 1);
+                mesh.addTriangle(brB + i * 2, brB + ni * 2 + 1, brB + i * 2 + 1);
+            }
+        }
+
+        // 3. Multi-Lobe Foliage Canopy with Soft Transferred Envelope Normals
+        auto addFoliageLobe = [&](const Vec3& center, float r, const Vec4& baseLeafCol) {
+            int latSteps = 6;
+            int lonSteps = 10;
+            uint32_t fBase = static_cast<uint32_t>(mesh.vertices.size());
+
+            for (int lat = 0; lat <= latSteps; ++lat) {
+                float v = (float)lat / latSteps;
+                float phi = v * 3.14159f;
+                float sinP = std::sin(phi), cosP = std::cos(phi);
+
+                for (int lon = 0; lon <= lonSteps; ++lon) {
+                    float u = (float)lon / lonSteps;
+                    float theta = u * 6.28318f;
+                    float sinT = std::sin(theta), cosT = std::cos(theta);
+
+                    Vec3 normal(cosT * sinP, cosP, sinT * sinP);
+                    Vec3 pt = center + normal * r;
+
+                    // Transferred Envelope Normal: Soft volumetric light transfer
+                    Vec3 envNormal = (pt - (pos + Vec3(0, hgt * 0.65f, 0))).normalized();
+                    float sunDot = std::clamp(envNormal.dot(Vec3(0.55f, 0.70f, 0.45f).normalized()), 0.25f, 1.0f);
+                    Vec4 col(baseLeafCol.x * sunDot, baseLeafCol.y * sunDot, baseLeafCol.z * sunDot, 1.0f);
+
+                    mesh.addVertex({pt, envNormal, {u, v}, col});
+                }
+            }
+
+            int rowStride = lonSteps + 1;
+            for (int lat = 0; lat < latSteps; ++lat) {
+                for (int lon = 0; lon < lonSteps; ++lon) {
+                    uint32_t i0 = fBase + lat * rowStride + lon;
+                    uint32_t i1 = fBase + lat * rowStride + (lon + 1);
+                    uint32_t i2 = fBase + (lat + 1) * rowStride + (lon + 1);
+                    uint32_t i3 = fBase + (lat + 1) * rowStride + lon;
+                    mesh.addTriangle(i0, i1, i2);
+                    mesh.addTriangle(i0, i2, i3);
+                }
+            }
+        };
+
+        // Central crown + 4 lateral clusters for natural organic volume
+        Vec4 londonPlaneGreen(0.24f, 0.58f, 0.26f, 1.0f);
+        addFoliageLobe(pos + Vec3(0, hgt * 0.82f, 0), canopyR * 0.85f, londonPlaneGreen);
+        for (int b = 0; b < 4; ++b) {
+            float a = boughAngles[b];
+            Vec3 lobePos = pos + Vec3(std::cos(a) * canopyR * 0.65f, hgt * 0.65f, std::sin(a) * canopyR * 0.65f);
+            Vec4 variation(0.21f, 0.54f, 0.23f, 1.0f);
+            addFoliageLobe(lobePos, canopyR * 0.62f, variation);
         }
     };
 
     for (float x = -28.0f; x <= 28.0f; x += 14.0f) {
-        addProceduralTree(Vec3(x, 0, 24.0f), 5.5f, 2.4f);
-        addProceduralTree(Vec3(x, 0, -24.0f), 5.5f, 2.4f);
+        addProceduralTree(Vec3(x, 0, 24.0f), 6.5f, 2.8f);
+        addProceduralTree(Vec3(x, 0, -24.0f), 6.5f, 2.8f);
     }
 
     return mesh;
