@@ -1612,6 +1612,7 @@
         color: 0x8a929a,
         roughness: 0.85,
         metalness: 0.0,
+        skinning: true,
         clippingPlanes: [clipPlane],
         clipShadows: true
       }),
@@ -1619,6 +1620,7 @@
         color: new THREE.Color(initMelRgb[0], initMelRgb[1], initMelRgb[2]),
         roughness: state.skin.roughness,
         metalness: 0.02,
+        skinning: true,
         sheen: 0.35 * state.skin.sss,
         sheenColor: new THREE.Color(initMelRgb[0] * 1.3, initMelRgb[1] * 1.0, initMelRgb[2] * 0.9),
         transmission: 0.04 * state.skin.sss,
@@ -1630,6 +1632,7 @@
         color: new THREE.Color(initMelRgb[0], initMelRgb[1], initMelRgb[2]),
         roughness: 0.65,
         metalness: 0.08,
+        skinning: true,
         transparent: true,
         opacity: state.skin.surfelOpacity,
         clippingPlanes: [clipPlane],
@@ -1639,6 +1642,7 @@
         color: 0x181e25,
         roughness: 0.25,
         metalness: state.skin.cyberMetal,
+        skinning: true,
         emissive: new THREE.Color(state.skin.cyberColor),
         emissiveIntensity: state.skin.cyberGlow,
         clippingPlanes: [clipPlane],
@@ -1648,6 +1652,7 @@
         color: 0x38bdf8,
         roughness: 0.15,
         metalness: 0.05,
+        skinning: true,
         transmission: 0.75,
         thickness: 0.05,
         transparent: true,
@@ -1657,6 +1662,7 @@
       wireframe: new THREE.MeshStandardMaterial({
         color: 0x38bdf8,
         wireframe: true,
+        skinning: true,
         clippingPlanes: [clipPlane]
       })
     };
