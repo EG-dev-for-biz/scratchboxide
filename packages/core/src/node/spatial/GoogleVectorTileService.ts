@@ -12,8 +12,9 @@ import * as path from 'path';
 import Pbf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
-import { DEFAULT_GOOGLE_MAPS_API_KEY } from './StreetViewPanoramaProjectionService';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
+
+export const DEFAULT_GOOGLE_MAPS_API_KEY = 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
 
 export interface VectorFeaturePolygon {
     id: string;

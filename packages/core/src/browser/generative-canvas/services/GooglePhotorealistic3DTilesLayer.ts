@@ -21,50 +21,12 @@ import {
 } from './mesh/FlattenRegion';
 import { CLASSIFIER_SHADER_CHUNK } from './TileMaterialClassifier';
 
-let TilesRenderer: any;
-let GoogleCloudAuthPlugin: any;
-try {
-   
-  const tr = require('3d-tiles-renderer');
-  TilesRenderer = tr.TilesRenderer || tr;
-  const trp = require('3d-tiles-renderer/plugins');
-  GoogleCloudAuthPlugin = trp.GoogleCloudAuthPlugin || trp;
-} catch {
-  // Headless Node / SSR / Test runner mock fallback
-}
-
-// Headless Node / SSR / Test runner mock fallback
-class SafeTilesRenderer {
-  public group = new THREE.Group();
-  public lruCache = { maxBytesSize: 1024 * 1024 * 1024, minBytesSize: 512 * 1024 * 1024 };
-  public downloadQueue = { maxJobs: 24 };
-  public parseQueue = { maxJobs: 16 };
-  public maxTilesProcessed = 400;
-  public errorTarget = 5.0;
-  public rootURL = '';
-  public onLoadModel: any = null;
-  public registerPlugin(_plugin: any) {}
-  public setCamera(_camera: any) {}
-  public setResolutionFromRenderer(_camera: any, _renderer: any) {}
-  public update() {}
-  public dispose() {}
-}
-
-class SafeGoogleCloudAuthPlugin {
-  constructor(_opts?: any) {}
-}
+import { TilesRenderer } from '3d-tiles-renderer';
+// @ts-ignore - 3d-tiles-renderer/plugins bundle exports all three.js plugins at runtime
+import { GoogleCloudAuthPlugin, ReorientationPlugin, GLTFExtensionsPlugin } from '3d-tiles-renderer/plugins';
 
 export type TilesRendererType = any;
 export type GoogleCloudAuthPluginType = any;
-
-function getTilesRendererClasses(): { TilesRendererClass: any; GoogleCloudAuthPluginClass: any } {
-  const ResolvedTilesRenderer = typeof TilesRenderer !== 'undefined' && TilesRenderer ? TilesRenderer : SafeTilesRenderer;
-  const ResolvedGoogleCloudAuthPlugin = typeof GoogleCloudAuthPlugin !== 'undefined' && GoogleCloudAuthPlugin ? GoogleCloudAuthPlugin : SafeGoogleCloudAuthPlugin;
-  return {
-    TilesRendererClass: ResolvedTilesRenderer,
-    GoogleCloudAuthPluginClass: ResolvedGoogleCloudAuthPlugin
-  };
-}
 
 // WGS-84 Ellipsoid constants
 const WGS84_A = 6378137.0; // semi-major axis (meters)
@@ -99,6 +61,7 @@ export class GooglePhotorealistic3DTilesLayer {
   private geoidHeight: number;
   private renderMode: 'clay' | 'textured' | 'grayscale' | 'blueprint';
   private clayPreset: ClayPresetId;
+  private reorientPlugin: any = null;
   private styleUniforms: {
     uTileRenderMode: { value: number };
     uTileColor: { value: THREE.Color };
@@ -151,10 +114,8 @@ export class GooglePhotorealistic3DTilesLayer {
   private initTilesRenderer(options: Google3DTilesLayerOptions): void {
     const mapsService = GoogleMapsService.getInstance();
     const apiKey = options.apiKey || mapsService.getApiKey() || (typeof process !== 'undefined' ? process.env?.GOOGLE_MAPS_API_KEY || process.env?.MAP_TILES_API_KEY : '') || '';
-    const { TilesRendererClass, GoogleCloudAuthPluginClass } = getTilesRendererClasses();
-
     try {
-      this.tilesRenderer = new TilesRendererClass();
+      this.tilesRenderer = new TilesRenderer('https://tile.googleapis.com/v1/3dtiles/root.json');
       // Enforce highest quality leaf LOD error budget (<= 0.5) per AGENTS.md
       this.tilesRenderer.errorTarget = options.errorTarget ?? 0.5;
 
@@ -169,17 +130,28 @@ export class GooglePhotorealistic3DTilesLayer {
 
       // Auth Plugin
       if (apiKey) {
-        const authPlugin = new GoogleCloudAuthPluginClass({
+        const authPlugin = new GoogleCloudAuthPlugin({
           apiToken: apiKey,
           autoRefreshToken: true,
           useRecommendedSettings: false
         });
         this.tilesRenderer.registerPlugin(authPlugin);
-      } else {
-        (this.tilesRenderer as any).rootURL = 'https://tile.googleapis.com/v1/3dtiles/root.json';
       }
 
-      // Register Persistent IndexedDB Tile Cache Plugin (spce logic)
+      // Reorientation Plugin for proper ENU local space (+Y Up, Z North, X East)
+      const latRad = (this.currentOrigin.lat * Math.PI) / 180;
+      const lonRad = (this.currentOrigin.lng * Math.PI) / 180;
+      const height = (this.currentOrigin.alt ?? 0) + this.geoidHeight;
+      this.reorientPlugin = new ReorientationPlugin({
+        lat: latRad,
+        lon: lonRad,
+        height: height,
+        recenter: true
+      });
+      this.tilesRenderer.registerPlugin(this.reorientPlugin);
+      this.tilesRenderer.registerPlugin(new GLTFExtensionsPlugin());
+
+      // Register Persistent IndexedDB Tile Cache Plugin
       if (options.enablePersistentCache !== false) {
         const cachePlugin = new PhotorealCachePlugin({ enabled: true });
         this.tilesRenderer.registerPlugin(cachePlugin);
@@ -188,11 +160,10 @@ export class GooglePhotorealistic3DTilesLayer {
       // Add to group
       this.group.add(this.tilesRenderer.group);
 
-      // Align Coordinates
-      this.updateOrigin(this.currentOrigin, this.geoidHeight);
-
-      // Attach Material Shader Patcher
-      (this.tilesRenderer as any).onLoadModel = (scene: THREE.Object3D) => {
+      // Model load handler (supports both modern 'load-model' event and legacy onLoadModel callback)
+      const onModelLoaded = (eventOrScene: any) => {
+        const scene = eventOrScene?.scene || eventOrScene;
+        if (!scene || !scene.traverse) return;
         scene.traverse((child: THREE.Object3D) => {
           if ((child as THREE.Mesh).isMesh) {
             const mesh = child as THREE.Mesh;
@@ -213,6 +184,9 @@ export class GooglePhotorealistic3DTilesLayer {
           }
         }
       };
+
+      this.tilesRenderer.addEventListener('load-model', onModelLoaded);
+      (this.tilesRenderer as any).onLoadModel = (scene: THREE.Object3D) => onModelLoaded({ scene });
     } catch (err) {
       console.warn('[GooglePhotorealistic3DTilesLayer] TilesRenderer initialization error:', err);
     }
@@ -423,42 +397,51 @@ export class GooglePhotorealistic3DTilesLayer {
     const lngRad = origin.lng * (Math.PI / 180);
     const altEllipsoid = (origin.alt ?? 0) + geoidHeight;
 
-    const sinLat = Math.sin(latRad);
-    const cosLat = Math.cos(latRad);
-    const sinLng = Math.sin(lngRad);
-    const cosLng = Math.cos(lngRad);
+    if (this.reorientPlugin) {
+      this.reorientPlugin.lat = latRad;
+      this.reorientPlugin.lon = lngRad;
+      this.reorientPlugin.height = altEllipsoid;
+      if (this.tilesRenderer.ellipsoid) {
+        this.reorientPlugin.transformLatLonHeightToOrigin(latRad, lngRad, altEllipsoid);
+      }
+    } else {
+      const sinLat = Math.sin(latRad);
+      const cosLat = Math.cos(latRad);
+      const sinLng = Math.sin(lngRad);
+      const cosLng = Math.cos(lngRad);
 
-    const n = WGS84_A / Math.sqrt(1.0 - WGS84_E2 * sinLat * sinLat);
-    const x = (n + altEllipsoid) * cosLat * cosLng;
-    const y = (n + altEllipsoid) * cosLat * sinLng;
-    const z = ((1.0 - WGS84_E2) * n + altEllipsoid) * sinLat;
+      const n = WGS84_A / Math.sqrt(1.0 - WGS84_E2 * sinLat * sinLat);
+      const x = (n + altEllipsoid) * cosLat * cosLng;
+      const y = (n + altEllipsoid) * cosLat * sinLng;
+      const z = ((1.0 - WGS84_E2) * n + altEllipsoid) * sinLat;
 
-    // Three.js X = East, Y = Up, Z = -North
-    const m00 = -sinLng;
-    const m01 = cosLng;
-    const m02 = 0;
-    const m03 = -(m00 * x + m01 * y + m02 * z);
+      // Three.js X = East, Y = Up, Z = -North
+      const m00 = -sinLng;
+      const m01 = cosLng;
+      const m02 = 0;
+      const m03 = -(m00 * x + m01 * y + m02 * z);
 
-    const m10 = cosLat * cosLng;
-    const m11 = cosLat * sinLng;
-    const m12 = sinLat;
-    const m13 = -(m10 * x + m11 * y + m12 * z);
+      const m10 = cosLat * cosLng;
+      const m11 = cosLat * sinLng;
+      const m12 = sinLat;
+      const m13 = -(m10 * x + m11 * y + m12 * z);
 
-    const m20 = sinLat * cosLng;
-    const m21 = sinLat * sinLng;
-    const m22 = -cosLat;
-    const m23 = -(m20 * x + m21 * y + m22 * z);
+      const m20 = sinLat * cosLng;
+      const m21 = sinLat * sinLng;
+      const m22 = -cosLat;
+      const m23 = -(m20 * x + m21 * y + m22 * z);
 
-    const localMatrix = new THREE.Matrix4();
-    localMatrix.set(
-      m00, m01, m02, m03,
-      m10, m11, m12, m13,
-      m20, m21, m22, m23,
-      0,   0,   0,   1
-    );
+      const localMatrix = new THREE.Matrix4();
+      localMatrix.set(
+        m00, m01, m02, m03,
+        m10, m11, m12, m13,
+        m20, m21, m22, m23,
+        0,   0,   0,   1
+      );
 
-    this.tilesRenderer.group.matrix.copy(localMatrix);
-    this.tilesRenderer.group.matrixAutoUpdate = false;
+      this.tilesRenderer.group.matrix.copy(localMatrix);
+      this.tilesRenderer.group.matrixAutoUpdate = false;
+    }
   }
 
   /**
@@ -495,6 +478,21 @@ export class GooglePhotorealistic3DTilesLayer {
         this.tilesRenderer.setResolutionFromRenderer(camera, renderer);
       }
       this.tilesRenderer.update();
+
+      // Proactively drain priority queues so tiles stream without RAF starvation in background/Electron
+      if (this.tilesRenderer.downloadQueue?.originQueues) {
+        for (const q of this.tilesRenderer.downloadQueue.originQueues.values()) {
+          if (q.scheduled && q.currJobs < q.maxJobs) {
+            q.tryRunJobs();
+          }
+        }
+      }
+      if (this.tilesRenderer.parseQueue?.scheduled && this.tilesRenderer.parseQueue.currJobs < this.tilesRenderer.parseQueue.maxJobs) {
+        this.tilesRenderer.parseQueue.tryRunJobs();
+      }
+      if (this.tilesRenderer.processNodeQueue?.scheduled && this.tilesRenderer.processNodeQueue.currJobs < this.tilesRenderer.processNodeQueue.maxJobs) {
+        this.tilesRenderer.processNodeQueue.tryRunJobs();
+      }
     } catch {
       // Ignore transient update frame errors
     }

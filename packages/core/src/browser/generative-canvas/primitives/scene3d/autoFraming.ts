@@ -27,6 +27,8 @@ export interface AutoFramingOptions {
     azimuthDeg?: number;       // default: 45 degrees
     minDistance?: number;      // default: 15.0
     force?: boolean;
+    /** Direction of key light (from origin towards light) to orient camera towards illuminated facade */
+    keyLightDirection?: [number, number, number];
 }
 
 export interface SceneBoundsResult {
@@ -78,12 +80,20 @@ export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResul
             box.expandByObject(child);
             hasGeometry = true;
 
-            // Check if this object is a flat ground plane vs focal structure
+            // Check if this object is a flat ground plane or massive terrain/tile background vs focal structure
             const childBox = new THREE.Box3().setFromObject(child);
             const childSize = new THREE.Vector3();
             childBox.getSize(childSize);
             const isFlatGround = (name.includes('ground') || name.includes('plane') || name.includes('floor')) && childSize.y < 1.0 && Math.max(childSize.x, childSize.z) > 40.0;
-            if (!isFlatGround) {
+            const isBackgroundTileOrTerrain =
+                name.includes('tile-clay') ||
+                name.includes('BakedTerrain') ||
+                name.includes('tile_mesh') ||
+                name.startsWith('external-object-tile') ||
+                (child.parent && (child.parent.name.includes('tile-clay') || child.parent.name.startsWith('external-object-tile'))) ||
+                (Math.max(childSize.x, childSize.z) > 80.0 && (child.name.toLowerCase().includes('terrain') || child.name.toLowerCase().includes('tile')));
+
+            if (!isFlatGround && !isBackgroundTileOrTerrain) {
                 focalBox.expandByObject(child);
                 hasFocalGeometry = true;
             }
@@ -161,8 +171,17 @@ export function calculateStandoffCamera(
     const fovRad = (fovDegrees * Math.PI) / 180.0;
     const optimalDist = Math.max(minDistance, (radius / Math.sin(fovRad / 2.0)) * marginMultiplier);
 
+    let effAzimuthDeg = azimuthDeg;
+    if (options.keyLightDirection && Array.isArray(options.keyLightDirection) && options.keyLightDirection.length >= 3) {
+        const [lx, , lz] = options.keyLightDirection;
+        if (Math.hypot(lx, lz) > 0.001) {
+            // Orient towards the illuminated facade with an aesthetic 15° beauty angle
+            effAzimuthDeg = (Math.atan2(lx, lz) * 180.0 / Math.PI) + 15.0;
+        }
+    }
+
     const phi = (90.0 - elevationDeg) * (Math.PI / 180.0); // zenith angle
-    const theta = azimuthDeg * (Math.PI / 180.0);
+    const theta = effAzimuthDeg * (Math.PI / 180.0);
 
     const px = center.x + optimalDist * Math.sin(phi) * Math.sin(theta);
     const py = center.y + optimalDist * Math.cos(phi);

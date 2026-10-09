@@ -68,12 +68,12 @@ process.on('uncaughtException', (err: Error) => {
     process.exit(1);
 });
 
-function attachListenErrorHandler(server: http.Server, label: string, port: number): void {
+function attachListenErrorHandler(server: http.Server, label: string, port: number, onAddressInUse?: () => void): void {
     server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
             console.error(`[Electron] ${label} port ${port} is already in use on ${BACKEND_HOST}. ` +
                 'Continuing, assuming it was launched externally.');
-            // Ignore error and do not crash
+            onAddressInUse?.();
         } else {
             console.error(`[Electron] ${label} failed to listen on ${BACKEND_HOST}:${port}:`, err);
             process.exit(1);
@@ -109,11 +109,19 @@ async function startBackendServer(): Promise<void> {
     });
 
     return new Promise((resolve) => {
+        let settled = false;
+        const markDone = () => {
+            if (!settled) {
+                settled = true;
+                resolve();
+            }
+        };
+
         serverInstance = serverApp.listen(BACKEND_PORT, BACKEND_HOST, () => {
             console.log(`[Electron] Internal Backend Server listening on http://${BACKEND_HOST}:${BACKEND_PORT}`);
-            resolve();
+            markDone();
         });
-        attachListenErrorHandler(serverInstance, 'API', BACKEND_PORT);
+        attachListenErrorHandler(serverInstance, 'API', BACKEND_PORT, markDone);
 
         const toolsApp = createToolsServer(serverApp.locals.exportedToolsStore);
         toolsServerInstance = toolsApp.listen(TOOLS_PORT, BACKEND_HOST, () => {

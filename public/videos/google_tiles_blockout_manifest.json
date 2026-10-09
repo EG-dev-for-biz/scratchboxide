@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-08T06:26:14.133Z",
+  "timestamp": "2026-10-09T02:02:25.861Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_clay_blockout_camera.mp4",
-  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/build/3d-geospatial/41_890210_12_492231_tiles.glb",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/test-venice.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_frame_00.png",
   "storyboardPaths": [
@@ -20,10 +20,10 @@
   "totalFrames": 72,
   "durationSec": 3,
   "geoAnchor": {
-    "lat": 41.89021,
-    "lng": 12.492231,
-    "elevation": 15,
-    "landmarkName": "Coordinates (41.890210, 12.492231)"
+    "lat": 33.985,
+    "lng": -118.4695,
+    "elevation": 4.12,
+    "landmarkName": "Venice Beach Boardwalk, Venice, Los Angeles, CA 90291, USA"
   },
   "errorTarget": 0.5,
   "renderMode": "clay",

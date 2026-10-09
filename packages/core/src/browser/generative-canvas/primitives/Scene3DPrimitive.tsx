@@ -1616,30 +1616,32 @@ int main(int argc, char** argv) {
             if (data.transformMode) setTransformMode(data.transformMode);
             if (data.transformSpace) setTransformSpace(data.transformSpace);
 
-            if (data.geoAnchor) {
+            if (data.geoAnchor && data.geoAnchor.lat !== undefined && data.geoAnchor.lng !== undefined) {
                 setHasGeoCoordinates(data.geoAnchor.active !== false);
-                setLat(data.geoAnchor.lat.toString());
-                setLng(data.geoAnchor.lng.toString());
+                setLat(String(data.geoAnchor.lat));
+                setLng(String(data.geoAnchor.lng));
                 if (data.geoAnchor.elevation !== undefined) {
-                    setElevation(data.geoAnchor.elevation.toString());
+                    setElevation(String(data.geoAnchor.elevation));
                 }
+            } else if (data.geoAnchor && data.geoAnchor.active === false) {
+                setHasGeoCoordinates(false);
             } else {
-                const geoObj = data.objects?.find(o => o.space?.geoAnchor);
+                const geoObj = data.objects?.find(o => o.space?.geoAnchor && o.space.geoAnchor.lat !== undefined && o.space.geoAnchor.lng !== undefined);
                 if (geoObj?.space?.geoAnchor) {
                     setHasGeoCoordinates(true);
-                    setLat(geoObj.space.geoAnchor.lat.toString());
-                    setLng(geoObj.space.geoAnchor.lng.toString());
+                    setLat(String(geoObj.space.geoAnchor.lat));
+                    setLng(String(geoObj.space.geoAnchor.lng));
                     if (geoObj.space.geoAnchor.alt !== undefined) {
-                        setElevation(geoObj.space.geoAnchor.alt.toString());
+                        setElevation(String(geoObj.space.geoAnchor.alt));
                     }
                 }
             }
 
-            if (data.droneRoute) {
-                setPinALat(data.droneRoute.pinA.lat.toString());
-                setPinALng(data.droneRoute.pinA.lng.toString());
-                setPinBLat(data.droneRoute.pinB.lat.toString());
-                setPinBLng(data.droneRoute.pinB.lng.toString());
+            if (data.droneRoute?.pinA && data.droneRoute?.pinB) {
+                if (data.droneRoute.pinA.lat !== undefined) setPinALat(String(data.droneRoute.pinA.lat));
+                if (data.droneRoute.pinA.lng !== undefined) setPinALng(String(data.droneRoute.pinA.lng));
+                if (data.droneRoute.pinB.lat !== undefined) setPinBLat(String(data.droneRoute.pinB.lat));
+                if (data.droneRoute.pinB.lng !== undefined) setPinBLng(String(data.droneRoute.pinB.lng));
                 if (data.droneRoute.active !== undefined) {
                     setIsRoutingActive(data.droneRoute.active);
                     if (data.droneRoute.active) setIsPlaying(true);

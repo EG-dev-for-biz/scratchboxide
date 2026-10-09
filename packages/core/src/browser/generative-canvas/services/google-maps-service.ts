@@ -353,6 +353,22 @@ const LANDMARK_REGISTRY: Record<string, GeocodeResult> = {
         elevation: -84.69,
         zoom: 15
     },
+    'venice beach': {
+        lat: 33.9850,
+        lng: -118.4695,
+        formattedAddress: 'Venice Beach Boardwalk, Venice, Los Angeles, CA 90291, USA',
+        placeId: 'ChIJ5b0U5dK6woAR8vT54nF4fS0',
+        elevation: 4.12,
+        zoom: 17
+    },
+    'venice beach boardwalk': {
+        lat: 33.9850,
+        lng: -118.4695,
+        formattedAddress: 'Venice Beach Boardwalk, Venice, Los Angeles, CA 90291, USA',
+        placeId: 'ChIJ5b0U5dK6woAR8vT54nF4fS0',
+        elevation: 4.12,
+        zoom: 17
+    },
     'redwood national park': {
         lat: 41.2132,
         lng: -124.0046,

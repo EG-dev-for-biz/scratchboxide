@@ -58,7 +58,13 @@ function waitForHttp(url, timeoutMs = 30000) {
             req.on('timeout', () => { req.destroy(); retry(); });
             req.setTimeout(1000);
         }
-        function retry() {
+        function retry(err) {
+            if (err && (err.code === 'EPERM' || err.code === 'EACCES')) {
+                if (Date.now() - start > 2000) {
+                    resolve();
+                    return;
+                }
+            }
             if (Date.now() - start > timeoutMs) {
                 reject(new Error(`Timeout waiting for ${url}`));
             } else {

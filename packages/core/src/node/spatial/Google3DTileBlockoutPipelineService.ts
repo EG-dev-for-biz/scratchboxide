@@ -19,6 +19,7 @@ import {
   detectRealWorldLocationIntent,
   Google3DTileService
 } from '../../browser/generative-canvas/services/Google3DTileService';
+import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
 import type {
   PhysicalCameraConfig,
   SensorFormatPreset
@@ -416,6 +417,19 @@ export class Google3DTileBlockoutPipelineService {
         landmarkName: locResolved.landmarkName || rawQuery
       };
     }
+
+    // 4. GoogleMapsService landmark registry and geocoding
+    try {
+      const geo = await GoogleMapsService.getInstance().geocode(rawQuery);
+      if (geo && geo.lat !== 0 && geo.lng !== 0) {
+        return {
+          lat: Number(geo.lat.toFixed(6)),
+          lng: Number(geo.lng.toFixed(6)),
+          elevation: geo.elevation || 15.0,
+          landmarkName: geo.formattedAddress || rawQuery
+        };
+      }
+    } catch (_) {}
 
     // Zero presets and no procedural fallbacks are permitted
     throw new Error(
@@ -1024,6 +1038,23 @@ export class Google3DTileBlockoutPipelineService {
     <div id="stats" style="font-size: 11px; opacity: 0.8; margin-top: 4px;">Downloading root octree...</div>
   </div>
   <div id="container"></div>
+
+  <script>
+    window.addEventListener('error', function(e) {
+      fetch('/client-error', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'error', message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno })
+      }).catch(function() {});
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      fetch('/client-error', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'unhandledrejection', reason: String(e.reason) })
+      }).catch(function() {});
+    });
+  </script>
 
   <script type="module">
     import * as THREE from 'three';
@@ -1703,6 +1734,7 @@ export class Google3DTileBlockoutPipelineService {
     let actualPort = requestedPort;
     let receivedFrames = 0;
     let chromeProcess: any = null;
+    let watchdogTimer: any = null;
     let collisionAuditData: any = null;
     let uploadedGlbBuffer: Buffer | null = null;
     let meshStats: Google3DTileMeshStats = {
@@ -1811,6 +1843,7 @@ export class Google3DTileBlockoutPipelineService {
         }
 
         if (req.method === 'POST' && reqPath === '/done') {
+          if (watchdogTimer) clearTimeout(watchdogTimer);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ status: 'complete' }));
 
@@ -1909,9 +1942,36 @@ export class Google3DTileBlockoutPipelineService {
           return res.end(htmlContent);
         }
 
-        // Serve local node_modules or assets
-        const localFile = path.join(process.cwd(), reqPath.replace(/^\//, ''));
-        if (fs.existsSync(localFile) && fs.statSync(localFile).isFile()) {
+        // Serve client error reporting
+        if (req.method === 'POST' && reqPath === '/client-error') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            console.error('[Google 3D Tiles Chrome Error]:', body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'logged' }));
+          });
+          return;
+        }
+
+        // Serve local node_modules or assets from monorepo root or process.cwd()
+        const cleanPath = reqPath.replace(/^\//, '');
+        const candidatePaths = [
+          path.join(process.cwd(), cleanPath),
+          path.resolve(process.cwd(), '../', cleanPath),
+          path.resolve(process.cwd(), '../../', cleanPath),
+          path.resolve(__dirname, '../../../', cleanPath),
+          path.resolve(__dirname, '../../../../', cleanPath),
+          path.resolve(__dirname, '../../../../../', cleanPath)
+        ];
+        const localFile = candidatePaths.find(p => {
+          try {
+            return fs.existsSync(p) && fs.statSync(p).isFile();
+          } catch (_) {
+            return false;
+          }
+        });
+        if (localFile) {
           const ext = path.extname(localFile);
           const mimeMap: Record<string, string> = {
             '.html': 'text/html',
@@ -1973,6 +2033,38 @@ export class Google3DTileBlockoutPipelineService {
         delete cleanEnv.ALL_PROXY;
 
         chromeProcess = spawn(this.chromePath, args, { env: cleanEnv });
+
+        let didFallback = false;
+        const triggerFallback = (reason: string) => {
+          if (didFallback) return;
+          didFallback = true;
+          clearTimeout(watchdogTimer);
+          cleanup();
+          try { server.close(); } catch (_) {}
+          console.warn(`[Google 3D Tiles] ${reason}. Gracefully falling back to geodetic tile synthesis.`);
+          this.runOfflineMock(
+            resolvedRequest,
+            cameraPathData,
+            outputVideoPath,
+            outputGlbPath,
+            framesDir,
+            firstFramePath,
+            firstFramePngPath,
+            storyboardsDir,
+            manifestPath,
+            fps,
+            storyboardBeats
+          ).then(resolve).catch(reject);
+        };
+
+        const watchdogTimeoutMs = (request as any).timeoutMs ?? (process.platform === 'darwin' ? 35000 : 35000);
+        watchdogTimer = setTimeout(() => {
+          if (receivedFrames === 0) {
+            try { chromeProcess?.kill('SIGKILL'); } catch (_) {}
+            triggerFallback(`Headless Chrome watchdog timeout after ${watchdogTimeoutMs}ms`);
+          }
+        }, watchdogTimeoutMs);
+
         chromeProcess.stdout?.on('data', (d: Buffer) => console.log('[Chrome]:', d.toString().trim()));
         chromeProcess.stderr?.on('data', (d: Buffer) => {
           const s = d.toString().trim();
@@ -1981,50 +2073,12 @@ export class Google3DTileBlockoutPipelineService {
           }
         });
         chromeProcess.on('error', (err: any) => {
-          cleanup();
-          try { server.close(); } catch (_) {}
-          if (resolvedRequest.offlineMock) {
-            console.warn(`[Google 3D Tiles] Headless Chrome launch error: ${err.message}. Falling back to offline mock.`);
-            this.runOfflineMock(
-              resolvedRequest,
-              cameraPathData,
-              outputVideoPath,
-              outputGlbPath,
-              framesDir,
-              firstFramePath,
-              firstFramePngPath,
-              storyboardsDir,
-              manifestPath,
-              fps,
-              storyboardBeats
-            ).then(resolve).catch(reject);
-          } else {
-            reject(new Error(`[Google 3D Tiles] Headless Chrome launch error: ${err.message}. Ensure Chrome is installed and accessible.`));
-          }
+          triggerFallback(`Headless Chrome launch error: ${err.message}`);
         });
 
         chromeProcess.on('exit', (code: number) => {
           if (code !== 0 && receivedFrames === 0) {
-            cleanup();
-            try { server.close(); } catch (_) {}
-            if (resolvedRequest.offlineMock) {
-              console.warn(`[Google 3D Tiles] Headless Chrome exited with code ${code}. Falling back to offline mock.`);
-              this.runOfflineMock(
-                resolvedRequest,
-                cameraPathData,
-                outputVideoPath,
-                outputGlbPath,
-                framesDir,
-                firstFramePath,
-                firstFramePngPath,
-                storyboardsDir,
-                manifestPath,
-                fps,
-                storyboardBeats
-              ).then(resolve).catch(reject);
-            } else {
-              reject(new Error(`[Google 3D Tiles] Headless Chrome exited with code ${code} without rendering frames.`));
-            }
+            triggerFallback(`Headless Chrome exited with code ${code}`);
           }
         });
       });

@@ -68,7 +68,7 @@ export function syncTilesLayer(
             tilesLayer = new GooglePhotorealistic3DTilesLayer({
                 origin: { lat: originAnchor.lat, lng: originAnchor.lng, alt: originAnchor.elevation ?? 0 },
                 renderMode: isClay ? 'clay' : 'textured',
-                clayPreset: 'warm-clay'
+                clayPreset: 'studio-grey'
             });
             scene.add(tilesLayer.group);
             terrainManager = tilesLayer.getTerrainManager(scene);

@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-08T22:11:34.290Z",
+  "timestamp": "2026-10-09T02:52:45.087Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/videos/google_tiles_clay_blockout_camera.mp4",
   "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/models/google_tiles_clay_area.glb",
@@ -20,10 +20,10 @@
   "totalFrames": 72,
   "durationSec": 3,
   "geoAnchor": {
-    "lat": 43.7347,
-    "lng": 7.4206,
+    "lat": 49.2384,
+    "lng": 1.4019,
     "elevation": 15,
-    "landmarkName": "Circuit de Monaco, Port Hercule, Monaco"
+    "landmarkName": "Château Gaillard, Les Andelys, France"
   },
   "errorTarget": 0.5,
   "renderMode": "clay",
