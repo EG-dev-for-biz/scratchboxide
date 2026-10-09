@@ -7,8 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { ContentRepresentation4D } from '../../common/geospatial-4d-protocol';
-import { LatLngAlt } from '../../common/coordinate/LocalTangentPlane';
+import { ContentRepresentation4D } from '../../common/geospatial-4d-protocol.js';
+import { LatLngAlt } from '../../common/coordinate/LocalTangentPlane.js';
 
 export interface VaultMetadata {
   id: string;

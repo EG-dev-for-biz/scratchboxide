@@ -86,40 +86,43 @@ async function main() {
             return outPath;
         };
 
-        // Wait for WebGL scene and 3D GLB models to fully mount
-        console.log('[Critic Suite] Waiting 4.5s for initial GLB meshes and textures...');
-        await sleep(4500);
+        // Wait for page and images to load
+        console.log('[Critic Suite] Waiting 2.5s for initial layout & plates...');
+        await sleep(2500);
 
-        // 1. Capture Corner Orthogonality Zoom
-        console.log('[Critic Suite] Switching to Corner Orthogonality Zoom...');
-        await evaluate("setCameraView('corner')");
+        // 1. Capture Default Dual Split View (Stage 1 Clay vs Stage 3 Street View PBR)
+        console.log('[Critic Suite] Capturing Default Dual Split (Stage 1 vs Stage 3)...');
+        await capture('omnispatial_critic_v3_dual_split.png');
+
+        // 2. Select Stage 2 (Vector Refined Geometry)
+        console.log('[Critic Suite] Selecting Stage 2 (Vector Refined)...');
+        await evaluate("selectStage(2)");
+        await sleep(800);
+        await capture('omnispatial_critic_v3_stage2_vector_refined.png');
+
+        // 3. Switch to Interactive Wipe Split Slider Mode
+        console.log('[Critic Suite] Switching to Wipe Split Slider Mode...');
+        await evaluate("setViewMode('wipe'); selectStage(3);");
+        await sleep(800);
+        await capture('omnispatial_critic_v3_wipe_slider.png');
+
+        // 4. Switch to Normal Pass
+        console.log('[Critic Suite] Switching to Surface Normals Buffer Pass...');
+        await evaluate("setViewMode('side-by-side'); setRenderPass('normal'); selectStage(3);");
+        await sleep(800);
+        await capture('omnispatial_critic_v3_normal_pass.png');
+
+        // 5. Switch to Depth Pass
+        console.log('[Critic Suite] Switching to Metric Depth Buffer Pass...');
+        await evaluate("setRenderPass('depth');");
+        await sleep(800);
+        await capture('omnispatial_critic_v3_depth_pass.png');
+
+        // 6. Test Address / Location Query Prompt Box Execution
+        console.log('[Critic Suite] Testing Address Query Prompt Box with Rockefeller Center...');
+        await evaluate("loadLocation('45 Rockefeller Plaza, New York, NY 10111 (Rockefeller Center)'); setRenderPass('beauty');");
         await sleep(1500);
-        await capture('omnispatial_critic_1_corner_ortho.png');
-
-        // 2. Capture Fenestration 3D Inset Loupe
-        console.log('[Critic Suite] Switching to Fenestration 3D Inset Loupe...');
-        await evaluate("setCameraView('window')");
-        await sleep(1500);
-        await capture('omnispatial_critic_2_fenestration_inset.png');
-
-        // 3. Capture Skyline Aerial Orbit View
-        console.log('[Critic Suite] Switching to Skyline Aerial Orbit...');
-        await evaluate("setCameraView('skyline')");
-        await sleep(1500);
-        await capture('omnispatial_critic_3_skyline_aerial.png');
-
-        // 4. Toggle SpatialVectorDataService Cadastral Vector Intelligence
-        console.log('[Critic Suite] Toggling Cadastral Vector Intelligence...');
-        await evaluate("toggleVectorIntelligence()");
-        await sleep(1200);
-        await capture('omnispatial_critic_4_vector_cadastral.png');
-
-        // 5. ADA Open-Domain Test: Alien Planet Test Query
-        console.log('[Critic Suite] Executing ADA Open-Domain Query (Alien Planet Test)...');
-        await evaluate("document.getElementById('location-query-input').value = 'Bioluminescent Mycelium Spire, Asteroid Ceti-Alpha'; executeLocationQuery();");
-        // Wait for animated synthesis modal (5 steps x ~350ms + loading)
-        await sleep(5000);
-        await capture('omnispatial_critic_5_alien_planet_synthesis.png');
+        await capture('omnispatial_critic_v3_address_query.png');
 
         ws.close();
         console.log('[Critic Suite] All critic captures completed successfully!');

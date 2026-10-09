@@ -2767,20 +2767,23 @@ public:
         // Configure Submesh Names and PBR Material Properties
         submeshes[0].name = "submesh_limestone_facade";
         submeshes[0].material = PbrMaterial::stoneLimestone();
+        submeshes[0].material.baseColorFactor = Vec4(0.82f, 0.80f, 0.76f, 1.0f);
+        submeshes[0].material.metallicFactor = 0.02f;
+        submeshes[0].material.roughnessFactor = 0.85f;
 
         submeshes[1].name = "submesh_bronze_spandrels";
         submeshes[1].material = PbrMaterial::polishedBrass();
         submeshes[1].material.name = "art_deco_bronze";
-        submeshes[1].material.baseColorFactor = Vec4(0.85f, 0.67f, 0.38f, 1.0f);
-        submeshes[1].material.metallicFactor = 0.90f;
-        submeshes[1].material.roughnessFactor = 0.28f;
+        submeshes[1].material.baseColorFactor = Vec4(0.72f, 0.58f, 0.35f, 1.0f);
+        submeshes[1].material.metallicFactor = 0.75f;
+        submeshes[1].material.roughnessFactor = 0.42f;
 
         submeshes[2].name = "submesh_stainless_steel";
         submeshes[2].material = PbrMaterial::titanium();
         submeshes[2].material.name = "brushed_stainless_steel";
-        submeshes[2].material.baseColorFactor = Vec4(0.92f, 0.93f, 0.95f, 1.0f);
-        submeshes[2].material.metallicFactor = 0.98f;
-        submeshes[2].material.roughnessFactor = 0.25f;
+        submeshes[2].material.baseColorFactor = Vec4(0.88f, 0.90f, 0.92f, 1.0f);
+        submeshes[2].material.metallicFactor = 0.85f;
+        submeshes[2].material.roughnessFactor = 0.45f;
 
         submeshes[3].name = "submesh_granite_plinth";
         submeshes[3].material = PbrMaterial::basaltRock();
@@ -2830,8 +2833,8 @@ public:
             } else if (centroid.y <= 5.8f && std::abs(norm.y) < 0.5f) {
                 // Street-level entrance plinth
                 targetType = ArchitecturalMaterialType::GRANITE_PLINTH;
-            } else if (centroid.y >= 168.0f || (v0.color.x > 0.88f && v0.color.z > 0.90f)) {
-                // Mooring mast, spire, and chrome trim
+            } else if (centroid.y >= 380.0f) {
+                // Mooring mast, spire, and architectural metallic mullions
                 targetType = ArchitecturalMaterialType::STAINLESS_STEEL;
             } else if (std::abs(norm.y) >= 0.5f && centroid.y > 5.8f) {
                 // Observation deck terraces and setback roofs

@@ -11,8 +11,8 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import Pbf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
-import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
-import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
+import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer.js';
+import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane.js';
 
 function tryLoadLocalEnv(): void {
     if (typeof process === 'undefined' || !process.env) return;

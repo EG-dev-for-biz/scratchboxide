@@ -24,9 +24,9 @@ import {
     VectorFeaturePolygon,
     VectorFeatureLine,
     DEFAULT_GOOGLE_MAPS_API_KEY
-} from './GoogleVectorTileService';
-import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
-import { SpatialAssetVaultService } from './SpatialAssetVaultService';
+} from './GoogleVectorTileService.js';
+import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane.js';
+import { SpatialAssetVaultService } from './SpatialAssetVaultService.js';
 
 export type UniversalSpatialLayer = 'building' | 'road' | 'water' | 'landuse' | 'transit' | 'poi' | (string & {});
 

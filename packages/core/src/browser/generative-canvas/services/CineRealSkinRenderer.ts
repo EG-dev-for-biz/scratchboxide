@@ -251,21 +251,19 @@ export class CineRealSkinRenderer {
                 float curvature = length(dNdx) + length(dNdy);
                 curvature = clamp(curvature * 2.5, 0.0, 1.0);
 
-                // 3. Deep hemoglobin dermal scattering: warm red bleed into curvature, knuckles & creases
-                vec3 hemoglobinTint = uSbSkinSubColor * (uSbSkinSubRadius.r / 3.67);
-                vec3 dermalScattered = mix(gl_FragColor.rgb, gl_FragColor.rgb + hemoglobinTint * 0.45, curvature * uSbSkinSubWeight * (1.0 - nailFactor * 0.5));
+                // 3. Deep hemoglobin dermal scattering: subtle capillary warmth in creases and high-curvature folds
+                vec3 warmCreaseColor = gl_FragColor.rgb * vec3(1.12, 0.88, 0.84);
+                vec3 dermalScattered = mix(gl_FragColor.rgb, warmCreaseColor, curvature * uSbSkinSubWeight * 0.40 * (1.0 - nailFactor * 0.75));
 
                 // 4. Nail Keratin 4-Zone Morphology Blending
                 if (nailFactor > 0.01) {
                     vec4 nailAlbedoSample = texture2D(uSbNailAlbedoMap, vSbNailCoord);
-                    vec4 nailOrmSample = texture2D(uSbNailOrmMap, vSbNailCoord);
-
-                    // Blend nail bed capillary pink flush & lunula prominence
-                    vec3 nailBedWarmth = vec3(0.88, 0.52 * (1.0 - uSbNailPinkFlush * 0.25), 0.48 * (1.0 - uSbNailPinkFlush * 0.35));
-                    vec3 finalNailColor = mix(nailBedWarmth, nailAlbedoSample.rgb, 0.75);
+                    // Calibrated healthy capillary bed & lunula keratin
+                    vec3 nailBedWarmth = vec3(0.84, 0.65 * (1.0 - uSbNailPinkFlush * 0.12), 0.60 * (1.0 - uSbNailPinkFlush * 0.18));
+                    vec3 finalNailColor = mix(nailBedWarmth, nailAlbedoSample.rgb, 0.80);
 
                     // Blend into fragColor based on nailFactor
-                    dermalScattered = mix(dermalScattered, finalNailColor, nailFactor * 0.88);
+                    dermalScattered = mix(dermalScattered, finalNailColor, nailFactor * 0.92);
                 }
 
                 // 5. Subcutaneous backlighting transmission (vascular tissue & subungual bed glow red)

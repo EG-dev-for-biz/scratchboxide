@@ -16,6 +16,7 @@
 
 #include "scratchbox_engine.hpp"
 #include "scratchbox_tile_cleanup.hpp"
+#include "scratchbox_gltf_scene.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -28,6 +29,7 @@ using namespace scratchbox::math;
 using namespace scratchbox::geometry;
 using namespace scratchbox::cleanup;
 using namespace scratchbox::io;
+using namespace scratchbox::gltf;
 
 // Generates the Empire State Building raw photogrammetric scan with realistic aerial sensor noise and melted corners
 ScratchboxMesh createEmpireStateBuildingRawScan() {
@@ -214,6 +216,8 @@ ScratchboxMesh createEmpireStateBuildingRawScan() {
 int main(int argc, char* argv[]) {
     std::string outputPath = "cleaned_tile_output.glb";
     std::string rawOutputPath = "";
+    std::string inputPath = "";
+    std::string refinedOutputPath = "";
     bool streamStdout = false;
     float planarAngleThreshold = 4.0f;
     float cornerSnapTol = 0.85f;
@@ -226,6 +230,10 @@ int main(int argc, char* argv[]) {
             outputPath = argv[++i];
         } else if (arg == "--raw-output" && i + 1 < argc) {
             rawOutputPath = argv[++i];
+        } else if (arg == "--input" && i + 1 < argc) {
+            inputPath = argv[++i];
+        } else if (arg == "--refined-output" && i + 1 < argc) {
+            refinedOutputPath = argv[++i];
         } else if (arg == "--stream") {
             streamStdout = true;
         } else if (arg == "--res" && i + 1 < argc) {
@@ -256,8 +264,20 @@ int main(int argc, char* argv[]) {
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
-    // 1. Ingest Scanned Raw Mesh (Empire State Building)
-    ScratchboxMesh rawMesh = createEmpireStateBuildingRawScan();
+    // 1. Ingest Scanned Raw Mesh
+    ScratchboxMesh rawMesh;
+    std::string assetTitle = "Empire State Building Procedural Scan";
+    if (!inputPath.empty()) {
+        GltfScene scene = GlbSceneReader::readFile(inputPath);
+        if (!scene.ok) {
+            std::cerr << "Failed to read input GLB: " << scene.error << std::endl;
+            return 1;
+        }
+        rawMesh = scene.mesh;
+        assetTitle = inputPath;
+    } else {
+        rawMesh = createEmpireStateBuildingRawScan();
+    }
     size_t rawTriangles = rawMesh.indices.size() / 3;
     size_t rawVertices = rawMesh.vertices.size();
 
@@ -271,7 +291,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (!streamStdout) {
-        std::cout << "[Stage 1/5] Ingested raw photogrammetry tile (Empire State Building):\n";
+        std::cout << "[Stage 1/5] Ingested raw photogrammetry tile (" << assetTitle << "):\n";
         std::cout << "            -> Raw Triangles: " << rawTriangles << "\n";
         std::cout << "            -> Raw Vertices:  " << rawVertices << "\n";
         if (!rawOutputPath.empty()) {
@@ -371,6 +391,22 @@ int main(int argc, char* argv[]) {
         addQ(c + Vec3(h.x, -h.y, h.z), c + Vec3(h.x, -h.y, -h.z), c + Vec3(h.x, h.y, -h.z), c + Vec3(h.x, h.y, h.z), Vec3(1, 0, 0));
         // Top
         addQ(c + Vec3(-h.x, h.y, h.z), c + Vec3(h.x, h.y, h.z), c + Vec3(h.x, h.y, -h.z), c + Vec3(-h.x, h.y, -h.z), Vec3(0, 1, 0));
+    }
+
+    if (!refinedOutputPath.empty()) {
+        ScratchboxMesh clayRefined = combinedMesh;
+        for (auto& v : clayRefined.vertices) {
+            v.color = Vec4(0.55f, 0.57f, 0.60f, 1.0f);
+        }
+        std::vector<uint8_t> refinedGlb = GlbWriter::serializeToGlb(clayRefined);
+        std::ofstream refFile(refinedOutputPath, std::ios::binary);
+        if (refFile.is_open()) {
+            refFile.write(reinterpret_cast<const char*>(refinedGlb.data()), refinedGlb.size());
+            refFile.close();
+            if (!streamStdout) {
+                std::cout << "            -> Exported Vector-Refined Clay Model: " << refinedOutputPath << "\n";
+            }
+        }
     }
 
     // Synthesize 6 dedicated multi-material PBR texture sets with biophysical patina & micro-textures
