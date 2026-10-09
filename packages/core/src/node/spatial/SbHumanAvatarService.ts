@@ -97,8 +97,8 @@ export class PbrMeshSkinAdapter implements ISbHumanSkinAdapter {
             positions: mesh.positions,
             normals: mesh.normals,
             colors: mesh.colors,
-            joints: mesh.joints,
-            weights: mesh.weights,
+            joints: (mesh as any).joints || mesh.skinIndices,
+            weights: (mesh as any).weights || mesh.skinWeights,
             uvs: mesh.uvs,
             bounds: {
                 min: [minX, minY, minZ],

@@ -1619,6 +1619,7 @@
       if (gizmoGroup.visible) {
         const ringIntersects = raycaster.intersectObjects(gizmoRings, true);
         if (ringIntersects.length > 0) {
+          state.lerpProgress = 1.0; // Stop any ongoing kinematic animation
           activeGizmoRing = ringIntersects[0].object;
           isGizmoDragging = true;
           controls.enabled = false; // Disable camera orbit while rotating bone
@@ -1661,6 +1662,30 @@
      * Joint Selection & UI Synchronization
      * ===================================================================== */
 
+    function syncActiveSliders() {
+      const bone = bonesMap.get(state.selectedJointName);
+      if (!bone) return;
+      const degX = Math.round(bone.rotation.x * (180 / Math.PI));
+      const degY = Math.round(bone.rotation.y * (180 / Math.PI));
+      const degZ = Math.round(bone.rotation.z * (180 / Math.PI));
+
+      const flexSlider = document.getElementById('slider-active-flexion');
+      const splaySlider = document.getElementById('slider-active-splay');
+      const twistSlider = document.getElementById('slider-active-twist');
+
+      if (flexSlider) flexSlider.value = degX;
+      const valFlex = document.getElementById('val-active-flexion');
+      if (valFlex) valFlex.textContent = `${degX}°`;
+
+      if (splaySlider) splaySlider.value = degY;
+      const valSplay = document.getElementById('val-active-splay');
+      if (valSplay) valSplay.textContent = `${degY}°`;
+
+      if (twistSlider) twistSlider.value = degZ;
+      const valTwist = document.getElementById('val-active-twist');
+      if (valTwist) valTwist.textContent = `${degZ}°`;
+    }
+
     function selectJoint(jointName) {
       const meta = JOINT_MAP.get(jointName);
       if (!meta) return;
@@ -1674,23 +1699,45 @@
         row.classList.toggle('selected', row.getAttribute('data-joint') === jointName);
       });
 
-      // Synchronize Sliders with current bone rotation
-      const bone = bonesMap.get(jointName);
-      if (bone) {
-        const degX = Math.round(bone.rotation.x * (180 / Math.PI));
-        const degY = Math.round(bone.rotation.y * (180 / Math.PI));
-        const degZ = Math.round(bone.rotation.z * (180 / Math.PI));
+      const flexSlider = document.getElementById('slider-active-flexion');
+      const splaySlider = document.getElementById('slider-active-splay');
+      const twistSlider = document.getElementById('slider-active-twist');
 
-        document.getElementById('slider-active-flexion').value = degX;
-        document.getElementById('val-active-flexion').textContent = `${degX}°`;
+      // Dynamically configure slider limits based on physiological ROM
+      const limits = ROM_LIMITS[jointName];
+      if (state.enforceLimits && limits) {
+        const minX = Math.floor(limits.minX * (180 / Math.PI));
+        const maxX = Math.ceil(limits.maxX * (180 / Math.PI));
+        flexSlider.min = minX;
+        flexSlider.max = maxX;
 
-        document.getElementById('slider-active-splay').value = degY;
-        document.getElementById('val-active-splay').textContent = `${degY}°`;
+        const minY = Math.floor(limits.minY * (180 / Math.PI));
+        const maxY = Math.ceil(limits.maxY * (180 / Math.PI));
+        splaySlider.min = minY;
+        splaySlider.max = maxY;
+        splaySlider.disabled = (minY === maxY);
+        splaySlider.style.opacity = (minY === maxY) ? '0.35' : '1.0';
 
-        document.getElementById('slider-active-twist').value = degZ;
-        document.getElementById('val-active-twist').textContent = `${degZ}°`;
+        const minZ = Math.floor(limits.minZ * (180 / Math.PI));
+        const maxZ = Math.ceil(limits.maxZ * (180 / Math.PI));
+        twistSlider.min = minZ;
+        twistSlider.max = maxZ;
+        twistSlider.disabled = (minZ === maxZ);
+        twistSlider.style.opacity = (minZ === maxZ) ? '0.35' : '1.0';
+      } else {
+        flexSlider.min = -90;
+        flexSlider.max = 140;
+        splaySlider.min = -60;
+        splaySlider.max = 60;
+        splaySlider.disabled = false;
+        splaySlider.style.opacity = '1.0';
+        twistSlider.min = -60;
+        twistSlider.max = 60;
+        twistSlider.disabled = false;
+        twistSlider.style.opacity = '1.0';
       }
 
+      syncActiveSliders();
       updateGizmoTransform();
     }
 
@@ -1702,19 +1749,16 @@
 
       flexSlider.addEventListener('input', (e) => {
         const rad = parseFloat(e.target.value) * (Math.PI / 180);
-        document.getElementById('val-active-flexion').textContent = `${e.target.value}°`;
         setJointAxisRotation(state.selectedJointName, 'x', rad);
       });
 
       splaySlider.addEventListener('input', (e) => {
         const rad = parseFloat(e.target.value) * (Math.PI / 180);
-        document.getElementById('val-active-splay').textContent = `${e.target.value}°`;
         setJointAxisRotation(state.selectedJointName, 'y', rad);
       });
 
       twistSlider.addEventListener('input', (e) => {
         const rad = parseFloat(e.target.value) * (Math.PI / 180);
-        document.getElementById('val-active-twist').textContent = `${e.target.value}°`;
         setJointAxisRotation(state.selectedJointName, 'z', rad);
       });
 
@@ -1739,6 +1783,7 @@
     }
 
     function setJointAxisRotation(jointName, axis, angleRad) {
+      state.lerpProgress = 1.0; // Stop any ongoing kinematic animation
       const bone = bonesMap.get(jointName);
       if (!bone) return;
       if (state.enforceLimits && ROM_LIMITS[jointName]) {
@@ -1750,7 +1795,11 @@
       bone.rotation[axis] = angleRad;
       bone.updateMatrixWorld(true);
       if (skinnedMesh) skinnedMesh.skeleton.update();
-      updateGizmoTransform();
+
+      if (jointName === state.selectedJointName) {
+        syncActiveSliders();
+        updateGizmoTransform();
+      }
     }
 
     function setJointRotation(jointName, [rx, ry, rz]) {
@@ -1765,9 +1814,13 @@
       bone.rotation.set(rx, ry, rz);
       bone.updateMatrixWorld(true);
       if (skinnedMesh) skinnedMesh.skeleton.update();
+      if (jointName === state.selectedJointName) {
+        updateGizmoTransform();
+      }
     }
 
     function curlAllFingers(factor) {
+      state.lerpProgress = 1.0;
       const digits = ['Index', 'Middle', 'Ring', 'Pinky'];
       digits.forEach(d => {
         setJointAxisRotation(`Left${d}1`, 'x', factor * 1.4);
@@ -1781,6 +1834,7 @@
     }
 
     function spreadAllFingers(factor) {
+      state.lerpProgress = 1.0;
       setJointAxisRotation('LeftIndex1', 'y', factor * 0.35);
       setJointAxisRotation('LeftMiddle1', 'y', factor * 0.05);
       setJointAxisRotation('LeftRing1', 'y', -factor * 0.25);
@@ -1948,6 +2002,9 @@
         setJointRotation(name, [rx, ry, rz]);
       });
 
+      // Synchronize active joint sliders in real-time during animation
+      syncActiveSliders();
+
       if (t >= 1.0) {
         selectJoint(state.selectedJointName);
       }
@@ -2018,6 +2075,7 @@
         state.enforceLimits = !state.enforceLimits;
         limitsBtn.classList.toggle('active', state.enforceLimits);
         limitsBtn.textContent = state.enforceLimits ? 'ROM Limiters: ON' : 'ROM Limiters: OFF';
+        selectJoint(state.selectedJointName);
       });
 
       // Quick Pose Chips

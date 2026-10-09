@@ -105,10 +105,10 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         // Decode surface GLB and verify roundtrip fidelity
         const decoded = decodeSurfaceGlb(glbBuffer);
         expect(decoded.positions.length).toBe(frame0.positions.length);
-        expect(decoded.normals.length).toBe(frame0.normals.length);
+        expect(decoded.normals!.length).toBe(frame0.normals!.length);
         expect(decoded.indices.length).toBeGreaterThan(0);
-        expect(decoded.joints.length).toBe(frame0.joints.length);
-        expect(decoded.weights.length).toBe(frame0.weights.length);
+        expect(decoded.skinIndices.length).toBe(frame0.joints!.length);
+        expect(decoded.skinWeights.length).toBe(frame0.weights!.length);
 
         // Verify glTF JSON structure contains skins and bone hierarchy
         const jsonLength = Buffer.from(glbBuffer).readUInt32LE(12);
@@ -124,7 +124,7 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         expect(gltf.nodes.length).toBe(23);
         expect(gltf.nodes[0].mesh).toBe(0);
         expect(gltf.nodes[0].skin).toBe(0);
-        expect(gltf.nodes[1].name).toBe('PerformerBone_Pelvis');
+        expect(gltf.nodes[1].name).toBe('pelvis');
     });
 
     it('PbrMeshSkinAdapter applies melanin pigmentation in exportArtifact', async () => {

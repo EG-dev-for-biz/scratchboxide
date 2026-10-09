@@ -62,7 +62,15 @@ export interface SkinFrameResult {
     positions?: Float32Array;
     normals?: Float32Array;
     colors?: Float32Array;
+    uvs?: Float32Array;
+    joints?: Uint8Array | Uint16Array;
+    weights?: Float32Array;
     splatBuffer?: Uint8Array;
+    bounds?: {
+        min: [number, number, number];
+        max: [number, number, number];
+    };
+    centroid?: [number, number, number];
 }
 
 export interface SkinExportOptions {
