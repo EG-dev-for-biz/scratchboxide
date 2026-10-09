@@ -64,6 +64,9 @@ export interface CrawlAndBakeRequest {
   maxTiles?: number;
   packerOptions?: AtlasPackerOptions;
   cacheDir?: string;
+  clay?: boolean;
+  clayPreset?: string;
+  outputGlbPath?: string;
   // For offline/test usage:
   mockTiles?: TileMeshInput[];
 }
@@ -663,15 +666,16 @@ export class Google3DTileCrawlerBaker {
    */
   public async crawlAndBake(request: CrawlAndBakeRequest): Promise<MergedTileResult> {
     const cacheDir = request.cacheDir || path.join(process.cwd(), '.scratchbox', 'tiles_cache');
-    const radius = request.radiusMeters || 200;
-    const cacheKey = `tile_${request.origin.lat.toFixed(4)}_${request.origin.lng.toFixed(4)}_${Math.round(radius)}`;
-    const cachePath = path.join(cacheDir, `${cacheKey}.glb`);
+    const radius = request.radiusMeters || 120;
+    const isClay = request.clay ?? (request.packerOptions as any)?.clay ?? false;
+    const cacheKey = `tile_${request.origin.lat.toFixed(4)}_${request.origin.lng.toFixed(4)}_${Math.round(radius)}${isClay ? '_clay' : ''}`;
+    const cachePath = request.outputGlbPath || path.join(cacheDir, `${cacheKey}.glb`);
 
     // 1. If mockTiles provided, merge and write to cache
     if (request.mockTiles && request.mockTiles.length > 0) {
       const merged = Google3DTileCrawlerBaker.mergeTileMeshes(request.mockTiles, request.origin, request.packerOptions);
       try {
-        fs.mkdirSync(cacheDir, { recursive: true });
+        fs.mkdirSync(path.dirname(cachePath), { recursive: true });
         fs.writeFileSync(cachePath, merged.glbBuffer);
       } catch (err) {
         // Cache directory write failure is non-fatal
@@ -680,19 +684,20 @@ export class Google3DTileCrawlerBaker {
     }
 
     // 2. Live crawl of the real leaf tiles; there is no synthetic substitute
-    const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY;
-    if (!apiKey) {
-      throw new Error('crawlAndBake needs a Google Maps API key (request.apiKey or GOOGLE_MAPS_API_KEY) or explicit mockTiles.');
-    }
+    const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
     const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir: path.join(cacheDir, 'leaves') });
     const anchor = { lat: request.origin.lat, lng: request.origin.lng, heightGuessM: request.origin.alt ?? 0 };
     const { leaves, session } = await crawler.collectLeafTiles(anchor, radius);
     if (request.maxTiles && leaves.length > request.maxTiles) leaves.length = request.maxTiles;
     const buffers = await crawler.downloadLeaves(leaves, session);
     const parsed = buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b));
-    const district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor);
+    const district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, {
+      clay: isClay,
+      clayPreset: request.clayPreset || 'studio-grey',
+      groundSearchRadiusM: Math.min(radius, 80)
+    });
 
-    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
     fs.writeFileSync(cachePath, district.glb);
     return {
       vertexCount: district.vertexCount,

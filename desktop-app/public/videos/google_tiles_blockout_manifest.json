@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-09T02:52:45.087Z",
+  "timestamp": "2026-10-09T03:10:30.454Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/videos/google_tiles_clay_blockout_camera.mp4",
-  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/models/google_tiles_clay_area.glb",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/build/3d-geospatial/ch_teau_gaillard_les_andelys_france_49_2_tiles.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/models/blockout_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/images/blockout_frame_00.png",
   "storyboardPaths": [
@@ -22,8 +22,7 @@
   "geoAnchor": {
     "lat": 49.2384,
     "lng": 1.4019,
-    "elevation": 15,
-    "landmarkName": "Château Gaillard, Les Andelys, France"
+    "elevation": 15
   },
   "errorTarget": 0.5,
   "renderMode": "clay",

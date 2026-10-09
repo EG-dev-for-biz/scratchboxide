@@ -403,7 +403,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                 id: `staged-location-${Date.now()}`,
                 content: {
                     type: '3d-model',
-                    durableUri: extractedGlbPath,
+                    durableUri: `/models/${path.basename(extractedGlbPath)}`,
                     mimeType: 'model/gltf-binary',
                     metadata: {
                         role: 'environment',

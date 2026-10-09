@@ -83,7 +83,7 @@ export class GeospatialTileExtractionBridge {
       mockExecution?: boolean;
     } = {}
   ): Promise<LocationExtractionResult> {
-    const outputDir = options.outputDir || path.resolve(process.cwd(), 'build/3d-geospatial');
+    const outputDir = options.outputDir || path.resolve(process.cwd(), 'public/models');
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
@@ -99,12 +99,14 @@ export class GeospatialTileExtractionBridge {
     if (fs.existsSync(tileGlbPath) && fs.existsSync(manifestPath)) {
       try {
         const cachedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        return {
-          success: true,
-          manifest: cachedManifest,
-          manifestPath,
-          glbPath: tileGlbPath
-        };
+        if (cachedManifest && cachedManifest.totalVertices && cachedManifest.totalVertices >= 1000) {
+          return {
+            success: true,
+            manifest: cachedManifest,
+            manifestPath,
+            glbPath: tileGlbPath
+          };
+        }
       } catch {
         // Corrupted cache, re-fetch
       }

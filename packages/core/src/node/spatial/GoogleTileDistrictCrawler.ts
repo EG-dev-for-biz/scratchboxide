@@ -507,6 +507,8 @@ export class GoogleTileDistrictCrawler {
             name?: string;
             /** Use this frame origin (e.g. the parent commit's) instead of estimating the street height. */
             originEllipsoidalHeightM?: number;
+            clay?: boolean;
+            clayPreset?: string;
         } = {}
     ): DistrictGlbResult {
         if (leaves.length === 0) throw new Error('No leaf tiles to build a district from');
@@ -552,6 +554,17 @@ export class GoogleTileDistrictCrawler {
             return bufferViews.length - 1;
         };
 
+        if (options.clay) {
+            materials.push({
+                name: 'StudioGreyClay',
+                pbrMetallicRoughness: {
+                    baseColorFactor: [0.55, 0.57, 0.60, 1.0],
+                    metallicFactor: 0.0,
+                    roughnessFactor: 0.85
+                }
+            });
+        }
+
         const min: Vec3 = [Infinity, Infinity, Infinity];
         const max: Vec3 = [-Infinity, -Infinity, -Infinity];
         const providerCounts = new Map<string, number>();
@@ -577,19 +590,48 @@ export class GoogleTileDistrictCrawler {
             const posView = addView(Buffer.from(pos.buffer, pos.byteOffset, pos.byteLength), 34962);
             accessors.push({ bufferView: posView, componentType: 5126, count: pos.length / 3, type: 'VEC3', min: pmin, max: pmax });
             attributes.POSITION = accessors.length - 1;
-            if (leaf.uvs) {
-                const uvView = addView(Buffer.from(leaf.uvs.buffer, leaf.uvs.byteOffset, leaf.uvs.byteLength), 34962);
-                accessors.push({ bufferView: uvView, componentType: 5126, count: leaf.uvs.length / 2, type: 'VEC2' });
-                attributes.TEXCOORD_0 = accessors.length - 1;
-            }
+
             const idx = leaf.indices;
             const componentType = idx instanceof Uint32Array ? 5125 : idx instanceof Uint16Array ? 5123 : 5121;
             const idxView = addView(Buffer.from(idx.buffer, idx.byteOffset, idx.byteLength), 34963);
             accessors.push({ bufferView: idxView, componentType, count: idx.length, type: 'SCALAR' });
             const indicesAccessor = accessors.length - 1;
 
+            // Generate smooth vertex normals for architectural clay lighting
+            const numVerts = pos.length / 3;
+            const norm = new Float32Array(pos.length);
+            for (let t = 0; t < idx.length; t += 3) {
+                const i0 = idx[t], i1 = idx[t + 1], i2 = idx[t + 2];
+                const v0x = pos[i0 * 3], v0y = pos[i0 * 3 + 1], v0z = pos[i0 * 3 + 2];
+                const v1x = pos[i1 * 3], v1y = pos[i1 * 3 + 1], v1z = pos[i1 * 3 + 2];
+                const v2x = pos[i2 * 3], v2y = pos[i2 * 3 + 1], v2z = pos[i2 * 3 + 2];
+                const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z;
+                const e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
+                const nx = e1y * e2z - e1z * e2y;
+                const ny = e1z * e2x - e1x * e2z;
+                const nz = e1x * e2y - e1y * e2x;
+                norm[i0 * 3] += nx; norm[i0 * 3 + 1] += ny; norm[i0 * 3 + 2] += nz;
+                norm[i1 * 3] += nx; norm[i1 * 3 + 1] += ny; norm[i1 * 3 + 2] += nz;
+                norm[i2 * 3] += nx; norm[i2 * 3 + 1] += ny; norm[i2 * 3 + 2] += nz;
+            }
+            for (let i = 0; i < numVerts; i++) {
+                const len = Math.hypot(norm[i * 3], norm[i * 3 + 1], norm[i * 3 + 2]) || 1;
+                norm[i * 3] /= len; norm[i * 3 + 1] /= len; norm[i * 3 + 2] /= len;
+            }
+            const normView = addView(Buffer.from(norm.buffer, norm.byteOffset, norm.byteLength), 34962);
+            accessors.push({ bufferView: normView, componentType: 5126, count: numVerts, type: 'VEC3' });
+            attributes.NORMAL = accessors.length - 1;
+
+            if (leaf.uvs && !options.clay) {
+                const uvView = addView(Buffer.from(leaf.uvs.buffer, leaf.uvs.byteOffset, leaf.uvs.byteLength), 34962);
+                accessors.push({ bufferView: uvView, componentType: 5126, count: leaf.uvs.length / 2, type: 'VEC2' });
+                attributes.TEXCOORD_0 = accessors.length - 1;
+            }
+
             let materialIndex: number | undefined;
-            if (leaf.image) {
+            if (options.clay) {
+                materialIndex = 0;
+            } else if (leaf.image) {
                 const imgView = addView(leaf.image.bytes);
                 images.push({ bufferView: imgView, mimeType: leaf.image.mimeType });
                 textures.push({ source: images.length - 1, sampler: 0 });
@@ -613,7 +655,7 @@ export class GoogleTileDistrictCrawler {
         const copyrights = [...providerCounts.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
         const json = {
             asset: { version: '2.0', generator: 'scratchbox-google-tile-district-crawler', copyright: copyrights.join('; ') },
-            extensionsUsed: materials.length ? ['KHR_materials_unlit'] : undefined,
+            extensionsUsed: (!options.clay && materials.length) ? ['KHR_materials_unlit'] : undefined,
             scene: 0,
             scenes: [{ nodes: [0] }],
             nodes,

@@ -904,6 +904,8 @@ const server = http.createServer(async (req, res) => {
         reqPath = '/scripts/viewer.html';
     } else if (reqPath === '/camera' || reqPath === '/camera-space' || reqPath === '/studio') {
         reqPath = '/scripts/camera_space_visualizer.html';
+    } else if (reqPath === '/omnispatial' || reqPath === '/synthesis' || reqPath === '/triad') {
+        reqPath = '/public/omnispatial_synthesis_demo.html';
     }
     
     let filePath = path.join(ROOT, reqPath);

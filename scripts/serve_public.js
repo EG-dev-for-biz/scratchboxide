@@ -27,6 +27,7 @@ const MIME_TYPES = {
 };
 
 const POPULAR_DEMOS = [
+    { title: 'Omnispatial Multi-Sensor 3D Synthesis · Minimal Orthogonal Basis Demo', path: '/omnispatial_synthesis_demo.html', badge: 'ORTHOGONAL TRIAD' },
     { title: 'Adaptive Image-to-PBR Relief Studio · Seamless Tiling & Displaced Geometry', path: '/image_to_adaptive_pbr_studio.html', badge: 'IMAGE TO PBR' },
     { title: 'Semantic 3D Tile Segmentation & Botanical Engine', path: '/semantic_3d_tile_separation_demo.html', badge: 'SEMANTIC 3D TILE' },
     { title: 'Next-Gen Astro 3D Viewport Studio', path: '/next_gen_astra_viewport_studio.html', badge: 'INDUSTRY BENCHMARK' },

@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import * as path from 'path';
 import * as THREE from 'three';
 import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, runTileClayBlockoutRunner } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { recolor3DTilesGlb } from '../../spatial/GlbTextureRecolorService';
@@ -505,15 +506,24 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         if (_ctx.request?.activeArtifact?.type === '3d-scene') {
             const prevArtifact = _ctx.request.activeArtifact;
             const prevData = (prevArtifact.data as any) || {};
-            const prevObjects = Array.isArray(prevData.objects) ? [...prevData.objects] : [];
+            const rawObjects = Array.isArray(prevData.objects) ? prevData.objects : [];
+            const cleanPrevObjects = rawObjects.filter((o: any) => {
+                const s = (o.content?.metadata?.source || '').toLowerCase();
+                const role = (o.content?.metadata?.role || '').toLowerCase();
+                return s !== 'google3dtilesclay' && s !== 'google_3d_tiles_clay' && s !== 'google3dtilesfulltexture' && s !== 'google_3d_tiles_full_texture' && s !== 'googlevectortileservice' && s !== 'google_vector_tile_service' && role !== 'environment';
+            });
+            const glbUri = result.glbPath.includes('/public/models/')
+                ? `/models/${path.basename(result.glbPath)}`
+                : (result.glbPath.startsWith('/') && !result.glbPath.startsWith('/models/') ? `/models/${path.basename(result.glbPath)}` : result.glbPath);
             const tileObject = {
                 id: `tile-texture-${Date.now()}`,
                 content: {
                     type: '3d-model',
-                    durableUri: result.glbPath,
+                    durableUri: glbUri,
                     mimeType: 'model/gltf-binary',
                     metadata: {
                         source: 'Google3DTilesFullTexture',
+                        role: 'environment',
                         resolvedAddress: result.resolvedAddress || query,
                         vertexCount: result.mesh?.vertexCount,
                         triangleCount: result.mesh?.triangleCount
@@ -532,7 +542,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                     ...prevData,
                     groundTileMode: 'photoreal-textured',
                     geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
-                    objects: [...prevObjects, tileObject]
+                    objects: [...cleanPrevObjects, tileObject]
                 }
             };
         }
@@ -574,15 +584,24 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         if (_ctx.request?.activeArtifact?.type === '3d-scene') {
             const prevArtifact = _ctx.request.activeArtifact;
             const prevData = (prevArtifact.data as any) || {};
-            const prevObjects = Array.isArray(prevData.objects) ? [...prevData.objects] : [];
+            const rawObjects = Array.isArray(prevData.objects) ? prevData.objects : [];
+            const cleanPrevObjects = rawObjects.filter((o: any) => {
+                const s = (o.content?.metadata?.source || '').toLowerCase();
+                const role = (o.content?.metadata?.role || '').toLowerCase();
+                return s !== 'google3dtilesclay' && s !== 'google_3d_tiles_clay' && s !== 'google3dtilesfulltexture' && s !== 'google_3d_tiles_full_texture' && s !== 'googlevectortileservice' && s !== 'google_vector_tile_service' && role !== 'environment';
+            });
+            const glbUri = result.glbPath.includes('/public/models/')
+                ? `/models/${path.basename(result.glbPath)}`
+                : (result.glbPath.startsWith('/') && !result.glbPath.startsWith('/models/') ? `/models/${path.basename(result.glbPath)}` : result.glbPath);
             const tileObject = {
                 id: `tile-clay-${Date.now()}`,
                 content: {
                     type: '3d-model',
-                    durableUri: result.glbPath,
+                    durableUri: glbUri,
                     mimeType: 'model/gltf-binary',
                     metadata: {
                         source: 'Google3DTilesClay',
+                        role: 'environment',
                         resolvedAddress: result.resolvedAddress || query,
                         vertexCount: result.mesh?.vertexCount,
                         triangleCount: result.mesh?.triangleCount
@@ -601,7 +620,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                     ...prevData,
                     groundTileMode: 'photoreal-clay',
                     geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
-                    objects: [...prevObjects, tileObject]
+                    objects: [...cleanPrevObjects, tileObject]
                 }
             };
         }

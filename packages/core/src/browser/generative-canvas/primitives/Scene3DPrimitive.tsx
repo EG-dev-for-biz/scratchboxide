@@ -1844,12 +1844,19 @@ int main(int argc, char** argv) {
         renderMode
     ]);
 
+    const hasExplicit3DTileObject = React.useMemo(() => Boolean(
+        sceneData.objects?.some(o => {
+            const s = (o.content?.metadata?.source || '').toLowerCase();
+            return s === 'google3dtilesclay' || s === 'google_3d_tiles_clay' || s === 'google3dtilesfulltexture' || s === 'google_3d_tiles_full_texture';
+        })
+    ), [sceneData.objects]);
+
     const tilesInput = React.useMemo<TilesLayerInput>(() => ({
-        has3DTiles: has3DTiles && (effectiveGroundTileMode === 'photoreal-textured' || effectiveGroundTileMode === 'photoreal-clay'),
+        has3DTiles: !hasExplicit3DTileObject && has3DTiles && (effectiveGroundTileMode === 'photoreal-textured' || effectiveGroundTileMode === 'photoreal-clay'),
         geoAnchor: sceneData.geoAnchor ? { lat: sceneData.geoAnchor.lat, lng: sceneData.geoAnchor.lng, elevation: sceneData.geoAnchor.elevation } : null,
         renderMode,
-        groundTileMode: effectiveGroundTileMode
-    }), [has3DTiles, sceneData.geoAnchor, renderMode, effectiveGroundTileMode]);
+        groundTileMode: hasExplicit3DTileObject ? 'none' : effectiveGroundTileMode
+    }), [hasExplicit3DTileObject, has3DTiles, sceneData.geoAnchor, renderMode, effectiveGroundTileMode]);
     const tilesFingerprint = React.useMemo(() => JSON.stringify(tilesInput), [tilesInput]);
     const tilesInputRef = useLatest(tilesInput);
 
@@ -2657,9 +2664,9 @@ int main(int argc, char** argv) {
             if (source === 'googlevectortileservice' || source === 'google_vector_tile_service') {
                 isVisibleForGroundMode = effectiveGroundTileMode === 'vector-world-clay';
             } else if (source === 'google3dtilesclay' || source === 'google_3d_tiles_clay') {
-                isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-clay';
+                isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-clay' || hasExplicit3DTileObject;
             } else if (source === 'google3dtilesfulltexture' || source === 'google_3d_tiles_full_texture') {
-                isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-textured';
+                isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-textured' || hasExplicit3DTileObject;
             }
 
             const existing = currentMap.get(obj.id);
