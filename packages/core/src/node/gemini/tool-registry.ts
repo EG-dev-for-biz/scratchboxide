@@ -74,6 +74,8 @@ import {
     tapir4dgsHandlers,
     AVATAR_4DGS_TOOL_DECLARATIONS,
     avatar4dgsHandlers,
+    HUMANOID_AVATAR_TOOL_DECLARATIONS,
+    humanoidAvatarHandlers,
     ANALYTICAL_GROOM_TOOL_DECLARATIONS,
     analyticalGroomHandlers,
     UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS,
@@ -639,6 +641,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of AVATAR_4DGS_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, avatar4dgsHandlers[decl.name], 'workspace');
+    }
+    for (const decl of HUMANOID_AVATAR_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, humanoidAvatarHandlers[decl.name], 'workspace');
     }
     for (const decl of ANALYTICAL_GROOM_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, analyticalGroomHandlers[decl.name], 'workspace');

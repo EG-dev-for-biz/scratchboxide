@@ -63,6 +63,8 @@ import {
     tapir4dgsHandlers,
     AVATAR_4DGS_TOOL_DECLARATIONS,
     avatar4dgsHandlers,
+    HUMANOID_AVATAR_TOOL_DECLARATIONS,
+    humanoidAvatarHandlers,
     ANALYTICAL_GROOM_TOOL_DECLARATIONS,
     analyticalGroomHandlers
 } from './spatial-tools';
@@ -113,6 +115,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...PHYSICAL_CAMERA_TOOL_DECLARATIONS,
     ...TAPIR_4DGS_TOOL_DECLARATIONS,
     ...AVATAR_4DGS_TOOL_DECLARATIONS,
+    ...HUMANOID_AVATAR_TOOL_DECLARATIONS,
     ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
     ...COMFYUI_TOOL_DECLARATIONS,
     ...IMAGE_TO_PBR_TOOL_DECLARATIONS,
@@ -156,5 +159,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...botanicalTreeHandlers
 };
 
-
-
+export {
+    HUMANOID_AVATAR_TOOL_DECLARATIONS,
+    humanoidAvatarHandlers
+};

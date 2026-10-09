@@ -592,6 +592,60 @@ export class VideoTo4DPerformerPipelineService {
         const splatBuffer = SplatService.serializeSplatBuffer(texturedGaussians);
         await fs.writeFile(splatPath, splatBuffer);
 
+        // Modernized Dual-Modal Pipeline: Synthesize and emit canonical rigged PBR mesh GLB
+        let glbPath: string | undefined;
+        let pbrMeshStats: { vertexCount: number; triangleCount: number } | undefined;
+        const modalitiesEmitted: HumanoidSkinModality[] = ['4dgs-radiance', '2dgs-planar-surfel'];
+
+        if (options.exportRiggedGlb !== false) {
+            try {
+                const outGlbPath = path.join(outputDir, `${characterId}_rigged_pbr.glb`);
+                let surfaceMesh: SurfaceMesh | undefined;
+                if (gvhmrBody) {
+                    const surfaceSvc = new PerformerSurfaceMeshService();
+                    const splatsForMesh = texturedGaussians.map(g => ({
+                        position: [g.position[0], g.position[1], g.position[2]] as [number, number, number],
+                        colorRgb: [g.colorRgb[0], g.colorRgb[1], g.colorRgb[2]] as [number, number, number],
+                        opacity: g.opacity,
+                        bone: g.boneIndices && g.boneWeights ? g.boneIndices[g.boneWeights.indexOf(Math.max(...g.boneWeights))] : undefined
+                    }));
+                    surfaceMesh = surfaceSvc.build(gvhmrBody, splatsForMesh, { subdivisionLevels: 2, maxOffset: 0.025 });
+                }
+
+                if (surfaceMesh) {
+                    const glbBuf = PerformerSurfaceMeshService.encodeGlb(surfaceMesh, {
+                        includeSkin: true,
+                        canonicalJoints: DEFAULT_CANONICAL_JOINTS,
+                        jointParents: SBHUMAN22_PARENTS,
+                        jointNames: CANONICAL_22_JOINT_NAMES,
+                        material: {
+                            name: `${characterId}_PbrSurface`,
+                            baseColorFactor: [1, 1, 1, 1],
+                            roughnessFactor: 0.65,
+                            metallicFactor: 0.05
+                        }
+                    });
+                    await fs.writeFile(outGlbPath, glbBuf);
+                    glbPath = outGlbPath;
+                    pbrMeshStats = {
+                        vertexCount: surfaceMesh.positions.length / 3,
+                        triangleCount: surfaceMesh.indices.length / 3
+                    };
+                    modalitiesEmitted.push('pbr-standard', 'pbr-melanin', 'hybrid-pbr-hair-groom');
+
+                    // If public/models exists, save a copy there for client-side viewport loading
+                    const publicModelsGlb = path.join(process.cwd(), 'public', 'models', `humanoid_${characterId}.glb`);
+                    const publicModelsDir = path.dirname(publicModelsGlb);
+                    if (await fs.pathExists(publicModelsDir)) {
+                        await fs.writeFile(publicModelsGlb, glbBuf);
+                    }
+                }
+            } catch (meshErr) {
+                // Non-fatal fallback: 4DGS splats remain primary
+                console.warn(`[VideoTo4DPerformerPipelineService] PBR surface mesh generation skipped: ${meshErr}`);
+            }
+        }
+
         // Write geo_manifest.json
         const geoManifest = {
             character_id: characterId,
@@ -728,6 +782,9 @@ export class VideoTo4DPerformerPipelineService {
             plyPath,
             motionPath,
             splatPath,
+            glbPath,
+            pbrMeshStats,
+            modalitiesEmitted,
             geoManifestPath,
             stagePlacementPath,
             nerfstudioTransformsPath: transformsPath,

@@ -72,6 +72,7 @@ import { GaussianSplat4DService } from '../../3d-engine/gaussian-splat-4d-servic
 import { Dynamic4DGaussianSplatService } from '../../3d-engine/Dynamic4DGaussianSplatService';
 import { HumanoidMotionBridgeService } from '../../spatial/HumanoidMotionBridgeService';
 import { VideoTo4DPerformerPipelineService } from '../../spatial/VideoTo4DPerformerPipelineService';
+import { SbHumanAvatarService } from '../../spatial/SbHumanAvatarService';
 import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisService';
 import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
 import { Splat3DTilesService } from '../../spatial/Splat3DTilesService';
@@ -4826,6 +4827,91 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
+export const HUMANOID_AVATAR_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'humanoid_avatar_list',
+        description: 'Lists all available humanoid avatars (performer demos, SB-Human models) with their available skinning modalities (PBR polygonal mesh, Melanin-calibrated PBR, 4DGS splats, 2D planar surfels).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {}
+        }
+    },
+    {
+        name: 'humanoid_avatar_get',
+        description: 'Retrieves comprehensive metadata, skeletal joint hierarchy, available skinning adapters, and bounding dimensions for a humanoid avatar.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                actorId: {
+                    type: 'STRING',
+                    description: 'Humanoid actor identifier (e.g. "2785536", "sbhuman_neutral")'
+                }
+            },
+            required: ['actorId']
+        }
+    },
+    {
+        name: 'humanoid_avatar_skin',
+        description: 'Evaluates, skins, or exports a humanoid avatar using the chosen skinning modality (pbr-standard, pbr-melanin, 4dgs-radiance, 2dgs-planar-surfel). Can export rigged GLB, SPLAT binary, or PLY.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                actorId: {
+                    type: 'STRING',
+                    description: 'Humanoid actor identifier (e.g. "2785536")'
+                },
+                modality: {
+                    type: 'STRING',
+                    description: 'Skinning modality: "pbr-standard", "pbr-melanin", "4dgs-radiance", "2dgs-planar-surfel"'
+                },
+                melaninFraction: {
+                    type: 'NUMBER',
+                    description: 'Melanin pigmentation fraction [0.0 = pale, 1.0 = deep dark] for biophysical PBR skin'
+                },
+                pheomelaninRatio: {
+                    type: 'NUMBER',
+                    description: 'Pheomelanin warm/reddish ratio [0.0 = neutral/eumelanin, 1.0 = warm/pheomelanin]'
+                },
+                frameIndex: {
+                    type: 'NUMBER',
+                    description: 'Optional motion frame index to evaluate (0-indexed)'
+                },
+                format: {
+                    type: 'STRING',
+                    description: 'Optional export format: "glb", "splat", "ply"'
+                }
+            },
+            required: ['actorId']
+        }
+    },
+    {
+        name: 'humanoid_avatar_animate',
+        description: 'Animates and deforms a humanoid avatar at a specific motion frame index via 22-joint SB-Human Linear Blend Skinning (LBS) across PBR mesh or 4DGS splats.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                actorId: {
+                    type: 'STRING',
+                    description: 'Humanoid actor identifier'
+                },
+                frameIndex: {
+                    type: 'NUMBER',
+                    description: 'Motion frame index to evaluate (0-indexed)'
+                },
+                modality: {
+                    type: 'STRING',
+                    description: 'Skinning modality ("pbr-standard", "4dgs-radiance", "2dgs-planar-surfel"; default: "pbr-standard")'
+                },
+                exportArtifact: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to serialize and return the deformed artifact buffer (default: false)'
+                }
+            },
+            required: ['actorId', 'frameIndex']
+        }
+    }
+];
+
 export const tapir4dgsHandlers: Record<string, ToolHandler> = {
     async tapir_track_video_points(args) {
         const numFrames = Number(args.numFrames ?? 24);
@@ -5108,10 +5194,103 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
 
         return {
             resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Synthesized 4D performer "${result.characterId}": ${result.numGaussians} Gaussians rigged with 4-bone LBS, ${result.numFrames} motion frames tracked, anchored at ${result.venueAnchor.venueName} (alt: ${result.venueAnchor.altitudeMsl}m MSL). PLY: ${result.plyPath}, SPLAT: ${result.splatPath}`
+            summaryResult: `Synthesized 4D performer "${result.characterId}": ${result.numGaussians} Gaussians rigged with 4-bone LBS, ${result.numFrames} motion frames tracked, anchored at ${result.venueAnchor.venueName} (alt: ${result.venueAnchor.altitudeMsl}m MSL). PLY: ${result.plyPath}, SPLAT: ${result.splatPath}${result.glbPath ? `, Rigged PBR GLB: ${result.glbPath}` : ''}`
         };
     }
 };
+
+export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
+    async humanoid_avatar_list(_args) {
+        const service = new SbHumanAvatarService();
+        const actors = await service.listActors();
+        return {
+            resultPayload: {
+                totalActors: actors.length,
+                actors
+            } as unknown as ToolResultPayload,
+            summaryResult: `Found ${actors.length} humanoid actors (${actors.map(a => a.actorId).join(', ')}) with pluggable multi-modality skinning support.`
+        };
+    },
+
+    async humanoid_avatar_get(args) {
+        const actorId = asString(args.actorId || args.avatarId, '2785536');
+        const service = new SbHumanAvatarService();
+        const actor = await service.getActor(actorId);
+        if (!actor) {
+            return {
+                resultPayload: { error: `Actor "${actorId}" not found` } as unknown as ToolResultPayload,
+                summaryResult: `Actor "${actorId}" not found.`
+            };
+        }
+        return {
+            resultPayload: {
+                actor
+            } as unknown as ToolResultPayload,
+            summaryResult: `Retrieved actor "${actor.name}" (${actorId}): modalities=[${actor.availableModalities.join(', ')}], joints=${actor.canonicalJoints.length}, frames=${actor.frameCount}.`
+        };
+    },
+
+    async humanoid_avatar_skin(args) {
+        const actorId = asString(args.actorId || args.avatarId, '2785536');
+        const modality = asString(args.modality, 'pbr-standard') as any;
+        const melaninFraction = args.melaninFraction !== undefined ? Number(args.melaninFraction) : undefined;
+        const pheomelaninRatio = args.pheomelaninRatio !== undefined ? Number(args.pheomelaninRatio) : undefined;
+        const frameIndex = args.frameIndex !== undefined ? Number(args.frameIndex) : 0;
+        const format = args.format ? asString(args.format, 'glb') as any : undefined;
+
+        const service = new SbHumanAvatarService();
+        const adapter = await service.getSkinAdapter(actorId, modality);
+
+        let artifactBuffer: Buffer | Uint8Array | undefined;
+        if (format || args.exportArtifact) {
+            artifactBuffer = await adapter.exportArtifact({
+                modality,
+                format,
+                frameIndex,
+                melaninFraction,
+                pheomelaninRatio
+            });
+        }
+
+        const frameResult = await adapter.evaluateFrame(frameIndex);
+        return {
+            resultPayload: {
+                actorId,
+                modality,
+                frameIndex,
+                vertexCount: frameResult.vertexCount,
+                gaussianCount: frameResult.gaussianCount,
+                artifactBytes: artifactBuffer ? artifactBuffer.byteLength : undefined,
+                artifactBase64Preview: artifactBuffer ? Buffer.from(artifactBuffer).subarray(0, 64).toString('hex') : undefined
+            } as unknown as ToolResultPayload,
+            summaryResult: `Evaluated actor "${actorId}" with skin modality "${modality}": ${frameResult.vertexCount ?? frameResult.gaussianCount ?? 0} geometric elements${artifactBuffer ? `, exported ${artifactBuffer.byteLength} bytes (${format || 'artifact'})` : ''}.`
+        };
+    },
+
+    async humanoid_avatar_animate(args) {
+        const actorId = asString(args.actorId || args.avatarId, '2785536');
+        const frameIndex = Number(args.frameIndex ?? 0);
+        const modality = asString(args.modality, 'pbr-standard') as any;
+        const service = new SbHumanAvatarService();
+        const frame = await service.evaluateActorFrame(actorId, frameIndex, modality);
+
+        return {
+            resultPayload: {
+                actorId,
+                frameIndex,
+                modality,
+                vertexCount: frame.vertexCount,
+                gaussianCount: frame.gaussianCount,
+                bounds: frame.bounds,
+                centroid: frame.centroid
+            } as unknown as ToolResultPayload,
+            summaryResult: `Animated actor "${actorId}" at frame ${frameIndex} using modality "${modality}".`
+        };
+    }
+};
+
+// Merge humanoid avatar handlers into avatar4dgsHandlers for transparent unified routing
+Object.assign(avatar4dgsHandlers, humanoidAvatarHandlers);
 
 // ============================================================================
 // Analytical Hair Groom & 3D Gaussian Splat Declarations & Handlers

@@ -23,6 +23,7 @@ import {
     PHYSICAL_CAMERA_TOOL_DECLARATIONS,
     TAPIR_4DGS_TOOL_DECLARATIONS,
     AVATAR_4DGS_TOOL_DECLARATIONS,
+    HUMANOID_AVATAR_TOOL_DECLARATIONS,
     ANALYTICAL_GROOM_TOOL_DECLARATIONS
 } from './tools/spatial-tools';
 import { UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS } from './tools/universal-3d-structure-tools';
@@ -129,7 +130,8 @@ export const VFX_VIDEO_PACK: ToolPackDefinition = {
         ...PHYSICAL_CAMERA_TOOL_DECLARATIONS,
         ...POSE_DEPTH_TOOL_DECLARATIONS,
         ...TAPIR_4DGS_TOOL_DECLARATIONS,
-        ...AVATAR_4DGS_TOOL_DECLARATIONS
+        ...AVATAR_4DGS_TOOL_DECLARATIONS,
+        ...HUMANOID_AVATAR_TOOL_DECLARATIONS
     ],
     toolNames: [
         ...VFX_VIDEO_TOOL_DECLARATIONS.map(d => d.name),
@@ -141,7 +143,8 @@ export const VFX_VIDEO_PACK: ToolPackDefinition = {
         ...PHYSICAL_CAMERA_TOOL_DECLARATIONS.map(d => d.name),
         ...POSE_DEPTH_TOOL_DECLARATIONS.map(d => d.name),
         ...TAPIR_4DGS_TOOL_DECLARATIONS.map(d => d.name),
-        ...AVATAR_4DGS_TOOL_DECLARATIONS.map(d => d.name)
+        ...AVATAR_4DGS_TOOL_DECLARATIONS.map(d => d.name),
+        ...HUMANOID_AVATAR_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };
 

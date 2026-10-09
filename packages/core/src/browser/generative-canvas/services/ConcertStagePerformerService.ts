@@ -28,6 +28,17 @@ export enum PerformerSkinningMode {
    * Provided for visual side-by-side comparison to demonstrate the quality leap.
    */
   DEPTHBOX3_LEGACY_TRANSLATION = 'depthbox3_legacy_translation',
+
+  /**
+   * Canonical Rigged PBR Mesh skinning via WebGL Three.js SkinnedMesh.
+   * Leverages canonical 22-joint SB-Human skeleton with standard PBR material.
+   */
+  PBR_RIGGED_MESH = 'pbr_rigged_mesh',
+
+  /**
+   * Biophysical Melanin calibrated PBR surface skinning.
+   */
+  PBR_MELANIN_SURFACE = 'pbr_melanin_surface',
 }
 
 /**
@@ -250,6 +261,7 @@ export class ConcertStagePerformerService {
   private performerPointsMesh?: THREE.Points;
   private performerPositionsBuffer?: Float32Array;
   private performerColorsBuffer?: Float32Array;
+  private performerSkinnedMesh?: THREE.SkinnedMesh;
 
   constructor(options: ConcertStageOptions = {}) {
     this.venue = options.venue || MUSIC_VENUE_PRESETS.red_rocks;
@@ -438,6 +450,40 @@ export class ConcertStagePerformerService {
   }
 
   /**
+   * Ingests canonical Performer rigged PBR SkinnedMesh and binds to the stage performer group.
+   */
+  public loadPerformerMesh(skinnedMesh: THREE.SkinnedMesh, canonicalJoints?: Array<[number, number, number]>) {
+    if (this.performerSkinnedMesh) {
+      this.performerGroup.remove(this.performerSkinnedMesh);
+      this.performerSkinnedMesh.geometry.dispose();
+    }
+    this.performerSkinnedMesh = skinnedMesh;
+    if (canonicalJoints && canonicalJoints.length >= 22) {
+      this.canonicalJoints = canonicalJoints;
+    }
+    this.performerGroup.add(skinnedMesh);
+    this.evaluateCurrentFrame();
+  }
+
+  /**
+   * Toggles visibility of the rigged PBR skinned mesh.
+   */
+  public setMeshVisibility(visible: boolean) {
+    if (this.performerSkinnedMesh) {
+      this.performerSkinnedMesh.visible = visible;
+    }
+  }
+
+  /**
+   * Toggles visibility of the 4DGS point cloud / splats.
+   */
+  public setSplatsVisibility(visible: boolean) {
+    if (this.performerPointsMesh) {
+      this.performerPointsMesh.visible = visible;
+    }
+  }
+
+  /**
    * Automatically binds canonical Gaussians to skeletal bones via geodesic segment distance.
    */
   public computeSplatBoneWeights(radiusFalloff: number = 0.22) {
@@ -578,7 +624,7 @@ export class ConcertStagePerformerService {
    */
   public evaluateCurrentFrame(): BakedGaussian[] {
     const count = this.restSplats.length;
-    if (count === 0) return [];
+    if (count === 0 && !this.performerSkinnedMesh) return [];
 
     const frame =
       this.motionFrames.length > 0
@@ -592,11 +638,15 @@ export class ConcertStagePerformerService {
       const lowestRestY = Math.min(this.canonicalJoints[10][1], this.canonicalJoints[11][1]);
       const stageOffset = this.stageHeight - lowestRestY;
 
+      if (this.performerSkinnedMesh) {
+        this.performerSkinnedMesh.position.set(0, stageOffset, 0);
+      }
+
       deformedSplats = this.restSplats.map((g) => ({
         ...g,
         position: [g.position[0], g.position[1] + stageOffset, g.position[2]],
       }));
-    } else if (this.skinningMode === PerformerSkinningMode.SCRATCHBOX_LBS_4BONE) {
+    } else if (this.skinningMode === PerformerSkinningMode.SCRATCHBOX_LBS_4BONE || this.skinningMode === PerformerSkinningMode.PBR_RIGGED_MESH || this.skinningMode === PerformerSkinningMode.PBR_MELANIN_SURFACE) {
       deformedSplats = this.evaluateScratchboxLBS4Bone(frame);
     } else {
       deformedSplats = this.evaluateDepthBox3LegacyTranslation(frame);
@@ -669,6 +719,23 @@ export class ConcertStagePerformerService {
       mat.multiply(mToOrigin);
 
       skinTransforms.push(mat);
+    }
+
+    // Update SkinnedMesh skeleton if loaded
+    if (this.performerSkinnedMesh && this.performerSkinnedMesh.skeleton) {
+      const bones = this.performerSkinnedMesh.skeleton.bones;
+      const numBones = Math.min(bones.length, posedJoints.length);
+      for (let b = 0; b < numBones; b++) {
+        const bPos = posedJoints[b];
+        if (bPos) {
+          bones[b].position.set(
+            bPos[0] + frame.rootTranslation[0],
+            bPos[1] + frame.rootTranslation[1] + groundPinDeltaY,
+            bPos[2] + frame.rootTranslation[2]
+          );
+        }
+      }
+      this.performerSkinnedMesh.skeleton.update();
     }
 
     // Blend all splats across 4 bone weights

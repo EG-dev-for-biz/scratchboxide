@@ -71,13 +71,40 @@ export class PbrMeshSkinAdapter implements ISbHumanSkinAdapter {
 
     public async evaluateFrame(frameIndex: number, _jointTransforms?: any[]): Promise<SkinFrameResult> {
         const mesh = await this.loadRestMesh();
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        let sumX = 0, sumY = 0, sumZ = 0;
+        const vCount = mesh.positions.length / 3;
+        for (let i = 0; i < mesh.positions.length; i += 3) {
+            const x = mesh.positions[i];
+            const y = mesh.positions[i + 1];
+            const z = mesh.positions[i + 2];
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            minZ = Math.min(minZ, z);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+            maxZ = Math.max(maxZ, z);
+            sumX += x;
+            sumY += y;
+            sumZ += z;
+        }
+
         return {
             frameIndex,
             modality: this.modality,
-            vertexCount: mesh.positions.length / 3,
+            vertexCount: vCount,
             positions: mesh.positions,
             normals: mesh.normals,
-            colors: mesh.colors
+            colors: mesh.colors,
+            joints: mesh.joints,
+            weights: mesh.weights,
+            uvs: mesh.uvs,
+            bounds: {
+                min: [minX, minY, minZ],
+                max: [maxX, maxY, maxZ]
+            },
+            centroid: vCount > 0 ? [sumX / vCount, sumY / vCount, sumZ / vCount] : [0, 0, 0]
         };
     }
 
@@ -164,23 +191,21 @@ export class Gaussian4DGSSkinAdapter implements ISbHumanSkinAdapter {
     }
 
     public async evaluateFrame(frameIndex: number): Promise<SkinFrameResult> {
-        const anim = this.splatService.animateAvatar(this.actorId, frameIndex);
+        const anim = this.splatService.animateFrame(this.actorId, frameIndex);
         return {
             frameIndex,
             modality: this.modality,
-            gaussianCount: anim.gaussians.length,
-            positions: new Float32Array(anim.gaussians.flatMap(g => g.position)),
-            colors: new Float32Array(anim.gaussians.flatMap(g => g.colorRgb))
+            gaussianCount: anim.splats.length,
+            positions: new Float32Array(anim.splats.flatMap(g => g.position)),
+            colors: new Float32Array(anim.splats.flatMap(g => g.colorRgb)),
+            bounds: anim.bounds,
+            centroid: anim.centroid
         };
     }
 
     public async exportArtifact(options: SkinExportOptions = {}): Promise<Buffer> {
         const frameIndex = options.frameIndex ?? 0;
-        const anim = this.splatService.animateAvatar(this.actorId, frameIndex, { exportSplat: true });
-        if (!anim.splatBuffer) {
-            throw new Error(`Failed to export .splat binary for avatar ${this.actorId} at frame ${frameIndex}`);
-        }
-        return Buffer.from(anim.splatBuffer.buffer, anim.splatBuffer.byteOffset, anim.splatBuffer.byteLength);
+        return this.splatService.exportSplatBuffer(this.actorId, frameIndex);
     }
 }
 
@@ -278,10 +303,15 @@ export class SbHumanAvatarService {
                     }
                 }
 
+                const headY = DEFAULT_CANONICAL_JOINTS[15][1];
+                const footY = Math.min(DEFAULT_CANONICAL_JOINTS[10][1], DEFAULT_CANONICAL_JOINTS[11][1]);
+                const heightMeters = Number((headY - footY + 0.15).toFixed(2));
+
                 actors.push({
                     actorId: entry,
                     name: `SB-Human Performer (${entry})`,
                     sourceType: 'performer-demo',
+                    heightMeters,
                     frameCount,
                     fps,
                     durationSeconds: frameCount > 0 ? frameCount / fps : 0,
@@ -313,6 +343,7 @@ export class SbHumanAvatarService {
                     actorId: id,
                     name: `SB-Human Canonical Model (${id})`,
                     sourceType: 'sbhuman-model',
+                    heightMeters: 1.75,
                     hasSkeletalMotion: false,
                     availableModalities: ['pbr-standard', 'pbr-melanin', '2dgs-planar-surfel'],
                     canonicalJoints: DEFAULT_CANONICAL_JOINTS,
