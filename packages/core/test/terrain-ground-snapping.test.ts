@@ -291,6 +291,74 @@ async function runTerrainGroundSnappingTests(): Promise<void> {
         console.log('  ✓ Test 6 Passed: Camera lookAt dynamically adjusts to terrain elevation.');
     }
 
+    // =========================================================================
+    // TEST 7: Additive Construction & Ground Logic Between 3D Tile Meshes and Built Objects
+    // =========================================================================
+    console.log('  Testing additive building and shared metric ground logic on 3D tiles...');
+    {
+        const scene = new THREE.Scene();
+
+        // 1. Ingest simulated 3D tile district mesh with elevated plaza at Y = 4.5m
+        const tileGeometry = new THREE.BoxGeometry(60, 9, 60); // from -4.5 to +4.5
+        const tileMesh = new THREE.Mesh(tileGeometry, new THREE.MeshBasicMaterial());
+        tileMesh.name = 'external-object-tile-colosseum';
+        tileMesh.position.set(0, 0, 0); // top surface is at Y = 4.5m
+        tileMesh.updateMatrixWorld(true);
+        scene.add(tileMesh);
+
+        const manager = new TerrainManager({ scene });
+
+        // Verify terrain/tile elevation query
+        const tileSurfaceY = manager.sampleHeight(0, 0);
+        assert.ok(tileSurfaceY !== null, 'Must detect 3D tile mesh surface');
+        assert.ok(Math.abs(tileSurfaceY - 4.5) < 0.01, `Tile surface should be at 4.5m, got ${tileSurfaceY}`);
+
+        // 2. Build Object A (Pavilion/Pedestal: 10m x 3m x 10m, centered at origin, height 3m)
+        const pedestalGeo = new THREE.BoxGeometry(10, 3, 10);
+        const pedestalMesh = new THREE.Mesh(pedestalGeo, new THREE.MeshBasicMaterial());
+        pedestalMesh.name = 'pedestal_edifice';
+        pedestalMesh.position.set(0, 0, 0); // before snap: center at 0, min.y = -1.5, max.y = +1.5
+        scene.add(pedestalMesh);
+        pedestalMesh.updateMatrixWorld(true);
+
+        // Snap Object A to the 3D tile surface
+        const snappedPavilionY = manager.snapObjectToGround(pedestalMesh, 0);
+        assert.ok(snappedPavilionY !== null);
+        pedestalMesh.updateMatrixWorld(true);
+
+        const pedestalBox = new THREE.Box3().setFromObject(pedestalMesh);
+        // Base of Object A should rest flush at Y = 4.5m, top should reach Y = 7.5m
+        assert.ok(Math.abs(pedestalBox.min.y - 4.5) < 0.05, `Object A base must rest on tile surface at 4.5m, got ${pedestalBox.min.y}`);
+        assert.ok(Math.abs(pedestalBox.max.y - 7.5) < 0.05, `Object A top must reach 7.5m, got ${pedestalBox.max.y}`);
+        console.log(`    ✓ Object A correctly grounded on 3D tile: base=${pedestalBox.min.y.toFixed(2)}m, top=${pedestalBox.max.y.toFixed(2)}m`);
+
+        // 3. Build Object B (Statue/Hero Asset: 2m x 4m x 2m, centered at origin, height 4m)
+        // This tests building ON TOP of Object A ("build on top of each other")
+        const heroGeo = new THREE.BoxGeometry(2, 4, 2);
+        const heroMesh = new THREE.Mesh(heroGeo, new THREE.MeshBasicMaterial());
+        heroMesh.name = 'hero_statue';
+        heroMesh.position.set(0, 0, 0); // before snap: center at 0, min.y = -2.0, max.y = +2.0
+        scene.add(heroMesh);
+        heroMesh.updateMatrixWorld(true);
+
+        // Snap Object B on top of Object A
+        const snappedHeroY = manager.snapObjectToGround(heroMesh, 0);
+        assert.ok(snappedHeroY !== null);
+        heroMesh.updateMatrixWorld(true);
+
+        const heroBox = new THREE.Box3().setFromObject(heroMesh);
+        // Base of Object B should rest flush at the top of Object A (Y = 7.5m), top should reach Y = 11.5m
+        assert.ok(Math.abs(heroBox.min.y - 7.5) < 0.05, `Object B base must rest on top of Object A at 7.5m, got ${heroBox.min.y}`);
+        assert.ok(Math.abs(heroBox.max.y - 11.5) < 0.05, `Object B top must reach 11.5m, got ${heroBox.max.y}`);
+        console.log(`    ✓ Object B correctly built on top of Object A: base=${heroBox.min.y.toFixed(2)}m, top=${heroBox.max.y.toFixed(2)}m`);
+
+        // 4. Verify metric SI scaling: 1 Three.js unit = 1.0 meter
+        const totalHeight = heroBox.max.y - 4.5; // from tile surface to top of Object B
+        assert.ok(Math.abs(totalHeight - 7.0) < 0.05, `Total combined height should be 3m + 4m = 7m, got ${totalHeight}`);
+
+        console.log('  ✓ Test 7 Passed: Additive construction and shared metric ground logic between tiles and objects verified.');
+    }
+
     console.log('\n🎉 All Terrain Ground Snapping & Elevation Tests Passed Successfully!\n');
 }
 

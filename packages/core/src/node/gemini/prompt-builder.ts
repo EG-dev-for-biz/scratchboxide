@@ -1022,6 +1022,12 @@ scene.merge(loc.create_procedural_vegetation(density=1.0))
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 \`\`\`
 
+- SHARED METRIC SCALING & GROUND LOGIC INVARIANT:
+  * Ingested Google 3D Tiles and procedurally built objects share the exact same SI metric coordinate frame (1 unit = 1.0 meter; +X East, +Y Up, +Z South).
+  * The street/anchor ground datum is centered at Y = 0.0m.
+  * Default Surface Ground Conformance: When 3D tiles or underlying structures exist in the scene, built objects automatically snap their bounding-box base to sit directly on top of the terrain or underlying surface triangle at (X, Z).
+  * Additive Building: You can build structures, pavilions, vehicles, or botanical assets directly on top of 3D tiles or on top of previously built assets (using mesh.ground_on(target) in Python or by default in the viewport renderer).
+
 - INSTANT IN-MEMORY DELTA EDITS (<1ms): For conversational multi-turn requests modifying an existing 3D scene (e.g. "move the building back 5m", "change roof color to copper", "make it golden hour", "frame closer"), call scene_3d_dispatch_operators with commands: [{ operator: "...", params: { ... } }] instead of regenerating from scratch!
 - CLOSED-LOOP VISUAL QUALITY AUDIT: Call audit_3d_scene_viewport to inspect multi-angle camera perspectives, detect geometric flaws, and auto-dispatch corrective repair operators!
 - ZERO UNINVITED DEFAULTS: Preserve studio lighting and visual neutrality unless atmospheric scattering or diurnal ephemeris is explicitly requested.]`;
@@ -1059,6 +1065,10 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
             const media4dSummary = (sceneData.objects || []).map(o => ({
                 id: o.id,
                 space: o.space?.spatial3d,
+                role: o.content?.metadata?.role,
+                source: o.content?.metadata?.source,
+                resolvedAddress: o.content?.metadata?.resolvedAddress || o.content?.metadata?.location,
+                isGround: o.content?.metadata?.isGround,
                 dims: o.content?.metadata?.dims
             }));
             const sceneSummary = {
@@ -1067,6 +1077,8 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 renderMode: sceneData.renderMode,
                 camera: sceneData.camera,
                 environment: sceneData.environment,
+                groundDatum: (sceneData as any).groundDatum,
+                geoAnchor: (sceneData as any).geoAnchor,
                 sculptSettings: sceneData.sculptSettings,
                 features: sceneData.features,
                 customMeshes: objectsSummary,

@@ -3375,15 +3375,20 @@ export function parseOrSynthesizeArtifact(
             if (exec.toolName === 'stage_3d_vector_world' || exec.toolName === 'google_3d_tiles_get_clay' || exec.toolName === 'execute_3d_python_script') {
                 const res = ((exec as any).resultPayload || (exec as any).result || (exec as any).payload || {}) as any;
                 const glbPath = res?.glbPath || res?.outputGlbPath;
+                const isLocationTool = exec.toolName === 'google_3d_tiles_get_clay' || exec.toolName === 'stage_3d_vector_world';
                 if (glbPath && !resolvedObjects.some(o => o.content?.durableUri === glbPath)) {
                     resolvedObjects.push({
-                        id: `hero-${Date.now()}`,
+                        id: isLocationTool ? `tile-clay-${Date.now()}` : `hero-${Date.now()}`,
                         content: {
                             type: '3d-model',
                             durableUri: glbPath,
                             mimeType: 'model/gltf-binary',
                             metadata: {
+                                role: isLocationTool ? 'environment' : 'hero',
                                 source: exec.toolName,
+                                isGround: isLocationTool,
+                                metricScale: 1.0,
+                                groundSnapped: !isLocationTool,
                                 description: res?.description
                             }
                         },
@@ -3401,7 +3406,11 @@ export function parseOrSynthesizeArtifact(
                             durableUri: locGlbPath,
                             mimeType: 'model/gltf-binary',
                             metadata: {
+                                role: 'environment',
                                 source: 'google_3d_tiles_clay',
+                                isGround: true,
+                                metricScale: 1.0,
+                                groundDatumMeters: 0.0,
                                 location: res?.locationQuery || locIntent?.landmarkName
                             }
                         },

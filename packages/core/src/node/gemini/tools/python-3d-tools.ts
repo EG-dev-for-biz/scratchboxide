@@ -192,8 +192,8 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
-export const python3DHandlers: Record<string, (args: Record<string, unknown>) => Promise<ToolHandlerOutcome>> = {
-    execute_3d_python_script: async (args: Record<string, unknown>): Promise<ToolHandlerOutcome> => {
+export const python3DHandlers: Record<string, (args: Record<string, unknown>, _ctx?: any) => Promise<ToolHandlerOutcome>> = {
+    execute_3d_python_script: async (args: Record<string, unknown>, _ctx?: any): Promise<ToolHandlerOutcome> => {
         const script = typeof args.script === 'string' ? args.script : '';
         const locationQuery = typeof args.location === 'string' ? args.location.trim() : '';
         const timeoutMs = typeof args.timeoutMs === 'number' ? args.timeoutMs : 45000;
@@ -392,6 +392,17 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             }
         }
 
+        const activeArtifact = _ctx.request?.canvasState?.activeArtifact;
+        const activeData = activeArtifact?.data as any;
+        const existingObjects = activeData?.objects || [];
+        const existingEnvTiles = existingObjects.filter((o: any) => {
+            const role = o?.content?.metadata?.role;
+            const source = (o?.content?.metadata?.source || '').toLowerCase();
+            return role === 'environment' || o?.content?.metadata?.isGround || source.includes('google3dtiles') || source.includes('googlevectortile');
+        });
+        const effectiveGeoAnchor = resolvedGeoAnchor || activeData?.geoAnchor;
+        const effectiveGroundTileMode = isRealWorld ? 'photoreal-clay' : (activeData?.groundTileMode || 'photoreal-clay');
+
         const stagedObjects = [
             ...(durableHeroUri ? [{
                 id: `hero-${Date.now()}`,
@@ -402,7 +413,9 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                     metadata: {
                         role: 'hero',
                         description: desc,
-                        originalPath: result.glbPath
+                        originalPath: result.glbPath,
+                        metricScale: 1.0,
+                        groundSnapped: true
                     }
                 },
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },
@@ -418,13 +431,16 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                     metadata: {
                         role: 'environment',
                         source: 'google_3d_tiles_clay',
+                        isGround: true,
+                        metricScale: 1.0,
+                        groundDatumMeters: 0.0,
                         location: resolvedLocName
                     }
                 },
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },
                 time: { startMs: 0, durationMs: 20000 },
                 lineage: { version: 1 }
-            }] : [])
+            }] : existingEnvTiles)
         ];
 
         return {
@@ -440,8 +456,15 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                 gateReport: gateReport,
                 locationManifest: extractedManifest,
                 locationGlbPath: extractedGlbPath,
-                geoAnchor: resolvedGeoAnchor,
+                geoAnchor: effectiveGeoAnchor,
                 locationQuery: effectiveLocation,
+                groundDatum: {
+                    coordinateSystem: 'metric-enu',
+                    units: 'meters',
+                    scale: 1.0,
+                    groundDatumMeters: 0.0,
+                    groundLogic: 'shared-metric-ground'
+                },
                 artifact: {
                     id: `artifact-3d-${Date.now()}`,
                     type: '3d-scene',
@@ -463,9 +486,17 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                         environment: {
                             skybox: 'studio',
                             lighting: 'studio',
-                            ground: isRealWorld
+                            ground: isRealWorld || existingEnvTiles.length > 0
                         },
-                        geoAnchor: resolvedGeoAnchor,
+                        groundDatum: {
+                            coordinateSystem: 'metric-enu',
+                            units: 'meters',
+                            scale: 1.0,
+                            groundDatumMeters: 0.0,
+                            groundLogic: 'shared-metric-ground'
+                        },
+                        groundTileMode: effectiveGroundTileMode,
+                        geoAnchor: effectiveGeoAnchor,
                         objects: stagedObjects,
                         pythonGenerator: {
                             enabled: true,
@@ -478,7 +509,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                     }
                 }
             },
-            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}].${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') : ''}`
+            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built object automatically grounded on top of scene terrain/tiles.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') : ''}`
         };
     }
 };

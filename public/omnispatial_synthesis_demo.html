@@ -7,7 +7,7 @@
     <style>
         :root {
             --bg-color: #07090e;
-            --dock-bg: rgba(13, 17, 28, 0.88);
+            --dock-bg: rgba(13, 17, 28, 0.90);
             --dock-border: rgba(255, 255, 255, 0.12);
             --accent-cyan: #38bdf8;
             --accent-blue: #3b82f6;
@@ -42,14 +42,15 @@
         -------------------------------------------------------------------- */
         .top-nav {
             position: absolute;
-            top: 16px;
-            left: 20px;
-            right: 20px;
+            top: 14px;
+            left: 18px;
+            right: 18px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             z-index: 100;
             pointer-events: none;
+            gap: 12px;
         }
 
         .top-nav > * {
@@ -63,10 +64,11 @@
             background: var(--dock-bg);
             border: 1px solid var(--dock-border);
             border-radius: 12px;
-            padding: 8px 16px;
+            padding: 8px 14px;
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+            flex-shrink: 0;
         }
 
         .brand-badge {
@@ -92,21 +94,136 @@
         }
 
         .nav-title {
-            font-size: 13px;
+            font-size: 12.5px;
             font-weight: 600;
             color: #f1f5f9;
+            white-space: nowrap;
         }
 
         .nav-subtitle {
-            font-size: 10.5px;
+            font-size: 10px;
             color: var(--accent-cyan);
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            white-space: nowrap;
         }
 
+        /* --------------------------------------------------------------------
+           Location Search & Synthesis Bar (Center)
+        -------------------------------------------------------------------- */
+        .nav-center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            flex-grow: 1;
+            max-width: 580px;
+        }
+
+        .search-box {
+            display: flex;
+            align-items: center;
+            background: rgba(13, 17, 28, 0.94);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            border-radius: 11px;
+            padding: 4px 6px 4px 12px;
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7), 0 0 16px rgba(56, 189, 248, 0.15);
+            width: 100%;
+            gap: 8px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .search-box:focus-within {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.8), 0 0 24px rgba(56, 189, 248, 0.35);
+        }
+
+        .search-icon {
+            font-size: 13px;
+            opacity: 0.85;
+        }
+
+        .search-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #fff;
+            font-size: 12.5px;
+            font-family: inherit;
+        }
+
+        .search-input::placeholder {
+            color: var(--text-muted);
+            font-size: 11.5px;
+        }
+
+        .synth-submit-btn {
+            background: linear-gradient(135deg, #0284c7, #2563eb);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 6px 13px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.15s;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+            white-space: nowrap;
+        }
+
+        .synth-submit-btn:hover {
+            background: linear-gradient(135deg, #38bdf8, #3b82f6);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(56, 189, 248, 0.5);
+        }
+
+        .location-chips {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .loc-chip {
+            background: rgba(13, 17, 28, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 2px 7px;
+            font-size: 9.5px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            backdrop-filter: blur(12px);
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .loc-chip:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: #fff;
+            border-color: rgba(255, 255, 255, 0.25);
+        }
+
+        .loc-chip.active {
+            background: rgba(56, 189, 248, 0.2);
+            border-color: var(--accent-cyan);
+            color: #fff;
+            font-weight: 600;
+        }
+
+        /* --------------------------------------------------------------------
+           Top Nav Controls (Right)
+        -------------------------------------------------------------------- */
         .nav-right {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
+            flex-shrink: 0;
         }
 
         .segmented-group {
@@ -123,15 +240,16 @@
             background: transparent;
             border: none;
             color: var(--text-secondary);
-            font-size: 12px;
+            font-size: 11.5px;
             font-weight: 600;
-            padding: 6px 14px;
+            padding: 6px 12px;
             border-radius: 7px;
             cursor: pointer;
             transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
+            white-space: nowrap;
         }
 
         .seg-btn:hover {
@@ -142,6 +260,13 @@
             background: rgba(255, 255, 255, 0.12);
             color: #fff;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .seg-btn.active.split-active {
+            background: linear-gradient(135deg, rgba(244, 63, 94, 0.4), rgba(16, 185, 129, 0.4));
+            border: 1px solid rgba(56, 189, 248, 0.5);
+            color: #fff;
+            font-weight: 700;
         }
 
         .seg-btn.active.clay {
@@ -155,24 +280,139 @@
         }
 
         /* --------------------------------------------------------------------
+           Interactive 50/50 Side-by-Side Split View Curtain
+        -------------------------------------------------------------------- */
+        .split-curtain-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        .split-divider-line {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 50%;
+            width: 4px;
+            background: linear-gradient(180deg, rgba(244, 63, 94, 0.9) 0%, rgba(56, 189, 248, 0.9) 50%, rgba(16, 185, 129, 0.9) 100%);
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.8), 0 0 6px rgba(255, 255, 255, 0.9);
+            cursor: ew-resize;
+            pointer-events: auto;
+            transform: translateX(-50%);
+            z-index: 60;
+        }
+
+        .split-handle {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: rgba(13, 17, 28, 0.96);
+            border: 2px solid var(--accent-cyan);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8), 0 0 20px rgba(56, 189, 248, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            font-size: 11px;
+            color: #fff;
+            user-select: none;
+            transition: transform 0.15s, border-color 0.15s;
+        }
+
+        .split-handle:hover {
+            transform: translate(-50%, -50%) scale(1.12);
+            border-color: #fff;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9), 0 0 28px rgba(56, 189, 248, 0.9);
+        }
+
+        .split-handle-icon {
+            font-weight: 700;
+            letter-spacing: -0.05em;
+        }
+
+        .split-badge {
+            position: absolute;
+            top: 96px;
+            padding: 8px 14px;
+            border-radius: 9px;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            pointer-events: auto;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        .split-badge-left {
+            left: 28px;
+            background: rgba(244, 63, 94, 0.18);
+            border: 1px solid rgba(244, 63, 94, 0.45);
+        }
+
+        .split-badge-right {
+            right: 350px;
+            background: rgba(16, 185, 129, 0.18);
+            border: 1px solid rgba(16, 185, 129, 0.45);
+        }
+
+        .badge-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .badge-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .dot-red { background: #f43f5e; box-shadow: 0 0 10px #f43f5e; }
+        .dot-green { background: #10b981; box-shadow: 0 0 10px #10b981; }
+
+        .split-badge-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        .split-badge-left .split-badge-title { color: #fb7185; }
+        .split-badge-right .split-badge-title { color: #34d399; }
+
+        .split-badge-sub {
+            font-size: 9.5px;
+            color: var(--text-secondary);
+        }
+
+        /* --------------------------------------------------------------------
            Floating Side Telemetry HUD (Right)
         -------------------------------------------------------------------- */
         .hud-panel {
             position: absolute;
-            top: 76px;
-            right: 20px;
-            width: 320px;
+            top: 90px;
+            right: 18px;
+            width: 310px;
             background: var(--dock-bg);
             border: 1px solid var(--dock-border);
             border-radius: 14px;
-            padding: 16px;
+            padding: 14px;
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
             z-index: 90;
             display: flex;
             flex-direction: column;
-            gap: 14px;
+            gap: 12px;
         }
 
         .hud-header {
@@ -180,11 +420,11 @@
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            padding-bottom: 10px;
+            padding-bottom: 8px;
         }
 
         .hud-title {
-            font-size: 11.5px;
+            font-size: 11px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.06em;
@@ -195,7 +435,7 @@
         }
 
         .hud-badge {
-            font-size: 9.5px;
+            font-size: 9px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             background: rgba(56, 189, 248, 0.12);
             color: var(--accent-cyan);
@@ -207,21 +447,21 @@
         .metric-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 8px;
+            gap: 7px;
         }
 
         .metric-card {
             background: rgba(255, 255, 255, 0.03);
             border: 1px solid rgba(255, 255, 255, 0.06);
             border-radius: 8px;
-            padding: 10px;
+            padding: 8px 10px;
             display: flex;
             flex-direction: column;
-            gap: 3px;
+            gap: 2px;
         }
 
         .metric-label {
-            font-size: 10px;
+            font-size: 9.5px;
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.04em;
@@ -229,14 +469,14 @@
         }
 
         .metric-value {
-            font-size: 14px;
+            font-size: 13.5px;
             font-weight: 700;
             color: #f8fafc;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         }
 
         .metric-delta {
-            font-size: 10px;
+            font-size: 9.5px;
             font-weight: 600;
         }
 
@@ -247,122 +487,230 @@
         .triad-breakdown {
             display: flex;
             flex-direction: column;
-            gap: 8px;
-            background: rgba(0, 0, 0, 0.25);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            padding: 10px;
+            gap: 6px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            padding-top: 8px;
         }
 
         .triad-item {
             display: flex;
             align-items: flex-start;
             gap: 8px;
-            font-size: 11px;
-            line-height: 1.4;
+            font-size: 10px;
+            line-height: 1.3;
         }
 
         .triad-dot {
-            width: 8px;
-            height: 8px;
+            width: 7px;
+            height: 7px;
             border-radius: 50%;
-            margin-top: 4px;
+            margin-top: 3px;
             flex-shrink: 0;
         }
 
-        .dot-green  { background: #10b981; box-shadow: 0 0 8px #10b981; }
-        .dot-blue   { background: #3b82f6; box-shadow: 0 0 8px #3b82f6; }
-        .dot-purple { background: #a855f7; box-shadow: 0 0 8px #a855f7; }
+        .dot-blue   { background: #38bdf8; box-shadow: 0 0 6px #38bdf8; }
+        .dot-purple { background: #a855f7; box-shadow: 0 0 6px #a855f7; }
 
         .triad-text strong {
             color: #f1f5f9;
-        }
-
-        .triad-text span {
-            color: var(--text-secondary);
-            font-size: 10px;
             display: block;
         }
 
+        .triad-text span {
+            color: var(--text-muted);
+        }
+
         /* --------------------------------------------------------------------
-           Floating Camera Viewport Presets (Top Left)
+           Floating Camera Presets Pills (Left Edge)
         -------------------------------------------------------------------- */
         .camera-pills {
             position: absolute;
-            top: 76px;
             left: 20px;
+            top: 96px;
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 7px;
             z-index: 90;
         }
 
         .cam-btn {
             background: var(--dock-bg);
             border: 1px solid var(--dock-border);
+            border-radius: 9px;
+            padding: 7px 12px;
             color: var(--text-secondary);
-            border-radius: 8px;
-            padding: 8px 12px;
             font-size: 11px;
             font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
             cursor: pointer;
             backdrop-filter: blur(20px);
-            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+            text-align: left;
         }
 
         .cam-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent-cyan);
             color: #fff;
-            transform: translateX(3px);
+            transform: translateX(4px);
         }
 
         .cam-btn.active {
+            background: rgba(56, 189, 248, 0.16);
             border-color: var(--accent-cyan);
             color: #fff;
-            background: rgba(56, 189, 248, 0.12);
+            box-shadow: 0 4px 16px rgba(56, 189, 248, 0.25);
         }
 
         /* --------------------------------------------------------------------
-           Bottom Floating Orchestration Dock (Center)
+           3D Navigation HUD & Telemetry
+        -------------------------------------------------------------------- */
+        .nav-hud-panel {
+            position: absolute;
+            left: 20px;
+            bottom: 154px;
+            background: var(--dock-bg);
+            border: 1px solid var(--dock-border);
+            border-radius: 12px;
+            padding: 10px 14px;
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+            z-index: 90;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            width: 250px;
+        }
+
+        .nav-hud-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 6px;
+        }
+
+        .nav-hud-title {
+            font-size: 10.5px;
+            font-weight: 700;
+            color: #f1f5f9;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .nav-hud-badge {
+            font-size: 9px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-cyan);
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+
+        .nav-speed-row {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .speed-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .speed-pill-btn {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+            padding: 2px 7px;
+            font-size: 9.5px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .speed-pill-btn.active {
+            background: var(--accent-cyan);
+            color: #07090e;
+            font-weight: 700;
+            border-color: var(--accent-cyan);
+        }
+
+        .nav-coords-box {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 5px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 9.5px;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 6px;
+            padding: 6px;
+        }
+
+        .coord-item {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
+        .coord-lbl { color: var(--text-muted); font-size: 8.5px; }
+        .coord-val { color: var(--accent-cyan); font-weight: 600; }
+
+        .nav-hints-list {
+            font-size: 9.5px;
+            color: var(--text-muted);
+            line-height: 1.4;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .nav-hints-list kbd {
+            background: rgba(255, 255, 255, 0.12);
+            color: #f1f5f9;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-size: 8.5px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        /* --------------------------------------------------------------------
+           Bottom Stage Selector Dock (Interactive 3-Card Carousel)
         -------------------------------------------------------------------- */
         .dock-container {
             position: absolute;
-            bottom: 24px;
+            bottom: 18px;
             left: 50%;
             transform: translateX(-50%);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 12px;
             z-index: 100;
-            width: calc(100% - 40px);
-            max-width: 900px;
+            pointer-events: none;
         }
 
         .stage-selector {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            display: flex;
             gap: 12px;
-            width: 100%;
+            pointer-events: auto;
         }
 
         .stage-card {
+            width: 250px;
             background: var(--dock-bg);
             border: 1px solid var(--dock-border);
-            border-radius: 14px;
-            padding: 14px;
-            cursor: pointer;
-            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            border-radius: 13px;
+            padding: 12px 14px;
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 5px;
             position: relative;
             overflow: hidden;
         }
@@ -401,7 +749,7 @@
         }
 
         .stage-number {
-            font-size: 10px;
+            font-size: 9.5px;
             font-weight: 700;
             letter-spacing: 0.08em;
             text-transform: uppercase;
@@ -421,31 +769,195 @@
         .tag-3 { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
 
         .stage-title {
-            font-size: 13.5px;
+            font-size: 13px;
             font-weight: 700;
             color: #f8fafc;
         }
 
         .stage-desc {
-            font-size: 11px;
+            font-size: 10.5px;
             color: var(--text-secondary);
             line-height: 1.35;
         }
 
         .stage-badges {
             display: flex;
-            gap: 6px;
-            margin-top: 4px;
+            gap: 5px;
+            margin-top: 3px;
             flex-wrap: wrap;
         }
 
         .pill-badge {
-            font-size: 9.5px;
-            padding: 1px 6px;
+            font-size: 9px;
+            padding: 1px 5px;
             border-radius: 4px;
             background: rgba(255, 255, 255, 0.06);
             color: var(--text-muted);
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        /* --------------------------------------------------------------------
+           Animated Synthesis Pipeline Execution Modal
+        -------------------------------------------------------------------- */
+        .synth-modal {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(7, 9, 14, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            z-index: 300;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease-out;
+        }
+
+        .synth-modal.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .synth-modal-content {
+            width: 480px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            border-radius: 16px;
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8), 0 0 32px rgba(56, 189, 248, 0.25);
+            padding: 24px 28px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .synth-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 12px;
+        }
+
+        .synth-modal-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 700;
+            color: #f1f5f9;
+        }
+
+        .synth-spin-icon {
+            color: var(--accent-cyan);
+            display: inline-block;
+            animation: spin 2s linear infinite;
+        }
+
+        .synth-target-badge {
+            font-size: 10.5px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 6px;
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-cyan);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+        }
+
+        .synth-step-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .synth-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--text-muted);
+            transition: all 0.2s;
+        }
+
+        .synth-step.active {
+            color: var(--accent-cyan);
+            font-weight: 600;
+        }
+
+        .synth-step.done {
+            color: #34d399;
+        }
+
+        .step-check {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        .synth-step.active .step-check {
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+            animation: pulse-ring 1s infinite;
+        }
+
+        .synth-step.done .step-check {
+            border-color: #34d399;
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+        }
+
+        .step-text-block {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .step-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+
+        .step-detail {
+            font-size: 10.5px;
+            color: var(--text-secondary);
+        }
+
+        .synth-progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .synth-progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #38bdf8, #10b981);
+            border-radius: 3px;
+            transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.8; }
         }
 
         /* Loading Indicator */
@@ -476,10 +988,6 @@
             animation: spin 0.8s linear infinite;
         }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
         .loading-text {
             font-size: 12.5px;
             font-weight: 600;
@@ -502,6 +1010,7 @@
 
     <!-- Top Navigation Island -->
     <header class="top-nav">
+        <!-- Left: Brand and Landmark Subtitle -->
         <div class="nav-left">
             <div class="brand-badge">
                 <span class="brand-sparkle">✦</span>
@@ -509,17 +1018,61 @@
             </div>
             <div class="nav-title-block">
                 <span class="nav-title">Omnispatial Multi-Sensor 3D Synthesis Pipeline</span>
-                <span class="nav-subtitle">Minimal Orthogonal Basis Proof · Empire State Building, NYC</span>
+                <span class="nav-subtitle" id="active-location-subtitle">Active Target · Empire State Building, NYC</span>
             </div>
         </div>
 
+        <!-- Center: Location Query Prompt Box & Quick Chips -->
+        <div class="nav-center">
+            <div class="search-box">
+                <span class="search-icon">📍</span>
+                <input
+                    type="text"
+                    id="location-query-input"
+                    class="search-input"
+                    placeholder="Enter landmark or address (e.g. Rome Colosseum, SF Ferry, Flatiron)..."
+                    value="Empire State Building, NYC"
+                    onkeydown="if(event.key==='Enter') executeLocationQuery()"
+                />
+                <button class="synth-submit-btn" id="btn-synthesize" onclick="executeLocationQuery()">
+                    <span>Synthesize Omni-Twin ✦</span>
+                </button>
+            </div>
+            <div class="location-chips">
+                <button class="loc-chip active" id="chip-esb" onclick="selectLocationPreset('esb')">🗽 Empire State, NYC</button>
+                <button class="loc-chip" id="chip-colosseum" onclick="selectLocationPreset('colosseum')">🏛️ Colosseum, Rome</button>
+                <button class="loc-chip" id="chip-ferry" onclick="selectLocationPreset('ferry')">🌁 SF Ferry Building</button>
+                <button class="loc-chip" id="chip-washington" onclick="selectLocationPreset('washington')">🏛️ Washington Arch</button>
+                <button class="loc-chip" id="chip-eiffel" onclick="selectLocationPreset('eiffel')">🗼 Eiffel Tower</button>
+                <button class="loc-chip" id="chip-venice" onclick="selectLocationPreset('venice')">🏖️ Venice Beach</button>
+            </div>
+        </div>
+
+        <!-- Right: View Modes & Shading -->
         <div class="nav-right">
+            <!-- Side-by-Side Split View Toggle -->
+            <div class="segmented-group">
+                <button class="seg-btn active split-active" id="btn-split-toggle" onclick="toggleSplitMode()">
+                    <span>⬌ Side-by-Side</span>
+                </button>
+            </div>
+
+            <!-- 3D Navigation Mode: Orbit vs Free Fly -->
+            <div class="segmented-group">
+                <button class="seg-btn active" id="btn-mode-orbit" onclick="setNavMode('orbit')">
+                    <span>🔄 Orbit / CAD</span>
+                </button>
+                <button class="seg-btn" id="btn-mode-fly" onclick="setNavMode('fly')">
+                    <span>🛸 Free Fly (WASD)</span>
+                </button>
+            </div>
+
             <!-- Shading Mode: Clay vs PBR -->
             <div class="segmented-group">
-                <button class="seg-btn active clay" id="btn-clay" onclick="setShading('clay')">
-                    <span>🗿 18% Studio Clay</span>
+                <button class="seg-btn clay" id="btn-clay" onclick="setShading('clay')">
+                    <span>🗿 18% Clay</span>
                 </button>
-                <button class="seg-btn" id="btn-pbr" onclick="setShading('pbr')">
+                <button class="seg-btn active pbr" id="btn-pbr" onclick="setShading('pbr')">
                     <span>🎨 PBR Materials</span>
                 </button>
             </div>
@@ -533,8 +1086,31 @@
         </div>
     </header>
 
+    <!-- 50/50 Side-by-Side Split Divider & Badges -->
+    <div class="split-curtain-container" id="split-curtain">
+        <div class="split-divider-line" id="split-line">
+            <div class="split-handle" id="split-handle" title="Drag to compare Raw 3D Tiles vs Omni-Twin PBR">
+                <span class="split-handle-icon">◀ ⬌ ▶</span>
+            </div>
+        </div>
+        <div class="split-badge split-badge-left" id="badge-left">
+            <div class="badge-header">
+                <span class="badge-dot dot-red"></span>
+                <span class="split-badge-title">BEFORE: RAW 3D TILES (CLAY)</span>
+            </div>
+            <span class="split-badge-sub">Melted corners · Flat windows · Broccoli tree blobs</span>
+        </div>
+        <div class="split-badge split-badge-right" id="badge-right">
+            <div class="badge-header">
+                <span class="badge-dot dot-green"></span>
+                <span class="split-badge-title">AFTER: OMNI-TWIN SYNTHESIS</span>
+            </div>
+            <span class="split-badge-sub" id="badge-right-sub">90° Orthogonal · 0.22m Recess · sb-veggie Trees · Street View PBR</span>
+        </div>
+    </div>
+
     <!-- Camera Viewport Presets -->
-    <div class="camera-pills">
+    <div class="camera-pills" id="camera-pills">
         <button class="cam-btn active" id="cam-eye" onclick="setCameraView('eye')">
             <span>🚶 Street View Eye-Level (1.7m)</span>
         </button>
@@ -545,27 +1121,66 @@
             <span>🪟 Fenestration 3D Inset Loupe</span>
         </button>
         <button class="cam-btn" id="cam-deck" onclick="setCameraView('deck')">
-            <span>🏙️ 86th Fl. Observation Deck</span>
+            <span>🏙️ Observation Deck / Mid-Tower</span>
         </button>
         <button class="cam-btn" id="cam-skyline" onclick="setCameraView('skyline')">
             <span>🛰️ Skyline Aerial Orbit</span>
         </button>
     </div>
 
-    <!-- Live Analytical Telemetry HUD -->
-    <aside class="hud-panel">
-        <div class="hud-header">
-            <div class="hud-title">
-                <span>⚡ Live Telemetry</span>
+    <!-- 3D Navigation Controls HUD -->
+    <div class="nav-hud-panel" id="nav-hud-panel">
+        <div class="nav-hud-header">
+            <span class="nav-hud-title">🎮 3D Navigation</span>
+            <span class="nav-hud-badge" id="hud-nav-mode">ORBIT CAD</span>
+        </div>
+
+        <div class="nav-speed-row">
+            <span class="speed-label">Speed:</span>
+            <button class="speed-pill-btn" id="spd-walk" onclick="setFlightSpeed(3)">1x (Walk)</button>
+            <button class="speed-pill-btn active" id="spd-fly" onclick="setFlightSpeed(12)">4x (Fly)</button>
+            <button class="speed-pill-btn" id="spd-turbo" onclick="setFlightSpeed(35)">12x (Jet)</button>
+        </div>
+
+        <div class="nav-coords-box">
+            <div class="coord-item">
+                <span class="coord-lbl">ALTITUDE</span>
+                <span class="coord-val" id="cam-alt">2.2 m</span>
             </div>
-            <span class="hud-badge" id="hud-stage-badge">STAGE 3 SYNTHESIS</span>
+            <div class="coord-item">
+                <span class="coord-lbl">DISTANCE</span>
+                <span class="coord-val" id="cam-dist">38.0 m</span>
+            </div>
+            <div class="coord-item">
+                <span class="coord-lbl">HEADING</span>
+                <span class="coord-val" id="cam-heading">0°</span>
+            </div>
+            <div class="coord-item">
+                <span class="coord-lbl">FOCUS</span>
+                <span class="coord-val" id="cam-focus">Center</span>
+            </div>
+        </div>
+
+        <div class="nav-hints-list">
+            <div><kbd>Left Drag</kbd> Orbit / Rotate Look</div>
+            <div><kbd>WASD / QE</kbd> 6-DOF Fly in 3D</div>
+            <div><kbd>Shift</kbd> 3x Turbo Flight Boost</div>
+            <div><kbd>Double Click</kbd> Glide Raycast Focus</div>
+        </div>
+    </div>
+
+    <!-- Side Floating Telemetry HUD -->
+    <aside class="hud-panel" id="telemetry-hud">
+        <div class="hud-header">
+            <span class="hud-title">⚡ Synthesis Telemetry</span>
+            <span class="hud-badge" id="hud-stage-badge">SIDE-BY-SIDE SPLIT</span>
         </div>
 
         <div class="metric-grid">
             <div class="metric-card">
                 <span class="metric-label">Corner Orthogonality</span>
                 <span class="metric-value" id="val-corner">90.00°</span>
-                <span class="metric-delta delta-good" id="delta-corner">0.00° RMS Error</span>
+                <span class="metric-delta delta-good" id="delta-corner">0.00° Quoin Error</span>
             </div>
 
             <div class="metric-card">
@@ -581,15 +1196,15 @@
             </div>
 
             <div class="metric-card">
-                <span class="metric-label">Entrance Portal Reveal</span>
-                <span class="metric-value" id="val-portal">0.85 m</span>
-                <span class="metric-delta delta-good" id="delta-portal">Art Deco Portal</span>
+                <span class="metric-label">Botanical Replacement</span>
+                <span class="metric-value" id="val-trees">sb-veggie</span>
+                <span class="metric-delta delta-good" id="delta-trees">C++20 Watertight</span>
             </div>
 
             <div class="metric-card">
-                <span class="metric-label">Total Triangles</span>
-                <span class="metric-value" id="val-tris">32,580</span>
-                <span class="metric-delta delta-good" id="delta-tris">>25K Gate Passed</span>
+                <span class="metric-label">PBR Material Mode</span>
+                <span class="metric-value" id="val-pbr">Street View</span>
+                <span class="metric-delta delta-good" id="delta-pbr">NOAA De-Lighted</span>
             </div>
 
             <div class="metric-card">
@@ -601,24 +1216,24 @@
 
         <div class="triad-breakdown">
             <div class="triad-item">
-                <div class="triad-dot dot-green"></div>
+                <div class="triad-dot dot-red"></div>
                 <div class="triad-text">
-                    <strong>1. Google 3D Photo Tiles</strong>
-                    <span>Macro 3D volumetric massing, 6 tiered setbacks, spire & terrain</span>
+                    <strong>1. Google 3D Photo Tiles (Left)</strong>
+                    <span>Volumetric macro massing in 18% grey clay mode</span>
                 </div>
             </div>
             <div class="triad-item">
                 <div class="triad-dot dot-blue"></div>
                 <div class="triad-text">
-                    <strong>2. Google 2D Vector Tiles</strong>
-                    <span>Cadastral angular truth: sharp 90° corners, 70% planar decimation</span>
+                    <strong>2. UTDRA + sb-veggie (Right)</strong>
+                    <span>90° corner snapping + C++20 botanical canopy inversion</span>
                 </div>
             </div>
             <div class="triad-item">
-                <div class="triad-dot dot-purple"></div>
+                <div class="triad-dot dot-green"></div>
                 <div class="triad-text">
-                    <strong>3. Google Street View 360</strong>
-                    <span>0.22m 3D recessed window bays, grand bronze portal, stone sills</span>
+                    <strong>3. Google Street View PBR (Right)</strong>
+                    <span>0.22m window setback reveals + de-lighted PBR materials</span>
                 </div>
             </div>
         </div>
@@ -634,11 +1249,11 @@
                     <span class="stage-tag tag-1">Raw Photogrammetry</span>
                 </div>
                 <span class="stage-title">Raw 3D Photo Tiles</span>
-                <p class="stage-desc">Volumetric envelope with melted corners (±0.25m), wavy walls, flat 2D blurry windows, and tree blobs.</p>
+                <p class="stage-desc" id="card1-desc">Volumetric envelope with melted corners (±0.25m), wavy walls, flat 2D blurry windows, and broccoli tree blobs.</p>
                 <div class="stage-badges">
-                    <span class="pill-badge">16.4° Corner Err</span>
-                    <span class="pill-badge">0.00m Fenestration</span>
-                    <span class="pill-badge">12,926 Tris</span>
+                    <span class="pill-badge" id="badge-s1-1">16.4° Corner Err</span>
+                    <span class="pill-badge" id="badge-s1-2">0.00m Fenestration</span>
+                    <span class="pill-badge" id="badge-s1-3">Blob Trees</span>
                 </div>
             </div>
 
@@ -646,14 +1261,14 @@
             <div class="stage-card stage-2" id="card-stage-2" onclick="switchStage(2)">
                 <div class="stage-top">
                     <span class="stage-number">Stage 02</span>
-                    <span class="stage-tag tag-2">+ 2D Vector Tiles</span>
+                    <span class="stage-tag tag-2">+ UTDRA & sb-veggie</span>
                 </div>
-                <span class="stage-title">Cadastral Rectification</span>
-                <p class="stage-desc">Angular cadastral truth: corners clamped to exact 90° right angles, collinear facades, 70% planar decimation.</p>
+                <span class="stage-title">Rectified & Botanicals</span>
+                <p class="stage-desc" id="card2-desc">Cadastral angular truth: corners clamped to exact 90°, collinear facades, excised broccoli replaced by C++20 trees.</p>
                 <div class="stage-badges">
-                    <span class="pill-badge">0.00° Corner Err</span>
-                    <span class="pill-badge">Planar Straight</span>
-                    <span class="pill-badge">2,600 Tris</span>
+                    <span class="pill-badge" id="badge-s2-1">0.00° Corner Err</span>
+                    <span class="pill-badge" id="badge-s2-2">Planar Straight</span>
+                    <span class="pill-badge" id="badge-s2-3">C++20 Trees</span>
                 </div>
             </div>
 
@@ -661,15 +1276,74 @@
             <div class="stage-card stage-3 active" id="card-stage-3" onclick="switchStage(3)">
                 <div class="stage-top">
                     <span class="stage-number">Stage 03</span>
-                    <span class="stage-tag tag-3">+ Street View 360</span>
+                    <span class="stage-tag tag-3">+ Street View PBR</span>
                 </div>
                 <span class="stage-title">Full Omnispatial Synthesis</span>
-                <p class="stage-desc">Cadastral 90° corners + Street View 0.22m recessed 3D window bays, Art Deco entrance reveals, stone sills.</p>
+                <p class="stage-desc" id="card3-desc">90° corners + 0.22m 3D recessed window bays, Art Deco entrance reveals, and de-lighted Street View PBR.</p>
                 <div class="stage-badges">
-                    <span class="pill-badge">0.22m 3D Insets</span>
-                    <span class="pill-badge">0.85m Portal</span>
-                    <span class="pill-badge">32,580 Tris</span>
+                    <span class="pill-badge" id="badge-s3-1">0.22m 3D Insets</span>
+                    <span class="pill-badge" id="badge-s3-2">Street View PBR</span>
+                    <span class="pill-badge" id="badge-s3-3">Watertight</span>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Animated Synthesis Execution Modal -->
+    <div class="synth-modal" id="synth-modal">
+        <div class="synth-modal-content">
+            <div class="synth-modal-header">
+                <div class="synth-modal-title">
+                    <span class="synth-spin-icon">✦</span>
+                    <span>Omnispatial 3D Synthesis Pipeline</span>
+                </div>
+                <span class="synth-target-badge" id="synth-target-text">Empire State Building</span>
+            </div>
+
+            <div class="synth-step-list">
+                <div class="synth-step" id="synth-step-1">
+                    <span class="step-check">○</span>
+                    <div class="step-text-block">
+                        <span class="step-name">1. Google 3D Photo Tiles Ingestion</span>
+                        <span class="step-detail">Extracting leaf LOD mesh in 18% studio grey clay mode...</span>
+                    </div>
+                </div>
+
+                <div class="synth-step" id="synth-step-2">
+                    <span class="step-check">○</span>
+                    <div class="step-text-block">
+                        <span class="step-name">2. UTDRA Geometric Rectification</span>
+                        <span class="step-detail">Snapping 90.00° quoin normals, planar relaxation, and curb step...</span>
+                    </div>
+                </div>
+
+                <div class="synth-step" id="synth-step-3">
+                    <span class="step-check">○</span>
+                    <div class="step-text-block">
+                        <span class="step-name">3. Fenestration & Portal Carving</span>
+                        <span class="step-detail">Extruding 0.22m window setback reveals & architectural entrance...</span>
+                    </div>
+                </div>
+
+                <div class="synth-step" id="synth-step-4">
+                    <span class="step-check">○</span>
+                    <div class="step-text-block">
+                        <span class="step-name">4. Botanical Surgery (sb-veggie)</span>
+                        <span class="step-detail">Excising congealed broccoli blobs; synthesizing C++20 trees...</span>
+                    </div>
+                </div>
+
+                <div class="synth-step" id="synth-step-5">
+                    <span class="step-check">○</span>
+                    <div class="step-text-block">
+                        <span class="step-name">5. Street View Multi-Epoch PBR De-Lighting</span>
+                        <span class="step-detail">NOAA ephemeris shadow lifting & biophysical albedo/roughness extraction...</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="synth-progress-bar">
+                <div class="synth-progress-fill" id="synth-progress-fill"></div>
             </div>
         </div>
     </div>
@@ -706,13 +1380,15 @@
         const controls = new OrbitControls(camera, canvas);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
-        controls.target.set(0, 18, 0);
-        controls.maxPolarAngle = Math.PI * 0.49;
-        controls.minDistance = 3;
-        controls.maxDistance = 600;
+        controls.target.set(0, 8, 18);
+        controls.maxPolarAngle = Math.PI * 0.495;
+        controls.minPolarAngle = 0.01;
+        controls.minDistance = 0.2;
+        controls.maxDistance = 1500;
+        controls.screenSpacePanning = true;
 
         // Radiometric Lighting Dome
-        const hemiLight = new THREE.HemisphereLight(0xb1e1ff, 0x1e293b, 0.7);
+        const hemiLight = new THREE.HemisphereLight(0xb1e1ff, 0x1e293b, 0.75);
         scene.add(hemiLight);
 
         const sunLight = new THREE.DirectionalLight(0xfff8ee, 2.2);
@@ -738,22 +1414,15 @@
         gridHelper.position.y = -0.05;
         scene.add(gridHelper);
 
-        const rootGroup = new THREE.Group();
-        scene.add(rootGroup);
+        // Three dedicated Scene Groups for Stage 1 (Raw Clay), Stage 2 (Rectified), and Stage 3 (PBR)
+        const stage1Group = new THREE.Group();
+        const stage2Group = new THREE.Group();
+        const stage3Group = new THREE.Group();
+        scene.add(stage1Group);
+        scene.add(stage2Group);
+        scene.add(stage3Group);
 
-        // --------------------------------------------------------------------
-        // State & Models
-        // --------------------------------------------------------------------
-        let currentStage = 3;
-        let shadingMode = 'clay'; // 'clay' | 'pbr'
-        let isWireframe = false;
-
-        const stageModels = {
-            1: { path: '/models/omnispatial_stage1_raw_tiles.glb', object: null },
-            2: { path: '/models/omnispatial_stage2_vector_straightened.glb', object: null },
-            3: { path: '/models/omnispatial_stage3_full_synthesis.glb', object: null }
-        };
-
+        // Clay Material for 18% Studio Grey baseline
         const clayMaterial = new THREE.MeshStandardMaterial({
             color: 0x8c929d, // 18% Studio Grey Clay
             roughness: 0.85,
@@ -761,58 +1430,476 @@
             flatShading: false
         });
 
+        // --------------------------------------------------------------------
+        // Multi-Location Registry & Presets
+        // --------------------------------------------------------------------
+        const LOCATION_REGISTRY = {
+            esb: {
+                key: 'esb',
+                name: 'Empire State Building, NYC',
+                subtitle: 'Art Deco High-Rise · Manhattan Cadastral Grid',
+                badgeSub: '90° Orthogonal · 0.22m Recess · London Plane Trees · Street View PBR',
+                stages: {
+                    1: '/models/omnispatial_stage1_raw_tiles.glb',
+                    2: '/models/omnispatial_stage2_vector_straightened.glb',
+                    3: '/models/omnispatial_stage3_full_synthesis.glb'
+                },
+                camera: {
+                    eye: { pos: [0, 2.2, 38], target: [0, 8.0, 18], label: '5th Ave Entrance' },
+                    corner: { pos: [-29, 14, 28], target: [-27, 12, 18], label: '90° Quoin Corner' },
+                    window: { pos: [-18, 12, 23], target: [-6, 12, 18], label: '0.22m 3D Bay Loupe' },
+                    deck: { pos: [22, 155, 26], target: [0, 140, 0], label: '86th Fl. Deck' },
+                    skyline: { pos: [110, 160, 170], target: [0, 95, 0], label: 'Skyline Aerial' }
+                },
+                metrics: {
+                    corner: '90.00°',
+                    deltaCorner: '0.00° Quoin Error',
+                    variance: '0.000 m²',
+                    deltaVariance: 'Planar Conformed',
+                    fenestration: '0.22 m',
+                    deltaFenestration: 'True 3D Insets',
+                    trees: '14x Trees',
+                    deltaTrees: 'sb-veggie London Plane',
+                    pbr: 'Indiana Stone',
+                    deltaPbr: 'NOAA De-Lighted PBR'
+                }
+            },
+            colosseum: {
+                key: 'colosseum',
+                name: 'Colosseum, Rome',
+                subtitle: 'Flavian Amphitheatre · Elliptical Curvature Rectification',
+                badgeSub: 'Arcade Rectification · Travertine Cavitation · Cypress & Pine · Roman PBR',
+                stages: {
+                    1: '/models/colosseum_rome_clay.glb',
+                    2: '/models/colosseum_sb_archi_full.glb',
+                    3: '/models/colosseum_rome_1k_pbr.glb'
+                },
+                camera: {
+                    eye: { pos: [-42, 12, 58], target: [0, 10, 0], label: 'Via dei Fori Imperiali' },
+                    corner: { pos: [-30, 22, 35], target: [-15, 18, 15], label: 'Outer Arcade Curve' },
+                    window: { pos: [-18, 14, 24], target: [-8, 12, 12], label: 'Vomitoria Arches' },
+                    deck: { pos: [10, 48, 45], target: [0, 20, 0], label: 'Attic Parapet' },
+                    skyline: { pos: [75, 80, 95], target: [0, 15, 0], label: 'Piazza del Colosseo' }
+                },
+                metrics: {
+                    corner: 'Harmonic 80°',
+                    deltaCorner: 'Curvature Snapped',
+                    variance: '0.001 m²',
+                    deltaVariance: 'Travertine Fitted',
+                    fenestration: '0.85 m',
+                    deltaFenestration: 'Vomitoria Vaults',
+                    trees: '18x Trees',
+                    deltaTrees: 'sb-veggie Cypress/Pine',
+                    pbr: 'Travertine',
+                    deltaPbr: 'Calibrated Roman Stone'
+                }
+            },
+            ferry: {
+                key: 'ferry',
+                name: 'San Francisco Ferry Building',
+                subtitle: 'Beaux-Arts Waterfront Civic · Embarcadero Corridor',
+                badgeSub: 'Clock Tower Rectified · Arcade Revealing · Canary Palms · Sandstone PBR',
+                stages: {
+                    1: '/models/sf_ferry_raw.glb',
+                    2: '/models/sf_ferry_restructured.glb',
+                    3: '/models/sf_ferry_restructured.glb'
+                },
+                camera: {
+                    eye: { pos: [0, 4, 38], target: [0, 12, 0], label: 'Embarcadero Plaza' },
+                    corner: { pos: [-24, 16, 26], target: [-10, 12, 0], label: 'Tower Quoin' },
+                    window: { pos: [-12, 10, 18], target: [-4, 9, 0], label: 'Arcade Fenestration' },
+                    deck: { pos: [0, 52, 28], target: [0, 45, 0], label: 'Clockface Level' },
+                    skyline: { pos: [65, 55, 75], target: [0, 20, 0], label: 'San Francisco Bay' }
+                },
+                metrics: {
+                    corner: '90.00°',
+                    deltaCorner: 'Vertical Clock Shaft',
+                    variance: '0.000 m²',
+                    deltaVariance: 'Planar Arcade',
+                    fenestration: '0.45 m',
+                    deltaFenestration: 'Arcade Reveals',
+                    trees: '8x Palms',
+                    deltaTrees: 'sb-veggie Date Palms',
+                    pbr: 'Colusa Stone',
+                    deltaPbr: 'Patina Copper & Stone'
+                }
+            },
+            washington: {
+                key: 'washington',
+                name: 'Washington Square Arch, NYC',
+                subtitle: 'Triumphal Marble Monument · 5th Avenue Terminus',
+                badgeSub: 'Soffit AO · Marble Relief · London Plane Trees · Tuckahoe Marble PBR',
+                stages: {
+                    1: '/models/washington_square_arch_nyc_raw.glb',
+                    2: '/models/washington_square_arch_nyc_universal_pbr.glb',
+                    3: '/models/washington_square_arch_nyc_universal_pbr.glb'
+                },
+                camera: {
+                    eye: { pos: [0, 3.5, 22], target: [0, 7.5, 0], label: '5th Ave Approach' },
+                    corner: { pos: [-14, 9, 16], target: [-7, 7, 0], label: 'Cornice Entablature' },
+                    window: { pos: [-6, 6.5, 10], target: [0, 6, 0], label: 'Archway Soffit AO' },
+                    deck: { pos: [0, 22, 18], target: [0, 15, 0], label: 'Attic Inscription' },
+                    skyline: { pos: [32, 28, 42], target: [0, 8, 0], label: 'Washington Square Park' }
+                },
+                metrics: {
+                    corner: '90.00°',
+                    deltaCorner: 'Entablature Snapped',
+                    variance: '0.000 m²',
+                    deltaVariance: 'Planar Frieze',
+                    fenestration: '0.38 m',
+                    deltaFenestration: 'Frieze & Spandrels',
+                    trees: '6x Trees',
+                    deltaTrees: 'sb-veggie London Plane',
+                    pbr: 'Tuckahoe',
+                    deltaPbr: 'Tuckahoe White Marble'
+                }
+            },
+            eiffel: {
+                key: 'eiffel',
+                name: 'Eiffel Tower, Paris',
+                subtitle: 'Wrought Iron Lattice · Champ de Mars Park Landscape',
+                badgeSub: 'Lattice Regularization · Arch Pier Alignment · Sweet Chestnuts · Puddle Iron PBR',
+                stages: {
+                    1: '/models/eiffel_tower_paris_clay.glb',
+                    2: '/models/eiffel_tower_textured.glb',
+                    3: '/models/eiffel_tower_textured.glb'
+                },
+                camera: {
+                    eye: { pos: [0, 8, 85], target: [0, 30, 0], label: 'Champ de Mars Lawn' },
+                    corner: { pos: [-40, 25, 45], target: [-15, 18, 0], label: 'Base Pylon Leg' },
+                    window: { pos: [-20, 22, 28], target: [0, 20, 0], label: 'First Platform Arch' },
+                    deck: { pos: [0, 115, 55], target: [0, 105, 0], label: 'Second Platform' },
+                    skyline: { pos: [120, 150, 180], target: [0, 70, 0], label: 'Parisian Skyline' }
+                },
+                metrics: {
+                    corner: '90.00°',
+                    deltaCorner: 'Pylon Symmetry',
+                    variance: '0.002 m²',
+                    deltaVariance: 'Lattice Regularized',
+                    fenestration: '0.50 m',
+                    deltaFenestration: 'Truss Member Depth',
+                    trees: '24x Trees',
+                    deltaTrees: 'sb-veggie Chestnut',
+                    pbr: 'Puddle Iron',
+                    deltaPbr: 'Tri-Tone Brun Tour'
+                }
+            },
+            venice: {
+                key: 'venice',
+                name: 'Venice Beach Boardwalk, CA',
+                subtitle: 'Oceanfront Coastal Corridor · Pedestrian Promenade',
+                badgeSub: 'Curbside Planarization · Storefront Portals · Fan Palms · Weathered Concrete',
+                stages: {
+                    1: '/models/venice_beach_test_clay.glb',
+                    2: '/models/venice_beach_test_textured.glb',
+                    3: '/models/venice_beach_test_textured.glb'
+                },
+                camera: {
+                    eye: { pos: [0, 2.8, 30], target: [0, 4.0, 0], label: 'Ocean Front Walk' },
+                    corner: { pos: [-18, 8, 20], target: [-8, 5, 0], label: 'Boardwalk Curb' },
+                    window: { pos: [-10, 4.5, 14], target: [-2, 3.5, 0], label: 'Storefront Portals' },
+                    deck: { pos: [0, 25, 35], target: [0, 10, 0], label: 'Rooftop Overlook' },
+                    skyline: { pos: [45, 35, 60], target: [0, 5, 0], label: 'Pacific Coastline' }
+                },
+                metrics: {
+                    corner: '90.00°',
+                    deltaCorner: 'Corridor Alignment',
+                    variance: '0.001 m²',
+                    deltaVariance: 'Beachfront Planar',
+                    fenestration: '0.30 m',
+                    deltaFenestration: 'Shopfront Insets',
+                    trees: '12x Palms',
+                    deltaTrees: 'sb-veggie Fan Palms',
+                    pbr: 'Marine PBR',
+                    deltaPbr: 'Sun-Bleached Concrete'
+                }
+            }
+        };
+
+        // Current active state
+        let activeLocationKey = 'esb';
+        let currentStage = 3;
+        let isSplitMode = true; // Side-by-side enabled by default!
+        let splitRatio = 0.50; // Centered 50/50 split
+        let isDraggingSplit = false;
+        let shadingMode = 'pbr'; // 'clay' | 'pbr'
+        let isWireframe = false;
+
         const gltfLoader = new GLTFLoader();
 
-        function loadModel(stageNum, callback) {
-            const entry = stageModels[stageNum];
-            if (entry.object) {
-                if (callback) callback(entry.object);
-                return;
-            }
+        // --------------------------------------------------------------------
+        // Load Location Models into Stage Groups
+        // --------------------------------------------------------------------
+        function loadLocation(locationKey, onComplete) {
+            const loc = LOCATION_REGISTRY[locationKey] || LOCATION_REGISTRY.esb;
+            activeLocationKey = loc.key;
 
             document.getElementById('loading-overlay').style.display = 'flex';
-            document.getElementById('loading-text').innerText = `Loading Stage 0${stageNum} Mesh...`;
+            document.getElementById('loading-text').innerText = `Loading ${loc.name}...`;
 
-            gltfLoader.load(
-                entry.path,
-                (gltf) => {
-                    const obj = gltf.scene;
-                    // Cache original materials for PBR mode
-                    obj.traverse((child) => {
-                        if (child.isMesh) {
-                            child.castShadow = true;
-                            child.receiveShadow = true;
-                            child.userData.originalMaterial = child.material;
-                        }
-                    });
-                    entry.object = obj;
+            // Update UI Subtitles & Badges
+            document.getElementById('active-location-subtitle').innerText = `Active Target · ${loc.name}`;
+            document.getElementById('badge-right-sub').innerText = loc.badgeSub;
+
+            // Update Telemetry Panel
+            updateTelemetryForLocation(loc);
+
+            // Update Active Chip
+            document.querySelectorAll('.loc-chip').forEach(c => c.classList.remove('active'));
+            const activeChip = document.getElementById(`chip-${loc.key}`);
+            if (activeChip) activeChip.classList.add('active');
+
+            // Clear previous stage objects
+            while (stage1Group.children.length > 0) stage1Group.remove(stage1Group.children[0]);
+            while (stage2Group.children.length > 0) stage2Group.remove(stage2Group.children[0]);
+            while (stage3Group.children.length > 0) stage3Group.remove(stage3Group.children[0]);
+
+            let loadedCount = 0;
+            const checkDone = () => {
+                loadedCount++;
+                if (loadedCount >= 3) {
                     document.getElementById('loading-overlay').style.display = 'none';
-                    if (callback) callback(obj);
-                },
-                undefined,
-                (err) => {
-                    console.error("Failed to load GLB:", err);
-                    document.getElementById('loading-overlay').style.display = 'none';
+                    // Auto-frame camera to primary view
+                    setCameraView('eye');
+                    if (onComplete) onComplete();
                 }
-            );
-        }
+            };
 
-        function applyShading(obj) {
-            if (!obj) return;
-            obj.traverse((child) => {
-                if (child.isMesh) {
-                    if (shadingMode === 'clay') {
+            // Load Stage 1 (Raw 3D Photo Tiles Clay)
+            gltfLoader.load(loc.stages[1], (gltf) => {
+                const obj = gltf.scene;
+                obj.traverse(child => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        child.userData.originalMaterial = child.material;
                         child.material = clayMaterial.clone();
-                    } else {
-                        child.material = child.userData.originalMaterial || child.material;
                     }
-                    child.material.wireframe = isWireframe;
-                }
-            });
+                });
+                stage1Group.add(obj);
+                checkDone();
+            }, undefined, () => checkDone());
+
+            // Load Stage 2 (Rectified & Botanicals)
+            gltfLoader.load(loc.stages[2], (gltf) => {
+                const obj = gltf.scene;
+                obj.traverse(child => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        child.userData.originalMaterial = child.material;
+                    }
+                });
+                stage2Group.add(obj);
+                checkDone();
+            }, undefined, () => checkDone());
+
+            // Load Stage 3 (Full Omnispatial PBR)
+            gltfLoader.load(loc.stages[3], (gltf) => {
+                const obj = gltf.scene;
+                obj.traverse(child => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        child.userData.originalMaterial = child.material;
+                    }
+                });
+                stage3Group.add(obj);
+                checkDone();
+            }, undefined, () => checkDone());
         }
 
+        function updateTelemetryForLocation(loc) {
+            const m = loc.metrics;
+            document.getElementById('val-corner').innerText = m.corner;
+            document.getElementById('delta-corner').innerText = m.deltaCorner;
+            document.getElementById('val-variance').innerText = m.variance;
+            document.getElementById('delta-variance').innerText = m.deltaVariance;
+            document.getElementById('val-fenestration').innerText = m.fenestration;
+            document.getElementById('delta-fenestration').innerText = m.deltaFenestration;
+            document.getElementById('val-trees').innerText = m.trees;
+            document.getElementById('delta-trees').innerText = m.deltaTrees;
+            document.getElementById('val-pbr').innerText = m.pbr;
+            document.getElementById('delta-pbr').innerText = m.deltaPbr;
+        }
+
+        // --------------------------------------------------------------------
+        // Location Query & Synthesis Pipeline Execution
+        // --------------------------------------------------------------------
+        window.executeLocationQuery = function() {
+            const inputEl = document.getElementById('location-query-input');
+            const query = (inputEl.value || '').trim();
+            if (!query) return;
+
+            // Resolve target location preset or closest architectural match
+            const lower = query.toLowerCase();
+            let targetKey = 'esb';
+            let targetName = query;
+
+            if (lower.includes('colosseum') || lower.includes('rome') || lower.includes('amphitheat')) {
+                targetKey = 'colosseum';
+                targetName = 'Colosseum, Rome';
+            } else if (lower.includes('ferry') || lower.includes('san francisco') || lower.includes('embarcadero')) {
+                targetKey = 'ferry';
+                targetName = 'San Francisco Ferry Building';
+            } else if (lower.includes('washington') || lower.includes('arch') || lower.includes('greenwich')) {
+                targetKey = 'washington';
+                targetName = 'Washington Square Arch, NYC';
+            } else if (lower.includes('eiffel') || lower.includes('paris') || lower.includes('champ')) {
+                targetKey = 'eiffel';
+                targetName = 'Eiffel Tower, Paris';
+            } else if (lower.includes('venice') || lower.includes('beach') || lower.includes('boardwalk')) {
+                targetKey = 'venice';
+                targetName = 'Venice Beach Boardwalk, CA';
+            } else if (lower.includes('flatiron')) {
+                targetKey = 'esb';
+                targetName = 'Flatiron Building, NYC (High-Rise Orthogonal)';
+            } else {
+                targetKey = 'esb';
+                targetName = `${query} (Omnispatial Twin)`;
+            }
+
+            // Launch Animated Pipeline Execution Modal
+            runSynthesisModal(targetKey, targetName);
+        };
+
+        window.selectLocationPreset = function(locKey) {
+            const loc = LOCATION_REGISTRY[locKey];
+            if (!loc) return;
+            document.getElementById('location-query-input').value = loc.name;
+            runSynthesisModal(locKey, loc.name);
+        };
+
+        function runSynthesisModal(locKey, displayName) {
+            const modal = document.getElementById('synth-modal');
+            const targetBadge = document.getElementById('synth-target-text');
+            const progressFill = document.getElementById('synth-progress-fill');
+
+            targetBadge.innerText = displayName;
+            modal.classList.add('active');
+
+            // Reset step UI
+            [1, 2, 3, 4, 5].forEach(i => {
+                const stepEl = document.getElementById(`synth-step-${i}`);
+                stepEl.classList.remove('active', 'done');
+                stepEl.querySelector('.step-check').innerText = '○';
+            });
+            progressFill.style.width = '0%';
+
+            const steps = [
+                { id: 1, pct: 20, delay: 350 },
+                { id: 2, pct: 42, delay: 350 },
+                { id: 3, pct: 65, delay: 350 },
+                { id: 4, pct: 85, delay: 380 },
+                { id: 5, pct: 100, delay: 380 }
+            ];
+
+            let curr = 0;
+            function nextStep() {
+                if (curr > 0) {
+                    const prevEl = document.getElementById(`synth-step-${steps[curr - 1].id}`);
+                    prevEl.classList.remove('active');
+                    prevEl.classList.add('done');
+                    prevEl.querySelector('.step-check').innerText = '✔';
+                }
+
+                if (curr < steps.length) {
+                    const s = steps[curr];
+                    const stepEl = document.getElementById(`synth-step-${s.id}`);
+                    stepEl.classList.add('active');
+                    progressFill.style.width = `${s.pct}%`;
+                    curr++;
+                    setTimeout(nextStep, s.delay);
+                } else {
+                    // Synthesis Complete!
+                    setTimeout(() => {
+                        modal.classList.remove('active');
+                        // Load models and automatically engage Side-by-Side split view!
+                        isSplitMode = true;
+                        updateSplitModeUI();
+                        loadLocation(locKey);
+                    }, 400);
+                }
+            }
+
+            setTimeout(nextStep, 150);
+        }
+
+        // --------------------------------------------------------------------
+        // Split Mode Interaction & Controls
+        // --------------------------------------------------------------------
+        window.toggleSplitMode = function() {
+            isSplitMode = !isSplitMode;
+            updateSplitModeUI();
+        };
+
+        function updateSplitModeUI() {
+            const btn = document.getElementById('btn-split-toggle');
+            const curtain = document.getElementById('split-curtain');
+            const badge = document.getElementById('hud-stage-badge');
+
+            if (isSplitMode) {
+                btn.classList.add('active', 'split-active');
+                curtain.style.display = 'block';
+                badge.innerText = 'SIDE-BY-SIDE SPLIT';
+                badge.style.color = '#38bdf8';
+                badge.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+                badge.style.background = 'rgba(56, 189, 248, 0.15)';
+            } else {
+                btn.classList.remove('active', 'split-active');
+                curtain.style.display = 'none';
+                badge.innerText = `STAGE 0${currentStage}`;
+            }
+        }
+
+        // Draggable Split Divider Line & Handle
+        const splitLine = document.getElementById('split-line');
+        const splitHandle = document.getElementById('split-handle');
+
+        function updateSplitFromClientX(clientX) {
+            splitRatio = Math.max(0.04, Math.min(0.96, clientX / window.innerWidth));
+            splitLine.style.left = `${splitRatio * 100}%`;
+        }
+
+        splitHandle.addEventListener('mousedown', (e) => {
+            isDraggingSplit = true;
+            e.stopPropagation();
+            e.preventDefault();
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (isDraggingSplit) {
+                updateSplitFromClientX(e.clientX);
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDraggingSplit = false;
+        });
+
+        // Touch drag support
+        splitHandle.addEventListener('touchstart', (e) => {
+            isDraggingSplit = true;
+            e.stopPropagation();
+        }, { passive: true });
+
+        window.addEventListener('touchmove', (e) => {
+            if (isDraggingSplit && e.touches.length > 0) {
+                updateSplitFromClientX(e.touches[0].clientX);
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchend', () => {
+            isDraggingSplit = false;
+        });
+
+        // --------------------------------------------------------------------
+        // Stage Switching (Single-Stage Full Inspection Mode)
+        // --------------------------------------------------------------------
         window.switchStage = function(stageNum) {
             currentStage = stageNum;
+            isSplitMode = false; // Exit split mode when user explicitly inspects a single stage
+            updateSplitModeUI();
 
             // Update UI card classes
             [1, 2, 3].forEach(s => {
@@ -824,167 +1911,323 @@
                 }
             });
 
-            // Update Telemetry HUD
-            updateTelemetry(stageNum);
-
-            // Load and switch active scene object
-            loadModel(stageNum, (obj) => {
-                // Clear existing
-                while (rootGroup.children.length > 0) {
-                    rootGroup.remove(rootGroup.children[0]);
-                }
-                applyShading(obj);
-                rootGroup.add(obj);
-            });
-        };
-
-        function updateTelemetry(stageNum) {
+            // Update Telemetry Stage Badge
             const badgeEl = document.getElementById('hud-stage-badge');
-            const cornerEl = document.getElementById('val-corner');
-            const dCornerEl = document.getElementById('delta-corner');
-            const varEl = document.getElementById('val-variance');
-            const dVarEl = document.getElementById('delta-variance');
-            const fenEl = document.getElementById('val-fenestration');
-            const dFenEl = document.getElementById('delta-fenestration');
-            const portEl = document.getElementById('val-portal');
-            const dPortEl = document.getElementById('delta-portal');
-            const trisEl = document.getElementById('val-tris');
-            const dTrisEl = document.getElementById('delta-tris');
-
             if (stageNum === 1) {
                 badgeEl.innerText = "STAGE 1: RAW 3D TILES";
                 badgeEl.style.color = "#f43f5e";
                 badgeEl.style.borderColor = "rgba(244, 63, 94, 0.4)";
                 badgeEl.style.background = "rgba(244, 63, 94, 0.12)";
-
-                cornerEl.innerText = "73.6° - 106.4°";
-                dCornerEl.innerText = "±16.4° Melt Error";
-                dCornerEl.className = "metric-delta delta-bad";
-
-                varEl.innerText = "0.024 m²";
-                dVarEl.innerText = "Wavy Facade Noise";
-                dVarEl.className = "metric-delta delta-bad";
-
-                fenEl.innerText = "0.00 m";
-                dFenEl.innerText = "Flat 2D Blurry Texture";
-                dFenEl.className = "metric-delta delta-bad";
-
-                portEl.innerText = "0.00 m";
-                dPortEl.innerText = "No Portal Depth";
-                dPortEl.className = "metric-delta delta-bad";
-
-                trisEl.innerText = "12,926";
-                dTrisEl.innerText = "Raw Delaunay Mesh";
-                dTrisEl.className = "metric-delta delta-warn";
             } else if (stageNum === 2) {
-                badgeEl.innerText = "STAGE 2: VECTOR RECTIFIED";
+                badgeEl.innerText = "STAGE 2: RECTIFIED & VEGGIE";
                 badgeEl.style.color = "#60a5fa";
                 badgeEl.style.borderColor = "rgba(59, 130, 246, 0.4)";
                 badgeEl.style.background = "rgba(59, 130, 246, 0.12)";
-
-                cornerEl.innerText = "90.00°";
-                dCornerEl.innerText = "0.00° Exact Cadastral";
-                dCornerEl.className = "metric-delta delta-good";
-
-                varEl.innerText = "0.000 m²";
-                dVarEl.innerText = "Planar Conformed";
-                dVarEl.className = "metric-delta delta-good";
-
-                fenEl.innerText = "0.00 m";
-                dFenEl.innerText = "Still Flat 2D Windows";
-                dFenEl.className = "metric-delta delta-warn";
-
-                portEl.innerText = "0.00 m";
-                dPortEl.innerText = "No Portal Depth";
-                dPortEl.className = "metric-delta delta-warn";
-
-                trisEl.innerText = "2,600";
-                dTrisEl.innerText = "70% Planar Decimation";
-                dTrisEl.className = "metric-delta delta-good";
             } else {
-                badgeEl.innerText = "STAGE 3: FULL SYNTHESIS";
+                badgeEl.innerText = "STAGE 3: FULL OMNI-TWIN";
                 badgeEl.style.color = "#34d399";
                 badgeEl.style.borderColor = "rgba(16, 185, 129, 0.4)";
                 badgeEl.style.background = "rgba(16, 185, 129, 0.12)";
-
-                cornerEl.innerText = "90.00°";
-                dCornerEl.innerText = "0.00° Sharp Right Angles";
-                dCornerEl.className = "metric-delta delta-good";
-
-                varEl.innerText = "0.000 m²";
-                dVarEl.innerText = "Cadastral Planar";
-                dVarEl.className = "metric-delta delta-good";
-
-                fenEl.innerText = "0.22 m";
-                dFenEl.innerText = "Street View 3D Insets";
-                dFenEl.className = "metric-delta delta-good";
-
-                portEl.innerText = "0.85 m";
-                dPortEl.innerText = "Art Deco Portal Reveal";
-                dPortEl.className = "metric-delta delta-good";
-
-                trisEl.innerText = "32,580";
-                dTrisEl.innerText = "High-Relief Architecture";
-                dTrisEl.className = "metric-delta delta-good";
             }
-        }
+        };
 
+        // Shading Mode & Wireframe
         window.setShading = function(mode) {
             shadingMode = mode;
             document.getElementById('btn-clay').classList.toggle('active', mode === 'clay');
             document.getElementById('btn-pbr').classList.toggle('active', mode === 'pbr');
-            applyShading(rootGroup);
         };
 
         window.toggleWireframe = function() {
             isWireframe = !isWireframe;
             document.getElementById('btn-wireframe').classList.toggle('active', isWireframe);
-            applyShading(rootGroup);
         };
 
-        // --------------------------------------------------------------------
-        // Camera Viewport Presets
-        // --------------------------------------------------------------------
-        let targetCamPos = new THREE.Vector3(0, 12, 55);
-        let targetCamLook = new THREE.Vector3(0, 18, 0);
+        function applyGroupShading(group, forcedMode) {
+            if (!group) return;
+            group.traverse(child => {
+                if (child.isMesh) {
+                    if (forcedMode === 'clay') {
+                        child.material = clayMaterial.clone();
+                    } else {
+                        child.material = child.userData.originalMaterial || child.material;
+                    }
+                    child.material.wireframe = isWireframe;
+                }
+            });
+        }
 
+        // --------------------------------------------------------------------
+        // 3D Navigation Controls Engine (CAD Orbit + 6-DOF Fly WASD)
+        // --------------------------------------------------------------------
+        let navMode = 'orbit'; // 'orbit' | 'fly'
+        let flightSpeed = 12.0;
+        let isTransitioning = false;
+        const targetCamPos = new THREE.Vector3();
+        const targetCamLook = new THREE.Vector3();
+        const clock = new THREE.Clock();
+
+        const flyEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+        let isRightMouseDown = false;
+        let isLeftMouseDown = false;
+        const prevMouse = { x: 0, y: 0 };
+        const keyState = {
+            KeyW: false, KeyS: false, KeyA: false, KeyD: false,
+            KeyQ: false, KeyE: false, ShiftLeft: false, ShiftRight: false,
+            ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false
+        };
+
+        window.setNavMode = function(mode) {
+            navMode = mode;
+            document.getElementById('btn-mode-orbit').classList.toggle('active', mode === 'orbit');
+            document.getElementById('btn-mode-fly').classList.toggle('active', mode === 'fly');
+            const hudNav = document.getElementById('hud-nav-mode');
+            if (hudNav) hudNav.innerText = mode === 'orbit' ? 'ORBIT CAD' : 'FREE FLY (WASD)';
+
+            if (mode === 'orbit') {
+                controls.enabled = true;
+                const fwd = new THREE.Vector3();
+                camera.getWorldDirection(fwd);
+                controls.target.copy(camera.position).addScaledVector(fwd, 25);
+            } else {
+                controls.enabled = false;
+                flyEuler.setFromQuaternion(camera.quaternion, 'YXZ');
+            }
+        };
+
+        window.setFlightSpeed = function(spd) {
+            flightSpeed = spd;
+            document.getElementById('spd-walk').classList.toggle('active', spd === 3);
+            document.getElementById('spd-fly').classList.toggle('active', spd === 12);
+            document.getElementById('spd-turbo').classList.toggle('active', spd === 35);
+        };
+
+        function cancelTransition() {
+            if (isTransitioning) {
+                isTransitioning = false;
+                if (navMode === 'fly') flyEuler.setFromQuaternion(camera.quaternion, 'YXZ');
+            }
+        }
+
+        controls.addEventListener('start', () => cancelTransition());
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) isLeftMouseDown = true;
+            if (e.button === 2) isRightMouseDown = true;
+            prevMouse.x = e.clientX;
+            prevMouse.y = e.clientY;
+            cancelTransition();
+        });
+
+        window.addEventListener('mouseup', (e) => {
+            if (e.button === 0) isLeftMouseDown = false;
+            if (e.button === 2) isRightMouseDown = false;
+        });
+
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        canvas.addEventListener('mousemove', (e) => {
+            const dx = e.clientX - prevMouse.x;
+            const dy = e.clientY - prevMouse.y;
+            prevMouse.x = e.clientX;
+            prevMouse.y = e.clientY;
+
+            if (navMode === 'fly' && (isRightMouseDown || isLeftMouseDown)) {
+                flyEuler.y -= dx * 0.0028;
+                flyEuler.x -= dy * 0.0028;
+                flyEuler.x = Math.max(-Math.PI * 0.48, Math.min(Math.PI * 0.48, flyEuler.x));
+                camera.quaternion.setFromEuler(flyEuler);
+                cancelTransition();
+            }
+        });
+
+        canvas.addEventListener('wheel', (e) => {
+            cancelTransition();
+            if (navMode === 'fly') {
+                if (e.deltaY < 0) {
+                    flightSpeed = Math.min(80, flightSpeed * 1.15);
+                } else {
+                    flightSpeed = Math.max(1, flightSpeed * 0.85);
+                }
+                window.setFlightSpeed(flightSpeed);
+            }
+        }, { passive: true });
+
+        // Keyboard navigation listeners (WASD + QE + Shift + Arrows)
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return; // Don't trigger WASD while typing in search box!
+            if (e.code in keyState) {
+                keyState[e.code] = true;
+                cancelTransition();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code in keyState) {
+                keyState[e.code] = false;
+            }
+        });
+
+        // Double Click Raycasting to Focus Target
+        const raycaster = new THREE.Raycaster();
+        const mouse2D = new THREE.Vector2();
+
+        canvas.addEventListener('dblclick', (event) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse2D.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse2D.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse2D, camera);
+            const activeGroup = isSplitMode ? (mouse2D.x < (splitRatio * 2 - 1) ? stage1Group : stage3Group) : (currentStage === 1 ? stage1Group : (currentStage === 2 ? stage2Group : stage3Group));
+            const intersects = raycaster.intersectObjects(activeGroup.children, true);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                const hitPoint = hit.point;
+
+                const curDir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+                const dist = Math.min(Math.max(camera.position.distanceTo(hitPoint) * 0.5, 4.0), 50.0);
+
+                targetCamLook.copy(hitPoint);
+                targetCamPos.copy(hitPoint).addScaledVector(curDir, dist);
+                isTransitioning = true;
+
+                const focusEl = document.getElementById('cam-focus');
+                if (focusEl) focusEl.innerText = 'Surface Point';
+            }
+        });
+
+        // Camera Viewport Presets
         window.setCameraView = function(view) {
             document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
             const btn = document.getElementById(`cam-${view}`);
             if (btn) btn.classList.add('active');
 
-            if (view === 'eye') {
-                // Standing at Street Level looking at the 5th Avenue entrance & window sills
-                targetCamPos.set(0, 2.2, 38);
-                targetCamLook.set(0, 8.0, 18);
-            } else if (view === 'corner') {
-                // Extreme zoom into front-left corner
-                targetCamPos.set(-29, 14, 28);
-                targetCamLook.set(-27, 12, 18);
-            } else if (view === 'window') {
-                // Grazing angle showing 0.22m 3D window recess depth
-                targetCamPos.set(-18, 12, 23);
-                targetCamLook.set(-6, 12, 18);
-            } else if (view === 'deck') {
-                // 86th floor setback terrace
-                targetCamPos.set(22, 155, 26);
-                targetCamLook.set(0, 140, 0);
-            } else if (view === 'skyline') {
-                // Full skyline aerial orbit
-                targetCamPos.set(110, 160, 170);
-                targetCamLook.set(0, 95, 0);
-            }
+            const loc = LOCATION_REGISTRY[activeLocationKey] || LOCATION_REGISTRY.esb;
+            const camDef = loc.camera[view] || loc.camera.eye;
+
+            targetCamPos.set(camDef.pos[0], camDef.pos[1], camDef.pos[2]);
+            targetCamLook.set(camDef.target[0], camDef.target[1], camDef.target[2]);
+
+            const focusEl = document.getElementById('cam-focus');
+            if (focusEl) focusEl.innerText = camDef.label;
+
+            isTransitioning = true;
         };
 
-        // Smooth camera lerp in render loop
+        // --------------------------------------------------------------------
+        // Render & Navigation Loop
+        // --------------------------------------------------------------------
         function animate() {
             requestAnimationFrame(animate);
 
-            camera.position.lerp(targetCamPos, 0.06);
-            controls.target.lerp(targetCamLook, 0.06);
-            controls.update();
+            const delta = Math.min(clock.getDelta(), 0.1);
 
-            renderer.render(scene, camera);
+            // Handle preset transitions
+            if (isTransitioning) {
+                camera.position.lerp(targetCamPos, 0.08);
+                if (navMode === 'orbit') {
+                    controls.target.lerp(targetCamLook, 0.08);
+                } else {
+                    camera.lookAt(targetCamLook);
+                    flyEuler.setFromQuaternion(camera.quaternion, 'YXZ');
+                }
+
+                if (camera.position.distanceTo(targetCamPos) < 0.06) {
+                    camera.position.copy(targetCamPos);
+                    if (navMode === 'orbit') {
+                        controls.target.copy(targetCamLook);
+                    }
+                    isTransitioning = false;
+                }
+            } else {
+                // Process keyboard flight movement (WASD + QE + Arrows)
+                const fwd = new THREE.Vector3();
+                camera.getWorldDirection(fwd);
+                const rgt = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+
+                let spd = flightSpeed;
+                if (keyState.ShiftLeft || keyState.ShiftRight) spd *= 3.0;
+                const moveStep = spd * delta;
+                const moveVec = new THREE.Vector3();
+
+                if (keyState.KeyW || keyState.ArrowUp) moveVec.addScaledVector(fwd, moveStep);
+                if (keyState.KeyS || keyState.ArrowDown) moveVec.addScaledVector(fwd, -moveStep);
+                if (keyState.KeyA || keyState.ArrowLeft) moveVec.addScaledVector(rgt, -moveStep);
+                if (keyState.KeyD || keyState.ArrowRight) moveVec.addScaledVector(rgt, moveStep);
+                if (keyState.KeyE) moveVec.y += moveStep;
+                if (keyState.KeyQ) moveVec.y -= moveStep;
+
+                if (moveVec.lengthSq() > 0) {
+                    camera.position.add(moveVec);
+                    if (navMode === 'orbit') {
+                        controls.target.add(moveVec);
+                    }
+                    // Prevent underground clipping
+                    if (camera.position.y < 0.8) camera.position.y = 0.8;
+                }
+            }
+
+            // Update OrbitControls
+            if (navMode === 'orbit') {
+                controls.update();
+            }
+
+            // Update live telemetry in 3D navigation HUD
+            const altEl = document.getElementById('cam-alt');
+            const distEl = document.getElementById('cam-dist');
+            const headEl = document.getElementById('cam-heading');
+
+            if (altEl) altEl.innerText = `${camera.position.y.toFixed(1)} m`;
+            if (distEl) distEl.innerText = `${camera.position.distanceTo(controls.target).toFixed(1)} m`;
+
+            const fwdVec = new THREE.Vector3();
+            camera.getWorldDirection(fwdVec);
+            const headingDeg = Math.round((Math.atan2(fwdVec.x, fwdVec.z) * 180 / Math.PI + 360) % 360);
+            if (headEl) headEl.innerText = `${headingDeg}°`;
+
+            // ----------------------------------------------------------------
+            // Scissor-Test Side-by-Side Dual Pass Rendering
+            // ----------------------------------------------------------------
+            const screenW = window.innerWidth;
+            const screenH = window.innerHeight;
+
+            if (isSplitMode) {
+                renderer.setScissorTest(true);
+                const splitPixelX = Math.floor(screenW * splitRatio);
+
+                // Pass 1: Left Side -> Stage 1 (Raw 3D Photo Tiles in Clay Mode)
+                renderer.setScissor(0, 0, splitPixelX, screenH);
+                renderer.setViewport(0, 0, screenW, screenH);
+
+                stage1Group.visible = true;
+                stage2Group.visible = false;
+                stage3Group.visible = false;
+                applyGroupShading(stage1Group, 'clay');
+                renderer.render(scene, camera);
+
+                // Pass 2: Right Side -> Stage 3 (Full Omnispatial Synthesis PBR)
+                renderer.setScissor(splitPixelX, 0, screenW - splitPixelX, screenH);
+                renderer.setViewport(0, 0, screenW, screenH);
+
+                stage1Group.visible = false;
+                stage2Group.visible = false;
+                stage3Group.visible = true;
+                applyGroupShading(stage3Group, shadingMode);
+                renderer.render(scene, camera);
+
+                renderer.setScissorTest(false);
+            } else {
+                // Normal Single-Stage View
+                stage1Group.visible = (currentStage === 1);
+                stage2Group.visible = (currentStage === 2);
+                stage3Group.visible = (currentStage === 3);
+
+                const activeGroup = currentStage === 1 ? stage1Group : (currentStage === 2 ? stage2Group : stage3Group);
+                const effectiveShading = currentStage === 1 ? 'clay' : shadingMode;
+                applyGroupShading(activeGroup, effectiveShading);
+                renderer.render(scene, camera);
+            }
         }
 
         window.addEventListener('resize', () => {
@@ -993,9 +2236,10 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // Initialize Stage 3 by default
-        switchStage(3);
-        setCameraView('eye');
+        // Initialize with default location (ESB) in Split Side-by-Side Mode!
+        loadLocation('esb', () => {
+            updateSplitModeUI();
+        });
         animate();
     </script>
 </body>

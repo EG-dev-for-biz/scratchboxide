@@ -859,6 +859,60 @@ const demoVectorWorldStagingData: Scene3DData = {
 };
 
 // ----------------------------------------------------------------------------------
+// Demo: Omnispatial Multi-Sensor 3D Synthesis Pipeline (Minimal Orthogonal Basis)
+// ----------------------------------------------------------------------------------
+const demoOmnispatialSynthesisData: Scene3DData = {
+    title: 'Omnispatial Multi-Sensor 3D Synthesis Pipeline',
+    subtitle: 'Minimal Orthogonal Basis Proof: 3D Tiles + 2D Vector Cadastre + Street View 360',
+    sceneType: 'city',
+    renderMode: 'clay',
+    cameraMode: 'orbit',
+    selectedMeshId: 'omnispatial-stage3-esb',
+    camera: {
+        position: [0, 18, 55],
+        target: [0, 18, 0],
+        fov: 45
+    },
+    environment: {
+        skybox: 'studio',
+        lighting: 'studio',
+        ground: true,
+        groundColor: '#1e293b',
+        ambientIntensity: 0.95
+    },
+    geoAnchor: {
+        lat: 40.7484,
+        lng: -73.9857,
+        elevation: 381,
+        active: true,
+        landmarkName: 'Empire State Building, NYC',
+        castingArchetype: 'Omnispatial Digital Twin',
+        castingRationale: 'Google 3D Photo Tiles + 2D Vector Cadastre + Street View 360 Fused into Metric 3D Geometry'
+    },
+    objects: [
+        {
+            id: 'omnispatial-stage3-esb',
+            content: {
+                type: '3d-model',
+                durableUri: '/models/omnispatial_stage3_full_synthesis.glb',
+                mimeType: 'model/gltf-binary',
+                metadata: {
+                    materialPreset: '18% Studio Grey Clay (roughness: 0.85, metalness: 0.05)',
+                    cornerOrthogonalityError: '0.00°',
+                    windowBayInsetDepth: '0.22m',
+                    entrancePortalRevealDepth: '0.85m',
+                    triangleCount: 32580,
+                    vertexCount: 64820
+                }
+            },
+            space: {
+                spatial3d: { x: 0, y: 0, z: 0 }
+            }
+        }
+    ]
+};
+
+// ----------------------------------------------------------------------------------
 // Complete Preloaded Showcase Demos Catalog
 // ----------------------------------------------------------------------------------
 export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
@@ -901,6 +955,26 @@ export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
             version: 1
         },
         introMessage: 'Welcome to the 3D Vector Tiles World Population Staging demo! This pipeline decodes Google 2D roadmap vector tiles (MVT/PBF) at zoom 16, triangulates building polygon rings, extrudes volumetric prisms, and bakes 18% Studio Grey Clay materials into a standard binary .glb for immediate scene staging.'
+    },
+    {
+        id: 'demo-omnispatial-synthesis',
+        title: 'Omnispatial Multi-Sensor 3D Synthesis Pipeline',
+        subtitle: 'Minimal Orthogonal Basis Proof · 3D Tiles + Vector + SV 360',
+        category: '3d',
+        categoryLabel: '3D & Geospatial',
+        description: 'Synthesizes the Minimal Orthogonal Basis into human-scale metric digital twins: Google 3D Photo Tiles macro envelope rectified with 2D cadastral vector sharp 90° corners, and fused with Street View 360 for true 0.22m 3D recessed window bays and Art Deco entrance reveals.',
+        tags: ['Orthogonal Triad', 'Google 3D Tiles', 'Vector Cadastre', 'Street View 360', '90° Corners', '3D Window Bays', 'C++20 Clang'],
+        highlightBadge: 'ORTHOGONAL TRIAD',
+        artifact: {
+            id: 'art-demo-omnispatial-synthesis',
+            type: '3d-scene',
+            title: 'Omnispatial Multi-Sensor 3D Synthesis Pipeline',
+            summary: 'Minimal Orthogonal Basis Proof fusing 3D Photo Tiles, 2D Vector Cadastre, and Street View 360 into true 3D geometry.',
+            data: demoOmnispatialSynthesisData,
+            createdAt: new Date().toISOString(),
+            version: 1
+        },
+        introMessage: 'Welcome to the Omnispatial Multi-Sensor 3D Synthesis Pipeline demo! This showcase tests our Minimal Orthogonal Basis theory: raw 3D photogrammetric tiles provide volumetric massing, 2D vector tiles rectify corners to exact 90° right angles, and Street View 360 carves true 0.22m 3D recessed window bays and Art Deco entrance reveals.'
     },
     {
         id: 'demo-nextgen-astra-viewport',

@@ -1965,6 +1965,8 @@ int main(int argc, char** argv) {
         threeCameraRef.current = camera;
         threeRendererRef.current = renderer;
         customGridHelperRef.current = stack.gridHelper;
+        (window as any).__SB_THREE__ = THREE;
+        (window as any).__SB_TERRAIN_MANAGER__ = terrainManagerRef.current;
         (window as any).__SB_3D_CAMERA__ = camera;
         (window as any).__SB_3D_SCENE__ = scene;
         (window as any).__SB_3D_STACK__ = stack;
@@ -2234,6 +2236,21 @@ int main(int argc, char** argv) {
         const handle = syncTilesLayer(stack, tilesInputRef.current, {
             onTileLoaded: (terrainManager) => {
                 snapGroupFiguresToGround(contentRef.current?.proceduralSceneGroup ?? null, terrainManager);
+                const cppRoot = stack.scene?.getObjectByName('scratchbox-cpp-generated-root');
+                if (cppRoot) {
+                    terrainManager.snapObjectToGround(cppRoot, 0);
+                }
+                externalObjectsMapRef.current.forEach((model, id) => {
+                    const def = (sceneDataRef.current.objects || []).find(o => o.id === id);
+                    const role = def?.content?.metadata?.role;
+                    const source = (def?.content?.metadata?.source || '').toLowerCase();
+                    const isEnv = role === 'environment' || def?.content?.metadata?.isGround || source.includes('google3dtiles') || source.includes('googlevectortile');
+                    if (!isEnv) {
+                        const s = def?.space?.spatial3d;
+                        const offset = (s?.y !== undefined && s.y !== 0) ? s.y : 0;
+                        terrainManager.snapObjectToGround(model, offset);
+                    }
+                });
                 const groundY = terrainManager.sampleGroundHeight(0, 0);
                 if (groundY !== null && !sceneDataRef.current.camera?.target) {
                     cameraTargetRef.current.y = groundY + 1.5;
@@ -2591,6 +2608,10 @@ int main(int argc, char** argv) {
                     }
                 });
                 applyClayRenderMode([gltf.scene], renderModeRef.current === 'clay');
+                // Shared metric ground logic: snap procedural geometry to terrain or 3D tile surface
+                if (terrainManagerRef.current) {
+                    terrainManagerRef.current.snapObjectToGround(gltf.scene, 0);
+                }
                 const generatedSphere = new THREE.Box3().setFromObject(gltf.scene).getBoundingSphere(new THREE.Sphere());
                 if (Number.isFinite(generatedSphere.radius) && generatedSphere.radius > 0) {
                     setGeneratedContentRadius(Number(generatedSphere.radius.toPrecision(2)));
@@ -2756,8 +2777,48 @@ int main(int argc, char** argv) {
 
                     model.visible = isVisibleForGroundMode;
                     scene.add(model);
+                    model.updateMatrixWorld(true);
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
+
+                    const role = obj.content?.metadata?.role;
+                    const metaSource = (obj.content?.metadata?.source || '').toLowerCase();
+                    const isEnvTile = role === 'environment' ||
+                        obj.content?.metadata?.isGround ||
+                        metaSource.includes('google3dtiles') ||
+                        metaSource.includes('googlevectortile');
+
+                    if (isEnvTile) {
+                        // When environment 3D tiles finish loading, re-ground all active built/hero objects onto it
+                        if (terrainManagerRef.current) {
+                            const cppRoot = scene.getObjectByName('scratchbox-cpp-generated-root');
+                            if (cppRoot) {
+                                terrainManagerRef.current.snapObjectToGround(cppRoot, 0);
+                            }
+                            currentMap.forEach((otherModel, otherId) => {
+                                if (otherId !== obj.id) {
+                                    const otherDef = (sceneDataRef.current.objects || []).find(o => o.id === otherId);
+                                    const otherRole = otherDef?.content?.metadata?.role;
+                                    const otherSrc = (otherDef?.content?.metadata?.source || '').toLowerCase();
+                                    const isOtherEnv = otherRole === 'environment' ||
+                                        otherDef?.content?.metadata?.isGround ||
+                                        otherSrc.includes('google3dtiles') ||
+                                        otherSrc.includes('googlevectortile');
+                                    if (!isOtherEnv) {
+                                        const os = otherDef?.space?.spatial3d;
+                                        const offset = (os?.y !== undefined && os.y !== 0) ? os.y : 0;
+                                        terrainManagerRef.current?.snapObjectToGround(otherModel, offset);
+                                    }
+                                }
+                            });
+                        }
+                    } else {
+                        // For built / hero objects: snap bottom of object to terrain or underlying 3D tile surface
+                        if (terrainManagerRef.current && (s?.y === 0 || s?.y === undefined)) {
+                            terrainManagerRef.current.snapObjectToGround(model, 0);
+                        }
+                    }
+
                     refreshEntities();
 
                     if (stackRef.current) {

@@ -558,9 +558,13 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                     metadata: {
                         source: 'Google3DTilesFullTexture',
                         role: 'environment',
+                        isGround: true,
+                        metricScale: 1.0,
+                        groundDatumMeters: 0.0,
                         resolvedAddress: result.resolvedAddress || query,
                         vertexCount: result.mesh?.vertexCount,
-                        triangleCount: result.mesh?.triangleCount
+                        triangleCount: result.mesh?.triangleCount,
+                        boundingBox: result.mesh?.boundingBox
                     }
                 },
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },
@@ -571,7 +575,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 id: `artifact-3d-${Date.now()}`,
                 type: '3d-scene',
                 title: `${result.resolvedAddress || query} (Photorealistic 3D Tiles)`,
-                summary: `Ingested authentic Google 3D Tiles in full photogrammetric texture for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles).`,
+                summary: `Ingested authentic Google 3D Tiles in full photogrammetric texture for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles). Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`,
                 version: 1,
                 data: {
                     title: `${result.resolvedAddress || query} — Photorealistic 3D Model`,
@@ -582,6 +586,13 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         skybox: 'studio',
                         lighting: 'studio',
                         ground: false
+                    },
+                    groundDatum: {
+                        coordinateSystem: 'metric-enu',
+                        units: 'meters',
+                        scale: 1.0,
+                        groundDatumMeters: 0.0,
+                        groundLogic: 'shared-metric-ground'
                     },
                     groundTileMode: 'photoreal-textured',
                     geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
@@ -598,11 +609,23 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 resolvedAddress: result.resolvedAddress,
                 glbPath: result.glbPath,
                 mesh: result.mesh,
+                groundDatum: {
+                    coordinateSystem: 'metric-enu',
+                    units: 'meters',
+                    scale: 1.0,
+                    groundDatumMeters: 0.0,
+                    bounds: result.mesh?.boundingBox,
+                    elevationRange: result.mesh?.boundingBox ? {
+                        minY: result.mesh.boundingBox.min[1],
+                        maxY: result.mesh.boundingBox.max[1]
+                    } : undefined,
+                    groundLogic: 'shared-metric-ground'
+                },
                 quality: result.quality,
                 render: result.render,
                 ...(mountedArtifact ? { artifact: mountedArtifact } : {})
             },
-            summaryResult: `Google 3D Tiles ingested in full texture for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).`
+            summaryResult: `Google 3D Tiles ingested in full texture for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles). Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
         };
     },
 
@@ -645,9 +668,13 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                     metadata: {
                         source: 'Google3DTilesClay',
                         role: 'environment',
+                        isGround: true,
+                        metricScale: 1.0,
+                        groundDatumMeters: 0.0,
                         resolvedAddress: result.resolvedAddress || query,
                         vertexCount: result.mesh?.vertexCount,
-                        triangleCount: result.mesh?.triangleCount
+                        triangleCount: result.mesh?.triangleCount,
+                        boundingBox: result.mesh?.boundingBox
                     }
                 },
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },
@@ -663,11 +690,18 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                     ? `${prevArtifact.title || '3D Scene'} — Staged at ${result.resolvedAddress || query}`
                     : `${result.resolvedAddress || query} (Studio Grey Clay 3D Tiles)`,
                 summary: isStagingRequest
-                    ? `Staged active 3D asset at ${result.resolvedAddress || query} with authentic Google 3D Tiles Studio Grey Clay massing (${result.mesh?.vertexCount || 0} vertices).`
-                    : `Ingested authentic Google 3D Tiles in Studio Grey Clay for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles).`,
+                    ? `Staged active 3D asset at ${result.resolvedAddress || query} with authentic Google 3D Tiles Studio Grey Clay massing (${result.mesh?.vertexCount || 0} vertices). Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`
+                    : `Ingested authentic Google 3D Tiles in Studio Grey Clay for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles). Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`,
                 data: {
                     ...prevData,
                     renderMode: 'clay',
+                    groundDatum: {
+                        coordinateSystem: 'metric-enu',
+                        units: 'meters',
+                        scale: 1.0,
+                        groundDatumMeters: 0.0,
+                        groundLogic: 'shared-metric-ground'
+                    },
                     groundTileMode: 'photoreal-clay',
                     geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
                     objects: [...objectsToKeep, tileObject]
@@ -686,9 +720,13 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                     metadata: {
                         source: 'Google3DTilesClay',
                         role: 'environment',
+                        isGround: true,
+                        metricScale: 1.0,
+                        groundDatumMeters: 0.0,
                         resolvedAddress: result.resolvedAddress || query,
                         vertexCount: result.mesh?.vertexCount,
-                        triangleCount: result.mesh?.triangleCount
+                        triangleCount: result.mesh?.triangleCount,
+                        boundingBox: result.mesh?.boundingBox
                     }
                 },
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },
@@ -699,7 +737,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 id: `artifact-3d-${Date.now()}`,
                 type: '3d-scene',
                 title: `${result.resolvedAddress || query} (Studio Grey Clay 3D Tiles)`,
-                summary: `Ingested authentic Google 3D Tiles in Studio Grey Clay for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles).`,
+                summary: `Ingested authentic Google 3D Tiles in Studio Grey Clay for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles). Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`,
                 version: 1,
                 data: {
                     title: `${result.resolvedAddress || query} — 3D Real-World Clay Model`,
@@ -711,6 +749,13 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         skybox: 'studio',
                         lighting: 'studio',
                         ground: false
+                    },
+                    groundDatum: {
+                        coordinateSystem: 'metric-enu',
+                        units: 'meters',
+                        scale: 1.0,
+                        groundDatumMeters: 0.0,
+                        groundLogic: 'shared-metric-ground'
                     },
                     groundTileMode: 'photoreal-clay',
                     geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
@@ -727,11 +772,23 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 resolvedAddress: result.resolvedAddress,
                 glbPath: result.glbPath,
                 mesh: result.mesh,
+                groundDatum: {
+                    coordinateSystem: 'metric-enu',
+                    units: 'meters',
+                    scale: 1.0,
+                    groundDatumMeters: 0.0,
+                    bounds: result.mesh?.boundingBox,
+                    elevationRange: result.mesh?.boundingBox ? {
+                        minY: result.mesh.boundingBox.min[1],
+                        maxY: result.mesh.boundingBox.max[1]
+                    } : undefined,
+                    groundLogic: 'shared-metric-ground'
+                },
                 quality: result.quality,
                 render: result.render,
                 ...(mountedArtifact ? { artifact: mountedArtifact } : {})
             },
-            summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).`
+            summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles). Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m [elevation: ${result.mesh?.boundingBox?.min[1]?.toFixed(1) ?? '0.0'}m to ${result.mesh?.boundingBox?.max[1]?.toFixed(1) ?? '0.0'}m]. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
         };
     },
 
@@ -1763,7 +1820,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 style: { type: 'STRING', description: 'Material styling mode (default: "studio_clay" for 18% Studio Grey Clay).' },
                 populate: { type: 'BOOLEAN', description: 'Whether to procedurally populate world with streetlamps, street trees, and traffic vehicles (default: true).' },
                 includeTraffic: { type: 'BOOLEAN', description: 'Include background vehicles aligned in lanes (default: true).' },
-                includeTrees: { type: 'BOOLEAN', description: 'Include street trees and park foliage (default: true).' },
+                includeTrees: { type: 'BOOLEAN', description: 'Include street trees and park foliage (default: false; deferred to authentic Google 3D Tiles).' },
                 includeStreetlamps: { type: 'BOOLEAN', description: 'Include curbside streetlamps (default: true).' },
                 includeSidewalks: { type: 'BOOLEAN', description: 'Include elevated sidewalks with beveled granite curbs (default: true).' },
                 heroStaging: {
@@ -1778,6 +1835,38 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     }
                 },
                 outputGlbPath: { type: 'STRING', description: 'Optional custom output file path for the generated binary .glb.' }
+            },
+            required: ['latitude', 'longitude']
+        }
+    },
+    {
+        name: 'query_spatial_vector_data',
+        description: 'Query rich 2D vector roadmap and cadastral parcel data (kinematic road corridors with lane centerlines, building footprints with verified heights, bridge/tunnel vertical layers, landuse surface friction, POIs) co-registered with Google 3D Photorealistic Tiles via LocalTangentPlane. Enforces Universal Spatial Identifiers (urn:scratchbox:spatial:<layer>:<geohash>:<id>) and the Zero-Fake-Trees invariant.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                latitude: { type: 'NUMBER', description: 'Target geodetic latitude (e.g. 40.7484 for Empire State Building).' },
+                longitude: { type: 'NUMBER', description: 'Target geodetic longitude (e.g. -73.9857).' },
+                elevation: { type: 'NUMBER', description: 'Anchor ground elevation in meters ASL/MSL (default: 0.0).' },
+                radiusMeters: { type: 'NUMBER', description: 'Search radius in meters (default: 250).' },
+                layers: {
+                    type: 'ARRAY',
+                    description: 'Specific layers to query: "building", "road", "water", "landuse", "poi". Omit for all.',
+                    items: { type: 'STRING' }
+                },
+                queryType: {
+                    type: 'STRING',
+                    description: 'Specialized query mode: "overview" (default summary & feature lists), "building_at_point" (identify building at local ENU point), "nearest_road" (find closest lane and heading for point), "excavation_stencil" (generate 3D tile clipping boundary for building), "kinematic_graph" (road network nodes & edges), or "semantic_annotations" (3D HUD billboard labels).'
+                },
+                localPoint: {
+                    type: 'ARRAY',
+                    description: 'Local metric ENU coordinate [x, y, z] in meters for targeted spatial queries ("building_at_point" or "nearest_road").',
+                    items: { type: 'NUMBER' }
+                },
+                targetFeatureId: {
+                    type: 'STRING',
+                    description: 'Universal Spatial ID (e.g. "urn:scratchbox:spatial:building:...") for stencil generation or feature lookup.'
+                }
             },
             required: ['latitude', 'longitude']
         }
@@ -5175,7 +5264,9 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
         const outputGlbPath = asString(args.outputGlbPath);
         const populate = args.populate !== false;
         const includeTraffic = args.includeTraffic !== false;
-        const includeTrees = args.includeTrees !== false;
+        // Reality Grounding Invariant: procedural tree generation is false by default.
+        // Authentic tree foliage is extracted from Google 3D Photorealistic Tiles or Solar dataLayers.
+        const includeTrees = args.includeTrees === true;
         const includeStreetlamps = args.includeStreetlamps !== false;
         const includeSidewalks = args.includeSidewalks !== false;
         const heroStaging = args.heroStaging && typeof args.heroStaging === 'object' ? args.heroStaging as any : undefined;
@@ -5310,6 +5401,117 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                 summaryResult: `Successfully staged 3D vector world in 18% Studio Grey Clay at [${latitude}, ${longitude}]. Extruded ${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road segments, and ${result.stats.waterPolygonCount} water polygons into standard binary GLB (${result.stats.vertexCount} vertices, ${result.stats.triangleCount} triangles). GLB: ${(result as any).glbPath || (result as any).outputGlbPath}`
             };
         }
+    },
+    query_spatial_vector_data: async (args, _ctx) => {
+        const latitude = typeof args.latitude === 'number' ? args.latitude : 40.7484;
+        const longitude = typeof args.longitude === 'number' ? args.longitude : -73.9857;
+        const elevation = typeof args.elevation === 'number' ? args.elevation : 0.0;
+        const radiusMeters = typeof args.radiusMeters === 'number' ? args.radiusMeters : 250;
+        const queryType = asString(args.queryType) || 'overview';
+        const targetFeatureId = asString(args.targetFeatureId);
+        const localPoint = Array.isArray(args.localPoint) && args.localPoint.length >= 3
+            ? [args.localPoint[0], args.localPoint[1], args.localPoint[2]] as [number, number, number]
+            : undefined;
+
+        const rawLayers = Array.isArray(args.layers) ? args.layers.map(l => String(l).toLowerCase()) : [];
+        const layers = rawLayers.length > 0 ? (rawLayers as any[]) : undefined;
+
+        const { SpatialVectorDataService } = await import('../../spatial/SpatialVectorDataService');
+        const dataset = await SpatialVectorDataService.querySpatialVectorData({
+            latitude,
+            longitude,
+            elevation,
+            radiusMeters,
+            layers
+        });
+
+        if (queryType === 'building_at_point' && localPoint) {
+            const building = SpatialVectorDataService.queryBuildingAt(dataset, localPoint);
+            return {
+                resultPayload: {
+                    queryType,
+                    localPoint,
+                    building: building || null,
+                    found: !!building
+                } as unknown as ToolResultPayload,
+                summaryResult: building
+                    ? `Found building at [${localPoint.join(', ')}]: ${building.name || building.universalId} (Area: ${building.areaM2}m², Verified Height: ${building.heightM !== null ? building.heightM + 'm' : 'unverified/null'}). Universal ID: ${building.universalId}`
+                    : `No building footprint contains local point [${localPoint.join(', ')}].`
+            };
+        }
+
+        if (queryType === 'nearest_road' && localPoint) {
+            const nearest = SpatialVectorDataService.queryNearestRoad(dataset, localPoint);
+            return {
+                resultPayload: {
+                    queryType,
+                    localPoint,
+                    nearestRoad: nearest || null,
+                    found: !!nearest
+                } as unknown as ToolResultPayload,
+                summaryResult: nearest
+                    ? `Nearest road to [${localPoint.join(', ')}]: ${nearest.road.name || nearest.road.universalId} (${nearest.road.roadClass}) at ${nearest.distanceM}m distance. Closest Lane: ${nearest.laneIndex}/${nearest.road.lanes}, Heading: ${nearest.headingDeg}°.`
+                    : `No road corridor found within dataset bounds.`
+            };
+        }
+
+        if (queryType === 'excavation_stencil') {
+            const building = targetFeatureId
+                ? (SpatialVectorDataService.getFeatureById(dataset, targetFeatureId) as any)
+                : (localPoint ? SpatialVectorDataService.queryBuildingAt(dataset, localPoint) : dataset.buildings[0]);
+
+            if (!building || building.layer !== 'building') {
+                return {
+                    resultPayload: { success: false, error: 'No valid building feature identified for excavation stencil.' } as unknown as ToolResultPayload,
+                    summaryResult: `Failed to generate excavation stencil: no building found matching target.`
+                };
+            }
+
+            const stencil = SpatialVectorDataService.generateExcavationStencil(building);
+            return {
+                resultPayload: {
+                    queryType,
+                    buildingId: building.universalId,
+                    stencil
+                } as unknown as ToolResultPayload,
+                summaryResult: `Generated 2D excavation stencil for ${building.name || building.universalId}: Bounding box [${stencil.boundingBox.map(n => n.toFixed(1)).join(', ')}], Area: ${stencil.areaM2}m², Vertices: ${stencil.stencilPolygonEnu.length}. Ready for clipping Google 3D Photorealistic Tiles.`
+            };
+        }
+
+        if (queryType === 'kinematic_graph') {
+            const graph = SpatialVectorDataService.generateKinematicGraph(dataset);
+            return {
+                resultPayload: {
+                    queryType,
+                    graph
+                } as unknown as ToolResultPayload,
+                summaryResult: `Generated kinematic road network graph: ${graph.nodes.length} intersection nodes, ${graph.roads.length} road segments spanning ${graph.totalLengthKm} km with precomputed lane centerlines.`
+            };
+        }
+
+        if (queryType === 'semantic_annotations') {
+            const annotations = SpatialVectorDataService.generateSemantic3DAnnotations(dataset);
+            return {
+                resultPayload: {
+                    queryType,
+                    annotations
+                } as unknown as ToolResultPayload,
+                summaryResult: `Generated ${annotations.length} semantic 3D HUD billboard annotations (buildings, road corridors, POIs) with Universal Spatial IDs.`
+            };
+        }
+
+        // Default: overview
+        return {
+            resultPayload: {
+                dataset,
+                notes: [
+                    'Co-registered with Google 3D Photorealistic Tiles via LocalTangentPlane ENU.',
+                    'Universal Spatial Identifiers formatted as urn:scratchbox:spatial:<layer>:<geohash>:<id>.',
+                    'Zero-Fake-Trees Invariant: Authentic trees deferred to Google 3D Tiles or Solar dataLayers (GoogleSolarFoliageClassifier).'
+                ]
+            } as unknown as ToolResultPayload,
+            summaryResult: `Spatial Vector Data queried at [${latitude}, ${longitude}] (${dataset.geohash}): ${dataset.stats.buildingCount} buildings (${dataset.stats.totalBuildingFootprintAreaM2}m² footprint, ${dataset.stats.verifiedHeightCount} verified heights), ${dataset.stats.roadSegmentCount} road segments (${dataset.stats.roadNetworkLengthKm}km, ${dataset.stats.bridgeCount} bridges, ${dataset.stats.tunnelCount} tunnels), ${dataset.landuse.length} landuse zones, ${dataset.water.length} water bodies, ${dataset.pois.length} POIs.`
+        };
     }
 };
 

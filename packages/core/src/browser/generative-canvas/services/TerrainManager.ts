@@ -156,6 +156,11 @@ export class TerrainManager {
         far = 2500,
         ignoreObject?: THREE.Object3D | THREE.Object3D[]
     ): number | null {
+        // Direct single-point surface probe for additive construction & pinpoint grounding
+        if (spreadM <= 0.05) {
+            return this.sampleHeight(x, z, originY, far, ignoreObject);
+        }
+
         // Fast O(1) path via cached elevation heightfield
         if (this.heightfield && this.heightfield.contains(x, z)) {
             let hMin = Infinity;
@@ -196,15 +201,17 @@ export class TerrainManager {
     }
 
     /**
-     * Snaps a 3D object to the ground surface at its current (x, z) location,
-     * taking into account its bounding box so the bottom of the object rests directly on the terrain.
+     * Snaps a 3D object to the ground or underlying mesh surface at its current (x, z) location,
+     * taking into account its bounding box so the bottom of the object rests directly on the terrain or surface.
+     * Defaults to spreadM = 0 (exact surface point contact), enabling objects to build on top of each other
+     * or on top of 3D tiles without dropping off edges.
      *
      * @param object The THREE.Object3D to ground.
      * @param offset Optional vertical elevation offset in meters (e.g. contact buffer or stand height).
-     * @param spreadM Ground sampling spread in meters.
+     * @param spreadM Ground sampling spread in meters (0 for direct surface contact, >0 for perimeter minimum).
      * @returns The newly computed world Y position of the object, or null if no terrain hit.
      */
-    public snapObjectToGround(object: THREE.Object3D, offset = 0, spreadM = 4): number | null {
+    public snapObjectToGround(object: THREE.Object3D, offset = 0, spreadM = 0): number | null {
         if (!object) return null;
 
         // Ensure matrices are up to date
@@ -213,8 +220,9 @@ export class TerrainManager {
         const worldPos = new THREE.Vector3();
         object.getWorldPosition(worldPos);
 
-        const groundY = this.sampleGroundHeight(worldPos.x, worldPos.z, spreadM, 2000, 2500, object)
-            ?? this.sampleHeight(worldPos.x, worldPos.z, 2000, 2500, object);
+        const groundY = spreadM > 0
+            ? (this.sampleGroundHeight(worldPos.x, worldPos.z, spreadM, 2000, 2500, object) ?? this.sampleHeight(worldPos.x, worldPos.z, 2000, 2500, object))
+            : this.sampleHeight(worldPos.x, worldPos.z, 2000, 2500, object);
 
         if (groundY === null) return null;
 

@@ -39,7 +39,8 @@ async function evaluate(code) {
   const { ws, send } = await getCDPClient();
   const res = await send('Runtime.evaluate', {
     expression: code,
-    returnByValue: true
+    returnByValue: true,
+    awaitPromise: true
   });
   ws.close();
   return res;
@@ -54,7 +55,7 @@ async function takeScreenshot(outputPath) {
   console.log(`Screenshot saved to ${outputPath} (${buffer.length} bytes)`);
 }
 
-module.exports = { evaluate, takeScreenshot };
+module.exports = { evaluate, takeScreenshot, getCDPClient };
 
 if (require.main === module) {
   const cmd = process.argv[2];
