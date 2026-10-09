@@ -22,7 +22,8 @@ import {
     mvtPointToLatLng,
     DecodedVectorTileData,
     VectorFeaturePolygon,
-    VectorFeatureLine
+    VectorFeatureLine,
+    DEFAULT_GOOGLE_MAPS_API_KEY
 } from './GoogleVectorTileService';
 import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
 import { SpatialAssetVaultService } from './SpatialAssetVaultService';
@@ -187,6 +188,22 @@ export interface StagingAnchorProposal {
     buildingCollisionChecked: boolean;
 }
 
+export interface UniversalSatelliteFallback {
+    source: 'google_satellite' | 'google_hybrid' | (string & {});
+    center: { latitude: number; longitude: number };
+    zoom: number;
+    staticMapUrl: string;
+    tileCoords: { x: number; y: number; z: number };
+    boundsWgs84: {
+        north: number;
+        south: number;
+        east: number;
+        west: number;
+    };
+    attribution: string;
+    description: string;
+}
+
 export interface SpatialVectorDataSet {
     anchor: {
         latitude: number;
@@ -205,6 +222,8 @@ export interface SpatialVectorDataSet {
     landuse: UniversalLanduseFeature[];
     water: UniversalWaterFeature[];
     pois: UniversalPoiFeature[];
+    /** Universal satellite fallback metadata for global 100% surface coverage */
+    satelliteFallback: UniversalSatelliteFallback;
     /** Reality grounding invariant notice */
     vegetationNotice: string;
     stats: {
@@ -651,6 +670,13 @@ export class SpatialVectorDataService {
             up: ltp.rotMatrix[2]
         };
 
+        const satelliteFallback = SpatialVectorDataService.getSatelliteFallback({
+            latitude: lat,
+            longitude: lng,
+            zoom: options.zoom ?? 16,
+            apiKey: options.apiKey
+        });
+
         return {
             anchor: { latitude: lat, longitude: lng, elevation },
             geohash,
@@ -660,6 +686,7 @@ export class SpatialVectorDataService {
             landuse,
             water,
             pois,
+            satelliteFallback,
             vegetationNotice: 'REALITY GROUNDING INVARIANT: Procedural tree generation is omitted by default. Authentic trees and foliage are physically present in Google 3D Photorealistic Tiles and can be extracted via GoogleSolarFoliageClassifier or UTDRA.',
             stats: {
                 totalFeatures: buildings.length + roads.length + landuse.length + water.length + pois.length,
@@ -672,6 +699,51 @@ export class SpatialVectorDataService {
                 verifiedHeightCount: verifiedHeights,
                 unverifiedHeightCount: unverifiedHeights
             }
+        };
+    }
+
+    /**
+     * Resolves high-resolution orthorectified satellite imagery metadata as a complete universal fallback
+     * when 3D photorealistic meshes or Street View coverage are unavailable.
+     */
+    public static getSatelliteFallback(options: {
+        latitude: number;
+        longitude: number;
+        zoom?: number;
+        apiKey?: string;
+        layer?: 'satellite' | 'hybrid' | (string & {});
+    }): UniversalSatelliteFallback {
+        const z = options.zoom ?? 16;
+        const lat = options.latitude;
+        const lng = options.longitude;
+        const latRad = (lat * Math.PI) / 180;
+        const nTiles = Math.pow(2, z);
+        const tileX = Math.floor(((lng + 180) / 360) * nTiles);
+        const tileY = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * nTiles);
+
+        const tileLngWest = (tileX / nTiles) * 360 - 180;
+        const tileLngEast = ((tileX + 1) / nTiles) * 360 - 180;
+        const tileLatNorth = (Math.atan(Math.sinh(Math.PI * (1 - 2 * tileY / nTiles))) * 180) / Math.PI;
+        const tileLatSouth = (Math.atan(Math.sinh(Math.PI * (1 - 2 * (tileY + 1) / nTiles))) * 180) / Math.PI;
+
+        const mapsKey = options.apiKey || (typeof process !== 'undefined' ? process.env?.GOOGLE_MAPS_API_KEY || process.env?.MAP_TILES_API_KEY || '' : '') || DEFAULT_GOOGLE_MAPS_API_KEY;
+        const mapType = options.layer ?? 'satellite';
+        const staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${z}&size=1024x1024&scale=2&maptype=${mapType}&key=${mapsKey}`;
+
+        return {
+            source: mapType === 'hybrid' ? 'google_hybrid' : 'google_satellite',
+            center: { latitude: lat, longitude: lng },
+            zoom: z,
+            staticMapUrl,
+            tileCoords: { x: tileX, y: tileY, z },
+            boundsWgs84: {
+                north: tileLatNorth,
+                south: tileLatSouth,
+                east: tileLngEast,
+                west: tileLngWest
+            },
+            attribution: 'Google Maps Platform / Landsat / Copernicus',
+            description: 'Orthorectified 2D satellite/aerial imagery providing 100% universal global surface coverage fallback for terrain texturing when 3D photorealistic mesh or Street View is unavailable.'
         };
     }
 

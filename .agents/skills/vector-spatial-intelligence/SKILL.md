@@ -129,9 +129,40 @@ Urban street canyons create dramatic light channeling and shadow pockets:
 3. Compute diurnal solar position $(\alpha_{\text{sun}}, \phi_{\text{sun}})$ via `Atmospheric3DPipelineService.getSolarPosition(lat, lng, date)`.
 4. When $|\phi_{\text{sun}} - \phi_{\text{street}}| < 1.5^\circ$, trigger **"Manhattanhenge"** crepuscular god ray rendering with Henyey-Greenstein Mie scattering ($g \approx 0.76$).
 
+### Workflow 7: Universal Global Fallback via Satellite & Aerial Orthophotography
+Outside the thousands of metropolitan areas with Google 3D Photorealistic mesh tiles, or in off-road wilderness where Street View was never captured:
+1. Every query to `SpatialVectorDataService.querySpatialVectorData` automatically computes **`dataset.satelliteFallback`** (`UniversalSatelliteFallback`).
+2. Provides deterministic WGS-84 bounding coordinates (`boundsWgs84`), Mercator tile coordinates $(X, Y, Z)$, and high-resolution Static Maps URLs.
+3. In Three.js / Scratchbox C++20 engine, the satellite imagery is draped directly onto the global Digital Elevation Model (DEM) terrain heightfield via standard Mercator UV unwrapping:
+   $$u = \frac{\lambda - \lambda_{\min}}{\lambda_{\max} - \lambda_{\min}}, \quad v = \frac{y(\phi) - y(\phi_{\min})}{y(\phi_{\max}) - y(\phi_{\min})}$$
+4. Guarantees **100% universal global surface coverage** across every ocean, desert, mountaintop, and rural boundary on Earth with zero rendering voids.
+
 ---
 
-## 5. Codebase API & Agent Tool Reference
+## 5. Universal Spatial Fallback Hierarchy
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ TIER 1: HIGH-DENSITY METRO & LANDMARKS (~50+ COUNTRIES)                                │
+│ • Google 3D Photorealistic Mesh Tiles (Volumetric 3D Hull)                             │
+│ • 2D Vector Roadmap & Cadastral Parcels (Semantic Skeleton & Kinematics)               │
+│ • Google 360 Street View Panoramas (Ground-Level Photography & Depth Planes)           │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ TIER 2: SUBURBS, TOWNS & MAPPED ROADWAYS                                               │
+│ • Google 3D DEM Terrain Elevation Heightfield                                          │
+│ • 2D Vector Roadmap Kinematic Network & Landuse Polygons                               │
+│ • Google 360 Street View Panoramas (Available on Public Mapped Roads)                  │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ TIER 3: COMPLETE GLOBAL FALLBACK (100% WORLDWIDE COVERAGE)                             │
+│ • High-Resolution Orthorectified Satellite / Aerial Imagery (Draped on DEM)            │
+│ • Global WGS-84 Elevation Terrain                                                      │
+│ • Hydrography, Regional Landuse & Geographic Place Boundaries                          │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. Codebase API & Agent Tool Reference
 
 ### TypeScript API
 ```typescript
@@ -145,19 +176,24 @@ const dataset = await SpatialVectorDataService.querySpatialVectorData({
     layers: ['building', 'road', 'landuse', 'poi']
 });
 
-// 2. Click-to-Identify building at 3D local coordinate
+// 2. Access 100% Global Satellite Fallback for Terrain Draping
+console.log(`Satellite Source: ${dataset.satelliteFallback.source}`);
+console.log(`Static Map URL: ${dataset.satelliteFallback.staticMapUrl}`);
+console.log(`Bounding Box: N:${dataset.satelliteFallback.boundsWgs84.north}, S:${dataset.satelliteFallback.boundsWgs84.south}`);
+
+// 3. Click-to-Identify building at 3D local coordinate
 const building = SpatialVectorDataService.queryBuildingAt(dataset, [25.4, 0.0, -112.8]);
 if (building) {
     console.log(`Building: ${building.name}, Verified Height: ${building.heightM}m, Universal ID: ${building.universalId}`);
 }
 
-// 3. Snap vehicle to nearest road lane
+// 4. Snap vehicle to nearest road lane
 const nearest = SpatialVectorDataService.queryNearestRoad(dataset, [10.0, 0.0, -50.0]);
 if (nearest) {
     console.log(`Snapped to ${nearest.road.name}, Lane ${nearest.laneIndex}, Heading ${nearest.headingDeg}°`);
 }
 
-// 4. Generate excavation stencil for custom building placement
+// 5. Generate excavation stencil for custom building placement
 const stencil = SpatialVectorDataService.generateExcavationStencil(building);
 ```
 

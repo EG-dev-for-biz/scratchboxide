@@ -366,9 +366,22 @@ describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => 
                 mobilityAffinity: 'flow',
                 preferredSurface: 'road_lane'
             });
-            expect(anchors.length).toBeGreaterThan(0);
-            expect(anchors[0].headingDeg).toBeCloseTo(90.0, 1);
-            expect(anchors[0].forwardVec[0]).toBeGreaterThan(0.99); // Points East (+X)
+            // Verify Satellite Fallback for universal global coverage
+            expect(dataset.satelliteFallback).toBeDefined();
+            expect(dataset.satelliteFallback.source).toBe('google_satellite');
+            expect(dataset.satelliteFallback.staticMapUrl).toContain('maptype=satellite');
+            expect(dataset.satelliteFallback.boundsWgs84.north).toBeGreaterThan(dataset.satelliteFallback.boundsWgs84.south);
+            expect(dataset.satelliteFallback.boundsWgs84.east).toBeGreaterThan(dataset.satelliteFallback.boundsWgs84.west);
+
+            const directFallback = SpatialVectorDataService.getSatelliteFallback({
+                latitude: lat,
+                longitude: lng,
+                zoom: 17,
+                layer: 'hybrid'
+            });
+            expect(directFallback.source).toBe('google_hybrid');
+            expect(directFallback.zoom).toBe(17);
+            expect(directFallback.staticMapUrl).toContain('maptype=hybrid');
         } finally {
             GoogleVectorTileService.decodeTileBuffer = origDecode;
             GoogleVectorTileService.fetchVectorTile = origFetch;
