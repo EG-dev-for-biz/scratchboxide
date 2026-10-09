@@ -1856,11 +1856,23 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 queryType: {
                     type: 'STRING',
-                    description: 'Specialized query mode: "overview" (default summary & feature lists), "building_at_point" (identify building at local ENU point), "nearest_road" (find closest lane and heading for point), "excavation_stencil" (generate 3D tile clipping boundary for building), "kinematic_graph" (road network nodes & edges), or "semantic_annotations" (3D HUD billboard labels).'
+                    description: 'Specialized query mode: "overview" (default summary & feature lists), "staging_anchors" (intelligently solve authentic scene placement coordinates & headings), "building_at_point" (identify building at local ENU point), "nearest_road" (find closest lane and heading for point), "excavation_stencil" (generate 3D tile clipping boundary for building), "kinematic_graph" (road network nodes & edges), or "semantic_annotations" (3D HUD billboard labels).'
+                },
+                mobilityAffinity: {
+                    type: 'STRING',
+                    description: 'Mobility/circulation hint for staging anchors: "flow" (kinetic road lanes & traffic heading), "stagnation" (civic plazas & open architectural ground), or "perimeter" (sidewalks, curb offsets & setbacks).'
+                },
+                footprintRadiusM: {
+                    type: 'NUMBER',
+                    description: 'Minimum horizontal clearance radius in meters for staging anchors (default: 3.0m).'
+                },
+                preferredSurface: {
+                    type: 'STRING',
+                    description: 'Preferred surface type hint: "road_lane", "sidewalk", "plaza", "park", or "rooftop".'
                 },
                 localPoint: {
                     type: 'ARRAY',
-                    description: 'Local metric ENU coordinate [x, y, z] in meters for targeted spatial queries ("building_at_point" or "nearest_road").',
+                    description: 'Local metric ENU coordinate [x, y, z] in meters for targeted spatial queries ("building_at_point" or "nearest_road") or reference point for "staging_anchors".',
                     items: { type: 'NUMBER' }
                 },
                 targetFeatureId: {
@@ -5409,6 +5421,9 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
         const radiusMeters = typeof args.radiusMeters === 'number' ? args.radiusMeters : 250;
         const queryType = asString(args.queryType) || 'overview';
         const targetFeatureId = asString(args.targetFeatureId);
+        const mobilityAffinity = asString(args.mobilityAffinity);
+        const footprintRadiusM = typeof args.footprintRadiusM === 'number' ? args.footprintRadiusM : undefined;
+        const preferredSurface = asString(args.preferredSurface);
         const localPoint = Array.isArray(args.localPoint) && args.localPoint.length >= 3
             ? [args.localPoint[0], args.localPoint[1], args.localPoint[2]] as [number, number, number]
             : undefined;
@@ -5497,6 +5512,31 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                     annotations
                 } as unknown as ToolResultPayload,
                 summaryResult: `Generated ${annotations.length} semantic 3D HUD billboard annotations (buildings, road corridors, POIs) with Universal Spatial IDs.`
+            };
+        }
+
+        if (queryType === 'staging_anchors') {
+            const anchors = SpatialVectorDataService.solveStagingAnchors(dataset, {
+                mobilityAffinity: mobilityAffinity as any,
+                footprintRadiusM,
+                preferredSurface: preferredSurface as any,
+                referencePoint: localPoint || [0, 0, 0],
+                maxCandidates: 5
+            });
+
+            const topAnchor = anchors[0];
+            return {
+                resultPayload: {
+                    queryType,
+                    latitude,
+                    longitude,
+                    anchors,
+                    topAnchor: topAnchor || null,
+                    count: anchors.length
+                } as unknown as ToolResultPayload,
+                summaryResult: topAnchor
+                    ? `Discovered ${anchors.length} intelligent staging anchors at [${latitude}, ${longitude}]. Top anchor: "${topAnchor.name}" (${topAnchor.surfaceType}) at [${topAnchor.position.map(n => n.toFixed(1)).join(', ')}] with heading ${topAnchor.headingDeg}° (Confidence: ${(topAnchor.confidenceScore * 100).toFixed(0)}%). Rationale: ${topAnchor.spatialRationale}`
+                    : `No staging anchors discovered within search bounds.`
             };
         }
 

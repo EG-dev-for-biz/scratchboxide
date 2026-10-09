@@ -138,7 +138,9 @@ export class GooglePhotorealistic3DTilesLayer {
         this.tilesRenderer.registerPlugin(authPlugin);
       }
 
-      // Reorientation Plugin for proper ENU local space (+Y Up, Z North, X East)
+      // Reorientation Plugin for proper ENU local space (+Y Up, -Z North, X East)
+      // Note: azimuth: Math.PI is mathematically required so +X aligns with East and -Z aligns with True North,
+      // matching LocalTangentPlane and eliminating 180-degree yaw inversion.
       const latRad = (this.currentOrigin.lat * Math.PI) / 180;
       const lonRad = (this.currentOrigin.lng * Math.PI) / 180;
       const height = (this.currentOrigin.alt ?? 0) + this.geoidHeight;
@@ -146,6 +148,7 @@ export class GooglePhotorealistic3DTilesLayer {
         lat: latRad,
         lon: lonRad,
         height: height,
+        azimuth: Math.PI,
         recenter: true
       });
       this.tilesRenderer.registerPlugin(this.reorientPlugin);
@@ -401,8 +404,9 @@ export class GooglePhotorealistic3DTilesLayer {
       this.reorientPlugin.lat = latRad;
       this.reorientPlugin.lon = lngRad;
       this.reorientPlugin.height = altEllipsoid;
+      this.reorientPlugin.azimuth = Math.PI;
       if (this.tilesRenderer.ellipsoid) {
-        this.reorientPlugin.transformLatLonHeightToOrigin(latRad, lngRad, altEllipsoid);
+        this.reorientPlugin.transformLatLonHeightToOrigin(latRad, lngRad, altEllipsoid, Math.PI);
       }
     } else {
       const sinLat = Math.sin(latRad);

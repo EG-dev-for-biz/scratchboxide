@@ -248,6 +248,48 @@ describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => 
             expect(esbAnnotation?.title).toBe('Empire State Building');
             expect(esbAnnotation?.position[1]).toBeGreaterThan(381.0); // Billboard hovering above rooftop
 
+            // Test Intelligent Staging Anchors (Kinematic Flow / Vehicles)
+            const flowAnchors = SpatialVectorDataService.solveStagingAnchors(dataset, {
+                mobilityAffinity: 'flow',
+                preferredSurface: 'road_lane',
+                maxCandidates: 5
+            });
+            expect(flowAnchors.length).toBeGreaterThan(0);
+            const topFlow = flowAnchors[0];
+            expect(topFlow.surfaceType).toBe('road_lane');
+            expect(topFlow.roadName).toBe('5th Avenue');
+            expect(topFlow.headingDeg).toBeDefined();
+            expect(topFlow.confidenceScore).toBeGreaterThan(0.7);
+            expect(topFlow.buildingCollisionChecked).toBe(true);
+
+            // Test Intelligent Staging Anchors (Stagnation / Architectural Plazas)
+            const plazaAnchors = SpatialVectorDataService.solveStagingAnchors(dataset, {
+                mobilityAffinity: 'stagnation',
+                preferredSurface: 'plaza',
+                maxCandidates: 5
+            });
+            expect(plazaAnchors.length).toBeGreaterThan(0);
+            const topPlaza = plazaAnchors.find(a => a.surfaceType === 'plaza' || a.surfaceType === 'park');
+            expect(topPlaza).toBeDefined();
+            expect(topPlaza?.clearanceRadiusM).toBeGreaterThanOrEqual(5.0);
+
+            // Test Intelligent Staging Anchors (Perimeter / Sidewalks)
+            const sidewalkAnchors = SpatialVectorDataService.solveStagingAnchors(dataset, {
+                mobilityAffinity: 'perimeter',
+                preferredSurface: 'sidewalk',
+                maxCandidates: 5
+            });
+            expect(sidewalkAnchors.length).toBeGreaterThan(0);
+            const topSidewalk = sidewalkAnchors.find(a => a.surfaceType === 'sidewalk');
+            expect(topSidewalk).toBeDefined();
+            expect(topSidewalk?.position[1]).toBeCloseTo(0.17, 2); // Curb elevation
+
+            // Test Anti-Collision Invariant: None of the anchors intersect building footprints
+            for (const anchor of [...flowAnchors, ...plazaAnchors, ...sidewalkAnchors]) {
+                const insideBuilding = SpatialVectorDataService.queryBuildingAt(dataset, anchor.position);
+                expect(insideBuilding).toBeUndefined();
+            }
+
         } finally {
             GoogleVectorTileService.decodeTileBuffer = origDecode;
             GoogleVectorTileService.fetchVectorTile = origFetch;

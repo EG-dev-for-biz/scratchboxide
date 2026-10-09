@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-09T05:14:51.437Z",
+  "timestamp": "2026-10-09T17:59:00.389Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_clay_blockout_camera.mp4",
-  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/coordinates_40_748400_73_985700_clay.glb",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/41_890210_12_492231_tiles.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_frame_00.png",
   "storyboardPaths": [
@@ -20,10 +20,10 @@
   "totalFrames": 72,
   "durationSec": 3,
   "geoAnchor": {
-    "lat": 40.7484,
-    "lng": -73.9857,
+    "lat": 41.89021,
+    "lng": 12.492231,
     "elevation": 15,
-    "landmarkName": "Coordinates (40.748400, -73.985700)"
+    "landmarkName": "Coordinates (41.890210, 12.492231)"
   },
   "errorTarget": 0.5,
   "renderMode": "clay",
@@ -64,7 +64,7 @@
   "tileMetrics": {
     "totalFramesCaptured": 72,
     "averageSettleTimeMs": 45,
-    "maxTilesLoaded": 128,
+    "maxTilesLoaded": 524,
     "errorTarget": 0.5,
     "renderMode": "clay"
   }

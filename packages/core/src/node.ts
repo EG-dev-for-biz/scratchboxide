@@ -1133,6 +1133,26 @@ export {
     type HeadlessCriticOptions
 } from './node/3d-engine/HeadlessSnapshotCriticService';
 
+// Spatial Vector Data & Cadastral Intelligence Service
+export {
+    SpatialVectorDataService,
+    type UniversalSpatialLayer,
+    type UniversalSpatialFeatureBase,
+    type UniversalBuildingFeature,
+    type UniversalRoadFeature,
+    type UniversalLanduseFeature,
+    type UniversalWaterFeature,
+    type UniversalPoiFeature,
+    type UniversalSpatialFeature,
+    type SpatialVectorQueryOptions,
+    type KinematicRoadNode,
+    type KinematicRoadNetwork,
+    type ExcavationStencil,
+    type Semantic3DAnnotation,
+    type SpatialVectorDataSet
+} from './node/spatial/SpatialVectorDataService';
+
+
 
 
 

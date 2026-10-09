@@ -147,6 +147,46 @@ export interface Semantic3DAnnotation {
     attributes: Record<string, any>;
 }
 
+export type StagingMobilityAffinity = 'flow' | 'stagnation' | 'perimeter' | (string & {});
+export type StagingSurfaceType = 'road_lane' | 'sidewalk' | 'plaza' | 'park' | 'rooftop' | 'centroid' | (string & {});
+
+export interface StagingAnchorQuery {
+    /**
+     * Continuous affinity descriptor (ADA compliant open literal):
+     * - 'flow': kinetic flow corridors, driving lanes, transit channels
+     * - 'stagnation': civic plazas, courtyards, open terrain, architectural footprints
+     * - 'perimeter': sidewalks, curb offsets, building setbacks, pedestrian promenades
+     */
+    mobilityAffinity?: StagingMobilityAffinity;
+    /** Minimum circular/radial flat ground clearance in meters (default: 3.0) */
+    footprintRadiusM?: number;
+    /** Minimum vertical headroom clearance in meters (default: 2.5) */
+    clearanceHeightM?: number;
+    /** Preferred surface hint, e.g. 'road_lane' | 'plaza' | 'sidewalk' | 'rooftop' | (string & {}) */
+    preferredSurface?: StagingSurfaceType;
+    /** Maximum candidate anchors to return (default: 5) */
+    maxCandidates?: number;
+    /** Local reference point [x, y, z] to search near (default: [0, 0, 0]) */
+    referencePoint?: [number, number, number];
+}
+
+export interface StagingAnchorProposal {
+    id: string;
+    name: string;
+    surfaceType: StagingSurfaceType;
+    position: [number, number, number]; // [X, Y, Z] in Local ENU meters
+    headingDeg: number; // yaw rotation in degrees
+    forwardVec: [number, number, number];
+    confidenceScore: number; // 0.0 - 1.0 based on clearance and distance
+    clearanceRadiusM: number;
+    spatialRationale: string;
+    targetFeatureId?: string;
+    roadId?: string;
+    roadName?: string;
+    laneIndex?: number;
+    buildingCollisionChecked: boolean;
+}
+
 export interface SpatialVectorDataSet {
     anchor: {
         latitude: number;
@@ -412,7 +452,9 @@ export class SpatialVectorDataService {
                 const fdz = p1[2] - p0[2];
                 const segLen = Math.sqrt(fdx * fdx + fdz * fdz) || 1.0;
                 const tangentStart: [number, number, number] = [fdx / segLen, 0, fdz / segLen];
-                const headingStartDeg = (Math.atan2(tangentStart[0], tangentStart[2]) * 180) / Math.PI;
+                // In Three.js ENU coordinates (+X East, +Y Up, -Z North):
+                // Azimuth heading clockwise from True North is atan2(East, North) = atan2(tx, -tz)
+                const headingStartDeg = ((Math.atan2(tangentStart[0], -tangentStart[2]) * 180) / Math.PI + 360) % 360;
 
                 // Precompute lane centerlines
                 const laneCenterlinesEnu: Array<Array<[number, number, number]>> = [];
@@ -890,7 +932,244 @@ export class SpatialVectorDataService {
         };
     }
 
-    private static isPointInsidePolygon2D(
+    /**
+     * Intelligently discovers and ranks candidate 3D staging anchors with authentic scene relationships.
+     * Fuses topological vector features (roads, sidewalks, plazas, setbacks) with anti-collision checks
+     * against building footprints to produce context-aware (X, Z) coordinates and yaw headings.
+     */
+    public static solveStagingAnchors(
+        dataset: SpatialVectorDataSet,
+        query: StagingAnchorQuery = {}
+    ): StagingAnchorProposal[] {
+        const refPoint = query.referencePoint || [0, 0, 0];
+        const refX = refPoint[0];
+        const refZ = refPoint[2];
+        const maxCandidates = Math.max(1, query.maxCandidates ?? 5);
+        const affinity = query.mobilityAffinity;
+        const preferred = query.preferredSurface;
+        const footprintR = Math.max(0.5, query.footprintRadiusM ?? 3.0);
+
+        const proposals: StagingAnchorProposal[] = [];
+
+        // Helper: check if (x, z) falls inside ANY building footprint
+        const isInsideBuilding = (x: number, z: number): boolean => {
+            for (const b of dataset.buildings) {
+                if (this.isPointInsidePolygon2D(x, z, b.localPolygonEnu)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // --------------------------------------------------------------------
+        // 1. FLOW / ROAD LANE CANDIDATES (Kinetic & Vehicular Affordance)
+        // --------------------------------------------------------------------
+        for (let rIdx = 0; rIdx < dataset.roads.length; rIdx++) {
+            const road = dataset.roads[rIdx];
+            if (!road.localPathEnu || road.localPathEnu.length < 2) continue;
+
+            const lanes = Math.max(1, road.lanes || 1);
+            const laneCenterlines = road.laneCenterlinesEnu && road.laneCenterlinesEnu.length > 0
+                ? road.laneCenterlinesEnu
+                : [road.localPathEnu];
+
+            for (let lIdx = 0; lIdx < laneCenterlines.length; lIdx++) {
+                const lanePath = laneCenterlines[lIdx];
+                if (lanePath.length < 2) continue;
+
+                // Find point along lane closest to refPoint
+                let bestPt = lanePath[0];
+                let bestDistSq = Infinity;
+                let bestSegIdx = 0;
+
+                for (let i = 0; i < lanePath.length - 1; i++) {
+                    const p1 = lanePath[i];
+                    const p2 = lanePath[i + 1];
+                    const dx = p2[0] - p1[0];
+                    const dz = p2[2] - p1[2];
+                    const segLenSq = dx * dx + dz * dz;
+                    if (segLenSq < 0.001) continue;
+
+                    const t = Math.max(0, Math.min(1, ((refX - p1[0]) * dx + (refZ - p1[2]) * dz) / segLenSq));
+                    const px = p1[0] + t * dx;
+                    const pz = p1[2] + t * dz;
+                    const dSq = (px - refX) * (px - refX) + (pz - refZ) * (pz - refZ);
+
+                    if (dSq < bestDistSq) {
+                        bestDistSq = dSq;
+                        bestPt = [px, p1[1] + t * (p2[1] - p1[1]), pz];
+                        bestSegIdx = i;
+                    }
+                }
+
+                // Check collision against buildings
+                if (isInsideBuilding(bestPt[0], bestPt[2])) {
+                    continue; // Skip lane segment if clipped by an encroaching building footprint
+                }
+
+                // Calculate forward vector and yaw heading
+                const s0 = lanePath[bestSegIdx];
+                const s1 = lanePath[bestSegIdx + 1] || lanePath[bestSegIdx];
+                const fdx = s1[0] - s0[0];
+                const fdz = s1[2] - s0[2];
+                const segLen = Math.hypot(fdx, fdz) || 1.0;
+                const forwardVec: [number, number, number] = [fdx / segLen, 0, fdz / segLen];
+                const headingDeg = (Math.atan2(forwardVec[0], forwardVec[2]) * 180) / Math.PI;
+
+                const distFromRef = Math.sqrt(bestDistSq);
+                let score = 0.85 - Math.min(0.35, distFromRef / 500);
+
+                if (affinity === 'flow') score += 0.20;
+                if (preferred === 'road_lane') score += 0.15;
+                if (road.roadClass === 'motorway' || road.roadClass === 'arterial') score += 0.05;
+
+                const laneWidth = road.widthM / lanes;
+                const roadName = road.name || road.roadClass.toUpperCase();
+
+                proposals.push({
+                    id: `anchor-road-${road.universalId}-l${lIdx}`,
+                    name: `${roadName} (Lane ${lIdx + 1}/${lanes})`,
+                    surfaceType: 'road_lane',
+                    position: [bestPt[0], bestPt[1], bestPt[2]],
+                    headingDeg: Math.round(headingDeg * 10) / 10,
+                    forwardVec,
+                    confidenceScore: Math.min(1.0, Math.max(0.1, Math.round(score * 100) / 100)),
+                    clearanceRadiusM: Math.round((laneWidth / 2.0) * 10) / 10,
+                    spatialRationale: `Active travel lane on ${roadName} (${road.roadClass}, ${road.widthM}m width). Aligned with traffic flow heading ${headingDeg.toFixed(1)}° with ${laneWidth.toFixed(1)}m lane width.`,
+                    roadId: road.universalId,
+                    roadName: road.name,
+                    laneIndex: lIdx,
+                    buildingCollisionChecked: true
+                });
+            }
+        }
+
+        // --------------------------------------------------------------------
+        // 2. PERIMETER & SIDEWALK CANDIDATES (Pedestrian & Street Furniture)
+        // --------------------------------------------------------------------
+        for (let rIdx = 0; rIdx < Math.min(10, dataset.roads.length); rIdx++) {
+            const road = dataset.roads[rIdx];
+            if (!road.localPathEnu || road.localPathEnu.length < 2) continue;
+
+            const midIdx = Math.floor(road.localPathEnu.length / 2);
+            const p0 = road.localPathEnu[midIdx];
+            const p1 = road.localPathEnu[Math.min(road.localPathEnu.length - 1, midIdx + 1)];
+            const fdx = p1[0] - p0[0];
+            const fdz = p1[2] - p0[2];
+            const segLen = Math.hypot(fdx, fdz) || 1.0;
+            const tx = fdx / segLen;
+            const tz = fdz / segLen;
+            const normX = -tz;
+            const normZ = tx;
+
+            const sidewalkOffset = road.widthM * 0.5 + 1.5; // Elevated sidewalk offset
+            const sides: Array<['right' | 'left', number]> = [['right', 1], ['left', -1]];
+
+            for (const [sideName, mult] of sides) {
+                const swX = p0[0] + normX * sidewalkOffset * mult;
+                const swZ = p0[2] + normZ * sidewalkOffset * mult;
+
+                if (isInsideBuilding(swX, swZ)) continue;
+
+                const headingDeg = (Math.atan2(tx, tz) * 180) / Math.PI;
+                const distFromRef = Math.hypot(swX - refX, swZ - refZ);
+                let score = 0.80 - Math.min(0.35, distFromRef / 500);
+
+                if (affinity === 'perimeter') score += 0.20;
+                if (preferred === 'sidewalk') score += 0.15;
+
+                const roadName = road.name || road.roadClass;
+                proposals.push({
+                    id: `anchor-sidewalk-${road.universalId}-${sideName}`,
+                    name: `${roadName} Sidewalk (${sideName})`,
+                    surfaceType: 'sidewalk',
+                    position: [swX, p0[1] + 0.17, swZ],
+                    headingDeg: Math.round(headingDeg * 10) / 10,
+                    forwardVec: [tx, 0, tz],
+                    confidenceScore: Math.min(1.0, Math.max(0.1, Math.round(score * 100) / 100)),
+                    clearanceRadiusM: 2.0,
+                    spatialRationale: `Pedestrian sidewalk promenade along ${roadName} (${sideName} side, +0.17m curb elevation). Set back ${sidewalkOffset.toFixed(1)}m from road centerline.`,
+                    roadId: road.universalId,
+                    roadName: road.name,
+                    buildingCollisionChecked: true
+                });
+            }
+        }
+
+        // --------------------------------------------------------------------
+        // 3. STAGNATION & CIVIC PLAZA / PARK CANDIDATES (Architectural Footprints)
+        // --------------------------------------------------------------------
+        for (let lIdx = 0; lIdx < dataset.landuse.length; lIdx++) {
+            const area = dataset.landuse[lIdx];
+            if (!area.localPolygonEnu || area.localPolygonEnu.length < 3) continue;
+
+            // Compute centroid
+            let sumX = 0, sumZ = 0;
+            for (const pt of area.localPolygonEnu) {
+                sumX += pt[0];
+                sumZ += pt[2];
+            }
+            const cX = sumX / area.localPolygonEnu.length;
+            const cZ = sumZ / area.localPolygonEnu.length;
+
+            if (isInsideBuilding(cX, cZ)) continue;
+
+            // Heading: orient towards reference point / origin
+            const dx = refX - cX;
+            const dz = refZ - cZ;
+            const headingRad = Math.hypot(dx, dz) > 1.0 ? Math.atan2(dx, dz) : 0.0;
+            const headingDeg = (headingRad * 180) / Math.PI;
+
+            const distFromRef = Math.hypot(cX - refX, cZ - refZ);
+            let score = 0.75 - Math.min(0.35, distFromRef / 500);
+
+            const isPlaza = area.landuseType === 'plaza' || area.landuseType === 'pedestrian' || area.landuseType === 'commercial';
+            if (isPlaza) score += 0.15;
+            if (affinity === 'stagnation') score += 0.20;
+            if (preferred === 'plaza' || preferred === 'park') score += 0.15;
+
+            const approxRadius = Math.max(5.0, Math.min(50.0, Math.sqrt(area.areaM2 / Math.PI)));
+
+            proposals.push({
+                id: `anchor-landuse-${area.universalId}`,
+                name: area.name || `${area.landuseType.toUpperCase()} Concourse`,
+                surfaceType: isPlaza ? 'plaza' : 'park',
+                position: [cX, 0.05, cZ],
+                headingDeg: Math.round(headingDeg * 10) / 10,
+                forwardVec: [Math.sin(headingRad), 0, Math.cos(headingRad)],
+                confidenceScore: Math.min(1.0, Math.max(0.1, Math.round(score * 100) / 100)),
+                clearanceRadiusM: Math.round(approxRadius * 10) / 10,
+                spatialRationale: `Open civic ${area.landuseType} surface (${area.areaM2.toFixed(0)}m² area, friction: ${area.surfaceFriction}). Unobstructed radial clearance oriented toward scene focal center.`,
+                targetFeatureId: area.universalId,
+                buildingCollisionChecked: true
+            });
+        }
+
+        // --------------------------------------------------------------------
+        // 4. FALLBACK REFERENCE CENTROID (If sparse or isolated)
+        // --------------------------------------------------------------------
+        if (proposals.length === 0) {
+            proposals.push({
+                id: 'anchor-scene-datum',
+                name: 'Scene Geodetic Anchor',
+                surfaceType: 'centroid',
+                position: [refX, 0.0, refZ],
+                headingDeg: 0.0,
+                forwardVec: [0, 0, 1],
+                confidenceScore: 0.50,
+                clearanceRadiusM: footprintR,
+                spatialRationale: 'Geodetic origin datum of the scene. No overlapping vector road or plaza features detected within radius.',
+                buildingCollisionChecked: false
+            });
+        }
+
+        // Sort by confidenceScore descending
+        proposals.sort((a, b) => b.confidenceScore - a.confidenceScore);
+
+        return proposals.slice(0, maxCandidates);
+    }
+
+    public static isPointInsidePolygon2D(
         px: number,
         pz: number,
         polygon: Array<[number, number, number]>

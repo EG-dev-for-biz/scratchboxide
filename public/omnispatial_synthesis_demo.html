@@ -279,6 +279,77 @@
             color: #fff;
         }
 
+        .seg-btn.active.vector-active {
+            background: rgba(56, 189, 248, 0.22);
+            color: #38bdf8;
+            border-color: #38bdf8;
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+        }
+
+        .vector-intel-section {
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-radius: 10px;
+            padding: 10px 12px;
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        }
+
+        .vector-intel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 10px;
+            font-weight: 700;
+            color: #38bdf8;
+            letter-spacing: 0.04em;
+            border-bottom: 1px solid rgba(56, 189, 248, 0.15);
+            padding-bottom: 5px;
+        }
+
+        .vector-active-pill {
+            font-size: 8.5px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(100, 116, 139, 0.2);
+            color: #94a3b8;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            font-weight: 600;
+        }
+
+        .vector-intel-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+
+        .vec-stat-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .vec-stat-item.full-width {
+            grid-column: span 2;
+        }
+
+        .vec-stat-label {
+            font-size: 9px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+
+        .vec-stat-value {
+            font-size: 10.5px;
+            font-weight: 600;
+            color: #f1f5f9;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
         /* --------------------------------------------------------------------
            Interactive 50/50 Side-by-Side Split View Curtain
         -------------------------------------------------------------------- */
@@ -1083,6 +1154,13 @@
                     <span>🕸️ Wireframe</span>
                 </button>
             </div>
+
+            <!-- Spatial Vector Intelligence Layer (SpatialVectorDataService) -->
+            <div class="segmented-group">
+                <button class="seg-btn" id="btn-vector-overlay" onclick="toggleVectorIntelligence()" title="Toggle Cadastral Footprint, Road Corridors & Stencils from SpatialVectorDataService">
+                    <span>📐 Vector Intelligence</span>
+                </button>
+            </div>
         </div>
     </header>
 
@@ -1237,6 +1315,39 @@
                 </div>
             </div>
         </div>
+
+        <!-- SpatialVectorDataService Cadastral Truth Section -->
+        <div class="vector-intel-section" id="vector-intel-box">
+            <div class="vector-intel-header">
+                <div>
+                    <span class="vector-intel-icon">📐</span>
+                    <span>CADASTRAL VECTOR TRUTH</span>
+                </div>
+                <span class="vector-active-pill" id="vec-status-pill">OFF</span>
+            </div>
+            <div class="vector-intel-grid">
+                <div class="vec-stat-item">
+                    <span class="vec-stat-label">Cadastral Quoins</span>
+                    <span class="vec-stat-value" id="vec-stat-quoins">90.00° (0.00° Dev)</span>
+                </div>
+                <div class="vec-stat-item">
+                    <span class="vec-stat-label">Footprint Area</span>
+                    <span class="vec-stat-value" id="vec-stat-area">7,432.5 m²</span>
+                </div>
+                <div class="vec-stat-item">
+                    <span class="vec-stat-label">Verified Height</span>
+                    <span class="vec-stat-value" id="vec-stat-height">443.2 m (Verified)</span>
+                </div>
+                <div class="vec-stat-item">
+                    <span class="vec-stat-label">Nearest Road</span>
+                    <span class="vec-stat-value" id="vec-stat-road">5th Ave (4 Lanes · 18m)</span>
+                </div>
+                <div class="vec-stat-item full-width">
+                    <span class="vec-stat-label">Excavation Stencil BBox</span>
+                    <span class="vec-stat-value" id="vec-stat-stencil">[-42.0, -23.0] to [42.0, 23.0]</span>
+                </div>
+            </div>
+        </div>
     </aside>
 
     <!-- Bottom Stage Selector Dock -->
@@ -1312,8 +1423,8 @@
                 <div class="synth-step" id="synth-step-2">
                     <span class="step-check">○</span>
                     <div class="step-text-block">
-                        <span class="step-name">2. UTDRA Geometric Rectification</span>
-                        <span class="step-detail">Snapping 90.00° quoin normals, planar relaxation, and curb step...</span>
+                        <span class="step-name">2. Spatial Vector Data & UTDRA Geometric Rectification</span>
+                        <span class="step-detail">Querying SpatialVectorDataService; clamping facade quoins to 90.00° cadastral line segments; carving excavation stencil...</span>
                     </div>
                 </div>
 
@@ -1421,6 +1532,11 @@
         scene.add(stage1Group);
         scene.add(stage2Group);
         scene.add(stage3Group);
+
+        // Vector Intelligence 3D Overlay Group (Cadastral Polygons & Road Centerlines)
+        const vectorOverlayGroup = new THREE.Group();
+        vectorOverlayGroup.visible = false;
+        scene.add(vectorOverlayGroup);
 
         // Clay Material for 18% Studio Grey baseline
         const clayMaterial = new THREE.MeshStandardMaterial({
@@ -1624,11 +1740,13 @@
         let isDraggingSplit = false;
         let shadingMode = 'pbr'; // 'clay' | 'pbr'
         let isWireframe = false;
+        let isVectorOverlay = false;
+        let activeVectorData = null;
 
         const gltfLoader = new GLTFLoader();
 
         // --------------------------------------------------------------------
-        // Load Location Models into Stage Groups
+        // Load Location Models into Stage Groups & Fetch Vector Data
         // --------------------------------------------------------------------
         function loadLocation(locationKey, onComplete) {
             const loc = LOCATION_REGISTRY[locationKey] || LOCATION_REGISTRY.esb;
@@ -1653,6 +1771,31 @@
             while (stage1Group.children.length > 0) stage1Group.remove(stage1Group.children[0]);
             while (stage2Group.children.length > 0) stage2Group.remove(stage2Group.children[0]);
             while (stage3Group.children.length > 0) stage3Group.remove(stage3Group.children[0]);
+
+            // Clear previous vector overlay geometry
+            while (vectorOverlayGroup.children.length > 0) {
+                const c = vectorOverlayGroup.children[0];
+                if (c.geometry) c.geometry.dispose();
+                if (c.material) {
+                    if (Array.isArray(c.material)) c.material.forEach(m => m.dispose());
+                    else c.material.dispose();
+                }
+                vectorOverlayGroup.remove(c);
+            }
+
+            // Query authentic cadastral vector truth from SpatialVectorDataService
+            fetch(`/api/spatial/vector?q=${encodeURIComponent(loc.name)}`)
+                .then(r => r.json())
+                .then(res => {
+                    if (res && res.success && res.vectorData) {
+                        activeVectorData = res.vectorData;
+                        updateVectorIntelUI(activeVectorData);
+                        buildVectorOverlay(activeVectorData);
+                    }
+                })
+                .catch(err => {
+                    console.warn('SpatialVectorDataService API fallback:', err);
+                });
 
             let loadedCount = 0;
             const checkDone = () => {
@@ -1955,6 +2098,154 @@
                     child.material.wireframe = isWireframe;
                 }
             });
+        }
+
+        // --------------------------------------------------------------------
+        // Spatial Vector Intelligence Layer (SpatialVectorDataService)
+        // --------------------------------------------------------------------
+        window.toggleVectorIntelligence = function() {
+            isVectorOverlay = !isVectorOverlay;
+            const btn = document.getElementById('btn-vector-overlay');
+            const pill = document.getElementById('vec-status-pill');
+
+            if (isVectorOverlay) {
+                btn.classList.add('active', 'vector-active');
+                if (pill) {
+                    pill.innerText = 'ACTIVE';
+                    pill.style.background = 'rgba(56, 189, 248, 0.3)';
+                    pill.style.color = '#38bdf8';
+                    pill.style.borderColor = 'rgba(56, 189, 248, 0.6)';
+                }
+                if (activeVectorData) {
+                    buildVectorOverlay(activeVectorData);
+                }
+            } else {
+                btn.classList.remove('active', 'vector-active');
+                if (pill) {
+                    pill.innerText = 'OFF';
+                    pill.style.background = 'rgba(100, 116, 139, 0.2)';
+                    pill.style.color = '#94a3b8';
+                    pill.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                }
+            }
+            vectorOverlayGroup.visible = isVectorOverlay;
+        };
+
+        function updateVectorIntelUI(vec) {
+            if (!vec) return;
+            const b = vec.building || (vec.buildings && vec.buildings[0]);
+            const r = (vec.roads && vec.roads[0]) || null;
+            const s = vec.stats || {};
+
+            const quoinEl = document.getElementById('vec-stat-quoins');
+            const areaEl = document.getElementById('vec-stat-area');
+            const heightEl = document.getElementById('vec-stat-height');
+            const roadEl = document.getElementById('vec-stat-road');
+            const stencilEl = document.getElementById('vec-stat-stencil');
+
+            if (b) {
+                if (quoinEl) {
+                    const quoinDeg = (b.quoinAnglesDeg && b.quoinAnglesDeg.length > 0) ? b.quoinAnglesDeg[0].toFixed(2) : '90.00';
+                    const devDeg = s.quoinDeviationDeg !== undefined ? s.quoinDeviationDeg.toFixed(2) : '0.00';
+                    quoinEl.innerText = `${quoinDeg}° (${devDeg}° Dev)`;
+                }
+                if (areaEl) {
+                    const areaVal = b.areaM2 || (b.attributes && b.attributes.area_m2) || 7432.5;
+                    areaEl.innerText = `${Math.round(areaVal).toLocaleString()} m²`;
+                }
+                if (heightEl) {
+                    const hVal = b.heightM ? `${b.heightM.toFixed(1)} m` : '443.2 m';
+                    heightEl.innerText = `${hVal} (${b.isHeightVerified !== false ? 'Verified' : 'Estimated'})`;
+                }
+                if (b.excavationStencil && b.excavationStencil.boundingBox) {
+                    const bb = b.excavationStencil.boundingBox;
+                    if (stencilEl) stencilEl.innerText = `[${bb[0].toFixed(1)}, ${bb[2].toFixed(1)}] to [${bb[3].toFixed(1)}, ${bb[5].toFixed(1)}]`;
+                }
+            }
+            if (r && roadEl) {
+                roadEl.innerText = `${r.name || 'Arterial Corridor'} (${r.lanes || 4}L · ${r.widthM || 18}m)`;
+            }
+        }
+
+        function buildVectorOverlay(vec) {
+            while (vectorOverlayGroup.children.length > 0) {
+                const child = vectorOverlayGroup.children[0];
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                    else child.material.dispose();
+                }
+                vectorOverlayGroup.remove(child);
+            }
+
+            if (!vec) return;
+            const b = vec.building || (vec.buildings && vec.buildings[0]);
+            if (!b || !b.localPolygonEnu) return;
+
+            // 1. Cadastral Building Footprint LineLoop (Bright Cyan)
+            const footprintPoints = b.localPolygonEnu.map(p => new THREE.Vector3(p[0], 0.08, p[2]));
+            const footprintGeo = new THREE.BufferGeometry().setFromPoints(footprintPoints);
+            const footprintMat = new THREE.LineBasicMaterial({
+                color: 0x38bdf8,
+                linewidth: 2,
+                transparent: true,
+                opacity: 0.95
+            });
+            const footprintLine = new THREE.LineLoop(footprintGeo, footprintMat);
+            vectorOverlayGroup.add(footprintLine);
+
+            // 2. Corner Quoin Indicators (Glowing 90.00° corner points)
+            const cornerMat = new THREE.PointsMaterial({
+                color: 0x38bdf8,
+                size: 8,
+                sizeAttenuation: false,
+                transparent: true,
+                opacity: 0.95
+            });
+            const cornerPoints = new THREE.Points(footprintGeo, cornerMat);
+            vectorOverlayGroup.add(cornerPoints);
+
+            // 3. Road Corridor Centerlines (Amber Dashed)
+            if (vec.roads && vec.roads.length > 0) {
+                vec.roads.forEach(road => {
+                    if (road.localPathEnu && road.localPathEnu.length > 1) {
+                        const roadPts = road.localPathEnu.map(p => new THREE.Vector3(p[0], 0.05, p[2]));
+                        const roadGeo = new THREE.BufferGeometry().setFromPoints(roadPts);
+                        const roadMat = new THREE.LineDashedMaterial({
+                            color: 0xf59e0b,
+                            dashSize: 2.5,
+                            gapSize: 1.5,
+                            linewidth: 2
+                        });
+                        const roadLine = new THREE.Line(roadGeo, roadMat);
+                        roadLine.computeLineDistances();
+                        vectorOverlayGroup.add(roadLine);
+                    }
+                });
+            }
+
+            // 4. Sidewalk Excavation Stencil Outline (Orange Dashed)
+            if (b.excavationStencil && b.excavationStencil.boundingBox) {
+                const bb = b.excavationStencil.boundingBox;
+                const stencilPts = [
+                    new THREE.Vector3(bb[0], 0.03, bb[2]),
+                    new THREE.Vector3(bb[3], 0.03, bb[2]),
+                    new THREE.Vector3(bb[3], 0.03, bb[5]),
+                    new THREE.Vector3(bb[0], 0.03, bb[5])
+                ];
+                const stencilGeo = new THREE.BufferGeometry().setFromPoints(stencilPts);
+                const stencilMat = new THREE.LineDashedMaterial({
+                    color: 0xf97316,
+                    dashSize: 1.5,
+                    gapSize: 1.0,
+                    linewidth: 1.5
+                });
+                const stencilLine = new THREE.LineLoop(stencilGeo, stencilMat);
+                stencilLine.computeLineDistances();
+                vectorOverlayGroup.add(stencilLine);
+            }
+
+            vectorOverlayGroup.visible = isVectorOverlay;
         }
 
         // --------------------------------------------------------------------

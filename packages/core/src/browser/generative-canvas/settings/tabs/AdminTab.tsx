@@ -24,6 +24,17 @@ export interface StandaloneStudioItem {
 }
 
 export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
+    // 0. Vector Spatial Intelligence & Semantic Roadmap Studio
+    {
+        id: 'vector-spatial-intelligence-demo',
+        title: 'Vector Spatial Intelligence & Semantic Roadmap Studio',
+        subtitle: 'Google 2D MVT Cadastre · Sub-Millimeter ENU · Universal Spatial URNs · Kinematic Splines',
+        category: 'Geospatial & 3D Tiles',
+        path: '/vector_spatial_intelligence_demo.html',
+        description: 'Inspect the Semantic Skeleton co-registered with Google Photorealistic 3D Tiles: real-time raycast building identification, canonical Universal Spatial IDs (URNs), kinematic lane centerlines with legal traffic headings, verified building height vs null excavation stencils, and Zero-Fake-Trees reality grounding.',
+        tags: ['Spatial Intelligence', 'Universal URN', 'Cadastre', 'Kinematic Splines', 'Sub-Millimeter ENU', 'Zero Fake Trees'],
+        badge: 'SPATIAL SKELETON'
+    },
     // 0. Omnispatial Multi-Sensor 3D Synthesis Pipeline (Minimal Orthogonal Basis Proof)
     {
         id: 'omnispatial-synthesis-demo',

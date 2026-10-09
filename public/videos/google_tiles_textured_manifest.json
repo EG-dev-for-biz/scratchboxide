@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-09T05:14:51.193Z",
+  "timestamp": "2026-10-09T17:58:03.297Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_textured_blockout_camera.mp4",
   "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/coordinates_40_748400_73_985700_textured.glb",
@@ -64,7 +64,7 @@
   "tileMetrics": {
     "totalFramesCaptured": 72,
     "averageSettleTimeMs": 45,
-    "maxTilesLoaded": 128,
+    "maxTilesLoaded": 524,
     "errorTarget": 0.5,
     "renderMode": "textured"
   }

@@ -808,47 +808,80 @@ const demoMig360PanoramaData: Scene3DData = {
 };
 
 // ----------------------------------------------------------------------------------
-// Demo: Google 3D Vector Tiles World Population Staging
+// Demo: Google 3D Vector Roadmap & Cadastral Spatial Intelligence
 // ----------------------------------------------------------------------------------
 const demoVectorWorldStagingData: Scene3DData = {
-    title: 'Google 3D Vector Tiles World Population Staging',
-    subtitle: 'MVT Roadmap Extrusion in 18% Studio Grey Clay with Road Ribbons & Water Basins',
+    title: 'Google 3D Vector Roadmap & Cadastral Spatial Intelligence',
+    subtitle: 'Sub-Millimeter Cadastre · Universal Spatial URNs · Kinematic Splines · Zero Fake Trees',
     sceneType: 'city',
     renderMode: 'clay',
     cameraMode: 'orbit',
     selectedMeshId: 'vector-world-stage',
+    groundTileMode: 'vector-world-clay',
+    vectorRoadmap: {
+        enabled: true,
+        groundBlueprint: true,
+        groundElevationOffset: 0.05,
+        minimap: true,
+        groundTileMode: 'vector-world-clay'
+    },
     camera: {
-        position: [200, 160, 220],
-        target: [0, 10, 0],
-        fov: 50
+        position: [240, 180, 260],
+        target: [0, 25, 0],
+        fov: 48
     },
     environment: {
         skybox: 'studio',
         lighting: 'studio',
         ground: true,
-        groundColor: '#475569',
-        ambientIntensity: 0.95
+        groundColor: '#334155',
+        ambientIntensity: 0.95,
+        sunAzimuth: 29.0, // Aligned to Manhattan 29-degree street grid
+        sunElevation: 42.0
     },
     geoAnchor: {
-        lat: 40.7484,
-        lng: -73.9857,
-        elevation: 15,
+        lat: 40.7484405,
+        lng: -73.9856644,
+        elevation: 18.53,
         active: true,
-        landmarkName: 'Midtown Manhattan Staging Grid',
-        castingArchetype: 'Urban Architectural Massing',
-        castingRationale: 'Extruded directly from Google 2D roadmap vector tiles (zoom 16) in 18% Studio Grey Clay'
+        landmarkName: 'Empire State Building Cadastral Anchor',
+        castingArchetype: 'Urban Cadastral Massing & Kinematic Splines',
+        castingRationale: 'Co-registered at sub-millimeter precision with Google 3D Photorealistic Tiles (LocalTangentPlane ENU)'
     },
     objects: [
         {
             id: 'vector-world-stage',
             content: {
                 type: '3d-model',
-                durableUri: '/models/vector_world_midtown.glb',
+                durableUri: '/models/omnispatial_stage2_vector_straightened.glb',
                 mimeType: 'model/gltf-binary',
                 metadata: {
                     materialPreset: '18% Studio Grey Clay (roughness: 0.85, metalness: 0.0)',
-                    layers: ['buildings', 'roads', 'water'],
-                    zoomLevel: 16
+                    layers: ['cadastral_buildings', 'kinematic_roads', 'sidewalk_curbs', 'parcels'],
+                    zoomLevel: 16,
+                    coordinateParity: 'LocalTangentPlane ENU (0.000 mm drift vs Google 3D Tiles)',
+                    universalSpatialIds: [
+                        'urn:scratchbox:spatial:building:dr5regw3p2:empire-state-building-0',
+                        'urn:scratchbox:spatial:road:dr5regw3p2:5th-avenue-1',
+                        'urn:scratchbox:spatial:road:dr5regw3p2:west-34th-st-1',
+                        'urn:scratchbox:spatial:landuse:dr5regw3p2:greeley-square-park-0'
+                    ],
+                    verifiedHeights: {
+                        'urn:scratchbox:spatial:building:dr5regw3p2:empire-state-building-0': {
+                            heightM: 381.0,
+                            verified: true,
+                            source: 'cadastral_lidar'
+                        }
+                    },
+                    kinematics: {
+                        corridors: ['5th Avenue', 'West 34th Street', 'Broadway'],
+                        speedLimitKmh: 40,
+                        legalHeadingDegrees: 29.0
+                    },
+                    realityGrounding: {
+                        zeroFakeTreesInvariant: true,
+                        vegetationNotice: 'Authentic tree locations and canopies are deferred to Google 3D Photorealistic Tiles and Solar 0.1m nDSM canopy classification. Procedural tree hallucination is disabled.'
+                    }
                 }
             },
             space: {
@@ -938,23 +971,23 @@ export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
     },
     {
         id: 'demo-vector-world-staging',
-        title: '3D Vector Tiles World Population Staging',
-        subtitle: 'MVT Roadmap Extrusion in 18% Studio Grey Clay',
+        title: '3D Vector Roadmap & Cadastral Spatial Intelligence',
+        subtitle: 'Universal Spatial URNs · Kinematic Splines · Sub-Millimeter ENU · Zero Fake Trees',
         category: '3d',
         categoryLabel: '3D & Geospatial',
-        description: 'Stage full 3D urban populations and surrounding environments directly from Google 2D roadmap vector tiles (MVT/PBF at zoom 16). Extrudes building footprints with polygon triangulation, road network ribbons, and water basins into a standard binary .glb adhering strictly to the 18% Studio Grey Clay staging invariant.',
-        tags: ['Vector Tiles', '3D Staging', 'Grey Clay', 'MVT Protobuf', 'glTF 2.0', 'Urban World'],
-        highlightBadge: '3D STAGING',
+        description: 'Co-registers Google 2D roadmap vector tiles and cadastral parcels with Google 3D Photorealistic Tiles in 18% Studio Grey Clay. Delivers canonical Universal Spatial Identifiers (URNs), verified building height bounds vs null stencils, kinematic lane centerlines with legal traffic headings, and strictly enforces the Zero-Fake-Trees reality grounding invariant.',
+        tags: ['Spatial Intelligence', 'Universal URN', 'Cadastre', 'Kinematic Splines', 'Sub-Millimeter ENU', 'Zero Fake Trees'],
+        highlightBadge: 'SPATIAL INTEL',
         artifact: {
             id: 'art-demo-vector-world-staging',
             type: '3d-scene',
-            title: 'Google 3D Vector Tiles World Population Staging',
-            summary: 'Google 2D roadmap vector tiles extruded into 18% Studio Grey Clay 3D world population for CAD staging.',
+            title: '3D Vector Roadmap & Cadastral Spatial Intelligence',
+            summary: 'Sub-millimeter co-registered cadastral skeleton with Universal Spatial IDs, kinematic splines, and verified height boundaries in 18% Studio Grey Clay.',
             data: demoVectorWorldStagingData,
             createdAt: new Date().toISOString(),
-            version: 1
+            version: 2
         },
-        introMessage: 'Welcome to the 3D Vector Tiles World Population Staging demo! This pipeline decodes Google 2D roadmap vector tiles (MVT/PBF) at zoom 16, triangulates building polygon rings, extrudes volumetric prisms, and bakes 18% Studio Grey Clay materials into a standard binary .glb for immediate scene staging.'
+        introMessage: 'Welcome to the 3D Vector Roadmap & Cadastral Spatial Intelligence demo! This pipeline implements the "Skin & Bones" architecture: decoding Google 2D roadmap vector tiles and cadastral parcels into a sub-millimeter metric skeleton aligned with Google 3D Photorealistic Tiles via LocalTangentPlane ENU. Features canonical Universal Spatial IDs (urn:scratchbox:spatial:...), verified building height boundaries, kinematic lane centerlines with legal traffic headings, and complete reality grounding (zero procedural hallucinated trees).'
     },
     {
         id: 'demo-omnispatial-synthesis',

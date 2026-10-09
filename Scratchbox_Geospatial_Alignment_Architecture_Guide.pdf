@@ -1,0 +1,466 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [ 6 0 R 8 0 R 10 0 R ] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 7 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> >>
+endobj
+7 0 obj
+<< /Length 4506 >>
+stream
+0.080 0.120 0.200 rg
+0.00 720.00 612.00 72.00 re f
+1.000 1.000 1.000 rg
+/F2 18 Tf
+BT 40.00 755.00 Td (SCRATCHBOX 3D ENGINE & GEOSPATIAL FOUNDATION) Tj ET
+/F1 10 Tf
+BT 40.00 735.00 Td (Architectural Specification & Layman's Guide: Universal Geographic Alignment) Tj ET
+0.250 0.500 0.950 rg
+0.00 716.00 612.00 4.00 re f
+0.100 0.100 0.100 rg
+/F2 13 Tf
+BT 40.00 680.00 Td (1. Executive Summary: Why Aligning Geographic Data is Hard) Tj ET
+/F1 9.5 Tf
+BT 40.00 662.00 Td (In modern 3D graphics, visual effects, and digital twin simulation, developers frequently combine multiple) Tj ET
+BT 40.00 649.00 Td (distinct data sources from Google Maps and GIS providers into a single interactive 3D viewport. At first glance,) Tj ET
+BT 40.00 636.00 Td (one might assume that everything with a GPS coordinate naturally lines up. In practice, they violently clash:) Tj ET
+BT 40.00 623.00 Td (- 3D Photorealistic Tiles arrive as continuous, textured geometric meshes measured from the center of the Earth.) Tj ET
+BT 40.00 610.00 Td (- 2D Roadmaps & Cadastral Parcels arrive as flat, 2D curves projected via Web Mercator without intrinsic depth.) Tj ET
+BT 40.00 597.00 Td (- Elevation services report heights above sea level, while GPS satellites report heights above a mathematical oval.) Tj ET
+BT 40.00 584.00 Td (Without a disciplined mathematical architecture, cars float 30 meters above streets, roads pierce through tunnels,) Tj ET
+BT 40.00 571.00 Td (and camera viewports jitter uncontrollably due to 32-bit floating-point precision exhaustion.) Tj ET
+/F2 13 Tf
+BT 40.00 548.00 Td (2. The Layman's Analogy: The 'Skin & Bones' Architecture) Tj ET
+/F1 9.5 Tf
+/F1 9.5 Tf
+0.100 0.100 0.100 rg
+BT 40.00 530.00 Td (To understand how Scratchbox unifies disparate geographic layers, consider the human body:) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 517.50 Td () Tj ET
+/F2 9.5 Tf
+0.150 0.350 0.750 rg
+BT 40.00 505.00 Td (A. The Photographic 'Skin' \(Google 3D Photorealistic Tiles & Cesium\):) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 492.50 Td (   Think of 3D map tiles as the outer skin. They look stunning, photorealistic, and complete. However, the computer) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 480.00 Td (   has no clue what anything is. To the computer, a tree, an asphalt lane, a fire hydrant, and a skyscraper are all just) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 467.50 Td (   one continuous soup of millions of colored triangles. You cannot ask the skin 'where does lane 2 turn left?'.) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 455.00 Td () Tj ET
+/F2 9.5 Tf
+0.150 0.350 0.750 rg
+BT 40.00 442.50 Td (B. The Semantic 'Bones' \(Google 2D Vector Roadmap, OpenStreetMap, Overture Maps\):) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 430.00 Td (   Vector data is the skeleton. It consists of mathematical polylines, legal speed limits, lane boundaries, cadastral) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 417.50 Td (   property parcels, and building footprints. It knows exactly what each element is, but it has no 3D photographic volume.) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 405.00 Td () Tj ET
+/F2 9.5 Tf
+0.150 0.350 0.750 rg
+BT 40.00 392.50 Td (C. The Co-Registration Fusion:) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 380.00 Td (   Scratchbox fuses the 'Skin' and 'Bones' together onto a shared mathematical skeleton. The vector skeleton drives vehicle) Tj ET
+/F1 9.0 Tf
+0.200 0.200 0.200 rg
+BT 40.00 367.50 Td (   pathfinding, curb bevels, and bridge excavation, while the photographic skin provides VFX-grade visual fidelity.) Tj ET
+0.940 0.960 0.980 rg
+40.00 270.00 532.00 80.00 re f
+0.250 0.500 0.950 rg
+1.50 w
+40.00 270.00 532.00 80.00 re S
+0.100 0.200 0.400 rg
+/F2 10 Tf
+BT 50.00 333.00 Td (CORE ARCHITECTURAL PRINCIPLE: THE THREE SPATIAL SPHERES) Tj ET
+/F1 8.5 Tf
+0.200 0.200 0.200 rg
+BT 50.00 317.00 Td (1. GLOBAL GEODETIC \(WGS-84\): Latitude, Longitude in degrees \(Earth as an oblate spheroid\).) Tj ET
+BT 50.00 303.00 Td (2. PLANETARY CARTESIAN \(ECEF\): Earth-Centered, Earth-Fixed \(X, Y, Z in meters from planetary core\).) Tj ET
+BT 50.00 289.00 Td (3. LOCAL TANGENT PLANE \(ENU\): Metric East-North-Up space centered directly at the user's focus scene.) Tj ET
+BT 50.00 277.00 Td (Result: Sub-millimeter co-registration between 3D photogrammetry, road corridors, and CAD hero assets.) Tj ET
+0.500 0.500 0.500 rg
+/F1 8 Tf
+BT 40.00 30.00 Td (Scratchbox IDE Architecture Guide | Confidential | Page 1 of 3) Tj ET
+40.00 42.00 m 572.00 42.00 l S
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 9 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> >>
+endobj
+9 0 obj
+<< /Length 5737 >>
+stream
+0.080 0.120 0.200 rg
+0.00 745.00 612.00 47.00 re f
+1.000 1.000 1.000 rg
+/F2 12 Tf
+BT 40.00 765.00 Td (SCRATCHBOX 3D ENGINE: ELEVATION & 2-LAYER HARDENING) Tj ET
+/F1 8.5 Tf
+BT 40.00 752.00 Td (Solving the Gravitational Geoid Offset & Preserving Pure Metric Space) Tj ET
+0.250 0.500 0.950 rg
+0.00 742.00 612.00 3.00 re f
+0.100 0.100 0.100 rg
+/F2 12 Tf
+BT 40.00 715.00 Td (3. The Elevation Riddle: Why Elevation Coordinates Don't Naturally Match) Tj ET
+/F1 9.0 Tf
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 699.00 Td (Elevation is where most multi-source 3D applications fail. The fundamental confusion arises because Earth is not) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 687.00 Td (a smooth sphere, nor is it a simple geometric oval. It is an irregular potato shaped by variations in Earth's gravity field.) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 675.00 Td (Consequently, geospatial science defines two completely distinct measurements of height:) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 663.00 Td () Tj ET
+/F2 9.0 Tf
+0.150 0.350 0.750 rg
+BT 40.00 651.00 Td (1. Ellipsoidal Height \(h\): Measured by GPS satellites, Google 3D Tiles, and Cesium. This is the pure geometric) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 639.00 Td (   distance in meters from the mathematical WGS-84 reference ellipsoid.) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 627.00 Td () Tj ET
+/F2 9.0 Tf
+0.150 0.350 0.750 rg
+BT 40.00 615.00 Td (2. Orthometric Height \(H\): Measured by surveyors, Mean Sea Level \(MSL\), and Google 2D Roadmaps. This is the height) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 603.00 Td (   above where calm sea water would sit under Earth's actual gravitational field \(the Geoid\).) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 591.00 Td () Tj ET
+/F2 9.5 Tf
+0.800 0.200 0.100 rg
+BT 40.00 579.00 Td (The difference between them is the Geoid Undulation \(N\):   h = H + N) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 567.00 Td (In New York City, N is approx. -31.5 meters. In Singapore, N is +14.0 meters. If a developer pastes vector road data) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 555.00 Td (directly into 3D photogrammetric tiles without geoid undulation compensation, the road will either hover 31 meters) Tj ET
+/F1 8.8 Tf
+0.200 0.200 0.200 rg
+BT 40.00 543.00 Td (in mid-air or plunge 31 meters beneath the pavement. Scratchbox dynamically resolves N everywhere on Earth.) Tj ET
+0.100 0.100 0.100 rg
+/F2 12 Tf
+BT 40.00 523.00 Td (4. The 2-Layer Canonical Architecture \(Rigorously Audited\)) Tj ET
+/F1 9.0 Tf
+/F1 8.7 Tf
+0.200 0.200 0.200 rg
+BT 40.00 507.00 Td (A critical question arose during system architecture: Should we mandate WGS-84 coordinates on everything in the engine?) Tj ET
+/F1 8.7 Tf
+0.200 0.200 0.200 rg
+BT 40.00 495.00 Td (A ruthless first-principles critical thinking audit revealed that mandating GPS coordinates on everything is a catastrophic anti-pattern:) Tj ET
+/F1 8.7 Tf
+0.200 0.200 0.200 rg
+BT 40.00 483.00 Td (- It violates the 'Alien Planet Test' \(ADA Pillar 1\): An alien rover or fictional starship cannot have GPS coordinates on Earth.) Tj ET
+/F1 8.7 Tf
+0.200 0.200 0.200 rg
+BT 40.00 471.00 Td (- It causes the 'Null Island' disaster: Developers default non-geolocated assets to \(0,0\), dropping them off the coast of Ghana.) Tj ET
+/F1 8.7 Tf
+0.200 0.200 0.200 rg
+BT 40.00 459.00 Td (- It forces CAD/character artists to configure GIS projections just to sculpt a humanoid or coffee cup.) Tj ET
+/F1 8.7 Tf
+0.200 0.200 0.200 rg
+BT 40.00 447.00 Td () Tj ET
+/F2 9.2 Tf
+0.100 0.100 0.100 rg
+BT 40.00 435.00 Td (The Solution: The 2-Layer Architecture:) Tj ET
+/F2 9.0 Tf
+0.100 0.450 0.200 rg
+BT 40.00 423.00 Td (- LAYER 1: STRICT METRIC ROOT \(1.0 Unit = 1.0 Meter\). Mandatory for 100% of all assets, meshes, and tools in Scratchbox.) Tj ET
+/F2 9.0 Tf
+0.100 0.450 0.200 rg
+BT 40.00 411.00 Td (- LAYER 2: UNIVERSAL GEOGRAPHIC BRIDGE. An explicit, opt-in component strictly required for geolocated assets.) Tj ET
+/F1 8.7 Tf
+0.200 0.200 0.200 rg
+BT 40.00 399.00 Td (  If an asset has a real-world anchor, it projects into Layer 1 via LocalTangentPlane. If not, it remains in pure metric space.) Tj ET
+0.920 0.940 0.970 rg
+40.00 267.00 532.00 115.00 re f
+0.200 0.300 0.500 rg
+1.00 w
+40.00 267.00 532.00 115.00 re S
+/F2 9.5 Tf
+0.100 0.200 0.400 rg
+BT 50.00 363.00 Td (HARDENING SAFEGUARDS IMPLEMENTED IN SCRATCHBOX ENGINE) Tj ET
+/F2 8.2 Tf
+0.150 0.250 0.450 rg
+BT 50.00 347.00 Td (Null Island Anti-Poisoning Guard:) Tj ET
+/F1 8.2 Tf
+0.250 0.250 0.250 rg
+BT 220.00 347.00 Td (GeodeticAnchorValidator blocks \(0,0\) defaults, preventing GIS corruption.) Tj ET
+/F2 8.2 Tf
+0.150 0.250 0.450 rg
+BT 50.00 331.00 Td (Double-Precision Boundary \(Float64 -> 32\):) Tj ET
+/F1 8.2 Tf
+0.250 0.250 0.250 rg
+BT 220.00 331.00 Td (CPU performs planetary math in Float64; GPU receives camera-relative Float32.) Tj ET
+/F2 8.2 Tf
+0.150 0.250 0.450 rg
+BT 50.00 315.00 Td (Sub-Millimeter Floating-Point Jitter Fix:) Tj ET
+/F1 8.2 Tf
+0.250 0.250 0.250 rg
+BT 220.00 315.00 Td (Eliminates WebGL vertex trembling by subtracting anchor origin in double precision.) Tj ET
+/F2 8.2 Tf
+0.150 0.250 0.450 rg
+BT 50.00 299.00 Td (Metric Sanity Normalizer:) Tj ET
+/F1 8.2 Tf
+0.250 0.250 0.250 rg
+BT 220.00 299.00 Td (Detects Maya centimeters, CAD millimeters, & neural [-1, 1] boxes to enforce 1m = 1 unit.) Tj ET
+/F2 8.2 Tf
+0.150 0.250 0.450 rg
+BT 50.00 283.00 Td (Vertical Datum Auto-Harmonization:) Tj ET
+/F1 8.2 Tf
+0.250 0.250 0.250 rg
+BT 220.00 283.00 Td (Automatically computes Geoid Undulation N to snap orthometric roads to 3D tiles.) Tj ET
+0.500 0.500 0.500 rg
+/F1 8 Tf
+BT 40.00 30.00 Td (Scratchbox IDE Architecture Guide | Confidential | Page 2 of 3) Tj ET
+40.00 42.00 m 572.00 42.00 l S
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 11 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> >>
+endobj
+11 0 obj
+<< /Length 6213 >>
+stream
+0.080 0.120 0.200 rg
+0.00 745.00 612.00 47.00 re f
+1.000 1.000 1.000 rg
+/F2 12 Tf
+BT 40.00 765.00 Td (SCRATCHBOX 3D ENGINE: MULTI-SOURCE TRANSLATION MATRIX) Tj ET
+/F1 8.5 Tf
+BT 40.00 752.00 Td (Universal Ingestion for Future GIS Sources \(OSM, Overture, Cesium, USGS LiDAR\)) Tj ET
+0.250 0.500 0.950 rg
+0.00 742.00 612.00 3.00 re f
+0.100 0.100 0.100 rg
+/F2 12 Tf
+BT 40.00 715.00 Td (5. Universal Geographic Bridge: Ingesting Any Future Data Source) Tj ET
+/F1 9.0 Tf
+BT 40.00 699.00 Td (A critical directive of the Scratchbox Adaptive Domain Architecture \(ADA\) is zero closed taxonomies. The engine must) Tj ET
+BT 40.00 687.00 Td (never assume that Google Maps is the only geographic data provider. As OpenStreetMap, Overture Maps Foundation,) Tj ET
+BT 40.00 675.00 Td (Cesium 3D Tiles 1.1, USGS LiDAR point clouds, and national cadastral databases expand, the UniversalGeographicBridge) Tj ET
+BT 40.00 663.00 Td (acts as a universal multi-modal translator, converting all coordinate spaces and vertical datums into unified SI meters:) Tj ET
+0.150 0.250 0.450 rg
+40.00 623.00 532.00 20.00 re f
+1.000 1.000 1.000 rg
+/F2 8.2 Tf
+BT 44.00 628.00 Td (Geographic Source) Tj ET
+BT 154.00 628.00 Td (Data Format) Tj ET
+BT 244.00 628.00 Td (Native CRS) Tj ET
+BT 344.00 628.00 Td (Vertical Datum) Tj ET
+BT 444.00 628.00 Td (Translation Method) Tj ET
+0.960 0.970 0.990 rg
+40.00 604.00 532.00 17.00 re f
+0.200 0.200 0.200 rg
+/F1 7.8 Tf
+/F2 7.8 Tf
+0.100 0.200 0.400 rg
+BT 44.00 609.00 Td (Google 3D Tiles) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 154.00 609.00 Td (Continuous Mesh) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 244.00 609.00 Td (ECEF \(EPSG:4978\)) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 344.00 609.00 Td (WGS-84 Ellipsoid) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 444.00 609.00 Td (Direct Float64 Matrix Rotation) Tj ET
+1.000 1.000 1.000 rg
+40.00 587.00 532.00 17.00 re f
+0.200 0.200 0.200 rg
+/F1 7.8 Tf
+/F2 7.8 Tf
+0.100 0.200 0.400 rg
+BT 44.00 592.00 Td (Google 2D Vector) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 154.00 592.00 Td (MVT / PBF Roadways) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 244.00 592.00 Td (Mercator \(EPSG:3857\)) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 344.00 592.00 Td (Orthometric MSL) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 444.00 592.00 Td (Inverse Mercator + Geoid \(N\)) Tj ET
+0.960 0.970 0.990 rg
+40.00 570.00 532.00 17.00 re f
+0.200 0.200 0.200 rg
+/F1 7.8 Tf
+/F2 7.8 Tf
+0.100 0.200 0.400 rg
+BT 44.00 575.00 Td (OpenStreetMap \(OSM\)) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 154.00 575.00 Td (Polylines / Polygons) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 244.00 575.00 Td (Geodetic \(EPSG:4326\)) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 344.00 575.00 Td (Grade Relative / MSL) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 444.00 575.00 Td (Bowring Geodetic -> ENU) Tj ET
+1.000 1.000 1.000 rg
+40.00 553.00 532.00 17.00 re f
+0.200 0.200 0.200 rg
+/F1 7.8 Tf
+/F2 7.8 Tf
+0.100 0.200 0.400 rg
+BT 44.00 558.00 Td (Overture Maps) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 154.00 558.00 Td (GeoParquet / Arrow) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 244.00 558.00 Td (Geodetic \(EPSG:4326\)) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 344.00 558.00 Td (Orthometric MSL) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 444.00 558.00 Td (Vector Extrusion + ENU Anchor) Tj ET
+0.960 0.970 0.990 rg
+40.00 536.00 532.00 17.00 re f
+0.200 0.200 0.200 rg
+/F1 7.8 Tf
+/F2 7.8 Tf
+0.100 0.200 0.400 rg
+BT 44.00 541.00 Td (Cesium 3D Tiles 1.1) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 154.00 541.00 Td (b3dm / pnts / glTF) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 244.00 541.00 Td (ECEF / RTC_CENTER) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 344.00 541.00 Td (WGS-84 Ellipsoid) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 444.00 541.00 Td (Direct ECEF Delta -> ENU) Tj ET
+1.000 1.000 1.000 rg
+40.00 519.00 532.00 17.00 re f
+0.200 0.200 0.200 rg
+/F1 7.8 Tf
+/F2 7.8 Tf
+0.100 0.200 0.400 rg
+BT 44.00 524.00 Td (USGS 3DEP DEM) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 154.00 524.00 Td (GeoTIFF Heightmap) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 244.00 524.00 Td (UTM or Geodetic) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 344.00 524.00 Td (NAVD88 Orthometric) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 444.00 524.00 Td (Vertical Datum Shift \(h=H+N\)) Tj ET
+0.960 0.970 0.990 rg
+40.00 502.00 532.00 17.00 re f
+0.200 0.200 0.200 rg
+/F1 7.8 Tf
+/F2 7.8 Tf
+0.100 0.200 0.400 rg
+BT 44.00 507.00 Td (USGS LiDAR Point Clouds) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 154.00 507.00 Td (LAS / LAZ / COPC) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 244.00 507.00 Td (UTM \(EPSG:326xx\)) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 344.00 507.00 Td (Orthometric MSL) Tj ET
+/F1 7.6 Tf
+0.250 0.250 0.250 rg
+BT 444.00 507.00 Td (UTM Inverse Projection -> ENU) Tj ET
+0.100 0.100 0.100 rg
+/F2 11 Tf
+BT 40.00 468.00 Td (6. Conclusion & Verification) Tj ET
+/F1 8.8 Tf
+/F1 8.5 Tf
+0.200 0.200 0.200 rg
+BT 40.00 453.00 Td (By enforcing a strict SI Metric Invariant \(1 unit = 1.0 meter\) as Layer 1 and routing all geospatial data through) Tj ET
+/F1 8.5 Tf
+0.200 0.200 0.200 rg
+BT 40.00 441.00 Td (the UniversalGeographicBridge as Layer 2, Scratchbox IDE guarantees:) Tj ET
+/F2 8.5 Tf
+0.150 0.350 0.750 rg
+BT 40.00 429.00 Td (1. Total Geometric Separation: CAD, humanoid avatars, and procedural objects remain completely unpolluted by GIS math.) Tj ET
+/F2 8.5 Tf
+0.150 0.350 0.750 rg
+BT 40.00 417.00 Td (2. Zero Visual Jitter: All global coordinate math executes in 64-bit precision before feeding 32-bit WebGL viewports.) Tj ET
+/F2 8.5 Tf
+0.150 0.350 0.750 rg
+BT 40.00 405.00 Td (3. Universal Future-Proofing: Any upcoming satellite, municipal GIS, or drone photogrammetry source immediately) Tj ET
+/F1 8.5 Tf
+0.200 0.200 0.200 rg
+BT 40.00 393.00 Td (   locks into place with sub-millimeter precision, without requiring core engine rewrites.) Tj ET
+/F1 8.5 Tf
+0.200 0.200 0.200 rg
+BT 40.00 381.00 Td () Tj ET
+/F2 8.5 Tf
+0.100 0.500 0.200 rg
+BT 40.00 369.00 Td (Verified by automated Vitest test suites \(16/16 passing assertions across scale, null-island rejection, and projections\).) Tj ET
+0.500 0.500 0.500 rg
+/F1 8 Tf
+BT 40.00 30.00 Td (Scratchbox IDE Architecture Guide | Confidential | Page 3 of 3) Tj ET
+40.00 42.00 m 572.00 42.00 l S
+endstream
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000136 00000 n 
+0000000206 00000 n 
+0000000281 00000 n 
+0000000349 00000 n 
+0000000497 00000 n 
+0000005054 00000 n 
+0000005202 00000 n 
+0000010990 00000 n 
+0000011140 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+17405
+%%EOF

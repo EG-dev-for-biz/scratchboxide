@@ -503,23 +503,27 @@ export type {
     HeadlessCriticOptions
 } from './node/3d-engine/HeadlessSnapshotCriticService';
 
-// Spatial Vector Data & Semantic Intelligence API
-export {
+// Spatial Vector Data & Semantic Intelligence API (Types only in browser entrypoint)
+export type {
     SpatialVectorDataService,
-    type UniversalSpatialLayer,
-    type UniversalSpatialFeatureBase,
-    type UniversalBuildingFeature,
-    type UniversalRoadFeature,
-    type UniversalLanduseFeature,
-    type UniversalWaterFeature,
-    type UniversalPoiFeature,
-    type UniversalSpatialFeature,
-    type SpatialVectorQueryOptions,
-    type SpatialVectorDataSet,
-    type KinematicRoadNode,
-    type KinematicRoadNetwork,
-    type ExcavationStencil,
-    type Semantic3DAnnotation
+    UniversalSpatialLayer,
+    UniversalSpatialFeatureBase,
+    UniversalBuildingFeature,
+    UniversalRoadFeature,
+    UniversalLanduseFeature,
+    UniversalWaterFeature,
+    UniversalPoiFeature,
+    UniversalSpatialFeature,
+    SpatialVectorQueryOptions,
+    SpatialVectorDataSet,
+    KinematicRoadNode,
+    KinematicRoadNetwork,
+    ExcavationStencil,
+    Semantic3DAnnotation,
+    StagingMobilityAffinity,
+    StagingSurfaceType,
+    StagingAnchorQuery,
+    StagingAnchorProposal
 } from './node/spatial/SpatialVectorDataService';
 
 

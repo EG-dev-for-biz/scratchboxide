@@ -97,3 +97,7 @@ export * from './common/spatial/living-world-graph-types';
 // Universal Spatial Node, DAG & Modifier Protocols
 export * from './common/spatial/universal-spatial-node';
 
+// Metric Scale Invariant & Multi-Source Geographic Data Bridge
+export * from './common/spatial/MetricScaleNormalizer';
+export * from './common/spatial/GeodeticAnchorValidator';
+export * from './common/spatial/UniversalGeographicBridge';
