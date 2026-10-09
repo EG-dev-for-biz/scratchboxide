@@ -2072,6 +2072,7 @@ IMAGE ANALYSIS RULES:
   * NOTE: The 3D viewport is framed on the Left Hand. If the photo is a Right Hand, state chirality: "right" and output angles for that right hand; the client will apply the sagittal reflection matrix.
 - Vantage Point: State whether the hand is viewed from "palmar" (palm facing camera), "dorsal" (back of hand facing camera), "radial" (thumb edge), "ulnar" (pinky edge), or "knuckles" (end-on knuckles).
 - Non-Hand Rejection: If the image does not show a clear human hand, set isHand: false with explanation.
+- Skin Tone & Melanin Estimation: Analyze the epidermal skin tone of the hand according to the biophysical melanin spectrum. Estimate melaninFraction in [0.0 = very fair alabaster, 1.0 = deep dark melanin] and pheomelaninRatio in [0.0 = neutral eumelanin, 1.0 = warm reddish-yellow pheomelanin], along with Fitzpatrick phototype (Type I through Type VI).
 
 OUTPUT FORMAT (Strict JSON):
 {
@@ -2082,6 +2083,12 @@ OUTPUT FORMAT (Strict JSON):
   "handBoundingBox": [ymin, xmin, ymax, xmax],
   "gestureName": "peace_sign" | "clenched_fist" | "thumbs_up" | "pinch" | "ok_sign" | "pointing" | "open_splay" | "shaka" | "cup_hand" | "flat_palm" | "custom",
   "summary": "Short human readable summary of hand pose",
+  "skinEstimation": {
+    "melaninFraction": 0.35,
+    "pheomelaninRatio": 0.25,
+    "fitzpatrickType": "Type III",
+    "summary": "Medium olive complexion with golden undertones"
+  },
   "rotations": {
     "LeftIndex1": [rx, ry, rz],
     "LeftIndex2": [rx, 0, 0],

@@ -365,6 +365,145 @@
     .ref-pose-icon { font-size: 20px; }
     .ref-pose-label { font-size: 9.5px; font-weight: 600; color: var(--text-muted); text-align: center; }
 
+    /* SB-Human Multi-Modality Skinning Studio Drawer */
+    .skin-studio-drawer {
+      display: none;
+      flex-direction: column;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      gap: 10px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 28px rgba(0,0,0,0.65), 0 0 20px rgba(236, 72, 153, 0.12);
+    }
+    .skin-drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 8px;
+    }
+    .skin-modality-tabs {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 6px;
+    }
+    .skin-tab-btn {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 7px 6px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-align: center;
+    }
+    .skin-tab-btn:hover {
+      background: rgba(236, 72, 153, 0.12);
+      border-color: rgba(236, 72, 153, 0.4);
+      transform: translateY(-1px);
+    }
+    .skin-tab-btn.active {
+      background: rgba(236, 72, 153, 0.22);
+      border-color: #ec4899;
+      box-shadow: 0 0 12px rgba(236, 72, 153, 0.25);
+    }
+    .tab-emoji { font-size: 16px; }
+    .tab-title { font-size: 10px; font-weight: 700; color: #fff; white-space: nowrap; }
+    .tab-sub { font-size: 8.5px; color: var(--text-dim); }
+
+    .skin-subpanel {
+      background: rgba(18, 24, 38, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .skin-param-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .skin-param-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .skin-val {
+      font-size: 10px;
+      font-family: monospace;
+      font-weight: 700;
+      color: #f472b6;
+    }
+    .skin-slider {
+      width: 100%;
+      height: 4px;
+      appearance: none;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    .skin-slider::-webkit-slider-thumb {
+      appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ec4899;
+      box-shadow: 0 0 6px rgba(236, 72, 153, 0.6);
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    .skin-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+    .skin-param-hints {
+      display: flex;
+      justify-content: space-between;
+      font-size: 8.5px;
+      color: var(--text-dim);
+    }
+    .fitz-chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-size: 9.5px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .fitz-chip:hover {
+      background: rgba(236, 72, 153, 0.15);
+      color: #fff;
+      border-color: rgba(236, 72, 153, 0.4);
+    }
+    .fitz-chip.active {
+      background: rgba(236, 72, 153, 0.25);
+      border-color: #ec4899;
+      color: #f472b6;
+      font-weight: 700;
+    }
+    .skin-mini-btn {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .skin-mini-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      transform: translateY(-1px);
+    }
+
     .quick-chips-row {
       display: flex;
       align-items: center;
@@ -687,6 +826,7 @@
     <!-- Quick Pose & Reference Library Chips -->
     <div class="quick-chips-row">
       <button class="chip-btn" id="btn-toggle-ref-library" style="background:rgba(56, 189, 248, 0.15); border-color:var(--cyan); color:var(--cyan); font-weight:700;">🖼️ Reference Photos</button>
+      <button class="chip-btn" id="btn-toggle-skin-drawer" style="background:rgba(236, 72, 153, 0.15); border-color:rgba(236, 72, 153, 0.4); color:#f472b6; font-weight:700;">🎨 Skinning Studio</button>
       <button class="chip-btn" data-pose="fist">✊ Clenched Fist</button>
       <button class="chip-btn" data-pose="peace">✌️ Peace Sign</button>
       <button class="chip-btn" data-pose="thumbs_up">👍 Thumbs Up</button>
@@ -731,6 +871,173 @@
         <div class="ref-pose-card" data-ref-pose="shaka">
           <div class="ref-pose-icon">🤙</div>
           <div class="ref-pose-label">Shaka / Hang Loose</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SB-Human Multi-Modality Skinning Studio Drawer -->
+    <div class="skin-studio-drawer" id="skin-studio-drawer" style="display:none;">
+      <div class="skin-drawer-header">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:14px;">🎨</span>
+          <span style="font-weight:700; color:#f472b6; letter-spacing:0.5px; font-size:11px;">SB-HUMAN MULTI-MODALITY SKINNING STUDIO</span>
+          <span class="badge" style="background:rgba(236,72,153,0.15); border:1px solid rgba(236,72,153,0.35); color:#f472b6; font-size:9.5px; padding:2px 6px;">PROTOCOL V2</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <button class="skin-mini-btn" id="btn-auto-skin-photo" title="Extract skin chrominance from attached reference photo" style="display:none; color:#38bdf8; border-color:rgba(56,189,248,0.4);">📸 Auto-Skin from Photo</button>
+          <span style="font-size:11px; color:var(--text-dim); cursor:pointer;" id="btn-close-skin-drawer">✕ Close</span>
+        </div>
+      </div>
+
+      <!-- Modality Tabs -->
+      <div class="skin-modality-tabs">
+        <button class="skin-tab-btn active" data-skin-modality="clay">
+          <span class="tab-emoji">🏛️</span>
+          <span class="tab-title">18% Studio Clay</span>
+          <span class="tab-sub">CAD Void Baseline</span>
+        </button>
+        <button class="skin-tab-btn" data-skin-modality="melanin">
+          <span class="tab-emoji">🧬</span>
+          <span class="tab-title">Biophysical Melanin</span>
+          <span class="tab-sub">Spectral Forward Map</span>
+        </button>
+        <button class="skin-tab-btn" data-skin-modality="surfel">
+          <span class="tab-emoji">🫧</span>
+          <span class="tab-title">2DGS Planar Surfels</span>
+          <span class="tab-sub">Oriented Gaussian Discs</span>
+        </button>
+        <button class="skin-tab-btn" data-skin-modality="cyber">
+          <span class="tab-emoji">⚡</span>
+          <span class="tab-title">Cyber Biomech</span>
+          <span class="tab-sub">Titanium & Carbon Bus</span>
+        </button>
+        <button class="skin-tab-btn" data-skin-modality="xray">
+          <span class="tab-emoji">🩻</span>
+          <span class="tab-title">X-Ray Skeletal</span>
+          <span class="tab-sub">Translucent SSS Glass</span>
+        </button>
+        <button class="skin-tab-btn" data-skin-modality="wireframe">
+          <span class="tab-emoji">🕸️</span>
+          <span class="tab-title">Wireframe Topology</span>
+          <span class="tab-sub">10.4k Manifold Verts</span>
+        </button>
+      </div>
+
+      <!-- Sub-panel: Biophysical Melanin & Epidermal Controls (visible when melanin active) -->
+      <div id="skin-subpanel-melanin" class="skin-subpanel" style="display:none;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div id="melanin-swatch" style="width:24px; height:24px; border-radius:6px; border:1px solid rgba(255,255,255,0.25); background:#7b442b; box-shadow:0 2px 6px rgba(0,0,0,0.5);"></div>
+            <div>
+              <div style="font-size:11px; font-weight:700; color:#fff;" id="melanin-tone-title">Medium Warm Complexion (Fitzpatrick Type III)</div>
+              <div style="font-size:9.5px; color:var(--text-dim);" id="melanin-hex-code">Linear RGB: [0.42, 0.22, 0.12] · sRGB: #7b442b</div>
+            </div>
+          </div>
+          <!-- Quick Fitzpatrick Type Pills -->
+          <div style="display:flex; gap:4px;">
+            <button class="fitz-chip" data-fitz="1" title="Type I/II: Fair / Nordic">Type I/II Fair</button>
+            <button class="fitz-chip active" data-fitz="3" title="Type III: Golden / Light">Type III Golden</button>
+            <button class="fitz-chip" data-fitz="4" title="Type IV: Olive / Mediterranean">Type IV Olive</button>
+            <button class="fitz-chip" data-fitz="5" title="Type V: Bronze / Deep Tan">Type V Bronze</button>
+            <button class="fitz-chip" data-fitz="6" title="Type VI: Deep Melanin / Obsidian">Type VI Deep</button>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:12px;">
+          <!-- Melanin Fraction -->
+          <div class="skin-param-group">
+            <div class="skin-param-header">
+              <span>Melanin Fraction (f_mel)</span>
+              <span class="skin-val" id="val-melanin-frac">0.35</span>
+            </div>
+            <input type="range" id="slider-melanin-frac" min="0.00" max="1.00" step="0.01" value="0.35" class="skin-slider" />
+            <div class="skin-param-hints"><span>0.0 Pale</span><span>0.5 Medium</span><span>1.0 Deep Dark</span></div>
+          </div>
+          <!-- Pheomelanin Ratio -->
+          <div class="skin-param-group">
+            <div class="skin-param-header">
+              <span>Pheomelanin Warmth (ρ_pheo)</span>
+              <span class="skin-val" id="val-pheo-ratio">0.25</span>
+            </div>
+            <input type="range" id="slider-pheo-ratio" min="0.00" max="1.00" step="0.01" value="0.25" class="skin-slider" />
+            <div class="skin-param-hints"><span>0.0 Eumelanin</span><span>1.0 Warm Red</span></div>
+          </div>
+          <!-- Subsurface Scattering (SSS) -->
+          <div class="skin-param-group">
+            <div class="skin-param-header">
+              <span>Dermal Scatter (SSS)</span>
+              <span class="skin-val" id="val-skin-sss">0.45</span>
+            </div>
+            <input type="range" id="slider-skin-sss" min="0.00" max="1.00" step="0.02" value="0.45" class="skin-slider" />
+            <div class="skin-param-hints"><span>Opaque</span><span>Epidermal Transmission</span></div>
+          </div>
+          <!-- Micro-roughness -->
+          <div class="skin-param-group">
+            <div class="skin-param-header">
+              <span>Epidermal Micro-Roughness</span>
+              <span class="skin-val" id="val-skin-rough">0.55</span>
+            </div>
+            <input type="range" id="slider-skin-rough" min="0.10" max="0.95" step="0.01" value="0.55" class="skin-slider" />
+            <div class="skin-param-hints"><span>0.1 Glossy</span><span>0.95 Matte</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sub-panel: 2DGS Planar Surfels Controls -->
+      <div id="skin-subpanel-surfel" class="skin-subpanel" style="display:none;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:12px;">
+          <div class="skin-param-group">
+            <div class="skin-param-header"><span>Surfel Splat Density</span><span class="skin-val" id="val-surfel-density">35</span></div>
+            <input type="range" id="slider-surfel-density" min="15" max="80" step="1" value="35" class="skin-slider" />
+            <div class="skin-param-hints"><span>Sparse Discs</span><span>Dense Surfel Field</span></div>
+          </div>
+          <div class="skin-param-group">
+            <div class="skin-param-header"><span>Disc Radius / Falloff</span><span class="skin-val" id="val-surfel-radius">0.45</span></div>
+            <input type="range" id="slider-surfel-radius" min="0.20" max="0.70" step="0.02" value="0.45" class="skin-slider" />
+            <div class="skin-param-hints"><span>Point Splats</span><span>Overlapping Discs</span></div>
+          </div>
+          <div class="skin-param-group">
+            <div class="skin-param-header"><span>Gaussian Opacity</span><span class="skin-val" id="val-surfel-opacity">0.88</span></div>
+            <input type="range" id="slider-surfel-opacity" min="0.20" max="1.00" step="0.02" value="0.88" class="skin-slider" />
+            <div class="skin-param-hints"><span>Semidiaphanous</span><span>Solid Splat Sheet</span></div>
+          </div>
+          <div class="skin-param-group">
+            <div class="skin-param-header"><span>Surfel Tint</span></div>
+            <div style="display:flex; gap:6px; margin-top:4px;">
+              <button class="fitz-chip active" id="btn-surfel-melanin-tint">Melanin Conformal</button>
+              <button class="fitz-chip" id="btn-surfel-iridescent-tint">Normal Iridescent</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sub-panel: Cyber Biomech Controls -->
+      <div id="skin-subpanel-cyber" class="skin-subpanel" style="display:none;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:12px;">
+          <div class="skin-param-group">
+            <div class="skin-param-header"><span>Titanium Polish</span><span class="skin-val" id="val-cyber-metal">0.90</span></div>
+            <input type="range" id="slider-cyber-metal" min="0.20" max="1.00" step="0.02" value="0.90" class="skin-slider" />
+            <div class="skin-param-hints"><span>Matte Carbon</span><span>Mirror Chrome</span></div>
+          </div>
+          <div class="skin-param-group">
+            <div class="skin-param-header"><span>Circuit Bus Glow</span><span class="skin-val" id="val-cyber-glow">0.80</span></div>
+            <input type="range" id="slider-cyber-glow" min="0.00" max="2.00" step="0.05" value="0.80" class="skin-slider" />
+            <div class="skin-param-hints"><span>Cold Quenched</span><span>Overdriven Neon</span></div>
+          </div>
+          <div class="skin-param-group">
+            <div class="skin-param-header"><span>Bus Trace Hue</span></div>
+            <div style="display:flex; gap:4px; margin-top:4px;">
+              <button class="fitz-chip active" data-cyber-color="cyan" style="color:#38bdf8;">Cyan Pulse</button>
+              <button class="fitz-chip" data-cyber-color="amber" style="color:#fbbf24;">Amber Hazard</button>
+              <button class="fitz-chip" data-cyber-color="magenta" style="color:#f472b6;">Neon Pink</button>
+            </div>
+          </div>
+          <div class="skin-param-group">
+            <div class="skin-param-header"><span>Joint Bus Mode</span></div>
+            <div style="display:flex; gap:6px; margin-top:4px;">
+              <button class="fitz-chip active" id="btn-toggle-cyber-pulse">Pulsing Conduits</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -907,13 +1214,16 @@
       <button class="tool-btn" data-cam="knuckles">Knuckles</button>
     </div>
 
-    <!-- Shading & Material Modes -->
+    <!-- Skinning & Shading Modes -->
     <div class="toolbar-row">
-      <span class="toolbar-label">Shading:</span>
+      <span class="toolbar-label">Skin:</span>
       <button class="tool-btn active" data-mat="clay">18% Studio Clay</button>
-      <button class="tool-btn" data-mat="skin">PBR Skin</button>
+      <button class="tool-btn" data-mat="melanin">Biophysical Melanin</button>
+      <button class="tool-btn" data-mat="surfel">2DGS Planar Surfels</button>
+      <button class="tool-btn" data-mat="cyber">Cyber Biomech</button>
       <button class="tool-btn" data-mat="xray">X-Ray Bones</button>
       <button class="tool-btn" data-mat="wireframe">Wireframe</button>
+      <button class="tool-btn" id="btn-open-skin-inspector" style="color:#f472b6; border-color:rgba(236,72,153,0.4); font-weight:700;">⚙️ Skin Studio</button>
     </div>
 
     <!-- Isolation & Skeleton Toggles -->
@@ -989,6 +1299,21 @@
     const state = {
       selectedJointName: 'LeftIndex1',
       activeMaterial: 'clay',
+      skin: {
+        modality: 'clay',
+        melaninFraction: 0.35,
+        pheomelaninRatio: 0.25,
+        sss: 0.45,
+        roughness: 0.55,
+        surfelDensity: 35.0,
+        surfelRadius: 0.45,
+        surfelOpacity: 0.88,
+        surfelIridescent: false,
+        cyberMetal: 0.90,
+        cyberGlow: 0.80,
+        cyberColor: 0x00f0ff,
+        cyberPulse: true
+      },
       isIsolated: true,
       showJoints: true,
       enforceLimits: true,
@@ -1233,7 +1558,51 @@
     // Cross-section clipping plane to cleanly isolate Forearm & Hand
     const clipPlane = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0.32);
 
-    // Material Library
+    /**
+     * Analytical Biophysical Melanin Spectral Absorption Function
+     * Aligned directly with packages/core/src/common/humanoid-avatar-protocol.ts
+     * Calculates linear RGB reflectance from eumelanin and pheomelanin absorption spectra.
+     */
+    function computeMelaninAlbedo(melaninFraction = 0.35, pheomelaninRatio = 0.25) {
+      const f = Math.max(0.0, Math.min(1.0, melaninFraction));
+      const p = Math.max(0.0, Math.min(1.0, pheomelaninRatio));
+
+      // Base dermal albedo before melanin absorption (epidermal scatter reflectance)
+      const baseR = 0.82;
+      const baseG = 0.62;
+      const baseB = 0.52;
+
+      // Spectral absorption factors for eumelanin (neutral-brown) and pheomelanin (reddish-yellow)
+      const euAbsorption = [1.8, 3.2, 5.5];
+      const phAbsorption = [0.8, 2.4, 6.2];
+
+      const effAbsR = (1 - p) * euAbsorption[0] + p * phAbsorption[0];
+      const effAbsG = (1 - p) * euAbsorption[1] + p * phAbsorption[1];
+      const effAbsB = (1 - p) * euAbsorption[2] + p * phAbsorption[2];
+
+      const r = baseR * Math.exp(-f * effAbsR);
+      const g = baseG * Math.exp(-f * effAbsG);
+      const b = baseB * Math.exp(-f * effAbsB);
+
+      return [
+        Math.max(0.02, Math.min(1.0, r)),
+        Math.max(0.015, Math.min(1.0, g)),
+        Math.max(0.01, Math.min(1.0, b)),
+        1.0
+      ];
+    }
+
+    function linearToSrgbHex(r, g, b) {
+      const toSrgb = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1.0 / 2.4) - 0.055);
+      const sr = Math.round(Math.max(0, Math.min(1, toSrgb(r))) * 255);
+      const sg = Math.round(Math.max(0, Math.min(1, toSrgb(g))) * 255);
+      const sb = Math.round(Math.max(0, Math.min(1, toSrgb(b))) * 255);
+      return '#' + [sr, sg, sb].map(x => x.toString(16).padStart(2, '0')).join('');
+    }
+
+    const initMelRgb = computeMelaninAlbedo(state.skin.melaninFraction, state.skin.pheomelaninRatio);
+
+    // Material Library (SB-Human Multi-Modality Protocol v2)
     const materials = {
       clay: new THREE.MeshStandardMaterial({
         color: 0x8a929a,
@@ -1242,15 +1611,41 @@
         clippingPlanes: [clipPlane],
         clipShadows: true
       }),
-      skin: new THREE.MeshStandardMaterial({
-        color: 0xdfab9c,
-        roughness: 0.52,
+      melanin: new THREE.MeshPhysicalMaterial({
+        color: new THREE.Color(initMelRgb[0], initMelRgb[1], initMelRgb[2]),
+        roughness: state.skin.roughness,
         metalness: 0.02,
+        sheen: 0.35 * state.skin.sss,
+        sheenColor: new THREE.Color(initMelRgb[0] * 1.3, initMelRgb[1] * 1.0, initMelRgb[2] * 0.9),
+        transmission: 0.04 * state.skin.sss,
+        thickness: 0.02,
         clippingPlanes: [clipPlane],
         clipShadows: true
       }),
-      xray: new THREE.MeshStandardMaterial({
+      surfel: new THREE.MeshStandardMaterial({
+        color: new THREE.Color(initMelRgb[0], initMelRgb[1], initMelRgb[2]),
+        roughness: 0.65,
+        metalness: 0.08,
+        transparent: true,
+        opacity: state.skin.surfelOpacity,
+        clippingPlanes: [clipPlane],
+        clipShadows: true
+      }),
+      cyber: new THREE.MeshStandardMaterial({
+        color: 0x181e25,
+        roughness: 0.25,
+        metalness: state.skin.cyberMetal,
+        emissive: new THREE.Color(state.skin.cyberColor),
+        emissiveIntensity: state.skin.cyberGlow,
+        clippingPlanes: [clipPlane],
+        clipShadows: true
+      }),
+      xray: new THREE.MeshPhysicalMaterial({
         color: 0x38bdf8,
+        roughness: 0.15,
+        metalness: 0.05,
+        transmission: 0.75,
+        thickness: 0.05,
         transparent: true,
         opacity: 0.35,
         clippingPlanes: [clipPlane]
@@ -1260,6 +1655,69 @@
         wireframe: true,
         clippingPlanes: [clipPlane]
       })
+    };
+
+    // Alias 'skin' to 'melanin' for backwards compatibility
+    materials.skin = materials.melanin;
+
+    // Attach Shader Hooks for 2DGS Surfel Discs & Cyber Biomech
+    materials.surfel.onBeforeCompile = (shader) => {
+      shader.uniforms.uSurfelDensity = { value: state.skin.surfelDensity };
+      shader.uniforms.uSurfelRadius = { value: state.skin.surfelRadius };
+      shader.uniforms.uSurfelOpacity = { value: state.skin.surfelOpacity };
+      shader.uniforms.uIridescent = { value: state.skin.surfelIridescent ? 1.0 : 0.0 };
+
+      shader.fragmentShader = `
+        uniform float uSurfelDensity;
+        uniform float uSurfelRadius;
+        uniform float uSurfelOpacity;
+        uniform float uIridescent;
+      ` + shader.fragmentShader;
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `
+        #include <dithering_fragment>
+        // 2DGS Oriented Planar Surfel Discs with Gaussian Radial Falloff
+        vec2 surfCoord = fract(vUv * uSurfelDensity) - vec2(0.5);
+        float dist = length(surfCoord);
+        if (dist > uSurfelRadius) {
+          discard; // Sharp disc boundary
+        }
+        float gaussianWeight = exp(-4.0 * (dist * dist));
+        gl_FragColor.a *= gaussianWeight * uSurfelOpacity;
+
+        if (uIridescent > 0.5) {
+          vec3 surfNorm = normalize(vNormal) * 0.5 + 0.5;
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, surfNorm, 0.45);
+        }
+        `
+      );
+      materials.surfel.userData.shader = shader;
+    };
+
+    materials.cyber.onBeforeCompile = (shader) => {
+      shader.uniforms.uBusPulse = { value: 1.0 };
+      shader.uniforms.uBusColor = { value: new THREE.Color(state.skin.cyberColor) };
+
+      shader.fragmentShader = `
+        uniform float uBusPulse;
+        uniform vec3 uBusColor;
+      ` + shader.fragmentShader;
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <emissivemap_fragment>',
+        `
+        #include <emissivemap_fragment>
+        // Procedural Biomechanical Bus Lines & Phalange Circuit Conduits
+        float gridU = abs(fract(vUv.x * 24.0) - 0.5);
+        float gridV = abs(fract(vUv.y * 18.0) - 0.5);
+        float busLine = step(gridU, 0.04) + step(gridV, 0.035);
+        float pulse = 0.7 + 0.3 * sin(uBusPulse * 3.5 + vUv.y * 15.0);
+        totalEmissiveRadiance += uBusColor * busLine * pulse * 1.6;
+        `
+      );
+      materials.cyber.userData.shader = shader;
     };
 
     async function loadSbHumanModel() {
@@ -1844,12 +2302,411 @@
     }
 
     /* =====================================================================
+     * SB-Human Multi-Modality Skinning Engine (Protocol v2)
+     * ===================================================================== */
+
+    const FITZPATRICK_PRESETS = {
+      1: { f: 0.08, p: 0.40, name: 'Type I/II Fair (Nordic / Pale)', hex: '#f2c9b6' },
+      2: { f: 0.18, p: 0.32, name: 'Type II Light (Fair / Peachy)', hex: '#e8b59e' },
+      3: { f: 0.35, p: 0.25, name: 'Type III Golden (Medium / Warm)', hex: '#c58d6e' },
+      4: { f: 0.52, p: 0.18, name: 'Type IV Olive (Mediterranean / Tan)', hex: '#9d6342' },
+      5: { f: 0.70, p: 0.12, name: 'Type V Bronze (Deep Tan / Brown)', hex: '#6f3c22' },
+      6: { f: 0.92, p: 0.06, name: 'Type VI Deep Melanin (Obsidian)', hex: '#371e11' }
+    };
+
+    function updateSkinInspectorUI() {
+      // Update Melanin sub-panel values
+      const melVal = document.getElementById('val-melanin-frac');
+      const pheoVal = document.getElementById('val-pheo-ratio');
+      const sssVal = document.getElementById('val-skin-sss');
+      const roughVal = document.getElementById('val-skin-rough');
+
+      if (melVal) melVal.textContent = state.skin.melaninFraction.toFixed(2);
+      if (pheoVal) pheoVal.textContent = state.skin.pheomelaninRatio.toFixed(2);
+      if (sssVal) sssVal.textContent = state.skin.sss.toFixed(2);
+      if (roughVal) roughVal.textContent = state.skin.roughness.toFixed(2);
+
+      const sliderMel = document.getElementById('slider-melanin-frac');
+      const sliderPheo = document.getElementById('slider-pheo-ratio');
+      const sliderSss = document.getElementById('slider-skin-sss');
+      const sliderRough = document.getElementById('slider-skin-rough');
+
+      if (sliderMel) sliderMel.value = state.skin.melaninFraction;
+      if (sliderPheo) sliderPheo.value = state.skin.pheomelaninRatio;
+      if (sliderSss) sliderSss.value = state.skin.sss;
+      if (sliderRough) sliderRough.value = state.skin.roughness;
+
+      // Update Swatch & Title
+      const [r, g, b] = computeMelaninAlbedo(state.skin.melaninFraction, state.skin.pheomelaninRatio);
+      const hex = linearToSrgbHex(r, g, b);
+      const swatch = document.getElementById('melanin-swatch');
+      const toneTitle = document.getElementById('melanin-tone-title');
+      const hexCode = document.getElementById('melanin-hex-code');
+
+      if (swatch) swatch.style.background = hex;
+      if (hexCode) hexCode.textContent = `Linear RGB: [${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}] · sRGB: ${hex}`;
+
+      // Nearest Fitzpatrick
+      let nearestType = 3;
+      let minDiff = 999;
+      Object.entries(FITZPATRICK_PRESETS).forEach(([t, p]) => {
+        const diff = Math.abs(p.f - state.skin.melaninFraction);
+        if (diff < minDiff) {
+          minDiff = diff;
+          nearestType = parseInt(t);
+        }
+      });
+      if (toneTitle) {
+        toneTitle.textContent = `${FITZPATRICK_PRESETS[nearestType].name}`;
+      }
+      document.querySelectorAll('.fitz-chip[data-fitz]').forEach(chip => {
+        chip.classList.toggle('active', parseInt(chip.getAttribute('data-fitz')) === nearestType);
+      });
+
+      // Update Surfel sub-panel
+      const sDens = document.getElementById('val-surfel-density');
+      const sRad = document.getElementById('val-surfel-radius');
+      const sOp = document.getElementById('val-surfel-opacity');
+      if (sDens) sDens.textContent = Math.round(state.skin.surfelDensity);
+      if (sRad) sRad.textContent = state.skin.surfelRadius.toFixed(2);
+      if (sOp) sOp.textContent = state.skin.surfelOpacity.toFixed(2);
+
+      // Update Cyber sub-panel
+      const cMet = document.getElementById('val-cyber-metal');
+      const cGlow = document.getElementById('val-cyber-glow');
+      if (cMet) cMet.textContent = state.skin.cyberMetal.toFixed(2);
+      if (cGlow) cGlow.textContent = state.skin.cyberGlow.toFixed(2);
+    }
+
+    function updateSkinMaterial() {
+      const [r, g, b] = computeMelaninAlbedo(state.skin.melaninFraction, state.skin.pheomelaninRatio);
+
+      // 1. Melanin Physical Material
+      if (materials.melanin) {
+        materials.melanin.color.setRGB(r, g, b);
+        materials.melanin.roughness = state.skin.roughness;
+        materials.melanin.sheen = 0.35 * state.skin.sss;
+        materials.melanin.sheenColor.setRGB(r * 1.3, g * 1.0, b * 0.9);
+        materials.melanin.transmission = 0.04 * state.skin.sss;
+        materials.melanin.needsUpdate = true;
+      }
+
+      // 2. Surfel Material
+      if (materials.surfel) {
+        if (!state.skin.surfelIridescent) {
+          materials.surfel.color.setRGB(r, g, b);
+        } else {
+          materials.surfel.color.setRGB(0.7, 0.7, 0.8);
+        }
+        materials.surfel.opacity = state.skin.surfelOpacity;
+        if (materials.surfel.userData.shader) {
+          materials.surfel.userData.shader.uniforms.uSurfelDensity.value = state.skin.surfelDensity;
+          materials.surfel.userData.shader.uniforms.uSurfelRadius.value = state.skin.surfelRadius;
+          materials.surfel.userData.shader.uniforms.uSurfelOpacity.value = state.skin.surfelOpacity;
+          materials.surfel.userData.shader.uniforms.uIridescent.value = state.skin.surfelIridescent ? 1.0 : 0.0;
+        }
+        materials.surfel.needsUpdate = true;
+      }
+
+      // 3. Cyber Biomech Material
+      if (materials.cyber) {
+        materials.cyber.metalness = state.skin.cyberMetal;
+        materials.cyber.emissive.setHex(state.skin.cyberColor);
+        materials.cyber.emissiveIntensity = state.skin.cyberGlow;
+        if (materials.cyber.userData.shader) {
+          materials.cyber.userData.shader.uniforms.uBusColor.value.setHex(state.skin.cyberColor);
+        }
+        materials.cyber.needsUpdate = true;
+      }
+
+      updateSkinInspectorUI();
+    }
+
+    function setSkinModality(modalityKey) {
+      if (!materials[modalityKey]) return;
+      state.skin.modality = modalityKey;
+      state.activeMaterial = modalityKey;
+
+      if (skinnedMesh) {
+        skinnedMesh.material = materials[modalityKey];
+      }
+
+      // Update bottom toolbar buttons
+      document.querySelectorAll('[data-mat]').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-mat') === modalityKey);
+      });
+
+      // Update drawer tab buttons
+      document.querySelectorAll('[data-skin-modality]').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-skin-modality') === modalityKey);
+      });
+
+      // Toggle drawer sub-panels
+      const melSub = document.getElementById('skin-subpanel-melanin');
+      const surfSub = document.getElementById('skin-subpanel-surfel');
+      const cybSub = document.getElementById('skin-subpanel-cyber');
+
+      if (melSub) melSub.style.display = (modalityKey === 'melanin' || modalityKey === 'skin') ? 'block' : 'none';
+      if (surfSub) surfSub.style.display = (modalityKey === 'surfel') ? 'block' : 'none';
+      if (cybSub) cybSub.style.display = (modalityKey === 'cyber') ? 'block' : 'none';
+
+      updateSkinMaterial();
+    }
+
+    function applyFitzpatrickPreset(typeNum) {
+      const preset = FITZPATRICK_PRESETS[typeNum];
+      if (!preset) return;
+      state.skin.melaninFraction = preset.f;
+      state.skin.pheomelaninRatio = preset.p;
+      setSkinModality('melanin');
+    }
+
+    function setupSkinningStudioUI() {
+      // Toggle skin studio drawer
+      const skinDrawer = document.getElementById('skin-studio-drawer');
+      const btnToggleSkin = document.getElementById('btn-toggle-skin-drawer');
+      const btnCloseSkin = document.getElementById('btn-close-skin-drawer');
+      const btnOpenInspector = document.getElementById('btn-open-skin-inspector');
+
+      const toggleDrawer = () => {
+        const isOpen = skinDrawer.style.display === 'flex';
+        skinDrawer.style.display = isOpen ? 'none' : 'flex';
+        if (btnToggleSkin) btnToggleSkin.classList.toggle('active', !isOpen);
+        if (!isOpen) {
+          updateSkinInspectorUI();
+          setSkinModality(state.skin.modality);
+        }
+      };
+
+      if (btnToggleSkin && skinDrawer) btnToggleSkin.addEventListener('click', toggleDrawer);
+      if (btnOpenInspector && skinDrawer) btnOpenInspector.addEventListener('click', toggleDrawer);
+      if (btnCloseSkin && skinDrawer) {
+        btnCloseSkin.addEventListener('click', () => {
+          skinDrawer.style.display = 'none';
+          if (btnToggleSkin) btnToggleSkin.classList.remove('active');
+        });
+      }
+
+      // Drawer Modality Tabs
+      document.querySelectorAll('[data-skin-modality]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const mod = btn.getAttribute('data-skin-modality');
+          setSkinModality(mod);
+        });
+      });
+
+      // Bottom Toolbar Shading Buttons
+      document.querySelectorAll('[data-mat]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const mod = btn.getAttribute('data-mat');
+          setSkinModality(mod);
+        });
+      });
+
+      // Fitzpatrick Chips
+      document.querySelectorAll('.fitz-chip[data-fitz]').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const typeNum = parseInt(chip.getAttribute('data-fitz'));
+          applyFitzpatrickPreset(typeNum);
+        });
+      });
+
+      // Melanin Sliders
+      const sMel = document.getElementById('slider-melanin-frac');
+      const sPheo = document.getElementById('slider-pheo-ratio');
+      const sSss = document.getElementById('slider-skin-sss');
+      const sRough = document.getElementById('slider-skin-rough');
+
+      if (sMel) {
+        sMel.addEventListener('input', (e) => {
+          state.skin.melaninFraction = parseFloat(e.target.value);
+          setSkinModality('melanin');
+        });
+      }
+      if (sPheo) {
+        sPheo.addEventListener('input', (e) => {
+          state.skin.pheomelaninRatio = parseFloat(e.target.value);
+          setSkinModality('melanin');
+        });
+      }
+      if (sSss) {
+        sSss.addEventListener('input', (e) => {
+          state.skin.sss = parseFloat(e.target.value);
+          updateSkinMaterial();
+        });
+      }
+      if (sRough) {
+        sRough.addEventListener('input', (e) => {
+          state.skin.roughness = parseFloat(e.target.value);
+          updateSkinMaterial();
+        });
+      }
+
+      // Surfel Sliders
+      const sDens = document.getElementById('slider-surfel-density');
+      const sRad = document.getElementById('slider-surfel-radius');
+      const sOp = document.getElementById('slider-surfel-opacity');
+
+      if (sDens) {
+        sDens.addEventListener('input', (e) => {
+          state.skin.surfelDensity = parseFloat(e.target.value);
+          updateSkinMaterial();
+        });
+      }
+      if (sRad) {
+        sRad.addEventListener('input', (e) => {
+          state.skin.surfelRadius = parseFloat(e.target.value);
+          updateSkinMaterial();
+        });
+      }
+      if (sOp) {
+        sOp.addEventListener('input', (e) => {
+          state.skin.surfelOpacity = parseFloat(e.target.value);
+          updateSkinMaterial();
+        });
+      }
+
+      // Surfel Tint Mode Buttons
+      const btnSurfelMel = document.getElementById('btn-surfel-melanin-tint');
+      const btnSurfelIrid = document.getElementById('btn-surfel-iridescent-tint');
+      if (btnSurfelMel && btnSurfelIrid) {
+        btnSurfelMel.addEventListener('click', () => {
+          state.skin.surfelIridescent = false;
+          btnSurfelMel.classList.add('active');
+          btnSurfelIrid.classList.remove('active');
+          updateSkinMaterial();
+        });
+        btnSurfelIrid.addEventListener('click', () => {
+          state.skin.surfelIridescent = true;
+          btnSurfelIrid.classList.add('active');
+          btnSurfelMel.classList.remove('active');
+          updateSkinMaterial();
+        });
+      }
+
+      // Cyber Biomech Sliders & Toggles
+      const sCyMetal = document.getElementById('slider-cyber-metal');
+      const sCyGlow = document.getElementById('slider-cyber-glow');
+      if (sCyMetal) {
+        sCyMetal.addEventListener('input', (e) => {
+          state.skin.cyberMetal = parseFloat(e.target.value);
+          updateSkinMaterial();
+        });
+      }
+      if (sCyGlow) {
+        sCyGlow.addEventListener('input', (e) => {
+          state.skin.cyberGlow = parseFloat(e.target.value);
+          updateSkinMaterial();
+        });
+      }
+
+      // Cyber Colors
+      const cyberColorMap = {
+        cyan: 0x00f0ff,
+        amber: 0xffaa00,
+        magenta: 0xff0088
+      };
+      document.querySelectorAll('[data-cyber-color]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('[data-cyber-color]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          const colKey = btn.getAttribute('data-cyber-color');
+          state.skin.cyberColor = cyberColorMap[colKey] || 0x00f0ff;
+          updateSkinMaterial();
+        });
+      });
+
+      // Cyber Pulse Toggle
+      const btnCyPulse = document.getElementById('btn-toggle-cyber-pulse');
+      if (btnCyPulse) {
+        btnCyPulse.addEventListener('click', () => {
+          state.skin.cyberPulse = !state.skin.cyberPulse;
+          btnCyPulse.classList.toggle('active', state.skin.cyberPulse);
+        });
+      }
+
+      // Auto-Skin from Photo Button in Drawer
+      const btnAutoSkinDrawer = document.getElementById('btn-auto-skin-photo');
+      if (btnAutoSkinDrawer) {
+        btnAutoSkinDrawer.addEventListener('click', () => {
+          if (currentAttachedImage && currentAttachedImage._skinEst) {
+            state.skin.melaninFraction = currentAttachedImage._skinEst.melaninFraction;
+            state.skin.pheomelaninRatio = currentAttachedImage._skinEst.pheomelaninRatio;
+            setSkinModality('melanin');
+            showToast(`Auto-skinned hand from photo: ${Math.round(state.skin.melaninFraction * 100)}% Melanin`, '🧬', 3500);
+          } else {
+            showToast('Attach an image containing a hand first', '⚠️', 3000);
+          }
+        });
+      }
+
+      updateSkinInspectorUI();
+    }
+
+    /* =====================================================================
      * Natural Language Prompt Posing Engine
      * ===================================================================== */
 
     function parsePrompt(text) {
       const prompt = text.trim().toLowerCase();
       if (!prompt) return;
+
+      // 0. Multi-Modality Skinning Commands
+      if (/clay|matte grey|sculpt|void/i.test(prompt) && /skin|shade|modality|material|texture|hand/i.test(prompt)) {
+        setSkinModality('clay');
+        showToast('Skin switched to 18% Studio Clay Baseline', '🏛️');
+        return;
+      }
+      if (/surfel|2dgs|gaussian disc|splat/i.test(prompt)) {
+        setSkinModality('surfel');
+        showToast('Skin switched to 2DGS Planar Gaussian Surfels', '🫧');
+        return;
+      }
+      if (/cyber|robot|mech|cyborg|titanium|neon|futuristic/i.test(prompt)) {
+        setSkinModality('cyber');
+        showToast('Skin switched to Cyber Biomech Chassis', '⚡');
+        return;
+      }
+      if (/xray|x-ray|bone|skelet|translucent|hologram/i.test(prompt)) {
+        setSkinModality('xray');
+        showToast('Skin switched to X-Ray Holographic Dermis', '🩻');
+        return;
+      }
+      if (/wireframe|topology|mesh wire|lines/i.test(prompt)) {
+        setSkinModality('wireframe');
+        showToast('Skin switched to Manifold Wireframe Topology', '🕸️');
+        return;
+      }
+      if (/fair|pale|nordic|porcelain/i.test(prompt) && /skin|tone|complexion|shade/i.test(prompt)) {
+        applyFitzpatrickPreset(1);
+        showToast('Applied Fitzpatrick Type I/II (Fair / Nordic)', '🧬');
+        return;
+      }
+      if (/golden|light skin|medium light/i.test(prompt) && /skin|tone|complexion/i.test(prompt)) {
+        applyFitzpatrickPreset(3);
+        showToast('Applied Fitzpatrick Type III (Golden / Light)', '🧬');
+        return;
+      }
+      if (/olive|mediterranean|tan/i.test(prompt) && /skin|tone|complexion/i.test(prompt)) {
+        applyFitzpatrickPreset(4);
+        showToast('Applied Fitzpatrick Type IV (Olive / Mediterranean)', '🧬');
+        return;
+      }
+      if (/bronze|dark tan/i.test(prompt) && /skin|tone|complexion/i.test(prompt)) {
+        applyFitzpatrickPreset(5);
+        showToast('Applied Fitzpatrick Type V (Bronze / Deep Tan)', '🧬');
+        return;
+      }
+      if (/dark skin|deep melanin|obsidian|african|black/i.test(prompt) && /skin|tone|complexion|melanin/i.test(prompt)) {
+        applyFitzpatrickPreset(6);
+        showToast('Applied Fitzpatrick Type VI (Deep Melanin / Obsidian)', '🧬');
+        return;
+      }
+      if (/melanin|human skin|pbr skin|flesh/i.test(prompt)) {
+        setSkinModality('melanin');
+        showToast('Skin switched to Biophysical Melanin PBR', '🧬');
+        return;
+      }
 
       // 1. Direct Holistic Gesture Matches
       if (/fist|clench|punch|squeeze/i.test(prompt)) {
@@ -2036,18 +2893,8 @@
         });
       });
 
-      // Material Toggles
-      document.querySelectorAll('[data-mat]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('[data-mat]').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-          const matKey = btn.getAttribute('data-mat');
-          state.activeMaterial = matKey;
-          if (skinnedMesh && materials[matKey]) {
-            skinnedMesh.material = materials[matKey];
-          }
-        });
-      });
+      // SB-Human Multi-Modality Skinning Studio Wire-up
+      setupSkinningStudioUI();
 
       // Isolation Toggle
       const isoBtn = document.getElementById('btn-toggle-isolated');
@@ -2350,6 +3197,75 @@
     }
 
     /**
+     * Analytical Image Skin Tone & Melanin Spectrum Estimator
+     * Samples epidermal chromaticity in the isolated hand region
+     * and maps to continuous Melanin Fraction (f_mel) and Pheomelanin Ratio (ρ_pheo).
+     */
+    function analyzeImageSkinTone(img) {
+      const naturalW = img.naturalWidth || img.width || 512;
+      const naturalH = img.naturalHeight || img.height || 512;
+      const sampleW = 96;
+      const sampleH = Math.max(1, Math.round(96 * (naturalH / naturalW)));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = sampleW;
+      canvas.height = sampleH;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, sampleW, sampleH);
+
+      try {
+        const imgData = ctx.getImageData(0, 0, sampleW, sampleH).data;
+        let sumR = 0, sumG = 0, sumB = 0, skinCount = 0;
+
+        for (let y = 0; y < sampleH; y++) {
+          for (let x = 0; x < sampleW; x++) {
+            const idx = (y * sampleW + x) * 4;
+            const r = imgData[idx];
+            const g = imgData[idx + 1];
+            const b = imgData[idx + 2];
+
+            // Universal skin chromatic cluster test
+            const isSkin = (r > 50) && (g > 30) && (b > 15) &&
+                           ((Math.max(r, g, b) - Math.min(r, g, b)) > 12) &&
+                           (r > g) && (r > b);
+
+            if (isSkin) {
+              sumR += r;
+              sumG += g;
+              sumB += b;
+              skinCount++;
+            }
+          }
+        }
+
+        if (skinCount < 10) return null;
+
+        const avgR = sumR / skinCount;
+        const avgG = sumG / skinCount;
+        const avgB = sumB / skinCount;
+
+        // Relative perceived luminance
+        const lum = 0.2126 * (avgR / 255) + 0.7152 * (avgG / 255) + 0.0722 * (avgB / 255);
+
+        // Continuous mapping to melanin fraction f_mel in [0.0, 1.0]
+        const melaninFraction = Math.max(0.02, Math.min(0.98, 1.0 - (lum / 0.82)));
+
+        // Warmth / redness ratio (pheomelanin vs eumelanin)
+        const redExcess = Math.max(0, (avgR - avgG) / (avgR + 1e-4));
+        const pheomelaninRatio = Math.max(0.05, Math.min(0.85, redExcess * 1.6));
+
+        return {
+          melaninFraction,
+          pheomelaninRatio,
+          avgColor: [avgR / 255, avgG / 255, avgB / 255],
+          hex: linearToSrgbHex(avgR / 255, avgG / 255, avgB / 255)
+        };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    /**
      * Non-Distorting Aspect-Ratio-Preserving Downscaler & Crop Engine
      */
     function prepareImageForSubmission(img, cropMode = 'auto_isolate') {
@@ -2404,6 +3320,13 @@
       if (!container) return;
 
       const prepared = prepareImageForSubmission(img, currentCropMode);
+      const skinEst = analyzeImageSkinTone(img);
+      img._skinEst = skinEst;
+
+      const btnAutoSkinDrawer = document.getElementById('btn-auto-skin-photo');
+      if (btnAutoSkinDrawer) {
+        btnAutoSkinDrawer.style.display = skinEst ? 'inline-block' : 'none';
+      }
 
       const arText = `${prepared.width}×${prepared.height} (${(prepared.aspectRatio).toFixed(2)}:1)`;
       const cropBadge = prepared.cropped
@@ -2425,6 +3348,7 @@
           <div class="crop-toggle-group">
             <button class="crop-pill ${currentCropMode === 'auto_isolate' ? 'active' : ''}" id="btn-crop-isolate" title="Isolate and zoom dominant hand">🎯 Auto-Isolate</button>
             <button class="crop-pill ${currentCropMode === 'full' ? 'active' : ''}" id="btn-crop-full" title="Keep complete camera frame">🖼️ Full Image</button>
+            ${skinEst ? `<button class="crop-pill" id="btn-chip-auto-skin" style="background:rgba(236,72,153,0.18); border-color:#ec4899; color:#f472b6; font-weight:600;" title="Auto-match hand skin tone to this photo">🎨 Auto-Skin (${Math.round(skinEst.melaninFraction * 100)}% Melanin)</button>` : ''}
           </div>
           <button class="btn-remove-attachment" id="btn-remove-img" title="Remove image">✕</button>
         </div>
@@ -2442,6 +3366,16 @@
       document.getElementById('btn-remove-img').addEventListener('click', () => {
         clearAttachedImage();
       });
+
+      const btnChipSkin = document.getElementById('btn-chip-auto-skin');
+      if (btnChipSkin && skinEst) {
+        btnChipSkin.addEventListener('click', () => {
+          state.skin.melaninFraction = skinEst.melaninFraction;
+          state.skin.pheomelaninRatio = skinEst.pheomelaninRatio;
+          setSkinModality('melanin');
+          showToast(`Hand skin tone matched to photo (${Math.round(skinEst.melaninFraction * 100)}% Melanin)`, '🧬', 3500);
+        });
+      }
     }
 
     function clearAttachedImage() {
@@ -2450,6 +3384,10 @@
       if (container) {
         container.style.display = 'none';
         container.innerHTML = '';
+      }
+      const btnAutoSkinDrawer = document.getElementById('btn-auto-skin-photo');
+      if (btnAutoSkinDrawer) {
+        btnAutoSkinDrawer.style.display = 'none';
       }
     }
 
@@ -2586,6 +3524,20 @@
         const mirrorNote = isRightHand ? ' (Right hand mirrored to Left rig)' : ' (Left hand aligned)';
         showToast(`Matched ${data.summary || data.gestureName || 'pose'}${mirrorNote}`, '🖐️', 4500);
 
+        // Auto-skin hand if skin tone was estimated or sampled from reference image
+        if (data.skinEstimation && data.skinEstimation.melaninFraction !== undefined) {
+          state.skin.melaninFraction = data.skinEstimation.melaninFraction;
+          if (data.skinEstimation.pheomelaninRatio !== undefined) {
+            state.skin.pheomelaninRatio = data.skinEstimation.pheomelaninRatio;
+          }
+          setSkinModality('melanin');
+          showToast(`Skin matched: ${data.skinEstimation.summary || 'Melanin ' + Math.round(state.skin.melaninFraction * 100) + '%'}`, '🧬', 4000);
+        } else if (img && img._skinEst) {
+          state.skin.melaninFraction = img._skinEst.melaninFraction;
+          state.skin.pheomelaninRatio = img._skinEst.pheomelaninRatio;
+          setSkinModality('melanin');
+        }
+
       } catch (err) {
         console.error('[Image Pose Error]', err);
         const promptFallback = (promptText || '').toLowerCase();
@@ -2643,6 +3595,11 @@
 
       // Smooth kinematic lerp
       updatePoseLerp();
+
+      // Cyber Bus Uniform Pulse
+      if (materials.cyber && materials.cyber.userData.shader && state.skin.cyberPulse) {
+        materials.cyber.userData.shader.uniforms.uBusPulse.value = time * 0.001;
+      }
 
       // Sync 3D Joint Markers with Skinned Mesh
       if (state.showJoints) {
