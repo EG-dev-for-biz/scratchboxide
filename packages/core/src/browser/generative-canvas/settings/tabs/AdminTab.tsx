@@ -24,6 +24,17 @@ export interface StandaloneStudioItem {
 }
 
 export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
+    // 0. SB-Human Hand & Forearm Kinematics & Skinning Studio
+    {
+        id: 'sbhuman-hand-pose-studio',
+        title: 'SB-Human Hand & Forearm Kinematics & Skinning Studio',
+        subtitle: '55-Joint FK/IK Kinematics · Multimodal Photo Posing · Melanin & 2DGS Surfel Skinning',
+        category: '3DGS & Splats',
+        path: '/sbhuman_hand_pose_studio.html',
+        description: 'Close-up 55-joint hand and forearm kinematic solver with dual FK/IK, real-time ROM clamping, natural language prompt parsing, reference photo auto-posing with aspect-ratio-safe crop, and multi-modality skinning (18% Studio Clay, Biophysical Melanin PBR, 2DGS Planar Surfels, Cyber Biomech, and X-Ray Translucency).',
+        tags: ['SB-Human', '55-Joint Rig', 'Hand Kinematics', 'FK/IK Solver', 'Melanin PBR', '2DGS Surfels', 'Gemini Vision'],
+        badge: '55-JOINT KINEMATICS'
+    },
     // 0. Vector Spatial Intelligence & Semantic Roadmap Studio
     {
         id: 'vector-spatial-intelligence-demo',
