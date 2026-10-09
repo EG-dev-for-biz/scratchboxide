@@ -3347,16 +3347,26 @@ export function parseOrSynthesizeArtifact(
 
         let finalTitle = active3DData?.title || sceneTitle;
         let finalSubtitle = (isAnimateOnly && active3DData?.subtitle) ? active3DData.subtitle : (active3DData?.subtitle || sceneSummary);
+        const isStagingRequest = /stage|ground|anchor|situate|place/i.test(prompt);
         if (hasRealWorldStaging) {
-            const cleanBaseTitle = active3DData?.title
-                ? active3DData.title.replace(/\s*—\s*Staged.*$/i, '')
-                : sceneTitle.replace(/\s*—\s*Staged.*$/i, '').replace(/\s*—\s*ADA Hero Asset/i, '').replace(/\s*—\s*Procedural Vehicle/i, '');
-            finalTitle = `${cleanBaseTitle} — Staged in ${locIntent.landmarkName}`;
-            finalSubtitle = `Real-World Geospatial Staging | [${locIntent.lat.toFixed(4)}°, ${locIntent.lng.toFixed(4)}°] | Studio Grey Clay Grounding`;
-            sceneSummary = `Staged 3D asset at ${locIntent.landmarkName} with real-world geospatial grounding.`;
+            if (isStagingRequest) {
+                const cleanBaseTitle = active3DData?.title
+                    ? active3DData.title.replace(/\s*—\s*Staged.*$/i, '')
+                    : sceneTitle.replace(/\s*—\s*Staged.*$/i, '').replace(/\s*—\s*ADA Hero Asset/i, '').replace(/\s*—\s*Procedural Vehicle/i, '');
+                finalTitle = `${cleanBaseTitle} — Staged in ${locIntent.landmarkName}`;
+                finalSubtitle = `Real-World Geospatial Staging | [${locIntent.lat.toFixed(4)}°, ${locIntent.lng.toFixed(4)}°] | Studio Grey Clay Grounding`;
+                sceneSummary = `Staged 3D asset at ${locIntent.landmarkName} with real-world geospatial grounding.`;
+            } else {
+                finalTitle = `${locIntent.landmarkName} (Studio Grey Clay 3D Tiles)`;
+                finalSubtitle = `Google Maps Photorealistic 3D Tiles in 18% Studio Grey Clay | Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}°`;
+                sceneSummary = `Ingested Google Maps Photorealistic 3D Tiles for ${locIntent.landmarkName} in Studio Grey Clay mode.`;
+            }
         }
 
-        const resolvedObjects = active3DData?.objects ? [...active3DData.objects] : [...defaultObjects];
+        const hasExecutedClayTool = _mcpExecutions.some(exec => exec.toolName === 'google_3d_tiles_get_clay');
+        const resolvedObjects = (hasExecutedClayTool && !isStagingRequest)
+            ? []
+            : (active3DData?.objects ? [...active3DData.objects] : [...defaultObjects]);
         for (const exec of _mcpExecutions) {
             if (exec.toolName === 'stage_3d_vector_world' || exec.toolName === 'google_3d_tiles_get_clay' || exec.toolName === 'execute_3d_python_script') {
                 const res = ((exec as any).resultPayload || (exec as any).result || (exec as any).payload || {}) as any;

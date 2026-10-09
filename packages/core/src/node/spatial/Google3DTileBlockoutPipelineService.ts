@@ -220,6 +220,7 @@ export interface Google3DTilesQueryOptions {
   atomicBuildingIntegrity?: boolean;
   enforceZeroBuildingClipping?: boolean;
   zenithAltitudeMeters?: number;
+  maxLeaves?: number;
 }
 
 export interface TileClayBlockoutRunnerRequest {
@@ -421,6 +422,15 @@ export class Google3DTileBlockoutPipelineService {
 
     // 4. GoogleMapsService landmark registry and geocoding
     try {
+      const syncMatch = GoogleMapsService.getInstance().resolveLandmarkSync(rawQuery);
+      if (syncMatch && syncMatch.lat !== 0 && syncMatch.lng !== 0) {
+        return {
+          lat: Number(syncMatch.lat.toFixed(6)),
+          lng: Number(syncMatch.lng.toFixed(6)),
+          elevation: syncMatch.elevation || 15.0,
+          landmarkName: syncMatch.formattedAddress || rawQuery
+        };
+      }
       const geo = await GoogleMapsService.getInstance().geocode(rawQuery);
       if (geo && geo.lat !== 0 && geo.lng !== 0) {
         return {
@@ -2150,6 +2160,19 @@ export class Google3DTileBlockoutPipelineService {
       const syntheticTile = Google3DTileCrawlerBaker.createSyntheticGeodeticTile(originAlt, 200);
       fs.writeFileSync(outputGlbPath, Google3DTileCrawlerBaker.mergeTileMeshes([syntheticTile], originAlt).glbBuffer);
     }
+    const fileName = path.basename(outputGlbPath);
+    for (const dir of [
+      path.resolve(process.cwd(), 'public/models'),
+      path.resolve(process.cwd(), 'desktop-app/public/models'),
+      path.resolve('/Users/eligreen/dev/scratchbox-ide-master/public/models'),
+      path.resolve('/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/models')
+    ]) {
+      try {
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const dest = path.join(dir, fileName);
+        if (dest !== outputGlbPath) fs.copyFileSync(outputGlbPath, dest);
+      } catch {}
+    }
     mergedGlb = fs.readFileSync(outputGlbPath);
     const parsedStats = this.parseGlbMeshStatistics(mergedGlb);
     if (!parsedStats) throw new Error(`Could not read mesh statistics from ${outputGlbPath}`);
@@ -2292,13 +2315,16 @@ export class Google3DTileBlockoutPipelineService {
     }
 
     const isTextured = mode === 'full-texture';
-    const defaultGlbName = isTextured ? 'google_tiles_textured_area.glb' : 'google_tiles_clay_area.glb';
+    const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
+    const canonicalModelsDir = path.resolve(repoRoot, 'public/models');
+    const sanitizedName = (geoAnchor.landmarkName || (typeof queryOrCoords === 'string' ? queryOrCoords : 'district')).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const defaultGlbName = `${sanitizedName}_${isTextured ? 'textured' : 'clay'}.glb`;
     const defaultVideoName = isTextured ? 'google_tiles_textured_blockout_camera.mp4' : 'google_tiles_clay_blockout_camera.mp4';
     const defaultManifestName = isTextured ? 'google_tiles_textured_manifest.json' : 'google_tiles_blockout_manifest.json';
 
     const outputGlbPath = options?.outputGlbPath
-      ? (path.isAbsolute(options.outputGlbPath) ? options.outputGlbPath : path.join(process.cwd(), options.outputGlbPath))
-      : path.join(process.cwd(), 'public/models', defaultGlbName);
+      ? (path.isAbsolute(options.outputGlbPath) ? options.outputGlbPath : path.resolve(canonicalModelsDir, path.basename(options.outputGlbPath)))
+      : path.join(canonicalModelsDir, defaultGlbName);
 
     const outputVideoPath = options?.outputVideoPath
       ? (path.isAbsolute(options.outputVideoPath) ? options.outputVideoPath : path.join(process.cwd(), options.outputVideoPath))
@@ -2310,7 +2336,7 @@ export class Google3DTileBlockoutPipelineService {
     // crawl leaf tiles directly from Google Maps 3D Tiles API to guarantee authentic geometry in < 10s
     if (!options?.offlineMock && apiKey) {
       try {
-        const radiusMeters = options?.radiusMeters || 120;
+        const radiusMeters = options?.radiusMeters || 160;
         const cacheDir = path.join(process.cwd(), '.scratchbox', 'tiles_cache', 'leaves');
         const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir });
         const anchor = {
@@ -2320,8 +2346,15 @@ export class Google3DTileBlockoutPipelineService {
         };
         const { leaves, session } = await crawler.collectLeafTiles(anchor, radiusMeters);
         if (leaves && leaves.length > 0) {
-          const maxLeaves = 40;
-          const leafSubset = leaves.length > maxLeaves ? leaves.slice(0, maxLeaves) : leaves;
+          const maxLeaves = options?.maxLeaves || 160;
+          // Sort leaves by 3D distance from anchor in ECEF space so the central landmark is 100% contiguous and complete
+          const anchorFrame = GoogleTileDistrictCrawler.localFrame(anchor.lat, anchor.lng, anchor.heightGuessM);
+          const sortedLeaves = [...leaves].sort((a, b) => {
+            const distA = Math.hypot(a.box[0] - anchorFrame.origin[0], a.box[1] - anchorFrame.origin[1], a.box[2] - anchorFrame.origin[2]);
+            const distB = Math.hypot(b.box[0] - anchorFrame.origin[0], b.box[1] - anchorFrame.origin[1], b.box[2] - anchorFrame.origin[2]);
+            return distA - distB;
+          });
+          const leafSubset = sortedLeaves.length > maxLeaves ? sortedLeaves.slice(0, maxLeaves) : sortedLeaves;
           const buffers = await crawler.downloadLeaves(leafSubset, session);
           const parsed = buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b));
           const district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, {

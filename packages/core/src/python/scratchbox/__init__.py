@@ -28,6 +28,7 @@ except ImportError:
         _native = None
 
 from .world import World
+Scene = World
 from .terrain import Terrain
 from .structure import Structure
 from .plant import PlantPreset, Flora, create_vegetation
@@ -1387,6 +1388,7 @@ __all__ = [
     "validation",
     "superellipse_loop",
     "superellipse_point",
+    "Scene",
     "World",
     "Terrain",
     "Structure",

@@ -636,11 +636,19 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
 5. Conclude your response with the next progression step: PBR Materials & Textures (vibrant court acrylics, clearcoat, carbon fiber, etc.).]`;
     } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|circuit|track\b|cyber|flower|garden|plant|flora|botan|manta|island|steampunk|rocket|aircraft|dojo|temple|sculpture|structure|environment/i.test(request.prompt || '')) {
         const initialLocIntent = detectRealWorldLocationIntent(request.prompt || '');
-        if (initialLocIntent?.isRealWorld) {
-            userPrompt += `\n\n[CRITICAL DIRECTIVE — MANDATORY INITIAL LOCATION STAGING: The user explicitly specified the real-world location "${initialLocIntent.landmarkName}" in this initial request ("${request.prompt}").
-1. MANDATORY LOCATION STAGING: The scene MUST be returned STAGED AT THIS LOCATION using Google 3D Tiles in Studio Grey Clay mode (groundTileMode: 'photoreal-clay')! You MUST pass location: "${initialLocIntent.landmarkName}" and coordinates: [${initialLocIntent.lat.toFixed(4)}, ${initialLocIntent.lng.toFixed(4)}] to execute_3d_python_script({ script: "...", location: "${initialLocIntent.landmarkName}", coordinates: [${initialLocIntent.lat.toFixed(4)}, ${initialLocIntent.lng.toFixed(4)}], description: "..." }) OR call google_3d_tiles_get_clay({ query: "${initialLocIntent.landmarkName}" }).
+        const hasIndependentHeroAsset = /\b(car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|cyber|flower|garden|plant|flora|botan|manta|steampunk|rocket|aircraft|plane|drone|copter|helicopter|rover|mech|robot|humanoid|character|avatar|creature|dragon|animal|bird|dinosaur|statue|sculpture|prop|furniture|chair|table|bench|kiosk|boat|ship|vessel|sub\w*|train|subway|tram)\b/i.test(request.prompt || '');
+
+        if (initialLocIntent?.isRealWorld && !hasIndependentHeroAsset) {
+            userPrompt += `\n\n[CRITICAL DIRECTIVE — PURE REAL-WORLD LOCATION QUERY (RULE 3 PURE LOCATION EXCEPTION):
+The user explicitly requested the real-world location "${initialLocIntent.landmarkName}" in 3D clay tiles ("${request.prompt}").
+1. MANDATORY DIRECT TOOL CALL: You MUST call google_3d_tiles_get_clay({ query: "${initialLocIntent.landmarkName}" }) directly!
+2. STRICT PROHIBITION ON PROCEDURAL STRUCTURES: DO NOT call execute_3d_python_script! DO NOT write Python or C++ code to generate procedural buildings, columns, arcades, spires, walls, or ground slabs! Real-world architectural massing and terrain are streamed directly from Google 3D Tiles in Studio Grey Clay mode. For this function, we do not build synthetic structures.
+3. CONCLUDE WITH FOLLOW-UP SUGGESTIONS: In chat, present follow-up options: 1. Lighting & Solar Ephemeris for ${initialLocIntent.landmarkName}, 2. Textures & PBR Materials.]`;
+        } else if (initialLocIntent?.isRealWorld && hasIndependentHeroAsset) {
+            userPrompt += `\n\n[CRITICAL DIRECTIVE — HERO OBJECT STAGED AT REAL-WORLD LOCATION: The user explicitly specified the real-world location "${initialLocIntent.landmarkName}" with a hero asset in this initial request ("${request.prompt}").
+1. MANDATORY LOCATION STAGING: The scene MUST be returned STAGED AT THIS LOCATION using Google 3D Tiles in Studio Grey Clay mode (groundTileMode: 'photoreal-clay')! You MUST pass location: "${initialLocIntent.landmarkName}" and coordinates: [${initialLocIntent.lat.toFixed(4)}, ${initialLocIntent.lng.toFixed(4)}] to execute_3d_python_script({ script: "...", location: "${initialLocIntent.landmarkName}", coordinates: [${initialLocIntent.lat.toFixed(4)}, ${initialLocIntent.lng.toFixed(4)}], description: "..." }).
 2. OPEN-DOMAIN GEODETIC ANCHORING (ADA ZERO-PRESETS): Under Adaptive Domain Architecture (ADA), Scratchbox never restricts locations to static landmark dictionaries. As the LLM domain engine, you supply exact WGS-84 geodetic coordinates [lat, lng] for any real-world location on Earth.
-3. 100% CODE BUDGET ON HERO OBJECT: Model the requested hero object (e.g. race car / vehicle / structure) with rich 70-20-10 anatomical form in 18% studio grey clay.
+3. 100% CODE BUDGET ON HERO OBJECT: Model the requested hero object (e.g. race car / vehicle / rover) with rich 70-20-10 anatomical form in 18% studio grey clay.
 4. STRICT PROHIBITION ON SYNTHETIC FALLBACK BOXES OR PROCEDURAL SKYSCRAPERS: NEVER write Python code to generate synthetic skyscrapers, cylindrical towers, buildings, expressway bridges, track slabs, or lollipop trees! The real-world architecture, street network, and terrain massing are streamed directly from Google 3D Tiles in Clay Mode. Dedicate 100% of your procedural Python script to the requested hero asset.
 5. INFERRED GEOMETRY UNCERTAINTY (WORLD-SCALE RULE 5): If generating or reconstructing architectural structures where backs or occluded surfaces are unobserved in source photogrammetry, explicitly tag those parts in metadata with inferred: true and confidence: 0.0.
 6. AUTO-FRAMING KEY LIGHT ALIGNMENT: Orient the default camera azimuth to directly face the directional key light vector so the primary facade is illuminated out-of-the-box.
@@ -656,7 +664,8 @@ The user did not specify a real-world geographic location in their initial reque
 3. PRESENT OPTIONS IN CHAT AS CLICKABLE PILL BUTTONS: All staging and follow-up options MUST be presented directly in the chat interface as clickable pill buttons (using interactive embeds or markdown pill buttons) and NEVER in the viewport HUD.]`;
         }
 
-        userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST call the execute_3d_python_script tool to build the scene! NEVER output raw JSON text or markdown code fences as your response.
+        if (!initialLocIntent?.isRealWorld || hasIndependentHeroAsset) {
+            userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST call the execute_3d_python_script tool to build the scene! NEVER output raw JSON text or markdown code fences as your response.
 - UNIFIED 3D PYTHON EXECUTION BUS (BLENDER MENTAL MODEL): All 3D scene building (procedural geometry, architectural complexes, botanical environments, organisms, and real-world locations) routes through execute_3d_python_script({ script: "...", location?: "..." }). The script imports scratchbox as sb and compiles native C++20 geometry via nanobind bindings to stream binary .glb directly into the viewport.
 - DYNAMIC CAMERA AUTO-FRAMING: The engine automatically extracts the analytical Axis-Aligned Bounding Box (AABB) from the GLB accessors in <0.1ms and computes the optimal camera distance and 3/4 cinematic framing. You do not need to manually guess camera coordinates!
 
@@ -1014,6 +1023,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 - INSTANT IN-MEMORY DELTA EDITS (<1ms): For conversational multi-turn requests modifying an existing 3D scene (e.g. "move the building back 5m", "change roof color to copper", "make it golden hour", "frame closer"), call scene_3d_dispatch_operators with commands: [{ operator: "...", params: { ... } }] instead of regenerating from scratch!
 - CLOSED-LOOP VISUAL QUALITY AUDIT: Call audit_3d_scene_viewport to inspect multi-angle camera perspectives, detect geometric flaws, and auto-dispatch corrective repair operators!
 - ZERO UNINVITED DEFAULTS: Preserve studio lighting and visual neutrality unless atmospheric scattering or diurnal ephemeris is explicitly requested.]`;
+        }
     }
 
     if (request.activeArtifact) {

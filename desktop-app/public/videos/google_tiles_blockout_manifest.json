@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-09T03:10:30.454Z",
+  "timestamp": "2026-10-09T04:15:20.319Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/videos/google_tiles_clay_blockout_camera.mp4",
-  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/build/3d-geospatial/ch_teau_gaillard_les_andelys_france_49_2_tiles.glb",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/build/3d-geospatial/eiffel_tower_paris_france_48_8584_2_2945_tiles.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/models/blockout_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/desktop-app/public/images/blockout_frame_00.png",
   "storyboardPaths": [
@@ -20,8 +20,8 @@
   "totalFrames": 72,
   "durationSec": 3,
   "geoAnchor": {
-    "lat": 49.2384,
-    "lng": 1.4019,
+    "lat": 48.8584,
+    "lng": 2.2945,
     "elevation": 15
   },
   "errorTarget": 0.5,

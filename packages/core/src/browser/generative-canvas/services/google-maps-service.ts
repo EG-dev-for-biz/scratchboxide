@@ -247,6 +247,78 @@ const LANDMARK_REGISTRY: Record<string, GeocodeResult> = {
     },
 
     // New York & East Coast
+    'manhattan': {
+        lat: 40.7831,
+        lng: -73.9712,
+        formattedAddress: 'Manhattan, New York, NY, USA',
+        placeId: 'ChIJyeZDuDocumentationPlaceId',
+        elevation: 15.0,
+        zoom: 14
+    },
+    'manhattan, new york': {
+        lat: 40.7831,
+        lng: -73.9712,
+        formattedAddress: 'Manhattan, New York, NY, USA',
+        placeId: 'ChIJyeZDuDocumentationPlaceId',
+        elevation: 15.0,
+        zoom: 14
+    },
+    'central park': {
+        lat: 40.785091,
+        lng: -73.968285,
+        formattedAddress: 'Central Park, New York, NY, USA',
+        placeId: 'ChIJ4zGFAZpYwokRGUGphPhSc3o',
+        elevation: 42.0,
+        zoom: 16
+    },
+    'central park, new york': {
+        lat: 40.785091,
+        lng: -73.968285,
+        formattedAddress: 'Central Park, New York, NY, USA',
+        placeId: 'ChIJ4zGFAZpYwokRGUGphPhSc3o',
+        elevation: 42.0,
+        zoom: 16
+    },
+    'washington square park arch': {
+        lat: 40.7308,
+        lng: -73.9973,
+        formattedAddress: 'Washington Square Park Arch, New York, NY 10012, USA',
+        placeId: 'ChIJV4qYV1ZZwokR8tMvY_K2B8s',
+        elevation: 10.0,
+        zoom: 17
+    },
+    'washington square park': {
+        lat: 40.7308,
+        lng: -73.9973,
+        formattedAddress: 'Washington Square Park, New York, NY 10012, USA',
+        placeId: 'ChIJV4qYV1ZZwokR8tMvY_K2B8s',
+        elevation: 10.0,
+        zoom: 17
+    },
+    'circuit de monaco': {
+        lat: 43.7384,
+        lng: 7.4246,
+        formattedAddress: 'Circuit de Monaco, Monaco',
+        placeId: 'ChIJwWvH3a7EzxIRq2u2U-5a0Z0',
+        elevation: 15.0,
+        zoom: 16
+    },
+    'monaco gp circuit': {
+        lat: 43.7384,
+        lng: 7.4246,
+        formattedAddress: 'Circuit de Monaco, Monaco',
+        placeId: 'ChIJwWvH3a7EzxIRq2u2U-5a0Z0',
+        elevation: 15.0,
+        zoom: 16
+    },
+    'monaco': {
+        lat: 43.7384,
+        lng: 7.4246,
+        formattedAddress: 'Monaco',
+        placeId: 'ChIJ5TCOcRaYzRIRx-ReU5kCG5w',
+        elevation: 15.0,
+        zoom: 15
+    },
     'empire state building': {
         lat: 40.7484,
         lng: -73.9857,
@@ -711,6 +783,29 @@ export class GoogleMapsService {
                 console.error('Error in GoogleMapsService listener:', e);
             }
         });
+    }
+
+    /**
+     * Synchronously resolves a query against the built-in landmark registry.
+     */
+    public resolveLandmarkSync(query: string): GeocodeResult | undefined {
+        if (!query || !query.trim()) return undefined;
+        const lower = query.trim().toLowerCase();
+        if (LANDMARK_REGISTRY[lower]) {
+            return LANDMARK_REGISTRY[lower];
+        }
+        const sortedEntries = Object.entries(LANDMARK_REGISTRY).sort((a, b) => b[0].length - a[0].length);
+        for (const [key, landmark] of sortedEntries) {
+            if (lower === key || lower.includes(key)) {
+                return landmark;
+            }
+        }
+        for (const [key, landmark] of sortedEntries) {
+            if (key.includes(lower)) {
+                return landmark;
+            }
+        }
+        return undefined;
     }
 
     /**

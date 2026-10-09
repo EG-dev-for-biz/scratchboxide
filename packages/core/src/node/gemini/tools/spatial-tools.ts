@@ -545,6 +545,49 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                     objects: [...cleanPrevObjects, tileObject]
                 }
             };
+        } else {
+            const glbUri = result.glbPath.includes('/public/models/')
+                ? `/models/${path.basename(result.glbPath)}`
+                : (result.glbPath.startsWith('/') && !result.glbPath.startsWith('/models/') ? `/models/${path.basename(result.glbPath)}` : result.glbPath);
+            const tileObject = {
+                id: `tile-texture-${Date.now()}`,
+                content: {
+                    type: '3d-model',
+                    durableUri: glbUri,
+                    mimeType: 'model/gltf-binary',
+                    metadata: {
+                        source: 'Google3DTilesFullTexture',
+                        role: 'environment',
+                        resolvedAddress: result.resolvedAddress || query,
+                        vertexCount: result.mesh?.vertexCount,
+                        triangleCount: result.mesh?.triangleCount
+                    }
+                },
+                space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                time: { startMs: 0, durationMs: 20000 },
+                lineage: { version: 1 }
+            };
+            mountedArtifact = {
+                id: `artifact-3d-${Date.now()}`,
+                type: '3d-scene',
+                title: `${result.resolvedAddress || query} (Photorealistic 3D Tiles)`,
+                summary: `Ingested authentic Google 3D Tiles in full photogrammetric texture for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles).`,
+                version: 1,
+                data: {
+                    title: `${result.resolvedAddress || query} — Photorealistic 3D Model`,
+                    subtitle: `Authentic Google 3D Tiles photogrammetry in full photogrammetric texture (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles).`,
+                    renderMode: 'shaded',
+                    cameraMode: 'orbit',
+                    environment: {
+                        skybox: 'studio',
+                        lighting: 'studio',
+                        ground: false
+                    },
+                    groundTileMode: 'photoreal-textured',
+                    geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
+                    objects: [tileObject]
+                }
+            };
         }
 
         return {
@@ -611,16 +654,67 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 time: { startMs: 0, durationMs: 20000 },
                 lineage: { version: 1 }
             };
+            const isStagingRequest = /stage|ground|anchor|situate|place/i.test(_ctx.request?.prompt || '');
+            const objectsToKeep = isStagingRequest ? cleanPrevObjects : [];
             mountedArtifact = {
                 ...prevArtifact,
                 version: (prevArtifact.version || 1) + 1,
-                title: `${prevArtifact.title || '3D Scene'} — Staged at ${result.resolvedAddress || query}`,
-                summary: `Staged active 3D asset at ${result.resolvedAddress || query} with authentic Google 3D Tiles Studio Grey Clay massing (${result.mesh?.vertexCount || 0} vertices).`,
+                title: isStagingRequest
+                    ? `${prevArtifact.title || '3D Scene'} — Staged at ${result.resolvedAddress || query}`
+                    : `${result.resolvedAddress || query} (Studio Grey Clay 3D Tiles)`,
+                summary: isStagingRequest
+                    ? `Staged active 3D asset at ${result.resolvedAddress || query} with authentic Google 3D Tiles Studio Grey Clay massing (${result.mesh?.vertexCount || 0} vertices).`
+                    : `Ingested authentic Google 3D Tiles in Studio Grey Clay for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles).`,
                 data: {
                     ...prevData,
+                    renderMode: 'clay',
                     groundTileMode: 'photoreal-clay',
                     geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
-                    objects: [...cleanPrevObjects, tileObject]
+                    objects: [...objectsToKeep, tileObject]
+                }
+            };
+        } else {
+            const glbUri = result.glbPath.includes('/public/models/')
+                ? `/models/${path.basename(result.glbPath)}`
+                : (result.glbPath.startsWith('/') && !result.glbPath.startsWith('/models/') ? `/models/${path.basename(result.glbPath)}` : result.glbPath);
+            const tileObject = {
+                id: `tile-clay-${Date.now()}`,
+                content: {
+                    type: '3d-model',
+                    durableUri: glbUri,
+                    mimeType: 'model/gltf-binary',
+                    metadata: {
+                        source: 'Google3DTilesClay',
+                        role: 'environment',
+                        resolvedAddress: result.resolvedAddress || query,
+                        vertexCount: result.mesh?.vertexCount,
+                        triangleCount: result.mesh?.triangleCount
+                    }
+                },
+                space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                time: { startMs: 0, durationMs: 20000 },
+                lineage: { version: 1 }
+            };
+            mountedArtifact = {
+                id: `artifact-3d-${Date.now()}`,
+                type: '3d-scene',
+                title: `${result.resolvedAddress || query} (Studio Grey Clay 3D Tiles)`,
+                summary: `Ingested authentic Google 3D Tiles in Studio Grey Clay for ${result.resolvedAddress || query} (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles).`,
+                version: 1,
+                data: {
+                    title: `${result.resolvedAddress || query} — 3D Real-World Clay Model`,
+                    subtitle: `Authentic Google 3D Tiles photogrammetry in 18% Studio Grey Clay (${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles).`,
+                    renderMode: 'clay',
+                    clayPreset: 'studio-grey',
+                    cameraMode: 'orbit',
+                    environment: {
+                        skybox: 'studio',
+                        lighting: 'studio',
+                        ground: false
+                    },
+                    groundTileMode: 'photoreal-clay',
+                    geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
+                    objects: [tileObject]
                 }
             };
         }

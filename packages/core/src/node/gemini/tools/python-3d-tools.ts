@@ -366,20 +366,30 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             : `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`;
 
         let durableHeroUri: string | undefined = undefined;
-        if (result.glbPath && fs.existsSync(result.glbPath)) {
+        const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
+        const canonicalModelsDir = path.resolve(repoRoot, 'public/models');
+
+        if (result.glbPath && fs.existsSync(result.glbPath) && fs.statSync(result.glbPath).size > 100) {
             const fileName = path.basename(result.glbPath);
-            const repoRoot = process.env.SCRATCHBOX_ROOT || process.cwd();
-            const targetDirs = [
-                path.resolve(repoRoot, 'desktop-app/public/models'),
-                path.resolve(repoRoot, 'public/models')
-            ];
-            for (const tDir of targetDirs) {
+            const canonicalDest = path.join(canonicalModelsDir, fileName);
+            if (path.resolve(result.glbPath) !== canonicalDest) {
                 try {
-                    if (!fs.existsSync(tDir)) fs.mkdirSync(tDir, { recursive: true });
-                    fs.copyFileSync(result.glbPath, path.join(tDir, fileName));
+                    if (!fs.existsSync(canonicalModelsDir)) fs.mkdirSync(canonicalModelsDir, { recursive: true });
+                    fs.copyFileSync(result.glbPath, canonicalDest);
                 } catch { }
             }
             durableHeroUri = `/models/${fileName}`;
+        }
+
+        if (extractedGlbPath && fs.existsSync(extractedGlbPath)) {
+            const fileName = path.basename(extractedGlbPath);
+            const canonicalDest = path.join(canonicalModelsDir, fileName);
+            if (path.resolve(extractedGlbPath) !== canonicalDest) {
+                try {
+                    if (!fs.existsSync(canonicalModelsDir)) fs.mkdirSync(canonicalModelsDir, { recursive: true });
+                    fs.copyFileSync(extractedGlbPath, canonicalDest);
+                } catch { }
+            }
         }
 
         const stagedObjects = [
