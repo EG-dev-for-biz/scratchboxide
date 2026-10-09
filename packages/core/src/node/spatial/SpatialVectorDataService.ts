@@ -27,7 +27,7 @@ import {
 import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
 import { SpatialAssetVaultService } from './SpatialAssetVaultService';
 
-export type UniversalSpatialLayer = 'building' | 'road' | 'water' | 'landuse' | 'transit' | 'poi';
+export type UniversalSpatialLayer = 'building' | 'road' | 'water' | 'landuse' | 'transit' | 'poi' | (string & {});
 
 export interface UniversalSpatialFeatureBase {
     universalId: string;
@@ -54,7 +54,7 @@ export interface UniversalBuildingFeature extends UniversalSpatialFeatureBase {
 
 export interface UniversalRoadFeature extends UniversalSpatialFeatureBase {
     layer: 'road';
-    roadClass: 'motorway' | 'arterial' | 'secondary' | 'residential' | 'service' | 'pedestrian' | 'cycleway' | string;
+    roadClass: 'motorway' | 'arterial' | 'secondary' | 'residential' | 'service' | 'pedestrian' | 'cycleway' | (string & {});
     lanes: number;
     widthM: number;
     oneWay: boolean;
@@ -74,9 +74,9 @@ export interface UniversalRoadFeature extends UniversalSpatialFeatureBase {
 
 export interface UniversalLanduseFeature extends UniversalSpatialFeatureBase {
     layer: 'landuse';
-    landuseType: 'park' | 'grass' | 'plaza' | 'commercial' | 'industrial' | 'cemetery' | 'sport' | string;
+    landuseType: 'park' | 'grass' | 'plaza' | 'commercial' | 'industrial' | 'cemetery' | 'sport' | (string & {});
     surfaceFriction: number; // e.g. 0.5 for grass, 0.8 for paved plazas
-    acousticProfile: 'absorptive_foliage' | 'reflective_hardscape' | string;
+    acousticProfile: 'absorptive_foliage' | 'reflective_hardscape' | (string & {});
     geodeticPolygon: Array<[number, number]>;
     localPolygonEnu: Array<[number, number, number]>;
     areaM2: number;
@@ -84,7 +84,7 @@ export interface UniversalLanduseFeature extends UniversalSpatialFeatureBase {
 
 export interface UniversalWaterFeature extends UniversalSpatialFeatureBase {
     layer: 'water';
-    waterType: 'ocean' | 'lake' | 'river' | 'canal' | 'basin' | string;
+    waterType: 'ocean' | 'lake' | 'river' | 'canal' | 'basin' | (string & {});
     geodeticPolygon: Array<[number, number]>;
     localPolygonEnu: Array<[number, number, number]>;
     areaM2: number;
@@ -441,6 +441,13 @@ export class SpatialVectorDataService {
                     widthM = 3.0;
                 }
 
+                // Continuous physical width overrides (ADA Pillar 3)
+                if (props.width && !isNaN(parseFloat(String(props.width)))) {
+                    widthM = parseFloat(String(props.width));
+                } else if (props.est_width && !isNaN(parseFloat(String(props.est_width)))) {
+                    widthM = parseFloat(String(props.est_width));
+                }
+
                 const oneWay = props.oneway === 'yes' || props.oneway === true || props.oneway === 1;
                 const speedLimitKmh = props.maxspeed ? parseInt(String(props.maxspeed), 10) : undefined;
                 const surface = props.surface || 'asphalt';
@@ -547,7 +554,10 @@ export class SpatialVectorDataService {
                 const landuseType = props.class || props.type || props.landuse || props.leisure || 'park';
                 const isPlaza = landuseType === 'plaza' || landuseType === 'commercial' || landuseType === 'pedestrian';
 
-                const surfaceFriction = isPlaza ? 0.8 : 0.5;
+                // Continuous surface friction overrides (ADA Pillar 3)
+                const surfaceFriction = props.surface_friction !== undefined && !isNaN(parseFloat(String(props.surface_friction)))
+                    ? parseFloat(String(props.surface_friction))
+                    : (props.friction !== undefined && !isNaN(parseFloat(String(props.friction))) ? parseFloat(String(props.friction)) : (isPlaza ? 0.8 : 0.5));
                 const acousticProfile = isPlaza ? 'reflective_hardscape' : 'absorptive_foliage';
 
                 const name = props.name || undefined;
@@ -1007,14 +1017,14 @@ export class SpatialVectorDataService {
                     continue; // Skip lane segment if clipped by an encroaching building footprint
                 }
 
-                // Calculate forward vector and yaw heading
+                // Calculate forward vector and yaw heading (Three.js ENU: +X East, +Y Up, -Z North)
                 const s0 = lanePath[bestSegIdx];
                 const s1 = lanePath[bestSegIdx + 1] || lanePath[bestSegIdx];
                 const fdx = s1[0] - s0[0];
                 const fdz = s1[2] - s0[2];
                 const segLen = Math.hypot(fdx, fdz) || 1.0;
                 const forwardVec: [number, number, number] = [fdx / segLen, 0, fdz / segLen];
-                const headingDeg = (Math.atan2(forwardVec[0], forwardVec[2]) * 180) / Math.PI;
+                const headingDeg = ((Math.atan2(forwardVec[0], -forwardVec[2]) * 180) / Math.PI + 360) % 360;
 
                 const distFromRef = Math.sqrt(bestDistSq);
                 let score = 0.85 - Math.min(0.35, distFromRef / 500);
@@ -1071,7 +1081,7 @@ export class SpatialVectorDataService {
 
                 if (isInsideBuilding(swX, swZ)) continue;
 
-                const headingDeg = (Math.atan2(tx, tz) * 180) / Math.PI;
+                const headingDeg = ((Math.atan2(tx, -tz) * 180) / Math.PI + 360) % 360;
                 const distFromRef = Math.hypot(swX - refX, swZ - refZ);
                 let score = 0.80 - Math.min(0.35, distFromRef / 500);
 
@@ -1114,11 +1124,11 @@ export class SpatialVectorDataService {
 
             if (isInsideBuilding(cX, cZ)) continue;
 
-            // Heading: orient towards reference point / origin
+            // Heading: orient towards reference point / origin in Three.js ENU (+X East, -Z North)
             const dx = refX - cX;
             const dz = refZ - cZ;
-            const headingRad = Math.hypot(dx, dz) > 1.0 ? Math.atan2(dx, dz) : 0.0;
-            const headingDeg = (headingRad * 180) / Math.PI;
+            const headingRad = Math.hypot(dx, dz) > 1.0 ? Math.atan2(dx, -dz) : 0.0;
+            const headingDeg = ((headingRad * 180) / Math.PI + 360) % 360;
 
             const distFromRef = Math.hypot(cX - refX, cZ - refZ);
             let score = 0.75 - Math.min(0.35, distFromRef / 500);
@@ -1136,7 +1146,7 @@ export class SpatialVectorDataService {
                 surfaceType: isPlaza ? 'plaza' : 'park',
                 position: [cX, 0.05, cZ],
                 headingDeg: Math.round(headingDeg * 10) / 10,
-                forwardVec: [Math.sin(headingRad), 0, Math.cos(headingRad)],
+                forwardVec: [Math.sin(headingRad), 0, -Math.cos(headingRad)],
                 confidenceScore: Math.min(1.0, Math.max(0.1, Math.round(score * 100) / 100)),
                 clearanceRadiusM: Math.round(approxRadius * 10) / 10,
                 spatialRationale: `Open civic ${area.landuseType} surface (${area.areaM2.toFixed(0)}m² area, friction: ${area.surfaceFriction}). Unobstructed radial clearance oriented toward scene focal center.`,

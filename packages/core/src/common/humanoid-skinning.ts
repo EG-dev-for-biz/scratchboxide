@@ -24,6 +24,56 @@ export type Mat3 = [Vec3, Vec3, Vec3];
 
 export const SBHUMAN22_PARENTS: number[] = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19];
 
+export const CANONICAL_22_JOINT_NAMES: readonly string[] = [
+    'pelvis',
+    'left_hip',
+    'right_hip',
+    'spine1',
+    'left_knee',
+    'right_knee',
+    'spine2',
+    'left_ankle',
+    'right_ankle',
+    'spine3',
+    'left_foot',
+    'right_foot',
+    'neck',
+    'left_collar',
+    'right_collar',
+    'head',
+    'left_shoulder',
+    'right_shoulder',
+    'left_elbow',
+    'right_elbow',
+    'left_wrist',
+    'right_wrist'
+] as const;
+
+export const DEFAULT_CANONICAL_JOINTS: Array<[number, number, number]> = [
+    [0.0031, 0.9353, 0.0400],   // 0: pelvis
+    [0.0613, 0.8426, -0.0140],  // 1: left_hip
+    [-0.0601, 0.8415, -0.0140], // 2: right_hip
+    [0.0028, 1.0253, 0.0245],   // 3: spine1
+    [0.0898, 0.4682, -0.0050],  // 4: left_knee
+    [-0.0892, 0.4685, -0.0050], // 5: right_knee
+    [0.0035, 1.1553, 0.0125],   // 6: spine2
+    [0.0712, 0.0782, -0.0520],  // 7: left_ankle
+    [-0.0715, 0.0780, -0.0520], // 8: right_ankle
+    [0.0038, 1.2453, 0.0045],   // 9: spine3
+    [0.0815, 0.0250, 0.0980],   // 10: left_foot
+    [-0.0812, 0.0250, 0.0980],  // 11: right_foot
+    [0.0040, 1.3453, -0.0247],  // 12: neck
+    [0.0448, 1.3143, -0.0003],  // 13: left_collar
+    [-0.0492, 1.3137, -0.0065], // 14: right_collar
+    [0.0111, 1.5549, -0.0040],  // 15: head
+    [0.1641, 1.3720, -0.0158],  // 16: left_shoulder
+    [-0.1518, 1.3672, -0.0191], // 17: right_shoulder
+    [0.4182, 1.2998, -0.0582],  // 18: left_elbow
+    [-0.4229, 1.3307, -0.0456], // 19: right_elbow
+    [0.6702, 1.3231, -0.0607],  // 20: left_wrist
+    [-0.6722, 1.3262, -0.0609], // 21: right_wrist
+];
+
 /** Child joint defining each joint's own segment direction (-1: leaf, inherits its parent's rotation). */
 export const SBHUMAN22_SEGMENT_CHILD: number[] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -1, 15, 16, 17, -1, 18, 19, 20, 21, -1, -1];
 

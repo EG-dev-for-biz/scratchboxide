@@ -1,0 +1,2611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SB-Human Hand & Forearm Kinematics Studio — Scratchbox IDE</title>
+  <script src="/libs/r128/three.min.js"></script>
+  <script src="/libs/r128/OrbitControls.js"></script>
+  <script>
+    if (typeof THREE === 'undefined') {
+      document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+      document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"><\/script>');
+    }
+  </script>
+  <style>
+    :root {
+      --bg: #07090f;
+      --panel-bg: rgba(13, 17, 28, 0.92);
+      --panel-border: rgba(56, 189, 248, 0.22);
+      --card-bg: rgba(22, 28, 45, 0.85);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --cyan: #38bdf8;
+      --cyan-glow: rgba(56, 189, 248, 0.35);
+      --rose: #f43f5e;
+      --amber: #f59e0b;
+      --emerald: #10b981;
+      --purple: #a855f7;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; }
+    body { background: var(--bg); color: var(--text); overflow: hidden; width: 100vw; height: 100vh; user-select: none; }
+
+    #webgl-canvas { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; outline: none; }
+
+    /* Top Header Bar */
+    .top-navbar {
+      position: absolute;
+      top: 14px;
+      left: 18px;
+      right: 18px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 0 18px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.7), 0 0 20px rgba(56, 189, 248, 0.1);
+      z-index: 100;
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #0284c7, #a855f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+    }
+    .brand-text h1 { font-size: 15px; font-weight: 700; letter-spacing: 0.3px; color: #fff; }
+    .brand-text p { font-size: 11px; color: var(--text-muted); }
+
+    .header-badges { display: flex; align-items: center; gap: 8px; }
+    .badge {
+      font-size: 10.5px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .badge-cyan { background: rgba(56, 189, 248, 0.15); color: var(--cyan); border: 1px solid rgba(56, 189, 248, 0.3); }
+    .badge-emerald { background: rgba(16, 185, 129, 0.15); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-amber { background: rgba(245, 158, 11, 0.15); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+
+    /* Top Prompt Posing Bar */
+    .prompt-bar-container {
+      position: absolute;
+      top: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 680px;
+      max-width: calc(100vw - 420px);
+      z-index: 90;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .prompt-input-row {
+      display: flex;
+      align-items: center;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 4px 6px 4px 14px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.6), 0 0 15px rgba(56, 189, 248, 0.15);
+      gap: 8px;
+    }
+
+    .prompt-icon { color: var(--cyan); font-size: 16px; opacity: 0.85; }
+    #prompt-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #fff;
+      font-size: 13.5px;
+      padding: 8px 0;
+    }
+    #prompt-input::placeholder { color: var(--text-dim); }
+
+    .btn-pose {
+      background: linear-gradient(135deg, #0284c7, #38bdf8);
+      color: #031326;
+      font-weight: 700;
+      font-size: 12.5px;
+      padding: 8px 18px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 2px 10px rgba(56, 189, 248, 0.4);
+    }
+    .btn-pose:hover { transform: translateY(-1px); filter: brightness(1.1); box-shadow: 0 4px 14px rgba(56, 189, 248, 0.6); }
+    .btn-pose:active { transform: translateY(0); filter: brightness(0.95); }
+
+    .btn-icon-upload {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--cyan);
+      font-size: 15px;
+      padding: 7px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+    .btn-icon-upload:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--cyan);
+      transform: translateY(-1px);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+    }
+
+    /* Image Attachment & Smart Crop Inspection Card */
+    .image-attachment-chip {
+      display: flex;
+      align-items: center;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 10px;
+      padding: 6px 10px;
+      gap: 12px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 12px rgba(56, 189, 248, 0.15);
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+    .thumb-preview-box {
+      width: 44px;
+      height: 44px;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid var(--cyan);
+      background: #030712;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .thumb-preview-box img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+
+    .attachment-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 1;
+      min-width: 0;
+    }
+    .attachment-title {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .attachment-subtext {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+
+    /* Crop Mode Toggle Pills */
+    .crop-toggle-group {
+      display: flex;
+      align-items: center;
+      background: rgba(2, 6, 23, 0.8);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 2px;
+      gap: 2px;
+    }
+    .crop-pill {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 10.5px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .crop-pill:hover { color: #fff; }
+    .crop-pill.active {
+      background: rgba(56, 189, 248, 0.25);
+      color: var(--cyan);
+      font-weight: 700;
+    }
+
+    .btn-remove-attachment {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: #f87171;
+      border-radius: 50%;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.15s;
+    }
+    .btn-remove-attachment:hover {
+      background: rgba(239, 68, 68, 0.25);
+      border-color: #ef4444;
+      color: #fff;
+    }
+
+    /* Full Window Drag & Drop Overlay */
+    #drag-drop-overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(3, 7, 18, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 300;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    #drag-drop-overlay.active { display: flex; }
+    .drag-drop-card {
+      border: 2px dashed var(--cyan);
+      border-radius: 20px;
+      padding: 40px 60px;
+      text-align: center;
+      background: rgba(15, 23, 42, 0.9);
+      box-shadow: 0 0 40px rgba(56, 189, 248, 0.3);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      animation: pulseBorder 1.5s infinite;
+    }
+    @keyframes pulseBorder {
+      0%, 100% { border-color: var(--cyan); box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); }
+      50% { border-color: #a855f7; box-shadow: 0 0 35px rgba(168, 85, 247, 0.4); }
+    }
+    .drag-drop-icon { font-size: 48px; }
+    .drag-drop-title { font-size: 18px; font-weight: 700; color: #fff; }
+    .drag-drop-subtitle { font-size: 12px; color: var(--text-muted); }
+
+    /* Toast Notification Banner */
+    #toast-notification {
+      position: fixed;
+      bottom: 24px;
+      right: 400px;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--cyan);
+      border-radius: 10px;
+      padding: 10px 16px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 15px rgba(56, 189, 248, 0.25);
+      z-index: 250;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Sample Reference Pose Strip */
+    .ref-library-drawer {
+      display: none;
+      flex-direction: column;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      gap: 8px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.6);
+    }
+    .ref-drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--cyan);
+      letter-spacing: 0.5px;
+    }
+    .ref-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 6px;
+    }
+    .ref-pose-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 6px 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .ref-pose-card:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--cyan);
+      transform: translateY(-2px);
+    }
+    .ref-pose-icon { font-size: 20px; }
+    .ref-pose-label { font-size: 9.5px; font-weight: 600; color: var(--text-muted); text-align: center; }
+
+    .quick-chips-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 2px 4px;
+      scrollbar-width: none;
+    }
+    .quick-chips-row::-webkit-scrollbar { display: none; }
+
+    .chip-btn {
+      background: rgba(18, 24, 38, 0.85);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 20px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+      backdrop-filter: blur(8px);
+    }
+    .chip-btn:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--cyan);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    /* Right Kinematic Hierarchy & Precision Sliders Panel */
+    .sidebar-panel {
+      position: absolute;
+      top: 80px;
+      right: 18px;
+      bottom: 18px;
+      width: 360px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      display: flex;
+      flex-direction: column;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.7), 0 0 20px rgba(56, 189, 248, 0.08);
+      z-index: 90;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .panel-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--cyan); display: flex; align-items: center; gap: 6px; }
+
+    .panel-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(56, 189, 248, 0.3) transparent;
+    }
+
+    /* Active Joint Inspector Card */
+    .active-joint-card {
+      background: var(--card-bg);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .active-joint-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .active-joint-name { font-size: 13px; font-weight: 700; color: #fff; }
+    .active-joint-type { font-size: 10px; color: var(--cyan); background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.25); }
+
+    .slider-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .slider-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .slider-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      width: 75px;
+    }
+    .slider-control {
+      flex: 1;
+      height: 4px;
+      background: #1e293b;
+      border-radius: 2px;
+      outline: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+    }
+    .slider-control::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 6px var(--cyan-glow);
+      cursor: pointer;
+    }
+    .slider-value {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      color: #fff;
+      width: 42px;
+      text-align: right;
+    }
+
+    /* Finger Accordion */
+    .finger-group {
+      background: rgba(18, 24, 38, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .finger-header {
+      padding: 9px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      background: rgba(255, 255, 255, 0.02);
+      transition: background 0.15s;
+    }
+    .finger-header:hover { background: rgba(255, 255, 255, 0.05); }
+    .finger-title { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .finger-indicator { width: 8px; height: 8px; border-radius: 50%; }
+    .finger-arrow { font-size: 10px; color: var(--text-dim); transition: transform 0.2s; }
+    .finger-body {
+      padding: 8px 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .finger-joint-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: background 0.1s, color 0.1s;
+    }
+    .finger-joint-row:hover { background: rgba(56, 189, 248, 0.1); color: #fff; }
+    .finger-joint-row.selected { background: rgba(56, 189, 248, 0.2); color: var(--cyan); font-weight: 700; border-left: 2px solid var(--cyan); }
+
+    /* Bottom Left Floating Toolbar (Camera & Staging) */
+    .bottom-toolbar {
+      position: absolute;
+      bottom: 18px;
+      left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 90;
+    }
+
+    .toolbar-row {
+      display: flex;
+      align-items: center;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 10px;
+      padding: 5px 8px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+      gap: 6px;
+    }
+    .toolbar-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      padding: 0 4px;
+    }
+    .tool-btn {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tool-btn:hover { background: rgba(56, 189, 248, 0.15); color: #fff; border-color: rgba(56, 189, 248, 0.3); }
+    .tool-btn.active { background: rgba(56, 189, 248, 0.25); color: var(--cyan); border-color: var(--cyan); font-weight: 700; }
+
+    /* Floating Viewport HUD / Tooltip */
+    #joint-hud {
+      position: absolute;
+      display: none;
+      pointer-events: none;
+      z-index: 120;
+      background: rgba(7, 9, 15, 0.9);
+      border: 1px solid var(--cyan);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 10px rgba(56, 189, 248, 0.3);
+      transform: translate(-50%, -120%);
+    }
+
+    /* Loading Overlay */
+    #loading-overlay {
+      position: absolute;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(7, 9, 15, 0.95);
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      transition: opacity 0.4s ease;
+    }
+    .loader-spinner {
+      width: 48px;
+      height: 48px;
+      border: 3px solid rgba(56, 189, 248, 0.15);
+      border-top-color: var(--cyan);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loader-text { font-size: 14px; font-weight: 600; color: #fff; letter-spacing: 0.5px; }
+    .loader-subtext { font-size: 11px; color: var(--text-dim); }
+  </style>
+</head>
+<body>
+
+  <!-- WebGL Rendering Canvas -->
+  <canvas id="webgl-canvas"></canvas>
+
+  <!-- Floating Degree / Joint HUD -->
+  <div id="joint-hud">LeftIndex1: Flexion 45.0°</div>
+
+  <!-- Loading Screen -->
+  <div id="loading-overlay">
+    <div class="loader-spinner"></div>
+    <div class="loader-text">Loading SB-Human 55-Joint Kinematic Avatar...</div>
+    <div class="loader-subtext">Parsing public/models/sbhuman_neutral.sbhuman (v2 container)</div>
+  </div>
+
+  <!-- Top Navigation Bar -->
+  <header class="top-navbar">
+    <div class="brand">
+      <div class="brand-icon">🖐️</div>
+      <div class="brand-text">
+        <h1>SB-Human Hand & Forearm Kinematics Studio</h1>
+        <p>Canonical 55-Joint Rig · Close-Up Macro Viewport · Semantic Natural Language & Viewport Posing</p>
+      </div>
+    </div>
+    <div class="header-badges">
+      <div class="badge badge-cyan">SB-HUMAN V2</div>
+      <div class="badge badge-emerald" id="fps-badge">60 FPS</div>
+      <div class="badge badge-amber" id="stats-badge">10,475 VERTS · 55 JOINTS</div>
+    </div>
+  </header>
+
+  <!-- Drag and Drop Overlay -->
+  <div id="drag-drop-overlay">
+    <div class="drag-drop-card">
+      <div class="drag-drop-icon">🖐️</div>
+      <div class="drag-drop-title">Drop Hand Reference Image</div>
+      <div class="drag-drop-subtitle">Auto-aspect downscaling & intelligent hand isolation enabled</div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast-notification">
+    <span id="toast-icon">✨</span>
+    <span id="toast-msg">Pose matched from reference image</span>
+  </div>
+
+  <!-- Top Prompt Posing Bar -->
+  <div class="prompt-bar-container">
+    <div class="prompt-input-row">
+      <div class="prompt-icon">✨</div>
+      <button class="btn-icon-upload" id="btn-upload-image" title="Upload or drop hand photo (Supports clipboard paste Cmd+V / Ctrl+V)">📷</button>
+      <input type="file" id="image-file-input" accept="image/*" style="display:none">
+      <input type="text" id="prompt-input" placeholder="Type prompt or drop reference photo (e.g. 'peace sign', 'fist', 'bend index 45°')...">
+      <button class="btn-pose" id="btn-pose">
+        <span id="btn-pose-label">Apply Pose</span>
+        <span>↵</span>
+      </button>
+    </div>
+
+    <!-- Attached Image & Smart Crop Card -->
+    <div id="image-attachment-container" style="display:none;"></div>
+
+    <!-- Quick Pose & Reference Library Chips -->
+    <div class="quick-chips-row">
+      <button class="chip-btn" id="btn-toggle-ref-library" style="background:rgba(56, 189, 248, 0.15); border-color:var(--cyan); color:var(--cyan); font-weight:700;">🖼️ Reference Photos</button>
+      <button class="chip-btn" data-pose="fist">✊ Clenched Fist</button>
+      <button class="chip-btn" data-pose="peace">✌️ Peace Sign</button>
+      <button class="chip-btn" data-pose="thumbs_up">👍 Thumbs Up</button>
+      <button class="chip-btn" data-pose="pinch">🤏 Pinch</button>
+      <button class="chip-btn" data-pose="ok">👌 OK Sign</button>
+      <button class="chip-btn" data-pose="rock">🤘 Rock On</button>
+      <button class="chip-btn" data-pose="point">👉 Point</button>
+      <button class="chip-btn" data-pose="splay">🖐️ Splay / Open</button>
+      <button class="chip-btn" data-pose="shaka">🤙 Shaka</button>
+      <button class="chip-btn" data-pose="cup">🤲 Cup Hand</button>
+      <button class="chip-btn" data-pose="flat">🛑 Flat Palm</button>
+      <button class="chip-btn" data-pose="neutral">🔄 Reset Neutral</button>
+    </div>
+
+    <!-- Reference Photo Library Drawer -->
+    <div class="ref-library-drawer" id="ref-library-drawer">
+      <div class="ref-drawer-header">
+        <span>Click Any Reference Photo to Match 3D Pose</span>
+        <span style="font-size:10px; color:var(--text-muted); cursor:pointer;" id="btn-close-ref-drawer">✕ Close</span>
+      </div>
+      <div class="ref-cards-grid">
+        <div class="ref-pose-card" data-ref-pose="peace">
+          <div class="ref-pose-icon">✌️</div>
+          <div class="ref-pose-label">Peace Sign (V)</div>
+        </div>
+        <div class="ref-pose-card" data-ref-pose="fist">
+          <div class="ref-pose-icon">✊</div>
+          <div class="ref-pose-label">Clenched Fist</div>
+        </div>
+        <div class="ref-pose-card" data-ref-pose="thumbs_up">
+          <div class="ref-pose-icon">👍</div>
+          <div class="ref-pose-label">Thumbs Up</div>
+        </div>
+        <div class="ref-pose-card" data-ref-pose="pinch">
+          <div class="ref-pose-icon">🤏</div>
+          <div class="ref-pose-label">Pinch Precision</div>
+        </div>
+        <div class="ref-pose-card" data-ref-pose="point">
+          <div class="ref-pose-icon">👉</div>
+          <div class="ref-pose-label">Index Point</div>
+        </div>
+        <div class="ref-pose-card" data-ref-pose="shaka">
+          <div class="ref-pose-icon">🤙</div>
+          <div class="ref-pose-label">Shaka / Hang Loose</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Kinematic Hierarchy & Precision Sliders Panel -->
+  <aside class="sidebar-panel">
+    <div class="panel-header">
+      <div class="panel-title"><span>⚙️</span> Kinematic Inspector</div>
+      <button class="tool-btn" id="btn-reset-hand" style="font-size:10px; padding:3px 8px;">Reset Hand</button>
+    </div>
+    <div class="panel-content">
+      
+      <!-- Active Joint Card -->
+      <div class="active-joint-card" id="active-joint-card">
+        <div class="active-joint-header">
+          <div class="active-joint-name" id="selected-joint-title">LeftIndex1 (MCP Knuckle)</div>
+          <div class="active-joint-type" id="selected-joint-type">Biaxial Condyloid</div>
+        </div>
+        <div class="slider-group">
+          <div class="slider-row">
+            <span class="slider-label" style="color:var(--rose);">Flexion (X):</span>
+            <input type="range" class="slider-control" id="slider-active-flexion" min="-20" max="95" value="0" step="1">
+            <span class="slider-value" id="val-active-flexion">0°</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label" style="color:var(--emerald);">Splay (Y):</span>
+            <input type="range" class="slider-control" id="slider-active-splay" min="-30" max="30" value="0" step="1">
+            <span class="slider-value" id="val-active-splay">0°</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label" style="color:var(--cyan);">Twist (Z):</span>
+            <input type="range" class="slider-control" id="slider-active-twist" min="-30" max="30" value="0" step="1">
+            <span class="slider-value" id="val-active-twist">0°</span>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:10px; color:var(--text-dim);">Click 3D arc rings in viewport to rotate</span>
+          <button class="tool-btn" id="btn-zero-joint" style="font-size:10px; padding:2px 8px;">Zero Joint</button>
+        </div>
+      </div>
+
+      <!-- Macro Master Sliders -->
+      <div style="background:rgba(255,255,255,0.03); border:1px solid var(--card-border); border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:8px;">
+        <div style="font-size:11px; font-weight:700; color:#fff;">Macro Hand Controls</div>
+        <div class="slider-row">
+          <span class="slider-label">Curl All:</span>
+          <input type="range" class="slider-control" id="slider-curl-all" min="0" max="100" value="0" step="1">
+          <span class="slider-value" id="val-curl-all">0%</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">Spread All:</span>
+          <input type="range" class="slider-control" id="slider-spread-all" min="-50" max="100" value="0" step="1">
+          <span class="slider-value" id="val-spread-all">0%</span>
+        </div>
+      </div>
+
+      <!-- All Digits Accordion -->
+      <div style="font-size:11px; font-weight:700; color:var(--text-muted); margin-top:4px;">17-Joint Hand & Forearm Armature</div>
+
+      <!-- Thumb -->
+      <div class="finger-group">
+        <div class="finger-header" data-finger="thumb">
+          <div class="finger-title">
+            <div class="finger-indicator" style="background:var(--amber);"></div>
+            <span>Thumb (1st Digit)</span>
+          </div>
+          <span class="finger-arrow">▼</span>
+        </div>
+        <div class="finger-body" id="body-thumb">
+          <div class="finger-joint-row" data-joint="LeftThumb1">LeftThumb1 (Trapeziometacarpal / CMC)</div>
+          <div class="finger-joint-row" data-joint="LeftThumb2">LeftThumb2 (Metacarpophalangeal / MCP)</div>
+          <div class="finger-joint-row" data-joint="LeftThumb3">LeftThumb3 (Interphalangeal / IP)</div>
+        </div>
+      </div>
+
+      <!-- Index -->
+      <div class="finger-group">
+        <div class="finger-header" data-finger="index">
+          <div class="finger-title">
+            <div class="finger-indicator" style="background:var(--cyan);"></div>
+            <span>Index (2nd Digit)</span>
+          </div>
+          <span class="finger-arrow">▼</span>
+        </div>
+        <div class="finger-body" id="body-index">
+          <div class="finger-joint-row selected" data-joint="LeftIndex1">LeftIndex1 (Knuckle / MCP)</div>
+          <div class="finger-joint-row" data-joint="LeftIndex2">LeftIndex2 (Proximal / PIP)</div>
+          <div class="finger-joint-row" data-joint="LeftIndex3">LeftIndex3 (Distal / DIP)</div>
+        </div>
+      </div>
+
+      <!-- Middle -->
+      <div class="finger-group">
+        <div class="finger-header" data-finger="middle">
+          <div class="finger-title">
+            <div class="finger-indicator" style="background:var(--emerald);"></div>
+            <span>Middle (3rd Digit)</span>
+          </div>
+          <span class="finger-arrow">▼</span>
+        </div>
+        <div class="finger-body" id="body-middle">
+          <div class="finger-joint-row" data-joint="LeftMiddle1">LeftMiddle1 (Knuckle / MCP)</div>
+          <div class="finger-joint-row" data-joint="LeftMiddle2">LeftMiddle2 (Proximal / PIP)</div>
+          <div class="finger-joint-row" data-joint="LeftMiddle3">LeftMiddle3 (Distal / DIP)</div>
+        </div>
+      </div>
+
+      <!-- Ring -->
+      <div class="finger-group">
+        <div class="finger-header" data-finger="ring">
+          <div class="finger-title">
+            <div class="finger-indicator" style="background:var(--purple);"></div>
+            <span>Ring (4th Digit)</span>
+          </div>
+          <span class="finger-arrow">▼</span>
+        </div>
+        <div class="finger-body" id="body-ring">
+          <div class="finger-joint-row" data-joint="LeftRing1">LeftRing1 (Knuckle / MCP)</div>
+          <div class="finger-joint-row" data-joint="LeftRing2">LeftRing2 (Proximal / PIP)</div>
+          <div class="finger-joint-row" data-joint="LeftRing3">LeftRing3 (Distal / DIP)</div>
+        </div>
+      </div>
+
+      <!-- Pinky -->
+      <div class="finger-group">
+        <div class="finger-header" data-finger="pinky">
+          <div class="finger-title">
+            <div class="finger-indicator" style="background:var(--rose);"></div>
+            <span>Pinky (5th Digit)</span>
+          </div>
+          <span class="finger-arrow">▼</span>
+        </div>
+        <div class="finger-body" id="body-pinky">
+          <div class="finger-joint-row" data-joint="LeftPinky1">LeftPinky1 (Knuckle / MCP)</div>
+          <div class="finger-joint-row" data-joint="LeftPinky2">LeftPinky2 (Proximal / PIP)</div>
+          <div class="finger-joint-row" data-joint="LeftPinky3">LeftPinky3 (Distal / DIP)</div>
+        </div>
+      </div>
+
+      <!-- Wrist & Forearm -->
+      <div class="finger-group">
+        <div class="finger-header" data-finger="wrist">
+          <div class="finger-title">
+            <div class="finger-indicator" style="background:#fff;"></div>
+            <span>Wrist & Forearm</span>
+          </div>
+          <span class="finger-arrow">▼</span>
+        </div>
+        <div class="finger-body" id="body-wrist">
+          <div class="finger-joint-row" data-joint="LeftWrist">LeftWrist (Carpal Flexion & Pronation)</div>
+          <div class="finger-joint-row" data-joint="LeftElbow">LeftElbow (Forearm Axial Rotation)</div>
+        </div>
+      </div>
+
+      <!-- Export & Utilities -->
+      <div style="display:flex; gap:6px; margin-top:8px;">
+        <button class="tool-btn" id="btn-copy-json" style="flex:1;">Copy Pose JSON</button>
+        <button class="tool-btn" id="btn-screenshot" style="flex:1;">Screenshot</button>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- Bottom Left Floating Toolbar (Camera & Staging) -->
+  <div class="bottom-toolbar">
+    <!-- Camera Angles -->
+    <div class="toolbar-row">
+      <span class="toolbar-label">Camera:</span>
+      <button class="tool-btn active" data-cam="dorsal">Dorsal (Back)</button>
+      <button class="tool-btn" data-cam="palmar">Palmar (Palm)</button>
+      <button class="tool-btn" data-cam="radial">Radial (Thumb)</button>
+      <button class="tool-btn" data-cam="ulnar">Ulnar (Pinky)</button>
+      <button class="tool-btn" data-cam="knuckles">Knuckles</button>
+    </div>
+
+    <!-- Shading & Material Modes -->
+    <div class="toolbar-row">
+      <span class="toolbar-label">Shading:</span>
+      <button class="tool-btn active" data-mat="clay">18% Studio Clay</button>
+      <button class="tool-btn" data-mat="skin">PBR Skin</button>
+      <button class="tool-btn" data-mat="xray">X-Ray Bones</button>
+      <button class="tool-btn" data-mat="wireframe">Wireframe</button>
+    </div>
+
+    <!-- Isolation & Skeleton Toggles -->
+    <div class="toolbar-row">
+      <span class="toolbar-label">Display:</span>
+      <button class="tool-btn active" id="btn-toggle-isolated">Isolated Forearm & Hand</button>
+      <button class="tool-btn active" id="btn-toggle-joints">Joint Gizmos</button>
+      <button class="tool-btn active" id="btn-toggle-limits">ROM Limiters: ON</button>
+    </div>
+  </div>
+
+  <script>
+    /* =====================================================================
+     * Scratchbox IDE — SB-Human Hand & Forearm Kinematics Engine
+     * Zero-Prohibited-Primitives Compliance: All custom buffer geometries
+     * ===================================================================== */
+
+    // Joint Metadata Dictionary
+    const HAND_JOINTS = [
+      { id: 18, name: 'LeftElbow',  digit: 'arm',   label: 'Left Elbow (Forearm Twist)', type: 'Hinge / Pivot' },
+      { id: 20, name: 'LeftWrist',  digit: 'arm',   label: 'Left Wrist (Carpal)',        type: 'Condyloid' },
+      // Index
+      { id: 25, name: 'LeftIndex1', digit: 'index', label: 'Left Index MCP (Knuckle)',   type: 'Biaxial Condyloid' },
+      { id: 26, name: 'LeftIndex2', digit: 'index', label: 'Left Index PIP',             type: 'Uniaxial Hinge' },
+      { id: 27, name: 'LeftIndex3', digit: 'index', label: 'Left Index DIP',             type: 'Uniaxial Hinge' },
+      // Middle
+      { id: 28, name: 'LeftMiddle1', digit: 'middle', label: 'Left Middle MCP (Knuckle)', type: 'Biaxial Condyloid' },
+      { id: 29, name: 'LeftMiddle2', digit: 'middle', label: 'Left Middle PIP',           type: 'Uniaxial Hinge' },
+      { id: 30, name: 'LeftMiddle3', digit: 'middle', label: 'Left Middle DIP',           type: 'Uniaxial Hinge' },
+      // Pinky
+      { id: 31, name: 'LeftPinky1', digit: 'pinky', label: 'Left Pinky MCP (Knuckle)',   type: 'Biaxial Condyloid' },
+      { id: 32, name: 'LeftPinky2', digit: 'pinky', label: 'Left Pinky PIP',             type: 'Uniaxial Hinge' },
+      { id: 33, name: 'LeftPinky3', digit: 'pinky', label: 'Left Pinky DIP',             type: 'Uniaxial Hinge' },
+      // Ring
+      { id: 34, name: 'LeftRing1',  digit: 'ring',  label: 'Left Ring MCP (Knuckle)',    type: 'Biaxial Condyloid' },
+      { id: 35, name: 'LeftRing2',  digit: 'ring',  label: 'Left Ring PIP',              type: 'Uniaxial Hinge' },
+      { id: 36, name: 'LeftRing3',  digit: 'ring',  label: 'Left Ring DIP',              type: 'Uniaxial Hinge' },
+      // Thumb
+      { id: 37, name: 'LeftThumb1', digit: 'thumb', label: 'Left Thumb CMC',             type: 'Saddle Joint' },
+      { id: 38, name: 'LeftThumb2', digit: 'thumb', label: 'Left Thumb MCP',             type: 'Condyloid' },
+      { id: 39, name: 'LeftThumb3', digit: 'thumb', label: 'Left Thumb IP',              type: 'Uniaxial Hinge' }
+    ];
+
+    const JOINT_MAP = new Map();
+    HAND_JOINTS.forEach(j => JOINT_MAP.set(j.name, j));
+
+    // Physiological Range of Motion (ROM) limits in radians [minFlex, maxFlex, minSplay, maxSplay, minTwist, maxTwist]
+    const ROM_LIMITS = {
+      LeftElbow:  { minX: 0, maxX: Math.PI * 0.75, minY: -0.2, maxY: 0.2, minZ: -Math.PI * 0.45, maxZ: Math.PI * 0.45 },
+      LeftWrist:  { minX: -Math.PI * 0.4, maxX: Math.PI * 0.4, minY: -Math.PI * 0.25, maxY: Math.PI * 0.25, minZ: -Math.PI * 0.45, maxZ: Math.PI * 0.45 },
+      // Knuckles (MCP)
+      LeftIndex1:  { minX: -0.25, maxX: 1.55, minY: -0.4, maxY: 0.4, minZ: -0.15, maxZ: 0.15 },
+      LeftMiddle1: { minX: -0.25, maxX: 1.55, minY: -0.25, maxY: 0.25, minZ: -0.15, maxZ: 0.15 },
+      LeftRing1:   { minX: -0.25, maxX: 1.55, minY: -0.3, maxY: 0.3, minZ: -0.15, maxZ: 0.15 },
+      LeftPinky1:  { minX: -0.25, maxX: 1.55, minY: -0.45, maxY: 0.45, minZ: -0.15, maxZ: 0.15 },
+      // PIP (Interphalangeal - Hinge)
+      LeftIndex2:  { minX: -0.05, maxX: 1.75, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
+      LeftMiddle2: { minX: -0.05, maxX: 1.75, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
+      LeftRing2:   { minX: -0.05, maxX: 1.75, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
+      LeftPinky2:  { minX: -0.05, maxX: 1.75, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
+      // DIP (Distal - Hinge)
+      LeftIndex3:  { minX: -0.05, maxX: 1.55, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
+      LeftMiddle3: { minX: -0.05, maxX: 1.55, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
+      LeftRing3:   { minX: -0.05, maxX: 1.55, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
+      LeftPinky3:  { minX: -0.05, maxX: 1.55, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
+      // Thumb
+      LeftThumb1:  { minX: -0.5, maxX: 0.9, minY: -0.7, maxY: 0.7, minZ: -0.5, maxZ: 0.5 },
+      LeftThumb2:  { minX: -0.2, maxX: 1.2, minY: -0.2, maxY: 0.2, minZ: -0.2, maxZ: 0.2 },
+      LeftThumb3:  { minX: -0.1, maxX: 1.5, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 }
+    };
+
+    // Global Studio State
+    const state = {
+      selectedJointName: 'LeftIndex1',
+      activeMaterial: 'clay',
+      isIsolated: true,
+      showJoints: true,
+      enforceLimits: true,
+      currentPose: {},
+      targetPose: {},
+      lerpProgress: 1.0,
+      lerpDuration: 250, // ms
+      lerpStartTime: 0
+    };
+
+    // Pre-calculated Holistic Gesture Presets
+    const GESTURE_PRESETS = {
+      fist: {
+        LeftIndex1: [1.4, -0.05, 0], LeftIndex2: [1.6, 0, 0], LeftIndex3: [1.3, 0, 0],
+        LeftMiddle1: [1.4, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.3, 0, 0],
+        LeftRing1: [1.4, 0.05, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.3, 0, 0],
+        LeftPinky1: [1.4, 0.1, 0], LeftPinky2: [1.6, 0, 0], LeftPinky3: [1.3, 0, 0],
+        LeftThumb1: [0.6, 0.5, 0.3], LeftThumb2: [0.8, 0, 0], LeftThumb3: [0.9, 0, 0],
+        LeftWrist: [0.1, 0, 0]
+      },
+      peace: {
+        LeftIndex1: [-0.05, 0.18, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftMiddle1: [-0.05, -0.18, 0], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
+        LeftRing1: [1.5, 0.05, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.4, 0, 0],
+        LeftPinky1: [1.5, 0.1, 0], LeftPinky2: [1.6, 0, 0], LeftPinky3: [1.4, 0, 0],
+        LeftThumb1: [0.7, 0.5, 0.2], LeftThumb2: [0.9, 0, 0], LeftThumb3: [0.9, 0, 0],
+        LeftWrist: [0, 0, 0]
+      },
+      thumbs_up: {
+        LeftIndex1: [1.4, -0.05, 0], LeftIndex2: [1.6, 0, 0], LeftIndex3: [1.3, 0, 0],
+        LeftMiddle1: [1.4, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.3, 0, 0],
+        LeftRing1: [1.4, 0.05, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.3, 0, 0],
+        LeftPinky1: [1.4, 0.1, 0], LeftPinky2: [1.6, 0, 0], LeftPinky3: [1.3, 0, 0],
+        LeftThumb1: [-0.25, -0.4, -0.2], LeftThumb2: [0, 0, 0], LeftThumb3: [-0.1, 0, 0],
+        LeftWrist: [0, 0.2, 0.3]
+      },
+      pinch: {
+        LeftIndex1: [0.7, -0.05, 0], LeftIndex2: [0.8, 0, 0], LeftIndex3: [0.6, 0, 0],
+        LeftThumb1: [0.4, 0.35, 0.2], LeftThumb2: [0.6, 0, 0], LeftThumb3: [0.4, 0, 0],
+        LeftMiddle1: [0.4, 0, 0], LeftMiddle2: [0.5, 0, 0], LeftMiddle3: [0.4, 0, 0],
+        LeftRing1: [0.5, 0.05, 0], LeftRing2: [0.6, 0, 0], LeftRing3: [0.4, 0, 0],
+        LeftPinky1: [0.6, 0.1, 0], LeftPinky2: [0.6, 0, 0], LeftPinky3: [0.4, 0, 0],
+        LeftWrist: [0, 0, 0]
+      },
+      ok: {
+        LeftIndex1: [0.85, -0.05, 0], LeftIndex2: [0.95, 0, 0], LeftIndex3: [0.75, 0, 0],
+        LeftThumb1: [0.5, 0.45, 0.3], LeftThumb2: [0.65, 0, 0], LeftThumb3: [0.5, 0, 0],
+        LeftMiddle1: [-0.05, 0.1, 0], LeftMiddle2: [0.05, 0, 0], LeftMiddle3: [0, 0, 0],
+        LeftRing1: [-0.05, 0.15, 0], LeftRing2: [0.05, 0, 0], LeftRing3: [0, 0, 0],
+        LeftPinky1: [-0.05, 0.25, 0], LeftPinky2: [0.05, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftWrist: [0, 0, 0]
+      },
+      rock: {
+        LeftIndex1: [0, 0.15, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftPinky1: [0, -0.2, 0], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftMiddle1: [1.5, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.4, 0, 0],
+        LeftRing1: [1.5, 0, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.4, 0, 0],
+        LeftThumb1: [0.6, 0.4, 0.2], LeftThumb2: [0.8, 0, 0], LeftThumb3: [0.7, 0, 0],
+        LeftWrist: [0, 0, 0]
+      },
+      point: {
+        LeftIndex1: [0, 0, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftMiddle1: [1.4, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.3, 0, 0],
+        LeftRing1: [1.4, 0, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.3, 0, 0],
+        LeftPinky1: [1.4, 0, 0], LeftPinky2: [1.6, 0, 0], LeftPinky3: [1.3, 0, 0],
+        LeftThumb1: [0.6, 0.35, 0.2], LeftThumb2: [0.7, 0, 0], LeftThumb3: [0.6, 0, 0],
+        LeftWrist: [0, 0, 0]
+      },
+      splay: {
+        LeftIndex1: [-0.1, 0.3, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftMiddle1: [-0.1, 0.05, 0], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
+        LeftRing1: [-0.1, -0.2, 0], LeftRing2: [0, 0, 0], LeftRing3: [0, 0, 0],
+        LeftPinky1: [-0.1, -0.4, 0], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftThumb1: [-0.2, 0.6, 0], LeftThumb2: [0, 0, 0], LeftThumb3: [0, 0, 0],
+        LeftWrist: [0, 0, 0]
+      },
+      shaka: {
+        LeftThumb1: [-0.3, 0.65, 0.2], LeftThumb2: [-0.1, 0, 0], LeftThumb3: [-0.1, 0, 0],
+        LeftPinky1: [-0.1, -0.35, 0], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftIndex1: [1.4, 0, 0], LeftIndex2: [1.6, 0, 0], LeftIndex3: [1.3, 0, 0],
+        LeftMiddle1: [1.4, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.3, 0, 0],
+        LeftRing1: [1.4, 0, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.3, 0, 0],
+        LeftWrist: [0, 0, 0.2]
+      },
+      cup: {
+        LeftIndex1: [0.45, 0.1, 0], LeftIndex2: [0.55, 0, 0], LeftIndex3: [0.35, 0, 0],
+        LeftMiddle1: [0.45, 0, 0], LeftMiddle2: [0.55, 0, 0], LeftMiddle3: [0.35, 0, 0],
+        LeftRing1: [0.45, -0.1, 0], LeftRing2: [0.55, 0, 0], LeftRing3: [0.35, 0, 0],
+        LeftPinky1: [0.45, -0.2, 0], LeftPinky2: [0.55, 0, 0], LeftPinky3: [0.35, 0, 0],
+        LeftThumb1: [0.3, 0.35, 0.2], LeftThumb2: [0.4, 0, 0], LeftThumb3: [0.3, 0, 0],
+        LeftWrist: [0.15, 0, 0]
+      },
+      flat: {
+        LeftIndex1: [0, 0, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftMiddle1: [0, 0, 0], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
+        LeftRing1: [0, 0, 0], LeftRing2: [0, 0, 0], LeftRing3: [0, 0, 0],
+        LeftPinky1: [0, 0, 0], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftThumb1: [0, 0, 0], LeftThumb2: [0, 0, 0], LeftThumb3: [0, 0, 0],
+        LeftWrist: [0, 0, 0], LeftElbow: [0, 0, 0]
+      },
+      neutral: {
+        // Natural resting posture of human hand (mild anatomical curl)
+        LeftIndex1: [0.15, 0.04, 0], LeftIndex2: [0.22, 0, 0], LeftIndex3: [0.12, 0, 0],
+        LeftMiddle1: [0.18, 0, 0], LeftMiddle2: [0.25, 0, 0], LeftMiddle3: [0.15, 0, 0],
+        LeftRing1: [0.22, -0.04, 0], LeftRing2: [0.28, 0, 0], LeftRing3: [0.18, 0, 0],
+        LeftPinky1: [0.28, -0.08, 0], LeftPinky2: [0.32, 0, 0], LeftPinky3: [0.22, 0, 0],
+        LeftThumb1: [0.18, 0.15, 0.1], LeftThumb2: [0.15, 0, 0], LeftThumb3: [0.1, 0, 0],
+        LeftWrist: [0, 0, 0], LeftElbow: [0, 0, 0]
+      }
+    };
+
+    /* =====================================================================
+     * Programmatic Buffer Geometries (Zero Prohibited Constructor Policy)
+     * ===================================================================== */
+
+    // Ring / Arc Buffer Geometry
+    function createArcBufferGeometry(radius, innerRadius, startAngle = 0, endAngle = Math.PI * 2, segments = 64) {
+      const geom = new THREE.BufferGeometry();
+      const positions = [];
+      const normals = [];
+      const indices = [];
+
+      for (let i = 0; i <= segments; i++) {
+        const theta = startAngle + (i / segments) * (endAngle - startAngle);
+        const cos = Math.cos(theta);
+        const sin = Math.sin(theta);
+
+        // Inner vertex
+        positions.push(cos * innerRadius, sin * innerRadius, 0);
+        normals.push(0, 0, 1);
+
+        // Outer vertex
+        positions.push(cos * radius, sin * radius, 0);
+        normals.push(0, 0, 1);
+      }
+
+      for (let i = 0; i < segments; i++) {
+        const a = i * 2;
+        const b = i * 2 + 1;
+        const c = i * 2 + 2;
+        const d = i * 2 + 3;
+        indices.push(a, b, c);
+        indices.push(c, b, d);
+        // Double-sided
+        indices.push(c, b, a);
+        indices.push(d, b, c);
+      }
+
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geom.setIndex(indices);
+      return geom;
+    }
+
+    // Geodesic Diamond Joint Marker Geometry
+    function createJointMarkerGeometry(size = 0.005) {
+      const geom = new THREE.BufferGeometry();
+      // Octahedral diamond shape
+      const s = size;
+      const positions = [
+        // Top pyramid
+        0, s, 0,   s, 0, 0,   0, 0, s,
+        0, s, 0,   0, 0, s,  -s, 0, 0,
+        0, s, 0,  -s, 0, 0,   0, 0,-s,
+        0, s, 0,   0, 0,-s,   s, 0, 0,
+        // Bottom pyramid
+        0,-s, 0,   0, 0, s,   s, 0, 0,
+        0,-s, 0,  -s, 0, 0,   0, 0, s,
+        0,-s, 0,   0, 0,-s,  -s, 0, 0,
+        0,-s, 0,   s, 0, 0,   0, 0,-s
+      ];
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geom.computeVertexNormals();
+      return geom;
+    }
+
+    /* =====================================================================
+     * Three.js Viewport & Scene Setup
+     * ===================================================================== */
+
+    const canvas = document.getElementById('webgl-canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.localClippingEnabled = true;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x07090f);
+
+    // Cinematic Macro Camera (Focal length ~50mm equivalent)
+    const camera = new THREE.PerspectiveCamera(32, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0.0, 0.16, 0.38);
+
+    const controls = new THREE.OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.target.set(0.0, 0.0, 0.0);
+    controls.minDistance = 0.15;
+    controls.maxDistance = 1.2;
+
+    // Studio 3-Point Lighting Setup
+    const ambientLight = new THREE.AmbientLight(0x1e293b, 0.45);
+    scene.add(ambientLight);
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.3);
+    keyLight.position.set(0.5, 0.8, 0.6);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    keyLight.shadow.bias = -0.0001;
+    scene.add(keyLight);
+
+    const rimLight = new THREE.DirectionalLight(0xdbeafe, 1.1);
+    rimLight.position.set(-0.6, 0.3, -0.6);
+    scene.add(rimLight);
+
+    const fillLight = new THREE.DirectionalLight(0xfef3c7, 0.45);
+    fillLight.position.set(-0.5, -0.2, 0.5);
+    scene.add(fillLight);
+
+    // Floor shadow receiver disk (programmatic buffer)
+    const floorGeom = createArcBufferGeometry(0.5, 0.0, 0, Math.PI * 2, 48);
+    const floorMat = new THREE.ShadowMaterial({ opacity: 0.35 });
+    const floorMesh = new THREE.Mesh(floorGeom, floorMat);
+    floorMesh.rotation.x = -Math.PI / 2;
+    floorMesh.position.y = -0.15;
+    floorMesh.receiveShadow = true;
+    scene.add(floorMesh);
+
+    /* =====================================================================
+     * SB-Human Binary Loader (.sbhuman v2)
+     * ===================================================================== */
+
+    let skinnedMesh = null;
+    let skeleton = null;
+    const bonesMap = new Map();
+    const restPositions = new Map();
+    let armRootOffset = new THREE.Vector3();
+
+    // Cross-section clipping plane to cleanly isolate Forearm & Hand
+    const clipPlane = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0.32);
+
+    // Material Library
+    const materials = {
+      clay: new THREE.MeshStandardMaterial({
+        color: 0x8a929a,
+        roughness: 0.85,
+        metalness: 0.0,
+        clippingPlanes: [clipPlane],
+        clipShadows: true
+      }),
+      skin: new THREE.MeshStandardMaterial({
+        color: 0xdfab9c,
+        roughness: 0.52,
+        metalness: 0.02,
+        clippingPlanes: [clipPlane],
+        clipShadows: true
+      }),
+      xray: new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.35,
+        clippingPlanes: [clipPlane]
+      }),
+      wireframe: new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        wireframe: true,
+        clippingPlanes: [clipPlane]
+      })
+    };
+
+    async function loadSbHumanModel() {
+      try {
+        const res = await fetch('/models/sbhuman_neutral.sbhuman');
+        if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch sbhuman_neutral.sbhuman`);
+        const buffer = await res.arrayBuffer();
+        const view = new DataView(buffer);
+
+        let offset = 0;
+        const magic = view.getUint32(offset, true); offset += 4;
+        const version = view.getUint32(offset, true); offset += 4;
+        if (magic !== 0x4E4D4853 || version !== 2) {
+          throw new Error('Invalid .sbhuman container format. Expected magic 0x4E4D4853 version 2.');
+        }
+
+        const numVertices = view.getUint32(offset, true); offset += 4;
+        const numIndices = view.getUint32(offset, true); offset += 4;
+        const numJoints = view.getUint32(offset, true); offset += 4;
+        // Fix: Header is exactly 40 bytes (magic:4, ver:4, numVerts:4, numIdx:4, numJoints:4, shape:4, expr:4, corr:4, reg:4, flags:4)
+        offset = 40;
+
+        // 1. Unpack Vertices (40 bytes stride)
+        const positions = new Float32Array(numVertices * 3);
+        const normals = new Float32Array(numVertices * 3);
+        const uvs = new Float32Array(numVertices * 2);
+
+        for (let i = 0; i < numVertices; i++) {
+          positions[i * 3 + 0] = view.getFloat32(offset, true);
+          positions[i * 3 + 1] = view.getFloat32(offset + 4, true);
+          positions[i * 3 + 2] = view.getFloat32(offset + 8, true);
+          offset += 16;
+          normals[i * 3 + 0] = view.getFloat32(offset, true);
+          normals[i * 3 + 1] = view.getFloat32(offset + 4, true);
+          normals[i * 3 + 2] = view.getFloat32(offset + 8, true);
+          offset += 16;
+          uvs[i * 2 + 0] = view.getFloat32(offset, true);
+          uvs[i * 2 + 1] = view.getFloat32(offset + 4, true);
+          offset += 8;
+        }
+
+        // 2. Unpack Indices
+        const indices = new Uint32Array(numIndices);
+        for (let i = 0; i < numIndices; i++) {
+          indices[i] = view.getUint32(offset, true);
+          offset += 4;
+        }
+
+        // 3. Unpack Joints
+        const joints = [];
+        for (let j = 0; j < numJoints; j++) {
+          const nameLen = view.getUint32(offset, true); offset += 4;
+          let name = '';
+          for (let k = 0; k < nameLen; k++) name += String.fromCharCode(view.getUint8(offset + k));
+          offset += nameLen;
+          const parent = view.getInt32(offset, true); offset += 4;
+          const jx = view.getFloat32(offset, true);
+          const jy = view.getFloat32(offset + 4, true);
+          const jz = view.getFloat32(offset + 8, true);
+          offset += 16;
+          joints.push({ id: j, name, parent, pos: [jx, jy, jz] });
+        }
+
+        // 4. Unpack Skin Weights
+        const skinIndices = new Uint16Array(numVertices * 4);
+        const skinWeights = new Float32Array(numVertices * 4);
+        for (let i = 0; i < numVertices; i++) {
+          skinIndices[i * 4 + 0] = view.getUint16(offset, true);
+          skinIndices[i * 4 + 1] = view.getUint16(offset + 2, true);
+          skinIndices[i * 4 + 2] = view.getUint16(offset + 4, true);
+          skinIndices[i * 4 + 3] = view.getUint16(offset + 6, true);
+          offset += 8;
+          skinWeights[i * 4 + 0] = view.getFloat32(offset, true);
+          skinWeights[i * 4 + 1] = view.getFloat32(offset + 4, true);
+          skinWeights[i * 4 + 2] = view.getFloat32(offset + 8, true);
+          skinWeights[i * 4 + 3] = view.getFloat32(offset + 12, true);
+          offset += 16;
+        }
+
+        // Centering Transformation: Center Left Wrist & Palm at (0, 0, 0)
+        // Left wrist rest position is [0.670, 1.337, -0.061]. Hand center ~[0.725, 1.335, -0.06]
+        armRootOffset.set(-0.725, -1.335, 0.060);
+
+        // Build Geometry
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        geometry.setAttribute('skinIndex', new THREE.BufferAttribute(skinIndices, 4));
+        geometry.setAttribute('skinWeight', new THREE.BufferAttribute(skinWeights, 4));
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+
+        // Build Bone Hierarchy
+        const bones = [];
+        for (let j = 0; j < joints.length; j++) {
+          const bone = new THREE.Bone();
+          bone.name = joints[j].name;
+          bones.push(bone);
+          bonesMap.set(bone.name, bone);
+          restPositions.set(bone.name, joints[j].pos);
+        }
+
+        for (let j = 0; j < joints.length; j++) {
+          const p = joints[j].parent;
+          if (p >= 0 && p < joints.length) {
+            bones[p].add(bones[j]);
+            const parentPos = joints[p].pos;
+            const curPos = joints[j].pos;
+            bones[j].position.set(curPos[0] - parentPos[0], curPos[1] - parentPos[1], curPos[2] - parentPos[2]);
+          } else {
+            const curPos = joints[j].pos;
+            bones[j].position.set(curPos[0], curPos[1], curPos[2]);
+          }
+        }
+
+        // Skinned Mesh Setup
+        skinnedMesh = new THREE.SkinnedMesh(geometry, materials.clay);
+        skinnedMesh.castShadow = true;
+        skinnedMesh.receiveShadow = true;
+
+        for (let j = 0; j < joints.length; j++) {
+          if (joints[j].parent < 0) {
+            skinnedMesh.add(bones[j]);
+          }
+        }
+
+        // Apply centering offset to mesh so hand is framed precisely at origin
+        skinnedMesh.position.copy(armRootOffset);
+        skinnedMesh.updateMatrixWorld(true);
+
+        skeleton = new THREE.Skeleton(bones);
+        skinnedMesh.bind(skeleton);
+        scene.add(skinnedMesh);
+
+        // Build 3D Joint Nodes and Interactive Gizmo
+        initJointVisualizers();
+        initRotationGizmo();
+
+        // Apply Natural Resting Neutral Hand Pose
+        applyPresetPose('neutral', false);
+
+        // Hide loading overlay
+        const loader = document.getElementById('loading-overlay');
+        loader.style.opacity = '0';
+        setTimeout(() => loader.remove(), 400);
+
+      } catch (err) {
+        console.error('Failed to load SB-Human:', err);
+        document.querySelector('.loader-text').textContent = 'Error Loading SB-Human Model';
+        document.querySelector('.loader-subtext').textContent = err.message;
+      }
+    }
+
+    /* =====================================================================
+     * Interactive 3D Joint Markers & Visual Skeleton
+     * ===================================================================== */
+
+    const jointMarkersGroup = new THREE.Group();
+    scene.add(jointMarkersGroup);
+    const markerMeshes = [];
+
+    const DIGIT_COLORS = {
+      thumb:  0xf59e0b, // Amber
+      index:  0x38bdf8, // Cyan
+      middle: 0x10b981, // Emerald
+      ring:   0xa855f7, // Purple
+      pinky:  0xf43f5e, // Rose
+      arm:    0xffffff  // White
+    };
+
+    function initJointVisualizers() {
+      const markerGeom = createJointMarkerGeometry(0.0035);
+
+      HAND_JOINTS.forEach(jointMeta => {
+        const color = DIGIT_COLORS[jointMeta.digit] || 0x38bdf8;
+        const mat = new THREE.MeshBasicMaterial({ color, wireframe: false, depthTest: false, transparent: true, opacity: 0.85 });
+        const mesh = new THREE.Mesh(markerGeom, mat);
+        mesh.userData = { jointName: jointMeta.name, meta: jointMeta };
+        jointMarkersGroup.add(mesh);
+        markerMeshes.push(mesh);
+      });
+    }
+
+    function updateJointVisualizerPositions() {
+      const v = new THREE.Vector3();
+      markerMeshes.forEach(mesh => {
+        const bone = bonesMap.get(mesh.userData.jointName);
+        if (bone) {
+          bone.getWorldPosition(v);
+          mesh.position.copy(v);
+        }
+      });
+    }
+
+    /* =====================================================================
+     * Interactive 3D Rotation Gizmo
+     * ===================================================================== */
+
+    const gizmoGroup = new THREE.Group();
+    scene.add(gizmoGroup);
+
+    let activeGizmoRing = null;
+    let isGizmoDragging = false;
+    let dragStartPointer = new THREE.Vector2();
+    let dragStartRotation = new THREE.Vector3();
+
+    const GIZMO_RADIUS = 0.024;
+    const GIZMO_THICKNESS = 0.002;
+
+    const ringGeom = createArcBufferGeometry(GIZMO_RADIUS, GIZMO_RADIUS - GIZMO_THICKNESS, 0, Math.PI * 2, 48);
+
+    // Flexion (X - Red)
+    const ringFlexMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e, depthTest: false, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+    const ringFlex = new THREE.Mesh(ringGeom, ringFlexMat);
+    ringFlex.rotation.y = Math.PI / 2;
+    ringFlex.userData = { axis: 'x', label: 'Flexion' };
+    gizmoGroup.add(ringFlex);
+
+    // Splay (Y - Green)
+    const ringSplayMat = new THREE.MeshBasicMaterial({ color: 0x10b981, depthTest: false, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+    const ringSplay = new THREE.Mesh(ringGeom, ringSplayMat);
+    ringSplay.rotation.x = Math.PI / 2;
+    ringSplay.userData = { axis: 'y', label: 'Splay' };
+    gizmoGroup.add(ringSplay);
+
+    // Twist (Z - Blue)
+    const ringTwistMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, depthTest: false, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+    const ringTwist = new THREE.Mesh(ringGeom, ringTwistMat);
+    ringTwist.userData = { axis: 'z', label: 'Twist' };
+    gizmoGroup.add(ringTwist);
+
+    const gizmoRings = [ringFlex, ringSplay, ringTwist];
+
+    function initRotationGizmo() {
+      updateGizmoTransform();
+    }
+
+    function updateGizmoTransform() {
+      const bone = bonesMap.get(state.selectedJointName);
+      if (!bone || !state.showJoints) {
+        gizmoGroup.visible = false;
+        return;
+      }
+      gizmoGroup.visible = true;
+      const worldPos = new THREE.Vector3();
+      const worldQuat = new THREE.Quaternion();
+      bone.getWorldPosition(worldPos);
+      bone.getWorldQuaternion(worldQuat);
+      gizmoGroup.position.copy(worldPos);
+      gizmoGroup.quaternion.copy(worldQuat);
+
+      // Scale gizmo slightly with camera distance to preserve clickability
+      const dist = camera.position.distanceTo(worldPos);
+      const s = Math.max(0.7, dist * 2.2);
+      gizmoGroup.scale.set(s, s, s);
+    }
+
+    /* =====================================================================
+     * Raycasting & Viewport Interaction (Click & Drag Posing)
+     * ===================================================================== */
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    const hud = document.getElementById('joint-hud');
+
+    function onPointerMove(e) {
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+      if (isGizmoDragging && activeGizmoRing) {
+        // Drag calculation: Calculate screen-space mouse delta and apply rotation
+        const deltaX = (e.clientX - dragStartPointer.x) * 0.012;
+        const deltaY = (e.clientY - dragStartPointer.y) * 0.012;
+        const bone = bonesMap.get(state.selectedJointName);
+        if (!bone) return;
+
+        const axis = activeGizmoRing.userData.axis;
+        let delta = 0;
+        if (axis === 'x') delta = -deltaY;
+        else if (axis === 'y') delta = deltaX;
+        else if (axis === 'z') delta = deltaX + deltaY;
+
+        let targetVal = dragStartRotation[axis] + delta;
+
+        // Apply ROM clamps if active
+        if (state.enforceLimits && ROM_LIMITS[state.selectedJointName]) {
+          const limits = ROM_LIMITS[state.selectedJointName];
+          if (axis === 'x') targetVal = Math.max(limits.minX, Math.min(limits.maxX, targetVal));
+          if (axis === 'y') targetVal = Math.max(limits.minY, Math.min(limits.maxY, targetVal));
+          if (axis === 'z') targetVal = Math.max(limits.minZ, Math.min(limits.maxZ, targetVal));
+        }
+
+        bone.rotation[axis] = targetVal;
+        bone.updateMatrixWorld(true);
+        if (skinnedMesh) skinnedMesh.skeleton.update();
+
+        // Update Slider UI
+        const deg = Math.round(targetVal * (180 / Math.PI));
+        if (axis === 'x') {
+          document.getElementById('slider-active-flexion').value = deg;
+          document.getElementById('val-active-flexion').textContent = `${deg}°`;
+        } else if (axis === 'y') {
+          document.getElementById('slider-active-splay').value = deg;
+          document.getElementById('val-active-splay').textContent = `${deg}°`;
+        } else if (axis === 'z') {
+          document.getElementById('slider-active-twist').value = deg;
+          document.getElementById('val-active-twist').textContent = `${deg}°`;
+        }
+
+        hud.style.display = 'block';
+        hud.style.left = `${e.clientX}px`;
+        hud.style.top = `${e.clientY}px`;
+        hud.textContent = `${state.selectedJointName} ${activeGizmoRing.userData.label}: ${deg}°`;
+        return;
+      }
+
+      // Hover Detection
+      raycaster.setFromCamera(mouse, camera);
+
+      // Check Gizmo Rings First
+      if (gizmoGroup.visible) {
+        const ringIntersects = raycaster.intersectObjects(gizmoRings, true);
+        if (ringIntersects.length > 0) {
+          canvas.style.cursor = 'grab';
+          ringIntersects[0].object.material.opacity = 1.0;
+          return;
+        } else {
+          gizmoRings.forEach(r => r.material.opacity = 0.85);
+        }
+      }
+
+      // Check Joint Markers
+      if (state.showJoints) {
+        const markerIntersects = raycaster.intersectObjects(markerMeshes, true);
+        if (markerIntersects.length > 0) {
+          canvas.style.cursor = 'pointer';
+          const meta = markerIntersects[0].object.userData.meta;
+          hud.style.display = 'block';
+          hud.style.left = `${e.clientX}px`;
+          hud.style.top = `${e.clientY}px`;
+          hud.textContent = `${meta.label} (${meta.type})`;
+          return;
+        }
+      }
+
+      canvas.style.cursor = 'default';
+      hud.style.display = 'none';
+    }
+
+    function onPointerDown(e) {
+      if (e.button !== 0) return; // Left click only
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+
+      // 1. Click on Gizmo Ring
+      if (gizmoGroup.visible) {
+        const ringIntersects = raycaster.intersectObjects(gizmoRings, true);
+        if (ringIntersects.length > 0) {
+          activeGizmoRing = ringIntersects[0].object;
+          isGizmoDragging = true;
+          controls.enabled = false; // Disable camera orbit while rotating bone
+          dragStartPointer.set(e.clientX, e.clientY);
+          const bone = bonesMap.get(state.selectedJointName);
+          if (bone) {
+            dragStartRotation.set(bone.rotation.x, bone.rotation.y, bone.rotation.z);
+          }
+          canvas.style.cursor = 'grabbing';
+          return;
+        }
+      }
+
+      // 2. Click on Joint Marker
+      if (state.showJoints) {
+        const markerIntersects = raycaster.intersectObjects(markerMeshes, true);
+        if (markerIntersects.length > 0) {
+          const jointName = markerIntersects[0].object.userData.jointName;
+          selectJoint(jointName);
+          return;
+        }
+      }
+    }
+
+    function onPointerUp() {
+      if (isGizmoDragging) {
+        isGizmoDragging = false;
+        activeGizmoRing = null;
+        controls.enabled = true; // Re-enable camera orbit
+        canvas.style.cursor = 'default';
+        hud.style.display = 'none';
+      }
+    }
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointerup', onPointerUp);
+
+    /* =====================================================================
+     * Joint Selection & UI Synchronization
+     * ===================================================================== */
+
+    function selectJoint(jointName) {
+      const meta = JOINT_MAP.get(jointName);
+      if (!meta) return;
+
+      state.selectedJointName = jointName;
+      document.getElementById('selected-joint-title').textContent = meta.label;
+      document.getElementById('selected-joint-type').textContent = meta.type;
+
+      // Update active highlight in accordion
+      document.querySelectorAll('.finger-joint-row').forEach(row => {
+        row.classList.toggle('selected', row.getAttribute('data-joint') === jointName);
+      });
+
+      // Synchronize Sliders with current bone rotation
+      const bone = bonesMap.get(jointName);
+      if (bone) {
+        const degX = Math.round(bone.rotation.x * (180 / Math.PI));
+        const degY = Math.round(bone.rotation.y * (180 / Math.PI));
+        const degZ = Math.round(bone.rotation.z * (180 / Math.PI));
+
+        document.getElementById('slider-active-flexion').value = degX;
+        document.getElementById('val-active-flexion').textContent = `${degX}°`;
+
+        document.getElementById('slider-active-splay').value = degY;
+        document.getElementById('val-active-splay').textContent = `${degY}°`;
+
+        document.getElementById('slider-active-twist').value = degZ;
+        document.getElementById('val-active-twist').textContent = `${degZ}°`;
+      }
+
+      updateGizmoTransform();
+    }
+
+    // Direct Slider Input Handlers
+    function setupSliderEvents() {
+      const flexSlider = document.getElementById('slider-active-flexion');
+      const splaySlider = document.getElementById('slider-active-splay');
+      const twistSlider = document.getElementById('slider-active-twist');
+
+      flexSlider.addEventListener('input', (e) => {
+        const rad = parseFloat(e.target.value) * (Math.PI / 180);
+        document.getElementById('val-active-flexion').textContent = `${e.target.value}°`;
+        setJointAxisRotation(state.selectedJointName, 'x', rad);
+      });
+
+      splaySlider.addEventListener('input', (e) => {
+        const rad = parseFloat(e.target.value) * (Math.PI / 180);
+        document.getElementById('val-active-splay').textContent = `${e.target.value}°`;
+        setJointAxisRotation(state.selectedJointName, 'y', rad);
+      });
+
+      twistSlider.addEventListener('input', (e) => {
+        const rad = parseFloat(e.target.value) * (Math.PI / 180);
+        document.getElementById('val-active-twist').textContent = `${e.target.value}°`;
+        setJointAxisRotation(state.selectedJointName, 'z', rad);
+      });
+
+      document.getElementById('btn-zero-joint').addEventListener('click', () => {
+        setJointRotation(state.selectedJointName, [0, 0, 0]);
+        selectJoint(state.selectedJointName);
+      });
+
+      // Master Curl All Slider
+      document.getElementById('slider-curl-all').addEventListener('input', (e) => {
+        const factor = parseFloat(e.target.value) / 100;
+        document.getElementById('val-curl-all').textContent = `${e.target.value}%`;
+        curlAllFingers(factor);
+      });
+
+      // Master Spread All Slider
+      document.getElementById('slider-spread-all').addEventListener('input', (e) => {
+        const factor = parseFloat(e.target.value) / 100;
+        document.getElementById('val-spread-all').textContent = `${e.target.value}%`;
+        spreadAllFingers(factor);
+      });
+    }
+
+    function setJointAxisRotation(jointName, axis, angleRad) {
+      const bone = bonesMap.get(jointName);
+      if (!bone) return;
+      if (state.enforceLimits && ROM_LIMITS[jointName]) {
+        const limits = ROM_LIMITS[jointName];
+        if (axis === 'x') angleRad = Math.max(limits.minX, Math.min(limits.maxX, angleRad));
+        if (axis === 'y') angleRad = Math.max(limits.minY, Math.min(limits.maxY, angleRad));
+        if (axis === 'z') angleRad = Math.max(limits.minZ, Math.min(limits.maxZ, angleRad));
+      }
+      bone.rotation[axis] = angleRad;
+      bone.updateMatrixWorld(true);
+      if (skinnedMesh) skinnedMesh.skeleton.update();
+      updateGizmoTransform();
+    }
+
+    function setJointRotation(jointName, [rx, ry, rz]) {
+      const bone = bonesMap.get(jointName);
+      if (!bone) return;
+      if (state.enforceLimits && ROM_LIMITS[jointName]) {
+        const limits = ROM_LIMITS[jointName];
+        rx = Math.max(limits.minX, Math.min(limits.maxX, rx));
+        ry = Math.max(limits.minY, Math.min(limits.maxY, ry));
+        rz = Math.max(limits.minZ, Math.min(limits.maxZ, rz));
+      }
+      bone.rotation.set(rx, ry, rz);
+      bone.updateMatrixWorld(true);
+      if (skinnedMesh) skinnedMesh.skeleton.update();
+    }
+
+    function curlAllFingers(factor) {
+      const digits = ['Index', 'Middle', 'Ring', 'Pinky'];
+      digits.forEach(d => {
+        setJointAxisRotation(`Left${d}1`, 'x', factor * 1.4);
+        setJointAxisRotation(`Left${d}2`, 'x', factor * 1.6);
+        setJointAxisRotation(`Left${d}3`, 'x', factor * 1.3);
+      });
+      setJointAxisRotation('LeftThumb1', 'x', factor * 0.6);
+      setJointAxisRotation('LeftThumb2', 'x', factor * 0.8);
+      setJointAxisRotation('LeftThumb3', 'x', factor * 0.8);
+      selectJoint(state.selectedJointName);
+    }
+
+    function spreadAllFingers(factor) {
+      setJointAxisRotation('LeftIndex1', 'y', factor * 0.35);
+      setJointAxisRotation('LeftMiddle1', 'y', factor * 0.05);
+      setJointAxisRotation('LeftRing1', 'y', -factor * 0.25);
+      setJointAxisRotation('LeftPinky1', 'y', -factor * 0.45);
+      setJointAxisRotation('LeftThumb1', 'y', factor * 0.6);
+      selectJoint(state.selectedJointName);
+    }
+
+    /* =====================================================================
+     * Natural Language Prompt Posing Engine
+     * ===================================================================== */
+
+    function parsePrompt(text) {
+      const prompt = text.trim().toLowerCase();
+      if (!prompt) return;
+
+      // 1. Direct Holistic Gesture Matches
+      if (/fist|clench|punch|squeeze/i.test(prompt)) {
+        applyPresetPose('fist');
+        return;
+      }
+      if (/peace|victory|two fingers|scissor/i.test(prompt)) {
+        applyPresetPose('peace');
+        return;
+      }
+      if (/thumbs?\s*up|like/i.test(prompt)) {
+        applyPresetPose('thumbs_up');
+        return;
+      }
+      if (/pinch|touch tips/i.test(prompt)) {
+        applyPresetPose('pinch');
+        return;
+      }
+      if (/^ok|ok sign|okay/i.test(prompt)) {
+        applyPresetPose('ok');
+        return;
+      }
+      if (/rock|horns|devil|metal/i.test(prompt)) {
+        applyPresetPose('rock');
+        return;
+      }
+      if (/point|index point|one finger/i.test(prompt)) {
+        applyPresetPose('point');
+        return;
+      }
+      if (/splay|spread|open hand|wide/i.test(prompt)) {
+        applyPresetPose('splay');
+        return;
+      }
+      if (/shaka|hang loose|hawaii/i.test(prompt)) {
+        applyPresetPose('shaka');
+        return;
+      }
+      if (/cup|hold ball|holding sphere|grasp/i.test(prompt)) {
+        applyPresetPose('cup');
+        return;
+      }
+      if (/flat|palm|stop|karate/i.test(prompt)) {
+        applyPresetPose('flat');
+        return;
+      }
+      if (/reset|neutral|relax/i.test(prompt)) {
+        applyPresetPose('neutral');
+        return;
+      }
+
+      // 2. Parametric Angle / Joint Parser (e.g. "bend index 45 degrees")
+      const degMatch = prompt.match(/(\d+)\s*(?:deg|degrees|°)?/i);
+      const angleDeg = degMatch ? parseFloat(degMatch[1]) : 45;
+      const angleRad = angleDeg * (Math.PI / 180);
+
+      const targetPose = Object.assign({}, getCurrentPoseState());
+
+      // Identify target digit
+      let targetDigit = null;
+      if (/thumb/i.test(prompt)) targetDigit = 'Thumb';
+      else if (/index/i.test(prompt)) targetDigit = 'Index';
+      else if (/middle/i.test(prompt)) targetDigit = 'Middle';
+      else if (/ring/i.test(prompt)) targetDigit = 'Ring';
+      else if (/pinky|little/i.test(prompt)) targetDigit = 'Pinky';
+      else if (/wrist/i.test(prompt)) targetDigit = 'Wrist';
+      else if (/elbow|forearm/i.test(prompt)) targetDigit = 'Elbow';
+
+      const isStraighten = /straight|extend|unbend|flatten/i.test(prompt);
+      const effectiveAngle = isStraighten ? 0 : angleRad;
+
+      if (targetDigit === 'Wrist') {
+        if (/prona|twist|rotate/i.test(prompt)) {
+          targetPose['LeftWrist'] = [0, 0, effectiveAngle];
+        } else {
+          targetPose['LeftWrist'] = [effectiveAngle, 0, 0];
+        }
+      } else if (targetDigit === 'Elbow') {
+        targetPose['LeftElbow'] = [0, 0, effectiveAngle];
+      } else if (targetDigit) {
+        // Check for specific joint level
+        if (/pip|proximal|mid/i.test(prompt)) {
+          targetPose[`Left${targetDigit}2`] = [effectiveAngle, 0, 0];
+        } else if (/dip|distal|tip/i.test(prompt)) {
+          targetPose[`Left${targetDigit}3`] = [effectiveAngle, 0, 0];
+        } else if (/mcp|knuckle|base/i.test(prompt)) {
+          targetPose[`Left${targetDigit}1`] = [effectiveAngle, 0, 0];
+        } else {
+          // Entire finger curls proportionally
+          targetPose[`Left${targetDigit}1`] = [effectiveAngle * 0.7, 0, 0];
+          targetPose[`Left${targetDigit}2`] = [effectiveAngle * 1.0, 0, 0];
+          targetPose[`Left${targetDigit}3`] = [effectiveAngle * 0.8, 0, 0];
+        }
+      } else if (/all\s*fingers|hand/i.test(prompt)) {
+        ['Index', 'Middle', 'Ring', 'Pinky', 'Thumb'].forEach(d => {
+          targetPose[`Left${d}1`] = [effectiveAngle * 0.7, 0, 0];
+          targetPose[`Left${d}2`] = [effectiveAngle * 1.0, 0, 0];
+          targetPose[`Left${d}3`] = [effectiveAngle * 0.8, 0, 0];
+        });
+      }
+
+      lerpToPose(targetPose);
+    }
+
+    function getCurrentPoseState() {
+      const pose = {};
+      HAND_JOINTS.forEach(j => {
+        const bone = bonesMap.get(j.name);
+        if (bone) {
+          pose[j.name] = [bone.rotation.x, bone.rotation.y, bone.rotation.z];
+        }
+      });
+      return pose;
+    }
+
+    function applyPresetPose(poseKey, animate = true) {
+      const preset = GESTURE_PRESETS[poseKey];
+      if (!preset) return;
+      if (!animate) {
+        Object.entries(preset).forEach(([name, rot]) => {
+          setJointRotation(name, rot);
+        });
+        selectJoint(state.selectedJointName);
+      } else {
+        lerpToPose(preset);
+      }
+    }
+
+    function lerpToPose(targetPoseMap) {
+      state.currentPose = getCurrentPoseState();
+      state.targetPose = Object.assign({}, state.currentPose, targetPoseMap);
+      state.lerpProgress = 0.0;
+      state.lerpStartTime = performance.now();
+    }
+
+    function updatePoseLerp() {
+      if (state.lerpProgress >= 1.0) return;
+
+      const elapsed = performance.now() - state.lerpStartTime;
+      let t = Math.min(1.0, elapsed / state.lerpDuration);
+      // Smooth sinusoidal cubic easing
+      const easeT = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      state.lerpProgress = t;
+
+      Object.entries(state.targetPose).forEach(([name, targetRot]) => {
+        const startRot = state.currentPose[name] || [0, 0, 0];
+        const rx = startRot[0] + (targetRot[0] - startRot[0]) * easeT;
+        const ry = startRot[1] + (targetRot[1] - startRot[1]) * easeT;
+        const rz = startRot[2] + (targetRot[2] - startRot[2]) * easeT;
+        setJointRotation(name, [rx, ry, rz]);
+      });
+
+      if (t >= 1.0) {
+        selectJoint(state.selectedJointName);
+      }
+    }
+
+    /* =====================================================================
+     * Camera Presets & UI Wire-up
+     * ===================================================================== */
+
+    const CAMERA_PRESETS = {
+      dorsal:   { pos: [0.0, 0.16, 0.38], target: [0, 0, 0] },
+      palmar:   { pos: [0.0, -0.16, 0.38], target: [0, 0, 0] },
+      radial:   { pos: [0.28, 0.08, 0.22], target: [0, 0, 0] },
+      ulnar:    { pos: [-0.28, 0.08, 0.22], target: [0, 0, 0] },
+      knuckles: { pos: [0.0, 0.38, 0.05], target: [0, 0, 0] }
+    };
+
+    function setupCameraControls() {
+      document.querySelectorAll('[data-cam]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          document.querySelectorAll('[data-cam]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          const preset = CAMERA_PRESETS[btn.getAttribute('data-cam')];
+          if (preset) {
+            camera.position.set(...preset.pos);
+            controls.target.set(...preset.target);
+            controls.update();
+          }
+        });
+      });
+
+      // Material Toggles
+      document.querySelectorAll('[data-mat]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('[data-mat]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          const matKey = btn.getAttribute('data-mat');
+          state.activeMaterial = matKey;
+          if (skinnedMesh && materials[matKey]) {
+            skinnedMesh.material = materials[matKey];
+          }
+        });
+      });
+
+      // Isolation Toggle
+      const isoBtn = document.getElementById('btn-toggle-isolated');
+      isoBtn.addEventListener('click', () => {
+        state.isIsolated = !state.isIsolated;
+        isoBtn.classList.toggle('active', state.isIsolated);
+        isoBtn.textContent = state.isIsolated ? 'Isolated Forearm & Hand' : 'Full Avatar Context';
+        Object.values(materials).forEach(m => {
+          m.clippingPlanes = state.isIsolated ? [clipPlane] : [];
+        });
+      });
+
+      // Joint Gizmos Toggle
+      const jointsBtn = document.getElementById('btn-toggle-joints');
+      jointsBtn.addEventListener('click', () => {
+        state.showJoints = !state.showJoints;
+        jointsBtn.classList.toggle('active', state.showJoints);
+        jointMarkersGroup.visible = state.showJoints;
+        gizmoGroup.visible = state.showJoints;
+      });
+
+      // ROM Limits Toggle
+      const limitsBtn = document.getElementById('btn-toggle-limits');
+      limitsBtn.addEventListener('click', () => {
+        state.enforceLimits = !state.enforceLimits;
+        limitsBtn.classList.toggle('active', state.enforceLimits);
+        limitsBtn.textContent = state.enforceLimits ? 'ROM Limiters: ON' : 'ROM Limiters: OFF';
+      });
+
+      // Quick Pose Chips
+      document.querySelectorAll('[data-pose]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          applyPresetPose(btn.getAttribute('data-pose'));
+        });
+      });
+
+      // Unified Prompt & Multimodal Pose Button
+      const promptInput = document.getElementById('prompt-input');
+      const poseBtn = document.getElementById('btn-pose');
+
+      poseBtn.addEventListener('click', handleUnifiedSubmit);
+      promptInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleUnifiedSubmit();
+      });
+
+      // Reference Library Drawer Toggle
+      const refDrawer = document.getElementById('ref-library-drawer');
+      const btnToggleRef = document.getElementById('btn-toggle-ref-library');
+      const btnCloseRef = document.getElementById('btn-close-ref-drawer');
+
+      if (btnToggleRef && refDrawer) {
+        btnToggleRef.addEventListener('click', () => {
+          const isOpen = refDrawer.style.display === 'flex';
+          refDrawer.style.display = isOpen ? 'none' : 'flex';
+          btnToggleRef.classList.toggle('active', !isOpen);
+        });
+      }
+      if (btnCloseRef && refDrawer) {
+        btnCloseRef.addEventListener('click', () => {
+          refDrawer.style.display = 'none';
+          btnToggleRef.classList.remove('active');
+        });
+      }
+
+      // Quick-test Reference Pose Cards
+      const REF_CARD_DATA = {
+        peace: { label: 'Peace Sign (V)', emoji: '✌️', prompt: 'peace sign' },
+        fist: { label: 'Clenched Fist', emoji: '✊', prompt: 'clenched fist' },
+        thumbs_up: { label: 'Thumbs Up', emoji: '👍', prompt: 'thumbs up' },
+        pinch: { label: 'Pinch Precision', emoji: '🤏', prompt: 'pinch thumb and index tips' },
+        point: { label: 'Index Point', emoji: '👉', prompt: 'pointing index finger' },
+        shaka: { label: 'Shaka / Hang Loose', emoji: '🤙', prompt: 'shaka hang loose hand' }
+      };
+
+      document.querySelectorAll('.ref-pose-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const pKey = card.getAttribute('data-ref-pose');
+          const meta = REF_CARD_DATA[pKey];
+          if (!meta) return;
+
+          const refImg = createReferencePoseImage(pKey, meta.label, meta.emoji);
+          refImg._poseKey = pKey;
+          refImg.onload = () => {
+            renderAttachedImageChip(refImg);
+            promptInput.value = meta.prompt;
+            refDrawer.style.display = 'none';
+            btnToggleRef.classList.remove('active');
+            handleUnifiedSubmit();
+          };
+        });
+      });
+
+      // Accordion Click
+      document.querySelectorAll('.finger-joint-row').forEach(row => {
+        row.addEventListener('click', () => {
+          const jointName = row.getAttribute('data-joint');
+          selectJoint(jointName);
+        });
+      });
+
+      // Finger header accordion collapse
+      document.querySelectorAll('.finger-header').forEach(header => {
+        header.addEventListener('click', () => {
+          const body = document.getElementById(`body-${header.getAttribute('data-finger')}`);
+          const arrow = header.querySelector('.finger-arrow');
+          if (body) {
+            const isHidden = body.style.display === 'none';
+            body.style.display = isHidden ? 'flex' : 'none';
+            arrow.textContent = isHidden ? '▼' : '▶';
+          }
+        });
+      });
+
+      // Reset Hand Button
+      document.getElementById('btn-reset-hand').addEventListener('click', () => {
+        clearAttachedImage();
+        applyPresetPose('neutral');
+        showToast('Hand returned to neutral anatomic pose', '🔄');
+      });
+
+      // Copy JSON
+      document.getElementById('btn-copy-json').addEventListener('click', () => {
+        const pose = getCurrentPoseState();
+        navigator.clipboard.writeText(JSON.stringify(pose, null, 2));
+        const btn = document.getElementById('btn-copy-json');
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy Pose JSON', 1500);
+        showToast('Pose JSON copied to clipboard', '📋');
+      });
+
+      // Screenshot Capture
+      document.getElementById('btn-screenshot').addEventListener('click', () => {
+        renderer.render(scene, camera);
+        const url = canvas.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `sbhuman_hand_pose_${Date.now()}.png`;
+        a.click();
+        showToast('Screenshot downloaded', '📸');
+      });
+
+      // File Input and Upload Button
+      const fileInput = document.getElementById('image-file-input');
+      const btnUpload = document.getElementById('btn-upload-image');
+      if (btnUpload && fileInput) {
+        btnUpload.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+          if (e.target.files && e.target.files[0]) {
+            loadReferenceImageFromBlob(e.target.files[0]);
+          }
+        });
+      }
+
+      // Drag and Drop Overlay & Listeners
+      const dragOverlay = document.getElementById('drag-drop-overlay');
+      let dragCounter = 0;
+
+      window.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        dragCounter++;
+        if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
+          dragOverlay.classList.add('active');
+        }
+      });
+
+      window.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dragCounter--;
+        if (dragCounter <= 0) {
+          dragCounter = 0;
+          dragOverlay.classList.remove('active');
+        }
+      });
+
+      window.addEventListener('dragover', (e) => {
+        e.preventDefault();
+      });
+
+      window.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dragCounter = 0;
+        dragOverlay.classList.remove('active');
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          const file = e.dataTransfer.files[0];
+          if (file.type.startsWith('image/')) {
+            loadReferenceImageFromBlob(file);
+          } else {
+            showToast('Please drop an image file (PNG, JPG, WebP).', '⚠️');
+          }
+        }
+      });
+
+      // Clipboard Paste Listener (Cmd+V / Ctrl+V anywhere in window)
+      window.addEventListener('paste', (e) => {
+        const items = (e.clipboardData || window.clipboardData)?.items;
+        if (!items) return;
+        for (const item of items) {
+          if (item.kind === 'file' && item.type.startsWith('image/')) {
+            const blob = item.getAsFile();
+            loadReferenceImageFromBlob(blob);
+            break;
+          }
+        }
+      });
+    }
+
+    /* =====================================================================
+     * Multimodal Hand Reference Image Engine & Intelligent Isolation
+     * ===================================================================== */
+
+    let currentAttachedImage = null; // HTMLImageElement
+    let currentCropMode = 'auto_isolate'; // 'auto_isolate' | 'full'
+
+    function showToast(message, icon = '✨', durationMs = 3800) {
+      const toast = document.getElementById('toast-notification');
+      const msgEl = document.getElementById('toast-msg');
+      const iconEl = document.getElementById('toast-icon');
+      if (!toast || !msgEl) return;
+      msgEl.textContent = message;
+      if (iconEl) iconEl.textContent = icon;
+      toast.style.display = 'flex';
+      clearTimeout(toast._timeout);
+      toast._timeout = setTimeout(() => {
+        toast.style.display = 'none';
+      }, durationMs);
+    }
+
+    /**
+     * Hand Saliency & Skin Chrominance Detector
+     * Evaluates spatial distribution of human skin chromaticity across Fitzpatrick I-VI
+     * to isolate the dominant hand and forearm bounding box.
+     */
+    function detectHandSaliency(img) {
+      const naturalW = img.naturalWidth || img.width || 512;
+      const naturalH = img.naturalHeight || img.height || 512;
+      const sampleW = 128;
+      const sampleH = Math.max(1, Math.round(128 * (naturalH / naturalW)));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = sampleW;
+      canvas.height = sampleH;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, sampleW, sampleH);
+
+      let imgData;
+      try {
+        imgData = ctx.getImageData(0, 0, sampleW, sampleH).data;
+      } catch (e) {
+        return { x: 0, y: 0, w: 1.0, h: 1.0, coverage: 1.0, detected: false };
+      }
+
+      let minX = sampleW, maxX = 0, minY = sampleH, maxY = 0;
+      let skinPixelCount = 0;
+
+      for (let y = 0; y < sampleH; y++) {
+        for (let x = 0; x < sampleW; x++) {
+          const idx = (y * sampleW + x) * 4;
+          const r = imgData[idx];
+          const g = imgData[idx + 1];
+          const b = imgData[idx + 2];
+
+          // Universal skin tone chromatic cluster
+          const isSkin = (r > 60) && (g > 40) && (b > 20) &&
+                         ((Math.max(r, g, b) - Math.min(r, g, b)) > 15) &&
+                         (Math.abs(r - g) > 15) &&
+                         (r > g) && (r > b);
+
+          if (isSkin) {
+            skinPixelCount++;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      const totalPixels = sampleW * sampleH;
+      const coverage = skinPixelCount / totalPixels;
+
+      if (coverage >= 0.03 && maxX > minX && maxY > minY) {
+        const bw = maxX - minX;
+        const bh = maxY - minY;
+        // 25% margin padding to preserve wrist and extended finger tips
+        const marginX = bw * 0.25;
+        const marginY = bh * 0.25;
+
+        return {
+          x: Math.max(0, (minX - marginX) / sampleW),
+          y: Math.max(0, (minY - marginY) / sampleH),
+          w: Math.min(1.0, (bw + marginX * 2) / sampleW),
+          h: Math.min(1.0, (bh + marginY * 2) / sampleH),
+          coverage,
+          detected: true
+        };
+      }
+
+      return { x: 0, y: 0, w: 1.0, h: 1.0, coverage: 1.0, detected: false };
+    }
+
+    /**
+     * Non-Distorting Aspect-Ratio-Preserving Downscaler & Crop Engine
+     */
+    function prepareImageForSubmission(img, cropMode = 'auto_isolate') {
+      const naturalW = img.naturalWidth || img.width || 512;
+      const naturalH = img.naturalHeight || img.height || 512;
+      const saliency = detectHandSaliency(img);
+
+      let srcX = 0, srcY = 0, srcW = naturalW, srcH = naturalH;
+
+      // When auto_isolate is active and hand occupies only a sub-region
+      if (cropMode === 'auto_isolate' && saliency.detected && saliency.coverage < 0.75) {
+        srcX = Math.round(saliency.x * naturalW);
+        srcY = Math.round(saliency.y * naturalH);
+        srcW = Math.round(saliency.w * naturalW);
+        srcH = Math.round(saliency.h * naturalH);
+      }
+
+      const regionAR = srcW / srcH;
+      const maxDim = 768; // Max dimension for high joint resolution without bandwidth bloat
+
+      let dstW, dstH;
+      if (srcW >= srcH) {
+        dstW = Math.min(srcW, maxDim);
+        dstH = Math.max(1, Math.round(dstW / regionAR));
+      } else {
+        dstH = Math.min(srcH, maxDim);
+        dstW = Math.max(1, Math.round(dstH * regionAR));
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = dstW;
+      canvas.height = dstH;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+
+      ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, dstW, dstH);
+
+      return {
+        dataUrl: canvas.toDataURL('image/jpeg', 0.88),
+        width: dstW,
+        height: dstH,
+        aspectRatio: regionAR,
+        cropped: (cropMode === 'auto_isolate' && saliency.detected && saliency.coverage < 0.75),
+        saliency
+      };
+    }
+
+    function renderAttachedImageChip(img) {
+      currentAttachedImage = img;
+      const container = document.getElementById('image-attachment-container');
+      if (!container) return;
+
+      const prepared = prepareImageForSubmission(img, currentCropMode);
+
+      const arText = `${prepared.width}×${prepared.height} (${(prepared.aspectRatio).toFixed(2)}:1)`;
+      const cropBadge = prepared.cropped
+        ? `<span style="color:var(--emerald);">🎯 Hand Isolated (${Math.round((1 - prepared.saliency.coverage) * 100)}% clutter removed)</span>`
+        : `<span style="color:var(--cyan);">🖼️ Full Frame (${arText})</span>`;
+
+      container.innerHTML = `
+        <div class="image-attachment-chip">
+          <div class="thumb-preview-box">
+            <img src="${prepared.dataUrl}" alt="Reference Hand">
+          </div>
+          <div class="attachment-meta">
+            <div class="attachment-title">
+              <span>Hand Reference Attached</span>
+              ${cropBadge}
+            </div>
+            <div class="attachment-subtext">${arText} · Aspect-ratio preserved</div>
+          </div>
+          <div class="crop-toggle-group">
+            <button class="crop-pill ${currentCropMode === 'auto_isolate' ? 'active' : ''}" id="btn-crop-isolate" title="Isolate and zoom dominant hand">🎯 Auto-Isolate</button>
+            <button class="crop-pill ${currentCropMode === 'full' ? 'active' : ''}" id="btn-crop-full" title="Keep complete camera frame">🖼️ Full Image</button>
+          </div>
+          <button class="btn-remove-attachment" id="btn-remove-img" title="Remove image">✕</button>
+        </div>
+      `;
+      container.style.display = 'block';
+
+      document.getElementById('btn-crop-isolate').addEventListener('click', () => {
+        currentCropMode = 'auto_isolate';
+        renderAttachedImageChip(currentAttachedImage);
+      });
+      document.getElementById('btn-crop-full').addEventListener('click', () => {
+        currentCropMode = 'full';
+        renderAttachedImageChip(currentAttachedImage);
+      });
+      document.getElementById('btn-remove-img').addEventListener('click', () => {
+        clearAttachedImage();
+      });
+    }
+
+    function clearAttachedImage() {
+      currentAttachedImage = null;
+      const container = document.getElementById('image-attachment-container');
+      if (container) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+      }
+    }
+
+    function loadReferenceImageFromBlob(blobOrFile) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          renderAttachedImageChip(img);
+          showToast('Hand photo attached! Click Apply Pose or press Enter.', '📷');
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(blobOrFile);
+    }
+
+    /**
+     * Synthesizes a high-contrast reference photo canvas for quick-test pose cards
+     */
+    function createReferencePoseImage(poseKey, label, emoji) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+
+      const grad = ctx.createRadialGradient(256, 256, 50, 256, 256, 256);
+      grad.addColorStop(0, '#1e293b');
+      grad.addColorStop(1, '#090d16');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 512, 512);
+
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.25)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(256, 230, 160, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.font = '160px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(emoji, 256, 220);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
+      ctx.fillText(label.toUpperCase(), 256, 420);
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = '16px monospace';
+      ctx.fillText(`SB-HUMAN HAND REFERENCE · ${poseKey.toUpperCase()}`, 256, 455);
+
+      const img = new Image();
+      img.src = canvas.toDataURL('image/png');
+      return img;
+    }
+
+    /**
+     * Multimodal API Call & Kinematic Solver Bridge
+     */
+    async function applyPoseFromImage(img, promptText) {
+      const prepared = prepareImageForSubmission(img, currentCropMode);
+      const btnPose = document.getElementById('btn-pose');
+      const btnLabel = document.getElementById('btn-pose-label');
+
+      btnPose.disabled = true;
+      if (btnLabel) btnLabel.textContent = 'Estimating...';
+      showToast('Estimating 3D hand pose with Gemini Vision...', '⏳', 10000);
+
+      try {
+        const resp = await fetch('/api/estimate-hand-pose', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: prepared.dataUrl,
+            promptText: promptText || '',
+            cropOptions: {
+              cropMode: currentCropMode,
+              aspectRatio: prepared.aspectRatio,
+              cropped: prepared.cropped
+            }
+          })
+        });
+
+        const result = await resp.json();
+        if (!result.success) {
+          throw new Error(result.error || 'Server error estimating pose');
+        }
+
+        const data = result.data;
+        if (!data.isHand) {
+          showToast(`No hand detected: ${data.summary || 'Please use an image with a visible hand.'}`, '⚠️', 5000);
+          return;
+        }
+
+        // Process rotations with Sagittal Reflection (Chirality Bridge)
+        const isRightHand = (data.chirality || '').toLowerCase() === 'right';
+        const finalRotations = {};
+
+        Object.entries(data.rotations || {}).forEach(([jointName, euler]) => {
+          let [rx, ry, rz] = euler;
+
+          // Sagittal Plane Reflection for Right Hand -> Left Armature
+          if (isRightHand) {
+            ry = -ry;
+            rz = -rz;
+          }
+
+          // Range of Motion (ROM) Clamping
+          if (state.enforceLimits && ROM_LIMITS[jointName]) {
+            const lim = ROM_LIMITS[jointName];
+            rx = Math.max(lim.minX, Math.min(lim.maxX, rx));
+            ry = Math.max(lim.minY, Math.min(lim.maxY, ry));
+            rz = Math.max(lim.minZ, Math.min(lim.maxZ, rz));
+          }
+
+          finalRotations[jointName] = [rx, ry, rz];
+        });
+
+        // Animate smoothly into target pose
+        lerpToPose(finalRotations);
+
+        // Update vantage camera if recognized
+        if (data.vantage && CAMERA_PRESETS[data.vantage.toLowerCase()]) {
+          const vBtn = document.querySelector(`[data-cam="${data.vantage.toLowerCase()}"]`);
+          if (vBtn) {
+            document.querySelectorAll('[data-cam]').forEach(b => b.classList.remove('active'));
+            vBtn.classList.add('active');
+            const camPreset = CAMERA_PRESETS[data.vantage.toLowerCase()];
+            camera.position.set(...camPreset.pos);
+            controls.target.set(...camPreset.target);
+            controls.update();
+          }
+        }
+
+        const mirrorNote = isRightHand ? ' (Right hand mirrored to Left rig)' : ' (Left hand aligned)';
+        showToast(`Matched ${data.summary || data.gestureName || 'pose'}${mirrorNote}`, '🖐️', 4500);
+
+      } catch (err) {
+        console.error('[Image Pose Error]', err);
+        const promptFallback = (promptText || '').toLowerCase();
+        let fallbackFound = false;
+        ['peace', 'fist', 'thumbs_up', 'pinch', 'ok', 'rock', 'point', 'splay', 'shaka', 'cup', 'flat'].forEach(p => {
+          if (promptFallback.includes(p) || (img._poseKey && img._poseKey === p)) {
+            applyPresetPose(p);
+            showToast(`Offline Fallback: applied semantic pose '${p}'`, 'ℹ️');
+            fallbackFound = true;
+          }
+        });
+        if (!fallbackFound) {
+          showToast(`Pose estimation failed: ${err.message}`, '⚠️', 5000);
+        }
+      } finally {
+        btnPose.disabled = false;
+        if (btnLabel) btnLabel.textContent = 'Apply Pose';
+      }
+    }
+
+    function handleUnifiedSubmit() {
+      const promptInput = document.getElementById('prompt-input');
+      const text = promptInput ? promptInput.value.trim() : '';
+
+      if (currentAttachedImage) {
+        applyPoseFromImage(currentAttachedImage, text);
+      } else if (text) {
+        parsePrompt(text);
+      } else {
+        showToast('Enter a prompt or attach a reference photo of a hand.', '💡');
+      }
+    }
+
+    /* =====================================================================
+     * Animation Loop & Responsive Viewport
+     * ===================================================================== */
+
+    let frameCount = 0;
+    let lastFpsUpdate = performance.now();
+    const fpsBadge = document.getElementById('fps-badge');
+
+    function animate(time) {
+      requestAnimationFrame(animate);
+
+      // Measure FPS
+      frameCount++;
+      if (time - lastFpsUpdate >= 1000) {
+        const fps = Math.round((frameCount * 1000) / (time - lastFpsUpdate));
+        fpsBadge.textContent = `${fps} FPS`;
+        frameCount = 0;
+        lastFpsUpdate = time;
+      }
+
+      controls.update();
+
+      // Smooth kinematic lerp
+      updatePoseLerp();
+
+      // Sync 3D Joint Markers with Skinned Mesh
+      if (state.showJoints) {
+        updateJointVisualizerPositions();
+        updateGizmoTransform();
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Initialize Studio
+    setupSliderEvents();
+    setupCameraControls();
+    loadSbHumanModel();
+    animate(performance.now());
+  </script>
+</body>
+</html>

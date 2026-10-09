@@ -195,6 +195,11 @@ describe('PerformerSurfaceMeshService', () => {
         const attrs = json.meshes[0].primitives[0].attributes;
         for (const a of ['POSITION', 'NORMAL', 'COLOR_0', 'JOINTS_0', 'WEIGHTS_0']) expect(attrs[a]).toBeDefined();
         expect(json.accessors[attrs.POSITION].min).toHaveLength(3);
+        expect(json.skins).toBeDefined();
+        expect(json.skins[0].joints).toHaveLength(22);
+        expect(json.nodes).toHaveLength(23); // node 0 (mesh) + 22 bone nodes
+        expect(json.nodes[0].skin).toBe(0);
+        expect(json.nodes[1].name).toBe('pelvis');
         const back = decodeSurfaceGlb(glb);
         expect(back.positions.length).toBe(mesh.positions.length);
         expect(back.indices.length).toBe(mesh.indices.length);

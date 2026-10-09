@@ -1,6 +1,25 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+// Auto-load .env configuration if present
+const envFile = path.resolve(__dirname, '../.env');
+if (fs.existsSync(envFile)) {
+    try {
+        const lines = fs.readFileSync(envFile, 'utf8').split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx > 0) {
+                const key = trimmed.slice(0, eqIdx).trim();
+                const val = trimmed.slice(eqIdx + 1).trim();
+                if (!process.env[key]) process.env[key] = val;
+            }
+        }
+    } catch (e) {
+        console.warn('[serve_public] Failed to read .env file:', e.message);
+    }
+}
 
 const PORT = parseInt(process.env.PORT || process.argv[2] || '5173', 10);
 const PUBLIC_DIR = path.resolve(__dirname, '../public');
@@ -27,6 +46,7 @@ const MIME_TYPES = {
 };
 
 const POPULAR_DEMOS = [
+    { title: 'SB-Human Hand & Forearm Kinematics Studio', path: '/sbhuman_hand_pose_studio.html', badge: '55-JOINT KINEMATICS' },
     { title: 'Vector Spatial Intelligence & Semantic Roadmap Studio', path: '/vector_spatial_intelligence_demo.html', badge: 'SPATIAL SKELETON' },
     { title: 'Omnispatial Multi-Sensor 3D Synthesis · Minimal Orthogonal Basis Demo', path: '/omnispatial_synthesis_demo.html', badge: 'ORTHOGONAL TRIAD' },
     { title: 'Adaptive Image-to-PBR Relief Studio · Seamless Tiling & Displaced Geometry', path: '/image_to_adaptive_pbr_studio.html', badge: 'IMAGE TO PBR' },
@@ -1979,6 +1999,165 @@ print(f"VERIFICATION_ELAPSED={time.time() - start_t:.3f}")
                 console.error('[API /api/synthesize-3d ERROR]', err);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: err?.message || 'Synthesis failed' }));
+            }
+        });
+        return;
+    }
+
+    // Hand Pose Multimodal Inverse Kinematics API (SB-Human Hand Rig)
+    if (req.method === 'POST' && reqPath === '/api/estimate-hand-pose') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 25 * 1024 * 1024) { // 25MB cap
+                res.writeHead(413, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Payload too large (max 25MB)' }));
+                req.destroy();
+            }
+        });
+
+        req.on('end', async () => {
+            try {
+                const data = JSON.parse(body || '{}');
+                const imageBase64 = data.imageBase64;
+                const promptText = data.promptText || '';
+                const cropOptions = data.cropOptions || {};
+
+                if (!imageBase64) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Missing imageBase64 payload' }));
+                    return;
+                }
+
+                // Strip data URL scheme prefix if present
+                const match = imageBase64.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+                const rawFormat = match ? match[1].toLowerCase() : 'jpeg';
+                const mimeType = (rawFormat === 'jpg' || rawFormat === 'jpeg') ? 'image/jpeg' : `image/${rawFormat}`;
+                const base64Data = match ? match[2] : imageBase64;
+
+                const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
+                if (!apiKey) {
+                    throw new Error('GEMINI_API_KEY is not configured on server.');
+                }
+
+                const { GoogleGenAI } = require('@google/genai');
+                const ai = new GoogleGenAI({ apiKey });
+
+                const systemInstruction = `You are an expert biomechanical computer vision engine for the Scratchbox IDE 3D SB-Human avatar hand rig.
+Your objective is to inspect the provided photograph/image of a hand and determine the exact 3D joint rotations in radians for a canonical 17-joint hand/arm armature.
+
+CANONICAL 17-JOINT ARMATURE DEFINITIONS:
+1. LeftIndex1, LeftMiddle1, LeftRing1, LeftPinky1: Metacarpophalangeal (MCP) knuckle joints.
+   Rotation is [flexion_pitch_x, splay_yaw_y, twist_roll_z] in radians.
+   - flexion_pitch_x: 0.0 rad = straight extended finger; +1.57 rad (~90 deg) = fully flexed/curled into palm.
+   - splay_yaw_y: lateral spreading/abduction angle relative to middle finger (+ = splay outward, - = tuck inward).
+   - twist_roll_z: minor axial knuckle twist.
+2. LeftIndex2, LeftIndex3, LeftMiddle2, LeftMiddle3, LeftRing2, LeftRing3, LeftPinky2, LeftPinky3: Proximal & Distal Interphalangeal (PIP/DIP) hinge joints.
+   Pure 1-DOF hinges: [flexion_pitch_x, 0.0, 0.0].
+   - 0.0 rad = fully straight, +1.57 rad = curled 90 degrees.
+3. LeftThumb1: Trapeziometacarpal (CMC) saddle joint.
+   Rotations: [flexion_pitch_x, abduction_splay_y, opposition_twist_z].
+4. LeftThumb2: Metacarpophalangeal (MCP) condyloid.
+   Rotations: [flexion_pitch_x, splay_yaw_y, twist_roll_z].
+5. LeftThumb3: Interphalangeal (IP) hinge.
+   Rotations: [flexion_pitch_x, 0.0, 0.0].
+6. LeftWrist: Radiocarpal joint.
+   Rotations: [flexion_pitch_x, deviation_yaw_y, pronation_roll_z].
+7. LeftElbow: Forearm axial rotation.
+   Rotations: [0.0, 0.0, twist_roll_z].
+
+IMAGE ANALYSIS RULES:
+- Hand Isolation: Locate and focus exclusively on the primary dominant hand in the image. Ignore background people, faces, or objects.
+- Chirality Detection: Accurately state whether the observed hand is a "left" hand or "right" hand.
+  * NOTE: The 3D viewport is framed on the Left Hand. If the photo is a Right Hand, state chirality: "right" and output angles for that right hand; the client will apply the sagittal reflection matrix.
+- Vantage Point: State whether the hand is viewed from "palmar" (palm facing camera), "dorsal" (back of hand facing camera), "radial" (thumb edge), "ulnar" (pinky edge), or "knuckles" (end-on knuckles).
+- Non-Hand Rejection: If the image does not show a clear human hand, set isHand: false with explanation.
+
+OUTPUT FORMAT (Strict JSON):
+{
+  "isHand": true,
+  "confidence": 0.95,
+  "chirality": "left" | "right",
+  "vantage": "dorsal" | "palmar" | "radial" | "ulnar" | "knuckles",
+  "handBoundingBox": [ymin, xmin, ymax, xmax],
+  "gestureName": "peace_sign" | "clenched_fist" | "thumbs_up" | "pinch" | "ok_sign" | "pointing" | "open_splay" | "shaka" | "cup_hand" | "flat_palm" | "custom",
+  "summary": "Short human readable summary of hand pose",
+  "rotations": {
+    "LeftIndex1": [rx, ry, rz],
+    "LeftIndex2": [rx, 0, 0],
+    "LeftIndex3": [rx, 0, 0],
+    "LeftMiddle1": [rx, ry, rz],
+    "LeftMiddle2": [rx, 0, 0],
+    "LeftMiddle3": [rx, 0, 0],
+    "LeftRing1": [rx, ry, rz],
+    "LeftRing2": [rx, 0, 0],
+    "LeftRing3": [rx, 0, 0],
+    "LeftPinky1": [rx, ry, rz],
+    "LeftPinky2": [rx, 0, 0],
+    "LeftPinky3": [rx, 0, 0],
+    "LeftThumb1": [rx, ry, rz],
+    "LeftThumb2": [rx, ry, rz],
+    "LeftThumb3": [rx, 0, 0],
+    "LeftWrist": [rx, ry, rz],
+    "LeftElbow": [0, 0, rz]
+  }
+}`;
+
+                const contents = [
+                    {
+                        role: 'user',
+                        parts: [
+                            {
+                                inlineData: {
+                                    mimeType,
+                                    data: base64Data
+                                }
+                            },
+                            {
+                                text: promptText
+                                    ? `Analyze this hand image. User context/refinement: "${promptText}". Extract precise 3D joint rotations.`
+                                    : 'Analyze this hand image and extract the precise 3D joint rotations for all 17 joints.'
+                            }
+                        ]
+                    }
+                ];
+
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash',
+                    contents,
+                    config: {
+                        systemInstruction,
+                        responseMimeType: 'application/json',
+                        temperature: 0.1
+                    }
+                });
+
+                const rawText = response.text || '';
+                let parsed = {};
+                try {
+                    parsed = JSON.parse(rawText);
+                } catch (e) {
+                    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        parsed = JSON.parse(jsonMatch[0]);
+                    } else {
+                        throw new Error('Could not parse model JSON response: ' + rawText.slice(0, 100));
+                    }
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    data: parsed
+                }));
+
+            } catch (err) {
+                console.error('[API /api/estimate-hand-pose ERROR]', err);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    error: err?.message || 'Hand pose estimation failed'
+                }));
             }
         });
         return;

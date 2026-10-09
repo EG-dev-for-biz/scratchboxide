@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { decodeGaussianPly } from '../../common/gaussian-ply-codec';
-import { SBHUMAN22_PARENTS } from '../../common/humanoid-skinning';
+import { SBHUMAN22_PARENTS, CANONICAL_22_JOINT_NAMES, DEFAULT_CANONICAL_JOINTS } from '../../common/humanoid-skinning';
 import { GvhmrBody, GvhmrBodyService } from './GvhmrBodyService';
 
 type Vec3 = [number, number, number];
@@ -24,6 +24,8 @@ export interface SurfaceMesh {
     normals?: Float32Array;
     /** Linear RGB per vertex (glTF COLOR_0 convention). */
     colors?: Float32Array;
+    /** UV texture coordinates [u, v] per vertex (glTF TEXCOORD_0 convention). */
+    uvs?: Float32Array;
     /** Camera-space positions at hero frame 0 for optical texture projection. */
     camPositions?: Float32Array;
 }
@@ -86,6 +88,30 @@ function splatAllowed(s: SurfaceSplat, mask: number): boolean {
 
 function srgbToLinear(c: number): number {
     return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+export interface EncodeGlbOptions {
+    /**
+     * Whether to embed glTF 2.0 skinning (skin object, inverseBindMatrices accessor,
+     * and bone node hierarchy). Defaults to true.
+     */
+    includeSkin?: boolean;
+    /** Canonical rest joint positions (22 Vec3). Defaults to DEFAULT_CANONICAL_JOINTS. */
+    canonicalJoints?: Array<[number, number, number]>;
+    /** Joint parent indices (22 ints). Defaults to SBHUMAN22_PARENTS. */
+    jointParents?: number[];
+    /** Joint names. Defaults to CANONICAL_22_JOINT_NAMES. */
+    jointNames?: readonly string[] | string[];
+    /** PBR Metallic-Roughness material options. */
+    material?: {
+        name?: string;
+        baseColorFactor?: [number, number, number, number];
+        metallicFactor?: number;
+        roughnessFactor?: number;
+        doubleSided?: boolean;
+    };
+    /** Include UV coordinates in glTF primitive if available. Defaults to true. */
+    includeUvs?: boolean;
 }
 
 /**
@@ -595,7 +621,7 @@ export class PerformerSurfaceMeshService {
         return { vertices: mesh.positions.length / 3, triangles: mesh.indices.length / 3 };
     }
 
-    static encodeGlb(mesh: SurfaceMesh): Buffer {
+    static encodeGlb(mesh: SurfaceMesh, options: EncodeGlbOptions = {}): Buffer {
         const normals = mesh.normals || PerformerSurfaceMeshService.computeNormals(mesh.positions, mesh.indices);
         const nv = mesh.positions.length / 3;
         const colors = mesh.colors || new Float32Array(nv * 3).fill(0.5);
@@ -616,7 +642,7 @@ export class PerformerSurfaceMeshService {
             max[k] = Math.max(max[k], mesh.positions[i * 3 + k]);
         }
         const ARRAY = 34962, ELEMENTS = 34963;
-        const accessors = [
+        const accessors: any[] = [
             { bufferView: addView(mesh.positions, ARRAY), componentType: 5126, count: nv, type: 'VEC3', min, max },
             { bufferView: addView(normals, ARRAY), componentType: 5126, count: nv, type: 'VEC3' },
             { bufferView: addView(colors, ARRAY), componentType: 5126, count: nv, type: 'VEC3' },
@@ -624,22 +650,115 @@ export class PerformerSurfaceMeshService {
             { bufferView: addView(mesh.skinWeights, ARRAY), componentType: 5126, count: nv, type: 'VEC4' },
             { bufferView: addView(mesh.indices, ELEMENTS), componentType: 5125, count: mesh.indices.length, type: 'SCALAR' }
         ];
+
+        const attributes: Record<string, number> = {
+            POSITION: 0,
+            NORMAL: 1,
+            COLOR_0: 2,
+            JOINTS_0: 3,
+            WEIGHTS_0: 4
+        };
+
+        if (mesh.uvs && options.includeUvs !== false) {
+            const uvView = addView(mesh.uvs, ARRAY);
+            accessors.push({ bufferView: uvView, componentType: 5126, count: nv, type: 'VEC2' });
+            attributes.TEXCOORD_0 = accessors.length - 1;
+        }
+
+        const includeSkin = options.includeSkin !== false;
+        let skins: any[] | undefined = undefined;
+        let nodes: any[] = [];
+        let sceneNodes: number[] = [0];
+
+        if (includeSkin) {
+            const canonicalJoints = options.canonicalJoints || DEFAULT_CANONICAL_JOINTS;
+            const jointParents = options.jointParents || SBHUMAN22_PARENTS;
+            const jointNames = options.jointNames || CANONICAL_22_JOINT_NAMES;
+            const K = canonicalJoints.length;
+
+            const invBind = new Float32Array(K * 16);
+            for (let j = 0; j < K; j++) {
+                const c = canonicalJoints[j];
+                const off = j * 16;
+                invBind[off + 0] = 1; invBind[off + 1] = 0; invBind[off + 2] = 0; invBind[off + 3] = 0;
+                invBind[off + 4] = 0; invBind[off + 5] = 1; invBind[off + 6] = 0; invBind[off + 7] = 0;
+                invBind[off + 8] = 0; invBind[off + 9] = 0; invBind[off + 10] = 1; invBind[off + 11] = 0;
+                invBind[off + 12] = -c[0]; invBind[off + 13] = -c[1]; invBind[off + 14] = -c[2]; invBind[off + 15] = 1;
+            }
+            const invBindView = addView(invBind, 0);
+            accessors.push({ bufferView: invBindView, componentType: 5126, count: K, type: 'MAT4' });
+            const invBindAccessor = accessors.length - 1;
+
+            nodes.push({ mesh: 0, skin: 0, name: 'PerformerSurface' });
+
+            const rootBones: number[] = [];
+            for (let j = 0; j < K; j++) {
+                const parent = jointParents[j];
+                const c = canonicalJoints[j];
+                const pC = parent >= 0 ? canonicalJoints[parent] : null;
+                const localT = pC ? [c[0] - pC[0], c[1] - pC[1], c[2] - pC[2]] : [c[0], c[1], c[2]];
+
+                const children: number[] = [];
+                for (let cIdx = 0; cIdx < K; cIdx++) {
+                    if (jointParents[cIdx] === j) children.push(cIdx + 1);
+                }
+
+                const boneNode: any = {
+                    name: jointNames[j] || `joint_${j}`,
+                    translation: localT
+                };
+                if (children.length > 0) boneNode.children = children;
+                nodes.push(boneNode);
+
+                if (parent < 0) {
+                    rootBones.push(j + 1);
+                }
+            }
+
+            sceneNodes = [0, ...rootBones];
+            skins = [{
+                name: 'PerformerSkin',
+                inverseBindMatrices: invBindAccessor,
+                joints: Array.from({ length: K }, (_, i) => i + 1),
+                skeleton: rootBones[0] || 1
+            }];
+        } else {
+            nodes = [{ mesh: 0, name: 'PerformerSurface' }];
+            sceneNodes = [0];
+        }
+
+        const mat = options.material || {};
+        const materials = [{
+            name: mat.name || 'PerformerSurfacePBR',
+            pbrMetallicRoughness: {
+                baseColorFactor: mat.baseColorFactor || [1, 1, 1, 1],
+                metallicFactor: mat.metallicFactor !== undefined ? mat.metallicFactor : 0.05,
+                roughnessFactor: mat.roughnessFactor !== undefined ? mat.roughnessFactor : 0.6
+            },
+            doubleSided: mat.doubleSided !== undefined ? mat.doubleSided : true
+        }];
+
         const bin = Buffer.concat(chunks);
-        const gltf = {
+        const gltf: any = {
             asset: { version: '2.0', generator: 'Scratchbox PerformerSurfaceMeshService' },
             scene: 0,
-            scenes: [{ nodes: [0] }],
-            nodes: [{ mesh: 0, name: 'PerformerSurface' }],
-            meshes: [{ name: 'PerformerSurface', primitives: [{
-                attributes: { POSITION: 0, NORMAL: 1, COLOR_0: 2, JOINTS_0: 3, WEIGHTS_0: 4 },
-                indices: 5,
-                material: 0
-            }] }],
-            materials: [{ name: 'PerformerSurfaceVertexColor', pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0.05, roughnessFactor: 0.6 }, doubleSided: true }],
+            scenes: [{ nodes: sceneNodes }],
+            nodes,
+            meshes: [{
+                name: 'PerformerSurface',
+                primitives: [{
+                    attributes,
+                    indices: 5,
+                    material: 0
+                }]
+            }],
+            materials,
             accessors,
             bufferViews: views,
             buffers: [{ byteLength: bin.length }]
         };
+        if (skins) gltf.skins = skins;
+
         let json = Buffer.from(JSON.stringify(gltf), 'utf-8');
         json = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
         const header = Buffer.alloc(12);
@@ -669,6 +788,7 @@ export function decodeSurfaceGlb(glb: Buffer): SurfaceMesh {
         switch (acc.componentType) {
             case 5126: return new Float32Array(copy);
             case 5125: return new Uint32Array(copy);
+            case 5123: return new Uint16Array(copy);
             case 5121: return new Uint8Array(copy);
             default: throw new Error(`unsupported componentType ${acc.componentType}`);
         }
@@ -678,6 +798,7 @@ export function decodeSurfaceGlb(glb: Buffer): SurfaceMesh {
         positions: read(prim.attributes.POSITION) as Float32Array,
         normals: prim.attributes.NORMAL !== undefined ? read(prim.attributes.NORMAL) as Float32Array : undefined,
         colors: prim.attributes.COLOR_0 !== undefined ? read(prim.attributes.COLOR_0) as Float32Array : undefined,
+        uvs: prim.attributes.TEXCOORD_0 !== undefined ? read(prim.attributes.TEXCOORD_0) as Float32Array : undefined,
         skinIndices: read(prim.attributes.JOINTS_0) as Uint8Array,
         skinWeights: read(prim.attributes.WEIGHTS_0) as Float32Array,
         indices: read(prim.indices) as Uint32Array

@@ -792,6 +792,20 @@ export {
     type CanonicalGaussiansResult
 } from './node/spatial/VideoTo4DPerformerPipelineService';
 export {
+    PerformerSurfaceMeshService,
+    decodeSurfaceGlb,
+    type SurfaceMesh,
+    type SurfaceSplat,
+    type SurfaceBuildOptions,
+    type EncodeGlbOptions
+} from './node/spatial/PerformerSurfaceMeshService';
+export {
+    SbHumanAvatarService,
+    PbrMeshSkinAdapter,
+    Gaussian4DGSSkinAdapter,
+    Surfel2DGSSkinAdapter
+} from './node/spatial/SbHumanAvatarService';
+export {
     CharacterClothingMorphology,
     type CharacterClothingMorphologyOptions
 } from './node/spatial/CharacterClothingMorphology';

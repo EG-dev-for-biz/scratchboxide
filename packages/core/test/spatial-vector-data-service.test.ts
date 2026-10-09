@@ -295,4 +295,83 @@ describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => 
             GoogleVectorTileService.fetchVectorTile = origFetch;
         }
     });
+
+    it('adheres to ADA standards: open literals, continuous parameters, and analytical heading math', async () => {
+        const origDecode = GoogleVectorTileService.decodeTileBuffer;
+        GoogleVectorTileService.decodeTileBuffer = () => ({
+            buildings: [],
+            roads: [
+                {
+                    id: 'alien-conduit',
+                    type: 'LineString',
+                    points: [
+                        [lng, lat],
+                        [lng + 0.001, lat] // Direct East
+                    ],
+                    properties: {
+                        name: 'Bioluminescent Mag-Conduit',
+                        class: 'cryo_hyperloop_conduit', // Novel extraterrestrial road class (Alien Planet Test)
+                        width: '14.75', // Continuous physical width in meters
+                        lanes: 6,
+                        surface: 'superconducting_graphene'
+                    }
+                }
+            ],
+            landuse: [
+                {
+                    id: 'geothermal-basin',
+                    type: 'Polygon',
+                    ring: [
+                        [lng, lat],
+                        [lng + 0.001, lat],
+                        [lng + 0.001, lat + 0.001],
+                        [lng, lat + 0.001]
+                    ],
+                    properties: {
+                        name: 'Methane Geyser Basin',
+                        class: 'geothermal_sulfur_flats', // Novel extraterrestrial landuse (Alien Planet Test)
+                        surface_friction: '0.94' // Continuous physical friction coefficient
+                    }
+                }
+            ],
+            water: []
+        });
+
+        const origFetch = GoogleVectorTileService.fetchVectorTile;
+        GoogleVectorTileService.fetchVectorTile = async (x, y, z) => {
+            return GoogleVectorTileService.decodeTileBuffer(new ArrayBuffer(0), x, y, z);
+        };
+
+        try {
+            const dataset = await SpatialVectorDataService.querySpatialVectorData({
+                latitude: lat,
+                longitude: lng,
+                radiusMeters: 500
+            });
+
+            // Verify continuous physical parameter ingestion
+            const road = dataset.roads[0];
+            expect(road.widthM).toBe(14.75); // Exact continuous metric width honored
+            expect(road.roadClass).toBe('cryo_hyperloop_conduit');
+
+            // Eastward path: dx > 0, dz = 0 -> True heading should be exactly 90 degrees (East)
+            expect(road.headingStartDeg).toBeCloseTo(90.0, 1);
+
+            const basin = dataset.landuse[0];
+            expect(basin.surfaceFriction).toBe(0.94); // Exact continuous friction honored
+            expect(basin.landuseType).toBe('geothermal_sulfur_flats');
+
+            // Solve staging anchor on the novel continuous road
+            const anchors = SpatialVectorDataService.solveStagingAnchors(dataset, {
+                mobilityAffinity: 'flow',
+                preferredSurface: 'road_lane'
+            });
+            expect(anchors.length).toBeGreaterThan(0);
+            expect(anchors[0].headingDeg).toBeCloseTo(90.0, 1);
+            expect(anchors[0].forwardVec[0]).toBeGreaterThan(0.99); // Points East (+X)
+        } finally {
+            GoogleVectorTileService.decodeTileBuffer = origDecode;
+            GoogleVectorTileService.fetchVectorTile = origFetch;
+        }
+    });
 });

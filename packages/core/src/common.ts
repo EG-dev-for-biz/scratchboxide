@@ -47,8 +47,13 @@ export {
     retargetSegmentDirections,
     SBHUMAN22_PARENTS,
     SBHUMAN22_SEGMENT_CHILD,
-    SBHUMAN22_LATERAL_REF
+    SBHUMAN22_LATERAL_REF,
+    CANONICAL_22_JOINT_NAMES,
+    DEFAULT_CANONICAL_JOINTS
 } from './common/humanoid-skinning';
+
+// Humanoid Avatar & Multi-Modality Skinning Protocol
+export * from './common/humanoid-avatar-protocol';
 
 // Universal COLMAP Vector Reference Types (Zero Presets)
 export * from './common/spatial/colmap-vector-reference-types';

@@ -32,7 +32,19 @@ import { PerformerPoseTrack, PerformerPoseTrackService } from './PerformerPoseTr
 import { HumanoidMotionBridgeService } from './HumanoidMotionBridgeService';
 import { GvhmrBody, GvhmrBodyService } from './GvhmrBodyService';
 import { encodeGaussianPly } from '../../common/gaussian-ply-codec';
-import { Mat3, Vec3, applyMat3, computeBoneRotations, skinPoint, transposeMat3 } from '../../common/humanoid-skinning';
+import {
+    CANONICAL_22_JOINT_NAMES,
+    DEFAULT_CANONICAL_JOINTS,
+    SBHUMAN22_PARENTS,
+    Mat3,
+    Vec3,
+    applyMat3,
+    computeBoneRotations,
+    skinPoint,
+    transposeMat3
+} from '../../common/humanoid-skinning';
+import { HumanoidSkinModality } from '../../common/humanoid-avatar-protocol';
+import { PerformerSurfaceMeshService, SurfaceMesh } from './PerformerSurfaceMeshService';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v'];
 
@@ -118,6 +130,11 @@ export interface VideoTo4DPerformerOptions {
     exportNerfstudioDataset?: boolean;
     nerfstudioOutputDir?: string;
     /**
+     * Whether to emit a rigged PBR mesh GLB along with the 4DGS splats.
+     * Defaults to true.
+     */
+    exportRiggedGlb?: boolean;
+    /**
      * Optional frame-motivated ingestion configuration.
      * When provided, the video ingestion pipeline validates and conditions motion on the reference A-pose hero frame.
      */
@@ -142,6 +159,15 @@ export interface VideoTo4DPerformerResult {
     plyPath: string;
     motionPath: string;
     splatPath: string;
+    /** Path to the canonical rigged PBR mesh glTF 2.0 GLB. */
+    glbPath?: string;
+    /** Geometric statistics of the synthesized rigged PBR surface mesh. */
+    pbrMeshStats?: {
+        vertexCount: number;
+        triangleCount: number;
+    };
+    /** Pluggable skinning modalities emitted by this execution. */
+    modalitiesEmitted?: HumanoidSkinModality[];
     geoManifestPath: string;
     stagePlacementPath: string;
     nerfstudioTransformsPath?: string;
