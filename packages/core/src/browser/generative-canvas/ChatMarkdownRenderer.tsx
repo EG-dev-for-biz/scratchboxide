@@ -1225,7 +1225,7 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                                             <button
                                                 type="button"
                                                 className="sb-chat-action-pill"
-                                                onClick={() => onPromptAction(promptToSend)}
+                                                onClick={() => onPromptAction && onPromptAction(promptToSend)}
                                                 title={`Click to select: "${promptToSend}"`}
                                             >
                                                 <span className="sb-chat-action-pill-icon">✦</span>

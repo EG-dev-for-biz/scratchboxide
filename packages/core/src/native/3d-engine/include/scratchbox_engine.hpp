@@ -33,6 +33,7 @@
 #include "scratchbox_volumetrics.hpp"
 #include "scratchbox_nature.hpp"
 #include "scratchbox_halfedge.hpp"
+#include "scratchbox_csg.hpp"
 #include "scratchbox_uv_tangent.hpp"
 #include "scratchbox_ibl.hpp"
 #include "scratchbox_kinematics.hpp"

@@ -44,6 +44,29 @@ export interface NodeGeometryChunk {
     materialId?: string;
 }
 
+export interface SpatialModifier {
+    id: string;
+    type: 'taper' | 'twist' | 'bend' | 'boolean_cutout' | 'mount_attachment' | 'array_replicator' | (string & {});
+    enabled: boolean;
+    parameters: Record<string, unknown>;
+}
+
+export interface SpatialProvenance {
+    ruleId?: string;
+    stepId?: string;
+    sourcePrompt?: string;
+    authorAgent?: string;
+    timestamp?: number;
+    confidence?: number; // 1.0 = measured, <0.5 = inferred
+    isInferred?: boolean;
+    dependencies?: string[];
+}
+
+export interface SpatialGeneratorRecipe {
+    generatorId: string;
+    parameters: Record<string, unknown>;
+}
+
 export interface UniversalSpatialNode {
     id: string;
     name: string;
@@ -72,6 +95,33 @@ export interface UniversalSpatialNode {
 
     /** Domain-specific metadata */
     metadata?: Record<string, unknown>;
+
+    /** Monotonically increasing revision counter */
+    version?: number;
+
+    /** Semantic spatial type (e.g. assembly, mesh, group, light) */
+    type?: string;
+
+    /** Architectural/functional role (e.g. building, facade, road, window) */
+    role?: string;
+
+    /** High-level parametric attributes (e.g. floors, width, height) */
+    parameters?: Record<string, any>;
+
+    /** SHA/Murmur content hash for DAG dirty-checking */
+    contentHash?: string;
+
+    /** Dirty status indicating this node needs geometric re-evaluation */
+    isDirty?: boolean;
+
+    /** High-level generator recipe producing base geometry */
+    generatorRecipe?: SpatialGeneratorRecipe;
+
+    /** Non-destructive modifier chain evaluated on top of base geometry */
+    modifierStack?: SpatialModifier[];
+
+    /** Provenance, inspectability, and uncertainty metadata */
+    provenance?: SpatialProvenance;
 }
 
 /**
@@ -107,33 +157,67 @@ export function createIdentityMatrix(): Float32Array {
 
 /**
  * Factory helper for constructing a UniversalSpatialNode.
+ * Supports both options-object and positional arguments.
  */
-export function createSpatialNode(params: {
-    id: string;
-    name: string;
-    polarity?: SpatialPolarity;
-    localTransform?: Float32Array;
-    localBounds?: MetricOBB;
-    geometry?: NodeGeometryChunk;
-    mountPlanes?: SurfaceMountPlane[];
-    children?: UniversalSpatialNode[];
-    tags?: string[];
-    metadata?: Record<string, unknown>;
-}): UniversalSpatialNode {
+export function createSpatialNode(
+    idOrParams: string | (Partial<UniversalSpatialNode> & { id: string; name?: string }),
+    typeOrName?: string,
+    options?: Partial<UniversalSpatialNode>
+): UniversalSpatialNode {
+    if (typeof idOrParams === 'object') {
+        const params = idOrParams;
+        return {
+            id: params.id,
+            name: params.name ?? params.id,
+            type: params.type,
+            role: params.role,
+            parameters: params.parameters ?? {},
+            polarity: params.polarity ?? 'positive_mass',
+            localTransform: params.localTransform ?? createIdentityMatrix(),
+            localBounds: params.localBounds ?? {
+                center: [0, 0, 0],
+                halfExtents: [0.5, 0.5, 0.5]
+            },
+            geometry: params.geometry,
+            mountPlanes: params.mountPlanes ?? [],
+            children: params.children ?? [],
+            tags: params.tags ?? [],
+            metadata: params.metadata ?? {},
+            version: params.version ?? 1,
+            contentHash: params.contentHash,
+            isDirty: params.isDirty ?? false,
+            generatorRecipe: params.generatorRecipe,
+            modifierStack: params.modifierStack ?? [],
+            provenance: params.provenance
+        };
+    }
+
+    const id = idOrParams;
+    const type = typeOrName;
+    const opts = options ?? {};
     return {
-        id: params.id,
-        name: params.name,
-        polarity: params.polarity ?? 'positive_mass',
-        localTransform: params.localTransform ?? createIdentityMatrix(),
-        localBounds: params.localBounds ?? {
+        id,
+        name: opts.name ?? id,
+        type: opts.type ?? type,
+        role: opts.role,
+        parameters: opts.parameters ?? {},
+        polarity: opts.polarity ?? 'positive_mass',
+        localTransform: opts.localTransform ?? createIdentityMatrix(),
+        localBounds: opts.localBounds ?? {
             center: [0, 0, 0],
             halfExtents: [0.5, 0.5, 0.5]
         },
-        geometry: params.geometry,
-        mountPlanes: params.mountPlanes ?? [],
-        children: params.children ?? [],
-        tags: params.tags ?? [],
-        metadata: params.metadata ?? {}
+        geometry: opts.geometry,
+        mountPlanes: opts.mountPlanes ?? [],
+        children: opts.children ?? [],
+        tags: opts.tags ?? [],
+        metadata: opts.metadata ?? {},
+        version: opts.version ?? 1,
+        contentHash: opts.contentHash,
+        isDirty: opts.isDirty ?? false,
+        generatorRecipe: opts.generatorRecipe,
+        modifierStack: opts.modifierStack ?? [],
+        provenance: opts.provenance
     };
 }
 
@@ -211,4 +295,70 @@ export function transformSpatialNode(node: UniversalSpatialNode, transform: Floa
         }
     };
 }
+
+/**
+ * Computes a deterministic content hash for a node's parameters, modifiers, and child IDs.
+ */
+export function computeNodeContentHash(node: UniversalSpatialNode): string {
+    const raw = JSON.stringify({
+        id: node.id,
+        parameters: node.parameters,
+        recipe: node.generatorRecipe,
+        modifiers: node.modifierStack,
+        childIds: node.children.map(c => c.id)
+    });
+    let hash = 5381;
+    for (let i = 0; i < raw.length; i++) {
+        hash = ((hash << 5) + hash) + raw.charCodeAt(i);
+        hash = hash & hash;
+    }
+    return `ch_${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * Traverses a spatial hierarchy and marks the target node and its ancestors as dirty.
+ */
+export function markNodeDirty(root: UniversalSpatialNode, targetNodeId: string): boolean {
+    if (root.id === targetNodeId) {
+        root.isDirty = true;
+        root.version = (root.version ?? 1) + 1;
+        root.contentHash = computeNodeContentHash(root);
+        return true;
+    }
+    let found = false;
+    for (const child of root.children) {
+        if (markNodeDirty(child, targetNodeId)) {
+            found = true;
+        }
+    }
+    if (found) {
+        root.isDirty = true; // Ancestor dirty propagation for bounds recalculation
+    }
+    return found;
+}
+
+/**
+ * Collects all nodes marked dirty in the spatial DAG.
+ */
+export function getDirtyNodes(root: UniversalSpatialNode): UniversalSpatialNode[] {
+    const dirty: UniversalSpatialNode[] = [];
+    if (root.isDirty) {
+        dirty.push(root);
+    }
+    for (const child of root.children) {
+        dirty.push(...getDirtyNodes(child));
+    }
+    return dirty;
+}
+
+/**
+ * Resets all dirty flags across the spatial tree once re-evaluation settles.
+ */
+export function clearDirtyFlags(root: UniversalSpatialNode): void {
+    root.isDirty = false;
+    for (const child of root.children) {
+        clearDirtyFlags(child);
+    }
+}
+
 

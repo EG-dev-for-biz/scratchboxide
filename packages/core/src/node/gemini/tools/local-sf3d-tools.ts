@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
+import type { ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolResultPayload } from './types';
 import { LocalSf3DService, type LocalSf3DOptions } from '../../3d-engine/local-sf3d-service';
 
 function asString(val: unknown): string | undefined {
@@ -70,13 +70,17 @@ export const LOCAL_SF3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const localSf3DHandlers: Record<string, ToolHandler> = {
-    generate_local_sf3d_organic_prop: async (args, _ctx): Promise<ToolResultPayload> => {
+    generate_local_sf3d_organic_prop: async (args, _ctx): Promise<ToolHandlerOutcome> => {
         const imagePath = asString(args.imagePath);
         if (!imagePath) {
             return {
-                status: 'error',
-                summary: 'Missing required argument: imagePath',
-                output: 'Please provide a valid file path to an input photograph or image.'
+                status: 'failed',
+                summaryResult: 'Missing required argument: imagePath',
+                resultPayload: {
+                    status: 'error',
+                    summary: 'Missing required argument: imagePath',
+                    output: 'Please provide a valid file path to an input photograph or image.'
+                }
             };
         }
 
@@ -120,30 +124,11 @@ export const localSf3DHandlers: Record<string, ToolHandler> = {
 
             return {
                 status: 'completed',
-                summary,
-                output: `${summary}\nGLB Output: ${result.glbPath}\nDimensions: ${bbox.dimensions.map(d => d.toFixed(3) + 'm').join(' x ')}`,
-                artifact: {
-                    type: '3d-scene',
-                    data: {
-                        modelUrl: result.glbPath,
-                        format: 'glb',
-                        renderMode: result.mode === 'no_pbr_clay' ? 'clay' : 'pbr',
-                        camera: {
-                            position: cameraPos,
-                            target: targetPos,
-                            fov: 45
-                        },
-                        environment: {
-                            skybox: 'studio',
-                            lighting: 'studio',
-                            ground: true
-                        },
-                        bounds: bbox,
-                        telemetry: result.telemetry
-                    }
-                },
+                summaryResult: summary,
                 resultPayload: {
                     success: true,
+                    summary,
+                    output: `${summary}\nGLB Output: ${result.glbPath}\nDimensions: ${bbox.dimensions.map(d => d.toFixed(3) + 'm').join(' x ')}`,
                     glbPath: result.glbPath,
                     mode: result.mode,
                     device: result.device,
@@ -151,14 +136,38 @@ export const localSf3DHandlers: Record<string, ToolHandler> = {
                     triangleCount: result.triangleCount,
                     executionTimeMs: result.executionTimeMs,
                     targetScaleMeters: result.targetScaleMeters,
-                    overallBoundingBox: bbox
+                    overallBoundingBox: bbox,
+                    artifact: {
+                        type: '3d-scene',
+                        data: {
+                            modelUrl: result.glbPath,
+                            format: 'glb',
+                            renderMode: result.mode === 'no_pbr_clay' ? 'clay' : 'pbr',
+                            camera: {
+                                position: cameraPos,
+                                target: targetPos,
+                                fov: 45
+                            },
+                            environment: {
+                                skybox: 'studio',
+                                lighting: 'studio',
+                                ground: true
+                            },
+                            bounds: bbox,
+                            telemetry: result.telemetry
+                        }
+                    }
                 }
             };
         } catch (err: any) {
             return {
-                status: 'error',
-                summary: `Failed to generate local SF3D organic prop: ${err.message}`,
-                output: err.stack || err.message
+                status: 'failed',
+                summaryResult: `Failed to generate local SF3D organic prop: ${err.message}`,
+                resultPayload: {
+                    status: 'error',
+                    summary: `Failed to generate local SF3D organic prop: ${err.message}`,
+                    output: err.stack || err.message
+                }
             };
         }
     }

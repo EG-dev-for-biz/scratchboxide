@@ -117,6 +117,12 @@ export class NativeCppCompilerService {
                 '-o',
                 pchPath
             ];
+            if (process.platform === 'darwin') {
+                const macSdk = '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk';
+                if (fs.existsSync(macSdk)) {
+                    pchArgs.push('-isysroot', macSdk);
+                }
+            }
             await execFileAsync(this.compilerBinary, pchArgs, {
                 cwd: this.sdkIncludePath,
                 timeout: 90000
@@ -255,6 +261,13 @@ export class NativeCppCompilerService {
             optFlag,
             `-I${this.sdkIncludePath}`
         ];
+
+        if (process.platform === 'darwin') {
+            const macSdk = '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk';
+            if (fs.existsSync(macSdk)) {
+                compileArgs.push('-isysroot', macSdk);
+            }
+        }
 
         if (usePch) {
             compileArgs.push('-include-pch', pchPath);

@@ -231,16 +231,6 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             mat.roughness = def.material?.roughness ?? presetConfig?.roughness ?? 0.5;
             mat.wireframe = !!def.material?.wireframe;
 
-            if (proceduralTextures) {
-                if (!mat.normalMap) {
-                    mat.normalMap = proceduralTextures.normalMap;
-                    const ns = presetConfig?.normalScale ?? 0.6;
-                    mat.normalScale.set(ns, ns);
-                }
-                if (!mat.roughnessMap) {
-                    mat.roughnessMap = proceduralTextures.roughnessMap;
-                }
-            }
 
             if (def.material?.emissive !== undefined) {
                 try {

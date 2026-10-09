@@ -150,8 +150,210 @@ class Structure:
     def get_mesh(self) -> Any:
         return self.mesh
 
+    def get_bounding_box(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+        """Returns ((min_x, min_y, min_z), (max_x, max_y, max_z)) of structure."""
+        if hasattr(self.mesh, "bounds"):
+            b = self.mesh.bounds
+            min_pt = (
+                float(b.min.x if hasattr(b.min, "x") else b.min[0]),
+                float(b.min.y if hasattr(b.min, "y") else b.min[1]),
+                float(b.min.z if hasattr(b.min, "z") else b.min[2])
+            )
+            max_pt = (
+                float(b.max.x if hasattr(b.max, "x") else b.max[0]),
+                float(b.max.y if hasattr(b.max, "y") else b.max[1]),
+                float(b.max.z if hasattr(b.max, "z") else b.max[2])
+            )
+            return (min_pt, max_pt)
+        elif hasattr(self.mesh, "vertices") and len(self.mesh.vertices) > 0:
+            xs = [v.position.x if hasattr(v.position, "x") else v.position[0] for v in self.mesh.vertices]
+            ys = [v.position.y if hasattr(v.position, "y") else v.position[1] for v in self.mesh.vertices]
+            zs = [v.position.z if hasattr(v.position, "z") else v.position[2] for v in self.mesh.vertices]
+            return ((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+        else:
+            hw = self.footprint_width * 0.5
+            hl = self.footprint_length * 0.5
+            return (
+                (self.position[0] - hw, self.position[1], self.position[2] - hl),
+                (self.position[0] + hw, self.position[1] + 20.0, self.position[2] + hl)
+            )
+
+    def find_mount_plane(self, face: str = "front") -> dict:
+        """
+        Calculates the 3D origin, normal, tangent basis vectors (u, v), and dimensions
+        for an exterior façade mount plane (e.g. for fire escapes, signs, awnings).
+        """
+        (min_x, min_y, min_z), (max_x, max_y, max_z) = self.get_bounding_box()
+        cx = (min_x + max_x) * 0.5
+        cy = (min_y + max_y) * 0.5
+        cz = (min_z + max_z) * 0.5
+        w = max_x - min_x
+        h = max_y - min_y
+        d = max_z - min_z
+
+        face_lower = face.lower()
+        if face_lower in ("front", "south", "+z"):
+            return {
+                "face": "front",
+                "center": (cx, cy, max_z),
+                "normal": (0.0, 0.0, 1.0),
+                "u_dir": (1.0, 0.0, 0.0),
+                "v_dir": (0.0, 1.0, 0.0),
+                "width": w,
+                "height": h
+            }
+        elif face_lower in ("back", "rear", "north", "-z"):
+            return {
+                "face": "back",
+                "center": (cx, cy, min_z),
+                "normal": (0.0, 0.0, -1.0),
+                "u_dir": (-1.0, 0.0, 0.0),
+                "v_dir": (0.0, 1.0, 0.0),
+                "width": w,
+                "height": h
+            }
+        elif face_lower in ("right", "east", "+x"):
+            return {
+                "face": "right",
+                "center": (max_x, cy, cz),
+                "normal": (1.0, 0.0, 0.0),
+                "u_dir": (0.0, 0.0, -1.0),
+                "v_dir": (0.0, 1.0, 0.0),
+                "width": d,
+                "height": h
+            }
+        elif face_lower in ("left", "west", "-x"):
+            return {
+                "face": "left",
+                "center": (min_x, cy, cz),
+                "normal": (-1.0, 0.0, 0.0),
+                "u_dir": (0.0, 0.0, 1.0),
+                "v_dir": (0.0, 1.0, 0.0),
+                "width": d,
+                "height": h
+            }
+        else:
+            return {
+                "face": "front",
+                "center": (cx, cy, max_z),
+                "normal": (0.0, 0.0, 1.0),
+                "u_dir": (1.0, 0.0, 0.0),
+                "v_dir": (0.0, 1.0, 0.0),
+                "width": w,
+                "height": h
+            }
+
+    def solve_mount_clearance(
+        self,
+        target_width: float,
+        target_height: float,
+        face: str = "front",
+        obstacles: Optional[list] = None,
+        safety_margin: float = 0.25
+    ) -> dict:
+        """
+        Analytical 2D clearance interval solver.
+        Finds a collision-free mounting interval on the building façade avoiding apertures.
+        """
+        plane = self.find_mount_plane(face)
+        wall_w = plane["width"]
+        wall_h = plane["height"]
+
+        obs_list = obstacles or []
+        half_w = wall_w * 0.5
+        half_h = wall_h * 0.5
+
+        # Check candidate U positions across façade
+        step_u = 0.25
+        best_u = 0.0
+        best_margin = -1.0
+        found = False
+
+        min_u_search = -half_w + target_width * 0.5 + safety_margin
+        max_u_search = half_w - target_width * 0.5 - safety_margin
+
+        u = min_u_search
+        while u <= max_u_search:
+            collides = False
+            min_dist = 1e6
+            cand_left = u - target_width * 0.5
+            cand_right = u + target_width * 0.5
+
+            for obs in obs_list:
+                obs_u = obs.get("u", 0.0)
+                obs_w = obs.get("width", 1.2)
+                obs_l = obs_u - obs_w * 0.5 - safety_margin
+                obs_r = obs_u + obs_w * 0.5 + safety_margin
+
+                if cand_right > obs_l and cand_left < obs_r:
+                    collides = True
+                    break
+                dist = max(0.0, max(obs_l - cand_right, cand_left - obs_r))
+                if dist < min_dist:
+                    min_dist = dist
+
+            if not collides:
+                if min_dist > best_margin:
+                    best_margin = min_dist
+                    best_u = u
+                    found = True
+            u += step_u
+
+        if not found:
+            best_u = 0.0
+            best_margin = 0.0
+
+        center = plane["center"]
+        u_dir = plane["u_dir"]
+        norm = plane["normal"]
+
+        mount_x = center[0] + u_dir[0] * best_u
+        mount_y = center[1]
+        mount_z = center[2] + u_dir[2] * best_u
+
+        return {
+            "found": found,
+            "face": face,
+            "center": (mount_x, mount_y, mount_z),
+            "normal": norm,
+            "u_offset": best_u,
+            "clearance_margin_meters": max(0.0, best_margin)
+        }
+
+    def attach_to_mount(
+        self,
+        attachment: Any,
+        face: str = "front",
+        u_offset: float = 0.0,
+        v_offset: float = 0.0,
+        standoff_meters: float = 0.05
+    ) -> "Structure":
+        """
+        Mounts an external accessory (e.g. fire escape, sign, awning) flush against
+        the structure façade with zero air gap and exact normal orientation.
+        """
+        plane = self.find_mount_plane(face)
+        cx, cy, cz = plane["center"]
+        ux, uy, uz = plane["u_dir"]
+        vx, vy, vz = plane["v_dir"]
+        nx, ny, nz = plane["normal"]
+
+        target_x = cx + ux * u_offset + vx * v_offset + nx * standoff_meters
+        target_y = cy + uy * u_offset + vy * v_offset + ny * standoff_meters
+        target_z = cz + uz * u_offset + vz * v_offset + nz * standoff_meters
+
+        if hasattr(attachment, "translate"):
+            attachment.translate(target_x, target_y, target_z)
+        elif hasattr(attachment, "position"):
+            attachment.position[0] += target_x
+            attachment.position[1] += target_y
+            attachment.position[2] += target_z
+
+        return self
+
     def __getattr__(self, name: str) -> Any:
         """Transparently delegate any mesh methods to self.mesh."""
         if hasattr(self.mesh, name):
             return getattr(self.mesh, name)
         raise AttributeError(f"'Structure' object has no attribute '{name}'")
+

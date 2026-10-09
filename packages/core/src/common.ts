@@ -93,3 +93,7 @@ export * from './common/spatial/photometric-units';
 
 // Living World Graph & Spatial Entity Contracts
 export * from './common/spatial/living-world-graph-types';
+
+// Universal Spatial Node, DAG & Modifier Protocols
+export * from './common/spatial/universal-spatial-node';
+

@@ -34,7 +34,8 @@ export interface UniversalSurfaceMesh {
   vertices: Float32Array | number[]; // Flattened [x0, y0, z0, x1, y1, z1, ...]
   indices?: Uint32Array | number[];  // Triangle index array [i0, i1, i2, ...]
   normals?: Float32Array | number[]; // Per-vertex normals
-  colors?: Float32Array | number[];  // Per-vertex RGB [r0, g0, b0, ...] normalized [0, 1]
+  colors?: Float32Array | number[];  // Per-vertex RGB/RGBA [r0, g0, b0, ...] normalized [0, 1]
+  confidences?: Float32Array | number[]; // Per-vertex uncertainty [0.0 = inferred, 1.0 = measured]
   uvs?: Float32Array | number[];     // Per-vertex UVs [u0, v0, u1, v1, ...]
   tangents?: Float32Array | number[]; // Per-vertex tangents [tx, ty, tz, tw]
   materialIndex?: number;            // Index into structure materials array

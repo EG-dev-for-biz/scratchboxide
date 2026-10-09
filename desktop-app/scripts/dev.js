@@ -85,7 +85,7 @@ if (shouldLaunchElectron) {
         const electronBin = path.join(appDir, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
         electronProcess = spawn(
             electronBin,
-            ['.'],
+            ['.', '--remote-debugging-port=9222'],
             { cwd: appDir, env, stdio: 'inherit' }
         );
 

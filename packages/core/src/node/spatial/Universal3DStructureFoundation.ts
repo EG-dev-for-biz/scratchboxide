@@ -1209,7 +1209,10 @@ export class Universal3DStructureFoundation {
    * TEXCOORD_0, COLOR_0, INDICES), PBR materials, samplers, and embedded textures.
    */
   public toGlbBuffer(options?: { includeAnimations?: boolean }): Buffer {
-    const v = this.mesh.vertices;
+    const v = this.mesh.vertices || (this.mesh as any).positions;
+    if (!v) {
+      throw new Error(`Cannot serialize GLB: mesh does not contain vertices or positions array.`);
+    }
     const chunks: Buffer[] = [];
     let totalBinLength = 0;
 
@@ -1253,6 +1256,32 @@ export class Universal3DStructureFoundation {
         uvBuf.writeFloatLE(uv[i], i * 4);
       }
       uvChunk = appendChunk(uvBuf);
+    }
+
+    // 3b. COLOR_0 & Confidence Chunk
+    let colChunk: { byteOffset: number; byteLength: number } | null = null;
+    let isVec4Color = false;
+    if (this.mesh.colors && this.mesh.colors.length > 0) {
+      const col = this.mesh.colors;
+      const colBuf = Buffer.alloc(col.length * 4);
+      for (let i = 0; i < col.length; i++) {
+        colBuf.writeFloatLE(col[i], i * 4);
+      }
+      colChunk = appendChunk(colBuf);
+      isVec4Color = col.length === this.mesh.vertexCount * 4;
+    } else if (this.mesh.confidences && this.mesh.confidences.length > 0) {
+      // Synthesize COLOR_0 RGBA where R = confidence (1 = measured, 0 = inferred), G = 0, B = 1 - confidence, A = 1
+      const conf = this.mesh.confidences;
+      const colBuf = Buffer.alloc(this.mesh.vertexCount * 4 * 4);
+      for (let i = 0; i < this.mesh.vertexCount; i++) {
+        const c = conf[i] ?? 1.0;
+        colBuf.writeFloatLE(c, (i * 4 + 0) * 4);
+        colBuf.writeFloatLE(0.0, (i * 4 + 1) * 4);
+        colBuf.writeFloatLE(1.0 - c, (i * 4 + 2) * 4);
+        colBuf.writeFloatLE(1.0, (i * 4 + 3) * 4);
+      }
+      colChunk = appendChunk(colBuf);
+      isVec4Color = true;
     }
 
     // 4. INDICES Chunk
@@ -1315,6 +1344,17 @@ export class Universal3DStructureFoundation {
       });
     }
 
+    let bvCol: number | null = null;
+    if (colChunk) {
+      bvCol = bufferViews.length;
+      bufferViews.push({
+        buffer: 0,
+        byteOffset: colChunk.byteOffset,
+        byteLength: colChunk.byteLength,
+        target: 34962
+      });
+    }
+
     let bvIdx: number | null = null;
     if (idxChunk) {
       bvIdx = bufferViews.length;
@@ -1370,6 +1410,18 @@ export class Universal3DStructureFoundation {
         componentType: 5126,
         count: this.mesh.vertexCount,
         type: 'VEC2'
+      });
+    }
+
+    let accCol: number | null = null;
+    if (bvCol !== null) {
+      accCol = accessors.length;
+      accessors.push({
+        bufferView: bvCol,
+        byteOffset: 0,
+        componentType: 5126,
+        count: this.mesh.vertexCount,
+        type: isVec4Color ? 'VEC4' : 'VEC3'
       });
     }
 
@@ -1441,6 +1493,7 @@ export class Universal3DStructureFoundation {
     const attributes: Record<string, number> = { POSITION: accPos };
     if (accNorm !== null) attributes.NORMAL = accNorm;
     if (accUv !== null) attributes.TEXCOORD_0 = accUv;
+    if (accCol !== null) attributes.COLOR_0 = accCol;
 
     const primitive: any = {
       attributes,
@@ -1597,7 +1650,17 @@ export class Universal3DStructureFoundation {
     }
 
     const gltfJson: any = {
-      asset: { version: '2.0', generator: 'Scratchbox_Universal3DStructure' },
+      asset: {
+        version: '2.0',
+        generator: 'Scratchbox_Universal3DStructure_v2',
+        extras: {
+          scratchbox_provenance: this.metadata?.provenance ?? {
+            id: this.id,
+            name: this.name,
+            timestamp: Date.now()
+          }
+        }
+      },
       scene: 0,
       scenes: [{ nodes: gltfNodes.map((_, i) => i) }],
       nodes: gltfNodes,

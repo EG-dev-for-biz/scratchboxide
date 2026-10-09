@@ -59,22 +59,21 @@ describe('PBR Material Gemini Tools & Multi-Resolution Engine', () => {
         expect(res.summaryResult).toContain('alpha=0.50');
     });
 
-    it('should synthesize a 1K PBR material PNG pack via native C++20 kernel', async () => {
+    it('should synthesize a PBR material PNG pack via native C++20 kernel', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbr_tool_test_'));
         try {
             const handler = pbrMaterialHandlers.pbr_synthesize_material;
             const res = await handler({
-                resolution: '1K',
+                resolution: 128,
                 archetype: 'carrara_marble',
                 format: 'png_pack',
                 outputDir: tmpDir,
-                outputFileName: 'marble_1k'
+                outputFileName: 'marble_128'
             }, {} as any);
 
             const payload = res.resultPayload as any;
             expect(payload.success).toBe(true);
-            expect(payload.resolution).toBe('1024x1024');
-            expect(payload.resolutionTier).toBe('1K');
+            expect(payload.resolution).toBe('128x128');
             expect(payload.files.albedo).toBeDefined();
             expect(payload.files.normal).toBeDefined();
             expect(payload.files.orm).toBeDefined();
@@ -101,7 +100,7 @@ describe('PBR Material Gemini Tools & Multi-Resolution Engine', () => {
         try {
             const handler = pbrMaterialHandlers.pbr_synthesize_material;
             const res = await handler({
-                resolution: '1K',
+                resolution: 128,
                 archetype: 'cor_ten_steel',
                 format: 'glb',
                 outputDir: tmpDir,

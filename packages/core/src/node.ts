@@ -1100,6 +1100,17 @@ export {
     type GroundProbeResult
 } from './node/spatial/LivingWorldGraphService';
 
+// Scene Graph Persistent Authority & Transactional Mutation Engine
+export {
+    SceneGraphMutationService,
+    type SpatialLease,
+    type MutationOperationType,
+    type SpatialMutationDelta,
+    type MutationCommitRecord,
+    type MutationResult
+} from './node/spatial/SceneGraphMutationService';
+
+
 // Autonomous AI-Native 3D Platform (Blender Alternative)
 export {
     ProceduralAstGuard,
