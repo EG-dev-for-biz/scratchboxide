@@ -28,9 +28,9 @@ const WGS84_E_PRIME2 = (WGS84_A * WGS84_A - WGS84_B * WGS84_B) / (WGS84_B * WGS8
  * Prevents WebGL single-precision vertex jitter and resolves coordinate drift.
  */
 export class LocalTangentPlane {
-  private originEcef: Vec3;
-  private rotMatrix: [Vec3, Vec3, Vec3]; // Strongly typed 3x3 rotation matrix
-  private invRotMatrix: [Vec3, Vec3, Vec3]; // Strongly typed 3x3 inverse rotation matrix
+  public readonly originEcef: Vec3;
+  public readonly rotMatrix: [Vec3, Vec3, Vec3]; // Strongly typed 3x3 rotation matrix
+  public readonly invRotMatrix: [Vec3, Vec3, Vec3]; // Strongly typed 3x3 inverse rotation matrix
 
   constructor(
     public readonly origin: LatLngAlt,

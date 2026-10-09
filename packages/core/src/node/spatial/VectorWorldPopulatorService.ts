@@ -646,7 +646,9 @@ export class VectorWorldPopulatorService {
         const lampPitch = options.streetlampPitchMeters ?? 25.0;
         const includeTraffic = options.includeTraffic !== false;
         const trafficDensity = options.trafficDensity ?? 0.25;
-        const includeTrees = options.includeTrees !== false;
+        // Reality Grounding Invariant: procedural tree generation is false by default.
+        // Authentic tree foliage is extracted from Google 3D Photorealistic Tiles or Solar dataLayers.
+        const includeTrees = options.includeTrees === true;
         const buildingArticulation = options.buildingArticulation !== false;
         const heightScale = options.buildingHeightScale ?? 1.0;
 

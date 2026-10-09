@@ -193,6 +193,30 @@ const server = http.createServer((req, res) => {
                     vertexCount = 28004;
                     triangleCount = 13920;
                     reliefDeltaY = 191.2;
+                } else if (lower.includes('washington') || lower.includes('arch') || lower.includes('greenwich')) {
+                    glbFile = 'washington_square_arch_nyc_raw.glb';
+                    landmarkName = 'Washington Square Arch, NYC';
+                    lat = 40.7308;
+                    lng = -73.9973;
+                    vertexCount = 14200;
+                    triangleCount = 8900;
+                    reliefDeltaY = 23.4;
+                } else if (lower.includes('eiffel') || lower.includes('paris') || lower.includes('champ')) {
+                    glbFile = 'eiffel_tower_paris_clay.glb';
+                    landmarkName = 'Eiffel Tower, Paris';
+                    lat = 48.8584;
+                    lng = 2.2945;
+                    vertexCount = 85200;
+                    triangleCount = 62100;
+                    reliefDeltaY = 324.0;
+                } else if (lower.includes('venice') || lower.includes('beach') || lower.includes('boardwalk')) {
+                    glbFile = 'venice_beach_test_clay.glb';
+                    landmarkName = 'Venice Beach Boardwalk, CA';
+                    lat = 33.9850;
+                    lng = -118.4695;
+                    vertexCount = 38400;
+                    triangleCount = 24100;
+                    reliefDeltaY = 12.5;
                 } else {
                     try {
                         const { getGoogle3DTilesClay } = require(path.resolve(__dirname, '../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService'));

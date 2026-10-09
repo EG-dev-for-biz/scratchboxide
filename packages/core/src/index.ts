@@ -503,4 +503,23 @@ export type {
     HeadlessCriticOptions
 } from './node/3d-engine/HeadlessSnapshotCriticService';
 
+// Spatial Vector Data & Semantic Intelligence API
+export {
+    SpatialVectorDataService,
+    type UniversalSpatialLayer,
+    type UniversalSpatialFeatureBase,
+    type UniversalBuildingFeature,
+    type UniversalRoadFeature,
+    type UniversalLanduseFeature,
+    type UniversalWaterFeature,
+    type UniversalPoiFeature,
+    type UniversalSpatialFeature,
+    type SpatialVectorQueryOptions,
+    type SpatialVectorDataSet,
+    type KinematicRoadNode,
+    type KinematicRoadNetwork,
+    type ExcavationStencil,
+    type Semantic3DAnnotation
+} from './node/spatial/SpatialVectorDataService';
+
 

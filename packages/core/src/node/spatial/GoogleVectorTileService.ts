@@ -30,11 +30,19 @@ export interface VectorFeatureLine {
     properties: Record<string, any>;
 }
 
+export interface VectorFeaturePoint {
+    id: string;
+    type: 'Point';
+    point: [number, number]; // [lng, lat]
+    properties: Record<string, any>;
+}
+
 export interface DecodedVectorTileData {
     buildings: VectorFeaturePolygon[];
     landuse: VectorFeaturePolygon[];
     water: VectorFeaturePolygon[];
     roads: VectorFeatureLine[];
+    pois?: VectorFeaturePoint[];
 }
 
 export interface VectorWorldStagingOptions {
@@ -339,7 +347,8 @@ export class GoogleVectorTileService {
             buildings: [],
             landuse: [],
             water: [],
-            roads: []
+            roads: [],
+            pois: []
         };
 
         if (!buffer || buffer.byteLength === 0) return result;
@@ -358,6 +367,7 @@ export class GoogleVectorTileService {
                 const isLanduseLayer = lowerName.includes('landuse') || lowerName.includes('park') || lowerName.includes('green');
                 const isWaterLayer = lowerName.includes('water');
                 const isRoadLayer = lowerName.includes('road') || lowerName.includes('transport') || lowerName.includes('street');
+                const isPoiLayer = lowerName.includes('poi') || lowerName.includes('place') || lowerName.includes('label');
 
                 for (let i = 0; i < layer.length; i++) {
                     const feature = layer.feature(i);
@@ -365,8 +375,20 @@ export class GoogleVectorTileService {
                     const rawGeom = feature.loadGeometry();
                     if (!rawGeom || rawGeom.length === 0) continue;
 
-                    // Type 3 = Polygon, Type 2 = LineString
-                    if (feature.type === 3) {
+                    // Type 1 = Point, Type 2 = LineString, Type 3 = Polygon
+                    if (feature.type === 1) {
+                        for (const ptList of rawGeom) {
+                            for (const p of ptList) {
+                                const point = mvtPointToLatLng(p.x, p.y, layer.extent, tileX, tileY, zoom);
+                                result.pois!.push({
+                                    id: `${layerName}-${i}`,
+                                    type: 'Point',
+                                    point,
+                                    properties: props
+                                });
+                            }
+                        }
+                    } else if (feature.type === 3) {
                         for (const ringPts of rawGeom) {
                             if (ringPts.length < 3) continue;
                             const ring: Array<[number, number]> = ringPts.map(p =>
