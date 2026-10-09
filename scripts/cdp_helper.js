@@ -1,136 +1,67 @@
-const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
-const path = require('path');
+const WebSocket = require('ws');
 
-function getPageTarget() {
-    return new Promise((resolve, reject) => {
-        const req = http.get('http://127.0.0.1:9222/json/list', (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try {
-                    const list = JSON.parse(data);
-                    const page = list.find(item => item.type === 'page' && item.url.includes('3030')) || list.find(item => item.type === 'page') || list[0];
-                    if (!page) reject(new Error('No page target found'));
-                    else resolve(page);
-                } catch (e) {
-                    reject(e);
-                }
-            });
-        });
-        req.on('error', reject);
-    });
+async function getCDPClient() {
+  const pages = await new Promise((resolve, reject) => {
+    http.get('http://127.0.0.1:9222/json/list', res => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => resolve(JSON.parse(data)));
+    }).on('error', reject);
+  });
+  const page = pages.find(p => p.type === 'page' && p.url.includes('3030')) || pages[0];
+  if (!page || !page.webSocketDebuggerUrl) {
+    throw new Error('No inspectable CDP page found');
+  }
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise(r => ws.on('open', r));
+
+  let id = 1;
+  const send = (method, params = {}) => new Promise((resolve, reject) => {
+    const curId = id++;
+    const handler = msg => {
+      const d = JSON.parse(msg);
+      if (d.id === curId) {
+        ws.off('message', handler);
+        if (d.error) reject(d.error);
+        else resolve(d.result);
+      }
+    };
+    ws.on('message', handler);
+    ws.send(JSON.stringify({ id: curId, method, params }));
+  });
+
+  return { ws, send };
 }
 
-class CDPClient {
-    constructor(wsUrl) {
-        this.wsUrl = wsUrl;
-        this.ws = null;
-        this.seq = 1;
-        this.callbacks = new Map();
-    }
-
-    connect() {
-        return new Promise((resolve, reject) => {
-            this.ws = new WebSocket(this.wsUrl);
-            this.ws.on('open', () => resolve());
-            this.ws.on('error', reject);
-            this.ws.on('message', (msg) => {
-                try {
-                    const data = JSON.parse(msg.toString());
-                    if (data.id && this.callbacks.has(data.id)) {
-                        const { resolve, reject } = this.callbacks.get(data.id);
-                        this.callbacks.delete(data.id);
-                        if (data.error) reject(new Error(JSON.stringify(data.error)));
-                        else resolve(data.result);
-                    }
-                } catch (e) {
-                    console.error('Error handling CDP message:', e);
-                }
-            });
-        });
-    }
-
-    send(method, params = {}) {
-        return new Promise((resolve, reject) => {
-            const id = this.seq++;
-            this.callbacks.set(id, { resolve, reject });
-            this.ws.send(JSON.stringify({ id, method, params }));
-        });
-    }
-
-    async evaluate(expression) {
-        const res = await this.send('Runtime.evaluate', {
-            expression,
-            returnByValue: true,
-            awaitPromise: true
-        });
-        if (res.exceptionDetails) {
-            throw new Error(JSON.stringify(res.exceptionDetails));
-        }
-        return res.result?.value;
-    }
-
-    async screenshot(filePath) {
-        const res = await this.send('Page.captureScreenshot', { format: 'png' });
-        const buffer = Buffer.from(res.data, 'base64');
-        fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        fs.writeFileSync(filePath, buffer);
-        console.log(`Saved screenshot to ${filePath} (${buffer.length} bytes)`);
-    }
-
-    close() {
-        if (this.ws) this.ws.close();
-    }
+async function evaluate(code) {
+  const { ws, send } = await getCDPClient();
+  const res = await send('Runtime.evaluate', {
+    expression: code,
+    returnByValue: true
+  });
+  ws.close();
+  return res;
 }
 
-async function main() {
-    const action = process.argv[2] || 'screenshot';
-    const arg = process.argv[3];
-
-    const target = await getPageTarget();
-    const client = new CDPClient(target.webSocketDebuggerUrl);
-    await client.connect();
-
-    if (action === 'screenshot') {
-        const outputPath = arg || 'test-screenshots/current_state.png';
-        await client.screenshot(outputPath);
-    } else if (action === 'eval') {
-        const result = await client.evaluate(arg);
-        console.log(JSON.stringify(result, null, 2));
-    } else if (action === 'click') {
-        const selector = arg;
-        const res = await client.evaluate(`
-            (() => {
-                const el = document.querySelector(${JSON.stringify(selector)});
-                if (!el) return 'NOT_FOUND';
-                el.click();
-                return 'CLICKED';
-            })()
-        `);
-        console.log('Click result:', res);
-    } else if (action === 'type') {
-        const selector = arg;
-        const text = process.argv[4] || '';
-        const res = await client.evaluate(`
-            (() => {
-                const el = document.querySelector(${JSON.stringify(selector)});
-                if (!el) return 'NOT_FOUND';
-                el.focus();
-                el.value = ${JSON.stringify(text)};
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                return 'TYPED';
-            })()
-        `);
-        console.log('Type result:', res);
-    }
-
-    client.close();
+async function takeScreenshot(outputPath) {
+  const { ws, send } = await getCDPClient();
+  const screenshot = await send('Page.captureScreenshot', { format: 'png' });
+  const buffer = Buffer.from(screenshot.data, 'base64');
+  fs.writeFileSync(outputPath, buffer);
+  ws.close();
+  console.log(`Screenshot saved to ${outputPath} (${buffer.length} bytes)`);
 }
 
-main().catch(err => {
-    console.error(err);
-    process.exit(1);
-});
+module.exports = { evaluate, takeScreenshot };
+
+if (require.main === module) {
+  const cmd = process.argv[2];
+  const arg = process.argv[3];
+  if (cmd === 'eval') {
+    evaluate(arg).then(r => console.log('Eval result:', JSON.stringify(r, null, 2))).catch(console.error);
+  } else if (cmd === 'screenshot') {
+    takeScreenshot(arg || '/Users/eligreen/.gemini/antigravity/brain/29954617-6067-4894-8ba1-420c57425aea/cdp_test_screenshot.png').catch(console.error);
+  }
+}

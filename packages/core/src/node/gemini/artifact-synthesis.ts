@@ -3368,6 +3368,10 @@ export function parseOrSynthesizeArtifact(
             ? []
             : (active3DData?.objects ? [...active3DData.objects] : [...defaultObjects]);
         for (const exec of _mcpExecutions) {
+            // For pure location queries, we strictly do NOT build procedural structures; real architecture is streamed via Google 3D Tiles Clay.
+            if (hasExecutedClayTool && !isStagingRequest && exec.toolName === 'execute_3d_python_script') {
+                continue;
+            }
             if (exec.toolName === 'stage_3d_vector_world' || exec.toolName === 'google_3d_tiles_get_clay' || exec.toolName === 'execute_3d_python_script') {
                 const res = ((exec as any).resultPayload || (exec as any).result || (exec as any).payload || {}) as any;
                 const glbPath = res?.glbPath || res?.outputGlbPath;

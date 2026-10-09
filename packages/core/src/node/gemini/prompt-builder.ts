@@ -1005,7 +1005,9 @@ Direct Primitive & Procedural Helpers on \`sb\`:
 - \`mesh.taubin_smooth(iterations=10)\`, \`mesh.isotropic_remesh(target_edge_length=0.25)\`, \`mesh.decimate(ratio=0.5)\`, \`mesh.fill_holes()\`, \`mesh.clean()\`
 - \`sb.pbr.PbrMaterial(base_color="#hex", roughness=0.3, metalness=0.8, emissive="#hex", emissive_intensity=1.0)\`
 
-- REAL-WORLD LOCATIONS & SHAPE EXTRACTION PIPELINE: When the user requests a real-world location (e.g. "Eiffel Tower", "Colosseum", "Central Park"), pass location: "<query>" to execute_3d_python_script. The backend automatically streams Google 3D Tiles, separates terrain, buildings, and vegetation clusters, and exposes them in sb.geospatial.load_location():
+- REAL-WORLD LOCATION STAGING VS PURE LOCATIONS:
+  * PURE LOCATION QUERY (e.g. "Colosseum", "Eiffel Tower", "Venice Beach"): Call google_3d_tiles_get_clay({ query: "<query>" }) directly! DO NOT call execute_3d_python_script; for this function we do not build synthetic structures, the real-world architecture is streamed directly from Google 3D Tiles in Studio Grey Clay mode.
+  * HERO OBJECT STAGED AT LOCATION (e.g. "race car in Central Park", "F1 car in Monaco"): Pass location: "<query>" to execute_3d_python_script to model the hero asset and stage it on the real-world terrain. The backend exposes location terrain in sb.geospatial.load_location():
 \`\`\`python
 import scratchbox as sb
 
