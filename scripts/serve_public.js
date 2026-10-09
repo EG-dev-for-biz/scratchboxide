@@ -2085,8 +2085,16 @@ IMAGE ANALYSIS RULES:
 - Chirality Detection: Accurately state whether the observed hand is a "left" hand or "right" hand.
   * NOTE: The 3D viewport is framed on the Left Hand. If the photo is a Right Hand, state chirality: "right" and output angles for that right hand; the client will apply the sagittal reflection matrix.
 - Vantage Point: State whether the hand is viewed from "palmar" (palm facing camera), "dorsal" (back of hand facing camera), "radial" (thumb edge), "ulnar" (pinky edge), or "knuckles" (end-on knuckles).
-- Non-Hand Rejection: If the image does not show a clear human hand, set isHand: false with explanation.
-- Skin Tone & Melanin Estimation: Analyze the epidermal skin tone of the hand according to the biophysical melanin spectrum. Estimate melaninFraction in [0.0 = very fair alabaster, 1.0 = deep dark melanin] and pheomelaninRatio in [0.0 = neutral eumelanin, 1.0 = warm reddish-yellow pheomelanin], along with Fitzpatrick phototype (Type I through Type VI).
+- Hand Morphology & Proportion Analysis:
+  Analyze the physical dimensions and structural build of the hand in the photo:
+  * fingerThickness: Continuous girth in [-1.0, +1.0] (-1.0 = slender/thin/spindly, 0.0 = neutral/average, +1.0 = thick/heavy/stubby).
+  * fingerLengthRatio: Digit length relative to palm in [-1.0, +1.0] (-1.0 = short/compact digits, 0.0 = average, +1.0 = elongated/long piano fingers).
+  * palmWidth: Palm breadth in [-1.0, +1.0] (-1.0 = narrow slender spade, 0.0 = balanced, +1.0 = broad square carpenter palm).
+  * handScale: Overall hand scale relative to baseline [0.85 = petite, 1.0 = standard, 1.15 = large].
+  * muscularity: Tendon and muscle definition in [-1.0, +1.0] (-1.0 = soft gentle contours, 0.0 = neutral, +1.0 = lean athletic with prominent extensor tendons).
+  * dimorphism: Skeletal dimorphism in [-1.0, +1.0] (-1.0 = feminine gracile curves, +1.0 = masculine angular robust planes).
+  * betas: 8-mode PCA blendshape vector [beta0, beta1, beta2, beta3, beta4, beta5, beta6, beta7] reflecting stature, muscularity, BMI, and dimorphism.
+  * summary: Short human-readable summary of hand morphology (e.g. "Long slender fingers with narrow palm and delicate build").
 
 OUTPUT FORMAT (Strict JSON):
 {
@@ -2102,6 +2110,16 @@ OUTPUT FORMAT (Strict JSON):
     "pheomelaninRatio": 0.25,
     "fitzpatrickType": "Type III",
     "summary": "Medium olive complexion with golden undertones"
+  },
+  "morphology": {
+    "fingerThickness": 0.0,
+    "fingerLengthRatio": 0.0,
+    "palmWidth": 0.0,
+    "handScale": 1.0,
+    "muscularity": 0.0,
+    "dimorphism": 0.0,
+    "betas": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "summary": "Balanced anatomical proportions"
   },
   "rotations": {
     "LeftIndex1": [rx, ry, rz],

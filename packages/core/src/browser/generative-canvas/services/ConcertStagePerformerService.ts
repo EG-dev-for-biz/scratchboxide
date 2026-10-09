@@ -11,6 +11,8 @@ import * as THREE from 'three';
 import { GeoFrame } from '../../../common/coordinate/GeoFrame';
 import { GeoAnchor4D } from '../../../common/geospatial-4d-protocol';
 import { BakedGaussian } from '../../../common/geospatial-4d-protocol';
+import { CineRealSkinRenderer, CineRealSkinConfig } from './CineRealSkinRenderer';
+
 
 /**
  * Skinning execution mode for the 4D performer avatar.
@@ -464,6 +466,20 @@ export class ConcertStagePerformerService {
     this.performerGroup.add(skinnedMesh);
     this.evaluateCurrentFrame();
   }
+
+  /**
+   * Applies cinematic biophysical skin shading (dermal SSS & dual-lobe specular) to the performer mesh.
+   */
+  public enableCineRealSkin(config?: CineRealSkinConfig) {
+    if (this.performerSkinnedMesh && this.performerSkinnedMesh.material) {
+      if (Array.isArray(this.performerSkinnedMesh.material)) {
+        this.performerSkinnedMesh.material.forEach(mat => CineRealSkinRenderer.patchSkinMaterial(mat, config));
+      } else {
+        CineRealSkinRenderer.patchSkinMaterial(this.performerSkinnedMesh.material, config);
+      }
+    }
+  }
+
 
   /**
    * Toggles visibility of the rigged PBR skinned mesh.

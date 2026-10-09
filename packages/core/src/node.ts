@@ -806,6 +806,15 @@ export {
     Surfel2DGSSkinAdapter
 } from './node/spatial/SbHumanAvatarService';
 export {
+    SbHumanStudioService,
+    DccHumanoidObject,
+    DccArmature,
+    DccPoseBone,
+    DccShapeKeys,
+    DccShapeKeyBlock,
+    DccPrincipledBsdfMaterial
+} from './node/spatial/SbHumanStudioService';
+export {
     CharacterClothingMorphology,
     type CharacterClothingMorphologyOptions
 } from './node/spatial/CharacterClothingMorphology';

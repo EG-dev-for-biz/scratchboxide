@@ -1,7 +1,8 @@
 """
 Scratchbox Agentic 3D Procedural Engine (Python SDK)
-Autonomous, headless, real-time procedural creation competing directly with Blender.
+Autonomous, headless, real-time procedural creation with cinematic DCC fidelity.
 """
+
 
 import sys
 import os
@@ -32,7 +33,18 @@ Scene = World
 from .terrain import Terrain
 from .structure import Structure
 from .plant import PlantPreset, Flora, create_vegetation
-from .human import Human, create_human
+from . import human as _py_human
+from .human import (
+    Human,
+    create_human,
+    StudioHuman,
+    PoseBone,
+    Armature,
+    ShapeKeys,
+    ShapeKeyBlock,
+    PrincipledBsdfMaterial,
+    create as create_character
+)
 
 # Classical Roman Orders
 RomanOrder = None
@@ -54,9 +66,30 @@ processing = getattr(_native, "processing", None) if _native else None
 topology = getattr(_native, "topology", None) if _native else None
 sdf = getattr(_native, "sdf", None) if _native else None
 hair = getattr(_native, "hair", None) if _native else None
-human = getattr(_native, "human", None) if _native else None
+
+class _HumanModuleWrapper:
+    """Unified facade exposing both high-level DCC human objects and native C++20 kinematics."""
+    def __init__(self, py_mod, native_mod):
+        self._py_mod = py_mod
+        self._native_mod = native_mod
+
+    def __getattr__(self, name):
+        if hasattr(self._py_mod, name):
+            return getattr(self._py_mod, name)
+        if self._native_mod and hasattr(self._native_mod, name):
+            return getattr(self._native_mod, name)
+        raise AttributeError(f"module 'scratchbox.human' has no attribute '{name}'")
+
+    def __dir__(self):
+        d = set(dir(self._py_mod))
+        if self._native_mod:
+            d.update(dir(self._native_mod))
+        return sorted(d)
+
+human = _HumanModuleWrapper(_py_human, getattr(_native, "human", None) if _native else None)
 random = _random
 py_math = _py_math
+
 
 def _to_point3(pt):
     if hasattr(pt, "x") and hasattr(pt, "y") and hasattr(pt, "z"):

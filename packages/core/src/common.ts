@@ -106,3 +106,7 @@ export * from './common/spatial/universal-spatial-node';
 export * from './common/spatial/MetricScaleNormalizer';
 export * from './common/spatial/GeodeticAnchorValidator';
 export * from './common/spatial/UniversalGeographicBridge';
+
+// DCC Humanoid & FACS Action Units Protocol
+export * from './common/humanoid-dcc-protocol';
+

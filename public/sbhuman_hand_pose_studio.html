@@ -534,6 +534,29 @@
       transform: translateY(-1px);
     }
 
+    .morph-chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .morph-chip:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--cyan);
+      color: #fff;
+    }
+    .morph-chip.active {
+      background: rgba(56, 189, 248, 0.25);
+      border-color: var(--cyan);
+      color: #fff;
+      box-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
+    }
+
     /* Right Kinematic Hierarchy & Precision Sliders Panel */
     .sidebar-panel {
       position: absolute;
@@ -1095,6 +1118,64 @@
         </div>
       </div>
 
+      <!-- Hand Morphology & Parametric Shape Studio (β + Differential Girth) -->
+      <div class="finger-group" style="border-color: rgba(56, 189, 248, 0.4); background: rgba(15, 23, 42, 0.65);">
+        <div class="finger-header" data-finger="morphology" style="background: rgba(56, 189, 248, 0.08);">
+          <div class="finger-title">
+            <div class="finger-indicator" style="background: var(--cyan);"></div>
+            <span style="font-weight:700; color:var(--cyan); letter-spacing:0.5px;">Hand Morphology & Shape (β)</span>
+          </div>
+          <span class="finger-arrow" id="arrow-morphology">▼</span>
+        </div>
+        <div class="finger-body" id="body-morphology" style="display:flex; flex-direction:column; gap:8px; padding:10px 12px;">
+          <!-- Quick Morphology Presets -->
+          <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
+            <button class="morph-chip active" data-morph="neutral">Neutral</button>
+            <button class="morph-chip" data-morph="slender">Slender / Piano</button>
+            <button class="morph-chip" data-morph="heavy">Heavy / Thick</button>
+            <button class="morph-chip" data-morph="athletic">Lean / Athletic</button>
+            <button class="morph-chip" data-morph="feminine">Gracile</button>
+            <button class="morph-chip" data-morph="masculine">Robust</button>
+          </div>
+
+          <!-- Sliders -->
+          <div class="slider-row">
+            <span class="slider-label" style="color:var(--cyan);">Digit Length:</span>
+            <input type="range" class="slider-control" id="slider-morph-length" min="-100" max="100" value="0" step="1">
+            <span class="slider-value" id="val-morph-length">0%</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label" style="color:var(--emerald);">Finger Girth:</span>
+            <input type="range" class="slider-control" id="slider-morph-thickness" min="-100" max="100" value="0" step="1">
+            <span class="slider-value" id="val-morph-thickness">0%</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label" style="color:var(--amber);">Palm Width:</span>
+            <input type="range" class="slider-control" id="slider-morph-palm" min="-100" max="100" value="0" step="1">
+            <span class="slider-value" id="val-morph-palm">0%</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label" style="color:var(--purple);">Muscularity:</span>
+            <input type="range" class="slider-control" id="slider-morph-muscularity" min="-100" max="100" value="0" step="1">
+            <span class="slider-value" id="val-morph-muscularity">0%</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label" style="color:var(--rose);">Dimorphism:</span>
+            <input type="range" class="slider-control" id="slider-morph-dimorphism" min="-100" max="100" value="0" step="1">
+            <span class="slider-value" id="val-morph-dimorphism">0%</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label" style="color:#fff;">Hand Scale:</span>
+            <input type="range" class="slider-control" id="slider-morph-scale" min="80" max="120" value="100" step="1">
+            <span class="slider-value" id="val-morph-scale">1.00×</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px;">
+            <span style="font-size:9.5px; color:var(--text-dim);" id="morph-status-indicator">SB-Human 8-Mode PCA + Local Girth</span>
+            <button class="tool-btn" id="btn-reset-morph" style="font-size:9.5px; padding:2px 6px;">Reset Morph</button>
+          </div>
+        </div>
+      </div>
+
       <!-- All Digits Accordion -->
       <div style="font-size:11px; font-weight:700; color:var(--text-muted); margin-top:4px;">17-Joint Hand & Forearm Armature</div>
 
@@ -1279,24 +1360,24 @@
       LeftElbow:  { minX: -Math.PI * 0.75, maxX: Math.PI * 0.75, minY: -0.15, maxY: 0.15, minZ: -Math.PI * 0.75, maxZ: 0.15 },
       LeftWrist:  { minX: -Math.PI * 0.45, maxX: Math.PI * 0.45, minY: -Math.PI * 0.25, maxY: Math.PI * 0.25, minZ: -Math.PI * 0.45, maxZ: Math.PI * 0.45 },
       // Knuckles (MCP - Biaxial Condyloid)
-      LeftIndex1:  { minX: -0.35, maxX: 0.35, minY: -0.45, maxY: 0.45, minZ: -1.75, maxZ: 0.35 },
-      LeftMiddle1: { minX: -0.25, maxX: 0.25, minY: -0.25, maxY: 0.25, minZ: -1.75, maxZ: 0.35 },
-      LeftRing1:   { minX: -0.30, maxX: 0.30, minY: -0.35, maxY: 0.35, minZ: -1.75, maxZ: 0.35 },
-      LeftPinky1:  { minX: -0.35, maxX: 0.35, minY: -0.50, maxY: 0.50, minZ: -1.75, maxZ: 0.35 },
-      // PIP (Interphalangeal - 1-DOF Hinge)
-      LeftIndex2:  { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.85, maxZ: 0.05 },
-      LeftMiddle2: { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.85, maxZ: 0.05 },
-      LeftRing2:   { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.85, maxZ: 0.05 },
-      LeftPinky2:  { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.85, maxZ: 0.05 },
-      // DIP (Distal Interphalangeal - 1-DOF Hinge)
-      LeftIndex3:  { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.65, maxZ: 0.05 },
-      LeftMiddle3: { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.65, maxZ: 0.05 },
-      LeftRing3:   { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.65, maxZ: 0.05 },
-      LeftPinky3:  { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.65, maxZ: 0.05 },
+      LeftIndex1:  { minX: -0.45, maxX: 0.45, minY: -0.45, maxY: 0.45, minZ: -1.75, maxZ: 0.35 },
+      LeftMiddle1: { minX: -0.45, maxX: 0.45, minY: -0.35, maxY: 0.35, minZ: -1.75, maxZ: 0.35 },
+      LeftRing1:   { minX: -0.55, maxX: 0.45, minY: -0.45, maxY: 0.45, minZ: -1.75, maxZ: 0.35 },
+      LeftPinky1:  { minX: -0.95, maxX: 0.45, minY: -0.55, maxY: 0.65, minZ: -1.75, maxZ: 0.35 },
+      // PIP (Interphalangeal - Anatomical Hinge with coordinate alignment)
+      LeftIndex2:  { minX: -0.20, maxX: 0.20, minY: -0.20, maxY: 0.20, minZ: -1.85, maxZ: 0.05 },
+      LeftMiddle2: { minX: -0.35, maxX: 0.35, minY: -0.25, maxY: 0.25, minZ: -1.85, maxZ: 0.05 },
+      LeftRing2:   { minX: -0.45, maxX: 0.35, minY: -0.35, maxY: 0.35, minZ: -1.85, maxZ: 0.05 },
+      LeftPinky2:  { minX: -0.90, maxX: 0.35, minY: -0.35, maxY: 0.60, minZ: -1.85, maxZ: 0.05 },
+      // DIP (Distal Interphalangeal - Anatomical Hinge with coordinate alignment)
+      LeftIndex3:  { minX: -0.20, maxX: 0.20, minY: -0.20, maxY: 0.20, minZ: -1.65, maxZ: 0.05 },
+      LeftMiddle3: { minX: -0.30, maxX: 0.30, minY: -0.20, maxY: 0.20, minZ: -1.65, maxZ: 0.05 },
+      LeftRing3:   { minX: -0.35, maxX: 0.30, minY: -0.25, maxY: 0.25, minZ: -1.65, maxZ: 0.05 },
+      LeftPinky3:  { minX: -0.65, maxX: 0.30, minY: -0.25, maxY: 0.40, minZ: -1.65, maxZ: 0.05 },
       // Thumb Digits
-      LeftThumb1:  { minX: -0.60, maxX: 0.60, minY: -0.80, maxY: 1.20, minZ: -0.80, maxZ: 0.80 },
-      LeftThumb2:  { minX: -0.30, maxX: 0.30, minY: -0.30, maxY: 0.30, minZ: -1.25, maxZ: 0.30 },
-      LeftThumb3:  { minX: -0.20, maxX: 0.20, minY: -0.10, maxY: 0.10, minZ: -1.55, maxZ: 0.20 }
+      LeftThumb1:  { minX: -0.85, maxX: 0.95, minY: -0.95, maxY: 1.35, minZ: -0.95, maxZ: 0.95 },
+      LeftThumb2:  { minX: -0.55, maxX: 0.55, minY: -0.45, maxY: 0.45, minZ: -1.35, maxZ: 0.45 },
+      LeftThumb3:  { minX: -0.40, maxX: 0.40, minY: -0.35, maxY: 0.35, minZ: -1.65, maxZ: 0.35 }
     };
 
     // Global Studio State
@@ -1318,6 +1399,26 @@
         cyberColor: 0x00f0ff,
         cyberPulse: true
       },
+      morphology: {
+        fingerLengthRatio: 0.0,
+        fingerThickness: 0.0,
+        palmWidth: 0.0,
+        handScale: 1.0,
+        muscularity: 0.0,
+        dimorphism: 0.0
+      },
+      currentBetas: [0, 0, 0, 0, 0, 0, 0, 0],
+      startMorph: null,
+      targetMorph: null,
+      morphProgress: 1.0,
+      morphDuration: 350,
+      morphStartTime: 0,
+      shapeDirs: null,
+      numShapeModes: 0,
+      basePositions: null,
+      baseNormals: null,
+      handVertexMetadata: null,
+      geometry: null,
       isIsolated: true,
       showJoints: true,
       enforceLimits: true,
@@ -1328,87 +1429,127 @@
       lerpStartTime: 0
     };
 
-    // Pre-calculated Holistic Gesture Presets [twistX, splayY, flexZ]
+    // Canonical Hand Morphology Presets
+    const MORPHOLOGY_PRESETS = {
+      neutral: {
+        label: 'Neutral Baseline',
+        fingerLengthRatio: 0.0, fingerThickness: 0.0, palmWidth: 0.0, handScale: 1.0, muscularity: 0.0, dimorphism: 0.0,
+        betas: [0, 0, 0, 0, 0, 0, 0, 0],
+        summary: 'Neutral canonical SB-Human hand anatomy'
+      },
+      slender: {
+        label: 'Slender / Piano',
+        fingerLengthRatio: 0.55, fingerThickness: -0.45, palmWidth: -0.30, handScale: 0.96, muscularity: -0.15, dimorphism: -0.75,
+        betas: [-0.15, -0.25, -0.85, -1.35, 0.0, 0.0, 0.0, 0.0],
+        summary: 'Elongated graceful piano fingers with slender gracile knuckles'
+      },
+      heavy: {
+        label: 'Heavy / Thick',
+        fingerLengthRatio: -0.20, fingerThickness: 0.65, palmWidth: 0.45, handScale: 1.08, muscularity: 0.20, dimorphism: 0.65,
+        betas: [0.25, 0.35, 1.20, 1.15, 0.0, 0.0, 0.0, 0.0],
+        summary: 'Thick robust digits with broad metacarpal pad'
+      },
+      athletic: {
+        label: 'Lean / Athletic',
+        fingerLengthRatio: 0.20, fingerThickness: -0.10, palmWidth: 0.15, handScale: 1.02, muscularity: 0.75, dimorphism: 0.30,
+        betas: [0.10, 1.15, -0.20, 0.45, 0.0, 0.0, 0.0, 0.0],
+        summary: 'Lean athletic hand with distinct extensor tendon definitions'
+      },
+      feminine: {
+        label: 'Gracile Feminine',
+        fingerLengthRatio: 0.35, fingerThickness: -0.35, palmWidth: -0.25, handScale: 0.92, muscularity: -0.30, dimorphism: -1.0,
+        betas: [-0.25, -0.50, -0.65, -1.80, 0.0, 0.0, 0.0, 0.0],
+        summary: 'Tapering feminine contour with slender wrist and delicate fingertips'
+      },
+      masculine: {
+        label: 'Robust Masculine',
+        fingerLengthRatio: 0.05, fingerThickness: 0.40, palmWidth: 0.35, handScale: 1.06, muscularity: 0.50, dimorphism: 1.0,
+        betas: [0.20, 0.85, 0.75, 1.80, 0.0, 0.0, 0.0, 0.0],
+        summary: 'Broad masculine square palm with prominent knuckle arches'
+      }
+    };
+
+    // Pre-calculated Holistic Gesture Presets with Anatomical Hinge Euler Coordinates
     const GESTURE_PRESETS = {
       fist: {
-        LeftIndex1: [0, -0.05, -1.35], LeftIndex2: [0, 0, -1.55], LeftIndex3: [0, 0, -1.25],
-        LeftMiddle1: [0, 0, -1.40], LeftMiddle2: [0, 0, -1.55], LeftMiddle3: [0, 0, -1.25],
-        LeftRing1: [0, 0.05, -1.35], LeftRing2: [0, 0, -1.55], LeftRing3: [0, 0, -1.25],
-        LeftPinky1: [0, 0.1, -1.30], LeftPinky2: [0, 0, -1.55], LeftPinky3: [0, 0, -1.25],
-        LeftThumb1: [0.12, 0.95, 0.35], LeftThumb2: [-0.20, 0, -0.75], LeftThumb3: [0.10, 0, -0.80],
-        LeftWrist: [0, 0, -0.05]
+        LeftIndex1: [0.091, -0.068, -1.293], LeftIndex2: [0.002, -0.002, -1.5], LeftIndex3: [0.002, -0.001, -0.7],
+        LeftMiddle1: [-0.128, 0.101, -1.335], LeftMiddle2: [-0.175, 0.158, -1.471], LeftMiddle3: [-0.111, 0.04, -0.688],
+        LeftRing1: [-0.184, 0.191, -1.311], LeftRing2: [-0.309, 0.252, -1.365], LeftRing3: [-0.193, 0.067, -0.664],
+        LeftPinky1: [-0.724, 0.469, -0.853], LeftPinky2: [-0.679, 0.405, -1.054], LeftPinky3: [-0.364, 0.097, -0.515],
+        LeftThumb1: [0.7, 0.9, -0.35], LeftThumb2: [-0.3, -0.1, -0.15], LeftThumb3: [0, 0, -0.9],
+        LeftWrist: [0, 0, -0.05],
       },
       peace: {
         LeftIndex1: [0, 0.16, 0.05], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
         LeftMiddle1: [0, -0.16, 0.05], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
-        LeftRing1: [0, 0.05, -1.40], LeftRing2: [0, 0, -1.60], LeftRing3: [0, 0, -1.30],
-        LeftPinky1: [0, 0.1, -1.35], LeftPinky2: [0, 0, -1.60], LeftPinky3: [0, 0, -1.30],
-        LeftThumb1: [0.15, 0.85, 0.30], LeftThumb2: [-0.20, 0, -0.80], LeftThumb3: [0.10, 0, -0.80],
-        LeftWrist: [0, 0, 0]
+        LeftRing1: [-0.184, 0.191, -1.311], LeftRing2: [-0.309, 0.252, -1.365], LeftRing3: [-0.193, 0.067, -0.664],
+        LeftPinky1: [-0.724, 0.469, -0.853], LeftPinky2: [-0.679, 0.405, -1.054], LeftPinky3: [-0.364, 0.097, -0.515],
+        LeftThumb1: [0.65, 0.85, -0.3], LeftThumb2: [-0.25, -0.1, -0.2], LeftThumb3: [0, 0, -0.8],
+        LeftWrist: [0, 0, 0],
       },
       thumbs_up: {
-        LeftIndex1: [0, -0.05, -1.35], LeftIndex2: [0, 0, -1.55], LeftIndex3: [0, 0, -1.25],
-        LeftMiddle1: [0, 0, -1.40], LeftMiddle2: [0, 0, -1.55], LeftMiddle3: [0, 0, -1.25],
-        LeftRing1: [0, 0.05, -1.35], LeftRing2: [0, 0, -1.55], LeftRing3: [0, 0, -1.25],
-        LeftPinky1: [0, 0.1, -1.30], LeftPinky2: [0, 0, -1.55], LeftPinky3: [0, 0, -1.25],
-        LeftThumb1: [-0.25, -0.35, 0.55], LeftThumb2: [0, 0, 0.10], LeftThumb3: [0, 0, 0.15],
-        LeftWrist: [0, 0.1, 0.25]
+        LeftIndex1: [0.091, -0.068, -1.293], LeftIndex2: [0.002, -0.002, -1.5], LeftIndex3: [0.002, -0.001, -0.7],
+        LeftMiddle1: [-0.128, 0.101, -1.335], LeftMiddle2: [-0.175, 0.158, -1.471], LeftMiddle3: [-0.111, 0.04, -0.688],
+        LeftRing1: [-0.184, 0.191, -1.311], LeftRing2: [-0.309, 0.252, -1.365], LeftRing3: [-0.193, 0.067, -0.664],
+        LeftPinky1: [-0.724, 0.469, -0.853], LeftPinky2: [-0.679, 0.405, -1.054], LeftPinky3: [-0.364, 0.097, -0.515],
+        LeftThumb1: [-0.25, -0.35, 0.55], LeftThumb2: [0, 0, 0.1], LeftThumb3: [0, 0, 0.15],
+        LeftWrist: [0, 0.1, 0.25],
       },
       pinch: {
-        LeftIndex1: [0, -0.05, -0.65], LeftIndex2: [0, 0, -0.85], LeftIndex3: [0, 0, -0.65],
-        LeftMiddle1: [0, 0, -0.45], LeftMiddle2: [0, 0, -0.55], LeftMiddle3: [0, 0, -0.40],
-        LeftRing1: [0, 0.05, -0.55], LeftRing2: [0, 0, -0.65], LeftRing3: [0, 0, -0.45],
-        LeftPinky1: [0, 0.1, -0.65], LeftPinky2: [0, 0, -0.70], LeftPinky3: [0, 0, -0.45],
-        LeftThumb1: [0.10, 0.65, 0.25], LeftThumb2: [-0.15, 0, -0.55], LeftThumb3: [0.10, 0, -0.45],
-        LeftWrist: [0, 0, 0]
+        LeftIndex1: [0.067, -0.028, -0.796], LeftIndex2: [0.002, -0.001, -0.95], LeftIndex3: [0.001, 0, -0.6],
+        LeftMiddle1: [-0.057, 0.013, -0.446], LeftMiddle2: [-0.09, 0.025, -0.541], LeftMiddle3: [-0.059, 0.01, -0.345],
+        LeftRing1: [-0.097, 0.077, -0.535], LeftRing2: [-0.181, 0.058, -0.617], LeftRing3: [-0.116, 0.022, -0.381],
+        LeftPinky1: [-0.389, 0.21, -0.456], LeftPinky2: [-0.389, 0.112, -0.553], LeftPinky3: [-0.258, 0.047, -0.361],
+        LeftThumb1: [0.35, 0.65, -0.15], LeftThumb2: [0.1, -0.1, -0.45], LeftThumb3: [0, 0, -0.55],
+        LeftWrist: [0, 0, 0],
       },
       ok: {
-        LeftIndex1: [0, -0.05, -0.80], LeftIndex2: [0, 0, -1.05], LeftIndex3: [0, 0, -0.85],
-        LeftThumb1: [0.10, 0.70, 0.25], LeftThumb2: [-0.15, 0, -0.65], LeftThumb3: [0.10, 0, -0.55],
-        LeftMiddle1: [0, -0.08, 0.10], LeftMiddle2: [0, 0, 0.05], LeftMiddle3: [0, 0, 0],
+        LeftIndex1: [0.076, -0.039, -0.945], LeftIndex2: [0.002, -0.001, -1.15], LeftIndex3: [0.002, -0.001, -0.75],
+        LeftMiddle1: [0, -0.08, 0.1], LeftMiddle2: [0, 0, 0.05], LeftMiddle3: [0, 0, 0],
         LeftRing1: [0, -0.12, 0.15], LeftRing2: [0, 0, 0.05], LeftRing3: [0, 0, 0],
-        LeftPinky1: [0, -0.18, 0.20], LeftPinky2: [0, 0, 0.05], LeftPinky3: [0, 0, 0],
-        LeftWrist: [0, 0, 0]
+        LeftPinky1: [0, -0.18, 0.2], LeftPinky2: [0, 0, 0.05], LeftPinky3: [0, 0, 0],
+        LeftThumb1: [0.4, 0.7, -0.15], LeftThumb2: [0.15, -0.1, -0.55], LeftThumb3: [0, 0, -0.65],
+        LeftWrist: [0, 0, 0],
       },
       rock: {
         LeftIndex1: [0, 0.12, 0.05], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftMiddle1: [-0.128, 0.101, -1.335], LeftMiddle2: [-0.175, 0.158, -1.471], LeftMiddle3: [-0.111, 0.04, -0.688],
+        LeftRing1: [-0.184, 0.191, -1.311], LeftRing2: [-0.309, 0.252, -1.365], LeftRing3: [-0.193, 0.067, -0.664],
         LeftPinky1: [0, -0.18, 0.05], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
-        LeftMiddle1: [0, 0, -1.45], LeftMiddle2: [0, 0, -1.60], LeftMiddle3: [0, 0, -1.30],
-        LeftRing1: [0, 0, -1.45], LeftRing2: [0, 0, -1.60], LeftRing3: [0, 0, -1.30],
-        LeftThumb1: [0.15, 0.80, 0.30], LeftThumb2: [-0.20, 0, -0.75], LeftThumb3: [0.10, 0, -0.70],
-        LeftWrist: [0, 0, 0]
+        LeftThumb1: [0.65, 0.85, -0.3], LeftThumb2: [-0.25, -0.1, -0.2], LeftThumb3: [0, 0, -0.8],
+        LeftWrist: [0, 0, 0],
       },
       point: {
         LeftIndex1: [0, 0, 0.05], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
-        LeftMiddle1: [0, 0, -1.40], LeftMiddle2: [0, 0, -1.55], LeftMiddle3: [0, 0, -1.25],
-        LeftRing1: [0, 0.05, -1.35], LeftRing2: [0, 0, -1.55], LeftRing3: [0, 0, -1.25],
-        LeftPinky1: [0, 0.1, -1.30], LeftPinky2: [0, 0, -1.55], LeftPinky3: [0, 0, -1.25],
-        LeftThumb1: [0.12, 0.85, 0.30], LeftThumb2: [-0.20, 0, -0.75], LeftThumb3: [0.10, 0, -0.70],
-        LeftWrist: [0, 0, 0]
+        LeftMiddle1: [-0.128, 0.101, -1.335], LeftMiddle2: [-0.175, 0.158, -1.471], LeftMiddle3: [-0.111, 0.04, -0.688],
+        LeftRing1: [-0.184, 0.191, -1.311], LeftRing2: [-0.309, 0.252, -1.365], LeftRing3: [-0.193, 0.067, -0.664],
+        LeftPinky1: [-0.724, 0.469, -0.853], LeftPinky2: [-0.679, 0.405, -1.054], LeftPinky3: [-0.364, 0.097, -0.515],
+        LeftThumb1: [0.7, 0.9, -0.35], LeftThumb2: [-0.3, -0.1, -0.15], LeftThumb3: [0, 0, -0.9],
+        LeftWrist: [0, 0, 0],
       },
       splay: {
         LeftIndex1: [0, 0.28, 0.05], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
         LeftMiddle1: [0, 0.05, 0.05], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
         LeftRing1: [0, -0.18, 0.05], LeftRing2: [0, 0, 0], LeftRing3: [0, 0, 0],
         LeftPinky1: [0, -0.38, 0.05], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
-        LeftThumb1: [-0.15, 0.55, 0.20], LeftThumb2: [0, 0, 0], LeftThumb3: [0, 0, 0],
-        LeftWrist: [0, 0, 0]
+        LeftThumb1: [-0.15, 0.55, 0.2], LeftThumb2: [0, 0, 0], LeftThumb3: [0, 0, 0],
+        LeftWrist: [0, 0, 0],
       },
       shaka: {
+        LeftIndex1: [0.091, -0.068, -1.293], LeftIndex2: [0.002, -0.002, -1.5], LeftIndex3: [0.002, -0.001, -0.7],
+        LeftMiddle1: [-0.128, 0.101, -1.335], LeftMiddle2: [-0.175, 0.158, -1.471], LeftMiddle3: [-0.111, 0.04, -0.688],
+        LeftRing1: [-0.184, 0.191, -1.311], LeftRing2: [-0.309, 0.252, -1.365], LeftRing3: [-0.193, 0.067, -0.664],
+        LeftPinky1: [0, -0.3, 0.1], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
         LeftThumb1: [-0.25, -0.45, 0.45], LeftThumb2: [0, 0, 0.1], LeftThumb3: [0, 0, 0.1],
-        LeftPinky1: [0, -0.30, 0.1], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
-        LeftIndex1: [0, 0, -1.40], LeftIndex2: [0, 0, -1.55], LeftIndex3: [0, 0, -1.25],
-        LeftMiddle1: [0, 0, -1.40], LeftMiddle2: [0, 0, -1.55], LeftMiddle3: [0, 0, -1.25],
-        LeftRing1: [0, 0, -1.40], LeftRing2: [0, 0, -1.55], LeftRing3: [0, 0, -1.25],
-        LeftWrist: [0, 0, 0.15]
+        LeftWrist: [0, 0, 0.15],
       },
       cup: {
-        LeftIndex1: [0, 0.10, -0.45], LeftIndex2: [0, 0, -0.55], LeftIndex3: [0, 0, -0.35],
-        LeftMiddle1: [0, 0, -0.45], LeftMiddle2: [0, 0, -0.55], LeftMiddle3: [0, 0, -0.35],
-        LeftRing1: [0, -0.10, -0.45], LeftRing2: [0, 0, -0.55], LeftRing3: [0, 0, -0.35],
-        LeftPinky1: [0, -0.20, -0.45], LeftPinky2: [0, 0, -0.55], LeftPinky3: [0, 0, -0.35],
-        LeftThumb1: [0.10, 0.45, -0.25], LeftThumb2: [0, 0, -0.35], LeftThumb3: [0, 0, -0.25],
-        LeftWrist: [0, 0, -0.15]
+        LeftIndex1: [0.041, -0.109, -0.444], LeftIndex2: [0.001, 0, -0.55], LeftIndex3: [0.001, 0, -0.35],
+        LeftMiddle1: [-0.057, 0.013, -0.446], LeftMiddle2: [-0.09, 0.025, -0.541], LeftMiddle3: [-0.059, 0.01, -0.345],
+        LeftRing1: [-0.081, 0.098, -0.435], LeftRing2: [-0.156, 0.042, -0.523], LeftRing3: [-0.102, 0.017, -0.334],
+        LeftPinky1: [-0.277, 0.222, -0.302], LeftPinky2: [-0.312, 0.07, -0.439], LeftPinky3: [-0.202, 0.029, -0.282],
+        LeftThumb1: [0.25, 0.45, -0.15], LeftThumb2: [0, 0, -0.3], LeftThumb3: [0, 0, -0.25],
+        LeftWrist: [0, 0, -0.15],
       },
       flat: {
         LeftIndex1: [0, 0, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
@@ -1416,16 +1557,15 @@
         LeftRing1: [0, 0, 0], LeftRing2: [0, 0, 0], LeftRing3: [0, 0, 0],
         LeftPinky1: [0, 0, 0], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
         LeftThumb1: [0, 0, 0], LeftThumb2: [0, 0, 0], LeftThumb3: [0, 0, 0],
-        LeftWrist: [0, 0, 0], LeftElbow: [0, 0, 0]
+        LeftWrist: [0, 0, 0], LeftElbow: [0, 0, 0],
       },
       neutral: {
-        // Natural resting posture of human hand (mild anatomical curl)
-        LeftIndex1: [0, 0.04, -0.18], LeftIndex2: [0, 0, -0.22], LeftIndex3: [0, 0, -0.14],
-        LeftMiddle1: [0, 0, -0.20], LeftMiddle2: [0, 0, -0.25], LeftMiddle3: [0, 0, -0.16],
-        LeftRing1: [0, -0.04, -0.22], LeftRing2: [0, 0, -0.28], LeftRing3: [0, 0, -0.18],
-        LeftPinky1: [0, -0.08, -0.25], LeftPinky2: [0, 0, -0.30], LeftPinky3: [0, 0, -0.20],
-        LeftThumb1: [0.08, 0.25, -0.15], LeftThumb2: [-0.05, 0, -0.15], LeftThumb3: [0.05, 0, -0.10],
-        LeftWrist: [0, 0, 0], LeftElbow: [0, 0, 0]
+        LeftIndex1: [0.017, -0.042, -0.179], LeftIndex2: [0.001, 0, -0.22], LeftIndex3: [0, 0, -0.14],
+        LeftMiddle1: [-0.026, 0.003, -0.198], LeftMiddle2: [-0.043, 0.005, -0.246], LeftMiddle3: [-0.027, 0.002, -0.158],
+        LeftRing1: [-0.04, 0.044, -0.215], LeftRing2: [-0.082, 0.011, -0.267], LeftRing3: [-0.053, 0.005, -0.172],
+        LeftPinky1: [-0.153, 0.094, -0.185], LeftPinky2: [-0.174, 0.021, -0.242], LeftPinky3: [-0.117, 0.009, -0.162],
+        LeftThumb1: [0.08, 0.25, -0.15], LeftThumb2: [-0.05, 0, -0.15], LeftThumb3: [0.05, 0, -0.1],
+        LeftWrist: [0, 0, 0], LeftElbow: [0, 0, 0],
       }
     };
 
@@ -1747,7 +1887,8 @@
         const numVertices = view.getUint32(offset, true); offset += 4;
         const numIndices = view.getUint32(offset, true); offset += 4;
         const numJoints = view.getUint32(offset, true); offset += 4;
-        // Fix: Header is exactly 40 bytes (magic:4, ver:4, numVerts:4, numIdx:4, numJoints:4, shape:4, expr:4, corr:4, reg:4, flags:4)
+        const numShapeModes = view.getUint32(offset, true); offset += 4;
+        // Header is exactly 40 bytes (magic:4, ver:4, numVerts:4, numIdx:4, numJoints:4, shape:4, expr:4, corr:4, reg:4, flags:4)
         offset = 40;
 
         // 1. Unpack Vertices (40 bytes stride)
@@ -1807,6 +1948,73 @@
           offset += 16;
         }
 
+        // 5. Unpack Shape Directions (numShapeModes * numVertices * 3 floats)
+        const totalShapeFloats = numShapeModes * numVertices * 3;
+        const shapeDirs = new Float32Array(totalShapeFloats);
+        for (let k = 0; k < totalShapeFloats; k++) {
+          shapeDirs[k] = view.getFloat32(offset, true);
+          offset += 4;
+        }
+
+        state.shapeDirs = shapeDirs;
+        state.numShapeModes = numShapeModes;
+        state.basePositions = new Float32Array(positions);
+        state.baseNormals = new Float32Array(normals);
+
+        // Build Hand & Digit Vertex Metadata for fast local morphology
+        const leftHandJointIds = new Set();
+        const digitJointGroups = {
+          thumb: new Set(),
+          index: new Set(),
+          middle: new Set(),
+          ring: new Set(),
+          pinky: new Set(),
+          wrist: new Set()
+        };
+
+        for (let j = 0; j < joints.length; j++) {
+          const n = joints[j].name;
+          if (n.startsWith('Left')) {
+            if (n.includes('Thumb')) { digitJointGroups.thumb.add(j); leftHandJointIds.add(j); }
+            else if (n.includes('Index')) { digitJointGroups.index.add(j); leftHandJointIds.add(j); }
+            else if (n.includes('Middle')) { digitJointGroups.middle.add(j); leftHandJointIds.add(j); }
+            else if (n.includes('Ring')) { digitJointGroups.ring.add(j); leftHandJointIds.add(j); }
+            else if (n.includes('Pinky')) { digitJointGroups.pinky.add(j); leftHandJointIds.add(j); }
+            else if (n.includes('Wrist') || n.includes('Hand')) { digitJointGroups.wrist.add(j); leftHandJointIds.add(j); }
+          }
+        }
+
+        const vertexPartTags = new Uint8Array(numVertices); // 0=none, 1=thumb, 2=index, 3=middle, 4=ring, 5=pinky, 6=wrist
+        const vertexJointWeights = new Float32Array(numVertices);
+
+        for (let i = 0; i < numVertices; i++) {
+          let maxW = 0;
+          let dominantJ = -1;
+          for (let k = 0; k < 4; k++) {
+            const jId = skinIndices[i * 4 + k];
+            const w = skinWeights[i * 4 + k];
+            if (w > maxW && leftHandJointIds.has(jId)) {
+              maxW = w;
+              dominantJ = jId;
+            }
+          }
+          if (dominantJ >= 0 && maxW > 0.05) {
+            vertexJointWeights[i] = maxW;
+            if (digitJointGroups.thumb.has(dominantJ)) vertexPartTags[i] = 1;
+            else if (digitJointGroups.index.has(dominantJ)) vertexPartTags[i] = 2;
+            else if (digitJointGroups.middle.has(dominantJ)) vertexPartTags[i] = 3;
+            else if (digitJointGroups.ring.has(dominantJ)) vertexPartTags[i] = 4;
+            else if (digitJointGroups.pinky.has(dominantJ)) vertexPartTags[i] = 5;
+            else if (digitJointGroups.wrist.has(dominantJ)) vertexPartTags[i] = 6;
+          }
+        }
+
+        state.handVertexMetadata = {
+          vertexPartTags,
+          vertexJointWeights,
+          leftHandJointIds
+        };
+
         // Centering Transformation: Center Left Wrist & Palm at (0, 0, 0)
         // Left wrist rest position is [0.670, 1.337, -0.061]. Hand center ~[0.725, 1.335, -0.06]
         armRootOffset.set(-0.725, -1.335, 0.060);
@@ -1861,6 +2069,10 @@
         skeleton = new THREE.Skeleton(bones);
         skinnedMesh.bind(skeleton);
         scene.add(skinnedMesh);
+
+        state.geometry = geometry;
+        evaluateAndApplyHandMorph(state.morphology);
+        updateMorphUI();
 
         // Build 3D Joint Nodes and Interactive Gizmo
         initJointVisualizers();
@@ -2257,6 +2469,315 @@
         document.getElementById('val-spread-all').textContent = `${e.target.value}%`;
         spreadAllFingers(factor);
       });
+
+      // Hand Morphology Sliders
+      const lenSlider = document.getElementById('slider-morph-length');
+      const thkSlider = document.getElementById('slider-morph-thickness');
+      const plmSlider = document.getElementById('slider-morph-palm');
+      const musSlider = document.getElementById('slider-morph-muscularity');
+      const dimSlider = document.getElementById('slider-morph-dimorphism');
+      const sclSlider = document.getElementById('slider-morph-scale');
+
+      if (lenSlider) {
+        lenSlider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value) / 100;
+          state.morphology.fingerLengthRatio = val;
+          document.getElementById('val-morph-length').textContent = `${val > 0 ? '+' : ''}${Math.round(val * 100)}%`;
+          evaluateAndApplyHandMorph(state.morphology);
+        });
+      }
+      if (thkSlider) {
+        thkSlider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value) / 100;
+          state.morphology.fingerThickness = val;
+          document.getElementById('val-morph-thickness').textContent = `${val > 0 ? '+' : ''}${Math.round(val * 100)}%`;
+          evaluateAndApplyHandMorph(state.morphology);
+        });
+      }
+      if (plmSlider) {
+        plmSlider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value) / 100;
+          state.morphology.palmWidth = val;
+          document.getElementById('val-morph-palm').textContent = `${val > 0 ? '+' : ''}${Math.round(val * 100)}%`;
+          evaluateAndApplyHandMorph(state.morphology);
+        });
+      }
+      if (musSlider) {
+        musSlider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value) / 100;
+          state.morphology.muscularity = val;
+          document.getElementById('val-morph-muscularity').textContent = `${val > 0 ? '+' : ''}${Math.round(val * 100)}%`;
+          evaluateAndApplyHandMorph(state.morphology);
+        });
+      }
+      if (dimSlider) {
+        dimSlider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value) / 100;
+          state.morphology.dimorphism = val;
+          document.getElementById('val-morph-dimorphism').textContent = `${val > 0 ? '+' : ''}${Math.round(val * 100)}%`;
+          evaluateAndApplyHandMorph(state.morphology);
+        });
+      }
+      if (sclSlider) {
+        sclSlider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value) / 100;
+          state.morphology.handScale = val;
+          document.getElementById('val-morph-scale').textContent = `${val.toFixed(2)}×`;
+          evaluateAndApplyHandMorph(state.morphology);
+        });
+      }
+
+      // Reset Morph Button
+      const btnResetMorph = document.getElementById('btn-reset-morph');
+      if (btnResetMorph) {
+        btnResetMorph.addEventListener('click', () => {
+          applyMorphology(MORPHOLOGY_PRESETS.neutral, true);
+          document.querySelectorAll('.morph-chip').forEach(c => c.classList.toggle('active', c.getAttribute('data-morph') === 'neutral'));
+          showToast('Hand morphology reset to baseline', '🧬');
+        });
+      }
+
+      // Morphology Preset Chips
+      document.querySelectorAll('.morph-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const mKey = chip.getAttribute('data-morph');
+          const preset = MORPHOLOGY_PRESETS[mKey];
+          if (!preset) return;
+          document.querySelectorAll('.morph-chip').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          applyMorphology(preset, true);
+          showToast(`Morph: ${preset.label}`, '🧬');
+        });
+      });
+    }
+
+    /* =====================================================================
+     * SB-Human Morphological Shape Engine (8-Mode PCA + Differential Girth)
+     * ===================================================================== */
+
+    function evaluateAndApplyHandMorph(params) {
+      if (!state.geometry || !state.basePositions) return;
+
+      const fingerLengthRatio = params.fingerLengthRatio !== undefined ? params.fingerLengthRatio : state.morphology.fingerLengthRatio;
+      const fingerThickness = params.fingerThickness !== undefined ? params.fingerThickness : state.morphology.fingerThickness;
+      const palmWidth = params.palmWidth !== undefined ? params.palmWidth : state.morphology.palmWidth;
+      const handScale = params.handScale !== undefined ? params.handScale : state.morphology.handScale;
+      const muscularity = params.muscularity !== undefined ? params.muscularity : state.morphology.muscularity;
+      const dimorphism = params.dimorphism !== undefined ? params.dimorphism : state.morphology.dimorphism;
+      const betas = params.betas || state.currentBetas;
+
+      const numVerts = state.basePositions.length / 3;
+      const posAttr = state.geometry.attributes.position;
+      const posArray = posAttr.array;
+
+      // 1. Determine active PCA blendshape betas
+      const b = betas ? [...betas] : [
+        (handScale - 1.0) * 3.0,
+        muscularity * 1.5,
+        fingerThickness * 1.8,
+        dimorphism * 1.8,
+        0, 0, 0, 0
+      ];
+
+      // 2. Start from basePositions
+      for (let i = 0; i < state.basePositions.length; i++) {
+        posArray[i] = state.basePositions[i];
+      }
+
+      // 3. Apply PCA shape deformation if shapeDirs are loaded
+      if (state.shapeDirs && state.numShapeModes > 0) {
+        const modes = Math.min(state.numShapeModes, b.length);
+        for (let m = 0; m < modes; m++) {
+          const val = b[m];
+          if (Math.abs(val) < 1e-4) continue;
+          const modeOffset = m * numVerts * 3;
+          for (let i = 0; i < state.basePositions.length; i++) {
+            posArray[i] += val * state.shapeDirs[modeOffset + i];
+          }
+        }
+      }
+
+      // 4. Analytical local finger and palm morphology
+      const meta = state.handVertexMetadata;
+      if (meta) {
+        const digitAxes = {
+          1: { x0: 0.710, y0: 1.319, z0: -0.015 }, // thumb
+          2: { x0: 0.772, y0: 1.329, z0: -0.039 }, // index
+          3: { x0: 0.779, y0: 1.331, z0: -0.068 }, // middle
+          4: { x0: 0.767, y0: 1.328, z0: -0.093 }, // ring
+          5: { x0: 0.754, y0: 1.322, z0: -0.116 }  // pinky
+        };
+        const wristPos = [0.670, 1.337, -0.061];
+
+        for (let i = 0; i < numVerts; i++) {
+          const tag = meta.vertexPartTags[i];
+          const w = meta.vertexJointWeights[i];
+          if (tag === 0 || w < 0.05) continue;
+
+          const idx = i * 3;
+          const x = posArray[idx];
+          const y = posArray[idx + 1];
+          const z = posArray[idx + 2];
+
+          let dx = 0, dy = 0, dz = 0;
+
+          // A. Finger Girth / Thickness (radial expansion around digit axis)
+          if (tag >= 1 && tag <= 5 && Math.abs(fingerThickness) > 0.01) {
+            const ax = digitAxes[tag];
+            const weightFactor = Math.min(1.0, w * 1.2);
+            dy += (y - ax.y0) * fingerThickness * 0.28 * weightFactor;
+            dz += (z - ax.z0) * fingerThickness * 0.28 * weightFactor;
+          }
+
+          // B. Finger Length (longitudinal extension along X from knuckle)
+          if (tag >= 1 && tag <= 5 && Math.abs(fingerLengthRatio) > 0.01) {
+            const ax = digitAxes[tag];
+            if (x > ax.x0) {
+              const distFromKnuckle = x - ax.x0;
+              dx += distFromKnuckle * fingerLengthRatio * 0.35 * w;
+            }
+          }
+
+          // C. Palm Breadth (lateral spread relative to middle ray)
+          if (Math.abs(palmWidth) > 0.01) {
+            const zRelMiddle = z - (-0.068);
+            dz += zRelMiddle * palmWidth * 0.22 * w;
+          }
+
+          // D. Dorsal Extensor Tendon Prominence / Muscularity
+          if (muscularity > 0.01 && y > 1.326 && x < 0.780 && x > 0.670) {
+            for (let d = 2; d <= 4; d++) {
+              const axZ = digitAxes[d].z0;
+              const distZ = Math.abs(z - axZ);
+              if (distZ < 0.012) {
+                const ridge = Math.exp(- (distZ * distZ) / 0.00004);
+                dy += ridge * muscularity * 0.0025 * w;
+              }
+            }
+          }
+
+          // E. Global Hand Scale relative to wrist
+          if (Math.abs(handScale - 1.0) > 0.01) {
+            const s = handScale - 1.0;
+            dx += (x - wristPos[0]) * s * w;
+            dy += (y - wristPos[1]) * s * w;
+            dz += (z - wristPos[2]) * s * w;
+          }
+
+          posArray[idx] += dx;
+          posArray[idx + 1] += dy;
+          posArray[idx + 2] += dz;
+        }
+      }
+
+      posAttr.needsUpdate = true;
+      state.geometry.computeVertexNormals();
+      state.geometry.attributes.normal.needsUpdate = true;
+    }
+
+    function applyMorphology(targetParams, animate = true) {
+      if (!targetParams) return;
+
+      const resolved = {
+        fingerLengthRatio: targetParams.fingerLengthRatio !== undefined ? targetParams.fingerLengthRatio : state.morphology.fingerLengthRatio,
+        fingerThickness: targetParams.fingerThickness !== undefined ? targetParams.fingerThickness : state.morphology.fingerThickness,
+        palmWidth: targetParams.palmWidth !== undefined ? targetParams.palmWidth : state.morphology.palmWidth,
+        handScale: targetParams.handScale !== undefined ? targetParams.handScale : state.morphology.handScale,
+        muscularity: targetParams.muscularity !== undefined ? targetParams.muscularity : state.morphology.muscularity,
+        dimorphism: targetParams.dimorphism !== undefined ? targetParams.dimorphism : state.morphology.dimorphism,
+        betas: targetParams.betas ? [...targetParams.betas] : null
+      };
+
+      if (!animate) {
+        Object.assign(state.morphology, resolved);
+        if (resolved.betas) state.currentBetas = [...resolved.betas];
+        evaluateAndApplyHandMorph(state.morphology);
+        updateMorphUI();
+        return;
+      }
+
+      state.startMorph = { ...state.morphology };
+      state.targetMorph = resolved;
+      state.morphStartTime = performance.now();
+      state.morphProgress = 0.0;
+      state.morphDuration = 350;
+    }
+
+    function updateMorphLerp() {
+      if (state.morphProgress >= 1.0 || !state.startMorph || !state.targetMorph) return;
+
+      const elapsed = performance.now() - state.morphStartTime;
+      let t = Math.min(1.0, elapsed / state.morphDuration);
+      // Smooth sinusoidal cubic ease
+      const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      state.morphProgress = t;
+
+      const current = {
+        fingerLengthRatio: state.startMorph.fingerLengthRatio + (state.targetMorph.fingerLengthRatio - state.startMorph.fingerLengthRatio) * ease,
+        fingerThickness: state.startMorph.fingerThickness + (state.targetMorph.fingerThickness - state.startMorph.fingerThickness) * ease,
+        palmWidth: state.startMorph.palmWidth + (state.targetMorph.palmWidth - state.startMorph.palmWidth) * ease,
+        handScale: state.startMorph.handScale + (state.targetMorph.handScale - state.startMorph.handScale) * ease,
+        muscularity: state.startMorph.muscularity + (state.targetMorph.muscularity - state.startMorph.muscularity) * ease,
+        dimorphism: state.startMorph.dimorphism + (state.targetMorph.dimorphism - state.startMorph.dimorphism) * ease,
+      };
+
+      if (state.targetMorph.betas && state.currentBetas) {
+        const curB = [];
+        for (let k = 0; k < 8; k++) {
+          const sb = state.currentBetas[k] || 0;
+          const tb = state.targetMorph.betas[k] || 0;
+          curB.push(sb + (tb - sb) * ease);
+        }
+        current.betas = curB;
+      }
+
+      Object.assign(state.morphology, current);
+      evaluateAndApplyHandMorph(state.morphology);
+      updateMorphUI();
+
+      if (t >= 1.0 && state.targetMorph.betas) {
+        state.currentBetas = [...state.targetMorph.betas];
+      }
+    }
+
+    function updateMorphUI() {
+      const lenSlider = document.getElementById('slider-morph-length');
+      const thkSlider = document.getElementById('slider-morph-thickness');
+      const plmSlider = document.getElementById('slider-morph-palm');
+      const musSlider = document.getElementById('slider-morph-muscularity');
+      const dimSlider = document.getElementById('slider-morph-dimorphism');
+      const sclSlider = document.getElementById('slider-morph-scale');
+
+      if (lenSlider) {
+        lenSlider.value = Math.round(state.morphology.fingerLengthRatio * 100);
+        const el = document.getElementById('val-morph-length');
+        if (el) el.textContent = `${lenSlider.value > 0 ? '+' : ''}${lenSlider.value}%`;
+      }
+      if (thkSlider) {
+        thkSlider.value = Math.round(state.morphology.fingerThickness * 100);
+        const el = document.getElementById('val-morph-thickness');
+        if (el) el.textContent = `${thkSlider.value > 0 ? '+' : ''}${thkSlider.value}%`;
+      }
+      if (plmSlider) {
+        plmSlider.value = Math.round(state.morphology.palmWidth * 100);
+        const el = document.getElementById('val-morph-palm');
+        if (el) el.textContent = `${plmSlider.value > 0 ? '+' : ''}${plmSlider.value}%`;
+      }
+      if (musSlider) {
+        musSlider.value = Math.round(state.morphology.muscularity * 100);
+        const el = document.getElementById('val-morph-muscularity');
+        if (el) el.textContent = `${musSlider.value > 0 ? '+' : ''}${musSlider.value}%`;
+      }
+      if (dimSlider) {
+        dimSlider.value = Math.round(state.morphology.dimorphism * 100);
+        const el = document.getElementById('val-morph-dimorphism');
+        if (el) el.textContent = `${dimSlider.value > 0 ? '+' : ''}${dimSlider.value}%`;
+      }
+      if (sclSlider) {
+        sclSlider.value = Math.round(state.morphology.handScale * 100);
+        const el = document.getElementById('val-morph-scale');
+        if (el) el.textContent = `${(state.morphology.handScale).toFixed(2)}×`;
+      }
     }
 
     function setJointAxisRotation(jointName, axis, angleRad) {
@@ -2296,28 +2817,70 @@
       }
     }
 
+    function getAnatomicalEuler(jointName, flexRad, splayRad = 0, twistRad = 0) {
+      const m = jointName.match(/Left(Thumb|Index|Middle|Ring|Pinky)(\d)/);
+      if (!m) return [0, 0, 0];
+      const d = m[1];
+      const lvl = parseInt(m[2]);
+      const curPos = restPositions.get(jointName);
+      if (!curPos) return [0, 0, -flexRad];
+      let nextPos = (lvl < 3) ? restPositions.get(`Left${d}${lvl+1}`) : null;
+      let dir;
+      if (nextPos) {
+        dir = new THREE.Vector3(nextPos[0] - curPos[0], 0, nextPos[2] - curPos[2]).normalize();
+      } else {
+        const prevPos = restPositions.get(`Left${d}${lvl-1}`);
+        if (prevPos) {
+          dir = new THREE.Vector3(curPos[0] - prevPos[0], 0, curPos[2] - prevPos[2]).normalize();
+        } else {
+          dir = new THREE.Vector3(1, 0, 0);
+        }
+      }
+      const longAxis = dir.clone();
+      const vertAxis = new THREE.Vector3(0, 1, 0);
+      const hingeAxis = new THREE.Vector3().crossVectors(vertAxis, longAxis).normalize();
+
+      const qHinge = new THREE.Quaternion().setFromAxisAngle(hingeAxis, flexRad);
+      const qSplay = new THREE.Quaternion().setFromAxisAngle(vertAxis, splayRad);
+      const qTwist = new THREE.Quaternion().setFromAxisAngle(longAxis, twistRad);
+
+      const qTotal = new THREE.Quaternion().multiply(qSplay).multiply(qHinge).multiply(qTwist);
+      const e = new THREE.Euler().setFromQuaternion(qTotal, 'XYZ');
+      return [+e.x.toFixed(3), +e.y.toFixed(3), +e.z.toFixed(3)];
+    }
+
     function curlAllFingers(factor) {
       state.lerpProgress = 1.0;
-      const digits = ['Index', 'Middle', 'Ring', 'Pinky'];
-      digits.forEach(d => {
-        setJointAxisRotation(`Left${d}1`, 'z', -factor * 1.35);
-        setJointAxisRotation(`Left${d}2`, 'z', -factor * 1.55);
-        setJointAxisRotation(`Left${d}3`, 'z', -factor * 1.25);
-      });
-      setJointAxisRotation('LeftThumb1', 'y', factor * 0.95);
-      setJointAxisRotation('LeftThumb1', 'z', factor * 0.35);
-      setJointAxisRotation('LeftThumb2', 'z', -factor * 0.75);
-      setJointAxisRotation('LeftThumb3', 'z', -factor * 0.80);
+      // Index
+      setJointRotation('LeftIndex1', getAnatomicalEuler('LeftIndex1', factor * 1.30));
+      setJointRotation('LeftIndex2', getAnatomicalEuler('LeftIndex2', factor * 1.50));
+      setJointRotation('LeftIndex3', getAnatomicalEuler('LeftIndex3', factor * 0.70));
+      // Middle
+      setJointRotation('LeftMiddle1', getAnatomicalEuler('LeftMiddle1', factor * 1.35));
+      setJointRotation('LeftMiddle2', getAnatomicalEuler('LeftMiddle2', factor * 1.50));
+      setJointRotation('LeftMiddle3', getAnatomicalEuler('LeftMiddle3', factor * 0.70));
+      // Ring
+      setJointRotation('LeftRing1', getAnatomicalEuler('LeftRing1', factor * 1.35, factor * 0.05));
+      setJointRotation('LeftRing2', getAnatomicalEuler('LeftRing2', factor * 1.45));
+      setJointRotation('LeftRing3', getAnatomicalEuler('LeftRing3', factor * 0.70));
+      // Pinky
+      setJointRotation('LeftPinky1', getAnatomicalEuler('LeftPinky1', factor * 1.30, factor * 0.14));
+      setJointRotation('LeftPinky2', getAnatomicalEuler('LeftPinky2', factor * 1.40));
+      setJointRotation('LeftPinky3', getAnatomicalEuler('LeftPinky3', factor * 0.65));
+      // Thumb: wraps comfortably across index/middle proximal phalanges
+      setJointRotation('LeftThumb1', [factor * 0.70, factor * 0.90, -factor * 0.35]);
+      setJointRotation('LeftThumb2', [-factor * 0.30, -factor * 0.10, -factor * 0.15]);
+      setJointRotation('LeftThumb3', [0.0, 0.0, -factor * 0.90]);
       selectJoint(state.selectedJointName);
     }
 
     function spreadAllFingers(factor) {
       state.lerpProgress = 1.0;
-      setJointAxisRotation('LeftIndex1', 'y', factor * 0.28);
-      setJointAxisRotation('LeftMiddle1', 'y', factor * 0.05);
-      setJointAxisRotation('LeftRing1', 'y', -factor * 0.18);
-      setJointAxisRotation('LeftPinky1', 'y', -factor * 0.38);
-      setJointAxisRotation('LeftThumb1', 'y', factor * 0.55);
+      setJointRotation('LeftIndex1', getAnatomicalEuler('LeftIndex1', 0, factor * 0.28));
+      setJointRotation('LeftMiddle1', getAnatomicalEuler('LeftMiddle1', 0, factor * 0.05));
+      setJointRotation('LeftRing1', getAnatomicalEuler('LeftRing1', 0, -factor * 0.18));
+      setJointRotation('LeftPinky1', getAnatomicalEuler('LeftPinky1', 0, -factor * 0.38));
+      setJointRotation('LeftThumb1', [-factor * 0.15, factor * 0.55, factor * 0.20]);
       selectJoint(state.selectedJointName);
     }
 
@@ -2809,32 +3372,32 @@
       } else if (targetDigit === 'Elbow') {
         targetPose['LeftElbow'] = [effectiveAngle, 0, 0];
       } else if (targetDigit === 'Thumb') {
-        targetPose['LeftThumb1'] = [0, effectiveAngle * 0.6, effectiveAngle * 0.3];
-        targetPose['LeftThumb2'] = [0, 0, -effectiveAngle * 0.7];
-        targetPose['LeftThumb3'] = [0, 0, -effectiveAngle * 0.8];
+        targetPose['LeftThumb1'] = [effectiveAngle * 0.50, effectiveAngle * 0.65, -effectiveAngle * 0.25];
+        targetPose['LeftThumb2'] = [-effectiveAngle * 0.20, -effectiveAngle * 0.10, -effectiveAngle * 0.40];
+        targetPose['LeftThumb3'] = [0, 0, -effectiveAngle * 0.70];
       } else if (targetDigit) {
         // Check for specific joint level
         if (/pip|proximal|mid/i.test(prompt)) {
-          targetPose[`Left${targetDigit}2`] = [0, 0, -effectiveAngle];
+          targetPose[`Left${targetDigit}2`] = getAnatomicalEuler(`Left${targetDigit}2`, effectiveAngle * 1.20);
         } else if (/dip|distal|tip/i.test(prompt)) {
-          targetPose[`Left${targetDigit}3`] = [0, 0, -effectiveAngle];
+          targetPose[`Left${targetDigit}3`] = getAnatomicalEuler(`Left${targetDigit}3`, effectiveAngle * 0.60);
         } else if (/mcp|knuckle|base/i.test(prompt)) {
-          targetPose[`Left${targetDigit}1`] = [0, 0, -effectiveAngle];
+          targetPose[`Left${targetDigit}1`] = getAnatomicalEuler(`Left${targetDigit}1`, effectiveAngle * 1.00);
         } else {
           // Entire finger curls proportionally
-          targetPose[`Left${targetDigit}1`] = [0, 0, -effectiveAngle * 0.7];
-          targetPose[`Left${targetDigit}2`] = [0, 0, -effectiveAngle * 1.0];
-          targetPose[`Left${targetDigit}3`] = [0, 0, -effectiveAngle * 0.8];
+          targetPose[`Left${targetDigit}1`] = getAnatomicalEuler(`Left${targetDigit}1`, effectiveAngle * 0.95);
+          targetPose[`Left${targetDigit}2`] = getAnatomicalEuler(`Left${targetDigit}2`, effectiveAngle * 1.15);
+          targetPose[`Left${targetDigit}3`] = getAnatomicalEuler(`Left${targetDigit}3`, effectiveAngle * 0.60);
         }
       } else if (/all\s*fingers|hand/i.test(prompt)) {
         ['Index', 'Middle', 'Ring', 'Pinky'].forEach(d => {
-          targetPose[`Left${d}1`] = [0, 0, -effectiveAngle * 0.7];
-          targetPose[`Left${d}2`] = [0, 0, -effectiveAngle * 1.0];
-          targetPose[`Left${d}3`] = [0, 0, -effectiveAngle * 0.8];
+          targetPose[`Left${d}1`] = getAnatomicalEuler(`Left${d}1`, effectiveAngle * 0.95);
+          targetPose[`Left${d}2`] = getAnatomicalEuler(`Left${d}2`, effectiveAngle * 1.15);
+          targetPose[`Left${d}3`] = getAnatomicalEuler(`Left${d}3`, effectiveAngle * 0.60);
         });
-        targetPose['LeftThumb1'] = [0, effectiveAngle * 0.6, effectiveAngle * 0.3];
-        targetPose['LeftThumb2'] = [0, 0, -effectiveAngle * 0.7];
-        targetPose['LeftThumb3'] = [0, 0, -effectiveAngle * 0.8];
+        targetPose['LeftThumb1'] = [effectiveAngle * 0.50, effectiveAngle * 0.65, -effectiveAngle * 0.25];
+        targetPose['LeftThumb2'] = [-effectiveAngle * 0.20, -effectiveAngle * 0.10, -effectiveAngle * 0.40];
+        targetPose['LeftThumb3'] = [0, 0, -effectiveAngle * 0.70];
       }
 
       lerpToPose(targetPose);
@@ -2989,14 +3552,50 @@
         });
       }
 
-      // Quick-test Reference Pose Cards
+      // Quick-test Reference Pose Cards with Anatomical Morphology Profiles
       const REF_CARD_DATA = {
-        peace: { label: 'Peace Sign (V)', emoji: '✌️', prompt: 'peace sign' },
-        fist: { label: 'Clenched Fist', emoji: '✊', prompt: 'clenched fist' },
-        thumbs_up: { label: 'Thumbs Up', emoji: '👍', prompt: 'thumbs up' },
-        pinch: { label: 'Pinch Precision', emoji: '🤏', prompt: 'pinch thumb and index tips' },
-        point: { label: 'Index Point', emoji: '👉', prompt: 'pointing index finger' },
-        shaka: { label: 'Shaka / Hang Loose', emoji: '🤙', prompt: 'shaka hang loose hand' }
+        peace: {
+          label: 'Peace Sign (V)', emoji: '✌️', prompt: 'peace sign',
+          morphology: {
+            fingerLengthRatio: 0.45, fingerThickness: -0.35, palmWidth: -0.20, handScale: 0.95, muscularity: -0.15, dimorphism: -0.6,
+            summary: 'Slender elongated digits with graceful contours'
+          }
+        },
+        fist: {
+          label: 'Clenched Fist', emoji: '✊', prompt: 'clenched fist',
+          morphology: {
+            fingerLengthRatio: -0.15, fingerThickness: 0.45, palmWidth: 0.35, handScale: 1.06, muscularity: 0.70, dimorphism: 0.6,
+            summary: 'Thick heavy fingers with wide knuckles and strong tendons'
+          }
+        },
+        thumbs_up: {
+          label: 'Thumbs Up', emoji: '👍', prompt: 'thumbs up',
+          morphology: {
+            fingerLengthRatio: 0.10, fingerThickness: 0.15, palmWidth: 0.10, handScale: 1.02, muscularity: 0.45, dimorphism: 0.2,
+            summary: 'Athletic hand with prominent extensor tendon definition'
+          }
+        },
+        pinch: {
+          label: 'Pinch Precision', emoji: '🤏', prompt: 'pinch thumb and index tips',
+          morphology: {
+            fingerLengthRatio: 0.35, fingerThickness: -0.40, palmWidth: -0.15, handScale: 0.94, muscularity: -0.20, dimorphism: -0.5,
+            summary: 'Delicate tapered fingertips for precision gripping'
+          }
+        },
+        point: {
+          label: 'Index Point', emoji: '👉', prompt: 'pointing index finger',
+          morphology: {
+            fingerLengthRatio: 0.25, fingerThickness: -0.15, palmWidth: 0.0, handScale: 1.0, muscularity: 0.25, dimorphism: 0.0,
+            summary: 'Long straight index finger with balanced proportions'
+          }
+        },
+        shaka: {
+          label: 'Shaka / Hang Loose', emoji: '🤙', prompt: 'shaka hang loose hand',
+          morphology: {
+            fingerLengthRatio: 0.15, fingerThickness: 0.10, palmWidth: 0.25, handScale: 1.04, muscularity: 0.20, dimorphism: 0.1,
+            summary: 'Wide relaxed palm with extended lateral digits'
+          }
+        }
       };
 
       document.querySelectorAll('.ref-pose-card').forEach(card => {
@@ -3007,6 +3606,7 @@
 
           const refImg = createReferencePoseImage(pKey, meta.label, meta.emoji);
           refImg._poseKey = pKey;
+          refImg._morphology = meta.morphology;
           refImg.onload = () => {
             renderAttachedImageChip(refImg);
             promptInput.value = meta.prompt;
@@ -3575,6 +4175,22 @@
           setSkinModality('melanin');
         }
 
+        // Auto-morph hand morphology if estimated from image or reference card
+        if (data.morphology) {
+          applyMorphology({
+            fingerLengthRatio: data.morphology.fingerLengthRatio !== undefined ? data.morphology.fingerLengthRatio : 0.0,
+            fingerThickness: data.morphology.fingerThickness !== undefined ? data.morphology.fingerThickness : 0.0,
+            palmWidth: data.morphology.palmWidth !== undefined ? data.morphology.palmWidth : 0.0,
+            handScale: data.morphology.handScale !== undefined ? data.morphology.handScale : 1.0,
+            muscularity: data.morphology.muscularity !== undefined ? data.morphology.muscularity : 0.0,
+            dimorphism: data.morphology.dimorphism !== undefined ? data.morphology.dimorphism : 0.0,
+            betas: data.morphology.betas || null
+          }, true);
+          showToast(`Hand Morphed: ${data.morphology.summary || 'Proportions & Girth Matched'}`, '🧬', 4000);
+        } else if (img && img._morphology) {
+          applyMorphology(img._morphology, true);
+        }
+
       } catch (err) {
         console.error('[Image Pose Error]', err);
         const promptFallback = (promptText || '').toLowerCase();
@@ -3582,6 +4198,9 @@
         ['peace', 'fist', 'thumbs_up', 'pinch', 'ok', 'rock', 'point', 'splay', 'shaka', 'cup', 'flat'].forEach(p => {
           if (promptFallback.includes(p) || (img._poseKey && img._poseKey === p)) {
             applyPresetPose(p);
+            if (img && img._morphology) {
+              applyMorphology(img._morphology, true);
+            }
             showToast(`Offline Fallback: applied semantic pose '${p}'`, 'ℹ️');
             fallbackFound = true;
           }
@@ -3632,6 +4251,9 @@
 
       // Smooth kinematic lerp
       updatePoseLerp();
+
+      // Smooth hand morphology lerp
+      updateMorphLerp();
 
       // Cyber Bus Uniform Pulse
       if (materials.cyber && materials.cyber.userData.shader && state.skin.cyberPulse) {
