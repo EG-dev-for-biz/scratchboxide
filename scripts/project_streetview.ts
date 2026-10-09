@@ -22,7 +22,7 @@ async function main() {
     let size = 640;
     let fov = 100;
     let fillMode: 'seamless' | 'green' | 'black' = 'seamless';
-    let apiKey = process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+    let apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || '';
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--panoId' || args[i] === '--panoid') panoId = args[++i];

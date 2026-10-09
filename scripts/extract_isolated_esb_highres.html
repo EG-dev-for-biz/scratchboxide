@@ -101,8 +101,9 @@
         statusEl.innerText = "Connecting to Google 3D Tiles API with errorTarget = 0.5 (Maximum Quality)...";
 
         const tiles = new TilesRenderer();
+        const apiToken = window.__GOOGLE_MAPS_API_KEY__ || new URLSearchParams(window.location.search).get('key') || '';
         const auth = new GoogleCloudAuthPlugin({
-            apiToken: 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4',
+            apiToken: apiToken,
             autoRefreshToken: true,
             useRecommendedSettings: false
         });

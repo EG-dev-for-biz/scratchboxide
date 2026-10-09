@@ -1059,7 +1059,7 @@
         </div>
         <div class="slider-group">
           <div class="slider-row">
-            <span class="slider-label" style="color:var(--rose);">Flexion (X):</span>
+            <span class="slider-label" style="color:var(--rose);">Flexion (Z):</span>
             <input type="range" class="slider-control" id="slider-active-flexion" min="-20" max="95" value="0" step="1">
             <span class="slider-value" id="val-active-flexion">0°</span>
           </div>
@@ -1069,7 +1069,7 @@
             <span class="slider-value" id="val-active-splay">0°</span>
           </div>
           <div class="slider-row">
-            <span class="slider-label" style="color:var(--cyan);">Twist (Z):</span>
+            <span class="slider-label" style="color:var(--cyan);">Twist (X):</span>
             <input type="range" class="slider-control" id="slider-active-twist" min="-30" max="30" value="0" step="1">
             <span class="slider-value" id="val-active-twist">0°</span>
           </div>
@@ -1270,29 +1270,33 @@
     const JOINT_MAP = new Map();
     HAND_JOINTS.forEach(j => JOINT_MAP.set(j.name, j));
 
-    // Physiological Range of Motion (ROM) limits in radians [minFlex, maxFlex, minSplay, maxSplay, minTwist, maxTwist]
+    // Physiological Range of Motion (ROM) limits in radians [minTwistX, maxTwistX, minSplayY, maxSplayY, minFlexZ, maxFlexZ]
+    // In SB-Human canonical rig (arm extending along +X, palm facing -Y):
+    // - Flexion / curl into palm is negative rotation on Z (e.g. -1.3 to -1.6 rad)
+    // - Splay / abduction is rotation on Y (positive = splay towards thumb, negative = splay towards pinky)
+    // - Twist / pronation is rotation on X along the bone shaft
     const ROM_LIMITS = {
-      LeftElbow:  { minX: 0, maxX: Math.PI * 0.75, minY: -0.2, maxY: 0.2, minZ: -Math.PI * 0.45, maxZ: Math.PI * 0.45 },
-      LeftWrist:  { minX: -Math.PI * 0.4, maxX: Math.PI * 0.4, minY: -Math.PI * 0.25, maxY: Math.PI * 0.25, minZ: -Math.PI * 0.45, maxZ: Math.PI * 0.45 },
-      // Knuckles (MCP)
-      LeftIndex1:  { minX: -0.25, maxX: 1.55, minY: -0.4, maxY: 0.4, minZ: -0.15, maxZ: 0.15 },
-      LeftMiddle1: { minX: -0.25, maxX: 1.55, minY: -0.25, maxY: 0.25, minZ: -0.15, maxZ: 0.15 },
-      LeftRing1:   { minX: -0.25, maxX: 1.55, minY: -0.3, maxY: 0.3, minZ: -0.15, maxZ: 0.15 },
-      LeftPinky1:  { minX: -0.25, maxX: 1.55, minY: -0.45, maxY: 0.45, minZ: -0.15, maxZ: 0.15 },
-      // PIP (Interphalangeal - Hinge)
-      LeftIndex2:  { minX: -0.05, maxX: 1.75, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
-      LeftMiddle2: { minX: -0.05, maxX: 1.75, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
-      LeftRing2:   { minX: -0.05, maxX: 1.75, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
-      LeftPinky2:  { minX: -0.05, maxX: 1.75, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
-      // DIP (Distal - Hinge)
-      LeftIndex3:  { minX: -0.05, maxX: 1.55, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
-      LeftMiddle3: { minX: -0.05, maxX: 1.55, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
-      LeftRing3:   { minX: -0.05, maxX: 1.55, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
-      LeftPinky3:  { minX: -0.05, maxX: 1.55, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 },
-      // Thumb
-      LeftThumb1:  { minX: -0.5, maxX: 0.9, minY: -0.7, maxY: 0.7, minZ: -0.5, maxZ: 0.5 },
-      LeftThumb2:  { minX: -0.2, maxX: 1.2, minY: -0.2, maxY: 0.2, minZ: -0.2, maxZ: 0.2 },
-      LeftThumb3:  { minX: -0.1, maxX: 1.5, minY: 0.0, maxY: 0.0, minZ: 0.0, maxZ: 0.0 }
+      LeftElbow:  { minX: -Math.PI * 0.75, maxX: Math.PI * 0.75, minY: -0.15, maxY: 0.15, minZ: -Math.PI * 0.75, maxZ: 0.15 },
+      LeftWrist:  { minX: -Math.PI * 0.45, maxX: Math.PI * 0.45, minY: -Math.PI * 0.25, maxY: Math.PI * 0.25, minZ: -Math.PI * 0.45, maxZ: Math.PI * 0.45 },
+      // Knuckles (MCP - Biaxial Condyloid)
+      LeftIndex1:  { minX: -0.35, maxX: 0.35, minY: -0.45, maxY: 0.45, minZ: -1.75, maxZ: 0.35 },
+      LeftMiddle1: { minX: -0.25, maxX: 0.25, minY: -0.25, maxY: 0.25, minZ: -1.75, maxZ: 0.35 },
+      LeftRing1:   { minX: -0.30, maxX: 0.30, minY: -0.35, maxY: 0.35, minZ: -1.75, maxZ: 0.35 },
+      LeftPinky1:  { minX: -0.35, maxX: 0.35, minY: -0.50, maxY: 0.50, minZ: -1.75, maxZ: 0.35 },
+      // PIP (Interphalangeal - 1-DOF Hinge)
+      LeftIndex2:  { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.85, maxZ: 0.05 },
+      LeftMiddle2: { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.85, maxZ: 0.05 },
+      LeftRing2:   { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.85, maxZ: 0.05 },
+      LeftPinky2:  { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.85, maxZ: 0.05 },
+      // DIP (Distal Interphalangeal - 1-DOF Hinge)
+      LeftIndex3:  { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.65, maxZ: 0.05 },
+      LeftMiddle3: { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.65, maxZ: 0.05 },
+      LeftRing3:   { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.65, maxZ: 0.05 },
+      LeftPinky3:  { minX: 0.0, maxX: 0.0, minY: 0.0, maxY: 0.0, minZ: -1.65, maxZ: 0.05 },
+      // Thumb Digits
+      LeftThumb1:  { minX: -0.60, maxX: 0.60, minY: -0.80, maxY: 1.20, minZ: -0.80, maxZ: 0.80 },
+      LeftThumb2:  { minX: -0.30, maxX: 0.30, minY: -0.30, maxY: 0.30, minZ: -1.25, maxZ: 0.30 },
+      LeftThumb3:  { minX: -0.20, maxX: 0.20, minY: -0.10, maxY: 0.10, minZ: -1.55, maxZ: 0.20 }
     };
 
     // Global Studio State
@@ -1324,87 +1328,87 @@
       lerpStartTime: 0
     };
 
-    // Pre-calculated Holistic Gesture Presets
+    // Pre-calculated Holistic Gesture Presets [twistX, splayY, flexZ]
     const GESTURE_PRESETS = {
       fist: {
-        LeftIndex1: [1.4, -0.05, 0], LeftIndex2: [1.6, 0, 0], LeftIndex3: [1.3, 0, 0],
-        LeftMiddle1: [1.4, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.3, 0, 0],
-        LeftRing1: [1.4, 0.05, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.3, 0, 0],
-        LeftPinky1: [1.4, 0.1, 0], LeftPinky2: [1.6, 0, 0], LeftPinky3: [1.3, 0, 0],
-        LeftThumb1: [0.6, 0.5, 0.3], LeftThumb2: [0.8, 0, 0], LeftThumb3: [0.9, 0, 0],
-        LeftWrist: [0.1, 0, 0]
+        LeftIndex1: [0, -0.05, -1.35], LeftIndex2: [0, 0, -1.55], LeftIndex3: [0, 0, -1.25],
+        LeftMiddle1: [0, 0, -1.40], LeftMiddle2: [0, 0, -1.55], LeftMiddle3: [0, 0, -1.25],
+        LeftRing1: [0, 0.05, -1.35], LeftRing2: [0, 0, -1.55], LeftRing3: [0, 0, -1.25],
+        LeftPinky1: [0, 0.1, -1.30], LeftPinky2: [0, 0, -1.55], LeftPinky3: [0, 0, -1.25],
+        LeftThumb1: [0.12, 0.95, 0.35], LeftThumb2: [-0.20, 0, -0.75], LeftThumb3: [0.10, 0, -0.80],
+        LeftWrist: [0, 0, -0.05]
       },
       peace: {
-        LeftIndex1: [-0.05, 0.18, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
-        LeftMiddle1: [-0.05, -0.18, 0], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
-        LeftRing1: [1.5, 0.05, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.4, 0, 0],
-        LeftPinky1: [1.5, 0.1, 0], LeftPinky2: [1.6, 0, 0], LeftPinky3: [1.4, 0, 0],
-        LeftThumb1: [0.7, 0.5, 0.2], LeftThumb2: [0.9, 0, 0], LeftThumb3: [0.9, 0, 0],
+        LeftIndex1: [0, 0.16, 0.05], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftMiddle1: [0, -0.16, 0.05], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
+        LeftRing1: [0, 0.05, -1.40], LeftRing2: [0, 0, -1.60], LeftRing3: [0, 0, -1.30],
+        LeftPinky1: [0, 0.1, -1.35], LeftPinky2: [0, 0, -1.60], LeftPinky3: [0, 0, -1.30],
+        LeftThumb1: [0.15, 0.85, 0.30], LeftThumb2: [-0.20, 0, -0.80], LeftThumb3: [0.10, 0, -0.80],
         LeftWrist: [0, 0, 0]
       },
       thumbs_up: {
-        LeftIndex1: [1.4, -0.05, 0], LeftIndex2: [1.6, 0, 0], LeftIndex3: [1.3, 0, 0],
-        LeftMiddle1: [1.4, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.3, 0, 0],
-        LeftRing1: [1.4, 0.05, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.3, 0, 0],
-        LeftPinky1: [1.4, 0.1, 0], LeftPinky2: [1.6, 0, 0], LeftPinky3: [1.3, 0, 0],
-        LeftThumb1: [-0.25, -0.4, -0.2], LeftThumb2: [0, 0, 0], LeftThumb3: [-0.1, 0, 0],
-        LeftWrist: [0, 0.2, 0.3]
+        LeftIndex1: [0, -0.05, -1.35], LeftIndex2: [0, 0, -1.55], LeftIndex3: [0, 0, -1.25],
+        LeftMiddle1: [0, 0, -1.40], LeftMiddle2: [0, 0, -1.55], LeftMiddle3: [0, 0, -1.25],
+        LeftRing1: [0, 0.05, -1.35], LeftRing2: [0, 0, -1.55], LeftRing3: [0, 0, -1.25],
+        LeftPinky1: [0, 0.1, -1.30], LeftPinky2: [0, 0, -1.55], LeftPinky3: [0, 0, -1.25],
+        LeftThumb1: [-0.25, -0.35, 0.55], LeftThumb2: [0, 0, 0.10], LeftThumb3: [0, 0, 0.15],
+        LeftWrist: [0, 0.1, 0.25]
       },
       pinch: {
-        LeftIndex1: [0.7, -0.05, 0], LeftIndex2: [0.8, 0, 0], LeftIndex3: [0.6, 0, 0],
-        LeftThumb1: [0.4, 0.35, 0.2], LeftThumb2: [0.6, 0, 0], LeftThumb3: [0.4, 0, 0],
-        LeftMiddle1: [0.4, 0, 0], LeftMiddle2: [0.5, 0, 0], LeftMiddle3: [0.4, 0, 0],
-        LeftRing1: [0.5, 0.05, 0], LeftRing2: [0.6, 0, 0], LeftRing3: [0.4, 0, 0],
-        LeftPinky1: [0.6, 0.1, 0], LeftPinky2: [0.6, 0, 0], LeftPinky3: [0.4, 0, 0],
+        LeftIndex1: [0, -0.05, -0.65], LeftIndex2: [0, 0, -0.85], LeftIndex3: [0, 0, -0.65],
+        LeftMiddle1: [0, 0, -0.45], LeftMiddle2: [0, 0, -0.55], LeftMiddle3: [0, 0, -0.40],
+        LeftRing1: [0, 0.05, -0.55], LeftRing2: [0, 0, -0.65], LeftRing3: [0, 0, -0.45],
+        LeftPinky1: [0, 0.1, -0.65], LeftPinky2: [0, 0, -0.70], LeftPinky3: [0, 0, -0.45],
+        LeftThumb1: [0.10, 0.65, 0.25], LeftThumb2: [-0.15, 0, -0.55], LeftThumb3: [0.10, 0, -0.45],
         LeftWrist: [0, 0, 0]
       },
       ok: {
-        LeftIndex1: [0.85, -0.05, 0], LeftIndex2: [0.95, 0, 0], LeftIndex3: [0.75, 0, 0],
-        LeftThumb1: [0.5, 0.45, 0.3], LeftThumb2: [0.65, 0, 0], LeftThumb3: [0.5, 0, 0],
-        LeftMiddle1: [-0.05, 0.1, 0], LeftMiddle2: [0.05, 0, 0], LeftMiddle3: [0, 0, 0],
-        LeftRing1: [-0.05, 0.15, 0], LeftRing2: [0.05, 0, 0], LeftRing3: [0, 0, 0],
-        LeftPinky1: [-0.05, 0.25, 0], LeftPinky2: [0.05, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftIndex1: [0, -0.05, -0.80], LeftIndex2: [0, 0, -1.05], LeftIndex3: [0, 0, -0.85],
+        LeftThumb1: [0.10, 0.70, 0.25], LeftThumb2: [-0.15, 0, -0.65], LeftThumb3: [0.10, 0, -0.55],
+        LeftMiddle1: [0, -0.08, 0.10], LeftMiddle2: [0, 0, 0.05], LeftMiddle3: [0, 0, 0],
+        LeftRing1: [0, -0.12, 0.15], LeftRing2: [0, 0, 0.05], LeftRing3: [0, 0, 0],
+        LeftPinky1: [0, -0.18, 0.20], LeftPinky2: [0, 0, 0.05], LeftPinky3: [0, 0, 0],
         LeftWrist: [0, 0, 0]
       },
       rock: {
-        LeftIndex1: [0, 0.15, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
-        LeftPinky1: [0, -0.2, 0], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
-        LeftMiddle1: [1.5, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.4, 0, 0],
-        LeftRing1: [1.5, 0, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.4, 0, 0],
-        LeftThumb1: [0.6, 0.4, 0.2], LeftThumb2: [0.8, 0, 0], LeftThumb3: [0.7, 0, 0],
+        LeftIndex1: [0, 0.12, 0.05], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftPinky1: [0, -0.18, 0.05], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftMiddle1: [0, 0, -1.45], LeftMiddle2: [0, 0, -1.60], LeftMiddle3: [0, 0, -1.30],
+        LeftRing1: [0, 0, -1.45], LeftRing2: [0, 0, -1.60], LeftRing3: [0, 0, -1.30],
+        LeftThumb1: [0.15, 0.80, 0.30], LeftThumb2: [-0.20, 0, -0.75], LeftThumb3: [0.10, 0, -0.70],
         LeftWrist: [0, 0, 0]
       },
       point: {
-        LeftIndex1: [0, 0, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
-        LeftMiddle1: [1.4, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.3, 0, 0],
-        LeftRing1: [1.4, 0, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.3, 0, 0],
-        LeftPinky1: [1.4, 0, 0], LeftPinky2: [1.6, 0, 0], LeftPinky3: [1.3, 0, 0],
-        LeftThumb1: [0.6, 0.35, 0.2], LeftThumb2: [0.7, 0, 0], LeftThumb3: [0.6, 0, 0],
+        LeftIndex1: [0, 0, 0.05], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftMiddle1: [0, 0, -1.40], LeftMiddle2: [0, 0, -1.55], LeftMiddle3: [0, 0, -1.25],
+        LeftRing1: [0, 0.05, -1.35], LeftRing2: [0, 0, -1.55], LeftRing3: [0, 0, -1.25],
+        LeftPinky1: [0, 0.1, -1.30], LeftPinky2: [0, 0, -1.55], LeftPinky3: [0, 0, -1.25],
+        LeftThumb1: [0.12, 0.85, 0.30], LeftThumb2: [-0.20, 0, -0.75], LeftThumb3: [0.10, 0, -0.70],
         LeftWrist: [0, 0, 0]
       },
       splay: {
-        LeftIndex1: [-0.1, 0.3, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
-        LeftMiddle1: [-0.1, 0.05, 0], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
-        LeftRing1: [-0.1, -0.2, 0], LeftRing2: [0, 0, 0], LeftRing3: [0, 0, 0],
-        LeftPinky1: [-0.1, -0.4, 0], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
-        LeftThumb1: [-0.2, 0.6, 0], LeftThumb2: [0, 0, 0], LeftThumb3: [0, 0, 0],
+        LeftIndex1: [0, 0.28, 0.05], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
+        LeftMiddle1: [0, 0.05, 0.05], LeftMiddle2: [0, 0, 0], LeftMiddle3: [0, 0, 0],
+        LeftRing1: [0, -0.18, 0.05], LeftRing2: [0, 0, 0], LeftRing3: [0, 0, 0],
+        LeftPinky1: [0, -0.38, 0.05], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftThumb1: [-0.15, 0.55, 0.20], LeftThumb2: [0, 0, 0], LeftThumb3: [0, 0, 0],
         LeftWrist: [0, 0, 0]
       },
       shaka: {
-        LeftThumb1: [-0.3, 0.65, 0.2], LeftThumb2: [-0.1, 0, 0], LeftThumb3: [-0.1, 0, 0],
-        LeftPinky1: [-0.1, -0.35, 0], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
-        LeftIndex1: [1.4, 0, 0], LeftIndex2: [1.6, 0, 0], LeftIndex3: [1.3, 0, 0],
-        LeftMiddle1: [1.4, 0, 0], LeftMiddle2: [1.6, 0, 0], LeftMiddle3: [1.3, 0, 0],
-        LeftRing1: [1.4, 0, 0], LeftRing2: [1.6, 0, 0], LeftRing3: [1.3, 0, 0],
-        LeftWrist: [0, 0, 0.2]
+        LeftThumb1: [-0.25, -0.45, 0.45], LeftThumb2: [0, 0, 0.1], LeftThumb3: [0, 0, 0.1],
+        LeftPinky1: [0, -0.30, 0.1], LeftPinky2: [0, 0, 0], LeftPinky3: [0, 0, 0],
+        LeftIndex1: [0, 0, -1.40], LeftIndex2: [0, 0, -1.55], LeftIndex3: [0, 0, -1.25],
+        LeftMiddle1: [0, 0, -1.40], LeftMiddle2: [0, 0, -1.55], LeftMiddle3: [0, 0, -1.25],
+        LeftRing1: [0, 0, -1.40], LeftRing2: [0, 0, -1.55], LeftRing3: [0, 0, -1.25],
+        LeftWrist: [0, 0, 0.15]
       },
       cup: {
-        LeftIndex1: [0.45, 0.1, 0], LeftIndex2: [0.55, 0, 0], LeftIndex3: [0.35, 0, 0],
-        LeftMiddle1: [0.45, 0, 0], LeftMiddle2: [0.55, 0, 0], LeftMiddle3: [0.35, 0, 0],
-        LeftRing1: [0.45, -0.1, 0], LeftRing2: [0.55, 0, 0], LeftRing3: [0.35, 0, 0],
-        LeftPinky1: [0.45, -0.2, 0], LeftPinky2: [0.55, 0, 0], LeftPinky3: [0.35, 0, 0],
-        LeftThumb1: [0.3, 0.35, 0.2], LeftThumb2: [0.4, 0, 0], LeftThumb3: [0.3, 0, 0],
-        LeftWrist: [0.15, 0, 0]
+        LeftIndex1: [0, 0.10, -0.45], LeftIndex2: [0, 0, -0.55], LeftIndex3: [0, 0, -0.35],
+        LeftMiddle1: [0, 0, -0.45], LeftMiddle2: [0, 0, -0.55], LeftMiddle3: [0, 0, -0.35],
+        LeftRing1: [0, -0.10, -0.45], LeftRing2: [0, 0, -0.55], LeftRing3: [0, 0, -0.35],
+        LeftPinky1: [0, -0.20, -0.45], LeftPinky2: [0, 0, -0.55], LeftPinky3: [0, 0, -0.35],
+        LeftThumb1: [0.10, 0.45, -0.25], LeftThumb2: [0, 0, -0.35], LeftThumb3: [0, 0, -0.25],
+        LeftWrist: [0, 0, -0.15]
       },
       flat: {
         LeftIndex1: [0, 0, 0], LeftIndex2: [0, 0, 0], LeftIndex3: [0, 0, 0],
@@ -1416,11 +1420,11 @@
       },
       neutral: {
         // Natural resting posture of human hand (mild anatomical curl)
-        LeftIndex1: [0.15, 0.04, 0], LeftIndex2: [0.22, 0, 0], LeftIndex3: [0.12, 0, 0],
-        LeftMiddle1: [0.18, 0, 0], LeftMiddle2: [0.25, 0, 0], LeftMiddle3: [0.15, 0, 0],
-        LeftRing1: [0.22, -0.04, 0], LeftRing2: [0.28, 0, 0], LeftRing3: [0.18, 0, 0],
-        LeftPinky1: [0.28, -0.08, 0], LeftPinky2: [0.32, 0, 0], LeftPinky3: [0.22, 0, 0],
-        LeftThumb1: [0.18, 0.15, 0.1], LeftThumb2: [0.15, 0, 0], LeftThumb3: [0.1, 0, 0],
+        LeftIndex1: [0, 0.04, -0.18], LeftIndex2: [0, 0, -0.22], LeftIndex3: [0, 0, -0.14],
+        LeftMiddle1: [0, 0, -0.20], LeftMiddle2: [0, 0, -0.25], LeftMiddle3: [0, 0, -0.16],
+        LeftRing1: [0, -0.04, -0.22], LeftRing2: [0, 0, -0.28], LeftRing3: [0, 0, -0.18],
+        LeftPinky1: [0, -0.08, -0.25], LeftPinky2: [0, 0, -0.30], LeftPinky3: [0, 0, -0.20],
+        LeftThumb1: [0.08, 0.25, -0.15], LeftThumb2: [-0.05, 0, -0.15], LeftThumb3: [0.05, 0, -0.10],
         LeftWrist: [0, 0, 0], LeftElbow: [0, 0, 0]
       }
     };
@@ -1929,24 +1933,24 @@
 
     const ringGeom = createArcBufferGeometry(GIZMO_RADIUS, GIZMO_RADIUS - GIZMO_THICKNESS, 0, Math.PI * 2, 48);
 
-    // Flexion (X - Red)
+    // Flexion (Z - Red/Rose: Normal along Z axis, sweeps in sagittal X-Y plane)
     const ringFlexMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e, depthTest: false, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
     const ringFlex = new THREE.Mesh(ringGeom, ringFlexMat);
-    ringFlex.rotation.y = Math.PI / 2;
-    ringFlex.userData = { axis: 'x', label: 'Flexion' };
+    ringFlex.userData = { axis: 'z', label: 'Flexion' };
     gizmoGroup.add(ringFlex);
 
-    // Splay (Y - Green)
+    // Splay (Y - Green: Normal along Y axis, sweeps in coronal X-Z palmar plane)
     const ringSplayMat = new THREE.MeshBasicMaterial({ color: 0x10b981, depthTest: false, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
     const ringSplay = new THREE.Mesh(ringGeom, ringSplayMat);
     ringSplay.rotation.x = Math.PI / 2;
     ringSplay.userData = { axis: 'y', label: 'Splay' };
     gizmoGroup.add(ringSplay);
 
-    // Twist (Z - Blue)
+    // Twist (X - Blue/Cyan: Normal along X axis, longitudinal roll along finger shaft)
     const ringTwistMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, depthTest: false, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
     const ringTwist = new THREE.Mesh(ringGeom, ringTwistMat);
-    ringTwist.userData = { axis: 'z', label: 'Twist' };
+    ringTwist.rotation.y = Math.PI / 2;
+    ringTwist.userData = { axis: 'x', label: 'Twist' };
     gizmoGroup.add(ringTwist);
 
     const gizmoRings = [ringFlex, ringSplay, ringTwist];
@@ -1996,9 +2000,9 @@
 
         const axis = activeGizmoRing.userData.axis;
         let delta = 0;
-        if (axis === 'x') delta = -deltaY;
-        else if (axis === 'y') delta = deltaX;
-        else if (axis === 'z') delta = deltaX + deltaY;
+        if (axis === 'z') delta = -(deltaY + deltaX); // Flexion: dragging changes Z rotation
+        else if (axis === 'y') delta = deltaX;        // Splay: lateral mouse motion changes Y rotation
+        else if (axis === 'x') delta = deltaY;        // Twist: vertical mouse motion rolls along X shaft
 
         let targetVal = dragStartRotation[axis] + delta;
 
@@ -2015,22 +2019,26 @@
         if (skinnedMesh) skinnedMesh.skeleton.update();
 
         // Update Slider UI
-        const deg = Math.round(targetVal * (180 / Math.PI));
-        if (axis === 'x') {
-          document.getElementById('slider-active-flexion').value = deg;
-          document.getElementById('val-active-flexion').textContent = `${deg}°`;
+        if (axis === 'z') {
+          // Negative Z rotation maps to positive flexion curl degrees
+          const flexDeg = Math.round(-targetVal * (180 / Math.PI));
+          document.getElementById('slider-active-flexion').value = flexDeg;
+          document.getElementById('val-active-flexion').textContent = `${flexDeg}°`;
         } else if (axis === 'y') {
-          document.getElementById('slider-active-splay').value = deg;
-          document.getElementById('val-active-splay').textContent = `${deg}°`;
-        } else if (axis === 'z') {
-          document.getElementById('slider-active-twist').value = deg;
-          document.getElementById('val-active-twist').textContent = `${deg}°`;
+          const splayDeg = Math.round(targetVal * (180 / Math.PI));
+          document.getElementById('slider-active-splay').value = splayDeg;
+          document.getElementById('val-active-splay').textContent = `${splayDeg}°`;
+        } else if (axis === 'x') {
+          const twistDeg = Math.round(targetVal * (180 / Math.PI));
+          document.getElementById('slider-active-twist').value = twistDeg;
+          document.getElementById('val-active-twist').textContent = `${twistDeg}°`;
         }
 
+        const displayDeg = (axis === 'z') ? Math.round(-targetVal * (180 / Math.PI)) : Math.round(targetVal * (180 / Math.PI));
         hud.style.display = 'block';
         hud.style.left = `${e.clientX}px`;
         hud.style.top = `${e.clientY}px`;
-        hud.textContent = `${state.selectedJointName} ${activeGizmoRing.userData.label}: ${deg}°`;
+        hud.textContent = `${state.selectedJointName} ${activeGizmoRing.userData.label}: ${displayDeg}°`;
         return;
       }
 
@@ -2123,25 +2131,26 @@
     function syncActiveSliders() {
       const bone = bonesMap.get(state.selectedJointName);
       if (!bone) return;
-      const degX = Math.round(bone.rotation.x * (180 / Math.PI));
-      const degY = Math.round(bone.rotation.y * (180 / Math.PI));
-      const degZ = Math.round(bone.rotation.z * (180 / Math.PI));
+      // In SB-Human canonical rig, negative Z is flexion/curl into palm
+      const degFlex = Math.round(-bone.rotation.z * (180 / Math.PI));
+      const degSplay = Math.round(bone.rotation.y * (180 / Math.PI));
+      const degTwist = Math.round(bone.rotation.x * (180 / Math.PI));
 
       const flexSlider = document.getElementById('slider-active-flexion');
       const splaySlider = document.getElementById('slider-active-splay');
       const twistSlider = document.getElementById('slider-active-twist');
 
-      if (flexSlider) flexSlider.value = degX;
+      if (flexSlider) flexSlider.value = degFlex;
       const valFlex = document.getElementById('val-active-flexion');
-      if (valFlex) valFlex.textContent = `${degX}°`;
+      if (valFlex) valFlex.textContent = `${degFlex}°`;
 
-      if (splaySlider) splaySlider.value = degY;
+      if (splaySlider) splaySlider.value = degSplay;
       const valSplay = document.getElementById('val-active-splay');
-      if (valSplay) valSplay.textContent = `${degY}°`;
+      if (valSplay) valSplay.textContent = `${degSplay}°`;
 
-      if (twistSlider) twistSlider.value = degZ;
+      if (twistSlider) twistSlider.value = degTwist;
       const valTwist = document.getElementById('val-active-twist');
-      if (valTwist) valTwist.textContent = `${degZ}°`;
+      if (valTwist) valTwist.textContent = `${degTwist}°`;
     }
 
     function selectJoint(jointName) {
@@ -2164,10 +2173,11 @@
       // Dynamically configure slider limits based on physiological ROM
       const limits = ROM_LIMITS[jointName];
       if (state.enforceLimits && limits) {
-        const minX = Math.floor(limits.minX * (180 / Math.PI));
-        const maxX = Math.ceil(limits.maxX * (180 / Math.PI));
-        flexSlider.min = minX;
-        flexSlider.max = maxX;
+        // Flexion is on Z: negative Z is flexion, so minFlex is -maxZ, maxFlex is -minZ
+        const minFlex = Math.floor(-limits.maxZ * (180 / Math.PI));
+        const maxFlex = Math.ceil(-limits.minZ * (180 / Math.PI));
+        flexSlider.min = minFlex;
+        flexSlider.max = maxFlex;
 
         const minY = Math.floor(limits.minY * (180 / Math.PI));
         const maxY = Math.ceil(limits.maxY * (180 / Math.PI));
@@ -2176,15 +2186,15 @@
         splaySlider.disabled = (minY === maxY);
         splaySlider.style.opacity = (minY === maxY) ? '0.35' : '1.0';
 
-        const minZ = Math.floor(limits.minZ * (180 / Math.PI));
-        const maxZ = Math.ceil(limits.maxZ * (180 / Math.PI));
-        twistSlider.min = minZ;
-        twistSlider.max = maxZ;
-        twistSlider.disabled = (minZ === maxZ);
-        twistSlider.style.opacity = (minZ === maxZ) ? '0.35' : '1.0';
+        const minX = Math.floor(limits.minX * (180 / Math.PI));
+        const maxX = Math.ceil(limits.maxX * (180 / Math.PI));
+        twistSlider.min = minX;
+        twistSlider.max = maxX;
+        twistSlider.disabled = (minX === maxX);
+        twistSlider.style.opacity = (minX === maxX) ? '0.35' : '1.0';
       } else {
-        flexSlider.min = -90;
-        flexSlider.max = 140;
+        flexSlider.min = -25;
+        flexSlider.max = 110;
         splaySlider.min = -60;
         splaySlider.max = 60;
         splaySlider.disabled = false;
@@ -2206,18 +2216,21 @@
       const twistSlider = document.getElementById('slider-active-twist');
 
       flexSlider.addEventListener('input', (e) => {
-        const rad = parseFloat(e.target.value) * (Math.PI / 180);
-        setJointAxisRotation(state.selectedJointName, 'x', rad);
+        const deg = parseFloat(e.target.value);
+        const radZ = -deg * (Math.PI / 180);
+        setJointAxisRotation(state.selectedJointName, 'z', radZ);
       });
 
       splaySlider.addEventListener('input', (e) => {
-        const rad = parseFloat(e.target.value) * (Math.PI / 180);
-        setJointAxisRotation(state.selectedJointName, 'y', rad);
+        const deg = parseFloat(e.target.value);
+        const radY = deg * (Math.PI / 180);
+        setJointAxisRotation(state.selectedJointName, 'y', radY);
       });
 
       twistSlider.addEventListener('input', (e) => {
-        const rad = parseFloat(e.target.value) * (Math.PI / 180);
-        setJointAxisRotation(state.selectedJointName, 'z', rad);
+        const deg = parseFloat(e.target.value);
+        const radX = deg * (Math.PI / 180);
+        setJointAxisRotation(state.selectedJointName, 'x', radX);
       });
 
       document.getElementById('btn-zero-joint').addEventListener('click', () => {
@@ -2281,23 +2294,24 @@
       state.lerpProgress = 1.0;
       const digits = ['Index', 'Middle', 'Ring', 'Pinky'];
       digits.forEach(d => {
-        setJointAxisRotation(`Left${d}1`, 'x', factor * 1.4);
-        setJointAxisRotation(`Left${d}2`, 'x', factor * 1.6);
-        setJointAxisRotation(`Left${d}3`, 'x', factor * 1.3);
+        setJointAxisRotation(`Left${d}1`, 'z', -factor * 1.35);
+        setJointAxisRotation(`Left${d}2`, 'z', -factor * 1.55);
+        setJointAxisRotation(`Left${d}3`, 'z', -factor * 1.25);
       });
-      setJointAxisRotation('LeftThumb1', 'x', factor * 0.6);
-      setJointAxisRotation('LeftThumb2', 'x', factor * 0.8);
-      setJointAxisRotation('LeftThumb3', 'x', factor * 0.8);
+      setJointAxisRotation('LeftThumb1', 'y', factor * 0.95);
+      setJointAxisRotation('LeftThumb1', 'z', factor * 0.35);
+      setJointAxisRotation('LeftThumb2', 'z', -factor * 0.75);
+      setJointAxisRotation('LeftThumb3', 'z', -factor * 0.80);
       selectJoint(state.selectedJointName);
     }
 
     function spreadAllFingers(factor) {
       state.lerpProgress = 1.0;
-      setJointAxisRotation('LeftIndex1', 'y', factor * 0.35);
+      setJointAxisRotation('LeftIndex1', 'y', factor * 0.28);
       setJointAxisRotation('LeftMiddle1', 'y', factor * 0.05);
-      setJointAxisRotation('LeftRing1', 'y', -factor * 0.25);
-      setJointAxisRotation('LeftPinky1', 'y', -factor * 0.45);
-      setJointAxisRotation('LeftThumb1', 'y', factor * 0.6);
+      setJointAxisRotation('LeftRing1', 'y', -factor * 0.18);
+      setJointAxisRotation('LeftPinky1', 'y', -factor * 0.38);
+      setJointAxisRotation('LeftThumb1', 'y', factor * 0.55);
       selectJoint(state.selectedJointName);
     }
 
@@ -2780,32 +2794,41 @@
 
       if (targetDigit === 'Wrist') {
         if (/prona|twist|rotate/i.test(prompt)) {
-          targetPose['LeftWrist'] = [0, 0, effectiveAngle];
-        } else {
           targetPose['LeftWrist'] = [effectiveAngle, 0, 0];
+        } else if (/abduct|deviat/i.test(prompt)) {
+          targetPose['LeftWrist'] = [0, effectiveAngle, 0];
+        } else {
+          targetPose['LeftWrist'] = [0, 0, -effectiveAngle];
         }
       } else if (targetDigit === 'Elbow') {
-        targetPose['LeftElbow'] = [0, 0, effectiveAngle];
+        targetPose['LeftElbow'] = [effectiveAngle, 0, 0];
+      } else if (targetDigit === 'Thumb') {
+        targetPose['LeftThumb1'] = [0, effectiveAngle * 0.6, effectiveAngle * 0.3];
+        targetPose['LeftThumb2'] = [0, 0, -effectiveAngle * 0.7];
+        targetPose['LeftThumb3'] = [0, 0, -effectiveAngle * 0.8];
       } else if (targetDigit) {
         // Check for specific joint level
         if (/pip|proximal|mid/i.test(prompt)) {
-          targetPose[`Left${targetDigit}2`] = [effectiveAngle, 0, 0];
+          targetPose[`Left${targetDigit}2`] = [0, 0, -effectiveAngle];
         } else if (/dip|distal|tip/i.test(prompt)) {
-          targetPose[`Left${targetDigit}3`] = [effectiveAngle, 0, 0];
+          targetPose[`Left${targetDigit}3`] = [0, 0, -effectiveAngle];
         } else if (/mcp|knuckle|base/i.test(prompt)) {
-          targetPose[`Left${targetDigit}1`] = [effectiveAngle, 0, 0];
+          targetPose[`Left${targetDigit}1`] = [0, 0, -effectiveAngle];
         } else {
           // Entire finger curls proportionally
-          targetPose[`Left${targetDigit}1`] = [effectiveAngle * 0.7, 0, 0];
-          targetPose[`Left${targetDigit}2`] = [effectiveAngle * 1.0, 0, 0];
-          targetPose[`Left${targetDigit}3`] = [effectiveAngle * 0.8, 0, 0];
+          targetPose[`Left${targetDigit}1`] = [0, 0, -effectiveAngle * 0.7];
+          targetPose[`Left${targetDigit}2`] = [0, 0, -effectiveAngle * 1.0];
+          targetPose[`Left${targetDigit}3`] = [0, 0, -effectiveAngle * 0.8];
         }
       } else if (/all\s*fingers|hand/i.test(prompt)) {
-        ['Index', 'Middle', 'Ring', 'Pinky', 'Thumb'].forEach(d => {
-          targetPose[`Left${d}1`] = [effectiveAngle * 0.7, 0, 0];
-          targetPose[`Left${d}2`] = [effectiveAngle * 1.0, 0, 0];
-          targetPose[`Left${d}3`] = [effectiveAngle * 0.8, 0, 0];
+        ['Index', 'Middle', 'Ring', 'Pinky'].forEach(d => {
+          targetPose[`Left${d}1`] = [0, 0, -effectiveAngle * 0.7];
+          targetPose[`Left${d}2`] = [0, 0, -effectiveAngle * 1.0];
+          targetPose[`Left${d}3`] = [0, 0, -effectiveAngle * 0.8];
         });
+        targetPose['LeftThumb1'] = [0, effectiveAngle * 0.6, effectiveAngle * 0.3];
+        targetPose['LeftThumb2'] = [0, 0, -effectiveAngle * 0.7];
+        targetPose['LeftThumb3'] = [0, 0, -effectiveAngle * 0.8];
       }
 
       lerpToPose(targetPose);
@@ -3488,10 +3511,18 @@
         Object.entries(data.rotations || {}).forEach(([jointName, euler]) => {
           let [rx, ry, rz] = euler;
 
+          // Legacy fail-safe: if model put flexion on rx and rz is near 0, translate rx to negative rz
+          if (Math.abs(rx) > 0.25 && Math.abs(rz) < 0.1) {
+            rz = -rx;
+            rx = 0;
+          }
+
           // Sagittal Plane Reflection for Right Hand -> Left Armature
+          // Flexion (Z) is preserved (both left and right hands flex palmar into negative Z).
+          // Splay (Y) and Twist (X) reflect across the sagittal midline.
           if (isRightHand) {
             ry = -ry;
-            rz = -rz;
+            rx = -rx;
           }
 
           // Range of Motion (ROM) Clamping

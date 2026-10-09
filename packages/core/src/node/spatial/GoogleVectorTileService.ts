@@ -14,7 +14,46 @@ import { VectorTile } from '@mapbox/vector-tile';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 
-export const DEFAULT_GOOGLE_MAPS_API_KEY = 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+function tryLoadLocalEnv(): void {
+    if (typeof process === 'undefined' || !process.env) return;
+    if (process.env.MAP_TILES_API_KEY || process.env.GOOGLE_MAPS_API_KEY) return;
+    try {
+        const candidates = [
+            path.resolve(process.cwd(), '.env'),
+            path.resolve(__dirname, '../../../../.env'),
+            path.resolve(__dirname, '../../../../../.env')
+        ];
+        for (const envFile of candidates) {
+            if (fs.existsSync(envFile)) {
+                const lines = fs.readFileSync(envFile, 'utf8').split('\n');
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || trimmed.startsWith('#')) continue;
+                    const eq = trimmed.indexOf('=');
+                    if (eq > 0) {
+                        const k = trimmed.slice(0, eq).trim();
+                        let v = trimmed.slice(eq + 1).trim();
+                        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+                            v = v.slice(1, -1);
+                        }
+                        if (!process.env[k]) {
+                            process.env[k] = v;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    } catch {
+        // Non-fatal if .env cannot be read
+    }
+}
+
+tryLoadLocalEnv();
+
+export const DEFAULT_GOOGLE_MAPS_API_KEY = (typeof process !== 'undefined'
+    ? process.env?.MAP_TILES_API_KEY || process.env?.GOOGLE_MAPS_API_KEY || ''
+    : '');
 
 export interface VectorFeaturePolygon {
     id: string;
@@ -249,7 +288,8 @@ export class GoogleVectorTileService {
     private static tileCache = new Map<string, DecodedVectorTileData>();
 
     public static resolveApiKey(key?: string): string {
-        return key || process.env.MAP_TILES_API_KEY || process.env.GOOGLE_MAPS_API_KEY || DEFAULT_GOOGLE_MAPS_API_KEY;
+        tryLoadLocalEnv();
+        return key || (typeof process !== 'undefined' ? process.env?.MAP_TILES_API_KEY || process.env?.GOOGLE_MAPS_API_KEY || '' : '') || DEFAULT_GOOGLE_MAPS_API_KEY;
     }
 
     /**

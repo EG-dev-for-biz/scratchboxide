@@ -2014,7 +2014,7 @@
             const embedIframe = document.getElementById('streetview-embed-iframe');
             if (mode === 'embed') {
                 const currentPanoId = currentStreetViewMeta?.panoId || document.getElementById('input-streetview-panoid')?.value || 'CAoSF0NJSE0wb2dLRUlDQWdJRHE4NkMtbXdF';
-                const apiKey = 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+                const apiKey = window.__GOOGLE_MAPS_API_KEY__ || new URLSearchParams(location.search).get('key') || '';
                 if (embedIframe) {
                     embedIframe.src = `https://www.google.com/maps/embed/v1/streetview?key=${apiKey}&pano=${encodeURIComponent(currentPanoId)}&heading=0&pitch=0&fov=90`;
                     embedIframe.style.display = 'block';

@@ -357,7 +357,9 @@ export function projectCubicFacesToErpBuffer(
     return { width: W, height: H, rgba: outBuffer, png };
 }
 
-export const DEFAULT_GOOGLE_MAPS_API_KEY = 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+export const DEFAULT_GOOGLE_MAPS_API_KEY = (typeof process !== 'undefined'
+    ? process.env?.GOOGLE_MAPS_API_KEY || process.env?.MAP_TILES_API_KEY || ''
+    : '');
 
 /**
  * Historical and Metadata query for Google Street View.

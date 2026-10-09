@@ -922,6 +922,19 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Dynamic Google Maps configuration endpoint
+    if (reqPath === '/api/google_maps_config') {
+        const configPath = path.resolve(__dirname, '../public/data/google_maps_config.json');
+        let config = {};
+        if (fs.existsSync(configPath)) {
+            try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
+        }
+        config.apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || '';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(config));
+        return;
+    }
+
     // Handle Google Street View Pano Query & Projection API (spce parity)
     if (reqPath === '/api/streetview/query' || reqPath === '/api/streetview/pano') {
         let body = '';
@@ -934,7 +947,7 @@ const server = http.createServer((req, res) => {
                 let lat = parseFloat(urlObj.searchParams.get('lat') || '');
                 let lng = parseFloat(urlObj.searchParams.get('lng') || '');
                 const format = urlObj.searchParams.get('format') || 'json';
-                const apiKey = process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+                const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || '';
 
                 if (body) {
                     try {
@@ -1062,7 +1075,7 @@ const server = http.createServer((req, res) => {
                 let prompt = urlObj.searchParams.get('prompt') || urlObj.searchParams.get('q') || '';
                 let lat = parseFloat(urlObj.searchParams.get('lat') || '');
                 let lng = parseFloat(urlObj.searchParams.get('lng') || '');
-                const apiKey = process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+                const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || '';
 
                 if (body) {
                     try {
@@ -2047,24 +2060,25 @@ print(f"VERIFICATION_ELAPSED={time.time() - start_t:.3f}")
 Your objective is to inspect the provided photograph/image of a hand and determine the exact 3D joint rotations in radians for a canonical 17-joint hand/arm armature.
 
 CANONICAL 17-JOINT ARMATURE DEFINITIONS:
+In SB-Human coordinate space, arm extends along +X, palm faces -Y:
 1. LeftIndex1, LeftMiddle1, LeftRing1, LeftPinky1: Metacarpophalangeal (MCP) knuckle joints.
-   Rotation is [flexion_pitch_x, splay_yaw_y, twist_roll_z] in radians.
-   - flexion_pitch_x: 0.0 rad = straight extended finger; +1.57 rad (~90 deg) = fully flexed/curled into palm.
-   - splay_yaw_y: lateral spreading/abduction angle relative to middle finger (+ = splay outward, - = tuck inward).
-   - twist_roll_z: minor axial knuckle twist.
+   Rotation is [twist_roll_x, splay_yaw_y, flexion_pitch_z] in radians.
+   - flexion_pitch_z: 0.0 rad = straight extended finger; -1.57 rad (~ -90 deg) = fully flexed/curled into palm (curl is NEGATIVE Z).
+   - splay_yaw_y: lateral spreading/abduction angle relative to middle finger (+ = splay outward towards thumb, - = tuck inward towards pinky).
+   - twist_roll_x: minor axial knuckle twist along finger shaft.
 2. LeftIndex2, LeftIndex3, LeftMiddle2, LeftMiddle3, LeftRing2, LeftRing3, LeftPinky2, LeftPinky3: Proximal & Distal Interphalangeal (PIP/DIP) hinge joints.
-   Pure 1-DOF hinges: [flexion_pitch_x, 0.0, 0.0].
-   - 0.0 rad = fully straight, +1.57 rad = curled 90 degrees.
+   Pure 1-DOF hinges: [0.0, 0.0, flexion_pitch_z].
+   - 0.0 rad = fully straight, -1.57 rad = curled 90 degrees into palm.
 3. LeftThumb1: Trapeziometacarpal (CMC) saddle joint.
-   Rotations: [flexion_pitch_x, abduction_splay_y, opposition_twist_z].
+   Rotations: [twist_roll_x, abduction_splay_y, opposition_pitch_z].
 4. LeftThumb2: Metacarpophalangeal (MCP) condyloid.
-   Rotations: [flexion_pitch_x, splay_yaw_y, twist_roll_z].
+   Rotations: [twist_roll_x, splay_yaw_y, flexion_pitch_z].
 5. LeftThumb3: Interphalangeal (IP) hinge.
-   Rotations: [flexion_pitch_x, 0.0, 0.0].
+   Rotations: [0.0, 0.0, flexion_pitch_z].
 6. LeftWrist: Radiocarpal joint.
-   Rotations: [flexion_pitch_x, deviation_yaw_y, pronation_roll_z].
+   Rotations: [pronation_roll_x, deviation_yaw_y, flexion_pitch_z].
 7. LeftElbow: Forearm axial rotation.
-   Rotations: [0.0, 0.0, twist_roll_z].
+   Rotations: [twist_roll_x, 0.0, 0.0].
 
 IMAGE ANALYSIS RULES:
 - Hand Isolation: Locate and focus exclusively on the primary dominant hand in the image. Ignore background people, faces, or objects.
@@ -2091,22 +2105,22 @@ OUTPUT FORMAT (Strict JSON):
   },
   "rotations": {
     "LeftIndex1": [rx, ry, rz],
-    "LeftIndex2": [rx, 0, 0],
-    "LeftIndex3": [rx, 0, 0],
+    "LeftIndex2": [0, 0, rz],
+    "LeftIndex3": [0, 0, rz],
     "LeftMiddle1": [rx, ry, rz],
-    "LeftMiddle2": [rx, 0, 0],
-    "LeftMiddle3": [rx, 0, 0],
+    "LeftMiddle2": [0, 0, rz],
+    "LeftMiddle3": [0, 0, rz],
     "LeftRing1": [rx, ry, rz],
-    "LeftRing2": [rx, 0, 0],
-    "LeftRing3": [rx, 0, 0],
+    "LeftRing2": [0, 0, rz],
+    "LeftRing3": [0, 0, rz],
     "LeftPinky1": [rx, ry, rz],
-    "LeftPinky2": [rx, 0, 0],
-    "LeftPinky3": [rx, 0, 0],
+    "LeftPinky2": [0, 0, rz],
+    "LeftPinky3": [0, 0, rz],
     "LeftThumb1": [rx, ry, rz],
     "LeftThumb2": [rx, ry, rz],
-    "LeftThumb3": [rx, 0, 0],
+    "LeftThumb3": [0, 0, rz],
     "LeftWrist": [rx, ry, rz],
-    "LeftElbow": [0, 0, rz]
+    "LeftElbow": [rx, 0, 0]
   }
 }`;
 
@@ -2250,6 +2264,14 @@ OUTPUT FORMAT (Strict JSON):
                     res.writeHead(500, { 'Content-Type': 'text/plain' });
                     res.end('Failed to read HTML file');
                     return;
+                }
+
+                const mapsApiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || '';
+                const injectedScript = `<script>window.__GOOGLE_MAPS_API_KEY__ = ${JSON.stringify(mapsApiKey)};</script>`;
+                if (htmlContent.includes('<head>')) {
+                    htmlContent = htmlContent.replace('<head>', '<head>\n    ' + injectedScript);
+                } else {
+                    htmlContent = injectedScript + '\n' + htmlContent;
                 }
 
                 const buf = Buffer.from(htmlContent, 'utf8');

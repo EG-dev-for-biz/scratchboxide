@@ -684,7 +684,7 @@ export class Google3DTileCrawlerBaker {
     }
 
     // 2. Live crawl of the real leaf tiles; there is no synthetic substitute
-    const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+    const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || '';
     const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir: path.join(cacheDir, 'leaves') });
     const anchor = { lat: request.origin.lat, lng: request.origin.lng, heightGuessM: request.origin.alt ?? 0 };
     const { leaves, session } = await crawler.collectLeafTiles(anchor, radius);

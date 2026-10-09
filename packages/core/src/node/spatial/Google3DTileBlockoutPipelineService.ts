@@ -302,7 +302,9 @@ export interface TileBlockoutPipelineResult {
   error?: string;
 }
 
-export const DEFAULT_GOOGLE_MAPS_TILES_API_KEY = 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+export const DEFAULT_GOOGLE_MAPS_TILES_API_KEY = (typeof process !== 'undefined'
+    ? process.env?.GOOGLE_MAPS_API_KEY || process.env?.MAP_TILES_API_KEY || ''
+    : '');
 
 export class Google3DTileBlockoutPipelineService {
   private chromePath: string;
@@ -444,7 +446,7 @@ export class Google3DTileBlockoutPipelineService {
 
     // Zero presets and no procedural fallbacks are permitted
     throw new Error(
-      `Cannot resolve geodetic coordinates for query "${rawQuery}". ` +
+      `Cannot resolve geodetic coordinates for query "${rawQuery}". Zero presets and no procedural fallbacks are permitted: ` +
       `Google Geocoding API is strictly disabled: please provide explicit coordinates ` +
       `(e.g. "40.748400, -73.985700" or { lat, lng }), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
     );
@@ -956,7 +958,7 @@ export class Google3DTileBlockoutPipelineService {
     const geoidHeight = request.geoidHeight ?? -30.0;
     const { matrixValues } = this.buildLocalTransformMatrix(geo, geoidHeight);
 
-    const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY || DEFAULT_GOOGLE_MAPS_TILES_API_KEY;
+    const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || DEFAULT_GOOGLE_MAPS_TILES_API_KEY;
 
     const atmo = request.atmosphere || {};
     const renderMode = atmo.renderMode || 'clay';
@@ -2285,7 +2287,7 @@ export class Google3DTileBlockoutPipelineService {
     options?: Google3DTilesQueryOptions
   ): Promise<Google3DTile3DObjectResult> {
     const geoAnchor = await this.resolveAddress(queryOrCoords, options?.apiKey);
-    const apiKey = options?.apiKey || process.env.GOOGLE_MAPS_API_KEY || DEFAULT_GOOGLE_MAPS_TILES_API_KEY;
+    const apiKey = options?.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || DEFAULT_GOOGLE_MAPS_TILES_API_KEY;
 
     // Harmonize ground truth elevation with Google DEM (EGM96)
     if (apiKey && (geoAnchor.elevation === undefined || geoAnchor.elevation === 15.0 || geoAnchor.elevation === 0)) {

@@ -121,7 +121,7 @@ async function runBlockoutPipelineTests() {
     const html = service.generateRunnerHtml({
       geoAnchor: esbOrigin,
       cameraPath: pathData,
-      apiKey: DEFAULT_GOOGLE_MAPS_TILES_API_KEY,
+      apiKey: DEFAULT_GOOGLE_MAPS_TILES_API_KEY || 'AIzaSyMockKeyForTesting_12345',
       atmosphere: {
         renderMode: 'clay',
         clayPreset: 'warm-clay',
@@ -352,7 +352,7 @@ async function runBlockoutPipelineTests() {
     const texturedHtml = service.generateRunnerHtml({
       geoAnchor: esbOrigin,
       cameraPath: pathData,
-      apiKey: DEFAULT_GOOGLE_MAPS_TILES_API_KEY,
+      apiKey: DEFAULT_GOOGLE_MAPS_TILES_API_KEY || 'AIzaSyMockKeyForTesting_12345',
       atmosphere: {
         renderMode: 'textured'
       },
