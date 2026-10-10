@@ -1,0 +1,20 @@
+{
+  "glbPath": "public/models/colosseum_rome_textured.glb",
+  "outputDir": "public/renders/colosseum_closeup_pbr",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 2,
+  "threads": 8,
+  "groundPlane": false,
+  "sun": {
+    "latitude": 41.8902,
+    "longitude": 12.4922,
+    "unixSeconds": 1720015200
+  },
+  "camera": {
+    "position": [-120.0, 35.0, 120.0],
+    "target": [-55.0, 22.0, 0.0],
+    "verticalFovDeg": 38.0
+  }
+}

@@ -111,7 +111,19 @@ float sbHag = vSbMask.g * 8.0;
 float sbLow = 1.0 - smoothstep(0.3, 0.5, sbHag);
 float sbFlatLow = step(0.75, abs(sbN.y)) * (1.0 - smoothstep(1.1, 1.3, sbHag));
 float sbRoad = (1.0 - sbVeg) * max(sbLow, sbFlatLow);
-float sbStone = max(0.0, 1.0 - sbVeg - sbRoad);
+
+// --- ADA Enhancement 1: Terracotta Barrel Roof Tile Detection (Pitched roofs with warm clay hue) ---
+float sbClayHue = (sbSrgb.r - max(sbSrgb.g, sbSrgb.b)) / max(sbSrgb.r, 0.01);
+float sbRoof = (1.0 - sbVeg) * (1.0 - sbRoad) * smoothstep(1.8, 3.8, sbHag) * smoothstep(0.25, 0.70, abs(sbN.y)) * smoothstep(0.05, 0.18, sbClayHue);
+
+// --- ADA Enhancement 2: Roman Sanpietrini Basalt Cobblestone Detection (Piazza & pedestrian ground) ---
+float sbPiazza = sbRoad * step(0.70, abs(sbN.y)) * smoothstep(0.12, 0.38, sbL);
+
+// --- ADA Enhancement 3: Architectural Window Aperture Detection on Vertical Facades ---
+float sbFacade = (1.0 - sbVeg) * (1.0 - sbRoad) * (1.0 - sbRoof) * step(abs(sbN.y), 0.45);
+float sbWindowBay = sbFacade * smoothstep(2.5, 4.5, sbHag) * (1.0 - smoothstep(0.16, 0.30, sbL));
+
+float sbStone = max(0.0, 1.0 - sbVeg - sbRoad - sbRoof);
 
 // --- De-lighting + weathering (same curves as the baked 1K suite, evaluated live) ---
 float sbShadowT = clamp((0.34 - sbL) / 0.26, 0.0, 1.0);
@@ -128,7 +140,7 @@ float sbComp = sbHighT * sbHighT * 0.14;
 sbLit *= vec3(1.0 - sbComp, 1.0 - sbComp * 0.95, 1.0 - sbComp * 0.85);
 sbLit -= clamp((-sbN.y - 0.32) / 0.55, 0.0, 1.0) * (13.0 / 255.0) * vec3(0.95, 1.0, 1.05);
 sbLit += clamp((sbN.y - 0.60) / 0.35, 0.0, 1.0) * vec3(7.0, 6.0, 4.0) / 255.0;
-float sbStoneW = sbStone * sbDelight;
+float sbStoneW = (sbStone + sbRoof * 0.5) * sbDelight;
 vec3 sbAlbedo = mix(sbSrgb, clamp(sbLit, 0.0, 1.0), sbStoneW);
 float sbShadowAo = 1.0 - sbShadowF * 0.28 * sbStoneW;
 
@@ -151,14 +163,70 @@ float sbLenS; float sbLenA; float sbLenF;
 vec4 sbDS = sbTriplanar(sbStoneDetail, vSbWorldPos, sbNB, sbTile.x, sbDetailStrength, sbLenS);
 vec4 sbDA = sbTriplanar(sbAsphaltDetail, vSbWorldPos, sbNB, sbTile.y, sbDetailStrength, sbLenA);
 vec4 sbDF = sbTriplanar(sbFoliageDetail, vSbWorldPos, sbNB, sbTile.z, sbDetailStrength, sbLenF);
-vec3 sbFinalN = normalize(sbDS.xyz * sbStone + sbDA.xyz * sbRoad + sbDF.xyz * sbVeg);
-float sbCavity = (sbDS.w - 0.5) * 0.22 * sbStone + (sbDA.w - 0.5) * 0.30 * sbRoad + (sbDF.w - 0.5) * 0.35 * sbVeg;
+
+// --- ADA Operator 1: Spanish / Roman Terracotta Barrel Tile Normal Relief (Coppi e embrici) ---
+// Harmonic pitch lambda = 0.22m, asymmetric crown profile, artisan irregularity & timber rafter sag
+vec3 sbRoofTang = normalize(cross(sbNB, vec3(0.0, 1.0, 0.0)));
+if (length(sbRoofTang) < 0.1) sbRoofTang = vec3(1.0, 0.0, 0.0);
+float sbTileCoord = dot(vSbWorldPos, sbRoofTang);
+float sbTilePhase = 6.2831853 * sbTileCoord / 0.22;
+float sbArtisanNoise = sin(dot(vSbWorldPos.xz, vec2(13.7, 18.2))) * 0.08;
+float sbRafterSag = sin(3.14159 * fract(vSbWorldPos.y / 3.2)) * 0.05;
+float sbTileSlope = (cos(sbTilePhase) + 0.35 * cos(2.0 * sbTilePhase) + sbArtisanNoise + sbRafterSag) * 0.42;
+vec3 sbRoofN = normalize(sbNB + sbRoofTang * sbTileSlope);
+vec3 sbTerracottaAlbedo = vec3(0.74, 0.40, 0.24);
+sbAlbedo = mix(sbAlbedo, mix(sbAlbedo, sbTerracottaAlbedo * (sbL / max(sbLuma(sbTerracottaAlbedo), 0.01)), 0.65), sbRoof);
+
+// --- ADA Operator 2: Roman Sanpietrini Basalt Cobblestone Pavers (10cm x 10cm grid + 15mm mortar) ---
+vec2 sbPiazzaUv = vSbWorldPos.xz / 0.10;
+vec2 sbPiazzaFrac = fract(sbPiazzaUv);
+float sbJointDist = min(min(sbPiazzaFrac.x, 1.0 - sbPiazzaFrac.x), min(sbPiazzaFrac.y, 1.0 - sbPiazzaFrac.y));
+float sbMortar = 1.0 - smoothstep(0.06, 0.16, sbJointDist);
+vec2 sbDomeSlope = vec2(sin(3.14159 * (sbPiazzaFrac.x - 0.5)), sin(3.14159 * (sbPiazzaFrac.y - 0.5))) * 0.28;
+vec3 sbPiazzaN = normalize(vec3(sbDomeSlope.x, 1.0, sbDomeSlope.y));
+vec3 sbBasaltColor = vec3(0.20, 0.21, 0.23);
+vec3 sbMortarColor = vec3(0.13, 0.13, 0.14);
+vec3 sbCobbleAlbedo = mix(sbBasaltColor, sbMortarColor, sbMortar);
+sbAlbedo = mix(sbAlbedo, sbCobbleAlbedo, sbPiazza * 0.75);
+
+// --- ADA Operator 3: Transferred Botanical Envelope Normals (Radial canopy expansion) ---
+vec3 sbCanopyN = normalize(sbDF.xyz + vec3(0.0, 0.40, 0.0) + normalize(vSbWorldNormal) * 0.60);
+
+// Combine normals across material strata
+vec3 sbBaseN = sbDS.xyz * sbStone + sbDA.xyz * (sbRoad * (1.0 - sbPiazza)) + sbPiazzaN * (sbRoad * sbPiazza) + sbRoofN * sbRoof + sbCanopyN * sbVeg;
+vec3 sbFinalN = normalize(sbBaseN);
+
+float sbCavity = (sbDS.w - 0.5) * 0.22 * sbStone + (sbDA.w - 0.5) * 0.30 * sbRoad + (sbDF.w - 0.5) * 0.35 * sbVeg - sbMortar * 0.30 * sbPiazza;
 sbAlbedo = clamp(sbAlbedo * (1.0 + sbCavity * sbDetailStrength), 0.0, 1.0);
+
+// --- ADA Operator 4: Building Fenestration & Specular Window Sheen ---
+vec3 sbSkyReflection = vec3(0.08, 0.12, 0.18);
+sbAlbedo = mix(sbAlbedo, sbSkyReflection, sbWindowBay * 0.85);
+
+// --- Living Foliage: Backlight chlorophyll rim transmittance glow ---
+float sbWrap = 0.35;
+vec3 sbSunDir = normalize(vec3(0.585, 0.683, 0.439));
+float sbNDotL = dot(sbFinalN, sbSunDir);
+float sbTransFactor = max(0.0, 1.0 - abs(sbNDotL + 0.05) / sbWrap);
+vec3 sbTransBoost = vec3(24.0, 48.0, -12.0) / 255.0;
+sbAlbedo += sbTransBoost * sbTransFactor * sbVeg;
+
 diffuseColor.rgb = sbAlbedo * sbAlbedo;
 `;
 
   const FRAGMENT_ROUGHNESS = /* glsl */ `
-float sbRough = sbStone * (0.82 + (0.5 - sbDS.w) * 0.12) + sbRoad * (0.55 + (0.5 - sbDA.w) * 0.15) + sbVeg * 0.80;
+// Living Foliage: dual-roughness cuticle stippling (0.32 waxy blades vs 0.88 matte stems)
+float sbCuticleNoise = fract(sin(dot(vSbWorldPos * 60.0, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
+float sbVegRough = (sbCuticleNoise > 0.72) ? 0.32 : 0.88;
+float sbRoofRough = 0.84 + sbArtisanNoise * 0.4;
+float sbPiazzaRough = mix(0.72, 0.94, sbMortar);
+float sbRough = sbStone * (0.82 + (0.5 - sbDS.w) * 0.12)
+              + sbRoad * (1.0 - sbPiazza) * (0.55 + (0.5 - sbDA.w) * 0.15)
+              + sbRoad * sbPiazza * sbPiazzaRough
+              + sbRoof * sbRoofRough
+              + sbVeg * sbVegRough;
+// Window panes have ultra-smooth specular glass reflection
+sbRough = mix(sbRough, 0.06, sbWindowBay);
 sbRough = mix(sbRough, max(0.48, sbRough - 0.08), sbW);
 float sbLen = clamp(sbLenS * sbStone + sbLenA * sbRoad + sbLenF * sbVeg, 0.05, 1.0);
 roughnessFactor = clamp(sqrt(sbRough * sbRough + 0.4 * sbDetailStrength * (1.0 - sbLen) / sbLen), 0.04, 1.0);
@@ -177,8 +245,9 @@ reflectedLight.indirectSpecular *= sbAO;
   const FRAGMENT_DEBUG = /* glsl */ `
 if (sbDebugView == 1) gl_FragColor = vec4(mix(vec3(0.05), vec3(1.0, 0.85, 0.3), sbW), 1.0);
 else if (sbDebugView == 2) gl_FragColor = vec4(vec3(sbAO), 1.0);
-else if (sbDebugView == 3) gl_FragColor = vec4(vec3(0.85, 0.62, 0.42) * sbStone + vec3(0.2, 0.7, 0.25) * sbVeg + vec3(0.3, 0.4, 0.8) * sbRoad, 1.0);
+else if (sbDebugView == 3) gl_FragColor = vec4(vec3(0.85, 0.62, 0.42) * sbStone + vec3(0.2, 0.7, 0.25) * sbVeg + vec3(0.3, 0.4, 0.5) * (sbRoad * (1.0 - sbPiazza)) + vec3(0.2, 0.4, 0.8) * (sbRoad * sbPiazza) + vec3(0.9, 0.35, 0.15) * sbRoof + vec3(0.1, 0.8, 0.9) * sbWindowBay, 1.0);
 else if (sbDebugView == 4) gl_FragColor = vec4(sbFinalN * 0.5 + 0.5, 1.0);
+else if (sbDebugView == 5) gl_FragColor = vec4(vec3(sbTileSlope * 0.5 + 0.5) * sbRoof + vec3(sbMortar) * sbPiazza + vec3(0.1), 1.0);
 `;
 
   function renameAttribute(geometry, from, to) {

@@ -1,0 +1,20 @@
+{
+  "glbPath": "public/models/colosseum_rome_1k_pbr.glb",
+  "outputDir": "public/renders/colosseum_1k_pbr_orbit",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 2,
+  "threads": 8,
+  "groundPlane": false,
+  "sun": {
+    "latitude": 41.8902,
+    "longitude": 12.4922,
+    "unixSeconds": 1720015200
+  },
+  "camera": {
+    "position": [220.0, 140.0, 260.0],
+    "target": [0.0, 25.0, 0.0],
+    "verticalFovDeg": 45.0
+  }
+}

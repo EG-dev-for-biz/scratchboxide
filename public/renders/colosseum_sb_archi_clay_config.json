@@ -1,0 +1,22 @@
+{
+  "glbPath": "public/models/colosseum_sb_archi_full.glb",
+  "outputDir": "public/renders/colosseum_sb_archi_clay",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 2,
+  "threads": 8,
+  "clay": true,
+  "groundPlane": true,
+  "groundHeight": 18.25,
+  "sun": {
+    "latitude": 41.8902,
+    "longitude": 12.4922,
+    "unixSeconds": 1720015200
+  },
+  "camera": {
+    "position": [70.0, 85.0, 175.0],
+    "target": [-43.4, 35.0, 62.5],
+    "verticalFovDeg": 45.0
+  }
+}

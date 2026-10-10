@@ -744,7 +744,8 @@
         <!-- Presets and View Mode Selector -->
         <div class="nav-right" style="display: flex; align-items: center; gap: 10px;">
             <div class="preset-pills">
-                <div class="preset-pill active" onclick="loadLocation('Empire State Building, NY')">Empire State</div>
+                <div class="preset-pill active" id="pillLocESB" onclick="loadLocation('Empire State Building, NY')">Empire State</div>
+                <div class="preset-pill" id="pillLocColosseum" onclick="loadLocation('Colosseum, Rome')">Colosseum, Rome</div>
                 <div class="preset-pill" onclick="loadLocation('Chrysler Building, NY')">Chrysler</div>
                 <div class="preset-pill" onclick="loadLocation('Rockefeller Center, NY')">Rockefeller</div>
                 <div class="preset-pill" onclick="loadLocation('One World Trade Center, NY')">One WTC</div>
@@ -819,12 +820,14 @@
         <div class="orbit-3d-layout" id="orbit3dLayout">
             <model-viewer id="mainModelViewer"
                           src="/models/omnispatial_real_stage3_streetview_pbr.glb"
-                          alt="Empire State Building 3D District"
+                          poster="/renders/real_tile_esb_stage3_pbr/beauty.png"
+                          alt="3D Spatial Model"
                           auto-rotate
                           camera-controls
                           touch-action="pan-y"
                           shadow-intensity="1.2"
                           exposure="1.0"
+                          loading="eager"
                           style="width: 100%; height: 100%;">
             </model-viewer>
             <div class="model-viewer-controls-overlay">
@@ -958,7 +961,7 @@
         </div>
 
         <!-- Enhancement 3: Cadastral Alignment -->
-        <div class="hud-card">
+        <div class="hud-card" id="cadastralCard">
             <div class="hud-card-title">
                 <span>Cadastral Vector Alignment</span>
                 <span style="color: var(--accent-purple);">Enhancement 3</span>
@@ -988,35 +991,88 @@
         let currentPass = 'beauty';
         let currentViewMode = 'side-by-side';
 
-        const stageImages = {
-            1: {
-                beauty: '/renders/real_tile_esb_clay_closeup/beauty.png',
-                albedo: '/renders/real_tile_esb_clay_closeup/albedo.png',
-                normal: '/renders/real_tile_esb_clay_closeup/normal.png',
-                depth:  '/renders/real_tile_esb_clay_closeup/depth.png',
-                glb:    '/models/omnispatial_real_stage1_clay.glb',
-                title:  'Stage 1: Authentic Google 3D Tile in Clay',
-                sub:    '169,588 Authentic Scan Triangles · Real Sensor Noise'
+        const locationDatasets = {
+            'esb': {
+                name: 'Empire State Building, NY',
+                stages: {
+                    1: {
+                        beauty: '/renders/real_tile_esb_clay_closeup/beauty.png',
+                        albedo: '/renders/real_tile_esb_clay_closeup/albedo.png',
+                        normal: '/renders/real_tile_esb_clay_closeup/normal.png',
+                        depth:  '/renders/real_tile_esb_clay_closeup/depth.png',
+                        glb:    '/models/omnispatial_real_stage1_clay.glb',
+                        title:  'Stage 1: Authentic Google 3D Tile in Clay',
+                        sub:    '169,588 Authentic Scan Triangles · Real Sensor Noise'
+                    },
+                    2: {
+                        beauty: '/renders/real_tile_esb_stage2_refined/beauty.png',
+                        albedo: '/renders/real_tile_esb_stage2_refined/albedo.png',
+                        normal: '/renders/real_tile_esb_stage2_refined/normal.png',
+                        depth:  '/renders/real_tile_esb_stage2_refined/depth.png',
+                        glb:    '/models/omnispatial_real_stage2_vector_refined.glb',
+                        title:  'Stage 2: Vector Shape Refinement',
+                        sub:    'Corner Straightener (90° Ortho) · Planar Decimator · Conformed Curbs'
+                    },
+                    3: {
+                        beauty: '/renders/real_tile_esb_stage3_pbr/beauty.png',
+                        albedo: '/renders/real_tile_esb_stage3_pbr/albedo.png',
+                        normal: '/renders/real_tile_esb_stage3_pbr/normal.png',
+                        depth:  '/renders/real_tile_esb_stage3_pbr/depth.png',
+                        glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
+                        title:  'Stage 3: Solar De-Lighted Real-Scan PBR',
+                        sub:    '0-Drift Inverse Barycentric · Street View Fusion · Toksvig AA'
+                    }
+                },
+                hud: {
+                    solarElev: '68.08° (Azimuth: 140.06°)',
+                    solarVec: '[0.240, 0.928, 0.286]',
+                    corridor: '5th Ave & W 34th St',
+                    stratLabel1: '0–15m: Street View (Pedestrian Entrances & Storefronts)',
+                    stratLabel3: '25–381m: De-Lighted Aerial Crown (Limestone & Spire)'
+                }
             },
-            2: {
-                beauty: '/renders/real_tile_esb_stage2_refined/beauty.png',
-                albedo: '/renders/real_tile_esb_stage2_refined/albedo.png',
-                normal: '/renders/real_tile_esb_stage2_refined/normal.png',
-                depth:  '/renders/real_tile_esb_stage2_refined/depth.png',
-                glb:    '/models/omnispatial_real_stage2_vector_refined.glb',
-                title:  'Stage 2: Vector Shape Refinement',
-                sub:    'Corner Straightener (90° Ortho) · Planar Decimator · Conformed Curbs'
-            },
-            3: {
-                beauty: '/renders/real_tile_esb_stage3_pbr/beauty.png',
-                albedo: '/renders/real_tile_esb_stage3_pbr/albedo.png',
-                normal: '/renders/real_tile_esb_stage3_pbr/normal.png',
-                depth:  '/renders/real_tile_esb_stage3_pbr/depth.png',
-                glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
-                title:  'Stage 3: Solar De-Lighted Real-Scan PBR',
-                sub:    '0-Drift Inverse Barycentric · Street View Fusion · Toksvig AA'
+            'colosseum': {
+                name: 'Colosseum, Rome',
+                stages: {
+                    1: {
+                        beauty: '/renders/colosseum/stage1_orbit.png',
+                        albedo: '/renders/colosseum/stage1_orbit.png',
+                        normal: '/renders/colosseum/stage1_orbit.png',
+                        depth:  '/renders/colosseum/stage1_orbit.png',
+                        glb:    '/models/colosseum_rome_clay.glb',
+                        title:  'Stage 1: Raw Google 3D Tile in Clay',
+                        sub:    '170,802 Photogrammetric Triangles · Melted Arches · Scan Noise'
+                    },
+                    2: {
+                        beauty: '/renders/colosseum/stage2_clay.png',
+                        albedo: '/renders/colosseum/stage2_clay.png',
+                        normal: '/renders/colosseum/stage2_clay.png',
+                        depth:  '/renders/colosseum/stage2_clay.png',
+                        glb:    '/models/colosseum_sb_archi_full.glb',
+                        title:  'Stage 2: Grounded Ruin & Vector Reshaping',
+                        sub:    'Hollow Ambulatory Arches · 3-Tier Orders · Preserved Ruin Silhouette'
+                    },
+                    3: {
+                        beauty: '/renders/colosseum/stage3_pbr.png',
+                        albedo: '/renders/colosseum/stage3_pbr.png',
+                        normal: '/renders/colosseum/stage3_pbr.png',
+                        depth:  '/renders/colosseum/stage3_pbr.png',
+                        glb:    '/models/colosseum_rome_1k_pbr.glb',
+                        title:  'Stage 3: De-Lighted Travertine PBR & Living Foliage',
+                        sub:    '5mm Virtual Bevel · Voronoi Foliage Flutter & Waxy Cuticle · Toksvig AA'
+                    }
+                },
+                hud: {
+                    solarElev: '50.74° (Azimuth: 254.21°)',
+                    solarVec: '[0.925, 0.835, 0.708]',
+                    corridor: 'Piazza del Colosseo & Via dei Fori Imperiali',
+                    stratLabel1: '0–12m: Ground Tier Doric/Tuscan Arcades',
+                    stratLabel3: '35–48.5m: Attic Storey with Window Apertures & Corbels'
+                }
             }
         };
+        let activeLocationKey = 'esb';
+        let stageImages = locationDatasets['esb'].stages;
 
         function setViewMode(mode) {
             currentViewMode = mode;
@@ -1030,6 +1086,16 @@
             document.getElementById('loupeViewerLayout').style.display = mode === 'loupe' ? 'flex' : 'none';
             document.getElementById('orbit3dLayout').style.display = mode === 'orbit-3d' ? 'block' : 'none';
 
+            if (mode === 'wipe') {
+                if (activeLocationKey === 'colosseum') {
+                    document.getElementById('imgWipeReveal').src = '/renders/colosseum/stage1_orbit.png';
+                    document.getElementById('imgWipeBase').src = '/renders/colosseum/stage3_pbr.png';
+                } else {
+                    document.getElementById('imgWipeReveal').src = stageImages[1][currentPass] || stageImages[1].beauty;
+                    document.getElementById('imgWipeBase').src = stageImages[currentStage][currentPass] || stageImages[currentStage].beauty;
+                }
+            }
+
             if (mode === 'loupe') {
                 updateLoupeImage();
             }
@@ -1041,7 +1107,10 @@
             document.getElementById('orbitPillStage3').classList.toggle('active', stage === 3);
 
             const mv = document.getElementById('mainModelViewer');
-            mv.src = stageImages[stage].glb;
+            if (mv) {
+                mv.src = stageImages[stage].glb;
+                mv.poster = stageImages[stage].beauty;
+            }
             document.getElementById('pipelineStatusText').innerText = `3D Model: ${stageImages[stage].title}`;
         }
 
@@ -1197,19 +1266,67 @@
         }
 
         function triggerPipelineExecution(locationName) {
+            const locLower = (locationName || '').toLowerCase();
+            const isColosseum = locLower.includes('coloss') || locLower.includes('rome');
+            activeLocationKey = isColosseum ? 'colosseum' : 'esb';
+            stageImages = locationDatasets[activeLocationKey].stages;
+
+            const esbPill = document.getElementById('pillLocESB');
+            const colosseumPill = document.getElementById('pillLocColosseum');
+            if (esbPill) esbPill.classList.toggle('active', !isColosseum);
+            if (colosseumPill) colosseumPill.classList.toggle('active', isColosseum);
+
+            // Update HUD Telemetry
+            const hudData = locationDatasets[activeLocationKey].hud;
+            const solarElevEl = document.querySelector('#delightingCard .telemetry-row:nth-child(3) .telemetry-val');
+            if (solarElevEl) solarElevEl.innerText = hudData.solarElev;
+            const solarVecEl = document.querySelector('#delightingCard .telemetry-row:nth-child(2) .telemetry-val');
+            if (solarVecEl) solarVecEl.innerText = hudData.solarVec;
+            const corridorEl = document.querySelector('#cadastralCard .telemetry-row:nth-child(2) .telemetry-val');
+            if (corridorEl) corridorEl.innerText = hudData.corridor;
+            const stratZone1 = document.querySelector('.strat-zone.zone-ground span:first-child');
+            if (stratZone1) stratZone1.innerText = hudData.stratLabel1;
+            const stratZone3 = document.querySelector('.strat-zone.zone-crown span:first-child');
+            if (stratZone3) stratZone3.innerText = hudData.stratLabel3;
+
+            isMacroView = false;
+            const macroBtn = document.getElementById('passMacro');
+            if (macroBtn) {
+                macroBtn.classList.remove('active');
+                macroBtn.style.borderColor = 'transparent';
+                macroBtn.style.color = '';
+            }
+
             const statusText = document.getElementById('pipelineStatusText');
-            statusText.innerText = `Ingesting Google 3D Tile Clay for ${locationName}...`;
-            
-            setTimeout(() => {
-                statusText.innerText = `Snapping 90° Orthogonal Facades & Vector Roads...`;
-                selectStage(2);
-            }, 600);
+            statusText.innerText = `Ingesting Google 3D Tile for ${locationDatasets[activeLocationKey].name}...`;
+
+            // Reset Left Pane to Stage 1
+            document.getElementById('imgLeft').src = stageImages[1][currentPass] || stageImages[1].beauty;
+            document.getElementById('leftPaneTitle').innerText = stageImages[1].title;
+            document.getElementById('leftPaneSub').innerText = stageImages[1].sub;
+            document.getElementById('imgWipeReveal').src = stageImages[1][currentPass] || stageImages[1].beauty;
+
+            // Immediately select current stage with new dataset
+            selectStage(currentStage);
+
+            // Update 3D model-viewer
+            const mv = document.getElementById('mainModelViewer');
+            if (mv) mv.src = stageImages[currentStage].glb;
 
             setTimeout(() => {
-                statusText.innerText = `Synthesizing De-Lighted PBR Textures & Toksvig AA...`;
+                statusText.innerText = isColosseum
+                    ? `Excavating Hollow Ambulatory Arches & Locking Ruin Silhouette...`
+                    : `Snapping 90° Orthogonal Facades & Vector Roads...`;
+                selectStage(2);
+            }, 500);
+
+            setTimeout(() => {
+                statusText.innerText = isColosseum
+                    ? `Synthesizing Roman Travertine PBR, Spanish Tiles & Pinus Pinea...`
+                    : `Synthesizing De-Lighted PBR Textures & Toksvig AA...`;
                 selectStage(3);
-                statusText.innerText = `Corridor Ready: ${locationName}`;
-            }, 1200);
+                statusText.innerText = `Corridor Ready: ${locationDatasets[activeLocationKey].name}`;
+            }, 1100);
         }
 
         executeBtn.addEventListener('click', () => {

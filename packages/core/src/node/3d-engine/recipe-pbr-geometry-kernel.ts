@@ -552,15 +552,17 @@ const DETAIL_SPECS: Record<DetailMapKind, { tileMeters: number; bump: number; he
       return 0.7 * stones + 0.3 * fine;
     }
   },
-  // Foliage: leaf clumps with dark gaps.
+  // Foliage: leaf clumps with Voronoi cellular facets and dark gaps.
   foliage: {
     tileMeters: 1.2,
-    bump: 3.0,
+    bump: 3.8,
     height: (u, v) => {
-      const w = periodicWorley(u * 20, v * 20, 20, 20, 89);
-      const clump = Math.min(1, (w.f2 - w.f1) * 2.2);
-      const leaf = periodicFbm(u * 60, v * 60, 60, 3, 97);
-      return 0.65 * clump + 0.35 * leaf;
+      // 5cm Voronoi leaf cells (24 cells per 1.2m tile)
+      const w = periodicWorley(u * 24, v * 24, 24, 24, 89);
+      const cellFacet = Math.min(1, (w.f2 - w.f1) * 2.6);
+      const leafRipples = periodicFbm(u * 72, v * 72, 72, 3, 97);
+      // Cellular planar tilt modulation for dynamic specular leaf flutter
+      return 0.55 * cellFacet + 0.45 * leafRipples;
     }
   }
 };
