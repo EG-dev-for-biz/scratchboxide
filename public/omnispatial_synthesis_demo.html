@@ -9,7 +9,7 @@
     <style>
         :root {
             --bg-color: #07090e;
-            --dock-bg: rgba(13, 17, 28, 0.92);
+            --dock-bg: rgba(13, 17, 28, 0.94);
             --dock-border: rgba(255, 255, 255, 0.12);
             --accent-cyan: #38bdf8;
             --accent-blue: #3b82f6;
@@ -119,7 +119,7 @@
             gap: 10px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
             flex: 1;
-            max-width: 620px;
+            max-width: 600px;
         }
 
         .search-icon {
@@ -262,7 +262,7 @@
             position: absolute;
             top: 76px;
             left: 20px;
-            background: rgba(10, 14, 23, 0.88);
+            background: rgba(10, 14, 23, 0.90);
             border: 1px solid rgba(255, 255, 255, 0.14);
             backdrop-filter: blur(14px);
             padding: 8px 14px;
@@ -346,19 +346,113 @@
             transform: translateY(-50%);
         }
 
-        /* Mode C: Interactive 3D Model Viewer (Zero Three.js) */
-        .model-viewer-layout {
+        /* Mode C: Macro Detail Loupe View (2.5x Magnification, Zero Three.js) */
+        .loupe-viewer-layout {
             width: 100%;
             height: 100%;
             display: none;
             position: relative;
+            align-items: center;
+            justify-content: center;
+            background: #07090e;
+            overflow: hidden;
         }
 
-        model-viewer {
+        .loupe-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             width: 100%;
             height: 100%;
-            background-color: #07090e;
-            --poster-color: transparent;
+            cursor: crosshair;
+        }
+
+        .loupe-glass {
+            position: absolute;
+            width: 280px;
+            height: 280px;
+            border-radius: 50%;
+            border: 3px solid var(--accent-cyan);
+            box-shadow: 0 0 35px rgba(56, 189, 248, 0.7), inset 0 0 25px rgba(0, 0, 0, 0.85);
+            pointer-events: none;
+            display: none;
+            z-index: 50;
+            overflow: hidden;
+            background-repeat: no-repeat;
+            transform: translate(-50%, -50%);
+        }
+
+        .loupe-instruction-pill {
+            position: absolute;
+            top: 72px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.88);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            color: var(--accent-cyan);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 8px 18px;
+            border-radius: 20px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+            z-index: 40;
+        }
+
+        /* Mode D: Interactive 3D Orbit Viewport (<model-viewer> Zero Three.js) */
+        .orbit-3d-layout {
+            display: none;
+            width: 100%;
+            height: 100%;
+            position: relative;
+            background: #07090e;
+        }
+
+        .model-viewer-controls-overlay {
+            position: absolute;
+            top: 76px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 50;
+        }
+
+        .model-viewer-badge {
+            background: var(--dock-bg);
+            border: 1px solid var(--dock-border);
+            backdrop-filter: blur(14px);
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        }
+
+        .orbit-model-switcher {
+            display: flex;
+            gap: 6px;
+            background: var(--dock-bg);
+            border: 1px solid var(--dock-border);
+            backdrop-filter: blur(14px);
+            padding: 6px;
+            border-radius: 10px;
+        }
+
+        .orbit-tip-pill {
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+            font-size: 10.5px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            text-align: center;
         }
 
         /* --------------------------------------------------------------------
@@ -372,7 +466,7 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
-            width: 360px;
+            width: 370px;
         }
 
         .hud-card {
@@ -380,13 +474,13 @@
             border: 1px solid var(--dock-border);
             backdrop-filter: blur(20px);
             -webkit-backdrop-filter: blur(20px);
-            padding: 14px 16px;
+            padding: 12px 14px;
             border-radius: 12px;
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
         }
 
         .hud-card-title {
-            font-size: 10.5px;
+            font-size: 10px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.06em;
@@ -394,7 +488,7 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         }
 
         .metric-grid {
@@ -407,14 +501,14 @@
             background: rgba(255, 255, 255, 0.03);
             border: 1px solid rgba(255, 255, 255, 0.06);
             border-radius: 8px;
-            padding: 8px 10px;
+            padding: 6px 8px;
             display: flex;
             flex-direction: column;
             gap: 2px;
         }
 
         .metric-label {
-            font-size: 9px;
+            font-size: 8.5px;
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.05em;
@@ -422,16 +516,65 @@
         }
 
         .metric-value {
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 700;
             color: #ffffff;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         }
 
         .metric-sub {
-            font-size: 9.5px;
+            font-size: 9px;
             color: var(--accent-emerald);
             font-weight: 500;
+        }
+
+        /* Stratification Visual Bar */
+        .strat-bar-container {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin: 6px 0 8px 0;
+        }
+
+        .strat-zone {
+            padding: 4px 8px;
+            border-radius: 5px;
+            font-size: 9.5px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .zone-ground {
+            background: rgba(16, 185, 129, 0.15);
+            border-left: 3px solid var(--accent-emerald);
+            color: #a7f3d0;
+        }
+
+        .zone-blend {
+            background: rgba(56, 189, 248, 0.15);
+            border-left: 3px solid var(--accent-cyan);
+            color: #bae6fd;
+        }
+
+        .zone-crown {
+            background: rgba(168, 85, 247, 0.15);
+            border-left: 3px solid var(--accent-purple);
+            color: #e9d5ff;
+        }
+
+        .strat-slider-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .strat-range {
+            flex: 1;
+            accent-color: var(--accent-cyan);
+            cursor: pointer;
         }
 
         /* --------------------------------------------------------------------
@@ -449,7 +592,7 @@
             background: var(--dock-bg);
             border: 1px solid var(--dock-border);
             backdrop-filter: blur(20px);
-            padding: 6px 10px;
+            padding: 6px 12px;
             border-radius: 14px;
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
         }
@@ -547,15 +690,15 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
-            width: 330px;
+            width: 350px;
         }
 
         .telemetry-row {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 11px;
-            padding: 4px 0;
+            font-size: 10.5px;
+            padding: 3.5px 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.05);
         }
 
@@ -610,7 +753,8 @@
             <div class="view-mode-toggle">
                 <button class="mode-btn active" id="modeSideBySide" onclick="setViewMode('side-by-side')">Dual Split</button>
                 <button class="mode-btn" id="modeWipe" onclick="setViewMode('wipe')">Wipe Slider</button>
-                <button class="mode-btn" id="mode3D" onclick="setViewMode('3d')">3D Orbit</button>
+                <button class="mode-btn" id="modeLoupe" onclick="setViewMode('loupe')">Detail Loupe 🔍</button>
+                <button class="mode-btn" id="modeOrbit" onclick="setViewMode('orbit-3d')">3D Free Orbit 🌐</button>
             </div>
         </div>
     </header>
@@ -639,8 +783,8 @@
                      alt="Stage 3 Street View PBR Texturing">
                 <div class="viewport-header-badge">
                     <span class="badge-stage-tag" style="color: var(--accent-emerald);"><span>●</span> Stage 3: Codebase PBR Synthesis</span>
-                    <span class="badge-title" id="rightPaneTitle">Street View Multi-Material PBR</span>
-                    <span class="badge-sub" id="rightPaneSub">Indiana Limestone, Bronze Spandrels, Granite, Bitumen</span>
+                    <span class="badge-title" id="rightPaneTitle">Solar De-Lighted Real-Scan PBR</span>
+                    <span class="badge-sub" id="rightPaneSub">0-Drift Inverse Barycentric · Street View Fusion · Toksvig AA</span>
                 </div>
             </div>
         </div>
@@ -660,23 +804,74 @@
             </div>
         </div>
 
-        <!-- Mode C: Interactive 3D Model Viewer (Official Web Component, Zero Three.js) -->
-        <div class="model-viewer-layout" id="modelViewerLayout">
-            <model-viewer id="modelViewer" 
-                          src="/models/omnispatial_real_stage3_streetview_pbr.glb" 
-                          camera-controls 
-                          touch-action="pan-y" 
-                          shadow-intensity="1.5" 
-                          exposure="1.0" 
-                          camera-orbit="45deg 55deg 450m"
-                          field-of-view="38deg"
-                          alt="Empire State Building Corridor 3D Inspection">
+        <!-- Mode C: Macro Detail Loupe View (2.5x Magnification, Zero Three.js) -->
+        <div class="loupe-viewer-layout" id="loupeViewerLayout">
+            <div class="loupe-container" id="loupeContainer">
+                <img id="imgLoupeBase" class="plate-image" 
+                     src="/renders/real_tile_esb_stage3_pbr/beauty.png" 
+                     alt="Macro Detail Loupe Inspection">
+                <div class="loupe-glass" id="loupeGlass"></div>
+                <div class="loupe-instruction-pill">Move cursor across facade to inspect 2.5x de-lighted Indiana limestone, bronze spandrels, and Scharr normals</div>
+            </div>
+        </div>
+
+        <!-- Mode D: Interactive 3D Orbit Viewport (<model-viewer> Zero Three.js) -->
+        <div class="orbit-3d-layout" id="orbit3dLayout">
+            <model-viewer id="mainModelViewer"
+                          src="/models/omnispatial_real_stage3_streetview_pbr.glb"
+                          alt="Empire State Building 3D District"
+                          auto-rotate
+                          camera-controls
+                          touch-action="pan-y"
+                          shadow-intensity="1.2"
+                          exposure="1.0"
+                          style="width: 100%; height: 100%;">
             </model-viewer>
+            <div class="model-viewer-controls-overlay">
+                <div class="model-viewer-badge">
+                    <span class="status-dot"></span>
+                    <span>Interactive 3D Navigation · Zero Three.js Engine</span>
+                </div>
+                <div class="orbit-model-switcher">
+                    <button class="stage-pill" id="orbitPillStage1" onclick="switchOrbitModel(1)">Stage 1: Clay Scan</button>
+                    <button class="stage-pill" id="orbitPillStage2" onclick="switchOrbitModel(2)">Stage 2: Vector Refined</button>
+                    <button class="stage-pill active" id="orbitPillStage3" onclick="switchOrbitModel(3)">Stage 3: De-Lighted PBR</button>
+                </div>
+                <div class="orbit-tip-pill">Left-click: Orbit · Right-click: Pan · Scroll: Zoom</div>
+            </div>
         </div>
     </main>
 
     <!-- Bottom Left Telemetry HUD -->
     <aside class="hud-left">
+        <!-- Enhancement 1: Elevation Stratification Inspector -->
+        <div class="hud-card" id="stratificationCard">
+            <div class="hud-card-title">
+                <span>Elevation-Stratified Fusion</span>
+                <span style="color: var(--accent-cyan);">Enhancement 1</span>
+            </div>
+            <div class="strat-bar-container">
+                <div class="strat-zone zone-ground">
+                    <span>0–15m: Street View (Pedestrian Entrances & Storefronts)</span>
+                    <span>100% Street</span>
+                </div>
+                <div class="strat-zone zone-blend">
+                    <span>15–25m: Sigmoid Hermite Transition Zone (Smooth Blend)</span>
+                    <span id="blendPctLabel">w(z)</span>
+                </div>
+                <div class="strat-zone zone-crown">
+                    <span>25–381m: De-Lighted Aerial Crown (Limestone & Spire)</span>
+                    <span>100% Aerial</span>
+                </div>
+            </div>
+            <div class="strat-slider-row">
+                <span class="telemetry-label">Ground Cutoff:</span>
+                <input type="range" id="stratSlider" min="5" max="40" value="20" class="strat-range" oninput="updateStratHeight(this.value)">
+                <span class="telemetry-val" id="stratVal">20.0 m</span>
+            </div>
+        </div>
+
+        <!-- Telemetry Card -->
         <div class="hud-card">
             <div class="hud-card-title">
                 <span>Algorithmic Telemetry</span>
@@ -694,14 +889,14 @@
                     <span class="metric-sub">Coplanar Facades</span>
                 </div>
                 <div class="metric-item">
-                    <span class="metric-label">Limestone Facade</span>
-                    <span class="metric-value">103,502 tris</span>
-                    <span class="metric-sub">Ashlar + Cavity Soot</span>
+                    <span class="metric-label">De-Lighted Facade</span>
+                    <span class="metric-value">100% Albedo</span>
+                    <span class="metric-sub">Shadows Lifted</span>
                 </div>
                 <div class="metric-item">
-                    <span class="metric-label">Art Deco Bronze</span>
-                    <span class="metric-value">19,149 tris</span>
-                    <span class="metric-sub">Verdigris Patina</span>
+                    <span class="metric-label">Toksvig Mip AA</span>
+                    <span class="metric-value">4 Levels</span>
+                    <span class="metric-sub">Zero Shimmer</span>
                 </div>
             </div>
         </div>
@@ -722,39 +917,63 @@
                 <span>2</span> Vector Refined
             </div>
             <div class="stage-pill active" id="pillStage3" onclick="selectStage(3)">
-                <span>3</span> Street View PBR
+                <span>3</span> De-Lighted PBR
             </div>
         </div>
 
         <div class="pass-selector">
             <button class="pass-btn active" id="passBeauty" onclick="setRenderPass('beauty')">Beauty</button>
+            <button class="pass-btn" id="passAlbedo" onclick="setRenderPass('albedo')">Albedo</button>
             <button class="pass-btn" id="passNormal" onclick="setRenderPass('normal')">Normals</button>
             <button class="pass-btn" id="passDepth" onclick="setRenderPass('depth')">Depth</button>
+            <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.15); margin: 0 4px;"></div>
+            <button class="pass-btn" id="passMacro" onclick="toggleCameraFraming()" title="Toggle 1:1 Ground-Truth Macro Facade Frame">Macro 1:1</button>
         </div>
     </nav>
 
     <!-- Bottom Right Telemetry HUD -->
     <aside class="hud-right">
-        <div class="hud-card">
+        <!-- Enhancement 2: Solar De-Lighting Inspector -->
+        <div class="hud-card" id="delightingCard">
             <div class="hud-card-title">
-                <span>Multi-Sensor Pipeline</span>
-                <span style="color: var(--accent-cyan);">C++20 Native</span>
+                <span>Solar Inverse De-Lighting</span>
+                <span style="color: var(--accent-emerald);">Enhancement 2</span>
             </div>
             <div class="telemetry-row">
-                <span class="telemetry-label">Dihedral Angle Threshold</span>
-                <span class="telemetry-val">4.00°</span>
+                <span class="telemetry-label">Solar Irradiance Vector L☉</span>
+                <span class="telemetry-val">[0.240, 0.928, 0.286]</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">NOAA Ephemeris Sun Elev</span>
+                <span class="telemetry-val">68.08° (Azimuth: 140.06°)</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Inversion Epsilon ε</span>
+                <span class="telemetry-val">0.180 (Singularity Safe)</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Scharr Normal Operator</span>
+                <span class="telemetry-val">5x5 Multi-Scale RNM</span>
+            </div>
+        </div>
+
+        <!-- Enhancement 3: Cadastral Alignment -->
+        <div class="hud-card">
+            <div class="hud-card-title">
+                <span>Cadastral Vector Alignment</span>
+                <span style="color: var(--accent-purple);">Enhancement 3</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Cadastral Road Corridor</span>
+                <span class="telemetry-val">5th Ave & W 34th St</span>
             </div>
             <div class="telemetry-row">
                 <span class="telemetry-label">Corner Snap Tolerance</span>
                 <span class="telemetry-val">0.85 m (90.0° Ortho)</span>
             </div>
             <div class="telemetry-row">
-                <span class="telemetry-label">Cadastral Road Corridor</span>
-                <span class="telemetry-val">34th St & 5th Ave</span>
-            </div>
-            <div class="telemetry-row">
-                <span class="telemetry-label">C++20 Processing Time</span>
-                <span class="telemetry-val">1,260 ms</span>
+                <span class="telemetry-label">Boundary Skirt Apron</span>
+                <span class="telemetry-val">4-Sided Continuous Blend</span>
             </div>
             <div class="telemetry-row">
                 <span class="telemetry-label">Cook-Torrance Path Tracer</span>
@@ -772,6 +991,7 @@
         const stageImages = {
             1: {
                 beauty: '/renders/real_tile_esb_clay_closeup/beauty.png',
+                albedo: '/renders/real_tile_esb_clay_closeup/albedo.png',
                 normal: '/renders/real_tile_esb_clay_closeup/normal.png',
                 depth:  '/renders/real_tile_esb_clay_closeup/depth.png',
                 glb:    '/models/omnispatial_real_stage1_clay.glb',
@@ -780,6 +1000,7 @@
             },
             2: {
                 beauty: '/renders/real_tile_esb_stage2_refined/beauty.png',
+                albedo: '/renders/real_tile_esb_stage2_refined/albedo.png',
                 normal: '/renders/real_tile_esb_stage2_refined/normal.png',
                 depth:  '/renders/real_tile_esb_stage2_refined/depth.png',
                 glb:    '/models/omnispatial_real_stage2_vector_refined.glb',
@@ -788,11 +1009,12 @@
             },
             3: {
                 beauty: '/renders/real_tile_esb_stage3_pbr/beauty.png',
+                albedo: '/renders/real_tile_esb_stage3_pbr/albedo.png',
                 normal: '/renders/real_tile_esb_stage3_pbr/normal.png',
                 depth:  '/renders/real_tile_esb_stage3_pbr/depth.png',
                 glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
-                title:  'Stage 3: Street View Multi-Material PBR',
-                sub:    'Indiana Limestone, Bronze Spandrels, Granite, Bitumen, Spire Steel'
+                title:  'Stage 3: Solar De-Lighted Real-Scan PBR',
+                sub:    '0-Drift Inverse Barycentric · Street View Fusion · Toksvig AA'
             }
         };
 
@@ -800,15 +1022,27 @@
             currentViewMode = mode;
             document.getElementById('modeSideBySide').classList.toggle('active', mode === 'side-by-side');
             document.getElementById('modeWipe').classList.toggle('active', mode === 'wipe');
-            document.getElementById('mode3D').classList.toggle('active', mode === '3d');
+            document.getElementById('modeLoupe').classList.toggle('active', mode === 'loupe');
+            document.getElementById('modeOrbit').classList.toggle('active', mode === 'orbit-3d');
 
             document.getElementById('sideBySideView').style.display = mode === 'side-by-side' ? 'flex' : 'none';
             document.getElementById('wipeSliderView').style.display = mode === 'wipe' ? 'block' : 'none';
-            document.getElementById('modelViewerLayout').style.display = mode === '3d' ? 'block' : 'none';
+            document.getElementById('loupeViewerLayout').style.display = mode === 'loupe' ? 'flex' : 'none';
+            document.getElementById('orbit3dLayout').style.display = mode === 'orbit-3d' ? 'block' : 'none';
 
-            if (mode === '3d') {
-                update3DModel();
+            if (mode === 'loupe') {
+                updateLoupeImage();
             }
+        }
+
+        function switchOrbitModel(stage) {
+            document.getElementById('orbitPillStage1').classList.toggle('active', stage === 1);
+            document.getElementById('orbitPillStage2').classList.toggle('active', stage === 2);
+            document.getElementById('orbitPillStage3').classList.toggle('active', stage === 3);
+
+            const mv = document.getElementById('mainModelViewer');
+            mv.src = stageImages[stage].glb;
+            document.getElementById('pipelineStatusText').innerText = `3D Model: ${stageImages[stage].title}`;
         }
 
         function selectStage(stage) {
@@ -819,23 +1053,53 @@
 
             // Update Right Pane
             const target = stageImages[stage];
-            document.getElementById('imgRight').src = target[currentPass];
-            document.getElementById('rightPaneTitle').innerText = target.title;
-            document.getElementById('rightPaneSub').innerText = target.sub;
+            const imgSrc = (stage === 3 && isMacroView) ? macroImages[currentPass] : target[currentPass];
+            document.getElementById('imgRight').src = imgSrc;
+            document.getElementById('rightPaneTitle').innerText = (stage === 3 && isMacroView)
+                ? 'Stage 3: 1:1 Macro Facade & Spandrels PBR'
+                : target.title;
+            document.getElementById('rightPaneSub').innerText = (stage === 3 && isMacroView)
+                ? 'Punched Window Reveals · Cast Bronze Chevrons · Indiana Limestone Ashlar Joints'
+                : target.sub;
 
             // Update Wipe Base
-            document.getElementById('imgWipeBase').src = target[currentPass];
+            document.getElementById('imgWipeBase').src = imgSrc;
 
-            if (currentViewMode === '3d') {
-                update3DModel();
+            updateLoupeImage();
+
+            document.getElementById('pipelineStatusText').innerText = (stage === 3 && isMacroView)
+                ? 'Displaying 1:1 Ground-Truth Macro Facade PBR'
+                : `Displaying ${target.title}`;
+        }
+
+        let isMacroView = false;
+        const macroImages = {
+            beauty: '/renders/real_tile_esb_macro_pbr/beauty.png',
+            albedo: '/renders/real_tile_esb_macro_pbr/albedo.png',
+            normal: '/renders/real_tile_esb_macro_pbr/normal.png',
+            depth:  '/renders/real_tile_esb_macro_pbr/depth.png',
+        };
+
+        function toggleCameraFraming() {
+            isMacroView = !isMacroView;
+            const btn = document.getElementById('passMacro');
+            btn.classList.toggle('active', isMacroView);
+            btn.style.borderColor = isMacroView ? 'var(--accent-cyan)' : 'transparent';
+            btn.style.color = isMacroView ? 'var(--accent-cyan)' : '';
+
+            // Ensure stage 3 is selected when viewing macro
+            if (isMacroView && currentStage !== 3) {
+                selectStage(3);
+                return;
             }
 
-            document.getElementById('pipelineStatusText').innerText = `Displaying ${target.title}`;
+            selectStage(currentStage);
         }
 
         function setRenderPass(pass) {
             currentPass = pass;
             document.getElementById('passBeauty').classList.toggle('active', pass === 'beauty');
+            if (document.getElementById('passAlbedo')) document.getElementById('passAlbedo').classList.toggle('active', pass === 'albedo');
             document.getElementById('passNormal').classList.toggle('active', pass === 'normal');
             document.getElementById('passDepth').classList.toggle('active', pass === 'depth');
 
@@ -844,17 +1108,56 @@
             document.getElementById('imgWipeReveal').src = stageImages[1][pass];
 
             // Right Pane is active stage pass
-            document.getElementById('imgRight').src = stageImages[currentStage][pass];
-            document.getElementById('imgWipeBase').src = stageImages[currentStage][pass];
+            const imgSrc = (currentStage === 3 && isMacroView) ? macroImages[pass] : stageImages[currentStage][pass];
+            document.getElementById('imgRight').src = imgSrc;
+            document.getElementById('imgWipeBase').src = imgSrc;
+
+            updateLoupeImage();
         }
 
-        function update3DModel() {
-            const mv = document.getElementById('modelViewer');
-            const targetGlb = stageImages[currentStage].glb;
-            if (mv.src !== targetGlb) {
-                mv.src = targetGlb;
+        function updateLoupeImage() {
+            const imgLoupe = document.getElementById('imgLoupeBase');
+            if (imgLoupe) {
+                const imgSrc = (currentStage === 3 && isMacroView) ? macroImages[currentPass] : stageImages[currentStage][currentPass];
+                imgLoupe.src = imgSrc;
             }
         }
+
+        function updateStratHeight(val) {
+            document.getElementById('stratVal').innerText = parseFloat(val).toFixed(1) + ' m';
+            const pct = Math.min(100, Math.max(0, (val - 15) / 10 * 100));
+            document.getElementById('blendPctLabel').innerText = `blend z=${val}m`;
+        }
+
+        // Macro Detail Loupe Interaction (2.5x Magnification)
+        const loupeContainer = document.getElementById('loupeContainer');
+        const loupeGlass = document.getElementById('loupeGlass');
+        const imgLoupeBase = document.getElementById('imgLoupeBase');
+        const ZOOM_FACTOR = 2.5;
+
+        loupeContainer.addEventListener('mousemove', (e) => {
+            if (currentViewMode !== 'loupe') return;
+            const rect = imgLoupeBase.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
+                loupeGlass.style.display = 'none';
+                return;
+            }
+
+            loupeGlass.style.display = 'block';
+            loupeGlass.style.left = `${x}px`;
+            loupeGlass.style.top = `${y}px`;
+
+            loupeGlass.style.backgroundImage = `url(${imgLoupeBase.src})`;
+            loupeGlass.style.backgroundSize = `${rect.width * ZOOM_FACTOR}px ${rect.height * ZOOM_FACTOR}px`;
+            loupeGlass.style.backgroundPosition = `-${x * ZOOM_FACTOR - 140}px -${y * ZOOM_FACTOR - 140}px`;
+        });
+
+        loupeContainer.addEventListener('mouseleave', () => {
+            loupeGlass.style.display = 'none';
+        });
 
         // Wipe Slider Drag Interaction
         const wipeContainer = document.getElementById('wipeSliderView');
@@ -903,7 +1206,7 @@
             }, 600);
 
             setTimeout(() => {
-                statusText.innerText = `Synthesizing Street View PBR Materials...`;
+                statusText.innerText = `Synthesizing De-Lighted PBR Textures & Toksvig AA...`;
                 selectStage(3);
                 statusText.innerText = `Corridor Ready: ${locationName}`;
             }, 1200);

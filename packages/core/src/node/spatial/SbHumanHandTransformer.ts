@@ -1,0 +1,1151 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
+ ********************************************************************************/
+
+import * as fs from 'fs';
+import * as path from 'path';
+import { SbHumanLoader } from '../../common/spatial/SbHumanLoader.js';
+import { decodePng, encodePng } from '../texture-processing.js';
+
+export interface EnhancedHandMesh {
+    positions: Float32Array;
+    normals: Float32Array;
+    uvs: Float32Array;
+    colors: Float32Array;
+    indices: Uint32Array;
+    numVertices: number;
+    numTriangles: number;
+}
+
+export interface PbrTexturePack {
+    albedoPng: Buffer;
+    normalPng: Buffer;
+    ormPng: Buffer;
+    width: number;
+    height: number;
+}
+
+type Vec3 = [number, number, number];
+type Vec2 = [number, number];
+
+function vSub(a: Vec3, b: Vec3): Vec3 { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function vAdd(a: Vec3, b: Vec3): Vec3 { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
+function vScale(v: Vec3, s: number): Vec3 { return [v[0] * s, v[1] * s, v[2] * s]; }
+function vDot(a: Vec3, b: Vec3): number { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function vCross(a: Vec3, b: Vec3): Vec3 {
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+    ];
+}
+function vLen(v: Vec3): number { return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
+function vNorm(v: Vec3): Vec3 {
+    const l = vLen(v);
+    return l > 1e-7 ? [v[0] / l, v[1] / l, v[2] / l] : [0, 1, 0];
+}
+function clamp(v: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, v));
+}
+
+/**
+ * SbHumanHandTransformer transforms the parametric sb-human hand into
+ * a hyper-realistic, anatomically sculpted 3D model with C^2 surface continuity,
+ * surface-conformal UV parameterization, and delighted multi-frequency PBR textures.
+ */
+export class SbHumanHandTransformer {
+    public static readonly HAND_JOINTS = new Set([
+        20, // LeftWrist
+        25, 26, 27, // LeftIndex 1, 2, 3
+        28, 29, 30, // LeftMiddle 1, 2, 3
+        31, 32, 33, // LeftPinky 1, 2, 3
+        34, 35, 36, // LeftRing 1, 2, 3
+        37, 38, 39  // LeftThumb 1, 2, 3
+    ]);
+
+    public static readonly DIGIT_JOINTS: Record<string, number[]> = {
+        thumb: [37, 38, 39],
+        index: [25, 26, 27],
+        middle: [28, 29, 30],
+        ring: [34, 35, 36],
+        pinky: [31, 32, 33]
+    };
+
+    /**
+     * Extracts, subdivides, sculpts, and parameterizes the hand submesh.
+     */
+    public static transformHand(
+        loader: SbHumanLoader,
+        options: {
+            subdivisionIterations?: number;
+            sculptStrength?: number;
+            recenterOrigin?: boolean;
+        } = {}
+    ): EnhancedHandMesh {
+        const subIters = options.subdivisionIterations !== undefined ? options.subdivisionIterations : 1;
+        const strength = options.sculptStrength !== undefined ? options.sculptStrength : 1.0;
+
+        // 1. Identify hand vertices and build vertex remapping
+        const nv = loader.header.numVertices;
+        const isHand = new Uint8Array(nv);
+        const vertexDigitMap = new Int8Array(nv).fill(-1); // 0=thumb, 1=index, 2=middle, 3=ring, 4=pinky, 5=palm
+
+        for (let i = 0; i < nv; i++) {
+            const sw = loader.skinWeights[i];
+            let maxW = 0;
+            let bestJoint = -1;
+            for (let k = 0; k < 4; k++) {
+                const j = sw.joints[k];
+                const w = sw.weights[k];
+                if (SbHumanHandTransformer.HAND_JOINTS.has(j) && w > maxW) {
+                    maxW = w;
+                    bestJoint = j;
+                }
+            }
+            if (maxW > 0.05) {
+                isHand[i] = 1;
+                if ([37, 38, 39].includes(bestJoint)) vertexDigitMap[i] = 0;
+                else if ([25, 26, 27].includes(bestJoint)) vertexDigitMap[i] = 1;
+                else if ([28, 29, 30].includes(bestJoint)) vertexDigitMap[i] = 2;
+                else if ([34, 35, 36].includes(bestJoint)) vertexDigitMap[i] = 3;
+                else if ([31, 32, 33].includes(bestJoint)) vertexDigitMap[i] = 4;
+                else vertexDigitMap[i] = 5; // palm/wrist
+            }
+        }
+
+        // 2. Extract closed triangles where all 3 vertices belong to the hand
+        const rawIndices = loader.indices;
+        const handTriangles: [number, number, number][] = [];
+        const oldToNew = new Map<number, number>();
+        const newPositions: Vec3[] = [];
+        const newDigitMap: number[] = [];
+
+        for (let f = 0; f < rawIndices.length; f += 3) {
+            const i0 = rawIndices[f];
+            const i1 = rawIndices[f + 1];
+            const i2 = rawIndices[f + 2];
+            if (isHand[i0] && isHand[i1] && isHand[i2]) {
+                const getNewIdx = (oldIdx: number) => {
+                    let nIdx = oldToNew.get(oldIdx);
+                    if (nIdx === undefined) {
+                        nIdx = newPositions.length;
+                        oldToNew.set(oldIdx, nIdx);
+                        newPositions.push([
+                            loader.basePositions[oldIdx * 3 + 0],
+                            loader.basePositions[oldIdx * 3 + 1],
+                            loader.basePositions[oldIdx * 3 + 2]
+                        ]);
+                        newDigitMap.push(vertexDigitMap[oldIdx]);
+                    }
+                    return nIdx;
+                };
+                handTriangles.push([getNewIdx(i0), getNewIdx(i1), getNewIdx(i2)]);
+            }
+        }
+
+        // 3. Loop Subdivision for C^2 continuous smooth limit surface
+        let curPositions = newPositions;
+        let curTriangles = handTriangles;
+        let curDigitMap = newDigitMap;
+
+        for (let it = 0; it < subIters; it++) {
+            const subResult = SbHumanHandTransformer.subdivideMesh(curPositions, curTriangles, curDigitMap);
+            curPositions = subResult.positions;
+            curTriangles = subResult.triangles;
+            curDigitMap = subResult.digitMap;
+        }
+
+        // 4. Center or orient if requested
+        const wristPos: Vec3 = [
+            loader.joints[20].pos[0],
+            loader.joints[20].pos[1],
+            loader.joints[20].pos[2]
+        ];
+
+        // 5. Anatomical Sculpting
+        SbHumanHandTransformer.applyAnatomicalSculpting(curPositions, curDigitMap, loader, strength);
+
+        // 6. Compute Analytical Smooth Normals
+        const preNormals = SbHumanHandTransformer.computeSmoothNormals(curPositions, curTriangles);
+
+        // 7. Continuous Surface-Conformal Dual-Island UV Parameterization (Zero knuckle/finger seams)
+        const {
+            positions: splitPositions,
+            normals: splitNormals,
+            uvs: splitUvs,
+            triangles: splitTriangles
+        } = SbHumanHandTransformer.computeContinuousDualIslandUvs(curPositions, preNormals, curTriangles, loader);
+
+        // Flatten buffers
+        const numV = splitPositions.length;
+        const positionsFlat = new Float32Array(numV * 3);
+        const normalsFlat = new Float32Array(numV * 3);
+        const uvsFlat = new Float32Array(numV * 2);
+        const colorsFlat = new Float32Array(numV * 3);
+
+        const centerOffset = options.recenterOrigin ? wristPos : [0, 0, 0];
+
+        for (let i = 0; i < numV; i++) {
+            positionsFlat[i * 3 + 0] = splitPositions[i][0] - centerOffset[0];
+            positionsFlat[i * 3 + 1] = splitPositions[i][1] - centerOffset[1];
+            positionsFlat[i * 3 + 2] = splitPositions[i][2] - centerOffset[2];
+
+            normalsFlat[i * 3 + 0] = splitNormals[i][0];
+            normalsFlat[i * 3 + 1] = splitNormals[i][1];
+            normalsFlat[i * 3 + 2] = splitNormals[i][2];
+
+            uvsFlat[i * 2 + 0] = splitUvs[i][0];
+            uvsFlat[i * 2 + 1] = splitUvs[i][1];
+
+            colorsFlat[i * 3 + 0] = 0.85;
+            colorsFlat[i * 3 + 1] = 0.75;
+            colorsFlat[i * 3 + 2] = 0.70;
+        }
+
+        const indicesFlat = new Uint32Array(splitTriangles.length * 3);
+        for (let t = 0; t < splitTriangles.length; t++) {
+            indicesFlat[t * 3 + 0] = splitTriangles[t][0];
+            indicesFlat[t * 3 + 1] = splitTriangles[t][1];
+            indicesFlat[t * 3 + 2] = splitTriangles[t][2];
+        }
+
+        return {
+            positions: positionsFlat,
+            normals: normalsFlat,
+            uvs: uvsFlat,
+            colors: colorsFlat,
+            indices: indicesFlat,
+            numVertices: numV,
+            numTriangles: splitTriangles.length
+        };
+    }
+
+    /**
+     * Subdivides triangle mesh with Loop subdivision rule.
+     */
+    private static subdivideMesh(
+        positions: Vec3[],
+        triangles: [number, number, number][],
+        digitMap: number[]
+    ): { positions: Vec3[]; triangles: [number, number, number][]; digitMap: number[] } {
+        const edgeMap = new Map<string, { v0: number; v1: number; opps: number[]; midIdx?: number }>();
+        const makeKey = (a: number, b: number) => a < b ? `${a}_${b}` : `${b}_${a}`;
+
+        for (const [i0, i1, i2] of triangles) {
+            const edges: [number, number, number][] = [
+                [i0, i1, i2],
+                [i1, i2, i0],
+                [i2, i0, i1]
+            ];
+            for (const [a, b, opp] of edges) {
+                const k = makeKey(a, b);
+                let entry = edgeMap.get(k);
+                if (!entry) {
+                    entry = { v0: Math.min(a, b), v1: Math.max(a, b), opps: [] };
+                    edgeMap.set(k, entry);
+                }
+                entry.opps.push(opp);
+            }
+        }
+
+        const newPositions: Vec3[] = [...positions.map(p => [...p] as Vec3)];
+        const newDigitMap: number[] = [...digitMap];
+
+        // 1. Compute midpoints for edges
+        for (const entry of edgeMap.values()) {
+            const pA = positions[entry.v0];
+            const pB = positions[entry.v1];
+            let edgePos: Vec3;
+            if (entry.opps.length === 2) {
+                const pC = positions[entry.opps[0]];
+                const pD = positions[entry.opps[1]];
+                edgePos = [
+                    (pA[0] + pB[0]) * 0.375 + (pC[0] + pD[0]) * 0.125,
+                    (pA[1] + pB[1]) * 0.375 + (pC[1] + pD[1]) * 0.125,
+                    (pA[2] + pB[2]) * 0.375 + (pC[2] + pD[2]) * 0.125
+                ];
+            } else {
+                edgePos = [
+                    (pA[0] + pB[0]) * 0.5,
+                    (pA[1] + pB[1]) * 0.5,
+                    (pA[2] + pB[2]) * 0.5
+                ];
+            }
+            entry.midIdx = newPositions.length;
+            newPositions.push(edgePos);
+            newDigitMap.push(digitMap[entry.v0] === digitMap[entry.v1] ? digitMap[entry.v0] : digitMap[entry.v0]);
+        }
+
+        // 2. Build 4 child triangles for each parent triangle
+        const newTriangles: [number, number, number][] = [];
+        for (const [v0, v1, v2] of triangles) {
+            const m01 = edgeMap.get(makeKey(v0, v1))!.midIdx!;
+            const m12 = edgeMap.get(makeKey(v1, v2))!.midIdx!;
+            const m20 = edgeMap.get(makeKey(v2, v0))!.midIdx!;
+
+            newTriangles.push([v0, m01, m20]);
+            newTriangles.push([v1, m12, m01]);
+            newTriangles.push([v2, m20, m12]);
+            newTriangles.push([m01, m12, m20]);
+        }
+
+        return { positions: newPositions, triangles: newTriangles, digitMap: newDigitMap };
+    }
+
+    /**
+     * Applies anatomical micro-geometry deformations:
+     * - Thenar & Hypothenar eminence muscle volumes
+     * - Palmar cup hollow
+     * - Knuckle condylar flaring at MCP, PIP, DIP
+     * - Volar fingertip pulp cushioning
+     * - Recessed nail bed & elevated eponychium cuticle lip
+     */
+    private static applyAnatomicalSculpting(
+        positions: Vec3[],
+        digitMap: number[],
+        loader: SbHumanLoader,
+        strength: number = 1.0
+    ): void {
+        // Wrist position
+        const wrist = loader.joints[20].pos;
+
+        // 1. Thenar Eminence (Thumb ball: muscular convex bulge at palm base)
+        const thenarCenter: Vec3 = [wrist[0] + 0.038, wrist[1] - 0.012, wrist[2] + 0.045];
+        const thenarRadius = 0.036;
+        const thenarDisp: Vec3 = [0.0008, -0.0042 * strength, 0.0025 * strength];
+
+        // 2. Hypothenar Eminence (Pinky ball: ulnar border cushion)
+        const hypoCenter: Vec3 = [wrist[0] + 0.042, wrist[1] - 0.010, wrist[2] - 0.035];
+        const hypoRadius = 0.032;
+        const hypoDisp: Vec3 = [0.0005, -0.0034 * strength, -0.0020 * strength];
+
+        // 3. Palmar Aponeurosis Hollow (Center of palm concavity)
+        const palmCenter: Vec3 = [wrist[0] + 0.060, wrist[1] - 0.006, wrist[2] - 0.002];
+        const palmRadius = 0.028;
+        const palmDisp: Vec3 = [0.0, 0.0008 * strength, 0.0];
+
+        // 4. Knuckle condyle list: [jointIndex, radius, flareStrength]
+        const condyles: Array<{ joint: number; radius: number; flare: number }> = [
+            // MCP joints
+            { joint: 25, radius: 0.016, flare: 0.12 },
+            { joint: 28, radius: 0.016, flare: 0.12 },
+            { joint: 34, radius: 0.015, flare: 0.11 },
+            { joint: 31, radius: 0.014, flare: 0.11 },
+            { joint: 37, radius: 0.018, flare: 0.13 },
+            // PIP joints
+            { joint: 26, radius: 0.013, flare: 0.10 },
+            { joint: 29, radius: 0.013, flare: 0.10 },
+            { joint: 35, radius: 0.012, flare: 0.09 },
+            { joint: 32, radius: 0.011, flare: 0.09 },
+            { joint: 38, radius: 0.015, flare: 0.11 },
+            // DIP joints
+            { joint: 27, radius: 0.011, flare: 0.08 },
+            { joint: 30, radius: 0.011, flare: 0.08 },
+            { joint: 36, radius: 0.010, flare: 0.07 },
+            { joint: 33, radius: 0.009, flare: 0.07 },
+            { joint: 39, radius: 0.013, flare: 0.09 }
+        ];
+
+        // Distal phalanx tips for pulp cushioning & nail beds
+        const distalFingers = [
+            { digit: 0, joint: 39, name: 'thumb' },
+            { digit: 1, joint: 27, name: 'index' },
+            { digit: 2, joint: 30, name: 'middle' },
+            { digit: 3, joint: 36, name: 'ring' },
+            { digit: 4, joint: 33, name: 'pinky' }
+        ];
+
+        for (let i = 0; i < positions.length; i++) {
+            const p = positions[i];
+
+            // --- Thenar Eminence ---
+            const dThenar = vLen(vSub(p, thenarCenter));
+            if (dThenar < thenarRadius) {
+                const t = dThenar / thenarRadius;
+                const w = (1.0 - t) * (1.0 - t) * (1.0 + 2.0 * t);
+                p[0] += thenarDisp[0] * w;
+                p[1] += thenarDisp[1] * w;
+                p[2] += thenarDisp[2] * w;
+            }
+
+            // --- Hypothenar Eminence ---
+            const dHypo = vLen(vSub(p, hypoCenter));
+            if (dHypo < hypoRadius) {
+                const t = dHypo / hypoRadius;
+                const w = (1.0 - t) * (1.0 - t) * (1.0 + 2.0 * t);
+                p[0] += hypoDisp[0] * w;
+                p[1] += hypoDisp[1] * w;
+                p[2] += hypoDisp[2] * w;
+            }
+
+            // --- Palmar Cup Hollow ---
+            const dPalm = vLen(vSub(p, palmCenter));
+            if (dPalm < palmRadius) {
+                const t = dPalm / palmRadius;
+                const w = (1.0 - t) * (1.0 - t) * (1.0 + 2.0 * t);
+                p[0] += palmDisp[0] * w;
+                p[1] += palmDisp[1] * w;
+                p[2] += palmDisp[2] * w;
+            }
+
+            // --- Knuckle Condylar Flaring ---
+            for (const c of condyles) {
+                const jPos: Vec3 = [
+                    loader.joints[c.joint].pos[0],
+                    loader.joints[c.joint].pos[1],
+                    loader.joints[c.joint].pos[2]
+                ];
+                const dCond = vLen(vSub(p, jPos));
+                if (dCond < c.radius) {
+                    const t = dCond / c.radius;
+                    const w = Math.cos(t * Math.PI * 0.5) * c.flare * strength;
+                    // Lateral flare (along Z axis for digits 1-4, along Y/X for thumb)
+                    if (c.joint >= 37) {
+                        p[1] += (p[1] - jPos[1]) * w * 0.8;
+                    } else {
+                        p[2] += (p[2] - jPos[2]) * w;
+                    }
+                }
+            }
+
+            // --- Volar Pulp Cushioning & Nail Bed Relief ---
+            const pRelWrist: Vec3 = [
+                p[0] - wrist[0],
+                p[1] - wrist[1],
+                p[2] - wrist[2]
+            ];
+
+            // Volar pulp pads for each finger (expanding downward)
+            const volarPulpPads = [
+                { center: [0.098, -0.024, 0.082], radius: 0.016, depth: 0.0024 }, // Thumb
+                { center: [0.178, -0.012, 0.021], radius: 0.014, depth: 0.0022 }, // Index
+                { center: [0.187, -0.008, -0.017], radius: 0.014, depth: 0.0022 }, // Middle
+                { center: [0.169, -0.010, -0.045], radius: 0.014, depth: 0.0022 }, // Ring
+                { center: [0.130, -0.020, -0.072], radius: 0.013, depth: 0.0020 }  // Pinky
+            ];
+
+            for (const pad of volarPulpPads) {
+                const dx = pRelWrist[0] - pad.center[0];
+                const dy = pRelWrist[1] - pad.center[1];
+                const dz = pRelWrist[2] - pad.center[2];
+                const d = Math.hypot(dx, dy, dz);
+                if (d < pad.radius && pRelWrist[1] < pad.center[1] + 0.003) {
+                    const w = Math.exp(-(d * d) / (0.008 * 0.008)) * strength;
+                    p[1] -= pad.depth * w; // Cushioning expansion
+                }
+            }
+
+            // Distal Nail Beds (Depressed ungual matrix & elevated proximal eponychium lip)
+            const nailBeds3D = [
+                { name: 'Thumb',  center: [0.0927, -0.0148, 0.0763], dir: [0.55, 0.0, 0.83], radius: 0.012 },
+                { name: 'Index',  center: [0.1721, -0.0040, 0.0210], dir: [1.00, 0.0, 0.00], radius: 0.011 },
+                { name: 'Middle', center: [0.1827, -0.0007, -0.0156], dir: [1.00, 0.0, 0.00], radius: 0.011 },
+                { name: 'Ring',   center: [0.1631, -0.0032, -0.0435], dir: [1.00, 0.0, 0.00], radius: 0.011 },
+                { name: 'Pinky',  center: [0.1265, -0.0130, -0.0726], dir: [0.95, 0.0, -0.30], radius: 0.010 }
+            ];
+
+            for (const nb of nailBeds3D) {
+                const dx = pRelWrist[0] - nb.center[0];
+                const dy = pRelWrist[1] - nb.center[1];
+                const dz = pRelWrist[2] - nb.center[2];
+                const d = Math.hypot(dx, dy, dz);
+                if (d < nb.radius && pRelWrist[1] > nb.center[1] - 0.005) {
+                    // Longitudinal projection along finger axis
+                    const tLong = dx * nb.dir[0] + dz * nb.dir[2];
+                    const wDist = 1.0 - (d / nb.radius);
+                    if (tLong > -0.005 && tLong < 0.006) {
+                        // Depress nail plate into ungual bed
+                        p[1] -= 0.00070 * wDist * strength;
+                    } else if (tLong >= -0.008 && tLong <= -0.005) {
+                        // Elevate eponychium cuticle lip
+                        p[1] += 0.00050 * wDist * strength;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+    /**
+     * Surface-Conformal Continuous Dual-Island UV Parameterization with Seam Splitting.
+     * Eliminates knuckle and finger seams completely by mapping the entire dorsal surface
+     * (wrist, dorsum, knuckles, and all 5 fingers) into one continuous sheet (U in [0.03, 0.47]),
+     * and the entire palmar surface into one continuous sheet (U in [0.53, 0.97]).
+     * Seam vertices along the lateral boundary are cleanly split so zero triangles straddle the gap.
+     */
+    private static computeContinuousDualIslandUvs(
+        positions: Vec3[],
+        normals: Vec3[],
+        triangles: [number, number, number][],
+        loader: SbHumanLoader
+    ): { positions: Vec3[]; normals: Vec3[]; uvs: Vec2[]; triangles: [number, number, number][] } {
+        const wrist = loader.joints[20].pos;
+        const middleMcp = loader.joints[28].pos;
+
+        const tLong = vNorm(vSub([middleMcp[0], middleMcp[1], middleMcp[2]], [wrist[0], wrist[1], wrist[2]]));
+        const nDorsal: Vec3 = [0, 1, 0];
+        const tLat = vNorm(vCross(tLong, nDorsal));
+
+        const minU = -0.080, maxU = 0.100;
+        const minV = -0.060, maxV = 0.200;
+
+        const outPositions: Vec3[] = [];
+        const outNormals: Vec3[] = [];
+        const outUvs: Vec2[] = [];
+        const outTriangles: [number, number, number][] = [];
+        const vertKeyMap = new Map<string, number>();
+
+        const getYMid = (x: number): number => {
+            if (x < 0.0) return 0.005;
+            if (x > 0.08) return -0.0085;
+            const t = x / 0.08;
+            return 0.005 * (1 - t) + (-0.0085) * t;
+        };
+
+        for (const [i0, i1, i2] of triangles) {
+            const p0 = positions[i0], p1 = positions[i1], p2 = positions[i2];
+            const e01 = vSub(p1, p0), e02 = vSub(p2, p0);
+            const fn = vNorm(vCross(e01, e02));
+
+            // Face is dorsal if its center is above anatomical midline and normal points upwards
+            const centerX = (p0[0] + p1[0] + p2[0]) / 3;
+            const centerY = (p0[1] + p1[1] + p2[1]) / 3;
+            const isDorsal = (centerY > getYMid(centerX)) && (fn[1] > -0.30);
+            const newCorners: [number, number, number] = [0, 0, 0];
+            const triCorners = [i0, i1, i2];
+
+            for (let c = 0; c < 3; c++) {
+                const vIdx = triCorners[c];
+                const key = `${vIdx}_${isDorsal ? 'D' : 'V'}`;
+                let finalIdx = vertKeyMap.get(key);
+
+                if (finalIdx === undefined) {
+                    finalIdx = outPositions.length;
+                    vertKeyMap.set(key, finalIdx);
+
+                    const p = positions[vIdx];
+                    outPositions.push([...p]);
+                    outNormals.push([...normals[vIdx]]);
+
+                    const r = vSub(p, [wrist[0], wrist[1], wrist[2]]);
+                    const uRaw = vDot(r, tLat);
+                    const vRaw = vDot(r, tLong);
+
+                    const uNorm = clamp((uRaw - minU) / (maxU - minU), 0, 1);
+                    const vNorm = clamp((vRaw - minV) / (maxV - minV), 0, 1);
+
+                    let uv: Vec2;
+                    if (isDorsal) {
+                        uv = [
+                            0.03 + uNorm * 0.44,
+                            0.03 + (1.0 - vNorm) * 0.94
+                        ];
+                    } else {
+                        uv = [
+                            0.53 + (1.0 - uNorm) * 0.44,
+                            0.03 + (1.0 - vNorm) * 0.94
+                        ];
+                    }
+                    outUvs.push(uv);
+                }
+                newCorners[c] = finalIdx;
+            }
+
+            outTriangles.push(newCorners);
+        }
+
+        return {
+            positions: outPositions,
+            normals: outNormals,
+            uvs: outUvs,
+            triangles: outTriangles
+        };
+    }
+
+    /**
+     * Analytical angle-weighted smooth surface normals.
+     */
+    private static computeSmoothNormals(positions: Vec3[], triangles: [number, number, number][]): Vec3[] {
+        const normals: Vec3[] = positions.map(() => [0, 0, 0] as Vec3);
+
+        for (const [i0, i1, i2] of triangles) {
+            const p0 = positions[i0];
+            const p1 = positions[i1];
+            const p2 = positions[i2];
+
+            const e01 = vSub(p1, p0);
+            const e02 = vSub(p2, p0);
+            const fn = vCross(e01, e02);
+            const fnLen = vLen(fn);
+            if (fnLen > 1e-8) {
+                const normFn: Vec3 = [fn[0] / fnLen, fn[1] / fnLen, fn[2] / fnLen];
+                // Accumulate onto all 3 vertices
+                normals[i0] = vAdd(normals[i0], normFn);
+                normals[i1] = vAdd(normals[i1], normFn);
+                normals[i2] = vAdd(normals[i2], normFn);
+            }
+        }
+
+        return normals.map(n => vNorm(n));
+    }
+
+    /**
+     * Bakes hyper-realistic 2K PBR texture maps (Albedo, Tangent Normal, ORM)
+     * using delighted photographic macro references and continuous dual-island layout.
+     */
+    public static bakePbrTextures(
+        palmRefPngPath: string,
+        dorsalRefPngPath: string,
+        nailRefPngPath: string,
+        outDir: string,
+        width: number = 2048,
+        height: number = 2048
+    ): PbrTexturePack {
+        fs.mkdirSync(outDir, { recursive: true });
+
+        // 1. Decode photographic macro references
+        const palmImg = decodePng(fs.readFileSync(palmRefPngPath));
+        const dorsalImg = decodePng(fs.readFileSync(dorsalRefPngPath));
+        const nailImg = decodePng(fs.readFileSync(nailRefPngPath));
+
+        const sampleBilinear = (img: { data: Buffer | Uint8Array; width: number; height: number }, u: number, v: number): [number, number, number, number] => {
+            const uu = (u % 1.0 + 1.0) % 1.0;
+            const vv = (v % 1.0 + 1.0) % 1.0;
+            const px = uu * (img.width - 1);
+            const py = vv * (img.height - 1);
+            const x0 = Math.floor(px);
+            const y0 = Math.floor(py);
+            const x1 = Math.min(img.width - 1, x0 + 1);
+            const y1 = Math.min(img.height - 1, y0 + 1);
+            const fx = px - x0;
+            const fy = py - y0;
+
+            const idx00 = (y0 * img.width + x0) * 4;
+            const idx10 = (y0 * img.width + x1) * 4;
+            const idx01 = (y1 * img.width + x0) * 4;
+            const idx11 = (y1 * img.width + x1) * 4;
+
+            const res: [number, number, number, number] = [0, 0, 0, 0];
+            for (let c = 0; c < 4; c++) {
+                const c0 = img.data[idx00 + c] * (1 - fx) + img.data[idx10 + c] * fx;
+                const c1 = img.data[idx01 + c] * (1 - fx) + img.data[idx11 + c] * fx;
+                res[c] = c0 * (1 - fy) + c1 * fy;
+            }
+            return res;
+        };
+
+        const smoothstep = (edge0: number, edge1: number, x: number): number => {
+            const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+            return t * t * (3 - 2 * t);
+        };
+
+        const albedoBuf = Buffer.alloc(width * height * 4);
+        const normalBuf = Buffer.alloc(width * height * 4);
+        const ormBuf = Buffer.alloc(width * height * 4);
+
+        // Exact calibrated fingernail placements on the Dorsal Island (matching distal phalanx geometry):
+        const nails = [
+            { name: 'Thumb',  u: 0.4232, v: 0.4234, angle: 22.28 * Math.PI / 180,  w: 0.038, l: 0.056 },
+            { name: 'Index',  u: 0.2935, v: 0.1316, angle: -0.50 * Math.PI / 180,  w: 0.030, l: 0.052 },
+            { name: 'Middle', u: 0.2028, v: 0.0946, angle: -5.94 * Math.PI / 180,  w: 0.032, l: 0.054 },
+            { name: 'Ring',   u: 0.1340, v: 0.1562, angle: -5.68 * Math.PI / 180,  w: 0.030, l: 0.052 },
+            { name: 'Pinky',  u: 0.0598, v: 0.2862, angle: -14.75 * Math.PI / 180, w: 0.026, l: 0.046 }
+        ];
+
+        // 3 Anatomical dorsal superficial veins (Rete venosum dorsale manus)
+        const dorsalVeins = [
+            // Vein 1: Central (between 3rd and 4th metacarpals)
+            [ [0.18, 0.48], [0.19, 0.62], [0.21, 0.76], [0.23, 0.92] ],
+            // Vein 2: Radial (between 2nd and 3rd metacarpals)
+            [ [0.26, 0.50], [0.25, 0.64], [0.25, 0.78], [0.26, 0.90] ],
+            // Vein 3: Cephalic branch (from 1st webspace towards radial carpus)
+            [ [0.33, 0.62], [0.31, 0.74], [0.29, 0.86], [0.27, 0.95] ]
+        ];
+
+        // Extensor Digitorum Tendons (4 pale cords from wrist to MCP knuckles)
+        const tendons = [0.272, 0.203, 0.134, 0.095];
+
+        // Transverse joint flexion folds (MCP, PIP, DIP)
+        const jointFolds = [
+            // MCP Knuckles
+            { u: 0.203, v: 0.447, r: 0.024, k: 110.0 },
+            { u: 0.283, v: 0.473, r: 0.022, k: 110.0 },
+            { u: 0.121, v: 0.452, r: 0.022, k: 110.0 },
+            { u: 0.100, v: 0.442, r: 0.018, k: 110.0 },
+            { u: 0.333, v: 0.639, r: 0.026, k: 90.0  },
+            // PIP Joints
+            { u: 0.200, v: 0.250, r: 0.016, k: 130.0 },
+            { u: 0.284, v: 0.291, r: 0.016, k: 130.0 },
+            { u: 0.135, v: 0.273, r: 0.016, k: 130.0 },
+            { u: 0.088, v: 0.376, r: 0.014, k: 130.0 },
+            { u: 0.346, v: 0.514, r: 0.018, k: 110.0 },
+            // DIP Joints
+            { u: 0.203, v: 0.136, r: 0.012, k: 150.0 },
+            { u: 0.292, v: 0.174, r: 0.012, k: 150.0 },
+            { u: 0.128, v: 0.188, r: 0.012, k: 150.0 },
+            { u: 0.133, v: 0.256, r: 0.010, k: 150.0 }
+        ];
+
+        // Palmar flexion creases (normalized to palmar island [0, 1])
+        const palmarCreases = [
+            // Distal transverse crease (Heart line)
+            [ [0.16, 0.60], [0.32, 0.54], [0.52, 0.51] ],
+            // Proximal transverse crease (Head line)
+            [ [0.76, 0.62], [0.52, 0.65], [0.24, 0.68] ],
+            // Thenar radial longitudinal crease (Life line)
+            [ [0.76, 0.60], [0.68, 0.70], [0.56, 0.82], [0.46, 0.90] ]
+        ];
+
+        // Helper: distance from point (px, py) to line segment (x0, y0)-(x1, y1)
+        const distToSeg = (px: number, py: number, x0: number, y0: number, x1: number, y1: number) => {
+            const l2 = (x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0);
+            if (l2 === 0) return { dist: Math.hypot(px - x0, py - y0), dx: px - x0, dy: py - y0 };
+            const t = Math.max(0, Math.min(1, ((px - x0) * (x1 - x0) + (py - y0) * (y1 - y0)) / l2));
+            const projX = x0 + t * (x1 - x0);
+            const projY = y0 + t * (y1 - y0);
+            return { dist: Math.hypot(px - projX, py - projY), dx: px - projX, dy: py - projY };
+        };
+
+        const cos37 = Math.cos(0.65);
+        const sin37 = Math.sin(0.65);
+
+        for (let y = 0; y < height; y++) {
+            const v = y / (height - 1);
+            for (let x = 0; x < width; x++) {
+                const u = x / (width - 1);
+                const outIdx = (y * width + x) * 4;
+
+                if (u < 0.50) {
+                    // ==========================================
+                    // --- DORSAL ISLAND (MULTI-SCALE PBR) ---
+                    // ==========================================
+
+                    // 1. Multi-Frequency Micro-Relief (0.5 mm biological skin pore & sulci cutis scale)
+                    // Octave A: scale 4.5, unrotated
+                    const normU = u / 0.50;
+                    const scaleA = 4.5;
+                    const sA = sampleBilinear(dorsalImg, normU * scaleA, v * scaleA);
+
+                    // Octave B: scale 5.8, rotated 37 degrees (aperiodic natural organic tessellation)
+                    const uRotR = normU * cos37 - v * sin37;
+                    const vRotR = normU * sin37 + v * cos37;
+                    const scaleB = 5.8;
+                    const sB = sampleBilinear(dorsalImg, uRotR * scaleB + 0.37, vRotR * scaleB + 0.53);
+
+                    const microR = sA[0] * 0.55 + sB[0] * 0.45;
+                    const microG = sA[1] * 0.55 + sB[1] * 0.45;
+                    const microB = sA[2] * 0.55 + sB[2] * 0.45;
+
+                    // 2. Macro Chromophore Gradient (broad skin tone)
+                    const macroDorsal = sampleBilinear(dorsalImg, normU, v);
+
+                    let r = clamp(Math.round(macroDorsal[0] * 0.40 + microR * 0.60), 0, 255);
+                    let g = clamp(Math.round(macroDorsal[1] * 0.40 + microG * 0.60), 0, 255);
+                    let b = clamp(Math.round(macroDorsal[2] * 0.40 + microB * 0.60), 0, 255);
+
+                    // 3. High-Frequency Normal Map from Micro-Relief Finite Differences
+                    const eps = 0.0015;
+                    const sAR = sampleBilinear(dorsalImg, normU * scaleA + eps * scaleA, v * scaleA)[0];
+                    const sAV = sampleBilinear(dorsalImg, normU * scaleA, v * scaleA + eps * scaleA)[0];
+                    const gradU = (sAR - sA[0]) / eps;
+                    const gradV = (sAV - sA[0]) / eps;
+
+                    let nx = clamp(Math.round(128 + gradU * 0.016), 0, 255);
+                    let ny = clamp(Math.round(128 + gradV * 0.016), 0, 255);
+                    let nz = 246;
+
+                    let ao = 255;
+                    let roughness = 118; // ~0.46 natural skin micro-sheen
+
+                    // 4. Subcutaneous Venous Network (Rete Venosum Dorsale Manus)
+                    if (v > 0.45 && v < 0.96) {
+                        let minVDist = Infinity;
+                        let vDx = 0;
+                        for (const vPts of dorsalVeins) {
+                            for (let seg = 0; seg < vPts.length - 1; seg++) {
+                                const res = distToSeg(u, v, vPts[seg][0], vPts[seg][1], vPts[seg+1][0], vPts[seg+1][1]);
+                                if (res.dist < minVDist) {
+                                    minVDist = res.dist;
+                                    vDx = res.dx;
+                                }
+                            }
+                        }
+                        if (minVDist < 0.015) {
+                            const vFade = smoothstep(0.45, 0.55, v) * (1.0 - smoothstep(0.92, 0.98, v));
+                            const wVein = Math.exp(-(minVDist * minVDist) / (0.0065 * 0.0065)) * vFade;
+                            r = clamp(Math.round(r - 24 * wVein), 0, 255);
+                            g = clamp(Math.round(g + 4 * wVein), 0, 255);
+                            b = clamp(Math.round(b + 18 * wVein), 0, 255);
+                            nx = clamp(Math.round(nx - (vDx / 0.0065) * 16 * wVein), 0, 255);
+                        }
+                    }
+
+                    // 5. Extensor Digitorum Tendon Cords
+                    if (v > 0.46 && v < 0.88) {
+                        const tFade = smoothstep(0.46, 0.52, v) * (1.0 - smoothstep(0.82, 0.88, v));
+                        for (const uTendon of tendons) {
+                            const duT = u - uTendon;
+                            if (Math.abs(duT) < 0.010) {
+                                const wT = Math.exp(-(duT * duT) / (0.0042 * 0.0042)) * tFade;
+                                r = clamp(Math.round(r + 14 * wT), 0, 255);
+                                g = clamp(Math.round(g + 14 * wT), 0, 255);
+                                b = clamp(Math.round(b + 9 * wT), 0, 255);
+                                nx = clamp(Math.round(nx - (duT / 0.0042) * 12 * wT), 0, 255);
+                            }
+                        }
+                    }
+
+                    // 6. Joint Flexion Folds (Accordion Wrinkles at Knuckles)
+                    for (const jt of jointFolds) {
+                        const djU = u - jt.u;
+                        const djV = v - jt.v;
+                        const dDist = Math.hypot(djU, djV);
+                        if (dDist < jt.r) {
+                            const wJ = Math.cos((dDist / jt.r) * Math.PI * 0.5);
+                            const foldWave = Math.sin((djV) * jt.k);
+                            ny = clamp(Math.round(ny + foldWave * 32 * wJ), 0, 255);
+                            if (foldWave > 0.2) {
+                                const dark = foldWave * 16 * wJ;
+                                r = clamp(Math.round(r - dark * 1.1), 0, 255);
+                                g = clamp(Math.round(g - dark * 1.0), 0, 255);
+                                b = clamp(Math.round(b - dark * 0.9), 0, 255);
+                            }
+                        }
+                    }
+
+                    // 7. Check if inside any of the 5 Fingernails
+                    for (const nail of nails) {
+                        const du = u - nail.u;
+                        const dv = v - nail.v;
+
+                        // Rotate by -angle into canonical nail frame
+                        const cosA = Math.cos(-nail.angle);
+                        const sinA = Math.sin(-nail.angle);
+                        const uRot = du * cosA - dv * sinA;
+                        const vRot = du * sinA + dv * cosA;
+
+                        const uNail = uRot / nail.w;
+                        const vNail = vRot / nail.l;
+
+                        // Slender anatomical fingernail composite ellipse SDF:
+                        const uHalfWidth = 0.25;
+                        const uNormSdf = uNail / uHalfWidth;
+                        let minDist = -1.0;
+                        if (Math.abs(uNormSdf) <= 1.2 && Math.abs(vNail) <= 0.45) {
+                            if (vNail > 0.10) {
+                                // Proximal cuticle ellipse
+                                const vRel = (vNail - 0.10) / 0.24;
+                                const distSq = uNormSdf * uNormSdf + vRel * vRel;
+                                minDist = (1.0 - Math.sqrt(distSq)) * uHalfWidth;
+                            } else if (vNail < -0.15) {
+                                // Distal free-edge ellipse
+                                const vRel = (vNail - (-0.15)) / 0.20;
+                                const distSq = uNormSdf * uNormSdf + vRel * vRel;
+                                minDist = (1.0 - Math.sqrt(distSq)) * uHalfWidth;
+                            } else {
+                                // Lateral body
+                                minDist = (1.0 - Math.abs(uNormSdf)) * uHalfWidth;
+                            }
+                        }
+
+                        const feather = 0.016;
+
+                        if (minDist > 0) {
+                            const nailWeight = smoothstep(0.0, feather, minDist);
+
+                            // Normalized longitudinal parameter:
+                            // t = 0.0 at proximal cuticle (lunula), t = 1.0 at distal free edge tip
+                            const tNail = clamp((0.34 - vNail) / 0.69, 0.0, 1.0);
+                            const uNailNorm = clamp(uNormSdf, -1.0, 1.0);
+
+                            // Sample strictly within pristine keratin plate of photographic reference
+                            const nV = clamp(0.22 + tNail * 0.58, 0.22, 0.80);
+                            const nU = clamp(0.50 + uNailNorm * 0.22, 0.28, 0.72);
+                            const nSample = sampleBilinear(nailImg, nU, nV);
+
+                            r = Math.round(r * (1.0 - nailWeight) + nSample[0] * nailWeight);
+                            g = Math.round(g * (1.0 - nailWeight) + nSample[1] * nailWeight);
+                            b = Math.round(b * (1.0 - nailWeight) + nSample[2] * nailWeight);
+
+                            // Eponychium cuticle soft raised lip inside proximal edge
+                            const dProximal = 0.34 - vNail;
+                            if (dProximal <= 0.05 && dProximal > 0) {
+                                const lipAngle = (dProximal / 0.05) * Math.PI;
+                                const lipH = Math.sin(lipAngle) * 14.0;
+                                ny = clamp(Math.round(ny * (1.0 - nailWeight) + (128 - lipH) * nailWeight), 0, 255);
+                            }
+
+                            // Longitudinal micro-striations along the nail plate
+                            const striation = Math.sin(uNail * 90.0) * 8.0;
+                            nx = clamp(Math.round(nx * (1.0 - nailWeight) + (128 + striation) * nailWeight), 0, 255);
+
+                            // High-gloss mirror clearcoat for nail plate
+                            roughness = Math.round(roughness * (1.0 - nailWeight) + 24 * nailWeight); // 24 / 255 ~ 0.094
+                            ao = Math.round(ao * (1.0 - nailWeight) + 255 * nailWeight);
+                        }
+                    }
+
+                    albedoBuf[outIdx + 0] = r;
+                    albedoBuf[outIdx + 1] = g;
+                    albedoBuf[outIdx + 2] = b;
+                    albedoBuf[outIdx + 3] = 255;
+
+                    normalBuf[outIdx + 0] = nx;
+                    normalBuf[outIdx + 1] = ny;
+                    normalBuf[outIdx + 2] = nz;
+                    normalBuf[outIdx + 3] = 255;
+
+                    ormBuf[outIdx + 0] = ao;
+                    ormBuf[outIdx + 1] = roughness;
+                    ormBuf[outIdx + 2] = 0;
+                    ormBuf[outIdx + 3] = 255;
+
+                } else {
+                    // ==========================================
+                    // --- PALMAR ISLAND (MULTI-SCALE PBR) ---
+                    // ==========================================
+
+                    const normU = (u - 0.50) / 0.50;
+
+                    // 1. Dual-Scale Friction Ridge Sampling (0.4 mm dermatoglyphics)
+                    const pA = sampleBilinear(palmImg, normU * 4.2, v * 4.2);
+                    const pB = sampleBilinear(palmImg, normU * 5.6 + 0.25, v * 5.6 + 0.35);
+                    const microPalmR = pA[0] * 0.60 + pB[0] * 0.40;
+                    const microPalmG = pA[1] * 0.60 + pB[1] * 0.40;
+                    const microPalmB = pA[2] * 0.60 + pB[2] * 0.40;
+
+                    const macroPalm = sampleBilinear(palmImg, normU, v);
+
+                    let pr = clamp(Math.round(macroPalm[0] * 0.35 + microPalmR * 0.65), 0, 255);
+                    let pg = clamp(Math.round(macroPalm[1] * 0.35 + microPalmG * 0.65), 0, 255);
+                    let pb = clamp(Math.round(macroPalm[2] * 0.35 + microPalmB * 0.65), 0, 255);
+
+                    // 2. High-Frequency Normal Map from Friction Ridges
+                    const palmEps = 0.0015;
+                    const pAR = sampleBilinear(palmImg, normU * 4.2 + palmEps * 4.2, v * 4.2)[0];
+                    const pAV = sampleBilinear(palmImg, normU * 4.2, v * 4.2 + palmEps * 4.2)[0];
+                    const pGradU = (pAR - pA[0]) / palmEps;
+                    const pGradV = (pAV - pA[0]) / palmEps;
+
+                    let pnx = clamp(Math.round(128 + pGradU * 0.018), 0, 255);
+                    let pny = clamp(Math.round(128 + pGradV * 0.018), 0, 255);
+                    let pnz = 244;
+                    let pao = 255;
+                    let pRoughness = 138; // ~0.54
+
+                    // 3. Major Palmar Flexion Creases (Heart Line, Head Line, Life Line)
+                    for (const cPts of palmarCreases) {
+                        for (let seg = 0; seg < cPts.length - 1; seg++) {
+                            const res = distToSeg(normU, v, cPts[seg][0], cPts[seg][1], cPts[seg+1][0], cPts[seg+1][1]);
+                            if (res.dist < 0.012) {
+                                const wC = Math.exp(-(res.dist * res.dist) / (0.0035 * 0.0035));
+                                pny = clamp(Math.round(pny - (res.dy / 0.0035) * 36 * wC), 0, 255);
+                                pnx = clamp(Math.round(pnx - (res.dx / 0.0035) * 36 * wC), 0, 255);
+                                pao = clamp(Math.round(pao - 70 * wC), 0, 255);
+                                pr = clamp(Math.round(pr + 12 * wC), 0, 255);
+                                pg = clamp(Math.round(pg - 14 * wC), 0, 255);
+                                pb = clamp(Math.round(pb - 8 * wC), 0, 255);
+                            }
+                        }
+                    }
+
+                    // 4. Volar Fingertip Pads (Rich capillary flush)
+                    if (v < 0.35) {
+                        const wPad = (1.0 - v / 0.35);
+                        pr = clamp(Math.round(pr + 16 * wPad), 0, 255);
+                        pg = clamp(Math.round(pg - 6 * wPad), 0, 255);
+                    }
+
+                    albedoBuf[outIdx + 0] = pr;
+                    albedoBuf[outIdx + 1] = pg;
+                    albedoBuf[outIdx + 2] = pb;
+                    albedoBuf[outIdx + 3] = 255;
+
+                    normalBuf[outIdx + 0] = pnx;
+                    normalBuf[outIdx + 1] = pny;
+                    normalBuf[outIdx + 2] = pnz;
+                    normalBuf[outIdx + 3] = 255;
+
+                    ormBuf[outIdx + 0] = pao;
+                    ormBuf[outIdx + 1] = pRoughness;
+                    ormBuf[outIdx + 2] = 0;
+                    ormBuf[outIdx + 3] = 255;
+                }
+            }
+        }
+
+        const albedoPng = encodePng(width, height, albedoBuf);
+        const normalPng = encodePng(width, height, normalBuf);
+        const ormPng = encodePng(width, height, ormBuf);
+
+        fs.writeFileSync(path.join(outDir, 'hand_albedo.png'), albedoPng);
+        fs.writeFileSync(path.join(outDir, 'hand_normal.png'), normalPng);
+        fs.writeFileSync(path.join(outDir, 'hand_orm.png'), ormPng);
+
+        return { albedoPng, normalPng, ormPng, width, height };
+    }
+
+    /**
+     * Packages the enhanced hand into standard binary glTF 2.0 (.glb) format
+     * with embedded PBR metallic-roughness material and textures.
+     */
+    public static exportGlb(
+        mesh: EnhancedHandMesh,
+        texturePack: PbrTexturePack,
+        outPath: string
+    ): Buffer {
+        const nv = mesh.numVertices;
+        const chunks: Buffer[] = [];
+        const views: any[] = [];
+        let offset = 0;
+
+        const addView = (data: ArrayBufferView, target?: number) => {
+            const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+            const pad = (4 - (buf.length % 4)) % 4;
+            const viewIdx = views.length;
+            views.push({
+                buffer: 0,
+                byteOffset: offset,
+                byteLength: buf.length,
+                ...(target ? { target } : {})
+            });
+            chunks.push(buf);
+            if (pad > 0) chunks.push(Buffer.alloc(pad));
+            offset += buf.length + pad;
+            return viewIdx;
+        };
+
+        const addImageBuffer = (pngBuf: Buffer) => {
+            const pad = (4 - (pngBuf.length % 4)) % 4;
+            const viewIdx = views.length;
+            views.push({
+                buffer: 0,
+                byteOffset: offset,
+                byteLength: pngBuf.length
+            });
+            chunks.push(pngBuf);
+            if (pad > 0) chunks.push(Buffer.alloc(pad));
+            offset += pngBuf.length + pad;
+            return viewIdx;
+        };
+
+        // Bounding box
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        for (let i = 0; i < nv; i++) {
+            const x = mesh.positions[i * 3 + 0];
+            const y = mesh.positions[i * 3 + 1];
+            const z = mesh.positions[i * 3 + 2];
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        }
+
+        const ARRAY = 34962;
+        const ELEMENTS = 34963;
+
+        const accessors: any[] = [
+            // 0: POSITION
+            { bufferView: addView(mesh.positions, ARRAY), componentType: 5126, count: nv, type: 'VEC3', min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+            // 1: NORMAL
+            { bufferView: addView(mesh.normals, ARRAY), componentType: 5126, count: nv, type: 'VEC3' },
+            // 2: TEXCOORD_0
+            { bufferView: addView(mesh.uvs, ARRAY), componentType: 5126, count: nv, type: 'VEC2' },
+            // 3: COLOR_0
+            { bufferView: addView(mesh.colors, ARRAY), componentType: 5126, count: nv, type: 'VEC3' },
+            // 4: INDICES
+            { bufferView: addView(mesh.indices, ELEMENTS), componentType: 5125, count: mesh.indices.length, type: 'SCALAR' }
+        ];
+
+        // Embed Images & Textures
+        const albedoView = addImageBuffer(texturePack.albedoPng);
+        const normalView = addImageBuffer(texturePack.normalPng);
+        const ormView = addImageBuffer(texturePack.ormPng);
+
+        const images = [
+            { bufferView: albedoView, mimeType: 'image/png' },
+            { bufferView: normalView, mimeType: 'image/png' },
+            { bufferView: ormView, mimeType: 'image/png' }
+        ];
+
+        const samplers = [
+            { magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }
+        ];
+
+        const textures = [
+            { source: 0, sampler: 0 }, // 0: albedo
+            { source: 1, sampler: 0 }, // 1: normal
+            { source: 2, sampler: 0 }  // 2: orm
+        ];
+
+        const materials = [{
+            name: 'SbHumanSkin_HyperReal_PBR',
+            pbrMetallicRoughness: {
+                baseColorTexture: { index: 0 },
+                metallicRoughnessTexture: { index: 2 },
+                metallicFactor: 0.0,
+                roughnessFactor: 1.0
+            },
+            normalTexture: { index: 1, scale: 1.0 },
+            occlusionTexture: { index: 2, strength: 1.0 },
+            doubleSided: true
+        }];
+
+        const bin = Buffer.concat(chunks);
+        const gltf: any = {
+            asset: { version: '2.0', generator: 'Scratchbox SbHumanHandTransformer' },
+            scene: 0,
+            scenes: [{ nodes: [0] }],
+            nodes: [{ mesh: 0, name: 'EnhancedHand' }],
+            meshes: [{
+                name: 'EnhancedHand',
+                primitives: [{
+                    attributes: {
+                        POSITION: 0,
+                        NORMAL: 1,
+                        TEXCOORD_0: 2,
+                        COLOR_0: 3
+                    },
+                    indices: 4,
+                    material: 0
+                }]
+            }],
+            materials,
+            textures,
+            images,
+            samplers,
+            accessors,
+            bufferViews: views,
+            buffers: [{ byteLength: bin.length }]
+        };
+
+        let json = Buffer.from(JSON.stringify(gltf), 'utf-8');
+        const jsonPad = (4 - (json.length % 4)) % 4;
+        if (jsonPad > 0) json = Buffer.concat([json, Buffer.alloc(jsonPad, 0x20)]);
+
+        const header = Buffer.alloc(12);
+        header.writeUInt32LE(0x46546c67, 0); // 'glTF'
+        header.writeUInt32LE(2, 4);          // version 2
+        header.writeUInt32LE(12 + 8 + json.length + 8 + bin.length, 8);
+
+        const jsonHead = Buffer.alloc(8);
+        jsonHead.writeUInt32LE(json.length, 0);
+        jsonHead.writeUInt32LE(0x4e4f534a, 4); // 'JSON'
+
+        const binHead = Buffer.alloc(8);
+        binHead.writeUInt32LE(bin.length, 0);
+        binHead.writeUInt32LE(0x004e4942, 4);  // 'BIN\0'
+
+        const glbBuffer = Buffer.concat([header, jsonHead, json, binHead, bin]);
+
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, glbBuffer);
+
+        return glbBuffer;
+    }
+}

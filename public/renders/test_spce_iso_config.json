@@ -1,0 +1,28 @@
+{
+  "glbPath": "public/models/spce_esb_isolated_full_quality_pbr.glb",
+  "outputDir": "public/renders/test_spce_iso_pbr",
+  "width": 640,
+  "height": 360,
+  "samplesPerPixel": 8,
+  "maxBounces": 2,
+  "threads": 8,
+  "groundPlane": false,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1720039200
+  },
+  "camera": {
+    "position": [
+      -375,
+      290,
+      355
+    ],
+    "target": [
+      -14,
+      218,
+      0
+    ],
+    "verticalFovDeg": 46
+  }
+}

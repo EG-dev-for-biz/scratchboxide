@@ -20,8 +20,8 @@ async function main() {
         longitude: -73.98566,
         timestampIso: '2024-06-21T17:00:00Z',
         regularizationEpsilon: 0.18,
-        directSunWeight: 0.65,
-        ambientSkyWeight: 0.35
+        directWeight: 0.65,
+        ambientWeight: 0.35
       },
       enableHeightStratifiedDeLighting: true,
       enableMultiFrequencyNormals: true,

@@ -1,0 +1,20 @@
+{
+  "glbPath": "public/models/cleaned_tile_from_real_scan.glb",
+  "outputDir": "public/renders/cleaned_tile_real_pbr",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 24,
+  "maxBounces": 3,
+  "threads": 4,
+  "groundPlane": false,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1720022400
+  },
+  "camera": {
+    "position": [-380.0, 360.0, 360.0],
+    "target": [-75.0, 160.0, 20.0],
+    "verticalFovDeg": 38.0
+  }
+}

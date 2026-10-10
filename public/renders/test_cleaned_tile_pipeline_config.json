@@ -1,0 +1,28 @@
+{
+  "glbPath": "cleaned_tile_output.glb",
+  "outputDir": "public/renders/test_cleaned_tile_pipeline",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 2,
+  "threads": 8,
+  "groundPlane": false,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1720039200
+  },
+  "camera": {
+    "position": [
+      -160,
+      140,
+      180
+    ],
+    "target": [
+      0,
+      80,
+      0
+    ],
+    "verticalFovDeg": 48
+  }
+}

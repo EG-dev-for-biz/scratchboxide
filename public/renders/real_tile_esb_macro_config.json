@@ -1,0 +1,20 @@
+{
+  "glbPath": "public/models/empire_state_building_pbr_textured.glb",
+  "outputDir": "public/renders/real_tile_esb_macro_pbr",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 24,
+  "maxBounces": 3,
+  "threads": 8,
+  "groundPlane": false,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1720039200
+  },
+  "camera": {
+    "position": [-75.0, 75.0, 75.0],
+    "target": [0.0, 50.0, 0.0],
+    "verticalFovDeg": 38.0
+  }
+}

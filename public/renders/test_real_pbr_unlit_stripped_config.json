@@ -1,0 +1,29 @@
+{
+  "glbPath": "public/models/spce_scan_real_pbr_unlit_stripped.glb",
+  "outputDir": "public/renders/test_real_pbr_unlit_stripped",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 2,
+  "threads": 8,
+  "groundPlane": false,
+  "shadingMode": "relit",
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1720039200
+  },
+  "camera": {
+    "position": [
+      -160,
+      140,
+      180
+    ],
+    "target": [
+      0,
+      80,
+      0
+    ],
+    "verticalFovDeg": 48
+  }
+}

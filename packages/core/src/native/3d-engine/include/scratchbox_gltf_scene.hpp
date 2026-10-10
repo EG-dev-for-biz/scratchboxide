@@ -40,6 +40,15 @@ struct SceneMaterial {
     int baseColorImage{-1};
     int wrapS{10497};  // glTF sampler wrap mode: 10497 repeat, 33071 clamp, 33648 mirrored repeat
     int wrapT{10497};
+    int normalImage{-1};
+    float normalScale{1.0f};
+    int normalWrapS{10497};
+    int normalWrapT{10497};
+    int metallicRoughnessImage{-1};
+    int mrWrapS{10497};
+    int mrWrapT{10497};
+    int occlusionImage{-1};
+    float occlusionStrength{1.0f};
     bool doubleSided{false};
     bool unlit{false};
 };
@@ -270,6 +279,44 @@ private:
                     sm.wrapT = sampler["wrapT"].asInt(10497);
                 }
             }
+            // Normal map
+            const auto& normTex = m["normalTexture"];
+            int normalTexIdx = normTex["index"].asInt(-1);
+            if (normalTexIdx >= 0 && normalTexIdx < static_cast<int>(textures.arr.size())) {
+                const auto& tex = textures[static_cast<size_t>(normalTexIdx)];
+                sm.normalImage = tex["source"].asInt(-1);
+                sm.normalScale = normTex["scale"].asFloat(1.0f);
+                int samplerIndex = tex["sampler"].asInt(-1);
+                if (samplerIndex >= 0 && samplerIndex < static_cast<int>(samplers.arr.size())) {
+                    const auto& sampler = samplers[static_cast<size_t>(samplerIndex)];
+                    sm.normalWrapS = sampler["wrapS"].asInt(10497);
+                    sm.normalWrapT = sampler["wrapT"].asInt(10497);
+                }
+            }
+
+            // Metallic-Roughness map
+            const auto& mrTex = pbr["metallicRoughnessTexture"];
+            int mrTexIdx = mrTex["index"].asInt(-1);
+            if (mrTexIdx >= 0 && mrTexIdx < static_cast<int>(textures.arr.size())) {
+                const auto& tex = textures[static_cast<size_t>(mrTexIdx)];
+                sm.metallicRoughnessImage = tex["source"].asInt(-1);
+                int samplerIndex = tex["sampler"].asInt(-1);
+                if (samplerIndex >= 0 && samplerIndex < static_cast<int>(samplers.arr.size())) {
+                    const auto& sampler = samplers[static_cast<size_t>(samplerIndex)];
+                    sm.mrWrapS = sampler["wrapS"].asInt(10497);
+                    sm.mrWrapT = sampler["wrapT"].asInt(10497);
+                }
+            }
+
+            // Occlusion map
+            const auto& occTex = m["occlusionTexture"];
+            int occTexIdx = occTex["index"].asInt(-1);
+            if (occTexIdx >= 0 && occTexIdx < static_cast<int>(textures.arr.size())) {
+                const auto& tex = textures[static_cast<size_t>(occTexIdx)];
+                sm.occlusionImage = tex["source"].asInt(-1);
+                sm.occlusionStrength = occTex["strength"].asFloat(1.0f);
+            }
+
             const auto& emissive = m["emissiveFactor"];
             if (emissive.arr.size() == 3) {
                 sm.emissiveFactor = Vec3(emissive[0].asFloat(0), emissive[1].asFloat(0), emissive[2].asFloat(0));
@@ -387,10 +434,12 @@ private:
         Accessor nrm = accessor(ctx, attrs["NORMAL"].asInt(-1));
         Accessor uv = accessor(ctx, attrs["TEXCOORD_0"].asInt(-1));
         Accessor col = accessor(ctx, attrs["COLOR_0"].asInt(-1));
+        Accessor tan = accessor(ctx, attrs["TANGENT"].asInt(-1));
         Accessor idx = accessor(ctx, prim["indices"].asInt(-1));
         const bool hasNormals = nrm.valid() && nrm.components == 3 && nrm.count == pos.count;
         const bool hasUv = uv.valid() && uv.components == 2 && uv.count == pos.count;
         const bool hasColor = col.valid() && (col.components == 3 || col.components == 4) && col.count == pos.count;
+        const bool hasTangents = tan.valid() && tan.components == 4 && tan.count == pos.count;
 
         int materialIndex = prim["material"].asInt(-1);
         if (materialIndex < 0 || materialIndex >= static_cast<int>(scene.materials.size())) {
@@ -417,6 +466,12 @@ private:
                 float b = component(col, v, 2);
                 float a = col.components == 4 ? component(col, v, 3) : 1.0f;
                 vert.color = Vec4(r, g, b, a);
+            }
+            if (hasTangents) {
+                Vec3 tLocal(component(tan, v, 0), component(tan, v, 1), component(tan, v, 2));
+                Vec3 tWorld = normalXf.transformDirection(tLocal).normalized();
+                float sign = component(tan, v, 3);
+                vert.tangent = Vec4(tWorld.x, tWorld.y, tWorld.z, sign);
             }
             scene.mesh.addVertex(vert);
         }

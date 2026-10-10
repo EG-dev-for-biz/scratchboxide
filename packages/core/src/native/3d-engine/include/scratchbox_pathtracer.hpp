@@ -562,13 +562,81 @@ private:
                 s.metallic = clayMetallic_;
                 s.roughness = clayRoughness_;
             } else {
-                const auto& mat = scene_.materials[scene_.triangleMaterial[hit.triangle]];
-                s.baseColor = triangleAlbedo(hit.triangle, hit.u, hit.v);
-                s.metallic = std::clamp(mat.metallicFactor, 0.0f, 1.0f);
-                s.roughness = std::clamp(mat.roughnessFactor, 0.02f, 1.0f);
-                s.emission = mat.emissiveFactor;
+                const auto& v0 = mesh_.vertices[mesh_.indices[hit.triangle * 3]];
+            const auto& v1 = mesh_.vertices[mesh_.indices[hit.triangle * 3 + 1]];
+            const auto& v2 = mesh_.vertices[mesh_.indices[hit.triangle * 3 + 2]];
+            float w = 1.0f - hit.u - hit.v;
+            Vec2 uv(v0.uv.x * w + v1.uv.x * hit.u + v2.uv.x * hit.v,
+                    v0.uv.y * w + v1.uv.y * hit.u + v2.uv.y * hit.v);
+
+            const auto& mat = scene_.materials[scene_.triangleMaterial[hit.triangle]];
+            s.baseColor = triangleAlbedo(hit.triangle, hit.u, hit.v);
+            s.metallic = std::clamp(mat.metallicFactor, 0.0f, 1.0f);
+            s.roughness = std::clamp(mat.roughnessFactor, 0.02f, 1.0f);
+            s.emission = mat.emissiveFactor;
+
+            // Metallic-Roughness map sampling
+            if (mat.metallicRoughnessImage >= 0 && mat.metallicRoughnessImage < static_cast<int>(scene_.images.size())) {
+                const auto& mrImg = scene_.images[static_cast<size_t>(mat.metallicRoughnessImage)];
+                if (mrImg.decoded) {
+                    Vec3 mrSample = detail::sampleTextureLinear(mrImg.pixels, uv, mat.mrWrapS, mat.mrWrapT);
+                    s.roughness = std::clamp(s.roughness * mrSample.y, 0.02f, 1.0f); // Green = Roughness
+                    s.metallic = std::clamp(s.metallic * mrSample.z, 0.0f, 1.0f);   // Blue = Metalness
+                }
+            }
+
+            // Occlusion map sampling
+            if (mat.occlusionImage >= 0 && mat.occlusionImage < static_cast<int>(scene_.images.size())) {
+                const auto& occImg = scene_.images[static_cast<size_t>(mat.occlusionImage)];
+                if (occImg.decoded) {
+                    Vec3 occSample = detail::sampleTextureLinear(occImg.pixels, uv, 10497, 10497);
+                    float ao = 1.0f + mat.occlusionStrength * (occSample.x - 1.0f); // Red = Occlusion
+                    s.baseColor = s.baseColor * std::clamp(ao, 0.05f, 1.0f);
+                }
+            }
+
+            // Normal map perturbation
+            if (mat.normalImage >= 0 && mat.normalImage < static_cast<int>(scene_.images.size())) {
+                const auto& nImg = scene_.images[static_cast<size_t>(mat.normalImage)];
+                if (nImg.decoded) {
+                    Vec3 nSample = detail::sampleTextureLinear(nImg.pixels, uv, mat.normalWrapS, mat.normalWrapT);
+                    Vec3 tanNormal(
+                        (2.0f * nSample.x - 1.0f) * mat.normalScale,
+                        (2.0f * nSample.y - 1.0f) * mat.normalScale,
+                        2.0f * nSample.z - 1.0f
+                    );
+                    tanNormal = tanNormal.normalized();
+
+                    // Evaluate Tangent and Bitangent
+                    Vec4 tanInterp = v0.tangent * w + v1.tangent * hit.u + v2.tangent * hit.v;
+                    Vec3 T(tanInterp.x, tanInterp.y, tanInterp.z);
+                    Vec3 N = s.shadingNormal;
+                    float sign = tanInterp.w < 0.0f ? -1.0f : 1.0f;
+
+                    if (T.lengthSquared() < 0.1f) {
+                        // Derive tangent on the fly from triangle derivatives
+                        Vec3 dp1 = v1.position - v0.position;
+                        Vec3 dp2 = v2.position - v0.position;
+                        Vec2 duv1 = v1.uv - v0.uv;
+                        Vec2 duv2 = v2.uv - v0.uv;
+                        float det = duv1.x * duv2.y - duv2.x * duv1.y;
+                        if (std::abs(det) > 1e-7f) {
+                            T = ((dp1 * duv2.y - dp2 * duv1.y) * (1.0f / det)).normalized();
+                        } else {
+                            T = (std::abs(N.y) < 0.99f ? Vec3(0, 1, 0) : Vec3(1, 0, 0)).cross(N).normalized();
+                        }
+                    }
+
+                    // Gram-Schmidt orthonormalize T against N
+                    T = (T - N * N.dot(T)).normalized();
+                    if (T.lengthSquared() > 0.5f) {
+                        Vec3 B = N.cross(T) * sign;
+                        s.shadingNormal = (T * tanNormal.x + B * tanNormal.y + N * tanNormal.z).normalized();
+                    }
+                }
             }
         }
+    }
         Vec3 wo = -dir;
         if (s.geometricNormal.dot(wo) < 0.0f) s.geometricNormal = -s.geometricNormal;
         if (s.shadingNormal.dot(s.geometricNormal) < 0.0f) s.shadingNormal = -s.shadingNormal;
