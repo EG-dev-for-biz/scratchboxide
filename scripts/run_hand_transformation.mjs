@@ -14,7 +14,7 @@ async function main() {
     // Transform Hand with C^2 Loop subdivision + anatomical sculpting
     console.log('[2/4] Transforming hand geometry (subdivision, anatomical sculpting, conformal UVs)...');
     const transformed = SbHumanHandTransformer.transformHand(loader, {
-        subdivisionIterations: 1,
+        subdivisionIterations: 2,
         sculptStrength: 1.0,
         recenterOrigin: true
     });

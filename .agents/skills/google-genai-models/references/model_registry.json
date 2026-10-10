@@ -1,0 +1,529 @@
+{
+  "version": "2026.10",
+  "updatedAt": "2026-10-09T18:55:00Z",
+  "defaultModel": "gemini-2.5-pro",
+  "fastModel": "gemini-2.5-flash",
+  "experimentalModel": "gemini-2.0-flash-thinking-exp-01-21",
+  "models": [
+    {
+      "id": "gemini-3.8-flash",
+      "displayName": "Gemini 3.8 Flash (High)",
+      "lifecycle": "preview",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "thinkingSupport": true,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 180,
+      "recommendedFor": [
+        "high-throughput-reasoning",
+        "interactive-ide-pair-programming",
+        "rapid-creative-iteration",
+        "multimodal-scene-critique"
+      ],
+      "apiEndpoint": "v1beta/models/gemini-3.8-flash",
+      "statusNotes": "Next-gen flagship flash model with integrated high-reasoning scratchpad and sub-200ms TTFT."
+    },
+    {
+      "id": "gemini-3.7-pro",
+      "displayName": "Gemini 3.7 Pro Preview",
+      "lifecycle": "preview",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 2097152,
+      "maxOutputTokens": 65536,
+      "thinkingSupport": true,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 550,
+      "recommendedFor": [
+        "deep-architectural-planning",
+        "complex-algorithmic-synthesis",
+        "multi-file-refactoring",
+        "mathematical-invariant-proofs"
+      ],
+      "apiEndpoint": "v1beta/models/gemini-3.7-pro",
+      "statusNotes": "Frontier multimodal reasoning model with extended 2M context and adaptive thinking budget."
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "displayName": "Gemini 2.5 Pro",
+      "lifecycle": "preview",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 2097152,
+      "maxOutputTokens": 65536,
+      "thinkingSupport": true,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 480,
+      "recommendedFor": [
+        "c++20-engine-code-synthesis",
+        "simd-sdf-geometry-algorithms",
+        "vfx-camera-matchmoving-pipeline",
+        "large-scale-codebase-refactoring"
+      ],
+      "apiEndpoint": "v1beta/models/gemini-2.5-pro",
+      "statusNotes": "Core production workhorse for high-reasoning coding, C++20 geometry kernels, and deep spatial planning."
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "displayName": "Gemini 2.5 Flash",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 1048576,
+      "maxOutputTokens": 32768,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 140,
+      "recommendedFor": [
+        "sub-second-tool-agent-loops",
+        "json-schema-contract-validation",
+        "realtime-webgl-inspector",
+        "quick-code-transforms"
+      ],
+      "apiEndpoint": "v1/models/gemini-2.5-flash",
+      "statusNotes": "Stable GA low-latency model for rapid tool orchestration and live feedback loops."
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "displayName": "Gemini 2.5 Flash-Lite",
+      "lifecycle": "preview",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "audio"],
+      "contextWindowTokens": 1048576,
+      "maxOutputTokens": 16384,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 85,
+      "recommendedFor": [
+        "high-volume-batch-processing",
+        "token-economical-filtering",
+        "fast-syntax-checking",
+        "realtime-telemetry-parsing"
+      ],
+      "apiEndpoint": "v1beta/models/gemini-2.5-flash-lite",
+      "statusNotes": "Cost-optimized ultra-lightweight model with sub-100ms response time."
+    },
+    {
+      "id": "gemini-2.0-flash-thinking-exp-01-21",
+      "displayName": "Gemini 2.0 Flash Thinking Exp (01-21)",
+      "lifecycle": "experimental",
+      "provider": "gemini-api",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "thinkingSupport": true,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 620,
+      "recommendedFor": [
+        "algorithmic-puzzle-solving",
+        "differential-geometry-verification",
+        "first-principles-debugging",
+        "step-by-step-logical-deduction"
+      ],
+      "apiEndpoint": "v1beta/models/gemini-2.0-flash-thinking-exp-01-21",
+      "statusNotes": "Dedicated experimental reasoning model that streams transparent thought process prior to generating output."
+    },
+    {
+      "id": "gemini-2.0-pro-exp-02-05",
+      "displayName": "Gemini 2.0 Pro Experimental (02-05)",
+      "lifecycle": "experimental",
+      "provider": "gemini-api",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 2097152,
+      "maxOutputTokens": 32768,
+      "thinkingSupport": true,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 520,
+      "recommendedFor": [
+        "benchmark-level-coding",
+        "complex-threejs-shader-synthesis",
+        "procedural-cpp-kernel-design"
+      ],
+      "apiEndpoint": "v1beta/models/gemini-2.0-pro-exp-02-05",
+      "statusNotes": "Cutting-edge experimental Pro checkpoint optimized for complex programming benchmarks."
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "displayName": "Gemini 2.0 Flash",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 1048576,
+      "maxOutputTokens": 8192,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 150,
+      "recommendedFor": [
+        "multimodal-live-streaming",
+        "audio-and-video-comprehension",
+        "general-purpose-creative-tasks"
+      ],
+      "apiEndpoint": "v1/models/gemini-2.0-flash",
+      "statusNotes": "General Availability multimodal model with native real-time audio and vision streaming."
+    },
+    {
+      "id": "gemini-1.5-pro",
+      "displayName": "Gemini 1.5 Pro (Stable GA)",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 2097152,
+      "maxOutputTokens": 8192,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 650,
+      "recommendedFor": [
+        "production-sla-pipelines",
+        "entire-repository-ingestion",
+        "enterprise-cloud-run-deployments"
+      ],
+      "apiEndpoint": "v1/models/gemini-1.5-pro-002",
+      "statusNotes": "Battle-tested 2M context GA model with enterprise SLAs on Google Cloud Vertex AI."
+    },
+    {
+      "id": "gemini-1.5-flash",
+      "displayName": "Gemini 1.5 Flash (Stable GA)",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "video", "audio"],
+      "contextWindowTokens": 1048576,
+      "maxOutputTokens": 8192,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 180,
+      "recommendedFor": [
+        "fast-production-endpoints",
+        "high-volume-rag-search",
+        "quick-multimodal-queries"
+      ],
+      "apiEndpoint": "v1/models/gemini-1.5-flash-002",
+      "statusNotes": "Standard production GA flash model with 1M token context."
+    },
+    {
+      "id": "gemini-1.5-flash-8b",
+      "displayName": "Gemini 1.5 Flash-8B",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["text", "code", "image", "audio"],
+      "contextWindowTokens": 1048576,
+      "maxOutputTokens": 8192,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 95,
+      "recommendedFor": [
+        "lightweight-high-frequency-tasks",
+        "summarization-and-extraction",
+        "log-parsing"
+      ],
+      "apiEndpoint": "v1/models/gemini-1.5-flash-8b",
+      "statusNotes": "8-billion parameter compact model for maximum speed and token economy."
+    },
+    {
+      "id": "imagen-3.0-generate-002",
+      "displayName": "Imagen 3 (High-Fidelity Photorealism)",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["image"],
+      "contextWindowTokens": 1024,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 3200,
+      "recommendedFor": [
+        "pbr-surface-texture-synthesis",
+        "cinematic-concept-art",
+        "photorealistic-vfx-plates",
+        "fine-typography-rendering"
+      ],
+      "apiEndpoint": "v1/models/imagen-3.0-generate-002",
+      "statusNotes": "Highest-quality diffusion generator for realistic textures, physical materials, and accurate text rendering."
+    },
+    {
+      "id": "imagen-3.0-fast-generate-001",
+      "displayName": "Imagen 3 Fast",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["image"],
+      "contextWindowTokens": 1024,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 1200,
+      "recommendedFor": [
+        "rapid-creative-prototyping",
+        "realtime-ui-thumbnail-generation",
+        "storyboard-thumbnailing"
+      ],
+      "apiEndpoint": "v1/models/imagen-3.0-fast-generate-001",
+      "statusNotes": "Fast iteration variant of Imagen 3 delivering rapid images with minimal latency."
+    },
+    {
+      "id": "imagen-3.0-capability-001",
+      "displayName": "Imagen 3 Editing & Inpainting",
+      "lifecycle": "preview",
+      "provider": "vertex-ai",
+      "modalities": ["image"],
+      "contextWindowTokens": 1024,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 3500,
+      "recommendedFor": [
+        "pbr-texture-inpainting",
+        "object-removal-and-insertion",
+        "outpainting-panoramas",
+        "background-environment-swapping"
+      ],
+      "apiEndpoint": "v1beta1/models/imagen-3.0-capability-001",
+      "statusNotes": "Provides mask-based inpainting, background editing, subject insertion, and outpainting."
+    },
+    {
+      "id": "veo-2.0-generate-001",
+      "displayName": "Google Veo 2",
+      "lifecycle": "preview",
+      "provider": "both",
+      "modalities": ["video"],
+      "contextWindowTokens": 2048,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 28000,
+      "recommendedFor": [
+        "text-to-video-synthesis",
+        "image-to-video-cinematic-motion",
+        "camera-choreography",
+        "4k-cinema-resolution-export"
+      ],
+      "apiEndpoint": "v1beta/models/veo-2.0-generate-001",
+      "statusNotes": "High-definition video generative model supporting 24fps cinema dynamics, camera motion tags, and 720p/1080p."
+    },
+    {
+      "id": "veo-3-preview",
+      "displayName": "Google Veo 3 Preview",
+      "lifecycle": "whitelisted",
+      "provider": "vertex-ai",
+      "modalities": ["video"],
+      "contextWindowTokens": 4096,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 35000,
+      "recommendedFor": [
+        "next-gen-photorealistic-video",
+        "advanced-spatial-fluid-physics",
+        "long-duration-temporal-coherence"
+      ],
+      "apiEndpoint": "v1beta1/models/veo-3-preview",
+      "statusNotes": "Next-generation video foundation model available to whitelisted Google Cloud projects and trusted testers."
+    },
+    {
+      "id": "gemini-omni-1.1-flash",
+      "displayName": "Gemini Omni 1.1 Flash",
+      "lifecycle": "whitelisted",
+      "provider": "vertex-ai",
+      "modalities": ["video", "image", "text"],
+      "contextWindowTokens": 16384,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 22000,
+      "recommendedFor": [
+        "dual-conditioned-video-synthesis",
+        "3d-blockout-to-photoreal-transfer",
+        "6-dof-camera-motion-matchmoving",
+        "multi-shot-cinematic-montages"
+      ],
+      "apiEndpoint": "v1beta1/projects/{project}/locations/global/interactions",
+      "statusNotes": "Vertex AI Interactions API endpoint supporting exact media tag binding (<FIRST_FRAME>, <LAST_FRAME>, <VIDEO_REF_0>)."
+    },
+    {
+      "id": "gemini-omni-preview",
+      "displayName": "Gemini Omni Preview (BidiStream & Interactions)",
+      "lifecycle": "whitelisted",
+      "provider": "vertex-ai",
+      "modalities": ["video", "image", "audio", "text"],
+      "contextWindowTokens": 32768,
+      "maxOutputTokens": 8192,
+      "thinkingSupport": true,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": true,
+      "latencyTierMs": 15000,
+      "recommendedFor": [
+        "real-time-bidi-video-dialogue",
+        "dual-conditioned-matchmoving",
+        "3d-wireframe-motion-transfer",
+        "temporal-continuity-enforcement",
+        "low-latency-visual-interaction"
+      ],
+      "apiEndpoint": "v1beta1/projects/{project}/locations/global/interactions",
+      "statusNotes": "Non-GA Omni multimodal foundation model accessible via Vertex AI Interactions API and Bidirectional Streaming."
+    },
+    {
+      "id": "nano-banana-2.1",
+      "displayName": "Nano Banana 2.1 (Neural Image Foundation)",
+      "lifecycle": "whitelisted",
+      "provider": "both",
+      "modalities": ["image", "text"],
+      "contextWindowTokens": 4096,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 1800,
+      "recommendedFor": [
+        "ultra-high-fidelity-photorealism",
+        "tactile-pbr-material-synthesis",
+        "fine-architectural-detailing",
+        "exemplar-inpainting-and-restoration",
+        "sharp-typography-rendering"
+      ],
+      "apiEndpoint": "v1beta1/publishers/google/models/nano-banana-2.1:predict",
+      "statusNotes": "Non-GA flagship neural image diffusion engine powering photorealistic surface synthesis, fine typography, and sub-pixel edge alignment."
+    },
+    {
+      "id": "nano-banana-2.1-mig",
+      "displayName": "Nano Banana 2.1 with Maps Imagery Grounding (MIG)",
+      "lifecycle": "whitelisted",
+      "provider": "vertex-ai",
+      "modalities": ["image", "text", "spatial-geodesic"],
+      "contextWindowTokens": 8192,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": true,
+      "latencyTierMs": 2400,
+      "recommendedFor": [
+        "geospatial-photorealism",
+        "street-view-erp-grounded-inpainting",
+        "real-world-architectural-reconstruction",
+        "anti-hallucination-facade-synthesis",
+        "6-dof-camera-pose-alignment"
+      ],
+      "apiEndpoint": "v1beta1/projects/{project}/locations/{location}/publishers/google/models/nano-banana-2.1:generateContent",
+      "statusNotes": "Integrates Vertex AI Maps Imagery Grounding (tools: [{ googleMaps: { groundingTypes: { streetviewImagery: {} } } }]) to ground diffusion directly in Google Street View panoramas and aerial photogrammetry."
+    },
+    {
+      "id": "gcap-vectortiles-v1",
+      "displayName": "Google Map Tiles API - Vector & Traffic Tiles (GCAP)",
+      "lifecycle": "whitelisted",
+      "provider": "maps-platform",
+      "modalities": ["vector-geometry", "3d-modeled-volumes", "traffic-telemetry"],
+      "contextWindowTokens": 4096,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": false,
+      "latencyTierMs": 85,
+      "recommendedFor": [
+        "sub-pixel-kinematic-road-networks",
+        "detailed-lane-markings-and-crosswalks",
+        "3d-modeled-building-volumes",
+        "real-time-traffic-speed-and-incidents",
+        "zero-hole-elevation-slicing",
+        "stage-3d-vector-world-pipelines"
+      ],
+      "apiEndpoint": "tile.googleapis.com/v1/vectortiles/featuretiles/{zoom}/{x}/{y}",
+      "statusNotes": "Confidential Geo Cloud Automotive Program (GCAP) REST API delivering sub-pixel (0..4095) vector geometry, 3D modeledVolumes, extrudedAreas, basemapZOrder, and real-time traffic."
+    },
+    {
+      "id": "text-embedding-004",
+      "displayName": "Text Embedding 004",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["text"],
+      "contextWindowTokens": 2048,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 45,
+      "recommendedFor": [
+        "semantic-code-search",
+        "document-similarity",
+        "rag-retrieval-pipelines",
+        "continuous-dimensional-clustering"
+      ],
+      "apiEndpoint": "v1/models/text-embedding-004",
+      "statusNotes": "State-of-the-art 768-dimensional embedding model with continuous dimensionality truncation."
+    },
+    {
+      "id": "multimodalembedding@001",
+      "displayName": "Multimodal Embeddings",
+      "lifecycle": "ga",
+      "provider": "vertex-ai",
+      "modalities": ["text", "image", "video"],
+      "contextWindowTokens": 1024,
+      "maxOutputTokens": 0,
+      "thinkingSupport": false,
+      "structuredOutputSupport": false,
+      "functionCallingSupport": false,
+      "latencyTierMs": 120,
+      "recommendedFor": [
+        "cross-modal-asset-search",
+        "video-frame-similarity",
+        "3d-render-to-photo-matching"
+      ],
+      "apiEndpoint": "v1/publishers/google/models/multimodalembedding@001",
+      "statusNotes": "Maps text, images, and video clips into a single joint continuous vector space."
+    },
+    {
+      "id": "gemma-2-27b-it",
+      "displayName": "Gemma 2 27B Instruct",
+      "lifecycle": "ga",
+      "provider": "both",
+      "modalities": ["text", "code"],
+      "contextWindowTokens": 8192,
+      "maxOutputTokens": 4096,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": false,
+      "latencyTierMs": 310,
+      "recommendedFor": [
+        "open-weights-cloud-run-deployment",
+        "fine-tuning-on-proprietary-dsls",
+        "privacy-isolated-procedural-tasks"
+      ],
+      "apiEndpoint": "v1/models/gemma-2-27b-it",
+      "statusNotes": "High-efficiency open weight model capable of matching GPT-4-class reasoning when fine-tuned."
+    },
+    {
+      "id": "paligemma-2-28b-pt-448",
+      "displayName": "PaliGemma 2 28B Vision-Language",
+      "lifecycle": "preview",
+      "provider": "vertex-ai",
+      "modalities": ["text", "image"],
+      "contextWindowTokens": 8192,
+      "maxOutputTokens": 2048,
+      "thinkingSupport": false,
+      "structuredOutputSupport": true,
+      "functionCallingSupport": false,
+      "latencyTierMs": 280,
+      "recommendedFor": [
+        "fine-grained-spatial-object-detection",
+        "visual-bounding-box-grounding",
+        "architectural-cad-diagram-parsing"
+      ],
+      "apiEndpoint": "v1beta1/publishers/google/models/paligemma-2-28b-pt-448",
+      "statusNotes": "Vision-language foundation model specialized in pixel-grounded bounding boxes and segmentation."
+    }
+  ]
+}

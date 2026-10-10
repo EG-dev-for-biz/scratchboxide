@@ -1,5 +1,5 @@
 #include "scratchbox_engine.hpp"
-#include "scratchbox_pbr_50_library.hpp"
+#include "scratchbox_pbr_manifold.hpp"
 #include "scratchbox_gltf_scene.hpp"
 
 #include <iostream>
@@ -13,7 +13,7 @@
 using namespace scratchbox;
 using namespace scratchbox::math;
 using namespace scratchbox::geometry;
-using namespace scratchbox::pbr_texture;
+using namespace scratchbox::pbr_manifold;
 using namespace scratchbox::texture;
 using namespace scratchbox::io;
 using namespace scratchbox::gltf;
@@ -128,17 +128,71 @@ inline void addCylinderMetric(
     }
 }
 
-enum class FacadeFacing {
-    EAST_5TH_AVE,
-    WEST_6TH_AVE,
-    NORTH_34TH_ST,
-    SOUTH_33RD_ST
+// ============================================================================
+// Adaptive Domain Architecture (ADA): Differential Tangent-Plane Facade Grammar
+// In accordance with ADA Pillars 1, 2, & 8: Zero closed taxonomies, zero street
+// enums, continuous normal/tangent frame transformations for arbitrary geometry.
+// ============================================================================
+
+struct TangentPlaneFacade {
+    Vec3 origin;      // Base anchor in world space
+    Vec3 tangent;     // Unit horizontal tangent (+s direction along wall)
+    Vec3 bitangent;   // Unit vertical bitangent (+y direction)
+    Vec3 normal;      // Unit outward surface normal (+forward direction, perpendicular to wall)
+    float length;     // Metric span along tangent
+    float height;     // Metric vertical height
+
+    inline Vec3 localToWorld(float s, float y, float forwardOffset = 0.0f) const {
+        return origin + tangent * s + bitangent * y + normal * forwardOffset;
+    }
 };
+
+inline void addOrientedQuad(
+    ScratchboxMesh& mesh,
+    const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3,
+    const Vec3& targetNormal,
+    const Vec4& color,
+    float scaleU = 1.0f, float scaleV = 1.0f
+) {
+    Vec3 crossP = (p1 - p0).cross(p3 - p0);
+    if (crossP.dot(targetNormal) >= 0.0f) {
+        addOutwardQuad(mesh, p0, p1, p2, p3, targetNormal, color, scaleU, scaleV);
+    } else {
+        addOutwardQuad(mesh, p1, p0, p3, p2, targetNormal, color, scaleU, scaleV);
+    }
+}
+
+inline void addOrientedBoxMetric(
+    ScratchboxMesh& mesh,
+    const Vec3& center,
+    const Vec3& axisU, // tangent
+    const Vec3& axisV, // bitangent
+    const Vec3& axisW, // normal
+    float sizeU, float sizeV, float sizeW,
+    const Vec4& color,
+    float scaleU = 1.0f, float scaleV = 1.0f
+) {
+    Vec3 hU = axisU * (sizeU * 0.5f);
+    Vec3 hV = axisV * (sizeV * 0.5f);
+    Vec3 hW = axisW * (sizeW * 0.5f);
+
+    // Front (+W)
+    addOrientedQuad(mesh, center + hW - hU - hV, center + hW + hU - hV, center + hW + hU + hV, center + hW - hU + hV, axisW, color, scaleU, scaleV);
+    // Back (-W)
+    addOrientedQuad(mesh, center - hW + hU - hV, center - hW - hU - hV, center - hW - hU + hV, center - hW + hU + hV, -axisW, color, scaleU, scaleV);
+    // Right (+U)
+    addOrientedQuad(mesh, center + hU + hW - hV, center + hU - hW - hV, center + hU - hW + hV, center + hU + hW + hV, axisU, color, scaleU, scaleV);
+    // Left (-U)
+    addOrientedQuad(mesh, center - hU - hW - hV, center - hU + hW - hV, center - hU + hW + hV, center - hU - hW + hV, -axisU, color, scaleU, scaleV);
+    // Top (+V)
+    addOrientedQuad(mesh, center + hV - hU + hW, center + hV + hU + hW, center + hV + hU - hW, center + hV - hU - hW, axisV, color, scaleU, scaleV);
+    // Bottom (-V)
+    addOrientedQuad(mesh, center - hV - hU - hW, center - hV + hU - hW, center - hV + hU + hW, center - hV - hU + hW, -axisV, color, scaleU, scaleV);
+}
 
 inline void addProjectingPier(
     ScratchboxMesh& meshLimestone,
-    FacadeFacing facing,
-    float facadeCoord,
+    const TangentPlaneFacade& facade,
     float s0, float s1,
     float y0, float y1,
     float pierDepth,
@@ -149,26 +203,8 @@ inline void addProjectingPier(
     float sMid = (s0 + s1) * 0.5f;
     float yMid = (y0 + y1) * 0.5f;
 
-    Vec3 center, size;
-    switch (facing) {
-        case FacadeFacing::EAST_5TH_AVE:
-            center = Vec3(facadeCoord + pierDepth * 0.5f, yMid, sMid);
-            size   = Vec3(pierDepth, pierHeight, pierWidth);
-            break;
-        case FacadeFacing::WEST_6TH_AVE:
-            center = Vec3(facadeCoord - pierDepth * 0.5f, yMid, sMid);
-            size   = Vec3(pierDepth, pierHeight, pierWidth);
-            break;
-        case FacadeFacing::NORTH_34TH_ST:
-            center = Vec3(sMid, yMid, facadeCoord - pierDepth * 0.5f);
-            size   = Vec3(pierWidth, pierHeight, pierDepth);
-            break;
-        case FacadeFacing::SOUTH_33RD_ST:
-            center = Vec3(sMid, yMid, facadeCoord + pierDepth * 0.5f);
-            size   = Vec3(pierWidth, pierHeight, pierDepth);
-            break;
-    }
-    addBoxMetric(meshLimestone, center, size, colLimestone, 1.0f / 2.0f, 1.0f / 3.0f);
+    Vec3 center = facade.localToWorld(sMid, yMid, pierDepth * 0.5f);
+    addOrientedBoxMetric(meshLimestone, center, facade.tangent, facade.bitangent, facade.normal, pierWidth, pierHeight, pierDepth, colLimestone, 1.0f / 2.0f, 1.0f / 3.0f);
 }
 
 inline void addApertureWindowBay(
@@ -176,8 +212,7 @@ inline void addApertureWindowBay(
     ScratchboxMesh& meshGlazing,
     ScratchboxMesh& meshSpandrel,
     ScratchboxMesh& meshSteel,
-    FacadeFacing facing,
-    float facadeCoord,
+    const TangentPlaneFacade& facade,
     float s0, float s1,
     float yFloor, float yCeiling,
     float hSpandrel,
@@ -197,117 +232,56 @@ inline void addApertureWindowBay(
     float yWinTop       = yCeiling - hLintel;
     float yLintel       = yWinTop;
     float hWin          = yWinTop - yWinBase;
-
-    auto getPt = [&](float sVal, float yVal, float forwardOffset) -> Vec3 {
-        switch (facing) {
-            case FacadeFacing::EAST_5TH_AVE:
-                return Vec3(facadeCoord + forwardOffset, yVal, sVal);
-            case FacadeFacing::WEST_6TH_AVE:
-                return Vec3(facadeCoord - forwardOffset, yVal, sVal);
-            case FacadeFacing::NORTH_34TH_ST:
-                return Vec3(sVal, yVal, facadeCoord - forwardOffset);
-            case FacadeFacing::SOUTH_33RD_ST:
-                return Vec3(sVal, yVal, facadeCoord + forwardOffset);
-        }
-        return Vec3(0, 0, 0);
-    };
-
-    Vec3 normal, tangent;
-    switch (facing) {
-        case FacadeFacing::EAST_5TH_AVE:
-            normal  = Vec3(1, 0, 0);
-            tangent = Vec3(0, 0, 1);
-            break;
-        case FacadeFacing::WEST_6TH_AVE:
-            normal  = Vec3(-1, 0, 0);
-            tangent = Vec3(0, 0, -1);
-            break;
-        case FacadeFacing::NORTH_34TH_ST:
-            normal  = Vec3(0, 0, -1);
-            tangent = Vec3(1, 0, 0);
-            break;
-        case FacadeFacing::SOUTH_33RD_ST:
-            normal  = Vec3(0, 0, 1);
-            tangent = Vec3(-1, 0, 0);
-            break;
-    }
+    float sLen          = s1 - s0;
 
     // 1. Spandrel
-    Vec3 spCenter = getPt((s0 + s1) * 0.5f, (ySpandrelBase + ySpandrelTop) * 0.5f, -dRecess * 0.5f);
-    Vec3 spSize;
-    if (facing == FacadeFacing::EAST_5TH_AVE || facing == FacadeFacing::WEST_6TH_AVE) {
-        spSize = Vec3(dRecess * 0.8f, hSpandrel, s1 - s0);
-    } else {
-        spSize = Vec3(s1 - s0, hSpandrel, dRecess * 0.8f);
-    }
-    addBoxMetric(meshSpandrel, spCenter, spSize, colSpandrel, 1.0f / 1.5f, 1.0f / 1.0f);
+    Vec3 spCenter = facade.localToWorld((s0 + s1) * 0.5f, (ySpandrelBase + ySpandrelTop) * 0.5f, -dRecess * 0.5f);
+    addOrientedBoxMetric(meshSpandrel, spCenter, facade.tangent, facade.bitangent, facade.normal, sLen, hSpandrel, dRecess * 0.8f, colSpandrel, 1.0f / 1.5f, 1.0f / 1.0f);
 
     // 2. Sill
-    Vec3 sillCenter = getPt((s0 + s1) * 0.5f, ySillBase + hSill * 0.5f, -dRecess * 0.3f);
-    Vec3 sillSize;
-    if (facing == FacadeFacing::EAST_5TH_AVE || facing == FacadeFacing::WEST_6TH_AVE) {
-        sillSize = Vec3(dRecess * 0.6f, hSill, s1 - s0);
-    } else {
-        sillSize = Vec3(s1 - s0, hSill, dRecess * 0.6f);
-    }
-    addBoxMetric(meshLimestone, sillCenter, sillSize, colLimestone, 1.0f / 2.0f, 1.0f / 0.5f);
+    Vec3 sillCenter = facade.localToWorld((s0 + s1) * 0.5f, ySillBase + hSill * 0.5f, -dRecess * 0.3f);
+    addOrientedBoxMetric(meshLimestone, sillCenter, facade.tangent, facade.bitangent, facade.normal, sLen, hSill, dRecess * 0.6f, colLimestone, 1.0f / 2.0f, 1.0f / 0.5f);
 
-    // 3. Glazing
+    // 3. Glazing Quads
     float fGlass = -dRecess;
-    float winWidth = ((s1 - s0) - (windowCount - 1) * 0.18f) / static_cast<float>(windowCount);
+    float winWidth = (sLen - (windowCount - 1) * 0.18f) / static_cast<float>(windowCount);
 
     for (int w = 0; w < windowCount; ++w) {
         float ws0 = s0 + static_cast<float>(w) * (winWidth + 0.18f);
         float ws1 = ws0 + winWidth;
 
-        Vec3 g0 = getPt(ws0, yWinBase, fGlass);
-        Vec3 g1 = getPt(ws1, yWinBase, fGlass);
-        Vec3 g2 = getPt(ws1, yWinTop, fGlass);
-        Vec3 g3 = getPt(ws0, yWinTop, fGlass);
+        Vec3 g0 = facade.localToWorld(ws0, yWinBase, fGlass);
+        Vec3 g1 = facade.localToWorld(ws1, yWinBase, fGlass);
+        Vec3 g2 = facade.localToWorld(ws1, yWinTop, fGlass);
+        Vec3 g3 = facade.localToWorld(ws0, yWinTop, fGlass);
 
-        if (facing == FacadeFacing::EAST_5TH_AVE || facing == FacadeFacing::NORTH_34TH_ST) {
-            addOutwardQuad(meshGlazing, g1, g0, g3, g2, normal, colGlazing, 1.0f / 1.5f, 1.0f / 2.2f);
-        } else {
-            addOutwardQuad(meshGlazing, g0, g1, g2, g3, normal, colGlazing, 1.0f / 1.5f, 1.0f / 2.2f);
-        }
+        addOrientedQuad(meshGlazing, g0, g1, g2, g3, facade.normal, colGlazing, 1.0f / 1.5f, 1.0f / 2.2f);
 
         if (w < windowCount - 1) {
             float ms0 = ws1;
             float ms1 = ms0 + 0.18f;
-            Vec3 mulCenter = getPt((ms0 + ms1) * 0.5f, (yWinBase + yWinTop) * 0.5f, fGlass + 0.04f);
-            Vec3 mulSize;
-            if (facing == FacadeFacing::EAST_5TH_AVE || facing == FacadeFacing::WEST_6TH_AVE) {
-                mulSize = Vec3(0.10f, hWin, 0.18f);
-            } else {
-                mulSize = Vec3(0.18f, hWin, 0.10f);
-            }
-            addBoxMetric(meshSteel, mulCenter, mulSize, colSteel, 1.0f / 0.3f, 1.0f / 2.0f);
+            Vec3 mulCenter = facade.localToWorld((ms0 + ms1) * 0.5f, (yWinBase + yWinTop) * 0.5f, fGlass + 0.04f);
+            addOrientedBoxMetric(meshSteel, mulCenter, facade.tangent, facade.bitangent, facade.normal, 0.18f, hWin, 0.10f, colSteel, 1.0f / 0.3f, 1.0f / 2.0f);
         }
     }
 
     // 4. Reveal Returns
-    Vec3 jL0 = getPt(s0, yWinBase, fGlass);
-    Vec3 jL1 = getPt(s0, yWinBase, 0.0f);
-    Vec3 jL2 = getPt(s0, yWinTop, 0.0f);
-    Vec3 jL3 = getPt(s0, yWinTop, fGlass);
-    addOutwardQuad(meshLimestone, jL0, jL1, jL2, jL3, tangent, colLimestone, 1.0f / 0.5f, 1.0f / 2.0f);
+    Vec3 jL0 = facade.localToWorld(s0, yWinBase, fGlass);
+    Vec3 jL1 = facade.localToWorld(s0, yWinBase, 0.0f);
+    Vec3 jL2 = facade.localToWorld(s0, yWinTop, 0.0f);
+    Vec3 jL3 = facade.localToWorld(s0, yWinTop, fGlass);
+    addOrientedQuad(meshLimestone, jL0, jL1, jL2, jL3, facade.tangent, colLimestone, 1.0f / 0.5f, 1.0f / 2.0f);
 
-    Vec3 jR0 = getPt(s1, yWinBase, 0.0f);
-    Vec3 jR1 = getPt(s1, yWinBase, fGlass);
-    Vec3 jR2 = getPt(s1, yWinTop, fGlass);
-    Vec3 jR3 = getPt(s1, yWinTop, 0.0f);
-    addOutwardQuad(meshLimestone, jR0, jR1, jR2, jR3, -tangent, colLimestone, 1.0f / 0.5f, 1.0f / 2.0f);
+    Vec3 jR0 = facade.localToWorld(s1, yWinBase, 0.0f);
+    Vec3 jR1 = facade.localToWorld(s1, yWinBase, fGlass);
+    Vec3 jR2 = facade.localToWorld(s1, yWinTop, fGlass);
+    Vec3 jR3 = facade.localToWorld(s1, yWinTop, 0.0f);
+    addOrientedQuad(meshLimestone, jR0, jR1, jR2, jR3, -facade.tangent, colLimestone, 1.0f / 0.5f, 1.0f / 2.0f);
 
     // 5. Head Beam / Lintel
     if (hLintel > 0.05f) {
-        Vec3 lintelCenter = getPt((s0 + s1) * 0.5f, yLintel + hLintel * 0.5f, -dRecess * 0.5f);
-        Vec3 lintelSize;
-        if (facing == FacadeFacing::EAST_5TH_AVE || facing == FacadeFacing::WEST_6TH_AVE) {
-            lintelSize = Vec3(dRecess, hLintel, s1 - s0);
-        } else {
-            lintelSize = Vec3(s1 - s0, hLintel, dRecess);
-        }
-        addBoxMetric(meshLimestone, lintelCenter, lintelSize, colLimestone, 1.0f / 2.0f, 1.0f / 0.8f);
+        Vec3 lintelCenter = facade.localToWorld((s0 + s1) * 0.5f, yLintel + hLintel * 0.5f, -dRecess * 0.5f);
+        addOrientedBoxMetric(meshLimestone, lintelCenter, facade.tangent, facade.bitangent, facade.normal, sLen, hLintel, dRecess, colLimestone, 1.0f / 2.0f, 1.0f / 0.8f);
     }
 }
 
@@ -600,21 +574,25 @@ int main(int argc, char** argv) {
         { 6.0f,   7.5f},  { 14.0f,  15.5f},  { 22.5f,  24.0f}, { 31.0f, 35.0f}
     };
 
+    // Base 4-Sided Facades (Y = 1.5 to 25.0m)
+    TangentPlaneFacade baseFacadeEast { Vec3(xEast, 0.0f, 0.0f), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3( 1, 0, 0), baseD, 25.0f };
+    TangentPlaneFacade baseFacadeWest { Vec3(xWest, 0.0f, 0.0f), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3(-1, 0, 0), baseD, 25.0f };
+
     for (const auto& pr : base5thAvePiers) {
-        addProjectingPier(meshLimestone, FacadeFacing::EAST_5TH_AVE, xEast, pr.first, pr.second, 5.2f, 25.0f, 0.45f, colLimestone);
-        addProjectingPier(meshLimestone, FacadeFacing::WEST_6TH_AVE, xWest, pr.first, pr.second, 5.2f, 25.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, baseFacadeEast, pr.first, pr.second, 5.2f, 25.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, baseFacadeWest, pr.first, pr.second, 5.2f, 25.0f, 0.45f, colLimestone);
     }
     for (float yF = 5.2f; yF < 24.0f; yF += 4.8f) {
         for (const auto& bay : base5thAveBays) {
             addApertureWindowBay(
                 meshLimestone, meshGlazing, meshSpandrel, meshSteel,
-                FacadeFacing::EAST_5TH_AVE, xEast, bay.first, bay.second,
+                baseFacadeEast, bay.first, bay.second,
                 yF, yF + 4.8f, 1.1f, 0.20f, 0.40f, 0.35f, 3,
                 colLimestone, colGlazing, colSpandrel, colSteel
             );
             addApertureWindowBay(
                 meshLimestone, meshGlazing, meshSpandrel, meshSteel,
-                FacadeFacing::WEST_6TH_AVE, xWest, bay.first, bay.second,
+                baseFacadeWest, bay.first, bay.second,
                 yF, yF + 4.8f, 1.1f, 0.20f, 0.40f, 0.35f, 3,
                 colLimestone, colGlazing, colSpandrel, colSteel
             );
@@ -634,6 +612,11 @@ int main(int argc, char** argv) {
     const float zSouthT1 = 33.0f;
     const float zNorthT1 = -33.0f;
 
+    TangentPlaneFacade t1FacadeEast { Vec3(xEastT1, 0.0f, 0.0f), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3( 1, 0, 0), 66.0f, 71.0f };
+    TangentPlaneFacade t1FacadeWest { Vec3(xWestT1, 0.0f, 0.0f), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3(-1, 0, 0), 66.0f, 71.0f };
+    TangentPlaneFacade t1FacadeNorth{ Vec3(0.0f, 0.0f, zNorthT1), Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, -1), 74.0f, 71.0f };
+    TangentPlaneFacade t1FacadeSouth{ Vec3(0.0f, 0.0f, zSouthT1), Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0,  1), 74.0f, 71.0f };
+
     // East & West (along Z: -33 to 33)
     std::vector<std::pair<float, float>> t1BaysZ = {
         {-28.0f, -20.0f}, {-15.0f, -7.0f}, { 7.0f, 15.0f}, {20.0f, 28.0f}
@@ -652,23 +635,23 @@ int main(int argc, char** argv) {
 
     // Piers Tier 1
     for (const auto& pr : t1PiersZ) {
-        addProjectingPier(meshLimestone, FacadeFacing::EAST_5TH_AVE, xEastT1, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
-        addProjectingPier(meshLimestone, FacadeFacing::WEST_6TH_AVE, xWestT1, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, t1FacadeEast, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, t1FacadeWest, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
     }
     for (const auto& pr : t1PiersX) {
-        addProjectingPier(meshLimestone, FacadeFacing::NORTH_34TH_ST, zNorthT1, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
-        addProjectingPier(meshLimestone, FacadeFacing::SOUTH_33RD_ST, zSouthT1, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, t1FacadeNorth, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, t1FacadeSouth, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
     }
 
     // Windows Tier 1
     for (float yF = 25.0f; yF < 94.0f; yF += 3.6f) {
         for (const auto& bay : t1BaysZ) {
-            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::EAST_5TH_AVE, xEastT1, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
-            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::WEST_6TH_AVE, xWestT1, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, t1FacadeEast, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, t1FacadeWest, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
         }
         for (const auto& bay : t1BaysX) {
-            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::NORTH_34TH_ST, zNorthT1, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
-            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::SOUTH_33RD_ST, zSouthT1, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, t1FacadeNorth, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, t1FacadeSouth, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
         }
     }
 
@@ -677,6 +660,11 @@ int main(int argc, char** argv) {
     const float xWestT2 = -33.5f;
     const float zSouthT2 = 31.0f;
     const float zNorthT2 = -31.0f;
+
+    TangentPlaneFacade t2FacadeEast { Vec3(xEastT2, 0.0f, 0.0f), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3( 1, 0, 0), 62.0f, 224.0f };
+    TangentPlaneFacade t2FacadeWest { Vec3(xWestT2, 0.0f, 0.0f), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3(-1, 0, 0), 62.0f, 224.0f };
+    TangentPlaneFacade t2FacadeNorth{ Vec3(0.0f, 0.0f, zNorthT2), Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, -1), 67.0f, 224.0f };
+    TangentPlaneFacade t2FacadeSouth{ Vec3(0.0f, 0.0f, zSouthT2), Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0,  1), 67.0f, 224.0f };
 
     // East & West (along Z: -31 to 31)
     std::vector<std::pair<float, float>> t2BaysZ = {
@@ -696,23 +684,23 @@ int main(int argc, char** argv) {
 
     // Piers Tier 2
     for (const auto& pr : t2PiersZ) {
-        addProjectingPier(meshLimestone, FacadeFacing::EAST_5TH_AVE, xEastT2, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
-        addProjectingPier(meshLimestone, FacadeFacing::WEST_6TH_AVE, xWestT2, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, t2FacadeEast, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, t2FacadeWest, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
     }
     for (const auto& pr : t2PiersX) {
-        addProjectingPier(meshLimestone, FacadeFacing::NORTH_34TH_ST, zNorthT2, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
-        addProjectingPier(meshLimestone, FacadeFacing::SOUTH_33RD_ST, zSouthT2, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, t2FacadeNorth, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, t2FacadeSouth, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
     }
 
     // Windows Tier 2
     for (float yF = 96.0f; yF < 318.0f; yF += 3.6f) {
         for (const auto& bay : t2BaysZ) {
-            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::EAST_5TH_AVE, xEastT2, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
-            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::WEST_6TH_AVE, xWestT2, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, t2FacadeEast, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, t2FacadeWest, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
         }
         for (const auto& bay : t2BaysX) {
-            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::NORTH_34TH_ST, zNorthT2, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
-            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::SOUTH_33RD_ST, zSouthT2, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, t2FacadeNorth, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, t2FacadeSouth, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
         }
     }
 
@@ -814,35 +802,128 @@ int main(int argc, char** argv) {
         std::move(meshDistrict)         // 12
     };
 
-    // Synthesize PBR Texture Sets
+    // Synthesize PBR Texture Sets via Continuous Biophysical Manifold (ADA Pillar 3)
     const int TEX_RES = 1024;
     std::vector<EmbeddedTexture> embeddedTextures;
 
-    struct MaterialDef {
+    struct ContinuousMaterialSlot {
         int matIndex;
         std::string name;
-        PbrMaterialArchetype archetype;
+        ContinuousMaterialDescriptor descriptor;
         uint32_t seed;
     };
 
-    std::vector<MaterialDef> materialDefs = {
-        {0, "IndianaLimestone", PbrMaterialArchetype::INDIANA_LIMESTONE_HONED, 101},
-        {1, "CharcoalGranite", PbrMaterialArchetype::CHARCOAL_GRANITE_PLINTH, 202},
-        {2, "ArtDecoSpandrels", PbrMaterialArchetype::ART_DECO_CHEVRON_SPANDREL, 303},
-        {3, "StainlessSteel", PbrMaterialArchetype::BRUSHED_STAINLESS_STEEL_316, 404},
-        {4, "ArchitecturalGlazing", PbrMaterialArchetype::SOLAR_LOW_E_REFLECTIVE_GLASS, 505},
-        {5, "CastBronze", PbrMaterialArchetype::STATUARY_CAST_BRONZE, 606},
-        {6, "BitumenRoof", PbrMaterialArchetype::BITUMEN_TAR_GRAVEL_BALLAST, 707},
-        {7, "SidewalkPavement", PbrMaterialArchetype::SCORED_SIDEWALK_PAVEMENT, 808},
-        {8, "LobbyInteriorMarble", PbrMaterialArchetype::ROMAN_TRAVERTINE_POLISHED, 909},
-        {9, "AuthenticTileSpire", PbrMaterialArchetype::TURNED_LATHE_ALUMINUM, 999},
-        {10, "OakBark", PbrMaterialArchetype::CHARCOAL_GRANITE_PLINTH, 111},
-        {11, "OakFoliage", PbrMaterialArchetype::SOLAR_LOW_E_REFLECTIVE_GLASS, 222},
-        {12, "MidtownDistrict", PbrMaterialArchetype::INDIANA_LIMESTONE_HONED, 333}
-    };
+    std::vector<ContinuousMaterialSlot> materialSlots;
+    {
+        // 0. Honed Indiana Limestone (Continuous biophysical stone)
+        ContinuousMaterialDescriptor dLimestone = getAnchorManifoldPoint(0);
+        dLimestone.albedoLinear = Vec3(0.72f, 0.70f, 0.65f);
+        dLimestone.roughnessBaseline = 0.82f;
+        dLimestone.conduction = 0.0f;
+        dLimestone.microPorosity = 0.42f;
+        dLimestone.normalStrength = 1.6f;
+        dLimestone.fissureScale = 12.0f;
+        dLimestone.fissureDepth = 0.18f;
+        materialSlots.push_back({0, "IndianaLimestone", dLimestone, 101});
 
-    for (const auto& def : materialDefs) {
-        auto pbrSet = generatePbrMaterial(def.archetype, TEX_RES, TEX_RES, def.seed);
+        // 1. Charcoal Granite Plinth
+        ContinuousMaterialDescriptor dGranite = getAnchorManifoldPoint(4);
+        dGranite.albedoLinear = Vec3(0.18f, 0.19f, 0.20f);
+        dGranite.secondaryAlbedo = Vec3(0.10f, 0.11f, 0.12f);
+        dGranite.conduction = 0.0f;
+        dGranite.roughnessBaseline = 0.75f;
+        dGranite.microPorosity = 0.50f;
+        dGranite.normalStrength = 1.8f;
+        dGranite.cellularWeight = 0.45f;
+        materialSlots.push_back({1, "CharcoalGranite", dGranite, 202});
+
+        // 2. Art Deco Bronze Spandrels
+        ContinuousMaterialDescriptor dSpandrel = getAnchorManifoldPoint(18);
+        dSpandrel.albedoLinear = Vec3(0.28f, 0.22f, 0.16f);
+        dSpandrel.secondaryAlbedo = Vec3(0.18f, 0.14f, 0.10f);
+        dSpandrel.conduction = 0.85f;
+        dSpandrel.roughnessBaseline = 0.38f;
+        dSpandrel.anisotropyStrength = 0.50f;
+        materialSlots.push_back({2, "ArtDecoSpandrels", dSpandrel, 303});
+
+        // 3. Brushed Stainless Steel
+        ContinuousMaterialDescriptor dSteel = getAnchorManifoldPoint(20);
+        dSteel.albedoLinear = Vec3(0.75f, 0.76f, 0.78f);
+        dSteel.conduction = 0.95f;
+        dSteel.roughnessBaseline = 0.28f;
+        dSteel.anisotropyStrength = 0.85f;
+        materialSlots.push_back({3, "StainlessSteel", dSteel, 404});
+
+        // 4. Low-E Architectural Reflective Glazing
+        ContinuousMaterialDescriptor dGlass = getAnchorManifoldPoint(30);
+        dGlass.albedoLinear = Vec3(0.05f, 0.08f, 0.12f);
+        dGlass.conduction = 0.05f;
+        dGlass.roughnessBaseline = 0.03f;
+        dGlass.microPorosity = 0.02f;
+        dGlass.normalStrength = 0.3f;
+        materialSlots.push_back({4, "ArchitecturalGlazing", dGlass, 505});
+
+        // 5. Statuary Cast Bronze
+        ContinuousMaterialDescriptor dBronze = getAnchorManifoldPoint(18);
+        dBronze.albedoLinear = Vec3(0.25f, 0.18f, 0.12f);
+        dBronze.conduction = 0.90f;
+        dBronze.roughnessBaseline = 0.42f;
+        materialSlots.push_back({5, "CastBronze", dBronze, 606});
+
+        // 6. Bitumen Tar & Gravel Ballast
+        ContinuousMaterialDescriptor dRoof = getAnchorManifoldPoint(10);
+        dRoof.albedoLinear = Vec3(0.15f, 0.15f, 0.16f);
+        dRoof.conduction = 0.0f;
+        dRoof.roughnessBaseline = 0.92f;
+        dRoof.cellularWeight = 0.60f;
+        dRoof.normalStrength = 2.4f;
+        materialSlots.push_back({6, "BitumenRoof", dRoof, 707});
+
+        // 7. Scored Sidewalk Pavement
+        ContinuousMaterialDescriptor dSidewalk = getAnchorManifoldPoint(10);
+        dSidewalk.albedoLinear = Vec3(0.60f, 0.59f, 0.57f);
+        dSidewalk.conduction = 0.0f;
+        dSidewalk.roughnessBaseline = 0.90f;
+        dSidewalk.graininess = 0.40f;
+        materialSlots.push_back({7, "SidewalkPavement", dSidewalk, 808});
+
+        // 8. Grand Lobby Interior Travertine Marble
+        ContinuousMaterialDescriptor dMarble = getAnchorManifoldPoint(2);
+        dMarble.albedoLinear = Vec3(0.85f, 0.81f, 0.72f);
+        dMarble.roughnessBaseline = 0.48f;
+        materialSlots.push_back({8, "LobbyInteriorMarble", dMarble, 909});
+
+        // 9. Turned Lathe Aluminum Spire
+        ContinuousMaterialDescriptor dSpire = getAnchorManifoldPoint(20);
+        dSpire.albedoLinear = Vec3(0.82f, 0.84f, 0.86f);
+        dSpire.conduction = 0.98f;
+        dSpire.roughnessBaseline = 0.20f;
+        materialSlots.push_back({9, "AuthenticTileSpire", dSpire, 999});
+
+        // 10. Botanical Oak Bark
+        ContinuousMaterialDescriptor dBark = getAnchorManifoldPoint(0);
+        dBark.albedoLinear = Vec3(0.22f, 0.18f, 0.14f);
+        dBark.roughnessBaseline = 0.88f;
+        dBark.fissureScale = 16.0f;
+        dBark.fissureDepth = 0.45f;
+        materialSlots.push_back({10, "OakBark", dBark, 111});
+
+        // 11. Botanical Oak Foliage
+        ContinuousMaterialDescriptor dLeaf = getAnchorManifoldPoint(30);
+        dLeaf.albedoLinear = Vec3(0.12f, 0.28f, 0.08f);
+        dLeaf.roughnessBaseline = 0.65f;
+        dLeaf.microPorosity = 0.25f;
+        materialSlots.push_back({11, "OakFoliage", dLeaf, 222});
+
+        // 12. Surrounding District Facades (Context Tiles)
+        ContinuousMaterialDescriptor dContext = getAnchorManifoldPoint(0);
+        dContext.albedoLinear = Vec3(0.70f, 0.68f, 0.64f);
+        dContext.roughnessBaseline = 0.80f;
+        materialSlots.push_back({12, "MidtownDistrict", dContext, 333});
+    }
+
+    for (const auto& def : materialSlots) {
+        auto pbrSet = synthesizeManifoldPbrParallel(def.descriptor, TEX_RES, TEX_RES, def.seed);
 
         if (def.matIndex == 4) { // Architectural Glazing: Dark reflective glass, ZERO daytime emission
             const int cellW = TEX_RES / 8;

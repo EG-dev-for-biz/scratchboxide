@@ -18,9 +18,12 @@ Transform raw real-world photogrammetric 3D tiles (such as Google Maps Photoreal
 
 Before executing any tile transformation, the system must enforce the following non-negotiable gates:
 
-### A. The Alien Planet Test (Adaptive Domain Architecture)
-- **Zero Closed Taxonomies**: Never design hardcoded enums for architectural styles, biomes, or materials (e.g. `type Style = 'art_deco' | 'gothic' | 'modern'`).
-- **Continuous Physical Fields**: All building profiles, setbacks, window bay dimensions, and material parameters must be expressed as continuous metric values ($w_{\text{bay}}, d_{\text{recess}}, h_{\text{spandrel}}, \alpha_{\text{roughness}}, \mu_{\text{metalness}}$).
+### A. The Alien Planet Test (Adaptive Domain Architecture & Open-Domain Universality)
+- **Zero Closed Taxonomies**: Never declare closed enum classifiers for architectural styles, biomes, or materials (e.g. `type Style = 'art_deco' | 'gothic' | 'modern'` or `enum class PbrMaterialArchetype`).
+- **Continuous Biophysical Material Manifold ($\mathbb{R}^{16}$)**: In accordance with `scratchbox_pbr_manifold.hpp`, all surfaces are represented as continuous dimensional vectors $\mathbf{m} \in \mathbb{R}^{16}$ ($\text{albedoLinear}$, $\text{conduction}$, $\text{roughnessBaseline}$, $\text{microPorosity}$, $\text{normalStrength}$, $\text{fissureScale}$, $\text{fissureDepth}$, $\text{cellularWeight}$). Any earthly stone, metal, glazed facade, or alien metamaterial can be interpolated ($\operatorname{lerp}$), blended, or dynamically evaluated without code modification.
+- **Differential Tangent-Plane Facade Grammar**: Facade apertures, piers, and setbacks are computed in continuous local tangent space $(s, y, f)$ via orthonormal frames $(\mathbf{t}, \mathbf{b}, \mathbf{n})$ anchored at $\mathbf{P}_0$. Execution logic must NEVER branch on human street names or discrete facing enums (`EAST_5TH_AVE`, `NORTH_34TH_ST`).
+- **Dynamic OBB GSD-Conformal Camera Rigging**: Camera coordinates must NEVER be static hardcoded numbers. All verification vantages are generated dynamically via `AdaptiveSurveyRigService` as continuous functions of the mesh Oriented Bounding Box (OBB) and surface normal vectors to enforce sub-millimeter Ground Sampling Distance (GSD).
+- **Automated Unsupervised DNA Abstraction**: Architectural setback tiers, bay rhythms, and material clusters must be discoverable directly from raw geometry via `TileAbstractorEngine` (`scratchbox_tile_abstractor.hpp`), eliminating manual hardcoded schemas.
 
 ### B. C++20 Engine Primacy & Apple Clang Compilation
 - **C++20 as Geometry Generator**: The generation of multi-tier building geometry, window aperture recesses, and botanical assets must be implemented in native C++20 using the Scratchbox 3D Engine (`#include "scratchbox_engine.hpp"`), compiled via Apple Clang (`-std=c++20 -O3`).
@@ -83,7 +86,7 @@ The transformation pipeline is structured into three distinct, verifiable stages
                                           v
 +-----------------------------------------------------------------------------------+
 | STAGE 3: MASTER PBR REALITY WITH PHOTOGRAMMETRIC CONTEXT FUSION                   |
-| - Assigns 13 calibrated PBR material sets (Indiana limestone, bronze, glazing)     |
+| - Evaluates continuous biophysical material points on the R^16 manifold           |
 | - Synthesizes micro-relief ashlar masonry normal maps (Scharr/Sobel operators)    |
 | - Preserves & bakes photogrammetric vertex colors for surrounding district tiles  |
 | - Path-traces final beauty plate under NOAA diurnal solar ephemeris (0-baked-shadows)|
@@ -109,14 +112,17 @@ The transformation pipeline is structured into three distinct, verifiable stages
   - Top lintel and bottom sill returns: $\text{depth} = d_{\text{recess}}$
   - Window glazing quad recessed behind the facade plane.
 
-### C. Phase 3: PBR Material Calibration & De-Lighting
-- Material channels calibrated against measured real-world biophysical values:
-  - **Indiana Limestone (Piers/Walls)**: Albedo = `[0.72, 0.70, 0.65]`, Roughness = `0.82`, Metalness = `0.0`.
-  - **Statuary Bronze (Spandrels/Mullions/Doors)**: Albedo = `[0.28, 0.22, 0.16]`, Roughness = `0.38`, Metalness = `0.85`.
-  - **Dielectric Window Glazing**: Albedo = `[0.05, 0.08, 0.12]`, Roughness = `0.03`, Metalness = `0.05`.
-  - **Granite Base Course Plinth**: Albedo = `[0.18, 0.19, 0.20]`, Roughness = `0.75`, Metalness = `0.0`.
-  - **Concrete Sidewalk Paving**: Albedo = `[0.60, 0.59, 0.57]`, Roughness = `0.90`, Metalness = `0.0`.
-- **Zero Baked Shadows**: De-lighting is achieved by overriding tile diffuse maps with calibrated physical albedo and evaluating path-traced direct solar irradiance and diffuse sky dome scattering using NOAA ephemeris.
+### C. Phase 3: Continuous Biophysical Material Manifold & De-Lighting
+In accordance with ADA Pillar 3, materials are never closed discrete archetypes. They are represented as continuous coordinate vectors $\mathbf{m} \in \mathbb{R}^{16}$ on the Scratchbox Biophysical Manifold (`scratchbox_pbr_manifold.hpp`):
+- **Continuous Manifold Dimensions**:
+  $$\mathbf{m} = \left(\mathbf{a}_{\text{lin}}, \mathbf{a}_{\text{sec}}, w_{\text{sec}}, \sigma_{\text{cond}}, \alpha_{\text{rough}}, \mu_{\text{porosity}}, \kappa_{\text{norm}}, \omega_{\text{fissure}}, \delta_{\text{fissure}}, \ldots\right)$$
+- **Continuous Physical Material Coordinates (ESB Instance Points)**:
+  - **Masonry Ashlar Piers / Walls**: $\mathbf{a}_{\text{lin}} = [0.72, 0.70, 0.65]$, $\alpha_{\text{rough}} = 0.82$, $\sigma_{\text{cond}} = 0.0$, $\mu_{\text{porosity}} = 0.42$, $\kappa_{\text{norm}} = 1.6$, $\omega_{\text{fissure}} = 12.0$.
+  - **Architectural Bronze Spandrels / Trim**: $\mathbf{a}_{\text{lin}} = [0.28, 0.22, 0.16]$, $\sigma_{\text{cond}} = 0.85$, $\alpha_{\text{rough}} = 0.38$, $\kappa_{\text{norm}} = 1.4$, anisotropy $= 0.50$.
+  - **Dielectric Low-E Glazing**: $\mathbf{a}_{\text{lin}} = [0.05, 0.08, 0.12]$, $\sigma_{\text{cond}} = 0.05$, $\alpha_{\text{rough}} = 0.03$, $\mu_{\text{porosity}} = 0.02$, zero daytime emission.
+  - **Granite Base Course Plinth**: $\mathbf{a}_{\text{lin}} = [0.18, 0.19, 0.20]$, $\alpha_{\text{rough}} = 0.75$, $\sigma_{\text{cond}} = 0.0$, $\kappa_{\text{norm}} = 1.8$, cellular weight $= 0.45$.
+  - **Scored Pedestrian Pavement**: $\mathbf{a}_{\text{lin}} = [0.60, 0.59, 0.57]$, $\alpha_{\text{rough}} = 0.90$, $\sigma_{\text{cond}} = 0.0$, graininess $= 0.40$.
+- **Zero Baked Shadows**: De-lighting is achieved by synthesizing unshadowed linear albedo and normal maps directly from the manifold, then evaluating path-traced direct solar irradiance and diffuse sky dome scattering using NOAA diurnal solar ephemeris.
 
 ### D. Phase 4: Botanical Integration via SB-Veggie
 - Photogrammetric scans reduce trees to solid, distorted green mounds.
@@ -129,25 +135,49 @@ The transformation pipeline is structured into three distinct, verifiable stages
 
 ## 6. The 3-Way Architectural Vantage Verification Triad
 
-To prevent visual cherry-picking and verify quality across all scales, every synthesized asset must be path-traced and inspected from **three mandatory vantage points**:
+To prevent visual cherry-picking and verify quality across all scales, every synthesized asset is framed dynamically via `AdaptiveSurveyRigService` (`plan_adaptive_survey_rig`). Camera coordinates are evaluated as continuous geometric functions of the asset's Oriented Bounding Box (OBB) and facade surface normals rather than hardcoded magic numbers:
 
-| Vantage | Camera Config | Spatial Purpose | What It Audits |
-| :--- | :--- | :--- | :--- |
-| **1. Midtown Aerial Master** | `pos: [-160, 140, 180]`, `target: [0, 80, 0]`, `FOV: 48°` | City District Scale | Setbacks, 4-sided fenestration, skyline integration, and photogrammetric context fusion |
-| **2. Facade Mid-Rise** | `pos: [70, 35, 45]`, `target: [15, 40, 0]`, `FOV: 50°` | Architectural Scale | Ashlar pier relief, recessed window bays, bronze chevron spandrels, self-shadowing |
-| **3. Street View Pedestrian** | `pos: [48, 4.5, -14]`, `target: [35, 10, 0]`, `FOV: 55°` | Human / Botanical Scale | Curtain wall excision, monumental entrance, bronze portico, sidewalk joints, SB-Veggie oak trees |
+| Vantage Class | Dynamic OBB Equation | Evaluated Camera Coordinates (ESB Instance) | Spatial Purpose | What It Audits |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. Aerial District Master** | $\mathbf{P} = \mathbf{C}_{\text{OBB}} + 1.8 \cdot \max(W, H, D) \cdot \mathbf{v}_{\text{orbit}}(\theta, 35^\circ)$ | `pos: [-160, 140, 180]`, `target: [0, 80, 0]`, `FOV: 48°` | City District Scale | Setbacks, 4-sided fenestration, skyline integration, and photogrammetric context fusion |
+| **2. Facade Mid-Rise** | $\mathbf{P} = \mathbf{P}_{\text{shaft\_mid}} + \frac{h_{\text{shaft}}}{2} \cdot \mathbf{n}_{\text{facade}} + \mathbf{b} \cdot y_{\text{offset}}$ | `pos: [70, 35, 45]`, `target: [15, 40, 0]`, `FOV: 50°` | Architectural Scale | Ashlar pier relief, recessed window bays, bronze chevron spandrels, self-shadowing |
+| **3. Pedestrian Street View** | $\mathbf{P} = \mathbf{P}_{\text{pedestrian\_corridor}} + 1.7\,\text{m} \cdot \mathbf{u}_y$ | `pos: [48, 4.5, -14]`, `target: [35, 10, 0]`, `FOV: 55°` | Human / Botanical Scale | Curtain wall excision, monumental entrance, bronze portico, sidewalk joints, SB-Veggie oak trees |
 
 ---
 
-## 7. Interactive Showcase & Demonstration UX
+## 7. Interactive Showcase UX & AI Prompt Interface
 
-The interactive web demo ([`omnispatial_synthesis_demo.html`](file:///Users/eligreen/dev/scratchbox-ide-master/public/demos/showcase/omnispatial_synthesis_demo.html)) must provide:
-1. **Interactive Vantage Switching**: Fast switching between the three canonical vantages.
-2. **Dual-Viewport Side-by-Side Mode**: Synchronized comparison between Stage 1, Stage 2, and Stage 3.
-3. **Interactive Split Wipe Slider**: Smooth drag slider allowing real-time pixel-level wipe between stages.
-4. **2.5x Detail Loupe**: Magnifying glass tool for close-up examination of masonry joints, bronze mullions, and window reflections.
-5. **3D Free Orbit Viewport**: Interactive `<model-viewer>` allowing users to orbit, zoom, and inspect the binary `.glb` model in real-time 3D.
-6. **Address / Location Query Box**: User input enabling arbitrary geographic coordinates and real-world addresses to be processed through the synthesis pipeline.
+The interactive web demo ([`omnispatial_synthesis_demo.html`](file:///Users/eligreen/dev/scratchbox-ide-master/public/demos/showcase/omnispatial_synthesis_demo.html)) proves the transformation through an end-to-end **Natural Language AI Prompt Interface**:
+1. **Natural Language AI Prompt Command Bar**:
+   - Accepts arbitrary freeform prompts (e.g. *"Transform raw 3D tile into hyper-realistic PBR building with recessed window bays"*, *"Stage 1: Ingest Google 3D tile in 18% Studio Grey Clay"*, *"Refine geometry to 4-sided Art Deco piers and SB-Veggie trees"*, *"Inspect 2.5x macro detail loupe on 5th Ave limestone facade"*).
+   - Intelligently parses intent across Target Stage (1, 2, 3), Architectural Vantage (Aerial, Facade, Street View), View Mode (Dual Split, Wipe Slider, 2.5x Detail Loupe, 3D Orbit), and Render Pass (Beauty, Albedo, Normal, Depth).
+2. **Interactive Quick-Prompt Chips**:
+   - Single-click prompt chips allow instantaneous execution of canonical pipeline configurations:
+     - `✨ Transform to PBR`
+     - `🏛️ Stage 1: Clay Scan`
+     - `📐 Stage 2: Vector Refined`
+     - `🎨 Stage 3: Manifold PBR`
+     - `🌳 Street View Portico`
+     - `🔍 2.5x Detail Loupe`
+     - `🌐 3D Free Orbit`
+     - `☀️ Surface Normals`
+     - `⇄ Wipe Comparison`
+3. **Live Streaming C++20 Pipeline Terminal Drawer**:
+   - Real-time animated terminal console tracking the exact C++20 engine operations with millisecond timestamps:
+     - `[PROMPT]`: Ingests and sanitizes natural language instruction.
+     - `[INTENT]`: Resolves stage, vantage, render pass, and view mode parameters.
+     - `[GEODESIC]`: Verifies sub-millimeter centroid locking at $(0.00\,\text{m}, 0.00\,\text{m})$ and base envelope dimensions.
+     - `[UTDRA]`: Excises melted tower shaft and ground curtain wall while preserving surrounding city block.
+     - `[C++20 ENGINE]`: Synthesizes 4-sided tangent plane Art Deco piers and 0.40m window bay recesses.
+     - `[SB-VEGGIE]`: Instances botanical Quercus alba trees along pedestrian sidewalk.
+     - `[PBR MANIFOLD]`: Evaluates continuous $\mathbb{R}^{16}$ manifold parameters and Toksvig Scharr normal AA pyramid.
+     - `[NOAA SOLAR]`: Inverts diurnal solar irradiance $L_\odot = [0.24, 0.93, 0.29]$ to eliminate baked shadows.
+     - `[VIEWPORT]`: Transitions viewports and 3D `<model-viewer>` with $0.000\,\text{px}$ spatial drift.
+4. **Interactive Multi-Mode Inspection**:
+   - **Dual-Viewport Side-by-Side Mode**: Synchronized comparison between Stage 1, Stage 2, and Stage 3.
+   - **Interactive Split Wipe Slider**: Smooth drag slider allowing real-time pixel-level wipe between stages.
+   - **2.5x Detail Loupe**: Magnifying glass tool for close-up examination of masonry joints, bronze mullions, and window reflections.
+   - **3D Free Orbit Viewport**: Interactive `<model-viewer>` allowing users to orbit, zoom, and inspect the binary `.glb` model in real-time 3D.
 
 ---
 
