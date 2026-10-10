@@ -7,6 +7,7 @@ description: >-
   Unreal Engine (Nanite, Lumen, Substrate, Niagara, PCG, HLSL), Unity (URP, HDRP, Shader Graph, VFX Graph, C# Mesh API), or Scratchbox IDE
   (Procedural3DEngineService, 3DGS/4DGS, UniversalPbrBakingKernel, VirtualBevelKernel, UTDRA/ULDRA photogrammetric elevation slicing, and WGS-84/ECEF/LTP geodesics).
   MANDATORY: Formulate and suggest ANY solution this skill conceives as direct, actionable changes to the codebase with target file paths, complete drop-in implementations, and verification harnesses.
+  MANDATORY SELF-INTERROGATION: The skill must ALWAYS ask itself "are these solutions adaptive domain architecture compliant?" before proposing or implementing changes.
   Use this skill to leverage Scratchbox IDE code, make grounded code improvements, explain what industry competitors (Blender, Unreal, Unity, Cesium, Luma AI) do to solve a problem,
   and enforce strict closed-loop mathematical invariants (SO(3) chirality, positive-definite covariance, differential UV Jacobians) free of the Architectural Simulation Trap.
 ---
@@ -20,7 +21,7 @@ description: >-
 
 ## 1. The Technical Artist's Core Philosophy
 
-When tackling any 3D, CGI, real-time engine, or Scratchbox IDE challenge, think in three layers:
+When tackling any 3D, CGI, real-time engine, or Scratchbox IDE challenge, think across four interconnected layers:
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -35,6 +36,11 @@ When tackling any 3D, CGI, real-time engine, or Scratchbox IDE challenge, think 
 │  3. HARDWARE & PIPELINE LAYER (Raster/RTX/Memory)      │
 │     Draw calls, overdraw, cache coherency, VRAM band-  │
 │     width, Nanite cluster limits, shader instructions. │
+├────────────────────────────────────────────────────────┤
+│  4. ADAPTIVE DOMAIN ARCHITECTURE (ADA) COMPLIANCE      │
+│     Self-Interrogation: "Are these solutions adaptive  │
+│     domain architecture compliant?" (Alien Planet Test,│
+│     zero closed enums, continuous R^n physical spaces) │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -44,6 +50,7 @@ When tackling any 3D, CGI, real-time engine, or Scratchbox IDE challenge, think 
 - **Never displace geometry if a parallax occlusion map (POM) or normal trick fools the camera.**
 - **If an asset doesn't deform, freeze its transforms and pack masks into vertex colors.**
 - **When physics explodes, replace the dynamic body with a kinematic anchor or driven spline.**
+- **Always ask: "Are these solutions adaptive domain architecture compliant?"**
 
 ---
 
@@ -78,6 +85,7 @@ When analyzing visual, geometric, or architectural problems, provide clear compa
               ──► [WHAT UNITY DOES]         (URP / HDRP / Burst Jobs / Shader Graph)
               ──► [WHAT CESIUM / LUMA DOES] (3D Tiles 1.1 RTC / Point Clouds / Splats)
               ──► [HOW SCRATCHBOX SOLVES IT](Native Invariant Kernels / LTP / UTDRA / Bevel)
+              ──► [ADA COMPLIANCE CHECK]    ("Are these solutions adaptive domain architecture compliant?")
               ──► [ACTIONABLE CODE CHANGE]  (Concrete, drop-in codebase modifications)
 ```
 
@@ -100,12 +108,43 @@ When analyzing visual, geometric, or architectural problems, provide clear compa
 
 ---
 
-## 4. Mandatory Directive: Every Solution Must Be Suggested as Codebase Changes
+## 4. Mandatory Directives: ADA Compliance & Direct Codebase Changes
 
-Whenever this skill conceives, diagnoses, or discovers a solution to ANY visual, geometric, shader, or pipeline challenge—whether inspired by Blender tricks, Unreal Engine techniques, Unity workflows, or optical cheats—**it must never remain purely abstract, theoretical, or advisory**. The agent MUST proactively formulate and suggest the solution to the user as **direct, actionable changes to the codebase**:
+### 4.1 Mandatory Self-Interrogation: "Are these solutions adaptive domain architecture compliant?"
 
-### 4.1 The 5-Point Codebase Delivery Protocol
-Every suggested solution must contain:
+Before suggesting, designing, or implementing ANY solution, the agent MUST explicitly ask itself:
+> **"Are these solutions adaptive domain architecture compliant?"**
+
+To pass this self-interrogation, the proposed solution must satisfy the **6 Pillars of Adaptive Domain Architecture (ADA)**:
+
+1. 🪐 **The Alien Planet Test (Zero Closed Taxonomies)**:
+   - *Self-Check*: Does the solution rely on closed enum catalogs (e.g., `type: 'tree' | 'rock' | 'building'`), static preset dictionaries, or hardcoded strings?
+   - *Mandate*: **REJECT closed presets**. The solution must accept open-ended, continuous physical parameter schemas in $\mathbb{R}^n$ (frequencies, amplitudes, roughness, Kelvin temperatures, metric scales) so that an unprecedented entity (e.g., a "Titan cryogenic atmospheric methane harvester drone" or "crystalline orbital tether station") synthesizes just as seamlessly as familiar Earth objects.
+2. 📏 **Strict Metric Root (1.0 Unit = 1.0 Meter)**:
+   - *Self-Check*: Are dimensions, bevels, clearances, and tolerances grounded in true SI meters without arbitrary scale factors?
+   - *Mandate*: All geometry, procedurals, and shaders must anchor to a strict 1-meter local coordinate root. Never mandate global GIS coordinates (WGS-84) on individual props (preventing the "Null Island" disaster).
+3. ⚙️ **The 5 Universal Geometric Operators of Mechanical Fidelity**:
+   - *Self-Check*: Does mechanical geometry exhibit real-world physical plausibility through universal operators?
+     1. *Compound-Curvature Lofts*: Aerodynamic/hydrodynamic lifting bodies with panel shutlines and fastener pitch.
+     2. *Kinematic Actuator & Linkage Chains*: Hydraulic rams, clevis pins, gimbal bearings.
+     3. *Protective Fluid & Thermal Interfaces*: Directional louvers, concentric debris strainers, heat sinks.
+     4. *Spline-Swept Umbilical Harnesses*: Flexible conduits, P-clamp brackets, wiring looms.
+     5. *Structural Spaceframe & Lightening Topology*: Lightening pockets, gussets, structural ribbing.
+4. 🏗️ **The 70-20-10 Form Hierarchy**:
+   - *Self-Check*: Does the asset respect form hierarchy?
+     - **70% Primary Edifice**: Dominant silhouette visible from distance.
+     - **20% Secondary Cowlings**: Articulating sub-assemblies, cowls, intakes, sponsons.
+     - **10% Tertiary Micro-detail**: Chamfers, fasteners, rivets, panel seams.
+5. 🔗 **Relational Spatial Predicates (Zero Magic Offsets)**:
+   - *Self-Check*: Are sub-assemblies positioned using fragile magic Cartesian offsets (`x: 3.42, y: 1.15`)?
+   - *Mandate*: Express placement as relational topological constraints (`SUPPORTED_BY`, `ATTACHED_TO`, `CONCENTRIC_WITH`, `CONTAINED_IN`), resolved dynamically by spatial solvers.
+6. 🔬 **Continuous Physical PBR & Signal Induction**:
+   - *Self-Check*: Are materials physically parameterized using true radiometric properties (microfacet roughness, complex IOR, Toksvig variance filtering) rather than uncalibrated artistic color multipliers?
+
+---
+
+### 4.2 The 5-Point Codebase Delivery Protocol
+Whenever this skill conceives, diagnoses, or discovers a solution to ANY visual, geometric, shader, or pipeline challenge, **it must never remain purely abstract, theoretical, or advisory**. The agent MUST proactively formulate and suggest the solution to the user as **direct, actionable changes to the codebase**:
 
 1. **Target File Identification**:
    - Explicitly specify the exact file path(s) within the project (e.g. `/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/node/...` or active workspace) to create, patch, or refactor.
@@ -125,7 +164,7 @@ Every suggested solution must contain:
 5. **Immediate Application Offer**:
    - Explicitly offer or proceed to apply the edits directly to the files so the user gets instant, tangible progress without manual re-typing.
 
-### 4.2 Preventing the Architectural Simulation Trap (AST)
+### 4.3 Preventing the Architectural Simulation Trap (AST)
 When translating solutions into code:
 1. **No Hollow Scaffolds**: Do not write empty interfaces or mock-in/mock-out classes. If an abstraction has only one implementation, collapse it into concrete code.
 2. **No Toy Script Regressions**: Never fall back to `THREE.BoxGeometry` or primitive cubes. Enforce `GeometricComplexityGate` ($\ge 25,000$ vertices).
@@ -145,6 +184,7 @@ For in-depth procedures, math proofs, node setups, and code snippets, consult th
 
 ### [Scratchbox IDE Mastery & Codebase Leverage](./references/scratchbox_ide_mastery.md)
 Complete architectural breakdown of `/Users/eligreen/dev/scratchbox-ide-master/`:
+- Adaptive Domain Architecture (ADA) and the Alien Planet Test.
 - Ingesting Google 3D Tiles and compiling binary glTF 2.0 via `Procedural3DEngineService`.
 - Packing PBR maps with `UniversalPbrBakingKernel` and chamfering edges with `VirtualBevelKernel`.
 - Mathematical invariant verification and AST prevention rules.

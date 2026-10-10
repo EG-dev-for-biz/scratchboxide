@@ -58,15 +58,15 @@ scratchbox-ide/
   1. Google 3D Tiles grounded mesh ingestion & geodetic anchor resolution.
   2. Multi-tier camera survey synthesis & pinhole blockout rendering.
   3. Closed-loop Sobel edge alignment quality control.
-  4. Native C++20 metric depth unprojection & spatial voxel-hash fusion (`station_to_splats.cpp`).
-  5. OGC 3D Tiles 1.1 packaging (`KHR_gaussian_splatting` & Niantic SPZ v2).
-  6. Direct Three.js `Scene3DData` interactive viewport integration.
+  4. Multi-view depth unprojection via native C++20 voxel-hash fusion (`station_to_splats.cpp`).
+  5. Packaging to OGC 3D Tiles 1.1 or Niantic SPZ.
 
-### 2.3 Universal PBR Baking Kernel (`UniversalPbrBakingKernel`)
+### 2.3 Universal PBR Texture Baking Kernel (`universal-pbr-baking-kernel.ts`)
 - **File**: `packages/core/src/node/3d-engine/universal-pbr-baking-kernel.ts`
-- **What it does**: Converts raw photogrammetry textures into studio-grade PBR maps:
-  - **Toksvig Specular Variance Filtering**: Uses $\kappa = 0.50$ to widen roughness where normal vectors vary within a texel footprint, eliminating shimmering fireflies.
-  - **Shadow Lifting**: Extracts perceptual linear luminance Laplacian to de-light harsh baked sunlight shadows without washing out ambient occlusion.
+- **What it does**: Native baking kernel that computes microfacet roughness, metallic, ambient occlusion, and normal variance.
+- **Key Features**:
+  - **Toksvig Specular Filtering**: Filters high-frequency normal variance into roughness ($\kappa = 0.50$), eliminating specular crawling and fireflies.
+  - **Shadow De-Lighting**: Uses luminance Laplacian filtering to remove baked-in sunlight shadows from photogrammetric albedo.
   - **ORM Packing**: Generates channel-packed Red=AO, Green=Roughness, Blue=Metallic textures.
 
 ### 2.4 Virtual Specular Bevel Kernel (`VirtualBevelKernel`)
@@ -80,7 +80,37 @@ scratchbox-ide/
 
 ---
 
-## 3. The 7 Non-Negotiable Mathematical Invariants
+## 3. Adaptive Domain Architecture (ADA) & The Alien Planet Test
+
+A foundational architectural doctrine in Scratchbox IDE is **Adaptive Domain Architecture (ADA)**. Every technical artist solution, procedural script, shader, and spatial service MUST be self-interrogated:
+> **"Are these solutions adaptive domain architecture compliant?"**
+
+### 3.1 The 6 ADA Pillars
+1. **The Alien Planet Test (Zero Closed Taxonomies)**:
+   - Zero hardcoded noun lists, closed string enums, or rigid preset tables.
+   - All parameters must exist as continuous coordinates in $\mathbb{R}^n$.
+   - The engine must synthesize a "Titan Cryogenic Atmospheric Methane Harvester Drone" or "Obsidian Basalt Ziggurat" just as easily as an Earth skyscraper.
+2. **2-Layer Metric Root vs Relative Geodesics**:
+   - **Layer 1 (Local)**: Strict metric root ($1.0\text{ unit} = 1.0\text{ meter}$) for 100% of meshes, tools, and props.
+   - **Layer 2 (Global)**: Relative geodetic attachment via `LocalTangentPlane` (ENU) or `GeoFrame`. Never mandate GPS coordinates on isolated non-geographic props (prevents "Null Island").
+3. **The 5 Universal Geometric Operators of Mechanical Fidelity**:
+   - Panelized Compound-Curvature Lofts (aerodynamic hulls, shutlines, fastener pitch).
+   - Kinematic Actuator & Linkage Chains (hydraulic rams, clevis pins, gimbal bearings).
+   - Protective Fluid & Thermal Interfaces (directional louvers, debris strainers, heat sinks).
+   - Spline-Swept Umbilical Harnesses (cryo conduits, P-clamp brackets, wiring looms).
+   - Structural Spaceframe & Lightening Topology (trusses, lightening pockets, gussets).
+4. **The 70-20-10 Form Hierarchy**:
+   - 70% Primary Edifice (dominant structural silhouette).
+   - 20% Secondary Cowlings (functional articulators, cowls, intakes, sponsons).
+   - 10% Tertiary Micro-detail (chamfers, fasteners, rivets, panel seams).
+5. **Relational Spatial Solvers vs Hardcoded Magic Offsets**:
+   - Spatial relationships must be declared as relational predicates (`SUPPORTED_BY`, `ATTACHED_TO`, `CONCENTRIC_WITH`, `CONTAINED_IN`) solved at compile/runtime by constraint solvers, never brittle magic Cartesian offsets.
+6. **Continuous Radiometric & Signal Grounding**:
+   - Continuous physical units (lux, candela, Kelvin, EV100, Pascals, microfacet roughness, complex refractive indices).
+
+---
+
+## 4. The 7 Non-Negotiable Mathematical Invariants
 
 When working in Scratchbox IDE, you must strictly satisfy the 7 core mathematical invariants verified by `scripts/verify_3d_math_invariants.js`:
 
@@ -104,7 +134,7 @@ When working in Scratchbox IDE, you must strictly satisfy the 7 core mathematica
 
 ---
 
-## 4. How to Suggest Meaningful Improvements in Scratchbox IDE
+## 5. How to Suggest Meaningful Improvements in Scratchbox IDE
 
 When auditing or proposing improvements for Scratchbox IDE, focus on concrete technical artist & engineering optimizations:
 
