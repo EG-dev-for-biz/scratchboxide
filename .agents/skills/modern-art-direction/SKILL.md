@@ -256,6 +256,10 @@ When presenting modern art direction in slide decks, treatments, and editorial l
     - *Sculptural Display Tracking*: Condense optical mass on display serif headlines ($\ge 24\text{pt}$, especially Bodoni Moda italic) with tight negative tracking (`-1.0` to `-1.5pt` / `-0.025em` to `-0.04em`) and disciplined tight leading (`1.05`–`1.08`).
     - *Harmonic Subtitle Proximity*: Place subtitles 0.14"–0.24" below headlines, with measure constrained to $\le 55$ characters per line (`w: 5.5"`).
     - *Zero Decorative Scaffolding*: Purge all decorative underline rectangles under eyebrows and page numbers. Format metadata footers as single unbroken horizontal lines with spaced bullets (` • `) and wide tracking. Suppress all chrome on cover slides.
+28. **Concept-Driven Visual Derivation Invariant (The Anti-Literalism Engine)**:
+    - Never pick colors, fonts, or photographic styles via semantic literalism (e.g. finance = navy blue, sustainability = green, luxury = gold).
+    - Always execute the 4 Narrative Probes before designing: (1) Ideological & emotional friction, (2) Physical sensory environment under light, (3) Vocal acoustic persona, and (4) Physical subject matter materials.
+    - Colors must be extracted from physical substances (60-30-8-2 rule) existing in that sensory world. Typography must be cast like actors across a 3-layer model (Display Persona + Invisible Reading Grotesk + Monospace Architectural Datum). Negative space must be directed as an organic scene continuation rather than an artificial graphical mask.
 
 ---
 
@@ -287,6 +291,7 @@ Before completing any task, subject the work to the **17 Senior Art Director Que
 ## 10. Modular Skill Reference Map
 
 All detailed operating manuals and case study databases reside in `references/`:
+* [concept_to_form_transduction.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/concept_to_form_transduction.md): Deriving unique colors, typography, and spatial style from narrative friction and sensory worlds.
 * [orthogonal_curation_matrix.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/orthogonal_curation_matrix.md): Orthogonal Decoupling across the 4 axes, 2026 cult reference catalog, polar tracking formula, 60-30-8-2 color staging, and permutation matrix.
 * [source_log.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/source_log.md): Primary-source research catalog on Jason Murray, @jason_swet, SWET STUDIO, Modern Art Direction, and classification matrix (`EXPLICIT` vs `INFERRED` vs `GENERALIZED`).
 * [mental_model.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/mental_model.md): Operational distinctions (Design, Art Direction, Creative Direction, Concept, Craft, Taste).

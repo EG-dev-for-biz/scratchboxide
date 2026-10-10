@@ -73,8 +73,8 @@ export const EDITORIAL_FONT_PAIRINGS = {
     bodyFont: 'Plus Jakarta Sans',
     monoFont: 'JetBrains Mono',
     italicDisplay: true,
-    displayTracking: -1.0,
-    kickerTracking: 3.5,
+    displayTracking: 0,
+    kickerTracking: 0,
   },
   'brutalist-scale': {
     name: 'Brutalist Scale-Contrast',
@@ -82,8 +82,8 @@ export const EDITORIAL_FONT_PAIRINGS = {
     bodyFont: 'Source Serif 4',
     monoFont: 'Space Mono',
     italicDisplay: false,
-    displayTracking: -2.0,
-    kickerTracking: 4.0,
+    displayTracking: 0,
+    kickerTracking: 0,
   },
   'intellectual-editorial': {
     name: 'Intellectual / Editorial Warmth',
@@ -91,8 +91,8 @@ export const EDITORIAL_FONT_PAIRINGS = {
     bodyFont: 'Plus Jakarta Sans',
     monoFont: 'JetBrains Mono',
     italicDisplay: true,
-    displayTracking: -1.0,
-    kickerTracking: 3.0,
+    displayTracking: 0,
+    kickerTracking: 0,
   },
   'technical-vanguard': {
     name: 'Technical Vanguard',
@@ -100,8 +100,8 @@ export const EDITORIAL_FONT_PAIRINGS = {
     bodyFont: 'Instrument Sans',
     monoFont: 'JetBrains Mono',
     italicDisplay: false,
-    displayTracking: -1.0,
-    kickerTracking: 3.0,
+    displayTracking: 0,
+    kickerTracking: 0,
   },
   'modern-grotesk': {
     name: 'Modern Neo-Grotesk',
@@ -109,8 +109,8 @@ export const EDITORIAL_FONT_PAIRINGS = {
     bodyFont: 'Plus Jakarta Sans',
     monoFont: 'JetBrains Mono',
     italicDisplay: false,
-    displayTracking: -1.0,
-    kickerTracking: 2.5,
+    displayTracking: 0,
+    kickerTracking: 0,
   },
 };
 
@@ -1159,18 +1159,18 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
     if ((options.chrome || frontmatter.chrome) && i > 0) {
       const eyebrowText = (options.eyebrow || frontmatter.eyebrow || brandAnchor || 'THE ART').toUpperCase();
       slide.addText(eyebrowText, {
-        x: padIn, y: padIn * 0.45, w: 4.0, h: 0.22,
+        x: padIn, y: padIn * 0.45, w: 6.0, h: 0.22,
         fontSize: 9, bold: true, color: palette.subtitleColor || '94A3B8',
         fontFace: fontPairing.monoFont,
-        charSpacing: 2.5, margin: 0,
+        margin: 0,
       });
 
       const spelledNum = SPELLED_NUMBERS[i + 1] || `${i + 1}`;
       slide.addText(spelledNum, {
-        x: slideWIn - padIn - 2.5, y: slideHIn - padIn * 0.5 - 0.22, w: 2.5, h: 0.22,
+        x: slideWIn - padIn - 3.0, y: slideHIn - padIn * 0.5 - 0.22, w: 3.0, h: 0.22,
         fontSize: 9, bold: true, color: palette.subtitleColor || '94A3B8',
         fontFace: fontPairing.monoFont,
-        charSpacing: 2.5, align: 'right', margin: 0,
+        align: 'right', margin: 0,
       });
     }
 
@@ -1255,31 +1255,40 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           x: padIn, y: slideHIn - padIn * 0.85, w: slideWIn - padIn * 2, h: 0.30,
           fontSize: 8.5, bold: true, color: '64748B',
           fontFace: fontPairing.monoFont,
-          charSpacing: 1.4, margin: 0,
+          margin: 0,
         });
         break;
       }
 
       case 'section-divider': {
         const barY = slideHIn * 0.32;
-        slide.addShape(pptx.ShapeType.rect, {
-          x: padIn, y: barY, w: 1.2, h: 0.05,
-          fill: { color: palette.accentColor }, line: { width: 0 },
-        });
+        if (s.images.length > 0) {
+          slide.addImage({
+            path: s.images[0].url,
+            x: 0, y: 0, w: slideWIn, h: slideHIn,
+            sizing: { type: 'cover', w: slideWIn, h: slideHIn },
+          });
+          const scrimPath = getOrCreateDirectionalScrim(palette, slideWIn, slideHIn);
+          slide.addImage({
+            path: scrimPath,
+            x: 0, y: 0, w: slideWIn, h: slideHIn,
+          });
+        }
 
         slide.addText(s.title.toUpperCase(), {
-          x: padIn, y: barY + 0.2, w: slideWIn - padIn * 2, h: 1.2,
-          fontSize: 32, bold: true, color: palette.titleColor,
+          x: padIn, y: barY + 0.1, w: slideWIn - padIn * 2, h: 1.2,
+          fontSize: 34, bold: true, color: palette.titleColor,
           fontFace: fontPairing.displayFont,
-          charSpacing: fontPairing.displayTracking, margin: 0,
+          italic: fontPairing.italicDisplay,
+          margin: 0,
         });
 
         if (s.subtitle || s.body) {
           slide.addText(s.subtitle || s.body, {
-            x: padIn, y: barY + 1.5, w: slideWIn * 0.75, h: 1.5,
+            x: padIn, y: barY + 1.4, w: slideWIn * 0.70, h: 1.5,
             fontSize: 14, color: palette.subtitleColor,
             fontFace: fontPairing.bodyFont,
-            lineSpacingMultiple: 1.4, margin: 0,
+            lineSpacingMultiple: 1.35, margin: 0,
           });
         }
         break;
@@ -1289,30 +1298,46 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         const isVs = s.title.trim().toUpperCase() === 'VS.' || s.title.trim().toUpperCase() === 'VS';
         const fontSize = isVs ? 64 : (s.title.length < 18 ? 46 : (s.title.length < 28 ? 38 : 32));
 
-        slide.addText(s.title.toUpperCase(), {
-          x: padIn,
-          y: slideHIn * 0.36,
-          w: slideWIn - padIn * 2,
-          h: 2.0,
-          fontSize,
-          bold: true,
-          fontFace: fontPairing.displayFont,
-          color: palette.titleColor,
-          align: 'center',
-          valign: 'middle',
-          charSpacing: fontPairing.displayTracking,
-          margin: 0,
-        });
+        if (s.images.length > 0) {
+          slide.addImage({
+            path: s.images[0].url,
+            x: 0, y: 0, w: slideWIn, h: slideHIn,
+            sizing: { type: 'cover', w: slideWIn, h: slideHIn },
+          });
+          const scrimPath = getOrCreateDirectionalScrim(palette, slideWIn, slideHIn);
+          slide.addImage({
+            path: scrimPath,
+            x: 0, y: 0, w: slideWIn, h: slideHIn,
+          });
 
-        if (!isVs) {
-          const barW = Math.min(2.2, Math.max(0.8, s.title.length * 0.08));
-          slide.addShape(pptx.ShapeType.rect, {
-            x: (slideWIn - barW) / 2,
-            y: slideHIn * 0.62,
-            w: barW,
-            h: 0.05,
-            fill: { color: palette.accentColor },
-            line: { width: 0 },
+          slide.addText(s.title.toUpperCase(), {
+            x: padIn * 1.5,
+            y: slideHIn * 0.36,
+            w: slideWIn * 0.60,
+            h: 2.2,
+            fontSize,
+            bold: true,
+            fontFace: fontPairing.displayFont,
+            italic: fontPairing.italicDisplay,
+            color: palette.titleColor,
+            align: 'left',
+            valign: 'middle',
+            margin: 0,
+          });
+        } else {
+          slide.addText(s.title.toUpperCase(), {
+            x: padIn,
+            y: slideHIn * 0.36,
+            w: slideWIn - padIn * 2,
+            h: 2.0,
+            fontSize,
+            bold: true,
+            fontFace: fontPairing.displayFont,
+            italic: fontPairing.italicDisplay,
+            color: palette.titleColor,
+            align: 'center',
+            valign: 'middle',
+            margin: 0,
           });
         }
         break;
@@ -1702,11 +1727,12 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
       }
 
       case 'image-forward': {
-        const isFullBleed = !options.split && (frontmatter.bleed === 'full' || frontmatter.fullBleed || s.fullBleed || s.bleed || s.archetype === 'full-bleed' || (s.speakerNotes && s.speakerNotes.toLowerCase().includes('full-bleed')) || options.fullBleed || true);
+        const imgPath = s.images.length > 0 ? s.images[0].url : '';
+        const isTechnical = /(diagram|blueprint|contact|animatic|viewport|cad|render|spec|schema|table)/i.test(imgPath + ' ' + (s.images[0]?.alt || '') + ' ' + s.title);
+        const isFullBleed = !options.split && !isTechnical && (frontmatter.bleed === 'full' || frontmatter.fullBleed || s.fullBleed || s.bleed || s.archetype === 'full-bleed' || (s.speakerNotes && s.speakerNotes.toLowerCase().includes('full-bleed')) || options.fullBleed);
         const textW = isFullBleed ? Math.min(slideWIn * 0.48, 5.8) : (slideWIn * 0.44 - padIn * 1.5);
 
         if (s.images.length > 0) {
-          const imgPath = s.images[0].url;
           if (isFullBleed) {
             // Full Bleed Image across 100% canvas
             slide.addImage({
@@ -1721,14 +1747,29 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
               x: 0, y: 0, w: slideWIn, h: slideHIn,
             });
           } else {
-            // Asymmetric Photographic Slab: Flush to right edge, seamless without hairline line
-            const imgW = slideWIn * 0.55;
-            const imgX = slideWIn - imgW;
-            slide.addImage({
-              path: imgPath,
-              x: imgX, y: 0, w: imgW, h: slideHIn,
-              sizing: { type: 'cover', w: imgW, h: slideHIn },
-            });
+            // Right-flank placement: Technical Diagram with preserved aspect ratio, or Asymmetric Photographic Slab
+            const rightW = (slideWIn - padIn * 2) * 0.54;
+            const rightX = slideWIn - padIn - rightW;
+
+            if (isTechnical) {
+              const { aspect } = getImageDimensions(imgPath);
+              const { w: imgFitW, h: imgFitH } = fitDimensions(aspect, rightW - 0.2, slideHIn - padIn * 1.8);
+              const cx = rightX + (rightW - imgFitW) / 2;
+              const cy = padIn + (slideHIn - padIn * 1.8 - imgFitH) / 2;
+              addCardContainer(slide, { x: cx - 0.08, y: cy - 0.08, w: imgFitW + 0.16, h: imgFitH + 0.16 });
+              slide.addImage({
+                path: imgPath,
+                x: cx, y: cy, w: imgFitW, h: imgFitH,
+              });
+            } else {
+              const imgW = slideWIn * 0.55;
+              const imgX = slideWIn - imgW;
+              slide.addImage({
+                path: imgPath,
+                x: imgX, y: 0, w: imgW, h: slideHIn,
+                sizing: { type: 'cover', w: imgW, h: slideHIn },
+              });
+            }
           }
         }
 
