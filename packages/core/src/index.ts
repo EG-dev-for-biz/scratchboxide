@@ -265,6 +265,14 @@ export type {
 } from './node/spatial/UniversalBotanicalBridgeService';
 
 export type {
+    PhotogrammetricTerrainHarmonizerService,
+    BotanicalStandDescriptor,
+    CadastralMonumentPolygon,
+    TerrainHarmonizeOptions,
+    TerrainHarmonizeResult
+} from './node/spatial/PhotogrammetricTerrainHarmonizerService';
+
+export type {
     UniversalArchiBridgeService,
     SupportedArchiTypology,
     ArchiTypologyAdapter,

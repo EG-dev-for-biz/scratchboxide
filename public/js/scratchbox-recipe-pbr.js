@@ -164,28 +164,88 @@ vec4 sbDS = sbTriplanar(sbStoneDetail, vSbWorldPos, sbNB, sbTile.x, sbDetailStre
 vec4 sbDA = sbTriplanar(sbAsphaltDetail, vSbWorldPos, sbNB, sbTile.y, sbDetailStrength, sbLenA);
 vec4 sbDF = sbTriplanar(sbFoliageDetail, vSbWorldPos, sbNB, sbTile.z, sbDetailStrength, sbLenF);
 
-// --- ADA Operator 1: Spanish / Roman Terracotta Barrel Tile Normal Relief (Coppi e embrici) ---
-// Harmonic pitch lambda = 0.22m, asymmetric crown profile, artisan irregularity & timber rafter sag
+// --- ADA Operator 1: Spanish / Roman Terracotta Barrel Tile Contact POM & Normal Relief ---
+// Harmonic pitch lambda = 0.22m, asymmetric crown profile, artisan irregularity & timber rafter sag.
+// Contact Parallax Occlusion Mapping (POM) raymarches tangent view ray to simulate physical barrel relief & self-shadowing.
 vec3 sbRoofTang = normalize(cross(sbNB, vec3(0.0, 1.0, 0.0)));
 if (length(sbRoofTang) < 0.1) sbRoofTang = vec3(1.0, 0.0, 0.0);
+vec3 sbViewDir = normalize(cameraPosition - vSbWorldPos);
+float sbCosV = max(dot(sbNB, sbViewDir), 0.05);
+vec3 sbSunDir = normalize(vec3(0.585, 0.683, 0.439));
+float sbCosL = max(dot(sbNB, sbSunDir), 0.05);
+
 float sbTileCoord = dot(vSbWorldPos, sbRoofTang);
-float sbTilePhase = 6.2831853 * sbTileCoord / 0.22;
+float sbTileDisp = 0.0;
+float sbRoofShadow = 1.0;
+if (sbRoof > 0.03) {
+  float sbTangView = dot(sbViewDir, sbRoofTang);
+  float sbPomStep = (sbTangView / sbCosV) * (0.035 / 6.0);
+  float sbCurrCoord = sbTileCoord;
+  for (int i = 0; i < 6; i++) {
+    float hSample = 0.5 + 0.5 * cos(6.2831853 * sbCurrCoord / 0.22) + 0.15 * cos(12.56637 * sbCurrCoord / 0.22);
+    float rayH = 1.0 - float(i) / 6.0;
+    if (hSample >= rayH) {
+      sbTileDisp = sbCurrCoord - sbTileCoord;
+      break;
+    }
+    sbCurrCoord -= sbPomStep;
+  }
+  // Sun raymarch for self-shadowing into barrel grooves
+  float sbTangSun = dot(sbSunDir, sbRoofTang);
+  float sbSunStep = (sbTangSun / sbCosL) * (0.035 / 4.0);
+  float sbShadCoord = sbTileCoord + sbTileDisp;
+  for (int s = 1; s <= 3; s++) {
+    float hSun = 0.5 + 0.5 * cos(6.2831853 * (sbShadCoord + float(s) * sbSunStep) / 0.22);
+    if (hSun > 0.70) {
+      sbRoofShadow *= 0.68;
+    }
+  }
+}
+float sbAdjustedTileCoord = sbTileCoord + sbTileDisp;
+float sbTilePhase = 6.2831853 * sbAdjustedTileCoord / 0.22;
 float sbArtisanNoise = sin(dot(vSbWorldPos.xz, vec2(13.7, 18.2))) * 0.08;
 float sbRafterSag = sin(3.14159 * fract(vSbWorldPos.y / 3.2)) * 0.05;
 float sbTileSlope = (cos(sbTilePhase) + 0.35 * cos(2.0 * sbTilePhase) + sbArtisanNoise + sbRafterSag) * 0.42;
 vec3 sbRoofN = normalize(sbNB + sbRoofTang * sbTileSlope);
 vec3 sbTerracottaAlbedo = vec3(0.74, 0.40, 0.24);
-sbAlbedo = mix(sbAlbedo, mix(sbAlbedo, sbTerracottaAlbedo * (sbL / max(sbLuma(sbTerracottaAlbedo), 0.01)), 0.65), sbRoof);
+sbAlbedo = mix(sbAlbedo, mix(sbAlbedo, sbTerracottaAlbedo * (sbL / max(sbLuma(sbTerracottaAlbedo), 0.01)) * sbRoofShadow, 0.65), sbRoof);
 
-// --- ADA Operator 2: Roman Sanpietrini Basalt Cobblestone Pavers (10cm x 10cm grid + 15mm mortar) ---
-vec2 sbPiazzaUv = vSbWorldPos.xz / 0.10;
-vec2 sbPiazzaFrac = fract(sbPiazzaUv);
+// --- ADA Operator 2: Roman Sanpietrini Basalt Cobblestone Contact POM (10cm x 10cm grid + 15mm mortar) ---
+// Contact POM raymarches horizontal plane at grazing view angles to occlude recessed mortar joints under basalt domes.
+vec2 sbPiazzaCoord = vSbWorldPos.xz / 0.10;
+float sbPiazzaShadow = 1.0;
+if (sbPiazza > 0.03) {
+  vec2 sbViewHoriz = sbViewDir.xz;
+  vec2 sbPaverStep = (sbViewHoriz / sbCosV) * (0.016 / 0.10 / 5.0);
+  vec2 sbCurrPaver = sbPiazzaCoord;
+  for (int p = 0; p < 5; p++) {
+    vec2 f = fract(sbCurrPaver);
+    float stoneDist = length(f - 0.5) * 2.0;
+    float stoneHeight = clamp(1.0 - stoneDist * stoneDist, 0.0, 1.0);
+    float rayH = 1.0 - float(p) / 5.0;
+    if (stoneHeight >= rayH) {
+      sbPiazzaCoord = sbCurrPaver;
+      break;
+    }
+    sbCurrPaver -= sbPaverStep;
+  }
+  // Paver contact shadow into mortar joints
+  vec2 sbSunHoriz = sbSunDir.xz;
+  vec2 sbSunPaverStep = (sbSunHoriz / sbCosL) * (0.016 / 0.10 / 3.0);
+  for (int s = 1; s <= 2; s++) {
+    vec2 fSun = fract(sbPiazzaCoord + float(s) * sbSunPaverStep);
+    if (length(fSun - 0.5) < 0.38) {
+      sbPiazzaShadow *= 0.70;
+    }
+  }
+}
+vec2 sbPiazzaFrac = fract(sbPiazzaCoord);
 float sbJointDist = min(min(sbPiazzaFrac.x, 1.0 - sbPiazzaFrac.x), min(sbPiazzaFrac.y, 1.0 - sbPiazzaFrac.y));
 float sbMortar = 1.0 - smoothstep(0.06, 0.16, sbJointDist);
 vec2 sbDomeSlope = vec2(sin(3.14159 * (sbPiazzaFrac.x - 0.5)), sin(3.14159 * (sbPiazzaFrac.y - 0.5))) * 0.28;
 vec3 sbPiazzaN = normalize(vec3(sbDomeSlope.x, 1.0, sbDomeSlope.y));
 vec3 sbBasaltColor = vec3(0.20, 0.21, 0.23);
-vec3 sbMortarColor = vec3(0.13, 0.13, 0.14);
+vec3 sbMortarColor = vec3(0.13, 0.13, 0.14) * sbPiazzaShadow;
 vec3 sbCobbleAlbedo = mix(sbBasaltColor, sbMortarColor, sbMortar);
 sbAlbedo = mix(sbAlbedo, sbCobbleAlbedo, sbPiazza * 0.75);
 

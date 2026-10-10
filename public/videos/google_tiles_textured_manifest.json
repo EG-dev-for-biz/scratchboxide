@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-09T20:49:55.065Z",
+  "timestamp": "2026-10-10T15:04:11.142Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_textured_blockout_camera.mp4",
-  "outputGlbPath": "/var/folders/78/ylz9y2bd0x393k6tfmw2q7m80000gn/T/scratchbox-tile-dual-api-test-phEk5c/textured_area.glb",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/coordinates_40_748400_73_985700_textured.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_textured_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_textured_frame_00.png",
   "storyboardPaths": [
@@ -23,7 +23,7 @@
     "lat": 40.7484,
     "lng": -73.9857,
     "elevation": 15,
-    "landmarkName": "Midtown Manhattan"
+    "landmarkName": "Coordinates (40.748400, -73.985700)"
   },
   "errorTarget": 0.5,
   "renderMode": "textured",

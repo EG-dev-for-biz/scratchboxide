@@ -131,6 +131,20 @@ async function main() {
   await sendCdp('Page.enable');
   await sendCdp('Runtime.enable');
 
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.method === 'Runtime.consoleAPICalled') {
+        const text = (msg.params.args || []).map(a => a.value || JSON.stringify(a)).join(' ');
+        if (text.includes('Error') || text.includes('load') || text.includes('GLTF') || text.includes('Recipe')) {
+          console.log(`[Browser Console] ${text}`);
+        }
+      } else if (msg.method === 'Runtime.exceptionThrown') {
+        console.error(`[Browser Exception] ${msg.params.exceptionDetails.text}`);
+      }
+    } catch (e) {}
+  });
+
   async function takeProofShot(filename, description) {
     console.log(`  -> Capturing: ${filename} (${description})...`);
     await sleep(1000);
