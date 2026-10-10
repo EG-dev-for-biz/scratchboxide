@@ -612,6 +612,8 @@ export class SbHumanHandTransformer {
         const palmImg = decodePng(fs.readFileSync(palmRefPngPath));
         const dorsalImg = decodePng(fs.readFileSync(dorsalRefPngPath));
         const nailImg = decodePng(fs.readFileSync(nailRefPngPath));
+        const userRefPath = path.resolve('public/textures/humanoid/hand_user_ref.png');
+        const userRef = fs.existsSync(userRefPath) ? decodePng(fs.readFileSync(userRefPath)) : dorsalImg;
 
         const sampleBilinear = (img: { data: Buffer | Uint8Array; width: number; height: number }, u: number, v: number): [number, number, number, number] => {
             const uu = (u % 1.0 + 1.0) % 1.0;
@@ -648,14 +650,70 @@ export class SbHumanHandTransformer {
         const normalBuf = Buffer.alloc(width * height * 4);
         const ormBuf = Buffer.alloc(width * height * 4);
 
-        // Exact calibrated fingernail placements on the Dorsal Island (matching distal phalanx geometry):
+        // Seamless Aperiodic Cellular Skin Noise (0.5 mm sulci cutis + 0.25 mm pores)
+        const NOISE_SIZE = 512;
+        const noiseTable = new Float32Array(NOISE_SIZE * NOISE_SIZE);
+        for (let j = 0; j < NOISE_SIZE; j++) {
+            for (let i = 0; i < NOISE_SIZE; i++) {
+                const h = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453;
+                noiseTable[j * NOISE_SIZE + i] = h - Math.floor(h);
+            }
+        }
+
+        const sampleNoise = (u: number, v: number, freq: number): number => {
+            let x = (u * freq) % 1.0;
+            if (x < 0) x += 1.0;
+            let y = (v * freq) % 1.0;
+            if (y < 0) y += 1.0;
+            const px = Math.min(NOISE_SIZE - 1, Math.max(0, Math.floor(x * (NOISE_SIZE - 1))));
+            const py = Math.min(NOISE_SIZE - 1, Math.max(0, Math.floor(y * (NOISE_SIZE - 1))));
+            return noiseTable[py * NOISE_SIZE + px];
+        };
+
+        // 5 Calibrated Fingernails (sub-millimeter alignment to distal phalanx geometry)
         const nails = [
-            { name: 'Thumb',  u: 0.4232, v: 0.4234, angle: 22.28 * Math.PI / 180,  w: 0.038, l: 0.056 },
-            { name: 'Index',  u: 0.2935, v: 0.1316, angle: -0.50 * Math.PI / 180,  w: 0.030, l: 0.052 },
-            { name: 'Middle', u: 0.2028, v: 0.0946, angle: -5.94 * Math.PI / 180,  w: 0.032, l: 0.054 },
-            { name: 'Ring',   u: 0.1340, v: 0.1562, angle: -5.68 * Math.PI / 180,  w: 0.030, l: 0.052 },
-            { name: 'Pinky',  u: 0.0598, v: 0.2862, angle: -14.75 * Math.PI / 180, w: 0.026, l: 0.046 }
+            { name: 'Thumb',  u: 0.4196, v: 0.4280, angle:  22.28 * Math.PI / 180, w: 0.058, l: 0.058 },
+            { name: 'Index',  u: 0.2946, v: 0.1280, angle:  -1.50 * Math.PI / 180, w: 0.033, l: 0.052 },
+            { name: 'Middle', u: 0.2067, v: 0.0880, angle:  -5.94 * Math.PI / 180, w: 0.035, l: 0.052 },
+            { name: 'Ring',   u: 0.1371, v: 0.1520, angle:  -5.68 * Math.PI / 180, w: 0.033, l: 0.050 },
+            { name: 'Pinky',  u: 0.0652, v: 0.2880, angle: -14.75 * Math.PI / 180, w: 0.030, l: 0.046 }
         ];
+
+        const evaluateNail = (u: number, v: number, nail: typeof nails[0]) => {
+            const du = u - nail.u;
+            const dv = v - nail.v;
+            const cosA = Math.cos(-nail.angle);
+            const sinA = Math.sin(-nail.angle);
+            const uRot = du * cosA - dv * sinA;
+            const vRot = du * sinA + dv * cosA;
+
+            const xn = uRot / (nail.w * 0.5);
+            const yn = vRot / (nail.l * 0.5);
+
+            if (Math.abs(xn) > 1.05 || yn < -1.15 || yn > 1.15) {
+                return { isInside: false, dist: -1, xn, yn, lip: 0 };
+            }
+
+            const yProx = 0.30 + 0.70 * Math.sqrt(Math.max(0, 1.0 - xn * xn));
+            const yDist = -0.75 - 0.25 * Math.sqrt(Math.max(0, 1.0 - xn * xn));
+
+            if (yn > yProx) {
+                const dCuticle = yn - yProx;
+                const lip = (dCuticle < 0.22) ? Math.sin((dCuticle / 0.22) * Math.PI) : 0;
+                return { isInside: false, dist: -dCuticle, xn, yn, lip };
+            }
+            if (yn < yDist) {
+                const dTip = yDist - yn;
+                return { isInside: false, dist: -dTip, xn, yn, lip: 0 };
+            }
+
+            const dLateral = 1.0 - Math.abs(xn);
+            const dTop = yProx - yn;
+            const dBot = yn - yDist;
+            const minDist = Math.min(dLateral, Math.min(dTop, dBot));
+
+            return { isInside: true, dist: minDist, xn, yn, lip: 0 };
+        };
 
         // 3 Anatomical dorsal superficial veins (Rete venosum dorsale manus)
         const dorsalVeins = [
@@ -673,22 +731,22 @@ export class SbHumanHandTransformer {
         // Transverse joint flexion folds (MCP, PIP, DIP)
         const jointFolds = [
             // MCP Knuckles
-            { u: 0.203, v: 0.447, r: 0.024, k: 110.0 },
-            { u: 0.283, v: 0.473, r: 0.022, k: 110.0 },
-            { u: 0.121, v: 0.452, r: 0.022, k: 110.0 },
-            { u: 0.100, v: 0.442, r: 0.018, k: 110.0 },
-            { u: 0.333, v: 0.639, r: 0.026, k: 90.0  },
+            { u: 0.203, v: 0.447, r: 0.024, k: 120.0 },
+            { u: 0.283, v: 0.473, r: 0.022, k: 120.0 },
+            { u: 0.121, v: 0.452, r: 0.022, k: 120.0 },
+            { u: 0.100, v: 0.442, r: 0.018, k: 120.0 },
+            { u: 0.333, v: 0.639, r: 0.026, k: 95.0  },
             // PIP Joints
-            { u: 0.200, v: 0.250, r: 0.016, k: 130.0 },
-            { u: 0.284, v: 0.291, r: 0.016, k: 130.0 },
-            { u: 0.135, v: 0.273, r: 0.016, k: 130.0 },
-            { u: 0.088, v: 0.376, r: 0.014, k: 130.0 },
-            { u: 0.346, v: 0.514, r: 0.018, k: 110.0 },
+            { u: 0.200, v: 0.250, r: 0.016, k: 140.0 },
+            { u: 0.284, v: 0.291, r: 0.016, k: 140.0 },
+            { u: 0.135, v: 0.273, r: 0.016, k: 140.0 },
+            { u: 0.088, v: 0.376, r: 0.014, k: 140.0 },
+            { u: 0.346, v: 0.514, r: 0.018, k: 120.0 },
             // DIP Joints
-            { u: 0.203, v: 0.136, r: 0.012, k: 150.0 },
-            { u: 0.292, v: 0.174, r: 0.012, k: 150.0 },
-            { u: 0.128, v: 0.188, r: 0.012, k: 150.0 },
-            { u: 0.133, v: 0.256, r: 0.010, k: 150.0 }
+            { u: 0.203, v: 0.136, r: 0.012, k: 160.0 },
+            { u: 0.292, v: 0.174, r: 0.012, k: 160.0 },
+            { u: 0.128, v: 0.188, r: 0.012, k: 160.0 },
+            { u: 0.133, v: 0.256, r: 0.010, k: 160.0 }
         ];
 
         // Palmar flexion creases (normalized to palmar island [0, 1])
