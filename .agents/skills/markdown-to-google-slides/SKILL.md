@@ -206,18 +206,18 @@ Match each slide to the optimal archetype from [Layout Templates](./references/l
 
 | Archetype | Layout Geometry | Ideal Content |
 | :--- | :--- | :--- |
-| **`hero-opener`** | Full-bleed 16:9 hero image + dark gradient scrim + bold title/subtitle + agency metadata | Title decks, keynote openers, high-impact hooks |
+| **`hero-opener`** | Full-bleed 21:9 ultrawide hero image + left directional optical scrim + bold title/subtitle + agency metadata | Title decks, keynote openers, high-impact hooks |
 | **`section-divider`** | Minimalist dark canvas + brand accent bar + large tracked uppercase headline | Chapter breaks, act pivots, category transitions |
 | **`art-card`** | Full obsidian negative space + massive ultra-condensed title (48–64pt) + anchor underline | Single-minded axioms, bold commandments, "VS." comparison cards |
 | **`quote-centered`** | Giant decorative quotation marks (`“` `”`) + centered geometric sans quote + attribution | Foundational philosophy, client quotes, director beliefs |
-| **`anamorphic-letterbox`** | 2.39:1 scope frame centered on 16:9 canvas with black letterbox bands + uppercase pull quote | Filmic mood statements, atmospheric keyframes |
+| **`anamorphic-letterbox`** | 2.39:1 scope frame centered on 21:9 canvas with edge-to-edge cinematic presence + uppercase pull quote | Filmic mood statements, atmospheric keyframes |
 | **`recap-card-grid`** | Symmetrical grid of clean, solid white container cards on obsidian canvas + bold uppercase copy | Rule summaries, deck commandments, executive synthesis |
 | **`cards-executive`** | Section kicker + assertion title + 2 or 3 side-by-side elevated visual cards | Narrative prose, director's statements, strategy briefs |
-| **`image-forward`** | Left card column (title + bullets) + right dominant framed image card | Core narrative beats, animatics, product highlights |
+| **`image-forward`** | Left text zone over low-frequency negative space (directional scrim) + right unshadowed photographic flank | Core narrative beats, animatics, product highlights |
 | **`text-left-images-right`**| Left card column + right 2-up or 4-up companion grid in rounded frames | Kinematic viewports, multi-shot breakdowns |
 | **`curated-grid`** | 2×2 or 1×2 image moodboard with uniform gutters and captions | Storyboard progressions, texture spreads |
 | **`composite`** | Balanced split with native editable table or structured deliverables | Timing tables, budget tables, technical specs |
-| **`full-bleed-text-overlay`**| Full-bleed cinematic photo + subtle bottom scrim + bold pull quote | Emotional punchlines, closing quotes |
+| **`full-bleed-text-overlay`**| Full-bleed 21:9 photo + subtle directional scrim + bold pull quote | Emotional punchlines, closing quotes |
 
 ---
 
@@ -227,18 +227,18 @@ Match each slide to the optimal archetype from [Layout Templates](./references/l
 ```bash
 node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_to_slides_compiler.mjs <input.md> --brand "<BrandName>" --chrome --scratchbox-images --upload-drive
 ```
-1. Builds widescreen PPTX using `LAYOUT_WIDE` and card container geometry.
-2. Supports `--scratchbox-images` to automatically synthesize and resolve photorealistic imagery via Scratchbox MCP (`scratchbox.ai`).
+1. Builds 21:9 ultrawide PPTX using `LAYOUT_21x9` (`17.778" × 7.5"`), directional optical scrimming, and card container geometry. (Override with `--ratio 16:9` if 16:9 is specifically requested).
+2. Supports `--scratchbox-images` to automatically synthesize and resolve 21:9 anamorphic 4K photorealistic imagery via Scratchbox MCP (`scratchbox.ai`).
 3. Supports `--chrome` for the Signature Editorial Chrome (top-left category eyebrow and bottom-right spelled-out page numbers: `ONE`, `TWO`, `TWENTY-FOUR`).
 4. Uploads via Google Drive multipart API with `mimeType: application/vnd.google-apps.presentation`.
 5. Sets public write permissions (`role: 'writer', type: 'anyone'`).
 6. Outputs the live editable URL: `https://docs.google.com/presentation/d/{presentationId}/edit`.
 
-### Option B: Interactive 1920×1080 HTML Web Presentation
+### Option B: Interactive 21:9 (2560×1080) HTML Web Presentation
 ```bash
 node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_to_slides_compiler.mjs <input.md> --brand "<BrandName>" --scratchbox-images --html
 ```
-1. Generates a standalone, zero-dependency `presentation.html` with full 16:9 stage scaling.
+1. Generates a standalone, zero-dependency `presentation.html` with fixed 21:9 stage scaling (`2560 × 1080`).
 2. Includes floating navigation pill (`◀`, `▶`, `1/20`, `⛶`), keyboard listeners (`ArrowRight`, `Space`, `F`), and print-to-PDF styles.
 3. Automatically embeds GIFs, animations, and high-res imagery.
 
