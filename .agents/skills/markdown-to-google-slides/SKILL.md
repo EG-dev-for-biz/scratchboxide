@@ -101,7 +101,11 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
      - For left-column text (default 21:9 split): Subject is anchored on the **rightmost 35-40%**, leaving the left two-thirds as an expansive low-frequency void (quiet plaster, dark shadow pool, smooth misty water) for text breathing room.
      - For right-column text: Subject is anchored on the **leftmost 35-40%**, opening the void on the right.
      - **Inward Convergence**: Subject eyelines, body orientation, and architectural vanishing lines must point **INWARD towards the typography**, pulling the viewer's eye into the headline.
-6. **Public CDN Ingestion**:
+6. **Mandatory Section Relevance & Conceptual Exemplification (Visual Proof Over Ambient Wallpaper)**:
+   - Images generated for any slide must **NEVER** be generic ambient wallpaper, decorative stock filler, or lazy category tropes (e.g., generic smiling businesspeople, glowing digital globe nodes, or random concrete blocks).
+   - The visual must **actively exemplify, substantiate, and elevate the specific thesis or physical mechanism** argued in that exact section.
+   - Ground the visual in **tangible physical evidence**: if discussing extreme thermal cycling, show a macro of heat pipes and micro-fin cooling under laser measurement; if discussing artisanal leather, show hand-stitched bridle leather with bone folders and awl marks; if discussing real-time rendering, show a color-calibrated studio monitor displaying wireframe density with zero motion drag.
+7. **Public CDN Ingestion**:
    - The resolved CDN URLs are directly ingested by the Google Slides API (`addImage({ path: url })`) and the 1920×1080 / 2560×1080 HTML presentation engine without requiring local file upload steps.
 
 ---

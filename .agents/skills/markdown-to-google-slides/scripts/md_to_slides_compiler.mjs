@@ -207,26 +207,77 @@ export async function generateScratchboxImage(prompt, aspectRatio = '16:9', work
   throw new Error(`Scratchbox MCP image generation timed out after ${maxWaitMs / 1000}s`);
 }
 
-export async function resolveScratchboxImages(slides, workspaceId = '126', autoGenerateForVisualSlides = false) {
+// ============================================================================
+// 0.5 CONTEXTUAL EXEMPLIFICATION PROMPT SYNTHESIS
+// ============================================================================
+
+export function synthesizeContextualExemplificationPrompt(s, brandContext = '', defaultRatio = '16:9', layoutPlacement = 'split-left') {
+  const title = s.title || '';
+  const subtitle = s.subtitle || '';
+  const kicker = s.kicker || '';
+  const prose = [
+    ...(s.bodyParagraphs || []),
+    ...(s.bullets || []),
+    ...(s.blockquote ? [s.blockquote] : []),
+    ...(s.speakerNotes ? [s.speakerNotes] : [])
+  ].join(' ');
+
+  const fullText = `${brandContext} ${kicker} ${title} ${subtitle} ${prose}`.toLowerCase();
+
+  // If user provided a descriptive prompt (>12 words), honor its core subject
+  if (s.rawAltPrompt && s.rawAltPrompt.split(/\s+/).length > 12) {
+    return s.rawAltPrompt;
+  }
+
+  // Domain extraction & physical proof formulation (anti-generic, concept-driven)
+  let physicalScene = '';
+
+  if (/(thermal|cooling|heatsink|heatpipe|battery|energy|power|watt|voltage)/.test(fullText)) {
+    physicalScene = 'Extreme macro photograph of an extruded matte-black aluminum heatsink with sintered copper heatpipes undergoing thermal stress testing; micro-convective heat shimmer in the air; 5000K overhead technical work lamp casting sharp raking shadows across precision CNC milling lines';
+  } else if (/(code|software|engine|compiler|latency|pipeline|shader|gpu|compute|algorithm|mesh|3d|runtime)/.test(fullText)) {
+    physicalScene = 'Technical studio photograph: an engineer\'s dark matte workstation with a color-calibrated monitor displaying wireframe mesh density; hands resting at an anodized mechanical keyboard with soft 3200K tungsten desk lamp grazing aluminum edges and dark slate desk surface';
+  } else if (/(concrete|brutalist|architecture|facade|cantilever|monolith|pavilion|building|spatial)/.test(fullText)) {
+    physicalScene = 'Medium-wide architectural exterior at dusk: monolithic board-formed concrete mass cantilevered over calm dark reflecting water; 2800K warm interior light glowing through recessed slit apertures into cool evening twilight with textured shadows';
+  } else if (/(leather|craft|artisan|tailor|bespoke|stitch|textile|linen|wool|material|fabric)/.test(fullText)) {
+    physicalScene = 'Tactile macro close-up of an artisan\'s hands pulling waxed linen thread tight through double saddle stitching on vegetable-tanned bridle leather; showing subtle brass awl marks, weathered oak workbench with bone folders';
+  } else if (/(warehouse|logistics|fulfillment|robot|agv|supply|shipping|transit|fleet)/.test(fullText)) {
+    physicalScene = 'Low-angle dynamic photograph inside a high-bay automated logistics facility at 3:15 AM; an automated guided vehicle (AGV) with worn scuff bumpers navigating floor tracking lines under cool industrial 4500K ceiling fixtures';
+  } else if (/(medical|bio|pharma|clinic|cellular|dna|lab|surgeon|surgical|microscop)/.test(fullText)) {
+    physicalScene = 'Clinical extreme macro photograph of a microfluidic test chip with delicate fluid meniscus advancing through sub-millimeter channels; cold 6000K shadowless illumination reflecting off sterile stainless steel instrument trays';
+  } else if (/(camera|lens|film|cinematograph|director|shutter|anamorphic|optics|sensor)/.test(fullText)) {
+    physicalScene = 'Close-up observational photograph of a 35mm cinema prime lens mounted on a studio camera rig on a soundstage; warm practical tungsten lanterns in the soft background, optical glass coatings catching subtle amber flares';
+  } else if (/(strategy|vision|executive|leadership|market|horizon|venture|growth)/.test(fullText)) {
+    physicalScene = 'Observational architectural interior at dawn: an executive conference room with floor-to-ceiling glass overlooking a misty coastal city skyline; minimalist oiled walnut table catching the first raking morning light (4000K)';
+  } else {
+    // Grounded physical proof derived from section title and subtitle
+    physicalScene = `Observational editorial documentary still exemplifying "${title}": authentic physical environment, lived-in details, and natural material textures directly relevant to ${subtitle || title}`;
+  }
+
+  return `${physicalScene}. Shot on 35mm Panavision Primo prime lens at T2.8, Kodak Vision3 500T organic film grain, high dynamic range.`;
+}
+
+export async function resolveScratchboxImages(slides, workspaceId = '126', autoGenerateForVisualSlides = false, brandContext = '', defaultRatio = '16:9') {
   for (let sIdx = 0; sIdx < slides.length; sIdx++) {
     const s = slides[sIdx];
+    const is21x9 = defaultRatio === '21:9' || defaultRatio === '2.37:1';
     
     // Check existing image tags
     for (let imgIdx = 0; imgIdx < s.images.length; imgIdx++) {
       const img = s.images[imgIdx];
       const isGenerate = !img.url || img.url === 'generate' || img.url.startsWith('generate:') || 
                          img.url === 'scratchbox' || img.url.startsWith('scratchbox:');
-      if (isGenerate && img.alt) {
-        let aspect = '16:9';
+      if (isGenerate) {
+        let aspect = is21x9 ? '21:9' : '16:9';
         if (img.url && img.url.includes(':')) {
-          aspect = img.url.replace(/^[^:]+:/, '').trim() || '16:9';
+          aspect = img.url.replace(/^[^:]+:/, '').trim() || aspect;
         } else if (s.archetype === 'art-card' || s.archetype === 'anamorphic-letterbox') {
           aspect = '21:9';
-        } else if (s.archetype === 'hero-opener') {
-          aspect = '16:9';
         }
-        console.log(`[SCRATCHBOX-MCP] Generating visual for slide ${sIdx + 1} ("${s.title}") via scratchbox.ai: "${img.alt}" (${aspect})...`);
-        const genRes = await generateScratchboxImage(img.alt, aspect, workspaceId);
+
+        s.rawAltPrompt = img.alt;
+        const prompt = synthesizeContextualExemplificationPrompt(s, brandContext, aspect, 'split-left');
+        console.log(`[SCRATCHBOX-MCP] Generating grounded visual proof for slide ${sIdx + 1} ("${s.title}") via scratchbox.ai (${aspect}):\n  -> "${prompt}"...`);
+        const genRes = await generateScratchboxImage(prompt, aspect, workspaceId, 'split-left');
         img.url = genRes.url;
         img.generatedBy = 'scratchbox-mcp';
         img.provider = genRes.provider;
@@ -239,10 +290,10 @@ export async function resolveScratchboxImages(slides, workspaceId = '126', autoG
     if (autoGenerateForVisualSlides && s.images.length === 0) {
       const visualArchetypes = ['art-card', 'hero-opener', 'anamorphic-letterbox', 'image-forward'];
       if (visualArchetypes.includes(s.archetype)) {
-        let aspect = (s.archetype === 'art-card' || s.archetype === 'anamorphic-letterbox') ? '21:9' : '16:9';
-        const prompt = `${s.title}: ${s.subtitle || ''}. Cinematic editorial photography, master lighting, 35mm film stock, photorealistic texture.`;
-        console.log(`[SCRATCHBOX-MCP] Auto-synthesizing visual for slide ${sIdx + 1} ("${s.title}"): "${prompt}" (${aspect})...`);
-        const genRes = await generateScratchboxImage(prompt, aspect, workspaceId);
+        let aspect = (s.archetype === 'art-card' || s.archetype === 'anamorphic-letterbox' || is21x9) ? '21:9' : '16:9';
+        const prompt = synthesizeContextualExemplificationPrompt(s, brandContext, aspect, 'split-left');
+        console.log(`[SCRATCHBOX-MCP] Auto-synthesizing visual proof for slide ${sIdx + 1} ("${s.title}") (${aspect}):\n  -> "${prompt}"...`);
+        const genRes = await generateScratchboxImage(prompt, aspect, workspaceId, 'split-left');
         s.images.push({
           alt: prompt,
           url: genRes.url,
@@ -896,7 +947,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
   const hasImageryRequests = slides.some(s => s.images.some(img => !img.url || img.url.startsWith('generate') || img.url.startsWith('scratchbox')));
   if (options.scratchboxImages || options.generateImages || hasImageryRequests) {
     console.log(`[SCRATCHBOX-MCP] Resolving slide imagery via Scratchbox MCP (https://scratchbox.ai)...`);
-    await resolveScratchboxImages(slides, options.workspaceId || '126', Boolean(options.scratchboxImages || options.generateImages));
+    await resolveScratchboxImages(slides, options.workspaceId || '126', Boolean(options.scratchboxImages || options.generateImages), brandAnchor, ratio);
   }
 
   const pptx = new PptxGenJS();

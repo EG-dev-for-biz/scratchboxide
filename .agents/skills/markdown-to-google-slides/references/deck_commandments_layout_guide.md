@@ -65,6 +65,15 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
   - **Inward Eyelines**: Subject gaze and physical light vectors must point **inward toward the copy**, magnetically directing reader attention into the headline.
   - **Zero Burned-In Text**: All letters, titles, and folios belong exclusively to the vector typography layer.
 
+### Commandment 5C: Section Relevance & Conceptual Exemplification (Visual Proof)
+- **The Rule**: Images must **actively exemplify, substantiate, and elevate the specific argument or mechanism** of the section they are associated with.
+- **The Violation**: Using an image as generic ambient decoration, visual filler, or an obvious stock cliché (e.g. an abstract skyscraper for finance, glowing nodes for technology, or a smiling businesswoman for teamwork).
+- **The Execution**: Extract the section's core mechanism, tension, or human truth from the copy and construct its **observable physical proof**:
+  - *If the section discusses high-performance computing*: Show an extreme macro of an extruded aluminum heatsink with sintered copper heatpipes undergoing thermal stress testing with faint convective air shimmer.
+  - *If the section discusses artisanal bespoke luxury*: Show an artisan's calloused hands pulling waxed linen thread tight through double saddle stitching on vegetable-tanned bridle leather with bone folders on a weathered oak bench.
+  - *If the section discusses brutalist architectural mass*: Show a monolithic board-formed concrete cantilever over a mirror-still dusk reflecting pool with raking interior tungsten light.
+  - *If the section discusses automated warehouse robotics*: Show a low-angle shot of an AGV with scuffed bumpers accelerating through a floor matrix of high-speed tracking markers at 3:15 AM under industrial sodium lamps.
+
 ### Commandment 6: Label Clearly
 - **The Rule**: Maintain clear orientation markers without cluttering the canvas.
 - **Structure**:

@@ -28,7 +28,19 @@ This skill equips an AI system with the visual judgment, strategic skepticism, a
    - For right-aligned text: Subject is anchored on the left third; expansive low-frequency negative space breathes on the right.
    - Vanishing lines, physical light vectors, and subject eyelines must point *inward* toward the typography, pulling the viewer's attention directly into the headline.
 9. **Micro-Motion Blur Shutter Invariant (Killing Digital Plasticity)**: AI diffusion engines naturally produce hyper-clinical, razor-edged, synthetic perfection where every pixel is frozen in artificial infinite focus. To eliminate this telltale AI sheen, all production imagery must incorporate a microscopic, motivated amount of physical camera shutter motion blur (1/48s cinema shutter drag, organic camera drift, subtle hand-held micro-movement) configured via Scratchbox AI MCP settings and causal prompt physics. This instantly grounds the image in physical camera mechanics and takes the harsh digital edge off.
-10. **Rules Serve Intent**: These rules are not dogma. When intent demands it: flat lighting is correct, bad typography is correct, an awkward crop is correct, and intentional imperfection is divine.
+10. **Section Conceptual Relevance & Exemplification (Visual Proof Over Ambient Wallpaper)**:
+    - Images generated for any slide, treatment beat, or presentation section must **NEVER** be ambient generic wallpaper, decorative stock filler, or obvious category clichés.
+    - The image must **actively exemplify, substantiate, and elevate the specific thesis or mechanism** argued in that exact section.
+    - **The Four-Question Art Direction Gate**:
+      1. *What is the specific point/tension of this section?* (Extract core nouns, verbs, mechanisms from the headline, body, and notes).
+      2. *What is the obvious generic visual default for this topic?* -> Say: *"No. That's the obvious version."*
+      3. *What physical, tangible, or human phenomenon proves this point in the real world?*
+      4. *How do camera lens, motivated light, and negative space dramatize this specific proof?*
+    - **Visual Proof vs. Ambient Illustration**:
+      - *Bad (Ambient Wallpaper)*: A slide discussing low-latency AI computing paired with a generic smiling person holding a tablet in a sunny office. (Zero relevance, generic corporate stock).
+      - *Good (Grounded Exemplification)*: An extreme macro photograph of a gold-plated optical transceiver module inserted into a liquid-cooled server blade, twin 850nm laser waveguides illuminated with subtle photon leakage, soft convective air shimmer, 4500K rack indicator LEDs casting soft specular dots on brushed aluminum. (Direct physical substantiation of low-latency computing reality).
+    - The audience must immediately recognize: *"This visual is not decoration; it is tangible evidence of the section's argument."*
+11. **Rules Serve Intent**: These rules are not dogma. When intent demands it: flat lighting is correct, bad typography is correct, an awkward crop is correct, and intentional imperfection is divine.
 
 ---
 

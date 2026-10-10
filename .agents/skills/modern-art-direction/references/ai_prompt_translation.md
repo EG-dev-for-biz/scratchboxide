@@ -96,6 +96,40 @@ An image generated for an editorial presentation or pitch deck is never an isola
 
 ---
 
+## 2.7 The Section Exemplification Engine: Translating Assertions into Visual Proof
+
+When generating an image for a specific section of a presentation, pitch deck, or treatment, the image must **never be generic ambient wallpaper or stock filler**. It must serve as **tangible visual proof** that exemplifies and substantiates the core argument made in that exact section.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE SECTION EXEMPLIFICATION PIPELINE                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 1. EXTRACT THE STRATEGIC CLAIM  │ Identify the core thesis, tension, or      │
+│                                 │ mechanical mechanism in the section text. │
+├─────────────────────────────────┼───────────────────────────────────────────┤
+│ 2. RUN THE GENERIC DETECTOR     │ "No. That's the obvious version."         │
+│                                 │ Reject the first 3 predictable stock tropes│
+├─────────────────────────────────┼───────────────────────────────────────────┤
+│ 3. GROUND IN PHYSICAL CAUSALITY │ What observable physical phenomenon proves│
+│                                 │ this point? What materials & tools show it│
+├─────────────────────────────────┼───────────────────────────────────────────┤
+│ 4. COORDINATE WITH TYPOGRAPHY   │ Stage subject on opposing flank, point    │
+│                                 │ vectors inward, enforce 4K & zero-text.   │
+└─────────────────────────────────┴───────────────────────────────────────────┘
+```
+
+### Exemplification Field Guide by Domain:
+
+| Section Topic & Strategic Thesis | ❌ The Obvious Cliché (Reject) | 💡 The Grounded Visual Proof (Generate) |
+| :--- | :--- | :--- |
+| **High-Throughput Edge AI & Computing** | Generic glowing neural network nodes or a businesswoman holding a glass tablet. | Extreme macro of an anodized heatsink with copper heatpipes undergoing thermal stress testing; micro-convective heat shimmer in the air; 5000K overhead work lamp casting raking shadows across precision CNC milling lines. |
+| **Bespoke Luxury & Material Craftsmanship** | Generic leather bag on a clean white catalog table. | Close-up macro of an artisan's calloused hands pulling waxed linen thread tight through double saddle stitching on vegetable-tanned bridle leather; brass awl marks, wood-grain workbench with bone folders. |
+| **Brutalist Architecture & Spatial Silence** | Generic concrete wall or generic modern building exterior. | Medium-wide exterior at dusk: monolithic board-formed concrete mass cantilevered over calm dark reflecting water; 2800K warm interior light glowing through recessed slit apertures into cool evening twilight. |
+| **Rapid Global Logistics & Supply Chain** | Generic semi-truck driving on an empty highway at sunset. | Low-angle dynamic action inside a high-bay automated fulfillment hub at 3:15 AM; an automated guided vehicle (AGV) with worn scuff bumpers accelerating past high-speed floor QR codes under cool industrial sodium lamps. |
+| **Clinical Precision & Biotechnology** | Generic doctor in a white coat looking into a microscope. | Extreme macro of a microfluidic capillary test chip under cold 6500K surgical ring light; delicate fluid meniscus advancing through sub-millimeter channels; sterile stainless steel tray reflections. |
+
+---
+
 ## 3. Structural Translation Examples
 
 ### Example 1: Street Sportswear Runner
