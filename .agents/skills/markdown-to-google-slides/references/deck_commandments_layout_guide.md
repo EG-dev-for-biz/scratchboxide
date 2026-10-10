@@ -74,6 +74,24 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
   - *If the section discusses brutalist architectural mass*: Show a monolithic board-formed concrete cantilever over a mirror-still dusk reflecting pool with raking interior tungsten light.
   - *If the section discusses automated warehouse robotics*: Show a low-angle shot of an AGV with scuffed bumpers accelerating through a floor matrix of high-speed tracking markers at 3:15 AM under industrial sodium lamps.
 
+### Commandment 5D: Contemporary Editorial Font Pairings & Structural Friction
+- **The Rule**: Reject obsolete 2012 corporate pairings (*Helvetica + Georgia*, *Roboto + Open Sans*, *Montserrat + Playfair*). Contemporary decks operate via **high-character structural tension** between precision-engineered Swiss grotesks and liquid, razor-sharp, or brutalist display faces.
+- **The 4 Master Pairing Archetypes**:
+  1. **High-Fashion & Culture**: *Bodoni Moda* (Italic, Light display) + *Plus Jakarta Sans* / *Inter* (Precision Swiss reading text).
+  2. **Brutalist Scale-Contrast**: *Syne* / *Syncopate* (Monolithic architectural wide display) + *Source Serif 4* / *Playfair* (Tight scholarly body).
+  3. **Intellectual / Editorial Warmth**: *DM Sans* / *Space Grotesk* (Modernist grotesque) + *Newsreader* / *Fraunces* (Lush literary serif).
+  4. **Technical Vanguard**: *Instrument Sans* (Clean industrial grotesk) + *JetBrains Mono* / *Space Mono* (Precision metadata folios).
+- **Micro-Typographic Invariants**:
+  - **Tight Negative Display Tracking**: Headers (40pt–80pt) set with tight negative letter-spacing (`-0.03em` to `-0.05em` / `-1` to `-2pt`).
+  - **Wide Positive Metadata Tracking**: Kickers, folios, and metadata set with wide letter-spacing (`+0.15em` to `+0.25em` / `+2` to `+4pt`).
+  - **Treated Italics**: Treat heavy italic serifs as primary display items, not timid inline citations.
+
+### Commandment 5E: Complex Full-Bleed Layouts & Asymmetric Scrim Architecture
+- **The Rule**: Full-bleed imagery is the entire physical environment, not a framed picture in a box. Never destroy 4K dynamic range with a muddy, uniform 50% black scrim.
+- **Asymmetric Directional Scrim**: Apply a 1-dimensional gradient starting at 35–45% deep brand tint only across the margin edge behind the copy, fading to 0% by the 45% mark of the slide width. 55%+ of the photograph remains completely pristine with true specular highlights and deep blacks.
+- **Frosted Glassmorphic Datum Shelves**: When complex cards, tables, or multi-paragraph blocks overlay full-bleed imagery, use physical frosted planes (`rgba(15, 20, 30, 0.65)`, `backdrop-filter: blur(24px) saturate(180%)`, `border: 1px solid rgba(255, 255, 255, 0.12)`).
+- **The Datum Line & Convergence**: Lock typography to an architectural horizontal or vertical datum. Converge subject gaze and light vectors inward toward the copy.
+
 ### Commandment 6: Label Clearly
 - **The Rule**: Maintain clear orientation markers without cluttering the canvas.
 - **Structure**:

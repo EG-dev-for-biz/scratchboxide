@@ -107,6 +107,20 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
    - Ground the visual in **tangible physical evidence**: if discussing extreme thermal cycling, show a macro of heat pipes and micro-fin cooling under laser measurement; if discussing artisanal leather, show hand-stitched bridle leather with bone folders and awl marks; if discussing real-time rendering, show a color-calibrated studio monitor displaying wireframe density with zero motion drag.
 7. **Public CDN Ingestion**:
    - The resolved CDN URLs are directly ingested by the Google Slides API (`addImage({ path: url })`) and the 1920×1080 / 2560×1080 HTML presentation engine without requiring local file upload steps.
+8. **Contemporary Editorial Font Pairings & Structural Friction**:
+   - Reject obsolete 2012 corporate defaults (*Helvetica + Georgia*, *Roboto + Open Sans*, *Montserrat + Playfair*).
+   - Enforce high-character structural tension between precision-engineered Swiss neo-grotesks and liquid/architectural display faces:
+     - *High-Fashion & Culture*: **Bodoni Moda** (Italic, Light display) + **Plus Jakarta Sans** (Reading body).
+     - *Brutalist Scale-Contrast*: **Syne** (Monolithic architectural wide display) + **Source Serif 4** (Scholarly body).
+     - *Intellectual / Editorial*: **DM Sans** (Modernist grotesque) + **Newsreader** (Lush literary serif).
+     - *Technical Vanguard*: **Instrument Sans** (Industrial grotesque) + **JetBrains Mono** (Precision folios).
+   - **Micro-Typographic Invariants**: Tight negative tracking on display headlines (`-0.03em` to `-0.05em`), wide positive tracking on kickers/folios (`+0.15em` to `+0.25em`), and treated display italics.
+9. **Complex Full-Bleed Layouts & Asymmetric Scrim Architecture**:
+   - Full-bleed imagery is the entire physical environment, not a framed picture in a box.
+   - **Prohibition of the Muddy Scrim**: Never drop a uniform 50% black box across a 4K photograph. It kills optical dynamic range and turns 4K optics into grey sludge.
+   - **Asymmetric Directional Scrims**: Apply a 1D gradient starting at 35–45% deep brand tint only across the margin edge behind the copy, fading to 0% by the 45% mark of the slide. 55%+ of the photograph remains completely pristine with true specular highlights and deep blacks.
+   - **Frosted Glassmorphic Datum Shelves**: When complex cards, tables, or multi-paragraph blocks overlay full-bleed imagery, use physical frosted planes (`rgba(15, 20, 30, 0.65)`, `backdrop-filter: blur(24px) saturate(180%)`, `border: 1px solid rgba(255, 255, 255, 0.12)`).
+   - **The Datum Line & Convergence**: Lock typography to an architectural horizontal or vertical datum. Converge subject gaze and light vectors inward toward the copy.
 
 ---
 

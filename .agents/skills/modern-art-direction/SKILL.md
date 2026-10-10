@@ -40,7 +40,25 @@ This skill equips an AI system with the visual judgment, strategic skepticism, a
       - *Bad (Ambient Wallpaper)*: A slide discussing low-latency AI computing paired with a generic smiling person holding a tablet in a sunny office. (Zero relevance, generic corporate stock).
       - *Good (Grounded Exemplification)*: An extreme macro photograph of a gold-plated optical transceiver module inserted into a liquid-cooled server blade, twin 850nm laser waveguides illuminated with subtle photon leakage, soft convective air shimmer, 4500K rack indicator LEDs casting soft specular dots on brushed aluminum. (Direct physical substantiation of low-latency computing reality).
     - The audience must immediately recognize: *"This visual is not decoration; it is tangible evidence of the section's argument."*
-11. **Rules Serve Intent**: These rules are not dogma. When intent demands it: flat lighting is correct, bad typography is correct, an awkward crop is correct, and intentional imperfection is divine.
+11. **Contemporary Editorial Font Pairings & Structural Friction**:
+    - Reject obsolete 2012 corporate defaults (*Roboto + Open Sans*, *Helvetica + Georgia*, *Montserrat + Playfair*).
+    - Contemporary editorial typography operates through **high-character structural tension**: pairing razor-clean, precision-engineered grotesks (*Söhne*, *Plus Jakarta Sans*, *Inter*, *Instrument Sans*) with liquid, razor-sharp, or brutalist display faces (*Editorial New*, *Bodoni Moda*, *Syne*, *Source Serif 4*).
+    - **The 4 Master Pairing Archetypes**:
+      1. *High-Fashion & Culture*: Narrow high-contrast serif italic (*Bodoni Moda* / *Editorial New*) paired with brutalist Swiss neo-grotesk (*Plus Jakarta Sans* / *Söhne*).
+      2. *Brutalist Scale-Contrast*: Monolithic architectural wide display (*Syne* / *Monument Extended*) paired with tight, scholarly reading serif (*Source Serif 4* / *Tiempos*).
+      3. *Intellectual / Editorial Warmth*: Quirky modernist grotesque display (*DM Sans* / *Diatype*) paired with voluptuous literary serif (*Newsreader* / *Domaine*).
+      4. *Technical Vanguard*: Clean industrial grotesque (*Instrument Sans* / *Founders Grotesk*) paired with dense monospaced metadata (*JetBrains Mono* / *Diatype Mono*).
+    - **Micro-Typographic Invariants**:
+      - Tight negative tracking on display headlines (40pt–80pt at `-0.03em` to `-0.05em` / `-1` to `-2pt`) to interlock letterforms structurally.
+      - Wide positive tracking on kickers, folios, and metadata (8pt–10pt at `+0.15em` to `+0.25em` / `+2` to `+4pt`) for technical precision.
+      - Treated italics: Treat lush italic serifs as primary display items, not timid citations.
+12. **Complex Full-Bleed Layouts & Asymmetric Scrim Architecture**:
+    - Full-bleed imagery is the entire physical environment, never a framed picture inside a box.
+    - **Prohibition of the Muddy Scrim**: Never drop a uniform 50% black box across a 4K photograph. It kills optical dynamic range and creates grey sludge.
+    - **Asymmetric Directional Scrims**: Apply a 1-dimensional gradient starting at 35–45% deep brand tint only across the margin edge behind text, fading to 0% by the 45% mark of the slide. 55%+ of the photograph remains pristine with true blacks and specular highlights.
+    - **Frosted Glassmorphic Datum Shelves**: When complex cards, tables, or bullets overlay full-bleed imagery, use physical frosted planes (`rgba(15, 20, 30, 0.65)`, `backdrop-filter: blur(24px) saturate(180%)`, `border: 1px solid rgba(255, 255, 255, 0.12)`) ensuring AAA contrast without obliterating the scene behind it.
+    - **The Datum Line & Vector Convergence**: Lock typography to an architectural horizontal or vertical datum (horizon line, architectural edge, hairline rule). Converge subject gaze vectors and lighting angles inward toward the copy.
+13. **Rules Serve Intent**: These rules are not dogma. When intent demands it: flat lighting is correct, bad typography is correct, an awkward crop is correct, and intentional imperfection is divine.
 
 ---
 

@@ -65,6 +65,54 @@ export const SPELLED_NUMBERS = [
   'FIFTY-ONE', 'FIFTY-TWO', 'FIFTY-THREE', 'FIFTY-FOUR', 'FIFTY-FIVE', 'FIFTY-SIX', 'FIFTY-SEVEN', 'FIFTY-EIGHT', 'FIFTY-NINE', 'SIXTY'
 ];
 
+export const EDITORIAL_FONT_PAIRINGS = {
+  'high-fashion': {
+    name: 'High-Fashion & Culture',
+    displayFont: 'Bodoni Moda',
+    bodyFont: 'Plus Jakarta Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: true,
+    displayTracking: -1.0,
+    kickerTracking: 3.5,
+  },
+  'brutalist-scale': {
+    name: 'Brutalist Scale-Contrast',
+    displayFont: 'Syne',
+    bodyFont: 'Source Serif 4',
+    monoFont: 'Space Mono',
+    italicDisplay: false,
+    displayTracking: -2.0,
+    kickerTracking: 4.0,
+  },
+  'intellectual-editorial': {
+    name: 'Intellectual / Editorial Warmth',
+    displayFont: 'Newsreader',
+    bodyFont: 'Plus Jakarta Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: true,
+    displayTracking: -1.0,
+    kickerTracking: 3.0,
+  },
+  'technical-vanguard': {
+    name: 'Technical Vanguard',
+    displayFont: 'Instrument Sans',
+    bodyFont: 'Instrument Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: false,
+    displayTracking: -1.0,
+    kickerTracking: 3.0,
+  },
+  'modern-grotesk': {
+    name: 'Modern Neo-Grotesk',
+    displayFont: 'Plus Jakarta Sans',
+    bodyFont: 'Plus Jakarta Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: false,
+    displayTracking: -1.0,
+    kickerTracking: 2.5,
+  },
+};
+
 // ============================================================================
 // 0. SCRATCHBOX MCP IMAGE ENGINE (scratchbox.ai)
 // ============================================================================
@@ -345,6 +393,7 @@ export function parseTextRuns(rawText, palette, baseOptions = {}) {
   const accentColor = baseOptions.accentColor || palette.accentColor;
   const boldColor = baseOptions.boldColor || palette.titleColor;
   const lineSpacing = baseOptions.lineSpacingMultiple || 1.35;
+  const fontFace = baseOptions.fontFace;
   const bulletPrefix = baseOptions.bullet ? '• ' : '';
 
   // Check for lead-in bold pattern: **Lead In**: rest or Lead In: rest
@@ -358,20 +407,21 @@ export function parseTextRuns(rawText, palette, baseOptions = {}) {
       options: {
         bold: true,
         fontSize: baseSize,
+        fontFace,
         color: boldColor,
         lineSpacingMultiple: lineSpacing,
       },
     });
 
-    const subRuns = parseInlineRuns(rest, baseSize, baseColor, accentColor, lineSpacing);
+    const subRuns = parseInlineRuns(rest, baseSize, baseColor, accentColor, lineSpacing, '', fontFace);
     runs.push(...subRuns);
     return runs;
   }
 
-  return parseInlineRuns(text, baseSize, baseColor, accentColor, lineSpacing, bulletPrefix);
+  return parseInlineRuns(text, baseSize, baseColor, accentColor, lineSpacing, bulletPrefix, fontFace);
 }
 
-function parseInlineRuns(text, baseSize, baseColor, accentColor, lineSpacing, prefix = '') {
+function parseInlineRuns(text, baseSize, baseColor, accentColor, lineSpacing, prefix = '', fontFace = undefined) {
   const runs = [];
   const regex = /(\*\*[^*]+\*\*)/g;
   const parts = text.split(regex);
@@ -386,6 +436,7 @@ function parseInlineRuns(text, baseSize, baseColor, accentColor, lineSpacing, pr
         options: {
           bold: true,
           fontSize: baseSize,
+          fontFace,
           color: accentColor,
           lineSpacingMultiple: lineSpacing,
         },
@@ -396,6 +447,7 @@ function parseInlineRuns(text, baseSize, baseColor, accentColor, lineSpacing, pr
         options: {
           bold: false,
           fontSize: baseSize,
+          fontFace,
           color: baseColor,
           lineSpacingMultiple: lineSpacing,
         },
@@ -940,6 +992,10 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
   const is21x9 = ratio === '21:9' || ratio === '2.37:1' || ratio === 'ultrawide';
   options.ratio = ratio;
 
+  const fontPairingKey = (options.fontPairing || options.fontPreset || frontmatter.font_pairing || frontmatter.fontPairing || frontmatter.font_preset || 'high-fashion').toLowerCase().trim();
+  const fontPairing = EDITORIAL_FONT_PAIRINGS[fontPairingKey] || EDITORIAL_FONT_PAIRINGS['high-fashion'];
+  options.fontPairing = fontPairingKey;
+
   const palette = resolveBrandPalette(brandAnchor, frontmatter.brand_colors, theme, harmony);
   const slides = parseMarkdownSlides(body);
 
@@ -951,6 +1007,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
   }
 
   const pptx = new PptxGenJS();
+  pptx.theme = { headFontFace: fontPairing.displayFont, bodyFontFace: fontPairing.bodyFont };
 
   // Aspect Ratio & Layout Geometry: 16:9 Widescreen, 21:9 Ultrawide, or 4:3 Legacy
   if (is21x9) {
@@ -1025,10 +1082,15 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             sizing: { type: 'cover', w: slideWIn, h: slideHIn },
           });
 
-          // Gradient scrim rectangle
+          // Asymmetric Left-Anchored Scrim: protects typography while leaving 55%+ of 4K photo pristine
           slide.addShape(pptx.ShapeType.rect, {
-            x: 0, y: slideHIn * 0.35, w: slideWIn, h: slideHIn * 0.65,
-            fill: { color: palette.slideBg, transparency: 20 },
+            x: 0, y: 0, w: slideWIn * 0.58, h: slideHIn,
+            fill: { color: palette.slideBg, transparency: 18 },
+            line: { width: 0 },
+          });
+          slide.addShape(pptx.ShapeType.rect, {
+            x: 0, y: slideHIn * 0.38, w: slideWIn * 0.65, h: slideHIn * 0.62,
+            fill: { color: palette.slideBg, transparency: 22 },
             line: { width: 0 },
           });
         }
@@ -1038,7 +1100,8 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         slide.addText(coverKicker.toUpperCase(), {
           x: padIn, y: slideHIn * 0.46, w: slideWIn - padIn * 2, h: 0.35,
           fontSize: 10.5, bold: true, color: palette.accentColor,
-          charSpacing: 2, margin: 0,
+          fontFace: fontPairing.monoFont,
+          charSpacing: fontPairing.kickerTracking, margin: 0,
         });
 
         // Title (dynamic font sizing for perfect wrap)
@@ -1048,8 +1111,12 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         const coverTitleH = Math.max(0.8, coverTitleLines * 0.55);
 
         slide.addText(coverTitle, {
-          x: padIn, y: slideHIn * 0.52, w: slideWIn - padIn * 2, h: coverTitleH,
-          fontSize: coverTitleSize, bold: true, color: palette.titleColor,
+          x: padIn, y: slideHIn * 0.52, w: (slideWIn - padIn * 2) * 0.72, h: coverTitleH,
+          fontSize: coverTitleSize, bold: true,
+          fontFace: fontPairing.displayFont,
+          italic: fontPairing.italicDisplay,
+          charSpacing: fontPairing.displayTracking,
+          color: palette.titleColor,
           margin: 0,
         });
 
@@ -1057,8 +1124,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         if (s.subtitle) {
           const coverSub = stripMarkdownFormatting(s.subtitle);
           slide.addText(coverSub, {
-            x: padIn, y: slideHIn * 0.52 + coverTitleH + 0.1, w: (slideWIn - padIn * 2) * 0.85, h: 0.7,
+            x: padIn, y: slideHIn * 0.52 + coverTitleH + 0.1, w: (slideWIn - padIn * 2) * 0.72, h: 0.7,
             fontSize: 15, color: palette.subtitleColor,
+            fontFace: fontPairing.bodyFont,
             margin: 0,
           });
         }
@@ -1076,7 +1144,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         });
         slide.addText(metaLine, {
           x: padIn, y: slideHIn * 0.89, w: slideWIn - padIn * 2, h: 0.35,
-          fontSize: 9.5, bold: true, color: palette.textColor, charSpacing: 1.5, margin: 0,
+          fontSize: 9.5, bold: true, color: palette.textColor,
+          fontFace: fontPairing.monoFont,
+          charSpacing: 1.5, margin: 0,
         });
         break;
       }
@@ -1091,13 +1161,16 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         slide.addText(s.title.toUpperCase(), {
           x: padIn, y: barY + 0.2, w: slideWIn - padIn * 2, h: 1.2,
           fontSize: 32, bold: true, color: palette.titleColor,
-          charSpacing: 2, margin: 0,
+          fontFace: fontPairing.displayFont,
+          charSpacing: fontPairing.displayTracking, margin: 0,
         });
 
         if (s.subtitle || s.body) {
           slide.addText(s.subtitle || s.body, {
             x: padIn, y: barY + 1.5, w: slideWIn * 0.75, h: 1.5,
-            fontSize: 14, color: palette.subtitleColor, lineSpacingMultiple: 1.4, margin: 0,
+            fontSize: 14, color: palette.subtitleColor,
+            fontFace: fontPairing.bodyFont,
+            lineSpacingMultiple: 1.4, margin: 0,
           });
         }
         break;
@@ -1114,10 +1187,11 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           h: 2.0,
           fontSize,
           bold: true,
+          fontFace: fontPairing.displayFont,
           color: palette.titleColor,
           align: 'center',
           valign: 'middle',
-          charSpacing: 2,
+          charSpacing: fontPairing.displayTracking,
           margin: 0,
         });
 
@@ -1143,23 +1217,33 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         slide.addText('“', {
           x: qx - 0.6, y: qy - 0.3, w: 0.6, h: 0.8,
-          fontSize: 60, bold: true, color: palette.accentColor, align: 'right', margin: 0,
+          fontSize: 60, bold: true, color: palette.accentColor,
+          fontFace: fontPairing.displayFont,
+          align: 'right', margin: 0,
         });
 
         slide.addText(quoteText, {
           x: qx, y: qy, w: quoteW, h: 2.6,
-          fontSize: 20, bold: true, color: palette.titleColor, align: 'center', lineSpacingMultiple: 1.45, margin: 0,
+          fontSize: 22, bold: true,
+          fontFace: fontPairing.displayFont,
+          italic: fontPairing.italicDisplay,
+          charSpacing: fontPairing.displayTracking,
+          color: palette.titleColor, align: 'center', lineSpacingMultiple: 1.45, margin: 0,
         });
 
         slide.addText('”', {
           x: qx + quoteW, y: qy + 1.8, w: 0.6, h: 0.8,
-          fontSize: 60, bold: true, color: palette.accentColor, align: 'left', margin: 0,
+          fontSize: 60, bold: true, color: palette.accentColor,
+          fontFace: fontPairing.displayFont,
+          align: 'left', margin: 0,
         });
 
         if (s.subtitle) {
           slide.addText(`- ${s.subtitle.toUpperCase()}`, {
             x: qx, y: qy + 2.7, w: quoteW, h: 0.4,
-            fontSize: 11, bold: true, color: palette.subtitleColor, align: 'center', charSpacing: 1.5, margin: 0,
+            fontSize: 11, bold: true, color: palette.subtitleColor,
+            fontFace: fontPairing.monoFont,
+            align: 'center', charSpacing: fontPairing.kickerTracking, margin: 0,
           });
         }
         break;
@@ -1243,7 +1327,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         const topKicker = s.kicker || (s.subtitle && s.title.length < 30 ? s.subtitle.toUpperCase() : `${(options.brand || frontmatter.brand || brandAnchor || 'EXECUTIVE').toUpperCase()} // ALIGNMENT`);
         slide.addText(topKicker, {
           x: padIn, y: padIn, w: slideWIn - padIn * 2, h: 0.28,
-          fontSize: 9.5, bold: true, color: palette.accentColor, charSpacing: 2, margin: 0,
+          fontSize: 9.5, bold: true, color: palette.accentColor,
+          fontFace: fontPairing.monoFont,
+          charSpacing: fontPairing.kickerTracking, margin: 0,
         });
 
         const rawTitle = stripMarkdownFormatting(s.title);
@@ -1253,7 +1339,11 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         slide.addText(rawTitle, {
           x: padIn, y: padIn + 0.32, w: slideWIn - padIn * 2, h: titleH,
-          fontSize: titleFontSize, bold: true, color: palette.titleColor, margin: 0,
+          fontSize: titleFontSize, bold: true,
+          fontFace: fontPairing.displayFont,
+          italic: fontPairing.italicDisplay,
+          charSpacing: fontPairing.displayTracking,
+          color: palette.titleColor, margin: 0,
         });
 
         let curHeaderY = padIn + 0.32 + titleH;
@@ -1264,7 +1354,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           const subH = Math.max(0.3, subLines * 0.26);
           slide.addText(rawSub, {
             x: padIn, y: curHeaderY + 0.05, w: slideWIn - padIn * 2, h: subH,
-            fontSize: 13, color: palette.subtitleColor, margin: 0,
+            fontSize: 13, color: palette.subtitleColor,
+            fontFace: fontPairing.bodyFont,
+            margin: 0,
           });
           curHeaderY += subH + 0.08;
         }
@@ -1312,7 +1404,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             });
             slide.addText(badge, {
               x: cx + 0.25, y: cardY + 0.25, w: Math.min(cardW - 0.5, Math.max(1.4, badge.length * 0.1 + 0.4)), h: 0.28,
-              fontSize: 9.5, bold: true, color: palette.accentColor, charSpacing: 1.5, align: 'center', valign: 'middle', margin: 0,
+              fontSize: 9.5, bold: true, color: palette.accentColor,
+              fontFace: fontPairing.monoFont,
+              charSpacing: 1.5, align: 'center', valign: 'middle', margin: 0,
             });
 
             // Accent divider line under pill
@@ -1325,6 +1419,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             const runs = parseTextRuns(textBody, palette, {
               fontSize: count === 4 ? 10.5 : 11.5,
               color: palette.textColor,
+              fontFace: fontPairing.bodyFont,
               lineSpacingMultiple: 1.4,
             });
 
@@ -1476,7 +1571,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         const kickerText = s.kicker || (s.subtitle && s.title.length < 30 ? s.subtitle.toUpperCase() : 'DIRECTOR VISION');
         slide.addText(kickerText, {
           x: padIn, y: padIn, w: textW, h: 0.28,
-          fontSize: 9.5, bold: true, color: palette.accentColor, charSpacing: 2, margin: 0,
+          fontSize: 9.5, bold: true, color: palette.accentColor,
+          fontFace: fontPairing.monoFont,
+          charSpacing: fontPairing.kickerTracking, margin: 0,
         });
 
         const rawTitle = stripMarkdownFormatting(s.title);
@@ -1486,7 +1583,11 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         slide.addText(rawTitle, {
           x: padIn, y: padIn + 0.32, w: textW, h: titleH,
-          fontSize: titleFontSize, bold: true, color: palette.titleColor, margin: 0,
+          fontSize: titleFontSize, bold: true,
+          fontFace: fontPairing.displayFont,
+          italic: fontPairing.italicDisplay,
+          charSpacing: fontPairing.displayTracking,
+          color: palette.titleColor, margin: 0,
         });
 
         let curHeaderY = padIn + 0.32 + titleH;
@@ -1496,7 +1597,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           const subH = Math.max(0.28, Math.ceil(rawSub.length / 45) * 0.25);
           slide.addText(rawSub, {
             x: padIn, y: curHeaderY + 0.04, w: textW, h: subH,
-            fontSize: 12, color: palette.subtitleColor, margin: 0,
+            fontSize: 12, color: palette.subtitleColor,
+            fontFace: fontPairing.bodyFont,
+            margin: 0,
           });
           curHeaderY += subH + 0.06;
         }
@@ -1512,14 +1615,14 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         const textParts = [];
         if (s.body) {
-          const bodyRuns = parseTextRuns(s.body, palette, { fontSize: 11, color: palette.textColor, lineSpacingMultiple: 1.35 });
+          const bodyRuns = parseTextRuns(s.body, palette, { fontSize: 11, color: palette.textColor, fontFace: fontPairing.bodyFont, lineSpacingMultiple: 1.35 });
           textParts.push(...bodyRuns);
           if (s.bullets && s.bullets.length > 0) {
             textParts.push({ text: '\n\n', options: { fontSize: 6 } });
           }
         }
         for (const b of s.bullets) {
-          textParts.push(...parseTextRuns(b, palette, { fontSize: 10.5, color: palette.textColor, bullet: true, lineSpacingMultiple: 1.3 }));
+          textParts.push(...parseTextRuns(b, palette, { fontSize: 10.5, color: palette.textColor, fontFace: fontPairing.bodyFont, bullet: true, lineSpacingMultiple: 1.3 }));
           textParts.push({ text: '\n\n', options: { fontSize: 5 } });
         }
 
@@ -1869,7 +1972,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
       const footerLabel = [footerBrand, footerShortTitle].filter(Boolean).join(' // ') || 'PRESENTATION DECK';
       slide.addText(`${footerLabel}  //  ${i + 1} / ${slides.length}`, {
         x: slideWIn - padIn - 6.5, y: slideHIn - 0.45, w: 6.5, h: 0.3,
-        fontSize: 8.5, color: '64748B', align: 'right', charSpacing: 1, margin: 0,
+        fontSize: 8.5, color: '64748B',
+        fontFace: fontPairing.monoFont,
+        align: 'right', charSpacing: 1.5, margin: 0,
       });
     }
   }
@@ -2034,6 +2139,7 @@ Options:
     if (args[i] === '--ratio') options.ratio = args[++i];
     if (args[i] === '--chrome') options.chrome = true;
     if (args[i] === '--eyebrow') options.eyebrow = args[++i];
+    if (args[i] === '--font-pairing' || args[i] === '--font-preset') options.fontPairing = args[++i];
     if (args[i] === '--scratchbox-images' || args[i] === '--generate-images') options.scratchboxImages = true;
     if (args[i] === '--workspace') options.workspaceId = args[++i];
     if (args[i] === '--html') options.html = true;

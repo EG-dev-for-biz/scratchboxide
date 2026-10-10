@@ -8,6 +8,54 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+export const EDITORIAL_FONT_PAIRINGS = {
+  'high-fashion': {
+    name: 'High-Fashion & Culture',
+    display: "'Bodoni Moda', 'Newsreader', serif",
+    displayStyle: 'italic',
+    body: "'Plus Jakarta Sans', sans-serif",
+    mono: "'JetBrains Mono', monospace",
+    titleTracking: '-0.02em',
+    kickerTracking: '3.5px',
+  },
+  'brutalist-scale': {
+    name: 'Brutalist Scale-Contrast',
+    display: "'Syne', sans-serif",
+    displayStyle: 'normal',
+    body: "'Source Serif 4', serif",
+    mono: "'Space Grotesk', monospace",
+    titleTracking: '-0.04em',
+    kickerTracking: '4px',
+  },
+  'intellectual-editorial': {
+    name: 'Intellectual / Editorial Warmth',
+    display: "'Newsreader', serif",
+    displayStyle: 'italic',
+    body: "'Plus Jakarta Sans', sans-serif",
+    mono: "'JetBrains Mono', monospace",
+    titleTracking: '-0.02em',
+    kickerTracking: '3px',
+  },
+  'technical-vanguard': {
+    name: 'Technical Vanguard',
+    display: "'Instrument Sans', sans-serif",
+    displayStyle: 'normal',
+    body: "'Instrument Sans', sans-serif",
+    mono: "'JetBrains Mono', monospace",
+    titleTracking: '-0.02em',
+    kickerTracking: '3px',
+  },
+  'modern-grotesk': {
+    name: 'Modern Neo-Grotesk',
+    display: "'Plus Jakarta Sans', sans-serif",
+    displayStyle: 'normal',
+    body: "'Plus Jakarta Sans', sans-serif",
+    mono: "'JetBrains Mono', monospace",
+    titleTracking: '-0.03em',
+    kickerTracking: '2.5px',
+  },
+};
+
 export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatter = {}, options = {} }) {
   const brandName = palette.name || frontmatter.brand || options.brand || 'Brand Presentation';
   const directorName = options.director || frontmatter.director || 'ELI GREEN';
@@ -17,6 +65,9 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
   const footerBrand = (options.brand || frontmatter.brand || brandName || '').toUpperCase();
   const footerTitle = (options.title || frontmatter.title || title || '').toUpperCase();
   const footerText = [footerBrand, footerTitle].filter(Boolean).join(' // ') || 'PRESENTATION DECK';
+
+  const fontPairingKey = (options.fontPairing || frontmatter.font_pairing || frontmatter.fontPairing || 'high-fashion').toLowerCase().trim();
+  const pairing = EDITORIAL_FONT_PAIRINGS[fontPairingKey] || EDITORIAL_FONT_PAIRINGS['high-fashion'];
 
   const rawRatio = options.ratio || options.aspectRatio || frontmatter.aspect_ratio || frontmatter.ratio || '16:9';
   const is21x9 = rawRatio === '21:9' || rawRatio === '2.37:1' || rawRatio === 'ultrawide';
@@ -156,7 +207,7 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
   <title>${title} | Interactive Presentation</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..900;1,6..96,400..900&family=Instrument+Sans:wght@400;600;700&family=JetBrains+Mono:wght@400;500;700&family=Newsreader:ital,opsz,wght@0,6..72,400..800;1,6..72,400..800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Space+Grotesk:wght@500;700&family=Syne:wght@500;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-canvas: ${bg};
@@ -169,6 +220,12 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
       --card-border: ${cardBorder};
       --stage-w: ${stageW}px;
       --stage-h: ${stageH}px;
+      --font-display: ${pairing.display};
+      --font-display-style: ${pairing.displayStyle};
+      --font-body: ${pairing.body};
+      --font-mono: ${pairing.mono};
+      --title-letter-spacing: ${pairing.titleTracking};
+      --kicker-letter-spacing: ${pairing.kickerTracking};
     }
 
     * {
@@ -180,7 +237,7 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
     body {
       background: #030712;
       color: var(--text-color);
-      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: var(--font-body), -apple-system, BlinkMacSystemFont, sans-serif;
       overflow: hidden;
       width: 100vw;
       height: 100vh;
@@ -235,21 +292,23 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
 
     /* Typography */
     .kicker-tag, .kicker-badge {
-      font-family: 'Space Grotesk', sans-serif;
-      font-size: 14px;
+      font-family: var(--font-mono), 'Space Grotesk', monospace;
+      font-size: 13px;
       font-weight: 700;
-      letter-spacing: 3px;
+      letter-spacing: var(--kicker-letter-spacing);
       color: var(--accent);
       text-transform: uppercase;
       margin-bottom: 12px;
     }
 
     .slide-title {
-      font-size: 40px;
-      font-weight: 800;
-      line-height: 1.18;
+      font-family: var(--font-display);
+      font-style: var(--font-display-style);
+      font-size: 42px;
+      font-weight: 700;
+      line-height: 1.15;
       color: var(--title-color);
-      letter-spacing: -0.02em;
+      letter-spacing: var(--title-letter-spacing);
       max-width: 1500px;
       text-wrap: balance;
     }
@@ -341,16 +400,17 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
     .card {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
-      border-radius: 16px;
-      padding: 28px 32px;
-      backdrop-filter: blur(16px);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 14px;
+      padding: 26px 30px;
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
       display: flex;
       flex-direction: column;
     }
 
     .card-badge {
-      font-family: 'Space Grotesk', sans-serif;
+      font-family: var(--font-mono), 'Space Grotesk', monospace;
       font-size: 11px;
       font-weight: 700;
       color: var(--secondary-accent);
@@ -362,7 +422,7 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
     .card-badge-pill {
       display: inline-block;
       align-self: flex-start;
-      font-family: 'Space Grotesk', sans-serif;
+      font-family: var(--font-mono), 'Space Grotesk', monospace;
       font-size: 11.5px;
       font-weight: 700;
       color: var(--accent);
@@ -548,14 +608,24 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
       width: 100%;
       height: 100%;
       object-fit: cover;
+      object-position: right center;
       z-index: 1;
     }
 
+    /* Asymmetric Directional Scrim: protects copy while keeping 55%+ of 4K photo pristine */
     .hero-scrim {
       position: absolute;
       inset: 0;
-      background: linear-gradient(to top, rgba(7, 17, 30, 0.95) 0%, rgba(7, 17, 30, 0.7) 45%, rgba(7, 17, 30, 0.3) 100%);
+      background: linear-gradient(
+        90deg,
+        rgba(7, 11, 20, 0.94) 0%,
+        rgba(7, 11, 20, 0.82) 32%,
+        rgba(7, 11, 20, 0.25) 54%,
+        rgba(7, 11, 20, 0.05) 70%,
+        transparent 85%
+      );
       z-index: 2;
+      pointer-events: none;
     }
 
     .hero-content {
@@ -565,12 +635,14 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
     }
 
     .hero-title {
+      font-family: var(--font-display);
+      font-style: var(--font-display-style);
       font-size: 64px;
-      font-weight: 800;
-      line-height: 1.1;
+      font-weight: 700;
+      line-height: 1.08;
       color: #fff;
       margin-bottom: 24px;
-      letter-spacing: -1px;
+      letter-spacing: var(--title-letter-spacing);
     }
 
     .hero-subtitle {
@@ -581,11 +653,13 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
     }
 
     .hero-meta {
+      font-family: var(--font-mono);
       display: flex;
       gap: 40px;
       border-top: 1px solid rgba(255, 255, 255, 0.15);
       padding-top: 24px;
-      font-size: 15px;
+      font-size: 13px;
+      letter-spacing: 0.5px;
       color: rgba(255, 255, 255, 0.7);
     }
 
