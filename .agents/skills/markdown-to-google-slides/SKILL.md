@@ -170,6 +170,15 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
       3. **Chromatic Lens Distortion**: Subtle peripheral optical aberration and barrel softness characteristic of vintage cinema glass.
       4. **Muddy / Lifted Blacks**: Real optical toe with atmospheric flare and tactile charcoal/slate values (never digital crushed #000000).
       5. **Authentic Silver Halide Grain**: Fine physical film grain across the frame to establish organic material familiarity.
+25. **True Full-Bleed Spatial Canvas & Directional Scrim Invariant**:
+    - **100% Edge-to-Edge Continuity**: When presenting photography, the image must occupy the full 100% canvas (`x: 0, y: 0, w: 100%, h: 100%`), never an artificial 50/50 or 56% split that chops off the photo and replaces it with a flat digital box.
+    - **Directional Optical Scrim**: Laying out text directly over full bleed requires a soft, non-linear directional scrim (e.g. 94% opacity falloff to 0% across 70% width). This guarantees 100% WCAG AAA copy legibility without crushing the focal subject or creating artificial graphic dividers.
+    - **Zero Synthetic Hairlines**: Ban artificial vertical dividing lines (`width: 1`) cutting between text and photography.
+26. **Optical Typography Craft Engine: Kerning, Tracking, Vertical Leading & Purity**:
+    - **Architectural Kicker-to-Title Gap**: Maintain an intentional 0.16"–0.24" (12pt–17pt) vertical buffer between the kicker and the headline. Ascenders must never touch or crowd the kicker.
+    - **Sculptural Display Tracking & Leading**: Display headlines ($\ge 24\text{pt}$, especially Bodoni Moda italic) require tight negative tracking (`-1.0` to `-1.5pt` / `-0.025em` to `-0.04em`) to condense optical mass, paired with tight, sculptural leading (`lineSpacingMultiple: 1.05`–`1.08`).
+    - **Immediate Subtitle Harmonic Proximity**: Anchor subtitles 0.14"–0.24" below the title, with line length constrained to $\le 55$ characters per line (`w: 5.5"`) and relaxed reading leading (`1.35`–`1.40`).
+    - **Subtraction of Decorative Clutter**: Purge all decorative underline rectangles beneath eyebrows and page numbers. Metadata footers must be formatted as single unbroken horizontal lines with spaced bullets (` • `) and wide tracking, with zero horizontal hairline rules. Suppress all chrome on cover slides.
 
 ---
 

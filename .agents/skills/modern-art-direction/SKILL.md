@@ -250,6 +250,12 @@ When presenting modern art direction in slide decks, treatments, and editorial l
     - *Chromatic Lens Distortion*: Subtle peripheral optical aberration and barrel softness characteristic of vintage cinema glass.
     - *Muddy / Lifted Blacks*: Real optical toe with atmospheric flare and tactile charcoal/slate values (never digital crushed #000000).
     - *Authentic Silver Halide Grain*: Fine physical film grain across the frame to establish organic material familiarity.
+26. **True Full-Bleed Spatial Canvas & Directional Scrim Invariant**: Never slice 16:9 / 21:9 cinematic photography into arbitrary split boxes with flat digital voids on one side. Photographs must span 100% edge-to-edge. Layering typography over the photograph must be achieved by directing negative space into calm, low-frequency atmospheric scene continuation (mist, wet ground, out-of-focus depths) and protecting the typography zone with an invisible, non-linear optical directional scrim (94% opacity rolling down to 0% across 70% width). Ban artificial vertical dividing rules.
+27. **Optical Typography Craft Engine (Kerning, Tracking, Vertical Leading & Purity)**:
+    - *Architectural Kicker Gap*: Maintain an intentional 0.16"–0.24" (12pt–17pt) vertical buffer between kicker and headline so ascenders never crowd or collide with the kicker.
+    - *Sculptural Display Tracking*: Condense optical mass on display serif headlines ($\ge 24\text{pt}$, especially Bodoni Moda italic) with tight negative tracking (`-1.0` to `-1.5pt` / `-0.025em` to `-0.04em`) and disciplined tight leading (`1.05`–`1.08`).
+    - *Harmonic Subtitle Proximity*: Place subtitles 0.14"–0.24" below headlines, with measure constrained to $\le 55$ characters per line (`w: 5.5"`).
+    - *Zero Decorative Scaffolding*: Purge all decorative underline rectangles under eyebrows and page numbers. Format metadata footers as single unbroken horizontal lines with spaced bullets (` • `) and wide tracking. Suppress all chrome on cover slides.
 
 ---
 

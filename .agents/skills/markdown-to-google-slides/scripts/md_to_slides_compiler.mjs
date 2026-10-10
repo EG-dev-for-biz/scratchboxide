@@ -21,6 +21,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 import { generateHtmlDeck } from './html_slides_engine.mjs';
 
@@ -995,6 +996,92 @@ export function classifySlideArchetype(slide, index, total) {
 }
 
 // ============================================================================
+// 4.5 DIRECTIONAL OPTICAL SCRIM GENERATOR (True Full-Bleed Scaffolding)
+// ============================================================================
+
+export function getOrCreateDirectionalScrim(palette, slideWIn, slideHIn) {
+  const isDark = (palette.mode || 'dark') === 'dark';
+  const baseHex = isDark ? (palette.slideBg || '070B14').replace('#', '') : (palette.slideBg || 'F6F4EE').replace('#', '');
+  const r = parseInt(baseHex.slice(0, 2) || '07', 16);
+  const g = parseInt(baseHex.slice(2, 4) || '0B', 16);
+  const b = parseInt(baseHex.slice(4, 6) || '14', 16);
+
+  const width = 1280;
+  const height = 720;
+  const outPath = path.join('/tmp', `scrim_directional_${baseHex}_${width}x${height}.png`);
+  if (fs.existsSync(outPath)) return outPath;
+
+  const rawData = Buffer.alloc(height * (1 + width * 4));
+  let offset = 0;
+  for (let y = 0; y < height; y++) {
+    rawData[offset++] = 0; // Filter None
+    for (let x = 0; x < width; x++) {
+      const t = x / (width - 1);
+      let alpha = 0;
+      if (t < 0.32) {
+        alpha = 0.94 - (t / 0.32) * 0.16; // 0.94 down to 0.78
+      } else if (t < 0.56) {
+        const p = (t - 0.32) / 0.24;
+        alpha = 0.78 - p * 0.52; // 0.78 down to 0.26
+      } else if (t < 0.76) {
+        const p = (t - 0.56) / 0.20;
+        alpha = 0.26 - p * 0.26; // 0.26 down to 0.0
+      } else {
+        alpha = 0;
+      }
+      const aByte = Math.round(Math.max(0, Math.min(255, alpha * 255)));
+      rawData[offset++] = r;
+      rawData[offset++] = g;
+      rawData[offset++] = b;
+      rawData[offset++] = aByte;
+    }
+  }
+
+  const compressed = zlib.deflateSync(rawData);
+
+  function crc32(buf) {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) {
+      c ^= buf[i];
+      for (let j = 0; j < 8; j++) {
+        c = (c >>> 1) ^ (-(c & 1) & 0xedb88320);
+      }
+    }
+    return ~c;
+  }
+
+  function makeChunk(type, data) {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const typeBuf = Buffer.from(type, 'ascii');
+    const crcBuf = Buffer.alloc(4);
+    const crc = crc32(Buffer.concat([typeBuf, data]));
+    crcBuf.writeInt32BE(crc, 0);
+    return Buffer.concat([len, typeBuf, data, crcBuf]);
+  }
+
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  const png = Buffer.concat([
+    sig,
+    makeChunk('IHDR', ihdr),
+    makeChunk('IDAT', compressed),
+    makeChunk('IEND', Buffer.alloc(0))
+  ]);
+
+  fs.writeFileSync(outPath, png);
+  return outPath;
+}
+
+// ============================================================================
 // 5. PPTX GENERATION ENGINE
 // ============================================================================
 
@@ -1063,26 +1150,22 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
       line: { width: 0 },
     });
 
-    // Signature Editorial Chrome: Top-Left Eyebrow & Bottom-Right Spelled-Out Page Number
-    if (options.chrome || frontmatter.chrome) {
+    // Signature Editorial Chrome: Top-Left Eyebrow & Bottom-Right Spelled-Out Page Number (Suppressed on Hero Opener)
+    if ((options.chrome || frontmatter.chrome) && i > 0) {
       const eyebrowText = (options.eyebrow || frontmatter.eyebrow || brandAnchor || 'THE ART').toUpperCase();
       slide.addText(eyebrowText, {
-        x: padIn, y: padIn * 0.4, w: 3.5, h: 0.25,
-        fontSize: 9, bold: true, color: palette.textColor, charSpacing: 2, margin: 0,
-      });
-      slide.addShape(pptx.ShapeType.rect, {
-        x: padIn, y: padIn * 0.4 + 0.26, w: 0.8, h: 0.015,
-        fill: { color: palette.textColor }, line: { width: 0 },
+        x: padIn, y: padIn * 0.45, w: 4.0, h: 0.22,
+        fontSize: 9, bold: true, color: palette.subtitleColor || '94A3B8',
+        fontFace: fontPairing.monoFont,
+        charSpacing: 2.5, margin: 0,
       });
 
       const spelledNum = SPELLED_NUMBERS[i + 1] || `${i + 1}`;
       slide.addText(spelledNum, {
-        x: slideWIn - padIn - 2.5, y: slideHIn - padIn * 0.5 - 0.25, w: 2.5, h: 0.25,
-        fontSize: 9, bold: true, color: palette.textColor, charSpacing: 2, align: 'right', margin: 0,
-      });
-      slide.addShape(pptx.ShapeType.rect, {
-        x: slideWIn - padIn - 0.8, y: slideHIn - padIn * 0.5 + 0.03, w: 0.8, h: 0.015,
-        fill: { color: palette.textColor }, line: { width: 0 },
+        x: slideWIn - padIn - 2.5, y: slideHIn - padIn * 0.5 - 0.22, w: 2.5, h: 0.22,
+        fontSize: 9, bold: true, color: palette.subtitleColor || '94A3B8',
+        fontFace: fontPairing.monoFont,
+        charSpacing: 2.5, align: 'right', margin: 0,
       });
     }
 
@@ -1093,78 +1176,81 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
     switch (archetype) {
       case 'hero-opener': {
         const hasImg = s.images.length > 0;
-        const leftAreaW = hasImg ? (slideWIn * 0.44 - padIn * 1.2) : (slideWIn - padIn * 2);
+        const textW = Math.min(slideWIn * 0.48, 6.2);
 
         if (hasImg) {
-          // Architectural Spatial Split: 4K photo is anchored on the right 56% as an unadulterated photographic plate
-          const imgW = slideWIn * 0.56;
-          const imgX = slideWIn - imgW;
+          // 1. TRUE FULL BLEED ARCHITECTURE: 100% width, 100% height edge-to-edge
           slide.addImage({
             path: s.images[0].url,
-            x: imgX, y: 0, w: imgW, h: slideHIn,
-            sizing: { type: 'cover', w: imgW, h: slideHIn },
+            x: 0, y: 0, w: slideWIn, h: slideHIn,
+            sizing: { type: 'cover', w: slideWIn, h: slideHIn },
           });
 
-          // Hairline vertical divider rule separating photo from canvas
-          slide.addShape(pptx.ShapeType.line, {
-            x: imgX, y: 0, w: 0, h: slideHIn,
-            line: { color: '1E293B', width: 1 },
+          // 2. Seamless Optical Directional Scrim: preserves 100% contrast for copy while leaving focal subject pure
+          const scrimPath = getOrCreateDirectionalScrim(palette, slideWIn, slideHIn);
+          slide.addImage({
+            path: scrimPath,
+            x: 0, y: 0, w: slideWIn, h: slideHIn,
           });
         }
 
-        // Kicker Badge
+        // 1. Kicker Badge: Architectural shelf above title (No redundant brand tag above)
         const coverKicker = s.kicker || frontmatter.kicker || palette.kicker || 'DIRECTOR’S TREATMENT & PREVIS';
+        const kickerY = slideHIn * 0.24;
+        const kickerH = 0.24;
         slide.addText(coverKicker.toUpperCase(), {
-          x: padIn, y: slideHIn * 0.24, w: leftAreaW, h: 0.35,
+          x: padIn, y: kickerY, w: textW, h: kickerH,
           fontSize: 10, bold: true, color: palette.accentColor,
           fontFace: fontPairing.monoFont,
           charSpacing: fontPairing.kickerTracking, margin: 0,
         });
 
-        // Monumental Title (high fashion display sizing)
+        // 2. Monumental Title (Sculptural display sizing & disciplined negative tracking)
         const coverTitle = stripMarkdownFormatting(s.title);
         const coverTitleSize = coverTitle.length < 25 ? 44 : (coverTitle.length < 45 ? 36 : 28);
         const coverTitleLines = Math.ceil(coverTitle.length / (coverTitleSize > 32 ? 18 : 24));
-        const coverTitleH = Math.max(0.9, coverTitleLines * (coverTitleSize / 72 * 1.25));
+        const coverTitleH = Math.max(0.85, coverTitleLines * (coverTitleSize / 72 * 1.15));
 
+        // Disciplined vertical gap: 0.24" (17pt) intentional breathing room below kicker
+        const titleY = kickerY + kickerH + 0.24;
         slide.addText(coverTitle, {
-          x: padIn, y: slideHIn * 0.30, w: leftAreaW, h: coverTitleH,
+          x: padIn, y: titleY, w: textW, h: coverTitleH,
           fontSize: coverTitleSize, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
           charSpacing: fontPairing.displayTracking,
+          lineSpacingMultiple: 1.06,
           color: palette.titleColor,
           margin: 0,
         });
 
-        // Subtitle (disciplined neutral tone)
+        // 3. Subtitle (Disciplined neutral tone, anchored 0.24" below title)
+        let endY = titleY + coverTitleH;
         if (s.subtitle) {
           const coverSub = stripMarkdownFormatting(s.subtitle);
+          const subY = titleY + coverTitleH + 0.24;
           slide.addText(coverSub, {
-            x: padIn, y: slideHIn * 0.30 + coverTitleH + 0.16, w: leftAreaW, h: 1.0,
-            fontSize: 14, color: palette.subtitleColor,
+            x: padIn, y: subY, w: Math.min(textW, 5.5), h: 1.0,
+            fontSize: 14.5, color: palette.subtitleColor || '94A3B8',
             fontFace: fontPairing.bodyFont,
-            lineSpacingMultiple: 1.35,
+            lineSpacingMultiple: 1.40,
             margin: 0,
           });
+          endY = subY + 1.0;
         }
 
-        // Metadata footer pill (Dynamic)
+        // 4. Metadata footer (Minimalist, spaced bullets, single unbroken line across bottom)
         const director = options.director || frontmatter.director || 'ELI GREEN';
-        const agency = options.agency || frontmatter.agency || 'DESIGN LABS';
+        const agency = options.agency || frontmatter.agency || 'SWET & DESIGN LABS';
         const client = options.brand || frontmatter.brand || options.client || frontmatter.client || brandAnchor;
         const studio = options.studio || frontmatter.studio || 'SCRATCHBOX STUDIO';
-        const metaLine = `DIRECTOR: ${director.toUpperCase()}  |  AGENCY: ${agency.toUpperCase()}  |  CLIENT: ${client.toUpperCase()}  |  STUDIO: ${studio.toUpperCase()}`;
+        const metaLine = `DIRECTOR: ${director.toUpperCase()}   •   AGENCY: ${agency.toUpperCase()}   •   CLIENT: ${client.toUpperCase()}   •   STUDIO: ${studio.toUpperCase()}`;
 
-        slide.addShape(pptx.ShapeType.line, {
-          x: padIn, y: slideHIn * 0.86, w: leftAreaW, h: 0,
-          line: { color: '334155', width: 1 },
-        });
         slide.addText(metaLine, {
-          x: padIn, y: slideHIn * 0.88, w: leftAreaW, h: 0.35,
-          fontSize: 8, bold: true, color: '64748B',
+          x: padIn, y: slideHIn - padIn * 0.85, w: slideWIn - padIn * 2, h: 0.30,
+          fontSize: 8.5, bold: true, color: '64748B',
           fontFace: fontPairing.monoFont,
-          charSpacing: 1.2, margin: 0,
+          charSpacing: 1.4, margin: 0,
         });
         break;
       }
@@ -1342,9 +1428,11 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
       case 'cards-executive': {
         // Dynamic Slide Header with Subtitle Support
+        const kickerY = padIn * 0.85;
+        const kickerH = 0.22;
         const topKicker = s.kicker || (s.subtitle && s.title.length < 30 ? s.subtitle.toUpperCase() : `${(options.brand || frontmatter.brand || brandAnchor || 'EXECUTIVE').toUpperCase()} // ALIGNMENT`);
         slide.addText(topKicker, {
-          x: padIn, y: padIn, w: slideWIn - padIn * 2, h: 0.28,
+          x: padIn, y: kickerY, w: slideWIn - padIn * 2, h: kickerH,
           fontSize: 9.5, bold: true, color: palette.accentColor,
           fontFace: fontPairing.monoFont,
           charSpacing: fontPairing.kickerTracking, margin: 0,
@@ -1353,30 +1441,34 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         const rawTitle = stripMarkdownFormatting(s.title);
         const titleFontSize = rawTitle.length > 50 ? 20 : (rawTitle.length > 35 ? 22 : 24);
         const titleLines = Math.ceil(rawTitle.length / (titleFontSize > 22 ? 38 : 46));
-        const titleH = Math.max(0.4, titleLines * (titleFontSize / 72 * 1.3));
+        const titleH = Math.max(0.4, titleLines * (titleFontSize / 72 * 1.25));
 
+        const titleY = kickerY + kickerH + 0.16;
         slide.addText(rawTitle, {
-          x: padIn, y: padIn + 0.32, w: slideWIn - padIn * 2, h: titleH,
+          x: padIn, y: titleY, w: slideWIn - padIn * 2, h: titleH,
           fontSize: titleFontSize, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
           charSpacing: fontPairing.displayTracking,
+          lineSpacingMultiple: 1.08,
           color: palette.titleColor, margin: 0,
         });
 
-        let curHeaderY = padIn + 0.32 + titleH;
+        let curHeaderY = titleY + titleH;
 
         if (s.subtitle) {
           const rawSub = stripMarkdownFormatting(s.subtitle);
           const subLines = Math.ceil(rawSub.length / 65);
-          const subH = Math.max(0.3, subLines * 0.26);
+          const subH = Math.max(0.28, subLines * 0.24);
+          const subY = curHeaderY + 0.12;
           slide.addText(rawSub, {
-            x: padIn, y: curHeaderY + 0.05, w: slideWIn - padIn * 2, h: subH,
+            x: padIn, y: subY, w: slideWIn - padIn * 2, h: subH,
             fontSize: 13, color: palette.subtitleColor,
             fontFace: fontPairing.bodyFont,
+            lineSpacingMultiple: 1.35,
             margin: 0,
           });
-          curHeaderY += subH + 0.08;
+          curHeaderY = subY + subH;
         }
 
         const cardY = curHeaderY + 0.18;
@@ -1605,11 +1697,41 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
       }
 
       case 'image-forward': {
-        const textW = slideWIn * 0.44 - padIn * 1.5;
+        const isFullBleed = !options.split && (frontmatter.bleed === 'full' || frontmatter.fullBleed || s.fullBleed || s.bleed || s.archetype === 'full-bleed' || (s.speakerNotes && s.speakerNotes.toLowerCase().includes('full-bleed')) || options.fullBleed || true);
+        const textW = isFullBleed ? Math.min(slideWIn * 0.48, 5.8) : (slideWIn * 0.44 - padIn * 1.5);
 
+        if (s.images.length > 0) {
+          const imgPath = s.images[0].url;
+          if (isFullBleed) {
+            // Full Bleed Image across 100% canvas
+            slide.addImage({
+              path: imgPath,
+              x: 0, y: 0, w: slideWIn, h: slideHIn,
+              sizing: { type: 'cover', w: slideWIn, h: slideHIn },
+            });
+            // Directional Scrim for copy legibility
+            const scrimPath = getOrCreateDirectionalScrim(palette, slideWIn, slideHIn);
+            slide.addImage({
+              path: scrimPath,
+              x: 0, y: 0, w: slideWIn, h: slideHIn,
+            });
+          } else {
+            // Asymmetric Photographic Slab: Flush to right edge, seamless without hairline line
+            const imgW = slideWIn * 0.55;
+            const imgX = slideWIn - imgW;
+            slide.addImage({
+              path: imgPath,
+              x: imgX, y: 0, w: imgW, h: slideHIn,
+              sizing: { type: 'cover', w: imgW, h: slideHIn },
+            });
+          }
+        }
+
+        const kickerY = padIn * 0.85;
+        const kickerH = 0.22;
         const kickerText = s.kicker || (s.subtitle && s.title.length < 30 ? s.subtitle.toUpperCase() : 'DIRECTOR VISION');
         slide.addText(kickerText, {
-          x: padIn, y: padIn, w: textW, h: 0.28,
+          x: padIn, y: kickerY, w: textW, h: kickerH,
           fontSize: 9.5, bold: true, color: palette.accentColor,
           fontFace: fontPairing.monoFont,
           charSpacing: fontPairing.kickerTracking, margin: 0,
@@ -1618,29 +1740,34 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         const rawTitle = stripMarkdownFormatting(s.title);
         const titleFontSize = rawTitle.length > 40 ? 20 : 23;
         const titleLines = Math.ceil(rawTitle.length / (titleFontSize > 21 ? 24 : 30));
-        const titleH = Math.max(0.42, titleLines * (titleFontSize / 72 * 1.3));
+        const titleH = Math.max(0.42, titleLines * (titleFontSize / 72 * 1.25));
 
+        // Disciplined vertical gap: 0.16" (11.5pt) breathing room below kicker
+        const titleY = kickerY + kickerH + 0.16;
         slide.addText(rawTitle, {
-          x: padIn, y: padIn + 0.32, w: textW, h: titleH,
+          x: padIn, y: titleY, w: textW, h: titleH,
           fontSize: titleFontSize, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
           charSpacing: fontPairing.displayTracking,
+          lineSpacingMultiple: 1.08,
           color: palette.titleColor, margin: 0,
         });
 
-        let curHeaderY = padIn + 0.32 + titleH;
+        let curHeaderY = titleY + titleH;
 
         if (s.subtitle) {
           const rawSub = stripMarkdownFormatting(s.subtitle);
           const subH = Math.max(0.28, Math.ceil(rawSub.length / 40) * 0.26);
+          const subY = curHeaderY + 0.14;
           slide.addText(rawSub, {
-            x: padIn, y: curHeaderY + 0.06, w: textW, h: subH,
+            x: padIn, y: subY, w: textW, h: subH,
             fontSize: 13, color: palette.subtitleColor,
             fontFace: fontPairing.bodyFont,
+            lineSpacingMultiple: 1.35,
             margin: 0,
           });
-          curHeaderY += subH + 0.08;
+          curHeaderY = subY + subH;
         }
 
         const textParts = [];
@@ -1672,30 +1799,8 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         if (textParts.length > 0) {
           slide.addText(textParts, {
-            x: padIn, y: curHeaderY + 0.22, w: textW, h: slideHIn - curHeaderY - padIn * 1.3,
+            x: padIn, y: curHeaderY + 0.18, w: textW, h: slideHIn - curHeaderY - padIn * 1.3,
             valign: 'top', margin: 0,
-          });
-        }
-
-        if (s.images.length > 0) {
-          const imgPath = s.images[0].url;
-          // Full-Bleed Vertical Photographic Slab: Flush to top, bottom, and right edge
-          const imgW = slideWIn * 0.55;
-          const imgX = slideWIn - imgW;
-
-          slide.addImage({
-            path: imgPath,
-            x: imgX,
-            y: 0,
-            w: imgW,
-            h: slideHIn,
-            sizing: { type: 'cover', w: imgW, h: slideHIn },
-          });
-
-          // Hairline vertical datum divider
-          slide.addShape(pptx.ShapeType.line, {
-            x: imgX, y: 0, w: 0, h: slideHIn,
-            line: { color: '1A202C', width: 1 },
           });
         }
         break;
@@ -2116,6 +2221,21 @@ export async function uploadPptxToGoogleSlides(pptxPath, title) {
     });
   } catch (err) {
     console.warn('[WARN] Could not set public permission:', err.message);
+  }
+
+  // Export rendered PDF directly from Drive for verification
+  try {
+    const pdfRes = await fetch(`https://www.googleapis.com/drive/v3/files/${presentationId}/export?mimeType=application/pdf&supportsAllDrives=true`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (pdfRes.ok) {
+      const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+      const pdfPath = pptxPath.replace(/\.pptx$/i, '.pdf');
+      fs.writeFileSync(pdfPath, pdfBuf);
+      console.log(`[SUCCESS] Exported Google Slides PDF -> ${pdfPath}`);
+    }
+  } catch (err) {
+    console.warn('[WARN] Could not export PDF:', err.message);
   }
 
   const editUrl = `https://docs.google.com/presentation/d/${presentationId}/edit`;

@@ -160,6 +160,18 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
   4. *Muddy / Lifted Blacks*: Optical flare toe and atmospheric bounce in shadows (never crushed #000000).
   5. *Authentic Film Grain*: Organic silver halide grain to give tactile familiarity to the viewer.
 
+### Commandment 5U: True Full-Bleed Spatial Canvas & Directional Scrim Invariant
+- **The Defect**: Chopping a 16:9 / 21:9 photograph into an artificial 50/50 split column and filling the other half with a flat digital `#070B14` box. This destroys the organic negative space and creates jarring artificial dividing lines.
+- **The Standard**: Photographic assets must span 100% of the canvas edge-to-edge (`w: 100%, h: 100%`). Copy is laid out directly over the image's low-frequency negative space using an invisible directional optical scrim (94% opacity rolling down to 0% across 70% width). Zero vertical dividing lines.
+
+### Commandment 5V: Optical Typography Craft Engine (Kerning, Tracking, Vertical Leading & Purity)
+- **The Defect**: Cluttered decorative underline bars, kickers colliding into display headlines with only 3pt gaps, loose display leading that breaks optical word shapes, and awkward multi-line metadata footers.
+- **The Standard**:
+  1. *Architectural Kicker Gap*: Maintain 0.16"–0.24" (12pt–17pt) intentional vertical buffer between kicker and headline so ascenders never collide.
+  2. *Sculptural Display Tracking*: Apply tight negative tracking (`-1.0` to `-1.5pt` / `-0.025em` to `-0.04em`) and compact leading (`1.05`–`1.08`) to monumental serif headlines to condense optical mass.
+  3. *Subtitle Harmonic Proximity*: Anchor subtitles 0.14"–0.24" below the title with line length constrained to $\le 55$ characters per line (`w: 5.5"`).
+  4. *Zero Decorative Scaffolding*: Purge all decorative underline rectangles. Format metadata footers as single unbroken lines with spaced bullets (` • `) and wide tracking. Suppress all chrome on cover slides.
+
 ### Commandment 6: Label Clearly
 - **The Rule**: Maintain clear orientation markers without cluttering the canvas.
 - **Structure**:

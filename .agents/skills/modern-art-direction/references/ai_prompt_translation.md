@@ -105,6 +105,15 @@ An image generated for an editorial presentation or pitch deck is never an isola
   ```
   This creates microscopic optical drag on moving edges (hair, fabric, camera pan), immediately breaking the synthetic hyper-sharp "AI render look" and imbuing the frame with genuine film mechanics.
 
+### 5. Composing Negative Space for Full-Bleed Typographic Overlays
+* **The Full-Bleed Spatial Canvas**: Photographs must be composed to span 100% of the canvas edge-to-edge. Never design images assuming they will be cropped or boxed into a split layout.
+* **The 35/65 Asymmetric Flank**:
+  - Anchor the hero subject (car, monolith, actor, product) within the right 35% of the frame.
+  - The remaining 65% of the frame must be a calm, continuous, low-frequency atmospheric environment (e.g., misty wet concrete, shadowed lime plaster, deep shallow depth-of-field background) providing a natural, organic floor for typographic placement.
+  - Leading lines and light falloff must slope inward toward the copy zone to create an architectural invitation.
+* **Text Separation via Directional Optical Scrim**:
+  - In presentation compilers (PPTX/HTML), overlay an invisible non-linear directional scrim (fading from 94% opacity on the copy margin to 0% transparency over the focal subject) so text achieves WCAG AAA legibility while the photographic scene remains fully continuous underneath.
+
 ---
 
 ## 2.7 The Section Exemplification Engine: Translating Assertions into Visual Proof

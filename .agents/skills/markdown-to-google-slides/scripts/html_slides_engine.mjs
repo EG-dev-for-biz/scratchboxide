@@ -627,7 +627,17 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
     .hero-content {
       position: relative;
       z-index: 3;
-      max-width: 1200px;
+      max-width: 1100px;
+    }
+
+    .kicker-badge {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      margin-bottom: 22px;
     }
 
     .hero-title {
@@ -635,33 +645,40 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
       font-style: var(--font-display-style);
       font-size: 64px;
       font-weight: 700;
-      line-height: 1.08;
+      line-height: 1.06;
       color: #fff;
-      margin-bottom: 24px;
-      letter-spacing: var(--title-letter-spacing);
+      margin-bottom: 22px;
+      letter-spacing: -0.025em;
     }
 
     .hero-subtitle {
-      font-size: 24px;
-      line-height: 1.5;
+      font-family: var(--font-body);
+      font-size: 20px;
+      line-height: 1.45;
       color: var(--subtitle-color);
-      margin-bottom: 40px;
+      max-width: 680px;
+      margin-bottom: 48px;
     }
 
     .hero-meta {
       font-family: var(--font-mono);
       display: flex;
-      gap: 40px;
-      border-top: 1px solid rgba(255, 255, 255, 0.15);
-      padding-top: 24px;
-      font-size: 13px;
-      letter-spacing: 0.5px;
-      color: rgba(255, 255, 255, 0.7);
+      gap: 32px;
+      font-size: 11.5px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #64748b;
+    }
+
+    .hero-meta span {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .hero-meta strong {
-      color: #fff;
-      margin-left: 6px;
+      color: #94a3b8;
+      margin-left: 4px;
     }
 
     /* Adaptive Card Row */
