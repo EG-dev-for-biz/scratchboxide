@@ -179,6 +179,16 @@ The interactive web demo ([`omnispatial_synthesis_demo.html`](file:///Users/elig
    - **2.5x Detail Loupe**: Magnifying glass tool for close-up examination of masonry joints, bronze mullions, and window reflections.
    - **3D Free Orbit Viewport**: Interactive `<model-viewer>` allowing users to orbit, zoom, and inspect the binary `.glb` model in real-time 3D.
 
+### 7.5 Universal Asset Resolution & Multi-Tier Fallback Cascade (Resolution of Black Screen Issue)
+- **Root-Cause Analysis**:
+  - The demo HTML file resides at `public/demos/showcase/omnispatial_synthesis_demo.html`.
+  - When referencing assets via root-relative URLs (`/renders/...` or `/models/...`), browsers attempting to open the file directly via `file:///` protocol resolve `/` to the root of the user's hard drive (`file:///renders/...`), which does not exist and throws `ERR_FILE_NOT_FOUND`.
+  - Similarly, when served by web servers rooted at the repository directory, `/renders/...` 404s because the physical directory is `public/renders/...`.
+- **Architectural Solution**:
+  1. Converted all hardcoded `src` attributes and data URLs to relative paths (`../../renders/...` and `../../models/...`), allowing the browser to resolve cleanly up two directories from `showcase/` into `public/`.
+  2. Implemented `setPlateSrc(imgElement, rawPath)` and `setModelViewerSrc(viewerElement, rawPath)` with an automatic fallback cascade (`../../...`, `/...`, `/public/...`, `../...`, `...`).
+  3. Validated that all 18 rendered beauty/albedo/normal/depth images and binary `.glb` models resolve with 100% success from the demo directory.
+
 ---
 
 ## 8. Summary of Lessons Learned & Skill Reusability
@@ -187,3 +197,5 @@ The interactive web demo ([`omnispatial_synthesis_demo.html`](file:///Users/elig
 2. **Preserve Contextual Tiles**: Do not delete the entire scene; preserve the surrounding block with baked photogrammetric vertex colors to ground the hero building in its authentic environment.
 3. **Excise the Curtain Wall**: Photogrammetry always fails at the street level; the ground floor must always be procedurally reconstructed with deep porticos, clear glazing, and botanical assets.
 4. **Enforce Native C++20 for Geometry**: Avoid client-side Three.js primitives to guarantee high-performance, watertight meshes capable of exceeding 500,000 triangles in under 200 milliseconds.
+5. **Universal Relative Asset Resolution**: Demos and showcases must never rely on root-relative `/` paths; always use relative or cascaded multi-tier URL resolvers (`../../renders/...`) so files can be opened seamlessly across `file:///`, local dev servers, and production web servers.
+

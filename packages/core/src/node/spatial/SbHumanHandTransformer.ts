@@ -438,9 +438,9 @@ export class SbHumanHandTransformer {
                 Rw: 0.0090,
                 Rh: 0.0075,
                 hAxis: -0.0015,
-                nailRootT: 0.0327 - 0.0150,
-                nailFreeT: 0.0327 - 0.0025,
-                nailHalfW: 0.0068
+                nailRootT: 0.0327 - 0.0165,
+                nailFreeT: 0.0327 - 0.0055,
+                nailHalfW: 0.0062
             },
             {
                 digitIdx: 1, // Index
@@ -452,9 +452,9 @@ export class SbHumanHandTransformer {
                 Rw: 0.0068,
                 Rh: 0.0055,
                 hAxis: -0.0012,
-                nailRootT: 0.0254 - 0.0135,
-                nailFreeT: 0.0254 - 0.0020,
-                nailHalfW: 0.0048
+                nailRootT: 0.0254 - 0.0145,
+                nailFreeT: 0.0254 - 0.0048,
+                nailHalfW: 0.0044
             },
             {
                 digitIdx: 2, // Middle
@@ -466,9 +466,9 @@ export class SbHumanHandTransformer {
                 Rw: 0.0070,
                 Rh: 0.0058,
                 hAxis: -0.0012,
-                nailRootT: 0.0277 - 0.0140,
-                nailFreeT: 0.0277 - 0.0020,
-                nailHalfW: 0.0050
+                nailRootT: 0.0277 - 0.0150,
+                nailFreeT: 0.0277 - 0.0050,
+                nailHalfW: 0.0046
             },
             {
                 digitIdx: 3, // Ring
@@ -480,9 +480,9 @@ export class SbHumanHandTransformer {
                 Rw: 0.0065,
                 Rh: 0.0052,
                 hAxis: -0.0012,
-                nailRootT: 0.0254 - 0.0135,
-                nailFreeT: 0.0254 - 0.0020,
-                nailHalfW: 0.0048
+                nailRootT: 0.0254 - 0.0145,
+                nailFreeT: 0.0254 - 0.0048,
+                nailHalfW: 0.0044
             },
             {
                 digitIdx: 4, // Pinky
@@ -494,9 +494,9 @@ export class SbHumanHandTransformer {
                 Rw: 0.0058,
                 Rh: 0.0048,
                 hAxis: -0.0010,
-                nailRootT: 0.0211 - 0.0120,
-                nailFreeT: 0.0211 - 0.0018,
-                nailHalfW: 0.0042
+                nailRootT: 0.0211 - 0.0125,
+                nailFreeT: 0.0211 - 0.0040,
+                nailHalfW: 0.0038
             }
         ];
 
@@ -674,42 +674,54 @@ export class SbHumanHandTransformer {
 
                 // Distal Segment Sculpting
                 if (t > cfg.tMax - 0.018 && Math.hypot(h - cfg.hAxis, w) < cfg.Rw * 1.8) {
-                    // 1. Organic Parabolic Tapering (C^2 Continuous Dome, Zero Blunt Stumps)
-                    const xi = Math.min(1.0, Math.max(0.0, (t - (cfg.tMax - 0.015)) / 0.015));
-                    const taperProfileW = Math.sqrt(Math.max(0.10, 1.0 - 0.88 * Math.pow(xi, 2.0)));
-                    const taperProfileH = Math.sqrt(Math.max(0.12, 1.0 - 0.82 * Math.pow(xi, 2.0)));
+                    // 1. Organic C^2 Continuous Fingertip Apex Dome (Zero Flat Cutoffs, True Spherical/Ellipsoidal Curvature)
+                    const tDome = cfg.tMax - 0.0075;
+                    let taperProfileW = 1.0;
+                    let taperProfileH = 1.0;
+
+                    if (t > tDome) {
+                        const xiDome = Math.min(1.0, Math.max(0.0, (t - tDome) / (cfg.tMax - tDome)));
+                        const rDome = Math.sqrt(Math.max(0.001, 1.0 - xiDome * xiDome));
+                        taperProfileW = 0.35 + 0.65 * rDome;
+                        taperProfileH = (h >= cfg.hAxis) ? (0.28 + 0.72 * rDome) : (0.42 + 0.58 * rDome);
+                    } else {
+                        // Gentle organic waisting prior to the distal apex dome
+                        const xiShaft = Math.max(0.0, (t - (cfg.tMax - 0.016)) / 0.016);
+                        taperProfileW = 1.0 - 0.04 * xiShaft;
+                        taperProfileH = 1.0 - 0.05 * xiShaft;
+                    }
 
                     let wNew = w * (1.0 - (1.0 - taperProfileW) * strength);
                     let hNew = cfg.hAxis + (h - cfg.hAxis) * (1.0 - (1.0 - taperProfileH) * strength);
                     let tNew = t;
 
                     // 2. Volar Tactile Pulp Pad (Anatomical Fleshy Teardrop Bulb)
-                    if (h < cfg.hAxis && t > cfg.tMax - 0.016 && t < cfg.tMax - 0.001) {
-                        const xiPad = Math.min(1.0, Math.max(0.0, (t - (cfg.tMax - 0.016)) / 0.015));
-                        const padW = Math.max(0.0, 1.0 - Math.pow(wNew / (cfg.Rw * 0.90), 2.0));
-                        // Teardrop swelling peaked at 55% of pad length
-                        const padProfile = Math.sin(Math.PI * Math.pow(xiPad, 0.85));
-                        hNew -= 0.0028 * padProfile * padW * strength;
+                    if (h < cfg.hAxis && t > cfg.tMax - 0.016 && t < cfg.tMax - 0.002) {
+                        const xiPad = Math.min(1.0, Math.max(0.0, (t - (cfg.tMax - 0.016)) / 0.014));
+                        const padW = Math.max(0.0, 1.0 - Math.pow(wNew / (cfg.Rw * 0.95), 2.0));
+                        // Teardrop swelling peaked at 60% of pad length curving forward into apex dome
+                        const padProfile = Math.sin(Math.PI * Math.pow(xiPad, 0.80));
+                        hNew -= 0.0034 * padProfile * padW * strength;
                     }
 
                     // 3. 3D Transverse C-Curve Vaulted Keratin Nail Architecture
                     if (h > cfg.hAxis) {
-                        // Nail Bed Zone
+                        // Nail Bed Zone (Recessed into dorsal surface, framed by lateral paronychium folds)
                         if (t >= cfg.nailRootT && t <= cfg.nailFreeT) {
                             const normW = Math.abs(wNew) / cfg.nailHalfW;
                             if (normW <= 1.0) {
                                 // 3D Transverse C-Curve:
-                                // Center of nail is vaulted (+0.60mm), lateral borders curve down (-0.90mm) into sulcus
-                                const cCurve = (0.00060 * (1.0 - Math.pow(normW, 2.0)) - 0.00090 * Math.pow(normW, 3.5)) * strength;
+                                // Center of nail is vaulted (+0.65mm), lateral borders curve down (-0.85mm) into sulcus
+                                const cCurve = (0.00065 * (1.0 - Math.pow(normW, 2.0)) - 0.00085 * Math.pow(normW, 3.5)) * strength;
                                 hNew += cCurve;
-                            } else if (normW <= 1.15) {
+                            } else if (normW <= 1.18) {
                                 // Deep lateral ungual sulcus groove right beside the nail plate
-                                const sulcusDist = (normW - 1.0) / 0.15;
-                                hNew -= 0.00055 * Math.sin(Math.PI * sulcusDist) * strength;
-                            } else if (normW <= 1.48) {
-                                // Paronychium: Fleshy lateral skin fold flanking nail (+0.80mm)
-                                const foldDist = (normW - 1.15) / 0.33;
-                                hNew += 0.00080 * Math.sin(Math.PI * foldDist) * strength;
+                                const sulcusDist = (normW - 1.0) / 0.18;
+                                hNew -= 0.00060 * Math.sin(Math.PI * sulcusDist) * strength;
+                            } else if (normW <= 1.55) {
+                                // Paronychium: Fleshy lateral skin fold flanking nail (+0.85mm)
+                                const foldDist = (normW - 1.18) / 0.37;
+                                hNew += 0.00085 * Math.sin(Math.PI * foldDist) * strength;
                             }
                         }
 
@@ -718,16 +730,16 @@ export class SbHumanHandTransformer {
                             const normW = Math.abs(wNew) / (cfg.nailHalfW + 0.0012);
                             if (normW <= 1.0) {
                                 const cutDist = (t - (cfg.nailRootT - 0.0028)) / 0.0028;
-                                hNew += 0.00065 * Math.sin(Math.PI * cutDist) * (1.0 - 0.3 * normW) * strength;
+                                hNew += 0.00070 * Math.sin(Math.PI * cutDist) * (1.0 - 0.25 * normW) * strength;
                             }
                         }
 
                         // Hyponychium (Free Edge Undercut Shelf):
-                        // At nailFreeT, nail plate lifts above bed with visible undercut
-                        if (t >= cfg.nailFreeT && t <= cfg.nailFreeT + 0.0022) {
+                        // At nailFreeT, nail plate lifts above bed before dropping to the forward-reaching distal pulp pad
+                        if (t >= cfg.nailFreeT && t <= cfg.nailFreeT + 0.0020) {
                             const normW = Math.abs(wNew) / cfg.nailHalfW;
                             if (normW <= 1.0) {
-                                const freeDist = (t - cfg.nailFreeT) / 0.0022;
+                                const freeDist = (t - cfg.nailFreeT) / 0.0020;
                                 hNew -= 0.00045 * (1.0 - freeDist) * (1.0 - normW * normW) * strength;
                             }
                         }
@@ -923,97 +935,69 @@ export class SbHumanHandTransformer {
         const ormBuf = Buffer.alloc(width * height * 4);
 
         // =========================================================================
-        // 1. Seamless Periodic Sulci Cutis Cellular Tile (512x512)
-        // Biophysical micro-facets (30-50 um scale) providing authentic living skin texture
-        // with sharp micro-furrows, polygonal domes, and tangent-space micro-normals.
+        // 1. Photographic Macro Precomputation (Tangent-Space Normals & Cavity Maps)
+        // Direct conversion of macro reference photographs into continuous biophysical
+        // tangent-space normal maps and high-frequency cavity maps.
         // =========================================================================
-        const SULCI_SIZE = 512;
-        const SULCI_CELLS = 48;
-        const sulciNormals = new Float32Array(SULCI_SIZE * SULCI_SIZE * 3);
-        const sulciCavity = new Float32Array(SULCI_SIZE * SULCI_SIZE);
-        {
-            const seeds = new Float32Array(SULCI_CELLS * SULCI_CELLS * 2);
-            for (let cy = 0; cy < SULCI_CELLS; cy++) {
-                for (let cx = 0; cx < SULCI_CELLS; cx++) {
-                    const idx = (cy * SULCI_CELLS + cx) * 2;
-                    const n = Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453;
-                    const m = Math.cos(cx * 37.112 + cy * 53.63) * 24634.63;
-                    seeds[idx + 0] = cx + 0.15 + 0.70 * ((n % 1.0 + 1.0) % 1.0);
-                    seeds[idx + 1] = cy + 0.15 + 0.70 * ((m % 1.0 + 1.0) % 1.0);
-                }
+        const precomputeMacroNormals = (img: { data: Buffer | Uint8Array; width: number; height: number }, strength: number = 2.8) => {
+            const W = img.width, H = img.height;
+            const lum = new Float32Array(W * H);
+            for (let i = 0; i < W * H; i++) {
+                lum[i] = (img.data[i * 4] * 0.299 + img.data[i * 4 + 1] * 0.587 + img.data[i * 4 + 2] * 0.114) / 255.0;
             }
-            const heightMap = new Float32Array(SULCI_SIZE * SULCI_SIZE);
-            for (let y = 0; y < SULCI_SIZE; y++) {
-                const fy = (y / SULCI_SIZE) * SULCI_CELLS;
-                const iy = Math.floor(fy);
-                for (let x = 0; x < SULCI_SIZE; x++) {
-                    const fx = (x / SULCI_SIZE) * SULCI_CELLS;
-                    const ix = Math.floor(fx);
-                    let d1 = 999.0, d2 = 999.0;
-                    for (let dy = -1; dy <= 1; dy++) {
-                        const cy = (iy + dy + SULCI_CELLS) % SULCI_CELLS;
-                        for (let dx = -1; dx <= 1; dx++) {
-                            const cx = (ix + dx + SULCI_CELLS) % SULCI_CELLS;
-                            const sx = seeds[(cy * SULCI_CELLS + cx) * 2 + 0] - cx;
-                            const sy = seeds[(cy * SULCI_CELLS + cx) * 2 + 1] - cy;
-                            const dist = Math.hypot(fx - (ix + dx + sx), fy - (iy + dy + sy));
-                            if (dist < d1) { d2 = d1; d1 = dist; }
-                            else if (dist < d2) { d2 = dist; }
-                        }
-                    }
-                    const groove = Math.min(1.0, (d2 - d1) * 2.8);
-                    const dome = Math.sqrt(Math.max(0.0, 1.0 - Math.min(1.0, d1 * 1.6)));
-                    const hVal = dome * 0.65 + groove * 0.35;
-                    heightMap[y * SULCI_SIZE + x] = hVal;
-                    sulciCavity[y * SULCI_SIZE + x] = Math.pow(groove, 0.65);
-                }
-            }
-            // Sobel micro-normals for sulci cutis
-            for (let y = 0; y < SULCI_SIZE; y++) {
-                const yPrev = (y - 1 + SULCI_SIZE) % SULCI_SIZE;
-                const yNext = (y + 1) % SULCI_SIZE;
-                for (let x = 0; x < SULCI_SIZE; x++) {
-                    const xPrev = (x - 1 + SULCI_SIZE) % SULCI_SIZE;
-                    const xNext = (x + 1) % SULCI_SIZE;
-                    const dx = (heightMap[y * SULCI_SIZE + xNext] - heightMap[y * SULCI_SIZE + xPrev]) * 1.8;
-                    const dy = (heightMap[yNext * SULCI_SIZE + x] - heightMap[yPrev * SULCI_SIZE + x]) * 1.8;
+            const normals = new Float32Array(W * H * 3);
+            const cavity = new Float32Array(W * H);
+            for (let y = 0; y < H; y++) {
+                const y0 = (y - 1 + H) % H;
+                const y1 = (y + 1) % H;
+                for (let x = 0; x < W; x++) {
+                    const x0 = (x - 1 + W) % W;
+                    const x1 = (x + 1) % W;
+                    const dx = (lum[y * W + x1] - lum[y * W + x0]) * strength;
+                    const dy = (lum[y1 * W + x] - lum[y0 * W + x]) * strength;
                     const len = Math.hypot(dx, dy, 1.0);
-                    const outI = (y * SULCI_SIZE + x) * 3;
-                    sulciNormals[outI + 0] = -dx / len;
-                    sulciNormals[outI + 1] = -dy / len;
-                    sulciNormals[outI + 2] = 1.0 / len;
+                    const idx = (y * W + x) * 3;
+                    normals[idx + 0] = -dx / len;
+                    normals[idx + 1] = -dy / len;
+                    normals[idx + 2] = 1.0 / len;
+                    cavity[y * W + x] = Math.max(0, Math.min(1, 0.5 + 2.0 * (0.58 - lum[y * W + x])));
                 }
             }
-        }
+            return { normals, cavity, width: W, height: H };
+        };
 
-        const sampleSulci = (u: number, v: number, freq: number) => {
-            const uu = ((u * freq) % 1.0 + 1.0) % 1.0;
-            const vv = ((v * freq) % 1.0 + 1.0) % 1.0;
-            const px = uu * (SULCI_SIZE - 1);
-            const py = vv * (SULCI_SIZE - 1);
+        const dorsalMacro = precomputeMacroNormals(dorsalImg, 2.5);
+        const nailMacro = precomputeMacroNormals(nailImg, 3.2);
+        const palmMacro = precomputeMacroNormals(palmImg, 2.8);
+
+        const sampleBilinearNormal = (macro: { normals: Float32Array; cavity: Float32Array; width: number; height: number }, u: number, v: number) => {
+            const uu = (u % 1.0 + 1.0) % 1.0;
+            const vv = (v % 1.0 + 1.0) % 1.0;
+            const px = uu * (macro.width - 1);
+            const py = vv * (macro.height - 1);
             const x0 = Math.floor(px);
             const y0 = Math.floor(py);
-            const x1 = (x0 + 1) % SULCI_SIZE;
-            const y1 = (y0 + 1) % SULCI_SIZE;
+            const x1 = (x0 + 1) % macro.width;
+            const y1 = (y0 + 1) % macro.height;
             const fx = px - x0;
             const fy = py - y0;
 
-            const i00 = (y0 * SULCI_SIZE + x0) * 3;
-            const i10 = (y0 * SULCI_SIZE + x1) * 3;
-            const i01 = (y1 * SULCI_SIZE + x0) * 3;
-            const i11 = (y1 * SULCI_SIZE + x1) * 3;
+            const i00 = (y0 * macro.width + x0) * 3;
+            const i10 = (y0 * macro.width + x1) * 3;
+            const i01 = (y1 * macro.width + x0) * 3;
+            const i11 = (y1 * macro.width + x1) * 3;
 
-            const nx = (sulciNormals[i00 + 0] * (1 - fx) + sulciNormals[i10 + 0] * fx) * (1 - fy) +
-                       (sulciNormals[i01 + 0] * (1 - fx) + sulciNormals[i11 + 0] * fx) * fy;
-            const ny = (sulciNormals[i00 + 1] * (1 - fx) + sulciNormals[i10 + 1] * fx) * (1 - fy) +
-                       (sulciNormals[i01 + 1] * (1 - fx) + sulciNormals[i11 + 1] * fx) * fy;
-            const nz = (sulciNormals[i00 + 2] * (1 - fx) + sulciNormals[i10 + 2] * fx) * (1 - fy) +
-                       (sulciNormals[i01 + 2] * (1 - fx) + sulciNormals[i11 + 2] * fx) * fy;
+            const nx = (macro.normals[i00 + 0] * (1 - fx) + macro.normals[i10 + 0] * fx) * (1 - fy) +
+                       (macro.normals[i01 + 0] * (1 - fx) + macro.normals[i11 + 0] * fx) * fy;
+            const ny = (macro.normals[i00 + 1] * (1 - fx) + macro.normals[i10 + 1] * fx) * (1 - fy) +
+                       (macro.normals[i01 + 1] * (1 - fx) + macro.normals[i11 + 1] * fx) * fy;
+            const nz = (macro.normals[i00 + 2] * (1 - fx) + macro.normals[i10 + 2] * fx) * (1 - fy) +
+                       (macro.normals[i01 + 2] * (1 - fx) + macro.normals[i11 + 2] * fx) * fy;
 
-            const c00 = sulciCavity[y0 * SULCI_SIZE + x0];
-            const c10 = sulciCavity[y0 * SULCI_SIZE + x1];
-            const c01 = sulciCavity[y1 * SULCI_SIZE + x0];
-            const c11 = sulciCavity[y1 * SULCI_SIZE + x1];
+            const c00 = macro.cavity[y0 * macro.width + x0];
+            const c10 = macro.cavity[y0 * macro.width + x1];
+            const c01 = macro.cavity[y1 * macro.width + x0];
+            const c11 = macro.cavity[y1 * macro.width + x1];
             const cav = (c00 * (1 - fx) + c10 * fx) * (1 - fy) + (c01 * (1 - fx) + c11 * fx) * fy;
 
             return { nx, ny, nz, cav };
@@ -1023,11 +1007,11 @@ export class SbHumanHandTransformer {
         // 2. Mathematically Grounded Fingernail Centers & Proportions
         // =========================================================================
         const nails = [
-            { name: 'Thumb',  u: 0.4260, v: 0.3991, angle: -33.37 * Math.PI / 180, w: 0.026, l: 0.032 },
-            { name: 'Index',  u: 0.2958, v: 0.1211, angle:   5.38 * Math.PI / 180, w: 0.019, l: 0.030 },
-            { name: 'Middle', u: 0.2015, v: 0.0846, angle:   2.34 * Math.PI / 180, w: 0.019, l: 0.031 },
-            { name: 'Ring',   u: 0.1286, v: 0.1455, angle:  -3.10 * Math.PI / 180, w: 0.019, l: 0.030 },
-            { name: 'Pinky',  u: 0.0509, v: 0.2824, angle: -11.31 * Math.PI / 180, w: 0.016, l: 0.027 }
+            { name: 'Thumb',  u: 0.4260, v: 0.4290, angle: -33.37 * Math.PI / 180, w: 0.026, l: 0.026 },
+            { name: 'Index',  u: 0.2958, v: 0.1360, angle:   5.38 * Math.PI / 180, w: 0.021, l: 0.025 },
+            { name: 'Middle', u: 0.2015, v: 0.1005, angle:   2.34 * Math.PI / 180, w: 0.022, l: 0.026 },
+            { name: 'Ring',   u: 0.1286, v: 0.1600, angle:  -3.10 * Math.PI / 180, w: 0.021, l: 0.025 },
+            { name: 'Pinky',  u: 0.0515, v: 0.2880, angle: -11.31 * Math.PI / 180, w: 0.017, l: 0.021 }
         ];
 
         const evaluateNail = (u: number, v: number, nail: typeof nails[0]) => {
@@ -1125,7 +1109,7 @@ export class SbHumanHandTransformer {
             return { dist: Math.hypot(px - projX, py - projY), dx: px - projX, dy: py - projY };
         };
 
-        console.log('  -> Synthesizing multi-frequency biophysical PBR textures with Sulci Cutis and Translucent Keratin...');
+        console.log(`[PBR Baking] Synthesizing ${width}x${height} hyper-realistic photographic PBR maps...`);
 
         for (let y = 0; y < height; y++) {
             const v = y / (height - 1);
@@ -1133,32 +1117,49 @@ export class SbHumanHandTransformer {
                 const u = x / (width - 1);
                 const outIdx = (y * width + x) * 4;
 
+                let nx = 128;
+                let ny = 128;
+                let nz = 255;
+
                 if (u < 0.50) {
                     // ==========================================
-                    // --- DORSAL ISLAND (Fitzpatrick IV/V) ---
+                    // --- DORSAL ISLAND (Photographic Sheet Mapping) ---
                     // ==========================================
                     const normU = u / 0.50;
 
-                    // 1. Base Melanin Sheet calibrated strictly to User Reference:
-                    // Dorsal carpus & metacarpus: [214, 156, 126] (warm golden-amber)
-                    // Finger shafts: [218, 160, 130]
-                    // Distal fingertip apex: [228, 168, 142] (warm capillary flush)
-                    const fingerFactor = smoothstep(0.45, 0.18, v);
+                    // 1. Continuous Base Melanin Field Calibrated to User Photo
+                    // Metacarpus: [196, 103, 59], Knuckles: [192, 104, 70], Fingers: [181, 93, 59], Tips: [212, 128, 86]
+                    const fingerFactor = smoothstep(0.46, 0.18, v);
                     const tipFactor = smoothstep(0.18, 0.06, v);
 
-                    let baseR = 214 * (1.0 - fingerFactor) + 218 * fingerFactor;
-                    let baseG = 156 * (1.0 - fingerFactor) + 160 * fingerFactor;
-                    let baseB = 126 * (1.0 - fingerFactor) + 130 * fingerFactor;
+                    let baseR = 196 * (1.0 - fingerFactor) + 181 * fingerFactor;
+                    let baseG = 103 * (1.0 - fingerFactor) +  93 * fingerFactor;
+                    let baseB =  59 * (1.0 - fingerFactor) +  59 * fingerFactor;
 
-                    baseR = baseR * (1.0 - tipFactor) + 228 * tipFactor;
-                    baseG = baseG * (1.0 - tipFactor) + 168 * tipFactor;
-                    baseB = baseB * (1.0 - tipFactor) + 142 * tipFactor;
+                    baseR = baseR * (1.0 - tipFactor) + 212 * tipFactor;
+                    baseG = baseG * (1.0 - tipFactor) + 128 * tipFactor;
+                    baseB = baseB * (1.0 - tipFactor) +  86 * tipFactor;
 
-                    // 2. High-Frequency Sulci Cutis (Tileable Micro-Facets at 200 cycles)
-                    const sulci = sampleSulci(normU, v, 200.0);
+                    // 2. Sectional Macro Photographic Sheet Projection
+                    let uSheet = normU * 1.5 + 0.10;
+                    let vSheet = (v - 0.40) / 0.56 * 1.4;
+                    if (v <= 0.40) {
+                        uSheet = normU * 2.2;
+                        vSheet = (v / 0.40) * 1.8;
+                    }
 
-                    // 3. Knuckle Melanin Hyper-Pigmentation Halos & Reticular Micro-Creases
-                    // Authentic Fitzpatrick IV/V burnt amber tones matching reference photo
+                    const dorsalSample = sampleBilinear(dorsalImg, uSheet, vSheet);
+                    const dorsalNorm = sampleBilinearNormal(dorsalMacro, uSheet, vSheet);
+
+                    // Organic micro-luminance modulation (preserves true biological pores and micro-grain)
+                    const dLum = (dorsalSample[0] * 0.299 + dorsalSample[1] * 0.587 + dorsalSample[2] * 0.114) / 156.0;
+                    const macroMod = 0.90 + 0.20 * clamp(dLum, 0.75, 1.25);
+
+                    let r = clamp(Math.round(baseR * macroMod), 0, 255);
+                    let g = clamp(Math.round(baseG * macroMod), 0, 255);
+                    let b = clamp(Math.round(baseB * macroMod), 0, 255);
+
+                    // 3. Knuckle Melanin Hyper-Pigmentation & Organic Creases
                     let knuckleDarkening = 0.0;
                     let creaseDisplacement = 0.0;
                     for (const kc of knuckleCenters) {
@@ -1166,170 +1167,123 @@ export class SbHumanHandTransformer {
                         const dv = v - kc.v;
                         const dNorm = Math.hypot(du / (kc.r * 0.85), dv / kc.r);
                         if (dNorm < 1.0) {
-                            // Soft Gaussian melanin halo
                             const halo = Math.exp(-dNorm * dNorm * 2.2);
                             knuckleDarkening = Math.max(knuckleDarkening, halo * kc.melaninBoost);
 
-                            // Organic Langer-line micro-creases (2-3 curved anatomical furrows)
                             const duNorm = du / (kc.r * 0.75);
                             if (Math.abs(duNorm) < 1.0) {
                                 const cCurve = 0.0016 * (1.0 - duNorm * duNorm);
-                                for (const cOffset of [-0.0042, 0.0, 0.0042]) {
+                                for (const cOffset of [-0.0035, 0.0, 0.0035]) {
                                     const cDist = Math.abs(dv - cOffset - cCurve);
-                                    if (cDist < 0.0015) {
-                                        const cWeight = (1.0 - cDist / 0.0015) * (1.0 - Math.abs(duNorm));
+                                    if (cDist < 0.0014) {
+                                        const cWeight = (1.0 - cDist / 0.0014) * (1.0 - Math.abs(duNorm));
                                         creaseDisplacement = Math.max(creaseDisplacement, cWeight);
                                     }
-                                }
-                                // Reticular diamond cross-hatching micro-facets over knuckle dome
-                                const cross1 = Math.abs((dv - cCurve) * 1.6 + duNorm * 0.0045);
-                                const cross2 = Math.abs((dv - cCurve) * 1.6 - duNorm * 0.0045);
-                                const crossDist = Math.min(cross1 % 0.0035, cross2 % 0.0035);
-                                if (crossDist < 0.0009 && dNorm < 0.85) {
-                                    const reticWeight = (1.0 - crossDist / 0.0009) * (1.0 - dNorm) * 0.40;
-                                    creaseDisplacement = Math.max(creaseDisplacement, reticWeight);
                                 }
                             }
                         }
                     }
 
-                    // Rich Fitzpatrick IV/V knuckle melanin pigmentation:
-                    // Lerps towards rich burnt amber [152, 100, 72] at the knuckle dome
-                    const melaninBlend = knuckleDarkening * 0.72;
-                    let r = Math.round(baseR * (1.0 - melaninBlend) + 152 * melaninBlend - creaseDisplacement * 22);
-                    let g = Math.round(baseG * (1.0 - melaninBlend) + 100 * melaninBlend - creaseDisplacement * 20);
-                    let b = Math.round(baseB * (1.0 - melaninBlend) + 72 * melaninBlend - creaseDisplacement * 16);
-
-                    // 4. Dorsal Micro-Follicle Pores & Fine Texture (320 cycles)
-                    const poreU = normU * 320.0;
-                    const poreV = v * 320.0;
-                    const piU = Math.floor(poreU);
-                    const piV = Math.floor(poreV);
-                    const pfU = poreU - piU - 0.5;
-                    const pfV = poreV - piV - 0.5;
-                    const poreHash = Math.abs(Math.sin(piU * 127.1 + piV * 311.7) * 43758.5453) % 1.0;
-                    let poreCavity = 0.0;
-                    if (poreHash > 0.68 && v > 0.28 && v < 0.94) {
-                        const dPore = Math.hypot(pfU, pfV);
-                        if (dPore < 0.26) {
-                            poreCavity = Math.pow(1.0 - dPore / 0.26, 2.0);
-                            r = clamp(r - Math.round(14 * poreCavity), 0, 255);
-                            g = clamp(g - Math.round(10 * poreCavity), 0, 255);
-                            b = clamp(b - Math.round(7 * poreCavity), 0, 255);
-                        }
+                    // Apply knuckle melanin halo (burnt amber [184, 96, 62])
+                    if (knuckleDarkening > 0) {
+                        const kBlend = knuckleDarkening * 0.65;
+                        r = clamp(Math.round(r * (1.0 - kBlend) + 184 * kBlend - creaseDisplacement * 18), 0, 255);
+                        g = clamp(Math.round(g * (1.0 - kBlend) +  96 * kBlend - creaseDisplacement * 16), 0, 255);
+                        b = clamp(Math.round(b * (1.0 - kBlend) +  62 * kBlend - creaseDisplacement * 14), 0, 255);
                     }
 
-                    // Sulci cutis micro-cavity shading
-                    r = clamp(Math.round(r * (0.94 + sulci.cav * 0.06)), 0, 255);
-                    g = clamp(Math.round(g * (0.94 + sulci.cav * 0.06)), 0, 255);
-                    b = clamp(Math.round(b * (0.94 + sulci.cav * 0.06)), 0, 255);
-
-                    // Tangent-Space Normal Map (Micro-Sulci + Crease Deflection + Micro-Pores)
-                    let fnx = sulci.nx * 0.45 + (pfU * poreCavity * 0.50);
-                    let fny = sulci.ny * 0.45 + creaseDisplacement * 0.40 + (pfV * poreCavity * 0.50);
-                    let fnz = Math.sqrt(Math.max(0.01, 1.0 - fnx * fnx - fny * fny));
-
-                    let nx = clamp(Math.round(128 + fnx * 127), 0, 255);
-                    let ny = clamp(Math.round(128 + fny * 127), 0, 255);
-                    let nz = clamp(Math.round(fnz * 255), 0, 255);
-
-                    // PBR Material Maps: Hydrated Stratum Corneum Roughness & Micro-Cavity AO
-                    let ao = clamp(Math.round(255 - (1.0 - sulci.cav) * 45 - creaseDisplacement * 75 - poreCavity * 50), 0, 255);
-                    let roughness = clamp(Math.round(118 + knuckleDarkening * 24 + (1.0 - sulci.cav) * 18), 0, 255); // ~0.46 - 0.60
-                    let metalness = 0;
-
-                    // 5. Subcutaneous Dorsal Veins (rete venosum dorsale manus)
+                    // 4. Subcutaneous Dorsal Veins & Extensor Tendons
+                    let veinNormX = 0.0;
                     for (const vein of dorsalVeins) {
                         for (let k = 0; k < vein.length - 1; k++) {
                             const seg = distToSeg(normU, v, vein[k][0], vein[k][1], vein[k+1][0], vein[k+1][1]);
                             const veinR = 0.018;
                             if (seg.dist < veinR && v > 0.45 && v < 0.96) {
                                 const falloff = Math.pow(1.0 - seg.dist / veinR, 2.0);
-                                r = clamp(r - Math.round(18 * falloff), 0, 255);
+                                r = clamp(r - Math.round(14 * falloff), 0, 255);
                                 g = clamp(g + Math.round(2 * falloff), 0, 255);
-                                b = clamp(b + Math.round(16 * falloff), 0, 255);
+                                b = clamp(b + Math.round(14 * falloff), 0, 255);
                                 const signX = seg.dx > 0 ? 1 : -1;
-                                nx = clamp(Math.round(nx + signX * falloff * 22), 0, 255);
+                                veinNormX += signX * falloff * 0.15;
                             }
                         }
                     }
 
-                    // 6. Extensor Digitorum Tendon Cords
+                    let tendonNormX = 0.0;
                     for (const tu of tendons) {
                         const du = Math.abs(normU - tu);
                         const tendonR = 0.014;
                         if (du < tendonR && v > 0.42 && v < 0.95) {
                             const falloff = Math.pow(1.0 - du / tendonR, 2.0);
-                            r = clamp(r + Math.round(9 * falloff), 0, 255);
-                            g = clamp(g + Math.round(7 * falloff), 0, 255);
-                            b = clamp(b + Math.round(5 * falloff), 0, 255);
+                            r = clamp(r + Math.round(7 * falloff), 0, 255);
+                            g = clamp(g + Math.round(5 * falloff), 0, 255);
+                            b = clamp(b + Math.round(3 * falloff), 0, 255);
                             const signX = (normU - tu) > 0 ? 1 : -1;
-                            nx = clamp(Math.round(nx - signX * falloff * 14), 0, 255);
+                            tendonNormX -= signX * falloff * 0.10;
                         }
                     }
 
-                    // =========================================================================
-                    // 6. Hyper-Realistic Keratin Fingernail Synthesis
-                    // Translucent nail plate over vascular bed, creamy lunula half-moon, and ivory free edge
-                    // =========================================================================
+                    // 5. Tangent-Space Normal Map & PBR ORM from Photographic Macro
+                    let fnx = dorsalNorm.nx * 0.45 + veinNormX + tendonNormX;
+                    let fny = dorsalNorm.ny * 0.45 + creaseDisplacement * 0.35;
+                    let fnz = Math.sqrt(Math.max(0.01, 1.0 - fnx * fnx - fny * fny));
+
+                    nx = clamp(Math.round(128 + fnx * 127), 0, 255);
+                    ny = clamp(Math.round(128 + fny * 127), 0, 255);
+                    nz = clamp(Math.round(fnz * 255), 0, 255);
+
+                    let ao = clamp(Math.round(255 - (1.0 - dorsalNorm.cav) * 40 - creaseDisplacement * 65), 0, 255);
+                    let roughness = clamp(Math.round(148 + knuckleDarkening * 22 + (1.0 - dorsalNorm.cav) * 15), 0, 255); // ~0.58 - 0.72
+                    let metalness = 0;
+
+                    // 6. Hyper-Realistic Fingernail Sampling from Macro Reference
                     for (const nail of nails) {
                         const res = evaluateNail(u, v, nail);
                         if (res.isInside) {
-                            // Longitudinal growth striations along nail axis
-                            const striations = 1.0 + 0.035 * Math.sin(res.xn * 95.0) + 0.020 * Math.cos(res.xn * 180.0);
+                            // Map to nail photographic reference coordinates
+                            const uNail = clamp(0.50 + res.xn * 0.44, 0.04, 0.96);
+                            const vNail = clamp(0.50 - res.yn * 0.42, 0.06, 0.94);
 
-                            // A. Lunula (Proximal creamy half-moon crescent)
+                            const nailSample = sampleBilinear(nailImg, uNail, vNail);
+                            const nailNormSample = sampleBilinearNormal(nailMacro, uNail, vNail);
+
+                            // Authentic keratin tone modulated with translucent vascular bed
+                            let nailR = Math.round(nailSample[0] * 0.85 + 226 * 0.15);
+                            let nailG = Math.round(nailSample[1] * 0.85 + 162 * 0.15);
+                            let nailB = Math.round(nailSample[2] * 0.85 + 152 * 0.15);
+
+                            // A. Lunula: creamy opaque half-moon crescent
                             const dLunula = Math.pow(res.xn / 0.65, 2.0) + Math.pow((res.yn - 0.48) / 0.28, 2.0);
-                            const isLunula = dLunula < 1.0 && res.yn > 0.16;
-
-                            // B. Smile Line & Free Edge (Distal unattached plate)
-                            const ySmile = -0.42 - 0.22 * Math.sqrt(Math.max(0.0, 1.0 - res.xn * res.xn));
-                            const isFreeEdge = res.yn < ySmile;
-
-                            let nailR = 226, nailG = 162, nailB = 152; // Vascular bed capillary pink
-
-                            if (isFreeEdge) {
-                                // Free edge: opaque ivory/cream white
-                                const freeT = Math.min(1.0, (ySmile - res.yn) / 0.12);
-                                nailR = Math.round(226 * (1.0 - freeT) + 246 * freeT);
-                                nailG = Math.round(162 * (1.0 - freeT) + 242 * freeT);
-                                nailB = Math.round(152 * (1.0 - freeT) + 230 * freeT);
-                            } else if (isLunula) {
-                                // Lunula: creamy opaque ivory half-moon
+                            if (dLunula < 1.0 && res.yn > 0.16) {
                                 const lunulaT = Math.min(1.0, (1.0 - dLunula) / 0.25);
-                                nailR = Math.round(nailR * (1.0 - lunulaT * 0.85) + 242 * (lunulaT * 0.85));
-                                nailG = Math.round(nailG * (1.0 - lunulaT * 0.85) + 234 * (lunulaT * 0.85));
-                                nailB = Math.round(nailB * (1.0 - lunulaT * 0.85) + 224 * (lunulaT * 0.85));
+                                nailR = Math.round(nailR * (1.0 - lunulaT * 0.75) + 242 * (lunulaT * 0.75));
+                                nailG = Math.round(nailG * (1.0 - lunulaT * 0.75) + 234 * (lunulaT * 0.75));
+                                nailB = Math.round(nailB * (1.0 - lunulaT * 0.75) + 224 * (lunulaT * 0.75));
                             }
 
-                            // Hyponychium smile line transition seam
-                            const dSmile = Math.abs(res.yn - ySmile);
-                            if (dSmile < 0.035) {
-                                const sW = (1.0 - dSmile / 0.035);
-                                nailR = clamp(Math.round(nailR - 16 * sW), 0, 255);
-                                nailG = clamp(Math.round(nailG - 18 * sW), 0, 255);
-                                nailB = clamp(Math.round(nailB - 22 * sW), 0, 255);
+                            // B. Smile Line & Free Edge
+                            const ySmile = -0.42 - 0.22 * Math.sqrt(Math.max(0.0, 1.0 - res.xn * res.xn));
+                            if (res.yn < ySmile) {
+                                const freeT = Math.min(1.0, (ySmile - res.yn) / 0.12);
+                                nailR = Math.round(nailR * (1.0 - freeT) + 246 * freeT);
+                                nailG = Math.round(nailG * (1.0 - freeT) + 242 * freeT);
+                                nailB = Math.round(nailB * (1.0 - freeT) + 230 * freeT);
                             }
 
-                            // Modulate with fine longitudinal keratin striations
-                            nailR = clamp(Math.round(nailR * striations), 0, 255);
-                            nailG = clamp(Math.round(nailG * striations), 0, 255);
-                            nailB = clamp(Math.round(nailB * striations), 0, 255);
-
-                            // Smooth border blend into paronychium lateral fold (0.08 normalized margin)
-                            const nailBlend = clamp(res.dist / 0.08, 0.0, 1.0);
+                            // Smooth border blend into paronychium lateral fold
+                            const nailBlend = clamp(res.dist / 0.09, 0.0, 1.0);
                             r = Math.round(nailR * nailBlend + r * (1.0 - nailBlend));
                             g = Math.round(nailG * nailBlend + g * (1.0 - nailBlend));
                             b = Math.round(nailB * nailBlend + b * (1.0 - nailBlend));
 
-                            // Tangent-space normal for nail: subtle longitudinal grooves aligned with finger
+                            // Rotate photographic nail normal by nail.angle
                             const cosA = Math.cos(nail.angle);
                             const sinA = Math.sin(nail.angle);
-                            const rotNx = 0.06 * Math.cos(res.xn * 95.0) * cosA;
-                            const rotNy = 0.06 * Math.cos(res.xn * 95.0) * sinA;
+                            const rotNx = nailNormSample.nx * cosA - nailNormSample.ny * sinA;
+                            const rotNy = nailNormSample.nx * sinA + nailNormSample.ny * cosA;
 
-                            const nailNx = clamp(Math.round(128 + rotNx * 127), 0, 255);
-                            const nailNy = clamp(Math.round(128 + rotNy * 127), 0, 255);
+                            const nailNx = clamp(Math.round(128 + rotNx * 85), 0, 255);
+                            const nailNy = clamp(Math.round(128 + rotNy * 85), 0, 255);
                             nx = Math.round(nailNx * nailBlend + nx * (1.0 - nailBlend));
                             ny = Math.round(nailNy * nailBlend + ny * (1.0 - nailBlend));
 
@@ -1345,7 +1299,7 @@ export class SbHumanHandTransformer {
                             b = clamp(Math.round(b * 0.85 + 115 * 0.15), 0, 255);
                             ny = clamp(Math.round(ny + res.lip * 28), 0, 255);
                             ao = clamp(Math.round(255 - res.lip * 85), 0, 255);
-                            roughness = 110;
+                            roughness = 120;
                             break;
                         }
                     }
@@ -1373,15 +1327,15 @@ export class SbHumanHandTransformer {
 
                 } else {
                     // ==========================================
-                    // --- PALMAR ISLAND (Thick Stratum Lucidum) ---
+                    // --- PALMAR ISLAND (Photographic Friction Ridges) ---
                     // ==========================================
                     const normU = (u - 0.50) / 0.50;
-
                     const uPalm = clamp(normU, 0.0, 1.0);
                     const vPalm = clamp(v, 0.0, 1.0);
 
-                    // Sample high-frequency dermatoglyphic papillae
-                    const sulciPalm = sampleSulci(uPalm, vPalm, 220.0);
+                    // Sample photographic dermatoglyphic ridges
+                    const palmSample = sampleBilinear(palmImg, uPalm * 1.5, vPalm * 1.5);
+                    const palmNorm = sampleBilinearNormal(palmMacro, uPalm * 1.5, vPalm * 1.5);
 
                     // Authentic palmar stratum lucidum tone (pale creamy peach, lacking melanin)
                     let pr = 236;
@@ -1438,15 +1392,17 @@ export class SbHumanHandTransformer {
                         pb = clamp(Math.round(pb * (1.0 - palmCreaseDepth * 0.52) - palmCreaseDepth * 58), 0, 255);
                     }
 
-                    // Apply dermatoglyphic micro-relief
-                    pr = clamp(Math.round(pr * (0.96 + sulciPalm.cav * 0.04)), 0, 255);
-                    pg = clamp(Math.round(pg * (0.96 + sulciPalm.cav * 0.04)), 0, 255);
-                    pb = clamp(Math.round(pb * (0.96 + sulciPalm.cav * 0.04)), 0, 255);
+                    // Modulate with photographic dermatoglyphic luminance
+                    const pLum = (palmSample[0] * 0.299 + palmSample[1] * 0.587 + palmSample[2] * 0.114) / 160.0;
+                    const pMod = 0.94 + 0.12 * clamp(pLum, 0.75, 1.25);
+                    pr = clamp(Math.round(pr * pMod), 0, 255);
+                    pg = clamp(Math.round(pg * pMod), 0, 255);
+                    pb = clamp(Math.round(pb * pMod), 0, 255);
 
-                    let pnx = clamp(Math.round(128 + sulciPalm.nx * 52), 0, 255);
-                    let pny = clamp(Math.round(128 + sulciPalm.ny * 52 + palmCreaseDepth * 45), 0, 255);
-                    let pao = clamp(Math.round(255 - (1.0 - sulciPalm.cav) * 40 - palmCreaseDepth * 110), 0, 255);
-                    let pRoughness = clamp(Math.round(135 + (1.0 - sulciPalm.cav) * 16 + palmCreaseDepth * 25), 0, 255); // ~0.53 - 0.68
+                    let pnx = clamp(Math.round(128 + palmNorm.nx * 65), 0, 255);
+                    let pny = clamp(Math.round(128 + palmNorm.ny * 65 + palmCreaseDepth * 45), 0, 255);
+                    let pao = clamp(Math.round(255 - (1.0 - palmNorm.cav) * 35 - palmCreaseDepth * 110), 0, 255);
+                    let pRoughness = clamp(Math.round(135 + (1.0 - palmNorm.cav) * 15 + palmCreaseDepth * 25), 0, 255); // ~0.53 - 0.68
 
                     const pfnx = (pnx - 128) / 127.0;
                     const pfny = (pny - 128) / 127.0;

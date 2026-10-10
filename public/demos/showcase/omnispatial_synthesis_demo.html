@@ -1187,7 +1187,7 @@
             <!-- Left Pane: Authentic Raw Google Maps 3D Tile in Studio Grey Clay -->
             <div class="viewport-half" id="paneLeft">
                 <img id="imgLeft" class="plate-image" 
-                     src="/renders/omnispatial_stage1_clay/beauty.png" 
+                     src="../../renders/omnispatial_stage1_clay/beauty.png" 
                      alt="Stage 1 Authentic Google 3D Tile in Clay">
                 <div class="viewport-header-badge">
                     <span class="badge-stage-tag"><span>●</span> Stage 1: Google Photorealistic 3D Tile</span>
@@ -1199,7 +1199,7 @@
             <!-- Right Pane: Codebase Refined & Street View PBR Texturing -->
             <div class="viewport-half" id="paneRight">
                 <img id="imgRight" class="plate-image" 
-                     src="/renders/omnispatial_stage3_pbr/beauty.png" 
+                     src="../../renders/omnispatial_stage3_pbr/beauty.png" 
                      alt="Stage 3 Street View PBR Texturing">
                 <div class="viewport-header-badge">
                     <span class="badge-stage-tag" style="color: var(--accent-emerald);"><span>●</span> Stage 3: Codebase PBR Synthesis</span>
@@ -1213,12 +1213,12 @@
         <div class="wipe-slider-layout" id="wipeSliderView">
             <div class="wipe-layer-base">
                 <img id="imgWipeBase" class="plate-image" 
-                     src="/renders/omnispatial_stage3_pbr/beauty.png" 
+                     src="../../renders/omnispatial_stage3_pbr/beauty.png" 
                      alt="Wipe Base Stage 3">
             </div>
             <div class="wipe-layer-reveal" id="wipeReveal">
                 <img id="imgWipeReveal" class="plate-image" 
-                     src="/renders/omnispatial_stage1_clay/beauty.png" 
+                     src="../../renders/omnispatial_stage1_clay/beauty.png" 
                      alt="Wipe Reveal Stage 1">
                 <div class="wipe-handle" id="wipeHandle">⇄</div>
             </div>
@@ -1228,7 +1228,7 @@
         <div class="loupe-viewer-layout" id="loupeViewerLayout">
             <div class="loupe-container" id="loupeContainer">
                 <img id="imgLoupeBase" class="plate-image" 
-                     src="/renders/omnispatial_stage3_pbr/beauty.png" 
+                     src="../../renders/omnispatial_stage3_pbr/beauty.png" 
                      alt="Macro Detail Loupe Inspection">
                 <div class="loupe-glass" id="loupeGlass"></div>
                 <div class="loupe-instruction-pill">Move cursor across facade to inspect 2.5x de-lighted Indiana limestone, bronze spandrels, and Scharr normals</div>
@@ -1238,7 +1238,7 @@
         <!-- Mode D: Interactive 3D Orbit Viewport (<model-viewer> Zero Three.js) -->
         <div class="orbit-3d-layout" id="orbit3dLayout">
             <model-viewer id="mainModelViewer"
-                          src="/models/omnispatial_real_stage3_streetview_pbr.glb"
+                          src="../../models/omnispatial_real_stage3_streetview_pbr.glb"
                           alt="Empire State Building 3D District"
                           auto-rotate
                           camera-controls
@@ -1407,33 +1407,100 @@
         let currentPass = 'beauty';
         let currentViewMode = 'side-by-side';
 
+        // --------------------------------------------------------------------
+        // Universal Asset URL Resolution & Multi-Tier Fallback Cascade
+        // Ensures flawless rendering whether loaded via file://, Vite, Next, or Express
+        // --------------------------------------------------------------------
+        function resolveAssetUrl(rawPath) {
+            if (!rawPath) return '';
+            if (rawPath.startsWith('http://') || rawPath.startsWith('https://') || rawPath.startsWith('data:')) {
+                return rawPath;
+            }
+            const clean = rawPath.replace(/^\/+/, '').replace(/^(\.\.\/)+/, '');
+            return '../../' + clean;
+        }
+
+        function setPlateSrc(imgElement, rawPath) {
+            if (!imgElement || !rawPath) return;
+            const clean = rawPath.replace(/^\/+/, '').replace(/^(\.\.\/)+/, '');
+            
+            const candidateUrls = [
+                '../../' + clean,
+                '/' + clean,
+                '/public/' + clean,
+                '../' + clean,
+                clean
+            ];
+
+            let attemptIdx = 0;
+            function tryNext() {
+                if (attemptIdx < candidateUrls.length) {
+                    const nextUrl = candidateUrls[attemptIdx++];
+                    imgElement.onerror = () => {
+                        tryNext();
+                    };
+                    imgElement.src = nextUrl;
+                } else {
+                    console.error('All asset fallbacks failed for:', rawPath);
+                }
+            }
+            tryNext();
+        }
+
+        function setModelViewerSrc(viewerElement, rawPath) {
+            if (!viewerElement || !rawPath) return;
+            const clean = rawPath.replace(/^\/+/, '').replace(/^(\.\.\/)+/, '');
+            
+            const candidateUrls = [
+                '../../' + clean,
+                '/' + clean,
+                '/public/' + clean,
+                '../' + clean,
+                clean
+            ];
+
+            let attemptIdx = 0;
+            function tryNextGlb() {
+                if (attemptIdx < candidateUrls.length) {
+                    const nextUrl = candidateUrls[attemptIdx++];
+                    viewerElement.onerror = () => {
+                        tryNextGlb();
+                    };
+                    viewerElement.src = nextUrl;
+                } else {
+                    console.error('All glb model fallbacks failed for:', rawPath);
+                }
+            }
+            tryNextGlb();
+        }
+
         const vantages = {
             aerial: {
                 name: 'Midtown Aerial',
                 1: {
-                    beauty: '/renders/omnispatial_stage1_clay/beauty.png',
-                    albedo: '/renders/omnispatial_stage1_clay/beauty.png',
-                    normal: '/renders/omnispatial_stage3_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_stage1_real_clay_tile.glb',
+                    beauty: '../../renders/omnispatial_stage1_clay/beauty.png',
+                    albedo: '../../renders/omnispatial_stage1_clay/beauty.png',
+                    normal: '../../renders/omnispatial_stage3_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_stage1_real_clay_tile.glb',
                     title:  'Stage 1: Authentic Google 3D Tile in Clay',
                     sub:    '169,588 Authentic Scan Triangles · Melted Facade Noise'
                 },
                 2: {
-                    beauty: '/renders/omnispatial_stage2_vector/beauty.png',
-                    albedo: '/renders/omnispatial_stage2_vector/beauty.png',
-                    normal: '/renders/omnispatial_stage3_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_stage2_vector_refined.glb',
+                    beauty: '../../renders/omnispatial_stage2_vector/beauty.png',
+                    albedo: '../../renders/omnispatial_stage2_vector/beauty.png',
+                    normal: '../../renders/omnispatial_stage3_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_stage2_vector_refined.glb',
                     title:  'Stage 2: 4-Sided Vector Refined Geometry in Clay',
                     sub:    '550,280 Triangles · Projecting Limestone Piers · SB-Veggie Oak Trees'
                 },
                 3: {
-                    beauty: '/renders/omnispatial_stage3_pbr/beauty.png',
-                    albedo: '/renders/omnispatial_stage3_pbr/albedo.png',
-                    normal: '/renders/omnispatial_stage3_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
+                    beauty: '../../renders/omnispatial_stage3_pbr/beauty.png',
+                    albedo: '../../renders/omnispatial_stage3_pbr/albedo.png',
+                    normal: '../../renders/omnispatial_stage3_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_real_stage3_streetview_pbr.glb',
                     title:  'Stage 3: Master PBR Reality with Photogrammetric City',
                     sub:    '13 Calibrated PBR Sets · Reflective Glazing · Vertex-Color City'
                 }
@@ -1441,29 +1508,29 @@
             facade: {
                 name: '5th Ave Facade',
                 1: {
-                    beauty: '/renders/omnispatial_hero_vantage_clay/beauty.png',
-                    albedo: '/renders/omnispatial_hero_vantage_clay/beauty.png',
-                    normal: '/renders/omnispatial_hero_vantage_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_stage1_real_clay_tile.glb',
+                    beauty: '../../renders/omnispatial_hero_vantage_clay/beauty.png',
+                    albedo: '../../renders/omnispatial_hero_vantage_clay/beauty.png',
+                    normal: '../../renders/omnispatial_hero_vantage_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_stage1_real_clay_tile.glb',
                     title:  'Stage 1: Google 3D Tile Clay (Featureless Slab)',
                     sub:    'Melted Facade Wall · Zero Window Geometry · Torn Polygons'
                 },
                 2: {
-                    beauty: '/renders/omnispatial_hero_vantage_stage2_vector/beauty.png',
-                    albedo: '/renders/omnispatial_hero_vantage_stage2_vector/beauty.png',
-                    normal: '/renders/omnispatial_hero_vantage_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_stage2_vector_refined.glb',
+                    beauty: '../../renders/omnispatial_hero_vantage_stage2_vector/beauty.png',
+                    albedo: '../../renders/omnispatial_hero_vantage_stage2_vector/beauty.png',
+                    normal: '../../renders/omnispatial_hero_vantage_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_stage2_vector_refined.glb',
                     title:  'Stage 2: 4-Sided Art Deco Piers & Window Bays',
                     sub:    'Continuous Limestone Piers · Deep Recessed Bays · Setbacks'
                 },
                 3: {
-                    beauty: '/renders/omnispatial_hero_vantage_pbr/beauty.png',
-                    albedo: '/renders/omnispatial_hero_vantage_pbr/beauty.png',
-                    normal: '/renders/omnispatial_hero_vantage_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
+                    beauty: '../../renders/omnispatial_hero_vantage_pbr/beauty.png',
+                    albedo: '../../renders/omnispatial_hero_vantage_pbr/beauty.png',
+                    normal: '../../renders/omnispatial_hero_vantage_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_real_stage3_streetview_pbr.glb',
                     title:  'Stage 3: Calibrated Indiana Limestone & Bronze PBR',
                     sub:    'Dielectric Glazing Reflections · Fluted Bronze · Context City'
                 }
@@ -1471,29 +1538,29 @@
             streetview: {
                 name: 'Street View Ground Truth',
                 1: {
-                    beauty: '/renders/omnispatial_streetview_stage1_clay/beauty.png',
-                    albedo: '/renders/omnispatial_streetview_stage1_clay/beauty.png',
-                    normal: '/renders/omnispatial_streetview_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_stage1_real_clay_tile.glb',
+                    beauty: '../../renders/omnispatial_streetview_stage1_clay/beauty.png',
+                    albedo: '../../renders/omnispatial_streetview_stage1_clay/beauty.png',
+                    normal: '../../renders/omnispatial_streetview_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_stage1_real_clay_tile.glb',
                     title:  'Stage 1: Street-Level Occlusion',
                     sub:    'Photogrammetric Curtain Wall Occlusion at Ground Level'
                 },
                 2: {
-                    beauty: '/renders/omnispatial_streetview_stage2_clay/beauty.png',
-                    albedo: '/renders/omnispatial_streetview_stage2_clay/beauty.png',
-                    normal: '/renders/omnispatial_streetview_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_stage2_vector_refined.glb',
+                    beauty: '../../renders/omnispatial_streetview_stage2_clay/beauty.png',
+                    albedo: '../../renders/omnispatial_streetview_stage2_clay/beauty.png',
+                    normal: '../../renders/omnispatial_streetview_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_stage2_vector_refined.glb',
                     title:  'Stage 2: Architectural Entrance Geometry (18% Clay)',
                     sub:    '3-Story Monumental Portico · Bronze Doors · SB-Veggie Oak Trees'
                 },
                 3: {
-                    beauty: '/renders/omnispatial_streetview_pbr/beauty.png',
-                    albedo: '/renders/omnispatial_streetview_pbr/beauty.png',
-                    normal: '/renders/omnispatial_streetview_pbr/normal.png',
-                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
-                    glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
+                    beauty: '../../renders/omnispatial_streetview_pbr/beauty.png',
+                    albedo: '../../renders/omnispatial_streetview_pbr/beauty.png',
+                    normal: '../../renders/omnispatial_streetview_pbr/normal.png',
+                    depth:  '../../renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '../../models/omnispatial_real_stage3_streetview_pbr.glb',
                     title:  'Stage 3: Street View Ground-Truth & SB-Veggie Trees',
                     sub:    'Granite Plinth · Ashlar Masonry · Foliage Dappled Sunlight'
                 }
@@ -1517,11 +1584,11 @@
 
             // Left Pane (always stage 1 of current vantage)
             const leftImg = document.getElementById('imgLeft');
-            if (leftImg) leftImg.src = stage1[currentPass] || stage1.beauty;
+            if (leftImg) setPlateSrc(leftImg, stage1[currentPass] || stage1.beauty);
 
             // Right Pane (active stage of current vantage)
             const rightImg = document.getElementById('imgRight');
-            if (rightImg) rightImg.src = activeStage[currentPass] || activeStage.beauty;
+            if (rightImg) setPlateSrc(rightImg, activeStage[currentPass] || activeStage.beauty);
 
             const rightTitle = document.getElementById('rightPaneTitle');
             if (rightTitle) rightTitle.innerText = activeStage.title;
@@ -1531,10 +1598,10 @@
 
             // Wipe Slider
             const wipeBase = document.getElementById('imgWipeBase');
-            if (wipeBase) wipeBase.src = activeStage[currentPass] || activeStage.beauty;
+            if (wipeBase) setPlateSrc(wipeBase, activeStage[currentPass] || activeStage.beauty);
 
             const wipeReveal = document.getElementById('imgWipeReveal');
-            if (wipeReveal) wipeReveal.src = stage1[currentPass] || stage1.beauty;
+            if (wipeReveal) setPlateSrc(wipeReveal, stage1[currentPass] || stage1.beauty);
 
             // Loupe
             updateLoupeImage();
@@ -1563,8 +1630,10 @@
             document.getElementById('orbitPillStage3').classList.toggle('active', stage === 3);
 
             const mv = document.getElementById('mainModelViewer');
-            mv.src = vantages[currentVantage][stage].glb;
-            document.getElementById('pipelineStatusText').innerText = `3D Model: ${vantages[currentVantage][stage].title}`;
+            if (mv && vantages[currentVantage][stage]) {
+                setModelViewerSrc(mv, vantages[currentVantage][stage].glb);
+                document.getElementById('pipelineStatusText').innerText = `3D Model: ${vantages[currentVantage][stage].title}`;
+            }
         }
 
         function selectStage(stage) {
@@ -1589,7 +1658,7 @@
             const imgLoupe = document.getElementById('imgLoupeBase');
             if (imgLoupe) {
                 const target = vantages[currentVantage][currentStage];
-                imgLoupe.src = target[currentPass] || target.beauty;
+                setPlateSrc(imgLoupe, target[currentPass] || target.beauty);
             }
         }
 
