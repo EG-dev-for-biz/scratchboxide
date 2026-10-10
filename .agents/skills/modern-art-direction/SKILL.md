@@ -291,6 +291,7 @@ Before completing any task, subject the work to the **17 Senior Art Director Que
 ## 10. Modular Skill Reference Map
 
 All detailed operating manuals and case study databases reside in `references/`:
+* [how_to_conceive_unique_layouts.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/how_to_conceive_unique_layouts.md): The 6-step operator's manual for conceiving and implementing truly unique, non-derivative layouts.
 * [concept_to_form_transduction.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/concept_to_form_transduction.md): Deriving unique colors, typography, and spatial style from narrative friction and sensory worlds.
 * [grid_systems_and_tone_taxonomy.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/grid_systems_and_tone_taxonomy.md): 5 master grid architectures, cognitive density matching, universal hanglines, and tone taxonomy.
 * [advanced_editorial_and_rule_breaking_grids.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/advanced_editorial_and_rule_breaking_grids.md): Spatial frequency occlusion mapping, high-fashion editorial dynamics, and controlled rule-breaking.
