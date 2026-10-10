@@ -147,6 +147,19 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
 - **The Defect**: Loose, disconnected headlines and cramped metadata caused by uniform tracking and arbitrary font sizes.
 - **The Standard**: As font scale expands ($\ge 40\text{pt}$), tracking must contract (`-0.03em` to `-0.05em`); as scale shrinks ($\le 10\text{pt}$ metadata), tracking must expand (`+0.15em` to `+0.25em`). Font sizes must anchor strictly to a defined mathematical modular scale (Major Third $1.250$ or Perfect Fourth $1.333$).
 
+### Commandment 5S: Organic Low-Frequency Continuation Over Pure Black Voids
+- **The Defect**: Generating artificial pure black (`#000000`) or flat graphic crop blocks for negative space. A flat black box is not photography; it reads as an artificial graphical border and ruins realism.
+- **The Standard**: Negative space in a photograph must be a calm, unbusy **continuation of the physical photograph**—e.g., gentle atmospheric mist, soft out-of-focus wet asphalt, shallow depth-of-field background blur, or concrete walls rolling off into soft shadow.
+
+### Commandment 5T: Tactile Optical Realism (The 5 Imperfections Engine)
+- **The Defect**: Smooth, sterile, hyper-vibrant AI plastic sheen that feels synthetic and artificial.
+- **The Standard**: Ground all visual production in physical optical character:
+  1. *Subtle Motion Blur*: Minute shutter drag / camera motion to take the digital edge off.
+  2. *Tiniest Desaturation*: Ground hyper-vibrant primaries into authentic film stock palettes.
+  3. *Subtle Chromatic Lens Distortion*: Optical aberration and edge softening from real cinema glass.
+  4. *Muddy / Lifted Blacks*: Optical flare toe and atmospheric bounce in shadows (never crushed #000000).
+  5. *Authentic Film Grain*: Organic silver halide grain to give tactile familiarity to the viewer.
+
 ### Commandment 6: Label Clearly
 - **The Rule**: Maintain clear orientation markers without cluttering the canvas.
 - **Structure**:

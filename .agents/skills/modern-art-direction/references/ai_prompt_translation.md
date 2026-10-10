@@ -79,9 +79,20 @@ An image generated for an editorial presentation or pitch deck is never an isola
   - If the subject looks away towards the right edge, the viewer’s eye is led out of the canvas, abandoning the copy.
 * **Architectural Vanishing Lines**: Architectural diagonals, cantilever edges, or raking light beams must slope toward the text column, forming physical visual rails that guide attention into the message.
 
-### 3. Low Spatial Frequency Voids
-* The negative space must consist of **low spatial frequency** surfaces: smooth lime wash plaster, tranquil dark water, clean morning mist, or soft bokeh wall textures.
-* High spatial frequency elements (dense tree branches, intricate wrought-iron railings, high-contrast city crowds) inside the negative space create visual vibration that renders text illegible.
+### 3. Organic Scene Continuation (Negative Space Is Never Pure Black)
+* **The Fatal Defect**: Generating artificial pure black (`#000000`) or flat graphic crop blocks for negative space. A flat black box is not photography; it reads as an artificial graphical border and ruins realism.
+* **The Living Scene Rule**: Negative space in a photograph must **rarely be pure black**; it must be an **organic continuation of the photograph that is not busy**. Physical negative space consists of calm, low-frequency atmospheric reality:
+  - Soft out-of-focus background architecture or distant trees.
+  - Gentle twilight mist or coastal fog rolling across the ground.
+  - Wet asphalt or concrete pavement trailing into soft shadow roll-off.
+  - Smooth lime wash plaster or textured board-formed walls in ambient shadow.
+* **The Five Tactile Optical Imperfections of Real Imagery**:
+  Generative diffusion engines defaults to sterile, plastic AI sheen. To create images that feel authentic, organic, and familiar to the human viewer, deliberately command these 5 physical optical phenomena:
+  1. **Subtle Motion Blur**: Minute camera motion or 1/48s cinema shutter drag that softens clinical digital edges and introduces physical temporal presence.
+  2. **Tiniest Desaturated Tone**: Pull back synthetic digital saturation by 5–10% into authentic physical film stock palettes (e.g. Kodak Portra 400, Vision3 500T).
+  3. **Subtle Chromatic Lens Distortion**: Natural optical aberration, gentle peripheral barrel softness, and delicate color fringing characteristic of real cinema glass (Cooke S4/i, Panavision C-Series, Leica Summilux).
+  4. **Muddy / Lifted Blacks**: Real optical sensors and chemical film emulsions never crush to #000000. Shadows carry atmospheric bounce, optical flare toe, and tactile lifted charcoal/slate values.
+  5. **Authentic Silver Halide Grain**: Fine physical film grain across the frame to establish organic material familiarity and break up digital pixel smoothness.
 
 ### 4. Micro-Motion Blur Settings (Scratchbox AI MCP)
 * Always activate cinema shutter settings in Scratchbox AI MCP:

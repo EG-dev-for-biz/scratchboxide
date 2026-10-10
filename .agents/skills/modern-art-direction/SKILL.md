@@ -243,6 +243,13 @@ When presenting modern art direction in slide decks, treatments, and editorial l
 21. **Orthogonal Reference Decoupling (The Anti-Cloning Engine)**: Never borrow an entire website or agency portfolio's personality. Decompose taste into 4 orthogonal axes: `[Spatial Layout] × [Typographic Tension] × [Material Chromatics] × [Micro-Interaction Craft]`. Cross-breed disparate cultural domains (e.g., Swiss architectural grids + experimental editorial serif + physical raw metal chromatics + aerospace telemetry shelves).
 22. **Role-Based Chromatic Staging (The 60-30-8-2 Invariant)**: Allocate color strictly by surface ratio: **60% Canvas Base** (Deep Carbon Obsidian `#07090E` or Warm Bone Paper `#F6F4EE`), **30% Primary Specular Typography** (Pure White `#FFFFFF` or Deep Sumi Ink `#181C24`), **8% Neutral Titanium/Slate** (`#94A3B8` Slate-400 / `#64748B` Slate-500 for subtitles and borders), and **2% Singular Motivated Accent** (Swedish Gold `#E5A93C`, Cobalt `#002FA7`, or Signal Red `#FF3B30` for micro-kickers and datum lines).
 23. **Polar Tracking Calibration & Mathematical Modular Scales**: Large display headers ($\ge 40\text{pt}$) require tight negative tracking (`-0.03em` to `-0.05em`); micro-metadata ($\le 10\text{pt}$) requires wide positive tracking (`+0.15em` to `+0.25em`). Font sizes must anchor strictly to a defined mathematical modular scale (Major Third $1.250$ or Perfect Fourth $1.333$).
+24. **Organic Scene Continuation Over Pure Black Voids**: Negative space in a photograph must NEVER be an artificial pure black (`#000000`) or flat graphic crop box. Negative space must be a calm, unbusy **continuation of the physical photograph**—e.g., gentle atmospheric mist, soft out-of-focus wet asphalt, shallow depth-of-field background blur, or concrete walls rolling off into soft shadow.
+25. **Tactile Optical Realism (The 5 Imperfections Engine)**: Eliminate sterile AI plastic sheen by intentionally directing 5 physical optical phenomena:
+    - *Subtle Motion Blur*: Minute shutter drag (1/48s cinematic motion blur) or camera pan softening sharp digital edges.
+    - *Tiniest Desaturation*: Pull back synthetic, hyper-vibrant saturation into natural film stock hues.
+    - *Chromatic Lens Distortion*: Subtle peripheral optical aberration and barrel softness characteristic of vintage cinema glass.
+    - *Muddy / Lifted Blacks*: Real optical toe with atmospheric flare and tactile charcoal/slate values (never digital crushed #000000).
+    - *Authentic Silver Halide Grain*: Fine physical film grain across the frame to establish organic material familiarity.
 
 ---
 

@@ -160,6 +160,16 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
 22. **Polar Tracking Calibration & Mathematical Modular Scales**:
     - **Optical Mass Balance**: Large display headers ($\ge 40\text{pt}$) require tight negative tracking (`-0.03em` to `-0.05em`); micro-metadata ($\le 10\text{pt}$) requires wide positive tracking (`+0.15em` to `+0.25em`).
     - **Modular Scale Discipline**: Anchor font sizes to mathematical scales (Major Third $1.250$ or Perfect Fourth $1.333$): $10\text{px} \rightarrow 13\text{px} \rightarrow 17\text{px} \rightarrow 22\text{px} \rightarrow 28\text{px} \rightarrow 36\text{px} \rightarrow 48\text{px} \rightarrow 64\text{px}$.
+23. **Organic Low-Frequency Continuation Over Pure Black Voids**:
+    - **No Digital Cutoff Voids**: Negative space in a photograph must NEVER be an artificial pure black (`#000000`) or flat graphic crop box. Pure black blocks look like graphical masks rather than authentic photography.
+    - **Living Scene Continuity**: Negative space must be a calm, unbusy continuation of the physical scene—e.g. atmospheric mist, soft out-of-focus wet pavement, shallow depth-of-field background blur, or concrete walls rolling off into soft shadow.
+24. **Tactile Optical Realism (The 5 Imperfections Engine)**:
+    - Eliminate sterile AI plastic sheen by intentionally directing 5 physical optical phenomena:
+      1. **Subtle Motion Blur**: Minute shutter drag (1/48s cinematic motion blur) softening sharp digital edges.
+      2. **Tiniest Desaturation**: Pull back synthetic, hyper-vibrant saturation into natural film stock hues.
+      3. **Chromatic Lens Distortion**: Subtle peripheral optical aberration and barrel softness characteristic of vintage cinema glass.
+      4. **Muddy / Lifted Blacks**: Real optical toe with atmospheric flare and tactile charcoal/slate values (never digital crushed #000000).
+      5. **Authentic Silver Halide Grain**: Fine physical film grain across the frame to establish organic material familiarity.
 
 ---
 
