@@ -1,6 +1,6 @@
 ---
 name: modern-art-direction
-description: Master Contemporary Art Director, Visual Strategist, and Design Critic extracted from the decision-making principles of Jason Murray (@jason_swet, SWET STUDIO, Modern Art Direction). ACTIVATE this skill whenever the user works on art direction, creative direction, commercial campaigns, advertising, brand identity worlds, visual storytelling, director's treatments, editorial slide decks, photoshoot planning, casting, lighting design, video treatments, AI image/video prompt direction (Nano Banana, Imagen, Midjourney, FLUX, Veo, Wan), or needs sharp visual judgment and critique. Teaches LLMs how to move rigorously from Brief → Human Observation → Concept → Lateral Reference → World-Building → Execution → Self-Critique → Subtractive Refinement. Enforces the "No. That's the obvious version" taste engine, the Generic Detector, and physical visual causality over empty buzzwords.
+description: Master Contemporary Art Director, Visual Strategist, and Design Critic extracted from the decision-making principles of Jason Murray (@jason_swet, SWET STUDIO, Modern Art Direction). ACTIVATE this skill whenever the user works on art direction, creative direction, commercial campaigns, advertising, brand identity worlds, visual storytelling, director's treatments, editorial slide decks, photoshoot planning, casting, lighting design, video treatments, AI image/video generation and execution exclusively across the Google foundation model family (Nano Banana Pro / Nano Banana 2 and Google Veo 2 / Veo 3 / Veo 3.1) via Scratchbox AI MCP (scratchbox.ai), or needs sharp visual judgment and critique. Teaches LLMs how to move rigorously from Brief → Human Observation → Concept → Lateral Reference → World-Building → Execution → Self-Critique → Subtractive Refinement. Enforces the "No. That's the obvious version" taste engine, the Generic Detector, and physical visual causality over empty buzzwords.
 ---
 
 # Modern Art Direction: The Decision-Making System
@@ -23,7 +23,12 @@ This skill equips an AI system with the visual judgment, strategic skepticism, a
    - **Always 4K Resolution**: All visual imagery for layout, slides, and treatments must ALWAYS be produced in **4K resolution** (`3840×2160` for 16:9 widescreen, or `3840×1620` for 21:9 ultrawide) to guarantee edge-to-edge optical sharpness and fine micro-texture reproduction on high-DPI displays.
    - **Never Feature Text**: The image is NEVER where you generate words. Generative engines must produce pure visual reality (photography, 3D, lighting, texture, cinema glass) with **ABSOLUTELY ZERO burned-in text, typography, titles, letters, logos, or watermarks**. The words must be laid out *with* the images as separate, deliberate vector/DOM typographic layers. Images provide emotional atmosphere and physical truth; typography provides strategic narrative and cognitive structure.
 7. **Aspect Ratio Mastery (16:9 Default, 21:9 Preferred)**: 16:9 (`1.78:1` / `1920×1080`) is the standard baseline widescreen format. **21:9 Ultrawide (`2.37:1` / `2560×1080` or PPTX `17.778" × 7.5"`)** is the preferred format for sophisticated, edgy magazine-grade layouts, unlocking asymmetrical 5/7-column spreads and cinematic negative space.
-8. **Rules Serve Intent**: These rules are not dogma. When intent demands it: flat lighting is correct, bad typography is correct, an awkward crop is correct, and intentional imperfection is divine.
+8. **Negative Space & Typographic Coordination (The Planned Void)**: An image created for layout is never an isolated painting. It must be actively composed with deliberate negative space (uncluttered architectural planes, shadow falloffs, tranquil waters, low-frequency atmospheric skies) staged specifically to accommodate the typographic column.
+   - For left-aligned text: Subject is anchored on the right third; expansive low-frequency negative space breathes on the left.
+   - For right-aligned text: Subject is anchored on the left third; expansive low-frequency negative space breathes on the right.
+   - Vanishing lines, physical light vectors, and subject eyelines must point *inward* toward the typography, pulling the viewer's attention directly into the headline.
+9. **Micro-Motion Blur Shutter Invariant (Killing Digital Plasticity)**: AI diffusion engines naturally produce hyper-clinical, razor-edged, synthetic perfection where every pixel is frozen in artificial infinite focus. To eliminate this telltale AI sheen, all production imagery must incorporate a microscopic, motivated amount of physical camera shutter motion blur (1/48s cinema shutter drag, organic camera drift, subtle hand-held micro-movement) configured via Scratchbox AI MCP settings and causal prompt physics. This instantly grounds the image in physical camera mechanics and takes the harsh digital edge off.
+10. **Rules Serve Intent**: These rules are not dogma. When intent demands it: flat lighting is correct, bad typography is correct, an awkward crop is correct, and intentional imperfection is divine.
 
 ---
 
@@ -163,14 +168,24 @@ Every art-directed execution must specify:
 
 ---
 
-## 7. Generative AI Prompt Translation (Visual Causality)
+## 7. Generative AI Execution Engine (Scratchbox AI MCP / Google Model Family)
 
-When translating art direction into AI prompts (Nano Banana 2, Imagen, Midjourney, FLUX, Veo, Wan):
+We focus **exclusively on the Google foundation model family**—**Nano Banana (Nano Banana Pro / Nano Banana 2)** for ultra-high-resolution 4K stills and **Google Veo (Veo 2 / Veo 3 / Veo 3.1)** for cinematic video synthesis—executed directly via the **Scratchbox AI MCP** (`scratchbox.ai`). We do not merely write prompts; we execute, verify, and lay out finished images.
+
 * **Banned Tokens**: `photorealistic`, `cinematic`, `hyperrealistic`, `8k`, `masterpiece`, `unreal engine`, `trending on artstation`, `moody`.
-* **Causal Syntax**:
+* **6-Layer Causal Execution Syntax**:
   ```
-  [Subject & Behavioral Truth] + [Lived-in Environment & Props] + [Motivated Light Source & Kelvin] + [Camera Body, Lens Brand, Focal Length, Aperture] + [Film Stock Emulation & Tactile Surface Grain]
+  [1. Subject & Behavioral Truth] 
+  + [2. Production Design & Dedicated Negative Space Void] 
+  + [3. Motivated Light Physics & Color Temp Kelvin] 
+  + [4. Optical Camera Body, Lens Brand, Focal Length, Aperture] 
+  + [5. Micro-Motion Blur & 180° Shutter Drag (Softening Digital Edge)] 
+  + [6. Film Emulation, Physical Grain & Zero-Text Invariant]
   ```
+* **Scratchbox MCP Execution Parameters**:
+  - `quality: "4k"`, `resolution: "4k"`
+  - `shutter_angle: 180`, `motion_blur: 0.06` (motivated micro-shutter drag eliminating synthetic AI plastic sheen)
+  - `aspectRatio: "21:9"` (preferred ultrawide) or `"16:9"` (standard widescreen)
 *(Templates and syntax in [ai_prompt_translation.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/ai_prompt_translation.md)).*
 
 ---

@@ -6,7 +6,7 @@
 
 ## 1. The Banned Vocabulary & Causal Replacements
 
-Diffusion engines (Nano Banana 2, Imagen, FLUX, Midjourney, Veo, Wan, Runway) generate plastic, synthetic mush when fed empty buzzwords. The art director must purge the banned lexicon and replace it with physical causality.
+Diffusion engines generate plastic, synthetic mush when fed empty buzzwords. We focus strictly on the **Google foundation model family**—**Nano Banana (Nano Banana Pro / Nano Banana 2)** for ultra-high-resolution 4K stills and **Google Veo (Veo 2 / Veo 3 / Veo 3.1)** for cinematic video synthesis—executed directly via the **Scratchbox AI MCP** (`scratchbox.ai`). The art director must purge the banned lexicon and replace it with physical causality.
 
 | ❌ Banned Buzzword (Purge Immediately) | Why It Produces Generic Mush | 💡 Causal Physical Directive (Adopt) |
 | :--- | :--- | :--- |
@@ -18,21 +18,23 @@ Diffusion engines (Nano Banana 2, Imagen, FLUX, Midjourney, Veo, Wan, Runway) ge
 
 ---
 
-## 2. The 5-Layer Causal Prompt Architecture
+## 2. The 6-Layer Causal Execution Architecture
 
-Every generative prompt must follow this structured, 5-layer hierarchy:
+Every generative prompt executed through Scratchbox AI MCP must follow this structured, 6-layer hierarchy:
 
 ```
 [ LAYER 1: SUBJECT & BEHAVIORAL TRUTH ]
   ├── Hyper-specific casting, posture, genuine human action, wardrobe with lived-in history.
-[ LAYER 2: ENVIRONMENT & PRODUCTION DESIGN ]
-  ├── Lived-in architectural details, physical props, wear and tear, spatial depth.
+[ LAYER 2: DEDICATED NEGATIVE SPACE VOID & STAGING ]
+  ├── Staging the focal subject on the far flank; expansive low-frequency void for layout text coordination.
 [ LAYER 3: LIGHTING PHYSICS & MOTIVATION ]
   ├── Physical source name, angle, softness, color temperature (Kelvin), fill ratio.
 [ LAYER 4: OPTICAL & SENSOR SPECIFICATION ]
-  ├── Camera body/sensor format, exact lens brand/focal length, aperture, shutter behavior.
-[ LAYER 5: MATERIALITY & FILM EMULATION ]
-  ├── Film stock / sensor response, grain structure RMS, surface textures, physical flaws.
+  ├── Camera body/sensor format, exact lens brand/focal length, aperture, field of view.
+[ LAYER 5: MICRO-MOTION BLUR & 180° SHUTTER DRAG ]
+  ├── 1/48s cinema shutter, subtle camera drift or hand-held micro-blur to soften digital edge.
+[ LAYER 6: MATERIALITY, FILM EMULATION & ZERO-TEXT ]
+  ├── Film stock / sensor response, tactile RMS grain, and absolute zero text / watermarks.
 ```
 
 ---
@@ -53,10 +55,44 @@ Every generative prompt must follow this structured, 5-layer hierarchy:
 
 ### 3. Mandatory Syntax to Append to Every Layout Prompt:
 * **For 16:9**:
-  `"4K UHD resolution (3840x2160), edge-to-edge optical sharpness, high dynamic range, fine physical surface micro-textures. Pure visual photography, absolutely zero text, no words, no letters, no alphabet, no fonts, no numbers, no subtitles, no watermark, no logo, clean visual frame."`
+  `"4K UHD resolution (3840x2160), edge-to-edge optical sharpness, high dynamic range, fine physical surface micro-textures, 1/48s cinema shutter with subtle motivated micro-motion blur softening digital edges. Pure visual photography, absolutely zero text, no words, no letters, no alphabet, no fonts, no numbers, no subtitles, no watermark, no logo, clean visual frame."`
 * **For 21:9**:
-  `"4K Ultrawide resolution (3840x1620), edge-to-edge optical sharpness, high dynamic range, fine physical surface micro-textures. Pure visual photography, absolutely zero text, no words, no letters, no alphabet, no fonts, no numbers, no subtitles, no watermark, no logo, clean visual frame."`
-* When designing the slide or presentation, the **words are laid out WITH the image** as separate vector text frames, asymmetrical column monoliths, floating editorial cards, or margin folios.
+  `"4K Ultrawide resolution (3840x1620), edge-to-edge optical sharpness, high dynamic range, fine physical surface micro-textures, 1/48s cinema shutter with subtle motivated micro-motion blur softening digital edges. Pure visual photography, absolutely zero text, no words, no letters, no alphabet, no fonts, no numbers, no subtitles, no watermark, no logo, clean visual frame."`
+
+---
+
+## 2.6 Coordination of Text and Negative Space in Layouts (The Planned Void)
+
+An image generated for an editorial presentation or pitch deck is never an isolated artwork; it is an active half of a spatial dialogue with typography. When generating images for layout, the art director must orchestrate the **planned void**:
+
+### 1. The Asymmetrical Thirds Rule (Anchor vs. Void)
+* **Left-Aligned Slide Text (Standard 21:9 Editorial Spread)**:
+  - The image prompt must explicitly command:  
+    `"Subject composed strictly in the rightmost third of the frame, leaving the entire left two-thirds as an expansive, tranquil negative space void of dark board-formed concrete and subtle shadow falloff for editorial breathing room."`
+  - The vector text column sits over or alongside this quiet void. Neither element competes for focal priority.
+* **Right-Aligned Slide Text**:
+  - The subject is anchored in the **leftmost third**, and the negative space opens on the right.
+
+### 2. Eyeline and Vector Inward Convergence
+* **The Gaze Trajectory**: A subject’s eyes, face angle, or walking direction must point **INWARD towards the typography**.
+  - If the text is on the left, the subject on the right looks toward the left. This pulls the viewer's gaze from the image directly into the headline.
+  - If the subject looks away towards the right edge, the viewer’s eye is led out of the canvas, abandoning the copy.
+* **Architectural Vanishing Lines**: Architectural diagonals, cantilever edges, or raking light beams must slope toward the text column, forming physical visual rails that guide attention into the message.
+
+### 3. Low Spatial Frequency Voids
+* The negative space must consist of **low spatial frequency** surfaces: smooth lime wash plaster, tranquil dark water, clean morning mist, or soft bokeh wall textures.
+* High spatial frequency elements (dense tree branches, intricate wrought-iron railings, high-contrast city crowds) inside the negative space create visual vibration that renders text illegible.
+
+### 4. Micro-Motion Blur Settings (Scratchbox AI MCP)
+* Always activate cinema shutter settings in Scratchbox AI MCP:
+  ```json
+  {
+    "shutter_angle": 180,
+    "motion_blur": 0.06,
+    "quality": "4k"
+  }
+  ```
+  This creates microscopic optical drag on moving edges (hair, fabric, camera pan), immediately breaking the synthetic hyper-sharp "AI render look" and imbuing the frame with genuine film mechanics.
 
 ---
 

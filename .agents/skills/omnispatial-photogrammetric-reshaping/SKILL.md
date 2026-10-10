@@ -47,6 +47,7 @@ By strictly adhering to **Adaptive Domain Architecture (ADA)**, this skill elimi
 3. **Information Inversion from Photo Tiles**: A flat photogrammetric polygon contains rich 2D photographic lighting clues. Alternating light and dark bands indicate surface corrugation; shadow penumbras indicate relief depth. The engine analyzes frequency and gradient data from the image to calculate normal relief $\Delta h(u, v)\,\mathbf{n}$.
 4. **Preservation of Historical Ruin Character**: Ancient structures and ruins (such as the Colosseum) must never be subjected to "plastic restoration." Missing spans and seismic fracture boundaries are locked with zero-tolerance Dirichlet boundary conditions ($w=1.0$), while interior melted voids are analytically carved.
 5. **Zero JavaScript Generative Primitives**: Stacking flat Three.js primitives (`new THREE.BoxGeometry`, etc.) is strictly prohibited. All geometric synthesis occurs in native C++20, streaming binary `.glb` chunks directly to the viewport.
+6. **Fresh Ingestion for New Workflows (Prohibition on Stale/Distorted Legacy Re-Use)**: If starting a new workflow, or whenever an existing model exhibits distortion, non-uniform scaling, or legacy editing artifacts, agents must NEVER inherit stale intermediate `.glb` assets. Always download/extract a fresh 3D model directly from Google Maps Platform Photorealistic 3D Tiles (`getGoogle3DTilesFullTexture` / `getGoogle3DTilesClay`) at leaf LOD (`errorTarget <= 0.5`) to establish a pristine, uncorrupted ground-truth geometric foundation.
 
 ---
 

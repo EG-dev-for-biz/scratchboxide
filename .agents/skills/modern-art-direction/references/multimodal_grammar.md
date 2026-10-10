@@ -119,3 +119,18 @@ When presented with one or more reference images, photographs, film clips, or la
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 **The Law of Symbiosis**: Images provide emotional atmosphere and physical grounding; typography provides strategic assertion, cognitive structure, and editorial authority. They work in dialogue, never flattened into the same bitmap.
+
+### The Negative Space & Typographic Alignment System (The Planned Void)
+
+To achieve world-class magazine coordination between text and imagery, the negative space within the image must be deliberately choreographed with the layout's typographic columns:
+
+1. **Spatial Staging & Asymmetry**:
+   - **Left-Column Text Spread**: The image must be staged with the primary subject anchored in the **rightmost third**, deliberately allocating the left flank as a low-frequency negative space void (smooth plaster, dark water, calm sky, soft falloff) that breathes alongside the text column.
+   - **Right-Column Text Spread**: The subject is anchored in the **leftmost third**, and the negative space opens on the right.
+2. **Inward Vector Convergence**:
+   - The subject's eyeline, body posture, and architectural vanishing lines must point **INWARD toward the typographic column**.
+   - This creates a magnetic visual loop: the viewer notices the image subject, the subject's gaze directs attention into the headline, and the copy delivers the cognitive payoff.
+3. **Low-Frequency Tonal Harmony**:
+   - The negative space in the image must remain low spatial frequency. High-frequency visual noise (busy foliage, crowd faces, high-contrast lattices) directly competes with the eye's foveal reading tracking and destroys typographic legibility.
+4. **Motivated Micro-Motion Blur (1/48s Cinema Shutter)**:
+   - To eliminate the telltale synthetic "plastic AI sharpness," images incorporate motivated micro-motion blur (`shutter_angle: 180`, `motion_blur: 0.06`). Microscopic temporal drag on camera drift or peripheral movement softens the clinical digital edge and immediately registers as authentic physical film optics.

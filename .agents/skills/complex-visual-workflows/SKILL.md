@@ -103,6 +103,9 @@ Scratchbox provides a high-performance C++20 geometry core bound directly to Pyt
 - **Two Dedicated Separate APIs**:
   - `getGoogle3DTilesClay` / `google_3d_tiles_get_clay`: Pure architectural/topographical massing rendered in neutral 18% Studio Grey Clay with flat lighting.
   - `getGoogle3DTilesFullTexture` / `google_3d_tiles_get_full_texture`: Full photogrammetric textured capture.
+- **Fresh Ingestion for New Workflows (Prohibition on Stale/Distorted Legacy Re-Use)**:
+  - When initiating a new visual production or when previous models exhibit distortion or non-uniform scaling, agents must NEVER inherit stale intermediate `.glb` assets from prior sessions.
+  - Always download/extract a fresh 3D model directly from Google Maps Platform Photorealistic 3D Tiles (`getGoogle3DTilesFullTexture` / `getGoogle3DTilesClay`) at leaf LOD (`errorTarget <= 0.5`) to establish a pristine, uncorrupted ground-truth geometric foundation.
 - **2D Vector Roadmap Staging (`stage_3d_vector_world`)**:
   - Queries Google 2D roadmap vector tiles (zoom 16) to generate 5-tier road cross-sections with beveled granite curbs, sidewalks, parcel massing prisms, lane-aligned traffic, streetlamps, and street trees.
 - **UTDRA Photogrammetric Rectification (`utdra_probe_tile`)**:

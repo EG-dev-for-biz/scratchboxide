@@ -69,7 +69,7 @@ export const SPELLED_NUMBERS = [
 // 0. SCRATCHBOX MCP IMAGE ENGINE (scratchbox.ai)
 // ============================================================================
 
-export function formatLayoutImagePrompt(rawPrompt, aspectRatio = '16:9') {
+export function formatLayoutImagePrompt(rawPrompt, aspectRatio = '16:9', layoutPlacement = 'split-left') {
   let prompt = (rawPrompt || '').trim();
   // Strip accidental requests for words, titles, typography, text
   prompt = prompt
@@ -81,11 +81,22 @@ export function formatLayoutImagePrompt(rawPrompt, aspectRatio = '16:9') {
     ? '4K Ultrawide resolution (3840x1620)' 
     : '4K UHD resolution (3840x2160)';
 
-  return `${prompt}. ${resTag}, razor-sharp optical clarity, high dynamic range, fine physical surface micro-textures. Pure visual imagery, absolutely zero text, no words, no letters, no alphabet, no fonts, no numbers, no subtitles, no watermark, no logo, clean visual frame.`;
+  // Directional negative space staging for layout-text coordination
+  let stagingClause = '';
+  if (layoutPlacement === 'split-left' || layoutPlacement === 'left-text') {
+    stagingClause = 'Compositional staging: primary focal subject anchored in the rightmost 35% of the frame, leaving an expansive, tranquil low-frequency negative space void across the left flank for editorial typographic breathing room, with subject gaze and leading lines directed inward toward the text.';
+  } else if (layoutPlacement === 'split-right' || layoutPlacement === 'right-text') {
+    stagingClause = 'Compositional staging: primary focal subject anchored in the leftmost 35% of the frame, leaving an expansive, tranquil low-frequency negative space void across the right flank for editorial typographic breathing room, with subject gaze and leading lines directed inward toward the text.';
+  }
+
+  // Micro-motion blur taking digital edge off
+  const shutterClause = '1/48s cinema shutter speed with subtle motivated micro-motion blur on camera drift and peripheral subject movement to soften artificial digital edge sharpness and ground the frame in physical optical physics.';
+
+  return `${prompt}. ${stagingClause} ${resTag}, razor-sharp optical clarity with physical film response, ${shutterClause} Pure visual imagery, absolutely zero text, no words, no letters, no alphabet, no fonts, no numbers, no subtitles, no watermark, no logo, clean visual frame.`;
 }
 
-export async function generateScratchboxImage(prompt, aspectRatio = '16:9', workspaceId = '126') {
-  const sanitizedPrompt = formatLayoutImagePrompt(prompt, aspectRatio);
+export async function generateScratchboxImage(prompt, aspectRatio = '16:9', workspaceId = '126', layoutPlacement = 'split-left') {
+  const sanitizedPrompt = formatLayoutImagePrompt(prompt, aspectRatio, layoutPlacement);
   const baseUrl = process.env.SCRATCHBOX_BASE_URL || 'https://scratchbox.ai/api/mcp/canvas';
   let secret = process.env.SCRATCHBOX_INTERNAL_SECRET;
   if (!secret) {
@@ -128,7 +139,16 @@ export async function generateScratchboxImage(prompt, aspectRatio = '16:9', work
       method: 'tools/call',
       params: {
         name: 'ai.generate_images',
-        arguments: { prompt: sanitizedPrompt, aspectRatio, idempotencyKey, quality: '4k', resolution: '4k' }
+        arguments: {
+          prompt: sanitizedPrompt,
+          aspectRatio,
+          idempotencyKey,
+          quality: '4k',
+          resolution: '4k',
+          shutter_angle: 180,
+          motion_blur: 0.06,
+          model: 'google/nano-banana-pro'
+        }
       }
     })
   });

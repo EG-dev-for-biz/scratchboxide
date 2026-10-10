@@ -47,9 +47,10 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
 - **The Violation**: Mashing together a daylight stock photo of a brass doorknob, a studio packshot, a milky way night landscape, and a cold blue bedroom shot.
 - **The Execution**: Enforce shared color temperature, matching grain/contrast, and logical spatial/chronological progression (e.g. blue dawn -> incandescent hallway -> torchlight -> moonlight barn).
 
-### Commandment 4: Find High-Res Imagery
-- **The Rule**: High-DPI assets only. Zero pixelation, digital sharpening artifacts, or compression blur.
-- **Upscaling / Verification**: Companion imagery generated or ingested must be rendered at minimum 1920×1080 (or 2.39:1 widescreen equivalent 1920×804) with razor-sharp fidelity.
+### Commandment 4: Find 4K High-Res Imagery with Motivated Shutter Drag
+- **The Rule**: High-DPI assets only (always targeting 4K UHD `3840×2160` or 4K Ultrawide `3840×1620`). Zero pixelation, digital sharpening artifacts, or compression blur.
+- **The Motion Blur Invariant**: Use Scratchbox AI MCP settings (`shutter_angle: 180`, `motion_blur: 0.06`) to introduce subtle 1/48s cinema shutter micro-motion blur on camera drift and peripheral movement. This softens artificial digital edge sharpness and takes the harsh AI sheen off the frame.
+- **Exclusivity**: Generated exclusively with the Google foundation model family (Nano Banana Pro / Nano Banana 2 and Google Veo).
 
 ### Commandment 5: Visual Emotion > Visual Prescription
 - **The Philosophy**: Do not illustrate words literally. Illustrate the *emotional subtext* behind the words.
@@ -57,6 +58,12 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
   - *Prompt / Script Line*: `"open on a girl and her dog watching TV"`
   - *Visual Prescription (Amateur)*: A stock photo from behind a girl and a dog sitting on a couch staring directly at a television screen. Literal, flat, corporate.
   - *Visual Emotion (Master)*: An intimate, warm high-angle shot of the girl lying relaxed on a worn Persian rug beside her sleeping 100-pound dog, soft golden hour sunlight filtering through linen curtains. The television is heard off-camera; the visual captures intimacy, comfort, and peace.
+
+### Commandment 5B: The Planned Void (Coordinating Text and Negative Space)
+- **The Rule**: Never drop typography onto an arbitrary photo. The image must be intentionally staged with a **dedicated low-frequency negative space void** aligned to the text column.
+  - **Left-Aligned Text**: Anchor the primary subject on the **rightmost 35-40%**, opening the left flank for the typographic monolith.
+  - **Inward Eyelines**: Subject gaze and physical light vectors must point **inward toward the copy**, magnetically directing reader attention into the headline.
+  - **Zero Burned-In Text**: All letters, titles, and folios belong exclusively to the vector typography layer.
 
 ### Commandment 6: Label Clearly
 - **The Rule**: Maintain clear orientation markers without cluttering the canvas.

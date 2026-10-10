@@ -88,6 +88,9 @@ All 3D tile captures adhere to strict photogrammetric standards and architectura
   - Headless tile streaming employs multi-tier high-altitude zenith cameras ($\ge 1,800\text{m} - 2,500\text{m}$, FOV 75°, far plane $\ge 25,000\text{m}$) and upward-inclined horizon cameras covering the full vertical envelope of metropolitan skylines to eliminate camera near-plane and frustum culling on skyscrapers.
 - **Boundary Dilation to Street Corridors**:
   - Extraction boundaries snap to natural clearings (street canyons, plazas, or waterways). If a boundary intersects a structure, it dilates to encompass the complete connected building.
+- **Fresh Ingestion for New Workflows (Prohibition on Stale/Distorted Legacy Re-Use)**:
+  - When initiating a new workflow, or whenever an existing model exhibits geometric distortion, shearing, or legacy editing artifacts, agents must NEVER inherit stale intermediate `.glb` assets from prior sessions.
+  - Always download/extract a brand new 3D model directly from Google Maps Platform Photorealistic 3D Tiles (`getGoogle3DTilesFullTexture` / `getGoogle3DTilesClay`) at leaf LOD (`errorTarget <= 0.5`) to establish a pristine, uncorrupted ground-truth geometric foundation.
 
 ---
 

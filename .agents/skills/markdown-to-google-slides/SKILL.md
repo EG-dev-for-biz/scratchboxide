@@ -88,14 +88,20 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
    - **Inline Image Tag**: `![Cinematic visual prompt](scratchbox:16:9)` or `![Prompt](scratchbox:21:9)`.
    - **HTML Comment Directive**: `<!-- scratchbox: prompt="Close-up of...", aspect="21:9" -->`.
    - **Automated Synthesis Flag**: `--scratchbox-images` automatically synthesizes contextual, photorealistic prompts from slide headers for visual archetypes (`hero-opener`, `art-card`, `anamorphic-letterbox`, `image-forward`).
-3. **Cinematic Realism Directives**:
-   - Anchor prompt directives in physical camera glass (Cooke S4/i, Panavision C-Series, ARRI Master Primes).
+3. **Cinematic Realism & Optical Directives**:
+   - Focus exclusively on the **Google foundation model family** (**Nano Banana Pro / Nano Banana 2** for 4K stills and **Google Veo 2 / Veo 3 / Veo 3.1** for video) executed via Scratchbox AI MCP (`scratchbox.ai`).
+   - Anchor prompt directives in physical cinema glass (Cooke S4/i, Panavision C-Series, ARRI Master Primes).
    - Specify film stock emulsion characteristics (Kodak Vision3 500T, Portra 400 grain, 35mm / 65mm format).
-   - Eliminate digital sheen, plastic AI skin, and hyper-saturated CGI glows.
+   - **Micro-Motion Blur Shutter Invariant**: Enforce 1/48s cinema shutter speed with motivated micro-motion blur (`shutter_angle: 180`, `motion_blur: 0.06`) to soften artificial digital edge sharpness and ground frames in authentic optical physics.
 4. **Mandatory 4K Resolution & Zero-Text Invariants**:
    - **Always 4K Resolution**: All slide and layout imagery must be produced in 4K UHD (`3840×2160` for 16:9, or `3840×1620` for 21:9 ultrawide) to guarantee razor-sharp optical clarity on Retina displays, 4K monitors, and presentation screens.
    - **Never Feature Text**: Generated imagery must **NEVER** contain rendered words, typography, letters, alphabet glyphs, brand names, or watermarks. Diffusion models hallucinate distorted characters; words are strictly reserved for the selectable vector typography layer.
-5. **Public CDN Ingestion**:
+5. **Negative Space & Typographic Coordination (The Planned Void)**:
+   - All layout imagery must be staged in dialogue with the typographic column:
+     - For left-column text (default 21:9 split): Subject is anchored on the **rightmost 35-40%**, leaving the left two-thirds as an expansive low-frequency void (quiet plaster, dark shadow pool, smooth misty water) for text breathing room.
+     - For right-column text: Subject is anchored on the **leftmost 35-40%**, opening the void on the right.
+     - **Inward Convergence**: Subject eyelines, body orientation, and architectural vanishing lines must point **INWARD towards the typography**, pulling the viewer's eye into the headline.
+6. **Public CDN Ingestion**:
    - The resolved CDN URLs are directly ingested by the Google Slides API (`addImage({ path: url })`) and the 1920×1080 / 2560×1080 HTML presentation engine without requiring local file upload steps.
 
 ---
