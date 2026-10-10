@@ -46,6 +46,10 @@ export interface TerrainHarmonizeOptions {
     stands: BotanicalStandDescriptor[];
     /** Protected cadastral monument polygons for Dirichlet boundary lock */
     monumentPolygons?: CadastralMonumentPolygon[];
+    /** Protected cadastral building polygons (or OSM footprints) for 100% Dirichlet lock */
+    buildingPolygons?: CadastralMonumentPolygon[];
+    /** Maximum plausible tree canopy thickness (meters, default: 14.0). Prevents crushing buildings */
+    maxCanopyThicknessMeters?: number;
     /** Default buffer around monument polygons (meters, default: 12.0) */
     defaultMonumentBufferMeters?: number;
     /** Curvature entropy threshold to lock jagged ruin surfaces (default: 0.28) */
@@ -147,7 +151,7 @@ export class PhotogrammetricTerrainHarmonizerService {
             return true;
         }
 
-        // 2. Cadastral Vector Distance Fields
+        // 2. Cadastral Vector Distance Fields (Monuments)
         const defaultBuffer = options.defaultMonumentBufferMeters ?? 12.0;
         if (options.monumentPolygons && options.monumentPolygons.length > 0) {
             for (const monument of options.monumentPolygons) {
@@ -156,6 +160,20 @@ export class PhotogrammetricTerrainHarmonizerService {
                     return true;
                 }
                 const dist = this.distanceToPolygon(x, z, monument.localPolygonEnu);
+                if (dist <= buffer) {
+                    return true;
+                }
+            }
+        }
+
+        // 2b. Cadastral Building Parcel Distance Fields (100% Dirichlet lock on all buildings)
+        if (options.buildingPolygons && options.buildingPolygons.length > 0) {
+            for (const bldg of options.buildingPolygons) {
+                const buffer = bldg.bufferMeters ?? 1.5;
+                if (this.isPointInPolygon(x, z, bldg.localPolygonEnu)) {
+                    return true;
+                }
+                const dist = this.distanceToPolygon(x, z, bldg.localPolygonEnu);
                 if (dist <= buffer) {
                     return true;
                 }
@@ -185,7 +203,8 @@ export class PhotogrammetricTerrainHarmonizerService {
         count: number,
         centroidX: number,
         centroidZ: number,
-        crownRadius: number
+        crownRadius: number,
+        fallbackElevation: number = 22.0
     ): number {
         const rInner = crownRadius * 1.10;
         const rOuter = crownRadius * 1.45;
@@ -209,7 +228,7 @@ export class PhotogrammetricTerrainHarmonizerService {
         }
 
         if (perimeterElevations.length === 0) {
-            return 22.0; // Fallback sensible default ground height
+            return fallbackElevation;
         }
 
         // Return 15th percentile to sample authentic ground rather than outer vegetation fringes
@@ -310,9 +329,10 @@ export class PhotogrammetricTerrainHarmonizerService {
                 // Auto-sample missing ground elevations from this primitive if needed
                 for (const stand of activeStands) {
                     if (!standGroundMap.has(stand.id)) {
-                        const [sx, , sz] = stand.centroid;
+                        const [sx, sy, sz] = stand.centroid;
                         const rBase = stand.crownDiameterMeters / 2;
-                        const sampledGy = this.samplePerimeterGroundElevation(pos, posAcc.count, sx, sz, rBase);
+                        const fallbackY = stand.groundElevationMeters ?? (sy - rBase);
+                        const sampledGy = this.samplePerimeterGroundElevation(pos, posAcc.count, sx, sz, rBase, fallbackY);
                         standGroundMap.set(stand.id, sampledGy);
                         totalGroundElevations += sampledGy;
                     }
@@ -340,7 +360,7 @@ export class PhotogrammetricTerrainHarmonizerService {
                     let isDepressed = false;
 
                     for (const stand of activeStands) {
-                        const [sx, , sz] = stand.centroid;
+                        const [sx, sy, sz] = stand.centroid;
                         const rBase = stand.crownDiameterMeters / 2;
                         const rFade = rBase * fadeMultiplier;
                         const dx = x - sx;
@@ -351,9 +371,15 @@ export class PhotogrammetricTerrainHarmonizerService {
                             const dist = Math.sqrt(distSq);
                             const u = dist / rFade;
                             const w = this.c1HermiteSmoothstep(u);
-                            const gy = standGroundMap.get(stand.id) ?? 22.0;
+                            const gy = standGroundMap.get(stand.id) ?? stand.groundElevationMeters ?? (sy - rBase);
 
-                            if (y > gy) {
+                            // Physical Invariant: Max plausible tree canopy thickness gate.
+                            // A botanical canopy rarely exceeds 14m thickness. Vertices higher than (gy + maxCanopyThickness)
+                            // are architectural roofs/facades or steep cliffs and must NEVER be depressed.
+                            const maxCanopyThick = options.maxCanopyThicknessMeters ?? 14.0;
+                            const deltaY = y - gy;
+
+                            if (deltaY > 0.0 && deltaY <= maxCanopyThick) {
                                 const blended = y * (1.0 - w) + gy * w;
                                 if (blended < targetY) {
                                     targetY = blended;
