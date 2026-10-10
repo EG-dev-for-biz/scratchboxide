@@ -13,8 +13,8 @@
     "unixSeconds": 1716300000
   },
   "camera": {
-    "position": [46.5, 3.5, -14.0],
-    "target": [40.0, 8.0, 0.0],
+    "position": [85.0, 3.5, -18.0],
+    "target": [64.0, 11.0, 0.0],
     "verticalFovDeg": 60.0
   },
   "atmosphere": {

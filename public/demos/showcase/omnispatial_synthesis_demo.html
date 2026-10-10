@@ -1108,7 +1108,8 @@
                     <button class="prompt-chip" onclick="applyQuickPrompt('Stage 3: Continuous R^16 biophysical manifold PBR & photogrammetric city fusion')">🎨 Stage 3: Manifold PBR</button>
                     <button class="prompt-chip" onclick="applyQuickPrompt('Switch to Pedestrian Street View at 5th Ave portico with botanical trees')">🌳 Street View Portico</button>
                     <button class="prompt-chip" onclick="applyQuickPrompt('Inspect 2.5x macro detail loupe on 5th Ave limestone facade')">🔍 2.5x Detail Loupe</button>
-                    <button class="prompt-chip" onclick="applyQuickPrompt('Launch interactive 3D free orbit viewport in Stage 3 PBR')">🌐 3D Free Orbit</button>
+                    <button class="prompt-chip" onclick="applyQuickPrompt('Inspect 86th Fl Promenade & Mooring Mast in 3D Orbit')">🔭 86th Fl Observation Crown</button>
+                    <button class="prompt-chip" onclick="applyQuickPrompt('Synthesize complete 70-20-10 Art Deco setbacks, promenade pavilion, and mooring mast into 3D GLB')">🏛️ 70-20-10 Setbacks & Mast</button>
                     <button class="prompt-chip" onclick="applyQuickPrompt('Evaluate Toksvig Scharr normal pass and surface roughness')">☀️ Surface Normals</button>
                     <button class="prompt-chip" onclick="applyQuickPrompt('Compare Stage 1 clay vs Stage 3 PBR with wipe split slider')">⇄ Wipe Comparison</button>
                 </div>
@@ -1124,11 +1125,12 @@
                 <div class="preset-pill" onclick="loadLocation('One World Trade Center, NY')">One WTC</div>
             </div>
 
-            <!-- 3 Architectural Vantages -->
+            <!-- 4 Architectural Vantages -->
             <div class="vantage-selector">
                 <button class="vantage-btn active" id="vantageAerial" onclick="setVantage('aerial')">Midtown Aerial</button>
                 <button class="vantage-btn" id="vantageFacade" onclick="setVantage('facade')">5th Ave Facade</button>
                 <button class="vantage-btn" id="vantageStreet" onclick="setVantage('streetview')">Street View 🌳</button>
+                <button class="vantage-btn" id="vantageCrown" onclick="setVantage('crown')">Observation Crown 🔭</button>
             </div>
 
             <div class="view-mode-toggle">
@@ -1256,6 +1258,13 @@
                     <button class="stage-pill" id="orbitPillStage1" onclick="switchOrbitModel(1)">Stage 1: Clay Scan</button>
                     <button class="stage-pill" id="orbitPillStage2" onclick="switchOrbitModel(2)">Stage 2: Vector Refined</button>
                     <button class="stage-pill active" id="orbitPillStage3" onclick="switchOrbitModel(3)">Stage 3: De-Lighted PBR</button>
+                </div>
+                <div class="orbit-camera-presets" style="display: flex; gap: 4px; background: var(--dock-bg); border: 1px solid var(--dock-border); backdrop-filter: blur(14px); padding: 5px; border-radius: 8px;">
+                    <span style="font-size: 10px; color: var(--accent-cyan); font-weight: 700; align-self: center; padding: 0 4px;">CAMERA:</span>
+                    <button class="preset-pill" onclick="setOrbitCamera('street')">Street View 🌳</button>
+                    <button class="preset-pill" onclick="setOrbitCamera('setbacks')">Setbacks 📐</button>
+                    <button class="preset-pill active" id="orbitCamCrown" onclick="setOrbitCamera('promenade')">86th Fl Mast 🔭</button>
+                    <button class="preset-pill" onclick="setOrbitCamera('skyline')">Full Skyline 🏙️</button>
                 </div>
                 <div class="orbit-tip-pill">Left-click: Orbit · Right-click: Pan · Scroll: Zoom</div>
             </div>
@@ -1563,6 +1572,36 @@
                     glb:    '../../models/omnispatial_real_stage3_streetview_pbr.glb',
                     title:  'Stage 3: Street View Ground-Truth & SB-Veggie Trees',
                     sub:    'Granite Plinth · Ashlar Masonry · Foliage Dappled Sunlight'
+                },
+                crown: {
+                    name: 'Observation Crown & Mooring Mast',
+                    1: {
+                        beauty: '../../renders/omnispatial_stage1_clay/beauty.png',
+                        albedo: '../../renders/omnispatial_stage1_clay/beauty.png',
+                        normal: '../../renders/omnispatial_crown_orbit_pbr/normal.png',
+                        depth:  '../../renders/omnispatial_crown_orbit_pbr/depth.png',
+                        glb:    '../../models/omnispatial_stage1_real_clay_tile.glb',
+                        title:  'Stage 1: Raw Google 3D Tile (Melted Spire & Void)',
+                        sub:    'Jagged Photogrammetric Peg · Zero Observation Deck · Melted Walls'
+                    },
+                    2: {
+                        beauty: '../../renders/omnispatial_stage2_vector/beauty.png',
+                        albedo: '../../renders/omnispatial_stage2_vector/beauty.png',
+                        normal: '../../renders/omnispatial_crown_orbit_pbr/normal.png',
+                        depth:  '../../renders/omnispatial_crown_orbit_pbr/depth.png',
+                        glb:    '../../models/omnispatial_stage2_vector_refined.glb',
+                        title:  'Stage 2: 70-20-10 Vector Refined Crown & Mast',
+                        sub:    '86th Fl Promenade Deck · Octagonal Mast · 102nd Gallery · Antenna Spire'
+                    },
+                    3: {
+                        beauty: '../../renders/omnispatial_crown_orbit_pbr/beauty.png',
+                        albedo: '../../renders/omnispatial_crown_orbit_pbr/albedo.png',
+                        normal: '../../renders/omnispatial_crown_orbit_pbr/normal.png',
+                        depth:  '../../renders/omnispatial_crown_orbit_pbr/depth.png',
+                        glb:    '../../models/omnispatial_real_stage3_streetview_pbr.glb',
+                        title:  'Stage 3: De-Lighted PBR Observation Promenade & Spire',
+                        sub:    'Stone Paver Decking · Stainless Steel Mullions · Aviation Strobes'
+                    }
                 }
             }
         };
@@ -1572,9 +1611,30 @@
             document.getElementById('vantageAerial').classList.toggle('active', vantageKey === 'aerial');
             document.getElementById('vantageFacade').classList.toggle('active', vantageKey === 'facade');
             document.getElementById('vantageStreet').classList.toggle('active', vantageKey === 'streetview');
+            if (document.getElementById('vantageCrown')) {
+                document.getElementById('vantageCrown').classList.toggle('active', vantageKey === 'crown');
+            }
 
             refreshViews();
             document.getElementById('pipelineStatusText').innerText = `Vantage: ${vantages[vantageKey].name}`;
+        }
+
+        function setOrbitCamera(preset) {
+            const mv = document.getElementById('mainModelViewer');
+            if (!mv) return;
+            if (preset === 'street') {
+                mv.cameraOrbit = '45deg 85deg 45m';
+                mv.cameraTarget = '35m 8m 0m';
+            } else if (preset === 'setbacks') {
+                mv.cameraOrbit = '30deg 75deg 220m';
+                mv.cameraTarget = '0m 180m 0m';
+            } else if (preset === 'promenade') {
+                mv.cameraOrbit = '25deg 55deg 120m';
+                mv.cameraTarget = '0m 345m 0m';
+            } else if (preset === 'skyline') {
+                mv.cameraOrbit = '45deg 65deg 550m';
+                mv.cameraTarget = '0m 180m 0m';
+            }
         }
 
         function refreshViews() {
@@ -1756,7 +1816,9 @@
             }
 
             // Vantage recognition
-            if (p.includes('street') || p.includes('pedestrian') || p.includes('ground') || p.includes('sidewalk') || p.includes('portico') || p.includes('entrance')) {
+            if (p.includes('crown') || p.includes('promenade') || p.includes('mast') || p.includes('spire') || p.includes('86th') || p.includes('102nd')) {
+                result.vantage = 'crown';
+            } else if (p.includes('street') || p.includes('pedestrian') || p.includes('ground') || p.includes('sidewalk') || p.includes('portico') || p.includes('entrance')) {
                 result.vantage = 'streetview';
             } else if (p.includes('facade') || p.includes('piers') || p.includes('spandrel') || p.includes('5th ave') || p.includes('mid-rise') || p.includes('close-up')) {
                 result.vantage = 'facade';
