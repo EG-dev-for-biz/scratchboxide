@@ -92,6 +92,29 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
 - **Frosted Glassmorphic Datum Shelves**: When complex cards, tables, or multi-paragraph blocks overlay full-bleed imagery, use physical frosted planes (`rgba(15, 20, 30, 0.65)`, `backdrop-filter: blur(24px) saturate(180%)`, `border: 1px solid rgba(255, 255, 255, 0.12)`).
 - **The Datum Line & Convergence**: Lock typography to an architectural horizontal or vertical datum. Converge subject gaze and light vectors inward toward the copy.
 
+### Commandment 5F: Elimination of the Hard-Edged Geometric Cutline
+- **The Rule**: Never drop a flat, solid, or semi-transparent rectangular polygon with a hard 90° boundary over an image subject. In PowerPoint / Google Slides where true CSS-style alpha gradients are not natively supported as vector primitives, a flat rectangle creates an accidental split-screen defect that cuts arbitrarily through faces and subjects.
+- **The Two Approved Solutions**:
+  1. *Natural Planned Void*: Direct the generative model to stage natural dark low-frequency shadows on the text side, allowing white vector typography to sit directly on the photo with zero overlay boxes.
+  2. *Architectural Spatial Split*: Dock the 4K photograph to the right 50%–60% of the widescreen canvas as a clean photographic column, placing all typography on the solid canvas background to the left.
+
+### Commandment 5G: Fluid Editorial Spreads vs. Boxy UI Dashboards
+- **The Rule**: Reject the default reflex to enclose every text block and image inside a rounded floating card (`addCardContainer`, 1px borders, rounded bezels). This produces a SaaS software dashboard / web app wireframe aesthetic that destroys high-end editorial gravitas.
+- **Canvas-Level Typography**: In editorial and image-forward slides, typography floats directly on the slide canvas, anchored by generous asymmetric margins (0.9" to 1.2") and typographic baseline grids—unencumbered by enclosing card boxes.
+- **Borderless Image Plates**: Images should bleed edge-to-edge, dock flush to screen boundaries, or sit as pristine borderless plates without decorative container bezels.
+
+### Commandment 5H: Zero Synthetic Boilerplate & Payload-Driven Topology
+- **The Rule**: Never inject unprompted, hardcoded dummy metadata cards (e.g. "TECHNICAL PREVIS SPECIFICATIONS", fake frame rates, or fabricated rig specs) to artificially balance white space.
+- **Adaptive Spatial Weight**: When a slide has only body copy and an image, scale the image up to command the full height of the viewport rather than fabricating placeholder cards to occupy space.
+
+### Commandment 5I: Strict Chromatic Hierarchy & Two-Tone Restraint
+- **The Rule**: Restrict active slide hues to a disciplined two-tone system: Canvas Base (Deep Dark or Bone White) + Monolithic Typography (Pure White / Off-Black) + **exactly ONE intentional Accent hue** (used strictly for 1 element type, e.g. kickers or folios).
+- **Anti-Confetti Discipline**: Never mix competing neon and primary hues (e.g. mustard yellow kickers, lime green subtitles, and electric blue card headers on a single slide). Subtitles must use a muted tint of the primary text color (e.g., `#94A3B8` Slate-400), not an uncoordinated neon secondary accent.
+
+### Commandment 5J: Dynamic Typographic Equilibrium & Asymmetric Balance
+- **The Rule**: When placing multi-column content, dynamically scale column proportions and font sizes to content volume.
+- **The Void Trap**: Never place a 2-line blurb in an expansive 50% width container next to a dense 10-line bullet column with 75% dead space. Structure columns proportionally (e.g., 35/65 split) or collapse sparse content into an asymmetric, unboxed editorial pull-quote.
+
 ### Commandment 6: Label Clearly
 - **The Rule**: Maintain clear orientation markers without cluttering the canvas.
 - **Structure**:

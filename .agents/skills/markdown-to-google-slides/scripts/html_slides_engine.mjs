@@ -943,16 +943,18 @@ function renderThreeCards(s, textColor, accent) {
     `;
   }
 
-  // Case 3: Prose + Bullets
+  // Case 3: Prose + Bullets -> Asymmetric Editorial Split (Unboxed Manifesto Left, Structured Specs Right)
   if (paragraphs.length > 0 && bullets.length > 0) {
     return `
-      <div class="card">
-        <div class="card-badge">CORE CONCEPT & MANDATE</div>
-        <div class="card-body">${paragraphs.map(p => `<p style="margin-bottom: 12px; font-size: 16px; line-height: 1.55;">${formatMarkdownHtml(p)}</p>`).join('')}</div>
+      <div class="card editorial-manifesto" style="grid-column: span 1; padding: 36px 32px; background: rgba(15, 23, 42, 0.4); border-color: rgba(255, 255, 255, 0.08);">
+        <div class="card-badge" style="color: var(--accent); margin-bottom: 20px;">CORE CONCEPT & MANDATE</div>
+        <div class="card-body" style="font-size: 20px; line-height: 1.6; color: var(--title-color);">
+          ${paragraphs.map(p => `<p style="margin-bottom: 16px;">${formatMarkdownHtml(p)}</p>`).join('')}
+        </div>
       </div>
-      <div class="card">
-        <div class="card-badge">KEY DELIVERABLES</div>
-        <ul class="card-bullets">
+      <div class="card editorial-specs" style="grid-column: span 2; padding: 36px 36px;">
+        <div class="card-badge" style="color: var(--subtitle-color); margin-bottom: 20px;">EXECUTION SPECIFICATIONS</div>
+        <ul class="card-bullets" style="gap: 14px;">
           ${bullets.map(renderFormattedBulletItem).join('')}
         </ul>
       </div>

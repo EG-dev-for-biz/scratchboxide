@@ -718,10 +718,9 @@ export function generateBrandPaletteFromHex(baseHex, brandName = '', theme = 'da
     const subRgb = hslToRgb((hsl.h + 30) % 360, 60, theme === 'dark' ? 65 : 40);
     subtitleHex = rgbToHex(subRgb.r, subRgb.g, subRgb.b);
   } else {
-    const triRgb = hslToRgb((hsl.h + 120) % 360, hsl.s, hsl.l);
-    secondaryHex = rgbToHex(triRgb.r, triRgb.g, triRgb.b);
-    const subRgb = hslToRgb((hsl.h + 240) % 360, 60, theme === 'dark' ? 65 : 40);
-    subtitleHex = rgbToHex(subRgb.r, subRgb.g, subRgb.b);
+    // Strict Two-Tone Restraint: Subtitle is a muted neutral tint, eliminating triadic rainbow confetti
+    subtitleHex = theme === 'dark' ? '94A3B8' : '64748B';
+    secondaryHex = cleanHex;
   }
 
   const kickerLabel = brandName ? `${brandName.toUpperCase()} // STRATEGY & CREATIVE VISION` : 'EXECUTIVE PRESENTATION';
@@ -1075,43 +1074,43 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
     switch (archetype) {
       case 'hero-opener': {
-        if (s.images.length > 0) {
+        const hasImg = s.images.length > 0;
+        const leftAreaW = hasImg ? (slideWIn * 0.44 - padIn * 1.2) : (slideWIn - padIn * 2);
+
+        if (hasImg) {
+          // Architectural Spatial Split: 4K photo is anchored on the right 56% as an unadulterated photographic plate
+          const imgW = slideWIn * 0.56;
+          const imgX = slideWIn - imgW;
           slide.addImage({
             path: s.images[0].url,
-            x: 0, y: 0, w: slideWIn, h: slideHIn,
-            sizing: { type: 'cover', w: slideWIn, h: slideHIn },
+            x: imgX, y: 0, w: imgW, h: slideHIn,
+            sizing: { type: 'cover', w: imgW, h: slideHIn },
           });
 
-          // Asymmetric Left-Anchored Scrim: protects typography while leaving 55%+ of 4K photo pristine
-          slide.addShape(pptx.ShapeType.rect, {
-            x: 0, y: 0, w: slideWIn * 0.58, h: slideHIn,
-            fill: { color: palette.slideBg, transparency: 18 },
-            line: { width: 0 },
-          });
-          slide.addShape(pptx.ShapeType.rect, {
-            x: 0, y: slideHIn * 0.38, w: slideWIn * 0.65, h: slideHIn * 0.62,
-            fill: { color: palette.slideBg, transparency: 22 },
-            line: { width: 0 },
+          // Hairline vertical divider rule separating photo from canvas
+          slide.addShape(pptx.ShapeType.line, {
+            x: imgX, y: 0, w: 0, h: slideHIn,
+            line: { color: '1E293B', width: 1 },
           });
         }
 
         // Kicker Badge
         const coverKicker = s.kicker || frontmatter.kicker || palette.kicker || 'DIRECTOR’S TREATMENT & PREVIS';
         slide.addText(coverKicker.toUpperCase(), {
-          x: padIn, y: slideHIn * 0.46, w: slideWIn - padIn * 2, h: 0.35,
-          fontSize: 10.5, bold: true, color: palette.accentColor,
+          x: padIn, y: slideHIn * 0.32, w: leftAreaW, h: 0.35,
+          fontSize: 10, bold: true, color: palette.accentColor,
           fontFace: fontPairing.monoFont,
           charSpacing: fontPairing.kickerTracking, margin: 0,
         });
 
         // Title (dynamic font sizing for perfect wrap)
         const coverTitle = stripMarkdownFormatting(s.title);
-        const coverTitleSize = coverTitle.length < 25 ? 36 : (coverTitle.length < 45 ? 30 : 24);
-        const coverTitleLines = Math.ceil(coverTitle.length / (coverTitleSize > 30 ? 30 : 40));
+        const coverTitleSize = coverTitle.length < 25 ? 34 : (coverTitle.length < 45 ? 28 : 22);
+        const coverTitleLines = Math.ceil(coverTitle.length / (coverTitleSize > 28 ? 20 : 28));
         const coverTitleH = Math.max(0.8, coverTitleLines * 0.55);
 
         slide.addText(coverTitle, {
-          x: padIn, y: slideHIn * 0.52, w: (slideWIn - padIn * 2) * 0.72, h: coverTitleH,
+          x: padIn, y: slideHIn * 0.38, w: leftAreaW, h: coverTitleH,
           fontSize: coverTitleSize, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
@@ -1124,8 +1123,8 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         if (s.subtitle) {
           const coverSub = stripMarkdownFormatting(s.subtitle);
           slide.addText(coverSub, {
-            x: padIn, y: slideHIn * 0.52 + coverTitleH + 0.1, w: (slideWIn - padIn * 2) * 0.72, h: 0.7,
-            fontSize: 15, color: palette.subtitleColor,
+            x: padIn, y: slideHIn * 0.38 + coverTitleH + 0.12, w: leftAreaW, h: 0.8,
+            fontSize: 13, color: palette.subtitleColor,
             fontFace: fontPairing.bodyFont,
             margin: 0,
           });
@@ -1139,14 +1138,14 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         const metaLine = `DIRECTOR: ${director.toUpperCase()}  |  AGENCY: ${agency.toUpperCase()}  |  CLIENT: ${client.toUpperCase()}  |  STUDIO: ${studio.toUpperCase()}`;
 
         slide.addShape(pptx.ShapeType.line, {
-          x: padIn, y: slideHIn * 0.88, w: slideWIn - padIn * 2, h: 0,
+          x: padIn, y: slideHIn * 0.86, w: leftAreaW, h: 0,
           line: { color: '334155', width: 1 },
         });
         slide.addText(metaLine, {
-          x: padIn, y: slideHIn * 0.89, w: slideWIn - padIn * 2, h: 0.35,
-          fontSize: 9.5, bold: true, color: palette.textColor,
+          x: padIn, y: slideHIn * 0.88, w: leftAreaW, h: 0.35,
+          fontSize: 8, bold: true, color: '64748B',
           fontFace: fontPairing.monoFont,
-          charSpacing: 1.5, margin: 0,
+          charSpacing: 1.2, margin: 0,
         });
         break;
       }
@@ -1468,44 +1467,61 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             valign: 'top', margin: 0,
           });
         } else if (hasBullets && paragraphs.length > 0) {
-          // 2-Card Split: Prose Left, Bullets Right
-          const cardW = (totalW - 0.3) / 2;
+          // Asymmetric Editorial Split: 38% unboxed manifesto on the left, 58% structured specs on the right
+          const leftColW = totalW * 0.38;
+          const rightColW = totalW * 0.58;
+          const rightColX = padIn + leftColW + (totalW - leftColW - rightColW);
 
-          // Card 1: Overview
-          addCardContainer(slide, { x: padIn, y: cardY, w: cardW, h: cardH });
+          // Left: Unboxed Editorial Statement / Manifesto
           slide.addText('CORE CONCEPT & MANDATE', {
-            x: padIn + 0.3, y: cardY + 0.25, w: cardW - 0.6, h: 0.3,
-            fontSize: 10, bold: true, color: palette.accentColor, charSpacing: 1.5, margin: 0,
+            x: padIn, y: cardY + 0.1, w: leftColW, h: 0.3,
+            fontSize: 9.5, bold: true, color: palette.accentColor,
+            fontFace: fontPairing.monoFont,
+            charSpacing: 2, margin: 0,
           });
+
           const proseRuns = [];
           for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
-            proseRuns.push(...parseTextRuns(paragraphs[pIdx], palette, { fontSize: 11.5, color: palette.textColor, lineSpacingMultiple: 1.4 }));
-            if (pIdx < paragraphs.length - 1) proseRuns.push({ text: '\n\n', options: { fontSize: 7 } });
+            proseRuns.push(...parseTextRuns(paragraphs[pIdx], palette, {
+              fontSize: 13.5,
+              color: palette.titleColor,
+              fontFace: fontPairing.bodyFont,
+              lineSpacingMultiple: 1.45,
+            }));
+            if (pIdx < paragraphs.length - 1) proseRuns.push({ text: '\n\n', options: { fontSize: 8 } });
           }
           slide.addText(proseRuns, {
-            x: padIn + 0.3, y: cardY + 0.65, w: cardW - 0.6, h: cardH - 0.9,
+            x: padIn, y: cardY + 0.5, w: leftColW, h: cardH - 0.7,
             valign: 'top', margin: 0,
           });
 
-          // Card 2: Bullets
-          const rx = padIn + cardW + 0.3;
-          addCardContainer(slide, { x: rx, y: cardY, w: cardW, h: cardH });
-          slide.addText('EXECUTION SPECIFICATIONS', {
-            x: rx + 0.3, y: cardY + 0.25, w: cardW - 0.6, h: 0.3,
-            fontSize: 10, bold: true, color: palette.secondaryAccent, charSpacing: 1.5, margin: 0,
+          // Subtle hairline vertical divider
+          slide.addShape(pptx.ShapeType.line, {
+            x: rightColX - 0.2, y: cardY + 0.1, w: 0, h: cardH - 0.2,
+            line: { color: '1E293B', width: 1 },
           });
+
+          // Right: Structured Execution Specifications
+          slide.addText('EXECUTION SPECIFICATIONS', {
+            x: rightColX, y: cardY + 0.1, w: rightColW, h: 0.3,
+            fontSize: 9.5, bold: true, color: '94A3B8',
+            fontFace: fontPairing.monoFont,
+            charSpacing: 2, margin: 0,
+          });
+
           const bulletRuns = [];
           for (const b of bullets) {
             bulletRuns.push(...parseTextRuns(b, palette, {
-              fontSize: bullets.length > 5 ? 9.5 : 10.5,
+              fontSize: bullets.length > 5 ? 10.5 : 11.5,
               color: palette.textColor,
+              fontFace: fontPairing.bodyFont,
               bullet: true,
-              lineSpacingMultiple: bullets.length > 5 ? 1.2 : 1.3,
+              lineSpacingMultiple: 1.35,
             }));
-            bulletRuns.push({ text: '\n\n', options: { fontSize: 5 } });
+            bulletRuns.push({ text: '\n\n', options: { fontSize: 6 } });
           }
           slide.addText(bulletRuns, {
-            x: rx + 0.3, y: cardY + 0.65, w: cardW - 0.6, h: cardH - 0.9,
+            x: rightColX, y: cardY + 0.5, w: rightColW, h: cardH - 0.7,
             valign: 'top', margin: 0,
           });
         } else if (paragraphs.length >= 2 && paragraphs.length <= 3) {
@@ -1609,26 +1625,22 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           fill: { color: palette.accentColor }, line: { width: 0 },
         });
 
-        const cardY = curHeaderY + 0.18;
-        const cardH = slideHIn - cardY - padIn * 0.7;
-        addCardContainer(slide, { x: padIn, y: cardY, w: textW, h: cardH });
-
         const textParts = [];
         if (s.body) {
-          const bodyRuns = parseTextRuns(s.body, palette, { fontSize: 11, color: palette.textColor, fontFace: fontPairing.bodyFont, lineSpacingMultiple: 1.35 });
+          const bodyRuns = parseTextRuns(s.body, palette, { fontSize: 11.5, color: palette.textColor, fontFace: fontPairing.bodyFont, lineSpacingMultiple: 1.4 });
           textParts.push(...bodyRuns);
           if (s.bullets && s.bullets.length > 0) {
-            textParts.push({ text: '\n\n', options: { fontSize: 6 } });
+            textParts.push({ text: '\n\n', options: { fontSize: 8 } });
           }
         }
         for (const b of s.bullets) {
-          textParts.push(...parseTextRuns(b, palette, { fontSize: 10.5, color: palette.textColor, fontFace: fontPairing.bodyFont, bullet: true, lineSpacingMultiple: 1.3 }));
-          textParts.push({ text: '\n\n', options: { fontSize: 5 } });
+          textParts.push(...parseTextRuns(b, palette, { fontSize: 10.5, color: palette.textColor, fontFace: fontPairing.bodyFont, bullet: true, lineSpacingMultiple: 1.35 }));
+          textParts.push({ text: '\n\n', options: { fontSize: 6 } });
         }
 
         if (textParts.length > 0) {
           slide.addText(textParts, {
-            x: padIn + 0.3, y: cardY + 0.3, w: textW - 0.6, h: cardH - 0.6,
+            x: padIn, y: curHeaderY + 0.22, w: textW, h: slideHIn - curHeaderY - padIn * 1.2,
             valign: 'top', margin: 0,
           });
         }
@@ -1637,53 +1649,22 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           const imgPath = s.images[0].url;
           const { aspect } = getImageDimensions(imgPath);
 
-          // Dedicated 16:9 Cinema Container (NEVER a square box!)
+          // Full-Scale Cinematic Plate: Scales to available canvas height without container cards
           const maxMediaW = rightAreaW;
-          const maxMediaH = 4.0;
-          const { w: imgFitW, h: imgFitH } = fitDimensions(aspect, maxMediaW - 0.16, maxMediaH - 0.16);
+          const maxMediaH = slideHIn - padIn * 1.6;
+          const { w: imgFitW, h: imgFitH } = fitDimensions(aspect, maxMediaW, maxMediaH);
 
-          const mediaCardW = imgFitW + 0.16;
-          const mediaCardH = imgFitH + 0.16;
-          const mediaCardX = rightAreaX + (rightAreaW - mediaCardW) / 2;
-          const mediaCardY = padIn;
+          const mediaX = rightAreaX + (rightAreaW - imgFitW) / 2;
+          const mediaY = padIn + 0.1 + (maxMediaH - imgFitH) / 2;
 
-          // True 16:9 Widescreen Card
-          addCardContainer(slide, { x: mediaCardX, y: mediaCardY, w: mediaCardW, h: mediaCardH });
-
-          // Exact native aspect ratio image
+          // Pure photographic plate
           slide.addImage({
             path: imgPath,
-            x: mediaCardX + 0.08,
-            y: mediaCardY + 0.08,
+            x: mediaX,
+            y: mediaY,
             w: imgFitW,
             h: imgFitH,
           });
-
-          // Companion Technical Specifications Card
-          const metaCardY = mediaCardY + mediaCardH + 0.25;
-          const metaCardH = slideHIn - padIn - metaCardY;
-          if (metaCardH >= 0.8) {
-            addCardContainer(slide, { x: mediaCardX, y: metaCardY, w: mediaCardW, h: metaCardH });
-
-            slide.addText('TECHNICAL PREVIS SPECIFICATIONS', {
-              x: mediaCardX + 0.25, y: metaCardY + 0.2, w: mediaCardW - 0.5, h: 0.25,
-              fontSize: 9.5, bold: true, color: palette.accentColor, charSpacing: 1.5, margin: 0,
-            });
-
-            const metaRuns = [
-              { text: '• Timeline: ', options: { bold: true, color: palette.subtitleColor, fontSize: 10 } },
-              { text: '15-Second Continuous Seamless Cycle (0.0s – 15.0s)\n', options: { color: palette.textColor, fontSize: 10 } },
-              { text: '• Frame Rate & Frustum: ', options: { bold: true, color: palette.subtitleColor, fontSize: 10 } },
-              { text: '30 FPS Broadcast Cadence  |  2:1 MSG Marquee Frustum\n', options: { color: palette.textColor, fontSize: 10 } },
-              { text: '• Chirality & Rig: ', options: { bold: true, color: palette.subtitleColor, fontSize: 10 } },
-              { text: 'Strict Left Arm (48° Incline)  |  55-Joint Articulated Hand Rig', options: { color: palette.textColor, fontSize: 10 } },
-            ];
-
-            slide.addText(metaRuns, {
-              x: mediaCardX + 0.25, y: metaCardY + 0.48, w: mediaCardW - 0.5, h: metaCardH - 0.55,
-              valign: 'top', lineSpacingMultiple: 1.25, margin: 0,
-            });
-          }
         }
         break;
       }
