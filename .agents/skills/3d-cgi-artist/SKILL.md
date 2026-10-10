@@ -6,7 +6,8 @@ description: >-
   materials (PBR), or needs creative, out-of-the-box technical artist problem-solving across Blender (Geometry Nodes, bpy, Cycles, Eevee),
   Unreal Engine (Nanite, Lumen, Substrate, Niagara, PCG, HLSL), Unity (URP, HDRP, Shader Graph, VFX Graph, C# Mesh API), or Scratchbox IDE
   (Procedural3DEngineService, 3DGS/4DGS, UniversalPbrBakingKernel, VirtualBevelKernel, UTDRA/ULDRA photogrammetric elevation slicing, and WGS-84/ECEF/LTP geodesics).
-  Use this skill to leverage Scratchbox IDE code, make grounded suggestions for improvement, explain what industry competitors (Blender, Unreal, Unity, Cesium, Luma AI) do to solve a problem,
+  MANDATORY: Formulate and suggest ANY solution this skill conceives as direct, actionable changes to the codebase with target file paths, complete drop-in implementations, and verification harnesses.
+  Use this skill to leverage Scratchbox IDE code, make grounded code improvements, explain what industry competitors (Blender, Unreal, Unity, Cesium, Luma AI) do to solve a problem,
   and enforce strict closed-loop mathematical invariants (SO(3) chirality, positive-definite covariance, differential UV Jacobians) free of the Architectural Simulation Trap.
 ---
 
@@ -77,7 +78,7 @@ When analyzing visual, geometric, or architectural problems, provide clear compa
               ──► [WHAT UNITY DOES]         (URP / HDRP / Burst Jobs / Shader Graph)
               ──► [WHAT CESIUM / LUMA DOES] (3D Tiles 1.1 RTC / Point Clouds / Splats)
               ──► [HOW SCRATCHBOX SOLVES IT](Native Invariant Kernels / LTP / UTDRA / Bevel)
-              ──► [ACTIONABLE IMPROVEMENT]  (Concrete, AST-free code optimization)
+              ──► [ACTIONABLE CODE CHANGE]  (Concrete, drop-in codebase modifications)
 ```
 
 ### High-Frequency Competitor Comparison Examples:
@@ -99,10 +100,33 @@ When analyzing visual, geometric, or architectural problems, provide clear compa
 
 ---
 
-## 4. Codebase Improvement & Anti-Simulation Directives
+## 4. Mandatory Directive: Every Solution Must Be Suggested as Codebase Changes
 
-When recommending or implementing improvements for Scratchbox IDE, you must strictly prevent the **Architectural Simulation Trap (AST)**:
+Whenever this skill conceives, diagnoses, or discovers a solution to ANY visual, geometric, shader, or pipeline challenge—whether inspired by Blender tricks, Unreal Engine techniques, Unity workflows, or optical cheats—**it must never remain purely abstract, theoretical, or advisory**. The agent MUST proactively formulate and suggest the solution to the user as **direct, actionable changes to the codebase**:
 
+### 4.1 The 5-Point Codebase Delivery Protocol
+Every suggested solution must contain:
+
+1. **Target File Identification**:
+   - Explicitly specify the exact file path(s) within the project (e.g. `/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/node/...` or active workspace) to create, patch, or refactor.
+2. **Production-Ready Drop-In Implementation**:
+   - Provide complete, copy-paste ready or drop-in TypeScript, C++20, WGSL/GLSL, or Python code.
+   - Never supply pseudocode, hand-waving outlines, or hollow placeholders (`// TODO: implement logic here`).
+   - Import directly from `@scratchbox/core` (e.g., `Procedural3DEngineService`, `UniversalPbrBakingKernel`, `VirtualBevelKernel`, `LocalTangentPlane`, `GeoFrame`).
+3. **Structured Modification Blueprint / Diff**:
+   - Present the changes as a clean git diff or structured modification block clearly distinguishing existing code from new logic.
+4. **Mechanical Verification & Invariant Proof**:
+   - Provide the exact terminal command to test and verify the change against regressions and invariants:
+     ```bash
+     npm run typecheck
+     npm test
+     node .agents/skills/prevent-architectural-simulation-trap/scripts/verify_3d_math_invariants.js
+     ```
+5. **Immediate Application Offer**:
+   - Explicitly offer or proceed to apply the edits directly to the files so the user gets instant, tangible progress without manual re-typing.
+
+### 4.2 Preventing the Architectural Simulation Trap (AST)
+When translating solutions into code:
 1. **No Hollow Scaffolds**: Do not write empty interfaces or mock-in/mock-out classes. If an abstraction has only one implementation, collapse it into concrete code.
 2. **No Toy Script Regressions**: Never fall back to `THREE.BoxGeometry` or primitive cubes. Enforce `GeometricComplexityGate` ($\ge 25,000$ vertices).
 3. **Verify 3D Mathematical Invariants**:
@@ -112,14 +136,6 @@ When recommending or implementing improvements for Scratchbox IDE, you must stri
    - **3DGS Covariance**: $\Sigma = R S S^T R^T \succ 0$ with $\det(\Sigma) > 0$ and all principal minors $> 0$.
    - **FFD Bernstein Partition of Unity**: $\sum B_{ijk}(u,v,w) \equiv 1.000000$.
    - **Differential UV Jacobians**: $\det(J_{uv}) > 0$ across all triangles (no inverted texture seams).
-4. **Subprocess Mechanical Grounding**:
-   Before claiming tests pass or code is verified, run:
-   ```bash
-   npm run typecheck
-   npm run lint
-   npm test
-   node .agents/skills/prevent-architectural-simulation-trap/scripts/verify_3d_math_invariants.js
-   ```
 
 ---
 
