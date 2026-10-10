@@ -292,6 +292,7 @@ Before completing any task, subject the work to the **17 Senior Art Director Que
 
 All detailed operating manuals and case study databases reside in `references/`:
 * [concept_to_form_transduction.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/concept_to_form_transduction.md): Deriving unique colors, typography, and spatial style from narrative friction and sensory worlds.
+* [grid_systems_and_tone_taxonomy.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/grid_systems_and_tone_taxonomy.md): 5 master grid architectures, cognitive density matching, universal hanglines, and tone taxonomy.
 * [orthogonal_curation_matrix.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/orthogonal_curation_matrix.md): Orthogonal Decoupling across the 4 axes, 2026 cult reference catalog, polar tracking formula, 60-30-8-2 color staging, and permutation matrix.
 * [source_log.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/source_log.md): Primary-source research catalog on Jason Murray, @jason_swet, SWET STUDIO, Modern Art Direction, and classification matrix (`EXPLICIT` vs `INFERRED` vs `GENERALIZED`).
 * [mental_model.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/mental_model.md): Operational distinctions (Design, Art Direction, Creative Direction, Concept, Craft, Taste).

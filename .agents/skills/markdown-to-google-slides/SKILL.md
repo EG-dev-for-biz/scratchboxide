@@ -247,6 +247,7 @@ node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_
 ## 7. References & Tooling
 
 - [`references/concept_to_form_transduction.md`](./references/concept_to_form_transduction.md) — Deriving unique colors, typography, and spatial style from narrative friction and sensory worlds.
+- [`references/grid_systems_and_tone_taxonomy.md`](./references/grid_systems_and_tone_taxonomy.md) — Grid system selection, cognitive density matching, universal hanglines, and tone taxonomy.
 - [`references/scratchbox_mcp_guide.md`](./references/scratchbox_mcp_guide.md) — Scratchbox Canvas MCP architecture, tools, and endpoints.
 - [`references/deck_commandments_layout_guide.md`](./references/deck_commandments_layout_guide.md) — The 10 Deck Commandments from *The Art of Deck Making*.
 - [`references/orthogonal_design_synthesis_guide.md`](./references/orthogonal_design_synthesis_guide.md) — Orthogonal reference curation, cult layout heuristics, and the 4-axis synthesis matrix.

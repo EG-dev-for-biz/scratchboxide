@@ -1465,7 +1465,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           x: padIn, y: kickerY, w: slideWIn - padIn * 2, h: kickerH,
           fontSize: 9.5, bold: true, color: palette.accentColor,
           fontFace: fontPairing.monoFont,
-          charSpacing: fontPairing.kickerTracking, margin: 0,
+          margin: 0,
         });
 
         const rawTitle = stripMarkdownFormatting(s.title);
@@ -1479,7 +1479,6 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           fontSize: titleFontSize, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
-          charSpacing: fontPairing.displayTracking,
           lineSpacingMultiple: 1.08,
           color: palette.titleColor, margin: 0,
         });
@@ -1780,22 +1779,21 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           x: padIn, y: kickerY, w: textW, h: kickerH,
           fontSize: 9.5, bold: true, color: palette.accentColor,
           fontFace: fontPairing.monoFont,
-          charSpacing: fontPairing.kickerTracking, margin: 0,
+          margin: 0,
         });
 
         const rawTitle = stripMarkdownFormatting(s.title);
-        const titleFontSize = rawTitle.length > 40 ? 20 : 23;
-        const titleLines = Math.ceil(rawTitle.length / (titleFontSize > 21 ? 24 : 30));
-        const titleH = Math.max(0.42, titleLines * (titleFontSize / 72 * 1.25));
+        const titleFontSize = rawTitle.length > 40 ? 19 : 22;
+        const titleLines = Math.ceil(rawTitle.length / (titleFontSize > 20 ? 24 : 30));
+        const titleH = Math.max(0.40, titleLines * (titleFontSize / 72 * 1.22));
 
         // Disciplined vertical gap: 0.16" (11.5pt) breathing room below kicker
-        const titleY = kickerY + kickerH + 0.16;
+        const titleY = kickerY + kickerH + 0.14;
         slide.addText(rawTitle, {
           x: padIn, y: titleY, w: textW, h: titleH,
           fontSize: titleFontSize, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
-          charSpacing: fontPairing.displayTracking,
           lineSpacingMultiple: 1.08,
           color: palette.titleColor, margin: 0,
         });
@@ -1804,48 +1802,55 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         if (s.subtitle) {
           const rawSub = stripMarkdownFormatting(s.subtitle);
-          const subH = Math.max(0.28, Math.ceil(rawSub.length / 40) * 0.26);
-          const subY = curHeaderY + 0.14;
+          const subH = Math.max(0.26, Math.ceil(rawSub.length / 40) * 0.24);
+          const subY = curHeaderY + 0.12;
           slide.addText(rawSub, {
             x: padIn, y: subY, w: textW, h: subH,
-            fontSize: 13, color: palette.subtitleColor,
+            fontSize: 12.5, color: palette.subtitleColor,
             fontFace: fontPairing.bodyFont,
-            lineSpacingMultiple: 1.35,
+            lineSpacingMultiple: 1.30,
             margin: 0,
           });
           curHeaderY = subY + subH;
         }
 
+        // Dynamic auto-fit text budget to guarantee ZERO vertical overflow
+        const availH = slideHIn - curHeaderY - padIn * 1.4;
+        const totalChars = (s.body ? s.body.length : 0) + (s.bullets ? s.bullets.join(' ').length : 0);
+        const autoFontSize = totalChars > 750 ? 9.5 : (totalChars > 450 ? 10.5 : 11.5);
+        const autoLineSpacing = totalChars > 500 ? 1.25 : 1.35;
+        const autoBulletGap = totalChars > 500 ? 6 : 8;
+
         const textParts = [];
         if (s.body) {
           const bodyRuns = parseTextRuns(s.body, palette, {
-            fontSize: 12.5,
+            fontSize: autoFontSize + 1,
             color: palette.titleColor,
             fontFace: fontPairing.bodyFont,
-            lineSpacingMultiple: 1.45,
+            lineSpacingMultiple: autoLineSpacing + 0.05,
           });
           textParts.push(...bodyRuns);
           if (s.bullets && s.bullets.length > 0) {
-            textParts.push({ text: '\n\n', options: { fontSize: 10 } });
+            textParts.push({ text: '\n\n', options: { fontSize: autoBulletGap } });
           }
         }
         for (let bIdx = 0; bIdx < s.bullets.length; bIdx++) {
           const b = s.bullets[bIdx];
           textParts.push(...parseTextRuns(b, palette, {
-            fontSize: 11,
+            fontSize: autoFontSize,
             color: palette.textColor,
             fontFace: fontPairing.bodyFont,
             bullet: true,
-            lineSpacingMultiple: 1.35,
+            lineSpacingMultiple: autoLineSpacing,
           }));
           if (bIdx < s.bullets.length - 1) {
-            textParts.push({ text: '\n\n', options: { fontSize: 8 } });
+            textParts.push({ text: '\n\n', options: { fontSize: autoBulletGap } });
           }
         }
 
         if (textParts.length > 0) {
           slide.addText(textParts, {
-            x: padIn, y: curHeaderY + 0.18, w: textW, h: slideHIn - curHeaderY - padIn * 1.3,
+            x: padIn, y: curHeaderY + 0.16, w: textW, h: availH,
             valign: 'top', margin: 0,
           });
         }
@@ -1859,38 +1864,44 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         const kickerText = s.kicker || (s.subtitle && s.title.length < 30 ? s.subtitle.toUpperCase() : 'TECHNICAL ARCHITECTURE');
         slide.addText(kickerText, {
-          x: padIn, y: padIn, w: textW, h: 0.28,
-          fontSize: 9.5, bold: true, color: palette.accentColor, charSpacing: 2, margin: 0,
+          x: padIn, y: padIn * 0.85, w: textW, h: 0.22,
+          fontSize: 9.5, bold: true, color: palette.accentColor,
+          fontFace: fontPairing.monoFont,
+          margin: 0,
         });
 
         const rawTitle = stripMarkdownFormatting(s.title);
-        const titleFontSize = rawTitle.length > 40 ? 18 : 20;
+        const titleFontSize = rawTitle.length > 40 ? 18 : 21;
         const titleLines = Math.ceil(rawTitle.length / (titleFontSize > 19 ? 28 : 34));
-        const titleH = Math.max(0.38, titleLines * (titleFontSize / 72 * 1.3));
+        const titleH = Math.max(0.38, titleLines * (titleFontSize / 72 * 1.25));
 
+        const titleY = padIn * 0.85 + 0.22 + 0.14;
         slide.addText(rawTitle, {
-          x: padIn, y: padIn + 0.32, w: textW, h: titleH,
-          fontSize: titleFontSize, bold: true, color: palette.titleColor, margin: 0,
+          x: padIn, y: titleY, w: textW, h: titleH,
+          fontSize: titleFontSize, bold: true,
+          fontFace: fontPairing.displayFont,
+          italic: fontPairing.italicDisplay,
+          color: palette.titleColor,
+          lineSpacingMultiple: 1.08,
+          margin: 0,
         });
 
-        let curHeaderY = padIn + 0.32 + titleH;
+        let curHeaderY = titleY + titleH;
 
         if (s.subtitle) {
           const rawSub = stripMarkdownFormatting(s.subtitle);
-          const subH = Math.max(0.28, Math.ceil(rawSub.length / 45) * 0.25);
+          const subH = Math.max(0.26, Math.ceil(rawSub.length / 45) * 0.24);
+          const subY = curHeaderY + 0.10;
           slide.addText(rawSub, {
-            x: padIn, y: curHeaderY + 0.04, w: textW, h: subH,
-            fontSize: 12, color: palette.subtitleColor, margin: 0,
+            x: padIn, y: subY, w: textW, h: subH,
+            fontSize: 12, color: palette.subtitleColor,
+            fontFace: fontPairing.bodyFont,
+            margin: 0,
           });
-          curHeaderY += subH + 0.06;
+          curHeaderY = subY + subH;
         }
 
-        slide.addShape(pptx.ShapeType.rect, {
-          x: padIn, y: curHeaderY + 0.06, w: 0.8, h: 0.035,
-          fill: { color: palette.accentColor }, line: { width: 0 },
-        });
-
-        const cardY = curHeaderY + 0.18;
+        const cardY = curHeaderY + 0.16;
         const cardH = slideHIn - cardY - padIn * 0.7;
         addCardContainer(slide, { x: padIn, y: cardY, w: textW, h: cardH });
 
