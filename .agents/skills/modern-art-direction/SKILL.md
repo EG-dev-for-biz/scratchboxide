@@ -260,6 +260,17 @@ When presenting modern art direction in slide decks, treatments, and editorial l
     - Never pick colors, fonts, or photographic styles via semantic literalism (e.g. finance = navy blue, sustainability = green, luxury = gold).
     - Always execute the 4 Narrative Probes before designing: (1) Ideological & emotional friction, (2) Physical sensory environment under light, (3) Vocal acoustic persona, and (4) Physical subject matter materials.
     - Colors must be extracted from physical substances (60-30-8-2 rule) existing in that sensory world. Typography must be cast like actors across a 3-layer model (Display Persona + Invisible Reading Grotesk + Monospace Architectural Datum). Negative space must be directed as an organic scene continuation rather than an artificial graphical mask.
+29. **Grid System Selection & Typographic Tone Taxonomy Invariant**:
+    - Layout mathematics must embody the narrative's psychological posture. Evaluate the 3 axes: Cognitive Density (sparse vs. dense), Cognitive Tempo (slow/cinematic vs. fast/forensic), and Institutional Posture (sovereign, rational, or subversive).
+    - Map directly to the 5 Master Grid Architectures: Monolithic Axial Void ($M_p \ge 10\%-14\%$), Asymmetric Editorial Duo ($38/62$ split), Swiss Compound Modular (6/12 columns with universal hangline $y = 24\%$), High-Density Telemetry Matrix (8/16 columns with horizontal monospace datum shelves), or Brutalist Collision (deliberate scale rupture).
+30. **Spatial Frequency Occlusion, Magazine Editorial Dynamics & Controlled Rule-Breaking Invariant**:
+    - *Spatial Frequency Decoupling*: Direct photography so high-frequency focal subjects anchor strictly on the right 35% flank, reserving the left 65% for calm low-frequency atmosphere.
+    - *Directional Optical Scrim*: Protect typography with an asymmetric cubic falloff scrim ($mid_1 = 0.26, cutoff = 0.62$, 94% opacity falloff), leaving $>60\%$ of the photograph unshadowed and pristine.
+    - *Magazine Editorial Tension*: Enforce a 10:1 scalar ratio between monumental display headlines ($48\text{pt}–80\text{pt}$, negative tracking) and micro-metadata ($8\text{pt}–9\text{pt}$, wide positive tracking). Purge bullet points for structured datum shelves (`01 //`, `02 //`).
+    - *Controlled Rule-Breaking*: Allow exactly one calculated rupture per spread (Margin Overflow, Scale Collision, 90° Rotated Vertical Spine, or Depth-Layer Occlusion) while keeping 85% of the layout locked to the underlying grid.
+31. **The 6-Step Unique Layout Conception Methodology**:
+    - Reject the first three layout ideas ("No. That's the obvious version").
+    - Execute the 6 steps sequentially: (1) Subtractive Purge of cards/boxes/icons, (2) 3 Lateral Probes, (3) Master Grid Selection, (4) Living Photographic Continuation with the 5 optical imperfections, (5) Directional Scrim & Polar Typography, and (6) The 17-Gate Art Director Critique.
 
 ---
 
