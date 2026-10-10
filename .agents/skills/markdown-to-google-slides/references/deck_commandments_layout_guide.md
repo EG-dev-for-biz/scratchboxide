@@ -135,6 +135,18 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
 - **The Defect**: Pairing a 2-sentence manifesto paragraph at 13.5pt body size with 6 dense bullets leaves an 8-inch cavern of dead space on the left.
 - **The Standard**: Scale the single core statement into a **22pt–26pt monumental display pull-quote** (in italic display serif) that commands vertical space. Format bullet points as structured numbered datum shelves (`01 // CORE CONCEPT`, `02 // THE PLANNED VOID`).
 
+### Commandment 5P: Orthogonal Reference Decoupling (The Anti-Cloning Engine)
+- **The Defect**: Cloning or borrowing an entire website's visual identity or corporate slide template wholesale, inheriting all its clichés and compromises.
+- **The Standard**: Decompose references into 4 independent, orthogonal axes: `[Spatial Layout] × [Typographic Tension] × [Material Chromatics] × [Micro-Interaction Craft]`. Cross-breed across domains (e.g., Swiss architectural spatial grids + editorial serif tension + physical raw metal chromatics + aerospace telemetry shelves).
+
+### Commandment 5Q: Role-Based Chromatic Staging (The 60-30-8-2 Invariant)
+- **The Defect**: Picking 5 bright colors in isolation and spraying them equally across slides, cards, subtitles, and badges like confetti.
+- **The Standard**: Enforce strict spatial surface distribution: **60% Canvas Base** (Deep Carbon Obsidian `#07090E` or Warm Bone Paper `#F6F4EE`), **30% Primary Specular Typography** (Pure White `#FFFFFF` or Deep Sumi Ink `#181C24`), **8% Structural Subtitles & Borders** (Neutral Titanium/Slate `#94A3B8` Slate-400), and **2% Singular Motivated Accent** (Swedish Gold `#E5A93C`, Cobalt `#002FA7`, or Signal Red `#FF3B30`).
+
+### Commandment 5R: Polar Tracking Calibration & Mathematical Modular Scales
+- **The Defect**: Loose, disconnected headlines and cramped metadata caused by uniform tracking and arbitrary font sizes.
+- **The Standard**: As font scale expands ($\ge 40\text{pt}$), tracking must contract (`-0.03em` to `-0.05em`); as scale shrinks ($\le 10\text{pt}$ metadata), tracking must expand (`+0.15em` to `+0.25em`). Font sizes must anchor strictly to a defined mathematical modular scale (Major Third $1.250$ or Perfect Fourth $1.333$).
+
 ### Commandment 6: Label Clearly
 - **The Rule**: Maintain clear orientation markers without cluttering the canvas.
 - **Structure**:

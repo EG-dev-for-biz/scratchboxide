@@ -103,3 +103,25 @@ A mood board is not a mood board until it has been **art-directed**. Submitting 
    - Never use a predictable 3x3 uniform grid.
    - Select ONE Hero Anchor (commands 50–60% of visual weight), TWO Supporting References (answering specific questions on light and texture), and ONE Unexpected Counterpoint (creating conceptual friction).
    - Label every reference with the exact question it answers (e.g., *"Reference for harsh top-down key light only—ignore wardrobe"*).
+
+---
+
+## 4. The Orthogonal Decoupling Protocol (Anti-Cloning Curation)
+
+> *"The interesting exercise is to collect references separately for layout, type, color, and interaction. You can then build an original visual language from those four decisions rather than borrowing an entire website's personality."*
+
+When executing visual research for modern campaigns, slide presentations, or UI systems, decouple reference gathering across 4 independent orthogonal axes:
+
+$$\text{Identity System} = \left[ \text{Spatial Layout} \right] \times \left[ \text{Typographic Tension} \right] \times \left[ \text{Material Chromatics} \right] \times \left[ \text{Interaction / Craft} \right]$$
+
+1. **Spatial Layout (Siteinspire, Recent, Details.so, Brutalist Websites, Are.na, Mobbin)**:
+   - Extract spatial architecture: full-bleed photographic slabs, unboxed canvas manifestos, asymmetrical column splits ($38/62$), and zero-card-clutter rules.
+2. **Typographic Tension (Fonts in Use, Typewolf, Future Fonts, Pangram Pangram, Velvetyne)**:
+   - Extract voice and scale: 3-tier polar friction (sculptural display serif vs. neutral Swiss reading body vs. mechanical monospace datum), polar tracking calibration ($\text{Tracking}(fontSize)$), and modular typescales.
+3. **Material Chromatics (Happy Hues, Realtime Colors, Picular, BP&O)**:
+   - Extract color from physical matter: 60-30-8-2 role-based surface distribution, neutral titanium subtitles (`#94A3B8`), and singular motivated 2% accents.
+4. **Interaction, Micro-Moments & Deeper Craft (Design Spells, BP&O)**:
+   - Extract tactile precision: numbered datum shelves (`01 //`), isolated canvas folio boundaries (zero photo collision), and the elimination of dated decorative underline toothpicks.
+
+*(See full operating manual in [orthogonal_curation_matrix.md](./orthogonal_curation_matrix.md)).*
+

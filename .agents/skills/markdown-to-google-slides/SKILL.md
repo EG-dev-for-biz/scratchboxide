@@ -152,6 +152,14 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
 19. **Monumental Pull-Quote Manifesto & Structured Datum Shelves (`cards-executive`)**:
     - **Command the Cavern**: When a slide pairs a single core concept sentence on the left with bullet points on the right, scale the sentence from 13.5pt to a **22pt–26pt monumental display pull-quote** (in italic serif) to anchor the column and eliminate the 8-inch cavern of dead space.
     - **Numbered Datum Shelves**: Structure dense execution points with uppercase sequence tags (`01 // CORE CONCEPT`, `02 // THE PLANNED VOID`) rather than loose generic bullets.
+20. **Orthogonal Reference Decoupling (The Anti-Cloning Engine)**:
+    - **Anti-Template Invariant**: Never borrow an entire website or deck template's personality. Decompose visual taste into 4 independent axes: `[Spatial Layout] × [Typographic Tension] × [Material Chromatics] × [Micro-Interaction Craft]`.
+    - **Cross-Domain Cross-Breeding**: Synthesize original visual languages by sampling distinct domains (e.g., Swiss architectural spatial grids from *Siteinspire*, editorial serif friction from *Fonts in Use*, physical material palettes from *Picular*, and datum telemetry shelves from *Mobbin*).
+21. **Role-Based Chromatic Staging (The 60-30-8-2 Invariant)**:
+    - **Spatial Color Discipline**: Allocate palette colors strictly by surface ratio: **60% Canvas Base** (Deep Carbon Obsidian `#07090E` or Warm Bone Paper `#F6F4EE`), **30% Primary Specular Typography** (Pure White `#FFFFFF` or Deep Sumi Ink `#181C24`), **8% Neutral Titanium/Slate** (`#94A3B8` Slate-400 / `#64748B` Slate-500 for subtitles and borders), and **2% Singular Motivated Accent** (Swedish Gold `#E5A93C`, Cobalt `#002FA7`, or Signal Red `#FF3B30` for micro-kickers and datum lines).
+22. **Polar Tracking Calibration & Mathematical Modular Scales**:
+    - **Optical Mass Balance**: Large display headers ($\ge 40\text{pt}$) require tight negative tracking (`-0.03em` to `-0.05em`); micro-metadata ($\le 10\text{pt}$) requires wide positive tracking (`+0.15em` to `+0.25em`).
+    - **Modular Scale Discipline**: Anchor font sizes to mathematical scales (Major Third $1.250$ or Perfect Fourth $1.333$): $10\text{px} \rightarrow 13\text{px} \rightarrow 17\text{px} \rightarrow 22\text{px} \rightarrow 28\text{px} \rightarrow 36\text{px} \rightarrow 48\text{px} \rightarrow 64\text{px}$.
 
 ---
 
@@ -220,6 +228,7 @@ node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_
 
 - [`references/scratchbox_mcp_guide.md`](./references/scratchbox_mcp_guide.md) — Scratchbox Canvas MCP architecture, tools, and endpoints.
 - [`references/deck_commandments_layout_guide.md`](./references/deck_commandments_layout_guide.md) — The 10 Deck Commandments from *The Art of Deck Making*.
+- [`references/orthogonal_design_synthesis_guide.md`](./references/orthogonal_design_synthesis_guide.md) — Orthogonal reference curation, cult layout heuristics, and the 4-axis synthesis matrix.
 - [`references/pptx_engine_invariants.md`](./references/pptx_engine_invariants.md) — Technical footguns and OOXML rules.
 - [`references/content_density_and_story_spine.md`](./references/content_density_and_story_spine.md) — Active assertion headlines and card chunking.
 - [`references/brand_palette_guide.md`](./references/brand_palette_guide.md) — Brand identity extraction guide.

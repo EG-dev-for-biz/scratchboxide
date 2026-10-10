@@ -240,6 +240,9 @@ When presenting modern art direction in slide decks, treatments, and editorial l
 18. **Strict Monochromatic Harmony (Zero Neon Bleed)**: Subtitle hues must never be derived from chromatic wheel math that mutates gold/orange into toxic neon green. Subtitles must permanently remain neutral Titanium/Slate tints (`#94A3B8` Slate-400 or `#64748B` Slate-500).
 19. **Isolated Canvas Folio Boundary**: Running footers must NEVER render on the `hero-opener` cover slide, and must be confined strictly to the left typography column on split layouts so they never stamp text or numbers over 4K photography.
 20. **Monumental Pull-Quote Manifesto & Structured Datum Shelves**: When pairing a single core concept sentence on the left with execution specs on the right, scale the sentence to a **22pt–26pt monumental display pull-quote** (in italic serif) to anchor the column and eliminate dead space, and format execution specs into uppercase numbered datum shelves (`01 // CORE CONCEPT`, `02 // THE PLANNED VOID`).
+21. **Orthogonal Reference Decoupling (The Anti-Cloning Engine)**: Never borrow an entire website or agency portfolio's personality. Decompose taste into 4 orthogonal axes: `[Spatial Layout] × [Typographic Tension] × [Material Chromatics] × [Micro-Interaction Craft]`. Cross-breed disparate cultural domains (e.g., Swiss architectural grids + experimental editorial serif + physical raw metal chromatics + aerospace telemetry shelves).
+22. **Role-Based Chromatic Staging (The 60-30-8-2 Invariant)**: Allocate color strictly by surface ratio: **60% Canvas Base** (Deep Carbon Obsidian `#07090E` or Warm Bone Paper `#F6F4EE`), **30% Primary Specular Typography** (Pure White `#FFFFFF` or Deep Sumi Ink `#181C24`), **8% Neutral Titanium/Slate** (`#94A3B8` Slate-400 / `#64748B` Slate-500 for subtitles and borders), and **2% Singular Motivated Accent** (Swedish Gold `#E5A93C`, Cobalt `#002FA7`, or Signal Red `#FF3B30` for micro-kickers and datum lines).
+23. **Polar Tracking Calibration & Mathematical Modular Scales**: Large display headers ($\ge 40\text{pt}$) require tight negative tracking (`-0.03em` to `-0.05em`); micro-metadata ($\le 10\text{pt}$) requires wide positive tracking (`+0.15em` to `+0.25em`). Font sizes must anchor strictly to a defined mathematical modular scale (Major Third $1.250$ or Perfect Fourth $1.333$).
 
 ---
 
@@ -268,9 +271,10 @@ Before completing any task, subject the work to the **17 Senior Art Director Que
 
 ---
 
-## 9. Modular Skill Reference Map
+## 10. Modular Skill Reference Map
 
 All detailed operating manuals and case study databases reside in `references/`:
+* [orthogonal_curation_matrix.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/orthogonal_curation_matrix.md): Orthogonal Decoupling across the 4 axes, 2026 cult reference catalog, polar tracking formula, 60-30-8-2 color staging, and permutation matrix.
 * [source_log.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/source_log.md): Primary-source research catalog on Jason Murray, @jason_swet, SWET STUDIO, Modern Art Direction, and classification matrix (`EXPLICIT` vs `INFERRED` vs `GENERALIZED`).
 * [mental_model.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/mental_model.md): Operational distinctions (Design, Art Direction, Creative Direction, Concept, Craft, Taste).
 * [taste_and_anti_generic.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/taste_and_anti_generic.md): The "No. That's the obvious version" protocol & 12-trap Generic Detector.
