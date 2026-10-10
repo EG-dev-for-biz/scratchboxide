@@ -217,6 +217,41 @@
             color: #ffffff;
         }
 
+        /* Camera Vantage Selector */
+        .vantage-selector {
+            display: flex;
+            align-items: center;
+            background: rgba(20, 24, 33, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 3px;
+            gap: 4px;
+            backdrop-filter: blur(12px);
+        }
+
+        .vantage-btn {
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text-secondary);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 11.5px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .vantage-btn:hover {
+            color: #f1f5f9;
+        }
+
+        .vantage-btn.active {
+            background: #0284c7;
+            color: #ffffff;
+            box-shadow: 0 0 12px rgba(2, 132, 199, 0.45);
+        }
+
         /* --------------------------------------------------------------------
            Main Viewport Stages
         -------------------------------------------------------------------- */
@@ -750,6 +785,13 @@
                 <div class="preset-pill" onclick="loadLocation('One World Trade Center, NY')">One WTC</div>
             </div>
 
+            <!-- 3 Architectural Vantages -->
+            <div class="vantage-selector">
+                <button class="vantage-btn active" id="vantageAerial" onclick="setVantage('aerial')">Midtown Aerial</button>
+                <button class="vantage-btn" id="vantageFacade" onclick="setVantage('facade')">5th Ave Facade</button>
+                <button class="vantage-btn" id="vantageStreet" onclick="setVantage('streetview')">Street View 🌳</button>
+            </div>
+
             <div class="view-mode-toggle">
                 <button class="mode-btn active" id="modeSideBySide" onclick="setViewMode('side-by-side')">Dual Split</button>
                 <button class="mode-btn" id="modeWipe" onclick="setViewMode('wipe')">Wipe Slider</button>
@@ -767,7 +809,7 @@
             <!-- Left Pane: Authentic Raw Google Maps 3D Tile in Studio Grey Clay -->
             <div class="viewport-half" id="paneLeft">
                 <img id="imgLeft" class="plate-image" 
-                     src="/renders/real_tile_esb_clay_closeup/beauty.png" 
+                     src="/renders/omnispatial_stage1_clay/beauty.png" 
                      alt="Stage 1 Authentic Google 3D Tile in Clay">
                 <div class="viewport-header-badge">
                     <span class="badge-stage-tag"><span>●</span> Stage 1: Google Photorealistic 3D Tile</span>
@@ -779,7 +821,7 @@
             <!-- Right Pane: Codebase Refined & Street View PBR Texturing -->
             <div class="viewport-half" id="paneRight">
                 <img id="imgRight" class="plate-image" 
-                     src="/renders/real_tile_esb_stage3_pbr/beauty.png" 
+                     src="/renders/omnispatial_stage3_pbr/beauty.png" 
                      alt="Stage 3 Street View PBR Texturing">
                 <div class="viewport-header-badge">
                     <span class="badge-stage-tag" style="color: var(--accent-emerald);"><span>●</span> Stage 3: Codebase PBR Synthesis</span>
@@ -793,12 +835,12 @@
         <div class="wipe-slider-layout" id="wipeSliderView">
             <div class="wipe-layer-base">
                 <img id="imgWipeBase" class="plate-image" 
-                     src="/renders/real_tile_esb_stage3_pbr/beauty.png" 
+                     src="/renders/omnispatial_stage3_pbr/beauty.png" 
                      alt="Wipe Base Stage 3">
             </div>
             <div class="wipe-layer-reveal" id="wipeReveal">
                 <img id="imgWipeReveal" class="plate-image" 
-                     src="/renders/real_tile_esb_clay_closeup/beauty.png" 
+                     src="/renders/omnispatial_stage1_clay/beauty.png" 
                      alt="Wipe Reveal Stage 1">
                 <div class="wipe-handle" id="wipeHandle">⇄</div>
             </div>
@@ -808,7 +850,7 @@
         <div class="loupe-viewer-layout" id="loupeViewerLayout">
             <div class="loupe-container" id="loupeContainer">
                 <img id="imgLoupeBase" class="plate-image" 
-                     src="/renders/real_tile_esb_stage3_pbr/beauty.png" 
+                     src="/renders/omnispatial_stage3_pbr/beauty.png" 
                      alt="Macro Detail Loupe Inspection">
                 <div class="loupe-glass" id="loupeGlass"></div>
                 <div class="loupe-instruction-pill">Move cursor across facade to inspect 2.5x de-lighted Indiana limestone, bronze spandrels, and Scharr normals</div>
@@ -982,39 +1024,143 @@
 
     <script>
         // State variables
+        let currentVantage = 'aerial';
         let currentStage = 3;
         let currentPass = 'beauty';
         let currentViewMode = 'side-by-side';
 
-        const stageImages = {
-            1: {
-                beauty: '/renders/real_tile_esb_clay_closeup/beauty.png',
-                albedo: '/renders/real_tile_esb_clay_closeup/albedo.png',
-                normal: '/renders/real_tile_esb_clay_closeup/normal.png',
-                depth:  '/renders/real_tile_esb_clay_closeup/depth.png',
-                glb:    '/models/omnispatial_real_stage1_clay.glb',
-                title:  'Stage 1: Authentic Google 3D Tile in Clay',
-                sub:    '169,588 Authentic Scan Triangles · Real Sensor Noise'
+        const vantages = {
+            aerial: {
+                name: 'Midtown Aerial',
+                1: {
+                    beauty: '/renders/omnispatial_stage1_clay/beauty.png',
+                    albedo: '/renders/omnispatial_stage1_clay/beauty.png',
+                    normal: '/renders/omnispatial_stage3_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_stage1_real_clay_tile.glb',
+                    title:  'Stage 1: Authentic Google 3D Tile in Clay',
+                    sub:    '169,588 Authentic Scan Triangles · Melted Facade Noise'
+                },
+                2: {
+                    beauty: '/renders/omnispatial_stage2_vector/beauty.png',
+                    albedo: '/renders/omnispatial_stage2_vector/beauty.png',
+                    normal: '/renders/omnispatial_stage3_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_stage2_vector_refined.glb',
+                    title:  'Stage 2: 4-Sided Vector Refined Geometry in Clay',
+                    sub:    '550,280 Triangles · Projecting Limestone Piers · SB-Veggie Oak Trees'
+                },
+                3: {
+                    beauty: '/renders/omnispatial_stage3_pbr/beauty.png',
+                    albedo: '/renders/omnispatial_stage3_pbr/albedo.png',
+                    normal: '/renders/omnispatial_stage3_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
+                    title:  'Stage 3: Master PBR Reality with Photogrammetric City',
+                    sub:    '13 Calibrated PBR Sets · Reflective Glazing · Vertex-Color City'
+                }
             },
-            2: {
-                beauty: '/renders/real_tile_esb_stage2_refined/beauty.png',
-                albedo: '/renders/real_tile_esb_stage2_refined/albedo.png',
-                normal: '/renders/real_tile_esb_stage2_refined/normal.png',
-                depth:  '/renders/real_tile_esb_stage2_refined/depth.png',
-                glb:    '/models/omnispatial_real_stage2_vector_refined.glb',
-                title:  'Stage 2: Vector Shape Refinement',
-                sub:    'Corner Straightener (90° Ortho) · Planar Decimator · Conformed Curbs'
+            facade: {
+                name: '5th Ave Facade',
+                1: {
+                    beauty: '/renders/omnispatial_hero_vantage_clay/beauty.png',
+                    albedo: '/renders/omnispatial_hero_vantage_clay/beauty.png',
+                    normal: '/renders/omnispatial_hero_vantage_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_stage1_real_clay_tile.glb',
+                    title:  'Stage 1: Google 3D Tile Clay (Featureless Slab)',
+                    sub:    'Melted Facade Wall · Zero Window Geometry · Torn Polygons'
+                },
+                2: {
+                    beauty: '/renders/omnispatial_hero_vantage_stage2_vector/beauty.png',
+                    albedo: '/renders/omnispatial_hero_vantage_stage2_vector/beauty.png',
+                    normal: '/renders/omnispatial_hero_vantage_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_stage2_vector_refined.glb',
+                    title:  'Stage 2: 4-Sided Art Deco Piers & Window Bays',
+                    sub:    'Continuous Limestone Piers · Deep Recessed Bays · Setbacks'
+                },
+                3: {
+                    beauty: '/renders/omnispatial_hero_vantage_pbr/beauty.png',
+                    albedo: '/renders/omnispatial_hero_vantage_pbr/beauty.png',
+                    normal: '/renders/omnispatial_hero_vantage_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
+                    title:  'Stage 3: Calibrated Indiana Limestone & Bronze PBR',
+                    sub:    'Dielectric Glazing Reflections · Fluted Bronze · Context City'
+                }
             },
-            3: {
-                beauty: '/renders/real_tile_esb_stage3_pbr/beauty.png',
-                albedo: '/renders/real_tile_esb_stage3_pbr/albedo.png',
-                normal: '/renders/real_tile_esb_stage3_pbr/normal.png',
-                depth:  '/renders/real_tile_esb_stage3_pbr/depth.png',
-                glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
-                title:  'Stage 3: Solar De-Lighted Real-Scan PBR',
-                sub:    '0-Drift Inverse Barycentric · Street View Fusion · Toksvig AA'
+            streetview: {
+                name: 'Street View Ground Truth',
+                1: {
+                    beauty: '/renders/omnispatial_streetview_stage1_clay/beauty.png',
+                    albedo: '/renders/omnispatial_streetview_stage1_clay/beauty.png',
+                    normal: '/renders/omnispatial_streetview_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_stage1_real_clay_tile.glb',
+                    title:  'Stage 1: Street-Level Occlusion',
+                    sub:    'Photogrammetric Curtain Wall Occlusion at Ground Level'
+                },
+                2: {
+                    beauty: '/renders/omnispatial_streetview_stage2_clay/beauty.png',
+                    albedo: '/renders/omnispatial_streetview_stage2_clay/beauty.png',
+                    normal: '/renders/omnispatial_streetview_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_stage2_vector_refined.glb',
+                    title:  'Stage 2: Architectural Entrance Geometry (18% Clay)',
+                    sub:    '3-Story Monumental Portico · Bronze Doors · SB-Veggie Oak Trees'
+                },
+                3: {
+                    beauty: '/renders/omnispatial_streetview_pbr/beauty.png',
+                    albedo: '/renders/omnispatial_streetview_pbr/beauty.png',
+                    normal: '/renders/omnispatial_streetview_pbr/normal.png',
+                    depth:  '/renders/omnispatial_stage3_pbr/depth.png',
+                    glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
+                    title:  'Stage 3: Street View Ground-Truth & SB-Veggie Trees',
+                    sub:    'Granite Plinth · Ashlar Masonry · Foliage Dappled Sunlight'
+                }
             }
         };
+
+        function setVantage(vantageKey) {
+            currentVantage = vantageKey;
+            document.getElementById('vantageAerial').classList.toggle('active', vantageKey === 'aerial');
+            document.getElementById('vantageFacade').classList.toggle('active', vantageKey === 'facade');
+            document.getElementById('vantageStreet').classList.toggle('active', vantageKey === 'streetview');
+
+            refreshViews();
+            document.getElementById('pipelineStatusText').innerText = `Vantage: ${vantages[vantageKey].name}`;
+        }
+
+        function refreshViews() {
+            const vData = vantages[currentVantage];
+            const stage1 = vData[1];
+            const activeStage = vData[currentStage];
+
+            // Left Pane (always stage 1 of current vantage)
+            const leftImg = document.getElementById('imgLeft');
+            if (leftImg) leftImg.src = stage1[currentPass] || stage1.beauty;
+
+            // Right Pane (active stage of current vantage)
+            const rightImg = document.getElementById('imgRight');
+            if (rightImg) rightImg.src = activeStage[currentPass] || activeStage.beauty;
+
+            const rightTitle = document.getElementById('rightPaneTitle');
+            if (rightTitle) rightTitle.innerText = activeStage.title;
+
+            const rightSub = document.getElementById('rightPaneSub');
+            if (rightSub) rightSub.innerText = activeStage.sub;
+
+            // Wipe Slider
+            const wipeBase = document.getElementById('imgWipeBase');
+            if (wipeBase) wipeBase.src = activeStage[currentPass] || activeStage.beauty;
+
+            const wipeReveal = document.getElementById('imgWipeReveal');
+            if (wipeReveal) wipeReveal.src = stage1[currentPass] || stage1.beauty;
+
+            // Loupe
+            updateLoupeImage();
+        }
 
         function setViewMode(mode) {
             currentViewMode = mode;
@@ -1039,8 +1185,8 @@
             document.getElementById('orbitPillStage3').classList.toggle('active', stage === 3);
 
             const mv = document.getElementById('mainModelViewer');
-            mv.src = stageImages[stage].glb;
-            document.getElementById('pipelineStatusText').innerText = `3D Model: ${stageImages[stage].title}`;
+            mv.src = vantages[currentVantage][stage].glb;
+            document.getElementById('pipelineStatusText').innerText = `3D Model: ${vantages[currentVantage][stage].title}`;
         }
 
         function selectStage(stage) {
@@ -1048,19 +1194,8 @@
             document.getElementById('pillStage1').classList.toggle('active', stage === 1);
             document.getElementById('pillStage2').classList.toggle('active', stage === 2);
             document.getElementById('pillStage3').classList.toggle('active', stage === 3);
-
-            // Update Right Pane
-            const target = stageImages[stage];
-            document.getElementById('imgRight').src = target[currentPass];
-            document.getElementById('rightPaneTitle').innerText = target.title;
-            document.getElementById('rightPaneSub').innerText = target.sub;
-
-            // Update Wipe Base
-            document.getElementById('imgWipeBase').src = target[currentPass];
-
-            updateLoupeImage();
-
-            document.getElementById('pipelineStatusText').innerText = `Displaying ${target.title}`;
+            refreshViews();
+            document.getElementById('pipelineStatusText').innerText = `Stage ${stage}: ${vantages[currentVantage][stage].title}`;
         }
 
         function setRenderPass(pass) {
@@ -1069,22 +1204,14 @@
             if (document.getElementById('passAlbedo')) document.getElementById('passAlbedo').classList.toggle('active', pass === 'albedo');
             document.getElementById('passNormal').classList.toggle('active', pass === 'normal');
             document.getElementById('passDepth').classList.toggle('active', pass === 'depth');
-
-            // Left Pane is always Stage 1 pass
-            document.getElementById('imgLeft').src = stageImages[1][pass];
-            document.getElementById('imgWipeReveal').src = stageImages[1][pass];
-
-            // Right Pane is active stage pass
-            document.getElementById('imgRight').src = stageImages[currentStage][pass];
-            document.getElementById('imgWipeBase').src = stageImages[currentStage][pass];
-
-            updateLoupeImage();
+            refreshViews();
         }
 
         function updateLoupeImage() {
             const imgLoupe = document.getElementById('imgLoupeBase');
             if (imgLoupe) {
-                imgLoupe.src = stageImages[currentStage][currentPass];
+                const target = vantages[currentVantage][currentStage];
+                imgLoupe.src = target[currentPass] || target.beauty;
             }
         }
 
@@ -1186,6 +1313,9 @@
                 triggerPipelineExecution(addressInput.value.trim() || 'Empire State Building, NY');
             }
         });
+
+        // Initialize views
+        refreshViews();
     </script>
 </body>
 </html>

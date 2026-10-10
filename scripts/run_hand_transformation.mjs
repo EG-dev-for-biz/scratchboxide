@@ -48,10 +48,10 @@ async function main() {
     const glbBuf = SbHumanHandTransformer.exportGlb(transformed, texturePack, outGlbPath);
 
     console.log('  -> Exported GLB size:', glbBuf.length, 'bytes to:', outGlbPath);
-    console.log('--- Transformation Successfully Completed ---');
+    console.log('Done!');
 }
 
 main().catch(err => {
-    console.error('Error running hand transformation:', err);
+    console.error('Hand transformation failed:', err);
     process.exit(1);
 });

@@ -1,0 +1,26 @@
+{
+  "glbPath": "public/models/omnispatial_real_stage3_streetview_pbr.glb",
+  "outputDir": "public/renders/omnispatial_streetview_pbr",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 3,
+  "shadingMode": "relit",
+  "groundPlane": true,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1716300000
+  },
+  "camera": {
+    "position": [41.5, 3.5, -14.0],
+    "target": [35.0, 8.0, 0.0],
+    "verticalFovDeg": 60.0
+  },
+  "atmosphere": {
+    "siteElevationMeters": 10.0,
+    "airDensity": 1.0,
+    "dustDensity": 0.05,
+    "sunIntensity": 1.0
+  }
+}

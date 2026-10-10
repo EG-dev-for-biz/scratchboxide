@@ -1,0 +1,26 @@
+{
+  "glbPath": "public/models/omnispatial_stage2_vector_refined.glb",
+  "outputDir": "public/renders/omnispatial_streetview_stage2_clay",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 3,
+  "shadingMode": "relit",
+  "groundPlane": true,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1716300000
+  },
+  "camera": {
+    "position": [48.0, 4.5, -14.0],
+    "target": [35.0, 10.0, 0.0],
+    "verticalFovDeg": 55.0
+  },
+  "atmosphere": {
+    "siteElevationMeters": 10.0,
+    "airDensity": 1.0,
+    "dustDensity": 0.05,
+    "sunIntensity": 1.0
+  }
+}

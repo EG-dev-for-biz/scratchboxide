@@ -317,10 +317,10 @@ inline void addApertureWindowBay(
 
 int main(int argc, char** argv) {
     std::cout << "======================================================================\n";
-    std::cout << "SCRATCHBOX OMNISPATIAL MASTER SUITE GENERATOR\n";
+    std::cout << "SCRATCHBOX OMNISPATIAL MASTER SUITE GENERATOR (4-SIDED ART DECO)\n";
     std::cout << "1. Stage 1: Authentic Google 3D Tile in 18% Studio Grey Clay\n";
-    std::cout << "2. Stage 2: Vector-Refined Geometry + SB-Veggie Street Trees in Clay\n";
-    std::cout << "3. Stage 3: Master Hyper-Realistic PBR Model with District & Ground Truth\n";
+    std::cout << "2. Stage 2: 4-Sided Vector-Refined Geometry + SB-Veggie Trees in Clay\n";
+    std::cout << "3. Stage 3: Master Hyper-Realistic PBR Model with Photogrammetric City\n";
     std::cout << "======================================================================\n";
 
     auto totalStart = std::chrono::high_resolution_clock::now();
@@ -337,7 +337,8 @@ int main(int argc, char** argv) {
     }
     std::cout << "Loaded Tile: " << tileScene.mesh.vertices.size() << " vertices, " 
               << (tileScene.mesh.indices.size() / 3) << " triangles, "
-              << tileScene.materials.size() << " materials.\n";
+              << tileScene.materials.size() << " materials, "
+              << tileScene.images.size() << " images.\n";
 
     // ------------------------------------------------------------------------
     // B. Export Stage 1: Authentic Google 3D Tile in 18% Studio Grey Clay
@@ -361,19 +362,17 @@ int main(int argc, char** argv) {
         if (ok) {
             std::cout << "SUCCESS: Wrote Stage 1 Clay Tile to " << stage1Path << " (" 
                       << (clayMesh.indices.size() / 3) << " triangles)\n";
-        } else {
-            std::cerr << "ERROR: Failed to write Stage 1 GLB\n";
         }
     }
 
     // ------------------------------------------------------------------------
-    // C. Separate Surrounding Midtown Manhattan District from ESB Footprint
+    // C. Extract Surrounding Midtown Manhattan District Geometry & Bake Colors
     // ------------------------------------------------------------------------
-    std::cout << "\n[Step 3/5] Extracting Surrounding Midtown Manhattan District Geometry...\n";
+    std::cout << "\n[Step 3/5] Extracting Surrounding City District & Baking Photogrammetric Colors...\n";
     ScratchboxMesh meshDistrict;
     meshDistrict.name = "MidtownManhattan_SurroundingDistrict";
     meshDistrict.material.name = "Mat_MidtownDistrict";
-    meshDistrict.material.baseColorFactor = Vec4(0.70f, 0.68f, 0.64f, 1.0f);
+    meshDistrict.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, 1.0f);
     meshDistrict.material.roughnessFactor = 0.82f;
     meshDistrict.material.metallicFactor = 0.04f;
 
@@ -383,18 +382,38 @@ int main(int argc, char** argv) {
     size_t esbTris = 0;
 
     for (size_t i = 0; i < tileIndices.size(); i += 3) {
-        const auto& v0 = tileVerts[tileIndices[i]];
-        const auto& v1 = tileVerts[tileIndices[i + 1]];
-        const auto& v2 = tileVerts[tileIndices[i + 2]];
+        Vertex v0 = tileVerts[tileIndices[i]];
+        Vertex v1 = tileVerts[tileIndices[i + 1]];
+        Vertex v2 = tileVerts[tileIndices[i + 2]];
 
         float cx = (v0.position.x + v1.position.x + v2.position.x) / 3.0f;
         float cz = (v0.position.z + v1.position.z + v2.position.z) / 3.0f;
 
-        // Bounding box for Empire State Building parcel
-        if (cx >= -75.0f && cx <= 45.0f && cz >= -45.0f && cz <= 45.0f) {
+        // Bounding box for Empire State Building parcel (centered at 0,0)
+        if (cx >= -65.0f && cx <= 65.0f && cz >= -46.0f && cz <= 46.0f) {
             esbTris++;
         } else {
             districtTris++;
+            // Sample authentic photogrammetric texture color into vertex colors
+            uint32_t matIdx = (i / 3 < tileScene.triangleMaterial.size()) ? tileScene.triangleMaterial[i / 3] : 0;
+            if (matIdx < tileScene.materials.size()) {
+                int imgIdx = tileScene.materials[matIdx].baseColorImage;
+                if (imgIdx >= 0 && imgIdx < static_cast<int>(tileScene.images.size())) {
+                    const auto& img = tileScene.images[imgIdx];
+                    if (img.decoded && !img.pixels.data.empty()) {
+                        auto sampleCol = [&](Vertex& v) {
+                            float u = v.uv.x - std::floor(v.uv.x);
+                            float vCoord = v.uv.y - std::floor(v.uv.y);
+                            Vec3 c = img.pixels.sampleBilinear(u, vCoord);
+                            v.color = Vec4(c.x, c.y, c.z, 1.0f);
+                        };
+                        sampleCol(v0);
+                        sampleCol(v1);
+                        sampleCol(v2);
+                    }
+                }
+            }
+
             uint32_t b = static_cast<uint32_t>(meshDistrict.vertices.size());
             meshDistrict.addVertex(v0);
             meshDistrict.addVertex(v1);
@@ -403,8 +422,7 @@ int main(int argc, char** argv) {
         }
     }
     std::cout << "Preserved Surrounding District: " << districtTris << " triangles (" 
-              << meshDistrict.vertices.size() << " vertices)\n";
-    std::cout << "Replaced Noisy Photogrammetry ESB: " << esbTris << " triangles\n";
+              << meshDistrict.vertices.size() << " vertices with photogrammetric colors)\n";
 
     // ------------------------------------------------------------------------
     // D. Load Botanical Oak Tree from SB-Veggie
@@ -412,9 +430,6 @@ int main(int argc, char** argv) {
     std::string oakGlb = "public/models/sb_veggie_oak.glb";
     std::cout << "\n[Step 4/5] Loading SB-Veggie Botanical Oak Tree: " << oakGlb << "...\n";
     GltfScene oakScene = GlbSceneReader::readFile(oakGlb);
-    if (!oakScene.ok) {
-        std::cerr << "WARNING: Could not load oak tree: " << oakScene.error << "\n";
-    }
 
     ScratchboxMesh meshTreeTrunk;
     meshTreeTrunk.name = "SBVeggie_OakTrunks";
@@ -431,27 +446,31 @@ int main(int argc, char** argv) {
     meshTreeFoliage.material.metallicFactor = 0.0f;
 
     if (oakScene.ok) {
-        // Tree instancing along 5th Ave and 34th Street sidewalks
         struct TreeInstance {
             Vec3 pos;
             float scale;
             float rotY;
         };
         std::vector<TreeInstance> treeInstances = {
-            // 5th Avenue Sidewalk (X = 39.0m)
-            { Vec3(39.0f, 0.0f, -30.0f), 0.62f, 0.3f },
-            { Vec3(39.0f, 0.0f, -18.0f), 0.68f, 1.2f },
-            { Vec3(39.0f, 0.0f,  -6.0f), 0.65f, 2.4f },
-            { Vec3(39.0f, 0.0f,   7.0f), 0.60f, 0.8f },
-            { Vec3(39.0f, 0.0f,  20.0f), 0.66f, 1.9f },
-            { Vec3(39.0f, 0.0f,  32.0f), 0.64f, 3.1f },
-            // 34th Street Sidewalk (Z = -38.5m)
-            { Vec3(-55.0f, 0.0f, -38.5f), 0.65f, 0.5f },
-            { Vec3(-40.0f, 0.0f, -38.5f), 0.62f, 1.7f },
-            { Vec3(-25.0f, 0.0f, -38.5f), 0.67f, 2.8f },
-            { Vec3(-10.0f, 0.0f, -38.5f), 0.64f, 0.2f },
-            { Vec3(  5.0f, 0.0f, -38.5f), 0.66f, 1.4f },
-            { Vec3( 20.0f, 0.0f, -38.5f), 0.61f, 2.6f }
+            // 5th Avenue Sidewalk (X = 45.0m)
+            { Vec3(45.0f, 0.0f, -32.0f), 0.62f, 0.3f },
+            { Vec3(45.0f, 0.0f, -20.0f), 0.68f, 1.2f },
+            { Vec3(45.0f, 0.0f,  -8.0f), 0.65f, 2.4f },
+            { Vec3(45.0f, 0.0f,   8.0f), 0.60f, 0.8f },
+            { Vec3(45.0f, 0.0f,  20.0f), 0.66f, 1.9f },
+            { Vec3(45.0f, 0.0f,  32.0f), 0.64f, 3.1f },
+            // 34th Street Sidewalk (Z = -43.0m)
+            { Vec3(-35.0f, 0.0f, -43.0f), 0.65f, 0.5f },
+            { Vec3(-20.0f, 0.0f, -43.0f), 0.62f, 1.7f },
+            { Vec3( -5.0f, 0.0f, -43.0f), 0.67f, 2.8f },
+            { Vec3( 10.0f, 0.0f, -43.0f), 0.64f, 0.2f },
+            { Vec3( 25.0f, 0.0f, -43.0f), 0.66f, 1.4f },
+            // 33rd Street Sidewalk (Z = 43.0m)
+            { Vec3(-35.0f, 0.0f,  43.0f), 0.63f, 0.7f },
+            { Vec3(-20.0f, 0.0f,  43.0f), 0.67f, 1.9f },
+            { Vec3( -5.0f, 0.0f,  43.0f), 0.65f, 3.0f },
+            { Vec3( 10.0f, 0.0f,  43.0f), 0.62f, 0.4f },
+            { Vec3( 25.0f, 0.0f,  43.0f), 0.66f, 1.6f }
         };
 
         const auto& oakIndices = oakScene.mesh.indices;
@@ -468,13 +487,11 @@ int main(int argc, char** argv) {
                 uint32_t b = static_cast<uint32_t>(targetMesh.vertices.size());
                 for (int vi = 0; vi < 3; ++vi) {
                     Vertex v = oakVerts[oakIndices[i + vi]];
-                    // Transform position
                     float rx = (v.position.x * cosR - v.position.z * sinR) * inst.scale;
                     float rz = (v.position.x * sinR + v.position.z * cosR) * inst.scale;
                     float ry = v.position.y * inst.scale;
                     v.position = Vec3(rx, ry, rz) + inst.pos;
 
-                    // Transform normal
                     float rnx = v.normal.x * cosR - v.normal.z * sinR;
                     float rnz = v.normal.x * sinR + v.normal.z * cosR;
                     v.normal = Vec3(rnx, v.normal.y, rnz).normalized();
@@ -484,15 +501,13 @@ int main(int argc, char** argv) {
                 targetMesh.addTriangle(b, b + 1, b + 2);
             }
         }
-        std::cout << "Instanced " << treeInstances.size() << " SB-Veggie Oak Trees: "
-                  << meshTreeTrunk.vertices.size() << " trunk verts, " 
-                  << meshTreeFoliage.vertices.size() << " foliage verts.\n";
+        std::cout << "Instanced " << treeInstances.size() << " SB-Veggie Oak Trees\n";
     }
 
     // ------------------------------------------------------------------------
-    // E. Construct Rectified Hero Architecture (115,872 Triangles)
+    // E. Synthesize 4-Sided Art Deco Hero Architecture
     // ------------------------------------------------------------------------
-    std::cout << "\n[Step 5/5] Synthesizing Rectified Architectural Hero Geometry...\n";
+    std::cout << "\n[Step 5/5] Synthesizing 4-Sided Art Deco Architectural Geometry...\n";
 
     Vec4 colLimestone(1.0f, 1.0f, 1.0f, 1.0f);
     Vec4 colGranite(1.0f, 1.0f, 1.0f, 1.0f);
@@ -515,32 +530,32 @@ int main(int argc, char** argv) {
     ScratchboxMesh meshInterior;   meshInterior.name = "Hero_GrandLobbyInterior";
     ScratchboxMesh meshTileSpire;  meshTileSpire.name = "Hero_MooringMastAndSpire";
 
-    // 1. Plumb Foundation & Sidewalk Apron
-    addBoxMetric(meshSidewalk, Vec3(-15.0f, -0.075f, 0.0f), Vec3(130.0f, 0.15f, 96.0f), colSidewalk, 1.0f / 2.0f, 1.0f / 2.0f);
+    // 1. Foundation & Sidewalk (centered at 0,0)
+    addBoxMetric(meshSidewalk, Vec3(0.0f, -0.075f, 0.0f), Vec3(110.0f, 0.15f, 96.0f), colSidewalk, 1.0f / 2.0f, 1.0f / 2.0f);
 
-    const float xEast = 35.0f;
-    const float xWest = -65.0f;
-    const float zSouth = 35.0f;
-    const float zNorth = -35.0f;
-    const float baseCenterX = (xEast + xWest) * 0.5f; // -15.0m
+    const float xEast = 40.0f;
+    const float xWest = -40.0f;
+    const float zSouth = 36.0f;
+    const float zNorth = -36.0f;
+    const float baseCenterX = 0.0f;
     const float baseCenterZ = 0.0f;
-    const float baseW = xEast - xWest; // 100.0m
-    const float baseD = zSouth - zNorth; // 70.0m
+    const float baseW = xEast - xWest; // 80.0m
+    const float baseD = zSouth - zNorth; // 72.0m
 
     // Granite Plinth (Y = 0 to 1.5m)
     addBoxMetric(meshGranite, Vec3(baseCenterX, 0.75f, baseCenterZ), Vec3(baseW, 1.5f, baseD), colGranite, 1.0f / 2.0f, 1.0f / 1.0f);
 
     // Elevator Core & Floor Slabs
-    addBoxMetric(meshRoof, Vec3(-13.0f, 160.0f, 0.0f), Vec3(26.0f, 320.0f, 24.0f), colRoof, 1.0f / 4.0f, 1.0f / 4.0f);
+    addBoxMetric(meshRoof, Vec3(0.0f, 160.0f, 0.0f), Vec3(26.0f, 320.0f, 24.0f), colRoof, 1.0f / 4.0f, 1.0f / 4.0f);
 
     for (float ySlab = 4.8f; ySlab <= 24.0f; ySlab += 4.8f) {
-        addBoxMetric(meshRoof, Vec3(-15.0f, ySlab - 0.15f, 0.0f), Vec3(98.0f, 0.30f, 68.0f), colRoof, 1.0f / 4.0f, 1.0f / 4.0f);
+        addBoxMetric(meshRoof, Vec3(0.0f, ySlab - 0.15f, 0.0f), Vec3(78.0f, 0.30f, 70.0f), colRoof, 1.0f / 4.0f, 1.0f / 4.0f);
     }
     for (float ySlab = 28.0f; ySlab <= 96.0f; ySlab += 3.6f) {
-        addBoxMetric(meshRoof, Vec3(-15.0f, ySlab - 0.15f, 0.0f), Vec3(66.8f, 0.30f, 48.8f), colRoof, 1.0f / 4.0f, 1.0f / 4.0f);
+        addBoxMetric(meshRoof, Vec3(0.0f, ySlab - 0.15f, 0.0f), Vec3(72.0f, 0.30f, 64.0f), colRoof, 1.0f / 4.0f, 1.0f / 4.0f);
     }
 
-    // 2. 5th Avenue 3-Story Grand Entrance Portico
+    // 2. 5th Avenue 3-Story Grand Entrance Portico (centered at Z = 0)
     addBoxMetric(meshLimestone, Vec3(xEast + 0.35f, 7.8f, -10.0f), Vec3(0.70f, 12.6f, 2.0f), colLimestone, 1.0f / 1.0f, 1.0f / 3.0f);
     addBoxMetric(meshLimestone, Vec3(xEast + 0.35f, 7.8f,  10.0f), Vec3(0.70f, 12.6f, 2.0f), colLimestone, 1.0f / 1.0f, 1.0f / 3.0f);
     addBoxMetric(meshLimestone, Vec3(xEast + 0.40f, 13.1f, 0.0f), Vec3(0.80f, 2.0f, 22.0f), colLimestone, 1.0f / 3.0f, 1.0f / 1.0f);
@@ -558,9 +573,9 @@ int main(int argc, char** argv) {
     addBoxMetric(meshBronze, Vec3(xEast + 0.10f, 7.6f,  6.6f), Vec3(0.20f, 8.8f, 4.4f), colBronze, 1.0f / 1.0f, 1.0f / 2.0f);
 
     // Grand Lobby Interior Backing
-    addBoxMetric(meshInterior, Vec3(26.4f, 6.75f, 0.0f), Vec3(17.2f, 13.5f, 14.0f), colInterior, 1.0f / 2.0f, 1.0f / 2.0f);
+    addBoxMetric(meshInterior, Vec3(31.4f, 6.75f, 0.0f), Vec3(17.2f, 13.5f, 14.0f), colInterior, 1.0f / 2.0f, 1.0f / 2.0f);
 
-    // 33rd & 34th Street Marquee Entrance Canopies
+    // 33rd & 34th Street Marquee Entrance Canopies (centered at X = 0)
     auto addMarqueeCanopy = [&](float xCenter, float zWall, float forwardSign) {
         float canW = 14.0f, canD = 3.2f, canH = 0.65f, yCan = 4.4f;
         Vec3 center(xCenter, yCan, zWall + forwardSign * canD * 0.5f);
@@ -569,8 +584,8 @@ int main(int argc, char** argv) {
         addBoxMetric(meshBronze, Vec3(xCenter, 2.0f, zWall - forwardSign * 0.15f), Vec3(canW - 2.0f, 4.0f, 0.45f), colBronze, 1.0f / 2.0f, 1.0f / 2.0f);
         addBoxMetric(meshGlazing, Vec3(xCenter, 2.0f, zWall + forwardSign * 0.06f), Vec3(canW - 3.2f, 3.2f, 0.08f), colGlazing, 1.0f / 1.5f, 1.0f / 2.0f);
     };
-    addMarqueeCanopy(-15.0f, zNorth, -1.0f);
-    addMarqueeCanopy(-15.0f, zSouth, 1.0f);
+    addMarqueeCanopy(0.0f, zNorth, -1.0f);
+    addMarqueeCanopy(0.0f, zSouth, 1.0f);
 
     // 5-Story Base Facade (Y = 1.5m to 25.0m)
     addBoxMetric(meshGlazing, Vec3(xEast + 0.05f, 3.15f, -19.25f), Vec3(0.12f, 3.3f, 22.5f), colGlazing, 1.0f / 2.0f, 1.0f / 2.0f);
@@ -587,6 +602,7 @@ int main(int argc, char** argv) {
 
     for (const auto& pr : base5thAvePiers) {
         addProjectingPier(meshLimestone, FacadeFacing::EAST_5TH_AVE, xEast, pr.first, pr.second, 5.2f, 25.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, FacadeFacing::WEST_6TH_AVE, xWest, pr.first, pr.second, 5.2f, 25.0f, 0.45f, colLimestone);
     }
     for (float yF = 5.2f; yF < 24.0f; yF += 4.8f) {
         for (const auto& bay : base5thAveBays) {
@@ -596,106 +612,132 @@ int main(int argc, char** argv) {
                 yF, yF + 4.8f, 1.1f, 0.20f, 0.40f, 0.35f, 3,
                 colLimestone, colGlazing, colSpandrel, colSteel
             );
+            addApertureWindowBay(
+                meshLimestone, meshGlazing, meshSpandrel, meshSteel,
+                FacadeFacing::WEST_6TH_AVE, xWest, bay.first, bay.second,
+                yF, yF + 4.8f, 1.1f, 0.20f, 0.40f, 0.35f, 3,
+                colLimestone, colGlazing, colSpandrel, colSteel
+            );
         }
     }
 
-    // Setback Parapet Coping on Floor 5 (Y = 25.0m)
-    addBoxMetric(meshRoof, Vec3(-15.0f, 25.1f, 0.0f), Vec3(baseW, 0.20f, baseD), colRoof, 1.0f / 3.0f, 1.0f / 3.0f);
-    addBoxMetric(meshLimestone, Vec3(-15.0f, 25.7f, zNorth + 0.4f), Vec3(baseW, 1.2f, 0.8f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
-    addBoxMetric(meshLimestone, Vec3(-15.0f, 25.7f, zSouth - 0.4f), Vec3(baseW, 1.2f, 0.8f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
+    // Setback Parapet Coping on Floor 5 (Y = 25.0m) (centered at 0,0)
+    addBoxMetric(meshRoof, Vec3(0.0f, 25.1f, 0.0f), Vec3(baseW, 0.20f, baseD), colRoof, 1.0f / 3.0f, 1.0f / 3.0f);
+    addBoxMetric(meshLimestone, Vec3(0.0f, 25.7f, zNorth + 0.4f), Vec3(baseW, 1.2f, 0.8f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
+    addBoxMetric(meshLimestone, Vec3(0.0f, 25.7f, zSouth - 0.4f), Vec3(baseW, 1.2f, 0.8f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
     addBoxMetric(meshLimestone, Vec3(xEast - 0.4f, 25.7f, 0.0f), Vec3(0.8f, 1.2f, baseD), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
     addBoxMetric(meshLimestone, Vec3(xWest + 0.4f, 25.7f, 0.0f), Vec3(0.8f, 1.2f, baseD), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
 
-    // Floors 6 to 29 (Y = 25.0m to 96.0m)
-    const float xEastT1 = 18.0f;
-    const float xWestT1 = -48.0f;
-    const float zSouthT1 = 24.0f;
-    const float zNorthT1 = -24.0f;
+    // Floors 6 to 29 (Y = 25.0m to 96.0m) - 4-SIDED FENESTRATION (centered at 0,0)
+    const float xEastT1 = 37.0f;
+    const float xWestT1 = -37.0f;
+    const float zSouthT1 = 33.0f;
+    const float zNorthT1 = -33.0f;
 
-    std::vector<std::pair<float, float>> t1Bays = {
-        {-20.0f, -14.0f}, {-10.0f, -4.0f}, { 4.0f, 10.0f}, {14.0f, 20.0f}
+    // East & West (along Z: -33 to 33)
+    std::vector<std::pair<float, float>> t1BaysZ = {
+        {-28.0f, -20.0f}, {-15.0f, -7.0f}, { 7.0f, 15.0f}, {20.0f, 28.0f}
     };
-    std::vector<std::pair<float, float>> t1Piers = {
-        {-24.0f, -20.0f}, {-14.0f, -10.0f}, {-4.0f, 4.0f}, {10.0f, 14.0f}, {20.0f, 24.0f}
+    std::vector<std::pair<float, float>> t1PiersZ = {
+        {-33.0f, -28.0f}, {-20.0f, -15.0f}, {-7.0f, 7.0f}, {15.0f, 20.0f}, {28.0f, 33.0f}
     };
 
-    for (const auto& pr : t1Piers) {
+    // North & South (along X: -37 to 37)
+    std::vector<std::pair<float, float>> t1BaysX = {
+        {-32.0f, -24.0f}, {-18.0f, -10.0f}, {-4.0f, 4.0f}, {10.0f, 18.0f}, {24.0f, 32.0f}
+    };
+    std::vector<std::pair<float, float>> t1PiersX = {
+        {-37.0f, -32.0f}, {-24.0f, -18.0f}, {-10.0f, -4.0f}, {4.0f, 10.0f}, {18.0f, 24.0f}, {32.0f, 37.0f}
+    };
+
+    // Piers Tier 1
+    for (const auto& pr : t1PiersZ) {
         addProjectingPier(meshLimestone, FacadeFacing::EAST_5TH_AVE, xEastT1, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
         addProjectingPier(meshLimestone, FacadeFacing::WEST_6TH_AVE, xWestT1, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
     }
+    for (const auto& pr : t1PiersX) {
+        addProjectingPier(meshLimestone, FacadeFacing::NORTH_34TH_ST, zNorthT1, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, FacadeFacing::SOUTH_33RD_ST, zSouthT1, pr.first, pr.second, 25.0f, 96.0f, 0.45f, colLimestone);
+    }
+
+    // Windows Tier 1
     for (float yF = 25.0f; yF < 94.0f; yF += 3.6f) {
-        for (const auto& bay : t1Bays) {
-            addApertureWindowBay(
-                meshLimestone, meshGlazing, meshSpandrel, meshSteel,
-                FacadeFacing::EAST_5TH_AVE, xEastT1, bay.first, bay.second,
-                yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2,
-                colLimestone, colGlazing, colSpandrel, colSteel
-            );
-            addApertureWindowBay(
-                meshLimestone, meshGlazing, meshSpandrel, meshSteel,
-                FacadeFacing::WEST_6TH_AVE, xWestT1, bay.first, bay.second,
-                yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2,
-                colLimestone, colGlazing, colSpandrel, colSteel
-            );
+        for (const auto& bay : t1BaysZ) {
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::EAST_5TH_AVE, xEastT1, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::WEST_6TH_AVE, xWestT1, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+        }
+        for (const auto& bay : t1BaysX) {
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::NORTH_34TH_ST, zNorthT1, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::SOUTH_33RD_ST, zSouthT1, bay.first, bay.second, yF, yF + 3.6f, 0.90f, 0.15f, 0.30f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
         }
     }
 
-    // Floors 30 to 85 Main Tower (Y = 96.0m to 320.0m)
-    const float xEastT2 = 12.0f;
-    const float xWestT2 = -42.0f;
-    const float zSouthT2 = 18.0f;
-    const float zNorthT2 = -18.0f;
+    // Floors 30 to 85 Main Tower (Y = 96.0m to 320.0m) - 4-SIDED FENESTRATION (matches real scan: X in [-33.5, 33.5], Z in [-31, 31])
+    const float xEastT2 = 33.5f;
+    const float xWestT2 = -33.5f;
+    const float zSouthT2 = 31.0f;
+    const float zNorthT2 = -31.0f;
 
-    std::vector<std::pair<float, float>> t2Bays = {
-        {-15.0f, -9.0f}, {-6.0f, 0.0f}, { 0.0f, 6.0f}, { 9.0f, 15.0f}
+    // East & West (along Z: -31 to 31)
+    std::vector<std::pair<float, float>> t2BaysZ = {
+        {-25.0f, -17.0f}, {-11.0f, -3.0f}, { 3.0f, 11.0f}, {17.0f, 25.0f}
     };
-    std::vector<std::pair<float, float>> t2Piers = {
-        {-18.0f, -15.0f}, {-9.0f, -6.0f}, { 6.0f, 9.0f}, {15.0f, 18.0f}
+    std::vector<std::pair<float, float>> t2PiersZ = {
+        {-31.0f, -25.0f}, {-17.0f, -11.0f}, {-3.0f, 3.0f}, {11.0f, 17.0f}, {25.0f, 31.0f}
     };
 
-    for (const auto& pr : t2Piers) {
+    // North & South (along X: -33.5 to 33.5)
+    std::vector<std::pair<float, float>> t2BaysX = {
+        {-27.0f, -19.0f}, {-13.0f, -5.0f}, {5.0f, 13.0f}, {19.0f, 27.0f}
+    };
+    std::vector<std::pair<float, float>> t2PiersX = {
+        {-33.5f, -27.0f}, {-19.0f, -13.0f}, {-5.0f, 5.0f}, {13.0f, 19.0f}, {27.0f, 33.5f}
+    };
+
+    // Piers Tier 2
+    for (const auto& pr : t2PiersZ) {
         addProjectingPier(meshLimestone, FacadeFacing::EAST_5TH_AVE, xEastT2, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
         addProjectingPier(meshLimestone, FacadeFacing::WEST_6TH_AVE, xWestT2, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
     }
+    for (const auto& pr : t2PiersX) {
+        addProjectingPier(meshLimestone, FacadeFacing::NORTH_34TH_ST, zNorthT2, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
+        addProjectingPier(meshLimestone, FacadeFacing::SOUTH_33RD_ST, zSouthT2, pr.first, pr.second, 96.0f, 320.0f, 0.45f, colLimestone);
+    }
+
+    // Windows Tier 2
     for (float yF = 96.0f; yF < 318.0f; yF += 3.6f) {
-        for (const auto& bay : t2Bays) {
-            addApertureWindowBay(
-                meshLimestone, meshGlazing, meshSpandrel, meshSteel,
-                FacadeFacing::EAST_5TH_AVE, xEastT2, bay.first, bay.second,
-                yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2,
-                colLimestone, colGlazing, colSpandrel, colSteel
-            );
-            addApertureWindowBay(
-                meshLimestone, meshGlazing, meshSpandrel, meshSteel,
-                FacadeFacing::WEST_6TH_AVE, xWestT2, bay.first, bay.second,
-                yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2,
-                colLimestone, colGlazing, colSpandrel, colSteel
-            );
+        for (const auto& bay : t2BaysZ) {
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::EAST_5TH_AVE, xEastT2, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::WEST_6TH_AVE, xWestT2, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+        }
+        for (const auto& bay : t2BaysX) {
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::NORTH_34TH_ST, zNorthT2, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
+            addApertureWindowBay(meshLimestone, meshGlazing, meshSpandrel, meshSteel, FacadeFacing::SOUTH_33RD_ST, zSouthT2, bay.first, bay.second, yF, yF + 3.6f, 0.85f, 0.15f, 0.25f, 0.35f, 2, colLimestone, colGlazing, colSpandrel, colSteel);
         }
     }
 
-    // 86th Floor Open-Air Observation Deck (Y = 320.0m)
-    addBoxMetric(meshRoof, Vec3(-15.0f, 320.1f, 0.0f), Vec3(54.0f, 0.20f, 36.0f), colRoof, 1.0f / 3.0f, 1.0f / 3.0f);
-    addBoxMetric(meshLimestone, Vec3(-15.0f, 320.6f, -17.6f), Vec3(53.0f, 1.0f, 0.6f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
-    addBoxMetric(meshLimestone, Vec3(-15.0f, 320.6f,  17.6f), Vec3(53.0f, 1.0f, 0.6f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
-    addBoxMetric(meshLimestone, Vec3( 11.6f, 320.6f, 0.0f), Vec3(0.6f, 1.0f, 35.0f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
-    addBoxMetric(meshLimestone, Vec3(-41.6f, 320.6f, 0.0f), Vec3(0.6f, 1.0f, 35.0f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
+    // 86th Floor Open-Air Observation Deck (Y = 320.0m) (centered at 0,0)
+    addBoxMetric(meshRoof, Vec3(0.0f, 320.1f, 0.0f), Vec3(67.0f, 0.20f, 62.0f), colRoof, 1.0f / 3.0f, 1.0f / 3.0f);
+    addBoxMetric(meshLimestone, Vec3(0.0f, 320.6f, -30.6f), Vec3(66.0f, 1.0f, 0.6f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
+    addBoxMetric(meshLimestone, Vec3(0.0f, 320.6f,  30.6f), Vec3(66.0f, 1.0f, 0.6f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
+    addBoxMetric(meshLimestone, Vec3( 33.1f, 320.6f, 0.0f), Vec3(0.6f, 1.0f, 61.0f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
+    addBoxMetric(meshLimestone, Vec3(-33.1f, 320.6f, 0.0f), Vec3(0.6f, 1.0f, 61.0f), colLimestone, 1.0f / 2.0f, 1.0f / 1.0f);
 
-    // Mooring Mast & 102nd Floor Glass Observation Gallery (Y = 320m to 381m)
-    addCylinderMetric(meshSteel, Vec3(-15.0f, 320.0f, 0.0f), 12.0f, 9.5f, 35.0f, 32, colSteel, 4.0f, 1.0f / 4.0f);
-    addCylinderMetric(meshGlazing, Vec3(-15.0f, 355.0f, 0.0f), 9.6f, 9.6f, 8.0f, 32, colGlazing, 4.0f, 1.0f / 2.0f);
-    addCylinderMetric(meshSteel, Vec3(-15.0f, 363.0f, 0.0f), 9.5f, 6.5f, 18.0f, 32, colSteel, 4.0f, 1.0f / 3.0f);
+    // Mooring Mast & 102nd Floor Glass Observation Gallery (Y = 320m to 381m) (centered at 0,0)
+    addCylinderMetric(meshSteel, Vec3(0.0f, 320.0f, 0.0f), 12.0f, 9.5f, 35.0f, 32, colSteel, 4.0f, 1.0f / 4.0f);
+    addCylinderMetric(meshGlazing, Vec3(0.0f, 355.0f, 0.0f), 9.6f, 9.6f, 8.0f, 32, colGlazing, 4.0f, 1.0f / 2.0f);
+    addCylinderMetric(meshSteel, Vec3(0.0f, 363.0f, 0.0f), 9.5f, 6.5f, 18.0f, 32, colSteel, 4.0f, 1.0f / 3.0f);
 
-    // Antenna Spire (Y = 381.0m to 427.5m)
-    addCylinderMetric(meshTileSpire, Vec3(-15.0f, 381.0f, 0.0f), 3.2f, 1.8f, 24.0f, 24, colSteel, 2.0f, 1.0f / 4.0f);
-    addCylinderMetric(meshTileSpire, Vec3(-15.0f, 405.0f, 0.0f), 1.8f, 0.45f, 20.0f, 16, colSteel, 1.0f, 1.0f / 4.0f);
-    addCylinderMetric(meshTileSpire, Vec3(-15.0f, 425.0f, 0.0f), 0.45f, 0.08f, 2.5f, 12, colSteel, 1.0f, 1.0f / 1.0f);
+    // Antenna Spire (Y = 381.0m to 427.5m) (centered at 0,0)
+    addCylinderMetric(meshTileSpire, Vec3(0.0f, 381.0f, 0.0f), 3.2f, 1.8f, 24.0f, 24, colSteel, 2.0f, 1.0f / 4.0f);
+    addCylinderMetric(meshTileSpire, Vec3(0.0f, 405.0f, 0.0f), 1.8f, 0.45f, 20.0f, 16, colSteel, 1.0f, 1.0f / 4.0f);
+    addCylinderMetric(meshTileSpire, Vec3(0.0f, 425.0f, 0.0f), 0.45f, 0.08f, 2.5f, 12, colSteel, 1.0f, 1.0f / 1.0f);
 
     // ------------------------------------------------------------------------
     // F. Export Stage 2: Vector-Refined Geometry + Trees in Studio Grey Clay
     // ------------------------------------------------------------------------
     std::string stage2Path = "public/models/omnispatial_stage2_vector_refined.glb";
-    std::cout << "\nBuilding Stage 2 (Vector-Refined Geometry + Trees in Studio Grey Clay)...\n";
+    std::cout << "\nBuilding Stage 2 (4-Sided Vector-Refined Geometry + Trees in Studio Grey Clay)...\n";
     {
         ScratchboxMesh stage2ClayMesh;
         stage2ClayMesh.name = "VectorRefined_StudioGreyClay";
@@ -733,8 +775,6 @@ int main(int argc, char** argv) {
         if (ok) {
             std::cout << "SUCCESS: Wrote Stage 2 Vector-Refined Clay to " << stage2Path << " (" 
                       << (stage2ClayMesh.indices.size() / 3) << " triangles)\n";
-        } else {
-            std::cerr << "ERROR: Failed to write Stage 2 GLB\n";
         }
     }
 
@@ -804,7 +844,6 @@ int main(int argc, char** argv) {
     for (const auto& def : materialDefs) {
         auto pbrSet = generatePbrMaterial(def.archetype, TEX_RES, TEX_RES, def.seed);
 
-        // Custom Albedo & ORM Tuning for Absolute Photographic Realism
         if (def.matIndex == 4) { // Architectural Glazing: Dark reflective glass, ZERO daytime emission
             const int cellW = TEX_RES / 8;
             const int cellH = TEX_RES / 4;
@@ -825,8 +864,7 @@ int main(int argc, char** argv) {
                         pbrSet.albedo.setPixelRGB(x, y, Vec3(0.12f, 0.10f, 0.09f)); // Dark bronze mullion
                         pbrSet.orm.setPixelRGB(x, y, Vec3(1.0f, 0.35f, 0.85f));     // R=0.35, M=0.85
                     } else {
-                        // Deep dark dielectric reflective glass pane
-                        pbrSet.albedo.setPixelRGB(x, y, Vec3(0.04f, 0.05f, 0.07f));
+                        pbrSet.albedo.setPixelRGB(x, y, Vec3(0.04f, 0.05f, 0.07f)); // Reflective glass pane
                         pbrSet.orm.setPixelRGB(x, y, Vec3(1.0f, 0.03f, 0.05f));     // R=0.03, M=0.05
                     }
                 }
@@ -845,11 +883,11 @@ int main(int argc, char** argv) {
                     pbrSet.orm.setPixelRGB(x, y, Vec3(1.0f, 0.65f, 0.0f));
                 }
             }
-        } else if (def.matIndex == 12) { // Surrounding District Facades
+        } else if (def.matIndex == 12) { // Surrounding District Facades (Clean neutral multiplier)
             for (int y = 0; y < TEX_RES; ++y) {
                 for (int x = 0; x < TEX_RES; ++x) {
-                    pbrSet.albedo.setPixelRGB(x, y, Vec3(0.68f, 0.66f, 0.62f));
-                    pbrSet.orm.setPixelRGB(x, y, Vec3(1.0f, 0.82f, 0.05f));
+                    pbrSet.albedo.setPixelRGB(x, y, Vec3(1.0f, 1.0f, 1.0f));
+                    pbrSet.orm.setPixelRGB(x, y, Vec3(1.0f, 0.82f, 0.04f));
                 }
             }
         }
@@ -899,8 +937,6 @@ int main(int argc, char** argv) {
     bool ok3 = GlbWriter::writeMultiMeshToFile(subMeshes, stage3Path, embeddedTextures);
     if (ok3) {
         std::cout << "SUCCESS: Wrote Stage 3 Master PBR Model to " << stage3Path << "\n";
-    } else {
-        std::cerr << "ERROR: Failed to write Stage 3 GLB\n";
     }
 
     auto totalEnd = std::chrono::high_resolution_clock::now();

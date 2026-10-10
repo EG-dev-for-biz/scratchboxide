@@ -1,0 +1,26 @@
+{
+  "glbPath": "public/models/omnispatial_real_stage3_streetview_pbr.glb",
+  "outputDir": "public/renders/omnispatial_hero_vantage_pbr",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 3,
+  "shadingMode": "relit",
+  "groundPlane": true,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1716300000
+  },
+  "camera": {
+    "position": [70.0, 35.0, 45.0],
+    "target": [15.0, 40.0, 0.0],
+    "verticalFovDeg": 50.0
+  },
+  "atmosphere": {
+    "siteElevationMeters": 10.0,
+    "airDensity": 1.0,
+    "dustDensity": 0.05,
+    "sunIntensity": 1.0
+  }
+}
