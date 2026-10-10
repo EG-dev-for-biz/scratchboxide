@@ -232,7 +232,18 @@ We focus **exclusively on the Google foundation model family**—**Nano Banana (
 
 ---
 
-## 8. Senior Art Director Self-Critique Engine
+## 8. Operational Invariants for Presentation Layout & Visual Direction
+
+When presenting modern art direction in slide decks, treatments, and editorial layouts:
+16. **Full-Bleed Photographic Slab (`image-forward`)**: Never float 16:9 images as isolated postcards surrounded by dead canvas margins. Dock photographic plates flush to top, bottom, and right canvas edges (`x: 44%, w: 56%, y: 0, h: 100%`) so atmospheric voids (mist, shadow, concrete grain) dissolve seamlessly into the dark background.
+17. **Purge the Decorative Toothpick**: Reject arbitrary 0.8" colored rectangle lines (`0.035"` height) beneath titles. Elite editorial direction relies on pure whitespace, font weight contrast, and baseline alignment.
+18. **Strict Monochromatic Harmony (Zero Neon Bleed)**: Subtitle hues must never be derived from chromatic wheel math that mutates gold/orange into toxic neon green. Subtitles must permanently remain neutral Titanium/Slate tints (`#94A3B8` Slate-400 or `#64748B` Slate-500).
+19. **Isolated Canvas Folio Boundary**: Running footers must NEVER render on the `hero-opener` cover slide, and must be confined strictly to the left typography column on split layouts so they never stamp text or numbers over 4K photography.
+20. **Monumental Pull-Quote Manifesto & Structured Datum Shelves**: When pairing a single core concept sentence on the left with execution specs on the right, scale the sentence to a **22pt–26pt monumental display pull-quote** (in italic serif) to anchor the column and eliminate dead space, and format execution specs into uppercase numbered datum shelves (`01 // CORE CONCEPT`, `02 // THE PLANNED VOID`).
+
+---
+
+## 9. Senior Art Director Self-Critique Engine
 
 Before completing any task, subject the work to the **17 Senior Art Director Questions**:
 1. *Is this expected?*

@@ -529,6 +529,30 @@ export function computeSplitComplementary(hex) {
 }
 
 export const CANONICAL_BRAND_PRESETS = {
+  polestar: {
+    dark: {
+      slideBg: '07090E',
+      cardBg: '0E1118',
+      cardBorder: '1A202C',
+      titleColor: 'FFFFFF',
+      subtitleColor: '94A3B8',
+      textColor: 'CBD5E1',
+      accentColor: 'E5A93C', // Polestar Swedish Gold
+      secondaryAccent: '94A3B8',
+      kicker: 'POLESTAR // DESIGN & VISUAL TASTE',
+    },
+    light: {
+      slideBg: 'F8FAFC',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E2E8F0',
+      titleColor: '0A0D14',
+      subtitleColor: '64748B',
+      textColor: '334155',
+      accentColor: 'D97706',
+      secondaryAccent: '64748B',
+      kicker: 'POLESTAR // DESIGN & VISUAL TASTE',
+    },
+  },
   volvo: {
     dark: {
       slideBg: '07111E',
@@ -704,22 +728,16 @@ export function generateBrandPaletteFromHex(baseHex, brandName = '', theme = 'da
   const rgb = hexToRgb(cleanHex);
   const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
 
-  let secondaryHex = 'F58220';
-  let subtitleHex = '38BDF8';
+  // Strict Monochromatic Restraint: Subtitle is ALWAYS a muted neutral titanium/slate
+  subtitleHex = theme === 'dark' ? '94A3B8' : '64748B';
 
   if (harmony === 'split-complementary') {
     const sc = computeSplitComplementary(cleanHex);
     secondaryHex = sc.split1;
-    const subRgb = hslToRgb((hsl.h + 30) % 360, Math.min(hsl.s, 70), theme === 'dark' ? 65 : 40);
-    subtitleHex = rgbToHex(subRgb.r, subRgb.g, subRgb.b);
   } else if (harmony === 'complementary') {
     const compRgb = hslToRgb((hsl.h + 180) % 360, hsl.s, hsl.l);
     secondaryHex = rgbToHex(compRgb.r, compRgb.g, compRgb.b);
-    const subRgb = hslToRgb((hsl.h + 30) % 360, 60, theme === 'dark' ? 65 : 40);
-    subtitleHex = rgbToHex(subRgb.r, subRgb.g, subRgb.b);
   } else {
-    // Strict Two-Tone Restraint: Subtitle is a muted neutral tint, eliminating triadic rainbow confetti
-    subtitleHex = theme === 'dark' ? '94A3B8' : '64748B';
     secondaryHex = cleanHex;
   }
 
@@ -1097,20 +1115,20 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         // Kicker Badge
         const coverKicker = s.kicker || frontmatter.kicker || palette.kicker || 'DIRECTOR’S TREATMENT & PREVIS';
         slide.addText(coverKicker.toUpperCase(), {
-          x: padIn, y: slideHIn * 0.32, w: leftAreaW, h: 0.35,
+          x: padIn, y: slideHIn * 0.24, w: leftAreaW, h: 0.35,
           fontSize: 10, bold: true, color: palette.accentColor,
           fontFace: fontPairing.monoFont,
           charSpacing: fontPairing.kickerTracking, margin: 0,
         });
 
-        // Title (dynamic font sizing for perfect wrap)
+        // Monumental Title (high fashion display sizing)
         const coverTitle = stripMarkdownFormatting(s.title);
-        const coverTitleSize = coverTitle.length < 25 ? 34 : (coverTitle.length < 45 ? 28 : 22);
-        const coverTitleLines = Math.ceil(coverTitle.length / (coverTitleSize > 28 ? 20 : 28));
-        const coverTitleH = Math.max(0.8, coverTitleLines * 0.55);
+        const coverTitleSize = coverTitle.length < 25 ? 44 : (coverTitle.length < 45 ? 36 : 28);
+        const coverTitleLines = Math.ceil(coverTitle.length / (coverTitleSize > 32 ? 18 : 24));
+        const coverTitleH = Math.max(0.9, coverTitleLines * (coverTitleSize / 72 * 1.25));
 
         slide.addText(coverTitle, {
-          x: padIn, y: slideHIn * 0.38, w: leftAreaW, h: coverTitleH,
+          x: padIn, y: slideHIn * 0.30, w: leftAreaW, h: coverTitleH,
           fontSize: coverTitleSize, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
@@ -1119,13 +1137,14 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           margin: 0,
         });
 
-        // Subtitle
+        // Subtitle (disciplined neutral tone)
         if (s.subtitle) {
           const coverSub = stripMarkdownFormatting(s.subtitle);
           slide.addText(coverSub, {
-            x: padIn, y: slideHIn * 0.38 + coverTitleH + 0.12, w: leftAreaW, h: 0.8,
-            fontSize: 13, color: palette.subtitleColor,
+            x: padIn, y: slideHIn * 0.30 + coverTitleH + 0.16, w: leftAreaW, h: 1.0,
+            fontSize: 14, color: palette.subtitleColor,
             fontFace: fontPairing.bodyFont,
+            lineSpacingMultiple: 1.35,
             margin: 0,
           });
         }
@@ -1360,12 +1379,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           curHeaderY += subH + 0.08;
         }
 
-        slide.addShape(pptx.ShapeType.rect, {
-          x: padIn, y: curHeaderY + 0.08, w: 0.8, h: 0.035,
-          fill: { color: palette.accentColor }, line: { width: 0 },
-        });
-
-        const cardY = curHeaderY + 0.22;
+        const cardY = curHeaderY + 0.18;
         const cardH = slideHIn - cardY - padIn * 0.7;
         const totalW = slideWIn - padIn * 2;
 
@@ -1480,18 +1494,26 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             charSpacing: 2, margin: 0,
           });
 
+          // Monumental Manifesto Scale: if short (single statement), render at 22pt display font to command vertical volume
+          const isShortManifesto = paragraphs.length === 1 && paragraphs[0].length < 240;
+          const proseFontSize = isShortManifesto ? 22 : 14;
+          const proseLineSpacing = isShortManifesto ? 1.4 : 1.45;
+          const proseFace = isShortManifesto ? fontPairing.displayFont : fontPairing.bodyFont;
+          const proseItalic = isShortManifesto ? fontPairing.italicDisplay : false;
+
           const proseRuns = [];
           for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
             proseRuns.push(...parseTextRuns(paragraphs[pIdx], palette, {
-              fontSize: 13.5,
+              fontSize: proseFontSize,
               color: palette.titleColor,
-              fontFace: fontPairing.bodyFont,
-              lineSpacingMultiple: 1.45,
+              fontFace: proseFace,
+              italic: proseItalic,
+              lineSpacingMultiple: proseLineSpacing,
             }));
             if (pIdx < paragraphs.length - 1) proseRuns.push({ text: '\n\n', options: { fontSize: 8 } });
           }
           slide.addText(proseRuns, {
-            x: padIn, y: cardY + 0.5, w: leftColW, h: cardH - 0.7,
+            x: padIn, y: cardY + 0.55, w: leftColW, h: cardH - 0.75,
             valign: 'top', margin: 0,
           });
 
@@ -1510,7 +1532,8 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           });
 
           const bulletRuns = [];
-          for (const b of bullets) {
+          for (let bIdx = 0; bIdx < bullets.length; bIdx++) {
+            const b = bullets[bIdx];
             bulletRuns.push(...parseTextRuns(b, palette, {
               fontSize: bullets.length > 5 ? 10.5 : 11.5,
               color: palette.textColor,
@@ -1518,10 +1541,12 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
               bullet: true,
               lineSpacingMultiple: 1.35,
             }));
-            bulletRuns.push({ text: '\n\n', options: { fontSize: 6 } });
+            if (bIdx < bullets.length - 1) {
+              bulletRuns.push({ text: '\n\n', options: { fontSize: 6 } });
+            }
           }
           slide.addText(bulletRuns, {
-            x: rightColX, y: cardY + 0.5, w: rightColW, h: cardH - 0.7,
+            x: rightColX, y: cardY + 0.55, w: rightColW, h: cardH - 0.75,
             valign: 'top', margin: 0,
           });
         } else if (paragraphs.length >= 2 && paragraphs.length <= 3) {
@@ -1580,9 +1605,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
       }
 
       case 'image-forward': {
-        const textW = (slideWIn - padIn * 2) * 0.42;
-        const rightAreaW = (slideWIn - padIn * 2) * 0.54;
-        const rightAreaX = padIn + textW + 0.4;
+        const textW = slideWIn * 0.44 - padIn * 1.5;
 
         const kickerText = s.kicker || (s.subtitle && s.title.length < 30 ? s.subtitle.toUpperCase() : 'DIRECTOR VISION');
         slide.addText(kickerText, {
@@ -1593,9 +1616,9 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         });
 
         const rawTitle = stripMarkdownFormatting(s.title);
-        const titleFontSize = rawTitle.length > 40 ? 18 : 21;
-        const titleLines = Math.ceil(rawTitle.length / (titleFontSize > 19 ? 28 : 34));
-        const titleH = Math.max(0.38, titleLines * (titleFontSize / 72 * 1.3));
+        const titleFontSize = rawTitle.length > 40 ? 20 : 23;
+        const titleLines = Math.ceil(rawTitle.length / (titleFontSize > 21 ? 24 : 30));
+        const titleH = Math.max(0.42, titleLines * (titleFontSize / 72 * 1.3));
 
         slide.addText(rawTitle, {
           x: padIn, y: padIn + 0.32, w: textW, h: titleH,
@@ -1610,60 +1633,69 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         if (s.subtitle) {
           const rawSub = stripMarkdownFormatting(s.subtitle);
-          const subH = Math.max(0.28, Math.ceil(rawSub.length / 45) * 0.25);
+          const subH = Math.max(0.28, Math.ceil(rawSub.length / 40) * 0.26);
           slide.addText(rawSub, {
-            x: padIn, y: curHeaderY + 0.04, w: textW, h: subH,
-            fontSize: 12, color: palette.subtitleColor,
+            x: padIn, y: curHeaderY + 0.06, w: textW, h: subH,
+            fontSize: 13, color: palette.subtitleColor,
             fontFace: fontPairing.bodyFont,
             margin: 0,
           });
-          curHeaderY += subH + 0.06;
+          curHeaderY += subH + 0.08;
         }
-
-        slide.addShape(pptx.ShapeType.rect, {
-          x: padIn, y: curHeaderY + 0.06, w: 0.8, h: 0.035,
-          fill: { color: palette.accentColor }, line: { width: 0 },
-        });
 
         const textParts = [];
         if (s.body) {
-          const bodyRuns = parseTextRuns(s.body, palette, { fontSize: 11.5, color: palette.textColor, fontFace: fontPairing.bodyFont, lineSpacingMultiple: 1.4 });
+          const bodyRuns = parseTextRuns(s.body, palette, {
+            fontSize: 12.5,
+            color: palette.titleColor,
+            fontFace: fontPairing.bodyFont,
+            lineSpacingMultiple: 1.45,
+          });
           textParts.push(...bodyRuns);
           if (s.bullets && s.bullets.length > 0) {
-            textParts.push({ text: '\n\n', options: { fontSize: 8 } });
+            textParts.push({ text: '\n\n', options: { fontSize: 10 } });
           }
         }
-        for (const b of s.bullets) {
-          textParts.push(...parseTextRuns(b, palette, { fontSize: 10.5, color: palette.textColor, fontFace: fontPairing.bodyFont, bullet: true, lineSpacingMultiple: 1.35 }));
-          textParts.push({ text: '\n\n', options: { fontSize: 6 } });
+        for (let bIdx = 0; bIdx < s.bullets.length; bIdx++) {
+          const b = s.bullets[bIdx];
+          textParts.push(...parseTextRuns(b, palette, {
+            fontSize: 11,
+            color: palette.textColor,
+            fontFace: fontPairing.bodyFont,
+            bullet: true,
+            lineSpacingMultiple: 1.35,
+          }));
+          if (bIdx < s.bullets.length - 1) {
+            textParts.push({ text: '\n\n', options: { fontSize: 8 } });
+          }
         }
 
         if (textParts.length > 0) {
           slide.addText(textParts, {
-            x: padIn, y: curHeaderY + 0.22, w: textW, h: slideHIn - curHeaderY - padIn * 1.2,
+            x: padIn, y: curHeaderY + 0.22, w: textW, h: slideHIn - curHeaderY - padIn * 1.3,
             valign: 'top', margin: 0,
           });
         }
 
         if (s.images.length > 0) {
           const imgPath = s.images[0].url;
-          const { aspect } = getImageDimensions(imgPath);
+          // Full-Bleed Vertical Photographic Slab: Flush to top, bottom, and right edge
+          const imgW = slideWIn * 0.55;
+          const imgX = slideWIn - imgW;
 
-          // Full-Scale Cinematic Plate: Scales to available canvas height without container cards
-          const maxMediaW = rightAreaW;
-          const maxMediaH = slideHIn - padIn * 1.6;
-          const { w: imgFitW, h: imgFitH } = fitDimensions(aspect, maxMediaW, maxMediaH);
-
-          const mediaX = rightAreaX + (rightAreaW - imgFitW) / 2;
-          const mediaY = padIn + 0.1 + (maxMediaH - imgFitH) / 2;
-
-          // Pure photographic plate
           slide.addImage({
             path: imgPath,
-            x: mediaX,
-            y: mediaY,
-            w: imgFitW,
-            h: imgFitH,
+            x: imgX,
+            y: 0,
+            w: imgW,
+            h: slideHIn,
+            sizing: { type: 'cover', w: imgW, h: slideHIn },
+          });
+
+          // Hairline vertical datum divider
+          slide.addShape(pptx.ShapeType.line, {
+            x: imgX, y: 0, w: 0, h: slideHIn,
+            line: { color: '1A202C', width: 1 },
           });
         }
         break;
@@ -1947,16 +1979,31 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
     // Slide Number & Footer Tracker (bottom right)
     if (!options.chrome && !frontmatter.chrome) {
-      const footerBrand = (options.brand || frontmatter.brand || brandAnchor || '').toUpperCase();
-      const footerTitle = (options.title || frontmatter.title || pptx.title || '').toUpperCase();
-      const footerShortTitle = footerTitle.length > 36 ? footerTitle.slice(0, 33) + '...' : footerTitle;
-      const footerLabel = [footerBrand, footerShortTitle].filter(Boolean).join(' // ') || 'PRESENTATION DECK';
-      slide.addText(`${footerLabel}  //  ${i + 1} / ${slides.length}`, {
-        x: slideWIn - padIn - 6.5, y: slideHIn - 0.45, w: 6.5, h: 0.3,
-        fontSize: 8.5, color: '64748B',
-        fontFace: fontPairing.monoFont,
-        align: 'right', charSpacing: 1.5, margin: 0,
-      });
+      // Invariant: NEVER render running footer on hero-opener (cover slide)
+      if (archetype !== 'hero-opener') {
+        const footerBrand = (options.brand || frontmatter.brand || brandAnchor || '').toUpperCase();
+        const footerTitle = (options.title || frontmatter.title || pptx.title || '').toUpperCase();
+        const footerShortTitle = footerTitle.length > 36 ? footerTitle.slice(0, 33) + '...' : footerTitle;
+        const footerLabel = [footerBrand, footerShortTitle].filter(Boolean).join(' // ') || 'PRESENTATION DECK';
+
+        // For image-forward slides, place footer strictly within the left typography column so it never collides with photo!
+        if (archetype === 'image-forward' && s.images.length > 0) {
+          const leftAreaW = slideWIn * 0.44 - padIn * 1.5;
+          slide.addText(`${footerLabel}  //  ${i + 1} / ${slides.length}`, {
+            x: padIn, y: slideHIn - 0.42, w: leftAreaW, h: 0.3,
+            fontSize: 8, color: '64748B',
+            fontFace: fontPairing.monoFont,
+            align: 'left', charSpacing: 1.5, margin: 0,
+          });
+        } else {
+          slide.addText(`${footerLabel}  //  ${i + 1} / ${slides.length}`, {
+            x: slideWIn - padIn - 6.5, y: slideHIn - 0.45, w: 6.5, h: 0.3,
+            fontSize: 8.5, color: '64748B',
+            fontFace: fontPairing.monoFont,
+            align: 'right', charSpacing: 1.5, margin: 0,
+          });
+        }
+      }
     }
   }
 

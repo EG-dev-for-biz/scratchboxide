@@ -115,6 +115,26 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
 - **The Rule**: When placing multi-column content, dynamically scale column proportions and font sizes to content volume.
 - **The Void Trap**: Never place a 2-line blurb in an expansive 50% width container next to a dense 10-line bullet column with 75% dead space. Structure columns proportionally (e.g., 35/65 split) or collapse sparse content into an asymmetric, unboxed editorial pull-quote.
 
+### Commandment 5K: Full-Bleed Photographic Slabs vs. Floating Postcards
+- **The Defect**: Centering a 16:9 photo in a half-screen box surrounded by 1.5" dead black margins isolates the visual as an amateur thumbnail or stamp.
+- **The Standard**: Dock split photography flush to top, bottom, and right canvas perimeters (`x: 44%`, `w: 56%`, `y: 0`, `h: 100%`, `sizing: { type: 'cover' }`). Atmospheric shadows and environmental mist must bleed seamlessly into the dark presentation canvas.
+
+### Commandment 5L: Purge the Decorative Underline "Toothpick"
+- **The Defect**: Arbitrary 0.8" colored rectangle lines (`0.035"` height) placed beneath headers or subtitles act as dated 1990s PowerPoint clutter.
+- **The Standard**: Elite art direction uses pure typographic contrast, baseline rhythm, and generous whitespace. Delete all underline toothpick bars.
+
+### Commandment 5M: Monochromatic Neutral Subtitles (Zero Neon Bleed)
+- **The Defect**: Deriving subtitle colors from chromatic color wheel algorithms (e.g. split-complementary +30° offsets) turns warm gold into toxic neon lime-green.
+- **The Standard**: Subtitles must permanently remain neutral Titanium/Slate tints (`#94A3B8` Slate-400 or `#64748B` Slate-500). Maintain strict two-tone discipline across all slides.
+
+### Commandment 5N: Isolated Canvas Folio Boundary (Zero Imagery Collision)
+- **The Defect**: Running footers printed across the bottom right of the canvas collide with and print over 4K photography, model wardrobes, and architectural voids.
+- **The Standard**: Never print running footers on the `hero-opener` cover slide. On split photographic slides, anchor the running footer strictly to the left typography column (`x: padIn`, `w: leftColW`, `align: left`).
+
+### Commandment 5O: Monumental Pull-Quote Manifesto & Structured Datum Shelves
+- **The Defect**: Pairing a 2-sentence manifesto paragraph at 13.5pt body size with 6 dense bullets leaves an 8-inch cavern of dead space on the left.
+- **The Standard**: Scale the single core statement into a **22pt–26pt monumental display pull-quote** (in italic display serif) that commands vertical space. Format bullet points as structured numbered datum shelves (`01 // CORE CONCEPT`, `02 // THE PLANNED VOID`).
+
 ### Commandment 6: Label Clearly
 - **The Rule**: Maintain clear orientation markers without cluttering the canvas.
 - **Structure**:

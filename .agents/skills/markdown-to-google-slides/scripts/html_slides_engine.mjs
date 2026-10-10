@@ -101,7 +101,6 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
         <div class="kicker-tag">${formatMarkdownHtml(s.kicker || (s.subtitle && s.title.length < 30 ? s.subtitle.toUpperCase() : `${footerBrand} // EXECUTIVE PERSPECTIVE`))}</div>
         <h2 class="slide-title">${formatMarkdownHtml(titleText)}</h2>
         ${s.subtitle ? `<p class="slide-subtitle">${formatMarkdownHtml(s.subtitle)}</p>` : ''}
-        <div class="accent-bar"></div>
       </div>
     `;
 
@@ -191,10 +190,12 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
         <div class="stage-frame">
           ${innerContent}
         </div>
-        <div class="slide-footer">
+        ${!isFirst ? `
+        <div class="slide-footer" style="${hasImages && imgCount === 1 ? 'max-width: 44%; left: 80px;' : ''}">
           <div class="footer-left">${footerText}</div>
           <div class="footer-right">${slideNumber} / ${slides.length}</div>
         </div>
+        ` : ''}
       </section>
     `;
   }).join('\n');
@@ -324,50 +325,45 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
     }
 
     .accent-bar {
-      width: 72px;
-      height: 4px;
-      background: var(--accent);
-      margin-top: 14px;
-      margin-bottom: 28px;
-      border-radius: 2px;
+      display: none;
     }
 
-    /* Split Layout */
+    /* Split Layout: Full Bleed Photographic Slab */
     .split-layout {
       display: grid;
-      grid-template-columns: ${is21x9 ? '1fr 1.35fr' : '1fr 1fr'};
-      gap: ${is21x9 ? '80px' : '60px'};
-      height: 100%;
-      align-items: center;
+      grid-template-columns: ${is21x9 ? '1fr 1.35fr' : '44% 56%'};
+      gap: 0;
+      height: calc(100% + 120px);
+      margin: -60px -80px;
+      align-items: stretch;
+      width: calc(100% + 160px);
     }
 
     .split-left {
       display: flex;
       flex-direction: column;
       justify-content: center;
+      padding: 60px 60px 60px 80px;
     }
 
     .split-right {
       height: 100%;
       display: flex;
-      align-items: center;
-      justify-content: center;
+      align-items: stretch;
+      justify-content: stretch;
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+      overflow: hidden;
     }
 
     .media-container {
       width: 100%;
-      aspect-ratio: ${is21x9 ? '21 / 9' : '16 / 9'};
-      height: auto;
-      max-height: ${is21x9 ? '620px' : '540px'};
-      background: rgba(10, 18, 30, 0.9);
-      border: 1px solid var(--card-border);
-      border-radius: 16px;
+      height: 100%;
+      background: transparent;
+      border: none;
+      border-radius: 0;
       overflow: hidden;
       display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+      box-shadow: none;
       position: relative;
     }
 
@@ -943,18 +939,23 @@ function renderThreeCards(s, textColor, accent) {
     `;
   }
 
-  // Case 3: Prose + Bullets -> Asymmetric Editorial Split (Unboxed Manifesto Left, Structured Specs Right)
+  // Case 3: Prose + Bullets -> Asymmetric Editorial Split (Monumental Pull-Quote Manifesto Left, Structured Specs Right)
   if (paragraphs.length > 0 && bullets.length > 0) {
+    const isShortManifesto = paragraphs.length === 1 && paragraphs[0].length < 240;
+    const manifestoStyle = isShortManifesto 
+      ? `font-size: 26px; line-height: 1.45; font-family: var(--font-display); font-style: var(--font-display-style, italic); color: var(--title-color);`
+      : `font-size: 19px; line-height: 1.6; color: var(--title-color);`;
+
     return `
-      <div class="card editorial-manifesto" style="grid-column: span 1; padding: 36px 32px; background: rgba(15, 23, 42, 0.4); border-color: rgba(255, 255, 255, 0.08);">
-        <div class="card-badge" style="color: var(--accent); margin-bottom: 20px;">CORE CONCEPT & MANDATE</div>
-        <div class="card-body" style="font-size: 20px; line-height: 1.6; color: var(--title-color);">
+      <div class="card editorial-manifesto" style="grid-column: span 1; padding: 40px 36px; background: rgba(15, 23, 42, 0.4); border-color: rgba(255, 255, 255, 0.08);">
+        <div class="card-badge" style="color: var(--accent); margin-bottom: 24px;">CORE CONCEPT & MANDATE</div>
+        <div class="card-body" style="${manifestoStyle}">
           ${paragraphs.map(p => `<p style="margin-bottom: 16px;">${formatMarkdownHtml(p)}</p>`).join('')}
         </div>
       </div>
-      <div class="card editorial-specs" style="grid-column: span 2; padding: 36px 36px;">
-        <div class="card-badge" style="color: var(--subtitle-color); margin-bottom: 20px;">EXECUTION SPECIFICATIONS</div>
-        <ul class="card-bullets" style="gap: 14px;">
+      <div class="card editorial-specs" style="grid-column: span 2; padding: 40px 40px;">
+        <div class="card-badge" style="color: var(--subtitle-color); margin-bottom: 24px;">EXECUTION SPECIFICATIONS</div>
+        <ul class="card-bullets" style="gap: 16px;">
           ${bullets.map(renderFormattedBulletItem).join('')}
         </ul>
       </div>

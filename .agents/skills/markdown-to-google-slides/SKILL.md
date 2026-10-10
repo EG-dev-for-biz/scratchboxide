@@ -139,6 +139,19 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
 14. **Dynamic Typographic Equilibrium & Asymmetric Balance**:
     - When placing multi-column content, dynamically scale column proportions and font sizes to content volume.
     - Never place a 2-line blurb in an expansive 50% width container next to a dense 10-line bullet column with 75% dead blue space. Structure columns proportionally (e.g., 35/65 split) or collapse sparse content into an asymmetric, unboxed editorial pull-quote.
+15. **The Full-Bleed Photographic Slab (`image-forward`)**:
+    - **Never Float Postcards**: Reject the "floating postcard" defect where a 16:9 photo floats centered with dead margins around it, marooned like a stamp.
+    - **Flush Perimeter Docking**: Dock split photographic plates flush to the top, bottom, and right edges (`x: slideW * 0.44`, `w: slideW * 0.56`, `y: 0`, `h: slideH`, `sizing: { type: 'cover' }`). This allows low-frequency atmospheric voids (mist, shadow, concrete grain) to dissolve seamlessly into the canvas.
+16. **Purge the Decorative Underline "Toothpick"**:
+    - **Zero Dated PowerPoint Decorators**: Never place 0.8" colored rectangle lines (`0.035"` height) beneath subtitles or titles. High-end art direction relies on pure whitespace, font weight contrast, and baseline alignment—not colored line widgets.
+17. **Strict Monochromatic Subtitle Discipline (Neon Elimination)**:
+    - **Neutral Titanium/Slate Invariant**: Subtitle colors must never be derived from chromatic wheel offsets (such as split-complementary +30° shifts that mutate Swedish gold into neon lime-green). Subtitles must always remain neutral Slate-400 (`#94A3B8`) or Slate-500 (`#64748B`).
+18. **Isolated Canvas Folio Boundary (Zero Photo Collision)**:
+    - **Cover Slide Suppression**: Never render running footers or page numbers on the `hero-opener` cover slide.
+    - **Column-Confined Folio**: On split layouts (`image-forward`), confine the running footer strictly to the left typography column (`x: padIn`, `w: leftColW`, `align: left`). A running folio must NEVER print across or stamp numbers over photography.
+19. **Monumental Pull-Quote Manifesto & Structured Datum Shelves (`cards-executive`)**:
+    - **Command the Cavern**: When a slide pairs a single core concept sentence on the left with bullet points on the right, scale the sentence from 13.5pt to a **22pt–26pt monumental display pull-quote** (in italic serif) to anchor the column and eliminate the 8-inch cavern of dead space.
+    - **Numbered Datum Shelves**: Structure dense execution points with uppercase sequence tags (`01 // CORE CONCEPT`, `02 // THE PLANNED VOID`) rather than loose generic bullets.
 
 ---
 
