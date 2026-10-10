@@ -69,7 +69,7 @@ export function generateHtmlDeck({ title, slides, palette, outputPath, frontmatt
   const fontPairingKey = (options.fontPairing || frontmatter.font_pairing || frontmatter.fontPairing || 'high-fashion').toLowerCase().trim();
   const pairing = EDITORIAL_FONT_PAIRINGS[fontPairingKey] || EDITORIAL_FONT_PAIRINGS['high-fashion'];
 
-  const rawRatio = options.ratio || options.aspectRatio || frontmatter.aspect_ratio || frontmatter.ratio || '16:9';
+  const rawRatio = options.ratio || options.aspectRatio || frontmatter.aspect_ratio || frontmatter.ratio || '21:9';
   const is21x9 = rawRatio === '21:9' || rawRatio === '2.37:1' || rawRatio === 'ultrawide';
   const stageW = is21x9 ? 2560 : 1920;
   const stageH = 1080;

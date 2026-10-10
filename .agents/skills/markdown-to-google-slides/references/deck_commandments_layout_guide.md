@@ -160,9 +160,9 @@ This guide codifies the 10 Deck Commandments and the advanced layout geometry th
   4. *Muddy / Lifted Blacks*: Optical flare toe and atmospheric bounce in shadows (never crushed #000000).
   5. *Authentic Film Grain*: Organic silver halide grain to give tactile familiarity to the viewer.
 
-### Commandment 5U: True Full-Bleed Spatial Canvas & Directional Scrim Invariant
-- **The Defect**: Chopping a 16:9 / 21:9 photograph into an artificial 50/50 split column and filling the other half with a flat digital `#070B14` box. This destroys the organic negative space and creates jarring artificial dividing lines.
-- **The Standard**: Photographic assets must span 100% of the canvas edge-to-edge (`w: 100%, h: 100%`). Copy is laid out directly over the image's low-frequency negative space using an invisible directional optical scrim (94% opacity rolling down to 0% across 70% width). Zero vertical dividing lines.
+### Commandment 5U: Default 21:9 Ultrawide Scope & True Full-Bleed Spatial Canvas Invariant
+- **The Defect**: Chopping a cinematic photograph into an artificial 50/50 split column and filling the other half with a flat digital `#070B14` box, or rendering 16:9 images on a 21:9 canvas resulting in letterboxing or vertical head-chopping.
+- **The Standard**: The presentation canvas defaults to **21:9 Ultrawide** (17.778" × 7.5" in PPTX, 2560×1080 in HTML). All intended full-bleed imagery must be generated in native **21:9 anamorphic format (3840×1620)**. Photographic assets must span 100% of the canvas edge-to-edge (`w: 100%, h: 100%`). Copy is laid out directly over the image's low-frequency negative space using an invisible directional optical scrim (94% opacity rolling down to 0% across 62% width on 21:9). Zero vertical dividing lines.
 
 ### Commandment 5V: Optical Typography Craft Engine (Kerning, Tracking, Vertical Leading & Purity)
 - **The Defect**: Cluttered decorative underline bars, kickers colliding into display headlines with only 3pt gaps, loose display leading that breaks optical word shapes, and awkward multi-line metadata footers.

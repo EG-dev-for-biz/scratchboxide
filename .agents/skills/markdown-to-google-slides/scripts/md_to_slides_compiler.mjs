@@ -118,7 +118,7 @@ export const EDITORIAL_FONT_PAIRINGS = {
 // 0. SCRATCHBOX MCP IMAGE ENGINE (scratchbox.ai)
 // ============================================================================
 
-export function formatLayoutImagePrompt(rawPrompt, aspectRatio = '16:9', layoutPlacement = 'split-left') {
+export function formatLayoutImagePrompt(rawPrompt, aspectRatio = '21:9', layoutPlacement = 'split-left') {
   let prompt = (rawPrompt || '').trim();
   // Strip accidental requests for words, titles, typography, text
   prompt = prompt
@@ -127,7 +127,7 @@ export function formatLayoutImagePrompt(rawPrompt, aspectRatio = '16:9', layoutP
     .trim();
 
   const resTag = (aspectRatio === '21:9' || aspectRatio === '2.37:1') 
-    ? '4K Ultrawide resolution (3840x1620)' 
+    ? '4K Ultrawide resolution (3840x1620, 21:9 anamorphic aspect ratio)' 
     : '4K UHD resolution (3840x2160)';
 
   // Directional negative space staging for layout-text coordination
@@ -144,7 +144,7 @@ export function formatLayoutImagePrompt(rawPrompt, aspectRatio = '16:9', layoutP
   return `${prompt}. ${stagingClause} ${resTag}, razor-sharp optical clarity with physical film response, ${shutterClause} Pure visual imagery, absolutely zero text, no words, no letters, no alphabet, no fonts, no numbers, no subtitles, no watermark, no logo, clean visual frame.`;
 }
 
-export async function generateScratchboxImage(prompt, aspectRatio = '16:9', workspaceId = '126', layoutPlacement = 'split-left') {
+export async function generateScratchboxImage(prompt, aspectRatio = '21:9', workspaceId = '126', layoutPlacement = 'split-left') {
   const sanitizedPrompt = formatLayoutImagePrompt(prompt, aspectRatio, layoutPlacement);
   const baseUrl = process.env.SCRATCHBOX_BASE_URL || 'https://scratchbox.ai/api/mcp/canvas';
   let secret = process.env.SCRATCHBOX_INTERNAL_SECRET;
@@ -260,7 +260,7 @@ export async function generateScratchboxImage(prompt, aspectRatio = '16:9', work
 // 0.5 CONTEXTUAL EXEMPLIFICATION PROMPT SYNTHESIS
 // ============================================================================
 
-export function synthesizeContextualExemplificationPrompt(s, brandContext = '', defaultRatio = '16:9', layoutPlacement = 'split-left') {
+export function synthesizeContextualExemplificationPrompt(s, brandContext = '', defaultRatio = '21:9', layoutPlacement = 'split-left') {
   const title = s.title || '';
   const subtitle = s.subtitle || '';
   const kicker = s.kicker || '';
@@ -305,7 +305,7 @@ export function synthesizeContextualExemplificationPrompt(s, brandContext = '', 
   return `${physicalScene}. Shot on 35mm Panavision Primo prime lens at T2.8, Kodak Vision3 500T organic film grain, high dynamic range.`;
 }
 
-export async function resolveScratchboxImages(slides, workspaceId = '126', autoGenerateForVisualSlides = false, brandContext = '', defaultRatio = '16:9') {
+export async function resolveScratchboxImages(slides, workspaceId = '126', autoGenerateForVisualSlides = false, brandContext = '', defaultRatio = '21:9') {
   for (let sIdx = 0; sIdx < slides.length; sIdx++) {
     const s = slides[sIdx];
     const is21x9 = defaultRatio === '21:9' || defaultRatio === '2.37:1';
@@ -316,7 +316,7 @@ export async function resolveScratchboxImages(slides, workspaceId = '126', autoG
       const isGenerate = !img.url || img.url === 'generate' || img.url.startsWith('generate:') || 
                          img.url === 'scratchbox' || img.url.startsWith('scratchbox:');
       if (isGenerate) {
-        let aspect = is21x9 ? '21:9' : '16:9';
+        let aspect = '21:9';
         if (img.url && img.url.includes(':')) {
           aspect = img.url.replace(/^[^:]+:/, '').trim() || aspect;
         } else if (s.archetype === 'art-card' || s.archetype === 'anamorphic-letterbox') {
@@ -339,7 +339,7 @@ export async function resolveScratchboxImages(slides, workspaceId = '126', autoG
     if (autoGenerateForVisualSlides && s.images.length === 0) {
       const visualArchetypes = ['art-card', 'hero-opener', 'anamorphic-letterbox', 'image-forward'];
       if (visualArchetypes.includes(s.archetype)) {
-        let aspect = (s.archetype === 'art-card' || s.archetype === 'anamorphic-letterbox' || is21x9) ? '21:9' : '16:9';
+        let aspect = '21:9';
         const prompt = synthesizeContextualExemplificationPrompt(s, brandContext, aspect, 'split-left');
         console.log(`[SCRATCHBOX-MCP] Auto-synthesizing visual proof for slide ${sIdx + 1} ("${s.title}") (${aspect}):\n  -> "${prompt}"...`);
         const genRes = await generateScratchboxImage(prompt, aspect, workspaceId, 'split-left');
@@ -1006,25 +1006,30 @@ export function getOrCreateDirectionalScrim(palette, slideWIn, slideHIn) {
   const g = parseInt(baseHex.slice(2, 4) || '0B', 16);
   const b = parseInt(baseHex.slice(4, 6) || '14', 16);
 
-  const width = 1280;
+  const is21x9 = slideWIn > 14;
+  const width = is21x9 ? 1680 : 1280;
   const height = 720;
   const outPath = path.join('/tmp', `scrim_directional_${baseHex}_${width}x${height}.png`);
   if (fs.existsSync(outPath)) return outPath;
 
   const rawData = Buffer.alloc(height * (1 + width * 4));
   let offset = 0;
+  const cutoff = is21x9 ? 0.62 : 0.76;
+  const mid1 = is21x9 ? 0.26 : 0.32;
+  const mid2 = is21x9 ? 0.44 : 0.56;
+
   for (let y = 0; y < height; y++) {
     rawData[offset++] = 0; // Filter None
     for (let x = 0; x < width; x++) {
       const t = x / (width - 1);
       let alpha = 0;
-      if (t < 0.32) {
-        alpha = 0.94 - (t / 0.32) * 0.16; // 0.94 down to 0.78
-      } else if (t < 0.56) {
-        const p = (t - 0.32) / 0.24;
+      if (t < mid1) {
+        alpha = 0.94 - (t / mid1) * 0.16; // 0.94 down to 0.78
+      } else if (t < mid2) {
+        const p = (t - mid1) / (mid2 - mid1);
         alpha = 0.78 - p * 0.52; // 0.78 down to 0.26
-      } else if (t < 0.76) {
-        const p = (t - 0.56) / 0.20;
+      } else if (t < cutoff) {
+        const p = (t - mid2) / (cutoff - mid2);
         alpha = 0.26 - p * 0.26; // 0.26 down to 0.0
       } else {
         alpha = 0;
@@ -1092,7 +1097,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
   const brandAnchor = options.brand || frontmatter.brand || 'Chase';
   const theme = options.theme || frontmatter.theme || 'dark';
   const harmony = options.harmony || frontmatter.harmony || 'split-complementary';
-  const ratio = options.ratio || options.aspectRatio || frontmatter.ratio || frontmatter.aspect_ratio || '16:9';
+  const ratio = options.ratio || options.aspectRatio || frontmatter.ratio || frontmatter.aspect_ratio || '21:9';
   const is21x9 = ratio === '21:9' || ratio === '2.37:1' || ratio === 'ultrawide';
   options.ratio = ratio;
 
@@ -2262,7 +2267,7 @@ Options:
   --color <hex>         Custom brand anchor color
   --harmony <mode>      Adobe Color harmony model: split-complementary, analogous, triadic
   --theme <dark|light>  Color scheme variant (default: dark)
-  --ratio <16:9|21:9|4:3> Slide aspect ratio (default: 16:9, preferred ultrawide: 21:9)
+  --ratio <21:9|16:9|4:3> Slide aspect ratio (default: 21:9 ultrawide, optional: 16:9, 4:3)
   --chrome              Enable Signature Editorial Chrome (eyebrow + spelled-out page numbers)
   --eyebrow <text>      Eyebrow label for top-left header
   --scratchbox-images   Generate visuals via Scratchbox MCP (scratchbox.ai / Nano Banana Pro)

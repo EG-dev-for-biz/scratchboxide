@@ -85,16 +85,16 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
    - Bridges to `https://scratchbox.ai/api/mcp/canvas` via `/Users/eligreen/.gemini/config/scripts/scratchbox_mcp_bridge.mjs`.
    - Durable asynchronous jobs are enqueued (`ai.generate_images`), polled via `operation.get`, and resolved to live, publicly accessible CDN assets (`https://scratchbox.ai/api/storage/serve?path=...`).
 2. **Markdown Directives**:
-   - **Inline Image Tag**: `![Cinematic visual prompt](scratchbox:16:9)` or `![Prompt](scratchbox:21:9)`.
+   - **Inline Image Tag**: `![Cinematic visual prompt](scratchbox:21:9)` (default) or `![Prompt](scratchbox:16:9)`.
    - **HTML Comment Directive**: `<!-- scratchbox: prompt="Close-up of...", aspect="21:9" -->`.
-   - **Automated Synthesis Flag**: `--scratchbox-images` automatically synthesizes contextual, photorealistic prompts from slide headers for visual archetypes (`hero-opener`, `art-card`, `anamorphic-letterbox`, `image-forward`).
+   - **Automated Synthesis Flag**: `--scratchbox-images` automatically synthesizes contextual, photorealistic prompts from slide headers in **21:9 anamorphic format** (`hero-opener`, `art-card`, `anamorphic-letterbox`, `image-forward`).
 3. **Cinematic Realism & Optical Directives**:
    - Focus exclusively on the **Google foundation model family** (**Nano Banana Pro / Nano Banana 2** for 4K stills and **Google Veo 2 / Veo 3 / Veo 3.1** for video) executed via Scratchbox AI MCP (`scratchbox.ai`).
    - Anchor prompt directives in physical cinema glass (Cooke S4/i, Panavision C-Series, ARRI Master Primes).
    - Specify film stock emulsion characteristics (Kodak Vision3 500T, Portra 400 grain, 35mm / 65mm format).
    - **Micro-Motion Blur Shutter Invariant**: Enforce 1/48s cinema shutter speed with motivated micro-motion blur (`shutter_angle: 180`, `motion_blur: 0.06`) to soften artificial digital edge sharpness and ground frames in authentic optical physics.
-4. **Mandatory 4K Resolution & Zero-Text Invariants**:
-   - **Always 4K Resolution**: All slide and layout imagery must be produced in 4K UHD (`3840×2160` for 16:9, or `3840×1620` for 21:9 ultrawide) to guarantee razor-sharp optical clarity on Retina displays, 4K monitors, and presentation screens.
+4. **Mandatory 21:9 4K Ultrawide Resolution & Zero-Text Invariants**:
+   - **Default 21:9 4K Ultrawide Resolution**: All slide and layout imagery defaults to **4K Ultrawide (3840×1620, 21:9 anamorphic aspect ratio)** to match the ultrawide presentation canvas edge-to-edge. (Legacy 16:9 standard is available via explicit `--ratio 16:9` at `3840×2160`).
    - **Never Feature Text**: Generated imagery must **NEVER** contain rendered words, typography, letters, alphabet glyphs, brand names, or watermarks. Diffusion models hallucinate distorted characters; words are strictly reserved for the selectable vector typography layer.
 5. **Negative Space & Typographic Coordination (The Planned Void)**:
    - All layout imagery must be staged in dialogue with the typographic column:
@@ -170,9 +170,10 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
       3. **Chromatic Lens Distortion**: Subtle peripheral optical aberration and barrel softness characteristic of vintage cinema glass.
       4. **Muddy / Lifted Blacks**: Real optical toe with atmospheric flare and tactile charcoal/slate values (never digital crushed #000000).
       5. **Authentic Silver Halide Grain**: Fine physical film grain across the frame to establish organic material familiarity.
-25. **True Full-Bleed Spatial Canvas & Directional Scrim Invariant**:
-    - **100% Edge-to-Edge Continuity**: When presenting photography, the image must occupy the full 100% canvas (`x: 0, y: 0, w: 100%, h: 100%`), never an artificial 50/50 or 56% split that chops off the photo and replaces it with a flat digital box.
-    - **Directional Optical Scrim**: Laying out text directly over full bleed requires a soft, non-linear directional scrim (e.g. 94% opacity falloff to 0% across 70% width). This guarantees 100% WCAG AAA copy legibility without crushing the focal subject or creating artificial graphic dividers.
+25. **Default 21:9 Ultrawide Scope & True Full-Bleed Spatial Canvas Invariant**:
+    - **Default 21:9 Ultrawide Architecture**: Presentations default to **21:9 Ultrawide Scope** (`17.778" \times 7.5"` in PPTX, `2560\times1080` in HTML).
+    - **21:9 Native Full-Bleed Imagery**: All intended full-bleed imagery must be synthesized and rendered in native **21:9 anamorphic format (3840×1620)** so it spans the canvas edge-to-edge (`x: 0, y: 0, w: 100%, h: 100%`) without letterboxing, vertical clipping, or distortion. Never slice photography into artificial split boxes with flat digital voids.
+    - **Directional Optical Scrim**: Laying out text directly over full bleed requires a soft, non-linear directional scrim (e.g. 94% opacity falloff to 0% across 62% width on 21:9). This guarantees 100% WCAG AAA copy legibility without crushing the focal subject or creating artificial graphic dividers.
     - **Zero Synthetic Hairlines**: Ban artificial vertical dividing lines (`width: 1`) cutting between text and photography.
 26. **Optical Typography Craft Engine: Kerning, Tracking, Vertical Leading & Purity**:
     - **Architectural Kicker-to-Title Gap**: Maintain an intentional 0.16"–0.24" (12pt–17pt) vertical buffer between the kicker and the headline. Ascenders must never touch or crowd the kicker.
