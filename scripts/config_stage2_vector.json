@@ -1,0 +1,29 @@
+{
+  "glbPath": "public/models/omnispatial_stage2_vector_refined.glb",
+  "outputDir": "public/renders/omnispatial_stage2_vector",
+  "width": 1280,
+  "height": 720,
+  "samplesPerPixel": 16,
+  "maxBounces": 3,
+  "shadingMode": "relit",
+  "groundPlane": true,
+  "clayAlbedo": [0.55, 0.57, 0.60],
+  "clayRoughness": 0.85,
+  "clayMetallic": 0.0,
+  "sun": {
+    "latitude": 40.7484,
+    "longitude": -73.9857,
+    "unixSeconds": 1716300000
+  },
+  "camera": {
+    "position": [-160.0, 140.0, 180.0],
+    "target": [0.0, 80.0, 0.0],
+    "verticalFovDeg": 48.0
+  },
+  "atmosphere": {
+    "siteElevationMeters": 10.0,
+    "airDensity": 1.0,
+    "dustDensity": 0.05,
+    "sunIntensity": 1.0
+  }
+}
