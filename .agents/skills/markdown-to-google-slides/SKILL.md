@@ -203,71 +203,135 @@ All photorealistic hero openers, cinematic anamorphic letterbox stills, previs f
 
 ---
 
-## 4. Structural Parsing & Semantic Chunking
+## 4. Markdown Source Specification & YAML Frontmatter
 
-When ingesting a `.md` file:
+Every markdown deck must begin with a structured YAML frontmatter block that declares the presentation's visual DNA and layout architecture:
 
-1. **Slide Separation**:
-   - Segments divided by `---` map to individual slides.
-2. **Heading & Title Extraction**:
-   - Lines with `#`, `##`, `###`, or `####` map to slide titles and subtitles.
-   - If a slide lacks an explicit title, synthesize an active assertion headline from the opening sentence or bullet point.
+```yaml
+---
+title: "KINESIS // SPECULATIVE AERODYNAMICS"
+subtitle: "MONOGRAPH 07 // ICELANDIC PROVING GROUND"
+brand: "Atelier Kinesis"               # Falls back to client, studio, or "MONOGRAPH ARCHIVE"
+ratio: "21:9"                         # "21:9" (default ultrawide), "16:9" (widescreen), or "4:3" (legacy)
+font_preset: "high-fashion"           # 13 presets (see Section 5 table below)
+palette: "nordic-amber"               # 12 material palettes (see Section 5 table below) or custom HEX "#E58A3C"
+theme: "dark"                         # "dark" or "light"
+harmony: "split-complementary"        # "split-complementary", "complementary", or "monochrome"
+chrome: true                          # Enables category eyebrows & spelled-out page numbers (ONE, TWO)
+director: "ELI GREEN"                 # Running footer director attribution
+agency: "SCRATCHBOX STUDIO"           # Running footer agency/studio attribution
+---
+```
+
+### Content Ingestion Rules:
+1. **Slide Separation**: Segments divided by `---` map to individual slides.
+2. **Title Extraction**: Lines with `#`, `##`, `###` map to slide titles and subtitles.
+   - If a slide lacks an explicit title, synthesize an active assertion headline from the opening sentence.
    - **Forbidden**: Never use the document's filename (`directors_treatment`) as a slide title.
-3. **Card Decomposition**:
-   - Text-heavy sections without images are classified as `cards-executive`. Paragraphs are mapped to 2 or 3 distinct side-by-side cards (`THE ATMOSPHERE`, `THE CELEBRATION`, `THE PAYOFF`).
-4. **Speaker Notes**:
-   - HTML comments (`<!-- ... -->`) are parsed and assigned to `slide.addNotes()`.
+3. **Card Decomposition**: Text-heavy sections without images are automatically chunked into side-by-side floating editorial cards (`cards-executive`).
+4. **Speaker Notes**: HTML comments (`<!-- ... -->`) are parsed and assigned to `slide.addNotes()`.
 
 ---
 
-## 5. The 12 Layout Archetypes
+## 5. Master Creative Taxonomy: Typography & Material Chromatics
 
-Match each slide to the optimal archetype from [Layout Templates](./references/layout_templates.md) and [The Deck Commandments](./references/deck_commandments_layout_guide.md):
+### The 13 Master Typographic Pairings (`font_preset`)
 
-| Archetype | Layout Geometry | Ideal Content |
+| Preset Key | Persona & Atmosphere | Display Typeface | Body Font | Mono Datum |
+| :--- | :--- | :--- | :--- | :--- |
+| `high-fashion` | Speculative Luxury, High Fashion | *Bodoni Moda (Italic, 300)* | Plus Jakarta Sans (400) | JetBrains Mono (500) |
+| `brutalist-scale` | Raw Cultural Tension (*032c*) | **Syne (ExtraBold 800)** | Source Serif 4 (400) | Space Mono (400) |
+| `intellectual-editorial` | Literary Depth & Warmth (*Cereal*) | *Newsreader (Italic, 400)* | Plus Jakarta Sans (300) | JetBrains Mono (400) |
+| `swiss-rationalist` | Objective Precision (Müller-Brockmann)| **Instrument Sans (600)** | Instrument Sans (400) | JetBrains Mono (400) |
+| `technical-vanguard` | Vanguard Engineering | **Instrument Sans (600)** | Instrument Sans (400) | JetBrains Mono (400) |
+| `aerospace-telemetry` | Classified Skunkworks, HUD Telemetry | **Chakra Petch (Bold 700)** | Plus Jakarta Sans (400) | JetBrains Mono (500) |
+| `compressed-poster` | Kinetic Action, Urgent Poster (*Wired*)| **Oswald (Bold 700)** | Plus Jakarta Sans (300) | Space Mono (400) |
+| `neoclassical-monumental`| Sovereign Heritage, Monumental Roman | **Cinzel (Regular 400)** | EB Garamond (400) | JetBrains Mono (400) |
+| `contemporary-humanist` | Warm Editorial Cosmopolitanism (*Monocle*)| *Fraunces (Soft 100, Italic)* | Albert Sans (400) | JetBrains Mono (400) |
+| `retro-futurist-slab` | 1970s Analog Aerospace (Olivetti, Apollo)| **BioRhyme (Bold 700)** | Work Sans (400) | JetBrains Mono (500) |
+| `avant-garde-liquid` | Post-Digital Kinetic Design (Dinamo) | **Clash Display (600)** | Plus Jakarta Sans (400) | JetBrains Mono (400) |
+| `forensic-dispatch` | Investigative Journalism (*FT Weekend*)| **Source Serif 4 (SemiBold)**| Plus Jakarta Sans (400) | JetBrains Mono (500) |
+| `architectural-reduction`| Concrete Silence & Space (Tadao Ando) | **Shippori Mincho (400)** | Plus Jakarta Sans Light | Space Mono (400) |
+| `modern-grotesk` | Clean Contemporary Neo-Grotesk | **Plus Jakarta Sans (700)** | Plus Jakarta Sans (400) | JetBrains Mono (500) |
+
+### The 12 Master Material Color Worlds (`palette`)
+
+All palettes enforce the **60-30-8-2 Invariant** (60% Canvas Base, 30% Primary Specular Typography, 8% Neutral Titanium/Slate, 2% Motivated Accent):
+
+| Palette Key | Physical Sensory World | Base (60%) | Specular (30%) | Slate (8%) | Accent (2%) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `nordic-amber` | Icelandic volcanic basalt & sodium tungsten | `#08090C` | `#FFFFFF` | `#94A3B8` | `#E58A3C` (Amber) |
+| `kyoto-moss` | Sukiya cedar, wet garden stones, dull bronze | `#0B0F0D` | `#F4F2EC` | `#9BA99E` | `#C29B38` (Bronze) |
+| `cadmium-bone` | Japanese urushi lacquer & raw calcified plaster| `#0F0E0E` | `#FAF8F5` | `#A8A29E` | `#E11D48` (Crimson) |
+| `raw-linen` | Heavyweight unbleached rag & letterpress soot | `#F6F4EE` | `#121316` | `#79766E` | `#8A3B14` (Sienna) |
+| `electric-cobalt` | Aerospace pre-preg carbon & Klein blue laser | `#050811` | `#FFFFFF` | `#94A3B8` | `#2563EB` (Cobalt) |
+| `scandi-celadon` | Bog oak, wet eucalyptus bark, pale celadon | `#131716` | `#F0F4F1` | `#95A69B` | `#86EFAC` (Celadon) |
+| `travertine-sun` | Sun-baked Roman travertine & scorched clay | `#F7F3EE` | `#1E1B18` | `#8C827A` | `#C25E38` (Terracotta)|
+| `berlin-sulfur` | Bruised warehouse concrete & industrial sulfur| `#0D0B10` | `#F5F3F7` | `#A59BAF` | `#EAB308` (Sulfur) |
+| `liquid-mercury` | Mach-3 titanium skin & cockpit avionics cyan | `#0C0D10` | `#FFFFFF` | `#94A3B8` | `#06B6D4` (Mach Cyan) |
+| `sonoran-dune` | High-altitude adobe dusk & creosote sagebrush | `#181614` | `#F7F2E7` | `#A39B8C` | `#E07A5F` (Adobe Clay)|
+| `prussian-chalk` | Heavyweight blueprint cotton rag & Prussian ink| `#FAF9F5` | `#0F172A` | `#64748B` | `#DC2626` (Red Lead) |
+| `forge-iron` | Industrial hot-rolled steel & molten weld slag | `#121214` | `#EDECE6` | `#A1A1AA` | `#D97706` (Molten Weld)|
+
+---
+
+## 6. The 10 Advanced Editorial Layout Topologies
+
+Match slides dynamically to these archetypes to maintain dramatic narrative cadence:
+
+| Topology / Archetype | Geometry & Mechanics | Ideal Narrative Content |
 | :--- | :--- | :--- |
-| **`hero-opener`** | Full-bleed 21:9 ultrawide hero image + left directional optical scrim + bold title/subtitle + agency metadata | Title decks, keynote openers, high-impact hooks |
-| **`section-divider`** | Minimalist dark canvas + brand accent bar + large tracked uppercase headline | Chapter breaks, act pivots, category transitions |
-| **`art-card`** | Full obsidian negative space + massive ultra-condensed title (48–64pt) + anchor underline | Single-minded axioms, bold commandments, "VS." comparison cards |
-| **`quote-centered`** | Giant decorative quotation marks (`“` `”`) + centered geometric sans quote + attribution | Foundational philosophy, client quotes, director beliefs |
-| **`anamorphic-letterbox`** | 2.39:1 scope frame centered on 21:9 canvas with edge-to-edge cinematic presence + uppercase pull quote | Filmic mood statements, atmospheric keyframes |
-| **`recap-card-grid`** | Symmetrical grid of clean, solid white container cards on obsidian canvas + bold uppercase copy | Rule summaries, deck commandments, executive synthesis |
-| **`cards-executive`** | Section kicker + assertion title + 2 or 3 side-by-side elevated visual cards | Narrative prose, director's statements, strategy briefs |
-| **`image-forward`** | Left text zone over low-frequency negative space (directional scrim) + right unshadowed photographic flank | Core narrative beats, animatics, product highlights |
-| **`text-left-images-right`**| Left card column + right 2-up or 4-up companion grid in rounded frames | Kinematic viewports, multi-shot breakdowns |
-| **`curated-grid`** | 2×2 or 1×2 image moodboard with uniform gutters and captions | Storyboard progressions, texture spreads |
-| **`composite`** | Balanced split with native editable table or structured deliverables | Timing tables, budget tables, technical specs |
-| **`full-bleed-text-overlay`**| Full-bleed 21:9 photo + subtle directional scrim + bold pull quote | Emotional punchlines, closing quotes |
+| **`hero-opener` / Full-Bleed Void** | 21:9 full bleed (`x:0, y:0, w:100%, h:100%`) + cubic directional scrim (`mid=0.26, cutoff=0.62`) | Title openers, keynote hooks, manifesto statements |
+| **`asymmetric-duo` / `image-forward`**| 38% unboxed typographic column on left + 62% unshadowed 4K photographic plate on right | Core narrative beats, vehicle exterior, architecture |
+| **`telemetry-matrix`** | 8/16 column grid with horizontal monospace datum shelves (`01 //`, `02 //`) | Technical specs, avionics, structural parameters |
+| **`scale-collision`** | Giant display wordmark ($64\text{pt}–96\text{pt}$) deliberately colliding with micro-specs | Bold category pivots, provocative declarations |
+| **`gallery-triptych`** | 3 uniform vertical or horizontal plates aligned to universal hangline ($y=24\%$) | Spatial sequences, lighting transitions, materials |
+| **`sovereign-void` / `art-card`** | Single pure statement centered in vast obsidian negative space ($M_p \ge 14\%$) | Core philosophical axioms, single-minded beliefs |
+| **`bento-grid`** | Asymmetric hierarchical container cards (1 dominant hero card + 2 satellite cards) | Ecosystem overviews, multi-variable syntheses |
+| **`contact-sheet`** | Documentarian film strip of 4–6 unbordered consecutive stills | Storyboard progressions, camera blocking, animatics |
+| **`diagonal-slit`** | Angled optical split separating shadow and raking light aperture | Dynamic reveals, dramatic before/after comparisons |
+| **`monograph-catalog-table`** | Clean typographic table with subtle horizontal rules and mono headers | Timing schedules, budget breakdowns, deliverables |
 
 ---
 
-## 6. Dual-Engine Generation & Delivery
+## 7. Dual-Engine Compilation & Delivery CLI
 
-### Option A: Live Google Slides Presentation (Automated Drive Conversion)
-```bash
-node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_to_slides_compiler.mjs <input.md> --brand "<BrandName>" --chrome --scratchbox-images --upload-drive
-```
-1. Builds 21:9 ultrawide PPTX using `LAYOUT_21x9` (`17.778" × 7.5"`), directional optical scrimming, and card container geometry. (Override with `--ratio 16:9` if 16:9 is specifically requested).
-2. Supports `--scratchbox-images` to automatically synthesize and resolve 21:9 anamorphic 4K photorealistic imagery via Scratchbox MCP (`scratchbox.ai`).
-3. Supports `--chrome` for the Signature Editorial Chrome (top-left category eyebrow and bottom-right spelled-out page numbers: `ONE`, `TWO`, `TWENTY-FOUR`).
-4. Uploads via Google Drive multipart API with `mimeType: application/vnd.google-apps.presentation`.
-5. Sets public write permissions (`role: 'writer', type: 'anyone'`).
-6. Outputs the live editable URL: `https://docs.google.com/presentation/d/{presentationId}/edit`.
+The compiler script (`md_to_slides_compiler.mjs`) builds native 21:9 Google Slides and interactive HTML presentations:
 
-### Option B: Interactive 21:9 (2560×1080) HTML Web Presentation
 ```bash
-node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_to_slides_compiler.mjs <input.md> --brand "<BrandName>" --scratchbox-images --html
+node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_to_slides_compiler.mjs <input.md> \
+  --output presentation.pptx \
+  --ratio 21:9 \
+  --font-preset high-fashion \
+  --palette nordic-amber \
+  --theme dark \
+  --chrome \
+  --scratchbox-images \
+  --upload-drive \
+  --html presentation.html \
+  --pdf presentation.pdf
 ```
-1. Generates a standalone, zero-dependency `presentation.html` with fixed 21:9 stage scaling (`2560 × 1080`).
-2. Includes floating navigation pill (`◀`, `▶`, `1/20`, `⛶`), keyboard listeners (`ArrowRight`, `Space`, `F`), and print-to-PDF styles.
-3. Automatically embeds GIFs, animations, and high-res imagery.
+
+### CLI Flag Reference:
+* `<input.md>`: Path to the input markdown file (first positional argument).
+* `--output <path.pptx>`: Destination path for the PowerPoint file.
+* `--ratio <21:9|16:9|4:3>`: Presentation aspect ratio. **Defaults to `21:9`** (`17.778" × 7.5"`).
+* `--font-preset <slug>`: Select from the 13 master typography systems.
+* `--palette <slug|hex>`: Select from the 12 material palettes or pass a custom 6-digit hex code.
+* `--theme <dark|light>`: Color theme mode. Defaults to `dark`.
+* `--chrome`: Injects Signature Editorial Chrome (top-left category eyebrow and bottom-right spelled-out page numbers).
+* `--scratchbox-images`: Automatically synthesizes missing or prompt-based imagery via Scratchbox MCP (`scratchbox.ai`) using Nano Banana Pro in 21:9 4K anamorphic format.
+* `--workspace-id <id>`: Scratchbox MCP workspace ID (defaults to `'126'`).
+* `--upload-drive`: Uploads directly to Google Drive via multipart API, sets public write permissions, and outputs the live editable Google Slides URL.
+* `--html <path.html>`: Generates a self-contained, zero-dependency interactive 21:9 HTML web deck with keyboard navigation and fullscreen support.
+* `--pdf <path.pdf>`: Compiles vector PDF via headless Chromium or LibreOffice.
 
 ---
 
-## 7. References & Tooling
+## 8. References & Tooling
 
+- [`references/creative_palette_study_text_color_layout.md`](./references/creative_palette_study_text_color_layout.md) — Master study compendium of 13 typographic pairings, 12 material color worlds, 10 advanced editorial topologies, and 3-axis synthesis matrix.
 - [`references/how_to_conceive_unique_layouts.md`](./references/how_to_conceive_unique_layouts.md) — The 6-step operator's manual for conceiving and implementing truly unique, non-derivative layouts.
-- [`references/creative_palette_study_text_color_layout.md`](./references/creative_palette_study_text_color_layout.md) — Comprehensive master study of 13 typographic pairings, 12 material color worlds, 10 advanced editorial topologies, and 3-axis synthesis matrix.
 - [`references/concept_to_form_transduction.md`](./references/concept_to_form_transduction.md) — Deriving unique colors, typography, and spatial style from narrative friction and sensory worlds.
 - [`references/grid_systems_and_tone_taxonomy.md`](./references/grid_systems_and_tone_taxonomy.md) — Grid system selection, cognitive density matching, universal hanglines, and tone taxonomy.
 - [`references/advanced_editorial_and_rule_breaking_grids.md`](./references/advanced_editorial_and_rule_breaking_grids.md) — Spatial frequency occlusion mapping, high-fashion editorial dynamics, and controlled rule-breaking.

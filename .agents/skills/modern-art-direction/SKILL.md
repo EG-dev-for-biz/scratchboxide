@@ -271,6 +271,12 @@ When presenting modern art direction in slide decks, treatments, and editorial l
 31. **The 6-Step Unique Layout Conception Methodology**:
     - Reject the first three layout ideas ("No. That's the obvious version").
     - Execute the 6 steps sequentially: (1) Subtractive Purge of cards/boxes/icons, (2) 3 Lateral Probes, (3) Master Grid Selection, (4) Living Photographic Continuation with the 5 optical imperfections, (5) Directional Scrim & Polar Typography, and (6) The 17-Gate Art Director Critique.
+32. **Master Creative Combinations: Typography, Material Chromatics & Editorial Topologies Invariant**:
+    - Ground all creative decisions in the taxonomy codified in [creative_palette_study_text_color_layout.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/creative_palette_study_text_color_layout.md).
+    - **The 3-Axis Synthesis Formula**: Evaluate every project along three psychological vectors before picking any form: $\text{Creative Identity} = \text{Cognitive Density} \times \text{Cognitive Tempo} \times \text{Institutional Posture}$.
+    - **13 Master Typographic Pairings (3-Layer Casting Model)**: Cast type like actors across Display Persona (acoustic timbre) + Invisible Reading Grotesk (ergonomic neutrality) + Monospace Datum (structural provenance). Select from: `high-fashion` (Bodoni Moda italic), `brutalist-scale` (Syne 800), `intellectual-editorial` (Newsreader italic), `swiss-rationalist` (Instrument Sans), `aerospace-telemetry` (Chakra Petch), `compressed-poster` (Oswald), `neoclassical-monumental` (Cinzel), `contemporary-humanist` (Fraunces), `retro-futurist-slab` (BioRhyme), `avant-garde-liquid` (Clash Display), `forensic-dispatch` (Source Serif 4), `architectural-reduction` (Shippori Mincho), or `modern-grotesk`.
+    - **12 Master Material Color Worlds (60-30-8-2 Rule)**: Ground colors in physical matter under lighting rather than synthetic web pickers: `nordic-amber`, `kyoto-moss`, `cadmium-bone`, `raw-linen`, `electric-cobalt`, `scandi-celadon`, `travertine-sun`, `berlin-sulfur`, `liquid-mercury`, `sonoran-dune`, `prussian-chalk`, and `forge-iron`.
+    - **10 Master Layout Archetypes**: Shift between dynamic topologies across sequential spreads (Hero Void, Asymmetric Duo, Telemetry Matrix, Scale-Collision Rupture, Gallery Triptych, Sovereign Void, Bento Grid, Contact Sheet, Diagonal Slit, Catalog Table) to eliminate monotonic card fatigue.
 
 ---
 
@@ -303,6 +309,7 @@ Before completing any task, subject the work to the **17 Senior Art Director Que
 
 All detailed operating manuals and case study databases reside in `references/`:
 * [how_to_conceive_unique_layouts.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/how_to_conceive_unique_layouts.md): The 6-step operator's manual for conceiving and implementing truly unique, non-derivative layouts.
+* [creative_palette_study_text_color_layout.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/creative_palette_study_text_color_layout.md): Comprehensive master study of 13 typographic pairings, 12 material color worlds, 10 advanced editorial topologies, and 3-axis synthesis matrix.
 * [concept_to_form_transduction.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/concept_to_form_transduction.md): Deriving unique colors, typography, and spatial style from narrative friction and sensory worlds.
 * [grid_systems_and_tone_taxonomy.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/grid_systems_and_tone_taxonomy.md): 5 master grid architectures, cognitive density matching, universal hanglines, and tone taxonomy.
 * [advanced_editorial_and_rule_breaking_grids.md](file:///Users/eligreen/.gemini/config/skills/modern-art-direction/references/advanced_editorial_and_rule_breaking_grids.md): Spatial frequency occlusion mapping, high-fashion editorial dynamics, and controlled rule-breaking.

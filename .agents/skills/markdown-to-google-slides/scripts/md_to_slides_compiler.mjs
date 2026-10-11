@@ -68,7 +68,7 @@ export const SPELLED_NUMBERS = [
 
 export const EDITORIAL_FONT_PAIRINGS = {
   'high-fashion': {
-    name: 'High-Fashion & Culture',
+    name: 'High-Fashion & Speculative Luxury',
     displayFont: 'Bodoni Moda',
     bodyFont: 'Plus Jakarta Sans',
     monoFont: 'JetBrains Mono',
@@ -77,7 +77,7 @@ export const EDITORIAL_FONT_PAIRINGS = {
     kickerTracking: 0,
   },
   'brutalist-scale': {
-    name: 'Brutalist Scale-Contrast',
+    name: 'Brutalist Scale-Collision (032c)',
     displayFont: 'Syne',
     bodyFont: 'Source Serif 4',
     monoFont: 'Space Mono',
@@ -86,11 +86,20 @@ export const EDITORIAL_FONT_PAIRINGS = {
     kickerTracking: 0,
   },
   'intellectual-editorial': {
-    name: 'Intellectual / Editorial Warmth',
+    name: 'Intellectual & Slow-Living (Cereal / Kinfolk)',
     displayFont: 'Newsreader',
     bodyFont: 'Plus Jakarta Sans',
     monoFont: 'JetBrains Mono',
     italicDisplay: true,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'swiss-rationalist': {
+    name: 'Swiss Ultra-Rationalist (Müller-Brockmann)',
+    displayFont: 'Instrument Sans',
+    bodyFont: 'Instrument Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: false,
     displayTracking: 0,
     kickerTracking: 0,
   },
@@ -99,6 +108,78 @@ export const EDITORIAL_FONT_PAIRINGS = {
     displayFont: 'Instrument Sans',
     bodyFont: 'Instrument Sans',
     monoFont: 'JetBrains Mono',
+    italicDisplay: false,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'aerospace-telemetry': {
+    name: 'Aerospace Telemetry & Skunkworks',
+    displayFont: 'Chakra Petch',
+    bodyFont: 'Plus Jakarta Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: false,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'compressed-poster': {
+    name: 'Compressed Poster & Action (Wired)',
+    displayFont: 'Oswald',
+    bodyFont: 'Plus Jakarta Sans',
+    monoFont: 'Space Mono',
+    italicDisplay: false,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'neoclassical-monumental': {
+    name: 'Neoclassical Monumental & Heritage',
+    displayFont: 'Cinzel',
+    bodyFont: 'EB Garamond',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: false,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'contemporary-humanist': {
+    name: 'Contemporary Humanist (Fraunces / Monocle)',
+    displayFont: 'Fraunces',
+    bodyFont: 'Albert Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: true,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'retro-futurist-slab': {
+    name: 'Retro-Futurist Slab Serif (Apollo / Olivetti)',
+    displayFont: 'BioRhyme',
+    bodyFont: 'Work Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: false,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'avant-garde-liquid': {
+    name: 'Avant-Garde Liquid Grotesk (Dinamo)',
+    displayFont: 'Clash Display',
+    bodyFont: 'Plus Jakarta Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: false,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'forensic-dispatch': {
+    name: 'Forensic Dispatch (FT Weekend / ProPublica)',
+    displayFont: 'Source Serif 4',
+    bodyFont: 'Plus Jakarta Sans',
+    monoFont: 'JetBrains Mono',
+    italicDisplay: false,
+    displayTracking: 0,
+    kickerTracking: 0,
+  },
+  'architectural-reduction': {
+    name: 'Architectural Reduction (Tadao Ando / Kenya Hara)',
+    displayFont: 'Shippori Mincho',
+    bodyFont: 'Plus Jakarta Sans',
+    monoFont: 'Space Mono',
     italicDisplay: false,
     displayTracking: 0,
     kickerTracking: 0,
@@ -724,6 +805,309 @@ export const CANONICAL_BRAND_PRESETS = {
   },
 };
 
+export const CANONICAL_MATERIAL_PALETTES = {
+  'nordic-amber': {
+    name: 'Icelandic Basalt & Amber Flare',
+    dark: {
+      slideBg: '08090C',
+      cardBg: '12141A',
+      cardBorder: '1E222B',
+      titleColor: 'FFFFFF',
+      subtitleColor: '94A3B8',
+      textColor: 'E2E8F0',
+      accentColor: 'E58A3C',
+      secondaryAccent: '2C3E50',
+      kicker: 'MONOGRAPH // VOLCANIC PROVING GROUND',
+    },
+    light: {
+      slideBg: 'F7F8FA',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E2E8F0',
+      titleColor: '08090C',
+      subtitleColor: '64748B',
+      textColor: '1E293B',
+      accentColor: 'C26A20',
+      secondaryAccent: '08090C',
+      kicker: 'MONOGRAPH // VOLCANIC PROVING GROUND',
+    },
+  },
+  'kyoto-moss': {
+    name: 'Kyoto Moss & Smoked Bronze',
+    dark: {
+      slideBg: '0B0F0D',
+      cardBg: '141A16',
+      cardBorder: '212B24',
+      titleColor: 'F4F2EC',
+      subtitleColor: '9BA99E',
+      textColor: 'E5EBE6',
+      accentColor: 'C29B38',
+      secondaryAccent: '415A46',
+      kicker: 'ARCHITECTURAL SANCTUARY // MONOGRAPH',
+    },
+    light: {
+      slideBg: 'F7F6F2',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E3E0D8',
+      titleColor: '0B0F0D',
+      subtitleColor: '606D63',
+      textColor: '1E2420',
+      accentColor: 'A37E24',
+      secondaryAccent: '0B0F0D',
+      kicker: 'ARCHITECTURAL SANCTUARY // MONOGRAPH',
+    },
+  },
+  'cadmium-bone': {
+    name: 'Cadmium Lacquer & Raw Plaster',
+    dark: {
+      slideBg: '0F0E0E',
+      cardBg: '1A1717',
+      cardBorder: '2A2525',
+      titleColor: 'FAF8F5',
+      subtitleColor: 'A8A29E',
+      textColor: 'F5F5F4',
+      accentColor: 'E11D48',
+      secondaryAccent: 'FB7185',
+      kicker: 'CONTEMPORARY MONOGRAPH // AVANT-GARDE',
+    },
+    light: {
+      slideBg: 'FAF8F5',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E7E5E4',
+      titleColor: '0F0E0E',
+      subtitleColor: '78716C',
+      textColor: '1C1917',
+      accentColor: 'BE123C',
+      secondaryAccent: '0F0E0E',
+      kicker: 'CONTEMPORARY MONOGRAPH // AVANT-GARDE',
+    },
+  },
+  'raw-linen': {
+    name: 'Raw Linen & Letterpress Lampblack',
+    light: {
+      slideBg: 'F6F4EE',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E6E2D8',
+      titleColor: '121316',
+      subtitleColor: '79766E',
+      textColor: '26272B',
+      accentColor: '8A3B14',
+      secondaryAccent: '121316',
+      kicker: 'EDITORIAL ARCHIVE // FIRST EDITION',
+    },
+    dark: {
+      slideBg: '121316',
+      cardBg: '1B1C20',
+      cardBorder: '2C2D33',
+      titleColor: 'F6F4EE',
+      subtitleColor: '9E9B93',
+      textColor: 'E6E4DE',
+      accentColor: 'D97746',
+      secondaryAccent: 'F6F4EE',
+      kicker: 'EDITORIAL ARCHIVE // FIRST EDITION',
+    },
+  },
+  'electric-cobalt': {
+    name: 'Electric Cobalt & Aerospace Carbon',
+    dark: {
+      slideBg: '050811',
+      cardBg: '0D1424',
+      cardBorder: '1B2742',
+      titleColor: 'FFFFFF',
+      subtitleColor: '94A3B8',
+      textColor: 'F1F5F9',
+      accentColor: '2563EB',
+      secondaryAccent: '38BDF8',
+      kicker: 'SKUNKWORKS // AUTONOMOUS TELEMETRY',
+    },
+    light: {
+      slideBg: 'F8FAFC',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E2E8F0',
+      titleColor: '050811',
+      subtitleColor: '64748B',
+      textColor: '1E293B',
+      accentColor: '1D4ED8',
+      secondaryAccent: '050811',
+      kicker: 'SKUNKWORKS // AUTONOMOUS TELEMETRY',
+    },
+  },
+  'scandi-celadon': {
+    name: 'Oxidized Celadon & Smoked Peat',
+    dark: {
+      slideBg: '131716',
+      cardBg: '1C2422',
+      cardBorder: '2D3936',
+      titleColor: 'F0F4F1',
+      subtitleColor: '95A69B',
+      textColor: 'E2EBE5',
+      accentColor: '86EFAC',
+      secondaryAccent: '1F2E26',
+      kicker: 'NORDIC BOTANICAL // MONOGRAPH',
+    },
+    light: {
+      slideBg: 'F4F7F5',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E0E8E3',
+      titleColor: '131716',
+      subtitleColor: '627568',
+      textColor: '1D2622',
+      accentColor: '16A34A',
+      secondaryAccent: '131716',
+      kicker: 'NORDIC BOTANICAL // MONOGRAPH',
+    },
+  },
+  'travertine-sun': {
+    name: 'Bleached Travertine & Terracotta',
+    light: {
+      slideBg: 'F7F3EE',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E6DFC8',
+      titleColor: '1E1B18',
+      subtitleColor: '8C827A',
+      textColor: '2D2925',
+      accentColor: 'C25E38',
+      secondaryAccent: '1E1B18',
+      kicker: 'MEDITERRANEAN BRUTALISM // MONOGRAPH',
+    },
+    dark: {
+      slideBg: '181513',
+      cardBg: '24201D',
+      cardBorder: '36302C',
+      titleColor: 'F7F3EE',
+      subtitleColor: 'A89F96',
+      textColor: 'EBE6E0',
+      accentColor: 'E07A5F',
+      secondaryAccent: 'F7F3EE',
+      kicker: 'MEDITERRANEAN BRUTALISM // MONOGRAPH',
+    },
+  },
+  'berlin-sulfur': {
+    name: 'Smoked Plum & Sulfur Ochre (032c)',
+    dark: {
+      slideBg: '0D0B10',
+      cardBg: '18141F',
+      cardBorder: '2B2338',
+      titleColor: 'F5F3F7',
+      subtitleColor: 'A59BAF',
+      textColor: 'EDE9F2',
+      accentColor: 'EAB308',
+      secondaryAccent: '9333EA',
+      kicker: 'CULTURAL DISPATCH // UNDERGROUND',
+    },
+    light: {
+      slideBg: 'F9F8FA',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E8E4EC',
+      titleColor: '0D0B10',
+      subtitleColor: '6F657B',
+      textColor: '211D29',
+      accentColor: 'CA8A04',
+      secondaryAccent: '0D0B10',
+      kicker: 'CULTURAL DISPATCH // UNDERGROUND',
+    },
+  },
+  'liquid-mercury': {
+    name: 'Titanium Monocoque & Mach Cyan',
+    dark: {
+      slideBg: '0C0D10',
+      cardBg: '15171D',
+      cardBorder: '232731',
+      titleColor: 'FFFFFF',
+      subtitleColor: '94A3B8',
+      textColor: 'E2E8F0',
+      accentColor: '06B6D4',
+      secondaryAccent: '38BDF8',
+      kicker: 'HYPERSONIC FLUID DYNAMICS',
+    },
+    light: {
+      slideBg: 'F8FAFC',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E2E8F0',
+      titleColor: '0C0D10',
+      subtitleColor: '64748B',
+      textColor: '1E293B',
+      accentColor: '0891B2',
+      secondaryAccent: '0C0D10',
+      kicker: 'HYPERSONIC FLUID DYNAMICS',
+    },
+  },
+  'sonoran-dune': {
+    name: 'Desert Adobe & Scorched Sage',
+    dark: {
+      slideBg: '181614',
+      cardBg: '24211E',
+      cardBorder: '36322D',
+      titleColor: 'F7F2E7',
+      subtitleColor: 'A39B8C',
+      textColor: 'EDE8DC',
+      accentColor: 'E07A5F',
+      secondaryAccent: '81988A',
+      kicker: 'HIGH SONORAN // MONOGRAPH',
+    },
+    light: {
+      slideBg: 'F7F4EE',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E5DFD3',
+      titleColor: '181614',
+      subtitleColor: '7A7365',
+      textColor: '2B2721',
+      accentColor: 'C85A3D',
+      secondaryAccent: '181614',
+      kicker: 'HIGH SONORAN // MONOGRAPH',
+    },
+  },
+  'prussian-chalk': {
+    name: 'Archival Rag & Prussian Indigo',
+    light: {
+      slideBg: 'FAF9F5',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E8E6DF',
+      titleColor: '0F172A',
+      subtitleColor: '64748B',
+      textColor: '1E293B',
+      accentColor: 'DC2626',
+      secondaryAccent: '0F172A',
+      kicker: 'FORENSIC AUDIT // MONOGRAPH',
+    },
+    dark: {
+      slideBg: '0A0E17',
+      cardBg: '111827',
+      cardBorder: '1F2937',
+      titleColor: 'FAF9F5',
+      subtitleColor: '94A3B8',
+      textColor: 'F1F5F9',
+      accentColor: 'EF4444',
+      secondaryAccent: 'FAF9F5',
+      kicker: 'FORENSIC AUDIT // MONOGRAPH',
+    },
+  },
+  'forge-iron': {
+    name: 'Cast Iron & Molten Weld Glow',
+    dark: {
+      slideBg: '121214',
+      cardBg: '1C1C20',
+      cardBorder: '2C2C33',
+      titleColor: 'EDECE6',
+      subtitleColor: 'A1A1AA',
+      textColor: 'F4F4F5',
+      accentColor: 'D97706',
+      secondaryAccent: '92400E',
+      kicker: 'INDUSTRIAL PRECISION // MONOGRAPH',
+    },
+    light: {
+      slideBg: 'F7F7F8',
+      cardBg: 'FFFFFF',
+      cardBorder: 'E4E4E7',
+      titleColor: '121214',
+      subtitleColor: '71717A',
+      textColor: '27272A',
+      accentColor: 'B45309',
+      secondaryAccent: '121214',
+      kicker: 'INDUSTRIAL PRECISION // MONOGRAPH',
+    },
+  },
+};
+
 export function generateBrandPaletteFromHex(baseHex, brandName = '', theme = 'dark', harmony = 'split-complementary') {
   const cleanHex = baseHex.replace('#', '').toUpperCase();
   const rgb = hexToRgb(cleanHex);
@@ -772,21 +1156,34 @@ export function generateBrandPaletteFromHex(baseHex, brandName = '', theme = 'da
   }
 }
 
-export function resolveBrandPalette(brandName, customHex = null, theme = 'dark', harmony = 'split-complementary') {
-  const norm = (brandName || '').toLowerCase().trim();
-  if (customHex && typeof customHex === 'string') {
-    return generateBrandPaletteFromHex(customHex, brandName, theme, harmony);
+export function resolveBrandPalette(brandName, customHexOrPreset = null, theme = 'dark', harmony = 'split-complementary') {
+  const normBrand = (brandName || '').toLowerCase().trim();
+  const normPreset = (typeof customHexOrPreset === 'string' ? customHexOrPreset : '').toLowerCase().trim();
+
+  // 1. Direct Material Palette Preset Lookup
+  for (const [key, preset] of Object.entries(CANONICAL_MATERIAL_PALETTES)) {
+    if (normPreset.includes(key) || normBrand.includes(key)) {
+      const selectedTheme = preset[theme] || (preset.dark || preset.light);
+      return { ...selectedTheme, name: preset.name };
+    }
   }
+
+  // 2. Custom Hex Override
+  if (customHexOrPreset && typeof customHexOrPreset === 'string' && /^#?[0-9A-Fa-f]{6}$/.test(customHexOrPreset.trim())) {
+    return generateBrandPaletteFromHex(customHexOrPreset, brandName, theme, harmony);
+  }
+
+  // 3. Canonical Brand Presets
   for (const [key, preset] of Object.entries(CANONICAL_BRAND_PRESETS)) {
-    if (norm.includes(key)) {
+    if (normBrand.includes(key)) {
       return preset[theme] || preset.dark;
     }
   }
 
-  // Derive hash-based primary hue from brand name if not in presets!
+  // 4. Derive hash-based primary hue from brand name
   let hash = 0;
-  for (let i = 0; i < norm.length; i++) {
-    hash = norm.charCodeAt(i) + ((hash << 5) - hash);
+  for (let i = 0; i < normBrand.length; i++) {
+    hash = normBrand.charCodeAt(i) + ((hash << 5) - hash);
   }
   const hue = Math.abs(hash) % 360;
   const brandRgb = hslToRgb(hue, 75, theme === 'dark' ? 45 : 40);
@@ -1106,7 +1503,8 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
   const fontPairing = EDITORIAL_FONT_PAIRINGS[fontPairingKey] || EDITORIAL_FONT_PAIRINGS['high-fashion'];
   options.fontPairing = fontPairingKey;
 
-  const palette = resolveBrandPalette(brandAnchor, frontmatter.brand_colors, theme, harmony);
+  const paletteTarget = options.palette || frontmatter.palette || options.color || frontmatter.color || frontmatter.brand_colors || null;
+  const palette = resolveBrandPalette(brandAnchor, paletteTarget, theme, harmony);
   const slides = parseMarkdownSlides(body);
 
   // 1.5 Scratchbox MCP Imagery Resolution
