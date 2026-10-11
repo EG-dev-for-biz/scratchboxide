@@ -21,7 +21,7 @@ if (fs.existsSync(envFile)) {
     }
 }
 
-const PORT = parseInt(process.env.PORT || process.argv[2] || '5173', 10);
+const PORT = parseInt(process.argv[2] || process.env.PORT || '5173', 10);
 const PUBLIC_DIR = path.resolve(__dirname, '../public');
 
 const MIME_TYPES = {

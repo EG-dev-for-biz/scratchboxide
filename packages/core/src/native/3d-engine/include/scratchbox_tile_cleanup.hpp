@@ -2833,7 +2833,7 @@ public:
             } else if (centroid.y <= 5.8f && std::abs(norm.y) < 0.5f) {
                 // Street-level entrance plinth
                 targetType = ArchitecturalMaterialType::GRANITE_PLINTH;
-            } else if (centroid.y >= 380.0f) {
+            } else if (centroid.y >= 168.0f) {
                 // Mooring mast, spire, and architectural metallic mullions
                 targetType = ArchitecturalMaterialType::STAINLESS_STEEL;
             } else if (std::abs(norm.y) >= 0.5f && centroid.y > 5.8f) {

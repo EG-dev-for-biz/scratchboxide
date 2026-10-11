@@ -6,10 +6,12 @@
   <title>SB-Human Hand & Forearm Kinematics Studio — Scratchbox IDE</title>
   <script src="/libs/r128/three.min.js"></script>
   <script src="/libs/r128/OrbitControls.js"></script>
+  <script src="/libs/r128/GLTFLoader.js"></script>
   <script>
     if (typeof THREE === 'undefined') {
       document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
       document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"><\/script>');
+      document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"><\/script>');
     }
   </script>
   <style>
@@ -809,9 +811,9 @@
       </div>
     </div>
     <div class="header-badges">
-      <div class="badge badge-cyan">SB-HUMAN V2</div>
+      <div class="badge badge-cyan" id="mode-badge">✨ HYPER-REAL PBR</div>
       <div class="badge badge-emerald" id="fps-badge">60 FPS</div>
-      <div class="badge badge-amber" id="stats-badge">10,475 VERTS · 55 JOINTS</div>
+      <div class="badge badge-amber" id="stats-badge">14,022 VERTS · 26,656 TRIS</div>
     </div>
   </header>
 
@@ -1379,24 +1381,33 @@
 
   <!-- Bottom Left Floating Toolbar (Camera & Staging) -->
   <div class="bottom-toolbar">
+    <!-- Model Selection -->
+    <div class="toolbar-row">
+      <span class="toolbar-label">Model:</span>
+      <button class="tool-btn active" data-model="hyperreal" style="border-color: rgba(56,189,248,0.6); font-weight:700;">✨ Hyper-Real PBR (14k)</button>
+      <button class="tool-btn" data-model="kinematic">Kinematic Rig (1.7k)</button>
+      <button class="tool-btn" data-model="split">50/50 Dual Comparison</button>
+    </div>
+
     <!-- Camera Angles -->
     <div class="toolbar-row">
       <span class="toolbar-label">Camera:</span>
       <button class="tool-btn active" data-cam="dorsal">Dorsal (Back)</button>
       <button class="tool-btn" data-cam="palmar">Palmar (Palm)</button>
+      <button class="tool-btn" data-cam="macro_fingertip">Fingertip Macro</button>
+      <button class="tool-btn" data-cam="knuckles">Knuckles & Tendons</button>
+      <button class="tool-btn" data-cam="lateral">Lateral Profile</button>
       <button class="tool-btn" data-cam="radial">Radial (Thumb)</button>
       <button class="tool-btn" data-cam="ulnar">Ulnar (Pinky)</button>
-      <button class="tool-btn" data-cam="knuckles">Knuckles</button>
     </div>
 
     <!-- Skinning & Shading Modes -->
     <div class="toolbar-row">
-      <span class="toolbar-label">Skin:</span>
-      <button class="tool-btn active" data-mat="clay">18% Studio Clay</button>
-      <button class="tool-btn" data-mat="melanin">CineReal Biophysical</button>
-      <button class="tool-btn" data-mat="surfel">2DGS Planar Surfels</button>
-      <button class="tool-btn" data-mat="cyber">Cyber Biomech</button>
-      <button class="tool-btn" data-mat="xray">X-Ray Bones</button>
+      <span class="toolbar-label">Shading:</span>
+      <button class="tool-btn active" data-mat="pbr">Photographic PBR</button>
+      <button class="tool-btn" data-mat="clay">18% Studio Clay</button>
+      <button class="tool-btn" data-mat="normal">Normal Tangents</button>
+      <button class="tool-btn" data-mat="melanin">CineReal Melanin</button>
       <button class="tool-btn" data-mat="wireframe">Wireframe</button>
       <button class="tool-btn" id="btn-open-skin-inspector" style="color:#f472b6; border-color:rgba(236,72,153,0.4); font-weight:700;">⚙️ Skin Studio</button>
     </div>
@@ -1407,6 +1418,7 @@
       <button class="tool-btn active" id="btn-toggle-isolated">Isolated Forearm & Hand</button>
       <button class="tool-btn active" id="btn-toggle-joints">Joint Gizmos</button>
       <button class="tool-btn active" id="btn-toggle-limits">ROM Limiters: ON</button>
+      <button class="tool-btn" id="btn-toggle-turntable">Turntable: OFF</button>
     </div>
   </div>
 
@@ -1910,10 +1922,16 @@
         wireframe: true,
         skinning: true,
         clippingPlanes: [clipPlane]
+      }),
+      normal: new THREE.MeshNormalMaterial({
+        skinning: true
       })
     };
+    materials.pbr = materials.melanin;
 
-    // Alias 'skin' to 'melanin' for backwards compatibility
+    // Hyper-Real Anatomical Model State
+    let hyperRealMesh = null;
+    window._hyperRealReady = false;
     // Load Biophysical PBR Skin & Fingernail Textures
     const texLoader = new THREE.TextureLoader();
     const skinPbrTextures = {
@@ -2479,6 +2497,58 @@
 
         // Apply Natural Resting Neutral Hand Pose
         applyPresetPose('neutral', false);
+
+        // Load SB-Human Hyper-Real Anatomical Model (14,022 Vertices, 26,656 Triangles, 2048² PBR Texture Atlas)
+        if (typeof THREE.GLTFLoader !== 'undefined') {
+          const gltfLoader = new THREE.GLTFLoader();
+          gltfLoader.load('/models/sbhuman_hand_hyperreal.glb', (gltf) => {
+            console.log('✅ Loaded Hyper-Real Hand GLB:', gltf);
+            hyperRealMesh = gltf.scene;
+            hyperRealMesh.position.set(-0.055, 0, 0);
+
+            hyperRealMesh.traverse((child) => {
+              if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                // Preserve original PBR material from GLB
+                child.userData.pbrMaterial = child.material;
+                // 18% Studio Grey Clay Material
+                child.userData.clayMaterial = new THREE.MeshStandardMaterial({
+                  color: 0x8a929a,
+                  roughness: 0.85,
+                  metalness: 0.0,
+                  side: THREE.DoubleSide
+                });
+                // Normal Tangents Visualizer Material
+                child.userData.normalMaterial = new THREE.MeshNormalMaterial({
+                  side: THREE.DoubleSide
+                });
+                // Wireframe Topology Material
+                child.userData.wireframeMaterial = new THREE.MeshStandardMaterial({
+                  color: 0x38bdf8,
+                  wireframe: true
+                });
+              }
+            });
+
+            scene.add(hyperRealMesh);
+            window.hyperRealMesh = hyperRealMesh;
+
+            // Read initial model mode from URL query param (?model=hyperreal by default)
+            const urlParams = new URLSearchParams(window.location.search);
+            const initialModel = urlParams.get('model') || 'hyperreal';
+            setModelMode(initialModel);
+            window._hyperRealReady = true;
+          }, undefined, (err) => {
+            console.warn('Could not load sbhuman_hand_hyperreal.glb, defaulting to kinematic rig:', err);
+            setModelMode('kinematic');
+            window._hyperRealReady = true;
+          });
+        } else {
+          console.warn('GLTFLoader not available, defaulting to kinematic rig');
+          setModelMode('kinematic');
+          window._hyperRealReady = true;
+        }
 
         // Hide loading overlay
         const loader = document.getElementById('loading-overlay');
@@ -3466,7 +3536,14 @@
     }
 
     function setSkinModality(modalityKey) {
-      if (!materials[modalityKey]) return;
+      if (modalityKey === 'pbr') modalityKey = 'melanin';
+      if (!materials[modalityKey]) {
+        if (modalityKey === 'normal') {
+          materials.normal = new THREE.MeshNormalMaterial({ skinning: true });
+        } else {
+          return;
+        }
+      }
       state.skin.modality = modalityKey;
       state.activeMaterial = modalityKey;
 
@@ -3474,9 +3551,27 @@
         skinnedMesh.material = materials[modalityKey];
       }
 
+      if (hyperRealMesh) {
+        hyperRealMesh.traverse((child) => {
+          if (child.isMesh && child.userData) {
+            if (modalityKey === 'clay') {
+              child.material = child.userData.clayMaterial || child.material;
+            } else if (modalityKey === 'wireframe') {
+              child.material = child.userData.wireframeMaterial || child.material;
+            } else if (modalityKey === 'normal') {
+              child.material = child.userData.normalMaterial || child.material;
+            } else {
+              child.material = child.userData.pbrMaterial || child.material;
+            }
+          }
+        });
+      }
+
       // Update bottom toolbar buttons
       document.querySelectorAll('[data-mat]').forEach(btn => {
-        btn.classList.toggle('active', btn.getAttribute('data-mat') === modalityKey);
+        const m = btn.getAttribute('data-mat');
+        const isActive = (m === modalityKey) || (modalityKey === 'melanin' && m === 'pbr') || (modalityKey === 'pbr' && m === 'melanin');
+        btn.classList.toggle('active', isActive);
       });
 
       // Update drawer tab buttons
@@ -3495,6 +3590,57 @@
 
       updateSkinMaterial();
     }
+
+    function setModelMode(mode) {
+      state.modelMode = mode;
+      document.querySelectorAll('[data-model]').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-model') === mode);
+      });
+
+      const modeBadge = document.getElementById('mode-badge');
+      const statsBadge = document.getElementById('stats-badge');
+
+      if (mode === 'hyperreal') {
+        if (hyperRealMesh) {
+          hyperRealMesh.visible = true;
+          hyperRealMesh.position.set(-0.055, 0, 0);
+        }
+        if (skinnedMesh) {
+          skinnedMesh.visible = false;
+        }
+        if (typeof jointMarkersGroup !== 'undefined') jointMarkersGroup.visible = false;
+        if (typeof gizmoGroup !== 'undefined') gizmoGroup.visible = false;
+        if (modeBadge) modeBadge.textContent = '✨ HYPER-REAL PBR';
+        if (statsBadge) statsBadge.textContent = '14,022 VERTS · 26,656 TRIS';
+        setSkinModality(state.skin.modality || 'pbr');
+      } else if (mode === 'kinematic') {
+        if (hyperRealMesh) {
+          hyperRealMesh.visible = false;
+        }
+        if (skinnedMesh) {
+          skinnedMesh.visible = true;
+          skinnedMesh.position.copy(armRootOffset);
+        }
+        if (typeof jointMarkersGroup !== 'undefined') jointMarkersGroup.visible = state.showJoints;
+        if (typeof gizmoGroup !== 'undefined') gizmoGroup.visible = state.showJoints;
+        if (modeBadge) modeBadge.textContent = 'KINEMATIC RIG';
+        if (statsBadge) statsBadge.textContent = '1,720 VERTS · 55 JOINTS';
+      } else if (mode === 'split') {
+        if (hyperRealMesh) {
+          hyperRealMesh.visible = true;
+          hyperRealMesh.position.set(-0.055, 0, 0.08); // right offset
+        }
+        if (skinnedMesh) {
+          skinnedMesh.visible = true;
+          skinnedMesh.position.set(armRootOffset.x, armRootOffset.y, armRootOffset.z - 0.08); // left offset
+        }
+        if (typeof jointMarkersGroup !== 'undefined') jointMarkersGroup.visible = state.showJoints;
+        if (typeof gizmoGroup !== 'undefined') gizmoGroup.visible = false;
+        if (modeBadge) modeBadge.textContent = '50/50 DUAL COMPARISON';
+        if (statsBadge) statsBadge.textContent = 'BASE (1.7k) vs HYPER-REAL (14k)';
+      }
+    }
+    window.setModelMode = setModelMode;
 
     function applyFitzpatrickPreset(typeNum) {
       const preset = FITZPATRICK_PRESETS[typeNum];
@@ -3997,14 +4143,24 @@
      * ===================================================================== */
 
     const CAMERA_PRESETS = {
-      dorsal:   { pos: [0.0, 0.16, 0.38], target: [0, 0, 0] },
-      palmar:   { pos: [0.0, -0.16, 0.38], target: [0, 0, 0] },
-      radial:   { pos: [0.28, 0.08, 0.22], target: [0, 0, 0] },
-      ulnar:    { pos: [-0.28, 0.08, 0.22], target: [0, 0, 0] },
-      knuckles: { pos: [0.0, 0.38, 0.05], target: [0, 0, 0] }
+      dorsal:          { pos: [0.01, 0.35, 0.01], target: [0.01, 0.0, 0.0] },
+      palmar:          { pos: [0.01, -0.35, 0.01], target: [0.01, 0.0, 0.0] },
+      macro_fingertip: { pos: [0.165, 0.055, -0.015], target: [0.130, 0.005, -0.015] },
+      lateral:         { pos: [0.02, 0.03, 0.32], target: [0.01, 0.0, 0.0] },
+      knuckles:        { pos: [-0.02, 0.28, -0.06], target: [0.01, 0.01, 0.0] },
+      radial:          { pos: [0.02, 0.08, 0.30], target: [0.01, 0.0, 0.0] },
+      ulnar:           { pos: [0.02, 0.08, -0.30], target: [0.01, 0.0, 0.0] }
     };
 
     function setupCameraControls() {
+      // Model Mode Selector Buttons
+      document.querySelectorAll('[data-model]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          setModelMode(btn.getAttribute('data-model'));
+        });
+      });
+
+      // Camera Angle Preset Buttons
       document.querySelectorAll('[data-cam]').forEach(btn => {
         btn.addEventListener('click', (e) => {
           document.querySelectorAll('[data-cam]').forEach(b => b.classList.remove('active'));
@@ -4017,6 +4173,32 @@
           }
         });
       });
+
+      // Turntable Auto-Rotation Toggle
+      const turntableBtn = document.getElementById('btn-toggle-turntable');
+      if (turntableBtn) {
+        turntableBtn.addEventListener('click', () => {
+          controls.autoRotate = !controls.autoRotate;
+          controls.autoRotateSpeed = 2.5;
+          turntableBtn.classList.toggle('active', controls.autoRotate);
+          turntableBtn.textContent = controls.autoRotate ? 'Turntable: ON' : 'Turntable: OFF';
+        });
+      }
+
+      // Expose programmatic hooks on window for automation & headless testing
+      window.setCameraPreset = (name) => {
+        const preset = CAMERA_PRESETS[name];
+        if (preset) {
+          camera.position.set(...preset.pos);
+          controls.target.set(...preset.target);
+          controls.update();
+          document.querySelectorAll('[data-cam]').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-cam') === name);
+          });
+        }
+      };
+      window.setShadingMode = (mat) => setSkinModality(mat);
+      window.applyHandPose = (name) => applyPresetPose(name);
 
       // SB-Human Multi-Modality Skinning Studio Wire-up
       setupSkinningStudioUI();

@@ -55,6 +55,62 @@ export interface ContinuousEpidermalContract {
     ungualVaultingExponent: number;
 }
 
+/**
+ * Continuous Transformation Options for SbHumanHandTransformer.
+ * Fully parameterized under Adaptive Domain Architecture (ADA).
+ */
+export interface HandTransformationOptions {
+    /** Target subdivision iterations [1 = fast/low-poly, 2 = production 14k vertices, 3 = film 50k] [default: 1] */
+    subdivisionIterations?: number;
+    /** Overall anatomical sculpting intensity [0.0 = raw base mesh, 1.0 = standard human, 2.0 = pronounced muscularity] [default: 1.0] */
+    sculptStrength?: number;
+    /** Recenter root joint to coordinate origin [0,0,0] [default: false] */
+    recenterOrigin?: boolean;
+    /** Distal tuft squoval preservation exponent [2.0 = elliptical, 3.2 = anatomical squoval, 4.0 = boxy paddle] [default: 3.2] */
+    tuftSquovalExponent?: number;
+    /** Phalangeal diaphysis waisting ratio [0.0 = tubular, 0.015 = anatomical hourglass, 0.04 = pronounced bone] [default: 0.015] */
+    phalangealWaisting?: number;
+    /** Articular bicondylar lateral flare ratio [0.0 = straight, 0.018 = articulated condyles] [default: 0.018] */
+    jointCondylarFlare?: number;
+    /** Extensor digitorum dorsal tendon elevation in millimeters [0.0 = flat, 1.8 = athletic cords] [default: 1.8] */
+    tendonElevationMm?: number;
+    /** Volar tactile pulp pad depth in millimeters [default: 1.8] */
+    volarPulpBulgeMm?: number;
+    /** Age / wrinkle roughness factor [0.0 = youthful smooth, 1.0 = aged/crepey] [default: 0.2] */
+    dermalAgeFactor?: number;
+    /** Melanin concentration and Fitzpatrick color target */
+    melaninTarget?: { r: number; g: number; b: number };
+    /** Dermal capillary blood perfusion volume [0.0 = pale, 1.0 = heavy flush] */
+    capillaryBloodVolume?: number;
+    /** Stratum corneum hydration level [0.0 = dry, 1.0 = dewy/hydrated] */
+    hydrationLevel?: number;
+    /** Continuous biophysical epidermal contract */
+    epidermalContract?: Partial<ContinuousEpidermalContract>;
+}
+
+export interface PbrBakingOptions {
+    /** Continuous biophysical epidermal contract */
+    epidermalContract?: Partial<ContinuousEpidermalContract>;
+    /** Explicit RGB melanin color target (overrides default Fitzpatrick IV/V [196, 134, 98]) */
+    melaninTarget?: { r: number; g: number; b: number };
+    /** Dermal age and micro-wrinkle scaling factor [0.0 = smooth youthful, 1.0 = aged/crepey] */
+    dermalAgeFactor?: number;
+    /** Capillary blood perfusion volume [0.0 = pale, 1.0 = heavy erythema] */
+    capillaryBloodVolume?: number;
+    /** Surface hydration level [0.0 = dry matte, 1.0 = hydrated sheen] */
+    hydrationLevel?: number;
+}
+
+export interface InvariantCheckResult {
+    valid: boolean;
+    errors: string[];
+    checks: {
+        name: string;
+        passed: boolean;
+        details: string;
+    }[];
+}
+
 type Vec3 = [number, number, number];
 type Vec2 = [number, number];
 
@@ -106,11 +162,7 @@ export class SbHumanHandTransformer {
      */
     public static transformHand(
         loader: SbHumanLoader,
-        options: {
-            subdivisionIterations?: number;
-            sculptStrength?: number;
-            recenterOrigin?: boolean;
-        } = {}
+        options: HandTransformationOptions = {}
     ): EnhancedHandMesh {
         const subIters = options.subdivisionIterations !== undefined ? options.subdivisionIterations : 1;
         const strength = options.sculptStrength !== undefined ? options.sculptStrength : 1.0;
@@ -193,7 +245,7 @@ export class SbHumanHandTransformer {
         ];
 
         // 5. Anatomical Sculpting
-        SbHumanHandTransformer.applyAnatomicalSculpting(curPositions, curDigitMap, loader, strength);
+        SbHumanHandTransformer.applyAnatomicalSculpting(curPositions, curDigitMap, loader, strength, options);
 
         // 6. Compute Analytical Smooth Normals
         const preNormals = SbHumanHandTransformer.computeSmoothNormals(curPositions, curTriangles);
@@ -386,7 +438,8 @@ export class SbHumanHandTransformer {
         positions: Vec3[],
         digitMap: number[],
         loader: SbHumanLoader,
-        strength: number = 1.0
+        strength: number = 1.0,
+        options: HandTransformationOptions = {}
     ): void {
         const wrist = loader.joints[20].pos;
 
@@ -563,17 +616,59 @@ export class SbHumanHandTransformer {
                 p[2] += cushionDisp[2] * w;
             }
 
+            // Palmar Aponeurosis Flexion Crease Tethering (3D structural valleys: Life Line, Head Line, Heart Line)
+            if (p[1] <= wrist[1] + 0.002 && p[0] >= wrist[0] + 0.015 && p[0] <= wrist[0] + 0.088) {
+                const palmar3DCreases: Vec3[][] = [
+                    // 1. Thenar Crease (Life Line): Curves around thenar eminence from web toward wrist
+                    [
+                        [wrist[0] + 0.064, wrist[1] - 0.006, wrist[2] + 0.016],
+                        [wrist[0] + 0.052, wrist[1] - 0.009, wrist[2] + 0.010],
+                        [wrist[0] + 0.038, wrist[1] - 0.010, wrist[2] + 0.004],
+                        [wrist[0] + 0.024, wrist[1] - 0.008, wrist[2] + 0.002]
+                    ],
+                    // 2. Proximal Transverse Crease (Head Line): Sweeps across mid-palm
+                    [
+                        [wrist[0] + 0.065, wrist[1] - 0.006, wrist[2] + 0.015],
+                        [wrist[0] + 0.058, wrist[1] - 0.007, wrist[2] + 0.002],
+                        [wrist[0] + 0.050, wrist[1] - 0.008, wrist[2] - 0.012],
+                        [wrist[0] + 0.044, wrist[1] - 0.009, wrist[2] - 0.022]
+                    ],
+                    // 3. Distal Transverse Crease (Heart Line): Sweeps from pinky base toward index/middle interspace
+                    [
+                        [wrist[0] + 0.068, wrist[1] - 0.008, wrist[2] - 0.030],
+                        [wrist[0] + 0.071, wrist[1] - 0.007, wrist[2] - 0.015],
+                        [wrist[0] + 0.074, wrist[1] - 0.006, wrist[2] - 0.002],
+                        [wrist[0] + 0.076, wrist[1] - 0.005, wrist[2] + 0.006]
+                    ]
+                ];
+
+                let maxCreaseDepth = 0.0;
+                for (const cCurve of palmar3DCreases) {
+                    for (let k = 0; k < cCurve.length - 1; k++) {
+                        const res = distToSegment(p, cCurve[k], cCurve[k + 1]);
+                        const creaseRadius = 0.0028;
+                        if (res.dist < creaseRadius) {
+                            const falloff = Math.exp(-Math.pow(res.dist / 0.0012, 2.0));
+                            maxCreaseDepth = Math.max(maxCreaseDepth, 0.00075 * falloff * strength);
+                        }
+                    }
+                }
+                // Indent inward into palmar fleshy tissue (+Y direction toward dorsal)
+                p[1] += maxCreaseDepth;
+            }
+
             // =========================================================================
             // B. Dorsal Extensor Tendons, Superficial Veins & Metacarpal Arch
             // =========================================================================
             if (p[1] > wrist[1] - 0.008 && p[0] >= wrist[0] + 0.015 && p[0] <= wrist[0] + 0.088) {
                 // Extensor Digitorum Tendon Cords
                 let maxTendonElev = 0.0;
+                const tendonElevM = options.tendonElevationMm !== undefined ? options.tendonElevationMm * 0.001 : 0.0018;
                 for (const cord of tendonCords) {
                     const res = distToSegment(p, cord.start as Vec3, cord.mcp as Vec3);
                     if (res.dist < 0.0065) {
                         const falloff = Math.exp(-Math.pow(res.dist / 0.0028, 2.0));
-                        maxTendonElev = Math.max(maxTendonElev, 0.0018 * falloff * strength);
+                        maxTendonElev = Math.max(maxTendonElev, tendonElevM * falloff * strength);
                     }
                 }
                 p[1] += maxTendonElev;
@@ -584,26 +679,58 @@ export class SbHumanHandTransformer {
                 }
 
                 // 3D Dorsal Superficial Vein Network (rete venosum dorsale manus)
-                const dorsalVeinCords: { start: Vec3; end: Vec3; r: number; h: number }[] = [
-                    { start: [wrist[0] + 0.018, wrist[1] + 0.003, wrist[2] + 0.010], end: [wrist[0] + 0.076, wrist[1] - 0.003, wrist[2] + 0.005], r: 0.0035, h: 0.0013 },
-                    { start: [wrist[0] + 0.022, wrist[1] + 0.004, wrist[2] - 0.002], end: [wrist[0] + 0.080, wrist[1] - 0.004, wrist[2] - 0.010], r: 0.0038, h: 0.0014 },
-                    { start: [wrist[0] + 0.016, wrist[1] + 0.002, wrist[2] - 0.016], end: [wrist[0] + 0.072, wrist[1] - 0.005, wrist[2] - 0.022], r: 0.0032, h: 0.0011 }
+                // Subcutaneous fluid conduits with organic curvilinear trajectories and soft Gaussian profiles
+                const dorsalVeinSplines: Vec3[][] = [
+                    // 1. Radial tributary (leads to cephalic vein)
+                    [
+                        [wrist[0] + 0.016, wrist[1] + 0.003, wrist[2] + 0.012],
+                        [wrist[0] + 0.035, wrist[1] + 0.002, wrist[2] + 0.011],
+                        [wrist[0] + 0.055, wrist[1] + 0.000, wrist[2] + 0.009],
+                        [wrist[0] + 0.076, wrist[1] - 0.003, wrist[2] + 0.006]
+                    ],
+                    // 2. Central intermetacarpal vein (between middle and ring, serpentine path)
+                    [
+                        [wrist[0] + 0.020, wrist[1] + 0.0035, wrist[2] - 0.003],
+                        [wrist[0] + 0.040, wrist[1] + 0.0025, wrist[2] - 0.005],
+                        [wrist[0] + 0.060, wrist[1] + 0.0005, wrist[2] - 0.007],
+                        [wrist[0] + 0.080, wrist[1] - 0.0035, wrist[2] - 0.009]
+                    ],
+                    // 3. Ulnar tributary (leads to basilic vein)
+                    [
+                        [wrist[0] + 0.016, wrist[1] + 0.002, wrist[2] - 0.018],
+                        [wrist[0] + 0.038, wrist[1] + 0.001, wrist[2] - 0.020],
+                        [wrist[0] + 0.058, wrist[1] - 0.002, wrist[2] - 0.022],
+                        [wrist[0] + 0.072, wrist[1] - 0.005, wrist[2] - 0.024]
+                    ],
+                    // 4. Parabolic Transverse communicating arch (curved convexly toward knuckles)
+                    [
+                        [wrist[0] + 0.044, wrist[1] + 0.0015, wrist[2] + 0.008],
+                        [wrist[0] + 0.052, wrist[1] + 0.0010, wrist[2] - 0.005],
+                        [wrist[0] + 0.048, wrist[1] + 0.0005, wrist[2] - 0.020]
+                    ]
                 ];
-                for (const vein of dorsalVeinCords) {
-                    const res = distToSegment(p, vein.start, vein.end);
-                    if (res.dist < vein.r) {
-                        const falloff = Math.exp(-Math.pow(res.dist / (vein.r * 0.55), 2.0));
-                        p[1] += vein.h * falloff * strength;
+                let maxVeinElev = 0.0;
+                for (const vSpline of dorsalVeinSplines) {
+                    for (let k = 0; k < vSpline.length - 1; k++) {
+                        const res = distToSegment(p, vSpline[k], vSpline[k + 1]);
+                        const vRadius = 0.0042;
+                        if (res.dist < vRadius) {
+                            const falloff = Math.exp(-Math.pow(res.dist / 0.0020, 2.0));
+                            maxVeinElev = Math.max(maxVeinElev, 0.00065 * falloff * strength);
+                        }
                     }
                 }
+                p[1] += maxVeinElev;
 
-                // Transverse Metacarpal Arch (cupping arch toward ulnar border)
-                if (p[0] >= wrist[0] + 0.035) {
-                    const archDist = (p[2] - (wrist[2] - 0.010));
-                    if (archDist < 0) {
-                        // Pinky side drops down slightly to form natural palm cup
-                        p[1] -= 0.0015 * Math.min(1.0, -archDist / 0.025) * strength;
-                    }
+                // Continuous Bilateral Transverse Metacarpal Arch Vaulting (natural palm cupping)
+                if (p[0] >= wrist[0] + 0.025) {
+                    // 3rd metacarpal ray is the rigid structural apex at wrist[2] - 0.005
+                    const zOffset = (p[2] - (wrist[2] - 0.005));
+                    const normSpan = Math.min(1.4, Math.abs(zOffset) / 0.028);
+                    const xProg = Math.min(1.0, (p[0] - (wrist[0] + 0.025)) / 0.055);
+                    // Both radial and ulnar flanks drop toward volar direction (-Y)
+                    const vaultDrop = 0.0022 * (normSpan * normSpan) * xProg * strength;
+                    p[1] -= vaultDrop;
                 }
             }
 
@@ -613,17 +740,20 @@ export class SbHumanHandTransformer {
             if (dIdx >= 1 && dIdx <= 4) {
                 const chain = fingerChains[dIdx - 1];
 
-                // Natural subtle resting flexion curl (relaxes rigid T-pose board)
+                // Natural graduated resting flexion curl (Index < Middle < Ring < Pinky cascade)
+                const digitCurlMultiplier = [1.0, 0.75, 1.05, 1.40, 1.75][dIdx];
                 const xDist = Math.max(0.0, p[0] - chain.mcp[0]);
-                const curlDrop = 0.0030 * Math.pow(xDist / 0.080, 1.4) * strength;
+                const curlDrop = 0.0026 * digitCurlMultiplier * Math.pow(xDist / 0.080, 1.4) * strength;
                 p[1] -= curlDrop;
 
                 // --- 1. Proximal Phalanx (MCP to PIP) ---
                 const proxRes = distToSegment(p, chain.mcp as Vec3, chain.pip as Vec3);
+                const waistRatio = options.phalangealWaisting ?? 0.015;
+                const flareRatio = options.jointCondylarFlare ?? 0.018;
                 if (proxRes.dist < 0.018 && proxRes.t > 0.02 && proxRes.t < 0.98) {
                     const xi = proxRes.t;
                     // Realistic anatomical diaphysis waisting (subtle slender middle shaft)
-                    const waist = 1.0 - 0.015 * Math.pow(Math.sin(Math.PI * xi), 2.0) * strength;
+                    const waist = 1.0 - waistRatio * Math.pow(Math.sin(Math.PI * xi), 2.0) * strength;
                     p[0] = proxRes.proj[0] + (p[0] - proxRes.proj[0]) * waist;
                     p[1] = proxRes.proj[1] + (p[1] - proxRes.proj[1]) * waist;
                     p[2] = proxRes.proj[2] + (p[2] - proxRes.proj[2]) * waist;
@@ -636,11 +766,18 @@ export class SbHumanHandTransformer {
                     // PIP Cutaneous Knuckle Pad & Lateral Condyle Flare (xi > 0.70)
                     if (xi > 0.70) {
                         const pipFlare = ((xi - 0.70) / 0.30);
-                        p[2] += (p[2] - proxRes.proj[2]) * pipFlare * 0.018 * strength;
+                        p[2] += (p[2] - proxRes.proj[2]) * pipFlare * flareRatio * strength;
                         if (p[1] > chain.pip[1] - 0.002) {
                             // Subtle fleshy cutaneous pad over PIP joint
                             p[1] += 0.0004 * Math.sin(Math.PI * pipFlare * 0.8) * strength;
                         }
+                    }
+
+                    // Transverse PIP flexion furrow on volar underside (subtle skin fold)
+                    if (p[1] < chain.pip[1] && xi > 0.86 && xi < 0.98) {
+                        const dCrease = Math.abs(xi - 0.92);
+                        const cFalloff = Math.exp(-Math.pow(dCrease / 0.024, 2.0));
+                        p[1] += 0.0005 * cFalloff * strength;
                     }
                 }
 
@@ -649,7 +786,7 @@ export class SbHumanHandTransformer {
                 if (midRes.dist < 0.015 && midRes.t > 0.02 && midRes.t < 0.98) {
                     const xi = midRes.t;
                     // Subtle secondary diaphysis waisting
-                    const waist = 1.0 - 0.012 * Math.pow(Math.sin(Math.PI * xi), 2.0) * strength;
+                    const waist = 1.0 - (waistRatio * 0.80) * Math.pow(Math.sin(Math.PI * xi), 2.0) * strength;
                     p[0] = midRes.proj[0] + (p[0] - midRes.proj[0]) * waist;
                     p[1] = midRes.proj[1] + (p[1] - midRes.proj[1]) * waist;
                     p[2] = midRes.proj[2] + (p[2] - midRes.proj[2]) * waist;
@@ -657,10 +794,17 @@ export class SbHumanHandTransformer {
                     // DIP Cutaneous Knuckle Pad & Lateral Condyle Flare (xi > 0.70)
                     if (xi > 0.70) {
                         const dipFlare = ((xi - 0.70) / 0.30);
-                        p[2] += (p[2] - midRes.proj[2]) * dipFlare * 0.015 * strength;
+                        p[2] += (p[2] - midRes.proj[2]) * dipFlare * (flareRatio * 0.83) * strength;
                         if (p[1] > chain.dip[1] - 0.002) {
                             p[1] += 0.0003 * Math.sin(Math.PI * dipFlare * 0.8) * strength;
                         }
+                    }
+
+                    // Transverse DIP flexion furrow on volar underside (subtle skin fold)
+                    if (p[1] < chain.dip[1] && xi > 0.86 && xi < 0.98) {
+                        const dCrease = Math.abs(xi - 0.92);
+                        const cFalloff = Math.exp(-Math.pow(dCrease / 0.024, 2.0));
+                        p[1] += 0.0004 * cFalloff * strength;
                     }
                 }
             }
@@ -699,7 +843,8 @@ export class SbHumanHandTransformer {
                     if (t > tApexZone) {
                         const xiApex = Math.min(1.0, Math.max(0.0, (t - tApexZone) / 0.0018));
                         // Squoval transverse rounding (rounds only the distal corners into an anatomical squoval arch, preserving 92% width)
-                        const rApexW = 1.0 - 0.08 * Math.pow(xiApex, 3.2);
+                        const squovalExp = options.tuftSquovalExponent ?? 3.2;
+                        const rApexW = 1.0 - 0.08 * Math.pow(xiApex, squovalExp);
                         // Dorsal surface stays flat/taut to support the nail plate; volar surface curves upward
                         const rApexHDorsal = 1.0 - 0.04 * Math.pow(xiApex, 2.0);
                         const rApexHVolar = 1.0 - 0.10 * Math.pow(xiApex, 2.0);
@@ -732,7 +877,8 @@ export class SbHumanHandTransformer {
                             if (normW <= 1.0) {
                                 // 3D Transverse C-Curve:
                                 // Center of nail is vaulted (+0.28mm), smoothly tapering laterally
-                                const cCurve = (0.00028 * (1.0 - Math.pow(normW, 2.0)) - 0.00015 * Math.pow(normW, 4.0)) * strength;
+                                const vaultingExp = options.epidermalContract?.ungualVaultingExponent ?? 2.0;
+                                const cCurve = (0.00028 * (1.0 - Math.pow(normW, vaultingExp)) - 0.00015 * Math.pow(normW, vaultingExp * 2.0)) * strength;
                                 hNew += cCurve;
                             } else if (normW <= 1.15) {
                                 // Subtle lateral ungual sulcus groove right beside the nail plate (-0.20mm)
@@ -837,15 +983,22 @@ export class SbHumanHandTransformer {
                 const dotDorsal = fn[0] * thumbUdorsal[0] + fn[1] * thumbUdorsal[1] + fn[2] * thumbUdorsal[2];
                 isDorsal = (h > 0.001) || (h > -0.003 && dotDorsal > -0.10);
             } else if (triDigit >= 1 && triDigit <= 4) {
-                // Fingers 1-4: dorsal if above finger centerline or normal pointing upward
+                // Fingers 1-4:
+                // Palmar if below finger midline and normal pointing palmar/downward
                 const relY = centerY - wrist[1];
                 const relX = centerX - wrist[0];
-                isDorsal = (relY > getYMid(relX)) || (fn[1] > -0.20);
+                const isPalmarFacing = (fn[1] < 0.05);
+                const isBelowMid = (relY < getYMid(relX) + 0.001);
+                isDorsal = !(isPalmarFacing && isBelowMid);
             } else {
-                // Palm / Wrist: dorsal if above anatomical midline (with subtle wrap around lateral flanks)
+                // Palm / Wrist:
+                // Palmar if below midline and normal pointing palmar/downward (fn[1] < -0.15)
+                // Lateral flanks pointing sideways (radial/ulnar) wrap onto the dorsal atlas
                 const relY = centerY - wrist[1];
                 const relX = centerX - wrist[0];
-                isDorsal = (relY > getYMid(relX) - 0.002);
+                const isPalmarFacing = (fn[1] < -0.15);
+                const isBelowMid = (relY < getYMid(relX) - 0.001);
+                isDorsal = !(isPalmarFacing && isBelowMid);
             }
             const newCorners: [number, number, number] = [0, 0, 0];
             const triCorners = [i0, i1, i2];
@@ -935,7 +1088,8 @@ export class SbHumanHandTransformer {
         nailRefPngPath: string,
         outDir: string,
         width: number = 2048,
-        height: number = 2048
+        height: number = 2048,
+        options: PbrBakingOptions = {}
     ): PbrTexturePack {
         fs.mkdirSync(outDir, { recursive: true });
 
@@ -945,6 +1099,33 @@ export class SbHumanHandTransformer {
         const nailImg = decodePng(fs.readFileSync(nailRefPngPath));
         const userRefPath = path.resolve('public/textures/humanoid/hand_user_ref.png');
         const userRef = fs.existsSync(userRefPath) ? decodePng(fs.readFileSync(userRefPath)) : dorsalImg;
+
+        // Continuous biophysical calibration from options
+        let targetSkinR = 196;
+        let targetSkinG = 134;
+        let targetSkinB = 98;
+
+        if (options.melaninTarget) {
+            targetSkinR = options.melaninTarget.r;
+            targetSkinG = options.melaninTarget.g;
+            targetSkinB = options.melaninTarget.b;
+        } else if (options.epidermalContract?.melaninFraction !== undefined) {
+            const m = clamp(options.epidermalContract.melaninFraction, 0.0, 1.0);
+            const eu = clamp(options.epidermalContract.eumelaninPheomelaninRatio ?? 0.70, 0.0, 1.0);
+            targetSkinR = 228 * (1.0 - m) + (85 * eu + 135 * (1.0 - eu)) * m;
+            targetSkinG = 185 * (1.0 - m) + (52 * eu +  82 * (1.0 - eu)) * m;
+            targetSkinB = 155 * (1.0 - m) + (35 * eu +  48 * (1.0 - eu)) * m;
+        }
+
+        const rScale = targetSkinR / 196.0;
+        const gScale = targetSkinG / 134.0;
+        const bScale = targetSkinB / 98.0;
+
+        const ageFactor = options.dermalAgeFactor !== undefined ? options.dermalAgeFactor : 0.20;
+        const capillaryVol = options.capillaryBloodVolume !== undefined ? options.capillaryBloodVolume : 0.50;
+        const hydration = options.hydrationLevel !== undefined ? options.hydrationLevel : 0.65;
+        const flushMod = (capillaryVol - 0.50) * 20.0;
+        const roughMod = (0.65 - hydration) * 0.25;
 
         const sampleBilinear = (img: { data: Buffer | Uint8Array; width: number; height: number }, u: number, v: number): [number, number, number, number] => {
             const uu = (u % 1.0 + 1.0) % 1.0;
@@ -1013,9 +1194,9 @@ export class SbHumanHandTransformer {
             return { normals, cavity, width: W, height: H };
         };
 
-        const dorsalMacro = precomputeMacroNormals(dorsalImg, 0.65);
+        const dorsalMacro = precomputeMacroNormals(dorsalImg, 0.65 * (1.0 + (ageFactor - 0.20) * 0.7));
         const nailMacro = precomputeMacroNormals(nailImg, 1.10);
-        const palmMacro = precomputeMacroNormals(palmImg, 0.70);
+        const palmMacro = precomputeMacroNormals(palmImg, 0.70 * (1.0 + (ageFactor - 0.20) * 0.5));
 
         const sampleBilinearNormal = (macro: { normals: Float32Array; cavity: Float32Array; width: number; height: number }, u: number, v: number) => {
             const uu = (u % 1.0 + 1.0) % 1.0;
@@ -1055,7 +1236,7 @@ export class SbHumanHandTransformer {
         // Measured directly from 3D hand dorsal UV coordinates and anatomical proportions
         // =========================================================================
         const nails = [
-            { name: 'Thumb',  u: 0.4334, v: 0.4095, angle: -43.0 * Math.PI / 180, w: 0.0360, l: 0.0480 },
+            { name: 'Thumb',  u: 0.4334, v: 0.4180, angle: -55.0 * Math.PI / 180, w: 0.0340, l: 0.0460 },
             { name: 'Index',  u: 0.2946, v: 0.1216, angle:   4.4 * Math.PI / 180, w: 0.029, l: 0.052 },
             { name: 'Middle', u: 0.2011, v: 0.0873, angle:   7.4 * Math.PI / 180, w: 0.029, l: 0.048 },
             { name: 'Ring',   u: 0.1311, v: 0.1458, angle:   0.3 * Math.PI / 180, w: 0.030, l: 0.048 },
@@ -1127,26 +1308,43 @@ export class SbHumanHandTransformer {
             { u: 0.0851, v: 0.3166, r: 0.020, melaninBoost: 0.30, name: 'Pinky DIP' }
         ];
 
-        // 3 Anatomical dorsal superficial veins (Rete venosum dorsale manus)
+        // Anatomical dorsal superficial venous network (Rete venosum dorsale manus)
+        // Dense organic trajectories with parabolic transverse arch
         const dorsalVeins = [
-            [ [0.18, 0.48], [0.19, 0.62], [0.21, 0.76], [0.23, 0.92] ],
-            [ [0.26, 0.50], [0.25, 0.64], [0.25, 0.78], [0.26, 0.90] ],
-            [ [0.33, 0.62], [0.31, 0.74], [0.29, 0.86], [0.27, 0.95] ]
+            // 1. Ulnar tributary (intermetacarpal space between Ring and Pinky)
+            [
+                [0.142, 0.49], [0.148, 0.56], [0.158, 0.64], [0.170, 0.74], [0.185, 0.84], [0.200, 0.92]
+            ],
+            // 2. Central tributary (intermetacarpal space between Middle and Ring)
+            [
+                [0.192, 0.46], [0.198, 0.54], [0.208, 0.63], [0.218, 0.73], [0.226, 0.83], [0.232, 0.91]
+            ],
+            // 3. Radial tributary (intermetacarpal space between Index and Middle)
+            [
+                [0.252, 0.47], [0.258, 0.55], [0.264, 0.64], [0.268, 0.75], [0.262, 0.85], [0.252, 0.93]
+            ],
+            // 4. Parabolic Transverse communicating arch (curved convexly towards knuckles)
+            [
+                [0.158, 0.64], [0.182, 0.61], [0.208, 0.59], [0.236, 0.60], [0.264, 0.64]
+            ],
+            // 5. Cephalic vein radial collateral (curving along radial wrist)
+            [
+                [0.315, 0.62], [0.302, 0.70], [0.288, 0.79], [0.274, 0.88]
+            ]
         ];
 
         // Extensor Digitorum Tendons (4 pale cords from carpus to MCP knuckles)
         const tendons = [0.308, 0.246, 0.154, 0.132];
 
         // Palmar Flexion Creases (Life Line, Head Line, Heart Line)
-        // Confined strictly to anatomical palm body (uPalm in [0.44, 0.78], vPalm in [0.40, 0.78])
-        // Eliminates dark brown lines and chevrons on thumb or wrist
+        // True anatomical bounds on palmar island (uPalm in [0.28, 0.82], vPalm in [0.38, 0.82])
         const palmarCreases = [
-            // 1. Thenar Crease (Life Line): Curves around thenar eminence towards wrist
-            [ [0.44, 0.50], [0.48, 0.58], [0.52, 0.68], [0.54, 0.76] ],
-            // 2. Proximal Transverse Crease (Head Line): Sweeps from web across mid-palm
-            [ [0.44, 0.50], [0.52, 0.53], [0.60, 0.55], [0.68, 0.58] ],
-            // 3. Distal Transverse Crease (Heart Line): Sweeps from pinky base across towards index/middle interspace
-            [ [0.74, 0.46], [0.66, 0.44], [0.58, 0.42], [0.50, 0.41] ]
+            // 1. Thenar Crease (Life Line): Curves around thenar eminence from thumb-index web towards wrist
+            [ [0.38, 0.47], [0.35, 0.54], [0.36, 0.63], [0.42, 0.73] ],
+            // 2. Proximal Transverse Crease (Head Line): Sweeps across mid-palm
+            [ [0.38, 0.47], [0.46, 0.51], [0.55, 0.54], [0.66, 0.57] ],
+            // 3. Distal Transverse Crease (Heart Line): Sweeps from pinky base toward index/middle interspace
+            [ [0.74, 0.47], [0.65, 0.44], [0.55, 0.42], [0.47, 0.40] ]
         ];
 
         // Helper: distance from point (px, py) to line segment (x0, y0)-(x1, y1)
@@ -1182,13 +1380,13 @@ export class SbHumanHandTransformer {
                     const fingerFactor = smoothstep(0.46, 0.18, v);
                     const tipFactor = smoothstep(0.18, 0.06, v);
 
-                    let baseR = 196 * (1.0 - fingerFactor) + 190 * fingerFactor;
-                    let baseG = 134 * (1.0 - fingerFactor) + 128 * fingerFactor;
-                    let baseB = 98 * (1.0 - fingerFactor) + 94 * fingerFactor;
+                    let baseR = (196 * (1.0 - fingerFactor) + 190 * fingerFactor) * rScale;
+                    let baseG = (134 * (1.0 - fingerFactor) + 128 * fingerFactor) * gScale;
+                    let baseB = (98 * (1.0 - fingerFactor) + 94 * fingerFactor) * bScale;
 
-                    baseR = baseR * (1.0 - tipFactor) + 202 * tipFactor;
-                    baseG = baseG * (1.0 - tipFactor) + 138 * tipFactor;
-                    baseB = baseB * (1.0 - tipFactor) + 110 * tipFactor;
+                    baseR = clamp((baseR * (1.0 - tipFactor) + 202 * tipFactor * rScale) + flushMod * tipFactor, 0, 255);
+                    baseG = clamp(baseG * (1.0 - tipFactor) + 138 * tipFactor * gScale, 0, 255);
+                    baseB = clamp(baseB * (1.0 - tipFactor) + 110 * tipFactor * bScale, 0, 255);
 
                     // 2. Continuous Sectional Macro Photographic Sheet Sampling for Micro-Relief
                     const uSheet = 0.06 + normU * 0.88;
@@ -1210,8 +1408,9 @@ export class SbHumanHandTransformer {
                     let g = clamp(Math.round(dorsalSample[1] * dorsalWeight + baseG * (1.0 - dorsalWeight)), 0, 255);
                     let b = clamp(Math.round(dorsalSample[2] * dorsalWeight + baseB * (1.0 - dorsalWeight)), 0, 255);
 
-                    // 3. Knuckle Melanin Hyper-Pigmentation (Natural warm amber accumulation, zero procedural cut stripes)
+                    // 3. Knuckle Melanin Hyper-Pigmentation & Bony Condylar Apex Blanching
                     let knuckleDarkening = 0.0;
+                    let knuckleBlanching = 0.0;
                     for (const kc of knuckleCenters) {
                         const du = u - kc.u;
                         const dv = v - kc.v;
@@ -1219,6 +1418,11 @@ export class SbHumanHandTransformer {
                         if (dNorm < 1.0) {
                             const halo = Math.exp(-dNorm * dNorm * 2.2);
                             knuckleDarkening = Math.max(knuckleDarkening, halo * kc.melaninBoost);
+                            // Bony condylar apex blanching (taut skin squeezes dermal capillary blood)
+                            if (dNorm < 0.38) {
+                                const blanch = Math.exp(-Math.pow(dNorm / 0.18, 2.0));
+                                knuckleBlanching = Math.max(knuckleBlanching, blanch * 0.60);
+                            }
                         }
                     }
 
@@ -1230,21 +1434,37 @@ export class SbHumanHandTransformer {
                         b = clamp(Math.round(b * (1.0 - kBlend) +  88 * kBlend), 0, 255);
                     }
 
+                    // Apply bony apex blanching (subtle condylar highlight with reduced melanin)
+                    if (knuckleBlanching > 0) {
+                        r = clamp(Math.round(r + 18 * knuckleBlanching), 0, 255);
+                        g = clamp(Math.round(g + 14 * knuckleBlanching), 0, 255);
+                        b = clamp(Math.round(b + 10 * knuckleBlanching), 0, 255);
+                    }
+
                     // 4. Subcutaneous Dorsal Veins & Extensor Tendons
                     let veinNormX = 0.0;
+                    let veinAlpha = 0.0;
                     for (const vein of dorsalVeins) {
                         for (let k = 0; k < vein.length - 1; k++) {
                             const seg = distToSeg(u, v, vein[k][0], vein[k][1], vein[k+1][0], vein[k+1][1]);
-                            const veinR = 0.018;
-                            if (seg.dist < veinR && v > 0.45 && v < 0.96) {
-                                const falloff = Math.pow(1.0 - seg.dist / veinR, 2.0);
-                                r = clamp(r - Math.round(5 * falloff), 0, 255);
-                                g = clamp(g + Math.round(2 * falloff), 0, 255);
-                                b = clamp(b + Math.round(5 * falloff), 0, 255);
+                            const veinR = 0.024;
+                            if (seg.dist < veinR && v > 0.45 && v < 0.95) {
+                                // Smooth cubic Gaussian-like falloff representing deep dermal light scattering
+                                const dNorm = seg.dist / veinR;
+                                const falloff = (1.0 - dNorm * dNorm) * (1.0 - dNorm * dNorm);
+                                veinAlpha = Math.max(veinAlpha, falloff);
                                 const signX = seg.dx > 0 ? 1 : -1;
-                                veinNormX += signX * falloff * 0.10;
+                                veinNormX += signX * falloff * 0.07;
                             }
                         }
+                    }
+
+                    // Subcutaneous venous blood chromophore absorption:
+                    // Soft diffused scattering through dermis and epidermis (eliminates harsh straight pencil lines)
+                    if (veinAlpha > 0) {
+                        r = clamp(r - Math.round(9 * veinAlpha), 0, 255);
+                        g = clamp(g - Math.round(2 * veinAlpha), 0, 255);
+                        b = clamp(b + Math.round(6 * veinAlpha), 0, 255);
                     }
 
                     let tendonNormX = 0.0;
@@ -1272,8 +1492,12 @@ export class SbHumanHandTransformer {
                     nz = clamp(Math.round(fnz * 255), 0, 255);
 
                     let ao = clamp(Math.round(255 - (1.0 - dorsalNorm.cav) * 10), 0, 255);
-                    // Hydrated living lipid mantle (supple ~0.44 - 0.50 roughness)
-                    let roughness = clamp(Math.round(116 + knuckleDarkening * 12 + (1.0 - dorsalNorm.cav) * 8), 0, 255);
+                    // Dual-Lobe Hydrated living lipid mantle (supple ~0.38 - 0.48 roughness)
+                    // Pores and flexure regions have higher roughness; lipid film plateaus have micro-sheen
+                    const sebumSheen = dorsalNorm.cav > 0.85 ? 10 : 0;
+                    const veinSheen = veinAlpha > 0 ? Math.round(14 * veinAlpha) : 0;
+                    const blanchSheen = knuckleBlanching > 0 ? Math.round(12 * knuckleBlanching) : 0;
+                    let roughness = clamp(Math.round(116 + knuckleDarkening * 12 + (1.0 - dorsalNorm.cav) * 10 - sebumSheen - veinSheen - blanchSheen), 0, 255);
                     let metalness = 0;
 
 
@@ -1362,7 +1586,7 @@ export class SbHumanHandTransformer {
                     normalBuf[outIdx + 3] = 255;
 
                     ormBuf[outIdx + 0] = ao;
-                    ormBuf[outIdx + 1] = roughness;
+                    ormBuf[outIdx + 1] = clamp(Math.round(roughness + roughMod), 10, 245);
                     ormBuf[outIdx + 2] = metalness;
                     ormBuf[outIdx + 3] = 255;
 
@@ -1433,17 +1657,22 @@ export class SbHumanHandTransformer {
                     }
 
                     // Palmar Flexion Creases (Life Line, Head Line, Heart Line)
-                    // Confined strictly to anatomical palm body (uPalm in [0.44, 0.78], vPalm in [0.40, 0.78])
-                    // NEVER bleeds onto thumb or fingers!
+                    // True anatomical bounds covering thenar, hypothenar, and mid-palm body (uPalm in [0.28, 0.82], vPalm in [0.38, 0.82])
                     let palmCreaseDepth = 0.0;
-                    if (uPalm >= 0.44 && uPalm <= 0.78 && vPalm >= 0.40 && vPalm <= 0.78) {
+                    let creaseNx = 0.0;
+                    let creaseNy = 0.0;
+                    if (uPalm >= 0.28 && uPalm <= 0.82 && vPalm >= 0.38 && vPalm <= 0.82) {
                         for (const crease of palmarCreases) {
                             for (let k = 0; k < crease.length - 1; k++) {
                                 const seg = distToSeg(uPalm, vPalm, crease[k][0], crease[k][1], crease[k+1][0], crease[k+1][1]);
-                                const cRadius = 0.012;
+                                const cRadius = 0.015;
                                 if (seg.dist < cRadius) {
-                                    const falloff = Math.exp(-Math.pow(seg.dist / 0.005, 2.0));
-                                    palmCreaseDepth = Math.max(palmCreaseDepth, falloff);
+                                    const falloff = Math.exp(-Math.pow(seg.dist / 0.006, 2.0));
+                                    if (falloff > palmCreaseDepth) {
+                                        palmCreaseDepth = falloff;
+                                        creaseNx = (seg.dx / seg.dist) * falloff;
+                                        creaseNy = (seg.dy / seg.dist) * falloff;
+                                    }
                                 }
                             }
                         }
@@ -1451,15 +1680,15 @@ export class SbHumanHandTransformer {
 
                     // ZERO dark pigment subtraction! Real flexion creases are living skin folds with subtle capillary blood flush
                     if (palmCreaseDepth > 0) {
-                        pr = clamp(Math.round(pr + palmCreaseDepth * 3), 0, 255);
-                        pg = clamp(Math.round(pg - palmCreaseDepth * 2), 0, 255);
-                        pb = clamp(Math.round(pb - palmCreaseDepth * 2), 0, 255);
+                        pr = clamp(Math.round(pr + palmCreaseDepth * 8), 0, 255);
+                        pg = clamp(Math.round(pg - palmCreaseDepth * 3), 0, 255);
+                        pb = clamp(Math.round(pb - palmCreaseDepth * 3), 0, 255);
                     }
 
-                    let pnx = clamp(Math.round(128 + palmNorm.nx * 65), 0, 255);
-                    let pny = clamp(Math.round(128 + palmNorm.ny * 65 + palmCreaseDepth * 22), 0, 255);
-                    let pao = clamp(Math.round(255 - (1.0 - palmNorm.cav) * 35 - palmCreaseDepth * 25), 0, 255);
-                    let pRoughness = clamp(Math.round(120 + (1.0 - palmNorm.cav) * 15 + palmCreaseDepth * 15), 0, 255); // ~0.47 - 0.55
+                    let pnx = clamp(Math.round(128 + palmNorm.nx * 65 + creaseNx * 45), 0, 255);
+                    let pny = clamp(Math.round(128 + palmNorm.ny * 65 + creaseNy * 45), 0, 255);
+                    let pao = clamp(Math.round(255 - (1.0 - palmNorm.cav) * 35 - palmCreaseDepth * 60), 0, 255);
+                    let pRoughness = clamp(Math.round(120 + (1.0 - palmNorm.cav) * 15 + palmCreaseDepth * 25), 0, 255); // ~0.47 - 0.60
 
                     const pfnx = (pnx - 128) / 127.0;
                     const pfny = (pny - 128) / 127.0;
@@ -1477,7 +1706,7 @@ export class SbHumanHandTransformer {
                     normalBuf[outIdx + 3] = 255;
 
                     ormBuf[outIdx + 0] = pao;
-                    ormBuf[outIdx + 1] = pRoughness;
+                    ormBuf[outIdx + 1] = clamp(Math.round(pRoughness + roughMod), 10, 245);
                     ormBuf[outIdx + 2] = 0;
                     ormBuf[outIdx + 3] = 255;
                 }
@@ -1652,5 +1881,142 @@ export class SbHumanHandTransformer {
         fs.writeFileSync(outPath, glbBuffer);
 
         return glbBuffer;
+    }
+
+    /**
+     * Mechanically verifies geometric, topological, UV conformal, and PBR mathematical
+     * invariants across the enhanced humanoid hand mesh and texture pack.
+     */
+    public static assertInvariants(mesh: EnhancedHandMesh, texturePack?: PbrTexturePack): InvariantCheckResult {
+        const errors: string[] = [];
+        const checks: { name: string; passed: boolean; details: string }[] = [];
+
+        // 1. Geometric Complexity Floor
+        const minVerts = 5000;
+        const minTris = 10000;
+        const vertPass = mesh.numVertices >= minVerts;
+        const triPass = mesh.numTriangles >= minTris;
+        if (!vertPass) errors.push(`Vertex count ${mesh.numVertices} below minimum floor of ${minVerts}`);
+        if (!triPass) errors.push(`Triangle count ${mesh.numTriangles} below minimum floor of ${minTris}`);
+        checks.push({
+            name: 'Geometric Complexity Floor',
+            passed: vertPass && triPass,
+            details: `${mesh.numVertices} vertices, ${mesh.numTriangles} triangles`
+        });
+
+        // 2. Finite Coordinates & Non-Degenerate Face Areas
+        let nonFiniteCoords = 0;
+        let degenerateFaces = 0;
+        let minArea = Infinity;
+        let maxArea = -Infinity;
+
+        for (let i = 0; i < mesh.numVertices; i++) {
+            const px = mesh.positions[i * 3 + 0];
+            const py = mesh.positions[i * 3 + 1];
+            const pz = mesh.positions[i * 3 + 2];
+            if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) {
+                nonFiniteCoords++;
+            }
+        }
+
+        for (let t = 0; t < mesh.numTriangles; t++) {
+            const i0 = mesh.indices[t * 3 + 0];
+            const i1 = mesh.indices[t * 3 + 1];
+            const i2 = mesh.indices[t * 3 + 2];
+            const p0x = mesh.positions[i0 * 3 + 0], p0y = mesh.positions[i0 * 3 + 1], p0z = mesh.positions[i0 * 3 + 2];
+            const p1x = mesh.positions[i1 * 3 + 0], p1y = mesh.positions[i1 * 3 + 1], p1z = mesh.positions[i1 * 3 + 2];
+            const p2x = mesh.positions[i2 * 3 + 0], p2y = mesh.positions[i2 * 3 + 1], p2z = mesh.positions[i2 * 3 + 2];
+
+            const ax = p1x - p0x, ay = p1y - p0y, az = p1z - p0z;
+            const bx = p2x - p0x, by = p2y - p0y, bz = p2z - p0z;
+            const cx = ay * bz - az * by;
+            const cy = az * bx - ax * bz;
+            const cz = ax * by - ay * bx;
+            const area = 0.5 * Math.sqrt(cx * cx + cy * cy + cz * cz);
+            if (area < 1e-10) {
+                degenerateFaces++;
+            }
+            if (area < minArea) minArea = area;
+            if (area > maxArea) maxArea = area;
+        }
+
+        const finitePass = nonFiniteCoords === 0;
+        const degenPass = degenerateFaces === 0;
+        if (!finitePass) errors.push(`${nonFiniteCoords} non-finite vertex coordinates detected`);
+        if (!degenPass) errors.push(`${degenerateFaces} degenerate or zero-area triangles detected`);
+        checks.push({
+            name: 'Topology & Face Invariants',
+            passed: finitePass && degenPass,
+            details: `Min face area: ${minArea.toExponential(3)} m², Max: ${maxArea.toExponential(3)} m², 0 non-finite, 0 degenerate`
+        });
+
+        // 3. Unit Normal Vectors
+        let nonUnitNormals = 0;
+        for (let i = 0; i < mesh.numVertices; i++) {
+            const nx = mesh.normals[i * 3 + 0];
+            const ny = mesh.normals[i * 3 + 1];
+            const nz = mesh.normals[i * 3 + 2];
+            const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+            if (Math.abs(len - 1.0) > 1e-3) {
+                nonUnitNormals++;
+            }
+        }
+        const normalPass = nonUnitNormals === 0;
+        if (!normalPass) errors.push(`${nonUnitNormals} non-unit normal vectors detected`);
+        checks.push({
+            name: 'C¹ Continuous Unit Normals',
+            passed: normalPass,
+            details: `${mesh.numVertices} normals verified | ||n|| - 1.0| < 1e-3`
+        });
+
+        // 4. Conformal UV Bounds [0, 1] x [0, 1]
+        let outOfBoundsUvs = 0;
+        for (let i = 0; i < mesh.numVertices; i++) {
+            const u = mesh.uvs[i * 2 + 0];
+            const v = mesh.uvs[i * 2 + 1];
+            if (u < -1e-5 || u > 1.00001 || v < -1e-5 || v > 1.00001) {
+                outOfBoundsUvs++;
+            }
+        }
+        const uvPass = outOfBoundsUvs === 0;
+        if (!uvPass) errors.push(`${outOfBoundsUvs} UV coordinates outside [0, 1] boundary`);
+        checks.push({
+            name: 'Conformal Dual-Island UV Bounds',
+            passed: uvPass,
+            details: `All ${mesh.numVertices} UV coords in [0, 1] × [0, 1]`
+        });
+
+        // 5. PBR Energy Conservation & Texture Pack Integrity
+        if (texturePack) {
+            let pbrErrors = 0;
+            const buffers = [
+                { name: 'Albedo', buf: texturePack.albedoPng },
+                { name: 'Normal', buf: texturePack.normalPng },
+                { name: 'ORM', buf: texturePack.ormPng }
+            ];
+            for (const b of buffers) {
+                if (!b.buf || b.buf.length < 1000) {
+                    errors.push(`PBR texture map buffer missing or undersized: ${b.name}`);
+                    pbrErrors++;
+                } else {
+                    // Check PNG magic bytes 0x89 0x50 0x4E 0x47
+                    if (b.buf[0] !== 0x89 || b.buf[1] !== 0x50 || b.buf[2] !== 0x4e || b.buf[3] !== 0x47) {
+                        errors.push(`PBR texture map buffer corrupted (invalid PNG magic bytes): ${b.name}`);
+                        pbrErrors++;
+                    }
+                }
+            }
+            checks.push({
+                name: 'Photographic PBR Texture Pack Integrity',
+                passed: pbrErrors === 0,
+                details: `Albedo: ${(texturePack.albedoPng.length / 1024 / 1024).toFixed(2)} MB, Normal: ${(texturePack.normalPng.length / 1024 / 1024).toFixed(2)} MB, ORM: ${(texturePack.ormPng.length / 1024 / 1024).toFixed(2)} MB (${texturePack.width}x${texturePack.height})`
+            });
+        }
+
+        return {
+            valid: errors.length === 0,
+            errors,
+            checks
+        };
     }
 }

@@ -96,8 +96,15 @@ async function main() {
     'about:blank'
   ]);
 
+  chromeProc.stderr.on('data', (d) => {
+    const msg = d.toString();
+    if (msg.includes('ERROR') || msg.includes('DevTools')) {
+      console.log('[Chrome STDERR]', msg.trim());
+    }
+  });
+
   let targetWs = null;
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 80; i++) {
     await sleep(250);
     try {
       const targets = await getJson(`http://127.0.0.1:${CDP_PORT}/json`);
@@ -106,7 +113,9 @@ async function main() {
         targetWs = pageTarget.webSocketDebuggerUrl;
         break;
       }
-    } catch (e) {}
+    } catch (e) {
+      if (i > 60) console.log('[Chrome Poll Retry]', e.message);
+    }
   }
 
   if (!targetWs) {
@@ -164,12 +173,85 @@ async function main() {
     await sendCdp('Runtime.evaluate', {
       expression: `
         loadLocation('Colosseum, Rome');
+        if (typeof clearPipelineTimeouts === 'function') clearPipelineTimeouts();
       `
     });
-    // Wait for the pipeline transition (1100ms) plus image load
     await sleep(2000);
+
+    // 2b. Extract clean 3D renders from <model-viewer> for each stage via CDP
+    console.log('[Colosseum Demo Capture] Generating clean renders for Stages 1, 2, 3 in 3D orbit...');
+
+    async function captureCleanStageRender(stage, filename) {
+      console.log(`[Colosseum Demo Capture] Capturing clean render for Stage ${stage}...`);
+      await sendCdp('Runtime.evaluate', {
+        expression: `
+          new Promise((resolve) => {
+            const mv = document.getElementById('mainModelViewer');
+            if (!mv) return resolve('no-mv');
+            mv.removeAttribute('poster');
+
+            setViewMode('orbit-3d');
+            selectStage(${stage});
+            
+            mv.removeAttribute('auto-rotate');
+            mv.setAttribute('camera-orbit', '35deg 62deg 520m');
+            mv.setAttribute('camera-target', '0m 0m 0m');
+            mv.setAttribute('field-of-view', '30deg');
+
+            const hideIds = ['.app-header', '.hud-left', '.hud-right', '.playback-dock', '.model-viewer-badge', '.orbit-model-switcher', '.orbit-tip-pill'];
+            hideIds.forEach(sel => {
+              const el = document.querySelector(sel);
+              if (el) el.style.visibility = 'hidden';
+            });
+
+            if (mv.loaded) {
+              setTimeout(() => resolve('already-loaded'), 2500);
+            } else {
+              mv.addEventListener('load', () => setTimeout(() => resolve('loaded'), 2500), { once: true });
+              setTimeout(() => resolve('timeout'), 12000);
+            }
+          });
+        `,
+        awaitPromise: true
+      });
+      await sleep(2500); // Allow WebGL frames to settle
+      const shot = await sendCdp('Page.captureScreenshot', { format: 'png' });
+      const pngBuf = Buffer.from(shot.data, 'base64');
+      const outPath = path.resolve(__dirname, '../public/renders/colosseum', filename);
+      fs.writeFileSync(outPath, pngBuf);
+      console.log(`     ✅ Clean stage render saved: ${filename} (${(pngBuf.length / 1024).toFixed(1)} KB)`);
+
+      // Restore UI elements
+      await sendCdp('Runtime.evaluate', {
+        expression: `
+          const showIds = ['.app-header', '.hud-left', '.hud-right', '.playback-dock', '.model-viewer-badge', '.orbit-model-switcher', '.orbit-tip-pill'];
+          showIds.forEach(sel => {
+            const el = document.querySelector(sel);
+            if (el) el.style.visibility = 'visible';
+          });
+        `
+      });
+      return true;
+    }
+
+    await captureCleanStageRender(1, 'clean_stage1_clay.png');
+    await captureCleanStageRender(2, 'clean_stage2_vector.png');
+    await captureCleanStageRender(3, 'clean_stage3_master.png');
+
+    // Update locationDatasets in running page with newly generated clean renders
     await sendCdp('Runtime.evaluate', {
       expression: `
+        const ts = Date.now();
+        locationDatasets['colosseum'].stages[1].beauty = '/renders/colosseum/clean_stage1_clay.png?' + ts;
+        locationDatasets['colosseum'].stages[1].albedo = '/renders/colosseum/clean_stage1_clay.png?' + ts;
+        locationDatasets['colosseum'].stages[2].beauty = '/renders/colosseum/clean_stage2_vector.png?' + ts;
+        locationDatasets['colosseum'].stages[2].albedo = '/renders/colosseum/clean_stage2_vector.png?' + ts;
+        locationDatasets['colosseum'].stages[3].beauty = '/renders/colosseum/clean_stage3_master.png?' + ts;
+        locationDatasets['colosseum'].stages[3].albedo = '/renders/colosseum/clean_stage3_master.png?' + ts;
+        stageImages = locationDatasets['colosseum'].stages;
+        setViewMode('side-by-side');
+        document.getElementById('imgLeft').src = '/renders/colosseum/clean_stage1_clay.png?' + ts;
+        document.getElementById('imgRight').src = '/renders/colosseum/clean_stage3_master.png?' + ts;
         selectStage(3);
       `
     });
@@ -202,6 +284,10 @@ async function main() {
         selectStage(3);
         const wipe = document.getElementById('wipeReveal');
         if (wipe) wipe.style.width = '48%';
+        const imgWipeReveal = document.getElementById('imgWipeReveal');
+        if (imgWipeReveal) imgWipeReveal.src = '/renders/colosseum/clean_stage1_clay.png';
+        const imgWipeBase = document.getElementById('imgWipeBase');
+        if (imgWipeBase) imgWipeBase.src = '/renders/colosseum/clean_stage3_master.png';
       `
     });
     await sleep(1500);
@@ -215,14 +301,16 @@ async function main() {
     await sendCdp('Runtime.evaluate', {
       expression: `
         setViewMode('loupe');
+        const imgLoupeBase = document.getElementById('imgLoupeBase');
+        if (imgLoupeBase) imgLoupeBase.src = '/renders/colosseum/clean_stage3_master.png';
         const loupeGlass = document.getElementById('loupeGlass');
         if (loupeGlass) {
           loupeGlass.style.display = 'block';
           loupeGlass.style.left = '960px';
           loupeGlass.style.top = '480px';
-          loupeGlass.style.backgroundImage = 'url(/renders/colosseum/stage3_pbr.png)';
-          loupeGlass.style.backgroundSize = '4800px 2700px';
-          loupeGlass.style.backgroundPosition = '-1800px -900px';
+          loupeGlass.style.backgroundImage = 'url(/renders/colosseum/clean_stage3_master.png)';
+          loupeGlass.style.backgroundSize = '3840px 2160px';
+          loupeGlass.style.backgroundPosition = '-1920px -1080px';
         }
       `
     });
@@ -238,12 +326,79 @@ async function main() {
       expression: `
         setViewMode('orbit-3d');
         switchOrbitModel(3);
+        const mv = document.getElementById('mainModelViewer');
+        if (mv) {
+          mv.cameraOrbit = '-45deg 42deg 540m';
+          mv.cameraTarget = '40m 20m 0m';
+        }
       `
     });
-    await sleep(3500); // Allow <model-viewer> to render the 3D GLB
+    console.log('  -> Waiting for <model-viewer> load and render frames...');
+    await sendCdp('Runtime.evaluate', {
+      expression: `
+        new Promise((resolve) => {
+          const mv = document.getElementById('mainModelViewer');
+          if (!mv) return resolve('no-mv');
+          if (mv.loaded) return resolve('already-loaded');
+          mv.addEventListener('load', () => resolve('loaded'), { once: true });
+          setTimeout(() => resolve('timeout'), 20000);
+        });
+      `,
+      awaitPromise: true
+    });
+    await sleep(5000); // Allow WebGL frames and PBR materials to settle
     await takeProofShot(
       'colosseum_demo_app_3d_orbit.png',
       'App Interface: 3D Free Orbit Mode with Google model-viewer rendering Colosseum PBR GLB'
+    );
+
+    // Screenshot 5b: Ground-Level Human Vantage (Northern Facade & Curtain Wall Fix Verification)
+    console.log('[Colosseum Demo Capture] Positioning camera at Ground-Level Northern Facade vantage...');
+    await sendCdp('Runtime.evaluate', {
+      expression: `
+        const mv = document.getElementById('mainModelViewer');
+        if (mv) {
+          mv.setAttribute('camera-orbit', '25deg 78deg 280m');
+          mv.setAttribute('camera-target', '50m 25m -120m');
+          if (typeof mv.jumpCameraToGoal === 'function') mv.jumpCameraToGoal();
+        }
+      `
+    });
+    await sleep(4000);
+    await takeProofShot(
+      'colosseum_proof_ground_facade_curtain_wall_fix.png',
+      'App Interface: Ground-Level verification showing intact Via Nicola Salvi building facade and eliminated curtain walls'
+    );
+
+    // Screenshot 5c: Orthographic Top-Down Plan View (Perimeter Boundary & Parco del Celio Coverage)
+    console.log('[Colosseum Demo Capture] Positioning camera at Orthographic Top-Down Plan View...');
+    await sendCdp('Runtime.evaluate', {
+      expression: `
+        const mv = document.getElementById('mainModelViewer');
+        if (mv) {
+          mv.setAttribute('camera-orbit', '0deg 5deg 620m');
+          mv.setAttribute('camera-target', '16m 20m -21m');
+          if (typeof mv.jumpCameraToGoal === 'function') mv.jumpCameraToGoal();
+        }
+      `
+    });
+    await sleep(4000);
+    await takeProofShot(
+      'colosseum_proof_orthographic_plan_celio_coverage.png',
+      'App Interface: Orthographic top-down plan showing clean circular perimeter boundary and complete Parco del Celio canopy coverage'
+    );
+
+    // Screenshot 6: 3D Stage 2 Vector & Botanical Clay Mode
+    console.log('[Colosseum Demo Capture] Switching to 3D Stage 2 Clay Model...');
+    await sendCdp('Runtime.evaluate', {
+      expression: `
+        switchOrbitModel(2);
+      `
+    });
+    await sleep(4000);
+    await takeProofShot(
+      'colosseum_demo_app_3d_orbit_stage2.png',
+      'App Interface: 3D Free Orbit Mode rendering Stage 2 Clay Vitruvian Architecture and Botanical Stands'
     );
 
     console.log('[Colosseum Demo Capture] All screenshots captured successfully!');

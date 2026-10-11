@@ -16,7 +16,12 @@ async function main() {
     const transformed = SbHumanHandTransformer.transformHand(loader, {
         subdivisionIterations: 2,
         sculptStrength: 1.0,
-        recenterOrigin: true
+        recenterOrigin: true,
+        tuftSquovalExponent: 3.2,
+        phalangealWaisting: 0.015,
+        jointCondylarFlare: 0.018,
+        tendonElevationMm: 1.8,
+        volarPulpBulgeMm: 1.8
     });
 
     console.log('  -> Hand Vertices:', transformed.numVertices);
@@ -35,12 +40,27 @@ async function main() {
         nailRef,
         texOutDir,
         2048,
-        2048
+        2048,
+        {
+            hydrationLevel: 0.68,
+            capillaryBloodVolume: 0.52,
+            dermalAgeFactor: 0.18
+        }
     );
 
     console.log('  -> Albedo PNG size:', texturePack.albedoPng.length, 'bytes');
     console.log('  -> Normal PNG size:', texturePack.normalPng.length, 'bytes');
     console.log('  -> ORM PNG size:', texturePack.ormPng.length, 'bytes');
+
+    // Mechanical Mathematical Invariant Verification
+    console.log('[*] Verifying mechanical invariants across mesh topology and PBR texture pack...');
+    const invResult = SbHumanHandTransformer.assertInvariants(transformed, texturePack);
+    for (const check of invResult.checks) {
+        console.log(`  [${check.passed ? 'PASS' : 'FAIL'}] ${check.name}: ${check.details}`);
+    }
+    if (!invResult.valid) {
+        throw new Error(`Mathematical invariant verification failed: ${invResult.errors.join('; ')}`);
+    }
 
     // Export GLB 2.0 Binary Model
     console.log('[4/4] Packaging binary glTF 2.0 (.glb) with embedded PBR textures...');

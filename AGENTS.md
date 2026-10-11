@@ -174,6 +174,16 @@ When fetching, downloading, or ingesting real-world 3D meshes (e.g. from Google 
 3. **Preserve Raw High-Resolution Assets**:
    - Always persist the extracted high-resolution raw mesh (e.g., `public/models/..._raw.glb` or `public/tiles/...`) to maintain reproducible, non-destructive workflows from the highest-quality source.
 
+### Rule: Always Download/Extract Fresh 3D Models for New Workflows (Prohibition on Stale/Distorted Legacy Re-Use)
+Whenever starting a new workflow, reproducing a 3D scene, or whenever an existing model exhibits geometric distortion, anisotropic scaling, or legacy editing artifacts:
+1. **Strict Prohibition on Re-Using Stale/Distorted Intermediate Assets**:
+   - Never inherit old, previously altered, or intermediate `.glb` files found in `public/models/` (such as legacy test crops that may carry accumulated manual deformers, coordinate shearing, or coarse octree LODs).
+2. **Always Download/Extract Fresh Ground Truth from Google 3D Photo Tiles**:
+   - Always initiate the canonical ingestion pipeline (`getGoogle3DTilesFullTexture` / `getGoogle3DTilesClay` or `google_3d_tiles_get_full_texture` / `google_3d_tiles_get_clay`) to pull a brand-new, undistorted 3D model directly from Google Maps Platform Photorealistic 3D Tiles at leaf LOD (`errorTarget <= 0.5`, 4K SSE budget, async octree settle).
+3. **Pristine Ground-Truth Provenance**:
+   - Persist freshly extracted models with timestamped, geodetically grounded naming (e.g., `public/models/<location>_<lat>_<lng>_raw_tiles.glb`) alongside extraction metadata (geodetic coordinates, WGS-84 bounding volume, capture date, LOD error target).
+   - This ensures 100% metric fidelity, true vertical architectural envelopes, pristine UVs, and uncorrupted geometry before any downstream ADA reshaping, PBR de-lighting, or botanical instancing begins.
+
 ### Rule: Dual Dedicated 3D Object APIs & Zero Presets
 When retrieving real-world locations or addresses as 3D models from Google Maps Photorealistic 3D Tiles:
 1. **Two Dedicated Separate APIs**:

@@ -97,6 +97,7 @@
 #include "scratchbox_tile_restructurer.hpp"
 #include "scratchbox_displacement.hpp"
 #include "scratchbox_processing.hpp"
+#include "scratchbox_carrier.hpp"
 
 namespace sb = scratchbox;
 namespace disp = scratchbox::displacement;
@@ -109,6 +110,7 @@ namespace ptc = scratchbox::particles;
 namespace pbr = scratchbox::pbr;
 namespace scn = scratchbox::composer;
 namespace trp = scratchbox::triplanar;
+namespace car = scratchbox::carrier;
 namespace sss = scratchbox::sss;
 namespace vol = scratchbox::volumetrics;
 namespace nat = scratchbox::nature;

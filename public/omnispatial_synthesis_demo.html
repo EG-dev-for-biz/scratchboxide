@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Omnispatial Multi-Sensor 3D Synthesis · Scratchbox IDE</title>
     <!-- Google Model Viewer (Official Web Component for 3D GLB - Zero Three.js) -->
-    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+    <script type="module" src="/js/model-viewer.min.js"></script>
     <style>
         :root {
             --bg-color: #07090e;
@@ -824,6 +824,7 @@
                           alt="3D Spatial Model"
                           auto-rotate
                           camera-controls
+                          bounds="tight"
                           touch-action="pan-y"
                           shadow-intensity="1.2"
                           exposure="1.0"
@@ -1035,31 +1036,31 @@
                 name: 'Colosseum, Rome',
                 stages: {
                     1: {
-                        beauty: '/renders/colosseum/stage1_orbit.png',
-                        albedo: '/renders/colosseum/stage1_orbit.png',
-                        normal: '/renders/colosseum/stage1_orbit.png',
-                        depth:  '/renders/colosseum/stage1_orbit.png',
-                        glb:    '/models/colosseum_rome_clay.glb',
-                        title:  'Stage 1: Raw Google 3D Tile in Clay',
-                        sub:    '170,802 Photogrammetric Triangles · Melted Arches · Scan Noise'
+                        beauty: '/renders/colosseum/clean_stage1_clay.png',
+                        albedo: '/renders/colosseum/clean_stage1_clay.png',
+                        normal: '/renders/colosseum/clean_stage1_clay.png',
+                        depth:  '/renders/colosseum/clean_stage1_clay.png',
+                        glb:    '/models/colosseum_rome_pristine_clay_raw.glb',
+                        title:  'Stage 1: Authentic Google 3D Tile in Clay',
+                        sub:    '537,940 Photogrammetric Vertices · 411,950 Triangles · 18% Studio Clay · Zero Distortion'
                     },
                     2: {
-                        beauty: '/renders/colosseum/stage2_clay.png',
-                        albedo: '/renders/colosseum/stage2_clay.png',
-                        normal: '/renders/colosseum/stage2_clay.png',
-                        depth:  '/renders/colosseum/stage2_clay.png',
-                        glb:    '/models/colosseum_sb_archi_full.glb',
-                        title:  'Stage 2: Grounded Ruin & Vector Reshaping',
-                        sub:    'Hollow Ambulatory Arches · 3-Tier Orders · Preserved Ruin Silhouette'
+                        beauty: '/renders/colosseum/clean_stage2_vector.png',
+                        albedo: '/renders/colosseum/clean_stage2_vector.png',
+                        normal: '/renders/colosseum/clean_stage2_vector.png',
+                        depth:  '/renders/colosseum/clean_stage2_vector.png',
+                        glb:    '/models/colosseum_stage2_vector_refined.glb',
+                        title:  'Stage 2: Vitruvian Architecture & Botanical Stands',
+                        sub:    '537,940 Vertices · 73,559 C^1 Hermite Depressed Vertices · 75 Resected Botanical Stands (Parasol Pines, Cypresses, Holm Oaks) · 262,968 Locked Vertices'
                     },
                     3: {
-                        beauty: '/renders/colosseum/stage3_pbr.png',
-                        albedo: '/renders/colosseum/stage3_pbr.png',
-                        normal: '/renders/colosseum/stage3_pbr.png',
-                        depth:  '/renders/colosseum/stage3_pbr.png',
-                        glb:    '/models/colosseum_rome_1k_pbr.glb',
-                        title:  'Stage 3: De-Lighted Travertine PBR & Living Foliage',
-                        sub:    '5mm Virtual Bevel · Voronoi Foliage Flutter & Waxy Cuticle · Toksvig AA'
+                        beauty: '/renders/colosseum/clean_stage3_master.png',
+                        albedo: '/renders/colosseum/clean_stage3_master.png',
+                        normal: '/renders/colosseum/clean_stage3_master.png',
+                        depth:  '/renders/colosseum/clean_stage3_master.png',
+                        glb:    '/models/colosseum_stage3_master_pbr.glb',
+                        title:  'Stage 3: Photogrammetric Tile & Botanical Fusion',
+                        sub:    '73,559 Depressed Foliage Vertices · 75 Dynamic Botanical Stands (146 Nodes) · 262,968 Locked Monument Vertices · Zero Drift'
                     }
                 },
                 hud: {
@@ -1088,8 +1089,8 @@
 
             if (mode === 'wipe') {
                 if (activeLocationKey === 'colosseum') {
-                    document.getElementById('imgWipeReveal').src = '/renders/colosseum/stage1_orbit.png';
-                    document.getElementById('imgWipeBase').src = '/renders/colosseum/stage3_pbr.png';
+                    document.getElementById('imgWipeReveal').src = '/renders/colosseum/stage1_clay_orbit.png';
+                    document.getElementById('imgWipeBase').src = '/renders/colosseum/stage3_pbr_orbit.png';
                 } else {
                     document.getElementById('imgWipeReveal').src = stageImages[1][currentPass] || stageImages[1].beauty;
                     document.getElementById('imgWipeBase').src = stageImages[currentStage][currentPass] || stageImages[currentStage].beauty;
@@ -1099,18 +1100,18 @@
             if (mode === 'loupe') {
                 updateLoupeImage();
             }
+
+            if (mode === 'orbit-3d') {
+                const mv = document.getElementById('mainModelViewer');
+                if (mv && stageImages[currentStage].glb) {
+                    mv.src = stageImages[currentStage].glb;
+                    mv.poster = stageImages[currentStage].beauty;
+                }
+            }
         }
 
         function switchOrbitModel(stage) {
-            document.getElementById('orbitPillStage1').classList.toggle('active', stage === 1);
-            document.getElementById('orbitPillStage2').classList.toggle('active', stage === 2);
-            document.getElementById('orbitPillStage3').classList.toggle('active', stage === 3);
-
-            const mv = document.getElementById('mainModelViewer');
-            if (mv) {
-                mv.src = stageImages[stage].glb;
-                mv.poster = stageImages[stage].beauty;
-            }
+            selectStage(stage);
             document.getElementById('pipelineStatusText').innerText = `3D Model: ${stageImages[stage].title}`;
         }
 
@@ -1135,6 +1136,20 @@
             document.getElementById('imgWipeBase').src = imgSrc;
 
             updateLoupeImage();
+
+            // Synchronize 3D model viewer
+            const mv = document.getElementById('mainModelViewer');
+            if (mv && target.glb) {
+                if (mv.src !== target.glb && !mv.src.endsWith(target.glb)) {
+                    mv.src = target.glb;
+                }
+                mv.removeAttribute('poster');
+            }
+            if (document.getElementById('orbitPillStage1')) {
+                document.getElementById('orbitPillStage1').classList.toggle('active', stage === 1);
+                document.getElementById('orbitPillStage2').classList.toggle('active', stage === 2);
+                document.getElementById('orbitPillStage3').classList.toggle('active', stage === 3);
+            }
 
             document.getElementById('pipelineStatusText').innerText = (stage === 3 && isMacroView)
                 ? 'Displaying 1:1 Ground-Truth Macro Facade PBR'
@@ -1265,7 +1280,14 @@
             triggerPipelineExecution(locationName);
         }
 
-        function triggerPipelineExecution(locationName) {
+        let pipelineTimeouts = [];
+        function clearPipelineTimeouts() {
+            pipelineTimeouts.forEach(t => clearTimeout(t));
+            pipelineTimeouts = [];
+        }
+
+        function triggerPipelineExecution(locationName, autoAdvance = true) {
+            clearPipelineTimeouts();
             const locLower = (locationName || '').toLowerCase();
             const isColosseum = locLower.includes('coloss') || locLower.includes('rome');
             activeLocationKey = isColosseum ? 'colosseum' : 'esb';
@@ -1309,24 +1331,37 @@
             // Immediately select current stage with new dataset
             selectStage(currentStage);
 
-            // Update 3D model-viewer
+            // Update 3D model-viewer camera framing
             const mv = document.getElementById('mainModelViewer');
-            if (mv) mv.src = stageImages[currentStage].glb;
+            if (mv) {
+                mv.src = stageImages[currentStage].glb;
+                if (isColosseum) {
+                    mv.setAttribute('camera-orbit', '35deg 62deg 520m');
+                    mv.setAttribute('camera-target', '0m 0m 0m');
+                    mv.setAttribute('field-of-view', '30deg');
+                } else {
+                    mv.removeAttribute('camera-orbit');
+                    mv.removeAttribute('camera-target');
+                    mv.removeAttribute('field-of-view');
+                }
+            }
 
-            setTimeout(() => {
-                statusText.innerText = isColosseum
-                    ? `Excavating Hollow Ambulatory Arches & Locking Ruin Silhouette...`
-                    : `Snapping 90° Orthogonal Facades & Vector Roads...`;
-                selectStage(2);
-            }, 500);
+            if (autoAdvance) {
+                pipelineTimeouts.push(setTimeout(() => {
+                    statusText.innerText = isColosseum
+                        ? `Excavating Hollow Ambulatory Arches & Locking Ruin Silhouette...`
+                        : `Snapping 90° Orthogonal Facades & Vector Roads...`;
+                    selectStage(2);
+                }, 500));
 
-            setTimeout(() => {
-                statusText.innerText = isColosseum
-                    ? `Synthesizing Roman Travertine PBR, Spanish Tiles & Pinus Pinea...`
-                    : `Synthesizing De-Lighted PBR Textures & Toksvig AA...`;
-                selectStage(3);
-                statusText.innerText = `Corridor Ready: ${locationDatasets[activeLocationKey].name}`;
-            }, 1100);
+                pipelineTimeouts.push(setTimeout(() => {
+                    statusText.innerText = isColosseum
+                        ? `Synthesizing Roman Travertine PBR, Spanish Tiles & Pinus Pinea...`
+                        : `Synthesizing De-Lighted PBR Textures & Toksvig AA...`;
+                    selectStage(3);
+                    statusText.innerText = `Corridor Ready: ${locationDatasets[activeLocationKey].name}`;
+                }, 1100));
+            }
         }
 
         executeBtn.addEventListener('click', () => {

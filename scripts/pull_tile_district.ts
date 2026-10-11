@@ -17,9 +17,18 @@ function arg(name: string, fallback?: string): string | undefined {
 function envKey(name: string): string | undefined {
     if (process.env[name]) return process.env[name];
     const envPath = path.resolve(process.cwd(), '.env');
-    if (!fs.existsSync(envPath)) return undefined;
-    const m = fs.readFileSync(envPath, 'utf8').match(new RegExp(`^${name}\\s*=\\s*"?([^"\\n]+)"?`, 'm'));
-    return m?.[1]?.trim();
+    if (fs.existsSync(envPath)) {
+        const m = fs.readFileSync(envPath, 'utf8').match(new RegExp(`^${name}\\s*=\\s*"?([^"\\n]+)"?`, 'm'));
+        if (m?.[1]) return m[1].trim();
+    }
+    const secretsPath = path.resolve(process.cwd(), 'secrets.json');
+    if (fs.existsSync(secretsPath)) {
+        try {
+            const sec = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
+            if (sec[name]) return sec[name];
+        } catch (_) {}
+    }
+    return undefined;
 }
 
 async function geocode(query: string, _key: string) {
@@ -75,7 +84,8 @@ async function main() {
     console.log(`Downloaded ${leaves.length} leaves, ${(downloadedBytes / 1e6).toFixed(1)} MB (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
 
     const parsed = buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b));
-    const district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, { name: commitId });
+    const isClay = process.argv.includes('--clay');
+    const district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, { name: commitId, clay: isClay });
     const fetchedAt = new Date().toISOString();
     const { glbPath, manifestPath, manifest } = GoogleTileDistrictCrawler.writeCommit(district, {
         outDir,

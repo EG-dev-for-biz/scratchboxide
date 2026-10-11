@@ -98,6 +98,7 @@ The transformation pipeline is structured into three distinct, verifiable stages
 ## 5. Detailed Implementation Blueprint
 
 ### A. Phase 1: High-Fidelity 3D Tile Ingestion
+- **Mandatory Fresh Ingestion for New Workflows**: Never reuse stale intermediate `.glb` assets from prior sessions or modified local files. Legacy models often harbor unrecorded anisotropic scale factors, experimental crop boundaries, or non-leaf LODs. Always download/extract a fresh, uncorrupted 3D model directly from Google Maps Photorealistic 3D Tiles (`getGoogle3DTilesFullTexture` / `getGoogle3DTilesClay`) at leaf LOD (`errorTarget = 0.5` or lower) against a 4K screen-space error budget to establish the authentic ground-truth baseline.
 - Stream Google Photorealistic 3D Tiles using leaf-node Level of Detail (`errorTarget = 0.5` or lower) against a 4K screen-space error budget.
 - Package ingested tile chunks into standardized binary glTF 2.0 (`.glb`).
 - Overwrite material shaders with uniform 18% Studio Grey Clay to isolate and document geometry defects.

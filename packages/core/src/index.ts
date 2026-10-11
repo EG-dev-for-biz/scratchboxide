@@ -98,6 +98,22 @@ export type {
     SurveyTexturePipelineRequest
 } from './node/spatial/SurveyTextureUnprojector';
 
+// SbHuman Hyper-Realistic Organic Appendage & Hand Transformer
+export {
+    SbHumanHandTransformer,
+    type EnhancedHandMesh,
+    type PbrTexturePack,
+    type ContinuousEpidermalContract,
+    type HandTransformationOptions,
+    type PbrBakingOptions,
+    type InvariantCheckResult
+} from './node/spatial/SbHumanHandTransformer';
+
+export {
+    UniversalAnatomicalOperators,
+    type UniversalAnatomicalContract
+} from './node/spatial/UniversalAnatomicalOperators';
+
 // Zero-Preset Adaptive Material PBR Architecture
 export type {
     AdaptiveMaterialPbrService
