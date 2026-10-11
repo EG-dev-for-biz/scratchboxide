@@ -730,7 +730,8 @@ export function generateBrandPaletteFromHex(baseHex, brandName = '', theme = 'da
   const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
 
   // Strict Monochromatic Restraint: Subtitle is ALWAYS a muted neutral titanium/slate
-  subtitleHex = theme === 'dark' ? '94A3B8' : '64748B';
+  const subtitleHex = theme === 'dark' ? '94A3B8' : '64748B';
+  let secondaryHex = cleanHex;
 
   if (harmony === 'split-complementary') {
     const sc = computeSplitComplementary(cleanHex);
@@ -1094,7 +1095,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
   const markdownText = fs.readFileSync(markdownPath, 'utf8');
   const { frontmatter, body } = extractFrontmatter(markdownText);
 
-  const brandAnchor = options.brand || frontmatter.brand || 'Chase';
+  const brandAnchor = options.brand || frontmatter.brand || frontmatter.client || frontmatter.studio || 'MONOGRAPH ARCHIVE';
   const theme = options.theme || frontmatter.theme || 'dark';
   const harmony = options.harmony || frontmatter.harmony || 'split-complementary';
   const ratio = options.ratio || options.aspectRatio || frontmatter.ratio || frontmatter.aspect_ratio || '21:9';
@@ -1207,7 +1208,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           x: padIn, y: kickerY, w: textW, h: kickerH,
           fontSize: 10, bold: true, color: palette.accentColor,
           fontFace: fontPairing.monoFont,
-          charSpacing: fontPairing.kickerTracking, margin: 0,
+          margin: 0,
         });
 
         // 2. Monumental Title (Sculptural display sizing & disciplined negative tracking)
@@ -1223,7 +1224,6 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           fontSize: coverTitleSize, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
-          charSpacing: fontPairing.displayTracking,
           lineSpacingMultiple: 1.06,
           color: palette.titleColor,
           margin: 0,
@@ -1361,7 +1361,6 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           fontSize: 22, bold: true,
           fontFace: fontPairing.displayFont,
           italic: fontPairing.italicDisplay,
-          charSpacing: fontPairing.displayTracking,
           color: palette.titleColor, align: 'center', lineSpacingMultiple: 1.45, margin: 0,
         });
 
@@ -1377,7 +1376,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             x: qx, y: qy + 2.7, w: quoteW, h: 0.4,
             fontSize: 11, bold: true, color: palette.subtitleColor,
             fontFace: fontPairing.monoFont,
-            align: 'center', charSpacing: fontPairing.kickerTracking, margin: 0,
+            align: 'center', margin: 0,
           });
         }
         break;
@@ -1413,7 +1412,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
         const statement = (s.blockquote || s.body || s.title || '').toUpperCase();
         slide.addText(statement, {
           x: padIn, y: slideHIn * 0.44, w: slideWIn - padIn * 2, h: 1.2,
-          fontSize: 15, bold: true, color: 'FFFFFF', align: 'center', charSpacing: 3, margin: 0,
+          fontSize: 15, bold: true, color: 'FFFFFF', align: 'center', margin: 0,
         });
         break;
       }
@@ -1421,7 +1420,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
       case 'recap-card-grid': {
         slide.addText(s.title ? s.title.toUpperCase() : 'DECK COMMANDMENTS // RECAP', {
           x: padIn, y: padIn * 0.7, w: slideWIn - padIn * 2, h: 0.5,
-          fontSize: 18, bold: true, color: palette.titleColor, charSpacing: 2, margin: 0,
+          fontSize: 18, bold: true, color: palette.titleColor, margin: 0,
         });
 
         const bullets = s.bullets || [];
@@ -1450,7 +1449,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           slide.addText(bullets[b].toUpperCase(), {
             x: cx + 0.2, y: cy + 0.1, w: cardW - 0.4, h: cardH - 0.2,
             fontSize: count > 8 ? 9.5 : 11, bold: true, color: '0D0D0E',
-            align: 'center', valign: 'middle', charSpacing: 1.5, margin: 0,
+            align: 'center', valign: 'middle', margin: 0,
           });
         }
         break;
@@ -1540,7 +1539,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
               x: cx + 0.25, y: cardY + 0.25, w: Math.min(cardW - 0.5, Math.max(1.4, badge.length * 0.1 + 0.4)), h: 0.28,
               fontSize: 9.5, bold: true, color: palette.accentColor,
               fontFace: fontPairing.monoFont,
-              charSpacing: 1.5, align: 'center', valign: 'middle', margin: 0,
+              align: 'center', valign: 'middle', margin: 0,
             });
 
             // Accent divider line under pill
@@ -1573,7 +1572,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           addCardContainer(slide, { x: padIn, y: cardY, w: cardW, h: cardH });
           slide.addText('PRIMARY OBJECTIVES', {
             x: padIn + 0.3, y: cardY + 0.25, w: cardW - 0.6, h: 0.3,
-            fontSize: 10, bold: true, color: palette.accentColor, charSpacing: 1.5, margin: 0,
+            fontSize: 10, bold: true, color: palette.accentColor, margin: 0,
           });
           const leftRuns = [];
           for (const b of leftBullets) {
@@ -1590,7 +1589,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           addCardContainer(slide, { x: rx, y: cardY, w: cardW, h: cardH });
           slide.addText('TECHNICAL DELIVERABLES', {
             x: rx + 0.3, y: cardY + 0.25, w: cardW - 0.6, h: 0.3,
-            fontSize: 10, bold: true, color: palette.secondaryAccent, charSpacing: 1.5, margin: 0,
+            fontSize: 10, bold: true, color: palette.secondaryAccent, margin: 0,
           });
           const rightRuns = [];
           for (const b of rightBullets) {
@@ -1612,7 +1611,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             x: padIn, y: cardY + 0.1, w: leftColW, h: 0.3,
             fontSize: 9.5, bold: true, color: palette.accentColor,
             fontFace: fontPairing.monoFont,
-            charSpacing: 2, margin: 0,
+            margin: 0,
           });
 
           // Monumental Manifesto Scale: if short (single statement), render at 22pt display font to command vertical volume
@@ -1649,7 +1648,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             x: rightColX, y: cardY + 0.1, w: rightColW, h: 0.3,
             fontSize: 9.5, bold: true, color: '94A3B8',
             fontFace: fontPairing.monoFont,
-            charSpacing: 2, margin: 0,
+            margin: 0,
           });
 
           const bulletRuns = [];
@@ -1683,7 +1682,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             const badgeText = defaultBadges[c] || `PILLAR 0${c + 1}`;
             slide.addText(badgeText, {
               x: cx + 0.3, y: cardY + 0.25, w: cardW - 0.6, h: 0.3,
-              fontSize: 10, bold: true, color: palette.accentColor, charSpacing: 1.5, margin: 0,
+              fontSize: 10, bold: true, color: palette.accentColor, margin: 0,
             });
             const pRuns = parseTextRuns(paragraphs[c], palette, { fontSize: 11.5, color: palette.textColor, lineSpacingMultiple: 1.4 });
             slide.addText(pRuns, {
@@ -1701,7 +1700,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
           addCardContainer(slide, { x: letterX, y: cardY, w: letterW, h: cardH });
           slide.addText(isLetter ? 'DIRECTOR STATEMENT & SIGN-OFF' : 'KEY DIRECTORIAL VISION', {
             x: letterX + 0.4, y: cardY + 0.3, w: letterW - 0.8, h: 0.3,
-            fontSize: 10, bold: true, color: palette.accentColor, charSpacing: 1.5, margin: 0,
+            fontSize: 10, bold: true, color: palette.accentColor, margin: 0,
           });
 
           const allRuns = [];
@@ -1728,7 +1727,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
       case 'image-forward': {
         const imgPath = s.images.length > 0 ? s.images[0].url : '';
         const isTechnical = /(diagram|blueprint|contact|animatic|viewport|cad|render|spec|schema|table)/i.test(imgPath + ' ' + (s.images[0]?.alt || '') + ' ' + s.title);
-        const isFullBleed = !options.split && !isTechnical && (frontmatter.bleed === 'full' || frontmatter.fullBleed || s.fullBleed || s.bleed || s.archetype === 'full-bleed' || (s.speakerNotes && s.speakerNotes.toLowerCase().includes('full-bleed')) || options.fullBleed);
+        const isFullBleed = !options.split && !isTechnical && (frontmatter.bleed === 'full' || frontmatter.fullBleed || s.fullBleed || s.bleed || s.archetype === 'full-bleed' || (s.speakerNotes && s.speakerNotes.toLowerCase().includes('full-bleed')) || options.fullBleed || is21x9);
         const textW = isFullBleed ? Math.min(slideWIn * 0.48, 5.8) : (slideWIn * 0.44 - padIn * 1.5);
 
         if (s.images.length > 0) {
@@ -1774,7 +1773,7 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 
         const kickerY = padIn * 0.85;
         const kickerH = 0.22;
-        const kickerText = s.kicker || (s.subtitle && s.title.length < 30 ? s.subtitle.toUpperCase() : 'DIRECTOR VISION');
+        const kickerText = s.kicker || (frontmatter.kicker ? frontmatter.kicker.toUpperCase() : (options.eyebrow || 'MONOGRAPH SPECIFICATION'));
         slide.addText(kickerText, {
           x: padIn, y: kickerY, w: textW, h: kickerH,
           fontSize: 9.5, bold: true, color: palette.accentColor,
@@ -2155,14 +2154,14 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
             x: padIn, y: slideHIn - 0.42, w: leftAreaW, h: 0.3,
             fontSize: 8, color: '64748B',
             fontFace: fontPairing.monoFont,
-            align: 'left', charSpacing: 1.5, margin: 0,
+            align: 'left', margin: 0,
           });
         } else {
           slide.addText(`${footerLabel}  //  ${i + 1} / ${slides.length}`, {
             x: slideWIn - padIn - 6.5, y: slideHIn - 0.45, w: 6.5, h: 0.3,
             fontSize: 8.5, color: '64748B',
             fontFace: fontPairing.monoFont,
-            align: 'right', charSpacing: 1.5, margin: 0,
+            align: 'right', margin: 0,
           });
         }
       }
