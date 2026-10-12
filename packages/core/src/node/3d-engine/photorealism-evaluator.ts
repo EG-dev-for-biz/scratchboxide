@@ -34,6 +34,8 @@ export interface GlbInspectionData {
     positions: Float32Array;
     normals: Float32Array;
     colors?: Float32Array;
+    /** Triangle indices widened to 32-bit; undefined for non-indexed primitives. */
+    indices?: Uint32Array;
     materialName?: string;
     metallicFactor?: number;
     roughnessFactor?: number;
@@ -103,6 +105,21 @@ export function inspectGlbBuffer(glbBytes: Uint8Array): GlbInspectionData {
         colors = new Float32Array(binBytes.buffer, binBytes.byteOffset + colorOffset, colorAccessor.count * 4);
     }
 
+    let indices: Uint32Array | undefined;
+    if (indexAccessor) {
+        const indexView = gltf.bufferViews[indexAccessor.bufferView];
+        const indexStart = binBytes.byteOffset + (indexView.byteOffset || 0) + (indexAccessor.byteOffset || 0);
+        const count = indexAccessor.count;
+        // Copy out of the BIN chunk so the typed array is aligned regardless of the view offset
+        if (indexAccessor.componentType === 5125) {
+            indices = new Uint32Array(binBytes.buffer.slice(indexStart, indexStart + count * 4));
+        } else if (indexAccessor.componentType === 5123) {
+            indices = Uint32Array.from(new Uint16Array(binBytes.buffer.slice(indexStart, indexStart + count * 2)));
+        } else if (indexAccessor.componentType === 5121) {
+            indices = Uint32Array.from(new Uint8Array(binBytes.buffer, indexStart, count));
+        }
+    }
+
     const material = gltf.materials?.[0];
     const pbr = material?.pbrMetallicRoughness;
 
@@ -112,6 +129,7 @@ export function inspectGlbBuffer(glbBytes: Uint8Array): GlbInspectionData {
         positions,
         normals,
         colors,
+        indices,
         materialName: material?.name,
         metallicFactor: pbr?.metallicFactor,
         roughnessFactor: pbr?.roughnessFactor,

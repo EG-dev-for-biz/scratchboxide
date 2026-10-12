@@ -3352,20 +3352,19 @@ int main() {
     using namespace scratchbox::geometry;
     using namespace scratchbox::math;
 
-    ScratchboxMesh matterhorn("Matterhorn_Alpine_Valley");
-    
-    // 4-Ridge Asymmetric Pyramidal Horn SDF (Hornli, Furggen, Lion, Zmutt)
-    MarchingCubesVolume grid(128, 128, 128, Bounds3D({-80, 0, -80}, {80, 75, 80}));
-    grid.sampleSDF([](Vec3 p) {
+    // 4-Ridge Asymmetric Pyramidal Horn SDF (Hornli, Furggen, Lion, Zmutt); negative = rock
+    auto horn = [](const Vec3& p) {
         float h = p.y / 65.0f;
         if (h > 1.0f) return 1.0f;
         float pyramid = std::max(std::abs(p.x), std::abs(p.z)) - (1.0f - h) * 45.0f;
         float strata = std::sin(p.y * 0.6f + p.x * 0.1f) * 1.8f;
-        float ridgeNoise = FastNoise3D::fbm(p * 0.05f, 5) * 3.5f;
+        float ridgeNoise = FastNoise3D::fbm(p.x * 0.05f, p.y * 0.05f, p.z * 0.05f, 5) * 3.5f;
         return pyramid + strata + ridgeNoise;
-    });
+    };
 
-    matterhorn.polygonize(grid);
+    // Volume fitted to the horn: base half-width <= 45 + 1.8 + 3.5 < 52, summit cut at y = 65
+    ScratchboxMesh matterhorn = MarchingCubes::polygonize(horn, AABB(Vec3(-52, 0, -52), Vec3(52, 66, 52)), 128, 0.0f);
+    matterhorn.name = "Matterhorn_Alpine_Valley";
     matterhorn.recomputeSmoothNormals();
     scratchbox::io::GlbWriter::streamChunk(matterhorn, "Matterhorn_Alpine_Valley");
     return 0;
@@ -3447,23 +3446,24 @@ onFrame((time, delta) => {
                 filename: 'world_generator.cpp',
                 enabled: true,
                 sourceCode: `#include "scratchbox_engine.hpp"
+#include <algorithm>
 #include <iostream>
 
 int main() {
     using namespace scratchbox::geometry;
     using namespace scratchbox::math;
+    using scratchbox::sdf::sdBox;
 
-    ScratchboxMesh ziggurat("Babylonian_Ziggurat_Observatory");
-    // Multi-tiered stepped massing with axial stairway and astrolabe plinth
-    MarchingCubesVolume grid(128, 128, 128, Bounds3D({-30, 0, -30}, {30, 30, 30}));
-    grid.sampleSDF([](Vec3 p) {
+    // Three stepped mudbrick tiers as a union of box SDFs; negative = solid
+    auto tiers = [](const Vec3& p) {
         float t1 = sdBox(p - Vec3(0, 4, 0), Vec3(24, 4, 24));
         float t2 = sdBox(p - Vec3(0, 11, 0), Vec3(17, 3, 17));
         float t3 = sdBox(p - Vec3(0, 16.5f, 0), Vec3(11, 2.5f, 11));
         return std::min({t1, t2, t3});
-    });
+    };
 
-    ziggurat.polygonize(grid);
+    ScratchboxMesh ziggurat = MarchingCubes::polygonize(tiers, AABB(Vec3(-30, 0, -30), Vec3(30, 30, 30)), 128, 0.0f);
+    ziggurat.name = "Babylonian_Ziggurat_Observatory";
     ziggurat.recomputeSmoothNormals();
     scratchbox::io::GlbWriter::streamChunk(ziggurat, "Babylonian_Ziggurat_Observatory");
     return 0;
