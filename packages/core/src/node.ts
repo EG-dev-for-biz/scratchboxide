@@ -195,6 +195,22 @@ export {
     MeshReshapingResult
 } from './node/3d-engine/native-mesh-reshaper-service';
 export {
+    SbRigService,
+    SbRigError,
+    sbRigMesh,
+    buildSbRigArgs,
+    parseSbRigTelemetry
+} from './node/3d-engine/sb-rig-service';
+export type {
+    Point3 as SbRigPoint3,
+    SbRigParams,
+    SbRigOptions,
+    SbRigJoint,
+    SbRigChainInfo,
+    SbRigReport,
+    SbRigResult
+} from './node/3d-engine/sb-rig-service';
+export {
     NativeTileRestructurerService,
     TileRestructurerService,
     restructureTileMesh,

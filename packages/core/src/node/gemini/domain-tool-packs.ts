@@ -28,6 +28,7 @@ import {
 } from './tools/spatial-tools';
 import { UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS } from './tools/universal-3d-structure-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS } from './tools/mesh-shaping-tools';
+import { SB_RIG_TOOL_DECLARATIONS } from './tools/sb-rig-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS } from './tools/algorithmic-uv-tools';
 import { BOTANICAL_TREE_TOOL_DECLARATIONS } from './tools/botanical-tree-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS } from './tools/nano-banana-tools';
@@ -97,9 +98,10 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
 export const MESH_SURFACE_PACK: ToolPackDefinition = {
     id: 'mesh_surface',
     displayName: 'Mesh Reshaping, Botanicals & Material Textures',
-    description: 'C++20 mesh shaping, botanical trees, algorithmic UV unwrap, MaxRects atlas binning, and analytical hair/groom forward splatting.',
+    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), botanical trees, algorithmic UV unwrap, MaxRects atlas binning, and analytical hair/groom forward splatting.',
     declarations: [
         ...MESH_SHAPING_TOOL_DECLARATIONS,
+        ...SB_RIG_TOOL_DECLARATIONS,
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
         ...BOTANICAL_TREE_TOOL_DECLARATIONS,
         ...NANO_BANANA_TOOL_DECLARATIONS,
@@ -108,6 +110,7 @@ export const MESH_SURFACE_PACK: ToolPackDefinition = {
     ],
     toolNames: [
         ...MESH_SHAPING_TOOL_DECLARATIONS.map(d => d.name),
+        ...SB_RIG_TOOL_DECLARATIONS.map(d => d.name),
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS.map(d => d.name),
         ...BOTANICAL_TREE_TOOL_DECLARATIONS.map(d => d.name),
         ...NANO_BANANA_TOOL_DECLARATIONS.map(d => d.name),

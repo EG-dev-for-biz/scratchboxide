@@ -56,6 +56,8 @@ import {
     atmosphereHandlers,
     MESH_SHAPING_TOOL_DECLARATIONS,
     meshShapingHandlers,
+    SB_RIG_TOOL_DECLARATIONS,
+    sbRigHandlers,
     WEBXR_GEOSPATIAL_TOOL_DECLARATIONS,
     webxrGeospatialHandlers,
     GEOBOX_PRECISION_TOOL_DECLARATIONS,
@@ -614,6 +616,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of MESH_SHAPING_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, meshShapingHandlers[decl.name], 'workspace');
+    }
+    for (const decl of SB_RIG_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, sbRigHandlers[decl.name], 'workspace');
     }
     for (const decl of WEBXR_GEOSPATIAL_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, webxrGeospatialHandlers[decl.name], 'workspace');

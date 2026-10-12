@@ -18,6 +18,7 @@ import { generateCommand } from './commands/generate';
 import { qaCommand } from './commands/qa';
 import { splatCommand } from './commands/splat';
 import { matchmoveCommand } from './commands/matchmove';
+import { rigCommand } from './commands/rig';
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const command = argv[0];
@@ -68,6 +69,9 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       case 'matchmove':
       case 'geo-matchmove':
         await matchmoveCommand(args);
+        break;
+      case 'rig':
+        await rigCommand(args);
         break;
       default:
         console.error(`Unknown command: '${command}'`);
@@ -126,6 +130,13 @@ Autonomous 3D Engine & Procedural Baking Commands:
     [--render-mode <mode>]       textured (default) or clay
     [--resolution <4k|1080p>]    4k (3840x2160, default) or 1080p
     [--dry-run]                  Solve 6-DoF trajectory JSON without launching 3D browser render
+  rig <input.glb>                SB-Rig: skeleton + skin weights for any mesh (textures kept intact)
+    [-o <output.glb>]            Skinned output (default: <input>_sbrig.glb)
+    [--root-hint x,y,z]          Start the hierarchy near this point (e.g. a cut limb end)
+    [--chain-hint "x,y,z;..."]   Add a chain base->tip where geometry can't separate a digit (repeatable)
+    [--rename FROM=TO]           Rename a chain (FROM=Chain3 -> TO1..n) or an exact joint (repeatable)
+    [--param-<name> <value>]     Dimensionless tuning, e.g. --param-minBranchFrac 0.06
+    [--tree] [--json]            Include the Reeb tree in the report / print the report as JSON
 
 Examples:
   sbox init
@@ -136,6 +147,7 @@ Examples:
   sbox diff earth/paris-2050 earth/main
   sbox matchmove reference.mp4 --landmark "The Plaza Hotel" --dry-run
   sbox qa eiffel.glb
+  sbox rig hand.glb --root-hint -0.32,-0.92,-0.06 --rename Chain3=LeftIndex
 `);
 }
 
