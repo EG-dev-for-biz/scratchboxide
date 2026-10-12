@@ -17,6 +17,7 @@ from scratchbox_native import (
     nature as nature,
     plant as plant,
     processing as processing,
+    rig as rig,
     sdf as sdf,
     shaper as shaper,
     topology as topology
