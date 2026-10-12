@@ -137,6 +137,8 @@ import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshe
 import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCustomMeshes';
 import { syncCustomShaders, tickCustomShaders } from './scene3d/syncCustomShaders';
 import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
+import { tickObjectAnimations } from './scene3d/objectAnimationRuntime';
+import type { PhysicsRuntimeState } from './scene3d/objectAnimationRuntime';
 import { attachViewportControls, stepCamera } from './scene3d/attachViewportControls';
 import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint';
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
@@ -1795,6 +1797,7 @@ int main(int argc, char** argv) {
     const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
     const customMeshRegistryRef = React.useRef<CustomMeshRegistry>(new Map());
     const externalObjectsMapRef = React.useRef<Map<string, THREE.Object3D>>(new Map());
+    const physicsRuntimeStateRef = React.useRef<PhysicsRuntimeState>(new Map());
     const activeSplatMeshesRef = React.useRef<Map<string, PhotorealGaussianSplatMesh>>(new Map());
 
     // Latest-value mirrors so the rAF loop / listeners never need to be re-bound
@@ -2131,6 +2134,16 @@ int main(int argc, char** argv) {
                     pos.needsUpdate = true;
                     wasmGeometryRef.current.computeVertexNormals();
                 }
+
+                // 9.5. Physics bodies (sb_add_physics) & property keyframes (sb_insert_keyframe)
+                tickObjectAnimations(
+                    sceneDataRef.current,
+                    customMeshRegistryRef.current,
+                    externalObjectsMapRef.current,
+                    physicsRuntimeStateRef.current,
+                    currentTimeMsRef.current,
+                    deltaSec
+                );
 
                 // 10. Camera (orbit or FPS)
                 stepCamera(camera, cameraModeRef.current, cameraRotationRef.current, cameraTargetRef.current, keysPressedRef.current);

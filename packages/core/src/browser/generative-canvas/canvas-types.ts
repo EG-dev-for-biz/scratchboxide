@@ -27,7 +27,7 @@ export function getActiveUserName(customName?: string): string {
     return DEFAULT_ACTIVE_USER_NAME;
 }
 
-import type { VideoTimelineData, TimelineTrack } from './services/video/videoTypes';
+import type { VideoTimelineData, TimelineTrack, KeyframeEasing } from './services/video/videoTypes';
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
 
@@ -686,6 +686,30 @@ export interface Media4DObject {
     space: SpaceDimension;
     time?: TimeDimension;
     lineage?: LineageDimension;
+    physics?: PhysicsBodyConfig;
+    keyframes?: AnimationKeyframe[];
+}
+
+/** Continuous body classification for the Scene3D viewport's runtime integrator (sb_add_physics). */
+export type RigidBodyType = 'dynamic' | 'static' | 'kinematic' | (string & {});
+
+/** Collision proxy used for ground-contact resolution; a geometric primitive, not a content taxonomy. */
+export type ColliderShape = 'box' | 'sphere' | 'capsule' | (string & {});
+
+export interface PhysicsBodyConfig {
+    bodyType: RigidBodyType;
+    mass: number;
+    friction: number;
+    restitution: number;
+    colliderShape: ColliderShape;
+}
+
+/** One sample of a per-property animation curve, played back by the Scene3D viewport's render loop (sb_insert_keyframe). */
+export interface AnimationKeyframe {
+    property: string;
+    timeMs: number;
+    value: number | [number, number, number];
+    easing: KeyframeEasing | (string & {});
 }
 
 export interface PbrTextureSet {
@@ -1109,6 +1133,8 @@ export interface Scene3DData {
             rootPosition?: [number, number, number];
             bones?: string[];
         };
+        physics?: PhysicsBodyConfig;
+        keyframes?: AnimationKeyframe[];
         triangles?: any[];
     }>;
     customLights?: any[];
