@@ -3244,30 +3244,40 @@ onFrame((time, delta) => {
                 filename: 'world_generator.cpp',
                 enabled: true,
                 sourceCode: `#include "scratchbox_engine.hpp"
-#include <iostream>
 #include <vector>
 
 int main() {
     using namespace scratchbox::geometry;
     using namespace scratchbox::math;
+    using scratchbox::shaper::Lattice3D;
 
     ScratchboxMesh viaduct("Highway_Overpass_Viaduct");
-    
-    // Extrude multi-span concrete box girder deck (140m long, 15m wide at Y=11.2m)
-    for (float z = -70.0f; z <= 70.0f; z += 1.0f) {
-        viaduct.extrudeCrossSectionProfile({
-            {-7.5f, 11.2f},
-            { 7.5f, 11.2f},
-            { 6.5f,  9.8f},
-            {-6.5f,  9.8f}
-        }, z);
+    const Vec4 concrete(0.62f, 0.62f, 0.60f, 1.0f);
+
+    // Box girder deck, 140 m along z: 15 m wide top at y = 11.2, 13 m wide soffit at y = 9.8.
+    // A 0.5 m gridded 15 x 1.4 x 140 m box whose soffit edges a trilinear FFD lattice pulls in 1 m a side.
+    ScratchboxMesh deck = ScratchboxMesh::createSubdividedBox(Vec3(15.0f, 1.4f, 140.0f), 30, 4, 280, concrete);
+    deck.translate(Vec3(0.0f, 10.5f, 0.0f));
+    Lattice3D girder(2, 2, 2, deck.bounds);
+    for (int k = 0; k < 2; ++k) {
+        girder.offsetControlPoint(0, 0, k, Vec3( 1.0f, 0.0f, 0.0f));
+        girder.offsetControlPoint(1, 0, k, Vec3(-1.0f, 0.0f, 0.0f));
     }
-    
-    // Concrete support piers & crosshead bents
+    girder.deform(deck);
+    viaduct.append(deck);
+
+    // Pier bents: two 1.2 m radius columns at x = +-4.2 rising 9.8 m from y = 0 into a
+    // 16.2 x 1.4 x 2.8 m crosshead centred at y = 9.4
     const float pierZ[4] = {-48.0f, -20.0f, 20.0f, 48.0f};
     for (float pz : pierZ) {
-        viaduct.addCylinderBent({-4.2f, 0.0f, pz}, {4.2f, 0.0f, pz}, 9.8f, 1.2f);
-        viaduct.addBoxCrosshead({0.0f, 9.4f, pz}, {16.2f, 1.4f, 2.8f});
+        for (float px : {-4.2f, 4.2f}) {
+            ScratchboxMesh column = ScratchboxMesh::createCylinder(1.2f, 9.8f, 48, concrete);
+            column.translate(Vec3(px, 4.9f, pz));
+            viaduct.append(column);
+        }
+        ScratchboxMesh crosshead = ScratchboxMesh::createSubdividedBox(Vec3(16.2f, 1.4f, 2.8f), 32, 4, 8, concrete);
+        crosshead.translate(Vec3(0.0f, 9.4f, pz));
+        viaduct.append(crosshead);
     }
 
     viaduct.recomputeSmoothNormals();
