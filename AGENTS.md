@@ -358,6 +358,7 @@ When conditioning video generation for performer avatars or generating multi-vie
 2. **Type Safety**: Maintain 100% clean TypeScript typechecks across all monorepo packages.
 3. **Continuous Verification**: Test all procedural generation and 3D pipelines with automated test suites.
 4. **Mechanical Reality Grounding (Zero Simulation Traps)**: Activate `.agents/skills/prevent-architectural-simulation-trap/SKILL.md`. Never simulate architecture through hollow interface scaffolds, mock-only tests, synthetic terminal claims, closed taxonomy enums, or toy script fallbacks. Every architectural claim must be verified via unedited subprocess command execution and exit code 0.
+5. **Regular Commits**: Commit verified, working changes in logical increments as a task progresses rather than batching everything into one commit at the very end. This keeps history reviewable, limits the blast radius of any one commit, and protects against losing work during long sessions. When staging changes in this repo, be aware the working tree frequently holds other in-progress, uncommitted work alongside your own (other agent sessions or the user's own edits) — stage and commit only the files/hunks your own task actually touched, never a broad `git add -A`/`git add .`, so unrelated in-flight work is never swept into your commit.
 
 ## Mechanical Reality Grounding & Anti-Simulation Trap Directive
 
