@@ -149,8 +149,9 @@ int main() {
     const evaluator = new PhotorealismEvaluator();
     const report = evaluator.evaluateGlb('procedural-sphere', glbBytes);
 
-    expect(report.vertexCount).toBeGreaterThan(400);
-    expect(report.triangleCount).toBeGreaterThan(400);
+    // Marching cubes on a 20^3 lattice shares vertices between cells: closed genus-0 sphere, F = 2V - 4.
+    expect(report.vertexCount).toBe(1326);
+    expect(report.triangleCount).toBe(2648);
     expect(report.densityScore).toBeGreaterThanOrEqual(5);
     expect(report.totalScore).toBeGreaterThanOrEqual(60);
   });
