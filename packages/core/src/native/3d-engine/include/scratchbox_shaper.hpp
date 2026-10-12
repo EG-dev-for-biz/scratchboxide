@@ -501,6 +501,9 @@ class Loft3D {
 public:
     /**
      * Lofts a smooth 3D skin between consecutive cross-sectional polygonal loops.
+     *
+     * The skin always winds outward, whichever way the loops run around the loft
+     * direction, and the end caps wind consistently with the side quads.
      */
     static ScratchboxMesh skin(
         const std::vector<std::vector<Vec3>>& slices,
@@ -513,6 +516,41 @@ public:
         for (const auto& slice : slices) {
             if (slice.size() != ptsPerSlice || ptsPerSlice < 3) return mesh;
         }
+
+        auto loopCentroid = [&](const std::vector<Vec3>& loop) {
+            Vec3 c(0, 0, 0);
+            for (const auto& pt : loop) c += pt;
+            return c * (1.0f / ptsPerSlice);
+        };
+        const size_t lastS = slices.size() - 1;
+        const Vec3 botCenter = loopCentroid(slices[0]);
+        const Vec3 topCenter = loopCentroid(slices[lastS]);
+
+        // Signed volume (x6) of the side quads below closed by centroid fans at both
+        // ends, taken about botCenter. Negative means the loops run the other way round
+        // the loft direction and every triangle must be flipped to face outward. Open
+        // lofts are measured the same way so their skin also faces away from the axis.
+        double signedVolume6 = 0.0;
+        for (size_t s = 0; s < lastS; ++s) {
+            for (size_t p = 0; p < ptsPerSlice; ++p) {
+                size_t nextP = (p + 1) % ptsPerSlice;
+                Vec3 a = slices[s][p] - botCenter;
+                Vec3 b = slices[s + 1][p] - botCenter;
+                Vec3 c = slices[s + 1][nextP] - botCenter;
+                Vec3 d = slices[s][nextP] - botCenter;
+                signedVolume6 += a.dot(b.cross(c)) + a.dot(c.cross(d));
+            }
+        }
+        for (size_t p = 0; p < ptsPerSlice; ++p) {
+            size_t nextP = (p + 1) % ptsPerSlice;
+            signedVolume6 += (topCenter - botCenter).dot(
+                (slices[lastS][nextP] - botCenter).cross(slices[lastS][p] - botCenter));
+        }
+        const bool flip = signedVolume6 < 0.0;
+        auto addTri = [&](uint32_t a, uint32_t b, uint32_t c) {
+            if (flip) mesh.addTriangle(a, c, b);
+            else mesh.addTriangle(a, b, c);
+        };
 
         // Add vertices
         for (size_t s = 0; s < slices.size(); ++s) {
@@ -535,35 +573,29 @@ public:
                 uint32_t i2 = s1 + static_cast<uint32_t>(nextP);
                 uint32_t i3 = s0 + static_cast<uint32_t>(nextP);
 
-                mesh.addTriangle(i0, i1, i2);
-                mesh.addTriangle(i0, i2, i3);
+                addTri(i0, i1, i2);
+                addTri(i0, i2, i3);
             }
         }
 
-        // Optional end capping
+        // Optional end capping: centroid fans wound to traverse each rim edge opposite to
+        // the side quad that shares it. The fans reuse the end-ring vertices so the skin
+        // stays index-watertight; LoopSubdivision and the SculptEngine brushes (which move
+        // vertices along their normals or index neighbours) would tear a duplicated rim.
         if (closeEnds) {
-            // Bottom cap (fan)
             uint32_t botCenterIdx = static_cast<uint32_t>(mesh.vertices.size());
-            Vec3 botCenter(0, 0, 0);
-            for (size_t p = 0; p < ptsPerSlice; ++p) botCenter += slices[0][p];
-            botCenter = botCenter * (1.0f / ptsPerSlice);
             mesh.addVertex({botCenter, Vec3(0, -1, 0), Vec2(0.5f, 0.5f), color});
             for (size_t p = 0; p < ptsPerSlice; ++p) {
                 size_t nextP = (p + 1) % ptsPerSlice;
-                mesh.addTriangle(botCenterIdx, static_cast<uint32_t>(nextP), static_cast<uint32_t>(p));
+                addTri(botCenterIdx, static_cast<uint32_t>(p), static_cast<uint32_t>(nextP));
             }
 
-            // Top cap (fan)
             uint32_t topCenterIdx = static_cast<uint32_t>(mesh.vertices.size());
-            Vec3 topCenter(0, 0, 0);
-            size_t lastS = slices.size() - 1;
-            for (size_t p = 0; p < ptsPerSlice; ++p) topCenter += slices[lastS][p];
-            topCenter = topCenter * (1.0f / ptsPerSlice);
             mesh.addVertex({topCenter, Vec3(0, 1, 0), Vec2(0.5f, 0.5f), color});
             uint32_t topOffset = static_cast<uint32_t>(lastS * ptsPerSlice);
             for (size_t p = 0; p < ptsPerSlice; ++p) {
                 size_t nextP = (p + 1) % ptsPerSlice;
-                mesh.addTriangle(topCenterIdx, topOffset + static_cast<uint32_t>(p), topOffset + static_cast<uint32_t>(nextP));
+                addTri(topCenterIdx, topOffset + static_cast<uint32_t>(nextP), topOffset + static_cast<uint32_t>(p));
             }
         }
 
