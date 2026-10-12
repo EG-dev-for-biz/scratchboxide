@@ -260,7 +260,7 @@ export const ADVANCED_REALISM_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_simulate_rigidbody_physics',
         category: 'physics_animation',
-        description: 'Runs native C++ rigid body dynamics with GJK/EPA collision manifolds, sequential impulse velocity resolution, and Baumgarte penetration stabilization.',
+        description: 'Steps discrete-time rigid body dynamics in TypeScript: axis-aligned box-collider broadphase/narrowphase, sequential-impulse velocity resolution (restitution + Coulomb friction), and Baumgarte penetration correction against a y=0 ground plane and the other targeted bodies. Reads/writes the same `physics` config as sb_add_physics, carrying velocity across calls.',
         execute: (ctx, params: {
             steps?: number;
             substeps?: number;
@@ -273,33 +273,197 @@ export const ADVANCED_REALISM_OPERATORS: OperatorDefinition[] = [
         }) => {
             const scene = ctx.getSceneData();
             const meshes = scene.customMeshes || [];
-            const steps = params.steps || 60;
-            const dt = 1.0 / 60.0;
-            const gravity = params.gravity || [0, -9.81, 0];
+            const targets = params.targetMeshId ? meshes.filter(m => m.id === params.targetMeshId) : meshes;
 
-            let updatedCount = 0;
-            for (const m of meshes) {
-                if (params.targetMeshId && m.id !== params.targetMeshId) continue;
-                if (!m.rigidBody) {
-                    m.rigidBody = {
-                        mass: params.mass !== undefined ? params.mass : (m.position && m.position[1] <= 0 ? 0 : 1.0),
-                        isStatic: params.isStatic !== undefined ? params.isStatic : (m.position && m.position[1] <= 0),
+            const steps = Math.max(1, Math.floor(params.steps || 60));
+            const substeps = Math.max(1, Math.floor(params.substeps || 2));
+            const dt = 1.0 / 60.0;
+            const subDt = dt / substeps;
+            const gravity = params.gravity || [0, -9.81, 0];
+            const velocityIterations = 6;
+            const groundY = 0;
+            const baumgarteFactor = 0.2;
+            const penetrationSlop = 0.005;
+
+            type SimBody = {
+                mesh: typeof targets[number];
+                halfExtent: [number, number, number];
+                invMass: number;
+                isStatic: boolean;
+                restitution: number;
+                friction: number;
+                position: [number, number, number];
+                velocity: [number, number, number];
+            };
+            type Contact = {
+                a: SimBody | null;
+                b: SimBody;
+                normal: [number, number, number];
+                penetration: number;
+                accumulatedNormalImpulse: number;
+                accumulatedTangentImpulse: number;
+            };
+
+            const bodies: SimBody[] = targets.map(m => {
+                if (!m.position) m.position = [0, 0, 0];
+                if (!m.physics) {
+                    const inferredStatic = params.isStatic !== undefined ? params.isStatic : m.position[1] <= 0;
+                    m.physics = {
+                        bodyType: inferredStatic ? 'static' : 'dynamic',
+                        mass: params.mass !== undefined ? params.mass : (inferredStatic ? 0 : 1.0),
+                        friction: params.friction ?? 0.5,
                         restitution: params.restitution ?? 0.3,
-                        friction: params.friction ?? 0.5
+                        colliderShape: 'box',
+                        velocity: [0, 0, 0]
                     };
                 }
+                if (!m.physics.velocity) m.physics.velocity = [0, 0, 0];
 
-                if (!m.rigidBody.isStatic && m.position) {
-                    const targetY = Math.max((m.scale ? m.scale[1] * 0.5 : 0.5), m.position[1] + gravity[1] * 0.5 * (steps * dt) * (steps * dt));
-                    m.position[1] = Math.max(m.scale ? m.scale[1] * 0.5 : 0.5, targetY);
-                    updatedCount++;
+                const isStatic = m.physics.bodyType === 'static' || m.physics.bodyType === 'kinematic';
+                const mass = m.physics.mass ?? 1.0;
+                return {
+                    mesh: m,
+                    halfExtent: [
+                        (m.scale?.[0] ?? 1) * 0.5,
+                        (m.scale?.[1] ?? 1) * 0.5,
+                        (m.scale?.[2] ?? 1) * 0.5
+                    ],
+                    invMass: isStatic || mass <= 0 ? 0 : 1 / mass,
+                    isStatic,
+                    restitution: m.physics.restitution ?? 0.3,
+                    friction: m.physics.friction ?? 0.5,
+                    position: [...m.position] as [number, number, number],
+                    velocity: [...m.physics.velocity] as [number, number, number]
+                };
+            });
+
+            let contactsResolved = 0;
+
+            for (let step = 0; step < steps; step++) {
+                for (let sub = 0; sub < substeps; sub++) {
+                    for (const b of bodies) {
+                        if (b.isStatic) continue;
+                        b.velocity[0] += gravity[0] * subDt;
+                        b.velocity[1] += gravity[1] * subDt;
+                        b.velocity[2] += gravity[2] * subDt;
+                    }
+
+                    const contacts: Contact[] = [];
+
+                    for (const b of bodies) {
+                        if (b.isStatic) continue;
+                        const penetration = groundY - (b.position[1] - b.halfExtent[1]);
+                        if (penetration > 0) {
+                            contacts.push({ a: null, b, normal: [0, 1, 0], penetration, accumulatedNormalImpulse: 0, accumulatedTangentImpulse: 0 });
+                        }
+                    }
+
+                    for (let i = 0; i < bodies.length; i++) {
+                        for (let j = i + 1; j < bodies.length; j++) {
+                            const A = bodies[i], B = bodies[j];
+                            if (A.isStatic && B.isStatic) continue;
+                            const dx = B.position[0] - A.position[0];
+                            const dy = B.position[1] - A.position[1];
+                            const dz = B.position[2] - A.position[2];
+                            const overlapX = A.halfExtent[0] + B.halfExtent[0] - Math.abs(dx);
+                            const overlapY = A.halfExtent[1] + B.halfExtent[1] - Math.abs(dy);
+                            const overlapZ = A.halfExtent[2] + B.halfExtent[2] - Math.abs(dz);
+                            if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
+                                let normal: [number, number, number];
+                                let penetration: number;
+                                if (overlapX <= overlapY && overlapX <= overlapZ) {
+                                    normal = [dx >= 0 ? 1 : -1, 0, 0];
+                                    penetration = overlapX;
+                                } else if (overlapY <= overlapX && overlapY <= overlapZ) {
+                                    normal = [0, dy >= 0 ? 1 : -1, 0];
+                                    penetration = overlapY;
+                                } else {
+                                    normal = [0, 0, dz >= 0 ? 1 : -1];
+                                    penetration = overlapZ;
+                                }
+                                contacts.push({ a: A, b: B, normal, penetration, accumulatedNormalImpulse: 0, accumulatedTangentImpulse: 0 });
+                            }
+                        }
+                    }
+
+                    contactsResolved += contacts.length;
+
+                    for (let iter = 0; iter < velocityIterations; iter++) {
+                        for (const c of contacts) {
+                            const invMassA = c.a ? c.a.invMass : 0;
+                            const invMassB = c.b.invMass;
+                            const kNormal = invMassA + invMassB;
+                            if (kNormal <= 1e-9) continue;
+
+                            const velA = c.a ? c.a.velocity : [0, 0, 0];
+                            const relVel: [number, number, number] = [c.b.velocity[0] - velA[0], c.b.velocity[1] - velA[1], c.b.velocity[2] - velA[2]];
+                            const vn = relVel[0] * c.normal[0] + relVel[1] * c.normal[1] + relVel[2] * c.normal[2];
+
+                            const restitution = Math.min(c.a ? c.a.restitution : 1.0, c.b.restitution);
+                            const baumgarte = baumgarteFactor * Math.max(0, c.penetration - penetrationSlop) / subDt;
+                            let targetVn = vn < -0.05 ? -restitution * vn : 0;
+                            targetVn += baumgarte;
+
+                            const impulseMag = (targetVn - vn) / kNormal;
+                            const oldAccum = c.accumulatedNormalImpulse;
+                            c.accumulatedNormalImpulse = Math.max(0, oldAccum + impulseMag);
+                            const applied = c.accumulatedNormalImpulse - oldAccum;
+
+                            const Px = c.normal[0] * applied, Py = c.normal[1] * applied, Pz = c.normal[2] * applied;
+                            if (c.a && !c.a.isStatic) {
+                                c.a.velocity[0] -= Px * invMassA; c.a.velocity[1] -= Py * invMassA; c.a.velocity[2] -= Pz * invMassA;
+                            }
+                            if (!c.b.isStatic) {
+                                c.b.velocity[0] += Px * invMassB; c.b.velocity[1] += Py * invMassB; c.b.velocity[2] += Pz * invMassB;
+                            }
+
+                            const velA2 = c.a ? c.a.velocity : [0, 0, 0];
+                            const relVel2: [number, number, number] = [c.b.velocity[0] - velA2[0], c.b.velocity[1] - velA2[1], c.b.velocity[2] - velA2[2]];
+                            const vnAfter = relVel2[0] * c.normal[0] + relVel2[1] * c.normal[1] + relVel2[2] * c.normal[2];
+                            const tangent: [number, number, number] = [
+                                relVel2[0] - c.normal[0] * vnAfter,
+                                relVel2[1] - c.normal[1] * vnAfter,
+                                relVel2[2] - c.normal[2] * vnAfter
+                            ];
+                            const tLen = Math.sqrt(tangent[0] * tangent[0] + tangent[1] * tangent[1] + tangent[2] * tangent[2]);
+                            if (tLen > 1e-5 && kNormal > 1e-9) {
+                                tangent[0] /= tLen; tangent[1] /= tLen; tangent[2] /= tLen;
+                                const vt = relVel2[0] * tangent[0] + relVel2[1] * tangent[1] + relVel2[2] * tangent[2];
+                                const frictionCoeff = (c.a ? c.a.friction : 1.0) * c.b.friction;
+                                const maxFriction = frictionCoeff * c.accumulatedNormalImpulse;
+                                const oldFric = c.accumulatedTangentImpulse;
+                                c.accumulatedTangentImpulse = Math.max(-maxFriction, Math.min(maxFriction, oldFric + (-vt / kNormal)));
+                                const appliedFric = c.accumulatedTangentImpulse - oldFric;
+                                const Ptx = tangent[0] * appliedFric, Pty = tangent[1] * appliedFric, Ptz = tangent[2] * appliedFric;
+                                if (c.a && !c.a.isStatic) {
+                                    c.a.velocity[0] -= Ptx * invMassA; c.a.velocity[1] -= Pty * invMassA; c.a.velocity[2] -= Ptz * invMassA;
+                                }
+                                if (!c.b.isStatic) {
+                                    c.b.velocity[0] += Ptx * invMassB; c.b.velocity[1] += Pty * invMassB; c.b.velocity[2] += Ptz * invMassB;
+                                }
+                            }
+                        }
+                    }
+
+                    for (const b of bodies) {
+                        if (b.isStatic) continue;
+                        b.position[0] += b.velocity[0] * subDt;
+                        b.position[1] += b.velocity[1] * subDt;
+                        b.position[2] += b.velocity[2] * subDt;
+                    }
                 }
+            }
+
+            for (const b of bodies) {
+                b.mesh.position = b.position;
+                b.mesh.physics!.velocity = b.velocity;
             }
 
             return {
                 success: true,
                 stepsExecuted: steps,
-                bodiesUpdated: updatedCount
+                bodiesSimulated: bodies.length,
+                contactsResolved
             };
         }
     },

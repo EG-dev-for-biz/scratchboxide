@@ -284,12 +284,35 @@ int main() {
         expect(rayRes.data.distance).toBeGreaterThan(0);
 
         // 4. Test sb_simulate_rigidbody_physics (Gap 3)
+        // Add a static platform for hero_cube (airborne at y=5) to land on. A real stepped
+        // simulation with body-vs-body collision must rest hero_cube on top of the platform
+        // (~y=3.0). The old closed-form stub had zero awareness of other bodies and only ever
+        // clamped position against an implicit y=0 floor, so it would have let hero_cube
+        // tunnel straight through the platform down to y=0.5.
+        engine.getSceneData().customMeshes!.push({
+            id: 'ground_platform',
+            name: 'GroundPlatform',
+            type: 'box',
+            position: [0, 2, 0],
+            scale: [10, 1, 10],
+            physics: { bodyType: 'static', mass: 0, friction: 0.5, restitution: 0.2 }
+        });
+
         const rbRes = engine.dispatch('sb_simulate_rigidbody_physics', {
-            targetMeshId: 'hero_cube',
-            steps: 60
+            steps: 90,
+            restitution: 0.2
         });
         expect(rbRes.success).toBe(true);
-        expect(rbRes.data.stepsExecuted).toBe(60);
+        expect(rbRes.data.stepsExecuted).toBe(90);
+        expect(rbRes.data.contactsResolved).toBeGreaterThan(0);
+
+        const heroAfterFall = engine.getSceneData().customMeshes!.find(m => m.id === 'hero_cube')!;
+        expect(heroAfterFall.position![1]).toBeGreaterThan(2.0);
+        expect(heroAfterFall.position![1]).toBeLessThan(4);
+        expect(heroAfterFall.physics?.velocity).toBeDefined();
+
+        const platformAfter = engine.getSceneData().customMeshes!.find(m => m.id === 'ground_platform')!;
+        expect(platformAfter.position![1]).toBe(2);
 
         // 5. Test sb_simulate_xpbd_cloth (Gap 4)
         const clothRes = engine.dispatch('sb_simulate_xpbd_cloth', {

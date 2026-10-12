@@ -1074,11 +1074,13 @@ export interface Scene3DData {
             distance: number;
         }>;
         bvhAccelerated?: boolean;
-        rigidBody?: {
+        physics?: {
+            bodyType?: 'dynamic' | 'static' | 'kinematic';
             mass?: number;
-            isStatic?: boolean;
-            restitution?: number;
             friction?: number;
+            restitution?: number;
+            colliderShape?: string;
+            velocity?: [number, number, number];
         };
         xpbdCloth?: {
             compliance?: number;
