@@ -611,6 +611,8 @@ public:
         Vec3 h = size * 0.5f;
         Vec3 inH(h.x - b, h.y - b, h.z - b);
 
+        // Every quad and corner triangle lists its corners counter-clockwise as seen
+        // from outside, so the winding (p1 - p0) x (p2 - p0) agrees with the stated normal.
         auto addQuad = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3,
                            const Vec3& n0, const Vec3& n1, const Vec3& n2, const Vec3& n3) {
             uint32_t start = static_cast<uint32_t>(mesh.vertices.size());
@@ -624,10 +626,10 @@ public:
 
         // 6 Primary Inset Faces
         // Top (+Y)
-        addQuad({-inH.x, h.y, -inH.z}, { inH.x, h.y, -inH.z}, { inH.x, h.y,  inH.z}, {-inH.x, h.y,  inH.z},
+        addQuad({-inH.x, h.y,  inH.z}, { inH.x, h.y,  inH.z}, { inH.x, h.y, -inH.z}, {-inH.x, h.y, -inH.z},
                 {0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 1, 0});
         // Bottom (-Y)
-        addQuad({-inH.x, -h.y,  inH.z}, { inH.x, -h.y,  inH.z}, { inH.x, -h.y, -inH.z}, {-inH.x, -h.y, -inH.z},
+        addQuad({-inH.x, -h.y, -inH.z}, { inH.x, -h.y, -inH.z}, { inH.x, -h.y,  inH.z}, {-inH.x, -h.y,  inH.z},
                 {0, -1, 0}, {0, -1, 0}, {0, -1, 0}, {0, -1, 0});
         // Front (+Z)
         addQuad({-inH.x, -inH.y, h.z}, { inH.x, -inH.y, h.z}, { inH.x,  inH.y, h.z}, {-inH.x,  inH.y, h.z},
@@ -645,10 +647,10 @@ public:
         // 12 Edge Chamfers
         // Top 4 edges (+Y)
         Vec3 nTF = Vec3(0, 1, 1).normalized();
-        addQuad({-inH.x, h.y, inH.z}, { inH.x, h.y, inH.z}, { inH.x, inH.y, h.z}, {-inH.x, inH.y, h.z},
+        addQuad({-inH.x, inH.y, h.z}, { inH.x, inH.y, h.z}, { inH.x, h.y, inH.z}, {-inH.x, h.y, inH.z},
                 nTF, nTF, nTF, nTF);
         Vec3 nTB = Vec3(0, 1, -1).normalized();
-        addQuad({ inH.x, h.y, -inH.z}, {-inH.x, h.y, -inH.z}, {-inH.x, inH.y, -h.z}, { inH.x, inH.y, -h.z},
+        addQuad({ inH.x, inH.y, -h.z}, {-inH.x, inH.y, -h.z}, {-inH.x, h.y, -inH.z}, { inH.x, h.y, -inH.z},
                 nTB, nTB, nTB, nTB);
         Vec3 nTR = Vec3(1, 1, 0).normalized();
         addQuad({inH.x, h.y, -inH.z}, {inH.x, h.y, inH.z}, {h.x, inH.y, inH.z}, {h.x, inH.y, -inH.z},
@@ -659,16 +661,16 @@ public:
 
         // Bottom 4 edges (-Y)
         Vec3 nBF = Vec3(0, -1, 1).normalized();
-        addQuad({ inH.x, -h.y, inH.z}, {-inH.x, -h.y, inH.z}, {-inH.x, -inH.y, h.z}, { inH.x, -inH.y, h.z},
+        addQuad({-inH.x, -h.y, inH.z}, { inH.x, -h.y, inH.z}, { inH.x, -inH.y, h.z}, {-inH.x, -inH.y, h.z},
                 nBF, nBF, nBF, nBF);
         Vec3 nBB = Vec3(0, -1, -1).normalized();
-        addQuad({-inH.x, -h.y, -inH.z}, { inH.x, -h.y, -inH.z}, { inH.x, -inH.y, -h.z}, {-inH.x, -inH.y, -h.z},
+        addQuad({ inH.x, -h.y, -inH.z}, {-inH.x, -h.y, -inH.z}, {-inH.x, -inH.y, -h.z}, { inH.x, -inH.y, -h.z},
                 nBB, nBB, nBB, nBB);
         Vec3 nBR = Vec3(1, -1, 0).normalized();
         addQuad({inH.x, -h.y, inH.z}, {inH.x, -h.y, -inH.z}, {h.x, -inH.y, -inH.z}, {h.x, -inH.y, inH.z},
                 nBR, nBR, nBR, nBR);
         Vec3 nBL = Vec3(-1, -1, 0).normalized();
-        addQuad({-inH.x, -h.y, -inH.z}, {-inH.x, -h.y, inH.z}, {-h.x, -inH.y, inH.z}, {-h.x, -inH.y, -h.z},
+        addQuad({-inH.x, -h.y, -inH.z}, {-inH.x, -h.y, inH.z}, {-h.x, -inH.y, inH.z}, {-h.x, -inH.y, -inH.z},
                 nBL, nBL, nBL, nBL);
 
         // Vertical 4 edges
