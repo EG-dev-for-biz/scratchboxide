@@ -385,6 +385,8 @@ export function generateNativeCppGenerator(title: string): string {
 #include <cmath>
 
 using namespace scratchbox;
+using namespace scratchbox::geometry;
+using namespace scratchbox::math;
 
 int main(int argc, char** argv) {
     std::cout << "[Scratchbox Engine] Initializing Grounded Geological Terrain..." << std::endl;
@@ -394,7 +396,7 @@ int main(int argc, char** argv) {
 
     const int gridRes = 48;
     const float worldSize = 36.0f;
-    FastNoise3D noise(4242);
+    const uint32_t noiseSeed = 4242;
 
     for (int z = 0; z < gridRes; ++z) {
         for (int x = 0; x < gridRes; ++x) {
@@ -407,7 +409,8 @@ int main(int argc, char** argv) {
             float edgeDist = 1.0f - std::max(std::abs(wx) / (worldSize * 0.5f), std::abs(wz) / (worldSize * 0.5f));
             float edgeFade = std::max(0.0f, std::min(1.0f, edgeDist * 3.5f));
 
-            float elevation = noise.fBm(wx * 0.08f, 0.0f, wz * 0.08f, 4, 0.5f, 2.0f) * 3.5f * edgeFade;
+            // fbm(x, y, z, octaves, lacunarity, gain, seed)
+            float elevation = FastNoise3D::fbm(wx * 0.08f, 0.0f, wz * 0.08f, 4, 2.0f, 0.5f, noiseSeed) * 3.5f * edgeFade;
             float heightNorm = std::max(0.0f, std::min(1.0f, elevation / 4.0f));
             Vec4 vertexColor(0.35f + heightNorm * 0.35f, 0.38f + heightNorm * 0.30f, 0.30f + heightNorm * 0.15f, 1.0f);
 
@@ -445,18 +448,23 @@ int main(int argc, char** argv) {
 #include <iostream>
 
 using namespace scratchbox;
+using namespace scratchbox::geometry;
 
 int main(int argc, char** argv) {
     std::cout << "[Scratchbox Engine] Initializing Studio Baseline Generator..." << std::endl;
 
-    // Grounded studio showcase pedestal adhering to Zero Uninvited Defaults
-    ScratchboxMesh pedestal = generateStudioPedestal(5.0f, 0.35f, 0.05f, 64);
-    pedestal.material = PbrMaterial::studioMatteGrey();
+    // Grounded studio showcase pedestal adhering to Zero Uninvited Defaults (18% studio grey clay)
+    ScratchboxMesh pedestal = composer::generateStudioPedestal(5.0f, 0.35f, 0.05f, 64);
+    pedestal.setColor(Vec4(1.0f, 1.0f, 1.0f, 1.0f)); // drop region-mask vertex colors so the clay albedo shows
+    pedestal.material.name = "studio_grey_clay";
+    pedestal.material.baseColorFactor = Vec4(0.55f, 0.57f, 0.60f, 1.0f);
+    pedestal.material.metallicFactor = 0.0f;
+    pedestal.material.roughnessFactor = 0.85f;
 
     scratchbox::io::GlbWriter::streamChunk(pedestal, "${title}");
 
     std::cout << "[Scratchbox Engine] glTF 2.0 streaming complete. Triangles: " 
-              << pedestal.triangleCount() << std::endl;
+              << pedestal.indices.size() / 3 << std::endl;
     return 0;
 }
 `;

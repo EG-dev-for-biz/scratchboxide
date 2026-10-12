@@ -17,6 +17,8 @@ import {
     LiveCodeSandboxData,
     CanvasArtifact
 } from "../src/browser/generative-canvas/canvas-types";
+import { compileAndRunEmittedGenerator, maxIndex, NATIVE_GENERATOR_TEST_TIMEOUT_MS } from "./helpers/native-generator-harness";
+import * as fs from "fs";
 
 describe("Advanced Live Code Sandbox Features (1 - 4)", () => {
     describe("Feature 1: Interactive Native C++20 3D Mesh Studio Micro-App", () => {
@@ -27,17 +29,60 @@ describe("Advanced Live Code Sandbox Features (1 - 4)", () => {
             expect(is3DStudioIntent("todo list app with react", "Task Manager")).toBe(false);
         });
 
-        it("should generate compliant modern C++20 source code according to AGENTS.md directives", () => {
+        it("should generate a C++20 terrain generator that compiles and streams its heightfield GLB", async () => {
             const cppSource = generateNativeCppGenerator("Alpine Mountain Range");
             expect(cppSource).toContain("#include \"scratchbox_engine.hpp\"");
-            expect(cppSource).toContain("#include \"scratchbox_math.hpp\"");
-            expect(cppSource).toContain("ProceduralTerrainSDF");
-            expect(cppSource).toContain("MarchingCubesVolume");
-            expect(cppSource).toContain("ComputeSmoothNormals");
-            expect(cppSource).toContain("GenerateProceduralColors");
-            expect(cppSource).toContain("GLBOutputStream");
-            expect(cppSource).toContain("Alpine Mountain Range");
-        });
+
+            const run = await compileAndRunEmittedGenerator(cppSource, "studio_terrain");
+            expect(run.chunk.name).toBe("Alpine Mountain Range");
+            // 48 x 48 vertex grid, two triangles per cell
+            expect(run.chunk.vertexCount).toBe(48 * 48);
+            expect(run.triangleCount).toBe(47 * 47 * 2);
+            expect(run.glb.vertexCount).toBe(run.chunk.vertexCount);
+            expect(run.glb.indexCount).toBe(run.chunk.indexCount);
+            expect(maxIndex(run.glb)).toBe(48 * 48 - 1);
+
+            // 36 m square footprint with fBm relief, and edge damping pins the perimeter to y = 0
+            const { min, max } = run.bounds;
+            expect(min[0]).toBeCloseTo(-18, 4);
+            expect(max[0]).toBeCloseTo(18, 4);
+            expect(min[2]).toBeCloseTo(-18, 4);
+            expect(max[2]).toBeCloseTo(18, 4);
+            expect(max[1] - min[1]).toBeGreaterThan(0.5);
+            const p = run.glb.positions;
+            for (let i = 0; i < p.length; i += 3) {
+                if (Math.abs(Math.abs(p[i]) - 18) < 1e-4 || Math.abs(Math.abs(p[i + 2]) - 18) < 1e-4) {
+                    expect(Math.abs(p[i + 1])).toBeLessThan(1e-6);
+                }
+            }
+
+            expect(fs.statSync(run.screenshotPath).size).toBeGreaterThan(0);
+        }, NATIVE_GENERATOR_TEST_TIMEOUT_MS);
+
+        it("should generate a C++20 studio pedestal generator that compiles and streams a grey clay GLB", async () => {
+            const cppSource = generateNativeCppGenerator("Cyberpunk Outpost Laboratory");
+
+            const run = await compileAndRunEmittedGenerator(cppSource, "studio_pedestal");
+            expect(run.chunk.name).toBe("Cyberpunk Outpost Laboratory");
+            // 64 segments: centre vertex + three rings of 65, fan top + bevel band + side band
+            expect(run.chunk.vertexCount).toBe(1 + 65 * 3);
+            expect(run.triangleCount).toBe(64 + 64 * 2 + 64 * 2);
+            expect(maxIndex(run.glb)).toBeLessThan(run.chunk.vertexCount);
+            expect(run.glb.materialName).toBe("studio_grey_clay");
+            expect(run.glb.roughnessFactor).toBeCloseTo(0.85, 5);
+            expect(run.glb.metallicFactor).toBe(0);
+            // Neutral vertex colours, so the clay baseColorFactor is the rendered albedo
+            expect(Array.from(run.glb.colors ?? []).every(c => c === 1)).toBe(true);
+
+            // 5 m radius disc, 0.35 m thick, top face on y = 0
+            const { min, max } = run.bounds;
+            expect(min[0]).toBeCloseTo(-5, 4);
+            expect(max[0]).toBeCloseTo(5, 4);
+            expect(min[1]).toBeCloseTo(-0.35, 4);
+            expect(max[1]).toBeCloseTo(0, 4);
+
+            expect(fs.statSync(run.screenshotPath).size).toBeGreaterThan(0);
+        }, NATIVE_GENERATOR_TEST_TIMEOUT_MS);
 
         it("should generate interactive 3D controls and Three.js App.tsx with native C++ bridge call", () => {
             const controls = generate3DControls();
