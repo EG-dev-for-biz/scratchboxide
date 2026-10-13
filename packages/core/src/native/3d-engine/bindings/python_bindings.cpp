@@ -576,9 +576,9 @@ NB_MODULE(scratchbox_native, m) {
         return ScratchboxMesh::createBox(size, color);
     }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
 
-    m_geom.def("create_cylinder", [](float radiusTop, float radiusBottom, float height, int segments, const Vec4& color) {
-        return ScratchboxMesh::createCylinder(radiusTop, radiusBottom, height, segments, color);
-    }, "radius_top"_a = 1.0f, "radius_bottom"_a = 1.0f, "height"_a = 2.0f, "segments"_a = 24, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+    m_geom.def("create_cylinder", [](float radiusTop, float radiusBottom, float height, int segments, const Vec4& color, bool capped) {
+        return ScratchboxMesh::createCylinder(radiusTop, radiusBottom, height, segments, color, capped);
+    }, "radius_top"_a = 1.0f, "radius_bottom"_a = 1.0f, "height"_a = 2.0f, "segments"_a = 24, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f), "capped"_a = true);
 
     m_geom.def("create_torus", [](float mainRadius, float tubeRadius, int radialSegments, int tubularSegments, const Vec4& color) {
         return createTorus(mainRadius, tubeRadius, radialSegments, tubularSegments, color);

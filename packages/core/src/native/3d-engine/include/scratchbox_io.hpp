@@ -14,6 +14,7 @@
 #include "scratchbox_kinematics.hpp"
 #include "scratchbox_skinning.hpp"
 #include "scratchbox_lighting.hpp"
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -765,28 +766,11 @@ public:
         ss << "],";
 
         // Meshes
-        ss << "\"meshes\":[";
+        // Materials: serialize per mesh, then share identical definitions instead of emitting one copy per mesh.
+        std::vector<std::string> uniqueMaterialJson;
+        std::vector<size_t> meshMaterialIndex(numMeshes, 0);
         for (size_t m = 0; m < numMeshes; ++m) {
-            if (m > 0) ss << ",";
-            size_t accBase = m * 6;
-            ss << "{\"name\":\"" << subMeshes[m].name << "\",\"primitives\":[{"
-               << "\"attributes\":{"
-               << "\"POSITION\":" << (accBase + 1) << ","
-               << "\"NORMAL\":" << (accBase + 2) << ","
-               << "\"TEXCOORD_0\":" << (accBase + 3) << ","
-               << "\"COLOR_0\":" << (accBase + 4) << ","
-               << "\"TANGENT\":" << (accBase + 5)
-               << "},"
-               << "\"indices\":" << (accBase + 0) << ","
-               << "\"material\":" << m
-               << "}]}";
-        }
-        ss << "],";
-
-        // Materials
-        ss << "\"materials\":[";
-        for (size_t m = 0; m < numMeshes; ++m) {
-            if (m > 0) ss << ",";
+            std::stringstream ms;
             const auto& mat = subMeshes[m].material;
 
             int baseColorTexIdx = -1;
@@ -828,39 +812,67 @@ public:
                 }
             }
 
-            ss << "{\"name\":\"" << mat.name << "\","
+            ms << "{\"name\":\"" << mat.name << "\","
                << "\"pbrMetallicRoughness\":{"
                << "\"baseColorFactor\":[" << mat.baseColorFactor.x << "," << mat.baseColorFactor.y << "," << mat.baseColorFactor.z << "," << mat.baseColorFactor.w << "],"
                << "\"metallicFactor\":" << mat.metallicFactor << ","
                << "\"roughnessFactor\":" << mat.roughnessFactor;
             if (baseColorTexIdx >= 0) {
-                ss << ",\"baseColorTexture\":" << appendTexInfo(baseColorTexIdx);
+                ms << ",\"baseColorTexture\":" << appendTexInfo(baseColorTexIdx);
             }
             if (mrTexIdx >= 0) {
-                ss << ",\"metallicRoughnessTexture\":" << appendTexInfo(mrTexIdx);
+                ms << ",\"metallicRoughnessTexture\":" << appendTexInfo(mrTexIdx);
             }
-            ss << "},"
+            ms << "},"
                << "\"emissiveFactor\":[" << mat.emissiveFactor.x << "," << mat.emissiveFactor.y << "," << mat.emissiveFactor.z << "],";
             if (normalTexIdx >= 0) {
-                ss << "\"normalTexture\":" << appendTexInfo(normalTexIdx) << ",";
+                ms << "\"normalTexture\":" << appendTexInfo(normalTexIdx) << ",";
             }
             if (occTexIdx >= 0) {
-                ss << "\"occlusionTexture\":" << appendTexInfo(occTexIdx) << ",";
+                ms << "\"occlusionTexture\":" << appendTexInfo(occTexIdx) << ",";
             }
             if (emissiveTexIdx >= 0) {
-                ss << "\"emissiveTexture\":" << appendTexInfo(emissiveTexIdx) << ",";
+                ms << "\"emissiveTexture\":" << appendTexInfo(emissiveTexIdx) << ",";
             }
-            ss << "\"doubleSided\":" << (mat.doubleSided ? "true" : "false");
+            ms << "\"doubleSided\":" << (mat.doubleSided ? "true" : "false");
             if (mat.alphaMode != "OPAQUE") {
-                ss << ",\"alphaMode\":\"" << mat.alphaMode << "\"";
+                ms << ",\"alphaMode\":\"" << mat.alphaMode << "\"";
                 if (mat.alphaMode == "MASK") {
-                    ss << ",\"alphaCutoff\":" << mat.alphaCutoff;
+                    ms << ",\"alphaCutoff\":" << mat.alphaCutoff;
                 }
             }
             if (mat.emissiveStrength > 1.001f) {
-                ss << ",\"extensions\":{\"KHR_materials_emissive_strength\":{\"emissiveStrength\":" << mat.emissiveStrength << "}}";
+                ms << ",\"extensions\":{\"KHR_materials_emissive_strength\":{\"emissiveStrength\":" << mat.emissiveStrength << "}}";
             }
-            ss << "}";
+            ms << "}";
+            const std::string json = ms.str();
+            auto found = std::find(uniqueMaterialJson.begin(), uniqueMaterialJson.end(), json);
+            meshMaterialIndex[m] = static_cast<size_t>(found - uniqueMaterialJson.begin());
+            if (found == uniqueMaterialJson.end()) uniqueMaterialJson.push_back(json);
+        }
+
+        ss << "\"meshes\":[";
+        for (size_t m = 0; m < numMeshes; ++m) {
+            if (m > 0) ss << ",";
+            size_t accBase = m * 6;
+            ss << "{\"name\":\"" << subMeshes[m].name << "\",\"primitives\":[{"
+               << "\"attributes\":{"
+               << "\"POSITION\":" << (accBase + 1) << ","
+               << "\"NORMAL\":" << (accBase + 2) << ","
+               << "\"TEXCOORD_0\":" << (accBase + 3) << ","
+               << "\"COLOR_0\":" << (accBase + 4) << ","
+               << "\"TANGENT\":" << (accBase + 5)
+               << "},"
+               << "\"indices\":" << (accBase + 0) << ","
+               << "\"material\":" << meshMaterialIndex[m]
+               << "}]}";
+        }
+        ss << "],";
+
+        ss << "\"materials\":[";
+        for (size_t i = 0; i < uniqueMaterialJson.size(); ++i) {
+            if (i > 0) ss << ",";
+            ss << uniqueMaterialJson[i];
         }
         ss << "],";
 
