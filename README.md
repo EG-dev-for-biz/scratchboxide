@@ -32,8 +32,9 @@ ts-node; the compiled server (below) starts in a few seconds.
 ### Python 3D engine
 
 The agent's Python 3D scripting (`import scratchbox as sb`) runs on a native C++ module
-(`scratchbox_native`) that is **built from source, not committed**. It needs CMake, a C++20
-compiler, and a repo-local virtualenv with nanobind:
+(`scratchbox_native`) that is **built from source, not committed**. It needs a C++20 compiler
+and a repo-local virtualenv on Python >= 3.10 (required by nanobind); `requirements.txt` also
+installs CMake into the venv, so no system CMake is needed:
 
 ```bash
 python3 -m venv .venv

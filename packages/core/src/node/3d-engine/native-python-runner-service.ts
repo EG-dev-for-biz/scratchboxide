@@ -216,9 +216,12 @@ export class NativePythonRunnerService {
                 }
                 const fingerprint = this.computeNativeSourceFingerprint(engineDir);
                 console.log('[NativePythonRunnerService] Engine sources changed; building scratchbox_native (a cold build takes a few minutes)...');
-                await execFileAsync('cmake', ['-B', buildDir, '-S', engineDir, '-DCMAKE_BUILD_TYPE=Release', `-DPython_EXECUTABLE=${this.pythonExecutable}`],
+                // `pip install cmake` into the interpreter's environment works without a system CMake on PATH.
+                const venvCmake = path.join(path.dirname(this.pythonExecutable), 'cmake');
+                const cmake = path.isAbsolute(venvCmake) && fs.existsSync(venvCmake) ? venvCmake : 'cmake';
+                await execFileAsync(cmake, ['-B', buildDir, '-S', engineDir, '-DCMAKE_BUILD_TYPE=Release', `-DPython_EXECUTABLE=${this.pythonExecutable}`],
                     { cwd: engineDir, timeout: 5 * 60 * 1000, maxBuffer: 32 * 1024 * 1024 });
-                await execFileAsync('cmake', ['--build', buildDir, '-j', String(Math.max(2, os.cpus().length))],
+                await execFileAsync(cmake, ['--build', buildDir, '-j', String(Math.max(2, os.cpus().length))],
                     { cwd: engineDir, timeout: 30 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 });
                 if (!this.hasBuiltModule(buildDir)) return `CMake build finished but produced no scratchbox_native module in ${buildDir}`;
                 fs.writeFileSync(path.join(buildDir, BUILD_STAMP), fingerprint);
