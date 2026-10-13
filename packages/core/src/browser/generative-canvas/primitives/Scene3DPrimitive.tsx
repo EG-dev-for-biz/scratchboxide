@@ -611,6 +611,16 @@ import { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import { NativeSpatialBridge } from '../../../common/spatial/NativeSpatialBridge';
 import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussianSplatMesh';
 
+function disposeObject3D(root: THREE.Object3D): void {
+    root.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        mesh.geometry?.dispose();
+        const mat = mesh.material;
+        if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+        else mat?.dispose();
+    });
+}
+
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
 // ==========================================
@@ -1797,6 +1807,21 @@ int main(int argc, char** argv) {
     const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
     const customMeshRegistryRef = React.useRef<CustomMeshRegistry>(new Map());
     const externalObjectsMapRef = React.useRef<Map<string, THREE.Object3D>>(new Map());
+    // Object id -> URI of a load still in flight, so effect re-runs during a load don't mount the model twice.
+    const pendingExternalLoadsRef = React.useRef<Map<string, string>>(new Map());
+    const pendingGeneratedGlbParsesRef = React.useRef(0);
+
+    // Lets background visual verification wait for models to finish loading before it screenshots.
+    React.useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const pendingLoads = () => pendingExternalLoadsRef.current.size + pendingGeneratedGlbParsesRef.current;
+        (window as any).__scratchbox_active_3d_scene_pending_loads = pendingLoads;
+        return () => {
+            if ((window as any).__scratchbox_active_3d_scene_pending_loads === pendingLoads) {
+                delete (window as any).__scratchbox_active_3d_scene_pending_loads;
+            }
+        };
+    }, []);
     const physicsRuntimeStateRef = React.useRef<PhysicsRuntimeState>(new Map());
     const activeSplatMeshesRef = React.useRef<Map<string, PhotorealGaussianSplatMesh>>(new Map());
 
@@ -2232,6 +2257,7 @@ int main(int argc, char** argv) {
             activeSplatMeshesRef.current.forEach(splatMesh => splatMesh.dispose());
             activeSplatMeshesRef.current.clear();
             externalObjectsMapRef.current.clear();
+            pendingExternalLoadsRef.current.clear();
             stack.dispose();
             stackRef.current = null;
             threeSceneRef.current = null;
@@ -2593,7 +2619,9 @@ int main(int argc, char** argv) {
                 bytes[i] = binaryStr.charCodeAt(i);
             }
             const loader = new GLTFLoader();
+            pendingGeneratedGlbParsesRef.current++;
             loader.parse(bytes.buffer, '', (gltf) => {
+                pendingGeneratedGlbParsesRef.current--;
                 const scene = stack.scene;
                 if (!scene) return;
                 const existing = scene.getObjectByName('scratchbox-cpp-generated-root');
@@ -2645,6 +2673,7 @@ int main(int argc, char** argv) {
                 }
                 refreshEntities();
             }, (err) => {
+                pendingGeneratedGlbParsesRef.current--;
                 console.warn('[3D Engine GLB Loader Error]:', err);
             });
         } catch (e) {
@@ -2674,6 +2703,7 @@ int main(int argc, char** argv) {
         }
 
         const currentMap = externalObjectsMapRef.current;
+        const pendingLoads = pendingExternalLoadsRef.current;
         const activeIds = new Set<string>();
 
         const loader = new GLTFLoader();
@@ -2715,6 +2745,10 @@ int main(int argc, char** argv) {
                 }
                 return;
             }
+            if (pendingLoads.get(obj.id) === uri) {
+                return;
+            }
+            pendingLoads.set(obj.id, uri);
 
             if (isSplat) {
                 PhotorealGaussianSplatMesh.fromUrl(uri, {
@@ -2722,10 +2756,11 @@ int main(int argc, char** argv) {
                     contactShadow: sceneData.splatOptions?.contactShadow ?? true,
                     enableRTC: sceneData.splatOptions?.enableRTC ?? true
                 }).then(splatMesh => {
-                    if (!stackRef.current?.scene) {
+                    if (!stackRef.current?.scene || pendingLoads.get(obj.id) !== uri) {
                         splatMesh.dispose();
                         return;
                     }
+                    pendingLoads.delete(obj.id);
                     splatMesh.name = `external-splat-${obj.id}`;
                     const s = obj.space?.spatial3d;
                     if (s) {
@@ -2750,6 +2785,7 @@ int main(int argc, char** argv) {
                         }
                     }
                 }).catch(err => {
+                    pendingLoads.delete(obj.id);
                     console.warn(`[External Splat Loader Error] Failed to load ${uri}:`, err);
                 });
                 return;
@@ -2758,7 +2794,11 @@ int main(int argc, char** argv) {
             loader.load(
                 uri,
                 (gltf) => {
-                    if (!stackRef.current?.scene) return;
+                    if (!stackRef.current?.scene || pendingLoads.get(obj.id) !== uri) {
+                        disposeObject3D(gltf.scene);
+                        return;
+                    }
+                    pendingLoads.delete(obj.id);
                     const model = gltf.scene;
                     model.name = `external-object-${obj.id}`;
                     const s = obj.space?.spatial3d;
@@ -2847,12 +2887,16 @@ int main(int argc, char** argv) {
                 },
                 undefined,
                 (err) => {
+                    pendingLoads.delete(obj.id);
                     console.warn(`[External Model Loader Error] Failed to load ${uri}:`, err);
                 }
             );
         });
 
         // Cleanup removed objects
+        for (const id of [...pendingLoads.keys()]) {
+            if (!activeIds.has(id)) pendingLoads.delete(id);
+        }
         for (const [id, obj3d] of currentMap.entries()) {
             if (!activeIds.has(id)) {
                 scene.remove(obj3d);
