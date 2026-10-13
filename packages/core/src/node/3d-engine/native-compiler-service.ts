@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { exec, execFile } from 'child_process';
@@ -22,6 +23,8 @@ import type {
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
+
+const pchBuilds = new Map<string, Promise<boolean>>();
 
 export class NativeCppCompilerService {
     private static instance?: NativeCppCompilerService;
@@ -78,59 +81,70 @@ export class NativeCppCompilerService {
     }
 
     /**
-     * Get path to the Scratchbox C++20 Precompiled Header (.pch).
+     * Path of the Scratchbox C++20 precompiled header, keyed by compiler and every SDK header's mtime/size
+     * so any header edit yields a fresh PCH instead of a stale one.
      */
     getPchPath(): string {
-        return path.join(this.sdkIncludePath, 'scratchbox_engine.hpp.pch');
+        const hasher = crypto.createHash('sha256')
+            .update(this.compilerBinary)
+            .update(process.platform)
+            .update(process.arch)
+            .update(this.sdkIncludePath);
+        try {
+            for (const hFile of fs.readdirSync(this.sdkIncludePath).sort()) {
+                if (hFile.endsWith('.hpp') || hFile.endsWith('.h')) {
+                    const stat = fs.statSync(path.join(this.sdkIncludePath, hFile));
+                    hasher.update(`${hFile}:${stat.mtimeMs}:${stat.size}`);
+                }
+            }
+        } catch {
+            // Missing include dir: the PCH simply never validates.
+        }
+        return path.join(os.tmpdir(), 'scratchbox-native-pch', `scratchbox_engine_${hasher.digest('hex').slice(0, 24)}.pch`);
     }
 
     /**
-     * Precompile scratchbox_engine.hpp into scratchbox_engine.hpp.pch if missing or outdated.
+     * Build the scratchbox_engine.hpp precompiled header if it does not exist yet.
+     * Cold -O3 compiles re-parse ~60k header lines per generator; the PCH cuts that roughly 3x.
      */
     async ensurePrecompiledHeader(forceRebuild = false): Promise<boolean> {
         const pchPath = this.getPchPath();
         const headerPath = path.join(this.sdkIncludePath, 'scratchbox_engine.hpp');
-
         if (!fs.existsSync(headerPath)) {
             return false;
         }
-
         if (!forceRebuild && fs.existsSync(pchPath)) {
-            try {
-                const headerStat = fs.statSync(headerPath);
-                const pchStat = fs.statSync(pchPath);
-                if (pchStat.mtimeMs >= headerStat.mtimeMs && pchStat.size > 0) {
-                    return true;
-                }
-            } catch {
-                // fall through to rebuild
-            }
+            return true;
+        }
+        const inFlight = pchBuilds.get(pchPath);
+        if (inFlight && !forceRebuild) {
+            return inFlight;
         }
 
-        try {
-            const pchArgs = [
-                '-std=c++20',
-                '-O3',
-                '-x',
-                'c++-header',
-                headerPath,
-                '-o',
-                pchPath
-            ];
+        const build = (async () => {
+            fs.mkdirSync(path.dirname(pchPath), { recursive: true });
+            // Write to a unique temp file and rename so concurrent processes never observe a partial PCH.
+            const tmpPath = `${pchPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+            const pchArgs = ['-std=c++20', '-O3', '-x', 'c++-header', headerPath, '-o', tmpPath];
             if (process.platform === 'darwin') {
                 const macSdk = '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk';
                 if (fs.existsSync(macSdk)) {
                     pchArgs.push('-isysroot', macSdk);
                 }
             }
-            await execFileAsync(this.compilerBinary, pchArgs, {
-                cwd: this.sdkIncludePath,
-                timeout: 90000
-            });
-            return fs.existsSync(pchPath);
-        } catch {
-            return false;
-        }
+            try {
+                await execFileAsync(this.compilerBinary, pchArgs, { cwd: this.sdkIncludePath, timeout: 180000 });
+                fs.renameSync(tmpPath, pchPath);
+                return true;
+            } catch {
+                fs.rmSync(tmpPath, { force: true });
+                return false;
+            } finally {
+                pchBuilds.delete(pchPath);
+            }
+        })();
+        pchBuilds.set(pchPath, build);
+        return build;
     }
 
     /**
@@ -200,21 +214,9 @@ export class NativeCppCompilerService {
         const optFlag = options.optimization || '-O3';
         const extraFlags = options.extraFlags || [];
 
-        // Check if precompiled header is available and valid
+        // The PCH is built at -O3; -O0 would trip clang's __OPTIMIZE__ PCH mismatch check.
         const pchPath = this.getPchPath();
-        let usePch = false;
-        try {
-            const headerPath = path.join(this.sdkIncludePath, 'scratchbox_engine.hpp');
-            if (fs.existsSync(pchPath) && fs.existsSync(headerPath)) {
-                const pchStat = fs.statSync(pchPath);
-                const headerStat = fs.statSync(headerPath);
-                if (pchStat.mtimeMs >= headerStat.mtimeMs && pchStat.size > 0) {
-                    usePch = true;
-                }
-            }
-        } catch {
-            usePch = false;
-        }
+        const usePch = optFlag !== '-O0' && await this.ensurePrecompiledHeader();
 
         // High-performance compilation cache: SHA-256 binary replay with SDK header mtime validation
         const cacheDir = path.join(outputDir, '.cache');
@@ -305,7 +307,7 @@ export class NativeCppCompilerService {
             const initialStderr = err.stderr || '';
 
             // Automatic fallback if PCH had mismatched target/architecture
-            if (usePch && (initialStderr.includes('precompiled header') || initialStderr.includes('PCH file'))) {
+            if (usePch && /precompiled|PCH/i.test(initialStderr)) {
                 try {
                     const fallbackArgs = compileArgs.filter((arg, idx) => arg !== '-include-pch' && compileArgs[idx - 1] !== '-include-pch');
                     const { stdout, stderr } = await execFileAsync(this.compilerBinary, fallbackArgs, {
