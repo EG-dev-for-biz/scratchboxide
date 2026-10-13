@@ -250,6 +250,7 @@ export class GeminiClient {
         this.cachedServiceAccountPath = keyFile;
         this.cachedProjectId = content.project_id;
         this.cachedClientEmail = content.client_email;
+        this.genAiClient = undefined;
         this.auth = new GoogleAuth({
             keyFile,
             projectId: content.project_id,

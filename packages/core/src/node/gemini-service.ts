@@ -291,9 +291,13 @@ export class GeminiService {
     // Auth & status
     // ------------------------------------------------------------------
 
-    /** Initialize Google Cloud service account authentication safely. */
-    private initAuth(): void {
+    /** Re-discover service-account credentials, e.g. after a new key file was written to disk. */
+    reloadAuth(): void {
         this.client.initAuth();
+    }
+
+    getActiveModel(): string {
+        return this.preferredModel;
     }
 
     /** Real-time connection status of the Gemini service. */

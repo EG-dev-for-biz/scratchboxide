@@ -9,7 +9,7 @@ import { test } from 'vitest';
  ********************************************************************************/
 
 import * as assert from 'assert';
-import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
+import { GoogleMediaCredentialsService, describeGoogleCredentialError } from '../src/node/google-media-credentials-service';
 
 async function runGoogleMediaCredentialTests(): Promise<void> {
     console.log('🧪 Running Google media credential tests...');
@@ -46,3 +46,21 @@ async function runGoogleMediaCredentialTests(): Promise<void> {
 test('google-media-credentials-service.test', async () => {
     await runGoogleMediaCredentialTests();
 }, 180_000);
+
+test('describeGoogleCredentialError extracts Google\'s message and adds a fix for blocked keys', () => {
+    const blocked = new Error('got status: 403 Forbidden. ' + JSON.stringify({
+        error: {
+            code: 403,
+            message: 'Requests to this API generativelanguage.googleapis.com method google.ai.generativelanguage.v1beta.GenerativeService.CountTokens are blocked.',
+            status: 'PERMISSION_DENIED',
+            details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'API_KEY_SERVICE_BLOCKED', domain: 'googleapis.com' }]
+        }
+    }));
+    const message = describeGoogleCredentialError(blocked);
+    assert.ok(message.startsWith('Could not verify credentials with Google: Requests to this API'), message);
+    assert.ok(message.includes('aistudio.google.com/apikey'), message);
+    assert.ok(!message.includes('"code"'), 'raw JSON must not leak into the message');
+
+    assert.ok(describeGoogleCredentialError(new Error('invalid_grant: Invalid JWT Signature.')).includes('deleted or revoked'));
+    assert.strictEqual(describeGoogleCredentialError(new Error('fetch failed')), 'Could not verify credentials with Google: fetch failed');
+});

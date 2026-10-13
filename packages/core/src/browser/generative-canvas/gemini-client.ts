@@ -350,10 +350,16 @@ export class GeminiClient {
                 return await res.json();
             }
             const errText = await res.text();
+            let serverError: string | undefined;
+            try {
+                serverError = JSON.parse(errText)?.error;
+            } catch {
+                // Non-JSON error body
+            }
             return {
                 success: false,
                 authMethod: 'unauthenticated',
-                error: `Save failed (${res.status}): ${errText}`
+                error: typeof serverError === 'string' ? serverError : `Save failed (${res.status}): ${errText}`
             };
         } catch (err: any) {
             return {

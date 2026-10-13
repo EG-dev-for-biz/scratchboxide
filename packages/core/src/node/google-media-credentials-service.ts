@@ -13,9 +13,40 @@ import * as path from 'path';
 import { GoogleGenAI, type GoogleGenAIOptions } from '@google/genai';
 import { SaveCredentialsResponse } from '../common/gemini-protocol';
 import { FileKeyStore, KeyStore } from './key-store';
+import { resolveVertexLocation } from './gemini/gemini-client';
 
 const KEYCHAIN_SERVICE = 'scratchbox-ide.google-genai';
 const KEYCHAIN_ACCOUNT = 'api-key';
+
+const CREDENTIAL_ERROR_HINTS: Record<string, string> = {
+    API_KEY_SERVICE_BLOCKED: 'This key is not allowed to call the Gemini API. Create a key at https://aistudio.google.com/apikey, or add "Generative Language API" to the key\'s API restrictions.',
+    API_KEY_INVALID: 'Check that the full key was pasted.',
+    IAM_PERMISSION_DENIED: 'Grant the service account the "Vertex AI User" role in this project.'
+};
+
+/** Turns a Google API or auth failure into a message a user can act on. */
+export function describeGoogleCredentialError(err: unknown): string {
+    const raw = err instanceof Error ? err.message : String(err);
+    let message = raw;
+    let hint = /invalid_grant/i.test(raw) ? 'Google rejected the service account key; it may have been deleted or revoked.' : '';
+    const jsonStart = raw.indexOf('{');
+    if (jsonStart >= 0) {
+        try {
+            const body = JSON.parse(raw.slice(jsonStart));
+            const apiError = body?.error ?? body;
+            if (typeof apiError?.message === 'string') {
+                message = apiError.message;
+            }
+            const reason = (apiError?.details || []).map((d: any) => d?.reason).find((r: unknown) => typeof r === 'string');
+            if (reason && CREDENTIAL_ERROR_HINTS[reason]) {
+                hint = CREDENTIAL_ERROR_HINTS[reason];
+            }
+        } catch {
+            // Not a JSON error body; keep the raw message
+        }
+    }
+    return `Could not verify credentials with Google: ${message}${hint ? ` ${hint}` : ''}`;
+}
 
 export class GoogleMediaCredentialsService {
     protected readonly keyStore: KeyStore;
@@ -106,6 +137,40 @@ export class GoogleMediaCredentialsService {
         await this.keyStore.setPassword(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, trimmed);
         await this.removeLegacyPlaintextKey();
         return { success: true, authMethod: 'api-key' };
+    }
+
+    /** Proves a key against the live Gemini API; returns a user-facing error, or undefined when it works. */
+    async verifyApiKey(apiKey: string, model: string): Promise<string | undefined> {
+        return this.probeModel(new GoogleGenAI({ apiKey: apiKey.trim() }), model);
+    }
+
+    /** Proves a service account against Vertex AI; returns a user-facing error, or undefined when it works. */
+    async verifyServiceAccount(credentialsRaw: string, model: string): Promise<string | undefined> {
+        let parsed: any;
+        try {
+            parsed = JSON.parse(credentialsRaw);
+        } catch {
+            return 'Service account JSON could not be parsed';
+        }
+        if (!parsed.project_id || !parsed.private_key || !parsed.client_email) {
+            return 'Service account JSON requires project_id, private_key, and client_email';
+        }
+        return this.probeModel(new GoogleGenAI({
+            vertexai: true,
+            project: parsed.project_id,
+            location: resolveVertexLocation(),
+            googleAuthOptions: { credentials: parsed, scopes: ['https://www.googleapis.com/auth/cloud-platform'] }
+        }), model);
+    }
+
+    // countTokens is free and goes through the same auth, API enablement and IAM checks as generation.
+    private async probeModel(client: GoogleGenAI, model: string): Promise<string | undefined> {
+        try {
+            await client.models.countTokens({ model, contents: 'ping' });
+            return undefined;
+        } catch (err) {
+            return describeGoogleCredentialError(err);
+        }
     }
 
     async saveServiceAccount(credentialsRaw: string, targetPath?: string): Promise<SaveCredentialsResponse> {

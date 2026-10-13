@@ -201,13 +201,28 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
                 res.status(400).json({ success: false, authMethod: 'unauthenticated', error: 'apiKey or credentialsJson is required' });
                 return;
             }
+            // Credentials are only persisted after Google accepts them for the model chat uses.
+            const model = geminiService.getActiveModel();
             if (rawJson && rawJson.startsWith('{')) {
+                const verifyError = await mediaCredentials.verifyServiceAccount(rawJson, model);
+                if (verifyError) {
+                    res.status(400).json({ success: false, authMethod: 'unauthenticated', error: verifyError });
+                    return;
+                }
                 const saved = await mediaCredentials.saveServiceAccount(rawJson);
+                if (saved.success) {
+                    geminiService.reloadAuth();
+                }
                 res.status(saved.success ? 200 : 400).json(saved);
                 return;
             }
             // Persist through the encrypted key store; only the running process keeps the env copy.
             const key = rawApiKey || rawJson;
+            const verifyError = await mediaCredentials.verifyApiKey(key, model);
+            if (verifyError) {
+                res.status(400).json({ success: false, authMethod: 'unauthenticated', error: verifyError });
+                return;
+            }
             const saved = await mediaCredentials.saveApiKey(key);
             if (!saved.success) {
                 res.status(400).json({ success: false, authMethod: 'unauthenticated', error: saved.error || 'Invalid API key' });
