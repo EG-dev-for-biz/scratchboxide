@@ -16,9 +16,7 @@ try:
 except ImportError:
     _cur_dir = os.path.dirname(os.path.abspath(__file__))
     _candidate_dirs = [
-        os.path.abspath(os.path.join(_cur_dir, "..", "..", "native", "3d-engine", "scratchbox")),
-        os.path.abspath(os.path.join(_cur_dir, "..", "..", "native", "3d-engine", "build_py")),
-        _cur_dir
+        os.path.abspath(os.path.join(_cur_dir, "..", "..", "native", "3d-engine", "build_py"))
     ]
     for d in _candidate_dirs:
         if os.path.exists(d) and d not in sys.path:

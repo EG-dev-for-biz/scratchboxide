@@ -116,6 +116,12 @@ public/comfyui_outputs/
 data/s4d_dataset/
 **/s4d_tile_blockout_runner*.html
 **/build_py/
+**/build_py.lock/
+# Native Python engine modules are built on demand from packages/core/src/native/3d-engine; never commit them.
+**/scratchbox_native*.so
+**/scratchbox_native*.pyd
+**/libscratchbox_core.dylib
+**/libscratchbox_core.so
 *.bak
 __pycache__/
 data/test_pilot_multiscene/

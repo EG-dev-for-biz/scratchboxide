@@ -8,11 +8,19 @@
  ********************************************************************************/
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import { exec, execSync } from 'child_process';
+import * as crypto from 'crypto';
+import { exec, execFile, execSync } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+const BUILD_STAMP = '.scratchbox-build-stamp';
+const BUILD_LOCK_STALE_MS = 20 * 60 * 1000;
+// One in-flight build per engine dir within this process; other processes are serialized by a lock directory.
+const nativeBuilds = new Map<string, Promise<string | null>>();
 
 export interface PythonExecutionAsset {
     name: string;
@@ -110,34 +118,15 @@ export class NativePythonRunnerService {
         return 'python3';
     }
 
+    private resolveEngineDir(): string {
+        return path.resolve(this.resolveRepoRoot(), 'packages/core/src/native/3d-engine');
+    }
+
     /**
-     * Resolve the directory containing compiled scratchbox_native extension and scratchbox package.
+     * The compiled scratchbox_native module is a build product (never committed): it lives in the engine's build_py dir.
      */
     private resolveModuleDirectory(): string {
-        const repoRoot = this.resolveRepoRoot();
-        const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
-        const candidateDirs = [
-            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/build_py'),
-            path.resolve(repoRoot, 'packages/core/src/python/scratchbox'),
-            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/scratchbox'),
-            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/build_py'),
-            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/scratchbox'),
-            path.resolve(baseDir, '../../native/3d-engine/build_py'),
-            path.resolve(baseDir, '../../native/3d-engine/scratchbox'),
-            path.resolve(baseDir, '../../../src/native/3d-engine/build_py'),
-            path.resolve(baseDir, '../../../src/native/3d-engine/scratchbox')
-        ];
-
-        for (const dir of candidateDirs) {
-            if (fs.existsSync(dir)) {
-                const files = fs.readdirSync(dir);
-                if (files.some(f => f.startsWith('scratchbox_native') && (f.endsWith('.so') || f.endsWith('.pyd') || f.endsWith('.dylib')))) {
-                    return dir;
-                }
-            }
-        }
-
-        return candidateDirs[0];
+        return path.join(this.resolveEngineDir(), 'build_py');
     }
 
     public getPythonExecutable(): string {
@@ -149,31 +138,101 @@ export class NativePythonRunnerService {
     }
 
     /**
-     * Ensure the nanobind module is compiled. If missing, compiles it automatically via CMake.
+     * Hash of everything that goes into the native module, so any engine edit (or interpreter switch) triggers a rebuild.
      */
-    public async ensureNativeModule(): Promise<boolean> {
-        if (fs.existsSync(this.moduleDirectory)) {
-            const files = fs.readdirSync(this.moduleDirectory);
-            if (files.some(f => f.startsWith('scratchbox_native') && (f.endsWith('.so') || f.endsWith('.pyd') || f.endsWith('.dylib')))) {
-                return true;
+    private computeNativeSourceFingerprint(engineDir: string): string {
+        const hasher = crypto.createHash('sha256').update(this.pythonExecutable).update(process.platform).update(process.arch);
+        const walk = (dir: string) => {
+            if (!fs.existsSync(dir)) return;
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    walk(full);
+                } else if (/\.(hpp|h|cpp|cc|cxx|inl)$/.test(entry.name)) {
+                    hasher.update(path.relative(engineDir, full)).update(fs.readFileSync(full));
+                }
             }
-        }
+        };
+        hasher.update(fs.readFileSync(path.join(engineDir, 'CMakeLists.txt')));
+        for (const sub of ['include', 'bindings', 'src']) walk(path.join(engineDir, sub));
+        return hasher.digest('hex');
+    }
 
-        const repoRoot = this.resolveRepoRoot();
-        const engineDir = path.resolve(repoRoot, 'packages/core/src/native/3d-engine');
+    private hasBuiltModule(dir: string): boolean {
+        return fs.existsSync(dir) && fs.readdirSync(dir).some(f => f.startsWith('scratchbox_native') && /\.(so|pyd)$/.test(f));
+    }
+
+    /**
+     * True when build_py holds a module built from exactly the current engine sources.
+     */
+    public isNativeModuleFresh(): boolean {
+        const buildDir = path.join(this.resolveEngineDir(), 'build_py');
+        const stampPath = path.join(buildDir, BUILD_STAMP);
+        return this.hasBuiltModule(buildDir) && fs.existsSync(stampPath) &&
+            fs.readFileSync(stampPath, 'utf8') === this.computeNativeSourceFingerprint(this.resolveEngineDir());
+    }
+
+    /**
+     * Ensure the nanobind module is built from the current engine sources, rebuilding via CMake when they change.
+     * Returns null when the module is ready, or the build error otherwise.
+     */
+    public async ensureNativeModule(): Promise<string | null> {
+        const engineDir = this.resolveEngineDir();
         const buildDir = path.join(engineDir, 'build_py');
-
-        try {
-            await execAsync(
-                `cmake -B "${buildDir}" -S "${engineDir}" -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE="${this.pythonExecutable}" && cmake --build "${buildDir}" -j8`,
-                { cwd: engineDir, timeout: 120000 }
-            );
+        if (this.isNativeModuleFresh()) {
             this.moduleDirectory = buildDir;
-            return true;
-        } catch (err: any) {
-            console.error('[NativePythonRunnerService] Failed to auto-compile nanobind module:', err);
-            return false;
+            return null;
         }
+
+        const inFlight = nativeBuilds.get(buildDir);
+        if (inFlight) return inFlight;
+
+        const build = (async (): Promise<string | null> => {
+            const lockDir = `${buildDir}.lock`;
+            const deadline = Date.now() + BUILD_LOCK_STALE_MS;
+            // mkdir is atomic: whoever creates the lock builds, everyone else waits and then re-checks freshness.
+            for (;;) {
+                try {
+                    fs.mkdirSync(lockDir);
+                    break;
+                } catch {
+                    try {
+                        if (Date.now() - fs.statSync(lockDir).mtimeMs > BUILD_LOCK_STALE_MS) fs.rmSync(lockDir, { recursive: true, force: true });
+                    } catch { /* lock released between checks */ }
+                    if (Date.now() > deadline) return 'Timed out waiting for another scratchbox_native build to finish';
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+            try {
+                if (this.isNativeModuleFresh()) {
+                    this.moduleDirectory = buildDir;
+                    return null;
+                }
+                // A cache configured from another checkout (e.g. a copied build dir) makes CMake refuse to configure.
+                const cachePath = path.join(buildDir, 'CMakeCache.txt');
+                if (fs.existsSync(cachePath)) {
+                    const home = /CMAKE_HOME_DIRECTORY:INTERNAL=(.*)/.exec(fs.readFileSync(cachePath, 'utf8'))?.[1]?.trim();
+                    if (home && fs.realpathSync(home) !== fs.realpathSync(engineDir)) fs.rmSync(buildDir, { recursive: true, force: true });
+                }
+                const fingerprint = this.computeNativeSourceFingerprint(engineDir);
+                console.log('[NativePythonRunnerService] Engine sources changed; building scratchbox_native (a cold build takes a few minutes)...');
+                await execFileAsync('cmake', ['-B', buildDir, '-S', engineDir, '-DCMAKE_BUILD_TYPE=Release', `-DPython_EXECUTABLE=${this.pythonExecutable}`],
+                    { cwd: engineDir, timeout: 5 * 60 * 1000, maxBuffer: 32 * 1024 * 1024 });
+                await execFileAsync('cmake', ['--build', buildDir, '-j', String(Math.max(2, os.cpus().length))],
+                    { cwd: engineDir, timeout: 30 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 });
+                if (!this.hasBuiltModule(buildDir)) return `CMake build finished but produced no scratchbox_native module in ${buildDir}`;
+                fs.writeFileSync(path.join(buildDir, BUILD_STAMP), fingerprint);
+                this.moduleDirectory = buildDir;
+                return null;
+            } catch (err: any) {
+                const detail = String(err?.stderr || err?.stdout || err?.message || err).slice(-4000);
+                return `Failed to build scratchbox_native (needs cmake and \`${this.pythonExecutable} -m pip install nanobind\`): ${detail}`;
+            } finally {
+                fs.rmSync(lockDir, { recursive: true, force: true });
+            }
+        })().finally(() => nativeBuilds.delete(buildDir));
+        nativeBuilds.set(buildDir, build);
+        return build;
     }
 
     /**
@@ -238,15 +297,16 @@ export class NativePythonRunnerService {
         const timeout = options.timeoutMs || 60000;
         const repoRoot = this.resolveRepoRoot();
 
+        const buildError = await this.ensureNativeModule();
+        if (buildError) {
+            return { success: false, exitCode: -1, stdout: '', stderr: buildError, executionTimeMs: Date.now() - startTime, errorDetails: buildError };
+        }
+
         // Build PYTHONPATH
         const pythonPaths = [
             options.env?.PYTHONPATH,
             path.resolve(repoRoot, 'packages/core/src/python'),
             this.moduleDirectory,
-            path.dirname(this.moduleDirectory),
-            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/build_py'),
-            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/scratchbox'),
-            path.resolve(repoRoot, 'packages/core/src/native/3d-engine'),
             process.env.PYTHONPATH
         ].filter(Boolean).join(path.delimiter);
 
@@ -354,15 +414,18 @@ export class NativePythonRunnerService {
         const timeout = options.timeoutMs || 60000;
         const repoRoot = this.resolveRepoRoot();
 
+        // A multi-minute build can't block a synchronous caller: start it in the background and report why this run can't proceed.
+        if (!this.isNativeModuleFresh()) {
+            void this.ensureNativeModule();
+            const msg = 'scratchbox_native is missing or out of date with the engine sources; a rebuild has started. Retry once it finishes, or call ensureNativeModule() first.';
+            return { success: false, exitCode: -1, stdout: '', stderr: msg, executionTimeMs: Date.now() - startTime, errorDetails: msg };
+        }
+
         // Build PYTHONPATH
         const pythonPaths = [
             options.env?.PYTHONPATH,
             path.resolve(repoRoot, 'packages/core/src/python'),
             this.moduleDirectory,
-            path.dirname(this.moduleDirectory),
-            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/build_py'),
-            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/scratchbox'),
-            path.resolve(repoRoot, 'packages/core/src/native/3d-engine'),
             process.env.PYTHONPATH
         ].filter(Boolean).join(path.delimiter);
 

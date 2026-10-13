@@ -1,6 +1,13 @@
 import { NativeCppCompilerService } from './packages/core/src/node/3d-engine/native-compiler-service';
+import { NativePythonRunnerService } from './packages/core/src/node/3d-engine/native-python-runner-service';
 
-// Build the native engine PCH once before workers fork, so parallel C++ tests don't each pay a cold ~20s parse.
+// Build native artifacts once before workers fork, so parallel tests don't each pay (or race for) the cold build.
 export default async function setup(): Promise<void> {
-    await new NativeCppCompilerService().ensurePrecompiledHeader();
+    const [, pythonBuildError] = await Promise.all([
+        new NativeCppCompilerService().ensurePrecompiledHeader(),
+        NativePythonRunnerService.getInstance().ensureNativeModule()
+    ]);
+    if (pythonBuildError) {
+        console.warn(`[vitest] scratchbox_native unavailable; Python engine tests will fail: ${pythonBuildError.slice(0, 500)}`);
+    }
 }
