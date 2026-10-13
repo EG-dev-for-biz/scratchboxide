@@ -6,6 +6,8 @@
 
 This ledger provides an exhaustive index of all completed APIs, services, operators, agent tools, REST endpoints, CLI commands, and native C++ modules built across Scratchbox IDE, followed by an architectural blueprint for how they interlock as an end-to-end pipeline for Visual Effects (VFX), Virtual Production, and Generative Spatial Video.
 
+> **Looking for the external API?** This ledger covers *internal* implementation — services, operators, and the in-app Gemini agent tool registry. For the contract other apps/agents use to call into Scratchbox Studio over MCP, see [docs/integrations/mcp/README.md](integrations/mcp/README.md).
+
 ---
 
 ## Table of Contents
