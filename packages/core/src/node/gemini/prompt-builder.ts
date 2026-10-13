@@ -975,7 +975,7 @@ Direct Primitive & Procedural Helpers on \`sb\`:
 - \`sb.create_cylinder(radius=..., height=..., segments=...)\`
 - \`sb.create_cone(radius=..., height=..., segments=...)\`
 - \`sb.create_box(width=..., height=..., depth=...)\`
-- \`sb.create_sphere(radius=..., segments=...)\`
+- \`sb.create_sphere(radius=..., rings=..., sectors=...)\`
 - \`sb.create_plane(width=..., height=..., seg_x=..., seg_y=...)\`
 - \`sb.geometry.create_catenary_cable(start=(x,y,z), end=(x,y,z), sag=..., radius=...)\`
 - \`sb.create_building(width=..., depth=..., floors=..., curvature=0.0..1.0, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='flat'|'hip'|'mansard'|'gable'|'dome'|'vault', bake_curvature_ao=True)\`
@@ -989,6 +989,19 @@ Direct Primitive & Procedural Helpers on \`sb\`:
 - \`mesh.bounds.min\` / \`mesh.bounds.max\` / \`mesh.bounds.center\` / \`mesh.bounds.size\` (each has .x .y .z)
 - \`mesh.taubin_smooth(iterations=10)\`, \`mesh.isotropic_remesh(target_edge_length=0.25)\`, \`mesh.decimate(ratio=0.5)\`, \`mesh.fill_holes()\`, \`mesh.clean()\`
 - \`sb.pbr.PbrMaterial(base_color="#hex", roughness=0.3, metalness=0.8, emissive="#hex", emissive_intensity=1.0)\`
+
+FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stacking primitives):
+- Surfaces of revolution (towers, columns, vessels, domes, nozzles, turned parts): describe the WHOLE silhouette as one profile of (radius, height) pairs and revolve it once, so plinth, taper, flares and cap stay one continuous surface:
+  \`sb.create_lathe([(0.0, 0.0), (4.2, 0.0), (3.4, 1.4), (2.1, 14.0), (2.9, 14.6), (0.0, 15.0)], segments=96)\`
+  (\`sb.revolve_harmonic_solid(profile_curve=[(r, y), ...], harmonic_lobe_count=K)\` adds K radial lobes / fluting.)
+- Organic masses (rock, outcrops, boulders, terrain lumps, flesh): displace a UNIT high-resolution sphere first, smooth it, THEN scale to size. Displacing after a non-uniform scale shreds the surface. \`amp\` is peak relief in metres relative to the unit form:
+  \`rock = sb.create_sphere(radius=1.0, rings=64, sectors=128); rock.displace(freq=1.1, amp=0.22); rock.displace(freq=3.2, amp=0.06); rock.taubin_smooth(iterations=4); rock.scale(11.0, 4.6, 9.0)\`
+- Rails, pipes, cables, trim and handrails: sweep a profile along a path of points rather than chaining cylinders:
+  \`sb.sweep_curve_profile(path=[(x, y, z), ...], profile_dimensions=(0.04, 0.04))\`
+- Hulls and blended cross-sections: \`sb.create_loft(slices=[[(x, y, z), ...], ...], close_ends=True)\` or \`sb.geometry.create_lofted_hull(...)\`.
+- Smoother curvature on any mesh: \`mesh.subdivide()\` (about 4x the vertices per call).
+- Reserve \`create_box\` / \`create_cylinder\` for genuinely prismatic or cylindrical parts (posts, beams, glazing bars, fasteners), and repeat them with loops at a metric pitch.
+- Detail budget: a hero object should land at roughly 10,000+ vertices; the tool reports fidelity alerts when it comes in under the floor, in which case refine the script and run it again.
 
 - REAL-WORLD LOCATION STAGING VS PURE LOCATIONS:
   * PURE LOCATION QUERY (e.g. "Colosseum", "Eiffel Tower", "Venice Beach"): Call google_3d_tiles_get_clay({ query: "<query>" }) directly! DO NOT call execute_3d_python_script; for this function we do not build synthetic structures, the real-world architecture is streamed directly from Google 3D Tiles in Studio Grey Clay mode.
