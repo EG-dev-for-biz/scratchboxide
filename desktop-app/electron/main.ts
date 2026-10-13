@@ -47,11 +47,15 @@ const isDev = (process.env.NODE_ENV === 'development') ||
 const launchToken = resolveLaunchToken();
 process.env.SCRATCHBOX_LAUNCH_TOKEN = launchToken;
 
-// Packaged or standalone builds load index.html from file://, which Chromium reports as `Origin: null`.
-// When loading standalone renderer via http://127.0.0.1:3001, also allow that origin.
-if (app.isPackaged || process.env.NODE_ENV === 'production' || process.env.SCRATCHBOX_STANDALONE === 'true') {
+// The renderer can load from the internal server in every mode (dev falls back to it when the
+// Vite server is down), and module scripts send an Origin header, so that origin must be allowed.
+// Packaged or standalone builds may also load from file://, which Chromium reports as `Origin: null`.
+{
     const existing = (process.env.SCRATCHBOX_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-    const needed = ['null', `http://${BACKEND_HOST}:${BACKEND_PORT}`, `http://localhost:${BACKEND_PORT}`];
+    const needed = [`http://${BACKEND_HOST}:${BACKEND_PORT}`, `http://localhost:${BACKEND_PORT}`];
+    if (app.isPackaged || process.env.NODE_ENV === 'production' || process.env.SCRATCHBOX_STANDALONE === 'true') {
+        needed.push('null');
+    }
     for (const n of needed) {
         if (!existing.includes(n)) existing.push(n);
     }
