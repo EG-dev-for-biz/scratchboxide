@@ -9,8 +9,6 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
-import { ComfyUiCloudRunService } from '../cloudrun/comfyui-cloudrun-service';
 
 export type RigPreset = 'dcc-ortho-4' | 'turntable-8' | 'dome-hemisphere-12' | 'custom' | (string & {});
 
@@ -55,7 +53,7 @@ export interface MultiAngleCaptureOptions {
     /** Output directory for reference image artifacts. */
     outputDir?: string;
     /** Downstream reconstruction pipeline target. */
-    downstreamTarget?: 'trellis-fal' | 'trellis-cloud-run' | 'trellis' | 'none';
+    downstreamTarget?: 'trellis-fal' | 'trellis' | 'none';
     /** Enforced real-world metric dimensions for .glb post-processing. */
     metricDimensions?: {
         lengthMeters?: number;
@@ -275,7 +273,7 @@ export class MultiAngleTurnaroundService {
 
         let downstreamGlb: MultiAngleCaptureResult['downstreamGlb'] = undefined;
 
-        // Downstream Trellis Execution (Fal.ai or Cloud Run)
+        // Downstream Trellis Execution (Fal.ai)
         if (options.downstreamTarget === 'trellis-fal' || options.downstreamTarget === 'trellis') {
             const glbFilename = `trellis_${path.basename(outputDir)}_${Date.now()}.glb`;
             const glbPath = path.join(outputDir, glbFilename);
@@ -305,65 +303,6 @@ export class MultiAngleTurnaroundService {
                     boundingBoxMeters: bounds
                 };
             }
-        } else if (options.downstreamTarget === 'trellis-cloud-run') {
-            const cloudRun = new ComfyUiCloudRunService({ mockExecution: options.mockExecution ?? true });
-            const glbFilename = `trellis_${path.basename(outputDir)}_${Date.now()}.glb`;
-            const glbPath = path.join(outputDir, glbFilename);
-
-            // Build minimal valid glTF 2.0 binary using GltfBinaryPacker
-            const gltfDoc = {
-                asset: { version: '2.0', generator: 'MultiAngleTurnaroundService' },
-                scenes: [{ nodes: [0] }],
-                scene: 0,
-                nodes: [{ mesh: 0, name: options.subject }],
-                meshes: [{
-                    name: 'Turnaround_Extracted_Mesh',
-                    primitives: [{
-                        attributes: { POSITION: 0, NORMAL: 1 },
-                        indices: 2,
-                        material: 0
-                    }]
-                }],
-                materials: [{
-                    name: 'Studio_Grey_Clay',
-                    pbrMetallicRoughness: {
-                        baseColorFactor: [0.55, 0.57, 0.60, 1.0],
-                        roughnessFactor: 0.85,
-                        metallicFactor: 0.0
-                    }
-                }],
-                accessors: [
-                    { bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: 'VEC3', min: [-1, -1, 0], max: [1, 1, 0] },
-                    { bufferView: 1, byteOffset: 0, componentType: 5126, count: 3, type: 'VEC3' },
-                    { bufferView: 2, byteOffset: 0, componentType: 5123, count: 3, type: 'SCALAR' }
-                ],
-                bufferViews: [
-                    { buffer: 0, byteOffset: 0, byteLength: 36, target: 34962 },
-                    { buffer: 0, byteOffset: 0, byteLength: 36, target: 34962 },
-                    { buffer: 0, byteOffset: 0, byteLength: 6, target: 34963 }
-                ]
-            };
-
-            const posBuf = Buffer.alloc(36);
-            const normBuf = Buffer.alloc(36);
-            const idxBuf = Buffer.alloc(6);
-
-            const packResult = GltfBinaryPacker.writeGlb(glbPath, gltfDoc, [posBuf, normBuf, idxBuf]);
-
-            const bounds: [number, number, number] = [
-                options.metricDimensions?.lengthMeters ?? 2.0,
-                options.metricDimensions?.heightMeters ?? 1.5,
-                options.metricDimensions?.widthMeters ?? 2.0
-            ];
-
-            downstreamGlb = {
-                path: glbPath,
-                url: `/models/${glbFilename}`,
-                vertexCount: 3,
-                triangleCount: 1,
-                byteLength: packResult.glbBuffer.length,
-                boundingBoxMeters: bounds
-            };
         }
 
         return {

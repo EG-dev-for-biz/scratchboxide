@@ -183,7 +183,7 @@ describe('Sophisticated 3D Tile Recoloring Engine v2 - API & Tool Suite', () => 
 
       for (const prompt of prompts) {
         const capability = TaskCapabilityResolver.resolveTaskCapability(prompt);
-        expect(capability.recommendedResolutionRoute).toBe('tier1-native');
+        expect(capability.canSolveNatively).toBe(true);
         expect(capability.tier1Assessment.canSolveNatively).toBe(true);
         expect(capability.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
         expect(capability.tier1Assessment.suggestedNativeAction?.serviceOrTool).toMatch(/recolor3DTilesGlb|google_3d_tiles_recolor_glb/);

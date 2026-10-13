@@ -669,8 +669,7 @@ function renderIdeVerificationScreenshot(glbPath, outDir, prefix = '') {
         ["FILL LIGHT", "LEFT AMBIENT (-X)"],
         ["SKYBOX", "'STUDIO' (NEUTRAL)"],
         ["GROUND", "FALSE (STAGE VOID)"],
-        ["GRID", "TRUE (CAD FLOOR)"],
-        ["COMFYUI", "BYPASSED (TIER 1 NATIVE)"]
+        ["GRID", "TRUE (CAD FLOOR)"]
     ];
 
     let fldY = inspY + 48;

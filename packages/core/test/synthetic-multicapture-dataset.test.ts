@@ -16,10 +16,8 @@ import {
   NERFSTUDIO_MASK_THRESHOLD,
   OrbitalCameraRigItem
 } from '../src/node/spatial/NerfstudioDatasetService';
-import { ComfyUiPipelineAgent } from '../src/node/agent/comfyui-pipeline-agent';
-import { ComfyUiCloudRunService } from '../src/node/cloudrun/comfyui-cloudrun-service';
 
-describe('Tier 2 Synthetic Multi-Capture & Cloud Run Splatfacto Pipeline', () => {
+describe('Synthetic Multi-Capture Nerfstudio Dataset Pipeline', () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -187,44 +185,6 @@ describe('Tier 2 Synthetic Multi-Capture & Cloud Run Splatfacto Pipeline', () =>
       expect(cam1MaskBytes[1]).toBe(0x50);
       expect(cam1MaskBytes[2]).toBe(0x4E);
       expect(cam1MaskBytes[3]).toBe(0x47);
-    });
-  });
-
-  describe('4. ComfyUI Blueprint & Cloud Run Splatfacto Pipeline', () => {
-    it('constructs Splatfacto 3DGS blueprint and executes remote prompt producing 3D Gaussian PLY asset', async () => {
-      const agent = new ComfyUiPipelineAgent({
-        hostUrl: 'http://localhost:8188',
-        mockExecution: true
-      });
-
-      const blueprint = await agent.researchPipeline(
-        'Train Splatfacto 4DGS performer reconstruction from Nerfstudio dataset with perceptual loss'
-      );
-
-      expect(blueprint.category).toBe('image-to-3d');
-      expect(blueprint.rationale).toContain('Splatfacto');
-      expect(blueprint.requiredCustomNodes).toContain('SplatfactoTrainerNode');
-      expect(blueprint.requiredCustomNodes).toContain('LoadNerfstudioDatasetNode');
-      expect(blueprint.requiredCustomNodes).toContain('Save4DGSPLY');
-
-      const prompt = agent.authorApiPrompt(blueprint);
-      expect(prompt['2'].class_type).toBe('SplatfactoTrainerNode');
-      expect(prompt['3'].class_type).toBe('Save4DGSPLY');
-
-      // Execute on Cloud Run service
-      const cloudRun = agent.getCloudRunService();
-      const execResult = await cloudRun.executeRemotePrompt(
-        prompt,
-        blueprint,
-        { outputDir: tempDir }
-      );
-
-      expect(execResult.success).toBe(true);
-      expect(execResult.assets.length).toBeGreaterThan(0);
-      const plyAsset = execResult.assets.find(a => a.filename.endsWith('.ply'));
-      expect(plyAsset).toBeDefined();
-      expect(plyAsset?.mediaKind).toBe('model-3d');
-      expect(fs.existsSync(plyAsset!.localPath)).toBe(true);
     });
   });
 

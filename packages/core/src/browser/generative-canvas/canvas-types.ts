@@ -920,17 +920,6 @@ export interface Scene3DData {
         glbPath?: string;
         diagnostics?: any[];
     };
-    fallbackTier2ComfyUi?: {
-        triggered: boolean;
-        goal?: string;
-        reason?: string;
-        blueprintId?: string;
-        promptId?: string;
-        status?: 'pending' | 'running' | 'completed' | 'failed';
-        assetUrls?: string[];
-        error?: string;
-        timestamp?: number;
-    };
     shaders?: Record<string, {
         vertexShader?: string;
         fragmentShader?: string;
@@ -1288,14 +1277,12 @@ export interface ExecutionPlanStep {
     id: string;
     title: string;
     description?: string;
-    tier?: 'tier1-native' | 'tier2-comfyui';
     engine?: string;
 }
 
 export interface ExecutionPlanCardData {
     title: string;
     goal: string;
-    pipelineTier: 'tier1-native' | 'tier2-comfyui' | 'hybrid';
     deliverables: {
         canvasType: PrimitiveType;
         assetFormat?: string;
@@ -1562,22 +1549,6 @@ export const DEFAULT_SKILLS_CATALOG: SkillItem[] = [
         promptStarters: [
             'Ingest photorealistic 3D tile model for coordinates [37.7749, -122.4194]',
             'Render studio grey clay blockout flight path for video diffusion conditioning'
-        ]
-    },
-    {
-        id: 'skill-two-tier-problem-solving',
-        name: 'Two-Tier Problem Solving (C++20 + ComfyUI)',
-        tagline: 'Tier 1 Native C++20 Astro 3D & WebGL with transactional failover to Tier 2 Cloud Run ComfyUI.',
-        description: 'Evaluates user goals against Scratchbox native capabilities (C++20 Astro 3D engine, Three.js, Video Timeline, NOAA solar ephemeris) and seamlessly spins up ComfyUI neural pipelines (Trellis, Marigold, AnimateDiff) with automatic failover.',
-        category: 'Engineering',
-        accentColor: 'purple',
-        tags: ['Two-Tier Architecture', 'C++20 Engine', 'ComfyUI Fallback', 'Cloud Run L4 GPU'],
-        isEnabled: true,
-        author: 'Scratchbox Core',
-        version: '1.0.0',
-        promptStarters: [
-            'Assess task capability and execute procedural C++20 generation',
-            'Spin up ComfyUI Trellis pipeline with dynamic node injection for neural 3D synthesis'
         ]
     },
     {

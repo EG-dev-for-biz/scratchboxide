@@ -150,7 +150,7 @@ describe('In-App Universal 3D Structure & Animation Agent Infrastructure', () =>
         });
 
         expect(resolution1.canSolveNatively).toBe(true);
-        expect(resolution1.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution1.canSolveNatively).toBe(true);
         expect(resolution1.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
         expect(resolution1.tier1Assessment.nativeCapabilitiesUsed.join(' ')).toContain('Universal 3D Structure Foundation');
         expect(resolution1.tier1Assessment.nativeCapabilitiesUsed.join(' ')).toContain('In-App Agent Tools');
@@ -160,7 +160,7 @@ describe('In-App Universal 3D Structure & Animation Agent Infrastructure', () =>
         });
 
         expect(resolution2.canSolveNatively).toBe(true);
-        expect(resolution2.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution2.canSolveNatively).toBe(true);
         expect(resolution2.tier1Assessment.nativeCapabilitiesUsed.join(' ')).toContain('Universal Continuous-Time Animation Engine');
     });
 

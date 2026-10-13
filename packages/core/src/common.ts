@@ -30,8 +30,6 @@ export * from './common/workspace-sync-protocol';
 // Geospatial 4D Protocol & Entities
 export * from './common/geospatial-4d-protocol';
 
-// ComfyUI Pipeline & Agent Protocol
-export * from './common/comfyui-protocol';
 
 // Performer 4DGS Gaussian PLY codec & 22-joint humanoid skinning (shared by Node pipeline and browser viewer)
 export {

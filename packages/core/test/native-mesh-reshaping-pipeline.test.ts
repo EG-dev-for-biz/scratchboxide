@@ -134,7 +134,7 @@ describe('Native Prompt-Driven Mesh Reshaping Pipeline (Tier 1)', () => {
 
     it('5. should route mesh deformation prompts natively to cpp-3d-engine via TaskCapabilityResolver', () => {
         const capability = resolveTaskCapability('I want to reshape this 3D mesh by tapering the top and twisting it 45 degrees');
-        expect(capability.recommendedResolutionRoute).toBe('tier1-native');
+        expect(capability.canSolveNatively).toBe(true);
         expect(capability.tier1Assessment.canSolveNatively).toBe(true);
         expect(capability.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
         expect(capability.tier1Assessment.suggestedNativeAction?.serviceOrTool).toContain('mesh_reshape_via_prompt');

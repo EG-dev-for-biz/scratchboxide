@@ -347,7 +347,7 @@ describe('Agent Lighting Intelligence - Unit 5: Gemini Agent Domain Pack & Opera
             userGoal: 'Create a dramatic Rembrandt lighting setup with a 4:1 key-to-fill ratio and venetian blinds shadow'
         });
 
-        expect(capability.tier).toBe('tier1-native');
+        expect(capability.canSolveNatively).toBe(true);
         expect(capability.tier1Assessment.canSolveNatively).toBe(true);
         expect(capability.tier1Assessment.primaryNativeEngine).toBe('threejs-webgl');
         expect(capability.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('LightingGafferService'))).toBe(true);

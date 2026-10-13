@@ -95,7 +95,7 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         );
 
         expect(resolution.canSolveNatively).toBe(true);
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.primaryNativeEngine).toBe('python-3d-engine');
         expect(resolution.suggestedNativeAction?.targetTool).toBe('generate_local_sf3d_organic_prop');
         expect(resolution.suggestedNativeAction?.targetService).toBe('LocalSf3DService');

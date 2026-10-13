@@ -72,12 +72,14 @@ describe('Showcase Preloaded Demos Catalog', () => {
         expect(entryFile.content).toContain('RetroSpaceBreakout');
     });
 
-    it('Autonomous spatial AI graph demo must feature KSampler and Cloud Run nodes', () => {
-        const demo = PRELOADED_SHOWCASE_DEMOS.find(d => d.id === 'demo-ai-node-graph');
+    it('Native 3D pipeline graph demo must feature the C++20 compile node', () => {
+        const demo = PRELOADED_SHOWCASE_DEMOS.find(d => d.id === 'demo-native-pipeline-graph');
         expect(demo).toBeDefined();
         expect(demo?.artifact.type).toBe('node-graph');
         const data = demo?.artifact.data as any;
         expect(data.nodes.length).toBeGreaterThanOrEqual(4);
+        expect(data.nodes.some((n: any) => n.id === 'node-compile')).toBe(true);
+        expect(JSON.stringify(data)).not.toMatch(/comfy|cloud run/i);
     });
 
     it('Next-Gen Astro 3D Viewport demo must feature standalone studio artifact and meshlet tags', () => {

@@ -2243,11 +2243,6 @@ export function synthesizeQuestionCardFallback(prompt: string, _activeArtifact?:
                         id: 'live-sandbox-r3f',
                         label: 'Interactive React Three Fiber Sandbox',
                         description: 'Full editable WebGL code sandbox with camera orbit, custom lighting, and UI controls'
-                    },
-                    {
-                        id: 'tier2-cloudrun-diffusion',
-                        label: 'Neural Mesh Diffusion (Google Cloud Run L4 GPU)',
-                        description: 'Discrete object neural reconstruction via Trellis / TripoSR on Cloud Run (for isolated scene props/objects)'
                     }
                 ] : [
                     {
@@ -2284,7 +2279,6 @@ export function synthesizeExecutionPlanFallback(prompt: string, _activeArtifact?
     const executionPlanCard: ExecutionPlanCardData = {
         title: `Implementation Plan: ${subject}`,
         goal: prompt.trim(),
-        pipelineTier: isSpatialOrVfx ? 'hybrid' : 'tier1-native',
         deliverables: [
             {
                 canvasType: isSpatialOrVfx ? '3d-scene' : 'live-code-sandbox',
@@ -2302,21 +2296,18 @@ export function synthesizeExecutionPlanFallback(prompt: string, _activeArtifact?
                 id: 'step-1',
                 title: 'Inspect requirements and validate input schema',
                 description: 'Index active project context and establish boundary constraints',
-                tier: 'tier1-native',
                 engine: 'Scratchbox Project Coordinator'
             },
             {
                 id: 'step-2',
                 title: isSpatialOrVfx ? 'Synthesize procedural 3D geometry & PBR materials' : 'Generate interactive component tree & state machine',
                 description: isSpatialOrVfx ? 'Apply C++20 Astro SIMD math and watertight polygonization' : 'Mount hot-reloading React code sandbox',
-                tier: 'tier1-native',
                 engine: isSpatialOrVfx ? 'C++20 Astro Engine (Apple Clang)' : 'Live Code Sandbox'
             },
             {
                 id: 'step-3',
                 title: 'Automated metrology verification & test suite execution',
                 description: 'Run automated typecheck, shader diagnostics, and functional tests',
-                tier: 'tier1-native',
                 engine: 'Vitest / Container Sandbox'
             }
         ],
@@ -2325,7 +2316,7 @@ export function synthesizeExecutionPlanFallback(prompt: string, _activeArtifact?
     };
 
     return {
-        chatResponse: `I have prepared a structured execution plan for **"${subject}"**. Please review the proposed deliverables, architecture tier, and step sequence below before we begin:`,
+        chatResponse: `I have prepared a structured execution plan for **"${subject}"**. Please review the proposed deliverables and step sequence below before we begin:`,
         executionPlanCard
     };
 }

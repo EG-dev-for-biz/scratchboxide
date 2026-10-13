@@ -110,8 +110,8 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
         });
     });
 
-    describe('End-to-End Execution & Downstream Trellis Packaging', () => {
-        it('executes turnaround workflow and builds valid binary .glb in mock mode', async () => {
+    describe('End-to-End Execution', () => {
+        it('executes turnaround workflow without a downstream reconstruction target', async () => {
             const tmpDir = path.resolve(process.cwd(), 'output/test_turnaround_' + Date.now());
             const service = new MultiAngleTurnaroundService();
 
@@ -120,25 +120,15 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
                 rigPreset: 'dcc-ortho-4',
                 stylePreset: '18-percent-studio-clay',
                 outputDir: tmpDir,
-                downstreamTarget: 'trellis-cloud-run',
+                downstreamTarget: 'none',
                 metricDimensions: { lengthMeters: 4.2, heightMeters: 1.6, widthMeters: 2.1 },
                 mockExecution: true
             });
 
             expect(result.success).toBe(true);
             expect(result.views).toHaveLength(4);
-            expect(result.downstreamGlb).toBeDefined();
-            expect(result.downstreamGlb?.vertexCount).toBeGreaterThan(0);
-            expect(result.downstreamGlb?.boundingBoxMeters).toEqual([4.2, 1.6, 2.1]);
+            expect(result.downstreamGlb).toBeUndefined();
 
-            // Verify file exists on disk
-            if (result.downstreamGlb?.path) {
-                expect(fs.existsSync(result.downstreamGlb.path)).toBe(true);
-                const buf = fs.readFileSync(result.downstreamGlb.path);
-                expect(buf.toString('utf8', 0, 4)).toBe('glTF'); // glTF binary magic
-            }
-
-            // Cleanup
             await fs.promises.rm(tmpDir, { recursive: true, force: true });
         });
     });

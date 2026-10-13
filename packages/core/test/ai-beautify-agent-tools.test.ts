@@ -97,7 +97,7 @@ describe('AI Beautify Agent Tool & Capability Resolution', () => {
             'Beautify photorealistic 3D tiles of Philadelphia Independence Hall with buildBeautifyPrompt'
         );
 
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('buildBeautifyPrompt'))).toBe(true);
         expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toMatch(/buildBeautifyPrompt|build_beautify_prompt/);
     });

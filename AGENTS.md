@@ -37,35 +37,26 @@ Before proposing any architectural plan, designing schema contracts, routing too
    - Any new detail on any asset (known vehicle, futuristic rover, industrial machine, alien probe) must be synthesized through combinations of these 4 operators, ensuring infinite domain-agnostic universality and smooth parameter interpolation ($\operatorname{lerp}$).
 
 
-## Two-Tier Problem-Solving Directive (VFX, 3D & Generative Tasks)
+## Native Capabilities Directive (VFX, 3D & Generative Tasks)
 
-### Rule: App Capabilities First -> ComfyUI Service Fallback
-When a user attempts to accomplish something specific (especially VFX-related, 3D-related, or generative):
-1. **Tier 1: Look Through Current App Capabilities First**:
-   - Inspect what Scratchbox IDE can natively do via coding, pipelines, attached skills, and Google models:
-     - **3D**: Primary path is C++20 via Scratchbox 3D engine (`#include "scratchbox_engine.hpp"`), Apple Clang (`-std=c++20 -O3`), SIMD math, SDFs, Marching Cubes, FastNoise3D, streaming binary `.glb`, and Google Photorealistic 3D Tiles (`GLTFExporter`). Fall back to Three.js customScript/shaders if needed.
-     - **VFX & Video**: Native Video Timeline NLE (`video-timeline`, `videoTimelineSynthesizer`), 6-DOF camera solve matchmoving (`VfxPlateMatchmoveService.interpolateCameraSolve`), Brown-Conrady lens undistortion, NOAA geodetic solar ephemeris tracking (`getSolarPosition`), anti-drift holdout mattes (`destination-out`), and composite WebGL layer rendering (`Video3DLayerRenderer`).
-     - **Google Models**: Gemini 3.7 / 2.5 high-reasoning multimodal inspection, Imagen image generation (`generate_image`), and Vertex AI.
-     - **Attached Skills & Tools**: Canvas primitives (`3d-scene`, `video-timeline`, `live-code-sandbox`, `node-graph`), Generative UI, modern web, Chrome DevTools, Google Maps Platform.
-2. **Tier 2: Resort to Spinning Up a ComfyUI Solution if Incapable**:
-   - If and ONLY if the native app capabilities and Google models are not capable (e.g. requires neural image-to-3D diffusion like Trellis/TripoSR, neural video-to-video restyling like Omni/AnimateDiff, monocular dense depth estimation like Marigold, or specialized custom LoRAs/checkpoints):
-   - Explicitly resort to spinning up a solution on the ComfyUI service!
-   - Execute via `comfyui_research_pipeline` / `comfyui_execute_pipeline` (routing to Google Cloud Run with NVIDIA L4 GPU acceleration or local), dynamically synthesize any missing Python custom nodes (`comfyui_inject_dynamic_code`), and stream the resulting 3D GLB mesh, PBR texture maps, or restyled video back into the canvas stage.
+### Rule: Solve With App Capabilities; Say So When Something Is Unsupported
+When a user attempts to accomplish something specific (especially VFX-related, 3D-related, or generative), solve it with what Scratchbox IDE can natively do via coding, pipelines, attached skills, and Google models:
+- **3D**: Primary path is C++20 via Scratchbox 3D engine (`#include "scratchbox_engine.hpp"`), Apple Clang (`-std=c++20 -O3`), SIMD math, SDFs, Marching Cubes, FastNoise3D, streaming binary `.glb`, and Google Photorealistic 3D Tiles (`GLTFExporter`). Fall back to Three.js customScript/shaders if needed.
+- **VFX & Video**: Native Video Timeline NLE (`video-timeline`, `videoTimelineSynthesizer`), 6-DOF camera solve matchmoving (`VfxPlateMatchmoveService.interpolateCameraSolve`), Brown-Conrady lens undistortion, NOAA geodetic solar ephemeris tracking (`getSolarPosition`), anti-drift holdout mattes (`destination-out`), and composite WebGL layer rendering (`Video3DLayerRenderer`).
+- **Google Models**: Gemini 3.8 / 2.5 high-reasoning multimodal inspection, Imagen image generation (`generate_image`), and Vertex AI.
+- **Attached Skills & Tools**: Canvas primitives (`3d-scene`, `video-timeline`, `live-code-sandbox`, `node-graph`), Generative UI, modern web, Chrome DevTools, Google Maps Platform.
 
-### Rule: Programmatic Two-Tier Execution & Transactional Failover
-1. **Canonical API & Agent Tool**:
-   - **Agent Tool**: `resolve_task_capability({ userGoal, promptContext })` assesses whether a prompt is natively feasible in Tier 1 or requires Tier 2 ComfyUI.
-   - **Programmatic Executor**: `ComfyUiPipelineAgent.executeWithTwoTierFallback<T>(prompt, nativeExecutor, comfyExecutor)` from `@scratchbox/core` and `@scratchbox/core/node`.
-   - **Typed Return Contract**: `TwoTierExecutionResult<T>` (`tier: 'tier1-native' | 'tier2-comfyui'`, `success: boolean`, `result: T`, `attempts: string[]`).
-2. **Transactional Failover Semantics**:
-   - If the task is assessed as natively feasible, Tier 1 is attempted first.
-   - If Tier 1 encounters an unexpected runtime error (e.g., C++ Clang compilation failure, missing driver, or GPU allocation fault), the pipeline must NEVER fail the user task; it must automatically and transparently fail over to Tier 2 ComfyUI execution.
+There is no ComfyUI / Cloud Run GPU fallback tier. If a task needs a capability the app does not run (neural image-to-3D diffusion such as Trellis/TripoSR outside the Fal.ai turnaround path, neural video-to-video restyling such as AnimateDiff, monocular dense depth such as Marigold, or custom LoRA checkpoints), tell the user plainly that it is unsupported. Never approximate it, simulate a result, or emit placeholder geometry.
+
+`TaskCapabilityResolver` / `resolveTaskCapability` (`packages/core/src/node/agent/task-capability-resolver.ts`) runs automatically before each agent turn to classify the task domain, pick tool packs, and pre-load the suggested native tool. It reports `canSolveNatively: false` with a rationale for unsupported tasks.
+
+If native generation fails at runtime (e.g. a Clang compilation error), surface the error to the user; do not paper over it with a different engine or with client-side primitives.
 
 ### Rule: "Capabilities Before Tools" Pre-Flight Pass
 When planning or resolving any user objective:
 1. **First-Principles Problem Formulation**:
-   - Before reaching for external workflows, tool chains, outside applications (such as Blender, external photogrammetry, or multi-app coordination), the agent MUST perform a pre-flight capability resolution pass via `resolve_task_capability`.
-   - Never assume an external application is needed simply because other AI agents (e.g. GPT-6.1 Astra) adopted an external pipeline. Formulate the problem directly in terms of mathematical transformations on 3D representations available natively in Scratchbox IDE.
+   - Before reaching for external workflows, tool chains, or outside applications (such as Blender, external photogrammetry, or multi-app coordination), formulate the problem directly in terms of mathematical transformations on 3D representations available natively in Scratchbox IDE.
+   - Never assume an external application is needed simply because other AI agents (e.g. GPT-6.1 Astra) adopted an external pipeline.
 
 ### Rule: Analytical Forward Splatting over Inverse Photogrammetry (Hair, Fur & Grooms)
 When creating or rendering volumetric fur, hair grooms, feathered surfaces, or star/puffball creatures:
@@ -98,7 +89,7 @@ When implementing 3D (scenes, models, procedural geometry, terrain generation, s
 
 2. **Strict Prohibition on JavaScript Generative Primitives (Zero-Tolerance "Tier-0" Ban)**:
    - **No Silent Fallback to Toy Primitives**: Viewports, canvas studios, and generative endpoints must NEVER catch backend generation errors and silently substitute client-side Three.js primitives (`new THREE.BoxGeometry`, `new THREE.CylinderGeometry`, `new THREE.ConeGeometry`, `new THREE.SphereGeometry`). Stacking flat boxes is prohibited.
-   - **Failover Strictly to Tier 2 (ComfyUI / Cloud Run GPU)**: If Tier 1 native C++20 encounters a runtime fault, the pipeline must fail over strictly to Tier 2 ComfyUI neural diffusion/mesh generation. Dropping to flat JavaScript primitives is an unconstitutional "Tier 0" regression.
+   - **Surface Native Faults**: If native C++20 / Python generation encounters a runtime fault, report the error to the user. Dropping to flat JavaScript primitives is an unconstitutional "Tier 0" regression.
    - **Mandatory Geometric Complexity Floor (`GeometricComplexityGate`)**: Every generative scene must pass `GeometricComplexityGate` with a strict minimum of **25,000 vertices** (5,000 for single isolated props), **15,000 triangles**, and an authentic 70-20-10 multi-mesh hierarchy (Primary edifice, secondary wings, tertiary botanical/architectural detail). Any generator emitting fewer vertices or un-subdivided primitive boxes must be rejected with `GeometricFidelityViolationError`.
    - **Static Analysis CI Gate (`npm run lint:primitives`)**: The codebase is protected by `scripts/lint_no_js_primitives.js`. Any PR, commit, or agent change that introduces prohibited Three.js primitive constructors into generative viewports will immediately fail the CI build.
    - **Client-Side Viewport Scope**: Three.js is restricted strictly to pure rendering, camera choreography, post-processing, and UI gizmo overlays. It is NEVER the procedural geometry generator.
@@ -133,7 +124,7 @@ When the user requests a 3D scene, model, vehicle, structure, or object:
 2. **Hero Objects in Grey Clay Void by Default (When NO Location is Described First)**:
    - When NO real-world geographic location is described in the initial prompt, always construct Hero Objects in **18% Studio Grey Clay** (`sb.PbrMaterial.clay()`, `roughness: 0.85, metalness: 0.0, color: [0.55, 0.57, 0.60]` or `renderMode: 'clay'`).
    - Stage the hero object in a **3D stage void** (`environment: { skybox: 'studio', lighting: 'studio', ground: false }`) with simple flat/studio default lighting (neutral key + ambient fill, standard 3D CAD/DCC default).
-   - **Never Use ComfyUI Neural Meshes Unless Requested**: Rely strictly on Scratchbox native procedural generation (Python / C++20 engine) by default. Do not invoke external neural diffusion models (Trellis/TripoSR) unless explicitly asked.
+   - **Native Procedural Generation Only by Default**: Rely strictly on Scratchbox native procedural generation (Python / C++20 engine). Do not invoke external neural diffusion models (Trellis/TripoSR) unless explicitly asked.
 3. **Pure Location Exception (Google 3D Tiles Clay Mode)**:
    - If the user's first request is ONLY a real-world location without a hero object (e.g., "Eiffel Tower", "San Francisco", "Monaco GP circuit") and that location can be created with Google Map Tiles:
    - Return a **clay style 3D map tile object** (`getGoogle3DTilesClay` / `clayPreset: 'studio-grey'`), capturing authentic real-world metropolitan massing without photogrammetric texture noise.
@@ -158,7 +149,6 @@ When the user requests a 3D scene, model, vehicle, structure, or object:
          - **2DGS (2D Gaussian Splatting / Planar Surfels)**: High-performance 2D planar surfels (`SURFACE_2DGS_PLANAR_SURFEL` via `scratchbox_depth_to_gaussian.hpp` and `Calibrated3DGSReconstructionService`), squashing Gaussian ellipsoids to near-zero thickness along the surface normal for razor-sharp geometric boundary fidelity with zero floating splatter.
          - **3DGS (3D Gaussian Radiance Fields & Forward Splats)**: Volumetric radiance field synthesis, analytical fur/hair/groom forward splatting (`scratchbox_hair.hpp`, `scratchbox_spz.hpp`, `AnalyticalGroomSplatService`), or multi-angle photogrammetric Gaussian splats.
          - **Algorithmic Micro-Texture Synthesis**: Geometric spatial lock (0.000 px drift), Sobel photographic joint deepening, procedural cavitation pores, calcite mineral grain, travertine strata, and archway soffit AO (`AlgorithmicUVRewrapService`).
-         - **Neural Multi-View Diffusion**: ComfyUI NVIDIA L4 GPU neural texture baking and multi-angle projection.
 
 ## 3D Tile & Mesh Ingestion Quality Directive
 
@@ -302,11 +292,9 @@ When initializing 3D Gaussians for performers, humans, or dynamic subjects from 
      - Ray projection: candidate 3D voxels are projected into all calibrated cameras; voxels falling within foreground masks across $K \ge \text{minViews}$ cameras are retained.
      - RGB Color Averaging: base Gaussian color is computed as the mean foreground RGB observation: $\mathbf{C}_p = \frac{1}{\sum \mathbf{1}_{\text{fg}}} \sum_k I_k(u_k, v_k)$.
 
-### Rule: Two-Tier 3DGS Execution Roles
-1. **Tier 1 (Interactive In-App Viewport)**:
-   - Always use native Three.js instanced WebGL shaders (`PhotorealGaussianSplatMesh.ts`, `createAnisotropic3DGSSplatMaterial`) and 4-bone partition-of-unity Linear Blend Skinning (LBS) in the browser for real-time 60 FPS playback with zero external Python servers.
-2. **Tier 2 (Cloud Run / ComfyUI Offline Reconstruction)**:
-   - When a user demands dense neural reconstruction ($>1\text{M}$ splats) from raw multi-view video, route the exported Nerfstudio dataset to Cloud Run with NVIDIA L4 GPU running `splatfacto` / `splatfacto-perceptual` with VGG-19 feature loss ($\lambda_{\text{perc}} = 0.4$), random background color regularizer, and depth supervision.
+### Rule: 3DGS Execution Role
+- Always use native Three.js instanced WebGL shaders (`PhotorealGaussianSplatMesh.ts`, `createAnisotropic3DGSSplatMaterial`) and 4-bone partition-of-unity Linear Blend Skinning (LBS) in the browser for real-time 60 FPS playback with zero external Python servers.
+- Dense neural reconstruction ($>1\text{M}$ splats via `splatfacto` training) is not run by the app; export the Nerfstudio dataset for the user to train externally if they ask for it.
 
 ### Rule: Performer & Avatar Video/Image Prompt Neutrality (Head-to-Toe, Flat Studio, A-Frame Pose)
 When directing or constructing prompts for video creation tools (Google Omni 1.1 / Veo) or image creation tools (Imagen 3, Nano Banana 2) for human characters, performers, or avatars:
@@ -338,7 +326,6 @@ When conditioning video generation for performer avatars or generating multi-vie
    - Motion must preserve identity, hair/skin texture, and clothing morphology seamlessly from Frame 0 with zero loop drift ($\text{SSIM} \ge 0.95$).
 2. **Google Veo 2 Diffusion Backbone (veo-2.0-generate-001)**:
    - Primary video generation path is **Google Veo 2** (`veo-2.0-generate-001` / Vertex AI) for continuous 360° orbital camera trajectories (72 frames, $\Delta\theta = 5.0^\circ$, Zero-COLMAP analytical extrinsics).
-   - Secondary / offline path uses open-weights multi-view diffusion (Wan2.2-TI2V-5B) via ComfyUI service if local offline inference is explicitly required.
    - Enforce Reference Context Packing (RCP) and Target Context Routing (TCR) across multi-view angle attention synchronization.
 3. **Capture Viewpoint Rig & Photogrammetric Angles**:
    - Capture viewpoints must systematically cover a continuous 360° orbital ring (radius $2.2\text{m}$, elevation $1.25\text{m}$) or orthogonal viewpoints:
@@ -349,7 +336,6 @@ When conditioning video generation for performer avatars or generating multi-vie
    - All synthesized multi-view video streams must maintain identical subject timing, A-pose starting frame, and shadowless `#808080` studio environment.
 4. **Programmatic Builder, Tool & Pipeline Invariant**:
    - Prompt Builder: `buildFrameMotivatedPerformerVideoPrompt` (`omniVideoPromptService.ts`) and Gemini tool `build_frame_motivated_performer_prompt`.
-   - Multi-View Diffusion Runner: Google Veo 2 Orbit Runner (`runVeo2OrbitPipeline`) and Gemini tool `generate_veo2_multiview_video`.
    - 4D Pipeline Ingestion: `VideoTo4DPerformerPipelineService.process({ frameMotivatedInput: { referenceFramePath, videoModelBackbone: 'veo-2.0-generate-001', cameraPositions, initialPose: 'a-pose' } })`.
 
 ## Code Quality & Engineering Principles
@@ -729,20 +715,17 @@ The Scratchbox 3D ecosystem maintains three concurrent representations of a 3D s
 2. **Procedural C++ Generator** (`world_generator.cpp` via `data.cppGenerator.sourceCode`): Native C++20 code producing the procedural geometry.
 3. **Live Three.js Viewport Stage**: GPU-resident meshes, materials, and scene graph hierarchy.
 
-When updating or falling back between tiers:
+When updating these representations:
 - **Lens Synchronization**: `Scene3DWorldLens` bidirectionally projects and unprojects between files on disk and the stage. Edits to one must reflect across all three without state drift.
-- **Two-Tier Fallback Metadata Preservation**: When a scene or model falls back from C++20 generation to Tier 2 ComfyUI (e.g., neural mesh synthesis), the engine preserves:
-  - `data.fallbackTier2ComfyUi`: Records fallback reason, prompt, model architecture, and execution timestamp.
-  - `data.cppGenerator.glbPath`: Links the resulting binary `.glb` asset into the scene.
-  - `data.cppGenerator.sourceCode`: Preserves the generator blueprint for inspection or future native re-synthesis.
+- **Generator Metadata Preservation**: The engine preserves `data.cppGenerator.glbPath` (links the resulting binary `.glb` asset into the scene) and `data.cppGenerator.sourceCode` (the generator blueprint for inspection or future re-synthesis).
 
 ## Megaservice Deconstruction & Modular Architecture Directive
 
 ### Rule: Modular Domain Packs for Tools and Canvas Operators
 To avoid monolithic file bloat, unmaintainable merge conflicts, and coupling:
 1. **Modular Gemini Tool Registry**:
-   - `ToolRegistry` (`packages/core/src/node/gemini/tool-registry.ts`) is a lightweight orchestrator (under 350 LOC) that registers declarations and delegates dispatch to 9 domain packs in `packages/core/src/node/gemini/tools/`:
-     - `canvas-tools.ts`, `spatial-tools.ts`, `utdra-tools.ts`, `comfyui-tools.ts`, `atmosphere-tools.ts`, `mesh-shaping-tools.ts`, `vfx-video-tools.ts`, `workspace-tools.ts`, `lens-browser-tools.ts`.
+   - `ToolRegistry` (`packages/core/src/node/gemini/tool-registry.ts`) is a lightweight orchestrator (under 350 LOC) that registers declarations and delegates dispatch to domain packs in `packages/core/src/node/gemini/tools/`, including:
+     - `canvas-tools.ts`, `spatial-tools.ts`, `utdra-tools.ts`, `atmosphere-tools.ts`, `mesh-shaping-tools.ts`, `vfx-video-tools.ts`, `workspace-tools.ts`, `lens-browser-tools.ts`.
    - Never add raw tool declarations or execution handlers directly to `tool-registry.ts`; always place them in their respective domain pack.
 2. **Modular Direct Dispatch Operator Engine**:
    - `DirectDispatchOperatorEngine` (`packages/core/src/browser/generative-canvas/services/direct-dispatch-operator-engine.ts`) is a lightweight router (under 300 LOC) delegating across 11 operator packs in `packages/core/src/browser/generative-canvas/services/operators/`:
@@ -754,8 +737,7 @@ To avoid monolithic file bloat, unmaintainable merge conflicts, and coupling:
 ### Rule: Proactive Tool Exploitation with Zero Leaked Plumbing
 When leveraging Scratchbox's unique superpowers to solve user tasks:
 1. **Antigravity-Style Tool Self-Awareness**:
-   - The agent MUST possess deep, proactive awareness of the platform's 57 specialized in-app tools:
-     - **Two-Tier Capability Routing**: `resolve_task_capability` (assess Tier 1 native feasibility vs Tier 2 ComfyUI fallback).
+   - The agent MUST possess deep, proactive awareness of the platform's specialized in-app tools:
      - **3D Geospatial Tiles & Photogrammetry**: `google_3d_tiles_get_full_texture`, `google_3d_tiles_get_clay`, `panorama_heal_seam`, `panorama_inpaint`, `panorama_generate_360`, `panorama_generate_perspectives`.
      - **Universal Tile Decomposition (UTDRA / ULDRA)**: `utdra_probe_tile`, `utdra_decompose_tile`, `utdra_slice_elevation`, `utdra_carve_bridge_voids`.
      - **Optical Resection & Alignment**: `geobox_resect_image_location`, `geobox_resect_camera_pose`, `geobox_harmonize_location_lighting`, `geobox_optimize_edge_alignment`, `optics_configure_lens_distortion`.
@@ -764,7 +746,6 @@ When leveraging Scratchbox's unique superpowers to solve user tasks:
       - **Native C++ Mesh Reshaping**: `mesh_reshape_via_prompt`, `mesh_apply_deformers`.
       - **Adaptive Keyframe Calibration & 6-DOF Matchmove**: `adaptive_matchmove_calibrate_sequence`, `adaptive_matchmove_resect_keyframe`, `adaptive_matchmove_synthesize_trajectory`, `adaptive_matchmove_verify_metrology`.
       - **AI Beautify & VFX Prompting**: `build_beautify_prompt`.
-     - **ComfyUI Autonomous Fallback & Cloud Run L4**: `comfyui_get_status`, `comfyui_research_pipeline`, `comfyui_cloudrun_status`, `comfyui_cloudrun_sync_upstream`, `comfyui_inject_dynamic_code`, `comfyui_execute_pipeline`.
      - **Canvas Primitives & Codebase Lenses**: `mount_canvas_primitive`, `lens_project`, `lens_unproject`, `lens_list_bindings`, `lens_sync`, `browser_navigate`, `browser_snapshot`, `browser_extract_content`, `browser_click`, `browser_type`, `browser_evaluate`.
      - **Workspace & Subagents**: `workspace_read_file`, `workspace_view_file`, `workspace_write_file`, `workspace_apply_diff`, `workspace_list_directory`, `workspace_search`, `workspace_grep_search`, `workspace_find_by_name`, `workspace_run_command`, `workspace_get_diagnostics`, `workspace_find_symbols`, `workspace_semantic_search`, `invoke_subagent`.
    - The agent must automatically exploit these tools when relevant, rather than asking the user or attempting crude approximations.

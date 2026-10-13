@@ -25,7 +25,7 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
             );
 
             expect(result.canSolveNatively).toBe(true);
-            expect(result.tier).toBe('tier1-native');
+            expect(result.canSolveNatively).toBe(true);
             expect(result.suggestedNativeAction).toBeDefined();
             expect(result.suggestedNativeAction?.primitiveType).toBe('3d-scene');
             expect(result.nativeCapabilities.some(c => /splat|3dgs|survey/i.test(c))).toBe(true);
@@ -39,7 +39,7 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
             );
 
             expect(result.canSolveNatively).toBe(true);
-            expect(result.tier).toBe('tier1-native');
+            expect(result.canSolveNatively).toBe(true);
             expect(result.suggestedNativeAction?.primitiveType).toBe('3d-scene');
         });
 
@@ -49,7 +49,7 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
             );
 
             expect(result.canSolveNatively).toBe(true);
-            expect(result.tier).toBe('tier1-native');
+            expect(result.canSolveNatively).toBe(true);
             expect(result.suggestedNativeAction?.primitiveType).toBe('3d-scene');
         });
     });

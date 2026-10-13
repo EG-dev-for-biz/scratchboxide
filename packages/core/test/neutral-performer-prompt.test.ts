@@ -181,7 +181,7 @@ describe('Neutral Performer Studio Prompt Pipeline (Prompt Neutrality Contract)'
         );
 
         expect(resolution.tier1Assessment.canSolveNatively).toBe(true);
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.primaryNativeEngine).toBe('google-models');
         expect(resolution.tier1Assessment.nativeCapabilitiesUsed).toContain(
             'Neutral Performer Studio Prompt Pipeline (buildNeutralPerformerPrompt)'

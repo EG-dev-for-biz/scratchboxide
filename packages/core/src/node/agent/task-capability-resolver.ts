@@ -7,8 +7,6 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { ComfyPipelineCategory } from '../../common/comfyui-protocol';
-export type { ComfyPipelineCategory };
 import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 
 export type TaskDomain = '3d' | 'vfx' | 'generative' | 'code' | 'general' | (string & {});
@@ -45,23 +43,6 @@ export interface Tier1Assessment {
     };
 }
 
-export interface Tier2ComfyUiFallback {
-    /** True if native capabilities are incapable and spinning up a ComfyUI solution is required. */
-    needed: boolean;
-    /** Detailed technical justification explaining why native code / Google models cannot solve this. */
-    gapReason?: string;
-    /** Recommended ComfyUI pipeline category to instantiate. */
-    recommendedPipelineCategory?: ComfyPipelineCategory;
-    /** Target execution environment (local or Cloud Run GPU). */
-    executionTarget: 'cloud-run' | 'local' | 'auto';
-    /** Suggested ComfyUI node class types required for this pipeline. */
-    suggestedNodes: string[];
-    /** Whether dynamic Python custom node code synthesis & injection is required. */
-    requiresDynamicNodes: boolean;
-    /** Specific dynamic node classes that should be synthesized. */
-    suggestedDynamicClasses?: string[];
-}
-
 export interface CapabilityResolutionResult {
     /** The evaluated task goal or prompt. */
     taskGoal: string;
@@ -69,13 +50,7 @@ export interface CapabilityResolutionResult {
     taskDomain: TaskDomain;
     /** Evaluation of what the app can do currently via coding, pipelines, skills, and Google models. */
     tier1Assessment: Tier1Assessment;
-    /** Fallback evaluation for spinning up a ComfyUI solution if native capabilities are insufficient. */
-    tier2Fallback: Tier2ComfyUiFallback;
-    /** Recommended resolution route. */
-    recommendedResolutionRoute: 'tier1-native' | 'tier2-comfyui';
-    /** Convenience alias for recommendedResolutionRoute matching TwoTierExecutionResult */
-    tier?: 'tier1-native' | 'tier2-comfyui';
-    canSolveNatively?: boolean;
+    canSolveNatively: boolean;
     primaryNativeEngine?: PrimaryNativeEngine;
     nativeCapabilities?: string[];
     suggestedNativeAction?: Tier1Assessment['suggestedNativeAction'];
@@ -95,8 +70,6 @@ export interface CapabilityOptions {
     hasInputImage?: boolean;
     hasInputVideo?: boolean;
     hasCameraTrack?: boolean;
-    targetEnvironment?: 'local' | 'cloud-run' | 'auto';
-    forceComfyUi?: boolean;
     activeArtifact?: any;
 }
 
@@ -155,9 +128,8 @@ export class TaskCapabilityResolver {
     }
 
     /**
-     * Resolves task capability using the Two-Tier Strategy:
-     * 1. Inspects native app capabilities (C++20 3D engine, Three.js shaders, Video NLE, VFX matchmoving, solar ephemeris, Google models, skills).
-     * 2. If incapable (neural diffusion, image-to-3D, video restyling, monocular depth), formulates Tier 2 ComfyUI fallback.
+     * Resolves which native subsystem (C++20 3D engine, Python engine, VFX/NLE, Google models, workspace tools) handles a task,
+     * or reports that the task is not natively supported (e.g. neural image-to-3D, video restyling, monocular depth).
      */
     static resolveTaskCapability(
         taskGoal: string | CapabilityOptions,
@@ -200,8 +172,6 @@ export class TaskCapabilityResolver {
 
         const isLatentDiffusionInpaint = /latent\s+inpaint|controlnet|stable\s+diffusion|sdxl|flux|lora\s+inpaint/i.test(lower);
 
-        const isExplicitComfyRequest = options.forceComfyUi || /comfyui|comfy\s+pipeline|node\s+graph\s+diffusion|custom\s+checkpoint/i.test(lower);
-
         // Check if Tier 1 can natively solve this
         let canSolveNatively = true;
         let primaryNativeEngine: PrimaryNativeEngine = 'workspace-coding';
@@ -219,7 +189,7 @@ export class TaskCapabilityResolver {
             (/wan2\.2|multiview\s*(?:video|diffusion)|all\s*(?:the\s*)?different\s*video\s*positions/i.test(lower) &&
             /video\s*model|capture|diffusion|generate|run/i.test(lower) &&
             !/prompt\s*only|format\s*prompt|text\s*only|author/i.test(lower)) ||
-            (opts.promptContext ? /comfyui_execute_pipeline|wan2\.2/i.test(opts.promptContext) && !/prompt/i.test(lower) : false);
+            (opts.promptContext ? /wan2\.2/i.test(opts.promptContext) && !/prompt/i.test(lower) : false);
 
         const isNeutralPerformerPrompt = /buildneutralperformerprompt|neutral[\s\w-]{0,40}(?:prompt|video|image|portrait|performer|avatar)|(?:performer|avatar|character|dancer|vocalist)[\s\w-]{0,40}(?:neutral|a[\s-]frame|prompt)|(?:prompt|video|image)[\s\w-]{0,40}(?:neutral|a[\s-]frame)|a[\s-]frame/i.test(lower);
 
@@ -232,7 +202,7 @@ export class TaskCapabilityResolver {
         if (isWanMultiviewDiffusionExecution) {
             canSolveNatively = false;
             primaryNativeEngine = 'none';
-            rationale = 'Multi-view 360-degree video capture using the Wan2.2-TI2V-5B video diffusion backbone requires heavy multi-camera video generation with Reference Context Packing (RCP) and Target Context Routing (TCR), requiring GPU ComfyUI / Cloud Run acceleration.';
+            rationale = 'Multi-view video diffusion (Wan2.2-TI2V-5B) is not natively supported: it requires a self-hosted GPU video diffusion backbone that this app does not run.';
         } else if (isLocationSplat) {
             canSolveNatively = true;
             primaryNativeEngine = 'cpp-3d-engine';
@@ -290,7 +260,7 @@ export class TaskCapabilityResolver {
                 // Neural video restyling cannot be done by algorithmic NLE or matchmoving
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
-                rationale = 'The requested video transformation requires deep generative neural restyling / temporal diffusion (e.g. Omni/AnimateDiff), which cannot be computed deterministically by the native Video NLE timeline or VFX plate matchmove services.';
+                rationale = 'Not natively supported: neural video restyling / temporal diffusion (e.g. AnimateDiff) cannot be computed by the native Video NLE timeline or VFX plate matchmove services.';
             } else if (isAdaptiveMatchmove) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'adaptive-matchmove-calibration';
@@ -390,7 +360,7 @@ export class TaskCapabilityResolver {
             } else if (isNeuralImageTo3D) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
-                rationale = 'Single-image to discrete 3D object mesh reconstruction requires a neural generative diffusion model (such as Trellis or TripoSR for isolated props/objects). 3D scenes, urban environments, and architectural layouts are created natively in codebase (Tier 1 C++20 Astro / UniversalArchiBridgeService / Three.js).';
+                rationale = 'Not natively supported: single-image to 3D mesh reconstruction needs a neural diffusion model (e.g. Trellis / TripoSR). 3D scenes, environments, and architecture are generated natively by the C++20 / Python engines.';
             } else if (/universal\s*3d\s*structure|canonical\s*3d\s*(?:anchor|foundation)|single\s*source\s*of\s*truth\s*3d|multi-?format\s*(?:3d|projection)|collision\s*(?:envelope|hull)|convex\s*bumper\s*hull|universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|animation[\s\w-]{0,30}(?:timeline|nle)|(?:export|project)\s*(?:to\s*)?(?:colmap|nerfstudio|3dgs)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
@@ -667,9 +637,10 @@ export class TaskCapabilityResolver {
                     targetService: 'Google360PanoramaPipelineService',
                     details: 'Invoke panorama_generate_4k, panorama_heal_seam, or panorama_reproject_zenith to seamlessly blend or restore the 360 equirectangular panorama.'
                 };
-            } else if (isNeuralImageTo3D || isNeuralVideoRestyle || isMonocularNeuralDepth || isLatentDiffusionInpaint || isExplicitComfyRequest) {
+            } else if (isNeuralImageTo3D || isNeuralVideoRestyle || isMonocularNeuralDepth || isLatentDiffusionInpaint) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
+                rationale = 'Not natively supported: this task needs a self-hosted neural model (image-to-3D, video-to-video restyling, monocular depth, or latent diffusion inpainting) that this app does not run.';
             } else if (/(?:recolor|re-color|grade|re-?grade|texture\s*atlas|material\s*harmoniz|pbr)[\s\w-]{0,40}(?:3d\s*tile|glb|model|photometry|photogrammetr)|(?:3d\s*tile|glb|texture\s*atlas)[\s\w-]{0,40}(?:recolor|re-color|grade|re-?grade|palette|foliage\s*protect|pbr)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
@@ -760,83 +731,6 @@ export class TaskCapabilityResolver {
             rationale = 'Standard requests are natively handled by Gemini reasoning and canvas primitives.';
         }
 
-        // If user explicitly asked for ComfyUI, override canSolveNatively
-        if (isExplicitComfyRequest) {
-            canSolveNatively = false;
-            rationale = 'ComfyUI pipeline generation was explicitly requested or targeted for this workflow.';
-        }
-
-        // Tier 2 Fallback Formulation
-        let tier2Fallback: Tier2ComfyUiFallback;
-        if (!canSolveNatively) {
-            let category: ComfyPipelineCategory = 'text-to-image';
-            let executionTarget: 'cloud-run' | 'local' | 'auto' = options.targetEnvironment || 'auto';
-            const suggestedNodes: string[] = [];
-            let requiresDynamicNodes = false;
-            const suggestedDynamicClasses: string[] = [];
-
-            if (isNeuralImageTo3D) {
-                category = 'image-to-3d';
-                executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy 3D offloads to Cloud Run GPU
-                suggestedNodes.push('LoadImage', 'TrellisImageTo3D', 'MeshDecimatorNode', 'SaveGLB');
-                requiresDynamicNodes = true;
-                suggestedDynamicClasses.push('SaveGLB', 'MeshDecimatorNode');
-            } else if (isWanMultiviewDiffusionExecution) {
-                category = 'video-generation';
-                executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy multi-view video offloads to Cloud Run GPU
-                suggestedNodes.push(
-                    'LoadImage',
-                    'Wan22TI2VModelLoader',
-                    'SkeletonConditioningNode',
-                    'WanMultiViewCameraRigNode',
-                    'Wan22MultiViewSampler',
-                    'SaveVideo'
-                );
-                requiresDynamicNodes = true;
-                suggestedDynamicClasses.push(
-                    'Wan22TI2VModelLoader',
-                    'SkeletonConditioningNode',
-                    'WanMultiViewCameraRigNode',
-                    'Wan22MultiViewSampler'
-                );
-            } else if (isNeuralVideoRestyle) {
-                category = 'video-generation';
-                executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy video offloads to Cloud Run GPU
-                suggestedNodes.push('LoadVideo', 'AnimateDiffLoader', 'ControlNetApply', 'KSampler', 'SaveVideo');
-                requiresDynamicNodes = false;
-            } else if (isMonocularNeuralDepth) {
-                category = 'depth-estimation';
-                executionTarget = options.targetEnvironment || 'auto';
-                suggestedNodes.push('LoadImage', 'MarigoldDepthEstimation', 'SaveImage');
-                requiresDynamicNodes = false;
-            } else if (lower.includes('pbr') || lower.includes('texture')) {
-                category = 'pbr-texture-synthesis';
-                suggestedNodes.push('LoadImage', 'PBRMaterialComposer', 'SaveImage');
-                requiresDynamicNodes = true;
-                suggestedDynamicClasses.push('PBRMaterialComposer');
-            } else {
-                category = 'text-to-image';
-                suggestedNodes.push('CheckpointLoaderSimple', 'CLIPTextEncode', 'KSampler', 'VAEDecode', 'SaveImage');
-            }
-
-            tier2Fallback = {
-                needed: true,
-                gapReason: rationale,
-                recommendedPipelineCategory: category,
-                executionTarget,
-                suggestedNodes,
-                requiresDynamicNodes,
-                suggestedDynamicClasses: suggestedDynamicClasses.length > 0 ? suggestedDynamicClasses : undefined
-            };
-        } else {
-            tier2Fallback = {
-                needed: false,
-                executionTarget: 'auto',
-                suggestedNodes: [],
-                requiresDynamicNodes: false
-            };
-        }
-
         return {
             taskGoal: goal,
             taskDomain: domain,
@@ -851,9 +745,6 @@ export class TaskCapabilityResolver {
                 rationale,
                 suggestedNativeAction
             },
-            tier2Fallback,
-            recommendedResolutionRoute: canSolveNatively ? 'tier1-native' : 'tier2-comfyui',
-            tier: canSolveNatively ? 'tier1-native' : 'tier2-comfyui',
             rationale,
             recommendedNativeTool: suggestedNativeAction?.serviceOrTool
         };

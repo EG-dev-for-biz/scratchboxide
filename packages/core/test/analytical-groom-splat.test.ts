@@ -72,7 +72,7 @@ describe('Analytical Groom & 3D Gaussian Splatting Engine', () => {
             );
 
             expect(assessment.canSolveNatively).toBe(true);
-            expect(assessment.tier).toBe('tier1-native');
+            expect(assessment.canSolveNatively).toBe(true);
             expect(assessment.primaryNativeEngine).toBe('cpp-3d-engine');
             expect(assessment.nativeCapabilities).toEqual(
                 expect.arrayContaining([
@@ -89,7 +89,7 @@ describe('Analytical Groom & 3D Gaussian Splatting Engine', () => {
             );
 
             expect(assessment.canSolveNatively).toBe(true);
-            expect(assessment.tier).toBe('tier1-native');
+            expect(assessment.canSolveNatively).toBe(true);
             expect(assessment.primaryNativeEngine).toBe('cpp-3d-engine');
         });
     });

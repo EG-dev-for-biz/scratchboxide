@@ -106,7 +106,6 @@ export interface GeminiGenerateRequest {
     enableLspDiagnostics?: boolean;
     enableDiffMemory?: boolean;
     enableWorkspaceTools?: boolean;
-    enableComfyUiTools?: boolean;
     maxTurns?: number;
     workspaceRoot?: string;
     targetFiles?: string[];
@@ -114,7 +113,7 @@ export interface GeminiGenerateRequest {
     mode?: InteractionMode;
     requirePlanApproval?: boolean;
     autoVerify?: boolean;
-    toolPacks?: Array<'core_workspace' | 'geospatial_3d' | 'mesh_surface' | 'vfx_video' | 'comfyui' | 'lens' | 'browser'>;
+    toolPacks?: Array<'core_workspace' | 'geospatial_3d' | 'mesh_surface' | 'vfx_video' | 'lens' | 'browser'>;
     domainHint?: 'auto' | '3d' | 'vfx' | 'generative' | 'code' | 'general';
 }
 

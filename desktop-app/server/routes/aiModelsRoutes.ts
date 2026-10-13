@@ -14,9 +14,7 @@ import * as fs from 'fs-extra';
 import {
     TrainedModelRegistryService,
     VideoTo4DPerformerPipelineService,
-    ComfyUiBridgeService,
-    ComfyUiPipelineAgent,
-    ComfyUiCloudRunService
+    resolveTaskCapability
 } from '../../../packages/core/src/node';
 
 export interface ExportedToolRecord {
@@ -228,200 +226,19 @@ export function createPerformerRouter(allowedWorkspaceRoots: string[]): Router {
 
 export async function handleCapabilitiesResolve(req: Request, res: Response): Promise<void> {
     try {
-        const { taskGoal, goal, domainHint, hasInputImage, hasInputVideo, targetEnvironment } = req.body;
+        const { taskGoal, goal, domainHint, hasInputImage, hasInputVideo } = req.body;
         const targetGoal = taskGoal || goal;
         if (!targetGoal) {
             res.status(400).json({ success: false, error: 'taskGoal is required' });
             return;
         }
-        const agent = new ComfyUiPipelineAgent();
-        const result = agent.assessTaskCapability(targetGoal, {
+        const result = resolveTaskCapability(targetGoal, {
             domainHint,
             hasInputImage,
-            hasInputVideo,
-            targetEnvironment
+            hasInputVideo
         });
         res.json({ success: true, ...result });
     } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message || String(err) });
     }
-}
-
-export function createComfyRouter(): Router {
-    const router = Router();
-
-    router.get('/status', async (req: Request, res: Response) => {
-        try {
-            const hostUrl = typeof req.query.hostUrl === 'string' ? req.query.hostUrl : undefined;
-            const bridge = new ComfyUiBridgeService({ hostUrl });
-            const available = await bridge.isAvailable();
-            if (!available) {
-                res.json({
-                    success: true,
-                    status: 'offline',
-                    available: false,
-                    hostUrl: bridge.getHostUrl(),
-                    message: 'ComfyUI server is offline.'
-                });
-                return;
-            }
-            const stats = await bridge.getSystemStats();
-            const models = await bridge.getModels();
-            res.json({
-                success: true,
-                status: 'online',
-                available: true,
-                hostUrl: bridge.getHostUrl(),
-                stats,
-                models
-            });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.get('/nodes', async (req: Request, res: Response) => {
-        try {
-            const hostUrl = typeof req.query.hostUrl === 'string' ? req.query.hostUrl : undefined;
-            const nodeClass = typeof req.query.nodeClass === 'string' ? req.query.nodeClass : undefined;
-            const bridge = new ComfyUiBridgeService({ hostUrl });
-            const info = await bridge.getObjectInfo(nodeClass);
-            res.json({ success: true, nodes: info });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.post('/research', async (req: Request, res: Response) => {
-        try {
-            const { goal, hostUrl, mockExecution } = req.body;
-            if (!goal) {
-                res.status(400).json({ success: false, error: 'Goal is required.' });
-                return;
-            }
-            const isMock = mockExecution === true || mockExecution === 'true';
-            const agent = new ComfyUiPipelineAgent({ hostUrl, mockExecution: isMock });
-            const blueprint = await agent.researchPipeline(goal);
-            const prompt = agent.authorApiPrompt(blueprint);
-            const nodeGraphData = agent.convertToNodeGraphData(blueprint, prompt);
-            res.json({ success: true, blueprint, prompt, nodeGraphData });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.get('/cloudrun/status', async (req: Request, res: Response) => {
-        try {
-            const serviceUrl = typeof req.query.serviceUrl === 'string' ? req.query.serviceUrl : undefined;
-            const mock = req.query.mockExecution === 'true';
-            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mock });
-            const status = await crService.getServiceStatus();
-            res.json({ success: true, ...status });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.get('/cloudrun/upstream', async (req: Request, res: Response) => {
-        try {
-            const serviceUrl = typeof req.query.serviceUrl === 'string' ? req.query.serviceUrl : undefined;
-            const mock = req.query.mockExecution === 'true';
-            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mock });
-            const info = await crService.getUpstreamVersionInfo();
-            res.json({ success: true, ...info });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.post('/cloudrun/sync', async (req: Request, res: Response) => {
-        try {
-            const { serviceUrl, mockExecution } = req.body || {};
-            const isMock = mockExecution === true || mockExecution === 'true';
-            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: isMock });
-            const syncResult = await crService.syncUpstream();
-            res.json({ ...syncResult, success: syncResult.success });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.post('/cloudrun/inject-code', async (req: Request, res: Response) => {
-        try {
-            const { moduleName, code, nodeClasses, requirements, serviceUrl, mockExecution } = req.body || {};
-            if (!moduleName || !code) {
-                res.status(400).json({ success: false, error: 'moduleName and code are required.' });
-                return;
-            }
-            const isMock = mockExecution === true || mockExecution === 'true';
-            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: isMock });
-            const injectResult = await crService.injectDynamicCode({
-                moduleName,
-                code,
-                nodeClasses: nodeClasses || [],
-                requirements: requirements || []
-            });
-            res.json({ ...injectResult, success: true });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.post('/workflow/prepare', async (req: Request, res: Response) => {
-        try {
-            const { workflow, dynamicCode, serviceUrl, mockExecution } = req.body || {};
-            if (!workflow) {
-                res.status(400).json({ success: false, error: 'workflow is required.' });
-                return;
-            }
-            const isMock = mockExecution === true || mockExecution === 'true';
-            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: isMock });
-            const report = await crService.prepareWorkflowDependencies(workflow, dynamicCode);
-            res.json({ success: true, report });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.post('/execute', async (req: Request, res: Response) => {
-        try {
-            const { goal, workflow, workflowJson, hostUrl, mockExecution, maxFixAttempts, targetEnvironment, cloudRun, autoSyncUpstream } = req.body;
-            if (!goal && !workflow && !workflowJson) {
-                res.status(400).json({ success: false, error: 'Goal or workflow is required.' });
-                return;
-            }
-            const isMock = mockExecution === true || mockExecution === 'true';
-            const agent = new ComfyUiPipelineAgent({
-                hostUrl,
-                mockExecution: isMock,
-                maxFixAttempts,
-                targetEnvironment,
-                cloudRun
-            });
-
-            let result;
-            if (workflow || workflowJson) {
-                const parsed = workflow || (typeof workflowJson === 'string' ? JSON.parse(workflowJson) : workflowJson);
-                result = await agent.executeWorkflowPrompt(parsed, goal || 'Execute workflow', {
-                    targetEnvironment,
-                    cloudRun,
-                    autoSyncUpstream
-                });
-            } else {
-                result = await agent.executeAndHeal(goal, {
-                    targetEnvironment,
-                    cloudRun,
-                    autoSyncUpstream
-                });
-            }
-
-            res.json({ ...result });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.post('/capabilities/resolve', handleCapabilitiesResolve);
-
-    return router;
 }

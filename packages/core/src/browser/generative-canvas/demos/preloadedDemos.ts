@@ -228,98 +228,86 @@ const demoVideoTimelineData: VideoTimelineData = {
 };
 
 // ----------------------------------------------------------------------------------
-// Demo 3: ComfyUI / Diffusion Node Graph Pipeline
+// Demo 3: Native C++20 3D Generation Pipeline Graph
 // ----------------------------------------------------------------------------------
 const demoNodeGraphData: NodeGraphData = {
-    title: 'Autonomous Spatial VFX & Diffusion Pipeline Graph',
-    subtitle: 'NVIDIA L4 Cloud Run Acceleration with ComfyUI Dynamic Code Injection',
+    title: 'Native 3D Generation Pipeline Graph',
+    subtitle: 'Prompt to C++20 procedural geometry to binary glTF in the viewport',
     nodes: [
         {
             id: 'node-prompt',
-            label: 'Multimodal Prompt Ingestion',
-            subtitle: 'Gemini 3.7 Flash Reasoning & Spatial Prompt',
+            label: 'Prompt Ingestion',
+            subtitle: 'Gemini multimodal reasoning',
             category: 'input',
             color: 'cyan',
             x: 80,
-            y: 160,
+            y: 180,
             status: 'completed',
-            details: 'Prompt: "High-altitude cinematic helicopter flight over Midtown Manhattan during sunset with atmospheric haze."'
+            details: 'Prompt: "Arctic research outpost on a basalt ridge, studio grey clay."'
         },
         {
-            id: 'node-dispatcher',
-            label: 'Cloud Run GPU Orchestrator',
-            subtitle: 'Google Cloud Run (NVIDIA L4 24GB VRAM)',
-            category: 'cli',
-            color: 'emerald',
+            id: 'node-capability',
+            label: 'Task Capability Resolver',
+            subtitle: 'Domain classification & tool-pack selection',
+            category: 'ai',
+            color: 'amber',
             x: 360,
             y: 80,
             status: 'completed',
-            details: 'Dynamic Python custom node synthesis via comfyui_inject_dynamic_code'
+            details: 'TaskCapabilityResolver classifies the task as 3D and pre-loads the native generation tools.'
         },
         {
-            id: 'node-checkpoint',
-            label: 'Diffusion Checkpoint Loader',
-            subtitle: 'Omni 1.1 / SDXL Foundation Weights',
+            id: 'node-contract',
+            label: 'Adaptive Scene Contract',
+            subtitle: 'Continuous physical parameters (70-20-10 hierarchy)',
             category: 'process',
             color: 'purple',
             x: 360,
-            y: 260,
-            status: 'completed',
-            details: 'Precision fp16 model loaded in 1.4s with TensorRT graph optimization'
-        },
-        {
-            id: 'node-depth-marigold',
-            label: 'Monocular Depth & Normal Estimator',
-            subtitle: 'Marigold Dense Surface Normals',
-            category: 'scene-3d',
-            color: 'blue',
-            x: 640,
-            y: 100,
-            status: 'completed',
-            details: 'Geometric depth alignment computed with anti-drift holdout matte destination-out'
-        },
-        {
-            id: 'node-ksampler',
-            label: 'Euler Ancestral KSampler',
-            subtitle: '30 Steps | CFG 7.5 | Denoise 0.65',
-            category: 'ai',
-            color: 'amber',
-            x: 640,
             y: 280,
-            status: 'running',
-            details: 'Step 22/30 (Latent temporal smoothing active across 300 keyframes)'
+            status: 'completed',
+            details: 'Adaptive3DSceneSynthesizer projects the prompt into continuous dimensional fields, with no presets.'
         },
         {
-            id: 'node-vae',
-            label: 'Tiled VAE Spatial Decoder',
-            subtitle: '4K Ultra-HD Latent Decoding',
+            id: 'node-compile',
+            label: 'Ephemeral C++20 Compile',
+            subtitle: 'NativeCppCompilerService (clang++ -std=c++20)',
+            category: 'cli',
+            color: 'emerald',
+            x: 640,
+            y: 180,
+            status: 'running',
+            details: 'Synthesized generator source includes scratchbox_engine.hpp and is compiled in a sub-process.'
+        },
+        {
+            id: 'node-gate',
+            label: 'Geometric Complexity Gate',
+            subtitle: 'Vertex / triangle floors & primitive ban',
             category: 'process',
             color: 'purple',
             x: 920,
             y: 180,
             status: 'pending',
-            details: 'Assembles uncompressed 3840x2160 frame sequence'
+            details: 'Rejects toy primitives and under-detailed output before it reaches the stage.'
         },
         {
             id: 'node-output',
-            label: 'Canvas Stage Video/GLB Streamer',
-            subtitle: 'Zero-Copy Shared Memory Framebuffer',
-            category: 'output',
-            color: 'emerald',
+            label: 'Binary glTF Viewport Stream',
+            subtitle: 'Three.js 3D scene primitive',
+            category: 'scene-3d',
+            color: 'blue',
             x: 1200,
             y: 180,
             status: 'pending',
-            details: 'Direct playback in VideoTimeline and Three.js Viewport'
+            details: 'The .glb streams into the 3d-scene primitive; generator source is kept in data.cppGenerator.sourceCode.'
         }
     ],
     edges: [
-        { id: 'e1', source: 'node-prompt', target: 'node-dispatcher', style: 'solid', color: 'cyan' },
-        { id: 'e2', source: 'node-prompt', target: 'node-checkpoint', style: 'solid', color: 'cyan' },
-        { id: 'e3', source: 'node-dispatcher', target: 'node-depth-marigold', style: 'solid', color: 'emerald' },
-        { id: 'e4', source: 'node-checkpoint', target: 'node-ksampler', style: 'solid', color: 'purple' },
-        { id: 'e5', source: 'node-depth-marigold', target: 'node-ksampler', style: 'animated', color: 'blue' },
-        { id: 'e6', source: 'node-ksampler', target: 'node-vae', style: 'animated', color: 'amber' },
-        { id: 'e7', source: 'node-vae', target: 'node-output', style: 'dashed', color: 'emerald' }
+        { id: 'e1', source: 'node-prompt', target: 'node-capability', style: 'solid', color: 'cyan' },
+        { id: 'e2', source: 'node-prompt', target: 'node-contract', style: 'solid', color: 'cyan' },
+        { id: 'e3', source: 'node-capability', target: 'node-compile', style: 'solid', color: 'amber' },
+        { id: 'e4', source: 'node-contract', target: 'node-compile', style: 'animated', color: 'purple' },
+        { id: 'e5', source: 'node-compile', target: 'node-gate', style: 'animated', color: 'emerald' },
+        { id: 'e6', source: 'node-gate', target: 'node-output', style: 'dashed', color: 'blue' }
     ]
 };
 
@@ -729,22 +717,6 @@ const demoTelemetryDashboardData: MetricDashboardData = {
             description: 'Zero-stutter viewport frame delivery'
         },
         {
-            id: 'metric-gpu-capacity',
-            label: 'NVIDIA L4 24GB Allocation',
-            value: '100%',
-            trend: 'up',
-            color: 'emerald',
-            description: 'Google Cloud Run GPU container online'
-        },
-        {
-            id: 'metric-dynamic-nodes',
-            label: 'ComfyUI Injected Dynamic Nodes',
-            value: '14 nodes',
-            trend: 'neutral',
-            color: 'indigo',
-            description: 'Auto-synthesized Python runtime operators'
-        },
-        {
             id: 'metric-matchmove-confidence',
             label: 'Camera Solve Matchmove Confidence',
             value: '99.4%',
@@ -1122,24 +1094,24 @@ export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
         introMessage: 'This demo showcases the Scratchbox Video Timeline NLE. You can scrub multi-track video plates, test 6-DoF camera solves, and toggle side-by-side comparison mode between 3D blockout and neural synthesis.'
     },
     {
-        id: 'demo-ai-node-graph',
-        title: 'Autonomous AI Diffusion Pipeline Graph',
-        subtitle: 'Cloud Run ComfyUI Workflow',
+        id: 'demo-native-pipeline-graph',
+        title: 'Native 3D Generation Pipeline Graph',
+        subtitle: 'C++20 Engine Workflow',
         category: 'graph',
         categoryLabel: 'AI & Node Flow',
-        description: 'Interactive visual workflow connecting prompt ingestion, NVIDIA L4 GPU workers, Marigold depth estimation, and KSampler latent diffusion.',
-        tags: ['Node Graph', 'ComfyUI', 'Cloud Run L4', 'KSampler', 'Dynamic Code'],
-        highlightBadge: 'AUTONOMOUS',
+        description: 'Interactive node graph tracing a prompt through capability resolution, adaptive scene contracts, ephemeral C++20 compilation, the geometric complexity gate, and binary glTF streaming.',
+        tags: ['Node Graph', 'C++20 Engine', 'glTF 2.0', 'Pipeline'],
+        highlightBadge: 'NATIVE',
         artifact: {
-            id: 'art-demo-ai-node-graph',
+            id: 'art-demo-native-pipeline-graph',
             type: 'node-graph',
-            title: 'Autonomous Spatial VFX & Diffusion Pipeline Graph',
-            summary: 'End-to-end cloud diffusion pipeline graph with live node execution states and Bezier signal routes.',
+            title: 'Native 3D Generation Pipeline Graph',
+            summary: 'How a 3D prompt becomes procedural geometry in the viewport.',
             data: demoNodeGraphData,
             createdAt: new Date().toISOString(),
             version: 1
         },
-        introMessage: 'Welcome to the AI Diffusion Pipeline Graph demo. This graph visualizes how Scratchbox IDE dispatches spatial diffusion workloads to NVIDIA L4 GPU Cloud Run containers with dynamic Python code synthesis.'
+        introMessage: 'This graph traces how Scratchbox turns a 3D prompt into native C++20 procedural geometry and streams it into the viewport.'
     },
     {
         id: 'demo-retro-breakout',
@@ -1179,6 +1151,6 @@ export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
             createdAt: new Date().toISOString(),
             version: 1
         },
-        introMessage: 'This dashboard provides a telemetry overview of Scratchbox IDE internal performance engines, including native SIMD geometry polygonization, WebGL frame latency, and Cloud Run GPU status.'
+        introMessage: 'This dashboard provides a telemetry overview of Scratchbox IDE internal performance engines, including native SIMD geometry polygonization and WebGL frame latency.'
     }
 ];

@@ -329,7 +329,7 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
                 'Extract and apply color from reference image to target image using nano banana method 2'
             );
 
-            expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+            expect(resolution.canSolveNatively).toBe(true);
             expect(resolution.tier1Assessment.canSolveNatively).toBe(true);
             expect(resolution.tier1Assessment.primaryNativeEngine).toBe('google-models');
             expect(resolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('Nano Banana Color Transfer Pipeline'))).toBe(true);

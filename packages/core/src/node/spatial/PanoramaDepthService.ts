@@ -46,7 +46,7 @@ export interface PanoramaDepthResult {
 /**
  * Service to orchestrate the high-fidelity 360 panorama depth extraction pipeline.
  * Spawns the local Python sidecar utilizing Depth Anything V2/V3 Metric models,
- * with robust fallbacks and ComfyUI Cloud Run L4 Tier 2 routing capability.
+ * with robust fallbacks.
  */
 export class PanoramaDepthService {
     private sidecarPath: string;

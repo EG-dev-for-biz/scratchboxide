@@ -35,8 +35,7 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
                 prompt: 'End-to-End User Journey Simulation',
                 enableWorkspaceTools: true,
                 enableBrowserTools: true,
-                enableLensTools: true,
-                enableComfyUiTools: true
+                enableLensTools: true
             },
             workspaceRoot: testDir,
             sandbox: {
@@ -267,33 +266,6 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
     });
 
     // =========================================================================
-    // Journey 5: Two-Tier Transactional Decision & ComfyUI Failover
-    // =========================================================================
-    it('Journey 5: Evaluates problem-solving tiers and executes ComfyUI research fallback', async () => {
-        // Native Tier 1 Resolution
-        const t1Res = await registry.dispatch('resolve_task_capability', {
-            taskGoal: 'Procedural 3D terrain generation using FastNoise3D and Marching Cubes in C++20'
-        }, mockContext);
-        expect(t1Res.exec.status).toBe('completed');
-        expect((t1Res.resultPayload as any).recommendedResolutionRoute).toBe('tier1-native');
-
-        // Neural Tier 2 Resolution
-        const t2Res = await registry.dispatch('resolve_task_capability', {
-            taskGoal: 'Monocular depth map estimation from phone photo using Marigold diffusion'
-        }, mockContext);
-        expect(t2Res.exec.status).toBe('completed');
-        expect((t2Res.resultPayload as any).recommendedResolutionRoute).toBe('tier2-comfyui');
-
-        // Research ComfyUI Pipeline Blueprint
-        const researchRes = await registry.dispatch('comfyui_research_pipeline', {
-            goal: 'Monocular Marigold depth estimation on Cloud Run L4 GPU',
-            mockExecution: true
-        }, mockContext);
-        expect(researchRes.exec.status).toBe('completed');
-        expect((researchRes.resultPayload as any).blueprint).toBeDefined();
-    });
-
-    // =========================================================================
     // Journey 6: Generative UI, Multi-Phase Plan Cards & User Interaction
     // =========================================================================
     it('Journey 6: Mounts canvas primitives, renders plan cards, and prompts user', async () => {
@@ -311,8 +283,8 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
             title: 'Colosseum Ingestion & 4DGS Reconstruction',
             goal: 'Stream high-res tiles and reconstruct animated avatar',
             steps: [
-                { id: 'step-1', title: 'Tile Ingestion', tier: 'tier1' },
-                { id: 'step-2', title: '4DGS Alignment', tier: 'tier2' }
+                { id: 'step-1', title: 'Tile Ingestion' },
+                { id: 'step-2', title: '4DGS Alignment' }
             ]
         }, mockContext);
         expect(planRes.exec.status).toBe('completed');
@@ -324,10 +296,10 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
             questions: [
                 {
                     id: 'exec-mode',
-                    prompt: 'Select execution environment for ComfyUI:',
+                    prompt: 'Select reconstruction quality:',
                     options: [
-                        { id: 'cloud', label: 'Cloud Run NVIDIA L4 GPU' },
-                        { id: 'local', label: 'Local ComfyUI Server' }
+                        { id: 'draft', label: 'Draft' },
+                        { id: 'final', label: 'Final' }
                     ]
                 }
             ]

@@ -140,7 +140,7 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
         it('resolves location 3dgs prompt to recommend location_generate_3dgs', () => {
             const res = TaskCapabilityResolver.resolveTaskCapability('Make a 3dgs of the Colosseum');
             expect(res.canSolveNatively).toBe(true);
-            expect(res.tier).toBe('tier1-native');
+            expect(res.canSolveNatively).toBe(true);
             expect(res.suggestedNativeAction?.serviceOrTool).toContain('location_generate_3dgs');
         });
     });

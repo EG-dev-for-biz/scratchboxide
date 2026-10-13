@@ -5,7 +5,7 @@ description: >-
   scenes using the Adaptive Multi-Angle Camera Orbit Engine (MultiAngleTurnaroundService and
   generate_multi_angle_turnaround). Enforces continuous spherical camera orbit mathematics (azimuth, elevation, standoff),
   dual-anchor identity conditioning graphs (Hero Anchor + Adjacent Continuity), and non-negotiable isolation rules
-  (zero ground, zero cast shadows, zero text/labels) for seamless downstream 3D reconstruction (Cloud Run Trellis, 3DGS, NeRF).
+  (zero ground, zero cast shadows, zero text/labels) for seamless downstream 3D reconstruction (Trellis via Fal.ai, 3DGS, NeRF).
 ---
 
 # Multi-Angle Turnaround Director: Consistent Multi-View Visual Orchestration
@@ -133,10 +133,8 @@ Viewed from [CAMERA ANGLE DESCRIPTION: e.g. 'pure horizontal side elevation prof
 
 ## 7. Downstream Execution Targets
 
-- **Target 1: Cloud Run Trellis Pipeline (`trellis-cloud-run`)**:
-  - Automatically compiles the multi-angle image batch into a ComfyUI `TrellisMultiViewLoader` API DAG.
-  - Submits to Google Cloud Run NVIDIA L4 GPU.
-  - Normalizes metric AABB bounds and returns a watertight binary `.glb` asset in seconds.
+- **Target 1: Fal.ai Trellis (`trellis-fal`, requires `FAL_KEY`)**:
+  - Submits the hero view to Fal.ai Trellis and downloads the resulting binary `.glb` asset with metric AABB bounds.
 - **Target 2: Dynamic 4DGS / Splatfacto (`gaussian-splatting`)**:
   - Unprojects camera rays using the known spherical poses $(\theta_i, \phi_i, r)$ to build a sparse camera constellation without needing COLMAP structure-from-motion.
 - **Target 3: Canvas Turntable Viewport (`canvas-turntable`)**:

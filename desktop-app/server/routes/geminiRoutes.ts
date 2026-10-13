@@ -617,10 +617,10 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
     router.get('/jobs/:id', getMediaJob);
     router.get('/media/jobs/:id', getMediaJob);
 
-    // Two-Tier Task Capability Resolution Endpoints
+    // Task Capability Resolution Endpoints
     const resolveCapability = (req: Request, res: Response): void => {
         try {
-            const { userGoal, goal, taskGoal, promptContext, domainHint, targetEnvironment } = req.body || {};
+            const { userGoal, goal, taskGoal, promptContext, domainHint } = req.body || {};
             const effectiveGoal = userGoal || goal || taskGoal;
             if (!effectiveGoal || typeof effectiveGoal !== 'string') {
                 res.status(400).json({ success: false, error: 'userGoal (or goal/taskGoal) is required' });
@@ -629,8 +629,7 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
             const resolution = resolveTaskCapability({
                 userGoal: effectiveGoal,
                 promptContext: typeof promptContext === 'string' ? promptContext : undefined,
-                domainHint,
-                targetEnvironment
+                domainHint
             });
             res.json({ success: true, resolution });
         } catch (err: any) {
