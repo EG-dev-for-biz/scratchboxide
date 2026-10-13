@@ -126,7 +126,7 @@ describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
             'Decompose this photogrammetric 3D tile and rectify building facades and crowns using UTDRA'
         );
 
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
         expect(resolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('UTDRA / ULDRA'))).toBe(true);
         expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toMatch(/utdra_decompose_tile/);
@@ -135,7 +135,7 @@ describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
         const uldraResolution = TaskCapabilityResolver.resolveTaskCapability(
             'Carve bridge void underpass curtain walls with ULDRA multi-level void carver'
         );
-        expect(uldraResolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(uldraResolution.canSolveNatively).toBe(true);
         expect(uldraResolution.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
         expect(uldraResolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('UTDRA / ULDRA'))).toBe(true);
     });

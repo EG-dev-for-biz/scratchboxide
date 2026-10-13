@@ -50,9 +50,7 @@ export {
     resolveTaskCapability,
     type TaskCapabilityResult,
     type TaskDomain,
-    type Tier1Assessment,
-    type Tier2ComfyUiFallback,
-    type ComfyPipelineCategory
+    type Tier1Assessment
 } from './node/agent/task-capability-resolver';
 
 // 3D Native Engine Compiler & Python Runner Services
@@ -194,6 +192,22 @@ export {
     MeshReshapingTelemetry,
     MeshReshapingResult
 } from './node/3d-engine/native-mesh-reshaper-service';
+export {
+    SbRigService,
+    SbRigError,
+    sbRigMesh,
+    buildSbRigArgs,
+    parseSbRigTelemetry
+} from './node/3d-engine/sb-rig-service';
+export type {
+    Point3 as SbRigPoint3,
+    SbRigParams,
+    SbRigOptions,
+    SbRigJoint,
+    SbRigChainInfo,
+    SbRigReport,
+    SbRigResult
+} from './node/3d-engine/sb-rig-service';
 export {
     NativeTileRestructurerService,
     TileRestructurerService,
@@ -427,10 +441,6 @@ export {
     ModelCatalogSummary
 } from './node/models/TrainedModelRegistryService';
 
-// ComfyUI Bridge, Cloud Run & Pipeline Agent Services
-export { ComfyUiBridgeService, ComfyBridgeOptions, ComfyQueuePromptResult } from './node/comfyui/comfyui-bridge-service';
-export { ComfyUiCloudRunService } from './node/cloudrun/comfyui-cloudrun-service';
-export { ComfyUiPipelineAgent, TwoTierExecutionResult } from './node/agent/comfyui-pipeline-agent';
 
 // Geo Camera Matchmove Pipeline Service
 export {
@@ -632,7 +642,6 @@ export {
     GEOSPATIAL_3D_PACK,
     MESH_SURFACE_PACK,
     VFX_VIDEO_PACK,
-    COMFYUI_PACK,
     LENS_PACK,
     BROWSER_PACK,
     resolveDomainToolPacks,

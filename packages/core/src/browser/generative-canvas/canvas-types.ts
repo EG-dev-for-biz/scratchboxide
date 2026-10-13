@@ -27,7 +27,7 @@ export function getActiveUserName(customName?: string): string {
     return DEFAULT_ACTIVE_USER_NAME;
 }
 
-import type { VideoTimelineData, TimelineTrack } from './services/video/videoTypes';
+import type { VideoTimelineData, TimelineTrack, KeyframeEasing } from './services/video/videoTypes';
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
 
@@ -686,6 +686,30 @@ export interface Media4DObject {
     space: SpaceDimension;
     time?: TimeDimension;
     lineage?: LineageDimension;
+    physics?: PhysicsBodyConfig;
+    keyframes?: AnimationKeyframe[];
+}
+
+/** Continuous body classification for the Scene3D viewport's runtime integrator (sb_add_physics). */
+export type RigidBodyType = 'dynamic' | 'static' | 'kinematic' | (string & {});
+
+/** Collision proxy used for ground-contact resolution; a geometric primitive, not a content taxonomy. */
+export type ColliderShape = 'box' | 'sphere' | 'capsule' | (string & {});
+
+export interface PhysicsBodyConfig {
+    bodyType: RigidBodyType;
+    mass: number;
+    friction: number;
+    restitution: number;
+    colliderShape: ColliderShape;
+}
+
+/** One sample of a per-property animation curve, played back by the Scene3D viewport's render loop (sb_insert_keyframe). */
+export interface AnimationKeyframe {
+    property: string;
+    timeMs: number;
+    value: number | [number, number, number];
+    easing: KeyframeEasing | (string & {});
 }
 
 export interface PbrTextureSet {
@@ -896,17 +920,6 @@ export interface Scene3DData {
         glbPath?: string;
         diagnostics?: any[];
     };
-    fallbackTier2ComfyUi?: {
-        triggered: boolean;
-        goal?: string;
-        reason?: string;
-        blueprintId?: string;
-        promptId?: string;
-        status?: 'pending' | 'running' | 'completed' | 'failed';
-        assetUrls?: string[];
-        error?: string;
-        timestamp?: number;
-    };
     shaders?: Record<string, {
         vertexShader?: string;
         fragmentShader?: string;
@@ -1109,6 +1122,8 @@ export interface Scene3DData {
             rootPosition?: [number, number, number];
             bones?: string[];
         };
+        physics?: PhysicsBodyConfig;
+        keyframes?: AnimationKeyframe[];
         triangles?: any[];
     }>;
     customLights?: any[];
@@ -1262,14 +1277,12 @@ export interface ExecutionPlanStep {
     id: string;
     title: string;
     description?: string;
-    tier?: 'tier1-native' | 'tier2-comfyui';
     engine?: string;
 }
 
 export interface ExecutionPlanCardData {
     title: string;
     goal: string;
-    pipelineTier: 'tier1-native' | 'tier2-comfyui' | 'hybrid';
     deliverables: {
         canvasType: PrimitiveType;
         assetFormat?: string;
@@ -1536,22 +1549,6 @@ export const DEFAULT_SKILLS_CATALOG: SkillItem[] = [
         promptStarters: [
             'Ingest photorealistic 3D tile model for coordinates [37.7749, -122.4194]',
             'Render studio grey clay blockout flight path for video diffusion conditioning'
-        ]
-    },
-    {
-        id: 'skill-two-tier-problem-solving',
-        name: 'Two-Tier Problem Solving (C++20 + ComfyUI)',
-        tagline: 'Tier 1 Native C++20 Astro 3D & WebGL with transactional failover to Tier 2 Cloud Run ComfyUI.',
-        description: 'Evaluates user goals against Scratchbox native capabilities (C++20 Astro 3D engine, Three.js, Video Timeline, NOAA solar ephemeris) and seamlessly spins up ComfyUI neural pipelines (Trellis, Marigold, AnimateDiff) with automatic failover.',
-        category: 'Engineering',
-        accentColor: 'purple',
-        tags: ['Two-Tier Architecture', 'C++20 Engine', 'ComfyUI Fallback', 'Cloud Run L4 GPU'],
-        isEnabled: true,
-        author: 'Scratchbox Core',
-        version: '1.0.0',
-        promptStarters: [
-            'Assess task capability and execute procedural C++20 generation',
-            'Spin up ComfyUI Trellis pipeline with dynamic node injection for neural 3D synthesis'
         ]
     },
     {

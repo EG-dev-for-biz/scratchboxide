@@ -550,10 +550,4 @@ export type {
     StagingAnchorProposal
 } from './node/spatial/SpatialVectorDataService';
 
-// Universal Anatomical Operators (ADA-Compliant Differential Geometric Modifiers)
-export {
-    UniversalAnatomicalOperators,
-    type UniversalAnatomicalContract
-} from './node/spatial/UniversalAnatomicalOperators';
-
 

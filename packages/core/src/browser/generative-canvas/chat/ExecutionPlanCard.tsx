@@ -26,33 +26,6 @@ export const ExecutionPlanCard: React.FC<ExecutionPlanCardProps> = ({
 }) => {
     const isConfirmed = !!card.confirmed;
 
-    const getTierBadge = (tier: ExecutionPlanCardData['pipelineTier']) => {
-        if (tier === 'tier2-comfyui') {
-            return {
-                label: 'Tier 2: Cloud Run NVIDIA L4 GPU',
-                color: '#c084fc',
-                bg: 'rgba(192, 132, 252, 0.12)',
-                border: 'rgba(192, 132, 252, 0.3)'
-            };
-        }
-        if (tier === 'hybrid') {
-            return {
-                label: 'Multi-Tier Hybrid Pipeline',
-                color: '#60a5fa',
-                bg: 'rgba(96, 165, 250, 0.12)',
-                border: 'rgba(96, 165, 250, 0.3)'
-            };
-        }
-        return {
-            label: 'Tier 1: Native C++20 Astro / SIMD',
-            color: '#34d399',
-            bg: 'rgba(52, 211, 153, 0.12)',
-            border: 'rgba(52, 211, 153, 0.3)'
-        };
-    };
-
-    const tierBadge = getTierBadge(card.pipelineTier);
-
     return (
         <div className="sb-execution-plan-card animate-fadeIn" style={{
             background: 'var(--sb-surface-card, #18181b)',
@@ -65,24 +38,13 @@ export const ExecutionPlanCard: React.FC<ExecutionPlanCardProps> = ({
             flexDirection: 'column',
             gap: '12px'
         }}>
-            {/* Header: Title and Pipeline Tier */}
+            {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255, 255, 255, 0.06)', paddingBottom: '10px', gap: '8px', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '14px' }}>📋</span>
                     <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--sb-text-label, #f4f4f5)' }}>
                         {card.title || 'Proposed Execution Plan'}
                     </span>
-                </div>
-                <div style={{
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    color: tierBadge.color,
-                    background: tierBadge.bg,
-                    border: `1px solid ${tierBadge.border}`,
-                    padding: '2px 8px',
-                    borderRadius: '4px'
-                }}>
-                    {tierBadge.label}
                 </div>
             </div>
 

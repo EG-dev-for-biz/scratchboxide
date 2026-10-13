@@ -9,8 +9,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { SbHumanLoader } from '../../common/spatial/SbHumanLoader.js';
-import { decodePng, encodePng } from '../texture-processing.js';
+import { SbHumanLoader } from '../../common/spatial/SbHumanLoader';
+import { decodePng, encodePng } from '../texture-processing';
 
 export interface EnhancedHandMesh {
     positions: Float32Array;

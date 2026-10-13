@@ -20,7 +20,6 @@ import {
     type ExtractedColorPalette,
     type ColorTransferPlan
 } from '../../browser/generative-canvas/services/nano-banana-color-service';
-import { ComfyUiPipelineAgent } from '../agent/comfyui-pipeline-agent';
 
 export interface ImageColorTransferRequest {
     /**
@@ -37,7 +36,7 @@ export interface ImageColorTransferRequest {
      * Execution mode:
      * - 'plan-only': Generates the exact two-step multimodal prompts and color plan.
      * - 'local-cielab': Runs instant offline Reinhard CIELAB statistical color harmonization (0ms network, 100% geometry lock).
-     * - 'execute': Full multimodal execution via Tier 1 Google Models with automatic Tier 2 ComfyUI failover.
+     * - 'execute': Alias of 'local-cielab' that reports telemetry mode 'execute'.
      * Defaults to 'local-cielab'.
      */
     mode?: 'execute' | 'plan-only' | 'local-cielab';
@@ -73,7 +72,6 @@ export interface ImageColorTransferResult {
     telemetry: {
         executionTimeMs: number;
         mode: 'execute' | 'plan-only' | 'local-cielab';
-        twoTierTier: 'tier1-native' | 'tier2-comfyui';
         preservedGeometry: boolean;
         dimensions?: { width: number; height: number };
     };
@@ -121,94 +119,37 @@ export class ImageColorTransferService {
                 telemetry: {
                     executionTimeMs: Date.now() - startTime,
                     mode: 'plan-only',
-                    twoTierTier: 'tier1-native',
                     preservedGeometry: true
                 }
             };
         }
 
-        if (mode === 'local-cielab') {
-            try {
-                const targetBuf = await this.resolveImageBuffer(request.targetImage);
-                const refBuf = await this.resolveImageBuffer(request.referenceImage);
-
-                const recoloredBuf = await this.transferColorLocalCielab(targetBuf, refBuf, {
-                    preserveSkinTones: request.preserveSkinTones ?? true,
-                    contrastCurve: request.contrastCurve || 'cinematic',
-                    outputFormat: request.outputFormat || 'jpg'
-                });
-
-                let outPath = request.outputPath;
-                if (outPath) {
-                    const dir = path.dirname(outPath);
-                    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-                    fs.writeFileSync(outPath, recoloredBuf);
-                }
-
-                return {
-                    success: true,
-                    palette: plan.extractedPalette,
-                    plan,
-                    outputImagePath: outPath,
-                    outputBuffer: recoloredBuf,
-                    telemetry: {
-                        executionTimeMs: Date.now() - startTime,
-                        mode: 'local-cielab',
-                        twoTierTier: 'tier1-native',
-                        preservedGeometry: true
-                    }
-                };
-            } catch (err: any) {
-                return {
-                    success: false,
-                    palette: plan.extractedPalette,
-                    plan,
-                    telemetry: {
-                        executionTimeMs: Date.now() - startTime,
-                        mode: 'local-cielab',
-                        twoTierTier: 'tier1-native',
-                        preservedGeometry: false
-                    },
-                    error: err.message
-                };
-            }
-        }
-
-        // Multimodal execution via Tier 1 Native / Tier 2 ComfyUI fallback
         try {
-            const agent = new ComfyUiPipelineAgent();
-            const result = await agent.executeWithTwoTierFallback<Buffer>(
-                `Apply Nano Banana color transfer: ${plan.phase2ApplicationPrompt}`,
-                async () => {
-                    // Tier 1 Native executor
-                    const targetBuf = await this.resolveImageBuffer(request.targetImage);
-                    const refBuf = await this.resolveImageBuffer(request.referenceImage);
-                    return this.transferColorLocalCielab(targetBuf, refBuf, {
-                        preserveSkinTones: request.preserveSkinTones ?? true,
-                        contrastCurve: request.contrastCurve || 'cinematic',
-                        outputFormat: request.outputFormat || 'jpg'
-                    });
-                },
-                { mockExecution: false }
-            );
+            const targetBuf = await this.resolveImageBuffer(request.targetImage);
+            const refBuf = await this.resolveImageBuffer(request.referenceImage);
+
+            const recoloredBuf = await this.transferColorLocalCielab(targetBuf, refBuf, {
+                preserveSkinTones: request.preserveSkinTones ?? true,
+                contrastCurve: request.contrastCurve || 'cinematic',
+                outputFormat: request.outputFormat || 'jpg'
+            });
 
             let outPath = request.outputPath;
-            if (outPath && result.result) {
+            if (outPath) {
                 const dir = path.dirname(outPath);
                 if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-                fs.writeFileSync(outPath, result.result);
+                fs.writeFileSync(outPath, recoloredBuf);
             }
 
             return {
-                success: result.success,
+                success: true,
                 palette: plan.extractedPalette,
                 plan,
                 outputImagePath: outPath,
-                outputBuffer: result.result,
+                outputBuffer: recoloredBuf,
                 telemetry: {
                     executionTimeMs: Date.now() - startTime,
-                    mode: 'execute',
-                    twoTierTier: result.tier,
+                    mode,
                     preservedGeometry: true
                 }
             };
@@ -219,8 +160,7 @@ export class ImageColorTransferService {
                 plan,
                 telemetry: {
                     executionTimeMs: Date.now() - startTime,
-                    mode: 'execute',
-                    twoTierTier: 'tier1-native',
+                    mode,
                     preservedGeometry: false
                 },
                 error: err.message

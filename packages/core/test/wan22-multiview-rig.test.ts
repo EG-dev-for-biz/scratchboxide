@@ -183,26 +183,6 @@ describe('Multi-View Video Diffusion & Non-A-Pose Casual Ingestion', () => {
             expect(response.resultPayload.prompt).not.toContain('symmetrical A-frame pose');
             expect(response.resultPayload.negativePrompt).not.toContain('non-A-frame pose');
         });
-
-        it('should handle generate_veo2_multiview_video with 24-view dense rig', async () => {
-            const handler = vfxVideoHandlers['generate_veo2_multiview_video'];
-            expect(handler).toBeDefined();
-
-            const response = await handler({
-                referenceFramePath: 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg',
-                characterDescription: 'lead singer',
-                heroPoseType: 'casual',
-                cameraRigPreset: '24-view-dense'
-            }, {} as any);
-
-            expect(response.resultPayload.videoDiffusionModel).toBe('veo-2.0-generate-001');
-            expect(response.resultPayload.cameraRigPreset).toBe('24-view-dense');
-            expect(response.resultPayload.heroPoseType).toBe('casual');
-            expect(response.resultPayload.totalCameras).toBe(24);
-            expect(response.resultPayload.generatedViews.length).toBe(24);
-            expect(response.resultPayload.generatedViews[0].yaw).toBe(0);
-            expect(response.resultPayload.generatedViews[1].yaw).toBe(15);
-        });
     });
 
     describe('4. VideoTo4DPerformerPipelineService Ingestion Contract', () => {

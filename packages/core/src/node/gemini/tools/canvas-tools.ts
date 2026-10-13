@@ -90,17 +90,12 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'present_execution_plan',
-        description: 'Present a structured execution plan card for user review and explicit confirmation before initiating complex, multi-step, or compute-heavy 3D/VFX/code tasks. Groups plan steps by pipeline tier (Tier 1 Native C++20 vs Tier 2 ComfyUI/Cloud Run), lists deliverables, and offers [Confirm & Execute] and [Adjust Plan] actions.',
+        description: 'Present a structured execution plan card for user review and explicit confirmation before initiating complex, multi-step, or compute-heavy 3D/VFX/code tasks. Lists steps and deliverables, and offers [Confirm & Execute] and [Adjust Plan] actions.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 title: { type: 'STRING', description: 'Title of the execution plan' },
                 goal: { type: 'STRING', description: 'Core user objective being solved' },
-                pipelineTier: {
-                    type: 'STRING',
-                    enum: ['tier1-native', 'tier2-comfyui', 'hybrid'],
-                    description: 'Execution architecture tier'
-                },
                 deliverables: {
                     type: 'ARRAY',
                     items: {
@@ -121,7 +116,6 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                             id: { type: 'STRING' },
                             title: { type: 'STRING' },
                             description: { type: 'STRING' },
-                            tier: { type: 'STRING', enum: ['tier1-native', 'tier2-comfyui'] },
                             engine: { type: 'STRING', description: 'Specific engine, e.g. C++20 Astro, Omni 1.1, Three.js' }
                         },
                         required: ['id', 'title']
@@ -134,7 +128,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     description: 'Optional open questions or assumptions'
                 }
             },
-            required: ['title', 'goal', 'pipelineTier', 'steps']
+            required: ['title', 'goal', 'steps']
         }
     },
     {
@@ -427,7 +421,6 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
     present_execution_plan(args, _ctx) {
         const title = asString(args.title) || 'Proposed Execution Plan';
         const goal = asString(args.goal) || 'Fulfill user goal';
-        const pipelineTier = (asString(args.pipelineTier) || 'tier1-native') as any;
         const deliverables = Array.isArray(args.deliverables) ? args.deliverables : [];
         const steps = Array.isArray(args.steps) ? args.steps : [];
         const estimatedLatency = asString(args.estimatedLatency) || undefined;
@@ -436,7 +429,6 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
         const executionPlanCard = {
             title,
             goal,
-            pipelineTier,
             deliverables,
             steps,
             estimatedLatency,
@@ -449,7 +441,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 status: 'plan_presented',
                 executionPlanCard
             },
-            summaryResult: `Presented execution plan "${title}" (${pipelineTier}) for user review.`
+            summaryResult: `Presented execution plan "${title}" for user review.`
         };
     },
 

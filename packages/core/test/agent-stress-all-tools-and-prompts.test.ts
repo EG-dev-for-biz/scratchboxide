@@ -37,8 +37,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 prompt: 'Master Agent Interaction & Tool Stress Test',
                 enableWorkspaceTools: true,
                 enableBrowserTools: true,
-                enableLensTools: true,
-                enableComfyUiTools: true
+                enableLensTools: true
             },
             workspaceRoot: testDir,
             sandbox: {
@@ -231,12 +230,11 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             const res = await registry.dispatch('present_execution_plan', {
                 title: 'High-Fidelity 3D Tiles & 4DGS Reconstruction Plan',
                 goal: 'Reconstruct high-fidelity 4D Gaussian Splat with real-world 3D tiles and UTDRA metrology',
-                pipelineTier: 'tier1-native',
                 steps: [
-                    { id: 's1', title: 'Ingest leaf LOD photogrammetric tiles via headless blockout runner', tier: 'tier1' },
-                    { id: 's2', title: 'Apply UTDRA elevation slicing & architectural crown preservation', tier: 'tier1' },
-                    { id: 's3', title: 'Calibrate diurnal solar lighting & Rayleigh sky scattering', tier: 'tier1' },
-                    { id: 's4', title: 'Reconstruct 4D performer Gaussians via Wan2.2-TI2V-5B backbone', tier: 'tier2' }
+                    { id: 's1', title: 'Ingest leaf LOD photogrammetric tiles via headless blockout runner' },
+                    { id: 's2', title: 'Apply UTDRA elevation slicing & architectural crown preservation' },
+                    { id: 's3', title: 'Calibrate diurnal solar lighting & Rayleigh sky scattering' },
+                    { id: 's4', title: 'Reconstruct 4D performer Gaussians via Wan2.2-TI2V-5B backbone' }
                 ]
             }, mockContext);
             expect(res.exec.status).toBe('completed');
@@ -594,41 +592,6 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).numSplats).toBeGreaterThan(0);
             expect((res.resultPayload as any).splatByteLength).toBeGreaterThan(0);
-        });
-    });
-
-    // =========================================================================
-    // Category 11: Two-Tier Task Capability Resolution & ComfyUI Failover
-    // =========================================================================
-    describe('11. Two-Tier Problem-Solving Directive & ComfyUI Tools', () => {
-        it('resolves procedural 3D terrain as Tier 1 Native C++20', async () => {
-            const res = await registry.dispatch('resolve_task_capability', {
-                taskGoal: 'Procedural mountain heightfield SDF and Marching Cubes in C++20',
-                promptContext: 'Native Scratchbox 3D engine C++20 compilation'
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).recommendedResolutionRoute).toBe('tier1-native');
-            expect((res.resultPayload as any).tier1Assessment.canSolveNatively).toBe(true);
-        });
-
-        it('resolves monocular neural depth estimation (Marigold) as Tier 2 ComfyUI', async () => {
-            const res = await registry.dispatch('resolve_task_capability', {
-                taskGoal: 'Synthesize dense metric depth map using Marigold diffusion model',
-                promptContext: 'Neural depth estimation requiring PyTorch LoRA on Cloud Run NVIDIA L4'
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).recommendedResolutionRoute).toBe('tier2-comfyui');
-            expect((res.resultPayload as any).tier2Fallback.recommendedPipelineCategory).toBeDefined();
-        });
-
-        it('executes comfyui_research_pipeline to find custom node blueprints', async () => {
-            const res = await registry.dispatch('comfyui_research_pipeline', {
-                goal: 'Neural image-to-3D diffusion mesh reconstruction',
-                mockExecution: true
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).status).toBe('success');
-            expect((res.resultPayload as any).blueprint).toBeDefined();
         });
     });
 

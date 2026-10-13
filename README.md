@@ -29,6 +29,22 @@ starts the Express API (`desktop-app/server/index.ts`, via ts-node) and the isol
 tools origin on port 3002, then starts Vite. The first API boot takes ~1 minute under
 ts-node; the compiled server (below) starts in a few seconds.
 
+### Python 3D engine
+
+The agent's Python 3D scripting (`import scratchbox as sb`) runs on a native C++ module
+(`scratchbox_native`) that is **built from source, not committed**. It needs CMake, a C++20
+compiler, and a repo-local virtualenv with nanobind:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+The first Python 3D run (or `npm test`) builds the module into
+`packages/core/src/native/3d-engine/build_py/` (a few minutes cold). It rebuilds automatically
+whenever the engine headers, bindings or `CMakeLists.txt` change; set `SCRATCHBOX_PYTHON` to use
+a different interpreter.
+
 ### Production build
 
 ```bash

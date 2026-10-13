@@ -72,11 +72,11 @@ test('route contract: every renderer client route reaches a JSON handler', async
         const tts = await post('/gemini/tts', {});
         assert.strictEqual(tts.status, 400, 'tts must require text');
 
-        // Two-Tier Capability Resolution & Media Job Polling
+        // Capability Resolution & Media Job Polling
         const cap = await post('/gemini/capability/resolve', { userGoal: 'procedural mountain terrain with SDF marching cubes' });
         assert.strictEqual(cap.status, 200, 'capability/resolve must be reachable');
         assert.strictEqual(cap.json.success, true);
-        assert.strictEqual(cap.json.resolution?.recommendedResolutionRoute, 'tier1-native');
+        assert.strictEqual(cap.json.resolution?.canSolveNatively, true);
 
         const job = await get(`/gemini/jobs/missing-job-1234?workspaceRoot=${encodeURIComponent(workspaceRoot)}`);
         assert.strictEqual(job.status, 404, 'gemini/jobs/:id must route and return 404 for missing job');

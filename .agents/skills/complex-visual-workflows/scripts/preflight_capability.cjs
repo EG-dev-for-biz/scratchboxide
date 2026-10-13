@@ -2,9 +2,9 @@
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * Pre-Flight Task Capability Resolver & Two-Tier Routing Tool
- * Analyzes visual prompts to determine Tier 1 (Native) vs Tier 2 (ComfyUI) routes,
- * mandatory staging rules, and exact tools/services to invoke.
+ * Pre-Flight Task Capability Resolver
+ * Analyzes visual prompts to determine native support, mandatory staging rules,
+ * and exact tools/services to invoke.
  *
  * Usage:
  *   node .agents/skills/complex-visual-workflows/scripts/preflight_capability.cjs "build a 3d sports car in monaco"
@@ -41,13 +41,13 @@ function analyzeVisualPrompt(prompt) {
     }
   }
 
-  // 3. Tier 2 ComfyUI Trigger Check
+  // 3. Unsupported Neural Capability Check
   const requiresTrellis = /trellis|triposr|image-to-3d|photo-to-3d|diffusion\s*mesh/i.test(lower);
   const requiresAnimateDiff = /animatediff|video-to-video\s*restyl|neural\s*style\s*transfer/i.test(lower);
   const requiresMarigold = /marigold|dense\s*depth\s*estimation/i.test(lower);
   const requiresCustomLora = /lora|custom\s*checkpoint|flux\s*lora|sdxl\s*checkpoint/i.test(lower);
 
-  const isTier2 = requiresTrellis || requiresAnimateDiff || requiresMarigold || requiresCustomLora;
+  const isUnsupported = requiresTrellis || requiresAnimateDiff || requiresMarigold || requiresCustomLora;
 
   // 4. Staging Strategy Determination
   let stagingStrategy = '18% Studio Grey Clay Void (CAD/DCC default baseline)';
@@ -100,12 +100,12 @@ function analyzeVisualPrompt(prompt) {
       detectedLocation: detectedLocation || (hasLocation ? 'Generic Geodetic' : 'None (Studio Void)')
     },
     stagingStrategy,
-    tierDecision: {
-      route: isTier2 ? 'tier2-comfyui' : 'tier1-native',
-      rationale: isTier2
-        ? 'Task explicitly requires neural diffusion / image-to-3D / specialized LoRAs not provided natively.'
+    capability: {
+      nativelySupported: !isUnsupported,
+      rationale: isUnsupported
+        ? 'Not supported: task requires neural diffusion / image-to-3D / specialized LoRAs that this app does not run.'
         : 'Task is fully achievable via Scratchbox native C++20 engine, Python nanobind, Google 3D Tiles, Omni 1.1, and matchmove services.',
-      comfyUiGaps: isTier2 ? { requiresTrellis, requiresAnimateDiff, requiresMarigold, requiresCustomLora } : null
+      unsupportedNeeds: isUnsupported ? { requiresTrellis, requiresAnimateDiff, requiresMarigold, requiresCustomLora } : null
     },
     suggestedNativeTools: nativeTools,
     suggestedCppHeaders: nativeHeaders,
@@ -127,7 +127,7 @@ function main() {
   console.log('============================================================\n');
   console.log(JSON.stringify(analysis, null, 2));
   console.log('\n============================================================');
-  console.log(`RECOMMENDED ROUTE: [${analysis.tierDecision.route.toUpperCase()}]`);
+  console.log(`NATIVELY SUPPORTED: [${analysis.capability.nativelySupported ? "YES" : "NO"}]`);
   console.log(`STAGING:           ${analysis.stagingStrategy}`);
   console.log('============================================================\n');
 }

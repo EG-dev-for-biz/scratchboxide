@@ -142,6 +142,8 @@ export class LocalSf3DService {
             `--device=${device}`
         ];
 
+        // The scratchbox package degrades gracefully without the native module, so a failed build isn't fatal here.
+        await this.pythonRunner.ensureNativeModule();
         const pythonExec = this.pythonRunner.getPythonExecutable();
         const { execFile } = await import('child_process');
         const { promisify } = await import('util');

@@ -172,10 +172,7 @@ Assembles or slices 2x2, side-by-side (50/50), or picture-in-picture video compo
 }
 ```
 
-### 2. `generate_veo2_multiview_video`
-Directs generative multiview camera angles for character and scene actions with temporal consistency.
-
-### 3. `vfx_ffmpeg_quick_edit`
+### 2. `vfx_ffmpeg_quick_edit`
 Performs precision cuts, cropping, audio re-muxing, and frame-rate conversions on extracted quadrants.
 
 ---

@@ -191,7 +191,7 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
   it('resolves algorithmic UV and PBR tasks natively in TaskCapabilityResolver', () => {
     const result = TaskCapabilityResolver.resolveTaskCapability('Perform algorithmic UV unwrap and rewrap with travertine cavitation pores and PBR decomposition');
 
-    expect(result.recommendedResolutionRoute).toBe('tier1-native');
+    expect(result.canSolveNatively).toBe(true);
     expect(result.tier1Assessment.canSolveNatively).toBe(true);
     expect(result.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
     expect(result.tier1Assessment.nativeCapabilitiesUsed).toContain('Algorithmic UV Unwrap & Rewrap Engine (AlgorithmicUvEngine)');

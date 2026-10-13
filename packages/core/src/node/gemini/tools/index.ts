@@ -11,11 +11,11 @@ export * from './types';
 export * from './workspace-tools';
 export * from './lens-browser-tools';
 export * from './canvas-tools';
-export * from './comfyui-tools';
 export * from './spatial-tools';
 export * from './atmosphere-tools';
 export * from './vfx-video-tools';
 export * from './mesh-shaping-tools';
+export * from './sb-rig-tools';
 export * from './nano-banana-tools';
 export * from './algorithmic-uv-tools';
 export * from './adaptive-matchmove-tools';
@@ -36,12 +36,12 @@ import { TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers } from './turnaround-t
 import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
+import { SB_RIG_TOOL_DECLARATIONS, sbRigHandlers } from './sb-rig-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers } from './nano-banana-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS, algorithmicUvHandlers } from './algorithmic-uv-tools';
 import { WORKSPACE_TOOL_DECLARATIONS, workspaceHandlers } from './workspace-tools';
 import { LENS_TOOL_DECLARATIONS, lensHandlers, BROWSER_TOOL_DECLARATIONS, browserHandlers } from './lens-browser-tools';
 import { CANVAS_TOOL_DECLARATIONS, canvasHandlers } from './canvas-tools';
-import { COMFYUI_TOOL_DECLARATIONS, comfyuiHandlers } from './comfyui-tools';
 import {
     GOOGLE_3D_TILES_TOOL_DECLARATIONS,
     google3DTilesHandlers,
@@ -108,6 +108,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...ATMOSPHERE_TOOL_DECLARATIONS,
     ...LIGHTING_TOOL_DECLARATIONS,
     ...MESH_SHAPING_TOOL_DECLARATIONS,
+    ...SB_RIG_TOOL_DECLARATIONS,
     ...WEBXR_GEOSPATIAL_TOOL_DECLARATIONS,
     ...GEOBOX_PRECISION_TOOL_DECLARATIONS,
     ...OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS,
@@ -117,7 +118,6 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...AVATAR_4DGS_TOOL_DECLARATIONS,
     ...HUMANOID_AVATAR_TOOL_DECLARATIONS,
     ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
-    ...COMFYUI_TOOL_DECLARATIONS,
     ...IMAGE_TO_PBR_TOOL_DECLARATIONS,
     ...PBR_MATERIAL_TOOL_DECLARATIONS,
     ...LOCAL_SF3D_TOOL_DECLARATIONS,
@@ -142,6 +142,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...atmosphereHandlers,
     ...lightingHandlers,
     ...meshShapingHandlers,
+    ...sbRigHandlers,
     ...webxrGeospatialHandlers,
     ...geoboxPrecisionHandlers,
     ...opticsLensDistortionHandlers,
@@ -150,7 +151,6 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...tapir4dgsHandlers,
     ...avatar4dgsHandlers,
     ...analyticalGroomHandlers,
-    ...comfyuiHandlers,
     ...imageToPbrHandlers,
     ...pbrMaterialHandlers,
     ...localSf3DHandlers,

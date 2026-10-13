@@ -13,6 +13,7 @@ export default defineConfig({
         environment: 'node',
         include: ['packages/core/test/**/*.test.ts', 'packages/cli/test/**/*.test.ts', 'desktop-app/test/**/*.test.ts'],
         exclude: ['**/node_modules/**', '**/dist/**'],
+        globalSetup: ['./vitest.global-setup.ts'],
         testTimeout: 180_000,
         hookTimeout: 60_000,
         silent: 'passed-only',

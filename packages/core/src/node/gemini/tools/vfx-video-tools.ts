@@ -11,10 +11,8 @@ import { buildBeautifyPrompt } from '../../../browser/generative-canvas/services
 import {
     buildNeutralPerformerPrompt,
     buildFrameMotivatedPerformerVideoPrompt,
-    generateMultiViewCameraRig,
     type MultiViewCameraPosition
 } from '../../../browser/generative-canvas/services/video/omniVideoPromptService';
-import { ComfyUiPipelineAgent } from '../../agent/comfyui-pipeline-agent';
 import { HeadlessVideoEditorService } from '../../video/HeadlessVideoEditorService';
 import { HeadlessVideoCompositorService } from '../../video/HeadlessVideoCompositorService';
 import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirectorService';
@@ -185,49 +183,6 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['referenceFrameRef']
         }
-    },
-    {
-        name: 'generate_veo2_multiview_video',
-        description: 'Orchestrate multi-view video capture using Google Veo 2 / Wan2.2 multi-view video diffusion with Reference Context Packing (RCP), Target Context Routing (TCR), multi-view camera capture rigs (6-view, 24-view dense, 48-view multi-pitch), and 3D skeleton conditioning across camera positions.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                referenceFramePath: {
-                    type: 'STRING',
-                    description: 'Path or image reference to the hero frame'
-                },
-                cameraPositions: {
-                    type: 'ARRAY',
-                    items: { type: 'STRING' },
-                    description: 'List of camera positions to capture: ["front", "left_45", "right_45", "rear_180"]'
-                },
-                cameraRigPreset: {
-                    type: 'STRING',
-                    description: 'Multi-view camera rig preset: "6-view-orbit", "24-view-dense", "48-view-multipitch", or "24-view-frontal-arc"'
-                },
-                heroPoseType: {
-                    type: 'STRING',
-                    description: 'Hero frame pose: "casual" or "a-pose"'
-                },
-                prompt: {
-                    type: 'STRING',
-                    description: 'Performer action and character prompt motivated by the reference frame'
-                },
-                skeletonGuidanceFile: {
-                    type: 'STRING',
-                    description: 'Optional path to SB-Human or MediaPipe 3D skeleton motion JSON'
-                },
-                steps: {
-                    type: 'NUMBER',
-                    description: 'Diffusion sampling steps (default 25)'
-                },
-                cfg: {
-                    type: 'NUMBER',
-                    description: 'Classifier-free guidance scale (default 6.0)'
-                }
-            },
-            required: ['referenceFramePath']
-        }
     }
 ];
 
@@ -344,47 +299,6 @@ export const aiBeautifyHandlers: Record<string, ToolHandler> = {
                 firstFrameSyntax: result.firstFrameSyntax
             },
             summaryResult: `Constructed frame-motivated video prompt conditioned on ${result.referenceFrameRef} (${result.cameraPosition} viewpoint, pose: ${result.heroPoseType}) for ${result.videoModelBackbone}.`
-        };
-    },
-
-    generate_veo2_multiview_video: async (args, _ctx) => {
-        const referenceFramePath = asString(args.referenceFramePath);
-        if (!referenceFramePath) throw new Error('generate_veo2_multiview_video: "referenceFramePath" is required.');
-
-        const cameraPositions = Array.isArray(args.cameraPositions)
-            ? (args.cameraPositions as string[]).map(s => String(s))
-            : ['front', 'left_45', 'right_45', 'rear_180'];
-        const cameraRigPreset = asString(args.cameraRigPreset) || '6-view-orbit';
-        const heroPoseType = asString(args.heroPoseType) || 'casual';
-        const cameraRig = generateMultiViewCameraRig(cameraRigPreset as any);
-        const prompt = asString(args.prompt) || `Performer in ${heroPoseType === 'a-pose' ? 'symmetrical A-pose' : 'natural casual posture'} maintaining subtle motion on neutral grey background`;
-
-        const mockExecution = typeof args.mockExecution === 'boolean'
-            ? args.mockExecution
-            : (process.env.NODE_ENV === 'test' || !process.env.COMFYUI_CLOUDRUN_URL);
-        const comfyAgent = new ComfyUiPipelineAgent({ mockExecution, workspaceRoot: _ctx?.workspaceRoot });
-        const goal = `Multi-view video diffusion using Google Veo 2 / Wan2.2-TI2V-5B backbone for capture positions ${cameraPositions.join(', ')} with rig preset ${cameraRigPreset} motivated by reference frame ${referenceFramePath} in ${heroPoseType} stance`;
-        const blueprint = await comfyAgent.researchPipeline(goal);
-        const execution = await comfyAgent.executeAndHeal(goal);
-
-        return {
-            resultPayload: {
-                success: execution.success,
-                blueprintId: blueprint.id,
-                category: blueprint.category,
-                videoDiffusionModel: 'veo-2.0-generate-001',
-                referenceFramePath,
-                cameraPositions,
-                cameraRigPreset,
-                heroPoseType,
-                cameraRig,
-                totalCameras: cameraRig.totalCameras,
-                generatedViews: cameraRig.cameras,
-                assets: execution.assets,
-                executionDurationMs: execution.executionDurationMs,
-                diagnostics: execution.diagnostics
-            },
-            summaryResult: `Dispatched Google Veo 2 / Wan2.2 multi-view video generation across ${cameraPositions.length} capture positions (${cameraPositions.join(', ')}, rig: ${cameraRigPreset}, pose: ${heroPoseType}).`
         };
     }
 };

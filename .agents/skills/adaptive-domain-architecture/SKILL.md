@@ -73,7 +73,7 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
 - **Three.js is a Pure Renderer/Viewport**: Three.js must never be used to procedurally construct geometry loops in browser JavaScript. Three.js is best utilized as a pure renderer and viewport, mounting the streamed `.glb`, managing the WebGL context, camera choreography, and interactive orbit controls.
 - **Strict Prohibition on Toy JavaScript Primitives ("Tier-0" Ban)**: Viewports and generative pipelines must NEVER catch errors and silently fall back to Three.js primitive boxes, cylinders, or cones (`new THREE.BoxGeometry`, etc.). Stacking flat boxes is strictly banned.
 - **Mandatory Geometric Complexity Floor (`GeometricComplexityGate`)**: Every procedural generative scene must pass `GeometricComplexityGate` with a strict minimum of **25,000 vertices** (5,000 for single isolated props), **15,000 triangles**, and an authentic 70-20-10 multi-mesh hierarchy.
-- **Strict Two-Tier Failover**: If Tier 1 native C++20 / Python nanobind fails at runtime, execution must fail over transparently to **Tier 2 ComfyUI (Cloud Run L4 GPU / local)**, never degrading to client-side JavaScript primitives.
+- **Surface Native Faults**: If native C++20 / Python nanobind generation fails at runtime, report the error; never degrade to client-side JavaScript primitives.
 
 ### Pillar 7: Zero Uninvited Defaults (Atmosphere & Clouds Strictly Opt-In)
 - **Preserve Visual Neutrality and User Intent**: In practice, uninvited defaults pollute user intent. When building an outpost or mechanical asset, unexpected clouds or lighting presets fight against the composition. Making atmosphere, ephemeris, and cloud layers strictly opt-in preserves visual neutrality and artistic control.

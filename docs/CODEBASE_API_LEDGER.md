@@ -6,6 +6,8 @@
 
 This ledger provides an exhaustive index of all completed APIs, services, operators, agent tools, REST endpoints, CLI commands, and native C++ modules built across Scratchbox IDE, followed by an architectural blueprint for how they interlock as an end-to-end pipeline for Visual Effects (VFX), Virtual Production, and Generative Spatial Video.
 
+> **Looking for the external API?** This ledger covers *internal* implementation — services, operators, and the in-app Gemini agent tool registry. For the contract other apps/agents use to call into Scratchbox Studio over MCP, see [docs/integrations/mcp/README.md](integrations/mcp/README.md).
+
 ---
 
 ## Table of Contents
@@ -23,7 +25,7 @@ This ledger provides an exhaustive index of all completed APIs, services, operat
    - [Pro NLE Video Compositor, Timeline & FFmpeg Processing](#pro-nle-video-compositor-timeline--ffmpeg-processing)
    - [Survey Station Synthesis & AI Beautify](#survey-station-synthesis--ai-beautify)
    - [WebXR Metric Geospatial Bridge](#webxr-metric-geospatial-bridge)
-   - [Autonomous Intelligence, DeepWrite & Two-Tier ComfyUI](#autonomous-intelligence-deepwrite--two-tier-comfyui)
+   - [Autonomous Intelligence & DeepWrite](#autonomous-intelligence--deepwrite)
    - [Canvas Primitives & Codebase Lenses](#canvas-primitives--codebase-lenses)
 2. [Gemini Agent Tool Suite (In-App Tool Registry)](#2-gemini-agent-tool-suite-in-app-tool-registry)
 3. [Direct-Dispatch Canvas Operators (Three.js Stage Engine)](#3-direct-dispatch-canvas-operators-threejs-stage-engine)
@@ -175,11 +177,9 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
   - Manual optical pin zero-drift calibration.
   - Vector projection: projects Google Maps Platform road corridors and parcel boundaries into 3D metric meshes.
 
-### Autonomous Intelligence, DeepWrite & Two-Tier ComfyUI
+### Autonomous Intelligence & DeepWrite
 - **`GeminiService`** (`packages/core/src/node/gemini-service.ts`): Multimodal reasoning, tool dispatch, and streaming.
-- **`ComfyUiPipelineAgent`** (`packages/core/src/node/agent/comfyui-pipeline-agent.ts`):
-  - `executeWithTwoTierFallback`: Assesses Tier 1 native feasibility vs Tier 2 ComfyUI fallback with automatic transactional failover.
-- **`ComfyUiBridgeService`** & **`ComfyUiCloudRunService`** (`packages/core/src/node/cloudrun/comfyui-cloudrun-service.ts`): Manages local ComfyUI and Google Cloud Run NVIDIA L4 GPU acceleration instances.
+- **`TaskCapabilityResolver`** (`packages/core/src/node/agent/task-capability-resolver.ts`): Pre-flight task-domain classification that selects tool packs and reports `canSolveNatively: false` for unsupported neural tasks.
 - **`DeepWriteService`** & **`DynamicDagPlanner`** (`packages/core/src/node/deep-write/`): Multi-file autonomous code generation, scaffold planning, and verification loops.
 - **`LongRunningAgentService`** & **`SubagentPoolService`** (`packages/core/src/node/`): Spawns, monitors, and compacts background agent contexts.
 
@@ -207,15 +207,6 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `workspace_find_symbols`: Finds AST symbols.
 - `workspace_semantic_search`: Vector similarity search across project.
 - `invoke_subagent`: Dispatches subagents from pool.
-
-### 2. ComfyUI Two-Tier Fallback (`comfyui-tools.ts`)
-- `resolve_task_capability`: Evaluates Tier 1 native feasibility vs Tier 2 ComfyUI fallback.
-- `comfyui_get_status`: Checks ComfyUI worker status.
-- `comfyui_research_pipeline`: Researches nodes/models for prompt.
-- `comfyui_cloudrun_status`: Checks Cloud Run L4 GPU instance.
-- `comfyui_cloudrun_sync_upstream`: Synchronizes custom nodes and weights.
-- `comfyui_inject_dynamic_code`: Injects missing Python custom nodes.
-- `comfyui_execute_pipeline`: Submits workflow and returns asset URLs.
 
 ### 3. Geospatial 3D Tiles & Reconstruction (`spatial-tools.ts`)
 - `google_3d_tiles_get_full_texture`: Ingests photorealistic textured 3D tile GLB.
@@ -296,7 +287,6 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `build_beautify_prompt`: Verbatim AI Beautify prompt template.
 - `build_neutral_performer_prompt`: Symmetrical A-pose flat studio prompt builder.
 - `build_frame_motivated_performer_prompt`: `<FIRST_FRAME>` syntax builder.
-- `generate_veo2_multiview_video`: Google Veo 2 / Multi-View runner.
 - `vfx_ffmpeg_quick_edit`: Fast trimming and concatenation.
 - `vfx_ffmpeg_extract_frames`: Extracts PNG keyframes.
 - `vfx_ffmpeg_split_screen`: Compiles synchronized side-by-side comparisons.
@@ -473,8 +463,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 | `/api/tools` | `toolsRouter` | Dynamic tools registry, tool execution, schema reflection |
 | `/api/models` | `modelsRouter` | Catalog of trained neural models, checkpoints, and LoRAs |
 | `/api/performer/pipeline`, `/api/models/performer/pipeline` | `performerRouter` | End-to-end Performer 4D dynamic performer reconstruction pipeline |
-| `/api/comfyui` | `comfyRouter` | ComfyUI local & Cloud Run L4 GPU cluster bridge, queueing, dynamic nodes |
-| `/api/capabilities/resolve`| `resolveTaskCapability`| Two-tier capability assessor (Tier 1 Native vs Tier 2 ComfyUI) |
+| `/api/capabilities/resolve`| `resolveTaskCapability`| Native capability assessor (task domain, suggested tool, `canSolveNatively`) |
 
 ---
 
@@ -573,7 +562,7 @@ Located in `packages/cli/src/commands/`:
 - **`sbox commit -m <message>`**: Creates a new spatial commit snapshotting geometry, transforms, and metadata.
 - **`sbox diff <commitA> <commitB>`**: Computes 3D geometric and volumetric deltas between two spatial commits.
 - **`sbox bake`**: Bakes procedural C++ geometry, high-res PBR textures, and LOD pyramids into static GLBs.
-- **`sbox generate --prompt <text> [--out <file.glb>]`**: Natural-language 3D generation via native C++ Astro or ComfyUI fallback.
+- **`sbox generate --prompt <text> [--out <file.glb>]`**: Natural-language 3D generation via the native C++ Astro engine.
 - **`sbox qa [--rubric]`**: Runs the automated 8-Dimension Visual Critic quality audit on the workspace.
 - **`sbox splat <input> [--out <file.ply>]`**: Converts multi-view photos, videos, or meshes into optimized 3D Gaussian Splats.
 - **`sbox matchmove <video> --location <coords/address>`**: Solves 6-DOF camera matchmove and exports camera trajectories.
@@ -623,14 +612,12 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
                            - Anti-Drift Holdout Mattes (`destination-out`)
                            - HeadlessVideoEditorService (LUTs, Chromakey, EBU R128)
                                              │
-                       ┌─────────────────────┴─────────────────────┐
-                       ▼                                           ▼
-          [Tier 1: Native C++20 Render]             [Tier 2: Neural Restyle & Inpaint]
-          - NativeCppCompilerService                - ComfyUiPipelineAgent (Two-Tier Fallback)
-          - Apple Clang -O3 SIMD Math              - Cloud Run NVIDIA L4 GPU Acceleration
-          - Streaming Binary GLTF 2.0               - Gemini Omni 1.1 / Veo Video Synthesis
-                       │                                           │
-                       └─────────────────────┬─────────────────────┘
+                                             ▼
+                             [Native C++20 Render]
+                           - NativeCppCompilerService
+                           - Apple Clang -O3 SIMD Math
+                           - Streaming Binary GLTF 2.0
+                                             │
                                              ▼
                              [Visual Critic & Metrology Audit]
                            - MediaPipeVideoDirectorService
@@ -663,6 +650,5 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
 2. **Anti-Drift Holdouts**: Real-world massing serves as dynamic occlusion mattes (`destination-out`) so performers and vehicles naturally pass behind architectural pillars and street corners.
 3. **Optical Realism**: `BrownConradyLensDistortionPass` reapplies original plate distortion, and `CinematicBokehPass` applies anamorphic circle of confusion blur keyed to dynamic focus targets (`camera_track_focus_target`).
 
-### Stage 6: Two-Tier Neural Enhancement & Quality Gate
-1. **Two-Tier Failover**: If the scene requires generative restyling, `resolve_task_capability` routes to `ComfyUiPipelineAgent` on Google Cloud Run NVIDIA L4 GPUs with zero manual setup.
-2. **Automated Visual Critic**: `vfx_visual_critic_audit` checks final pixel buffers against the 8-Dimension Visual Fidelity Rubric ($\ge 8.5/10$), ensuring zero void backgrounds, zero billboard splats, and zero sticker drop shadows before export.
+### Stage 6: Quality Gate
+1. **Automated Visual Critic**: `vfx_visual_critic_audit` checks final pixel buffers against the 8-Dimension Visual Fidelity Rubric ($\ge 8.5/10$), ensuring zero void backgrounds, zero billboard splats, and zero sticker drop shadows before export.

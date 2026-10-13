@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import type { ContinuousMaterialDescriptor } from '../../common/adaptive-material-types.js';
+import type { ContinuousMaterialDescriptor } from '../../common/adaptive-material-types';
 
 export interface UsdzFileEntry {
     name: string;

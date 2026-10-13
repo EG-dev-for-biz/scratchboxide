@@ -199,52 +199,50 @@ describe('Complex Workflows Prompt & Regex Audit', () => {
         });
     });
 
-    describe('9. Two-Tier Task Capability Resolver Regex Routing', () => {
-        it('routes native C++20, Three.js, and procedural 3D to Tier 1 Native', () => {
+    describe('9. Task Capability Resolver Regex Routing', () => {
+        it('routes native C++20, Three.js, and procedural 3D natively', () => {
             const capability = resolveTaskCapability({
                 userGoal: 'Build a procedural terrain mesh using C++20 Apple Clang and SIMD marching cubes',
                 promptContext: 'Native 3D engine execution'
             });
-            expect(capability.recommendedResolutionRoute).toBe('tier1-native');
+            expect(capability.canSolveNatively).toBe(true);
             expect(capability.tier1Assessment.canSolveNatively).toBe(true);
         });
 
-        it('routes UTDRA photogrammetric tile decomposition to Tier 1 Native', () => {
+        it('routes UTDRA photogrammetric tile decomposition natively', () => {
             const capability = resolveTaskCapability({
                 userGoal: 'Decompose photogrammetric 3D tiles using UTDRA algorithm to excise bridge voids and preserve crowns',
                 promptContext: 'UTDRA tile processing'
             });
-            expect(capability.recommendedResolutionRoute).toBe('tier1-native');
+            expect(capability.canSolveNatively).toBe(true);
             expect(capability.tier1Assessment.canSolveNatively).toBe(true);
         });
 
-        it('routes camera matchmoving and NOAA ephemeris to Tier 1 Native', () => {
+        it('routes camera matchmoving and NOAA ephemeris natively', () => {
             const capability = resolveTaskCapability({
                 userGoal: 'Calculate NOAA solar ephemeris and Brown-Conrady lens undistortion for camera solve',
                 promptContext: 'VFX plate alignment'
             });
-            expect(capability.recommendedResolutionRoute).toBe('tier1-native');
+            expect(capability.canSolveNatively).toBe(true);
             expect(capability.tier1Assessment.canSolveNatively).toBe(true);
         });
 
-        it('routes neural image-to-3D diffusion (Trellis / TripoSR) to Tier 2 ComfyUI', () => {
+        it('reports neural image-to-3D diffusion (Trellis / TripoSR) as not natively solvable', () => {
             const capability = resolveTaskCapability({
                 userGoal: 'Generate a 3D mesh from a single photo using Trellis image-to-3d diffusion model',
                 promptContext: 'Neural reconstruction'
             });
-            expect(capability.recommendedResolutionRoute).toBe('tier2-comfyui');
+            expect(capability.canSolveNatively).toBe(false);
             expect(capability.tier1Assessment.canSolveNatively).toBe(false);
-            expect(capability.tier2Fallback.needed).toBe(true);
         });
 
-        it('routes neural video-to-video restyling to Tier 2 ComfyUI', () => {
+        it('reports neural video-to-video restyling as not natively solvable', () => {
             const capability = resolveTaskCapability({
                 userGoal: 'Apply AnimateDiff video-to-video neural restyling with custom LoRA checkpoint',
                 promptContext: 'Neural video transfer'
             });
-            expect(capability.recommendedResolutionRoute).toBe('tier2-comfyui');
+            expect(capability.canSolveNatively).toBe(false);
             expect(capability.tier1Assessment.canSolveNatively).toBe(false);
-            expect(capability.tier2Fallback.needed).toBe(true);
         });
     });
 

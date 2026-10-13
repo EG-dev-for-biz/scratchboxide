@@ -154,7 +154,7 @@ describe('4K Monumental 360 Panorama Generator Pipeline & Agent Tool', () => {
             { domainHint: '3d' }
         );
 
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.primaryNativeEngine).toBe('google-models');
         expect(resolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('4K Monumental 360 Panorama Generator'))).toBe(true);

@@ -24,6 +24,7 @@
 #include "scratchbox_parametric_human.hpp"
 #include "scratchbox_kinematics.hpp"
 #include "scratchbox_skinning.hpp"
+#include "scratchbox_sb_rig.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -413,8 +414,10 @@ NB_MODULE(scratchbox_native, m) {
         }, "frequency"_a = 2.0f, "amplitude"_a = 0.15f)
         .def("displace_along_normals", [](ScratchboxMesh& self, float frequency, float amplitude) -> ScratchboxMesh& {
             math::FastNoise3D noise(42);
+            // 3-octave fBm has a p99 magnitude of ~0.44; normalizing makes `amplitude` the approximate peak relief in metres.
+            constexpr float kFbmP99 = 0.44f;
             for (auto& v : self.vertices) {
-                float n = noise.fBm(v.position.x * frequency, v.position.y * frequency, v.position.z * frequency, 3, 0.5f, 2.0f);
+                float n = noise.fBm(v.position.x * frequency, v.position.y * frequency, v.position.z * frequency, 3, 2.0f, 0.5f) / kFbmP99;
                 v.position = v.position + v.normal * (n * amplitude);
             }
             self.recomputeNormals();
@@ -575,9 +578,9 @@ NB_MODULE(scratchbox_native, m) {
         return ScratchboxMesh::createBox(size, color);
     }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
 
-    m_geom.def("create_cylinder", [](float radiusTop, float radiusBottom, float height, int segments, const Vec4& color) {
-        return ScratchboxMesh::createCylinder(radiusTop, radiusBottom, height, segments, color);
-    }, "radius_top"_a = 1.0f, "radius_bottom"_a = 1.0f, "height"_a = 2.0f, "segments"_a = 24, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+    m_geom.def("create_cylinder", [](float radiusTop, float radiusBottom, float height, int segments, const Vec4& color, bool capped) {
+        return ScratchboxMesh::createCylinder(radiusTop, radiusBottom, height, segments, color, capped);
+    }, "radius_top"_a = 1.0f, "radius_bottom"_a = 1.0f, "height"_a = 2.0f, "segments"_a = 24, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f), "capped"_a = true);
 
     m_geom.def("create_torus", [](float mainRadius, float tubeRadius, int radialSegments, int tubularSegments, const Vec4& color) {
         return createTorus(mainRadius, tubeRadius, radialSegments, tubularSegments, color);
@@ -1544,4 +1547,155 @@ NB_MODULE(scratchbox_native, m) {
        "surface_mesh"_a = nullptr,
        "surface_y_offset"_a = 0.0f,
        "Procedurally synthesizes and grounds an architectural scale entourage figure conforming to the 18% Studio Grey Clay Invariant");
+
+    // ========================================================================
+    // SB-RIG SUBMODULE (analytical auto-rigging of any mesh)
+    // ========================================================================
+    auto m_rig = m.def_submodule("rig", "SB-Rig: geometry-derived joint trees and geodesic 4-bone skin weights for any mesh");
+    using Point3 = std::array<float, 3>;
+    auto toVec3 = [](const Point3& p) { return Vec3(p[0], p[1], p[2]); };
+    auto renameFromDict = [](const nb::dict& d) {
+        sb_rig::RenameMap map;
+        for (auto [key, value] : d) map.emplace_back(nb::cast<std::string>(key), nb::cast<std::string>(value));
+        return map;
+    };
+
+    nb::class_<sb_rig::SbRigParams>(m_rig, "Params",
+        "All lengths are dimensionless fractions of lengths the mesh measures itself (geodesic diameter D, bbox diagonal, ring radius).")
+        .def(nb::init<>())
+        .def_rw("weld_frac", &sb_rig::SbRigParams::weldFrac)
+        .def_rw("refine_edge_multiple", &sb_rig::SbRigParams::refineEdgeMultiple)
+        .def_rw("agd_samples", &sb_rig::SbRigParams::agdSamples)
+        .def_rw("band_frac", &sb_rig::SbRigParams::bandFrac)
+        .def_rw("band_edge_multiple", &sb_rig::SbRigParams::bandEdgeMultiple)
+        .def_rw("loop_contract_ratio", &sb_rig::SbRigParams::loopContractRatio)
+        .def_rw("min_node_frac", &sb_rig::SbRigParams::minNodeFrac)
+        .def_rw("min_branch_frac", &sb_rig::SbRigParams::minBranchFrac)
+        .def_rw("hub_merge_frac", &sb_rig::SbRigParams::hubMergeFrac)
+        .def_rw("joint_deviation_frac", &sb_rig::SbRigParams::jointDeviationFrac)
+        .def_rw("radius_weight", &sb_rig::SbRigParams::radiusWeight)
+        .def_rw("bend_threshold_rad", &sb_rig::SbRigParams::bendThresholdRad)
+        .def_rw("min_bone_frac", &sb_rig::SbRigParams::minBoneFrac)
+        .def_rw("max_bone_frac", &sb_rig::SbRigParams::maxBoneFrac)
+        .def_rw("min_leaf_chain_segments", &sb_rig::SbRigParams::minLeafChainSegments)
+        .def_rw("blend_scale", &sb_rig::SbRigParams::blendScale)
+        .def_rw("emit_tip_joints", &sb_rig::SbRigParams::emitTipJoints)
+        .def_prop_rw("root_hint",
+            [](const sb_rig::SbRigParams& p) -> std::optional<Point3> {
+                if (!p.hasRootHint) return std::nullopt;
+                return Point3{p.rootHint.x, p.rootHint.y, p.rootHint.z};
+            },
+            [toVec3](sb_rig::SbRigParams& p, std::optional<Point3> hint) {
+                p.hasRootHint = hint.has_value();
+                if (hint) p.rootHint = toVec3(*hint);
+            },
+            "World-space point near where the hierarchy should start (e.g. the cut end of a limb); None = geodesic centre.")
+        .def_prop_rw("chain_hints",
+            [](const sb_rig::SbRigParams& p) {
+                std::vector<std::vector<Point3>> out;
+                for (const auto& h : p.chainHints) {
+                    std::vector<Point3> pts;
+                    for (const auto& v : h) pts.push_back({v.x, v.y, v.z});
+                    out.push_back(pts);
+                }
+                return out;
+            },
+            [toVec3](sb_rig::SbRigParams& p, const std::vector<std::vector<Point3>>& hints) {
+                p.chainHints.clear();
+                for (const auto& h : hints) {
+                    std::vector<Vec3> pts;
+                    for (const auto& v : h) pts.push_back(toVec3(v));
+                    p.chainHints.push_back(pts);
+                }
+            },
+            "Extra chains, each a base-to-tip list of points (surface points are pulled to the local axis).")
+        .def("set", &sb_rig::SbRigParams::set, "name"_a, "value"_a, "Set a parameter by its camelCase name, e.g. set('minBranchFrac', '0.06')")
+        .def("validate", &sb_rig::SbRigParams::validate);
+
+    nb::class_<sb_rig::SbRigChain>(m_rig, "Chain")
+        .def_ro("name", &sb_rig::SbRigChain::name)
+        .def_ro("parent_joint", &sb_rig::SbRigChain::parentJoint)
+        .def_ro("joints", &sb_rig::SbRigChain::joints)
+        .def_ro("leaf", &sb_rig::SbRigChain::leaf)
+        .def_ro("hinted", &sb_rig::SbRigChain::hinted)
+        .def_ro("length", &sb_rig::SbRigChain::length)
+        .def("__repr__", [](const sb_rig::SbRigChain& c) {
+            return "<sb.rig.Chain " + c.name + (c.leaf ? " leaf" : " inner") + " joints=" + std::to_string(c.joints.size()) + ">";
+        });
+
+    nb::class_<sb_rig::SbRigResult>(m_rig, "Result")
+        .def_ro("skeleton", &sb_rig::SbRigResult::skeleton)
+        .def_ro("chains", &sb_rig::SbRigResult::chains)
+        .def_prop_ro("joint_names", [](const sb_rig::SbRigResult& r) {
+            std::vector<std::string> names;
+            for (const auto& j : r.skeleton.joints) names.push_back(j.name);
+            return names;
+        })
+        .def_prop_ro("parents", [](const sb_rig::SbRigResult& r) {
+            std::vector<int32_t> parents;
+            for (const auto& j : r.skeleton.joints) parents.push_back(j.parentIndex);
+            return parents;
+        })
+        .def_prop_ro("rest_positions", [](const sb_rig::SbRigResult& r) {
+            std::vector<Point3> out;
+            for (const auto& j : r.skeleton.joints) out.push_back({j.restPosition.x, j.restPosition.y, j.restPosition.z});
+            return out;
+        })
+        .def_prop_ro("tip_joints", [](const sb_rig::SbRigResult& r) {
+            nb::list out;
+            for (uint8_t t : r.jointIsTip) out.append(nb::bool_(t != 0));
+            return out;
+        }, "True for end-effector joints, which carry no weight.")
+        .def_prop_ro("joint_indices", [](const sb_rig::SbRigResult& r) {
+            std::vector<uint16_t> out;
+            out.reserve(r.weights.size() * 4);
+            for (const auto& w : r.weights) out.insert(out.end(), w.joints.begin(), w.joints.end());
+            return out;
+        }, "Flat list, 4 joint indices per input vertex (glTF JOINTS_0 order).")
+        .def_prop_ro("joint_weights", [](const sb_rig::SbRigResult& r) {
+            std::vector<float> out;
+            out.reserve(r.weights.size() * 4);
+            for (const auto& w : r.weights) out.insert(out.end(), w.weights.begin(), w.weights.end());
+            return out;
+        }, "Flat list, 4 weights per input vertex summing to 1 (glTF WEIGHTS_0 order).")
+        .def_ro("vertex_owner", &sb_rig::SbRigResult::vertexOwner)
+        .def_prop_ro("leaf_count", &sb_rig::SbRigResult::leafCount)
+        .def("rename", [renameFromDict](sb_rig::SbRigResult& r, const nb::dict& mapping) { r.rename(renameFromDict(mapping)); }, "mapping"_a,
+             "Rename joints in dict order. A chain name (e.g. 'Chain3') renames its joints to <value>1..n; any other key must be an exact joint name.")
+        .def("report_json", [](const sb_rig::SbRigResult& r, const sb_rig::SbRigParams& params, bool includeTree) {
+            return sb_rig::reportJson(r, params, includeTree).dump();
+        }, "params"_a = sb_rig::SbRigParams(), "include_tree"_a = false)
+        .def("__repr__", [](const sb_rig::SbRigResult& r) {
+            return "<sb.rig.Result joints=" + std::to_string(r.skeleton.joints.size()) + " chains=" + std::to_string(r.chains.size()) +
+                   " leaves=" + std::to_string(r.leafCount()) + ">";
+        });
+
+    m_rig.def("solve", [](const ScratchboxMesh& mesh, const sb_rig::SbRigParams& params) {
+        return sb_rig::SbRigSolver::solve(mesh, params);
+    }, "mesh"_a, "params"_a = sb_rig::SbRigParams(), nb::call_guard<nb::gil_scoped_release>(),
+       "Discover a joint tree and 4-bone skin weights for an in-memory mesh.");
+
+    m_rig.def("rig_glb", [renameFromDict](const std::string& inputPath, const std::string& outputPath, const sb_rig::SbRigParams& params,
+                                          std::optional<nb::dict> rename, std::optional<std::string> reportPath) {
+        sb_rig::RenameMap map = rename ? renameFromDict(*rename) : sb_rig::RenameMap{};
+        sb_rig::SbRigResult result;
+        {
+            nb::gil_scoped_release release;
+            result = sb_rig::rigGlbFile(inputPath, outputPath, params, map);
+        }
+        if (reportPath) {
+            std::ofstream f(*reportPath);
+            if (!f.is_open()) throw std::runtime_error("cannot write " + *reportPath);
+            f << sb_rig::reportJson(result, params).dump();
+        }
+        return result;
+    }, "input_path"_a, "output_path"_a, "params"_a = sb_rig::SbRigParams(), "rename"_a = nb::none(), "report_path"_a = nb::none(),
+       "Rig a GLB file and write the skinned GLB; images, UVs and materials are carried over byte for byte.");
+
+    m_rig.def("export_skinned_glb_bytes", [](const ScratchboxMesh& mesh, const sb_rig::SbRigResult& result) {
+        if (result.weights.size() != mesh.vertices.size()) throw std::invalid_argument("result was solved for a different mesh");
+        for (const auto& j : result.skeleton.joints) sb_rig::validateJointName(j.name);
+        auto glb = GlbWriter::serializeSkinnedGlb(mesh, result.weights, result.skeleton);
+        return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
+    }, "mesh"_a, "result"_a, "Serialise an in-memory mesh with its SB-Rig skin as .glb bytes.");
 }

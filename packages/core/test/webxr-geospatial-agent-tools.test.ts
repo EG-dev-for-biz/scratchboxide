@@ -199,12 +199,11 @@ describe('WebXR Geospatial Agent Tools & Capability Resolution', () => {
         );
 
         expect(result.taskDomain).toBe('3d');
-        expect(result.recommendedResolutionRoute).toBe('tier1-native');
+        expect(result.canSolveNatively).toBe(true);
         expect(result.tier1Assessment.canSolveNatively).toBe(true);
         expect(result.tier1Assessment.primaryNativeEngine).toBe('threejs-webgl');
         expect(result.tier1Assessment.nativeCapabilitiesUsed).toContain('WebXR Geospatial Anchor Bridge (WebXRGeospatialAnchorBridge)');
         expect(result.tier1Assessment.suggestedNativeAction?.primitiveType).toBe('3d-scene');
-        expect(result.tier2Fallback.needed).toBe(false);
     });
 });
 

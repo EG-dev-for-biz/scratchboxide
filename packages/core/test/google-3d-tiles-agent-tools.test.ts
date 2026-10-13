@@ -91,7 +91,7 @@ describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
             'Ingest photorealistic 3D tiles for Midtown Manhattan coordinates 40.748400, -73.985700'
         );
 
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
         expect(resolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('Google Photorealistic 3D Tiles'))).toBe(true);
         expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toMatch(/getGoogle3DTilesFullTexture|getGoogle3DTilesClay/);

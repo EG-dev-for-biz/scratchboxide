@@ -172,6 +172,16 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
             verifiedArtifactKeysRef.current.add(artifactKey);
 
             try {
+                if (activeArtifact.type === '3d-scene') {
+                    // Auditing a half-loaded viewport scores low and triggers a needless auto-repair re-render.
+                    const pendingLoads = (window as any).__scratchbox_active_3d_scene_pending_loads as (() => number) | undefined;
+                    const deadline = Date.now() + 30_000;
+                    while (!cancelled && typeof pendingLoads === 'function' && pendingLoads() > 0 && Date.now() < deadline) {
+                        await new Promise(resolve => setTimeout(resolve, 250));
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                    if (cancelled) return;
+                }
                 const screenshot = captureActiveCanvasScreenshot(layoutMode);
                 const client = GeminiClient.getInstance();
 

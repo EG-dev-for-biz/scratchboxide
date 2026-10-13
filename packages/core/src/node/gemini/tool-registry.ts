@@ -56,6 +56,8 @@ import {
     atmosphereHandlers,
     MESH_SHAPING_TOOL_DECLARATIONS,
     meshShapingHandlers,
+    SB_RIG_TOOL_DECLARATIONS,
+    sbRigHandlers,
     WEBXR_GEOSPATIAL_TOOL_DECLARATIONS,
     webxrGeospatialHandlers,
     GEOBOX_PRECISION_TOOL_DECLARATIONS,
@@ -82,8 +84,6 @@ import {
     universal3DStructureHandlers,
     PYTHON_3D_TOOL_DECLARATIONS,
     python3DHandlers,
-    COMFYUI_TOOL_DECLARATIONS,
-    comfyuiHandlers,
     LENS_TOOL_DECLARATIONS,
     lensHandlers,
     BROWSER_TOOL_DECLARATIONS,
@@ -204,18 +204,6 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         unknownTool: 'fail',
         failurePayload: message => ({ status: 'failed', error: message })
     },
-    comfyui: {
-        prefix: 'comfyui_',
-        mcpServerId: 'mcp-scratchbox-comfyui',
-        mcpName: 'ComfyUI Pipeline Engine',
-        humanTitle: name => `ComfyUI Pipeline Action: ${name}`,
-        cardTitle: (name, status) => status === 'completed' ? `ComfyUI: ${name}` : `ComfyUI Failed: ${name}`,
-        stepTitle: name => `Execute ComfyUI pipeline: ${name}`,
-        durationMs: { completed: 80, failed: 40 },
-        statusLabel: status => status === 'completed' ? 'success' : 'failed',
-        unknownTool: 'fail',
-        failurePayload: message => ({ status: 'failed', error: message })
-    },
     mcp: {
         prefix: '',
         mcpServerId: 'mcp-live',
@@ -230,11 +218,10 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
     }
 };
 
-const PREFIXED_GROUPS: Array<Exclude<ToolGroup, 'mcp'>> = ['workspace', 'lens', 'browser', 'comfyui'];
+const PREFIXED_GROUPS: Array<Exclude<ToolGroup, 'mcp'>> = ['workspace', 'lens', 'browser'];
 
 export function inferToolGroup(name: string): ToolGroup {
     if (typeof name !== 'string') return 'workspace';
-    if (name.startsWith('comfyui_') || name === 'resolve_task_capability') return 'comfyui';
     if (name.startsWith('lens_')) return 'lens';
     if (name.startsWith('browser_')) return 'browser';
     if (
@@ -475,7 +462,6 @@ export function buildToolDeclarations(
         domainHint: (request as any).domainHint,
         activeArtifact: request.activeArtifact,
         enableWorkspaceTools: request.enableWorkspaceTools,
-        enableComfyUiTools: request.enableComfyUiTools,
         enableBrowserTools: request.enableBrowserTools,
         enableLensTools: request.enableLensTools,
         requestedPacks: (request as any).toolPacks,
@@ -506,18 +492,7 @@ export function buildToolDeclarations(
         packs.includes('geospatial_3d') ||
         packs.includes('mesh_surface') ||
         packs.includes('vfx_video') ||
-        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*match|grade\s*match|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice|comfy|neural|diffusion|matchmove|spline|botanical|avatar|4dgs|performer/i.test(request.prompt))
-    );
-
-    const isComfyUiNeeded = request.enableComfyUiTools !== false && (
-        request.enableComfyUiTools === true ||
-        request.mode === 'agent' ||
-        request.mode === 'plan' ||
-        !!request.agent ||
-        capabilityResolution?.recommendedResolutionRoute === 'tier2-comfyui' ||
-        capabilityResolution?.tier2Fallback?.needed === true ||
-        packs.includes('comfyui') ||
-        !!(request.prompt && /comfy|neural|diffusion|trellis|triposr|marigold|lora|checkpoint|cloudrun|workflow|pipeline/i.test(request.prompt))
+        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*match|grade\s*match|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice|neural|diffusion|matchmove|spline|botanical|avatar|4dgs|performer/i.test(request.prompt))
     );
 
     let functionDeclarations: ToolDeclaration[];
@@ -530,7 +505,6 @@ export function buildToolDeclarations(
         if (isWorkspaceNeeded) groups.push('workspace');
         if (isLensNeeded) groups.push('lens');
         if (isBrowserNeeded) groups.push('browser');
-        if (isComfyUiNeeded) groups.push('comfyui');
 
         functionDeclarations = groups.length > 0 ? registry.declarations(groups) : [];
     }
@@ -579,7 +553,7 @@ export function buildToolDeclarations(
     return tools.length > 0 ? tools : undefined;
 }
 
-/** Registry pre-loaded with the workspace, lens, browser, comfyui, google 3d tiles, utdra, ai beautify, atmosphere, webxr geospatial, geobox, optics and canvas tool suites. */
+/** Registry pre-loaded with the workspace, lens, browser, google 3d tiles, utdra, ai beautify, atmosphere, webxr geospatial, geobox, optics and canvas tool suites. */
 export function createDefaultToolRegistry(): ToolRegistry {
     const registry = new ToolRegistry();
     for (const decl of CANVAS_TOOL_DECLARATIONS) {
@@ -614,6 +588,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of MESH_SHAPING_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, meshShapingHandlers[decl.name], 'workspace');
+    }
+    for (const decl of SB_RIG_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, sbRigHandlers[decl.name], 'workspace');
     }
     for (const decl of WEBXR_GEOSPATIAL_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, webxrGeospatialHandlers[decl.name], 'workspace');
@@ -653,9 +630,6 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of PYTHON_3D_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, python3DHandlers[decl.name], 'workspace');
-    }
-    for (const decl of COMFYUI_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, comfyuiHandlers[decl.name], 'comfyui');
     }
     for (const decl of LENS_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, lensHandlers[decl.name], 'lens');

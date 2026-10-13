@@ -24,11 +24,11 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
             expect(decl?.parameters?.properties?.questions).toBeDefined();
         });
 
-        it('registers present_execution_plan with pipeline tiers, deliverables, and steps', () => {
+        it('registers present_execution_plan with deliverables and steps', () => {
             const decl = CANVAS_TOOL_DECLARATIONS.find(d => d.name === 'present_execution_plan');
             expect(decl).toBeDefined();
             expect(decl?.description).toContain('execution plan card');
-            expect(decl?.parameters?.properties?.pipelineTier).toBeDefined();
+            expect(decl?.parameters?.properties?.pipelineTier).toBeUndefined();
             expect(decl?.parameters?.properties?.steps).toBeDefined();
         });
     });
@@ -44,7 +44,7 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
                         allow_multiple: false,
                         options: [
                             { id: 'cpp-astro', label: 'C++20 Astro Engine', isRecommended: true, description: 'Fast native compilation' },
-                            { id: 'comfy-gpu', label: 'Cloud Run L4 GPU', isRecommended: false, description: 'Neural diffusion mesh' }
+                            { id: 'splat', label: 'Gaussian Splat', isRecommended: false, description: 'Radiance field' }
                         ]
                     }
                 ]
@@ -62,13 +62,12 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
             const result = canvasHandlers.present_execution_plan({
                 title: 'Mars Habitat 3D Scene Plan',
                 goal: 'Synthesize procedural 3D Mars rover habitat environment',
-                pipelineTier: 'tier1-native',
                 deliverables: [
                     { canvasType: '3d-scene', assetFormat: '.glb', description: 'Watertight PBR Mars exploration scene' }
                 ],
                 steps: [
-                    { id: 's1', title: 'Generate red terrain SDF', tier: 'tier1-native', engine: 'C++20 FastNoise3D' },
-                    { id: 's2', title: 'Assemble solar array geometry', tier: 'tier1-native', engine: 'C++20 Astro Engine' }
+                    { id: 's1', title: 'Generate red terrain SDF', engine: 'C++20 FastNoise3D' },
+                    { id: 's2', title: 'Assemble solar array geometry', engine: 'C++20 Astro Engine' }
                 ],
                 estimatedLatency: '~150ms'
             }, {} as any);
@@ -76,7 +75,6 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
             expect(result.resultPayload.status).toBe('plan_presented');
             const plan = result.resultPayload.executionPlanCard as ExecutionPlanCardData;
             expect(plan.title).toBe('Mars Habitat 3D Scene Plan');
-            expect(plan.pipelineTier).toBe('tier1-native');
             expect(plan.steps.length).toBe(2);
             expect(plan.confirmed).toBe(false);
             expect(plan.deliverables[0].canvasType).toBe('3d-scene');
@@ -94,7 +92,7 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
             expect(q).toBeDefined();
             expect(q?.options.some(o => o.label.includes('C++20 Astro'))).toBe(true);
             expect(q?.options.some(o => o.label.includes('Gaussian Splat'))).toBe(true);
-            expect(q?.options.some(o => o.label.includes('Cloud Run'))).toBe(true);
+            expect(q?.options.some(o => o.label.includes('Cloud Run'))).toBe(false);
         });
 
         it('synthesizes execution plan fallback when user enters Planning Mode', () => {
@@ -120,8 +118,7 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
                 executionPlanCard: {
                     title: 'Test Plan',
                     goal: 'Verify type contract',
-                    pipelineTier: 'tier1-native',
-                    deliverables: [{ canvasType: '3d-scene', description: 'Test 3D' }],
+                        deliverables: [{ canvasType: '3d-scene', description: 'Test 3D' }],
                     steps: [{ id: '1', title: 'Step 1' }]
                 },
                 questionCard: {
@@ -132,7 +129,7 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
                 }
             };
 
-            expect(message.executionPlanCard?.pipelineTier).toBe('tier1-native');
+            expect(message.executionPlanCard?.title).toBe('Test Plan');
             expect(message.questionCard?.questions[0].options[0].label).toBe('Option 1');
         });
     });

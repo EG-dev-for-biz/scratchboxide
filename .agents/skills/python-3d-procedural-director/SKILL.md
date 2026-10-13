@@ -36,6 +36,7 @@ Procedural scripts execute inside a sandboxed Python sub-process communicating d
   - sb.plant     (SMPL tree architecture)
   - sb.terrain   (Multi-fractal noise, elevation profiles)
   - sb.geospatial(Leaf-LOD 3D tile shape extraction)
+  - sb.rig       (SB-Rig: skeleton + skin weights for any mesh)
                  │
                  ▼
  [Native C++20 Astro Engine (Apple Clang)]
@@ -237,4 +238,26 @@ scene.add_mesh("Hood_Louvers", louvers)
 
 # Write binary glTF 2.0 (.glb)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+```
+
+---
+
+## 6. Rigging Any Mesh with `sb.rig` (SB-Rig)
+
+`sb.rig` discovers a joint tree and 4-bone skin weights from a mesh's geometry alone (hands, creatures, tentacles, branching props); there is no preset skeleton and no Blender. Full reference: `docs/processes/sb-rig-auto-rigger.md`.
+
+```python
+import scratchbox as sb
+
+# In-memory mesh built in this script -> skinned .glb bytes
+result = sb.rig.solve(mesh)                      # sb.rig.Params() defaults are scale-independent
+result.rename({"Chain1": "Tail", "Root": "TailBase"})   # chain name -> Tail1..n, or exact joint names
+open(OUTPUT_GLB_PATH, "wb").write(sb.rig.export_skinned_glb_bytes(mesh, result))
+
+# Existing .glb file (textures, UVs and materials are carried over byte for byte)
+p = sb.rig.Params()
+p.root_hint = (-0.32, -0.92, -0.06)             # start the hierarchy at a cut limb end
+p.chain_hints = [[(0.40, 0.55, 0.03), (0.40, 0.54, 0.15), (0.31, 0.45, 0.21), (0.25, 0.36, 0.22)]]  # a digit fused into the body
+result = sb.rig.rig_glb("in.glb", "out.glb", p, {"Chain3": "LeftIndex"}, "out.sbrig.json")
+print(result, result.chains)                     # read chain end positions, then rename / add hints
 ```

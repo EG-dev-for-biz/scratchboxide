@@ -324,9 +324,10 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             const analysis = extractGlbAnalysis(glbBuf);
             bounds = analysis.bounds;
             if (analysis.metrics) {
+                // Floor for a single hero prop; the result is fed back to the model so it can refine and re-run.
                 gateReport = GeometricComplexityGate.evaluate(analysis.metrics, {
-                    minVertexCount: 100,
-                    minTriangleCount: 50,
+                    minVertexCount: 5000,
+                    minTriangleCount: 3000,
                     requireMultiMeshHierarchy: false
                 });
             }
@@ -392,7 +393,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             }
         }
 
-        const activeArtifact = _ctx.request?.canvasState?.activeArtifact;
+        const activeArtifact = _ctx?.request?.canvasState?.activeArtifact;
         const activeData = activeArtifact?.data as any;
         const existingObjects = activeData?.objects || [];
         const existingEnvTiles = existingObjects.filter((o: any) => {
@@ -509,7 +510,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     }
                 }
             },
-            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built object automatically grounded on top of scene terrain/tiles.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') : ''}`
+            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built object automatically grounded on top of scene terrain/tiles.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}`
         };
     }
 };

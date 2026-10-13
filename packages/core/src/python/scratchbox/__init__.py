@@ -16,9 +16,7 @@ try:
 except ImportError:
     _cur_dir = os.path.dirname(os.path.abspath(__file__))
     _candidate_dirs = [
-        os.path.abspath(os.path.join(_cur_dir, "..", "..", "native", "3d-engine", "scratchbox")),
-        os.path.abspath(os.path.join(_cur_dir, "..", "..", "native", "3d-engine", "build_py")),
-        _cur_dir
+        os.path.abspath(os.path.join(_cur_dir, "..", "..", "native", "3d-engine", "build_py"))
     ]
     for d in _candidate_dirs:
         if os.path.exists(d) and d not in sys.path:
@@ -66,6 +64,7 @@ processing = getattr(_native, "processing", None) if _native else None
 topology = getattr(_native, "topology", None) if _native else None
 sdf = getattr(_native, "sdf", None) if _native else None
 hair = getattr(_native, "hair", None) if _native else None
+rig = getattr(_native, "rig", None) if _native else None
 
 class _HumanModuleWrapper:
     """Unified facade exposing both high-level DCC human objects and native C++20 kinematics."""
@@ -378,11 +377,13 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             return self
 
         def _mesh_apply_material(self, mat):
-            self.material = mat
-            if mat is not None:
-                col = getattr(mat, "base_color", getattr(mat, "baseColorFactor", None))
-                if col is not None and hasattr(self, "set_color"):
-                    self.set_color(col)
+            # write_glb exports merged sub-parts individually, so the material must reach each of them too.
+            for target in [self] + [p for p in (getattr(self, "_sub_parts", None) or []) if p is not self]:
+                target.material = mat
+                if mat is not None:
+                    col = getattr(mat, "base_color", getattr(mat, "baseColorFactor", None))
+                    if col is not None and hasattr(target, "set_color"):
+                        target.set_color(col)
             return self
 
         _NativeMesh.align_to_terrain = _mesh_align_to_terrain
@@ -523,7 +524,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         _orig_compute_curvature_ao = getattr(_NativeMesh, "compute_curvature_ao", None)
         def _mesh_compute_curvature_ao(self, intensity=0.65):
             if _orig_compute_curvature_ao:
-                _orig_compute_curvature_ao(self, float(intensity))
+                for target in [self] + [p for p in (getattr(self, "_sub_parts", None) or []) if p is not self]:
+                    _orig_compute_curvature_ao(target, float(intensity))
             elif hasattr(self, "bake_cavity_ao"):
                 self.bake_cavity_ao(intensity)
             return self
@@ -628,12 +630,12 @@ if _native is not None and hasattr(_native, "geometry"):
         return vec_c, mat
 
     _orig_create_cylinder = getattr(_geom, "create_cylinder", None)
-    def create_cylinder(radius=None, radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, material=None, **kwargs):
+    def create_cylinder(radius=None, radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, material=None, capped=True, **kwargs):
         rt = float(radius if radius is not None else radius_top)
         rb = float(radius if radius is not None else radius_bottom)
         c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.8, 0.8, 1.0))
         if _orig_create_cylinder:
-            mesh = _orig_create_cylinder(rt, rb, float(height), int(segments), c)
+            mesh = _orig_create_cylinder(rt, rb, float(height), int(segments), c, bool(capped))
             if mat is not None and hasattr(mesh, "apply_material"):
                 mesh.apply_material(mat)
             return mesh

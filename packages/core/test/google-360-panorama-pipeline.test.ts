@@ -995,7 +995,7 @@ describe('Task Capability Resolver - 360 Panorama Routing', () => {
             { domainHint: '3d' }
         );
 
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.primaryNativeEngine).toBe('google-models');
         expect(resolution.tier1Assessment.rationale).toMatch(/panorama|seam/i);
@@ -1007,19 +1007,18 @@ describe('Task Capability Resolver - 360 Panorama Routing', () => {
             { domainHint: 'generative' }
         );
 
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.primaryNativeEngine).toBe('google-models');
     });
 
-    it('preserves Tier 2 ComfyUI fallback for neural novel view synthesis or video restyling', () => {
+    it('reports neural novel view synthesis as not natively solvable', () => {
         const resolution = TaskCapabilityResolver.resolveTaskCapability(
             'Generate novel views from single image using Trellis image-to-3D diffusion model',
             { domainHint: '3d' }
         );
 
-        expect(resolution.recommendedResolutionRoute).toBe('tier2-comfyui');
-        expect(resolution.tier2Fallback.recommendedPipelineCategory).toBe('image-to-3d');
+        expect(resolution.canSolveNatively).toBe(false);
     });
 });
 
@@ -1402,7 +1401,7 @@ describe('Option A: Adaptive Two-Pass Zenith Reprojection', () => {
             { domainHint: '3d' }
         );
 
-        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.primaryNativeEngine).toBe('google-models');
         expect(resolution.tier1Assessment.rationale).toMatch(/zenith|polar|pinch|dome/i);

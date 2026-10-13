@@ -10,9 +10,6 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { ComfyUiCloudRunService } from '../src/node/cloudrun/comfyui-cloudrun-service';
-import { ComfyUiPipelineAgent } from '../src/node/agent/comfyui-pipeline-agent';
-import { ComfyUiBridgeService } from '../src/node/comfyui/comfyui-bridge-service';
 import { createInitialSettingsState } from '../src/browser/generative-canvas/settings/settingsReducer';
 
 describe('Scratchbox IDE 100% Production Readiness Audit', () => {
@@ -58,29 +55,11 @@ describe('Scratchbox IDE 100% Production Readiness Audit', () => {
             const src = fs.readFileSync(aiModelsRoutesPath, 'utf8');
             expect(src).not.toContain('mockExecution ?? true');
             expect(src).not.toContain('req.query.mockExecution === undefined');
-            expect(src).toContain("const mock = req.query.mockExecution === 'true'");
-            expect(src).toContain("mockExecution === true || mockExecution === 'true'");
         });
 
         it('spatialRoutes must default mockExecution to false across all endpoints', () => {
             const src = fs.readFileSync(spatialRoutesPath, 'utf8');
             expect(src).toContain("const isMock = mockExecution === true || mockExecution === 'true'");
-        });
-
-        it('ComfyUiCloudRunService constructor must default mockExecution to false', () => {
-            const crService = new ComfyUiCloudRunService();
-            expect(crService.isMockExecution()).toBe(false);
-        });
-
-        it('ComfyUiBridgeService constructor must default mockMode to false', () => {
-            const bridge = new ComfyUiBridgeService();
-            expect(bridge.isMockMode()).toBe(false);
-        });
-
-        it('ComfyUiPipelineAgent must initialize with real live execution by default', () => {
-            const agent = new ComfyUiPipelineAgent();
-            expect(agent.getBridge().isMockMode()).toBe(false);
-            expect(agent.getCloudRunService().isMockExecution()).toBe(false);
         });
     });
 

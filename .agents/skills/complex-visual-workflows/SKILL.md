@@ -3,35 +3,33 @@ name: complex-visual-workflows
 description: >-
   Orchestrate and execute complex visual tasks across 3D generation, video production, and 3D imagery
   using the Scratchbox IDE codebase, native C++20/Python engines, Google 3D Tiles, Omni 1.1 video synthesis,
-  camera matchmove, and ComfyUI two-tier pipelines. Enforces 18% Grey Clay void staging, 70-20-10 form hierarchy,
-  Two-Tier Problem Solving, and multi-disciplinary visual production.
+  and camera matchmove. Enforces 18% Grey Clay void staging, 70-20-10 form hierarchy,
+  native-capabilities-first problem solving, and multi-disciplinary visual production.
 category: 3D & Spatial
 accentColor: indigo
-tags: [3D, Video, VFX, Gaussian Splats, Photogrammetry, Omni, ComfyUI, Scratchbox]
+tags: [3D, Video, VFX, Gaussian Splats, Photogrammetry, Omni, Scratchbox]
 ---
 
 # Complex Visual Workflows Skill (3D, Video & 3D Imagery)
 
-The **Complex Visual Workflows Skill** equips Antigravity to act as a **Master Visual Director and Technical Supervisor**, seamlessly commanding Scratchbox IDE's native engines, C++20 kernels, Python nanobind tooling, Google Photorealistic 3D Tiles, Vertex AI Omni 1.1, matchmove NLE, and ComfyUI pipelines to execute sophisticated, end-to-end visual productions.
+The **Complex Visual Workflows Skill** equips Antigravity to act as a **Master Visual Director and Technical Supervisor**, seamlessly commanding Scratchbox IDE's native engines, C++20 kernels, Python nanobind tooling, Google Photorealistic 3D Tiles, Vertex AI Omni 1.1, and matchmove NLE to execute sophisticated, end-to-end visual productions.
 
 ```
                                 [USER OBJECTIVE]
                                         │
                                         ▼
                    [Pre-Flight Task Capability Resolver]
-               (scripts/preflight_capability.cjs / resolve_task_capability)
+                     (scripts/preflight_capability.cjs)
                                         │
              ┌──────────────────────────┴──────────────────────────┐
              ▼                                                     ▼
-  [TIER 1: Native Scratchbox Engine]                  [TIER 2: ComfyUI Fallback]
+  [Native Scratchbox Engine]                          [Unsupported: tell the user]
   • 3D: C++20 Astro Engine / Python nanobind          • Neural 3D Diffusion (Trellis / TripoSR)
-  • Geospatial: Google 3D Tiles / Vector MVT          • Neural Video Restyle (AnimateDiff / Omni)
+  • Geospatial: Google 3D Tiles / Vector MVT          • Neural Video Restyle (AnimateDiff)
   • Video: Geo-Camera Matchmove / Timeline NLE        • Monocular Dense Depth (Marigold)
-  • Imagery: AI Beautify / 2DGS & 3DGS Splats         • Cloud Run NVIDIA L4 GPU / Local Service
-             │                                                     ▲
-             └──────────────── Transactional Failover ─────────────┘
-                                        │
-                                        ▼
+  • Imagery: AI Beautify / 2DGS & 3DGS Splats         • Custom LoRA checkpoints
+             │
+             ▼
                            [Visual Production Hub]
              ┌──────────────────────────┼──────────────────────────┐
              ▼                          ▼                          ▼
@@ -56,10 +54,10 @@ The **Complex Visual Workflows Skill** equips Antigravity to act as a **Master V
 
 Every visual task executed in Scratchbox IDE must strictly obey six foundational architectural invariants:
 
-### 1. Two-Tier Problem-Solving Directive
-- **App Capabilities First**: Always attempt Tier 1 native capabilities (C++20 Astro Engine, Python nanobind `scratchbox`, Google 3D Tiles, UTDRA, matchmove NLE, Omni 1.1, Google models).
-- **Resort to ComfyUI If and Only If Incapable**: Only spin up ComfyUI when the task genuinely requires neural diffusion (e.g. image-to-3D diffusion like Trellis/TripoSR, video-to-video restyling like AnimateDiff, dense monocular depth like Marigold, or custom LoRAs).
-- **Strict Prohibition on Toy JavaScript Primitives ("Tier-0" Ban)**: Viewports and generative pipelines must **never** catch errors and silently fall back to client-side Three.js boxes (`new THREE.BoxGeometry`). Failover routes strictly to Tier 2 ComfyUI GPU neural generation.
+### 1. Native Capabilities Directive
+- **App Capabilities Only**: Solve tasks with native capabilities (C++20 Astro Engine, Python nanobind `scratchbox`, Google 3D Tiles, UTDRA, matchmove NLE, Omni 1.1, Google models).
+- **Say So When Unsupported**: There is no ComfyUI / GPU fallback tier. If a task genuinely requires self-hosted neural diffusion (e.g. image-to-3D like Trellis/TripoSR, video-to-video restyling like AnimateDiff, dense monocular depth like Marigold, or custom LoRAs), tell the user it is unsupported rather than approximating it.
+- **Strict Prohibition on Toy JavaScript Primitives ("Tier-0" Ban)**: Viewports and generative pipelines must **never** catch errors and silently fall back to client-side Three.js boxes (`new THREE.BoxGeometry`). Surface the native error instead.
 
 ### 2. Adaptive Domain Architecture (ADA) & Open Universality
 - **The Alien Planet Test (Zero Closed Taxonomies)**: Never design closed enums (e.g. `type Domain = 'arctic' | 'desert'`). All structures, biomes, and extraterrestrial forms must be expressible via continuous physical parameter manifolds ($R^N$).
@@ -222,13 +220,6 @@ Transforms coarse 3D tile captures into photographic-grade imagery by constructi
 2. **UTDRA Rectification**: Probe tile with `utdra_probe_tile`. Excise curtain walls beneath bridges and rectify vertical building shafts.
 3. **Algorithmic Micro-Textures**: Apply `AlgorithmicUVRewrapService` to deepen masonry joints and inject travertine cavitation pores with 0.000 px spatial lock.
 4. **Multi-Angle Turnaround Orbits**: Execute `generate_multi_angle_turnaround` across 8 dual-anchor orbit stations in isolated neutral void.
-
-### Runbook D: Two-Tier Transactional Failover to ComfyUI
-1. **Pre-flight Detection**: If prompt requires neural image-to-3D diffusion (Trellis/TripoSR), neural video-to-video restyling (AnimateDiff), or specialized LoRAs:
-2. **Spin Up ComfyUI Pipeline**:
-   - Route execution to Google Cloud Run NVIDIA L4 GPU or local ComfyUI instance via `comfyui_execute_pipeline`.
-   - If required custom nodes are missing, synthesize and inject dynamic Python nodes via `comfyui_inject_dynamic_code`.
-   - Stream resulting 3D `.glb` mesh or restyled video back into the Scratchbox canvas stage.
 
 ---
 

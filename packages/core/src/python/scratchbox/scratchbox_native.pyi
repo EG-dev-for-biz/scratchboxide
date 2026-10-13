@@ -8,5 +8,6 @@ from scratchbox_native import (
     geometry as geometry,
     io as io,
     math as math,
-    nature as nature
+    nature as nature,
+    rig as rig
 )

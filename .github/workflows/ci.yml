@@ -44,6 +44,10 @@ jobs:
       - name: Install
         run: npm ci
 
+      # The CLI resolves @scratchbox/core through its built dist/, so core must be built before typecheck.
+      - name: Build core
+        run: npm run build:core
+
       - name: Typecheck
         run: npm run typecheck
 

@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -dynamiclib -Wl,-headerpad_max_install_names -o libscratchbox_core.dylib -install_name @rpath/libscratchbox_core.dylib CMakeFiles/scratchbox_core.dir/src/scratchbox_core.cpp.o

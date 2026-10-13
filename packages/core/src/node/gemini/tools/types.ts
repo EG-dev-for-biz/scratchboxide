@@ -43,7 +43,7 @@ export type GeminiToolConfig =
     | { codeExecution: Record<string, never> }
     | { functionDeclarations: ToolDeclaration[] };
 
-export type ToolGroup = 'workspace' | 'lens' | 'browser' | 'comfyui' | 'mcp';
+export type ToolGroup = 'workspace' | 'lens' | 'browser' | 'mcp';
 
 export type ToolResultPayload = Record<string, unknown>;
 

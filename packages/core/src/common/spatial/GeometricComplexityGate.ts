@@ -7,7 +7,6 @@
  * - "Lean on C/C++ First for 3D (C++20 as Geometry Generator, Three.js as Pure Viewport)"
  * - Prohibition of client-side toy primitives (THREE.BoxGeometry / THREE.CylinderGeometry)
  * - Minimum geometric entropy & density enforcement (>=25,000 vertices for full scenes)
- * - Strict Two-Tier Problem Solving (Tier 1 Native C++20 -> Tier 2 ComfyUI GPU)
  ********************************************************************************/
 
 export interface GeometricMeshSummary {
@@ -156,10 +155,10 @@ export class GeometricComplexityGate {
 
         // 5. Engine Kernel Audit
         const kernel = (metrics.engineKernel || '').toLowerCase();
-        const isNativeKernel = kernel.includes('c++') || kernel.includes('nanobind') || kernel.includes('scratchbox') || kernel.includes('tier 2') || kernel.includes('comfy');
+        const isNativeKernel = kernel.includes('c++') || kernel.includes('nanobind') || kernel.includes('scratchbox');
         if (kernel && !isNativeKernel) {
             violations.push(
-                `Unsanctioned 3D engine kernel: "${metrics.engineKernel}". Only Native C++20 (Tier 1) or ComfyUI/Cloud Run GPU (Tier 2) are permitted.`
+                `Unsanctioned 3D engine kernel: "${metrics.engineKernel}". Only the native C++20 / Python engine kernels are permitted.`
             );
         }
 
@@ -200,10 +199,9 @@ export class GeometricComplexityGate {
             if (!submesh.bounds) continue;
             const [dx, dy, dz] = submesh.bounds.dimensions;
             const diam = Math.max(dx, dz);
-            const isCylindricalDisc = (dy < 0.65 * diam) && (Math.abs(dx - dz) / Math.max(1e-4, diam) < 0.35);
 
-            // If explicitly named wheel/tire OR if it's a disc sitting near the ground
-            if (isWheelCandidate || (isCylindricalDisc && submesh.bounds.min[1] < 0.5)) {
+            // Shape alone can't tell a flat wheel from a plinth, pond or rock outcrop, so only audit declared rolling parts.
+            if (isWheelCandidate) {
                 // Check if its thin dimension is vertical (Y)
                 if (dy < 0.70 * diam) {
                     violations.push(

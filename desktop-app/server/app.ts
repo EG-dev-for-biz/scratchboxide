@@ -65,7 +65,6 @@ import {
     createToolsRouter,
     createModelsRouter,
     createPerformerRouter,
-    createComfyRouter,
     handleCapabilitiesResolve,
     ExportedToolsStore,
     ExportedToolRecord
@@ -558,12 +557,11 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/panorama', createPanoramaRouter(mediaCredentials));
     app.use('/api/3d-engine/splat-studio', createSplatStudioRouter());
 
-    // 7. Standalone Tools, Models, 4D Performer, ComfyUI & Capabilities
+    // 7. Standalone Tools, Models, 4D Performer & Capabilities
     app.use('/api/tools', createToolsRouter(exportedToolsStore, toolsHost, toolsPort));
     app.use('/api/models', createModelsRouter());
     app.use('/api/performer/pipeline', createPerformerRouter(allowedWorkspaceRoots));
     app.use('/api/models/performer/pipeline', createPerformerRouter(allowedWorkspaceRoots));
-    app.use('/api/comfyui', createComfyRouter());
     app.post('/api/capabilities/resolve', handleCapabilitiesResolve);
 
     // SPA fallback for production browser mode (after all API routes).

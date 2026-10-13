@@ -27,7 +27,7 @@ function asBoolean(val: unknown, defaultVal = false): boolean {
 export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'generate_multi_angle_turnaround',
-        description: 'Generates a geometrically consistent multi-angle turnaround image capture set across 3D objects, props, vehicles, or architectural scenes using the Adaptive Multi-Angle Camera Orbit Engine (Nano Banana Lite). Enforces continuous spherical camera orbit mathematics, dual-anchor identity conditioning (Hero Anchor + Adjacent Continuity), and strict negative isolation invariants (zero ground/pedestal, zero cast shadows, zero text/labels) for seamless downstream 3D reconstruction (Cloud Run Trellis, 3DGS, NeRF).',
+        description: 'Generates a geometrically consistent multi-angle turnaround image capture set across 3D objects, props, vehicles, or architectural scenes using the Adaptive Multi-Angle Camera Orbit Engine (Nano Banana Lite). Enforces continuous spherical camera orbit mathematics, dual-anchor identity conditioning (Hero Anchor + Adjacent Continuity), and strict negative isolation invariants (zero ground/pedestal, zero cast shadows, zero text/labels) for seamless downstream 3D reconstruction (Trellis via Fal.ai, 3DGS, NeRF).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -57,7 +57,7 @@ export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 downstreamTarget: {
                     type: 'STRING',
-                    description: 'Optional downstream 3D reconstruction pipeline: "trellis-fal" (default when FAL_KEY present), "trellis-cloud-run", or "none".'
+                    description: 'Optional downstream 3D reconstruction pipeline: "trellis-fal" (default when FAL_KEY present) or "none".'
                 },
                 lengthMeters: {
                     type: 'NUMBER',
@@ -91,7 +91,7 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
         const floatingVoid = asBoolean(args.floatingVoid, true);
         const suppressShadows = asBoolean(args.suppressShadows, true);
         const suppressText = asBoolean(args.suppressText, true);
-        const downstreamTarget = (asString(args.downstreamTarget) || (process.env.FAL_KEY ? 'trellis-fal' : 'none')) as 'trellis-fal' | 'trellis-cloud-run' | 'trellis' | 'none';
+        const downstreamTarget = (asString(args.downstreamTarget) || (process.env.FAL_KEY ? 'trellis-fal' : 'none')) as 'trellis-fal' | 'trellis' | 'none';
         const mockExecution = asBoolean(args.mockExecution, false);
 
         const metricDimensions = (args.lengthMeters || args.widthMeters || args.heightMeters)

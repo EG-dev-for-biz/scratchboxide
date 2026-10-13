@@ -17,7 +17,6 @@ import {
     CORE_WORKSPACE_PACK,
     GEOSPATIAL_3D_PACK,
     VFX_VIDEO_PACK,
-    COMFYUI_PACK,
     MESH_SURFACE_PACK,
     type ToolRegistry,
     type ToolDeclaration
@@ -37,7 +36,7 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
             expect(ALL_TOOL_PACKS.geospatial_3d).toBeDefined();
             expect(ALL_TOOL_PACKS.mesh_surface).toBeDefined();
             expect(ALL_TOOL_PACKS.vfx_video).toBeDefined();
-            expect(ALL_TOOL_PACKS.comfyui).toBeDefined();
+            expect((ALL_TOOL_PACKS as Record<string, unknown>).comfyui).toBeUndefined();
             expect(ALL_TOOL_PACKS.lens).toBeDefined();
             expect(ALL_TOOL_PACKS.browser).toBeDefined();
 
@@ -49,7 +48,6 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
             expect(MESH_SURFACE_PACK.toolNames).toContain('algorithmic_uv_unwrap_rewrap');
             expect(VFX_VIDEO_PACK.toolNames).toContain('vfx_visual_critic_audit');
             expect(VFX_VIDEO_PACK.toolNames).toContain('optics_configure_lens_distortion');
-            expect(COMFYUI_PACK.toolNames).toContain('resolve_task_capability');
         });
 
         it('declarationsForPacks returns bounded, sanitized declarations without cross-domain pollution', () => {
@@ -89,22 +87,22 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
             expect(res.packs).not.toContain('browser');
         });
 
-        it('resolves neural generative diffusion tasks to comfyui pack', () => {
+        it('reports neural diffusion tasks as not natively solvable without adding any extra pack', () => {
             const res = resolveDomainToolPacks({
-                prompt: 'Spin up Trellis neural diffusion image-to-3d pipeline on Cloud Run GPU'
+                prompt: 'Spin up Trellis neural diffusion image-to-3d pipeline on a GPU'
             });
 
-            expect(res.capabilityResolution?.recommendedResolutionRoute).toBe('tier2-comfyui');
-            expect(res.packs).toContain('comfyui');
+            expect(res.capabilityResolution?.canSolveNatively).toBe(false);
+            expect(res.packs).toContain('core_workspace');
         });
 
         it('honors explicitly requested tool packs', () => {
             const res = resolveDomainToolPacks({
                 prompt: 'Do something generic',
-                requestedPacks: ['geospatial_3d', 'comfyui']
+                requestedPacks: ['geospatial_3d', 'vfx_video']
             });
 
-            expect(res.packs).toEqual(['geospatial_3d', 'comfyui']);
+            expect(res.packs).toEqual(['geospatial_3d', 'vfx_video']);
         });
 
         it('includes all workspace domain packs when enableWorkspaceTools is explicitly true', () => {

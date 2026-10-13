@@ -21,8 +21,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { SupportedTreeSpecies } from './UniversalBotanicalBridgeService.js';
-import { OrientedBoundingBoxSolver } from './OrientedBoundingBoxSolver.js';
+import type { SupportedTreeSpecies } from './UniversalBotanicalBridgeService';
+import { OrientedBoundingBoxSolver } from './OrientedBoundingBoxSolver';
 
 export interface BotanicalStandDescriptor {
     id: string;

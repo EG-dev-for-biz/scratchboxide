@@ -327,13 +327,13 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
     it('routes camera matchmove & tracking tasks natively to Tier 1 via TaskCapabilityResolver', () => {
         const prompt1 = 'Please calibrate the camera matchmove keyframes for the Plaza Hotel footage to align with Google Maps 3D tiles';
         const resolution1 = TaskCapabilityResolver.resolveTaskCapability(prompt1);
-        expect(resolution1.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution1.canSolveNatively).toBe(true);
         expect(resolution1.tier1Assessment.primaryNativeEngine).toBe('adaptive-matchmove-calibration');
         expect(resolution1.tier1Assessment.suggestedNativeAction?.serviceOrTool).toBe('adaptive_matchmove_calibrate_sequence');
 
         const prompt2 = 'Perform 6-DOF optical camera resection and Levenberg-Marquardt bundle adjustment across the drone video milestones';
         const resolution2 = TaskCapabilityResolver.resolveTaskCapability(prompt2);
-        expect(resolution2.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution2.canSolveNatively).toBe(true);
         expect(resolution2.tier1Assessment.primaryNativeEngine).toBe('adaptive-matchmove-calibration');
     });
 

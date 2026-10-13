@@ -900,11 +900,12 @@ public:
         return createCylinder(radius, radius, height, segments, color);
     }
 
-    static ScratchboxMesh createCylinder(float radiusTop = 1.0f, float radiusBottom = 1.0f, float height = 2.0f, int segments = 24, const Vec4& color = {0.3f, 0.8f, 0.4f, 1.0f}) {
+    static ScratchboxMesh createCylinder(float radiusTop = 1.0f, float radiusBottom = 1.0f, float height = 2.0f, int segments = 24, const Vec4& color = {0.3f, 0.8f, 0.4f, 1.0f}, bool capped = true) {
         ScratchboxMesh mesh("cylinder");
         float halfH = height * 0.5f;
+        // Tilt side normals by the taper slope so cones and frustums shade correctly.
+        float slope = height > 0.0f ? (radiusBottom - radiusTop) / height : 0.0f;
 
-        // Side vertices
         for (int i = 0; i <= segments; ++i) {
             float u = static_cast<float>(i) / segments;
             float angle = u * TWO_PI;
@@ -913,7 +914,7 @@ public:
 
             Vec3 topPos(cosA * radiusTop, halfH, sinA * radiusTop);
             Vec3 botPos(cosA * radiusBottom, -halfH, sinA * radiusBottom);
-            Vec3 norm(cosA, 0.0f, sinA);
+            Vec3 norm = Vec3(cosA, slope, sinA).normalized();
 
             mesh.addVertex({topPos, norm, {u, 1.0f}, color});
             mesh.addVertex({botPos, norm, {u, 0.0f}, color});
@@ -927,6 +928,29 @@ public:
 
             mesh.addTriangle(top1, top2, bot2);
             mesh.addTriangle(top1, bot2, bot1);
+        }
+
+        if (capped) {
+            // Caps get their own vertices so the rim keeps a hard edge instead of averaged normals.
+            auto addCap = [&](float radius, float y, float ny) {
+                if (radius <= 1e-6f) return;
+                uint32_t center = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.addVertex({Vec3(0.0f, y, 0.0f), Vec3(0.0f, ny, 0.0f), {0.5f, 0.5f}, color});
+                for (int i = 0; i <= segments; ++i) {
+                    float angle = static_cast<float>(i) / segments * TWO_PI;
+                    float cosA = std::cos(angle);
+                    float sinA = std::sin(angle);
+                    mesh.addVertex({Vec3(cosA * radius, y, sinA * radius), Vec3(0.0f, ny, 0.0f), {0.5f + 0.5f * cosA, 0.5f + 0.5f * sinA}, color});
+                }
+                for (int i = 0; i < segments; ++i) {
+                    uint32_t a = center + 1 + i;
+                    uint32_t b = center + 2 + i;
+                    if (ny > 0.0f) mesh.addTriangle(center, b, a);
+                    else mesh.addTriangle(center, a, b);
+                }
+            };
+            addCap(radiusTop, halfH, 1.0f);
+            addCap(radiusBottom, -halfH, -1.0f);
         }
 
         return mesh;

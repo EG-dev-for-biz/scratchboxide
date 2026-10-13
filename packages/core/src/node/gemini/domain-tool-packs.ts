@@ -28,6 +28,7 @@ import {
 } from './tools/spatial-tools';
 import { UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS } from './tools/universal-3d-structure-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS } from './tools/mesh-shaping-tools';
+import { SB_RIG_TOOL_DECLARATIONS } from './tools/sb-rig-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS } from './tools/algorithmic-uv-tools';
 import { BOTANICAL_TREE_TOOL_DECLARATIONS } from './tools/botanical-tree-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS } from './tools/nano-banana-tools';
@@ -36,7 +37,6 @@ import { VFX_VIDEO_TOOL_DECLARATIONS, AI_BEAUTIFY_TOOL_DECLARATIONS } from './to
 import { ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS } from './tools/adaptive-matchmove-tools';
 import { ATMOSPHERE_TOOL_DECLARATIONS } from './tools/atmosphere-tools';
 import { LIGHTING_TOOL_DECLARATIONS } from './tools/lighting-tools';
-import { COMFYUI_TOOL_DECLARATIONS } from './tools/comfyui-tools';
 import { LENS_TOOL_DECLARATIONS, BROWSER_TOOL_DECLARATIONS } from './tools/lens-browser-tools';
 
 export type ToolPackName =
@@ -44,7 +44,6 @@ export type ToolPackName =
     | 'geospatial_3d'
     | 'mesh_surface'
     | 'vfx_video'
-    | 'comfyui'
     | 'lens'
     | 'browser';
 
@@ -97,9 +96,10 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
 export const MESH_SURFACE_PACK: ToolPackDefinition = {
     id: 'mesh_surface',
     displayName: 'Mesh Reshaping, Botanicals & Material Textures',
-    description: 'C++20 mesh shaping, botanical trees, algorithmic UV unwrap, MaxRects atlas binning, and analytical hair/groom forward splatting.',
+    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), botanical trees, algorithmic UV unwrap, MaxRects atlas binning, and analytical hair/groom forward splatting.',
     declarations: [
         ...MESH_SHAPING_TOOL_DECLARATIONS,
+        ...SB_RIG_TOOL_DECLARATIONS,
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
         ...BOTANICAL_TREE_TOOL_DECLARATIONS,
         ...NANO_BANANA_TOOL_DECLARATIONS,
@@ -108,6 +108,7 @@ export const MESH_SURFACE_PACK: ToolPackDefinition = {
     ],
     toolNames: [
         ...MESH_SHAPING_TOOL_DECLARATIONS.map(d => d.name),
+        ...SB_RIG_TOOL_DECLARATIONS.map(d => d.name),
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS.map(d => d.name),
         ...BOTANICAL_TREE_TOOL_DECLARATIONS.map(d => d.name),
         ...NANO_BANANA_TOOL_DECLARATIONS.map(d => d.name),
@@ -148,14 +149,6 @@ export const VFX_VIDEO_PACK: ToolPackDefinition = {
     ]
 };
 
-export const COMFYUI_PACK: ToolPackDefinition = {
-    id: 'comfyui',
-    displayName: 'ComfyUI & Neural Generation Engine',
-    description: 'Two-tier capability resolution, Cloud Run GPU / local pipeline research, dynamic node injection, and execution telemetry.',
-    declarations: COMFYUI_TOOL_DECLARATIONS,
-    toolNames: COMFYUI_TOOL_DECLARATIONS.map(d => d.name)
-};
-
 export const LENS_PACK: ToolPackDefinition = {
     id: 'lens',
     displayName: 'Codebase Lens AST & Projections',
@@ -177,7 +170,6 @@ export const ALL_TOOL_PACKS: Record<ToolPackName, ToolPackDefinition> = {
     geospatial_3d: GEOSPATIAL_3D_PACK,
     mesh_surface: MESH_SURFACE_PACK,
     vfx_video: VFX_VIDEO_PACK,
-    comfyui: COMFYUI_PACK,
     lens: LENS_PACK,
     browser: BROWSER_PACK
 };
@@ -187,7 +179,6 @@ export interface ResolveToolPacksOptions {
     mode?: string;
     domainHint?: TaskDomain | 'auto';
     enableWorkspaceTools?: boolean;
-    enableComfyUiTools?: boolean;
     enableBrowserTools?: boolean;
     enableLensTools?: boolean;
     requestedPacks?: ToolPackName[];
@@ -197,8 +188,7 @@ export interface ResolveToolPacksOptions {
 
 /**
  * Deterministically resolves which domain tool packs should be active for a request.
- * Runs pre-flight TaskCapabilityResolver to classify domain and enforce Two-Tier directives
- * before the LLM generates tokens.
+ * Runs pre-flight TaskCapabilityResolver to classify the task domain before the LLM generates tokens.
  */
 export function resolveDomainToolPacks(options: ResolveToolPacksOptions): {
     packs: ToolPackName[];
@@ -244,18 +234,7 @@ export function resolveDomainToolPacks(options: ResolveToolPacksOptions): {
         packs.add('lens');
     }
 
-    // 3. ComfyUI check
-    const isComfyUiNeeded = options.enableComfyUiTools !== false && (
-        options.enableComfyUiTools === true ||
-        capabilityResolution?.recommendedResolutionRoute === 'tier2-comfyui' ||
-        capabilityResolution?.tier2Fallback?.needed === true ||
-        !!(prompt && /comfy|neural|diffusion|trellis|triposr|marigold|lora|checkpoint|cloudrun|workflow|pipeline/i.test(prompt))
-    );
-    if (isComfyUiNeeded) {
-        packs.add('comfyui');
-    }
-
-    // 4. Workspace & domain packs check
+    // 3. Workspace & domain packs check
     const isWorkspaceAllowed = options.enableWorkspaceTools !== false;
     if (isWorkspaceAllowed) {
         // Core workspace is always provided when workspace tools are active

@@ -213,7 +213,6 @@ Capture viewpoints must systematically cover:
 
 ### D. Programmatic Builders & Tools
 - **Prompt Formulation**: `buildFrameMotivatedPerformerVideoPrompt` (`omniVideoPromptService.ts`) or Gemini tool `build_frame_motivated_performer_prompt`.
-- **Multi-View Video Generation**: `generate_veo2_multiview_video` invoking Google Veo 2 closed-loop orbit pipeline or ComfyUI Wan2.2 multi-view blueprint (`Wan22TI2VModelLoader`, `WanMultiViewCameraRigNode`, `Wan22MultiViewSampler`, `SkeletonConditioningNode`).
 - **Pipeline Ingestion**: `VideoTo4DPerformerPipelineService.process({ frameMotivatedInput: { ... } })`.
 
 
