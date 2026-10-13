@@ -92,4 +92,22 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
         expect(json.materials[0].pbrMetallicRoughness.roughnessFactor).toBeCloseTo(0.85, 2);
         expect(new Set(primitives.map(p => p.material))).toEqual(new Set([0]));
     }, 120000);
+
+    it('displace() amplitude is roughly the peak relief in metres', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb
+rock = sb.create_sphere(radius=1.0, rings=48, sectors=96)
+rock.displace(freq=1.0, amp=1.0)
+b = rock.bounds
+print("HALF_EXTENT", max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) / 2)
+sb.io.write_glb(OUTPUT_GLB_PATH, rock)
+`, { timeoutMs: 60000 });
+
+        expect(result.success, result.errorDetails || result.stderr).toBe(true);
+        const halfExtent = parseFloat(/HALF_EXTENT ([0-9.]+)/.exec(result.stdout)![1]);
+        // Before the fix amp=1.0 moved the surface by ~0.1; peak relief should now be a sizeable fraction of amp.
+        expect(halfExtent).toBeGreaterThan(1.5);
+        expect(halfExtent).toBeLessThan(2.6);
+    }, 120000);
 });

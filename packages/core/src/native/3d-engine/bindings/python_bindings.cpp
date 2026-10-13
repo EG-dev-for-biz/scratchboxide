@@ -414,8 +414,10 @@ NB_MODULE(scratchbox_native, m) {
         }, "frequency"_a = 2.0f, "amplitude"_a = 0.15f)
         .def("displace_along_normals", [](ScratchboxMesh& self, float frequency, float amplitude) -> ScratchboxMesh& {
             math::FastNoise3D noise(42);
+            // 3-octave fBm has a p99 magnitude of ~0.44; normalizing makes `amplitude` the approximate peak relief in metres.
+            constexpr float kFbmP99 = 0.44f;
             for (auto& v : self.vertices) {
-                float n = noise.fBm(v.position.x * frequency, v.position.y * frequency, v.position.z * frequency, 3, 0.5f, 2.0f);
+                float n = noise.fBm(v.position.x * frequency, v.position.y * frequency, v.position.z * frequency, 3, 2.0f, 0.5f) / kFbmP99;
                 v.position = v.position + v.normal * (n * amplitude);
             }
             self.recomputeNormals();
