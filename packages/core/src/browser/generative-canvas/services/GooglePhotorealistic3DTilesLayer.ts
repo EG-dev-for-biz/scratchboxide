@@ -152,7 +152,7 @@ export class GooglePhotorealistic3DTilesLayer {
         recenter: true
       });
       this.tilesRenderer.registerPlugin(this.reorientPlugin);
-      this.tilesRenderer.registerPlugin(new GLTFExtensionsPlugin());
+      this.tilesRenderer.registerPlugin(new GLTFExtensionsPlugin({}));
 
       // Register Persistent IndexedDB Tile Cache Plugin
       if (options.enablePersistentCache !== false) {
