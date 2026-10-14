@@ -11,11 +11,6 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { GoogleMapsService } from '../src/browser/generative-canvas/services/google-maps-service';
 import {
-    CreativeLocationCastingService,
-    castCreativeLocation,
-    castCreativeLocationAsync
-} from '../src/browser/generative-canvas/services/CreativeLocationCastingService';
-import {
     applyCreativeLocationCasting,
     synthesizeContextual3DScene
 } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
@@ -25,7 +20,6 @@ import type { Scene3DData, VectorRoadmapConfig } from '../src/browser/generative
 
 describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
     const mapsService = GoogleMapsService.getInstance();
-    const castingService = CreativeLocationCastingService.getInstance();
 
     describe('1. Google Maps Service elevation comes from the Elevation API only', () => {
         const elevationFetch = (value: number | undefined, status = 200) => {
@@ -72,40 +66,7 @@ describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
         });
     });
 
-    describe('2. Creative Location Casting with Real-World Google Ground Truth', () => {
-        it('casts outdoor firing range to Angeles Shooting Ranges with 489.86m MSL elevation', () => {
-            const casted = castCreativeLocation('tactical target practice outdoor shooting range with steel targets');
-            expect(casted.archetype).toBe('ballistics_proving_ground');
-            expect(casted.landmarkName).toBe('Angeles Shooting Ranges & Proving Ground, CA');
-            expect(casted.elevation).toBeCloseTo(489.86, 1);
-            expect(casted.elevationSource).toBe('google_elevation');
-            expect(casted.datum).toBe('MSL_EGM96');
-        });
-
-        it('casts arid badlands to Badwater Basin with below-sea-level elevation (-84.69m MSL)', () => {
-            const casted = castCreativeLocation('vast arid badlands depression salt pan basin');
-            expect(casted.archetype).toBe('arid_desert_wasteland');
-            expect(casted.elevation).toBeCloseTo(-84.69, 1);
-            expect(casted.elevationSource).toBe('google_elevation');
-            expect(casted.datum).toBe('MSL_EGM96');
-        });
-
-        it('casts alpine peak to The Matterhorn with 4440.29m MSL elevation', () => {
-            const casted = castCreativeLocation('alpine mountain summit ridge');
-            expect(casted.archetype).toBe('geological_alpine');
-            expect(casted.elevation).toBeCloseTo(4440.29, 1);
-            expect(casted.elevationSource).toBe('google_elevation');
-        });
-
-        it('supports castLocationAsync with Google elevation resolution', async () => {
-            const casted = await castCreativeLocationAsync('topgolf driving range sports complex');
-            expect(casted.archetype).toBe('ballistics_proving_ground');
-            expect(casted.elevation).toBeCloseTo(634.65, 1);
-            expect(casted.elevationSource).toBe('google_elevation');
-        });
-    });
-
-    describe('3. Procedural 3D Synthesizer Geospatial Anchor & Elevation Propagation', () => {
+    describe('2. Procedural 3D Synthesizer never invents a geospatial anchor', () => {
         it('leaves a scene that names no location unanchored (clay void)', () => {
             const initialScene: Scene3DData = {
                 title: 'Shooting Range Proving Ground',
@@ -127,9 +88,15 @@ describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
             const scene = synthesizeContextual3DScene('architectural glass pavilion cantilever over Fallingwater, Mill Run, Pennsylvania');
             expect(scene.geoAnchor).toBeUndefined();
         });
+
+        it('does not cast a scene onto an archetype location (no place table, no default city)', () => {
+            for (const prompt of ['tactical target practice outdoor shooting range with steel targets', 'vast arid badlands depression salt pan basin', 'downtown city skyline waterfront plaza']) {
+                expect(synthesizeContextual3DScene(prompt).geoAnchor).toBeUndefined();
+            }
+        });
     });
 
-    describe('4. Three.js Viewport & Blueprint Local Ground Datum Invariant', () => {
+    describe('3. Three.js Viewport & Blueprint Local Ground Datum Invariant', () => {
         it('LocalTangentPlane sets Ground Surface strictly at Y = 0.0m', () => {
             expect(LocalTangentPlane.GROUND_SURFACE_LOCAL_Y).toBe(0.0);
             expect(LocalTangentPlane.groundLevel()).toBe(0.0);

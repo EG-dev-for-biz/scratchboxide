@@ -154,7 +154,8 @@ describe('Adaptive Domain Architecture (ADA) - Open-Domain 3D Scene Synthesis', 
 
             const scene = synthesizeContextual3DScene(prompt);
             expect(scene.worldBranch).toBe('planetary/mars-rover');
-            expect(scene.geoAnchor?.landmarkName).toContain('Jezero Crater');
+            // A geoAnchor is a point on Earth; Mars coordinates there would stream Earth tiles, so there is none.
+            expect(scene.geoAnchor).toBeUndefined();
         });
 
         it('preserves exact ballistics Voronoi fracture for glass shatter requests', () => {

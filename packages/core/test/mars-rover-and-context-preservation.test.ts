@@ -12,7 +12,6 @@ import {
     detect3DSceneTheme,
     synthesizeContextual3DScene
 } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
-import { castCreativeLocation } from '../src/browser/generative-canvas/services/CreativeLocationCastingService';
 import { Scene3DData, ChatMessage } from '../src/browser/generative-canvas/canvas-types';
 
 describe('Mars Rover Exploration & Non-Earth Geospatial Guardrails', () => {
@@ -53,33 +52,15 @@ describe('Mars Rover Exploration & Non-Earth Geospatial Guardrails', () => {
             expect(scene.environment?.ground).toBe(true);
         });
 
-        it('does not cast Mars scenes into Fallingwater PA or Earth terrestrial locations', () => {
-            const prompt = 'build a 3d scene for Mars Rover exploration';
-            const scene: Scene3DData = synthesizeContextual3DScene(prompt);
-
-            if (scene.geoAnchor) {
-                // If geoAnchor is present, it must be Martian (e.g. Jezero crater), not Pennsylvania Fallingwater
-                expect(scene.geoAnchor.landmarkName?.toLowerCase()).not.toContain('fallingwater');
-                expect(scene.geoAnchor.landmarkName?.toLowerCase()).not.toContain('pennsylvania');
-                expect(scene.geoAnchor.landmarkName?.toLowerCase()).toContain('mars');
+        it('gives a Mars scene no geodetic anchor (Earth tiles would stream at the Jezero lat/lng in India)', () => {
+            for (const prompt of ['build a 3d scene for Mars Rover exploration', 'perseverance rover traverse across jezero crater']) {
+                const scene: Scene3DData = synthesizeContextual3DScene(prompt);
+                expect(scene.geoAnchor).toBeUndefined();
             }
         });
     });
 
-    describe('3. Creative Location Casting Guardrails for Extraterrestrial Scenes', () => {
-        it('does not force Earth GPS coordinates for extraterrestrial planetary bodies', () => {
-            const prompt = 'Mars Rover exploration';
-            const casted = castCreativeLocation(prompt);
-
-            // Must identify as planetary surface, not Fallingwater or Earth observatory
-            expect(casted.archetype).toBe('planetary_surface');
-            expect(casted.landmarkName).toContain('Mars');
-            expect(casted.landmarkName).not.toContain('Fallingwater');
-            expect(casted.landmarkName).not.toContain('Mauna Kea');
-        });
-    });
-
-    describe('4. Clarification Selection Context Recovery', () => {
+    describe('3. Clarification Selection Context Recovery', () => {
         it('recovers prior user goal when prompt is a clarification selection response', () => {
             const messages: ChatMessage[] = [
                 {

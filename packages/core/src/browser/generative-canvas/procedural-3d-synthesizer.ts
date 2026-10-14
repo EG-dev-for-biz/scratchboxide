@@ -18,11 +18,6 @@ import {
     synthesizeAdaptive3DScene
 } from './services/adaptive-domain-engine';
 import {
-    synthesizeAdaptiveHeroScene,
-    synthesizeAdaptiveHeroObjectContract,
-    generateAdaptiveHeroPythonSource
-} from '../../common/spatial/adaptive-hero-synthesizer';
-import {
     WorldSpecification,
     planWorldIntentHeuristic,
     generateCompositeHeightfield,
@@ -35,16 +30,7 @@ import {
     BatchExecutionOptions,
     BatchExecutionResult
 } from './services/direct-dispatch-operator-engine';
-import {
-    Google3DTileService,
-    type ClayPresetId
-} from './services/Google3DTileService';
-import {
-    castCreativeLocation,
-    CreativeLocationCastingService,
-    type CastedLocation,
-    type LocationCastingArchetype
-} from './services/CreativeLocationCastingService';
+import { type ClayPresetId } from './services/Google3DTileService';
 import {
     type AtmosphericScatteringConfig
 } from './services/atmosphere';
@@ -63,14 +49,8 @@ export {
     type MicroSurfacePreset,
     type ProceduralMicroSurfaceConfig
 };
-export {
-    castCreativeLocation,
-    CreativeLocationCastingService
-};
 export type {
-    ClayPresetId,
-    CastedLocation,
-    LocationCastingArchetype
+    ClayPresetId
 };
 
 /**
@@ -120,7 +100,6 @@ export type Procedural3DTheme =
     | 'universal_scene'
     | 'nature_atmosphere'
     | 'glass_shatter'
-    | 'geospatial'
     | 'gaussian_splat'
     | 'general';
 
@@ -1154,15 +1133,6 @@ export function generateDefaultCpp3DSource(theme: Procedural3DTheme, title: stri
     const sanitizedTitle = title.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase().slice(0, 40) || 'procedural_asset';
 
     switch (theme) {
-        case 'geospatial':
-            return generateGeospatialCpp3DSource({
-                landmarkName: title,
-                lat: 37.7955,
-                lng: -122.3937,
-                elevation: 10.0,
-                clayPreset: 'warm_terracotta'
-            });
-
         case 'vehicle': {
             const styling = extractVehicleStyling(title);
             return generateParametricVehicleCpp3DSource(styling, title);
@@ -1890,148 +1860,29 @@ export function modifySceneWithOperators(
 }
 
 /**
- * Ensures that EVERY 3D scene is contextually and creatively cast to a real-world Google Maps location tile,
- * linking physical/thematic semantics to authentic Earth coordinates, terrain, and C++20 generator anchors.
+ * Gives a template scene that has no generator one from the adaptive domain engine. It never places the scene
+ * on Earth (or anywhere else): prompt words are not matched to places, and a location reaches a scene only
+ * through the location tools, which resolve it with Google Places.
  */
 export function applyCreativeLocationCasting(
     scene: Scene3DData,
     prompt: string,
-    context?: {
+    _context?: {
         activeArtifact?: CanvasArtifact;
         chatHistory?: Array<{ role: string; text: string }>;
         docTitle?: string;
         docContent?: string;
     }
 ): Scene3DData {
-    const activeDoc = context?.activeArtifact?.type === 'markdown-document'
-        ? (context.activeArtifact.data as MarkdownDocumentData)
-        : undefined;
-    const docTitle = context?.docTitle || activeDoc?.title || '';
-    const docContent = context?.docContent || (activeDoc?.sections ? activeDoc.sections.map(s => s.content || '').join(' ') : '');
-
-    // Preserve Martian or extraterrestrial planetary anchors
-    if (scene.sceneType === 'mars_rover' || (scene.worldBranch && scene.worldBranch.includes('mars')) || /\b(?:mars|martian|jezero)\b/i.test(prompt)) {
-        if (!scene.geoAnchor || !scene.geoAnchor.landmarkName?.toLowerCase().includes('mars')) {
-            scene.geoAnchor = {
-                lat: 18.38,
-                lng: 77.58,
-                elevation: -2500,
-                active: true,
-                landmarkName: 'Jezero Crater, Mars (Perseverance Exploration Site)',
-                castingRationale: 'Extraterrestrial planetary surface: Jezero Crater, Mars',
-                castingArchetype: 'planetary_surface'
-            };
-        }
-        return scene;
-    }
-
-    // Prompt words never become places here; a location reaches a scene only through the location tools.
-    if (!scene.geoAnchor) {
-        // No real-world location named: stay in the grey clay void instead of casting the
-        // scene onto an unrelated Earth location.
-        if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
-            const domain = classifyDomain(prompt);
-            const adaptive = synthesizeAdaptive3DScene(domain, scene.title, prompt);
-            if (adaptive.pythonGenerator) {
-                scene.pythonGenerator = adaptive.pythonGenerator;
-            } else if (adaptive.cppGenerator) {
-                scene.cppGenerator = adaptive.cppGenerator;
-            }
-        }
-        return scene;
-    }
-
-    const castedLoc = castCreativeLocation(prompt, {
-        theme: scene.sceneType,
-        docTitle,
-        docContent,
-        existingAnchor: scene.geoAnchor
-    });
-
-    if (!castedLoc.isRealWorld && scene.sceneType !== 'mars_rover' && !/\b(?:mars|martian|rover)\b/i.test(prompt)) {
-        if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
-            const domain = classifyDomain(prompt);
-            const adaptive = synthesizeAdaptive3DScene(domain, scene.title, prompt);
-            if (adaptive.pythonGenerator) {
-                scene.pythonGenerator = adaptive.pythonGenerator;
-            } else if (adaptive.cppGenerator) {
-                scene.cppGenerator = adaptive.cppGenerator;
-            }
-        }
-        return scene;
-    }
-
-    if (!scene.geoAnchor || !scene.geoAnchor.lat || !scene.geoAnchor.lng) {
-        scene.geoAnchor = {
-            lat: castedLoc.lat,
-            lng: castedLoc.lng,
-            elevation: castedLoc.elevation,
-            elevationSource: castedLoc.elevationSource || 'google_elevation',
-            datum: castedLoc.datum || 'MSL_EGM96',
-            active: true,
-            landmarkName: castedLoc.landmarkName,
-            castingRationale: castedLoc.rationale,
-            castingArchetype: castedLoc.archetype
-        };
-    } else {
-        if (!scene.geoAnchor.castingRationale) {
-            scene.geoAnchor.castingRationale = castedLoc.rationale;
-        }
-        if (!scene.geoAnchor.castingArchetype) {
-            scene.geoAnchor.castingArchetype = castedLoc.archetype;
-        }
-        if (!scene.geoAnchor.landmarkName) {
-            scene.geoAnchor.landmarkName = castedLoc.landmarkName;
-        }
-        if (scene.geoAnchor.elevation === undefined || scene.geoAnchor.elevation === null) {
-            scene.geoAnchor.elevation = castedLoc.elevation;
-        }
-        if (!scene.geoAnchor.elevationSource) {
-            scene.geoAnchor.elevationSource = castedLoc.elevationSource || 'google_elevation';
-        }
-        if (!scene.geoAnchor.datum) {
-            scene.geoAnchor.datum = castedLoc.datum || 'MSL_EGM96';
-        }
-        if (scene.geoAnchor.active === undefined) {
-            scene.geoAnchor.active = true;
-        }
-    }
-
-    // Ensure C++ or Python Procedural Generator conforms to 3D directive
     if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
-        const theme = detect3DSceneTheme(prompt, context);
-        let cppSource: string;
-        if (theme && theme !== 'general' && theme !== 'geospatial') {
-            cppSource = generateDefaultCpp3DSource(theme, scene.title || prompt);
-            // Prepend creative location casting anchor & rationale header comment
-            const header = `// ==============================================================================\n` +
-                `// Scratchbox 3D Engine: Creatively Cast Geospatial Anchor (C++20)\n` +
-                `// Real-World Anchor: ${scene.geoAnchor.landmarkName} (${scene.geoAnchor.lat.toFixed(4)}, ${scene.geoAnchor.lng.toFixed(4)})\n` +
-                `// Ground Elevation: ${(scene.geoAnchor.elevation ?? castedLoc.elevation).toFixed(2)}m MSL [Google Elevation Ground Truth, Datum: ${scene.geoAnchor.datum || 'EGM96'}]\n` +
-                `// Archetype: ${scene.geoAnchor.castingArchetype || castedLoc.archetype}\n` +
-                `// Creative Casting Rationale: ${(scene.geoAnchor.castingRationale || castedLoc.rationale).replace(/\n/g, ' ')}\n` +
-                `// ==============================================================================\n`;
-            cppSource = header + cppSource;
-        } else {
-            cppSource = generateGeospatialCpp3DSource({
-                landmarkName: scene.geoAnchor.landmarkName || castedLoc.landmarkName,
-                lat: scene.geoAnchor.lat || castedLoc.lat,
-                lng: scene.geoAnchor.lng || castedLoc.lng,
-                elevation: scene.geoAnchor.elevation ?? castedLoc.elevation,
-                clayPreset: castedLoc.suggestedEnvironment?.clayPreset || 'warm-clay',
-                castingRationale: scene.geoAnchor.castingRationale || castedLoc.rationale
-            });
+        const domain = classifyDomain(prompt);
+        const adaptive = synthesizeAdaptive3DScene(domain, scene.title, prompt);
+        if (adaptive.pythonGenerator) {
+            scene.pythonGenerator = adaptive.pythonGenerator;
+        } else if (adaptive.cppGenerator) {
+            scene.cppGenerator = adaptive.cppGenerator;
         }
-
-        scene.cppGenerator = {
-            enabled: true,
-            filename: 'world_generator.cpp',
-            sourceCode: cppSource,
-            vertexCount: 4096,
-            triangleCount: 2048
-        };
     }
-
     return scene;
 }
 
@@ -2062,18 +1913,6 @@ export function synthesizeRawContextual3DScene(
 ): Scene3DData {
     const raw = _synthesizeRawContextual3DSceneInner(prompt, context);
     return applyCreativeLocationCasting(raw, prompt, context);
-}
-
-/** The shape template branches read a location in; templates no longer receive one (see realWorldLoc below). */
-interface TemplateLocation {
-    isRealWorld: boolean;
-    landmarkName: string;
-    query: string;
-    lat: number;
-    lng: number;
-    elevation?: number;
-    elevationSource?: string;
-    datum?: string;
 }
 
 function _synthesizeRawContextual3DSceneInner(
@@ -2125,7 +1964,6 @@ function _synthesizeRawContextual3DSceneInner(
 
     // Direct 3D Gaussian Splat (.splat / .spz / 3DGS) scene synthesis
     const splatMatch = prompt.match(/(?:(?:\/splats\/|\/models\/|[a-zA-Z0-9_\-.]+\/)?([a-zA-Z0-9_\-]+\.sp(?:lat|z)))/i);
-    const isSplatRequested = theme === 'gaussian_splat' || Boolean(splatMatch) || /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(prompt);
 
     // Only a splat file the prompt names is shown; there is no stand-in splat for other requests.
     if (splatMatch) {
@@ -2173,327 +2011,8 @@ function _synthesizeRawContextual3DSceneInner(
         };
     }
 
-    // Check if the prompt asks for a real-world location or landmark.
-    // Specific-first ordering: a historical battlefield theme owns its own geo-anchored scene
-    // (Lexington Green, Buckman Tavern, formations) and must not be shadowed by the generic
-    // real-world tile path, which would otherwise relabel it as a 'worldbuilder' scene.
-    // Only a location the prompt actually names stages the scene on Earth; otherwise it stays in the clay void.
-    // Templates never turn prompt words into places: the model decides intent and resolves places with the
-    // location tools (Google Places), so a template scene has no real-world location.
-    const realWorldLoc = undefined as TemplateLocation | undefined;
-    // Determine procedural, object, and hero location classification
-    const isExplicitProcedural = /\b(?:procedural|scratchbox\s*engine|create_building|create_tree|python|c\+\+|nanobind|customScript)\b/i.test(prompt);
-    const isHeroObject = theme === 'vehicle' ||
-        /\b(?:probe|rover|robot|machine|drone|vehicle|car|race\s*car|f1|ship|craft|submersible|harvester|penetrator|device|apparatus|mechanism|weapon|tool|engine|reactor|walker|crawler|limb|coring|drill|auger|satellite|spacecraft|shuttle|aircraft|plane|jet|helicopter|truck|motorcycle|bicycle|mech|android|cyborg)\b/i.test(prompt);
-    const isObjectPrompt = isHeroObject;
-    const isHeroWithLocation = isObjectPrompt && Boolean(realWorldLoc?.isRealWorld);
-
-    if (realWorldLoc && realWorldLoc.isRealWorld) {
-        if (isSplatRequested) {
-            const locName = realWorldLoc.landmarkName || realWorldLoc.query;
-            const sanitizedName = locName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-            const locKey = locName.toLowerCase();
-
-            // Calibrated location splat URLs
-            let splatUrl = `/models/${sanitizedName}_splat.splat`;
-            let splatTilesetUrl = `/tilesets/${sanitizedName}/tileset.json`;
-
-            if (locKey.includes('colosseum') || locKey.includes('rome')) {
-                splatUrl = '/models/colosseum_splat.splat';
-                splatTilesetUrl = '/tilesets/colosseum/tileset.json';
-            } else if (locKey.includes('empire state') || locKey.includes('esb') || locKey.includes('manhattan')) {
-                splatUrl = '/models/esb_calibrated_3dgs_400k.splat';
-                splatTilesetUrl = '/tilesets/esb/tileset.json';
-            } else if (locKey.includes('grand army') || locKey.includes('plaza')) {
-                splatUrl = '/models/gap_splat.splat';
-                splatTilesetUrl = '/tilesets/gap/tileset.json';
-            } else if (locKey.includes('pantheon')) {
-                splatUrl = '/models/pantheon_atrium_360.spz';
-                splatTilesetUrl = '/tilesets/pantheon/tileset.json';
-            }
-
-            const splatMediaObject: Media4DObject = {
-                id: `${sanitizedName}-3dgs`,
-                content: {
-                    type: 'gaussian-splat',
-                    durableUri: splatUrl,
-                    mimeType: splatUrl.endsWith('.spz') ? 'application/x-spz' : 'application/octet-stream',
-                    metadata: {
-                        dims: { width: 120, height: 120, depth: 120 }
-                    }
-                },
-                space: {
-                    spatial3d: { x: 0, y: 0, z: 0 },
-                    geoAnchor: {
-                        lat: realWorldLoc.lat,
-                        lng: realWorldLoc.lng,
-                        alt: realWorldLoc.elevation || 0,
-                        heading: 0,
-                        pitch: 0
-                    }
-                },
-                lineage: {
-                    version: 1,
-                    generation: {
-                        model: 'nano-banana-survey-3dgs',
-                        prompt: prompt,
-                        params: { pipeline: 'SurveySplatPipelineService', restyleModel: 'nano-banana-2' }
-                    },
-                    timestamp: new Date().toISOString()
-                }
-            };
-
-            const sceneTitle = `${locName} — 3D Gaussian Splat`;
-            return {
-                title: sceneTitle,
-                subtitle: `Photorealistic 3DGS radiance field at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° synthesized via Nano Banana multi-station capture and C++20 metric depth unprojection.`,
-                worldBranch: `splat-world/${sanitizedName}`,
-                sceneType: 'gaussian_splat',
-                renderMode: 'pbr',
-                cameraMode: 'orbit',
-                animation: 'orbit',
-                splatUrl,
-                splatTilesetUrl,
-                splatOptions: {
-                    splatScale: 1.0,
-                    contactShadow: true,
-                    enableSoftZ: true
-                },
-                timeline: {
-                    currentTimeMs: 0,
-                    durationMs: 20000,
-                    isPlaying: true,
-                    speed: 1.0,
-                    playbackSpeed: 1.0,
-                    isLooping: true
-                },
-                camera: {
-                    position: [0, 20, 45],
-                    target: [0, 2, 0],
-                    fov: 45
-                },
-                environment: {
-                    skybox: hasAtmosphere ? 'realistic-sky' : 'golden_hour',
-                    lighting: 'golden_hour',
-                    ground: false
-                },
-                geoAnchor: {
-                    lat: realWorldLoc.lat,
-                    lng: realWorldLoc.lng,
-                    elevation: realWorldLoc.elevation,
-                    elevationSource: (realWorldLoc as any).elevationSource || 'google_elevation',
-                    datum: (realWorldLoc as any).datum || 'MSL_EGM96',
-                    active: true,
-                    landmarkName: locName
-                },
-                customMeshes: [],
-                objects: [splatMediaObject],
-                features: {
-                    ...baseFeatures,
-                    ...(hasAtmosphere ? {
-                        atmosphericScattering: buildHeadlessAtmosphere({
-                            sunElevation: 28,
-                            sunAzimuth: 145,
-                            latitude: realWorldLoc.lat,
-                            longitude: realWorldLoc.lng,
-                            aerialPerspectiveEnabled: hasHazeOrFogRequested,
-                            inscatteringIntensity: hasHazeOrFogRequested ? 1.0 : 0.0,
-                            aerialPerspectiveRange: 250.0
-                        })
-                    } : {})
-                }
-            };
-        }
-
-        // Only run tile ingest if explicitly requesting Google 3D tile models or geospatial photogrammetry
-        const isExplicitTileIngest = !isHeroWithLocation && (
-            /\b(?:tile|tiles|map\s*data|satellite|photogrammetr|geospatial|real\s*world\s*clay|google\s*maps)\b/i.test(prompt) ||
-            (!isExplicitProcedural && Boolean(realWorldLoc?.isRealWorld))
-        );
-
-        if (isExplicitTileIngest) {
-            // Extract clay preset preference if specified
-            let clayPreset: ClayPresetId = 'warm-clay';
-            if (/alabaster|white\s*clay|plaster/i.test(prompt)) clayPreset = 'alabaster';
-            else if (/terracotta|brick\s*clay/i.test(prompt)) clayPreset = 'terracotta';
-            else if (/onyx|black\s*clay|dark\s*clay|slate/i.test(prompt)) clayPreset = 'onyx';
-            else if (/studio\s*grey|neutral\s*clay|grey\s*clay/i.test(prompt)) clayPreset = 'studio-grey';
-            else if (/porcelain|ceramic/i.test(prompt)) clayPreset = 'porcelain';
-            else if (/concrete|brutalist/i.test(prompt)) clayPreset = 'concrete';
-
-            const tileService = Google3DTileService.getInstance();
-            let tileResult: any;
-            try {
-                tileResult = tileService.ingestTileRegionSync({
-                    query: realWorldLoc.landmarkName || realWorldLoc.query,
-                    lat: realWorldLoc.lat,
-                    lng: realWorldLoc.lng,
-                    elevation: realWorldLoc.elevation,
-                    clayPreset,
-                    detailLevel: 'high',
-                    includeBuildings: true,
-                    includeTerrain: true
-                });
-            } catch (err: any) {
-                console.warn('[procedural-3d-synthesizer] Google 3D Tile ingestion failed for location:', realWorldLoc, err.message);
-                return synthesizeAdaptiveHeroScene(prompt);
-            }
-
-            // Real-world scenes stream authentic Google 3D Tiles in 18% Studio Grey Clay.
-            // Synthetic box meshes and uninvited atmospheric skyboxes are strictly suppressed.
-            const customMeshes: NonNullable<Scene3DData['customMeshes']> = [];
-
-            const sceneTitle = `${realWorldLoc.landmarkName} — 3D Real-World Clay Model`;
-
-            return {
-                title: sceneTitle,
-                subtitle: `Geospatially grounded 3D architectural model at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° (${tileResult?.stats?.buildingCount || 0} structures, 18% Studio Grey Clay mode).`,
-                worldBranch: `real-world/${realWorldLoc.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-                sceneType: 'worldbuilder',
-                renderMode: 'clay',
-                cameraMode: 'orbit',
-                animation: 'orbit',
-                timeline: {
-                    currentTimeMs: 0,
-                    durationMs: 20000,
-                    isPlaying: true,
-                    speed: 1.0,
-                    playbackSpeed: 1.0,
-                    isLooping: true
-                },
-                camera: {
-                    position: [0, 25, 45],
-                    target: [0, 2, 0],
-                    fov: 45
-                },
-                environment: {
-                    skybox: (hasAtmosphere && explicitAtmosphereRequested) ? 'realistic-sky' : 'studio',
-                    lighting: 'studio',
-                    ground: false
-                },
-                geoAnchor: {
-                    lat: realWorldLoc.lat,
-                    lng: realWorldLoc.lng,
-                    elevation: realWorldLoc.elevation,
-                    elevationSource: 'google_elevation',
-                    datum: 'MSL_EGM96',
-                    active: true,
-                    landmarkName: realWorldLoc.landmarkName
-                },
-                customMeshes,
-                objects: [tileResult.media4DObject],
-                features: {
-                    ...baseFeatures,
-                    ...(explicitAtmosphereRequested ? {
-                        atmosphericScattering: buildHeadlessAtmosphere({
-                            sunElevation: 28,
-                            sunAzimuth: 145,
-                            latitude: realWorldLoc.lat,
-                            longitude: realWorldLoc.lng,
-                            aerialPerspectiveEnabled: hasHazeOrFogRequested,
-                            inscatteringIntensity: hasHazeOrFogRequested ? 1.0 : 0.0,
-                            cloudShadowsEnabled: hasCloudsRequested,
-                            cloudShadowIntensity: hasCloudsRequested ? 0.65 : 0.0
-                        }),
-                        godRays: hasGodRays
-                    } : {})
-                },
-                cppGenerator: {
-                    enabled: true,
-                    filename: 'world_generator.cpp',
-                    sourceCode: generateGeospatialCpp3DSource({
-                        landmarkName: realWorldLoc.landmarkName,
-                        lat: realWorldLoc.lat,
-                        lng: realWorldLoc.lng,
-                        elevation: realWorldLoc.elevation,
-                        clayPreset
-                    }),
-                    vertexCount: tileResult.stats.vertexCount,
-                    triangleCount: tileResult.stats.faceCount
-                }
-            };
-        }
-    }
-
-    if (isObjectPrompt && realWorldLoc) {
-        // Synthesize the hero object (e.g. race car / vehicle / rover)
-        const heroScene = synthesizeAdaptiveHeroScene(prompt);
-
-        // Ingest Google 3D Tiles in Studio Grey Clay for the requested location
-        const tileService = Google3DTileService.getInstance();
-        let tileResult: any;
-        try {
-            tileResult = tileService.ingestTileRegionSync({
-                query: realWorldLoc.landmarkName || realWorldLoc.query,
-                lat: realWorldLoc.lat,
-                lng: realWorldLoc.lng,
-                elevation: realWorldLoc.elevation,
-                clayPreset: 'studio-grey',
-                detailLevel: 'high',
-                includeBuildings: true,
-                includeTerrain: true
-            });
-        } catch (err: any) {
-            console.warn('[procedural-3d-synthesizer] Hero location staging tile ingestion failed:', realWorldLoc, err.message);
-            return heroScene;
-        }
-
-        const heroBaseTitle = heroScene.title.replace(/\s*—\s*ADA Hero Asset/i, '').replace(/\s*—\s*Procedural Vehicle/i, '').trim();
-        const stagedTitle = `${heroBaseTitle} — Staged in ${realWorldLoc.landmarkName}`;
-        const stagedSubtitle = `Real-World Geospatial Staging | [${realWorldLoc.lat.toFixed(4)}°, ${realWorldLoc.lng.toFixed(4)}°] | Studio Grey Clay Grounding`;
-
-        return {
-            ...heroScene,
-            title: stagedTitle,
-            subtitle: stagedSubtitle,
-            worldBranch: `geospatial/${realWorldLoc.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-            sceneType: 'real_world_landmark',
-            renderMode: 'clay',
-            environment: {
-                ...heroScene.environment,
-                skybox: (hasAtmosphere && explicitAtmosphereRequested) ? 'realistic-sky' : 'studio',
-                lighting: 'studio',
-                ground: true
-            },
-            geoAnchor: {
-                lat: realWorldLoc.lat,
-                lng: realWorldLoc.lng,
-                elevation: realWorldLoc.elevation,
-                elevationSource: 'google_elevation',
-                datum: 'MSL_EGM96',
-                active: true,
-                landmarkName: realWorldLoc.landmarkName
-            },
-            objects: [
-                tileResult.media4DObject,
-                ...(heroScene.objects || [])
-            ],
-            customMeshes: [
-                ...(heroScene.customMeshes || [])
-            ],
-            features: {
-                ...heroScene.features,
-                ...baseFeatures,
-                ...(explicitAtmosphereRequested ? {
-                    atmosphericScattering: buildHeadlessAtmosphere({
-                        sunElevation: isSunset ? 12 : 28,
-                        sunAzimuth: 145,
-                        latitude: realWorldLoc.lat,
-                        longitude: realWorldLoc.lng,
-                        aerialPerspectiveEnabled: hasHazeOrFogRequested || isSunset,
-                        inscatteringIntensity: (hasHazeOrFogRequested || isSunset) ? 1.0 : 0.0,
-                        cloudShadowsEnabled: hasCloudsRequested,
-                        cloudShadowIntensity: hasCloudsRequested ? 0.65 : 0.35
-                    }),
-                    godRays: hasGodRays
-                } : {})
-            }
-        };
-    }
-
-    if (isObjectPrompt && !realWorldLoc && theme !== 'vehicle' && theme !== 'mars_rover') {
-        return synthesizeAdaptiveHeroScene(prompt);
-    }
+    // Template scenes never stand on Earth: prompt words are not matched to places (the model resolves a place
+    // with the location tools), and nothing here stands in for an object build or a failed tile extraction.
 
     if (theme === 'vehicle') {
         return synthesizeProceduralVehicleScene(prompt, context);
@@ -2955,13 +2474,6 @@ onFrame((time, delta) => {
                     heightVariation: spec.terrain.elevationMax - spec.terrain.elevationMin
                 }
             },
-            geoAnchor: (realWorldLoc && realWorldLoc.isRealWorld) ? {
-                lat: realWorldLoc.lat,
-                lng: realWorldLoc.lng,
-                elevation: realWorldLoc.elevation || 10.0,
-                active: true,
-                landmarkName: realWorldLoc.landmarkName || spec.name
-            } : undefined,
             customMeshes,
             customScript,
             code: customScript,
@@ -3667,15 +3179,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 lightingKelvin: 4500,
                 ground: true
             },
-            geoAnchor: {
-                lat: 18.38,
-                lng: 77.58,
-                elevation: -2500,
-                active: true,
-                landmarkName: 'Jezero Crater, Mars (Perseverance Exploration Site)',
-                castingRationale: 'Extraterrestrial planetary surface: Jezero Crater, Mars',
-                castingArchetype: 'planetary_surface'
-            },
+            // No geoAnchor: an anchor is a WGS-84 point on Earth, so Mars coordinates would stream Earth tiles.
             customMeshes
         };
     }
@@ -4080,15 +3584,6 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 ground: true
             },
             customMeshes,
-            geoAnchor: realWorldLoc ? {
-                lat: realWorldLoc.lat,
-                lng: realWorldLoc.lng,
-                elevation: realWorldLoc.elevation,
-                elevationSource: 'google_elevation',
-                datum: 'MSL_EGM96',
-                active: true,
-                landmarkName: realWorldLoc.landmarkName
-            } : undefined,
             pythonGenerator: {
                 enabled: true,
                 filename: 'procedural_architecture.py',
