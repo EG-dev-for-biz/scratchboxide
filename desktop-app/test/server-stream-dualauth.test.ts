@@ -26,14 +26,11 @@ describe('Server Gemini Streaming Dual-Auth & Dev Origin Bypass', () => {
         });
     });
 
-    it('1. GET /api/auth/token returns the launch token for allowed dev origins', async () => {
-        const res = await fetch(`${baseUrl}/api/auth/token`, {
+    it('1. an allowed dev Origin alone is not accepted as auth', async () => {
+        const res = await fetch(`${baseUrl}/gemini/status`, {
             headers: { Origin: 'http://127.0.0.1:3030' }
         });
-        expect(res.status).toBe(200);
-        const data = await res.json();
-        expect(data.success).toBe(true);
-        expect(data.token).toBe(token);
+        expect(res.status).toBe(401);
     });
 
     it('2. GET /gemini/status returns connected: true with dual-auth', async () => {
@@ -46,12 +43,13 @@ describe('Server Gemini Streaming Dual-Auth & Dev Origin Bypass', () => {
         expect(['service-account', 'api-key']).toContain(data.authMethod);
     });
 
-    it('3. POST /gemini/generate-stream generates SSE stream with dev origin or token', async () => {
+    it('3. POST /gemini/generate-stream generates SSE stream from the dev origin with the token', async () => {
         const res = await fetch(`${baseUrl}/gemini/generate-stream`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Origin': 'http://127.0.0.1:3030'
+                'Origin': 'http://127.0.0.1:3030',
+                'X-Scratchbox-Token': token
             },
             body: JSON.stringify({
                 prompt: 'Respond with the single word: "READY"',

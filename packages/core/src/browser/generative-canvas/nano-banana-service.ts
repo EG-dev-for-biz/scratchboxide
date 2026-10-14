@@ -689,7 +689,7 @@ export const NANO_BANANA_IMAGE_CATALOG: CuratedImageEntry[] = [
         title: 'Multi-Modal Transformer Attention & Subagent DAG',
         caption: 'High-dimensional vector manifold showing attention head routing, subagent DAG parallelization, and real-time canvas synthesis.',
         attribution: 'AI Systems Laboratory • Gemini Architecture',
-        dateTag: 'Gemini 3.7 Flash & Autonomous Subagents',
+        dateTag: 'Gemini 3.8 Flash & Autonomous Subagents',
         theme: 'ai-machine-learning',
         keywords: ['ai', 'machine learning', 'neural', 'transformer', 'attention', 'dag', 'subagent', 'embedding', 'vector']
     }

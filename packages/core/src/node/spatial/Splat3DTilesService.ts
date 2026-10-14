@@ -9,12 +9,12 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { LocalTangentPlane, type LatLngAlt } from '../../common/coordinate/LocalTangentPlane';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface Splat3DTilesOptions {
     inputPath: string;                 // .splat or .spz
@@ -68,7 +68,9 @@ export class Splat3DTilesService {
         if (!fs.existsSync(src)) throw new Error(`Tiler source not found: ${src}`);
         await fs.ensureDir(path.dirname(this.binaryPath));
         const include = this.compiler.getSdkIncludePath();
-        await execAsync(`${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${include}" -lz "${src}" -o "${this.binaryPath}"`);
+        // CXX may carry a launcher/flags (e.g. "ccache clang++"): split it into argv, no shell involved.
+        const [cxx, ...cxxArgs] = (process.env.CXX || 'clang++').trim().split(/\s+/);
+        await execFileAsync(cxx, [...cxxArgs, '-std=c++20', '-O3', '-I', include, '-lz', src, '-o', this.binaryPath]);
         return this.binaryPath;
     }
 
@@ -80,15 +82,15 @@ export class Splat3DTilesService {
             const bin = await this.ensureBinary();
             await fs.ensureDir(options.outDir);
             const args = [
-                `--input "${options.inputPath}"`,
-                `--out-dir "${options.outDir}"`,
-                `--max-depth ${options.maxDepth ?? 5}`,
-                `--leaf-capacity ${options.leafCapacity ?? 65536}`,
-                `--interior-budget ${options.interiorBudget ?? 32768}`,
-                `--geometric-error-scale ${options.geometricErrorScale ?? 0.25}`,
+                '--input', options.inputPath,
+                '--out-dir', options.outDir,
+                '--max-depth', String(options.maxDepth ?? 5),
+                '--leaf-capacity', String(options.leafCapacity ?? 65536),
+                '--interior-budget', String(options.interiorBudget ?? 32768),
+                '--geometric-error-scale', String(options.geometricErrorScale ?? 0.25),
                 '--json'
             ];
-            const { stdout } = await execAsync(`"${bin}" ${args.join(' ')}`, { maxBuffer: 16 * 1024 * 1024 });
+            const { stdout } = await execFileAsync(bin, args, { maxBuffer: 16 * 1024 * 1024 });
             const stats = JSON.parse(stdout.trim());
 
             const tree = await fs.readJson(treePath) as { root: TreeNode; totalSplats: number; nodeCount: number };

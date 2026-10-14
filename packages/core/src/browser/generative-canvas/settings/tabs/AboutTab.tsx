@@ -33,7 +33,7 @@ export const AboutTab: React.FC = () => {
                 <div className="grid grid-cols-2 gap-3 max-w-md mx-auto text-left pt-2">
                     <div className="p-3 bg-zinc-100/70 dark:bg-zinc-900/80 rounded-xl border border-zinc-200 dark:border-zinc-800">
                         <div className="text-xs uppercase font-bold tracking-wider text-zinc-500 dark:text-zinc-400">Primary Model</div>
-                        <div className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 mt-0.5">Gemini 3.7 Flash</div>
+                        <div className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 mt-0.5">Gemini 3.8 Flash</div>
                     </div>
                     <div className="p-3 bg-zinc-100/70 dark:bg-zinc-900/80 rounded-xl border border-zinc-200 dark:border-zinc-800">
                         <div className="text-xs uppercase font-bold tracking-wider text-zinc-500 dark:text-zinc-400">Subagent Pool</div>

@@ -78,7 +78,7 @@ SBMesh *generate_scratchbox_custom_mesh() {
 
     try {
         const ai = new GoogleGenAI({ apiKey });
-        const modelName = options.model || 'gemini-3.7-flash';
+        const modelName = options.model || 'gemini-3.8-flash';
 
         const response = await ai.models.generateContent({
             model: modelName,
@@ -282,7 +282,7 @@ SBMesh *generate_scratchbox_custom_mesh() {
 
     try {
         const ai = new GoogleGenAI({ apiKey });
-        const model = 'gemini-3.7-flash';
+        const model = 'gemini-3.8-flash';
         const response = await ai.models.generateContent({
             model,
             contents: `Repair this C++ SBMesh function:\n${code}`,

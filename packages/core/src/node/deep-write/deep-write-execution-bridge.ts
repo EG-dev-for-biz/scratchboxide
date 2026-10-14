@@ -195,7 +195,7 @@ You MUST respond with a single valid JSON object containing corrected files:
                 {
                     prompt: 'Identify the compilation/runtime errors and output the corrected file contents.',
                     systemInstruction,
-                    model: 'gemini-3.7-flash',
+                    model: 'gemini-3.8-flash',
                     temperature: 0.1,
                     thinkingBudget: 512
                 },

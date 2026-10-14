@@ -63,8 +63,8 @@ export class GeminiClient {
             }
             return {
                 connected: false,
-                activeModel: 'gemini-3.7-flash',
-                availableModels: ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+                activeModel: 'gemini-3.8-flash',
+                availableModels: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
                 subagentModel: 'gemini-3.5-flash-lite',
                 availableSubagentModels: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite-preview', 'gemini-3.1-flash-lite'],
                 thinkingBudget: 1024,
@@ -74,8 +74,8 @@ export class GeminiClient {
         } catch (err: any) {
             return {
                 connected: false,
-                activeModel: 'gemini-3.7-flash',
-                availableModels: ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+                activeModel: 'gemini-3.8-flash',
+                availableModels: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
                 subagentModel: 'gemini-3.5-flash-lite',
                 availableSubagentModels: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite-preview', 'gemini-3.1-flash-lite'],
                 thinkingBudget: 1024,

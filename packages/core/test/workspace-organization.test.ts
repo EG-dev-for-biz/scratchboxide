@@ -118,7 +118,7 @@ Ensure all foreign keys have indexes and validate schema constraints.`
             settings: {
                 glassBlur: 'vibrant',
                 enableSpringMotion: true,
-                defaultModel: 'gemini-3.7-flash',
+                defaultModel: 'gemini-3.8-flash',
                 thinkingBudget: 2048
             }
         });

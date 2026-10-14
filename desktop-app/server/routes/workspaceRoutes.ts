@@ -201,7 +201,7 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
                 await fs.writeJSON(configPath, {
                     workspaceName: cleanName,
                     theme: 'dark',
-                    defaultModel: 'gemini-3.7-flash',
+                    defaultModel: 'gemini-3.8-flash',
                     thinkingBudget: 1024,
                     template: template || 'blank'
                 }, { spaces: 2 });
@@ -445,6 +445,11 @@ export function createGitRouter(ctx: RouteContext): Router {
             }
             if (commit) {
                 const cleanCommit = commit.replace(/[^a-zA-Z0-9_\-.~^]/g, '');
+                // A leading '-' would be parsed by git as an option (e.g. --output, --ext-diff).
+                if (cleanCommit.startsWith('-')) {
+                    res.status(400).json({ error: 'Invalid commit parameter' });
+                    return;
+                }
                 if (cleanCommit) gitArgs.push(cleanCommit);
             }
             if (file) {
@@ -591,7 +596,13 @@ export function createGitRouter(ctx: RouteContext): Router {
                 return;
             }
             const cleanBranch = branch.trim().replace(/[^a-zA-Z0-9_\-\.\/]/g, '');
-            const { stdout } = await runGit(['checkout', cleanBranch], targetRoot);
+            // Reject option-like or empty names so git never parses the value as a flag.
+            if (!cleanBranch || cleanBranch.startsWith('-')) {
+                res.status(400).json({ error: 'Invalid branch parameter' });
+                return;
+            }
+            // Trailing '--' forces git to treat cleanBranch as a revision, never a pathspec/option.
+            const { stdout } = await runGit(['checkout', cleanBranch, '--'], targetRoot);
             res.json({ success: true, branch: cleanBranch, output: stdout });
         } catch (err: any) {
             sendError(res, err);
@@ -628,7 +639,7 @@ export function createGitRouter(ctx: RouteContext): Router {
 
             await fs.ensureDir(path.dirname(resolvedDest));
 
-            const { stdout, stderr } = await runGit(['clone', cleanUrl, resolvedDest], path.dirname(resolvedDest));
+            const { stdout, stderr } = await runGit(['clone', '--', cleanUrl, resolvedDest], path.dirname(resolvedDest));
             res.json({
                 success: true,
                 path: resolvedDest,

@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adaptive UV & PBR Orchestrator · Scratchbox IDE</title>
+    <script type="module" src="/js/model-viewer.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #06090f;
+            --panel-bg: rgba(13, 19, 31, 0.92);
+            --panel-border: rgba(255, 255, 255, 0.12);
+            --accent-cyan: #38bdf8;
+            --accent-blue: #3b82f6;
+            --accent-emerald: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-purple: #c084fc;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            user-select: none;
+        }
+
+        /* Top Header */
+        header {
+            height: 56px;
+            padding: 0 24px;
+            background: linear-gradient(180deg, #0f172a 0%, #06090f 100%);
+            border-bottom: 1px solid var(--panel-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 50;
+            flex-shrink: 0;
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-title h1 {
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: #fff;
+        }
+
+        .badge {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-cyan { background: rgba(56, 189, 248, 0.15); color: var(--accent-cyan); border: 1px solid rgba(56, 189, 248, 0.3); }
+        .badge-emerald { background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-purple { background: rgba(192, 132, 252, 0.15); color: var(--accent-purple); border: 1px solid rgba(192, 132, 252, 0.3); }
+        .badge-amber { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+
+        .tabs-nav {
+            display: flex;
+            gap: 8px;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 4px;
+            border-radius: 8px;
+            border: 1px solid var(--panel-border);
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .tab-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
+        .tab-btn.active { color: #fff; background: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); }
+
+        /* Main Workspace Container */
+        .workspace {
+            flex: 1;
+            position: relative;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* 4-Up Grid Layout */
+        .quad-grid {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 2px;
+            background: #020408;
+        }
+
+        .quad-cell {
+            position: relative;
+            background: #090e17;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .quad-cell model-viewer {
+            width: 100%;
+            height: 100%;
+            background-color: #070b12;
+            --poster-color: transparent;
+        }
+
+        .cell-hud {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            right: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .cell-info {
+            background: rgba(10, 15, 25, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--panel-border);
+            padding: 8px 12px;
+            border-radius: 8px;
+            max-width: 320px;
+        }
+
+        .cell-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 2px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .cell-metric {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            color: var(--accent-cyan);
+            margin-bottom: 4px;
+        }
+
+        .cell-desc {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.35;
+        }
+
+        .cell-seam-badge {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 6px;
+            backdrop-filter: blur(8px);
+        }
+
+        /* Single Focused 3D Viewport */
+        .single-view {
+            position: absolute;
+            inset: 0;
+            display: none;
+            background: #070b12;
+        }
+
+        .single-view model-viewer {
+            width: 100%;
+            height: 100%;
+            --poster-color: transparent;
+        }
+
+        .single-overlay-hud {
+            position: absolute;
+            bottom: 24px;
+            left: 24px;
+            background: rgba(13, 19, 31, 0.90);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 16px 20px;
+            max-width: 480px;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        .hud-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+
+        .hud-label { color: var(--text-muted); font-weight: 500; }
+        .hud-val { color: #fff; font-weight: 600; font-family: ui-monospace, Menlo, monospace; }
+
+        /* Floating Controls */
+        .viewport-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 30;
+        }
+
+        .vp-btn {
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--panel-border);
+            color: #fff;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .vp-btn:hover { background: #1e293b; border-color: rgba(255,255,255,0.25); }
+
+        /* Bottom Status Bar */
+        footer {
+            height: 32px;
+            background: #04060a;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 0 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: ui-monospace, Menlo, monospace;
+            z-index: 50;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 8px #10b981;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="header-title">
+            <h1>Adaptive UV & PBR Orchestrator</h1>
+            <span class="badge badge-cyan">Topology-Adaptive Engine</span>
+            <span class="badge badge-emerald">Seam Healing Active</span>
+        </div>
+
+        <div class="tabs-nav">
+            <button class="tab-btn active" onclick="switchView('quad')">4-Domain Matrix</button>
+            <button class="tab-btn" onclick="switchView('colosseum')">Colosseum (Massive Scan)</button>
+            <button class="tab-btn" onclick="switchView('esb')">Empire State (High-Rise)</button>
+            <button class="tab-btn" onclick="switchView('cypress')">Cypress (Organic Anatomy)</button>
+            <button class="tab-btn" onclick="switchView('cad')">Cuboid (Zero-Seam CAD)</button>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="workspace">
+        
+        <!-- 4-Up Multi-Domain Matrix -->
+        <div class="quad-grid" id="quadGrid">
+            
+            <!-- Cell 1: Massive Photogrammetric Scan (Colosseum) -->
+            <div class="quad-cell">
+                <div class="cell-hud">
+                    <div class="cell-info">
+                        <div class="cell-title">
+                            <span>Massive Photogrammetric Scan</span>
+                            <span class="badge badge-amber">Recipe Hybrid</span>
+                        </div>
+                        <div class="cell-metric">Colosseum District · 259 Submeshes · 257k Tris</div>
+                        <div class="cell-desc">KD-tree boundary seam welding + _SBEDGEH affine edge altitude GPU micro-beveling. 0% VRAM expansion.</div>
+                    </div>
+                    <div class="cell-seam-badge">Welded Atlas Seams (4px Gutter)</div>
+                </div>
+                <model-viewer id="mvColosseumQuad"
+                    src="/models/colosseum_stage3_master_pbr.glb"
+                    camera-orbit="35deg 62deg 520m"
+                    camera-target="0m 0m 0m"
+                    field-of-view="30deg"
+                    loading="eager"
+                    reveal="auto"
+                    auto-rotate
+                    camera-controls
+                    shadow-intensity="1.2"
+                    exposure="1.0">
+                </model-viewer>
+            </div>
+
+            <!-- Cell 2: High-Rise Architecture (Empire State Building) -->
+            <div class="quad-cell">
+                <div class="cell-hud">
+                    <div class="cell-info">
+                        <div class="cell-title">
+                            <span>High-Rise Vertical Architecture</span>
+                            <span class="badge badge-purple">Elevation Conformal</span>
+                        </div>
+                        <div class="cell-metric">Empire State Building · Y = 443.2m · Aspect 3.12</div>
+                        <div class="cell-desc">Elevation-stratified conformal mapping. Seams placed along window reveals and chamfers with 16px dilation gutters.</div>
+                    </div>
+                    <div class="cell-seam-badge">Reveal Seams (16px Gutter)</div>
+                </div>
+                <model-viewer id="mvEsbQuad"
+                    src="/models/spce_esb_isolated_full_quality_raw.glb"
+                    loading="eager"
+                    reveal="auto"
+                    auto-rotate
+                    camera-controls
+                    shadow-intensity="1.2"
+                    exposure="1.05">
+                </model-viewer>
+            </div>
+
+            <!-- Cell 3: Organic Articulated Anatomy (Cypress / Plant) -->
+            <div class="quad-cell">
+                <div class="cell-hud">
+                    <div class="cell-info">
+                        <div class="cell-title">
+                            <span>Organic Articulated Anatomy</span>
+                            <span class="badge badge-emerald">Carrier Conformal</span>
+                        </div>
+                        <div class="cell-metric">Mediterranean Cypress · Organicity &Omega; = 1.00</div>
+                        <div class="cell-desc">SO(3) Frenet-Serret carrier sheets. Seams placed along natural occlusion geodesics with Hermite margin overlap.</div>
+                    </div>
+                    <div class="cell-seam-badge">Occlusion Seams (8px Gutter)</div>
+                </div>
+                <model-viewer id="mvCypressQuad"
+                    src="/models/sb_veggie_cypress.glb"
+                    loading="eager"
+                    reveal="auto"
+                    auto-rotate
+                    camera-controls
+                    shadow-intensity="1.1"
+                    exposure="1.0">
+                </model-viewer>
+            </div>
+
+            <!-- Cell 4: Rigid CAD / Mechanical Prop (Analytical Cuboid) -->
+            <div class="quad-cell">
+                <div class="cell-hud">
+                    <div class="cell-info">
+                        <div class="cell-title">
+                            <span>Rigid Mechanical CAD / Prop</span>
+                            <span class="badge badge-cyan">Triplanar Height-Blended</span>
+                        </div>
+                        <div class="cell-metric">Analytical Cuboid Blockout · &Omega; = 0.05</div>
+                        <div class="cell-desc">Continuous normal-weighted triplanar projection (k &ge; 4). 100% seam-free continuous PBR coverage.</div>
+                    </div>
+                    <div class="cell-seam-badge">Zero Seams (Continuous)</div>
+                </div>
+                <model-viewer id="mvCadQuad"
+                    src="/models/analytical_cuboid_blockout.glb"
+                    loading="eager"
+                    reveal="auto"
+                    auto-rotate
+                    camera-controls
+                    shadow-intensity="1.0"
+                    exposure="1.0">
+                </model-viewer>
+            </div>
+
+        </div>
+
+        <!-- Single Focused Viewport -->
+        <div class="single-view" id="singleView">
+            <model-viewer id="mainSingleViewer"
+                camera-controls
+                shadow-intensity="1.2"
+                exposure="1.0"
+                auto-rotate="false">
+            </model-viewer>
+
+            <div class="single-overlay-hud" id="singleOverlayHud">
+                <div class="hud-row">
+                    <span class="hud-label">Asset:</span>
+                    <span class="hud-val" id="hudAssetVal">Colosseum District Stage 3 Master</span>
+                </div>
+                <div class="hud-row">
+                    <span class="hud-label">Organicity Index (&Omega;):</span>
+                    <span class="hud-val" id="hudOmegaVal">0.00 (Inorganic Hard-Surface)</span>
+                </div>
+                <div class="hud-row">
+                    <span class="hud-label">Selected Strategy:</span>
+                    <span class="hud-val" id="hudStrategyVal" style="color: var(--accent-cyan)">Recipe Hybrid PBR</span>
+                </div>
+                <div class="hud-row">
+                    <span class="hud-label">Seam Placement:</span>
+                    <span class="hud-val" id="hudSeamPlaceVal">Photogrammetric Boundary Welded</span>
+                </div>
+                <div class="hud-row">
+                    <span class="hud-label">Seam Healing Method:</span>
+                    <span class="hud-val" id="hudSeamHealVal" style="color: var(--accent-emerald)">Affine Edge Altitude Bevel (_SBEDGEH)</span>
+                </div>
+                <div class="hud-row">
+                    <span class="hud-label">Handedness &amp; Drift:</span>
+                    <span class="hud-val" id="hudHandednessVal">MikkTSpace Guaranteed · 0.000px Drift</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Floating Viewport Controls -->
+        <div class="viewport-controls">
+            <button class="vp-btn" onclick="toggleAutoRotate()">
+                <span id="rotateIcon">🔄</span> Toggle Turntable
+            </button>
+            <button class="vp-btn" onclick="resetCurrentCamera()">
+                <span>🎯</span> Reset Camera
+            </button>
+        </div>
+
+    </div>
+
+    <!-- Footer Status -->
+    <footer>
+        <div class="status-pill">
+            <div class="status-dot"></div>
+            <span>AdaptiveUvOrchestrator v2.4 · 4 Strategies Active · MikkTSpace Orthonormal Handedness</span>
+        </div>
+        <div>Continuous Organicity &Omega; &isin; [0, 1] · 0.000px Geometric Drift · Toksvig Anti-Aliasing</div>
+    </footer>
+
+    <script>
+        const views = {
+            colosseum: {
+                title: 'Roman Colosseum District · Stage 3 Master PBR',
+                src: '/models/colosseum_stage3_master_pbr.glb',
+                orbit: '-38deg 58deg 540m',
+                target: '6.9m 14m 3.1m',
+                fov: '32deg',
+                omega: '0.00 (Inorganic Macro-District)',
+                strategy: 'Recipe Hybrid PBR',
+                seamPlace: 'Photogrammetric Boundary Welded',
+                seamHeal: 'Affine Edge Altitude Bevel (_SBEDGEH)',
+                handedness: 'MikkTSpace Guaranteed · 0.000px Drift'
+            },
+            esb: {
+                title: 'Empire State Building · Vertical High-Rise',
+                src: '/models/spce_esb_isolated_full_quality_raw.glb',
+                orbit: '45deg 75deg 650m',
+                target: '0m 220m 0m',
+                fov: '35deg',
+                omega: '0.00 (Inorganic High-Rise, Y = 443.2m)',
+                strategy: 'Elevation-Stratified Conformal Mapping',
+                seamPlace: 'Architectural Reveals & Mullions',
+                seamHeal: '16px Gutter Dilation Clamping + NOAA Delighting',
+                handedness: 'MikkTSpace Guaranteed · 0.000px Drift'
+            },
+            cypress: {
+                title: 'Mediterranean Cypress · Anatomical Organic Form',
+                src: '/models/sb_veggie_cypress.glb',
+                orbit: '-25deg 80deg 22m',
+                target: '0m 8m 0m',
+                fov: '35deg',
+                omega: '1.00 (Pure Organic Anatomy)',
+                strategy: 'SO(3) Carrier-Frame Conformal Sheets',
+                seamPlace: 'Natural Occlusion Geodesics',
+                seamHeal: '8px Hermite Margin Overlap',
+                handedness: 'MikkTSpace Guaranteed · Flexion Invariant'
+            },
+            cad: {
+                title: 'Analytical Cuboid Blockout · Mechanical CAD / Prop',
+                src: '/models/analytical_cuboid_blockout.glb',
+                orbit: '45deg 60deg 1900m',
+                target: '0m 215m 0m',
+                fov: '35deg',
+                omega: '0.05 (Rigid Mechanical Compact)',
+                strategy: 'Continuous Height-Blended Triplanar',
+                seamPlace: 'Zero Seams Continuous (Seam-Free)',
+                seamHeal: 'Normal-Weighted Height Blend (k >= 4)',
+                handedness: 'MikkTSpace Guaranteed · 0px Gutter'
+            }
+        };
+
+        let currentActiveView = 'quad';
+        let autoRotateState = false;
+
+        function switchView(mode) {
+            currentActiveView = mode;
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+
+            const quadGrid = document.getElementById('quadGrid');
+            const singleView = document.getElementById('singleView');
+            const singleMv = document.getElementById('mainSingleViewer');
+
+            if (mode === 'quad') {
+                quadGrid.style.display = 'grid';
+                singleView.style.display = 'none';
+                document.querySelectorAll('.tab-btn')[0].classList.add('active');
+            } else {
+                quadGrid.style.display = 'none';
+                singleView.style.display = 'block';
+
+                const cfg = views[mode];
+                if (cfg) {
+                    singleMv.src = cfg.src;
+                    singleMv.cameraOrbit = cfg.orbit;
+                    singleMv.cameraTarget = cfg.target;
+                    singleMv.fieldOfView = cfg.fov;
+
+                    document.getElementById('hudAssetVal').textContent = cfg.title;
+                    document.getElementById('hudOmegaVal').textContent = cfg.omega;
+                    document.getElementById('hudStrategyVal').textContent = cfg.strategy;
+                    document.getElementById('hudSeamPlaceVal').textContent = cfg.seamPlace;
+                    document.getElementById('hudSeamHealVal').textContent = cfg.seamHeal;
+                    document.getElementById('hudHandednessVal').textContent = cfg.handedness;
+
+                    const tabMap = { colosseum: 1, esb: 2, cypress: 3, cad: 4 };
+                    const idx = tabMap[mode];
+                    if (idx !== undefined) {
+                        document.querySelectorAll('.tab-btn')[idx].classList.add('active');
+                    }
+                }
+            }
+        }
+
+        function toggleAutoRotate() {
+            autoRotateState = !autoRotateState;
+            const singleMv = document.getElementById('mainSingleViewer');
+            if (singleMv) singleMv.autoRotate = autoRotateState;
+            ['mvColosseumQuad', 'mvEsbQuad', 'mvCypressQuad', 'mvCadQuad'].forEach(id => {
+                const mv = document.getElementById(id);
+                if (mv) mv.autoRotate = autoRotateState;
+            });
+        }
+
+        function resetCurrentCamera() {
+            if (currentActiveView !== 'quad' && views[currentActiveView]) {
+                const cfg = views[currentActiveView];
+                const singleMv = document.getElementById('mainSingleViewer');
+                singleMv.cameraOrbit = cfg.orbit;
+                singleMv.cameraTarget = cfg.target;
+                singleMv.fieldOfView = cfg.fov;
+            } else {
+                document.getElementById('mvColosseumQuad').cameraOrbit = views.colosseum.orbit;
+                document.getElementById('mvEsbQuad').cameraOrbit = views.esb.orbit;
+                document.getElementById('mvCypressQuad').cameraOrbit = views.cypress.orbit;
+                document.getElementById('mvCadQuad').cameraOrbit = views.cad.orbit;
+            }
+        }
+    </script>
+</body>
+</html>

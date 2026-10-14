@@ -705,7 +705,7 @@ export class TaskCapabilityResolver {
                 // If standard text-to-image or multimodal reasoning
                 canSolveNatively = true;
                 primaryNativeEngine = 'google-models';
-                nativeCapabilities.push('Google Gemini 3.7 / 2.5 Multimodal Reasoning');
+                nativeCapabilities.push('Google Gemini 3.8 / 2.5 Multimodal Reasoning');
                 nativeCapabilities.push('Imagen Generative Image Synthesis (generate_image)');
                 rationale = 'Native Google generative models (Gemini & Imagen) can handle standard text prompts, multimodal image understanding, and 2D asset synthesis.';
                 suggestedNativeAction = {
@@ -720,7 +720,7 @@ export class TaskCapabilityResolver {
             nativeCapabilities.push('Workspace File Tools (workspace_read_file, workspace_write_file, workspace_apply_diff)');
             nativeCapabilities.push('Workspace Terminal Execution (workspace_run_command)');
             nativeCapabilities.push('LSP Diagnostics & AST Symbol Search');
-            nativeCapabilities.push('Gemini 3.7 High Reasoning Pair-Programming');
+            nativeCapabilities.push('Gemini 3.8 High Reasoning Pair-Programming');
             rationale = 'Native workspace tools, compiler services, and Gemini code synthesis can read, modify, compile, test, and debug code directly.';
         } else {
             // General

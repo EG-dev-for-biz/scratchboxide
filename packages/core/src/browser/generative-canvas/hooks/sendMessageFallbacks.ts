@@ -1970,7 +1970,7 @@ export function synthesizeDocumentFallback(text: string, activeArtifact: CanvasA
                 id: `sec-check-${Date.now()}`,
                 type: 'checklist',
                 checklistItems: [
-                    { id: 'c-1', text: 'Verify Gemini 3.7 Flash subagent token streaming', done: true },
+                    { id: 'c-1', text: 'Verify Gemini 3.8 Flash subagent token streaming', done: true },
                     { id: 'c-2', text: 'Wire live MCP pipes to interactive tables', done: true },
                     { id: 'c-3', text: 'Conduct responsive multi-device audit (Desktop, Tablet, Mobile)', done: false }
                 ]

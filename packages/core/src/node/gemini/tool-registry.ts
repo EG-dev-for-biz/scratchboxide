@@ -87,7 +87,9 @@ import {
     LENS_TOOL_DECLARATIONS,
     lensHandlers,
     BROWSER_TOOL_DECLARATIONS,
-    browserHandlers
+    browserHandlers,
+    TILE_REFINE_TOOL_DECLARATIONS,
+    tileRefineHandlers
 } from './tools';
 
 interface ToolRegistration {
@@ -570,6 +572,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of UTDRA_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, utdraHandlers[decl.name], 'workspace');
+    }
+    for (const decl of TILE_REFINE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, tileRefineHandlers[decl.name], 'workspace');
     }
     for (const decl of ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, adaptiveMatchmoveHandlers[decl.name], 'workspace');

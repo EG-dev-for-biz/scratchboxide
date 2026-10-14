@@ -55,6 +55,8 @@ struct SceneMaterial {
 
 struct SceneImage {
     std::string mimeType;
+    /** Original encoded bytes (JPEG/PNG) from the GLB, for lossless re-embedding. */
+    std::vector<uint8_t> encoded;
     bool decoded{false};
     std::string error;
     texture::ImageBuffer pixels;
@@ -349,6 +351,10 @@ private:
             const uint8_t* bytes = ctx.bin + offset;
             bool isJpeg = si.mimeType == "image/jpeg" || (size > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8);
             bool isPng = si.mimeType == "image/png" || (size > 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47);
+            if (isJpeg || isPng) {
+                si.encoded.assign(bytes, bytes + size);
+                if (si.mimeType.empty()) si.mimeType = isJpeg ? "image/jpeg" : "image/png";
+            }
             if (isJpeg) {
                 auto decoded = jpeg::decode(bytes, size, jpeg::OutputFormat::Rgb);
                 si.decoded = decoded.ok;

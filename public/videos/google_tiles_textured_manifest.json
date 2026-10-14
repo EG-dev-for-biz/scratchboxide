@@ -1,9 +1,10 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-10T15:04:11.142Z",
+  "timestamp": "2026-10-13T03:12:14.861Z",
   "videoRef": "<VIDEO_REF_0>",
+  "mock": true,
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_textured_blockout_camera.mp4",
-  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/coordinates_40_748400_73_985700_textured.glb",
+  "outputGlbPath": "/var/folders/78/ylz9y2bd0x393k6tfmw2q7m80000gn/T/scratchbox-tile-dual-api-test-AlHLNG/textured_area.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_textured_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_textured_frame_00.png",
   "storyboardPaths": [
@@ -23,34 +24,34 @@
     "lat": 40.7484,
     "lng": -73.9857,
     "elevation": 15,
-    "landmarkName": "Coordinates (40.748400, -73.985700)"
+    "landmarkName": "Midtown Manhattan"
   },
   "errorTarget": 0.5,
   "renderMode": "textured",
   "mesh": {
-    "name": "Google3DTile_textured",
+    "name": "Google3DTile_textured_offline_mock",
     "vertexCount": 341,
     "triangleCount": 310,
     "submeshCount": 1,
     "boundingBox": {
       "min": [
-        -100,
-        -10,
-        -100
+        -150,
+        -1.4662940502166748,
+        -150
       ],
       "max": [
-        100,
-        200,
-        100
+        150,
+        90,
+        150
       ]
     },
     "boundingSphere": {
       "center": [
         0,
-        50,
+        44.26685297489166,
         0
       ],
-      "radius": 150
+      "radius": 217.00580807162783
     }
   },
   "collisionAudit": {
@@ -63,8 +64,8 @@
   },
   "tileMetrics": {
     "totalFramesCaptured": 72,
-    "averageSettleTimeMs": 45,
-    "maxTilesLoaded": 524,
+    "averageSettleTimeMs": 0,
+    "maxTilesLoaded": 0,
     "errorTarget": 0.5,
     "renderMode": "textured"
   }

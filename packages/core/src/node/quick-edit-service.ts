@@ -68,7 +68,7 @@ export class QuickEditService {
                 };
             }
 
-            const model = status.activeModel || 'gemini-3.7-flash';
+            const model = status.activeModel || 'gemini-3.8-flash';
             const rawResponse = await this.client.fetchVertexOrAistudio(
                 model,
                 [{ role: 'user', parts: [{ text: userPrompt }] }],

@@ -308,7 +308,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     const { googleSearchGrounding, mcpExecutions, mcpServers, setGoogleSearchGrounding, setMcpExecutions, setMcpServers, setSkills, skills } = useCapabilities();
 
-    // Gemini 3.7 Flash Backend State & Live Streaming Tokens
+    // Gemini 3.8 Flash Backend State & Live Streaming Tokens
     const [liveThinkingText, setLiveThinkingText] = React.useState<string>('');
     const [liveThinkingSeconds, setLiveThinkingSeconds] = React.useState<number>(0);
     const [liveSteps, setLiveSteps] = React.useState<AgentExecutionStep[]>([]);

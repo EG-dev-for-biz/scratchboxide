@@ -19,10 +19,20 @@ import {
 } from '../../services/transform-gizmo-engine';
 import type { GizmoHandleType } from '../../services/transform-gizmo-engine';
 import type { RendererStack } from './types';
+import { externalObjectIdOf, findExternalObjectRoot } from './selection';
 
 type Ref<T> = { current: T };
 
 export interface OrbitState { theta: number; phi: number; distance: number }
+
+/** A press that travels less than this (CSS px) before release is a click (select), not a drag. */
+export const CLICK_TRAVEL_PX = 4;
+/** Orbit distance scales by exp(deltaY * rate) per wheel event: ~12% per 100 px notch at any scale. */
+export const WHEEL_ZOOM_RATE = 0.0012;
+const MIN_ORBIT_DISTANCE = 1;
+/** Near plane used close-up and in FPS mode (matches createRendererStack). */
+const DEFAULT_NEAR = 0.1;
+const MAX_NEAR = 5;
 
 /**
  * Everything the pointer/keyboard handlers need. All mutable values are refs so the listeners
@@ -35,6 +45,8 @@ export interface ViewportControlContext {
     transformSpace: Ref<TransformGizmoSpace>;
     sculptSettings: Ref<SculptSettings>;
     orbit: Ref<OrbitState>;
+    /** Orbit pivot; panning translates it in the camera's screen plane. */
+    target: Ref<THREE.Vector3>;
     keysPressed: Ref<Record<string, boolean>>;
 
     gizmoEngine: Ref<TransformGizmoEngine>;
@@ -58,23 +70,55 @@ export interface ViewportControlContext {
 
 const vec3 = (o: THREE.Vector3): [number, number, number] => [o.x, o.y, o.z];
 const euler3 = (e: THREE.Euler): [number, number, number] => [e.x, e.y, e.z];
+const _poseScale = new THREE.Vector3();
+
+/**
+ * World-space position and orientation of `obj`. The gizmo is a scene-level group, so it must be
+ * placed from this pose: a selected part inside a translated / rotated / ground-snapped model root
+ * has a local transform that says nothing about where it is drawn.
+ */
+export function readWorldPose(obj: THREE.Object3D, outPosition: THREE.Vector3, outQuaternion: THREE.Quaternion): void {
+    obj.updateWorldMatrix(true, false);
+    obj.matrixWorld.decompose(outPosition, outQuaternion, _poseScale);
+}
+
+/** objects[].space.spatial3d stores rotation in degrees (the loader converts back to radians). */
+const spatial3dOf = (o: THREE.Object3D) => ({
+    x: o.position.x, y: o.position.y, z: o.position.z,
+    pitch: THREE.MathUtils.radToDeg(o.rotation.x),
+    yaw: THREE.MathUtils.radToDeg(o.rotation.y),
+    roll: THREE.MathUtils.radToDeg(o.rotation.z)
+});
 
 /**
  * Attaches sculpt / transform-gizmo / orbit-FPS pointer handling plus FPS key tracking to the
  * viewport. Returns a detach function. Attach once per renderer stack.
+ *
+ * Orbit: left-drag rotates, shift-drag / right-drag / middle-drag pans, the wheel zooms
+ * exponentially. Selection happens on a primary-button click (press + release within
+ * CLICK_TRAVEL_PX, shift allowed), so orbit and pan drags never raycast or re-select. A click
+ * picks the part under the cursor; alt-click picks the whole loaded model it belongs to. Gizmo
+ * drags work in world space and are written back into the selection's parent frame.
  */
 export function attachViewportControls(stack: RendererStack, ctx: ViewportControlContext): () => void {
     const { container, camera, scene } = stack;
     const raycaster = new THREE.Raycaster();
 
     let isDragging = false;
+    let isPanning = false;
+    let pendingPick = false;
+    let downX = 0;
+    let downY = 0;
     let isSculpting = false;
     let isGizmoDragging = false;
     let activeHandle: GizmoHandleType | null = null;
     let dragStartRay: { origin: THREE.Vector3; dir: THREE.Vector3 } | null = null;
+    // Drag start pose of the selection in WORLD space, plus the inverse world rotation of its parent
+    // for converting the dragged world pose back into the local transform.
     const dragInitialPos = new THREE.Vector3();
     const dragInitialQuat = new THREE.Quaternion();
     const dragInitialScale = new THREE.Vector3(1, 1, 1);
+    const dragParentQuatInv = new THREE.Quaternion();
     let lastSculptHit: THREE.Vector3 | null = null;
     let previousMouse = { x: 0, y: 0 };
 
@@ -92,12 +136,17 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         const ignored = ctx.ignoredPickObjects();
         if (cur === ctx.brushCursor.current || cur === ctx.selectionBox.current || ignored.includes(cur)) return false;
         while (cur) {
+            // three's Raycaster ignores `visible`, so a hidden ancestor must veto the hit here.
+            if (!cur.visible) return false;
             if (cur.name && (cur.name.startsWith('sb-gizmo-') || cur.name.startsWith('sb-selection-helper'))) return false;
             if (cur.userData?.isGizmo) return false;
             cur = cur.parent;
         }
         return true;
     };
+
+    const pickSceneHit = (): THREE.Intersection | undefined =>
+        raycaster.intersectObjects(scene.children, true).find(isPickable);
 
     const surfaceNormal = (hit: THREE.Intersection, mesh: THREE.Object3D) =>
         hit.face ? hit.face.normal.clone().transformDirection(mesh.matrixWorld) : new THREE.Vector3(0, 1, 0);
@@ -112,6 +161,8 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
 
     const handleMouseDown = (e: MouseEvent) => {
         setRayFromEvent(e);
+        pendingPick = false;
+        isPanning = false;
 
         // 1. Transform gizmo handle hit
         const selected = ctx.selectedObject.current;
@@ -122,19 +173,17 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
                 isDragging = false;
                 activeHandle = hit.handleType;
                 dragStartRay = { origin: raycaster.ray.origin.clone(), dir: raycaster.ray.direction.clone() };
-                dragInitialPos.copy(selected.position);
-                dragInitialQuat.copy(selected.quaternion);
+                readWorldPose(selected, dragInitialPos, dragInitialQuat);
+                if (selected.parent) selected.parent.getWorldQuaternion(dragParentQuatInv).invert();
+                else dragParentQuatInv.identity();
                 dragInitialScale.copy(selected.scale);
                 return;
             }
         }
 
-        // 2. Pick scene geometry
-        const intersects = raycaster.intersectObjects(scene.children, true);
-        const validHit = intersects.find(isPickable);
-
-        // 3. Sculpt stroke start
+        // 2. Sculpt stroke start (the only press that needs a scene raycast up front)
         if (ctx.toolMode.current === 'sculpt') {
+            const validHit = pickSceneHit();
             const targetMesh = (validHit && (validHit.object as any).isMesh) ? (validHit.object as THREE.Mesh) : ctx.sculptMesh.current;
             if (targetMesh && targetMesh.geometry && validHit) {
                 ctx.sculptMesh.current = targetMesh;
@@ -155,19 +204,42 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             }
         }
 
-        // 4. Direct selection
-        if (validHit) {
-            ctx.selectObject.current(ctx.resolveSelectableObject(validHit.object, scene));
-        }
-
+        // 3. Orbit / pan drag. Selection is deferred to mouseup so that a drag neither raycasts the
+        //    scene nor re-selects (selecting persists the artifact through onUpdate).
+        if (e.button === 1) e.preventDefault(); // suppress middle-click autoscroll
+        isPanning = ctx.cameraMode.current === 'orbit' && (e.button === 1 || e.button === 2 || e.shiftKey);
+        // Shift only turns a primary DRAG into a pan; a shift-click without travel still selects.
+        pendingPick = e.button === 0;
+        downX = e.clientX;
+        downY = e.clientY;
         isDragging = true;
         previousMouse = { x: e.clientX, y: e.clientY };
+    };
+
+    const panRight = new THREE.Vector3();
+    const panUp = new THREE.Vector3();
+    /** Translates the orbit pivot so the point under the cursor follows the pointer. */
+    const panOrbitTarget = (dx: number, dy: number) => {
+        const height = container.clientHeight || container.getBoundingClientRect().height || 1;
+        const worldPerPx = (2 * ctx.orbit.current.distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) / height;
+        camera.updateMatrixWorld();
+        panRight.setFromMatrixColumn(camera.matrixWorld, 0);
+        panUp.setFromMatrixColumn(camera.matrixWorld, 1);
+        ctx.target.current.addScaledVector(panRight, -dx * worldPerPx).addScaledVector(panUp, dy * worldPerPx);
+    };
+
+    /** Moves `obj` to a world-space position (its `position` lives in the parent's frame). */
+    const setWorldPosition = (obj: THREE.Object3D, world: THREE.Vector3) => {
+        obj.position.copy(world);
+        if (obj.parent) obj.parent.worldToLocal(obj.position);
     };
 
     const dragGizmo = () => {
         const selected = ctx.selectedObject.current;
         if (!selected || !dragStartRay || !activeHandle) return;
         const handle = activeHandle;
+        // World-space drag frame: the gizmo is drawn at the selection's world pose (it may be a part
+        // nested in a moved model root), and the picking rays are world-space too.
         const targetPos = dragInitialPos;
         const targetQuat = dragInitialQuat;
         const rayStart = raycaster.ray.origin;
@@ -180,13 +252,13 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             if (handle === 'axis-y') axis.set(0, 1, 0);
             else if (handle === 'axis-z') axis.set(0, 0, 1);
             if (local) axis.applyQuaternion(targetQuat);
-            selected.position.copy(targetPos.clone().add(computeAxisTranslation(rayStart, rayDir1, rayDir2, targetPos, axis)));
+            setWorldPosition(selected, targetPos.clone().add(computeAxisTranslation(rayStart, rayDir1, rayDir2, targetPos, axis)));
         } else if (handle.startsWith('plane-')) {
             const normal = new THREE.Vector3(0, 0, 1);
             if (handle === 'plane-xz') normal.set(0, 1, 0);
             else if (handle === 'plane-yz') normal.set(1, 0, 0);
             if (local) normal.applyQuaternion(targetQuat);
-            selected.position.copy(targetPos.clone().add(computePlaneTranslation(rayStart, rayDir1, rayDir2, targetPos, normal)));
+            setWorldPosition(selected, targetPos.clone().add(computePlaneTranslation(rayStart, rayDir1, rayDir2, targetPos, normal)));
         } else if (handle.startsWith('rot-')) {
             const rotAxis = new THREE.Vector3(1, 0, 0);
             if (handle === 'rot-y') rotAxis.set(0, 1, 0);
@@ -197,7 +269,8 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             const p2 = new THREE.Vector3();
             if (new THREE.Ray(rayStart, rayDir1).intersectPlane(plane, p1) && raycaster.ray.intersectPlane(plane, p2)) {
                 const angle = computeRotationAngle(p1, p2, targetPos, rotAxis);
-                selected.quaternion.copy(new THREE.Quaternion().setFromAxisAngle(rotAxis, angle).multiply(targetQuat));
+                const worldQuat = new THREE.Quaternion().setFromAxisAngle(rotAxis, angle).multiply(targetQuat);
+                selected.quaternion.copy(dragParentQuatInv).multiply(worldQuat);
             }
         } else if (handle.startsWith('scale-')) {
             const dist2 = raycaster.ray.origin.distanceTo(targetPos);
@@ -246,13 +319,15 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             ctx.brushCursor.current.visible = false;
         }
 
-        // 4. Camera rotation
+        // 4. Camera rotation / pan
         if (!isDragging) return;
         const deltaX = e.clientX - previousMouse.x;
         const deltaY = e.clientY - previousMouse.y;
         previousMouse = { x: e.clientX, y: e.clientY };
 
-        if (ctx.cameraMode.current === 'orbit') {
+        if (ctx.cameraMode.current === 'orbit' && isPanning) {
+            panOrbitTarget(deltaX, deltaY);
+        } else if (ctx.cameraMode.current === 'orbit') {
             const rot = ctx.orbit.current;
             rot.theta -= deltaX * 0.005;
             rot.phi -= deltaY * 0.005;
@@ -274,6 +349,9 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         const objId = sculptMesh?.name || 'sb-sculptable-mesh';
         const settings = ctx.sculptSettings.current;
         ctx.mutateSceneData.current(prev => {
+            // Parts of a loaded model are not customMeshes; an entry for them would be rebuilt as a
+            // placeholder primitive whenever it syncs before the model has loaded.
+            if (findExternalObjectRoot(sculptMesh)) return { ...prev, sculptSettings: settings };
             const meshes = Array.isArray(prev.customMeshes) ? [...prev.customMeshes] : [];
             const idx = meshes.findIndex(m => m.id === objId || m.name === objId);
             const meshData = {
@@ -296,49 +374,64 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
     const commitGizmoTransform = (selObj: THREE.Object3D) => {
         isGizmoDragging = false;
         activeHandle = null;
-        const objId = selObj.name || selObj.uuid;
         const currentMode = ctx.transformMode.current;
         const opName = currentMode === 'rotate' ? 'sb_rotate' : currentMode === 'scale' ? 'sb_scale' : 'sb_translate';
+        const transformParams = { position: vec3(selObj.position), rotation: euler3(selObj.rotation), scale: vec3(selObj.scale) };
 
+        // Loaded models persist through their objects[] entry. Parts inside a model have no schema
+        // slot: the edit stays live in the viewport and nothing is written for it.
+        const externalRoot = findExternalObjectRoot(selObj);
+        if (externalRoot) {
+            if (externalRoot !== selObj) return;
+            const objectId = externalObjectIdOf(externalRoot);
+            ctx.mutateSceneData.current(prev => ({
+                ...prev,
+                objects: (prev.objects || []).map(o => o.id === objectId
+                    ? { ...o, space: { ...o.space, spatial3d: spatial3dOf(selObj) } }
+                    : o)
+            }), { operator: opName, params: { objectId, ...transformParams } });
+            return;
+        }
+
+        const objId = selObj.name || selObj.uuid;
         ctx.mutateSceneData.current(prev => {
-            const meshes = Array.isArray(prev.customMeshes) ? [...prev.customMeshes] : [];
-            const idx = meshes.findIndex(m => m.id === objId || m.name === objId);
-            const meshData = {
-                id: objId,
-                name: selObj.name || objId,
-                type: (idx >= 0 && meshes[idx].type) ? meshes[idx].type : 'box' as any,
-                position: vec3(selObj.position),
-                rotation: euler3(selObj.rotation),
-                scale: vec3(selObj.scale)
-            };
-            if (idx >= 0) meshes[idx] = { ...meshes[idx], ...meshData };
-            else meshes.push(meshData);
-
-            let objects = prev.objects;
-            if (objects && objects.length > 0) {
-                objects = objects.map(o => (o.id === objId || o.content?.durableUri === objId)
-                    ? {
-                        ...o,
-                        space: {
-                            ...o.space,
-                            spatial3d: {
-                                x: selObj.position.x, y: selObj.position.y, z: selObj.position.z,
-                                pitch: selObj.rotation.x, yaw: selObj.rotation.y, roll: selObj.rotation.z
-                            }
-                        }
-                    }
-                    : o);
+            // Only update an existing definition: a fabricated entry for an object this schema does
+            // not own would be rebuilt by syncCustomMeshes as a placeholder primitive.
+            let customMeshes = prev.customMeshes;
+            const idx = customMeshes ? customMeshes.findIndex(m => m.id === objId || m.name === objId) : -1;
+            if (customMeshes && idx >= 0) {
+                customMeshes = [...customMeshes];
+                customMeshes[idx] = { ...customMeshes[idx], ...transformParams };
             }
-            return { ...prev, customMeshes: meshes, objects, selectedMeshId: objId };
+            const objects = prev.objects?.map(o => (o.id === objId || o.content?.durableUri === objId)
+                ? { ...o, space: { ...o.space, spatial3d: spatial3dOf(selObj) } }
+                : o);
+            return { ...prev, customMeshes, objects, selectedMeshId: objId };
         }, {
             operator: opName,
-            params: { objectId: objId, position: vec3(selObj.position), rotation: euler3(selObj.rotation), scale: vec3(selObj.scale) }
+            params: { objectId: objId, ...transformParams }
         });
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
         if (isSculpting) commitSculptStroke();
         if (isGizmoDragging && ctx.selectedObject.current) commitGizmoTransform(ctx.selectedObject.current);
+
+        // Click (not drag): select what is under the cursor, or clear a visible selection on a miss.
+        // Alt-click selects the whole loaded model instead of the part (its root is a pick-through
+        // container otherwise, and the only target whose move persists to objects[]).
+        if (pendingPick && Math.hypot(e.clientX - downX, e.clientY - downY) < CLICK_TRAVEL_PX) {
+            setRayFromEvent(e);
+            const hit = pickSceneHit();
+            if (hit) {
+                const modelRoot = e.altKey ? findExternalObjectRoot(hit.object) : null;
+                ctx.selectObject.current(modelRoot || ctx.resolveSelectableObject(hit.object, scene));
+            } else if (ctx.selectionBox.current?.visible) {
+                ctx.selectObject.current(null);
+            }
+        }
+        pendingPick = false;
+        isPanning = false;
         isDragging = false;
     };
 
@@ -346,14 +439,23 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         if (ctx.cameraMode.current !== 'orbit') return;
         e.preventDefault();
         const rot = ctx.orbit.current;
-        rot.distance = Math.max(5, Math.min(2500, rot.distance + e.deltaY * 0.08));
+        const deltaPx = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * (container.clientHeight || 800) : e.deltaY;
+        const next = rot.distance * Math.exp(deltaPx * WHEEL_ZOOM_RATE);
+        // Never pull an already-farther camera inward when zooming out past the cap.
+        const maxDistance = Math.max(2500, camera.far * 0.25, Math.min(rot.distance, next));
+        rot.distance = THREE.MathUtils.clamp(next, MIN_ORBIT_DISTANCE, maxDistance);
     };
 
+    // Right-drag pans in orbit mode only; FPS mode keeps the native context menu.
+    const handleContextMenu = (e: Event) => {
+        if (ctx.cameraMode.current === 'orbit') e.preventDefault();
+    };
     const handleKeyDown = (e: KeyboardEvent) => { ctx.keysPressed.current[e.key] = true; };
     const handleKeyUp = (e: KeyboardEvent) => { ctx.keysPressed.current[e.key] = false; };
 
     container.addEventListener('mousedown', handleMouseDown);
     container.addEventListener('mousemove', handleMouseMove);
+    container.addEventListener('contextmenu', handleContextMenu);
     window.addEventListener('mouseup', handleMouseUp);
     container.addEventListener('wheel', handleWheel, { passive: false });
     window.addEventListener('keydown', handleKeyDown);
@@ -362,11 +464,20 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
     return () => {
         container.removeEventListener('mousedown', handleMouseDown);
         container.removeEventListener('mousemove', handleMouseMove);
+        container.removeEventListener('contextmenu', handleContextMenu);
         window.removeEventListener('mouseup', handleMouseUp);
         container.removeEventListener('wheel', handleWheel);
         window.removeEventListener('keydown', handleKeyDown);
         window.removeEventListener('keyup', handleKeyUp);
     };
+}
+
+/** Updates the near plane only when it moves by more than 5% (projection rebuilds are not free). */
+function setNearPlane(camera: THREE.PerspectiveCamera, near: number): void {
+    if (Math.abs(camera.near - near) > near * 0.05) {
+        camera.near = near;
+        camera.updateProjectionMatrix();
+    }
 }
 
 /** Applies orbit or FPS camera motion for one frame. */
@@ -382,8 +493,12 @@ export function stepCamera(
         camera.position.y = target.y + orbit.distance * Math.cos(orbit.phi);
         camera.position.z = target.z + orbit.distance * Math.sin(orbit.phi) * Math.cos(orbit.theta);
         camera.lookAt(target);
+        // Depth precision is governed by near/far: keep near proportional to the viewing distance so
+        // km-scale scenes do not z-fight, while close-up work (< 100 m) keeps the default.
+        setNearPlane(camera, THREE.MathUtils.clamp(orbit.distance / 1000, DEFAULT_NEAR, MAX_NEAR));
         return;
     }
+    setNearPlane(camera, DEFAULT_NEAR);
     const speed = 0.22;
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);

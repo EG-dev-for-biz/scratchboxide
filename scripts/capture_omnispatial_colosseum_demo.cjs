@@ -5,8 +5,8 @@ const path = require('path');
 const WebSocket = require('ws');
 
 const CDP_PORT = 9550 + Math.floor(Math.random() * 300);
-const SERVER_PORT = 5300 + Math.floor(Math.random() * 300);
-const DEMO_URL = `http://127.0.0.1:${SERVER_PORT}/omnispatial_synthesis_demo.html`;
+const SERVER_PORT = process.env.PORT || 3030;
+const DEMO_URL = `http://localhost:${SERVER_PORT}/omnispatial_synthesis_demo.html`;
 
 const OUTPUT_DIR = path.resolve(__dirname, '../public/screenshots');
 const ARTIFACT_DIR = path.resolve('/Users/eligreen/.gemini/antigravity/brain/bec1637c-d213-4e3f-82c8-d1ddd168b931');
@@ -40,45 +40,7 @@ function getJson(url) {
 
 async function main() {
   console.log('[Colosseum Demo Capture] Starting capture sequence on port ' + SERVER_PORT + '...');
-
-  // Start HTTP server
-  console.log('[Colosseum Demo Capture] Launching scripts/serve_public.js on port ' + SERVER_PORT + '...');
-  const serverProc = spawn('node', ['scripts/serve_public.js', String(SERVER_PORT)], {
-    cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, PORT: String(SERVER_PORT) },
-    stdio: 'inherit'
-  });
-
-  let serverRunning = false;
-  for (let i = 0; i < 40; i++) {
-    await sleep(250);
-    try {
-      const ok = await new Promise((resolve, reject) => {
-        const req = http.get({
-          host: '127.0.0.1',
-          port: SERVER_PORT,
-          path: '/omnispatial_synthesis_demo.html',
-          timeout: 1500
-        }, (r) => {
-          resolve(r.statusCode === 200);
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-      });
-      if (ok) {
-        console.log('[Colosseum Demo Capture] Server ready on port ' + SERVER_PORT);
-        serverRunning = true;
-        break;
-      }
-    } catch (err) {
-      if (i > 30) console.log('[Colosseum Demo Capture] Poll retry (' + i + '):', err.message);
-    }
-  }
-
-  if (!serverRunning) {
-    if (serverProc) serverProc.kill('SIGKILL');
-    throw new Error(`Failed to start server on port ${SERVER_PORT}`);
-  }
+  const serverProc = null;
 
   // Launch Google Chrome headless
   const chromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -198,7 +160,7 @@ async function main() {
             mv.setAttribute('camera-target', '0m 0m 0m');
             mv.setAttribute('field-of-view', '30deg');
 
-            const hideIds = ['.app-header', '.hud-left', '.hud-right', '.playback-dock', '.model-viewer-badge', '.orbit-model-switcher', '.orbit-tip-pill'];
+            const hideIds = ['.top-nav', '.hud-left', '.hud-right', '.playback-dock', '.model-viewer-badge', '.orbit-model-switcher', '.orbit-tip-pill', '.floating-compass'];
             hideIds.forEach(sel => {
               const el = document.querySelector(sel);
               if (el) el.style.visibility = 'hidden';
@@ -224,7 +186,7 @@ async function main() {
       // Restore UI elements
       await sendCdp('Runtime.evaluate', {
         expression: `
-          const showIds = ['.app-header', '.hud-left', '.hud-right', '.playback-dock', '.model-viewer-badge', '.orbit-model-switcher', '.orbit-tip-pill'];
+          const showIds = ['.top-nav', '.hud-left', '.hud-right', '.playback-dock', '.model-viewer-badge', '.orbit-model-switcher', '.orbit-tip-pill', '.floating-compass'];
           showIds.forEach(sel => {
             const el = document.querySelector(sel);
             if (el) el.style.visibility = 'visible';
@@ -358,8 +320,12 @@ async function main() {
       expression: `
         const mv = document.getElementById('mainModelViewer');
         if (mv) {
+          mv.removeAttribute('auto-rotate');
+          mv.autoRotate = false;
           mv.setAttribute('camera-orbit', '25deg 78deg 280m');
           mv.setAttribute('camera-target', '50m 25m -120m');
+          mv.cameraOrbit = '25deg 78deg 280m';
+          mv.cameraTarget = '50m 25m -120m';
           if (typeof mv.jumpCameraToGoal === 'function') mv.jumpCameraToGoal();
         }
       `
@@ -376,8 +342,12 @@ async function main() {
       expression: `
         const mv = document.getElementById('mainModelViewer');
         if (mv) {
+          mv.removeAttribute('auto-rotate');
+          mv.autoRotate = false;
           mv.setAttribute('camera-orbit', '0deg 5deg 620m');
           mv.setAttribute('camera-target', '16m 20m -21m');
+          mv.cameraOrbit = '0deg 5deg 620m';
+          mv.cameraTarget = '16m 20m -21m';
           if (typeof mv.jumpCameraToGoal === 'function') mv.jumpCameraToGoal();
         }
       `
@@ -405,7 +375,7 @@ async function main() {
   } finally {
     ws.close();
     chromeProc.kill('SIGKILL');
-    serverProc.kill('SIGKILL');
+    if (serverProc) serverProc.kill('SIGKILL');
   }
 }
 

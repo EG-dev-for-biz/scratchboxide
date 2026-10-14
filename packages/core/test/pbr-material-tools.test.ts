@@ -18,14 +18,17 @@ import {
 
 describe('PBR Material Gemini Tools & Multi-Resolution Engine', () => {
     it('should export valid tool declarations for PBR materials', () => {
-        expect(PBR_MATERIAL_TOOL_DECLARATIONS.length).toBe(3);
+        expect(PBR_MATERIAL_TOOL_DECLARATIONS.length).toBe(4);
         const names = PBR_MATERIAL_TOOL_DECLARATIONS.map(d => d.name);
         expect(names).toContain('pbr_synthesize_material');
         expect(names).toContain('pbr_get_material_catalog');
         expect(names).toContain('pbr_interpolate_materials');
+        expect(names).toContain('pbr_probe_mesh_topology');
 
         const synthTool = PBR_MATERIAL_TOOL_DECLARATIONS.find(d => d.name === 'pbr_synthesize_material');
         expect(synthTool?.parameters?.properties?.resolution?.enum).toEqual(['1K', '2K', '4K', '8K', '12K']);
+        expect(synthTool?.parameters?.properties?.targetMeshPath).toBeDefined();
+        expect(synthTool?.parameters?.properties?.domain?.enum).toEqual(['organic', 'nonorganic']);
     });
 
     it('should retrieve biophysical material catalog with 50 archetypes', async () => {

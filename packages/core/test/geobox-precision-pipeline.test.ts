@@ -27,6 +27,7 @@ import {
 } from '../src/node/spatial/SubPixelEdgeAlignmentOptimizer';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
 describe('GeoBoxPrecisionPipeline', () => {
     it('computes Haversine distance with high fidelity across global landmarks', () => {
@@ -313,7 +314,9 @@ describe('GeoBoxPrecisionPipeline', () => {
 
     it('calls getGoogle3DTilesFullTexture service for authentic 3D object mesh (.glb)', async () => {
         const { getGoogle3DTilesFullTexture } = await import('../src/node/spatial/Google3DTileBlockoutPipelineService.js');
-        const outputGlbPath = path.join(process.cwd(), 'public', 'models', 'colosseum_rome_textured.glb');
+        // Offline mock writes placeholder data: keep it in a temp dir, never next to production assets in public/models
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'geobox-colosseum-'));
+        const outputGlbPath = path.join(tmpDir, 'colosseum_rome_textured.glb');
 
         const tileResult = await getGoogle3DTilesFullTexture({
             lat: 41.89030,
@@ -321,10 +324,12 @@ describe('GeoBoxPrecisionPipeline', () => {
             elevation: 26.0
         }, {
             outputGlbPath,
+            outputVideoPath: path.join(tmpDir, 'colosseum_blockout.mp4'),
             offlineMock: true
         });
 
         expect(tileResult.success).toBe(true);
+        expect(tileResult.mock).toBe(true);
         expect(tileResult.mode).toBe('full-texture');
         expect(tileResult.glbPath).toContain('colosseum_rome_textured.glb');
         expect(tileResult.mesh.vertexCount).toBeGreaterThan(0);
@@ -332,6 +337,7 @@ describe('GeoBoxPrecisionPipeline', () => {
         expect(tileResult.quality.errorTarget).toBeLessThanOrEqual(0.5);
         expect(tileResult.quality.resolution).toBe('4K (3840x2160)');
         expect(fs.existsSync(tileResult.glbPath)).toBe(true);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
     it('computes Sobel edge fields and gradient magnitudes with sub-pixel precision', () => {

@@ -108,3 +108,45 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
     const buf = fs.readFileSync(result.glbPath!);
     expect(buf.toString('utf8', 0, 4)).toBe('glTF');
 });
+
+test('NativePythonRunnerService refuses to stage assets outside outputDir', async () => {
+    const os = await import('os');
+    const path = await import('path');
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-py-assets-'));
+    const outputDir = path.join(sandbox, 'out');
+    const escaped = path.join(sandbox, 'escaped.txt');
+    try {
+        const runner = NativePythonRunnerService.getInstance();
+        await expect(runner.runScript('print(1)', {
+            outputDir,
+            assets: [{ name: '../escaped.txt', content: 'pwned' }]
+        })).rejects.toThrow(/outside the workspace root/);
+        await expect(runner.runScript('print(1)', {
+            outputDir,
+            assets: [{ name: escaped, content: 'pwned' }]
+        })).rejects.toThrow(/outside the workspace root/);
+        expect(fs.existsSync(escaped)).toBe(false);
+    } finally {
+        fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+});
+
+test('NativePythonRunnerService passes args without a shell (no command injection)', async () => {
+    const os = await import('os');
+    const path = await import('path');
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-py-args-'));
+    const marker = path.join(sandbox, 'injected');
+    try {
+        const runner = NativePythonRunnerService.getInstance();
+        const hostile = `x"; touch "${marker}"; echo "$(touch ${marker})`;
+        const result = await runner.runScript('import sys, json; print(json.dumps(sys.argv[1:]))', {
+            outputDir: sandbox,
+            args: [hostile]
+        });
+        expect(result.success).toBe(true);
+        expect(JSON.parse(result.stdout.trim().split('\n').pop() as string)).toEqual([hostile]);
+        expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+        fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+});

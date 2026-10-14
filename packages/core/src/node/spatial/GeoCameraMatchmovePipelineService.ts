@@ -9,7 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn, exec, execSync } from 'child_process';
+import { spawn, execFile, type StdioOptions } from 'child_process';
 import { promisify } from 'util';
 import {
   Google3DTileBlockoutPipelineService,
@@ -64,7 +64,26 @@ import {
   type TrajectoryBoundaryPose
 } from './ContinuousSplineMatchmoveService';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Runs an executable with an argument vector (no shell, so user-supplied paths such as
+ * `inputVideoPath` cannot inject commands) without blocking the event loop. Rejects with the
+ * exit code / signal when the process does not exit cleanly.
+ */
+function runProcess(command: string, args: string[], stdio: StdioOptions): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio });
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Command failed (${signal ? `signal ${signal}` : `exit code ${code}`}): ${command} ${args.join(' ')}`));
+      }
+    });
+  });
+}
 
 export type CameraMotionType =
   | 'crane-descent-to-nadir'
@@ -282,8 +301,14 @@ export class GeoCameraMatchmovePipelineService {
     }
 
     try {
-      const cmd = `"${this.ffprobePath}" -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,duration,nb_frames,codec_name -show_entries format=duration -of json "${videoPath}"`;
-      const { stdout } = await execAsync(cmd);
+      const { stdout } = await execFileAsync(this.ffprobePath, [
+        '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height,r_frame_rate,duration,nb_frames,codec_name',
+        '-show_entries', 'format=duration',
+        '-of', 'json',
+        videoPath
+      ]);
       const data = JSON.parse(stdout);
 
       const stream = data.streams?.[0] || {};
@@ -1231,8 +1256,9 @@ export class GeoCameraMatchmovePipelineService {
       try {
         const firstFramePng = path.join(imagesDir, `${baseName}_source_first_frame.png`);
         const lastFramePng = path.join(imagesDir, `${baseName}_source_last_frame.png`);
-        execSync(`"${this.ffmpegPath}" -y -v error -i "${request.inputVideoPath}" -frames:v 1 "${firstFramePng}"`);
-        execSync(`"${this.ffmpegPath}" -y -v error -sseof -1 -i "${request.inputVideoPath}" -update 1 "${lastFramePng}"`);
+        const quietStdio: StdioOptions = ['ignore', 'ignore', 'inherit'];
+        await runProcess(this.ffmpegPath, ['-y', '-v', 'error', '-i', request.inputVideoPath, '-frames:v', '1', firstFramePng], quietStdio);
+        await runProcess(this.ffmpegPath, ['-y', '-v', 'error', '-sseof', '-1', '-i', request.inputVideoPath, '-update', '1', lastFramePng], quietStdio);
         const omniResult = await this.omni.generate({
           prompt: buildBlockoutFirstLastPrompt({
             shot: request.omniShot ?? 'Follow the camera move of the blockout exactly.',
@@ -1244,7 +1270,7 @@ export class GeoCameraMatchmovePipelineService {
         });
         fs.writeFileSync(omniVideoPath, omniResult.video);
         omniInteractionId = omniResult.interactionId;
-        execSync(`"${this.ffmpegPath}" -y -i "${omniVideoPath}" -c:v libvpx-vp9 -threads 8 -cpu-used 4 -b:v 15M "${omniWebmPath}"`, { stdio: 'inherit' });
+        await runProcess(this.ffmpegPath, ['-y', '-i', omniVideoPath, '-c:v', 'libvpx-vp9', '-threads', '8', '-cpu-used', '4', '-b:v', '15M', omniWebmPath], 'inherit');
 
         // Compile Synchronized Split Comparison Video
         console.log(`⚡ Compiling Synchronized 4K Side-by-Side Comparison: ${comparisonVideoPath}`);
@@ -1253,8 +1279,13 @@ export class GeoCameraMatchmovePipelineService {
 
         const splitFilter = `[0:v]scale=${halfWidth}:${fullHeight}:flags=lanczos:force_original_aspect_ratio=increase,crop=${halfWidth}:${fullHeight}[left];[1:v]scale=${halfWidth}:${fullHeight}:flags=lanczos:force_original_aspect_ratio=increase,crop=${halfWidth}:${fullHeight}[right];[left][right]hstack[v]`;
 
-        execSync(`"${this.ffmpegPath}" -y -i "${blockoutVideoPath}" -i "${omniVideoPath}" -filter_complex "${splitFilter}" -map "[v]" -t ${metadata.durationSec} -r ${metadata.fps} -c:v libx264 -pix_fmt yuv420p -b:v 25M "${comparisonVideoPath}"`, { stdio: 'inherit' });
-        execSync(`"${this.ffmpegPath}" -y -i "${blockoutVideoPath}" -i "${omniVideoPath}" -filter_complex "${splitFilter}" -map "[v]" -t ${metadata.durationSec} -r ${metadata.fps} -c:v libvpx-vp9 -threads 8 -cpu-used 4 -b:v 15M "${comparisonWebmPath}"`, { stdio: 'inherit' });
+        const splitArgs = [
+          '-y', '-i', blockoutVideoPath, '-i', omniVideoPath,
+          '-filter_complex', splitFilter, '-map', '[v]',
+          '-t', String(metadata.durationSec), '-r', String(metadata.fps)
+        ];
+        await runProcess(this.ffmpegPath, [...splitArgs, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-b:v', '25M', comparisonVideoPath], 'inherit');
+        await runProcess(this.ffmpegPath, [...splitArgs, '-c:v', 'libvpx-vp9', '-threads', '8', '-cpu-used', '4', '-b:v', '15M', comparisonWebmPath], 'inherit');
 
         // Extract 6 QA Keyframes
         console.log(`📸 Extracting 6 Milestone QA Keyframes...`);
@@ -1267,13 +1298,13 @@ export class GeoCameraMatchmovePipelineService {
           Number((metadata.durationSec - 0.05).toFixed(2))
         ];
 
-        sampleTimes.forEach((sec, idx) => {
+        for (const [idx, sec] of sampleTimes.entries()) {
           const kfPath = path.join(imagesDir, `${baseName}_comparison_4k_keyframe_0${idx + 1}.png`);
-          execSync(`"${this.ffmpegPath}" -y -ss ${sec} -i "${comparisonVideoPath}" -vframes 1 -q:v 1 "${kfPath}"`, { stdio: 'ignore' });
+          await runProcess(this.ffmpegPath, ['-y', '-ss', String(sec), '-i', comparisonVideoPath, '-vframes', '1', '-q:v', '1', kfPath], 'ignore');
           if (fs.existsSync(kfPath)) {
             qaKeyframes.push(kfPath);
           }
-        });
+        }
       } catch (err: any) {
         omniError = err.message;
         console.warn(`[GeoMatchmove] Omni step failed: ${omniError}`);

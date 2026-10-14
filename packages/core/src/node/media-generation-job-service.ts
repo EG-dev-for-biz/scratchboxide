@@ -100,16 +100,12 @@ export class MediaGenerationJobService {
                     await this.transition(job, workspaceRoot, stage);
                 });
             } else {
-                result = {
-                    asset: {
-                        uri: 'mock-media-uri',
-                        contentHash: 'mock-hash',
-                        mimeType: request.kind === 'audio' ? 'audio/mp3' : 'model/gltf+json',
-                        byteLength: 1024,
-                        relativePath: 'mock-media'
-                    },
-                    modelUsed: 'mock-model'
-                };
+                // No generator backs this media kind yet: fail the job explicitly instead of fabricating an asset.
+                const message = `Media generation for kind '${(request as MediaGenerationRequest).kind}' is not supported by the job service ` +
+                    `(supported kinds: image, video)`;
+                throw Object.assign(new Error(message), {
+                    mediaError: { code: 'unsupported', message, retryable: false, model: job.modelUsed }
+                });
             }
 
             if (this.isCancelled(job)) {

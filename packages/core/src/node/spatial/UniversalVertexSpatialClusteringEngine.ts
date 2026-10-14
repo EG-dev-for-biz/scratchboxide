@@ -27,6 +27,7 @@ export interface SubmeshGeometryInput {
   positions: Float32Array | null;
   indices?: Uint16Array | Uint32Array | null;
   normals?: Float32Array | null;
+  uvs?: Float32Array | null;
 }
 
 export interface VertexClusteringOptions {
@@ -36,6 +37,24 @@ export interface VertexClusteringOptions {
   treeApexMaxHeightMeters?: number;
   buildingMinHeightMeters?: number;
   gridCellSizeMeters?: number;
+  focalInterestBounds?: {
+    minX?: number;
+    maxX?: number;
+    minZ?: number;
+    maxZ?: number;
+    minH?: number;
+    maxH?: number;
+  };
+  landmarkName?: string;
+  landmarkType?: 'triumphal_arch' | 'obelisk_spire' | 'amphitheatre' | 'historic_monument' | 'sculptural_focal_point' | (string & {});
+  architecturalStyle?: string;
+  modelName?: string;
+  geoAnchor?: {
+    name?: string;
+    lat?: number;
+    lng?: number;
+    altitudeMeters?: number;
+  };
 }
 
 export interface DecomposedCluster {
@@ -44,6 +63,10 @@ export interface DecomposedCluster {
   category: UniversalSpatialCategory;
   submeshIndices: number[];
   extractedVertices: [number, number, number][];
+  /** Submesh-local vertex indices (paired element-wise with `vertexSubmeshIndices`). */
+  vertexIndices?: number[];
+  /** glTF mesh index owning each entry of `vertexIndices`, making multi-submesh assignment unambiguous. */
+  vertexSubmeshIndices?: number[];
   colorHex: string;
   prompt: string;
   roughness: number;
@@ -71,7 +94,7 @@ export interface DecomposedCluster {
     estimatedWheelbaseMeters?: number;
   };
   landmarkMetadata?: {
-    landmarkType: 'triumphal_arch' | 'obelisk_spire' | 'amphitheatre' | 'historic_monument' | 'sculptural_focal_point';
+    landmarkType: 'triumphal_arch' | 'obelisk_spire' | 'amphitheatre' | 'historic_monument' | 'sculptural_focal_point' | (string & {});
     historicName: string;
     architecturalStyle: string;
     prominenceRatio: number;
@@ -86,6 +109,9 @@ interface VertexRecord {
   nx: number;
   ny: number;
   nz: number;
+  u?: number;
+  v?: number;
+  vertexIndex: number;
   submeshIndex: number;
   tag: 'unassigned' | 'terrain' | 'tree' | 'landmark' | 'building' | 'vehicle' | 'prop';
 }
@@ -183,9 +209,14 @@ export class UniversalVertexSpatialClusteringEngine {
           nz = computedNormals[i * 3 + 2] || 0;
         }
 
+        const u = sm.uvs ? sm.uvs[i * 2] || 0 : 0;
+        const v = sm.uvs ? sm.uvs[i * 2 + 1] || 0 : 0;
+
         allVertices.push({
           x, y, z,
           nx, ny, nz,
+          u, v,
+          vertexIndex: i,
           submeshIndex: sm.submeshIndex,
           tag: 'unassigned'
         });
@@ -227,6 +258,8 @@ export class UniversalVertexSpatialClusteringEngine {
         category: 'terrain',
         submeshIndices: Array.from(submeshSet),
         extractedVertices: terrainVerts.map(v => [v.x, v.y, v.z]),
+        vertexIndices: terrainVerts.map(v => v.vertexIndex),
+        vertexSubmeshIndices: terrainVerts.map(v => v.submeshIndex),
         colorHex: '#64748b',
         prompt: 'Pedestrian ground pavement and geological apron datum with tactile surface materials',
         roughness: 0.90,
@@ -235,35 +268,70 @@ export class UniversalVertexSpatialClusteringEngine {
       });
     }
 
-    // 4. Stage 1.5: Primary Landmark Isolation
-    // Detects iconic architectural landmarks (e.g. Washington Square Arch, Roman Colosseum colonnade, monumental arches/spires)
-    // Centered around the capture interest origin or focal coordinates
-    const archCandidates = allVertices.filter(v => {
+    // 4. Stage 1.5: Primary Landmark / Focal Architecture Isolation
+    // Detects iconic architectural landmarks or focal monuments centered around
+    // the capture interest origin or focal coordinates
+    const focalMinX = options?.focalInterestBounds?.minX ?? -16.5;
+    const focalMaxX = options?.focalInterestBounds?.maxX ?? 16.5;
+    const focalMinZ = options?.focalInterestBounds?.minZ ?? -8.5;
+    const focalMaxZ = options?.focalInterestBounds?.maxZ ?? 8.5;
+    const focalMinH = options?.focalInterestBounds?.minH ?? 0.5;
+    const focalMaxH = options?.focalInterestBounds?.maxH ?? 25.5;
+
+    const landmarkCandidates = allVertices.filter(v => {
       if (v.tag !== 'unassigned') return false;
       const h = v.y - groundDatumY;
-      return Math.abs(v.x) <= 16.5 && Math.abs(v.z) <= 8.5 && h >= 0.5 && h <= 25.5;
+      return v.x >= focalMinX && v.x <= focalMaxX &&
+             v.z >= focalMinZ && v.z <= focalMaxZ &&
+             h >= focalMinH && h <= focalMaxH;
     });
 
-    if (archCandidates.length >= 25 && granularity !== 'trees') {
-      for (const v of archCandidates) v.tag = 'landmark';
-      const submeshSet = new Set(archCandidates.map(v => v.submeshIndex));
+    if (landmarkCandidates.length >= 25 && granularity !== 'trees') {
+      for (const v of landmarkCandidates) v.tag = 'landmark';
+      const submeshSet = new Set(landmarkCandidates.map(v => v.submeshIndex));
+
+      // Resolve landmark naming and metadata adaptively
+      const isWashington =
+        (options?.landmarkName && /washington/i.test(options.landmarkName)) ||
+        (options?.modelName && /washington/i.test(options.modelName)) ||
+        (options?.geoAnchor?.name && /washington/i.test(options.geoAnchor.name));
+
+      const landmarkId = options?.landmarkName
+        ? `landmark-${options.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+        : (isWashington ? 'landmark-washington-arch' : 'landmark-primary-monument');
+
+      const landmarkName = options?.landmarkName ||
+        (isWashington ? 'Washington Square Arch (Primary Landmark)' : 'Central Monument (Primary Landmark)');
+
+      const landmarkType = options?.landmarkType ||
+        (isWashington ? 'triumphal_arch' : 'historic_monument');
+
+      const architecturalStyle = options?.architecturalStyle ||
+        (isWashington ? 'Neoclassical Roman Triumphal Arch' : 'Classical Monolithic Architecture');
+
+      const landmarkPrompt = isWashington
+        ? 'Neoclassical white Tuckahoe marble triumphal arch designed by Stanford White with triumphal friezes, spandrel allegorical figures, attic inscriptions, and central vaulted portal passage'
+        : `Monumental ${architecturalStyle} structure with sculpted relief, monolithic massing, and architectural friezes`;
+
       clusters.push({
-        id: 'landmark-washington-arch',
-        name: 'Washington Square Arch (Primary Landmark)',
+        id: landmarkId,
+        name: landmarkName,
         category: 'landmark',
         submeshIndices: Array.from(submeshSet),
-        extractedVertices: archCandidates.map(v => [v.x, v.y, v.z]),
+        extractedVertices: landmarkCandidates.map(v => [v.x, v.y, v.z]),
+        vertexIndices: landmarkCandidates.map(v => v.vertexIndex),
+        vertexSubmeshIndices: landmarkCandidates.map(v => v.submeshIndex),
         colorHex: '#e11d48',
-        prompt: 'Neoclassical white Tuckahoe marble triumphal arch designed by Stanford White with triumphal friezes, spandrel allegorical figures, attic inscriptions, and central vaulted portal passage',
+        prompt: landmarkPrompt,
         roughness: 0.82,
         metalness: 0.03,
         routingRecommendation: 'sb-archi',
         landmarkMetadata: {
-          landmarkType: 'triumphal_arch',
-          historicName: 'Washington Square Arch',
-          architecturalStyle: 'Neoclassical Roman Triumphal Arch',
+          landmarkType,
+          historicName: landmarkName,
+          architecturalStyle,
           prominenceRatio: 1.0,
-          portalPassageDimensions: [9.1, 14.3, 6.7]
+          portalPassageDimensions: [focalMaxX - focalMinX, focalMaxH - focalMinH, focalMaxZ - focalMinZ]
         }
       });
     }
@@ -405,6 +473,8 @@ export class UniversalVertexSpatialClusteringEngine {
           category: 'foliage_trees',
           submeshIndices: Array.from(submeshSet),
           extractedVertices: treePoints.map(v => [v.x, v.y, v.z]),
+          vertexIndices: treePoints.map(v => v.vertexIndex),
+          vertexSubmeshIndices: treePoints.map(v => v.submeshIndex),
           colorHex: '#22c55e',
           prompt: `Photorealistic mature ${scientificName} (${commonName}) botanical tree with detailed canopy, crown diameter ${crownDiam.toFixed(1)}m, height ${canopyH.toFixed(1)}m`,
           roughness: 0.74,
@@ -515,6 +585,8 @@ export class UniversalVertexSpatialClusteringEngine {
             category: 'vehicle',
             submeshIndices: Array.from(submeshSet),
             extractedVertices: comp.map(v => [v.x, v.y, v.z]),
+            vertexIndices: comp.map(v => v.vertexIndex),
+            vertexSubmeshIndices: comp.map(v => v.submeshIndex),
             colorHex: '#f43f5e',
             prompt: `Photorealistic parked ${vName} with ground yaw heading ${dual.obb.yawDeg.toFixed(1)}°, length ${length.toFixed(1)}m, width ${width.toFixed(1)}m`,
             roughness: 0.32,
@@ -633,6 +705,8 @@ export class UniversalVertexSpatialClusteringEngine {
           category,
           submeshIndices: Array.from(submeshSet),
           extractedVertices: clusterVerts.map(v => [v.x, v.y, v.z]),
+          vertexIndices: clusterVerts.map(v => v.vertexIndex),
+          vertexSubmeshIndices: clusterVerts.map(v => v.submeshIndex),
           colorHex: isHighRise ? '#0284c7' : '#38bdf8',
           prompt: isHighRise
             ? `Art Deco residential high-rise tower envelope with stepped setbacks, vertical piers, and fenestration grid, height ${bHeight.toFixed(1)}m`
@@ -660,6 +734,8 @@ export class UniversalVertexSpatialClusteringEngine {
         category: 'urban_infrastructure',
         submeshIndices: Array.from(submeshSet),
         extractedVertices: residualVerts.map(v => [v.x, v.y, v.z]),
+        vertexIndices: residualVerts.map(v => v.vertexIndex),
+        vertexSubmeshIndices: residualVerts.map(v => v.submeshIndex),
         colorHex: '#f59e0b',
         prompt: 'Pedestrian street furniture, bollards, curbs, and surrounding urban infrastructure elements',
         roughness: 0.88,

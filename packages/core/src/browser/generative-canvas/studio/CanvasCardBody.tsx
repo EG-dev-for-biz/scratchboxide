@@ -60,7 +60,7 @@ export const DocumentCodeSurfaces: React.FC<ArtifactStageProps> = props => {
                                 { id: 'sec-1', type: 'heading', level: 1, content: '1. Overview & Vision' },
                                 { id: 'sec-2', type: 'paragraph', content: 'Scratchbox IDE empowers developers with an AI-native workspace featuring N8N workflow canvases, rich document specs, and Kanban sprint boards.' },
                                 generateMotivatedEditorialImageSection('1776-revolution'),
-                                { id: 'sec-3', type: 'callout', calloutType: 'info', calloutTitle: 'Key Architecture Insight', content: 'Subagents running on Gemini Flash Lite handle ultra-fast data preprocessing while Gemini 3.7 Flash powers high-reasoning synthesis.' },
+                                { id: 'sec-3', type: 'callout', calloutType: 'info', calloutTitle: 'Key Architecture Insight', content: 'Subagents running on Gemini Flash Lite handle ultra-fast data preprocessing while Gemini 3.8 Flash powers high-reasoning synthesis.' },
                                 { id: 'sec-4', type: 'heading', level: 2, content: '2. Next Action Items' },
                                 { id: 'sec-5', type: 'checklist', checklistItems: [
                                     { id: 'c1', text: 'Verify N8N canvas node routing & simulation', done: true },
@@ -282,7 +282,7 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
                         subtitle: 'Drag and connect nodes to create automated execution pipelines',
                         nodes: [
                             { id: 'node-1', label: 'Webhook Trigger', subtitle: 'POST /api/v1/event', category: 'input', color: 'blue', x: 80, y: 140, status: 'completed' },
-                            { id: 'node-2', label: 'Reasoning Engine', subtitle: 'Gemini 3.7 Flash', category: 'ai', color: 'purple', x: 440, y: 140, status: 'running' }
+                            { id: 'node-2', label: 'Reasoning Engine', subtitle: 'Gemini 3.8 Flash', category: 'ai', color: 'purple', x: 440, y: 140, status: 'running' }
                         ],
                         edges: [
                             { id: 'e1', source: 'node-1', target: 'node-2', label: 'Payload', style: 'solid', color: 'purple' }

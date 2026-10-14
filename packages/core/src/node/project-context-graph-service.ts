@@ -926,7 +926,7 @@ export class ProjectContextGraphService {
 
     /**
      * Extracts a topological context slice centered around a focus node or all active nodes,
-     * and compacts it via MLA compression for token-efficient reasoning with Gemini 3.7 Flash.
+     * and compacts it via MLA compression for token-efficient reasoning with Gemini 3.8 Flash.
      */
     getContextSlice(focusNodeId?: string, options: ContextGraphSliceOptions = {}): ContextGraphSlice {
         const maxTokens = options.maxTokens || 2000;

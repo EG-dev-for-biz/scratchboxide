@@ -75,6 +75,12 @@ function waitForHttp(url, timeoutMs = 30000) {
     });
 }
 
+// Browser access (outside Electron) needs the token in the URL once; the
+// renderer strips it from the address bar. The API never hands it out.
+waitForHttp(`http://${host}:${webPort}/`, 90000).then(() => {
+    console.log(`\n🔑 Open in a browser: http://${host}:${webPort}/?token=${token}\n`);
+}).catch(() => undefined);
+
 const shouldLaunchElectron = process.env.SCRATCHBOX_NO_ELECTRON !== 'true' &&
     process.env.SCRATCHBOX_HEADLESS !== 'true' &&
     process.env.CI !== 'true';
@@ -91,7 +97,8 @@ if (shouldLaunchElectron) {
         const electronBin = path.join(appDir, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
         electronProcess = spawn(
             electronBin,
-            ['.', '--remote-debugging-port=9222'],
+            // CDP lets any local process drive the renderer (and its token), so it is opt-in.
+            process.env.SCRATCHBOX_REMOTE_DEBUG === '1' ? ['.', '--remote-debugging-port=9222'] : ['.'],
             { cwd: appDir, env, stdio: 'inherit' }
         );
 

@@ -61,7 +61,7 @@ async function runStandaloneServerTests() {
         assert.strictEqual(modelsRes.status, 200, '/gemini/models should return 200');
         const modelsData = await modelsRes.json();
         assert.ok(Array.isArray(modelsData.models), 'models should be an array');
-        assert.ok(modelsData.models.some((m: any) => m.id === 'gemini-3.7-flash'), 'gemini-3.7-flash must be present');
+        assert.ok(modelsData.models.some((m: any) => m.id === 'gemini-3.8-flash'), 'gemini-3.8-flash must be present');
         console.log('  ✓ Test 2 Passed: /gemini/models returns Google GenAI models');
 
         // Test 3: Gemini Status
@@ -69,7 +69,7 @@ async function runStandaloneServerTests() {
         const statusRes = await fetch(`${baseUrl}/gemini/status`);
         assert.strictEqual(statusRes.status, 200, '/gemini/status should return 200');
         const statusData = await statusRes.json();
-        assert.strictEqual(statusData.activeModel, 'gemini-3.7-flash');
+        assert.strictEqual(statusData.activeModel, 'gemini-3.8-flash');
         assert.ok(Array.isArray(statusData.availableModels));
         console.log('  ✓ Test 3 Passed: /gemini/status returns active model and availability');
 

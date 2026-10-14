@@ -25,7 +25,13 @@ export const SANDBOX_ENV_ALLOWLIST = ['PATH', 'HOME', 'USER', 'SHELL', 'LANG', '
 /** Any key matching this is never forwarded, regardless of source. */
 export const SANDBOX_SECRET_ENV_PATTERN = /(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|DATABASE_URL|_URL$)/i;
 
-/** Commands the sandbox will run without an explicit user confirmation. */
+/**
+ * Commands the sandbox will run without an explicit user confirmation.
+ * Interpreters and launchers (node, python, npx, npm, make, cmake, env, ...) are
+ * listed so that `node script.js`, `python3 script.py` and `npx vitest run` work,
+ * but their inline-code forms (`node -e`, `python -c`, `env <cmd>`, `npx -c`, ...)
+ * are rejected by {@link assertInterpreterSafe} and require user confirmation.
+ */
 export const DEFAULT_COMMAND_ALLOWLIST = [
     'ls', 'cat', 'echo', 'pwd', 'node', 'npm', 'npx', 'pnpm', 'yarn', 'tsc', 'vitest', 'jest',
     'python3', 'python', 'pip', 'git', 'rg', 'grep', 'find', 'head', 'tail', 'wc', 'mkdir', 'touch',
@@ -86,7 +92,11 @@ export function buildScrubbedEnv(
     return result;
 }
 
-/** Split a shell command line on top-level `;`, `&&`, `||`, `|` (quotes respected). */
+/**
+ * Split a shell command line on top-level `;`, `&&`, `||`, `|`, `&` and newlines
+ * (quotes respected). Newlines/carriage returns are command separators in
+ * `sh -c`, so they must be treated like `;` or a trailing line would bypass the policy.
+ */
 export function splitShellSegments(command: string): string[] {
     const segments: string[] = [];
     let current = '';
@@ -108,7 +118,7 @@ export function splitShellSegments(command: string): string[] {
             current += ch + command[++i];
             continue;
         }
-        if (ch === ';' || ch === '|' || ch === '&') {
+        if (ch === ';' || ch === '|' || ch === '&' || ch === '\n' || ch === '\r') {
             // Treat single '&' (background) like a separator too.
             const next = command[i + 1];
             if ((ch === '|' || ch === '&') && next === ch) i++;
@@ -252,18 +262,236 @@ function assertRedirectsWithinCwd(segment: string, cwd: string): void {
     }
 }
 
+/** Shells are never auto-allowed, including when launched through npx/npm exec/env. */
+const SHELL_COMMANDS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
+
+/** Python modules that are safe to run via `python -m` without confirmation. */
+export const PYTHON_SAFE_MODULES = new Set([
+    'pytest', 'unittest', 'pip', 'venv', 'py_compile', 'compileall', 'json.tool', 'doctest',
+    'mypy', 'black', 'ruff', 'flake8', 'pyflakes', 'pylint', 'isort'
+]);
+
+/**
+ * Leading `NAME=value` assignments that change how an interpreter or the shell
+ * loads code (e.g. `NODE_OPTIONS=--import=data:...`, `LD_PRELOAD=...`).
+ */
+const DANGEROUS_ENV_ASSIGNMENT = /^(NODE_OPTIONS|NODE_PATH|PYTHON[A-Z_]*|LD_[A-Z_]+|DYLD_[A-Z_]+|BASH_ENV|ENV|PERL5OPT|PERL5LIB|RUBYOPT|GIT_[A-Z_]+|PATH|IFS|PS4|SHELLOPTS|PROMPT_COMMAND|PAGER|EDITOR|VISUAL)=/;
+
+const NODE_VALUE_FLAGS = new Set([
+    '-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions',
+    '--input-type', '--title', '--env-file', '--stack-size', '--inspect-port'
+]);
+
+function rejectInline(segment: string, message: string, reason = 'inline_code'): never {
+    throw new SandboxCommandRejectedError(
+        `Blocked by sandbox policy: ${message} requires explicit user confirmation (segment: "${segment}")`,
+        segment,
+        reason
+    );
+}
+
+function assertNodeSafe(args: string[], segment: string): void {
+    let script: string | undefined;
+    let infoOnly = false;
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '--') {
+            script = args[i + 1];
+            break;
+        }
+        if (arg === '-') rejectInline(segment, 'node reading code from stdin');
+        if (!arg.startsWith('-')) {
+            script = arg;
+            break;
+        }
+        const [flag, inlineValue] = arg.startsWith('--') ? arg.split(/=([\s\S]*)/, 2) : [arg, undefined];
+        if (flag === '--eval' || flag === '--print' || flag === '--interactive') {
+            rejectInline(segment, `node ${flag}`);
+        }
+        // Short clusters such as -e, -p, -pe, -i.
+        if (!arg.startsWith('--') && /^-[a-zA-Z]*[epi]/.test(arg)) {
+            rejectInline(segment, `node ${arg}`);
+        }
+        if (flag === '-v' || flag === '--version' || flag === '-h' || flag === '--help' || flag === '--check' || flag === '-c') {
+            infoOnly = true;
+        }
+        if (NODE_VALUE_FLAGS.has(flag)) {
+            const value = inlineValue !== undefined ? inlineValue : args[++i];
+            if (value !== undefined && /^(data:|https?:|file:)/i.test(value)) {
+                rejectInline(segment, `node ${flag} with a URL module`);
+            }
+        }
+    }
+    if (script === undefined && !infoOnly) {
+        rejectInline(segment, 'node without a script file (REPL/stdin)');
+    }
+}
+
+function assertPythonSafe(args: string[], segment: string): void {
+    let script: string | undefined;
+    let infoOnly = false;
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '-') rejectInline(segment, 'python reading code from stdin');
+        if (arg === '--') {
+            script = args[i + 1];
+            break;
+        }
+        if (!arg.startsWith('-')) {
+            script = arg;
+            break;
+        }
+        if (arg.startsWith('--')) {
+            if (arg === '--version' || arg === '--help') infoOnly = true;
+            continue;
+        }
+        // Short option cluster, e.g. -c, -Bc, -um pytest, -W ignore.
+        for (let j = 1; j < arg.length; j++) {
+            const opt = arg[j];
+            if (opt === 'c') rejectInline(segment, 'python -c');
+            if (opt === 'i') rejectInline(segment, 'python -i');
+            if (opt === 'V' || opt === 'h') infoOnly = true;
+            if (opt === 'm') {
+                const mod = arg.length > j + 1 ? arg.slice(j + 1) : args[++i];
+                if (!mod || !PYTHON_SAFE_MODULES.has(mod)) {
+                    rejectInline(segment, `python -m ${mod || ''}`.trim());
+                }
+                return;
+            }
+            if (opt === 'W' || opt === 'X') {
+                if (arg.length === j + 1) i++;
+                break;
+            }
+        }
+    }
+    if (script === undefined && !infoOnly) {
+        rejectInline(segment, 'python without a script file (REPL/stdin)');
+    }
+}
+
+/** Validates the command launched by `npx`/`npm exec`/`pnpm dlx`: no `-c`, no shells or inline interpreters. */
+function assertLaunchedCommandSafe(args: string[], segment: string, launcher: string, valueFlags: Set<string>): void {
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '--') {
+            assertInnerCommandSafe(args.slice(i + 1), segment);
+            return;
+        }
+        if (arg.startsWith('-')) {
+            const flag = arg.split('=')[0];
+            if (flag === '-c' || flag === '--call' || flag === '--shell') {
+                rejectInline(segment, `${launcher} ${flag}`);
+            }
+            if (valueFlags.has(flag) && !arg.includes('=')) i++;
+            continue;
+        }
+        assertInnerCommandSafe(args.slice(i), segment);
+        return;
+    }
+}
+
+function assertInnerCommandSafe(tokens: string[], segment: string): void {
+    if (tokens.length === 0) return;
+    const inner = path.basename(tokens[0]);
+    if (SHELL_COMMANDS.has(inner)) {
+        rejectInline(segment, `launching shell "${inner}"`);
+    }
+    assertInterpreterSafe(inner, tokens.slice(1), segment);
+}
+
+const LAUNCHER_VALUE_FLAGS = new Set(['-p', '--package', '-w', '--workspace', '--prefix', '-C', '--dir', '--filter', '--cwd']);
+
+/** Directories whose binaries may be invoked by absolute path. */
+const TRUSTED_BINARY_DIRS = new Set(['/bin', '/usr/bin', '/usr/local/bin', '/opt/homebrew/bin', '/usr/sbin', '/sbin']);
+
+/**
+ * Rejects the inline-code / arbitrary-launch forms of allowlisted interpreters so that
+ * the auto-allow tier cannot be used to run arbitrary code (`node -e`, `python -c`,
+ * `env bash -c`, `npx -c`, `cmake -E`, `rg --pre`, `gcc -wrapper`, ...).
+ */
+export function assertInterpreterSafe(cmd: string, args: string[], segment: string): void {
+    switch (cmd) {
+        case 'node':
+        case 'nodejs':
+            assertNodeSafe(args, segment);
+            break;
+        case 'python':
+        case 'python3':
+            assertPythonSafe(args, segment);
+            break;
+        case 'env': {
+            // `env` (print environment) is fine; `env [opts] [VAR=x] cmd ...` launches an arbitrary program.
+            const launches = args.some(a => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(a));
+            if (launches) rejectInline(segment, 'env launching a command or using options');
+            break;
+        }
+        case 'npx':
+            assertLaunchedCommandSafe(args, segment, 'npx', LAUNCHER_VALUE_FLAGS);
+            break;
+        case 'npm':
+        case 'pnpm':
+        case 'yarn': {
+            const subIndex = args.findIndex(a => !a.startsWith('-'));
+            if (subIndex < 0) break;
+            const sub = args[subIndex];
+            const rest = args.slice(subIndex + 1);
+            if (sub === 'exec' || sub === 'x' || sub === 'dlx') {
+                assertLaunchedCommandSafe(rest, segment, `${cmd} ${sub}`, LAUNCHER_VALUE_FLAGS);
+            } else if (cmd !== 'npm' && (sub === 'node' || SHELL_COMMANDS.has(sub) || sub === 'python' || sub === 'python3')) {
+                // `yarn node -e ...` / `pnpm node ...` run the interpreter directly.
+                assertInnerCommandSafe(args.slice(subIndex), segment);
+            }
+            break;
+        }
+        case 'make':
+        case 'gmake':
+            if (args.some(a => a === '-E' || a.startsWith('--eval'))) rejectInline(segment, 'make --eval');
+            break;
+        case 'cmake':
+            if (args.some(a => a === '-E' || a === '-P')) rejectInline(segment, `cmake ${args.find(a => a === '-E' || a === '-P')}`);
+            break;
+        case 'clang':
+        case 'clang++':
+        case 'gcc':
+        case 'g++':
+            if (args.some(a => a === '-wrapper' || a.startsWith('-fplugin') || a.startsWith('-specs') || a === '-B' || /^-B./.test(a))) {
+                rejectInline(segment, `${cmd} with a wrapper/plugin/toolchain override`);
+            }
+            break;
+        case 'rg':
+            if (args.some(a => a === '--pre' || a.startsWith('--pre='))) rejectInline(segment, 'rg --pre');
+            break;
+        default:
+            break;
+    }
+}
+
 function assertSegmentAllowed(segment: string, options: CommandPolicyOptions, allowlist: Set<string>): void {
     const tokens = tokenize(segment);
     if (tokens.length === 0) return;
 
     // Skip leading VAR=value assignments.
     let index = 0;
-    while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) index++;
+    while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) {
+        if (DANGEROUS_ENV_ASSIGNMENT.test(tokens[index])) {
+            rejectInline(segment, `setting ${tokens[index].split('=')[0]}`, 'env_assignment');
+        }
+        index++;
+    }
     if (index >= tokens.length) return;
 
     const rawCmd = tokens[index];
     const cmd = path.basename(rawCmd);
     const args = tokens.slice(index + 1);
+
+    // `./node` or `/tmp/x/ls` is whatever binary sits there, not the allowlisted tool.
+    if (rawCmd.includes('/') && !TRUSTED_BINARY_DIRS.has(path.dirname(rawCmd))) {
+        throw new SandboxCommandRejectedError(
+            `Blocked by sandbox policy: path-qualified command "${rawCmd}" is outside the system binary directories (segment: "${segment}")`,
+            segment,
+            'not_allowlisted'
+        );
+    }
 
     if (!allowlist.has(cmd)) {
         throw new SandboxCommandRejectedError(
@@ -272,6 +500,8 @@ function assertSegmentAllowed(segment: string, options: CommandPolicyOptions, al
             'not_allowlisted'
         );
     }
+
+    assertInterpreterSafe(cmd, args, segment);
 
     const positional = args.filter(a => !a.startsWith('-'));
 
