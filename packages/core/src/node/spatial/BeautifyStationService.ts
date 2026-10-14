@@ -435,20 +435,24 @@ export function createGoogleStationImageGenerator(deps: {
                 modelPriority: deps.modelPriority,
                 fidelity: deps.fidelity
             });
-            const out = await fs.readFile(deps.assetStore.resolve(deps.workspaceRoot, res.asset));
-            // Ensure PNG (models may return JPEG/WebP): transcode via ffmpeg pipe if needed
-            if (out[0] === 0x89 && out[1] === 0x50) return out;
-            try {
-                const { execSync } = await import('child_process');
-                return execSync('ffmpeg -hide_banner -loglevel error -f image2pipe -i - -f image2 -c:v png -', {
-                    input: out,
-                    maxBuffer: 64 * 1024 * 1024
-                });
-            } catch (err: any) {
-                throw new Error(`Station image generator returned a non-PNG asset (${out.slice(0, 4).toString('hex')}) and ffmpeg conversion failed: ${err.message}`);
-            }
+            return ensureStationPng(await fs.readFile(deps.assetStore.resolve(deps.workspaceRoot, res.asset)));
         }
     };
+}
+
+/**
+ * Image models may answer with PNG, JPEG or WebP; stations need PNG. Conversion goes through the shared
+ * image codec, which decodes JPEG in-process when ffmpeg is missing.
+ */
+export async function ensureStationPng(image: Buffer): Promise<Buffer> {
+    if (image[0] === 0x89 && image[1] === 0x50) return image;
+    const { decodeImageToRgba, encodeRgbaToPng } = await import('../image-codec-ffmpeg');
+    try {
+        const decoded = await decodeImageToRgba(image);
+        return await encodeRgbaToPng(decoded.rgba, decoded.width, decoded.height);
+    } catch (err: any) {
+        throw new Error(`Station image generator returned an image that could not be converted to PNG (${image.subarray(0, 4).toString('hex')}): ${err?.message ?? err}`);
+    }
 }
 
 /**

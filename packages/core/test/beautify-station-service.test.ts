@@ -13,7 +13,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
-import { BeautifyStationService, warpStationImage, type StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { BeautifyStationService, ensureStationPng, warpStationImage, type StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { encode as encodeJpeg } from 'jpeg-js';
 import { decodePng, encodePng } from '../src/node/texture-processing';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
 
@@ -225,3 +226,32 @@ describe('BeautifyStationService: render -> prompt -> generate -> QC -> aligned 
     });
 });
 
+describe('ensureStationPng: image models may answer with JPEG', () => {
+    it('converts a JPEG into a PNG with the same size and colours (works without ffmpeg)', async () => {
+        // 64x32: left half red, right half blue (flat blocks survive JPEG compression almost exactly)
+        const W = 64, H = 32;
+        const rgba = Buffer.alloc(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const i = (y * W + x) * 4;
+            rgba[i] = x < W / 2 ? 220 : 20; rgba[i + 1] = 30; rgba[i + 2] = x < W / 2 ? 20 : 210; rgba[i + 3] = 255;
+        }
+        const jpeg = encodeJpeg({ data: rgba, width: W, height: H }, 95).data;
+        expect(jpeg.subarray(0, 2).toString('hex')).toBe('ffd8');
+
+        const png = await ensureStationPng(Buffer.from(jpeg));
+        fs.ensureDirSync(SHOTS);
+        fs.writeFileSync(path.join(SHOTS, 'station_png_from_jpeg.png'), png);
+        const img = decodePng(png);
+        expect([img.width, img.height]).toEqual([W, H]);
+        const at = (x: number, y: number) => Array.from(img.data.subarray((y * W + x) * 4, (y * W + x) * 4 + 3));
+        for (const [got, want] of [[at(8, 16), [220, 30, 20]], [at(56, 16), [20, 30, 210]]] as const) {
+            got.forEach((v, k) => expect(Math.abs(v - want[k])).toBeLessThan(12));
+        }
+    });
+
+    it('passes PNG through untouched and rejects bytes that are no image, naming the format', async () => {
+        const png = encodePng(2, 2, Buffer.alloc(16, 255));
+        expect(await ensureStationPng(png)).toBe(png);
+        await expect(ensureStationPng(Buffer.from('not an image at all'))).rejects.toThrow(/could not be converted to PNG \(6e6f7420\): .*unrecognised image format/);
+    });
+});
