@@ -151,6 +151,19 @@ export interface AdaptiveCharacterEntity {
 export type AdaptiveCharacterEntourageField = AdaptiveCharacterEntity;
 
 
+export interface SceneChunkRegion {
+    /** World-space XZ origin of this chunk's lower-left corner */
+    origin: [number, number, number];
+    /** Physical extent in meters (scales up with depth region: 6, 12, 24, 48...) */
+    physicalExtentMeters: number;
+    /** Physical overlap with adjacent chunks in meters */
+    physicalOverlapMeters: number;
+    /** Depth region index (0 = nearest, doubles per row) */
+    regionIndex: number;
+    /** Grid resolution (constant vertex count per axis regardless of physical size) */
+    gridResolution: number;
+}
+
 export interface Adaptive3DSceneContract {
     id: string;
     subject: string;
@@ -169,5 +182,7 @@ export interface Adaptive3DSceneContract {
     entourage?: {
         characters: AdaptiveCharacterEntity[];
     };
+    /** When present, restricts generation to this spatial chunk of a larger scene. */
+    chunkRegion?: SceneChunkRegion;
 }
 

@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
+import { AdaptiveSceneChunkPlanner, type ChunkDescriptor, type ChunkAllocationPlan } from './AdaptiveSceneChunkPlanner';
 import type {
     Adaptive3DSceneContract,
     AdaptiveTerrainField,
@@ -23,7 +24,8 @@ import type {
     AdaptiveSceneGraphBlueprint,
     SceneEntityBlueprint,
     AdaptiveCharacterEntity,
-    AdaptiveCharacterEntourageField
+    AdaptiveCharacterEntourageField,
+    SceneChunkRegion
 } from '../../common/spatial/adaptive-3d-scene-contract';
 
 export interface Adaptive3DSceneExecutionResult {
@@ -37,6 +39,21 @@ export interface Adaptive3DSceneExecutionResult {
     compilationTimeMs: number;
     executionTimeMs: number;
     error?: string;
+}
+
+export interface ChunkedSceneChunk {
+    originMeters: [number, number, number];
+    physicalExtentMeters: number;
+    regionIndex: number;
+    result: Adaptive3DSceneExecutionResult;
+}
+
+export interface ChunkedSceneResult {
+    chunks: ChunkedSceneChunk[];
+    plan: ChunkAllocationPlan;
+    totalVertexCount: number;
+    totalTriangleCount: number;
+    success: boolean;
 }
 
 export class Adaptive3DSceneSynthesizer {
@@ -442,6 +459,7 @@ export class Adaptive3DSceneSynthesizer {
      */
     public generateCppSource(contract: Adaptive3DSceneContract): string {
         const t = contract.terrain;
+        const cr = contract.chunkRegion;
         const b = contract.architecture.structures[0] || {
             dimensions: { width: 16, depth: 12, floorCount: 3, floorHeight: 3.4 },
             fenestration: { bayWidth: 3.2, windowRecess: 0.35, sillHeight: 0.85, headerHeight: 2.85 },
@@ -449,8 +467,33 @@ export class Adaptive3DSceneSynthesizer {
         };
         const charList = contract.characters || contract.entourage?.characters || [];
 
+        // Chunk-aware terrain parameters: when a chunkRegion is present, use its
+        // physical extent and origin; otherwise fall back to the full-scene grid.
+        const chunkGridSize  = cr ? cr.gridResolution : t.gridSize;
+        const chunkPhysExt   = cr ? cr.physicalExtentMeters : (t.gridSize - 1) * t.gridSpacing;
+        const chunkOriginX   = cr ? cr.origin[0] : -((t.gridSize - 1) * t.gridSpacing) / 2;
+        const chunkOriginZ   = cr ? cr.origin[2] : -((t.gridSize - 1) * t.gridSpacing) / 2;
+
+        // Whether the architecture compound falls inside this chunk's XZ bounds
+        const archX = b.dimensions ? 0 : 0;  // primary structure always at origin
+        const chunkContainsArch = !cr || (
+            archX >= cr.origin[0] && archX < cr.origin[0] + cr.physicalExtentMeters &&
+            0     >= cr.origin[2] && 0     < cr.origin[2] + cr.physicalExtentMeters
+        );
+
+        // For parametric vegetation in chunked mode: tree density from botany contract
+        const botanyPatch  = contract.botany.forestPatches[0];
+        const treeDensity  = botanyPatch?.density ?? 24;
+        const exclRadius   = chunkContainsArch && botanyPatch ? botanyPatch.exclusionRadius : 0;
+        const exclCX       = botanyPatch?.exclusionCenter[0] ?? 0;
+        const exclCZ       = botanyPatch?.exclusionCenter[1] ?? 0;
+        // Trees per chunk proportional to area × density / 100 (density is trees per 100m²)
+        const chunkArea    = cr ? cr.physicalExtentMeters * cr.physicalExtentMeters : 150 * 150;
+        const chunkTrees   = cr ? Math.round(treeDensity * chunkArea / 1000) : null;
+
         return `// Generated dynamically via Scratchbox Adaptive Domain Architecture
 // Zero hardcoded scene files. Authoritative procedural synthesis in C++20.
+${cr ? `// Chunk region: origin=(${cr.origin[0].toFixed(1)}, ${cr.origin[2].toFixed(1)}) extent=${cr.physicalExtentMeters}m region=${cr.regionIndex}` : '// Full-scene (non-chunked) generation'}
 #include "scratchbox_engine.hpp"
 #include "scratchbox_sb_veggie.hpp"
 #include "scratchbox_architecture.hpp"
@@ -467,6 +510,7 @@ export class Adaptive3DSceneSynthesizer {
 #include <vector>
 #include <cmath>
 #include <algorithm>
+${cr ? '#include <random>' : ''}
 
 using namespace scratchbox;
 using namespace scratchbox::math;
@@ -540,19 +584,22 @@ static Vec3 getTerrainNormal(float x, float z, float eps = 0.4f) {
 static ScratchboxMesh buildTerrainMesh() {
     ScratchboxMesh mesh("Adaptive_Topography");
 
-    const int gridSize = ${t.gridSize};
-    const float extent = ${((t.gridSize - 1) * t.gridSpacing).toFixed(2)}f;
+    // Chunk-aware grid: gridSize and extent are either full-scene or per-chunk values.
+    // When chunked, originX/Z place the grid in world space; vertices are world-coordinate.
+    const int gridSize = ${chunkGridSize};
+    const float extent = ${chunkPhysExt.toFixed(2)}f;
+    const float originX = ${chunkOriginX.toFixed(2)}f;
+    const float originZ = ${chunkOriginZ.toFixed(2)}f;
     const float step = extent / (gridSize - 1);
-    const float halfExt = extent * 0.5f;
 
     std::vector<std::vector<Vec3>> positions(gridSize, std::vector<Vec3>(gridSize));
     std::vector<std::vector<Vec3>> normals(gridSize, std::vector<Vec3>(gridSize));
     std::vector<std::vector<Vec4>> colors(gridSize, std::vector<Vec4>(gridSize));
 
     for (int i = 0; i < gridSize; ++i) {
-        float z = -halfExt + i * step;
+        float z = originZ + i * step;
         for (int j = 0; j < gridSize; ++j) {
-            float x = -halfExt + j * step;
+            float x = originX + j * step;
             float y = getTerrainHeight(x, z);
             positions[i][j] = Vec3(x, y, z);
         }
@@ -847,8 +894,8 @@ int main(int argc, char** argv) {
     // 1. Build Terrain
     ScratchboxMesh terrainMesh = buildTerrainMesh();
 
-    // 2. Build Archie Architectural Compound
-    ScratchboxMesh citadelMesh = buildArchitecturalCompound();
+    // 2. Build Archie Architectural Compound (skipped in distant chunks)
+    ${chunkContainsArch ? 'ScratchboxMesh citadelMesh = buildArchitecturalCompound();' : 'ScratchboxMesh citadelMesh("ArchCompound_Skipped"); // not in this chunk'}
 
     // 3. Build SB-Veggie Conifer Templates
     SbVeggieTemplate baseTmpl = SbVeggieModelBuilder::buildCanonicalTemplate(SbVeggieArchetype::ExcurrentConifer);
@@ -880,10 +927,40 @@ int main(int argc, char** argv) {
     paramsCompact.branchCurvature = 0.75f;
     auto decompCompact = SbVeggieEvaluator::evaluateDecomposed(baseTmpl, paramsCompact, true);
 
-    // 4. Tree Stand Layout with 70-20-10 Biome Stratification
-    // Tier 1: Dominant Canopy (70%): Mature tall conifers (scale 1.0 - 1.25)
-    // Tier 2: Understory (20%): Adolescent saplings (scale 0.55 - 0.75) clustered around canopy
-    // Tier 3: Groundcover (10%): Compact dwarf subalpine shrubs (scale 0.28 - 0.42)
+    // 4. Tree Stand Layout
+    ${cr ? `
+    // Chunked mode: parametric PRNG vegetation seeded by chunk world position.
+    // Density and exclusion radius from the botany contract field.
+    const float CHUNK_OX = ${chunkOriginX.toFixed(2)}f;
+    const float CHUNK_OZ = ${chunkOriginZ.toFixed(2)}f;
+    const float CHUNK_EXT = ${chunkPhysExt.toFixed(2)}f;
+    const float EXCL_RADIUS = ${exclRadius.toFixed(2)}f;
+    const float EXCL_CX = ${exclCX.toFixed(2)}f;
+    const float EXCL_CZ = ${exclCZ.toFixed(2)}f;
+    const int TARGET_TREES = ${chunkTrees ?? 0};
+
+    uint32_t rngSeed = static_cast<uint32_t>(
+        std::abs(CHUNK_OX) * 997.0f + std::abs(CHUNK_OZ) * 1009.0f
+    );
+    std::mt19937 rng(rngSeed);
+    std::uniform_real_distribution<float> xDist(CHUNK_OX, CHUNK_OX + CHUNK_EXT);
+    std::uniform_real_distribution<float> zDist(CHUNK_OZ, CHUNK_OZ + CHUNK_EXT);
+    std::uniform_real_distribution<float> scaleDist(0.82f, 1.22f);
+    std::uniform_real_distribution<float> yawDist(0.0f, 6.2832f);
+    std::uniform_int_distribution<int>    varDist(0, 2);
+
+    std::vector<TreeInstance> treeStands;
+    treeStands.reserve(TARGET_TREES);
+    for (int ti = 0; ti < TARGET_TREES * 4 && static_cast<int>(treeStands.size()) < TARGET_TREES; ++ti) {
+        float tx = xDist(rng);
+        float tz = zDist(rng);
+        float dx = tx - EXCL_CX;
+        float dz = tz - EXCL_CZ;
+        if (std::sqrt(dx * dx + dz * dz) < EXCL_RADIUS) continue;
+        treeStands.push_back({Vec3(tx, 0, tz), scaleDist(rng), yawDist(rng), varDist(rng)});
+    }
+    ` : `
+    // Full-scene mode: curated 70-20-10 biome-stratified placement.
     std::vector<TreeInstance> treeStands = {
         // --- TIER 1: DOMINANT CANOPY CONIFERS (70%) ---
         {Vec3(-12.5f, 0, 18.0f), 1.18f, 0.42f, 0},
@@ -900,7 +977,6 @@ int main(int argc, char** argv) {
         {Vec3(16.0f,  0, -9.5f), 1.10f, 2.40f, 0},
         {Vec3(-9.0f,  0, 26.0f), 1.02f, 1.80f, 0},
         {Vec3(9.5f,   0, 26.5f), 1.06f, 0.95f, 0},
-
         // --- TIER 2: UNDERSTORY ADOLESCENT SAPLINGS (20%) ---
         {Vec3(-14.5f, 0, 19.5f), 0.68f, 2.10f, 1},
         {Vec3(-18.5f, 0, 16.0f), 0.62f, 0.50f, 1},
@@ -910,7 +986,6 @@ int main(int argc, char** argv) {
         {Vec3(-23.0f, 0,  4.0f), 0.60f, 2.40f, 1},
         {Vec3(21.0f,  0, -3.0f), 0.66f, 0.85f, 1},
         {Vec3(24.0f,  0,  3.0f), 0.59f, 2.15f, 1},
-
         // --- TIER 3: ALPINE GROUNDCOVER SHRUBS & DWARF CLUSTERS (10%) ---
         {Vec3(-11.0f, 0, 16.5f), 0.35f, 1.40f, 2},
         {Vec3(-15.5f, 0, 22.5f), 0.32f, 2.70f, 2},
@@ -919,6 +994,7 @@ int main(int argc, char** argv) {
         {Vec3(-17.0f, 0, -6.0f), 0.34f, 1.95f, 2},
         {Vec3(18.0f,  0, -7.0f), 0.36f, 0.40f, 2}
     };
+    `}
 
     // Ground-snapping & slope-aware vegetation survival
     std::vector<TreeInstance> activeStands;
@@ -1229,6 +1305,60 @@ int main(int argc, char** argv) {
             triangleCount,
             compilationTimeMs: compileResult.compilationTimeMs,
             executionTimeMs: execResult.executionTimeMs
+        };
+    }
+
+    /**
+     * Perspective-aware chunked synthesis (Contribution 1 of the adaptive chunking paper).
+     * Plans a set of depth-region chunks via AdaptiveSceneChunkPlanner, compiles each
+     * chunk independently in parallel, and returns world-space origin metadata alongside
+     * each chunk's GLB buffer so the caller can load them as separate Three.js Groups.
+     */
+    public async synthesizeChunked(
+        contract: Adaptive3DSceneContract,
+        options: { outputDir?: string; maxConcurrency?: number } = {}
+    ): Promise<ChunkedSceneResult> {
+        const planner = new AdaptiveSceneChunkPlanner();
+        const plan = planner.plan(contract);
+        const outputDir = options.outputDir || path.resolve(process.cwd(), 'build/3d-native');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        const concurrency = options.maxConcurrency ?? 4;
+        const chunks = plan.chunks;
+        const results: Adaptive3DSceneExecutionResult[] = new Array(chunks.length);
+
+        // Process chunks in concurrency-limited batches
+        for (let i = 0; i < chunks.length; i += concurrency) {
+            const batch = chunks.slice(i, i + concurrency);
+            const batchResults = await Promise.all(batch.map((desc, batchIdx) => {
+                const chunkContract: Adaptive3DSceneContract = {
+                    ...contract,
+                    id: `${contract.id}_chunk_r${desc.regionIndex}_l${desc.lateralIndex}`,
+                    chunkRegion: AdaptiveSceneChunkPlanner.toChunkRegion(desc)
+                };
+                const glbPath = path.join(outputDir, `${chunkContract.id}.glb`);
+                return this.synthesizeAndCompile(chunkContract, { outputDir, outputGlbPath: glbPath });
+            }));
+            batchResults.forEach((r, batchIdx) => { results[i + batchIdx] = r; });
+        }
+
+        const totalVertexCount  = results.reduce((s, r) => s + r.vertexCount,  0);
+        const totalTriangleCount = results.reduce((s, r) => s + r.triangleCount, 0);
+        const allSucceeded       = results.every(r => r.success);
+
+        return {
+            chunks: results.map((r, idx) => ({
+                originMeters: chunks[idx].originMeters,
+                physicalExtentMeters: chunks[idx].physicalExtentMeters,
+                regionIndex: chunks[idx].regionIndex,
+                result: r
+            })),
+            plan,
+            totalVertexCount,
+            totalTriangleCount,
+            success: allSucceeded
         };
     }
 
