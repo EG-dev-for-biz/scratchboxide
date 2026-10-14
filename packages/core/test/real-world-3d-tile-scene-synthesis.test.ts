@@ -107,8 +107,10 @@ async function runTests() {
       await tileService.resolveLocation('unresolvable-fictional-location-12345XYZ');
     } catch (err: any) {
       errorThrown = true;
+      // Wording changed in 025cfe0 ("ADA Zero-Presets: Could not resolve geodetic coordinates or
+      // reach Google Maps 3D Tiles data sources ..."); the contract is still an actionable error.
       assert.ok(
-        err.message.includes('Unable to reach Google Maps 3D Tiles data sources'),
+        err.message.includes('reach Google Maps 3D Tiles data sources'),
         'Error should inform user that online data sources cannot be reached'
       );
     }

@@ -51,18 +51,31 @@ describe('C/C++ First 3D Engine Architecture Directive', () => {
         expect(generalCpp).toContain('quantum_monolith');
     });
 
-    it('2. should automatically synthesize Scene3DData with modern C++20 generator attached', () => {
+    it('2. should synthesize a native generator for a hero-object prompt and record attached C++20 generators in the operator stack', () => {
+        // Hero-object prompts ("build ... jet fighter") no longer route to the closed 'flight' preset:
+        // 013d47c sends them to the ADA hero synthesizer (Python adaptive_object.py, 70-20-10 form
+        // hierarchy, 18% clay void), and f6f522f lists jet/aircraft among hero objects.
         const scene = synthesizeContextual3DScene('Build a supersonic tactical jet fighter');
-        expect(scene.cppGenerator).toBeDefined();
-        expect(scene.cppGenerator?.enabled).toBe(true);
-        expect(scene.cppGenerator?.filename).toBe('world_generator.cpp');
-        expect(scene.cppGenerator?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
-        expect(scene.cppGenerator?.sourceCode).toContain('ScratchboxMesh aircraft');
+        expect(scene.pythonGenerator).toBeDefined();
+        expect(scene.pythonGenerator?.enabled).toBe(true);
+        expect(scene.pythonGenerator?.sourceCode).toContain('import scratchbox as sb');
+        expect(scene.pythonGenerator?.sourceCode).toContain('70-20-10 Geometric Form Hierarchy');
+        expect(scene.renderMode).toBe('clay');
 
-        // Check operator stack has sb_set_cpp_generator
-        const setCppOp = scene.operatorStack?.find(cmd => cmd.operator === 'sb_set_cpp_generator');
+        // A scene that carries a C++20 generator gets it registered as sb_set_cpp_generator.
+        const flightScene = initializeSceneOperatorStack({
+            title: 'Supersonic Tactical Jet Fighter',
+            cppGenerator: {
+                enabled: true,
+                filename: 'world_generator.cpp',
+                sourceCode: generateDefaultCpp3DSource('flight', 'Supersonic Tactical Jet Fighter')
+            }
+        } as Scene3DData);
+        expect(flightScene.cppGenerator?.sourceCode).toContain('ScratchboxMesh aircraft');
+        const setCppOp = flightScene.operatorStack?.find(cmd => cmd.operator === 'sb_set_cpp_generator');
         expect(setCppOp).toBeDefined();
         expect(setCppOp?.params?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
+        expect(setCppOp?.params?.sourceCode).toContain('ScratchboxMesh aircraft');
     });
 
     it('3. should execute sb_set_cpp_generator operator in DirectDispatchOperatorEngine', () => {
