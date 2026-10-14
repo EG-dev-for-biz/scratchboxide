@@ -1207,6 +1207,36 @@ def create_tree(
         mesh.material = material
     return mesh
 
+def create_ivy(
+    root: Any = (0.0, 0.0, 0.0),
+    obstacle_min: Any = (-4.0, 0.0, -4.0),
+    obstacle_max: Any = (4.0, 6.0, 4.0),
+    max_steps: int = 60,
+    cling_distance: Optional[float] = None,
+    material: Any = None,
+    name: str = "IvyGrowth",
+    **kwargs
+) -> Any:
+    """
+    Grows obstacle-clinging ivy vines from root across the obstacle AABB [obstacle_min, obstacle_max].
+    """
+    if _native is None or not hasattr(_native, "nature"):
+        raise RuntimeError("Native 3D nature module scratchbox_native.nature is required")
+
+    cfg = _native.nature.IvyConfig()
+    cfg.root_position = math.Vec3(*_to_point3(kwargs.get("root_position", root)))
+    cfg.obstacle_min = math.Vec3(*_to_point3(obstacle_min))
+    cfg.obstacle_max = math.Vec3(*_to_point3(obstacle_max))
+    cfg.max_steps = int(max_steps)
+    if cling_distance is not None:
+        cfg.cling_distance = float(cling_distance)
+
+    mesh = _native.nature.generate_ivy(cfg)
+    mesh.name = name
+    if material is not None:
+        mesh.material = material
+    return mesh
+
 # ============================================================================
 # 5. GEOSPATIAL & SUBMODULE EXPORTS
 # ============================================================================
@@ -1234,6 +1264,7 @@ class _NatureModule:
     PlantPreset = PlantPreset
     Flora = Flora
     create_tree = staticmethod(create_tree)
+    create_ivy = staticmethod(create_ivy)
     if _native and hasattr(_native, "nature"):
         SpaceColonizationConfig = getattr(_native.nature, "SpaceColonizationConfig", None)
         SpaceColonizationTree = getattr(_native.nature, "SpaceColonizationTree", None)
@@ -1398,6 +1429,7 @@ __all__ = [
     "create_curved_building",
     "create_tower",
     "create_tree",
+    "create_ivy",
     "create_studio_pedestal",
     "create_cylinder",
     "create_cone",
