@@ -137,6 +137,25 @@ describe('TileRefineService', () => {
         expect(runs()).toBe(before);
     });
 
+    it('facadeFlatten: false passes --no-flatten, a band passes --flatten-band, and both key the cache', async () => {
+        const svc = new TileRefineService({ workspaceRoot: root, binaryPath: fakeBin });
+        expect(svc.resolveRequest({ tilePath: 'public/tiles/a.glb' }).cliArgs).not.toContain('--no-flatten');
+        expect(svc.resolveRequest({ tilePath: 'public/tiles/a.glb', facadeFlatten: true }).cliArgs).toEqual([]);
+        const off = svc.resolveRequest({ tilePath: 'public/tiles/a.glb', facadeFlatten: false });
+        expect(off.cliArgs).toEqual(['--no-flatten']);
+        expect(off.keyParams).toEqual({ facadeFlatten: false });
+        const band = svc.resolveRequest({ tilePath: 'public/tiles/a.glb', facadeFlatten: { band: 0.06 } });
+        expect(band.cliArgs).toEqual(['--flatten-band', '0.06']);
+        expect(band.keyParams).toEqual({ flattenBand: 0.06 });
+        expect(() => svc.resolveRequest({ tilePath: 'public/tiles/a.glb', facadeFlatten: { band: 2 } })).toThrow(/facadeFlatten.band/);
+        expect(() => svc.resolveRequest({ tilePath: 'public/tiles/a.glb', facadeFlatten: { band: 0 } })).toThrow(/facadeFlatten.band/);
+        const plain = await svc.refine({ tilePath: 'public/tiles/a.glb' });
+        const flatOff = await svc.refine({ tilePath: 'public/tiles/a.glb', facadeFlatten: false });
+        expect(flatOff.cached).toBe(false);
+        expect(flatOff.cacheKey).not.toBe(plain.cacheKey);
+        expect(fs.readFileSync(flatOff.clayGlb, 'utf8')).toContain('--no-flatten');
+    });
+
     it('kills a hung run at the timeout and leaves no cache entry', async () => {
         const cacheDir = path.join('.scratchbox', 'cache', 'tile_refine_timeout');
         const svc = new TileRefineService({ workspaceRoot: root, binaryPath: hangBin, cacheDir });

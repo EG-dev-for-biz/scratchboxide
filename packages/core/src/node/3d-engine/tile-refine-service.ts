@@ -39,6 +39,11 @@ export interface TileRefineRequest {
     /** Photometric facade relief (default true). */
     relief?: boolean;
     /**
+     * Facade flatten: vertices within `band` metres of a detected wall plane move onto it (default on, band 0.10).
+     * `false` turns it off; `{ band }` sets the band (0..0.5 m).
+     */
+    facadeFlatten?: boolean | { band?: number };
+    /**
      * Keep only the structure under the anchor (its whole connected footprint and everything above it, never cut)
      * plus a ground apron, and refine just that. `true`, or `{ apron }` to set the apron width in metres (default 4).
      */
@@ -294,6 +299,18 @@ export class TileRefineService {
             cliArgs.push('--no-relief');
             keyParams.relief = false;
         }
+        if (req.facadeFlatten === false) {
+            cliArgs.push('--no-flatten');
+            keyParams.facadeFlatten = false;
+        } else if (req.facadeFlatten !== undefined && req.facadeFlatten !== true) {
+            if (typeof req.facadeFlatten !== 'object' || req.facadeFlatten === null) throw new TileRefineError('bad_request', 'facadeFlatten must be a boolean or { band }');
+            const band = req.facadeFlatten.band;
+            if (band !== undefined) {
+                if (!Number.isFinite(band) || band <= 0 || band > 0.5) throw new TileRefineError('bad_request', 'facadeFlatten.band must be a number of metres in (0, 0.5]');
+                cliArgs.push('--flatten-band', String(band));
+                keyParams.flattenBand = band;
+            }
+        }
         if (req.isolate !== undefined && req.isolate !== false) {
             if (req.isolate !== true && (typeof req.isolate !== 'object' || req.isolate === null)) {
                 throw new TileRefineError('bad_request', 'isolate must be true or { apron }');
@@ -478,6 +495,12 @@ export function summarizeTileRefineStats(stats: Record<string, any>): Record<str
             footprintBounds: stats.isolate.footprintBounds,
             height_m: stats.isolate.height_m,
             images: stats.isolate.images
+        } : undefined,
+        facadeFlatten: stats.flatten ? {
+            planes: stats.flatten.planes,
+            movedVertices: stats.flatten.movedVertices,
+            displacementMax_m: stats.flatten.displacement_m?.max,
+            guardSettled: stats.flatten.guardSettled
         } : undefined,
         rectifyFlips: stats.rectify?.flips,
         reliefFlips: stats.relief?.flips,
