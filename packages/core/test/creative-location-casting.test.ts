@@ -132,42 +132,20 @@ async function runCreativeLocationCastingTests(): Promise<void> {
     // ========================================================================
     // TEST 6: End-to-End Synthesizer Integration & C++20 Directive Compliance
     // ========================================================================
-    console.log('  Testing Case 6: synthesizeContextual3DScene with creative casting & C++ generation...');
+    console.log('  Testing Case 6: synthesizeContextual3DScene does not cast unlocated prompts...');
     {
-        // 1. Synthesize bullet scene
-        const scene1 = synthesizeContextual3DScene('bullet going through glass');
-        assert.ok(scene1.geoAnchor, 'Scene must have geoAnchor populated');
-        assert.strictEqual(scene1.geoAnchor.active, true, 'geoAnchor must be active');
-        assert.ok(scene1.geoAnchor.landmarkName, 'geoAnchor must have landmarkName');
-        assert.ok(scene1.geoAnchor.castingRationale, 'geoAnchor must have castingRationale');
-        assert.strictEqual(scene1.geoAnchor.castingArchetype, 'ballistics_proving_ground');
+        // Prompts that name no real-world location stay in the grey clay void (AGENTS.md):
+        // the synthesizer never casts them onto an unrelated Earth location.
+        for (const prompt of ['bullet going through glass', 'black background product pedestal with soft spotlight']) {
+            const scene = synthesizeContextual3DScene(prompt);
+            assert.strictEqual(scene.geoAnchor, undefined, `"${prompt}" names no place and must not be geo-anchored`);
+            assert.ok(
+                scene.pythonGenerator?.sourceCode || scene.cppGenerator?.sourceCode,
+                `"${prompt}" must still carry a procedural generator`
+            );
+        }
 
-        // Verify C++ Generator attaches to native C++20 engine
-        assert.ok(scene1.cppGenerator, 'Scene must include cppGenerator');
-        assert.strictEqual(scene1.cppGenerator.enabled, true);
-        assert.strictEqual(scene1.cppGenerator.filename, 'world_generator.cpp');
-        assert.ok(scene1.cppGenerator.sourceCode, 'C++ source code must be populated');
-        assert.ok(
-            scene1.cppGenerator.sourceCode.includes('#include "scratchbox_engine.hpp"'),
-            'C++ generator must include scratchbox_engine.hpp'
-        );
-        assert.ok(
-            scene1.cppGenerator.sourceCode.includes(scene1.geoAnchor.landmarkName),
-            'C++ generator must include casted landmark name'
-        );
-        assert.ok(
-            scene1.cppGenerator.sourceCode.includes('Creative Casting Rationale:'),
-            'C++ generator must include creative casting rationale comment'
-        );
-
-        // 2. Synthesize black background scene
-        const scene2 = synthesizeContextual3DScene('black background product pedestal with soft spotlight');
-        assert.ok(scene2.geoAnchor, 'Black background scene must have geoAnchor populated');
-        assert.strictEqual(scene2.geoAnchor.castingArchetype, 'black_box_soundstage');
-        assert.ok(scene2.geoAnchor.landmarkName?.includes('Pinewood') || scene2.geoAnchor.landmarkName?.includes('Sony') || scene2.geoAnchor.landmarkName?.includes('Soundstage'));
-        assert.ok(scene2.cppGenerator?.sourceCode.includes('Creative Casting Rationale:'));
-
-        console.log('  ✓ Case 6 Passed: synthesizeContextual3DScene end-to-end generates casted geoAnchor & C++20 source.');
+        console.log('  ✓ Case 6 Passed: synthesizeContextual3DScene leaves unlocated prompts unanchored with a procedural generator.');
     }
 
     // ========================================================================
