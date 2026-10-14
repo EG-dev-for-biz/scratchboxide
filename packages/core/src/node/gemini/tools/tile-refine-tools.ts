@@ -32,6 +32,7 @@ export const TILE_REFINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 roiRadius: { type: 'NUMBER', description: 'Relief region of interest: the anchor footprint grown by this many metres (default 60; negative = whole tile).' },
                 relief: { type: 'BOOLEAN', description: 'Add photometric facade relief (default true).' },
+                facadeFlatten: { type: 'BOOLEAN', description: 'Flatten the scan\'s wall planes: vertices within 10 cm of a detected wall move onto it, deeper features stay (default true).' },
                 isolate: { type: 'BOOLEAN', description: 'Refine only the structure under the anchor: its whole connected footprint and everything above it (never cut; attached neighbours come along, it ends at street canyons) plus a small ground apron. Takes seconds instead of the whole tile; use it to iterate on one building. Also writes the isolated raw scan as clay.' },
                 apron: { type: 'NUMBER', description: 'With isolate: metres of ground kept around the footprint (default 4).' },
                 publishAs: { type: 'STRING', description: 'Optional base name: writes public/models/<name>_refined.glb (textured) and <name>_refined_clay.glb (and <name>_raw_clay.glb with isolate).' },
@@ -51,6 +52,7 @@ export const tileRefineHandlers: Record<string, ToolHandler> = {
                 anchor: args.anchor as TileRefineRequest['anchor'],
                 roiRadius: typeof args.roiRadius === 'number' ? args.roiRadius : undefined,
                 relief: typeof args.relief === 'boolean' ? args.relief : undefined,
+                facadeFlatten: typeof args.facadeFlatten === 'boolean' ? args.facadeFlatten : undefined,
                 isolate: args.isolate === true ? (typeof args.apron === 'number' ? { apron: args.apron } : true) : undefined,
                 publishAs: typeof args.publishAs === 'string' && args.publishAs.trim() ? args.publishAs.trim() : undefined,
                 thumbnails: args.thumbnails === true
