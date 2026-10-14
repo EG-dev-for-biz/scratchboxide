@@ -38,7 +38,7 @@ export interface Requirement {
 export const HOW_TO = {
     /** Large binary demo assets are gitignored (see .gitignore "Media assets"). */
     gitignoredAsset: 'gitignored local asset; copy it from a machine that has it or regenerate it with the pipeline that produces it',
-    hydrate: 'gitignored demo asset; run `npm run hydrate` (scripts/hydrate_demo_assets.cjs) or copy it from a machine that has it',
+    hydrate: 'gitignored demo asset listed in manifests/demos_asset_manifest.json; `npm run hydrate` downloads it when a mirror is reachable (its offline placeholders do not count), or copy it from a machine that has it',
     performerAvatars: 'gitignored performer capture under models/; produce it with the performer capture / 3DGS avatar pipeline',
     ffmpeg: 'install ffmpeg (macOS: `brew install ffmpeg`; Ubuntu: `apt-get install ffmpeg`)',
     cwebp: 'install the WebP tools (macOS: `brew install webp`; Ubuntu: `apt-get install webp`)'
@@ -60,33 +60,83 @@ export function requireFile(p: string, howToObtain: string = HOW_TO.gitignoredAs
     return { ok, reason: ok ? '' : `missing ${display(p)} (${howToObtain})` };
 }
 
-let manifestPaths: Set<string> | null = null;
+let manifestSizes: Map<string, number> | null = null;
 
-function demoManifestPaths(): Set<string> {
-    if (manifestPaths) return manifestPaths;
-    manifestPaths = new Set();
+/** manifests/demos_asset_manifest.json: repo-relative path -> declared size in bytes (0 when undeclared). */
+function demoManifest(): Map<string, number> {
+    if (manifestSizes) return manifestSizes;
+    manifestSizes = new Map();
     try {
         const manifest = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'manifests/demos_asset_manifest.json'), 'utf-8'));
-        for (const a of manifest.assets ?? []) if (typeof a.path === 'string') manifestPaths.add(a.path);
+        for (const a of manifest.assets ?? []) {
+            if (typeof a.path === 'string') manifestSizes.set(a.path, typeof a.sizeBytes === 'number' ? a.sizeBytes : 0);
+        }
     } catch { /* no manifest: every asset gets the generic hint */ }
-    return manifestPaths;
+    return manifestSizes;
+}
+
+// Byte-exact stand-ins scripts/hydrate_demo_assets.cjs writes when it cannot download an asset.
+const HYDRATOR_STUBS = [
+    'AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAB5tZGF0AAAC' +
+    'AAAAAAAPAAACAAAAAAAPAAACAAAAAAAPAAAApG1vb3YAAABsbXZoZAAAAAB2bU5ydm1O' +
+    'cgAA+gAAAAABAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAA' +
+    'AAAAAAAAAAAAAAAAAAAAAAIAAAACJ0cmFrAAAAXHRraGQAAAAHd21OcnZtTnIAAAABAA' +
+    'AAAAEAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+    'AAABAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAEAAAAAEAAAAA',
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+].map(b => Buffer.from(b, 'base64'));
+
+/**
+ * True when the file is an offline stand-in written by `npm run hydrate` (scripts/hydrate_demo_assets.cjs)
+ * rather than the real asset: a GLB/JSON tagged with the hydrator generator name, one of its byte-exact
+ * MP4/PNG stubs, or a manifest asset far smaller than its declared size (procedural splats, test-pattern videos).
+ */
+export function isHydratorPlaceholder(p: string): boolean {
+    const abs = resolveRepoPath(p);
+    let head: Buffer;
+    let size: number;
+    try {
+        const st = fs.statSync(abs);
+        if (!st.isFile()) return false;
+        size = st.size;
+        const fd = fs.openSync(abs, 'r');
+        try {
+            const buf = Buffer.alloc(4096);
+            head = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0));
+        } finally {
+            fs.closeSync(fd);
+        }
+    } catch {
+        return false;
+    }
+    const text = head.toString('latin1');
+    if (text.includes('Scratchbox Procedural Hydrator') || text.includes('Scratchbox Demo Hydrator')) return true;
+    if (HYDRATOR_STUBS.some(stub => stub.equals(head))) return true;
+    const declared = demoManifest().get(display(p)) ?? 0;
+    return declared > 0 && size < declared / 2;
 }
 
 /**
- * Requires gitignored binary assets (models, splats, video plates, captures). The hint says
- * `npm run hydrate` when the asset is listed in manifests/demos_asset_manifest.json, and
- * otherwise names `producer` (the script/pipeline that generates it) when given.
+ * Requires gitignored binary assets (models, splats, video plates, captures). An `npm run hydrate`
+ * offline stand-in counts as missing. The hint says `npm run hydrate` when the asset is listed in
+ * manifests/demos_asset_manifest.json, and otherwise names `producer` (the script/pipeline that
+ * generates it) when given.
  */
 export function requireAssets(paths: readonly string[], producer?: string): Requirement {
     const missing = paths.filter(p => !fs.existsSync(resolveRepoPath(p)));
-    if (missing.length === 0) return { ok: true, reason: '' };
-    const inManifest = missing.every(p => demoManifestPaths().has(display(p)));
+    const stubs = paths.filter(p => !missing.includes(p) && isHydratorPlaceholder(p));
+    if (missing.length === 0 && stubs.length === 0) return { ok: true, reason: '' };
+    const unmet = [...missing, ...stubs];
+    const inManifest = unmet.every(p => demoManifest().has(display(p)));
     const hint = inManifest
         ? HOW_TO.hydrate
         : producer
             ? `gitignored; regenerate with ${producer} or copy it from a machine that has it`
             : HOW_TO.gitignoredAsset;
-    return { ok: false, reason: `missing ${missing.map(display).join(', ')} (${hint})` };
+    const parts: string[] = [];
+    if (missing.length) parts.push(`missing ${missing.map(display).join(', ')}`);
+    if (stubs.length) parts.push(`${stubs.map(display).join(', ')} is only an \`npm run hydrate\` offline placeholder`);
+    return { ok: false, reason: `${parts.join('; ')} (${hint})` };
 }
 
 export function requireAsset(p: string, producer?: string): Requirement {
