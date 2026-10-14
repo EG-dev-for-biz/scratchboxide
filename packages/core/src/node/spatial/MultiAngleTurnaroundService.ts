@@ -12,7 +12,7 @@ import * as path from 'path';
 import { IMAGE_MODEL_PRIORITY, SkippedMediaModel, describeModelUsed, resolveImageModelId, resolveRequestedModels } from '../../common/media-generation-protocol';
 import { GeneratorFailedError, MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
-import { generateImageWithModels } from '../google-media-generation-service';
+import { generateImageWithModels, withMediaFailureContext } from '../google-media-generation-service';
 import { FalTrellisService, type FalTrellisMultiInput, type FalTrellisResult } from './FalTrellisService';
 
 /** Image models a turnaround tries when none is named: Nano Banana Lite first, then the standard image list. */
@@ -332,19 +332,16 @@ export class MultiAngleTurnaroundService {
                 isolation
             );
             const references = station.referenceStationIndices.map(i => capturedViews[i]);
+            const contents = [
+                { text: `${positive} Avoid: ${negative}.` },
+                ...references.map(view => ({ inlineData: { data: view.buffer.toString('base64'), mimeType: view.mimeType } }))
+            ];
             let answer;
             try {
-                answer = await generateImageWithModels(client, {
-                    models,
-                    contents: [
-                        { text: `${positive} Avoid: ${negative}.` },
-                        ...references.map(view => ({ inlineData: { data: view.buffer.toString('base64'), mimeType: view.mimeType } }))
-                    ],
-                    imageConfig: { aspectRatio: '1:1' }
-                });
-            } catch (err: any) {
-                throw Object.assign(new MediaModelUnavailableError(err?.model || models[0], `${err?.reason || err?.message || err} (station ${station.label})`),
-                    { status: err?.status, mediaError: err?.mediaError });
+                answer = await generateImageWithModels(client, { models, contents, imageConfig: { aspectRatio: '1:1' } });
+            } catch (err) {
+                // Model failures gain the station name; any other error (a bug, a local failure) propagates as it is.
+                throw withMediaFailureContext(err, `station ${station.label}`);
             }
             if (!modelUsed) {
                 modelUsed = answer.modelUsed;

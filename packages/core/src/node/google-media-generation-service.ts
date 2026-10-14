@@ -74,18 +74,64 @@ export function skipReason(error: MediaGenerationError): string {
     return error.code === 'unsupported' ? `not served: ${message}` : `${error.code}: ${message}`;
 }
 
-/** A MediaModelUnavailableError that also carries the classified error, for the media job service. */
+/**
+ * A MediaModelUnavailableError that also carries the classified error, for the media job service. The carried
+ * error's message is the full reason (including any models skipped before this one), so a failed job shows it.
+ */
 export function mediaModelUnavailable(model: string, reason: string, detail: MediaGenerationError): MediaModelUnavailableError {
-    return Object.assign(new MediaModelUnavailableError(model, reason), { status: detail.status, mediaError: detail });
+    return Object.assign(new MediaModelUnavailableError(model, reason), { status: detail.status, mediaError: { ...detail, message: reason } });
+}
+
+/**
+ * Adds where a model failure happened (e.g. "station front") to a MediaModelUnavailableError. Any other error is
+ * returned unchanged: a bug or a local failure is never relabelled as a model being unavailable.
+ */
+export function withMediaFailureContext(error: unknown, context: string): unknown {
+    if (!(error instanceof MediaModelUnavailableError)) {
+        return error;
+    }
+    const reason = `${error.reason} (${context})`;
+    const detail = (error as any).mediaError as MediaGenerationError | undefined;
+    return Object.assign(new MediaModelUnavailableError(error.model, reason), {
+        status: (error as any).status,
+        mediaError: detail ? { ...detail, message: reason } : undefined
+    });
+}
+
+/**
+ * A failure of the model service itself: the SDK call threw, or the model answered without the media asked for.
+ * Only these are classified as model failures; any other error (a bug in our own code, a local write) propagates
+ * unchanged, so it is never reported as a model being unavailable.
+ */
+class ModelCallFailure extends Error {
+    constructor(readonly original: unknown) {
+        super(original instanceof Error ? original.message : String(original));
+        this.name = 'ModelCallFailure';
+    }
+}
+
+/** Runs one model-service call; a failure is marked as a model failure (see {@link ModelCallFailure}). */
+async function modelCall<T>(call: () => Promise<T>): Promise<T> {
+    try {
+        return await call();
+    } catch (error) {
+        throw new ModelCallFailure(error);
+    }
+}
+
+/** "(after skipping a: why; b: why)" when earlier models were skipped, else empty. */
+function skippedSuffix(skipped: readonly SkippedMediaModel[]): string {
+    return skipped.length ? ` (after skipping ${skipped.map(s => `${s.model}: ${s.reason}`).join('; ')})` : '';
 }
 
 /**
  * Asks each model in `request.models` for an image, in order, and returns the first image with the model that
  * produced it. Only a model that is not served (404) moves the request on to the next model, and each one moved
  * past is recorded with its reason, so the caller can say which model answered and why. A model that answers
- * with no image part is asked again ({@link EMPTY_IMAGE_RESPONSE_ATTEMPTS} times in all). Any other failure
+ * with no image part is asked again ({@link EMPTY_IMAGE_RESPONSE_ATTEMPTS} times in all). Any other model failure
  * (quota, safety filter, invalid request, no image) ends the request with a MediaModelUnavailableError, as does
- * a list in which no model is served (the error names every model tried and why).
+ * a list in which no model is served (the error names every model tried and why). Errors that are not model
+ * failures propagate as they are.
  */
 export async function generateImageWithModels(client: any, request: ImageModelRequest): Promise<ImageModelAnswer> {
     const models = request.models.filter(Boolean);
@@ -100,51 +146,51 @@ export async function generateImageWithModels(client: any, request: ImageModelRe
     }
     const skipped: SkippedMediaModel[] = [];
     for (const model of models) {
+        let response: any;
+        let parts: any[] = [];
+        let imagePart: any;
         try {
-            let response: any;
-            let parts: any[] = [];
-            let imagePart: any;
             // Image models sometimes finish (STOP) with no image part; ask again before giving up on the model.
             for (let attempt = 0; attempt < EMPTY_IMAGE_RESPONSE_ATTEMPTS && !imagePart; attempt++) {
-                response = await client.models.generateContent({
+                response = await modelCall(() => client.models.generateContent({
                     model,
                     contents: request.contents,
                     config: {
                         responseModalities: ['TEXT', 'IMAGE'],
                         ...(request.imageConfig ? { imageConfig: request.imageConfig } : {})
                     }
-                });
+                }));
                 if (response?.promptFeedback?.blockReason) {
-                    throw new Error(`Safety filter blocked prompt: ${response.promptFeedback.blockReason}`);
+                    throw new ModelCallFailure(new Error(`Safety filter blocked prompt: ${response.promptFeedback.blockReason}`));
                 }
                 parts = response?.candidates?.[0]?.content?.parts || [];
                 imagePart = parts.find((part: any) => part?.inlineData?.data);
             }
             if (!imagePart) {
                 const finishReason = response?.candidates?.[0]?.finishReason;
-                throw new Error(finishReason
+                throw new ModelCallFailure(new Error(finishReason
                     ? `Image generation returned no image (${finishReason})`
-                    : 'Image generation returned no image');
+                    : 'Image generation returned no image'));
             }
-            return {
-                data: Buffer.from(imagePart.inlineData.data, 'base64'),
-                mimeType: imagePart.inlineData.mimeType || 'image/png',
-                modelUsed: model,
-                modelVersion: response?.modelVersion || undefined,
-                responseText: parts.map((part: any) => part?.text || '').filter(Boolean).join('\n') || undefined,
-                requestedModels: models,
-                skippedModels: skipped,
-                modelNote: describeModelUsed(model, skipped)
-            };
         } catch (error) {
-            const classified = classifyMediaGenerationError(error, model);
+            if (!(error instanceof ModelCallFailure)) throw error;
+            const classified = classifyMediaGenerationError(error.original, model);
             if (classified.code === 'unsupported') {
                 skipped.push({ model, code: classified.code, reason: skipReason(classified) });
                 continue;
             }
-            const earlier = skipped.length ? ` (after skipping ${skipped.map(s => `${s.model}: ${s.reason}`).join('; ')})` : '';
-            throw mediaModelUnavailable(model, `${classified.message}${earlier}`, classified);
+            throw mediaModelUnavailable(model, `${classified.message}${skippedSuffix(skipped)}`, classified);
         }
+        return {
+            data: Buffer.from(imagePart.inlineData.data, 'base64'),
+            mimeType: imagePart.inlineData.mimeType || 'image/png',
+            modelUsed: model,
+            modelVersion: response?.modelVersion || undefined,
+            responseText: parts.map((part: any) => part?.text || '').filter(Boolean).join('\n') || undefined,
+            requestedModels: models,
+            skippedModels: skipped,
+            modelNote: describeModelUsed(model, skipped)
+        };
     }
     const message = describeNoModelAnswered('image', skipped);
     throw mediaModelUnavailable(models[0], message, { code: 'unsupported', message, retryable: false, model: models[0] });
@@ -266,8 +312,10 @@ export class GoogleMediaGenerationService {
         const skipped: SkippedMediaModel[] = [];
 
         for (const model of models) {
+            let operation: any;
+            let video: any;
             try {
-                let operation: any = await client.models.generateVideos({
+                operation = await modelCall(() => client.models.generateVideos({
                     model,
                     prompt: request.prompt,
                     image: sourceImage,
@@ -279,7 +327,7 @@ export class GoogleMediaGenerationService {
                         generateAudio: request.generateAudio !== false,
                         negativePrompt: request.negativePrompt
                     }
-                } as any);
+                } as any));
                 await onStage?.('running', operation.name, model);
 
                 const maxAttempts = this.options.maxPollAttempts || 180;
@@ -288,62 +336,68 @@ export class GoogleMediaGenerationService {
                 while (!operation.done && attempts < maxAttempts) {
                     attempts++;
                     await this.delay(interval);
-                    operation = await client.operations.getVideosOperation({ operation });
+                    const current = operation;
+                    operation = await modelCall(() => client.operations.getVideosOperation({ operation: current }));
                 }
                 if (!operation.done) {
-                    throw Object.assign(new Error('Video generation operation timed out'), { status: 504 });
+                    throw new ModelCallFailure(Object.assign(new Error('Video generation operation timed out'), { status: 504 }));
                 }
                 if (operation.error) {
-                    throw Object.assign(
+                    throw new ModelCallFailure(Object.assign(
                         new Error(String(operation.error.message || 'Video generation operation failed')),
                         operation.error
-                    );
+                    ));
                 }
-                const video = operation.response?.generatedVideos?.[0]?.video;
+                video = operation.response?.generatedVideos?.[0]?.video;
                 if (!video) {
                     const reasons = operation.response?.raiMediaFilteredReasons;
-                    throw new Error(reasons?.length
+                    throw new ModelCallFailure(new Error(reasons?.length
                         ? `Responsible AI safety filter: ${reasons.join('; ')}`
-                        : 'Video generation completed without a video');
+                        : 'Video generation completed without a video'));
                 }
-
-                await onStage?.('downloading', operation.name, model);
-                const mimeType = video.mimeType || 'video/mp4';
-                let bytes: Buffer;
-                if (video.videoBytes) {
-                    bytes = Buffer.from(video.videoBytes, 'base64');
-                } else {
-                    const stagingPath = this.assetStore.stagingPath(
-                        request.workspaceRoot,
-                        `${operation.name || Date.now()}.mp4`
-                    );
-                    await fs.ensureDir(require('path').dirname(stagingPath));
-                    try {
-                        await client.files.download({ file: video, downloadPath: stagingPath });
-                        bytes = await fs.readFile(stagingPath);
-                    } finally {
-                        await fs.remove(stagingPath);
-                    }
-                }
-                const asset = await this.assetStore.put(request.workspaceRoot, bytes, mimeType);
-                return {
-                    asset,
-                    modelUsed: model,
-                    requestedModels: models,
-                    skippedModels: skipped,
-                    modelNote: describeModelUsed(model, skipped),
-                    operationName: operation.name,
-                    createdAt: new Date().toISOString()
-                };
             } catch (error) {
-                const classified = this.extractOrClassify(error, model);
+                if (!(error instanceof ModelCallFailure)) throw error;
+                const classified = this.extractOrClassify(error.original, model);
                 if (classified.code === 'unsupported') {
                     skipped.push({ model, code: classified.code, reason: skipReason(classified) });
                     continue;
                 }
-                const earlier = skipped.length ? ` (after skipping ${skipped.map(s => `${s.model}: ${s.reason}`).join('; ')})` : '';
-                throw mediaModelUnavailable(model, `${classified.message}${earlier}`, classified);
+                throw mediaModelUnavailable(model, `${classified.message}${skippedSuffix(skipped)}`, classified);
             }
+
+            await onStage?.('downloading', operation.name, model);
+            const mimeType = video.mimeType || 'video/mp4';
+            let bytes: Buffer;
+            if (video.videoBytes) {
+                bytes = Buffer.from(video.videoBytes, 'base64');
+            } else {
+                const stagingPath = this.assetStore.stagingPath(
+                    request.workspaceRoot,
+                    `${operation.name || Date.now()}.mp4`
+                );
+                await fs.ensureDir(require('path').dirname(stagingPath));
+                try {
+                    try {
+                        await client.files.download({ file: video, downloadPath: stagingPath });
+                    } catch (error) {
+                        const classified = this.extractOrClassify(error, model);
+                        throw mediaModelUnavailable(model, `the finished video could not be downloaded: ${classified.message}${skippedSuffix(skipped)}`, classified);
+                    }
+                    bytes = await fs.readFile(stagingPath);
+                } finally {
+                    await fs.remove(stagingPath);
+                }
+            }
+            const asset = await this.assetStore.put(request.workspaceRoot, bytes, mimeType);
+            return {
+                asset,
+                modelUsed: model,
+                requestedModels: models,
+                skippedModels: skipped,
+                modelNote: describeModelUsed(model, skipped),
+                operationName: operation.name,
+                createdAt: new Date().toISOString()
+            };
         }
         const message = describeNoModelAnswered('video', skipped);
         throw mediaModelUnavailable(models[0], message, { code: 'unsupported', message, retryable: false, model: models[0] });

@@ -11,6 +11,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
 
 const execAsync = promisify(exec);
 
@@ -19,10 +20,9 @@ export interface PanoramaDepthOptions {
     /** Metres, or 'auto' (default) to infer the capture height from the metric floor. */
     eyeHeight?: number | 'auto';
     device?: string;
+    /** Tests only: the sidecar's own --mock geometry (labelled in modelUsed), not depth from the model. */
     mock?: boolean;
     outDir?: string;
-    /** Use the synthetic cylinder-room depth when the depth model cannot run (off by default). */
-    allowHeuristicFallback?: boolean;
 }
 
 export interface PanoramaDepthResult {
@@ -45,8 +45,8 @@ export interface PanoramaDepthResult {
 
 /**
  * Service to orchestrate the high-fidelity 360 panorama depth extraction pipeline.
- * Spawns the local Python sidecar utilizing Depth Anything V2/V3 Metric models,
- * with robust fallbacks.
+ * Spawns the local Python sidecar utilizing Depth Anything V2/V3 Metric models. When the model cannot run, the call
+ * fails with the sidecar's error; no depth is invented in its place.
  */
 export class PanoramaDepthService {
     private sidecarPath: string;
@@ -115,6 +115,11 @@ export class PanoramaDepthService {
             // Read the generated JSON metadata
             if (await fs.pathExists(outJson)) {
                 const metaContent = await fs.readJson(outJson);
+                const missing = ['width', 'height', 'modelUsed', ...(eyeHeightArg === 'auto' ? ['eyeHeight'] : [])]
+                    .filter(key => metaContent[key] === undefined || metaContent[key] === null || metaContent[key] === '');
+                if (missing.length) {
+                    throw new Error(`the sidecar's metadata ${outJson} does not report ${missing.join(', ')}`);
+                }
                 return {
                     success: true,
                     depthPath: outDepth,
@@ -129,142 +134,14 @@ export class PanoramaDepthService {
                     groundY: metaContent.groundY ?? -eyeHeight,
                     scaleCorrection: metaContent.scaleCorrection ?? 1.0,
                     eyeHeightInferred: metaContent.eyeHeightInferred === true,
-                    modelUsed: metaContent.modelUsed || 'unknown'
+                    modelUsed: metaContent.modelUsed
                 };
             } else {
                 throw new Error('Sidecar completed but output JSON was not found');
             }
 
         } catch (err: any) {
-            if (!options.allowHeuristicFallback) {
-                throw new Error(`Panorama depth model failed (${err.message}); set allowHeuristicFallback to accept the synthetic room depth instead.`);
-            }
-            return this.generateFallbackDepth(inputImagePath, outDepth, outPreview, outJson, eyeHeight);
+            throw new GeneratorFailedError('python', `Panorama depth model failed for ${inputImagePath}: ${err?.message || err}`);
         }
-    }
-
-    /**
-     * Local TypeScript fallback that generates a valid synthetic circular room depth field
-     * so that the pipeline never crashes during offline/testing scenarios.
-     */
-    private async generateFallbackDepth(
-        inputImagePath: string,
-        outDepth: string,
-        outPreview: string,
-        outJson: string,
-        eyeHeight: number
-    ): Promise<PanoramaDepthResult> {
-        // Assume default panorama size 2048x1024 if we can't inspect the file quickly
-        let width = 2048;
-        let height = 1024;
-
-        try {
-            // Try to extract dimensions if sharp or other utilities are available,
-            // otherwise keep 2048x1024 as robust baseline.
-            const size = await this.imageSizeFallback(inputImagePath);
-            width = size.width;
-            height = size.height;
-        } catch {
-            // Keep default
-        }
-
-        const sizeInFloats = width * height;
-        const depthBuffer = new Float32Array(sizeInFloats);
-
-        // Simple mathematical fallback: Ground plane + Cylindrical wall at R = 15m + ceiling
-        for (let y = 0; y < height; y++) {
-            const v = (y + 0.5) / height;
-            const pitch = (0.5 - v) * Math.PI;
-            const ry = Math.sin(pitch);
-            const cosPitch = Math.cos(pitch);
-
-            let d: number;
-            if (ry < -0.05) {
-                // Floor
-                d = -eyeHeight / ry;
-            } else if (ry > 0.4) {
-                // Ceiling (10m high)
-                d = (10.0 - eyeHeight) / ry;
-            } else {
-                // Wall
-                d = 15.0 / cosPitch;
-            }
-
-            d = Math.max(0.1, Math.min(80.0, d));
-
-            for (let x = 0; x < width; x++) {
-                depthBuffer[y * width + x] = d;
-            }
-        }
-
-        // Write depth binary file
-        await fs.outputFile(outDepth, Buffer.from(depthBuffer.buffer));
-
-        // Write mock colormapped PNG (transparent pixel mock or flat color)
-        // Standard PNG 1x1 blank or flat purple to satisfy preview file requirement
-        const dummyPng = Buffer.from('\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82', 'binary');
-        await fs.outputFile(outPreview, dummyPng);
-
-        // Write metadata JSON
-        const metadata = {
-            success: true,
-            width,
-            height,
-            minDepth: 0.1,
-            maxDepth: 80.0,
-            averageDepth: 15.0,
-            eyeHeight,
-            eyeHeightInferred: false,
-            groundY: -eyeHeight,
-            scaleCorrection: 1.0,
-            modelUsed: 'typescript-fallback-heuristic'
-        };
-        await fs.outputJson(outJson, metadata, { spaces: 2 });
-
-        return {
-            success: true,
-            depthPath: outDepth,
-            previewPath: outPreview,
-            metadataPath: outJson,
-            width,
-            height,
-            minDepth: 0.1,
-            maxDepth: 80.0,
-            averageDepth: 15.0,
-            eyeHeight,
-            groundY: -eyeHeight,
-            scaleCorrection: 1.0,
-            eyeHeightInferred: false,
-            modelUsed: 'typescript-fallback-heuristic'
-        };
-    }
-
-    private async imageSizeFallback(imagePath: string): Promise<{ width: number, height: number }> {
-        // Fast binary signature inspection for PNG/JPEG dimensions without heavy library dependencies
-        const fd = await fs.open(imagePath, 'r');
-        const buffer = Buffer.alloc(30);
-        await fs.read(fd, buffer, 0, 30, 0);
-        await fs.close(fd);
-
-        if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
-            // PNG dimensions at offset 16 (IHDR)
-            const width = buffer.readUInt32BE(16);
-            const height = buffer.readUInt32BE(20);
-            return { width, height };
-        } else if (buffer[0] === 0xff && buffer[1] === 0xd8) {
-            // JPEG parser (simplified find SOF0/SOF2 marker)
-            const stat = await fs.stat(imagePath);
-            const fullBuf = await fs.readFile(imagePath);
-            let offset = 2;
-            while (offset < fullBuf.length) {
-                if (fullBuf[offset] === 0xff && (fullBuf[offset+1] === 0xc0 || fullBuf[offset+1] === 0xc2)) {
-                    const height = fullBuf.readUInt16BE(offset + 5);
-                    const width = fullBuf.readUInt16BE(offset + 7);
-                    return { width, height };
-                }
-                offset++;
-            }
-        }
-        return { width: 2048, height: 1024 }; // Robust generic fallback
     }
 }

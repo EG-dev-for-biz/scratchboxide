@@ -62,9 +62,9 @@ describe('Scratchbox IDE 100% Production Readiness Audit', () => {
             expect(src).not.toContain('req.query.mockExecution === undefined');
         });
 
-        it('spatialRoutes must default mockExecution to false across all endpoints', () => {
+        it('spatialRoutes never lets a request body switch a panorama step into a mock run', () => {
             const src = fs.readFileSync(spatialRoutesPath, 'utf8');
-            expect(src).toContain("const isMock = mockExecution === true || mockExecution === 'true'");
+            expect(src).not.toContain('mockExecution');
         });
     });
 

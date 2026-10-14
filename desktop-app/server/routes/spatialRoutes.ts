@@ -20,6 +20,7 @@ import {
 } from '../../../packages/core/src/node';
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
 import { geoidUndulation } from '../../../packages/core/src/node/spatial/egm96-geoid';
+import { MediaModelUnavailableError, MissingInputError } from '../../../packages/core/src/common/errors/pipeline-errors';
 
 export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService): Router {
     const router = Router();
@@ -316,15 +317,31 @@ export function createDepthbox360Router(): Router {
     return router;
 }
 
+/**
+ * A failed panorama step: a missing input is the caller's error (422), a model that could not produce the image is
+ * a bad gateway (502), anything else a server error. The typed error's code goes with the message.
+ */
+function sendPanoramaFailure(res: Response, err: any, fallbackMessage: string): void {
+    const status = err instanceof MissingInputError ? 422 : err instanceof MediaModelUnavailableError ? 502 : 500;
+    res.status(status).json({
+        success: false,
+        error: err?.message || fallbackMessage,
+        ...(typeof err?.code === 'string' ? { code: err.code } : {})
+    });
+}
+
+/**
+ * Panorama model steps over HTTP. Request bodies cannot switch a step into a mock run: every step runs the image
+ * model (or the explicitly requested procedural mode) and the response names the model that answered.
+ */
 export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsService): Router {
     const router = Router();
     const panoramaService = new Google360PanoramaPipelineService(mediaCredentials);
 
     router.post('/heal-seam', async (req: Request, res: Response) => {
         try {
-            const { inputImagePath, inputImageBase64, prompt, seamWidth, outputImagePath, mockExecution, model } = req.body || {};
+            const { inputImagePath, inputImageBase64, prompt, seamWidth, outputImagePath, model } = req.body || {};
             const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
-            const isMock = mockExecution === true || mockExecution === 'true';
 
             const result = await panoramaService.healPanoramaSeam({
                 inputImagePath,
@@ -332,7 +349,6 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 prompt,
                 seamWidth,
                 outputImagePath,
-                mockExecution: isMock,
                 model
             });
 
@@ -344,19 +360,20 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 outputImagePath: result.outputImagePath,
                 outputImageBase64: result.outputBuffer.toString('base64'),
                 modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote,
                 summary: result.summary
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || 'Failed to heal panorama seam' });
+            sendPanoramaFailure(res, err, 'Failed to heal panorama seam');
         }
     });
 
     router.post('/inpaint', async (req: Request, res: Response) => {
         try {
-            const { inputImagePath, inputImageBase64, maskImagePath, maskImageBase64, nadirOnly, nadirRatio, prompt, outputImagePath, mockExecution, model } = req.body || {};
+            const { inputImagePath, inputImageBase64, maskImagePath, maskImageBase64, nadirOnly, nadirRatio, prompt, outputImagePath, model } = req.body || {};
             const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
             const maskBuffer = maskImageBase64 ? Buffer.from(maskImageBase64, 'base64') : undefined;
-            const isMock = mockExecution === true || mockExecution === 'true';
 
             const result = await panoramaService.inpaintPanorama({
                 inputImagePath,
@@ -367,7 +384,6 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 nadirRatio,
                 prompt,
                 outputImagePath,
-                mockExecution: isMock,
                 model
             });
 
@@ -378,21 +394,22 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 outputImagePath: result.outputImagePath,
                 outputImageBase64: result.outputBuffer.toString('base64'),
                 modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote,
                 summary: result.summary
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || 'Failed to inpaint panorama' });
+            sendPanoramaFailure(res, err, 'Failed to inpaint panorama');
         }
     });
 
     router.post('/generate', async (req: Request, res: Response) => {
         try {
-            const { prompt, style, width, height, healSeam, inpaintNadir, outputImagePath, mockExecution, model } = req.body || {};
+            const { prompt, style, width, height, healSeam, inpaintNadir, outputImagePath, model } = req.body || {};
             if (!prompt) {
                 res.status(400).json({ success: false, error: 'prompt is required to generate 360 panorama' });
                 return;
             }
-            const isMock = mockExecution === true || mockExecution === 'true';
 
             const result = await panoramaService.generate360Panorama({
                 prompt,
@@ -402,7 +419,6 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 healSeam,
                 inpaintNadir,
                 outputImagePath,
-                mockExecution: isMock,
                 model
             });
 
@@ -414,25 +430,25 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 outputImagePath: result.outputImagePath,
                 outputImageBase64: result.outputBuffer.toString('base64'),
                 modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote,
                 summary: result.summary
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || 'Failed to generate 360 panorama' });
+            sendPanoramaFailure(res, err, 'Failed to generate 360 panorama');
         }
     });
 
     router.post('/upscale-16k', async (req: Request, res: Response) => {
         try {
-            const { inputImagePath, inputImageBase64, engine, outputImagePath, mockExecution, seamWidth } = req.body || {};
+            const { inputImagePath, inputImageBase64, engine, outputImagePath, seamWidth } = req.body || {};
             const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
-            const isMock = mockExecution === true || mockExecution === 'true';
 
             const result = await panoramaService.upscalePanorama16K({
                 inputImagePath,
                 inputImageBuffer: inputBuffer,
                 engine,
                 outputImagePath,
-                mockExecution: isMock,
                 seamWidth
             });
 
@@ -450,7 +466,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 summary: result.summary
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || 'Failed to upscale panorama to 16K' });
+            sendPanoramaFailure(res, err, 'Failed to upscale panorama to 16K');
         }
     });
 

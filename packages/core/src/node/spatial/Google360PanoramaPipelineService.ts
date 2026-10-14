@@ -14,8 +14,8 @@ import { encodePng, decodePng } from '../texture-processing';
 import { decodeImageToRgba } from '../image-codec-ffmpeg';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { generateImageWithModels, ImageModelAnswer } from '../google-media-generation-service';
-import { IMAGE_MODEL_PRIORITY, SkippedMediaModel, resolveRequestedModels } from '../../common/media-generation-protocol';
-import { MediaModelUnavailableError } from '../../common/errors/pipeline-errors';
+import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, SkippedMediaModel, resolveRequestedModels } from '../../common/media-generation-protocol';
+import { MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
 
 export interface PanoramaSeamOptions {
     inputImagePath?: string;
@@ -36,7 +36,21 @@ export interface PanoramaModelReport {
     skippedModels?: SkippedMediaModel[];
     /** Which model produced the image and, when it was not the requested one, why. Tool summaries include it. */
     modelNote: string;
+    /** The aspect ratio asked of the model and the size it answered at (absent for mock and procedural runs). */
+    modelImage?: { requestedAspectRatio?: string; width: number; height: number };
 }
+
+/** " The model answered at WxH for a R request." for a model step; empty for mock or procedural steps. */
+export function describeModelImage(report: PanoramaModelReport): string {
+    const image = report.modelImage;
+    return image ? ` The model answered at ${image.width}x${image.height}${image.requestedAspectRatio ? ` for a ${image.requestedAspectRatio} request` : ''}.` : '';
+}
+
+/**
+ * How far (relative) an answer's aspect ratio may be from the ratio asked for. The models answer each ratio at a
+ * fixed size whose ratio differs from the nominal one by up to about 3% (21:9 comes back as 1536x672).
+ */
+export const MODEL_ANSWER_ASPECT_TOLERANCE = 0.04;
 
 export interface PanoramaSeamResult extends PanoramaModelReport {
     success: boolean;
@@ -377,8 +391,8 @@ export class Google360PanoramaPipelineService {
         contents: any[],
         width: number,
         height: number,
-        imageConfig?: { aspectRatio?: string }
-    ): Promise<{ rgba: Buffer; answer: ImageModelAnswer }> {
+        imageConfig: { aspectRatio: string }
+    ): Promise<{ rgba: Buffer; answer: ImageModelAnswer; modelImage: NonNullable<PanoramaModelReport['modelImage']> }> {
         const models = resolveRequestedModels(requestedModel, IMAGE_MODEL_PRIORITY);
         let client: any;
         try {
@@ -393,10 +407,90 @@ export class Google360PanoramaPipelineService {
         } catch (err: any) {
             throw new MediaModelUnavailableError(answer.modelUsed, `the returned image could not be decoded (${err?.message || err})`);
         }
+        // An answer at another aspect ratio was re-framed or cropped: stretching it onto the canvas would misplace
+        // everything blended from it, so it is refused rather than resampled.
+        const asked = IMAGE_MODEL_ASPECT_RATIOS.find(([label]) => label === imageConfig.aspectRatio)?.[1];
+        const answered = decoded.width / decoded.height;
+        if (asked !== undefined && Math.abs(answered - asked) / asked > MODEL_ANSWER_ASPECT_TOLERANCE) {
+            throw new MediaModelUnavailableError(answer.modelUsed,
+                `asked for a ${imageConfig.aspectRatio} image, the model answered ${decoded.width}x${decoded.height} (${answered.toFixed(3)}:1), which would not line up with the panorama`);
+        }
         const rgba = decoded.width === width && decoded.height === height
             ? decoded.rgba
             : Google360PanoramaPipelineService.resampleRgba(decoded.rgba, decoded.width, decoded.height, width, height);
-        return { rgba, answer };
+        return { rgba, answer, modelImage: { requestedAspectRatio: imageConfig.aspectRatio, width: decoded.width, height: decoded.height } };
+    }
+
+    /**
+     * The canvas an edit is sent on: the narrowest aspect ratio the image models accept that is at least as wide as
+     * the panorama, and that canvas's width. A 360 panorama wraps horizontally, so the extra columns repeat its left
+     * edge ({@link wrapExtendColumns}) and are dropped from the answer. Throws when the panorama is wider than 21:9.
+     */
+    static panoramaEditCanvas(width: number, height: number): { aspectRatio: string; canvasWidth: number } {
+        const ratio = width / height;
+        const fit = IMAGE_MODEL_ASPECT_RATIOS.find(([, r]) => r >= ratio - 1e-6);
+        if (!fit) {
+            throw new MissingInputError('panorama edit', 'inputImage',
+                `${width}x${height} is wider than the widest aspect ratio the image models accept (21:9)`);
+        }
+        return { aspectRatio: fit[0], canvasWidth: Math.max(width, Math.round(height * fit[1])) };
+    }
+
+    /** Widens a horizontally wrapping image to canvasWidth by repeating its columns from the left edge. */
+    static wrapExtendColumns(rgba: Buffer, width: number, height: number, canvasWidth: number): Buffer {
+        if (canvasWidth === width) return rgba;
+        const out = Buffer.alloc(canvasWidth * height * 4);
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < canvasWidth; x++) {
+                rgba.copy(out, (y * canvasWidth + x) * 4, (y * width + (x % width)) * 4, (y * width + (x % width)) * 4 + 4);
+            }
+        }
+        return out;
+    }
+
+    /** The first `width` columns of a canvasWidth-wide image. */
+    static cropColumns(rgba: Buffer, canvasWidth: number, height: number, width: number): Buffer {
+        if (canvasWidth === width) return rgba;
+        const out = Buffer.alloc(width * height * 4);
+        for (let y = 0; y < height; y++) {
+            rgba.copy(out, y * width * 4, y * canvasWidth * 4, y * canvasWidth * 4 + width * 4);
+        }
+        return out;
+    }
+
+    /**
+     * Sends a panorama edit (image + mask) to the image model on a canvas of a ratio the model accepts, checks that
+     * the answer has that ratio, and returns the answer at the panorama's own size.
+     */
+    protected async editPanoramaImage(
+        requestedModel: string | undefined,
+        instruction: string,
+        rgba: Buffer,
+        maskRgba: Buffer,
+        width: number,
+        height: number
+    ): Promise<{ rgba: Buffer; report: PanoramaModelReport }> {
+        const canvas = Google360PanoramaPipelineService.panoramaEditCanvas(width, height);
+        const widened = canvas.canvasWidth !== width;
+        const imagePng = encodePng(canvas.canvasWidth, height, Google360PanoramaPipelineService.wrapExtendColumns(rgba, width, height, canvas.canvasWidth));
+        const maskPng = encodePng(canvas.canvasWidth, height, Google360PanoramaPipelineService.wrapExtendColumns(maskRgba, width, height, canvas.canvasWidth));
+        const framing = widened
+            ? ` The image is a 360 panorama widened to ${canvas.aspectRatio} by repeating its left edge on the right; keep that repeat continuous.`
+            : '';
+        const generated = await this.generatePanoramaImage(requestedModel, [
+            { text: `${instruction}${framing} Answer with the whole image at exactly the same framing and ${canvas.aspectRatio} aspect ratio.` },
+            { inlineData: { data: imagePng.toString('base64'), mimeType: 'image/png' } },
+            { inlineData: { data: maskPng.toString('base64'), mimeType: 'image/png' } }
+        ], canvas.canvasWidth, height, { aspectRatio: canvas.aspectRatio });
+        return {
+            rgba: Google360PanoramaPipelineService.cropColumns(generated.rgba, canvas.canvasWidth, height, width),
+            report: {
+                modelUsed: generated.answer.modelUsed,
+                skippedModels: generated.answer.skippedModels,
+                modelNote: generated.answer.modelNote,
+                modelImage: generated.modelImage
+            }
+        };
     }
 
     /**
@@ -2501,10 +2595,9 @@ export class Google360PanoramaPipelineService {
 
         // Step 1: Forward shift by 50%
         const shiftedRgba = Google360PanoramaPipelineService.shiftImageHorizontally(decoded.rgba, width, height, 0.5, false);
-        const shiftedPng = encodePng(width, height, shiftedRgba);
 
         // Step 2: Create soft seam mask
-        const { maskPng, alphaMap } = Google360PanoramaPipelineService.createSeamMask(width, height, seamWidth);
+        const { maskRgba, alphaMap } = Google360PanoramaPipelineService.createSeamMask(width, height, seamWidth);
 
         // Step 3: Inpaint the centered seam
         let inpaintedRgba: Buffer;
@@ -2515,13 +2608,11 @@ export class Google360PanoramaPipelineService {
             report = { modelUsed: 'procedural-seam-healer (mock)', modelNote: 'Mock run: procedural seam heal, no model call.' };
         } else {
             const prompt = options.prompt || 'Continuous seamless panoramic landscape, photorealistic perspective, matching ambient lighting and textures across the seam';
-            const generated = await this.generatePanoramaImage(options.model, [
-                { text: `${prompt}. The first image is a 360 equirectangular panorama rolled by half its width, so its wrap-around seam runs down the vertical center. The second image is a mask: repaint only the white vertical band so the left and right halves join seamlessly, and keep every other pixel, the framing and the size unchanged.` },
-                { inlineData: { data: shiftedPng.toString('base64'), mimeType: 'image/png' } },
-                { inlineData: { data: maskPng.toString('base64'), mimeType: 'image/png' } }
-            ], width, height);
-            inpaintedRgba = generated.rgba;
-            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote };
+            const edited = await this.editPanoramaImage(options.model,
+                `${prompt}. The first image is a 360 equirectangular panorama rolled by half its width, so its wrap-around seam runs down the vertical center. The second image is a mask: repaint only the white vertical band so the left and right halves join seamlessly, and keep every other pixel unchanged.`,
+                shiftedRgba, maskRgba, width, height);
+            inpaintedRgba = edited.rgba;
+            report = edited.report;
         }
 
         // Step 4: Reverse shift by 50% and composite
@@ -2559,7 +2650,7 @@ export class Google360PanoramaPipelineService {
             outputImagePath: options.outputImagePath,
             outputBuffer,
             ...report,
-            summary: `360 panorama seam healed across a ${seamWidth}px band (${width}x${height}). ${report.modelNote}`
+            summary: `360 panorama seam healed across a ${seamWidth}px band (${width}x${height}). ${report.modelNote}${describeModelImage(report)}`
         };
     }
 
@@ -2578,7 +2669,7 @@ export class Google360PanoramaPipelineService {
 
         const decoded = decodePng(inputBuffer);
         const { width, height } = decoded;
-        let maskPng: Buffer;
+        let maskRgba: Buffer;
         let alphaMap: Float32Array;
         let isColumnAlpha = false;
 
@@ -2590,7 +2681,7 @@ export class Google360PanoramaPipelineService {
                     options.ceilingRatio || 0.20,
                     options.nadirRatio || 0.20
                 );
-                maskPng = polar.maskPng;
+                maskRgba = polar.maskRgba;
                 alphaMap = polar.alphaMap;
                 isColumnAlpha = false;
             } else if (options.ceilingOnly) {
@@ -2599,7 +2690,7 @@ export class Google360PanoramaPipelineService {
                     height,
                     options.ceilingRatio || 0.20
                 );
-                maskPng = ceiling.maskPng;
+                maskRgba = ceiling.maskRgba;
                 alphaMap = ceiling.alphaMap;
                 isColumnAlpha = false;
             } else {
@@ -2608,7 +2699,7 @@ export class Google360PanoramaPipelineService {
                     height,
                     options.nadirRatio || 0.15
                 );
-                maskPng = nadir.maskPng;
+                maskRgba = nadir.maskRgba;
                 alphaMap = nadir.alphaMap;
                 isColumnAlpha = false;
             }
@@ -2622,7 +2713,10 @@ export class Google360PanoramaPipelineService {
                 throw new Error('inpaintPanorama: mask is required when custom mask is requested.');
             }
             const maskDecoded = decodePng(maskBuf);
-            maskPng = maskBuf;
+            if (maskDecoded.width !== width || maskDecoded.height !== height) {
+                throw new MissingInputError('panorama_inpaint', 'mask', `the mask is ${maskDecoded.width}x${maskDecoded.height}, the panorama ${width}x${height}; they must match`);
+            }
+            maskRgba = maskDecoded.rgba;
             alphaMap = new Float32Array(width * height);
             for (let i = 0; i < width * height; i++) {
                 alphaMap[i] = maskDecoded.rgba[i * 4] / 255.0;
@@ -2683,13 +2777,11 @@ export class Google360PanoramaPipelineService {
                     : 'Clean seamless ground texture, matching surrounding floor pavement or grass, zero tripod, shadow, or camera rig';
             const prompt = options.prompt || defaultPrompt;
             // The model edits the panorama; only the masked region of its answer is blended back in below.
-            const generated = await this.generatePanoramaImage(options.model, [
-                { text: `${prompt}. The first image is a 360 equirectangular panorama and the second is a mask: repaint only the white region of the mask, and keep every other pixel, the framing and the size unchanged.` },
-                { inlineData: { data: encodePng(width, height, decoded.rgba).toString('base64'), mimeType: 'image/png' } },
-                { inlineData: { data: maskPng.toString('base64'), mimeType: 'image/png' } }
-            ], width, height);
-            inpaintedRgba = generated.rgba;
-            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote };
+            const edited = await this.editPanoramaImage(options.model,
+                `${prompt}. The first image is a 360 equirectangular panorama and the second is a mask: repaint only the white region of the mask, and keep every other pixel unchanged.`,
+                decoded.rgba, maskRgba, width, height);
+            inpaintedRgba = edited.rgba;
+            report = edited.report;
         }
 
         const finalRgba = Google360PanoramaPipelineService.blendImageAlpha(
@@ -2715,7 +2807,7 @@ export class Google360PanoramaPipelineService {
             outputImagePath: options.outputImagePath,
             outputBuffer,
             ...report,
-            summary: `Panorama inpainted (${width}x${height}). ${report.modelNote}`
+            summary: `Panorama inpainted (${width}x${height}). ${report.modelNote}${describeModelImage(report)}`
         };
     }
 
@@ -2911,7 +3003,7 @@ export class Google360PanoramaPipelineService {
             // The model answers at its own size (21:9); the panorama is resampled to the requested 2:1 canvas.
             const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height, { aspectRatio: '21:9' });
             generatedRgba = generated.rgba;
-            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote };
+            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote, modelImage: generated.modelImage };
         }
 
         let outputBuffer = encodePng(width, height, generatedRgba);
@@ -3047,7 +3139,7 @@ export class Google360PanoramaPipelineService {
             // Resampled to the target 4K canvas (4096x2048) from the model's own 21:9 answer.
             const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height, { aspectRatio: '21:9' });
             rawRgba = generated.rgba;
-            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote };
+            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote, modelImage: generated.modelImage };
         }
 
         let canvasRgba: Buffer = Buffer.from(rawRgba);
