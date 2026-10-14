@@ -30,6 +30,16 @@ import {
 import { AgentSessionState, AgentStreamEvent } from '../../common/agent-checkpoint-protocol';
 import { VisualVerificationRequest, VisualAuditResult } from '../../common/visual-verification-protocol';
 
+/** Where a chat request failed: the local server was unreachable, it returned an error, or the AI request itself failed. */
+export type ChatFailureKind = 'unreachable' | 'server' | 'ai';
+
+export class ChatRequestError extends Error {
+    constructor(message: string, readonly kind: ChatFailureKind, readonly status?: number) {
+        super(message);
+        this.name = 'ChatRequestError';
+    }
+}
+
 export class GeminiClient {
     private static instance: GeminiClient;
 
@@ -266,20 +276,32 @@ export class GeminiClient {
                 }
             } catch (fetchErr) {
                 if (signal?.aborted) return;
-                res = await fetch(`${this.endpoint()}/stream`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'text/event-stream'
-                    },
-                    body: JSON.stringify(request),
-                    signal: timeoutController.signal
-                });
+                try {
+                    res = await fetch(`${this.endpoint()}/stream`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'text/event-stream'
+                        },
+                        body: JSON.stringify(request),
+                        signal: timeoutController.signal
+                    });
+                } catch (retryErr: any) {
+                    if (signal?.aborted) return;
+                    throw new ChatRequestError(retryErr?.message || 'Connection to the Scratchbox server failed', 'unreachable');
+                }
             }
 
             if (!res.ok) {
                 const errText = await res.text();
-                throw new Error(`Stream request failed (${res.status}): ${errText}`);
+                let serverMessage = errText;
+                try {
+                    const body = JSON.parse(errText);
+                    serverMessage = body?.message || body?.error || errText;
+                } catch {
+                    // Non-JSON error body
+                }
+                throw new ChatRequestError(`HTTP ${res.status}: ${serverMessage}`, 'server', res.status);
             }
 
             // Connection established and headers received: clear connection timeout
@@ -294,7 +316,14 @@ export class GeminiClient {
             let buffer = '';
 
             while (true) {
-                const { done, value } = await reader.read();
+                let chunk: ReadableStreamReadResult<Uint8Array>;
+                try {
+                    chunk = await reader.read();
+                } catch (readErr: any) {
+                    if (signal?.aborted) return;
+                    throw new ChatRequestError(`The connection dropped mid-reply: ${readErr?.message || readErr}`, 'unreachable');
+                }
+                const { done, value } = chunk;
                 if (done) break;
 
                 buffer += decoder.decode(value, { stream: true });
@@ -312,14 +341,14 @@ export class GeminiClient {
                             try {
                                 const event: GeminiStreamEvent = JSON.parse(jsonStr);
                                 if (event.type === 'error') {
-                                    throw new Error(event.error || 'AI backend generation error');
+                                    throw new ChatRequestError(event.error || 'AI backend generation error', 'ai');
                                 }
                                 onEvent(event);
                             } catch (parseErr) {
-                                if (parseErr instanceof Error && parseErr.message && !parseErr.message.includes('JSON')) {
+                                // Only partial JSON chunks are skipped; Google's error bodies can mention "JSON" too.
+                                if (!(parseErr instanceof SyntaxError)) {
                                     throw parseErr;
                                 }
-                                // ignore partial JSON chunks
                             }
                         }
                     }

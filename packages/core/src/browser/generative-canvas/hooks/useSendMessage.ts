@@ -31,7 +31,8 @@ import {
     ExecutionPlanCardData
 } from '../canvas-types';
 import { AttachedMcpToolContext, AttachedSkillContext } from '../../../common/gemini-protocol';
-import { GeminiClient } from '../gemini-client';
+import { ChatRequestError, GeminiClient, type ChatFailureKind } from '../gemini-client';
+import { describeChatFailure } from './chatFailureMessage';
 import { resolveModeForArtifact } from '../guardrails-service';
 import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
@@ -141,6 +142,8 @@ interface GenerationContext {
 interface BackendStreamResult {
     usedBackend: boolean;
     connectionError?: string;
+    failureKind?: ChatFailureKind;
+    failureStatus?: number;
     generatedArtifact: CanvasArtifact | undefined;
     finalResponseText: string;
     streamGroundingMetadata: GroundingMetadata | undefined;
@@ -357,6 +360,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
     let streamQuestionCard: InteractiveQuestionCardData | undefined;
     let streamExecutionPlanCard: ExecutionPlanCardData | undefined;
     let connectionError: string | undefined;
+    let failureKind: ChatFailureKind | undefined;
+    let failureStatus: number | undefined;
 
     try {
         const attachedSkillsContext: AttachedSkillContext[] = attachedSkillObjects.map(s => ({
@@ -628,6 +633,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
     } catch (err: any) {
         console.warn('Gemini backend streaming error:', err?.message);
         connectionError = err?.message || 'Connection to backend failed';
+        failureKind = err instanceof ChatRequestError ? err.kind : 'unreachable';
+        failureStatus = err instanceof ChatRequestError ? err.status : undefined;
         if (err?.message && (err.message.includes('Command failed') || err.message.includes('Error:') || err.message.includes('TS'))) {
             setActiveTerminalError({
                 command: 'Gemini AI Execution',
@@ -640,7 +647,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
         }
     }
     const effectiveUsedBackend = !connectionError && usedBackend && (!!generatedArtifact || !!finalResponseText.trim() || !!streamQuestionCard || !!streamExecutionPlanCard);
-    return { usedBackend: effectiveUsedBackend, connectionError, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs, streamQuestionCard, streamExecutionPlanCard };
+    return { usedBackend: effectiveUsedBackend, connectionError, failureKind, failureStatus, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs, streamQuestionCard, streamExecutionPlanCard };
 }
 
 /** Step 4a — build the assistant message from a successful backend stream. */
@@ -1078,13 +1085,14 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             }
             finalAssistantMsg = finalizeBackendMessage(depsRef.current, ctx, backend);
         } else if (backend.connectionError) {
+            const failure = describeChatFailure(backend.failureKind || 'unreachable', backend.connectionError, backend.failureStatus);
             finalAssistantMsg = {
                 id: `msg-${Date.now()}`,
                 sender: 'assistant',
-                text: `⚠️ **Scratchbox Backend Service Offline**\n\nUnable to connect to the backend server at \`http://127.0.0.1:3001\` (${backend.connectionError}).\n\nIn accordance with our online architecture, offline mock fallbacks are disabled. Please ensure the dev server is running with network permissions (\`npm run dev\`).`,
+                text: failure.text,
                 timestamp: new Date().toLocaleTimeString()
             };
-            depsRef.current.showToast(`Backend unreachable: ${backend.connectionError}`, '⚠️');
+            depsRef.current.showToast(failure.toast, '⚠️');
         } else {
             finalAssistantMsg = {
                 id: `msg-${Date.now()}`,

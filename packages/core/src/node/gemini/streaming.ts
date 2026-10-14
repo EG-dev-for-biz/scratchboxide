@@ -141,6 +141,21 @@ function throwIfAborted(signal?: AbortSignal): void {
     }
 }
 
+/** User-facing explanation for a model turn that ended with no text, tool result or artifact. */
+export function describeEmptyModelReply(finishReason?: string): string {
+    const reason = finishReason ? ` (finish reason: ${finishReason})` : '';
+    if (finishReason === 'MAX_TOKENS') {
+        return `The model ran out of output space before it finished its reply${reason}. Try a smaller request or break it into steps.`;
+    }
+    if (finishReason && /SAFETY|PROHIBITED_CONTENT|BLOCKLIST|SPII|RECITATION/.test(finishReason)) {
+        return `Google's safety filters blocked the model's reply${reason}. Try rephrasing the request.`;
+    }
+    if (finishReason && /FUNCTION_CALL|TOOL_CALL/.test(finishReason)) {
+        return `The model produced a tool call the app could not run${reason}. Try sending the request again.`;
+    }
+    return `The model returned an empty reply${reason}. Try sending the request again.`;
+}
+
 export type StreamAuth =
     | { type: 'vertex'; token: string; projectId: string }
     | { type: 'api-key'; apiKey: string };
@@ -473,6 +488,7 @@ export class StreamingEngine {
         let streamMountedArtifact: CanvasArtifact | undefined = undefined;
         let streamQuestionCard: any = undefined;
         let streamExecutionPlanCard: any = undefined;
+        let lastFinishReason: string | undefined;
 
         const mergeGrounding = (g: GroundingMetadata): void => {
             accumulatedGroundingMetadata = mergeGroundingMetadata(accumulatedGroundingMetadata, g);
@@ -517,7 +533,8 @@ export class StreamingEngine {
                             turnText += chunkText;
                         },
                         usage => { finalUsage = usage; },
-                        mergeGrounding
+                        mergeGrounding,
+                        reason => { lastFinishReason = reason; }
                     );
                 }
             });
@@ -659,6 +676,13 @@ export class StreamingEngine {
             });
         }
 
+        // Building an artifact from the prompt alone would present a template as if the model had made it.
+        if (!accumulatedText.trim() && !streamMountedArtifact && !streamQuestionCard && !streamExecutionPlanCard) {
+            const error = describeEmptyModelReply(lastFinishReason);
+            onEvent({ type: 'error', error, modelUsed: model });
+            return { success: false, error, text: '', thoughts: accumulatedThoughts, mcpExecutions, modelUsed: model, usage: finalUsage };
+        }
+
         const isCodingMode = request.mode === 'agent' || request.mode === 'plan' || request.mode === 'ask';
         const hasJsonBlock = /```json\s*\{[\s\S]*\}\s*```/.test(accumulatedText);
         const hasArtifactTag = /<scratchboxPrimitive[\s\S]*?>/i.test(accumulatedText);
@@ -716,7 +740,8 @@ export class StreamingEngine {
         onEvent: StreamEventSink,
         appendChunkText: (text: string) => void,
         setUsage: (usage: UsageMetadata) => void,
-        setGroundingMetadata?: (metadata: GroundingMetadata) => void
+        setGroundingMetadata?: (metadata: GroundingMetadata) => void,
+        setFinishReason?: (reason: string) => void
     ): void {
         if (chunk.usageMetadata) {
             setUsage(chunk.usageMetadata as UsageMetadata);
@@ -724,6 +749,9 @@ export class StreamingEngine {
 
         const candidates = chunk.candidates || [];
         for (const cand of candidates) {
+            if (cand.finishReason) {
+                setFinishReason?.(cand.finishReason);
+            }
             // Grounding Metadata from the Google Search Grounding tool
             const groundingMeta = cand.groundingMetadata || chunk.groundingMetadata;
             if (groundingMeta) {
