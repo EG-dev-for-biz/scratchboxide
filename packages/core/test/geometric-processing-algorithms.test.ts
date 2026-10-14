@@ -1,12 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const NATIVE_BUILD_DIR = path.join(REPO_ROOT, 'packages/core/src/native/3d-engine/build_py');
 const PYTHON_DIR = path.join(REPO_ROOT, 'packages/core/src/python');
+// Scratch scripts go to a temp dir, not the repo root.
+const SCRATCH_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-geom-proc-'));
 
 function getPythonCmd(): string {
     const candidatePaths = [
@@ -36,7 +39,7 @@ topology = sb.topology
 
 ${scriptBody}
 `;
-    const tempScript = path.join(REPO_ROOT, `scratch_proc_test_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.py`);
+    const tempScript = path.join(SCRATCH_DIR, `scratch_proc_test_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.py`);
     fs.writeFileSync(tempScript, fullScript, 'utf8');
     const pyExe = getPythonCmd();
     try {
@@ -57,6 +60,7 @@ ${scriptBody}
 }
 
 describe('Scratchbox Geometric Processing & Topology Engine (C++20 SIMD)', () => {
+    afterAll(() => fs.rmSync(SCRATCH_DIR, { recursive: true, force: true }));
 
     it('1. Garland-Heckbert QEM Decimation: Simplifies mesh while preserving geometry and bounds', () => {
         const script = `

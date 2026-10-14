@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import {
   BoundingBoxComparisonService,
   type BoundingBoxComparisonResult,
@@ -186,11 +187,16 @@ describe('BoundingBoxComparisonService (AABB vs OBB Comparison)', () => {
     expect(html).toContain('Air Penalty / Void Space');
     expect(html).toContain('Tightness Gain');
 
-    // Save demo HTML to public directory for serving & screenshot capture
-    const demoPath = path.resolve(__dirname, '../../../public/demos/bounding_box_comparison_demo.html');
-    fs.mkdirSync(path.dirname(demoPath), { recursive: true });
-    fs.writeFileSync(demoPath, html, 'utf8');
-    expect(fs.existsSync(demoPath)).toBe(true);
-    expect(fs.statSync(demoPath).size).toBeGreaterThan(10 * 1024); // > 10 KB
+    // Save demo HTML to a temp dir (public/demos/bounding_box_comparison_demo.html is tracked;
+    // tests must not rewrite it) and check the written file.
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-bbox-demo-'));
+    try {
+      const demoPath = path.join(outDir, 'bounding_box_comparison_demo.html');
+      fs.writeFileSync(demoPath, html, 'utf8');
+      expect(fs.existsSync(demoPath)).toBe(true);
+      expect(fs.statSync(demoPath).size).toBeGreaterThan(10 * 1024); // > 10 KB
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
   });
 });

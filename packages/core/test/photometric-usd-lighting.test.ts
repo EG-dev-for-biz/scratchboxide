@@ -7,9 +7,10 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import {
     PhotometricUsdBridgeService,
     type UsdExportOptions,
@@ -25,6 +26,10 @@ import { LightingGafferService } from '../src/browser/generative-canvas/services
 import { LIGHTING_TOOL_DECLARATIONS, lightingHandlers } from '../src/node/gemini/tools/lighting-tools';
 
 describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () => {
+    // All USD/MaterialX exports go to a temp dir: the service default
+    // (public/data/matched_lighting_rig.usda) is a tracked file.
+    const OUT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-photometric-usd-'));
+    afterAll(() => fs.rmSync(OUT_DIR, { recursive: true, force: true }));
 
     const sampleRig: PhotometricLightingRigData = {
         rigId: 'rig_plaza_afternoon',
@@ -107,7 +112,7 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
         });
 
         it('should export USDA and MaterialX files to disk cleanly', () => {
-            const outUsdPath = path.join(process.cwd(), 'public/data/test_lighting_export.usda');
+            const outUsdPath = path.join(OUT_DIR, 'test_lighting_export.usda');
             const result = PhotometricUsdBridgeService.exportToUsd(sampleRig, {
                 outputPath: outUsdPath,
                 camera: sampleCamera,
@@ -164,7 +169,8 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
                 cameraHeadingDeg: 215.3,
                 cameraPitchDeg: 5.2,
                 stoneType: 'travertine',
-                autoExportUsd: true
+                autoExportUsd: true,
+                outputUsdPath: path.join(OUT_DIR, 'matched_lighting_rig_reference.usda')
             });
 
             expect(result.success).toBe(true);
@@ -211,7 +217,8 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
             const res = await handler({
                 imagePath: testImgPath,
                 landmarkName: 'The Plaza Hotel',
-                stoneType: 'travertine'
+                stoneType: 'travertine',
+                outputUsdPath: path.join(OUT_DIR, 'matched_lighting_rig_handler.usda')
             }, {} as any);
 
             expect(res.resultPayload).toBeDefined();
@@ -232,7 +239,8 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
                 locationName: 'The Plaza Hotel',
                 geodeticCoords: { lat: 40.7646, lng: -73.9743, altitudeMeters: 18.0 },
                 autoAlignCamera: true,
-                autoExportUsd: true
+                autoExportUsd: true,
+                outputUsdPath: path.join(OUT_DIR, 'matched_lighting_rig_location.usda')
             });
 
             expect(result.success).toBe(true);
@@ -257,7 +265,8 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
             const res = await handler({
                 imagePath: testImgPath,
                 locationName: 'The Plaza Hotel',
-                geodeticCoords: { lat: 40.7646, lng: -73.9743 }
+                geodeticCoords: { lat: 40.7646, lng: -73.9743 },
+                outputUsdPath: path.join(OUT_DIR, 'matched_lighting_rig_location_handler.usda')
             }, {} as any);
 
             expect(res.resultPayload).toBeDefined();

@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { MultiAngleTurnaroundService } from '../src/node/spatial/MultiAngleTurnaroundService';
 import {
     TURNAROUND_TOOL_DECLARATIONS,
@@ -112,7 +113,7 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
 
     describe('End-to-End Execution', () => {
         it('executes turnaround workflow without a downstream reconstruction target', async () => {
-            const tmpDir = path.resolve(process.cwd(), 'output/test_turnaround_' + Date.now());
+            const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-turnaround-'));
             const service = new MultiAngleTurnaroundService();
 
             const result = await service.execute({
@@ -155,13 +156,15 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
 
         it('executes tool handler via dispatch', async () => {
             const handler = turnaroundHandlers['generate_multi_angle_turnaround'];
+            // Temp workspace root: the handler writes to <workspaceRoot>/output/turnarounds/<ts>.
+            const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-turnaround-ws-'));
             const res = await handler(
                 {
                     subject: 'test sci-fi console',
                     rigPreset: 'dcc-ortho-4',
                     mockExecution: true
                 },
-                { workspaceRoot: process.cwd(), activeCanvasType: '3d-scene' }
+                { workspaceRoot, activeCanvasType: '3d-scene' }
             );
 
             expect(res.summaryResult).toContain('Captured 4 consistent views');
@@ -173,6 +176,7 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
                 const parentDir = path.dirname(outViews[0].imagePath);
                 await fs.promises.rm(parentDir, { recursive: true, force: true });
             }
+            await fs.promises.rm(workspaceRoot, { recursive: true, force: true });
         });
     });
 });

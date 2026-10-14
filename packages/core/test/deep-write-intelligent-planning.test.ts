@@ -10,6 +10,7 @@ import { test } from 'vitest';
 
 import * as assert from 'assert';
 import * as path from 'path';
+import * as os from 'os';
 import * as fs from 'fs-extra';
 import { UserMemoriesService } from '../src/node/user-memories-service';
 import { ProjectContextGraphService } from '../src/node/project-context-graph-service';
@@ -30,8 +31,8 @@ async function runDeepWriteIntelligentPlanningTests() {
     console.log('🧪 Running Boundless Multi-Platform Deep-Write & Intelligent Planning Test Suite...');
 
     // Staging and Temp Workspace Setup
-    const tempWorkspace = path.join(__dirname, 'temp-dw-workspace');
-    await fs.ensureDir(tempWorkspace);
+    // Temp workspace outside the repo (was packages/core/test/temp-dw-workspace).
+    const tempWorkspace = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-deep-write-')));
 
     // 1. Initialize Core Supporting Services
     const memoriesService = new UserMemoriesService({

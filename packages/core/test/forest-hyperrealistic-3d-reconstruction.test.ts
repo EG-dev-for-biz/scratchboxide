@@ -7,15 +7,19 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 
 describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => {
     const compiler = new NativeCppCompilerService();
     const sourcePath = path.resolve(process.cwd(), 'scripts/generate_forest_procedural_3d.cpp');
-    const outGlbPath = path.resolve(process.cwd(), 'public/models/forest_hyperreal.glb');
+    // Generated GLB goes to a temp dir, not public/models (tests must not write into public/).
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-forest-hyperreal-'));
+    afterAll(() => fs.rmSync(outDir, { recursive: true, force: true }));
+    const outGlbPath = path.join(outDir, 'forest_hyperreal.glb');
     const referenceImagePath = path.resolve(process.cwd(), 'public/forest_reference.png');
 
     it('should locate the generated forest reference photograph', () => {

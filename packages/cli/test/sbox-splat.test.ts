@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
+import * as os from 'os';
 import * as fs from 'fs-extra';
 import { runCli } from '../src/index';
 
@@ -18,8 +19,8 @@ describe('Scratchbox CLI (sbox) — 3D Gaussian Splatting Command (sbox splat)',
 
   beforeEach(async () => {
     originalCwd = process.cwd();
-    tempDir = path.resolve(__dirname, `../../.temp-splat-test-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
-    await fs.ensureDir(tempDir);
+    // Outside the repo (was packages/.temp-splat-test-*); realpath so cwd-relative paths compare equal on macOS.
+    tempDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-cli-splat-')));
     process.chdir(tempDir);
   });
 

@@ -9,6 +9,9 @@ import { test } from 'vitest';
  ********************************************************************************/
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { LongRunningAgentService } from '../src/node/long-running-agent-service';
 import { AgentContextCompactor } from '../src/node/agent-context-compactor';
 import { ContainerSandboxService } from '../src/node/container-sandbox-service';
@@ -22,15 +25,24 @@ async function runLongRunningAgentTests() {
     const selfImprovementService = new SelfImprovementService();
     const agentService = new LongRunningAgentService(sandboxService, selfImprovementService);
 
-    // Initialize sandbox environment for tests
+    // Initialize sandbox environment for tests. Every session gets a temp workspace root: checkpoint
+    // rollbacks and blueprint patches write files (e.g. src/core.ts) relative to the session's
+    // environment, which otherwise defaults to process.cwd() (the repository root).
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-long-running-agent-'));
     await sandboxService.createEnvironment({
         environmentId: 'test-env',
         isolationLevel: 'process-jail',
-        workspaceRoot: process.cwd()
+        workspaceRoot
+    });
+    const useTempWorkspace = (sessionId: string) => sandboxService.createEnvironment({
+        environmentId: sessionId,
+        isolationLevel: 'process-jail',
+        workspaceRoot
     });
 
     // Test 1: Initialize long running agent session and deconstruct milestones
     const sessionState = await agentService.createSession('Configure and verify custom memory limits inside secure sandbox', 15);
+    await useTempWorkspace(sessionState.sessionId);
     assert.strictEqual(sessionState.status, 'initializing');
     assert.strictEqual(sessionState.goal, 'Configure and verify custom memory limits inside secure sandbox');
     assert.ok(sessionState.milestones.length > 0, 'Milestones must be successfully deconstructed from goal');
@@ -58,6 +70,7 @@ async function runLongRunningAgentTests() {
 
     // Test 3: Bounded execution budget constraints (Exceed iterations)
     const budgetSession = await agentService.createSession('Failing Task', 1); // 1 iteration limit
+    await useTempWorkspace(budgetSession.sessionId);
     const events: AgentStreamEvent[] = [];
     await agentService.runMilestoneLoop(budgetSession.sessionId, (e) => events.push(e));
 
@@ -90,6 +103,7 @@ Compilation failed.
 
     // Test 5: Stuck cycle / repetition detection and strategy pivoting
     const cycleSession = await agentService.createSession('repetition-test', 20);
+    await useTempWorkspace(cycleSession.sessionId);
     const cycleEvents: AgentStreamEvent[] = [];
 
     // Rig environment to produce same step records consecutively and trigger cycle detection
@@ -108,6 +122,7 @@ Compilation failed.
 
     // Test 6: Play/Pause/Resume & Cancellation Signals
     const flowSession = await agentService.createSession('flow-test', 10);
+    await useTempWorkspace(flowSession.sessionId);
     const flowEvents: AgentStreamEvent[] = [];
 
     const executionPromise = agentService.runMilestoneLoop(flowSession.sessionId, (e) => flowEvents.push(e));
@@ -126,6 +141,7 @@ Compilation failed.
     // Test 7: Native Gemini 3.8 Reasoning & Turn-based Tool Loop Validation
     console.log('  Running Test 7: Native Gemini 3.8 Reasoning & Turn-based Tool Loop Validation...');
     const tddSession = await agentService.createSession('tdd-self-correcting-test', 10);
+    await useTempWorkspace(tddSession.sessionId);
     const tddEvents: AgentStreamEvent[] = [];
 
     process.env.SCRATCHBOX_TEST_USE_REAL_AI = 'true';
@@ -229,6 +245,7 @@ Compilation failed.
             geminiAny.getStatus = async () => ({ connected: true });
             geminiAny.streamGenerate = async () => { throw new Error('503 model overloaded'); };
             const errSession = await agentService.createSession('gemini-error-surface', 10);
+            await useTempWorkspace(errSession.sessionId);
             const errEvents: AgentStreamEvent[] = [];
             await agentService.runMilestoneLoop(errSession.sessionId, e => errEvents.push(e));
             assert.strictEqual(errSession.status, 'failed', 'Gemini errors must fail the run');
@@ -242,6 +259,7 @@ Compilation failed.
             delete process.env.SCRATCHBOX_TEST_USE_REAL_AI;
             geminiAny.getStatus = async () => ({ connected: false });
             const offlineSession = await agentService.createSession('gemini-offline-surface', 10);
+            await useTempWorkspace(offlineSession.sessionId);
             const offlineEvents: AgentStreamEvent[] = [];
             await agentService.runMilestoneLoop(offlineSession.sessionId, e => offlineEvents.push(e));
             assert.strictEqual(offlineSession.status, 'failed', 'Disconnected Gemini must fail the run');
@@ -258,6 +276,7 @@ Compilation failed.
 
     // Cleanup environment
     await sandboxService.destroyEnvironment('test-env');
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
 
     console.log('\n🎉 ALL LONG-RUNNING AGENT & STATE MACHINE TESTS PASSED SUCCESSFULLY!');
 }

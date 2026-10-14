@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import * as os from 'os';
 import {
     VectorWorldPopulatorService,
     VectorFeatureGraph
@@ -182,7 +183,8 @@ describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () 
         // Mock GoogleVectorTileService.fetchVectorTile to return mockDecodedData
         const fetchSpy = vi.spyOn(GoogleVectorTileService, 'fetchVectorTile').mockResolvedValue(mockDecodedData);
 
-        const outGlb = path.resolve(process.cwd(), 'public/models/test_vector_populated_world.glb');
+        const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-vector-world-'));
+        const outGlb = path.join(outDir, 'test_vector_populated_world.glb');
 
         const result = await VectorWorldPopulatorService.generatePopulatedWorld({
             latitude: 40.7484,
@@ -231,6 +233,6 @@ describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () 
         expect(magic).toBe('glTF');
 
         // Cleanup test artifact
-        await fs.unlink(outGlb);
+        await fs.remove(outDir);
     });
 });

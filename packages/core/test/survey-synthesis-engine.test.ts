@@ -98,8 +98,10 @@ describe('SurveySynthesisEngine: station synthesis', () => {
             aspectRatioXZ: 1.18,
             cameraCount: 112
         });
-        const outDir = path.resolve(process.cwd(), 'public/tilesets/colosseum');
-        if (fs.existsSync(outDir)) {
+        const os = await import('os');
+        // Write to a temp dir: public/tilesets/colosseum holds the tracked, committed manifests.
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-survey-synthesis-'));
+        try {
             fs.writeFileSync(path.join(outDir, 'colosseum_survey_112_stations.json'), JSON.stringify(stns112, null, 2));
             const geoJson112 = engine.toGeoJson(stns112, colosseumAnchor);
             fs.writeFileSync(path.join(outDir, 'colosseum_survey_112.geojson'), JSON.stringify(geoJson112, null, 2));
@@ -123,6 +125,8 @@ describe('SurveySynthesisEngine: station synthesis', () => {
             fs.writeFileSync(path.join(outDir, 'colosseum_survey_40_stations.json'), JSON.stringify(stns40, null, 2));
             const geoJson40 = engine.toGeoJson(stns40, colosseumAnchor);
             fs.writeFileSync(path.join(outDir, 'colosseum_survey_40.geojson'), JSON.stringify(geoJson40, null, 2));
+        } finally {
+            fs.rmSync(outDir, { recursive: true, force: true });
         }
         expect(stns112).toHaveLength(112);
     });
