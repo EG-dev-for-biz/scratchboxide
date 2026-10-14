@@ -2729,6 +2729,12 @@ onFrame((time, delta) => {
             subtitle,
             worldBranch: 'spatial/glass-shatter',
             sceneType: 'glass_shatter',
+            // The dedicated ballistic fracture generator (GlassFractureGenerator) builds this scene natively.
+            cppGenerator: {
+                filename: 'world_generator.cpp',
+                enabled: true,
+                sourceCode: generateDefaultCpp3DSource('glass_shatter', title)
+            },
             renderMode: 'pbr',
             cameraMode: 'orbit',
             animation: 'orbit',
