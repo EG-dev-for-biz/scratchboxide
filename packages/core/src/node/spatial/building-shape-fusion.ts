@@ -11,8 +11,8 @@
  * Building shape fusion: one best estimate per building from independent Google sources.
  *
  * - Vector Tiles (featuretiles): the footprint (plan shape) and a modeled height (extruded maxZ or 3D volume).
- * - Solar API DSM (dataLayers): a measured surface model, giving the street-level ground just outside the footprint
- *   and the roof surface inside it, both in meters above sea level.
+ * - Solar API DSM (dataLayers): a measured surface model, giving street level on nearby roads and the roof surface
+ *   inside the footprint, both in meters above sea level.
  * - Solar API roof segments (buildingInsights): planar roof facets with pitch, azimuth and plane height, which
  *   shape pitched and stepped roofs.
  *
@@ -46,13 +46,17 @@ export interface FusedBuilding {
     groundMsl?: number;
     /** Where groundMsl was measured: DSM on nearby roads, or the band just outside the footprint. */
     groundSource?: 'roads' | 'band';
-    /** Main roof level: the 90th percentile of DSM heights inside the footprint, m above sea level. */
+    /**
+     * Main roof level: the median DSM height inside the footprint, m above sea level. The median resists footprint
+     * edges that overlap a taller neighbour; measured around the ESB it matched the vector height within 5 m for
+     * 69% of buildings, against 44% for the 90th percentile.
+     */
     roofMsl?: number;
     /** Highest DSM point inside the footprint (spires, masts), m above sea level. */
     peakMsl?: number;
     /** Fraction of footprint samples with DSM data. */
     dsmCoverage: number;
-    /** Measured main roof above ground (DSM 90th percentile inside the footprint minus street level). */
+    /** Measured main roof above ground (DSM median inside the footprint minus street level). */
     dsmRoofHeightMeters?: number;
     /** Measured highest point above ground (DSM maximum). Thin masts and antennas are under-sampled by the DSM. */
     dsmPeakHeightMeters?: number;
@@ -166,7 +170,7 @@ export function fuseBuilding(
     }
     const groundSource: FusedBuilding['groundSource'] = roadGround.length >= 5 ? 'roads' : ground.length ? 'band' : undefined;
     const groundMsl = groundSource === 'roads' ? percentile(roadGround, 20) : percentile(ground, 10);
-    const roofMsl = percentile(inside, 90);
+    const roofMsl = percentile(inside, 50);
     const peakMsl = percentile(inside, 100);
     const measured = groundMsl !== undefined && roofMsl !== undefined && peakMsl !== undefined && dsmCoverage >= 0.5;
     const dsmRoof = measured ? roofMsl! - groundMsl! : undefined;
@@ -218,4 +222,27 @@ export function densifyRoads(lines: LngLat[][], spacingMeters = 4): LngLat[] {
         if (line.length) out.push(line[line.length - 1]);
     }
     return out;
+}
+
+/** Convex hull of [lng, lat] points (monotone chain), e.g. the plan outline of a modeled volume's base. */
+export function convexHull(points: LngLat[]): LngLat[] {
+    const p = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (p.length < 3) return p;
+    const cross = (o: LngLat, a: LngLat, b: LngLat) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower: LngLat[] = [], upper: LngLat[] = [];
+    for (const q of p) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop(); lower.push(q); }
+    for (const q of p.reverse()) { while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], q) <= 0) upper.pop(); upper.push(q); }
+    return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+
+/** Street level (m above sea level) near a point: the 20th percentile of the DSM on roads within `radius` m. */
+export function streetLevelNear(dsm: DsmRaster, latDeg: number, lngDeg: number, roadPoints: LngLat[], radius = 60): number | undefined {
+    const k = M_PER_DEG_LAT * Math.cos((latDeg * Math.PI) / 180);
+    const hs: number[] = [];
+    for (const [lng, lat] of roadPoints) {
+        if (Math.hypot((lng - lngDeg) * k, (lat - latDeg) * M_PER_DEG_LAT) > radius) continue;
+        const h = sampleDsm(dsm, lat, lng);
+        if (Number.isFinite(h)) hs.push(h);
+    }
+    return hs.length >= 5 ? percentile(hs, 20) : undefined;
 }

@@ -19,6 +19,7 @@ import {
     ImageToSplatService
 } from '../../../packages/core/src/node';
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
+import { geoidUndulation } from '../../../packages/core/src/node/spatial/egm96-geoid';
 
 export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService): Router {
     const router = Router();
@@ -545,5 +546,23 @@ export function createSplatStudioRouter(): Router {
         }
     });
 
+    return router;
+}
+
+/** Geodesy helpers for the renderer: EGM96 geoid undulation (MSL -> WGS84 ellipsoid offset). */
+export function createGeoRouter(): Router {
+    const router = Router();
+    router.get('/geoid', (req: Request, res: Response) => {
+        const lat = Number(req.query.lat), lng = Number(req.query.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90) {
+            res.status(400).json({ error: 'lat and lng are required numbers' });
+            return;
+        }
+        try {
+            res.json({ lat, lng, undulationMeters: geoidUndulation(lat, lng), model: 'EGM96 15-minute grid' });
+        } catch (err: any) {
+            res.status(500).json({ error: err?.message || String(err) });
+        }
+    });
     return router;
 }

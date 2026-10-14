@@ -152,3 +152,37 @@ export function sampleDsm(dsm: DsmRaster, latDeg: number, lngDeg: number): numbe
     const v00 = d[r0 * w + c0], v10 = d[r0 * w + c0 + 1], v01 = d[(r0 + 1) * w + c0], v11 = d[(r0 + 1) * w + c0 + 1];
     return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy;
 }
+
+/**
+ * Fetch the Solar API DSM around a point (dataLayers:get, DSM only) and parse it. Throws with the API's message when
+ * there is no coverage, so callers can fall back to vector heights and say why.
+ */
+export async function fetchSolarDsm(
+    latDeg: number,
+    lngDeg: number,
+    radiusMeters: number,
+    apiKey: string,
+    options: { pixelSizeMeters?: number; fetchImpl?: typeof fetch } = {}
+): Promise<DsmRaster & { imageryDate?: string }> {
+    if (!apiKey) throw new Error('A Google Maps API key is required for the Solar API DSM.');
+    const f = options.fetchImpl ?? fetch;
+    const params = new URLSearchParams({
+        'location.latitude': String(latDeg),
+        'location.longitude': String(lngDeg),
+        radiusMeters: String(Math.round(radiusMeters)),
+        view: 'DSM_LAYER',
+        requiredQuality: 'MEDIUM',
+        pixelSizeMeters: String(options.pixelSizeMeters ?? 0.5),
+        key: apiKey
+    });
+    const res = await f(`https://solar.googleapis.com/v1/dataLayers:get?${params}`);
+    const json: any = await res.json().catch(() => ({}));
+    if (!res.ok || !json.dsmUrl) {
+        throw new Error(`Solar DSM unavailable (${res.status}): ${json?.error?.message || 'no dsmUrl in response'}`);
+    }
+    const tif = await f(`${json.dsmUrl}&key=${apiKey}`);
+    if (!tif.ok) throw new Error(`Solar DSM download failed (${tif.status}).`);
+    const raster = parseDsmGeoTiff(Buffer.from(await tif.arrayBuffer()));
+    const d = json.imageryDate;
+    return { ...raster, imageryDate: d ? `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}` : undefined };
+}

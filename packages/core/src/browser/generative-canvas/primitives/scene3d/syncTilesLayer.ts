@@ -65,11 +65,23 @@ export function syncTilesLayer(
         try {
             const originAnchor = input.geoAnchor || { lat: 37.7749, lng: -122.4194, elevation: 0 };
             const isClay = mode === 'photoreal-clay' || (mode !== 'photoreal-textured' && input.renderMode === 'clay');
+            const origin = { lat: originAnchor.lat, lng: originAnchor.lng, alt: originAnchor.elevation ?? 0 };
+            const knownUndulation = (originAnchor as { geoidUndulationMeters?: number }).geoidUndulationMeters;
             tilesLayer = new GooglePhotorealistic3DTilesLayer({
-                origin: { lat: originAnchor.lat, lng: originAnchor.lng, alt: originAnchor.elevation ?? 0 },
+                origin,
                 renderMode: isClay ? 'clay' : 'textured',
-                clayPreset: 'studio-grey'
+                clayPreset: 'studio-grey',
+                ...(typeof knownUndulation === 'number' ? { geoidHeight: knownUndulation } : {})
             });
+            // The tiles are in ellipsoid heights and the anchor elevation is above sea level; the offset between them
+            // (EGM96 undulation) varies by up to ~190 m worldwide, so look it up rather than assume one value.
+            if (typeof knownUndulation !== 'number') {
+                const layer = tilesLayer;
+                fetch(`/api/geo/geoid?lat=${origin.lat}&lng=${origin.lng}`)
+                    .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+                    .then(j => { if (typeof j?.undulationMeters === 'number') layer.updateOrigin(origin, j.undulationMeters); })
+                    .catch(err => console.warn('[Google 3D Tiles] Geoid lookup failed; tile heights use the default offset.', err));
+            }
             scene.add(tilesLayer.group);
             terrainManager = tilesLayer.getTerrainManager(scene);
             const tm = terrainManager;

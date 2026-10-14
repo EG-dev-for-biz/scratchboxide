@@ -704,6 +704,12 @@ export interface PhysicsBodyConfig {
     friction: number;
     restitution: number;
     colliderShape: ColliderShape;
+    /** Scalar moment of inertia (kg·m²). Auto-derived from mass+scale when omitted. */
+    inertiaTensor?: number;
+    /** Initial angular velocity in radians/sec [x, y, z]. */
+    angularVelocity?: [number, number, number];
+    /** Initial linear velocity in m/s [x, y, z]. Applied once at simulation start. */
+    initialVelocity?: [number, number, number];
 }
 
 /** One sample of a per-property animation curve, played back by the Scene3D viewport's render loop (sb_insert_keyframe). */
@@ -869,6 +875,8 @@ export interface Scene3DData {
         elevation?: number;
         elevationSource?: 'google_elevation' | 'offline_verified' | 'procedural' | string;
         datum?: 'MSL_EGM96' | string;
+        /** EGM96 geoid undulation N at the anchor (m): ellipsoid height = MSL elevation + N. */
+        geoidUndulationMeters?: number;
         active?: boolean;
         landmarkName?: string;
         castingRationale?: string;

@@ -12,6 +12,9 @@ import * as path from 'path';
 import Pbf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
 import { decodeFeatureTile, type DecodedModeledVolume } from './google-feature-tile-decoder';
+import { fetchSolarDsm, type DsmRaster } from './solar-dsm';
+import { convexHull, densifyRoads, fuseBuilding, streetLevelNear, type FusedBuilding, type LngLat } from './building-shape-fusion';
+import { geoidUndulation } from './egm96-geoid';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 
@@ -119,9 +122,32 @@ export interface VectorWorldStagingOptions {
     apiKey?: string;
     outputGlbPath?: string;
     fetchImpl?: typeof fetch;
+    /**
+     * Seat and size buildings from the Google Solar API DSM (measured street level and roof) fused with the vector
+     * data. Default true; pass a raster to use it directly, or false to use vector heights on flat ground.
+     */
+    solarDsm?: DsmRaster | boolean;
+    /** DSM radius when fetched (default 175 m, the area the Solar API serves around the anchor). */
+    solarDsmRadiusMeters?: number;
+}
+
+export interface VectorWorldFusionStats {
+    /** Why fusion was skipped, if it was. */
+    skipped?: string;
+    dsmImageryDate?: string;
+    buildingsFused: number;
+    heightFromDsm: number;
+    heightFromVector: number;
+    confidence: { high: number; medium: number; low: number };
+    /** Street level at the anchor (m above EGM96 mean sea level); local Y = 0. */
+    anchorElevationMsl: number;
+    /** EGM96 undulation at the anchor; Photorealistic 3D Tiles height = MSL + this. */
+    geoidUndulationMeters: number;
+    anchorEllipsoidHeightMeters: number;
 }
 
 export interface VectorWorldStagingStats {
+    fusion?: VectorWorldFusionStats;
     buildingCount: number;
     /** Buildings drawn from Google's true 3D modeled volumes (part of buildingCount). */
     modeledVolumeCount?: number;
@@ -593,7 +619,32 @@ export class GoogleVectorTileService {
         };
 
         const heightScale = options.buildingHeightScale ?? 1.0;
-        const anchorElevation = options.elevation ?? 0.0;
+
+        // Measured surface (Solar DSM) fused with the vector data: street level per building from the DSM on
+        // nearby roads, roof height from the DSM inside each footprint, vector height where the DSM has no cover.
+        let dsm: DsmRaster | undefined;
+        let fusionSkipped: string | undefined;
+        if (options.solarDsm && typeof options.solarDsm === 'object') dsm = options.solarDsm;
+        else if (options.solarDsm !== false) {
+            try {
+                dsm = await fetchSolarDsm(options.latitude, options.longitude, options.solarDsmRadiusMeters ?? 175, apiKey, { fetchImpl });
+            } catch (err: any) {
+                fusionSkipped = err?.message || String(err);
+            }
+        } else fusionSkipped = 'disabled';
+        const roadPoints: LngLat[] = dsm ? densifyRoads(allRoads.map(r => r.points as LngLat[])) : [];
+        const measuredAnchor = dsm ? streetLevelNear(dsm, options.latitude, options.longitude, roadPoints, 80) : undefined;
+        const anchorElevation = options.elevation ?? measuredAnchor ?? 0.0;
+        const fusedStats = { fused: 0, dsm: 0, vector: 0, high: 0, medium: 0, low: 0 };
+        const fuse = (id: string, ring: LngLat[], vectorHeight: number | undefined, source: 'extruded' | 'modeled'): FusedBuilding | undefined => {
+            if (!dsm || ring.length < 3) return undefined;
+            const f = fuseBuilding({ id, ring, vectorHeightMeters: vectorHeight, source }, dsm, [], { roadPoints, sampleSpacingMeters: 1 });
+            if (f.groundMsl === undefined) return undefined;
+            fusedStats.fused++;
+            fusedStats[f.heightSource === 'dsm' ? 'dsm' : 'vector']++;
+            fusedStats[f.confidence]++;
+            return f;
+        };
         const ltp = getCachedLocalTangentPlane(options.latitude, options.longitude, anchorElevation);
 
         const sampleElevation = (x: number, z: number): number => {
@@ -640,9 +691,13 @@ export class GoogleVectorTileService {
             } else {
                 flatFootprintCount++;
             }
+            const fused = fuse(b.id, b.ring as LngLat[], height > 0.2 ? height : undefined, 'extruded');
+            if (fused?.heightMeters !== undefined) height = fused.heightMeters;
             height *= heightScale;
 
-            const groundElevations = localRing.map(p => sampleElevation(p.x, p.z));
+            const groundElevations = fused
+                ? localRing.map(() => fused.groundMsl! - anchorElevation)
+                : localRing.map(p => sampleElevation(p.x, p.z));
             const minGroundY = Math.min(...groundElevations);
             const maxGroundY = Math.max(...groundElevations);
             // Skirt embeds slightly below ground so slope never exposes gaps
@@ -710,7 +765,10 @@ export class GoogleVectorTileService {
                 wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude, anchorElevation, undefined, ltp));
             const cx = local.reduce((a, p) => a + p.x, 0) / local.length;
             const cz = local.reduce((a, p) => a + p.z, 0) / local.length;
-            const groundY = sampleElevation(cx, cz);
+            // A modeled volume keeps its own shape; fusion only seats it on the measured street level.
+            const base = convexHull(mv.vertices.filter(v => v[2] < 2).map(v => [v[0], v[1]] as LngLat));
+            const fusedMv = fuse(mv.id, base, mv.heightMeters, 'modeled');
+            const groundY = fusedMv ? fusedMv.groundMsl! - anchorElevation : sampleElevation(cx, cz);
             const pos = local.map((p, k) => [p.x, groundY + mv.vertices[k][2] * heightScale, p.z] as [number, number, number]);
             for (let t = 0; t + 2 < mv.indices.length; t += 3) {
                 const a = pos[mv.indices[t]], b2 = pos[mv.indices[t + 1]], c = pos[mv.indices[t + 2]];
@@ -931,6 +989,20 @@ export class GoogleVectorTileService {
                 buildingCount,
                 modeledVolumeCount,
                 flatFootprintCount,
+                fusion: (() => {
+                    const n = geoidUndulation(options.latitude, options.longitude);
+                    return {
+                        skipped: fusionSkipped,
+                        dsmImageryDate: (dsm as { imageryDate?: string } | undefined)?.imageryDate,
+                        buildingsFused: fusedStats.fused,
+                        heightFromDsm: fusedStats.dsm,
+                        heightFromVector: fusedStats.vector,
+                        confidence: { high: fusedStats.high, medium: fusedStats.medium, low: fusedStats.low },
+                        anchorElevationMsl: anchorElevation,
+                        geoidUndulationMeters: n,
+                        anchorEllipsoidHeightMeters: anchorElevation + n
+                    };
+                })(),
                 roadSegmentCount,
                 waterPolygonCount,
                 vertexCount: currentVertexCount,
