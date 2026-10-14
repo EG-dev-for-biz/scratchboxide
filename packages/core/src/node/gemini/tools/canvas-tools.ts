@@ -89,6 +89,27 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
+        name: 'update_task_list',
+        description: 'Keep a visible checklist of the work for a multi-step task. Call it once you understand the task (all items pending, the first in_progress), then again each time an item starts or finishes, sending the whole list every time. Exactly one item should be in_progress while you work. Mark an item completed only after you have checked the result, not when you have merely attempted it. Skip it for single-step requests.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                tasks: {
+                    type: 'ARRAY',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            title: { type: 'STRING', description: 'Short imperative description of the item' },
+                            status: { type: 'STRING', enum: ['pending', 'in_progress', 'completed'] }
+                        },
+                        required: ['title', 'status']
+                    }
+                }
+            },
+            required: ['tasks']
+        }
+    },
+    {
         name: 'present_execution_plan',
         description: 'Present a structured execution plan card for user review and explicit confirmation before initiating complex, multi-step, or compute-heavy 3D/VFX/code tasks. Lists steps and deliverables, and offers [Confirm & Execute] and [Adjust Plan] actions.',
         parameters: {
@@ -415,6 +436,21 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 questionCard
             },
             summaryResult: `Presented clarifying question card to user: "${questionCard.questions[0]?.prompt || title}".`
+        };
+    },
+
+    update_task_list(args, _ctx) {
+        const raw = Array.isArray(args.tasks) ? args.tasks : [];
+        const taskList = raw
+            .map((t: any) => ({
+                title: asString(t?.title).trim(),
+                status: (t?.status === 'completed' || t?.status === 'in_progress' ? t.status : 'pending') as 'pending' | 'in_progress' | 'completed'
+            }))
+            .filter(t => t.title);
+        const done = taskList.filter(t => t.status === 'completed').length;
+        return {
+            resultPayload: { status: 'task_list_updated', taskList },
+            summaryResult: `Task list: ${done}/${taskList.length} completed.`
         };
     },
 

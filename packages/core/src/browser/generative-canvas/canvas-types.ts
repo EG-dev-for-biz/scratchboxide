@@ -500,7 +500,7 @@ export interface AgentExecutionStep {
     durationMs?: number;
     durationFormatted?: string;
     details?: string;
-    kind?: 'context' | 'tool' | 'thinking' | 'synthesize' | 'verify';
+    kind?: 'context' | 'tool' | 'thinking' | 'synthesize' | 'verify' | 'task';
 }
 
 export interface McpExecutionState {

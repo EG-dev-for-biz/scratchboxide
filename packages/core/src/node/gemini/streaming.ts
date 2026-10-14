@@ -496,7 +496,10 @@ export class StreamingEngine {
         });
 
         const fetchFn = resolveFetch();
-        const maxTurns = request.maxTurns || 15;
+        // Rounds of tool calls before the run stops and asks to continue.
+        const maxTurns = request.maxTurns || 40;
+        let hitTurnLimit = false;
+        let awaitingUser = false;
         let currentTurn = 0;
         const modifiedFiles = new Set<string>();
         let verificationAttempts = 0;
@@ -672,6 +675,14 @@ export class StreamingEngine {
                     }
                 }
 
+                if (resultPayload && Array.isArray((resultPayload as any).taskList)) {
+                    onEvent({ type: 'task_list', taskList: (resultPayload as any).taskList, modelUsed: model });
+                }
+
+                if ((resultPayload as any)?.questionCard || (resultPayload as any)?.executionPlanCard) {
+                    awaitingUser = true;
+                }
+
                 const callId = toolCall.id || `call-${Date.now()}`;
                 const toolResult = { id: callId, name: toolName, result: resultPayload };
                 onEvent({ type: 'tool_result', mcpExecution: exec, toolResult, modelUsed: model });
@@ -691,11 +702,27 @@ export class StreamingEngine {
             payload.contents.push({ role: 'model', parts: modelParts });
             payload.contents.push({ role: 'user', parts: toolResponseParts });
 
+            // A question or plan card is a request for the user's decision: stop and wait for it.
+            if (awaitingUser) {
+                onEvent({ type: 'status', text: 'Waiting for your answer...', modelUsed: model });
+                break;
+            }
+            if (currentTurn >= maxTurns) {
+                hitTurnLimit = true;
+                break;
+            }
+
             onEvent({
                 type: 'status',
                 text: `Executed ${turnDetectedToolCalls.length} tool(s). Reasoning on turn ${currentTurn + 1}/${maxTurns}...`,
                 modelUsed: model
             });
+        }
+
+        if (hitTurnLimit) {
+            const notice = `\n\n---\nI stopped after ${maxTurns} rounds of tool calls before finishing. Reply "continue" to pick up where I left off.`;
+            accumulatedText += notice;
+            onEvent({ type: 'delta', text: notice, modelUsed: model });
         }
 
         // Building an artifact from the prompt alone would present a template as if the model had made it.

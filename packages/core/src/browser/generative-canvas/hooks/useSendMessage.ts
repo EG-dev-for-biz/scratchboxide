@@ -576,7 +576,17 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                             return [...prev, step];
                         });
                     }
-                    if (event.mcpExecution) {
+                    if (event.type === 'task_list' && event.taskList) {
+                        // The agent's checklist leads the step list and is replaced wholesale on each update.
+                        const taskSteps: AgentExecutionStep[] = event.taskList.map((t, i) => ({
+                            id: `task-${i}`,
+                            title: t.title,
+                            status: t.status === 'completed' ? 'completed' : t.status === 'in_progress' ? 'running' : 'pending',
+                            kind: 'task'
+                        }));
+                        setLiveSteps(prev => [...taskSteps, ...prev.filter(st => st.kind !== 'task')]);
+                    }
+                    if (event.mcpExecution && event.mcpExecution.toolName !== 'update_task_list') {
                         const execId = event.mcpExecution.id;
                         const existingIdx = streamExecs.findIndex(e => e.id === execId);
                         if (existingIdx >= 0) {

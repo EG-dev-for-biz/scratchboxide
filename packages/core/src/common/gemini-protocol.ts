@@ -138,6 +138,7 @@ export type GeminiStreamEventType =
     | 'verification_result'
     | 'question_card'
     | 'execution_plan_card'
+    | 'task_list'
     | 'done'
     | 'error';
 
@@ -219,6 +220,13 @@ export interface GeminiStreamEvent {
     planApprovalRequired?: boolean;
     questionCard?: import('../browser/generative-canvas/canvas-types').InteractiveQuestionCardData;
     executionPlanCard?: import('../browser/generative-canvas/canvas-types').ExecutionPlanCardData;
+    taskList?: AgentTaskListItem[];
+}
+
+/** One item of the agent's visible checklist (`update_task_list`). */
+export interface AgentTaskListItem {
+    title: string;
+    status: 'pending' | 'in_progress' | 'completed';
 }
 
 export interface GeminiGenerateResponse {

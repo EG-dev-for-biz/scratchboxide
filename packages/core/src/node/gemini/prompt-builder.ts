@@ -28,6 +28,17 @@ export interface PromptContextServices {
     workspaceConfig: WorkspaceConfigService;
 }
 
+/** How the agent approaches any task: understand, plan, act, check against reality, report honestly. */
+export const WORKING_METHOD_SECTION = `
+
+### HOW TO WORK
+1. Understand before acting. Read the relevant files, scene state or data first. When the request is ambiguous in a way that changes the outcome, ask with ask_user_question and stop; do not guess and do not keep working while waiting for the answer.
+2. Plan multi-step work. For anything with three or more steps, call update_task_list with the items, keep exactly one in_progress, and update it as items start and finish.
+3. Act in small, checkable steps. After each tool call, read its result before deciding the next step. If a tool fails, read the error, find the cause, and change your approach; do not repeat the identical call.
+4. Check results against reality, not intent. After building or editing, inspect the actual output: re-read the file, run the check, or audit the rendered scene. Compare it with what the user asked for, including materials, colors, proportions and counts, and fix any mismatch before reporting.
+5. Report honestly. State what you did and what you verified. Report numbers only when a tool returned them. If something failed, could not be checked, or is only partly done, say so plainly. Never describe a result a tool did not produce.
+6. Before finishing, re-read the user's request and confirm every part of it is addressed.`;
+
 /** Upper bound on project instructions in the system prompt (~50k tokens). */
 const MAX_PROJECT_INSTRUCTION_CHARS = 200_000;
 
@@ -607,12 +618,13 @@ When the user is attempting to accomplish something specific (especially 3D-rela
 If a task needs a capability that is not available natively (e.g. neural image-to-3D diffusion, neural video-to-video restyling, monocular dense depth estimation, or custom LoRA checkpoints), tell the user plainly that it is not supported instead of approximating it or simulating a result.`;
 
     const projectInstructionsSection = await buildProjectInstructionsSection(request.workspaceRoot, services.workspaceConfig);
+    const workingMethodSection = isCodingMode ? WORKING_METHOD_SECTION : '';
 
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
         : '\n\nDeliver insightful, Cupertino-grade results. Output a friendly intro explanation followed by the complete ```json codeblock.';
 
-    return `${basePersona}${projectInstructionsSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
+    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
 }
 
 /**
