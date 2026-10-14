@@ -21,6 +21,8 @@ export interface BakedView {
     name: 'Front' | 'Back' | 'Left' | 'Right' | 'Top' | 'Bottom';
     image: Buffer;
     pose: CameraPose6DOF;
+    /** The image model that produced the view and, when it was not the requested one, why. */
+    imageSource: string;
 }
 
 export interface MeshAiTextureBakingServiceOptions {
@@ -35,8 +37,7 @@ export class MeshAiTextureBakingService {
     constructor(options?: MeshAiTextureBakingServiceOptions) {
         this.workspaceRoot = options?.workspaceRoot || process.cwd();
         this.generator = options?.generator || createDefaultStationImageGenerator({
-            workspaceRoot: this.workspaceRoot,
-            allowProceduralGenerator: true
+            workspaceRoot: this.workspaceRoot
         });
     }
 
@@ -162,7 +163,8 @@ export class MeshAiTextureBakingService {
             views.push({
                 name: camera.name,
                 image: beauty.image,
-                pose: camera.pose
+                pose: camera.pose,
+                imageSource: beauty.imageSource
             });
         }
 

@@ -11,13 +11,43 @@ import * as React from 'react';
 import * as THREE from 'three';
 import type { TextureMatrixResult, TextureMatrixCandidate } from '../../../common/media-generation-protocol';
 
+/**
+ * A one-line notice under generated media saying that a model other than the requested one produced it, and why
+ * (the result's modelNote, see substitutedModelNote). Renders nothing when there is no note.
+ */
+export const MediaModelNotice: React.FC<{ note?: string; style?: React.CSSProperties }> = ({ note, style }) => {
+    if (!note) return null;
+    return (
+        <div
+            data-testid="sb-media-model-note"
+            role="note"
+            title={note}
+            style={{
+                fontSize: '10.5px',
+                lineHeight: 1.35,
+                color: '#fcd34d',
+                background: 'rgba(120, 53, 15, 0.35)',
+                border: '1px solid rgba(252, 211, 77, 0.25)',
+                borderRadius: '6px',
+                padding: '3px 6px',
+                overflowWrap: 'anywhere',
+                ...style
+            }}
+        >
+            {note}
+        </div>
+    );
+};
+
 // ==========================================
 // Multimedia & Geospatial Rendering Cards
 // ==========================================
 export const ImageGeneratedCard: React.FC<{
     imageContent?: string;
     imagesContent?: string[];
-}> = ({ imageContent, imagesContent }) => {
+    /** Shown under the images when a model other than the requested one produced them (substitutedModelNote). */
+    modelNote?: string;
+}> = ({ imageContent, imagesContent, modelNote }) => {
     const images = React.useMemo(() => {
         const list: string[] = [];
         if (imageContent) list.push(imageContent);
@@ -85,6 +115,7 @@ export const ImageGeneratedCard: React.FC<{
                     </div>
                 ))}
             </div>
+            <MediaModelNotice note={modelNote} style={{ marginTop: 6 }} />
             {statusText && (
                 <div className="sb-image-status-badge">
                     <span>{statusText}</span>
@@ -251,7 +282,9 @@ export const AudioNarratedCard: React.FC<{
 
 export const CinematicVideoCard: React.FC<{
     videoContent: string;
-}> = ({ videoContent }) => {
+    /** Shown under the video when a model other than the requested one produced it (substitutedModelNote). */
+    modelNote?: string;
+}> = ({ videoContent, modelNote }) => {
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = React.useState(false);
     const [currentTime, setCurrentTime] = React.useState(0);
@@ -397,6 +430,7 @@ export const CinematicVideoCard: React.FC<{
                 </div>
             </div>
 
+            <MediaModelNotice note={modelNote} style={{ marginTop: 6 }} />
             {statusText && (
                 <div className="sb-image-status-badge">
                     <span>{statusText}</span>

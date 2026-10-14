@@ -176,25 +176,21 @@ describe('Native 3D Engine AI Render & Keyframing Suite', () => {
         });
 
         it('can plan and synthesize keyframe interpolation video using a mock client', async () => {
+            // The Interactions API answer shape the service parses: model_output steps with a video part.
             const mockClient = {
                 interactions: {
                     create: vi.fn(async () => ({
                         steps: [{
-                            model_output: {
-                                content: {
-                                    parts: [{
-                                        inlineData: {
-                                            data: Buffer.from('interpolated-video-bytes').toString('base64')
-                                        }
-                                    }]
-                                }
-                            }
+                            type: 'model_output',
+                            content: [{ type: 'video', mime_type: 'video/mp4', data: Buffer.from('interpolated-video-bytes').toString('base64') }]
                         }]
                     }))
                 }
             } as any;
+            // Keyframe stills come from an injected image generator (the default one calls the image model).
+            const generator = { name: 'keyframe-test', generate: vi.fn(async () => ({ png: Buffer.from('still'), modelUsed: 'gemini-3.1-flash-image' })) };
 
-            const service = new SceneKeyframeVideoService({ client: mockClient });
+            const service = new SceneKeyframeVideoService({ client: mockClient, generator });
             const result = await service.synthesizeKeyframeInterpolationVideo({
                 mesh: testMesh,
                 startPose: testPose,
@@ -206,6 +202,8 @@ describe('Native 3D Engine AI Render & Keyframing Suite', () => {
 
             expect(result.video).toEqual(Buffer.from('interpolated-video-bytes'));
             expect(mockClient.interactions.create).toHaveBeenCalled();
+            expect(result.videoModel).toBe('gemini-omni-1.1-flash-preview');
+            expect(result.imageSources).toEqual(['Generated with gemini-3.1-flash-image.']);
         });
     });
 });

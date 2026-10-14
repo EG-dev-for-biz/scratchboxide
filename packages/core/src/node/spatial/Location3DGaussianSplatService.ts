@@ -13,7 +13,6 @@ import { SurveySplatPipelineService } from './SurveySplatPipelineService';
 import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngine';
 import {
     createDefaultStationImageGenerator,
-    createArchitecturalStationGenerator,
     type StationImageGenerator
 } from './BeautifyStationService';
 import { resolveSurveyPreset } from './survey-router';
@@ -264,7 +263,6 @@ export class Location3DGaussianSplatService {
                 const isDraft = req.draft === true || req.fidelity === 'draft';
                 generator = createDefaultStationImageGenerator({
                     workspaceRoot: root,
-                    allowProceduralGenerator: true,
                     fidelity: isDraft ? 'draft' : (req.fidelity || 'production'),
                     imageSize: isDraft ? '1K' : '2K'
                 });

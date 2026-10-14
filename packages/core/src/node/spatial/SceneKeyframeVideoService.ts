@@ -34,8 +34,7 @@ export class SceneKeyframeVideoService {
         this.client = options?.client;
         this.workspaceRoot = options?.workspaceRoot || process.cwd();
         this.generator = options?.generator || createDefaultStationImageGenerator({
-            workspaceRoot: this.workspaceRoot,
-            allowProceduralGenerator: true
+            workspaceRoot: this.workspaceRoot
         });
     }
 
@@ -78,7 +77,7 @@ export class SceneKeyframeVideoService {
         width?: number;
         height?: number;
         durationSeconds?: number;
-    }): Promise<{ video: Buffer; startImage: Buffer; endImage: Buffer }> {
+    }): Promise<{ video: Buffer; startImage: Buffer; endImage: Buffer; videoModel: string; imageSources: string[] }> {
         const width = request.width || 640;
         const height = request.height || 480;
         const durationSeconds = request.durationSeconds || 6;
@@ -119,8 +118,9 @@ export class SceneKeyframeVideoService {
         ];
 
         const client = await this.getClient();
+        const videoModel = 'gemini-omni-1.1-flash-preview';
         const response = await client.interactions.create({
-            model: 'gemini-omni-1.1-flash-preview',
+            model: videoModel,
             input: inputPayload,
             generation_config: {
                 video_config: {
@@ -168,7 +168,9 @@ export class SceneKeyframeVideoService {
         return {
             video: videoData,
             startImage: startBeauty.image,
-            endImage: endBeauty.image
+            endImage: endBeauty.image,
+            videoModel,
+            imageSources: Array.from(new Set([startBeauty.imageSource, endBeauty.imageSource]))
         };
     }
 }

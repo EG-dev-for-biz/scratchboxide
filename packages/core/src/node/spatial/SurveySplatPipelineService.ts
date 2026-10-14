@@ -14,7 +14,7 @@ import { promisify } from 'util';
 import { SurveySynthesisEngine, cameraBasis } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH } from './SurveyStationRenderService';
-import { BeautifyStationService, createDefaultStationImageGenerator, hasStationImageCredentials, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { BeautifyStationService, createDefaultStationImageGenerator, describeStationImageSource, hasStationImageCredentials, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { Splat3DTilesService } from './Splat3DTilesService';
 import { SplatService } from '../3d-engine/splat-service';
@@ -118,6 +118,10 @@ export interface SurveySplatStationReport {
     positionLocalENU?: [number, number, number];
     forwardVector?: [number, number, number];
     name?: string;
+    /** The image model that produced this station's picture; absent for a plate reused from disk or a generator that names none. */
+    modelUsed?: string;
+    /** Where the picture came from: the model (and why, when it was not the requested one) or the reused plate. */
+    imageSource?: string;
 }
 
 export interface SurveySplatPipelineResult {
@@ -228,7 +232,8 @@ export class SurveySplatPipelineService {
                             prompt: `Photorealistic view of station ${st.id}`,
                             positionLocalENU: posENU,
                             forwardVector: fwdVec,
-                            name: st.name
+                            name: st.name,
+                            imageSource: `Reused the station splat already on disk at ${splatPath}; no image was generated.`
                         };
                         bakedStations.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
                         reports.push(rep);
@@ -254,7 +259,8 @@ export class SurveySplatPipelineService {
                         qc: SurveySplatPipelineService.cachedPlateQc(),
                         accepted: true,
                         attempts: 1,
-                        generator: this.deps?.generator?.name || 'cached-beautified-plates'
+                        // The plate was made earlier, by whatever model was used then; this run did not generate it.
+                        generator: 'cached-beautified-plate'
                     };
                 } else {
                     if (!beautifier) {
@@ -281,7 +287,11 @@ export class SurveySplatPipelineService {
                     imagePath: beautifiedPath, blockoutPath: blockoutPath, qc: res.qc, prompt: res.prompt,
                     positionLocalENU: res.alignedStation.positionLocalENU || st.positionLocalENU,
                     forwardVector: res.alignedStation.forwardVector || st.forwardVector,
-                    name: st.name
+                    name: st.name,
+                    modelUsed: res.modelUsed,
+                    imageSource: res.generator === 'cached-beautified-plate'
+                        ? `Reused the beautified plate already on disk at ${beautifiedPath}; no image was generated.`
+                        : describeStationImageSource(res)
                 };
                 if (res.accepted) {
                     const baked = await this.bakeStation(baker, res, `${base}.splat`, req);
@@ -341,7 +351,9 @@ export class SurveySplatPipelineService {
                 ] as [number, number, number]
             };
             const meta = {
-                generator: this.deps?.generator?.name || 'cached-beautified-plates', mode, anchor: req.anchor, glbPath: req.glbPath,
+                generator: this.deps?.generator?.name || 'cached-beautified-plates',
+                modelsUsed: Array.from(new Set(reports.map(r => r.modelUsed).filter((m): m is string => !!m))),
+                mode, anchor: req.anchor, glbPath: req.glbPath,
                 eyeHeight: stations[0]?.cameraHeightAboveGround ?? 1.7,
                 cropBox, fusedSplatCount: fusedCount, voxelSizeMeters: voxel,
                 stations: reports, tiles: { tileCount: tileRes.tileCount, levels: tileRes.levels, tileBytes: tileRes.tileBytes },

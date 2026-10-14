@@ -11,7 +11,7 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { SurveySynthesisEngine } from '../packages/core/src/common/spatial/SurveySynthesisEngine';
 import { SurveySplatPipelineService } from '../packages/core/src/node/spatial/SurveySplatPipelineService';
-import { createArchitecturalStationGenerator } from '../packages/core/src/node/spatial/BeautifyStationService';
+import { createDefaultStationImageGenerator } from '../packages/core/src/node/spatial/BeautifyStationService';
 import type { GeodeticAnchor } from '../packages/core/src/common/spatial/colmap-vector-reference-types';
 import { SplatService } from '../packages/core/src/node/3d-engine/splat-service';
 
@@ -55,8 +55,8 @@ async function main() {
 
   console.log(`Generated ${stations.length} survey camera stations.`);
 
-  // Use the architectural generator with authentic Fountain Formation Red Sandstone albedo
-  const generator = createArchitecturalStationGenerator();
+  // Station images come from the image model (there is no procedural painter); this run makes billed calls.
+  const generator = createDefaultStationImageGenerator();
   const pipeline = new SurveySplatPipelineService({ generator });
 
   console.log('[2/4] Running SurveySplatPipelineService: Render -> Beautify -> Bake -> Fuse -> 3D Tiles...');

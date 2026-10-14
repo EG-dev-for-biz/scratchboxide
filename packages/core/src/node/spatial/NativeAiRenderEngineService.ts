@@ -10,8 +10,9 @@
 import { HeadlessMeshSilhouetteRenderer, RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 import { encodePng } from '../texture-processing';
-import { createDefaultStationImageGenerator, StationImageGenerator } from './BeautifyStationService';
+import { createDefaultStationImageGenerator, describeStationImageSource, toStationImageAnswer, StationImageGenerator } from './BeautifyStationService';
 import { buildBlockoutNanoBananaPrompt } from '../../browser/generative-canvas/services/video/omniVideoPromptService';
+import { nearestImageAspectRatio } from '../../common/media-generation-protocol';
 
 export interface RenderPasses {
     width: number;
@@ -34,8 +35,7 @@ export class NativeAiRenderEngineService {
     constructor(options?: NativeAiRenderEngineServiceOptions) {
         this.workspaceRoot = options?.workspaceRoot || process.cwd();
         this.generator = options?.generator || createDefaultStationImageGenerator({
-            workspaceRoot: this.workspaceRoot,
-            allowProceduralGenerator: true
+            workspaceRoot: this.workspaceRoot
         });
     }
 
@@ -167,7 +167,7 @@ export class NativeAiRenderEngineService {
         height?: number;
         clayColor?: [number, number, number];
         bgColor?: [number, number, number, number];
-    }): Promise<{ image: Buffer; width: number; height: number; passes: RenderPasses }> {
+    }): Promise<{ image: Buffer; width: number; height: number; passes: RenderPasses; modelUsed?: string; imageSource: string }> {
         const width = request.width || 640;
         const height = request.height || 480;
 
@@ -181,12 +181,12 @@ export class NativeAiRenderEngineService {
         const beautifyPrompt = buildBlockoutNanoBananaPrompt({
             locationName: request.prompt,
             heading: request.pose.fov, // Use fov as virtual heading/sensor context
-            aspectRatio: `${width}:${height}`,
+            aspectRatio: nearestImageAspectRatio(width, height),
             styleSuffix: request.stylePreset ? ` Style: ${request.stylePreset}.` : ''
         });
 
         // 3. Call generator with blockout PNG and synthesized prompt
-        const image = await this.generator.generate({
+        const answer = toStationImageAnswer(await this.generator.generate({
             stationId: 1,
             prompt: beautifyPrompt,
             blockoutPng: passes.clay,
@@ -196,16 +196,18 @@ export class NativeAiRenderEngineService {
                 locationName: request.prompt,
                 styleSuffix: request.stylePreset || ''
             },
-            aspectRatio: `${width}:${height}`,
+            aspectRatio: nearestImageAspectRatio(width, height),
             width,
             height
-        } as any);
+        } as any));
 
         return {
-            image,
+            image: answer.png,
             width,
             height,
-            passes
+            passes,
+            modelUsed: answer.modelUsed,
+            imageSource: describeStationImageSource({ ...answer, generator: this.generator.name })
         };
     }
 }

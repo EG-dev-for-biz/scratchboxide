@@ -179,7 +179,6 @@ async function main() {
 
     const generator = createDefaultStationImageGenerator({
         workspaceRoot: REPO_ROOT,
-        allowProceduralGenerator: true,
         fidelity: 'draft',
         imageSize: '1K'
     });

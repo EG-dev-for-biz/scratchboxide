@@ -2075,14 +2075,21 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             height
         });
 
+        const fs = await import('fs-extra');
+        const imagePath = `public/models/ai_rendered_frame_${Date.now()}.png`;
+        await fs.ensureDir('public/models');
+        await fs.writeFile(imagePath, result.image);
+
         return {
             resultPayload: {
-                imagePath: `public/models/ai_rendered_frame_${Date.now()}.png`,
+                imagePath,
                 width: result.width,
                 height: result.height,
-                stylePrompt: prompt
+                stylePrompt: prompt,
+                modelUsed: result.modelUsed,
+                imageSource: result.imageSource
             },
-            summaryResult: `Viewport AI render complete via NativeAiRenderEngineService. Output: ${result.width}x${result.height} registered Beauty Frame.`
+            summaryResult: `Viewport AI render written to ${imagePath} (${result.width}x${result.height} blockout restyled). ${result.imageSource}`
         };
     },
     spatial_smart_point_inpaint: async (args, ctx) => {
@@ -2178,9 +2185,11 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: {
                 videoPath: outVideoPath,
-                durationSeconds
+                durationSeconds,
+                videoModel: result.videoModel,
+                keyframeImageSources: result.imageSources
             },
-            summaryResult: `Keyframe video interpolation complete! Renders of start & end poses beautified with Nano Banana, and interpolated smoothly using Gemini Omni 1.1 Interactions API.`
+            summaryResult: `Keyframe video written to ${outVideoPath}: start and end renders restyled (${result.imageSources.join(' ')}), video interpolated by ${result.videoModel}.`
         };
     },
     mesh_bake_ai_textures: async (args, ctx) => {
@@ -2206,12 +2215,14 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             height
         });
 
+        const imageSources = Array.from(new Set(result.views.map(v => v.imageSource)));
         return {
             resultPayload: {
                 bakedViewsCount: result.views.length,
-                stylePrompt
+                stylePrompt,
+                imageSources
             },
-            summaryResult: `Multi-view AI texture baking complete. Captured 6 cardinal orthogonal viewpoints of mesh, beautified textures matching "${stylePrompt}" with Nano Banana, and returned baked coordinates.`
+            summaryResult: `Restyled ${result.views.length} orthogonal views of ${glbPath} to match "${stylePrompt}". ${imageSources.join(' ')}`
         };
     },
     panorama_audit_quality: async (args, _ctx) => {
@@ -2787,7 +2798,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const { imageBase64, ...rest } = res;
         return {
             resultPayload: { success: true, ...rest } as unknown as ToolResultPayload,
-            summaryResult: `Station ${res.stationId} ${res.accepted ? 'accepted' : 'rejected (' + res.qc.reason + ')'} after ${res.attempts} attempt(s) with ${generator.name}: yaw drift ${res.qc.deltaYawDeg.toFixed(2)} deg -> ${res.imagePath}`
+            summaryResult: `Station ${res.stationId} ${res.accepted ? 'accepted' : 'rejected (' + res.qc.reason + ')'} after ${res.attempts} attempt(s): yaw drift ${res.qc.deltaYawDeg.toFixed(2)} deg -> ${res.imagePath}. ${res.imageSource}`
         };
     },
 
@@ -2799,9 +2810,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
         const res = await deps.beautifyToSplats!({ ...args, stations: data.poses, anchor: data.anchor, glbPath: asString(args.glbPath) }, chatProgress(ctx));
         const accepted = res.stations.filter((s: any) => s.accepted).length;
+        const imageSources = Array.from(new Set(res.stations.map((s: any) => s.imageSource).filter(Boolean))) as string[];
         return {
-            resultPayload: { success: true, tilesetPath: res.tilesetPath, tilesetUrl: res.tilesetUrl, metaPath: res.metaPath, fusedSplatCount: res.fusedSplatCount, acceptedStations: accepted, totalStations: res.stations.length, cropBox: res.cropBox, durationMs: res.durationMs } as unknown as ToolResultPayload,
-            summaryResult: `Beautified ${accepted}/${res.stations.length} stations, baked ${res.fusedSplatCount.toLocaleString()} fused splats into a 3D Tiles tileset in ${(res.durationMs / 1000).toFixed(0)} s -> ${res.tilesetPath}`
+            resultPayload: { success: true, tilesetPath: res.tilesetPath, tilesetUrl: res.tilesetUrl, metaPath: res.metaPath, fusedSplatCount: res.fusedSplatCount, acceptedStations: accepted, totalStations: res.stations.length, cropBox: res.cropBox, durationMs: res.durationMs, imageSources } as unknown as ToolResultPayload,
+            summaryResult: `Beautified ${accepted}/${res.stations.length} stations, baked ${res.fusedSplatCount.toLocaleString()} fused splats into a 3D Tiles tileset in ${(res.durationMs / 1000).toFixed(0)} s -> ${res.tilesetPath}. ${imageSources.join(' ')}`
         };
     },
 
@@ -2851,9 +2863,11 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 coveredMeshTexels: result.metrics.coveredMeshTexels,
                 directlyPaintedTexels: result.metrics.directlyPaintedTexels,
                 stationContributions: result.metrics.stationContributions,
-                durationMs: result.metrics.durationMs
+                durationMs: result.metrics.durationMs,
+                modelsUsed: result.modelsUsed,
+                imageSources: result.imageSources
             } as unknown as ToolResultPayload,
-            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) with NOAA solar de-lighting and PBR maps -> ${result.outGlbPath}`
+            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) with NOAA solar de-lighting and PBR maps -> ${result.outGlbPath}. ${result.imageSources.join(' ')}`
         };
     },
 

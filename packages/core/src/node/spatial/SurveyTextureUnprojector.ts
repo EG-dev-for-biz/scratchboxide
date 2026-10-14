@@ -13,7 +13,8 @@ import { HeadlessMeshSilhouetteRenderer, type RenderMesh3D } from './HeadlessMes
 import { stationToPinhole, cameraBasis, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH, solarAtUtcInstant } from './SurveyStationRenderService';
-import { BeautifyStationService, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { BeautifyStationService, describeStationImageSource, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { AlgorithmicUvEngine, type PbrDecompositionOptions, type PbrDecompositionResult } from './AlgorithmicUvEngine';
 import { MaxRectsAtlasPacker, type TextureItem } from './TextureAtlasPacker';
@@ -40,6 +41,10 @@ export interface StationPlate {
      * (no 8-bit requantisation), e.g. exposure / white-balance normalisation. Undefined = unchanged.
      */
     linearGain?: [number, number, number];
+    /** Where the plate's picture came from (the image model that answered, and why when another one was asked for). */
+    imageSource?: string;
+    /** The image model that produced the plate's picture, when the generator named one. */
+    modelUsed?: string;
 }
 
 /** Robust (IRLS Huber) re-weighting of multi-view observations. Opt-in. */
@@ -206,6 +211,10 @@ export interface SurveyTextureResult {
     metrics: UnprojectionMetrics;
     pbrResult?: PbrDecompositionResult;
     submeshes?: SubmeshTextureResult[];
+    /** Image models that produced the station plates (empty for precomputed plates that name none). */
+    modelsUsed: string[];
+    /** One line per distinct plate source: the model that answered and, when it was not the requested one, why. */
+    imageSources: string[];
 }
 
 export interface SurveyTexturePipelineRequest {
@@ -310,25 +319,22 @@ export class SurveyTextureUnprojector {
                 throw new Error('Generator fidelity (draft) disagrees with options.draft (production)');
             }
         } else if (!request.precomputedPlates || request.precomputedPlates.length === 0) {
-            try {
-                const { GoogleMediaGenerationService } = await import('../google-media-generation-service');
-                const { GoogleMediaCredentialsService } = await import('../google-media-credentials-service');
-                const { MediaAssetStore } = await import('../media-asset-store');
-                const { createGoogleStationImageGenerator } = await import('./BeautifyStationService');
+            // The stations are photographed by the image model; the clay blockouts are never used as texture instead.
+            const { GoogleMediaGenerationService } = await import('../google-media-generation-service');
+            const { GoogleMediaCredentialsService } = await import('../google-media-credentials-service');
+            const { MediaAssetStore } = await import('../media-asset-store');
+            const { createGoogleStationImageGenerator } = await import('./BeautifyStationService');
 
-                const credentials = new GoogleMediaCredentialsService();
-                const assetStore = new MediaAssetStore();
-                const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
-                generator = createGoogleStationImageGenerator({
-                    mediaService,
-                    assetStore,
-                    workspaceRoot: process.cwd(),
-                    fidelity: isDraft ? 'draft' : 'production',
-                    imageSize: isDraft ? '1K' : '2K'
-                });
-            } catch {
-                // Ignore if Google GenAI unavailable in environment
-            }
+            const credentials = new GoogleMediaCredentialsService();
+            const assetStore = new MediaAssetStore();
+            const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
+            generator = createGoogleStationImageGenerator({
+                mediaService,
+                assetStore,
+                workspaceRoot: process.cwd(),
+                fidelity: isDraft ? 'draft' : 'production',
+                imageSize: isDraft ? '1K' : '2K'
+            });
         }
 
         // 1. Prepare station plates (render blockouts + depth + beautified RGBA)
@@ -442,7 +448,9 @@ export class SurveyTextureUnprojector {
             metallicPng: primarySub.metallicPng,
             metrics: overallMetrics,
             pbrResult: primarySub.pbrResult,
-            submeshes: submeshResults
+            submeshes: submeshResults,
+            modelsUsed: Array.from(new Set(plates.map(p => p.modelUsed).filter((m): m is string => !!m))),
+            imageSources: Array.from(new Set(plates.map(p => p.imageSource).filter((m): m is string => !!m)))
         };
     }
 
@@ -1320,9 +1328,13 @@ export class SurveyTextureUnprojector {
                 height: stationH
             });
 
-            let stationRgba: Buffer = blockout.rgba;
-
-            if (generator) {
+            if (!generator) {
+                throw new MissingInputError('survey_beautify_to_texture', 'generator', 'stations need an image generator (or precomputed plates); the clay blockout is never used as the texture');
+            }
+            let stationRgba: Buffer;
+            let imageSource: string;
+            let modelUsed: string | undefined;
+            {
                 const beautifyService = new BeautifyStationService(renderService, generator);
                 const bRes = await beautifyService.beautify(
                     st,
@@ -1344,6 +1356,8 @@ export class SurveyTextureUnprojector {
                 } else {
                     stationRgba = Buffer.from(bRes.image.rgba);
                 }
+                imageSource = describeStationImageSource(bRes);
+                modelUsed = bRes.modelUsed;
             }
 
             plates.push({
@@ -1353,7 +1367,9 @@ export class SurveyTextureUnprojector {
                 height: stationH,
                 depth: blockout.depth,
                 pose: blockout.cameraPose,
-                intrinsics: blockout.intrinsics
+                intrinsics: blockout.intrinsics,
+                imageSource,
+                modelUsed
             });
         }
 

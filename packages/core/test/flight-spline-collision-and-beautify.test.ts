@@ -12,8 +12,25 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { SurveySynthesisEngine } from '../src/common/spatial/SurveySynthesisEngine';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
-import { BeautifyStationService, createDefaultStationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { BeautifyStationService, type StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { decodePng, encodePng } from '../src/node/texture-processing';
 import type { GeodeticAnchor, ColmapCameraPose } from '../src/common/spatial/colmap-vector-reference-types';
+
+/** Test stand-in for the image model: recolours the clay blockout (keeps its geometry) and names itself as the model. */
+function recolourGenerator(): StationImageGenerator {
+    return {
+        name: 'test-recolour',
+        async generate(args) {
+            const b = decodePng(args.blockoutPng);
+            const out = Buffer.alloc(b.rgba.length);
+            for (let i = 0; i < b.rgba.length; i += 4) {
+                const l = b.rgba[i];
+                out[i] = Math.min(255, l * 1.1 + 15); out[i + 1] = l * 0.95; out[i + 2] = l * 0.8; out[i + 3] = 255;
+            }
+            return { png: encodePng(b.width, b.height, out), modelUsed: 'test-recolour' };
+        }
+    };
+}
 
 describe('3D Spline Flight Trajectory: Collision Avoidance & AI Beautify Draft Pipeline', () => {
     const ANCHOR: GeodeticAnchor = {
@@ -94,12 +111,8 @@ describe('3D Spline Flight Trajectory: Collision Avoidance & AI Beautify Draft P
             lookAtOffsetLocalENU: [5.2, 4.46, 0.0]
         });
 
-        // Use procedural/mock generator to guarantee offline test reliability
-        const generator = createDefaultStationImageGenerator({
-            allowProceduralGenerator: true,
-            fidelity: 'draft',
-            imageSize: '1K'
-        });
+        // A test stand-in for the image model keeps the run offline (there is no procedural painter in the app).
+        const generator = recolourGenerator();
 
         const beautifier = new BeautifyStationService(renderer, generator);
 

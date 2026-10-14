@@ -13,7 +13,7 @@ import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngin
 import type { ColmapCameraPose, GeodeticAnchor, SurveyPatternConfig } from '../../common/spatial/colmap-vector-reference-types';
 import { AdaptiveSurveyRigService } from './AdaptiveSurveyRigService';
 import { SurveyStationRenderService } from './SurveyStationRenderService';
-import { BeautifyStationService, type StationImageGenerator } from './BeautifyStationService';
+import { BeautifyStationService, describeStationImageSource, type StationImageGenerator } from './BeautifyStationService';
 import { SurveySplatPipelineService } from './SurveySplatPipelineService';
 import { Google3DTileService } from '../../browser/generative-canvas/services/Google3DTileService';
 import { extractLocationAndEraFromContext } from '../../browser/generative-canvas/services/location-beautify-service';
@@ -347,7 +347,7 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
         await fs.outputFile(path.join(outDir, `station_${station.id}_blockout.png`), res.blockout.png);
         await fs.outputFile(path.join(outDir, `station_${station.id}_beautified.png`), res.imagePng);
         report(1, res.accepted ? 'Accepted' : `Rejected: ${res.qc.reason}`);
-        return { stationId: station.id, accepted: res.accepted, attempts: res.attempts, qc: res.qc, prompt: res.prompt, imageBase64: res.imagePng.toString('base64'), imagePath: path.join(outDir, `station_${station.id}_beautified.png`), blockoutPath: path.join(outDir, `station_${station.id}_blockout.png`), alignedStation: res.alignedStation };
+        return { stationId: station.id, accepted: res.accepted, attempts: res.attempts, qc: res.qc, prompt: res.prompt, imageBase64: res.imagePng.toString('base64'), imagePath: path.join(outDir, `station_${station.id}_beautified.png`), blockoutPath: path.join(outDir, `station_${station.id}_blockout.png`), alignedStation: res.alignedStation, modelUsed: res.modelUsed, imageSource: describeStationImageSource(res) };
     };
 
     const runSurveyPipeline = async (args: any, report: (p: number, msg?: string) => void) => {

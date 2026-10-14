@@ -41,7 +41,8 @@ import {
 } from '../canvas-icons';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
-import { IMAGE_MODEL_PRIORITY, VIDEO_MODEL_PRIORITY, resolveImageModelId } from '../../../common/media-generation-protocol';
+import { IMAGE_MODEL_PRIORITY, VIDEO_MODEL_PRIORITY, resolveImageModelId, substitutedModelNote } from '../../../common/media-generation-protocol';
+import { MediaModelNotice } from '../chat/MediaCards';
 
 export interface NodeGraphPrimitiveProps {
     data: NodeGraphData;
@@ -61,6 +62,26 @@ const ACCENT_COLORS: { color: AccentColor; label: string; hex: string }[] = [
 ];
 
 const NODE_CARD_WIDTH = 240;
+
+/**
+ * Overlaid at the bottom of an image or video node's preview: the generation error, or, when a model other than
+ * the node's own produced the output, which one did and why.
+ */
+export const NodeMediaStatus: React.FC<{ node: GraphNode }> = ({ node }) => {
+    if (node.parameters?.isGenerating) return null;
+    const overlay: React.CSSProperties = { position: 'absolute', left: 4, right: 4, bottom: 4, zIndex: 2 };
+    if (node.parameters?.generationError) {
+        return (
+            <div data-testid="sb-node-media-error" role="alert" title={node.parameters.generationError} style={{
+                ...overlay, fontSize: '10.5px', lineHeight: 1.35, color: '#fecaca', background: 'rgba(127, 29, 29, 0.75)',
+                borderRadius: '6px', padding: '3px 6px', overflowWrap: 'anywhere', maxHeight: '60%', overflow: 'hidden'
+            }}>
+                {node.parameters.generationError}
+            </div>
+        );
+    }
+    return <MediaModelNotice note={node.parameters?.modelNote} style={{ ...overlay, background: 'rgba(69, 26, 3, 0.85)', maxHeight: '60%', overflow: 'hidden' }} />;
+};
 
 const getNodePort = (node: GraphNode) => {
     let nodeHeight = node.notes ? 126 : 96;
@@ -1228,7 +1249,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                     jobId: job.id,
                     workspaceRoot: wsPath,
                     intervalMs: 1000,
-                    onComplete: () => {
+                    onComplete: (done) => {
                         const resultUrl = client.contentUrl(job.id, wsPath);
                         handleUpdateNode(node.id, {
                             parameters: {
@@ -1237,9 +1258,12 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                 mediaUrl: resultUrl,
                                 imageUrl: resultUrl,
                                 videoUrl: resultUrl,
-                                audioUrl: resultUrl
+                                audioUrl: resultUrl,
+                                // Which model made the output; the note is shown on the node when it is not the node's model.
+                                generatedBy: done.result?.modelUsed,
+                                modelNote: substitutedModelNote(done.result)
                             },
-                            outputData: { url: resultUrl }
+                            outputData: { url: resultUrl, modelUsed: done.result?.modelUsed }
                         });
                     },
                     onError: (pollErr, failedJob) => {
@@ -1879,6 +1903,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                     <span>No Image Synthesized</span>
                                                 </div>
                                             )}
+                                            <NodeMediaStatus node={node} />
                                         </div>
                                         <div className="sb-node-prompt-box" style={{
                                             display: 'flex',
@@ -1987,6 +2012,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                     <span>No Video Synthesized</span>
                                                 </div>
                                             )}
+                                            <NodeMediaStatus node={node} />
                                         </div>
                                         <div className="sb-node-prompt-box" style={{
                                             display: 'flex',

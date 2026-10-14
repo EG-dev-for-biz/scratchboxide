@@ -59,7 +59,7 @@ import { NANO_BANANA_STYLES, synthesizeContextualNanoBananaPrompt } from '../nan
 import { beautifyLocationSection } from '../services/location-beautify-service';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
-import { IMAGE_MODEL_PRIORITY } from '../../../common/media-generation-protocol';
+import { IMAGE_MODEL_PRIORITY, mediaJobAttribution } from '../../../common/media-generation-protocol';
 export { NANO_BANANA_STYLES };
 
 export interface MarkdownDocumentPrimitiveProps {
@@ -961,7 +961,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                     jobId: job.id,
                     workspaceRoot: wsPath,
                     intervalMs: 2000,
-                    onComplete: () => {
+                    onComplete: (done) => {
                         const resultUrl = client.contentUrl(job.id, wsPath);
                         handleUpdateSection(section.id, {
                             imageUrl: resultUrl,
@@ -969,7 +969,8 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                             videoUrl: isVideo ? resultUrl : undefined,
                             stylePreset: synth.styleLabel,
                             visualPrompt: activePrompt,
-                            attribution: isVideo ? 'Generated with Google Omni 1.1' : 'Generated with Google Nano Banana 2',
+                            // The model that actually answered, and why when it is not the requested one.
+                            attribution: mediaJobAttribution(done),
                             imageTitle: section.imageTitle || section.videoTitle || synth.imageTitle,
                             caption: section.caption || synth.caption
                         });
