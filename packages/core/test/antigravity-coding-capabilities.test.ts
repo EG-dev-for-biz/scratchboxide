@@ -24,11 +24,7 @@ function createMockContext(workspaceRoot: string, mode: 'agent' | 'plan' | 'ask'
         contextGraph: new ProjectContextGraphService(),
         browserProxy: new BrowserProxyService(),
         lens: new LensBridge(),
-        executeSubagent: async req => ({
-            success: true,
-            result: `Subagent response for: ${req.prompt}`,
-            modelUsed: 'gemini-2.5-pro'
-        })
+        runSubagent: async task => ({ success: true, report: `Report for: ${task}`, toolsUsed: ['workspace_read_file'], modelUsed: 'gemini-3.5-flash-lite' })
     };
 }
 
@@ -187,7 +183,7 @@ test('Phase 3 & 4: Subagent delegation and AgentVerificationService self-healing
             prompt: 'Audit calculator.ts for bugs'
         }, ctx);
         assert.strictEqual(subagentRes.resultPayload.status, 'success');
-        assert.ok(String(subagentRes.resultPayload.result).includes('Audit calculator.ts for bugs'));
+        assert.ok(String(subagentRes.resultPayload.report).includes('Audit calculator.ts for bugs'));
 
         // 2. Verification typechecks the owning project; with no tsconfig it must not claim a typecheck ran
         const verifier = new AgentVerificationService(ctx.lsp, ctx.sandbox);

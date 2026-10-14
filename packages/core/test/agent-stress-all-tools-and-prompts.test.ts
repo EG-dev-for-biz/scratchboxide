@@ -729,14 +729,13 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect(syncRes.exec.status).toBe('completed');
         });
 
-        it('executes invoke_subagent with isolated task delegation', async () => {
+        it('invoke_subagent fails plainly when no subagent runner is available', async () => {
             const res = await registry.dispatch('invoke_subagent', {
                 role: 'Codebase Researcher',
-                taskType: 'research',
                 prompt: 'Audit C++20 Astro Engine SIMD vector math performance'
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).role).toBe('Codebase Researcher');
+            }, { ...mockContext, runSubagent: undefined });
+            expect(res.exec.status).toBe('failed');
+            expect(String((res.resultPayload as any).error)).toContain('nothing was delegated');
         });
     });
 });

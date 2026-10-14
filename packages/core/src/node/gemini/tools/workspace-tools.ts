@@ -251,12 +251,11 @@ export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'invoke_subagent',
-        description: 'Delegate a focused background subtask (e.g. codebase research, isolated debugging, or test verification) to a subagent.',
+        description: 'Delegate a self-contained research question to a subagent that has its own fresh context and read-only workspace tools (read, search, list, diagnostics). It cannot see this conversation, so put everything it needs in the prompt. Only its final report comes back, which keeps broad searches out of your context. Use it for wide codebase searches or investigations; it cannot edit anything.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 role: { type: 'STRING', description: 'Role or job title for the subagent (e.g. "Codebase Researcher", "Test Debugger")' },
-                taskType: { type: 'STRING', description: 'Subagent task type: "research" | "preprocess" | "skill_match" | "code_snippet" | "summarize"' },
                 prompt: { type: 'STRING', description: 'Actionable instructions and objective for the subagent' },
                 context: { type: 'STRING', description: 'Optional additional context or code snippets' }
             },
@@ -835,39 +834,23 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
 
     async invoke_subagent(args, ctx) {
         const role = asString(args.role) || 'Subagent';
-        const taskType = (asString(args.taskType) as any) || 'research';
         const prompt = asString(args.prompt);
         const context = asString(args.context);
-
         if (!prompt) throw new Error('prompt is required for invoke_subagent.');
-
-        if (ctx.executeSubagent) {
-            const response = await ctx.executeSubagent({
-                taskType,
-                prompt,
-                context
-            });
-            return {
-                resultPayload: {
-                    status: response.success ? 'success' : 'failed',
-                    role,
-                    taskType,
-                    result: response.result,
-                    modelUsed: response.modelUsed,
-                    data: response.data
-                },
-                summaryResult: `Subagent [${role}] completed task (${taskType}).`
-            };
+        if (ctx.request.isSubagentRun) {
+            throw new Error('A subagent cannot start another subagent. Do the investigation yourself with read-only tools.');
+        }
+        if (!ctx.runSubagent) {
+            throw new Error('Subagents are not available in this context, so nothing was delegated.');
         }
 
+        const run = await ctx.runSubagent(context ? `${prompt}\n\nCONTEXT FROM THE CALLER:\n${context}` : prompt, ctx.request);
+        if (!run.success) {
+            throw new Error(`Subagent [${role}] failed: ${run.error || 'no report'}`);
+        }
         return {
-            resultPayload: {
-                status: 'success',
-                role,
-                taskType,
-                result: `Completed background subagent task for [${role}]: ${prompt}`
-            },
-            summaryResult: `Subagent [${role}] executed.`
+            resultPayload: { status: 'success', role, report: run.report, toolsUsed: run.toolsUsed, modelUsed: run.modelUsed },
+            summaryResult: `Subagent [${role}] finished after ${run.toolsUsed.length} tool call(s).`
         };
     }
 };

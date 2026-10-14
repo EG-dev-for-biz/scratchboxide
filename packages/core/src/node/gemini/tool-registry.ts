@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { isReadOnlyMode, READ_ONLY_TOOLS } from './tool-permissions';
+import { isReadOnlyMode, PARENT_ONLY_TOOLS, READ_ONLY_TOOLS } from './tool-permissions';
 import type { GeminiGenerateRequest } from '../../common/gemini-protocol';
 import type { McpExecutionState } from '../../browser/generative-canvas/canvas-types';
 import { errorMessage } from './gemini-client';
@@ -550,9 +550,11 @@ export function buildToolDeclarations(
     }
 
     // Plan and Ask may only use tools that cannot change anything (enforced again at execution).
-    const offeredDeclarations = isReadOnlyMode(request.mode)
+    // A subagent reports back to its parent agent, so it gets no user-facing or delegation tools.
+    const offeredDeclarations = (isReadOnlyMode(request.mode)
         ? allFunctionDeclarations.filter(d => READ_ONLY_TOOLS.has(d.name))
-        : allFunctionDeclarations;
+        : allFunctionDeclarations
+    ).filter(d => !request.isSubagentRun || !PARENT_ONLY_TOOLS.has(d.name));
 
     const tools: GeminiToolConfig[] = [];
     if (request.enableGoogleSearch !== false) {

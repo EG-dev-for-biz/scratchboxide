@@ -33,6 +33,14 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
     'update_task_list'
 ]);
 
+/** Tools that only make sense for the agent talking to the user, never for a subagent. */
+export const PARENT_ONLY_TOOLS: ReadonlySet<string> = new Set([
+    'invoke_subagent',
+    'ask_user_question',
+    'present_execution_plan',
+    'update_task_list'
+]);
+
 export function isReadOnlyMode(mode: string | undefined): boolean {
     return mode === 'plan' || mode === 'ask';
 }

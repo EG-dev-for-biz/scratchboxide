@@ -39,6 +39,9 @@ import {
 import { ProjectContextGraphService } from './project-context-graph-service';
 import { UserMemoriesService } from './user-memories-service';
 import { WorkspaceConfigService } from './workspace-config-service';
+import type { SubagentRunResult } from './gemini/tools/types';
+
+const SUBAGENT_BRIEF = `You are a research subagent working for another agent. You cannot see its conversation; everything you need is in the task below. Use read-only tools to investigate, then reply with a concise report: the answer first, then the evidence (file paths with line numbers, exact names and values). Say plainly what you could not find or verify. Do not ask questions; if the task is ambiguous, state your assumption and proceed.`;
 import { BrowserProxyService } from './browser-proxy-service';
 import { CodebasePatternEngine } from './codebase-pattern-engine';
 import { LspDiagnosticFeedbackService } from './lsp-diagnostic-feedback-service';
@@ -264,8 +267,38 @@ export class GeminiService {
             contextGraph: this.getContextGraphService(),
             browserProxy: this.getBrowserProxy(),
             lens: this.lens,
-            executeSubagent: req => this.executeSubagentTask(req)
+            executeSubagent: req => this.executeSubagentTask(req),
+            runSubagent: (task, parent) => this.runSubagent(task, parent)
         };
+    }
+
+    /**
+     * A subagent is a full agent run in Ask mode (read-only tools, enforced) with a fresh context: it
+     * sees only the task, not the parent conversation, and only its final report returns to the parent.
+     */
+    async runSubagent(task: string, parent: GeminiGenerateRequest): Promise<SubagentRunResult> {
+        const toolsUsed: string[] = [];
+        try {
+            const response = await this.streaming.streamGenerate({
+                prompt: `${SUBAGENT_BRIEF}\n\nTASK:\n${task}`,
+                model: parent.subagentModel || DEFAULT_SUBAGENT_MODEL,
+                mode: 'ask',
+                isSubagentRun: true,
+                workspaceRoot: parent.workspaceRoot,
+                activeArtifact: parent.activeArtifact,
+                enableWorkspaceTools: true,
+                enableGoogleSearch: parent.enableGoogleSearch,
+                maxTurns: 20
+            }, event => {
+                if (event.type === 'tool_result' && event.mcpExecution?.toolName) toolsUsed.push(event.mcpExecution.toolName);
+            });
+            if (!response.success) {
+                return { success: false, report: '', toolsUsed, modelUsed: response.modelUsed, error: response.error || 'Subagent run failed' };
+            }
+            return { success: true, report: response.text, toolsUsed, modelUsed: response.modelUsed };
+        } catch (err: any) {
+            return { success: false, report: '', toolsUsed, error: err?.message || String(err) };
+        }
     }
 
     // ------------------------------------------------------------------

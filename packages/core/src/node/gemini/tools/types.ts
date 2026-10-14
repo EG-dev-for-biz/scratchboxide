@@ -69,6 +69,16 @@ export interface ToolContext {
     browserProxy: BrowserProxyService;
     lens: LensBridge;
     executeSubagent?: (request: SubagentRequest) => Promise<SubagentResponse>;
+    /** Runs a read-only agent with its own context on `task` and returns its final report. */
+    runSubagent?: (task: string, parent: GeminiGenerateRequest) => Promise<SubagentRunResult>;
+}
+
+export interface SubagentRunResult {
+    success: boolean;
+    report: string;
+    toolsUsed: string[];
+    modelUsed?: string;
+    error?: string;
 }
 
 export type ToolHandler = (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolHandlerOutcome> | ToolHandlerOutcome;

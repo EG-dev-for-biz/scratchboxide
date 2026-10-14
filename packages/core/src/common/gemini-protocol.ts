@@ -101,6 +101,8 @@ export interface GeminiGenerateRequest {
     attachedMcpTools?: AttachedMcpToolContext[];
     activeArtifact?: CanvasArtifact;
     chatHistory?: Array<{ role: 'user' | 'model'; text: string }>;
+    /** Set on requests made by a subagent run, so it cannot start further subagents. */
+    isSubagentRun?: boolean;
     enableSemanticGraph?: boolean;
     enableFewShotPatterns?: boolean;
     enableLspDiagnostics?: boolean;
