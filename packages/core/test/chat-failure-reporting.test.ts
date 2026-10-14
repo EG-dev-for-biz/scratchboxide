@@ -46,6 +46,45 @@ describe('describeChatFailure', () => {
     });
 });
 
+describe('streaming: a tool call that never returns', () => {
+    it('reports the tool as failed after the time limit and lets the chat finish', async () => {
+        process.env.SCRATCHBOX_TOOL_TIMEOUT_MS = '300';
+        try {
+            const service = new GeminiService();
+            (service as any).auth = { getClient: async () => ({ getAccessToken: async () => ({ token: 'mock-token' }) }) };
+            (service as any).cachedProjectId = 'mock-project';
+            (service as any).toolRegistry.register('hang_forever', {
+                name: 'hang_forever', description: 'never returns', parameters: { type: 'OBJECT', properties: {} }
+            }, () => new Promise(() => undefined), 'workspace');
+
+            const bodies: any[] = [];
+            const turns = [
+                'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"hang_forever","args":{}}}]},"finishReason":"STOP"}]}\ndata: [DONE]',
+                'data: {"candidates":[{"content":{"parts":[{"text":"The tool timed out, continuing."}]},"finishReason":"STOP"}]}\ndata: [DONE]'
+            ];
+            (globalThis as any).fetch = async (_url: string, opts: any) => {
+                bodies.push(JSON.parse(opts.body));
+                return { ok: true, text: async () => turns[bodies.length - 1], body: null };
+            };
+
+            const events: GeminiStreamEvent[] = [];
+            const started = Date.now();
+            const response = await service.streamGenerate({ prompt: 'run the slow tool', model: 'gemini-3.7-flash', mode: 'agent' }, e => events.push(e));
+
+            expect(Date.now() - started).toBeLessThan(5000);
+            expect(response.success).toBe(true);
+            const toolResult = events.find(e => e.type === 'tool_result');
+            expect(toolResult?.mcpExecution?.status).toBe('failed');
+            expect(String((toolResult?.toolResult as any)?.result?.error)).toContain('did not finish within');
+            const sentBack = JSON.stringify(bodies[1]?.contents?.at(-1));
+            expect(sentBack).toContain('did not finish within');
+            expect(events.some(e => e.type === 'done')).toBe(true);
+        } finally {
+            delete process.env.SCRATCHBOX_TOOL_TIMEOUT_MS;
+        }
+    });
+});
+
 describe('streaming: a model turn that produces nothing', () => {
     const run = async (sse: string) => {
         const service = new GeminiService();

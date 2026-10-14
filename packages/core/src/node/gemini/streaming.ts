@@ -141,6 +141,15 @@ function throwIfAborted(signal?: AbortSignal): void {
     }
 }
 
+// Some tools wait on their own long deadlines (a 3D Tiles render can allow ~38 min); the chat should not.
+const DEFAULT_TOOL_TIMEOUT_MS = 5 * 60_000;
+const TOOL_HEARTBEAT_MS = 15_000;
+
+export function resolveToolTimeoutMs(): number {
+    const fromEnv = Number(process.env.SCRATCHBOX_TOOL_TIMEOUT_MS);
+    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_TOOL_TIMEOUT_MS;
+}
+
 /** User-facing explanation for a model turn that ended with no text, tool result or artifact. */
 export function describeEmptyModelReply(finishReason?: string): string {
     const reason = finishReason ? ` (finish reason: ${finishReason})` : '';
@@ -621,7 +630,7 @@ export class StreamingEngine {
                     }
                 }
 
-                const { exec, resultPayload } = await this.executeToolCall({ id: toolCall.id, name: toolName, args: toolCall.args }, request);
+                const { exec, resultPayload } = await this.executeToolCallWithDeadline({ id: toolCall.id, name: toolName, args: toolCall.args }, request, onEvent, model);
                 mcpExecutions.push(exec);
 
                 if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
@@ -718,6 +727,52 @@ export class StreamingEngine {
             executionPlanCard: streamExecutionPlanCard,
             usage: finalUsage
         };
+    }
+
+    /**
+     * Runs a tool call with periodic progress events and a time limit. A call that overruns is reported to the
+     * model as failed so the turn can continue; the abandoned work may still finish in the background.
+     */
+    private async executeToolCallWithDeadline(
+        toolCall: GeminiFunctionCall,
+        request: GeminiGenerateRequest,
+        onEvent: StreamEventSink,
+        model: string
+    ): Promise<ToolExecutionResult> {
+        const toolName = toolCall.name || 'tool';
+        const limitMs = resolveToolTimeoutMs();
+        const startedAt = Date.now();
+        const work = this.executeToolCall(toolCall, request);
+        work.catch(() => undefined);
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const heartbeat = setInterval(() => {
+            onEvent({ type: 'status', text: `Still running ${toolName} (${Math.round((Date.now() - startedAt) / 1000)}s)...`, modelUsed: model });
+        }, TOOL_HEARTBEAT_MS);
+        const deadline = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), limitMs); });
+
+        try {
+            const outcome = await Promise.race([work, deadline]);
+            if (outcome !== 'timeout') {
+                return outcome;
+            }
+            const message = `${toolName} did not finish within ${Number((limitMs / 1000).toFixed(1))}s, so the chat continued without its result. It may still finish in the background.`;
+            const exec: McpExecutionState = {
+                id: `exec-timeout-${Date.now()}`,
+                mcpServerId: 'scratchbox-tool-deadline',
+                mcpName: 'Scratchbox',
+                toolName,
+                humanTitle: toolName,
+                status: 'failed',
+                timestamp: new Date().toLocaleTimeString(),
+                steps: [{ id: 's1', title: `Run ${toolName}`, status: 'failed', durationMs: limitMs }],
+                summaryResult: message
+            };
+            return { exec, resultPayload: { success: false, error: message, timedOut: true } };
+        } finally {
+            clearTimeout(timer);
+            clearInterval(heartbeat);
+        }
     }
 
     /** Route a model tool call to the registry, falling back to synthesised MCP telemetry. */
