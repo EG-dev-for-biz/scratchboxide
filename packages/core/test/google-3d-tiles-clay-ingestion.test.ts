@@ -9,7 +9,7 @@ import { test } from 'vitest';
  ********************************************************************************/
 
 import * as assert from 'assert';
-import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
+import { LocationUnresolvedError, MissingInputError } from '../src/common/errors/pipeline-errors';
 import { GoogleMapsService } from '../src/browser/generative-canvas/services/google-maps-service';
 import * as THREE from 'three';
 import { LocalTangentPlane } from '../src/common/coordinate/LocalTangentPlane';
@@ -209,12 +209,32 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
     {
         const nodeService = new Google3DTileIngestionService();
 
+        // A place name is never matched against a built-in table: without a Maps key the Places lookup fails.
+        const savedMapsEnv = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+        delete process.env.GOOGLE_MAPS_API_KEY;
+        delete process.env.MAP_TILES_API_KEY;
+        const savedStateKey = GoogleMapsService.getInstance().getApiKey();
+        GoogleMapsService.getInstance().setApiKey('');
+        try {
+            await assert.rejects(
+                nodeService.ingestAndStoreTileAsset({ branchId: 'main', locationQuery: 'coit tower' }),
+                (err: any) => err instanceof LocationUnresolvedError && /no Google Maps API key/.test(err.message)
+            );
+            await assert.rejects(nodeService.ingestAndStoreTileAsset({ branchId: 'main' }), MissingInputError);
+        } finally {
+            GoogleMapsService.getInstance().setApiKey(savedStateKey);
+            if (savedMapsEnv.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = savedMapsEnv.g;
+            if (savedMapsEnv.m !== undefined) process.env.MAP_TILES_API_KEY = savedMapsEnv.m;
+        }
+
         const nodeResult = await nodeService.ingestAndStoreTileAsset({
             branchId: 'main',
             locationQuery: 'coit tower',
+            coords: { lat: 37.8024, lng: -122.4058 },
             clayPreset: 'studio-grey',
             radiusMeters: 150
         });
+        assert.deepStrictEqual(nodeResult.geoAnchor, { lat: 37.8024, lng: -122.4058 }, 'coordinates as given, no invented elevation');
 
         assert.ok(nodeResult.success, 'Node ingestion must succeed');
         assert.ok(nodeResult.vaultId, 'Must produce a persistent vault ID');

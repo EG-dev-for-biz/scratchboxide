@@ -10,6 +10,9 @@
 import { LatLngAlt } from '../../common/coordinate/LocalTangentPlane';
 import { ContentRepresentation4D } from '../../common/geospatial-4d-protocol';
 import { SpatialAssetVaultService, VaultMetadata } from './SpatialAssetVaultService';
+import { geocode3DTilesAddress } from './Google3DTileBlockoutPipelineService';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { assertUsableCoordinates } from '../../common/coordinate/parse-coordinates';
 
 export interface NodeTileIngestionRequest {
   branchId?: string;
@@ -30,16 +33,6 @@ export interface NodeTileIngestionResponse {
   timestamp: string;
 }
 
-const BUILTIN_COORDINATES: Record<string, LatLngAlt> = {
-  'san francisco ferry building': { lat: 37.7955, lng: -122.3937, alt: 3.5 },
-  'coit tower': { lat: 37.8024, lng: -122.4058, alt: 84.0 },
-  'golden gate bridge': { lat: 37.8199, lng: -122.4783, alt: 67.0 },
-  'independence hall': { lat: 39.9489, lng: -75.1500, alt: 12.0 },
-  'eiffel tower': { lat: 48.8584, lng: 2.2945, alt: 35.0 },
-  'tokyo tower': { lat: 35.6586, lng: 139.7454, alt: 25.0 },
-  'san francisco': { lat: 37.7749, lng: -122.4194, alt: 16.0 }
-};
-
 export class Google3DTileIngestionService {
   private vaultService: SpatialAssetVaultService;
 
@@ -48,36 +41,21 @@ export class Google3DTileIngestionService {
   }
 
   /**
-   * Resolves geodetic coordinates for a query or coordinates object.
+   * Resolves the place to store: explicit coordinates as given, otherwise one Google Places Text Search call
+   * (geocode3DTilesAddress). There is no built-in place table and no default location; an unresolvable or
+   * missing place throws. `alt` is present only when an elevation was stated; it is never guessed.
    */
-  public resolveCoordinates(queryOrCoords?: string | LatLngAlt): LatLngAlt {
+  public async resolveCoordinates(queryOrCoords?: string | LatLngAlt): Promise<LatLngAlt> {
     if (typeof queryOrCoords === 'object' && queryOrCoords !== null) {
-      return {
-        lat: queryOrCoords.lat,
-        lng: queryOrCoords.lng,
-        alt: queryOrCoords.alt ?? 0
-      };
+      assertUsableCoordinates(queryOrCoords.lat, queryOrCoords.lng, `${queryOrCoords.lat}, ${queryOrCoords.lng}`);
+      return { lat: queryOrCoords.lat, lng: queryOrCoords.lng, ...(queryOrCoords.alt !== undefined ? { alt: queryOrCoords.alt } : {}) };
     }
-
-    const q = (typeof queryOrCoords === 'string' && queryOrCoords ? queryOrCoords : 'san francisco').toLowerCase().trim();
-
-    // Check direct comma separated numbers
-    const coordMatch = q.match(/^([-+]?[0-9]*\.?[0-9]+)[,\s]+([-+]?[0-9]*\.?[0-9]+)(?:[,\s]+([-+]?[0-9]*\.?[0-9]+))?$/);
-    if (coordMatch) {
-      return {
-        lat: parseFloat(coordMatch[1]),
-        lng: parseFloat(coordMatch[2]),
-        alt: coordMatch[3] ? parseFloat(coordMatch[3]) : 0
-      };
+    const query = typeof queryOrCoords === 'string' ? queryOrCoords.trim() : '';
+    if (!query) {
+      throw new MissingInputError('Google3DTileIngestionService', 'coords or locationQuery');
     }
-
-    for (const [key, coords] of Object.entries(BUILTIN_COORDINATES)) {
-      if (q === key || q.includes(key) || key.includes(q)) {
-        return coords;
-      }
-    }
-
-    return { lat: 37.7749, lng: -122.4194, alt: 10.0 };
+    const anchor = await geocode3DTilesAddress(query);
+    return { lat: anchor.lat, lng: anchor.lng, ...(anchor.elevation !== undefined ? { alt: anchor.elevation } : {}) };
   }
 
   /**
@@ -87,7 +65,7 @@ export class Google3DTileIngestionService {
     req: NodeTileIngestionRequest
   ): Promise<NodeTileIngestionResponse> {
     const branchId = req.branchId || 'main';
-    const coords = req.coords || this.resolveCoordinates(req.locationQuery);
+    const coords = await this.resolveCoordinates(req.coords || req.locationQuery);
     const radiusMeters = req.radiusMeters || 150;
     const clayPreset = req.clayPreset || 'warm-clay';
     const zoom = req.zoom || 17;
