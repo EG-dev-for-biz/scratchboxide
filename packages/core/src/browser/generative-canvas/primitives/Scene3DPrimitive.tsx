@@ -978,6 +978,12 @@ export function hasRealSceneGeometry(scene: Scene3DData | undefined): boolean {
     return false;
 }
 
+/** True when a scene object already loads the generator's output file (objects[].content.durableUri). */
+export function generatorFileIsObject(gen: { glbPath?: string } | undefined, objects: Scene3DData['objects']): boolean {
+    const file = gen?.glbPath?.split('/').pop();
+    return !!file && !!objects?.some(o => o.content?.durableUri?.split('/').pop() === file);
+}
+
 /** Per-object load state for externally referenced models (objects[].content.durableUri). */
 interface ExternalLoadStatus {
     phase: 'download' | 'parse' | 'ready' | 'error';
@@ -2626,6 +2632,8 @@ int main(int argc, char** argv) {
     React.useEffect(() => {
         const pyGen = sceneData.pythonGenerator;
         if (!pyGen?.sourceCode || pyGen.glbBase64) return;
+        // Saved scenes drop the base64 copy and keep the model as a file object; that object draws it.
+        if (generatorFileIsObject(pyGen, sceneData.objects)) return;
         let isCancelled = false;
         fetch('/3d/python/run', {
             method: 'POST',
@@ -2656,6 +2664,7 @@ int main(int argc, char** argv) {
     React.useEffect(() => {
         const cppGen = sceneData.cppGenerator;
         if (!cppGen?.sourceCode || cppGen.glbBase64) return;
+        if (generatorFileIsObject(cppGen, sceneData.objects)) return;
         let isCancelled = false;
         fetch('/3d/compile', {
             method: 'POST',
@@ -2857,11 +2866,11 @@ int main(int argc, char** argv) {
                 if (s?.y === 0 || s?.y === undefined) terrainManager.snapObjectToGround(model, 0);
             }
         };
-        const autoFrameIfNeeded = () => {
+        const autoFrameIfNeeded = (force = false) => {
             const live = stackRef.current;
             if (!live) return;
             const bounds = computeSceneGeometryBounds(live.scene);
-            const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: live.camera.fov });
+            const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: live.camera.fov, force });
             if (autoFrame && autoFrame.autoFramed) {
                 cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
                 cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
@@ -3013,7 +3022,14 @@ int main(int argc, char** argv) {
                     }
 
                     refreshEntities();
-                    if (attach) autoFrameIfNeeded();
+                    // A generated model's hero file is that model: frame and light it as effect 5b does for
+                    // its base64 copy, since saved scenes keep only the file.
+                    const isGeneratedHero = def.content?.metadata?.role === 'hero';
+                    if (attach && isGeneratedHero) {
+                        const sphere = new THREE.Box3().setFromObject(model).getBoundingSphere(new THREE.Sphere());
+                        if (Number.isFinite(sphere.radius) && sphere.radius > 0) setGeneratedContentRadius(Number(sphere.radius.toPrecision(2)));
+                    }
+                    if (attach) autoFrameIfNeeded(isGeneratedHero);
                 },
                 (evt: ProgressEvent) => {
                     if (pending.get(obj.id) !== uri) return; // superseded by a newer URL

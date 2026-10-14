@@ -13,6 +13,7 @@ import { DEFAULT_APPEARANCE_CONFIG, DEFAULT_SESSIONS } from '../state/studio-def
 import { ChatState, Updater } from '../state/chatStore';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 import { mergeChatSessions } from '../../../common/chat-session-merge';
+import { stripEmbeddedGlb } from '../../../common/strip-embedded-glb';
 
 
 const LS_SESSIONS_KEY = 'scratchbox_studio_sessions_v18';
@@ -231,7 +232,7 @@ export function usePersistedChatState(
                             return s;
                         });
                         try {
-                            localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(updated));
+                            localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(stripEmbeddedGlb(updated)));
                         } catch (err) {
                             try {
                                 localStorage.removeItem(LS_VERSIONS_KEY);
@@ -244,7 +245,7 @@ export function usePersistedChatState(
                     localStorage.setItem(LS_CURRENT_SESSION_KEY, currentSessionId);
                 } else {
                     try {
-                        localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(sessions));
+                        localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(stripEmbeddedGlb(sessions)));
                     } catch {
                         try {
                             localStorage.removeItem(LS_VERSIONS_KEY);
@@ -258,7 +259,7 @@ export function usePersistedChatState(
                     for (const [k, v] of Object.entries(artifactVersions || {})) {
                         prunedVersions[k] = (v || []).slice(-2);
                     }
-                    localStorage.setItem(LS_VERSIONS_KEY, JSON.stringify(prunedVersions));
+                    localStorage.setItem(LS_VERSIONS_KEY, JSON.stringify(stripEmbeddedGlb(prunedVersions)));
                 } catch {
                     localStorage.removeItem(LS_VERSIONS_KEY);
                 }
@@ -275,7 +276,7 @@ export function usePersistedChatState(
 
     const persistSessionsImmediately = React.useCallback((updatedSessions: ChatSession[]) => {
         try {
-            localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(updatedSessions));
+            localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(stripEmbeddedGlb(updatedSessions)));
             if (currentSessionId) {
                 localStorage.setItem(LS_CURRENT_SESSION_KEY, currentSessionId);
             }

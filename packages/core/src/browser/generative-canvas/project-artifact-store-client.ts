@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { stripEmbeddedGlb } from '../../common/strip-embedded-glb';
 import {
     ProjectArtifactGraph,
     createEmptyProjectGraph,
@@ -43,7 +44,7 @@ export class ProjectArtifactStoreClient {
                     'Content-Type': 'application/json',
                     Accept: 'application/json'
                 },
-                body: JSON.stringify({ workspaceRoot, graph })
+                body: JSON.stringify({ workspaceRoot, graph: stripEmbeddedGlb(graph) })
             });
             if (response.ok) {
                 this.removeLocal(graph.project.id);
@@ -55,7 +56,7 @@ export class ProjectArtifactStoreClient {
         if (typeof localStorage === 'undefined') {
             throw new Error('Project graph persistence unavailable');
         }
-        localStorage.setItem(this.localKey(graph.project.id), serializeProjectGraph(graph));
+        localStorage.setItem(this.localKey(graph.project.id), serializeProjectGraph(stripEmbeddedGlb(graph)));
         return 'localStorage';
     }
 

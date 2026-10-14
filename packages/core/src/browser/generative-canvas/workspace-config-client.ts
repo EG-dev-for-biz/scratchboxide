@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { stripEmbeddedGlb } from '../../common/strip-embedded-glb';
 import {
     CanvasArtifact,
     DiscoveredExternalMcpSource,
@@ -111,7 +112,7 @@ export class WorkspaceConfigClient {
             const res = await fetch(`${this.endpoint()}/sessions/${encodeURIComponent(session.id)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-                body: JSON.stringify({ workspaceRoot: workspaceRoot || '', session })
+                body: JSON.stringify({ workspaceRoot: workspaceRoot || '', session: stripEmbeddedGlb(session) })
             });
             return res.ok;
         } catch (e) {
