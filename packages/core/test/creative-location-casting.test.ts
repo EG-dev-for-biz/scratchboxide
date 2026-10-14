@@ -139,13 +139,14 @@ async function runCreativeLocationCastingTests(): Promise<void> {
         for (const prompt of ['bullet going through glass', 'black background product pedestal with soft spotlight']) {
             const scene = synthesizeContextual3DScene(prompt);
             assert.strictEqual(scene.geoAnchor, undefined, `"${prompt}" names no place and must not be geo-anchored`);
+            // No keyword-picked hero script with invented vertex counts is attached any more.
             assert.ok(
-                scene.pythonGenerator?.sourceCode || scene.cppGenerator?.sourceCode,
-                `"${prompt}" must still carry a procedural generator`
+                !(scene.pythonGenerator?.sourceCode || '').includes('AdaptiveHeroObjectSynthesizer'),
+                `"${prompt}" must not carry the keyword hero synthesizer script`
             );
         }
 
-        console.log('  ✓ Case 6 Passed: synthesizeContextual3DScene leaves unlocated prompts unanchored with a procedural generator.');
+        console.log('  ✓ Case 6 Passed: synthesizeContextual3DScene leaves unlocated prompts unanchored without a keyword hero script.');
     }
 
     // ========================================================================

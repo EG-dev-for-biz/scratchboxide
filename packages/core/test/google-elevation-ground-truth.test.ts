@@ -119,7 +119,8 @@ describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
             );
 
             expect(synthesized.geoAnchor).toBeUndefined();
-            expect(synthesized.pythonGenerator || synthesized.cppGenerator?.sourceCode).toBeTruthy();
+            // No keyword-picked hero script with invented vertex counts is attached.
+            expect(synthesized.pythonGenerator?.sourceCode ?? '').not.toContain('AdaptiveHeroObjectSynthesizer');
         });
 
         it('full contextual scene synthesis attaches verified elevation metadata for a named location', () => {

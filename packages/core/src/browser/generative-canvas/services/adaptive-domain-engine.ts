@@ -20,11 +20,6 @@ import type {
     Scene3DData,
     AccentColor
 } from '../canvas-types';
-import {
-    synthesizeAdaptiveHeroObjectContract,
-    generateAdaptiveHeroPythonSource,
-    synthesizeAdaptiveHeroScene
-} from '../../../common/spatial/adaptive-hero-synthesizer';
 import type {
     VideoTimelineData,
     TimelineTrack
@@ -1550,13 +1545,6 @@ export function synthesizeAdaptive3DScene(
             speed: 1.0,
             playbackSpeed: 1.0,
             isLooping: true
-        },
-        pythonGenerator: {
-            enabled: true,
-            filename: `${subject.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_generator.py`,
-            sourceCode: generateAdaptiveHeroPythonSource(synthesizeAdaptiveHeroObjectContract(prompt || title || 'Adaptive Hero Object')),
-            vertexCount: 38000,
-            triangleCount: 24000
         },
         customMeshes
     };

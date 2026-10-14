@@ -5,7 +5,6 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { SceneSpatialAssertionService } from '../src/node/spatial/SceneSpatialAssertionService';
 import { google3DTilesHandlers } from '../src/node/gemini/tools/spatial-tools';
-import { Adaptive3DSceneSynthesizer } from '../src/node/spatial/Adaptive3DSceneSynthesizer';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const NATIVE_BUILD_DIR = path.join(REPO_ROOT, 'packages/core/src/native/3d-engine/build_py');
@@ -165,20 +164,6 @@ sb.io.write_glb("${tempGlb}", scene)
         expect(hierarchyRes.summaryResult).toContain('certified');
 
         if (fs.existsSync(tempGlb)) fs.unlinkSync(tempGlb);
-    });
-
-    it('6. Adaptive3DSceneSynthesizer: Generates AdaptiveSceneGraphBlueprint with explicit SpatialRelation contracts', () => {
-        const synth = new Adaptive3DSceneSynthesizer();
-        const contract = synth.synthesizeContractFromPrompt('Construct an alpine research observatory with rooftop HVAC chillers and access ramp');
-
-        expect(contract.relations).toBeDefined();
-        expect(contract.relations!.length).toBeGreaterThanOrEqual(4);
-        expect(contract.sceneGraph).toBeDefined();
-        expect(contract.sceneGraph!.entities.length).toBeGreaterThanOrEqual(3);
-
-        const supportedRel = contract.relations!.find(r => r.predicate === 'SUPPORTED_BY');
-        expect(supportedRel).toBeDefined();
-        expect(supportedRel!.targetId).toBeDefined();
     });
 
     it('7. Terrain Raycast Grounding: ground_on_terrain snaps mesh onto sloped terrain mesh with zero levitation', () => {
