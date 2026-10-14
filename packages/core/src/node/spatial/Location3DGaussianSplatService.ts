@@ -24,6 +24,8 @@ import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas
 
 export interface Location3DGSRequest {
     location: string;
+    /** A clay GLB already extracted for this place (e.g. by google_3d_tiles_get_clay). Without it the place is extracted fresh. */
+    glbPath?: string;
     lat?: number;
     lng?: number;
     elevation?: number;
@@ -130,6 +132,7 @@ export class Location3DGaussianSplatService {
             lng: req.lng,
             elevationMeters: req.elevation,
             headingDeg: req.headingDeg,
+            glbPath: req.glbPath,
             cameraCount: req.cameraCount,
             sigmaScale: req.sigmaScale,
             voxelSizeMeters: req.voxelSizeMeters,

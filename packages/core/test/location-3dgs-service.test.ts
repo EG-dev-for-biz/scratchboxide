@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import {
@@ -19,6 +19,7 @@ import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolv
 import { ToolRegistry } from '../src/node/gemini/tool-registry';
 import { SPATIAL_TOOL_DECLARATIONS, spatialHandlers } from '../src/node/gemini/tools/spatial-tools';
 import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
+import { injectTileExtraction } from './helpers/inject-tile-extraction';
 
 const OUT_TEST_DIR = path.resolve(process.cwd(), 'build/test_location_3dgs_service');
 
@@ -27,6 +28,9 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
         process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR = 'mock';
         await fs.emptyDir(OUT_TEST_DIR);
     });
+    // The service extracts the place's clay tiles fresh; here that extraction is injected (no network).
+    let extraction: ReturnType<typeof injectTileExtraction> | undefined;
+    afterEach(() => extraction?.mockRestore());
 
     describe('1. Service Facade & generateLocation3DGS', () => {
         it('instantiates Location3DGaussianSplatService and exposes generateLocation3DGS', () => {
@@ -50,7 +54,15 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
                 forceRebake: true
             };
 
+            extraction = injectTileExtraction();
             const result = await service.generate(request);
+
+            // The clay tiles were extracted at the given coordinates, not looked up by name on disk
+            expect(extraction).toHaveBeenCalledTimes(1);
+            const [anchor, mode, options] = extraction.mock.calls[0] as any[];
+            expect(mode).toBe('clay');
+            expect([anchor.lat, anchor.lng, anchor.elevation]).toEqual([41.8902, 12.4922, 22.0]);
+            expect(path.basename(options.outputGlbPath)).toBe('rome_colosseum_clay.glb');
 
             expect(result.success).toBe(true);
             expect(result.locationName).toContain('Colosseum');
@@ -69,6 +81,7 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
         }, 120000);
 
         it('synthesizes location 3DGS via coordinates', async () => {
+            extraction = injectTileExtraction();
             const result = await generateLocation3DGS({
                 location: 'Custom Site',
                 lat: 40.7484,
@@ -116,6 +129,7 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
         it('dispatches location_generate_3dgs through tool handler', async () => {
             const handler = spatialHandlers.location_generate_3dgs;
             expect(handler).toBeDefined();
+            extraction = injectTileExtraction();
 
             const res = await handler({
                 location: 'Grand Army Plaza',
