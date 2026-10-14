@@ -40,9 +40,21 @@ static void usage() {
         "  --apron M               isolate: ground kept around the footprint (default 4)\n"
         "  --isolate-min-height M  isolate: footprint cells stand at least M above the terrain (default 3)\n"
         "  --isolate-reach M       isolate: connected raised surfaces within M of the footprint join it (default 12)\n"
-        "  --out-raw-clay PATH     also write the (isolated) raw scan, unmodified, as studio clay"
+        "  --low-attachment-max-height M  isolate: raised areas joined to the footprint that stay below min(M, half the\n"
+        "                          structure's height) and lie outside its core are dropped (default 8; <= min height: off)\n"
+        "  --keep-scan-apron       isolate: keep the scan's own ground triangles instead of rebuilding the apron\n"
+        "  --ground-opening-radius M  isolate: the rebuilt apron follows the scan's street surface with objects narrower than 2M\n"
+        "                          removed (default 6)\n"
+        "  --below-ground-margin M isolate: clip surfaces more than M below the terrain (default 0.3; < 0: off)\n"
+        "  --interior-inset M      isolate: drop upward-facing floors at least M inside the footprint under the top (default 2.5; < 0: off)\n"
+        "  --out-raw-clay PATH     also write the (isolated) raw scan, unmodified, as studio clay\n"
         "  --roi-radius M          relief region of interest: the anchor's footprint grown by M (default 60; <0 = whole tile)\n"
         "  --no-relief             skip the photometric relief (rectified scan only)\n"
+        "  --flatten-band M        facade flatten: vertices within M of a detected wall plane move onto it (default 0.10)\n"
+        "  --no-flatten            skip the facade flatten\n"
+        "  --flatten-parallel-deg DEG  facade flatten: a face lies along a plane within DEG (default 30)\n"
+        "  --flatten-min-area M2   facade flatten: smallest wall plane flattened onto (default 25)\n"
+        "  --flatten-corner-deg DEG  facade flatten: planes at least DEG apart meet in a corner line (default 15)\n"
         "  --thumbs DIR            write raw-vs-output thumbnails (aerial, hero facade, street) into DIR\n"
         "  --threads N             worker threads (default: all cores)\n"
         "  tolerances:\n"
@@ -87,8 +99,18 @@ int main(int argc, char** argv) {
         else if (a == "--apron") p.isolateApron = num();
         else if (a == "--isolate-min-height") p.isolateMinHeight = num();
         else if (a == "--isolate-reach") p.isolateReach = num();
+        else if (a == "--low-attachment-max-height") p.isolateLowAttachmentMaxHeight = num();
+        else if (a == "--keep-scan-apron") p.isolateRebuildGround = false;
+        else if (a == "--ground-opening-radius") p.isolateGroundOpeningRadius = num();
+        else if (a == "--below-ground-margin") p.isolateBelowGroundMargin = num();
+        else if (a == "--interior-inset") p.isolateInteriorInset = num();
         else if (a == "--out-raw-clay") p.rawClayPath = next();
         else if (a == "--no-relief") p.relief = false;
+        else if (a == "--flatten-band") p.flatten.band = num();
+        else if (a == "--no-flatten") p.flatten.band = 0;
+        else if (a == "--flatten-parallel-deg") p.flatten.parallelDeg = num();
+        else if (a == "--flatten-min-area") p.flatten.minPlaneArea = num();
+        else if (a == "--flatten-corner-deg") p.flatten.cornerMinDeg = num();
         else if (a == "--thumbs") p.thumbsDir = next();
         else if (a == "--threads") p.threads = static_cast<int>(num());
         else if (a == "--max-disp") p.rect.maxDisplacement = num();

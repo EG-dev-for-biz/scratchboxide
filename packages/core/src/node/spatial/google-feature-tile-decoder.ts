@@ -46,9 +46,16 @@ export interface DecodedLine {
 export interface DecodedModeledVolume {
     id: string;
     featureTypes: string[];
-    /** [lng, lat, heightMeters] per vertex; height is relative to the feature's base, not to sea level. */
+    /**
+     * [lng, lat, height] per vertex. Heights keep the tile's own vertical datum (not sea level, not street level), so the
+     * pieces of a building split across tiles line up: seat a building by the lowest point of all its pieces.
+     */
     vertices: Array<[number, number, number]>;
     indices: number[];
+    /** Lowest and highest vertex of this piece, in the same datum as `vertices`. */
+    minZMeters: number;
+    maxZMeters: number;
+    /** maxZMeters - minZMeters of this piece. */
     heightMeters: number;
 }
 
@@ -172,14 +179,16 @@ export function decodeFeatureTile(tile: FeatureTileJson, idPrefix = `${tile.zoom
         (g.modeledVolumes || []).forEach((mv: any, i: number) => {
             const xs = cumulative(mv.vertexOffsets?.xOffsets), ys = cumulative(mv.vertexOffsets?.yOffsets), zs = cumulative(mv.vertexOffsets?.zOffsets);
             if (!xs.length) return;
-            const minZ = Math.min(...zs);
-            const vertices = xs.map((x, k): [number, number, number] => [...gridToLngLat(tile, x, ys[k]), (zs[k] - minZ) * unit]);
+            const minZ = Math.min(...zs), maxZ = Math.max(...zs);
+            const vertices = xs.map((x, k): [number, number, number] => [...gridToLngLat(tile, x, ys[k]), zs[k] * unit]);
             out.modeledVolumes.push({
                 id: `${idPrefix}/f${fi}/m${i}`,
                 featureTypes: types,
                 vertices,
                 indices: stripsToTriangles(mv.strips),
-                heightMeters: (Math.max(...zs) - minZ) * unit
+                minZMeters: minZ * unit,
+                maxZMeters: maxZ * unit,
+                heightMeters: (maxZ - minZ) * unit
             });
         });
         if (hasType(types, /POI/)) {

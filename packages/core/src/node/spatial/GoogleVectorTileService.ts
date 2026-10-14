@@ -829,17 +829,43 @@ export class GoogleVectorTileService {
         }
 
         // 1b. Google's true 3D modeled volumes (buildings such as the Empire State Building that have no 2.5D
-        // footprint in this request), seated on the ground sampled at their centroid. Flat-shaded triangles.
+        // footprint in this request), seated on the measured street level. Flat-shaded triangles. A building split
+        // across tiles arrives as several pieces in one shared height datum: pieces that touch are seated together by
+        // their common lowest point (seating each by its own minimum offset the Flatiron's two halves by 0.29 m).
         let modeledVolumeCount = 0;
-        for (const mv of allModeled.values()) {
-            if (mv.vertices.length < 3 || mv.indices.length < 3) continue;
-            const local = mv.vertices.map(([lng, lat]) =>
-                wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude, anchorElevation, undefined, ltp));
-            const cx = local.reduce((a, p) => a + p.x, 0) / local.length;
-            const cz = local.reduce((a, p) => a + p.z, 0) / local.length;
+        const pieces = [...allModeled.values()].filter(mv => mv.vertices.length >= 3 && mv.indices.length >= 3);
+        const pieceLocal = pieces.map(mv => mv.vertices.map(([lng, lat]) =>
+            wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude, anchorElevation, undefined, ltp)));
+        const pieceBox = pieceLocal.map(l => ({
+            minX: Math.min(...l.map(p => p.x)), maxX: Math.max(...l.map(p => p.x)),
+            minZ: Math.min(...l.map(p => p.z)), maxZ: Math.max(...l.map(p => p.z))
+        }));
+        const pieceParent = pieces.map((_, i) => i);
+        const findPiece = (i: number): number => { while (pieceParent[i] !== i) { pieceParent[i] = pieceParent[pieceParent[i]]; i = pieceParent[i]; } return i; };
+        const touchMeters = 0.5;
+        for (let i = 0; i < pieces.length; i++) {
+            for (let j = i + 1; j < pieces.length; j++) {
+                const a = pieceBox[i], b = pieceBox[j];
+                if (a.minX - touchMeters <= b.maxX && b.minX - touchMeters <= a.maxX && a.minZ - touchMeters <= b.maxZ && b.minZ - touchMeters <= a.maxZ) {
+                    pieceParent[findPiece(j)] = findPiece(i);
+                }
+            }
+        }
+        const pieceGroups = new Map<number, number[]>();
+        pieces.forEach((_, i) => {
+            const r = findPiece(i);
+            if (!pieceGroups.has(r)) pieceGroups.set(r, []);
+            pieceGroups.get(r)!.push(i);
+        });
+        for (const group of pieceGroups.values()) {
+            const groupMin = Math.min(...group.map(i => pieces[i].minZMeters));
+            const groupMax = Math.max(...group.map(i => pieces[i].maxZMeters));
+            const groupPoints = group.flatMap(i => pieceLocal[i]);
+            const cx = groupPoints.reduce((a, p) => a + p.x, 0) / groupPoints.length;
+            const cz = groupPoints.reduce((a, p) => a + p.z, 0) / groupPoints.length;
             // A modeled volume keeps its own shape; fusion only seats it on the measured street level.
-            const base = convexHull(mv.vertices.filter(v => v[2] < 2).map(v => [v[0], v[1]] as LngLat));
-            const fusedMv = fuse(mv.id, base, mv.heightMeters, 'modeled');
+            const base = convexHull(group.flatMap(i => pieces[i].vertices.filter(v => v[2] - groupMin < 2).map(v => [v[0], v[1]] as LngLat)));
+            const fusedMv = fuse(pieces[group[0]].id, base, groupMax - groupMin, 'modeled');
             const tileGroundMv = tileGroundMsl(base);
             if (tileGroundMv !== undefined) {
                 snapped++;
@@ -847,22 +873,25 @@ export class GoogleVectorTileService {
             }
             const mvGroundMsl = tileGroundMv ?? fusedMv?.groundMsl;
             const groundY = mvGroundMsl !== undefined ? mvGroundMsl - anchorElevation : sampleElevation(cx, cz);
-            const pos = local.map((p, k) => [p.x, groundY + mv.vertices[k][2] * heightScale, p.z] as [number, number, number]);
-            for (let t = 0; t + 2 < mv.indices.length; t += 3) {
-                const a = pos[mv.indices[t]], b2 = pos[mv.indices[t + 1]], c = pos[mv.indices[t + 2]];
-                if (!a || !b2 || !c) continue;
-                const ux = b2[0] - a[0], uy = b2[1] - a[1], uz = b2[2] - a[2];
-                const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
-                let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-                const len = Math.hypot(nx, ny, nz);
-                if (len < 1e-9) continue;
-                nx /= len; ny /= len; nz /= len;
-                for (const p of [a, b2, c]) {
-                    indices.push(addVertex(p[0], p[1], p[2], nx, ny, nz, p[0] * 0.1, p[2] * 0.1));
-                    expandBounds(p[0], p[1], p[2]);
+            for (const i of group) {
+                const mv = pieces[i];
+                const pos = pieceLocal[i].map((p, k) => [p.x, groundY + (mv.vertices[k][2] - groupMin) * heightScale, p.z] as [number, number, number]);
+                for (let t = 0; t + 2 < mv.indices.length; t += 3) {
+                    const a = pos[mv.indices[t]], b2 = pos[mv.indices[t + 1]], c = pos[mv.indices[t + 2]];
+                    if (!a || !b2 || !c) continue;
+                    const ux = b2[0] - a[0], uy = b2[1] - a[1], uz = b2[2] - a[2];
+                    const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+                    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                    const len = Math.hypot(nx, ny, nz);
+                    if (len < 1e-9) continue;
+                    nx /= len; ny /= len; nz /= len;
+                    for (const p of [a, b2, c]) {
+                        indices.push(addVertex(p[0], p[1], p[2], nx, ny, nz, p[0] * 0.1, p[2] * 0.1));
+                        expandBounds(p[0], p[1], p[2]);
+                    }
                 }
+                modeledVolumeCount++;
             }
-            modeledVolumeCount++;
             buildingCount++;
         }
 
