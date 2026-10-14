@@ -584,7 +584,8 @@ export function createDefaultToolRegistry(): ToolRegistry {
         registry.register(decl.name, decl, google3DTilesHandlers[decl.name], 'workspace');
     }
     for (const decl of PANORAMA_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, panoramaHandlers[decl.name], 'workspace');
+        // Some panorama-pack tools (Street View grounding, vector staging) keep their handlers in analyticalGroomHandlers.
+        registry.register(decl.name, decl, panoramaHandlers[decl.name] ?? analyticalGroomHandlers[decl.name], 'workspace');
     }
     for (const decl of UTDRA_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, utdraHandlers[decl.name], 'workspace');

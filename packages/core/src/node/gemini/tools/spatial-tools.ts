@@ -90,6 +90,8 @@ import { SpatialVisualAlignmentVerificationService } from '../../spatial/Spatial
 import { AnalyticalGroomSplatService } from '../../3d-engine/AnalyticalGroomSplatService';
 import { SceneSpatialAssertionService } from '../../spatial/SceneSpatialAssertionService';
 import { MapsImageryGroundingService } from '../../spatial/MapsImageryGroundingService';
+import { createStreetViewGroundingImageService, GROUNDING_ASPECT_RATIOS, StreetViewGroundingImageService, type GooglePano, type GroundingAspectRatio } from '../../spatial/StreetViewGroundingImageService';
+import { GeminiClient } from '../gemini-client';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import type {
@@ -1790,6 +1792,22 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 height: { type: 'NUMBER', description: 'Baking render resolution per view.' }
             },
             required: ['glbPath', 'stylePrompt']
+        }
+    },
+    {
+        name: 'streetview_grounding_image',
+        description: 'Fetch a redacted Google Street View image that is permitted as input to image and video generation (Maps Imagery Grounding API, RetrieveGroundingImage). Use this, never ordinary Street View images, whenever Street View imagery will be sent to a generative model. Give a panoId, or lat/lng to use the nearest Google-captured panorama (user photospheres are not eligible). Saves the JPEG in the workspace and returns its path.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                panoId: { type: 'STRING', description: 'Google Street View panorama ID (must be a Google capture).' },
+                lat: { type: 'NUMBER', description: 'Latitude to find the nearest Google-captured panorama, when no panoId is given.' },
+                lng: { type: 'NUMBER', description: 'Longitude to find the nearest Google-captured panorama, when no panoId is given.' },
+                headingDegree: { type: 'NUMBER', description: 'View heading, degrees clockwise from north (0 = north, 90 = east). Default 0.' },
+                pitchDegree: { type: 'NUMBER', description: 'View pitch, degrees (90 = up, -90 = down). Default 0.' },
+                fovDegree: { type: 'NUMBER', description: 'Horizontal field of view, 1-90 degrees. Default 90.' },
+                aspectRatio: { type: 'STRING', enum: ['RATIO_1X1', 'RATIO_2X3', 'RATIO_3X2', 'RATIO_3X4', 'RATIO_4X3', 'RATIO_4X5', 'RATIO_5X4', 'RATIO_9X16', 'RATIO_16X9', 'RATIO_21X9'], description: 'Output aspect ratio; defaults to the source image ratio.' }
+            }
         }
     },
     {
@@ -5435,6 +5453,45 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: result as unknown as ToolResultPayload,
             summaryResult: `Successfully synthesized ${result.splatCount} anisotropic 3D Gaussian Splats from ${result.strandCount} biophysical strands (harmonic freq: ${contract.surface.harmonicFrequency ?? 0}, amplitude: ${contract.surface.harmonicAmplitude ?? 0}) in ${result.executionTimeMs}ms. SPZ: ${result.spzPath || 'N/A'}`
+        };
+    },
+    streetview_grounding_image: async (args, ctx) => {
+        const fs = await import('fs');
+        const lat = typeof args.lat === 'number' ? args.lat : undefined;
+        const lng = typeof args.lng === 'number' ? args.lng : undefined;
+        let panoId = asString(args.panoId);
+        let pano: GooglePano | undefined;
+        if (!panoId) {
+            if (lat === undefined || lng === undefined) throw new Error('Give a panoId, or lat and lng.');
+            pano = await StreetViewGroundingImageService.findGooglePano(lat, lng, MapsImageryGroundingService.resolveApiKey());
+            panoId = pano.panoId;
+        }
+        const service = createStreetViewGroundingImageService(new GeminiClient());
+        const shot = await service.retrieveGroundingImage({
+            panoId,
+            headingDegree: typeof args.headingDegree === 'number' ? args.headingDegree : undefined,
+            pitchDegree: typeof args.pitchDegree === 'number' ? args.pitchDegree : undefined,
+            fovDegree: typeof args.fovDegree === 'number' ? args.fovDegree : undefined,
+            aspectRatio: GROUNDING_ASPECT_RATIOS.includes(args.aspectRatio as GroundingAspectRatio) ? args.aspectRatio as GroundingAspectRatio : undefined
+        });
+        const dir = path.join(ctx.workspaceRoot, 'build', 'streetview-grounding');
+        fs.mkdirSync(dir, { recursive: true });
+        const ext = shot.mimeType.includes('png') ? 'png' : 'jpg';
+        const file = path.join(dir, `${panoId.replace(/[^A-Za-z0-9_-]/g, '_')}_h${Math.round(shot.headingDegree)}_p${Math.round(shot.pitchDegree)}_f${Math.round(shot.fovDegree)}.${ext}`);
+        fs.writeFileSync(file, shot.image);
+        return {
+            resultPayload: {
+                imagePath: path.relative(ctx.workspaceRoot, file),
+                panoId,
+                panoLocation: pano ? { lat: pano.lat, lng: pano.lng, date: pano.date } : undefined,
+                headingDegree: shot.headingDegree,
+                pitchDegree: shot.pitchDegree,
+                fovDegree: shot.fovDegree,
+                mimeType: shot.mimeType,
+                bytes: shot.image.length,
+                permittedForGenerativeMedia: true
+            } as unknown as ToolResultPayload,
+            summaryResult: `Saved redacted Street View image of pano ${panoId} (heading ${shot.headingDegree}°) to ${path.relative(ctx.workspaceRoot, file)}.`
         };
     },
     maps_imagery_grounding_pano: async (args, _ctx) => {
