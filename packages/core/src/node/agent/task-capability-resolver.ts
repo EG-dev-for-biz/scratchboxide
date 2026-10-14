@@ -553,14 +553,14 @@ export class TaskCapabilityResolver {
                 nativeCapabilities.push('Atmospheric Rayleigh & Mie Scattering Dome (AtmosphericSkyDome)');
                 nativeCapabilities.push('Diurnal Solar Ephemeris & Planckian Kelvin Radiometry (1,000K - 40,000K)');
                 nativeCapabilities.push('Aerial Perspective Koschmieder Extinction & Volumetric God Rays');
-                nativeCapabilities.push('Agent Tools (lighting_estimate_from_photo, lighting_configure_gaffer_rig, lighting_optimize_closed_loop, geobox_harmonize_location_lighting)');
-                rationale = 'Native LightingGafferService, InverseLightingEstimatorService, and ClosedLoopLightingOptimizerService provide photographic gaffer reasoning (Rembrandt, Split, Butterfly), beam modifiers, inverse photo estimation, and closed-loop lighting alignment directly in Tier 1.';
+                nativeCapabilities.push('Agent Tools (lighting_estimate_from_photo, lighting_configure_gaffer_rig, geobox_harmonize_location_lighting)');
+                rationale = 'Native LightingGafferService and InverseLightingEstimatorService provide photographic gaffer reasoning (Rembrandt, Split, Butterfly), beam modifiers and inverse photo estimation directly in Tier 1.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'LocationObjectLightingService & geobox_harmonize_location_lighting / LightingGafferService / lighting_* tools',
                     targetTool: 'geobox_harmonize_location_lighting',
                     targetService: 'LocationObjectLightingService',
-                    details: 'Invoke lighting_estimate_from_photo or lighting_configure_gaffer_rig, or run lighting_optimize_closed_loop to achieve >=95% photometric correlation.'
+                    details: 'Invoke lighting_estimate_from_photo to read the lighting from a photo, or lighting_configure_gaffer_rig to build a rig.'
                 };
 
             } else if (/360\s*panorama|4k\s*panorama|monumental\s*panorama|equirectangular|seam\s*heal|nadir\s*inpaint|zenith|polar\s*pinch|panorama_heal_seam|panorama_reproject_zenith|panorama_generate_4k/i.test(lower)) {
@@ -679,14 +679,14 @@ export class TaskCapabilityResolver {
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('Nano Banana Color Transfer Pipeline (Method 2: Extract-then-Apply)');
                 nativeCapabilities.push('NanoBananaColorService (buildExtractPalettePrompt, parseExtractedPalette, buildApplyPalettePrompt)');
-                nativeCapabilities.push('nano_banana_transfer_color, nano_banana_extract_color_palette & nano_banana_apply_color_palette Agent Tools');
-                rationale = 'Native Nano Banana Two-Step Extract-then-Apply color transfer extracts structured palette DNA and lighting atmosphere from a reference image, and applies global color overrides to the target image with strict non-negotiable geometry locking.';
+                nativeCapabilities.push('nano_banana_apply_color_palette Agent Tool (geometry-locked color override prompt from a complete palette)');
+                rationale = 'Read the palette and lighting atmosphere from the reference image, then nano_banana_apply_color_palette builds the global color override prompt that applies it to the target image with strict non-negotiable geometry locking.';
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
-                    serviceOrTool: 'NanoBananaColorService & nano_banana_transfer_color tool',
-                    targetTool: 'nano_banana_transfer_color',
+                    serviceOrTool: 'NanoBananaColorService & nano_banana_apply_color_palette tool',
+                    targetTool: 'nano_banana_apply_color_palette',
                     targetService: 'NanoBananaColorService',
-                    details: 'Invoke nano_banana_transfer_color or nano_banana_extract_color_palette / nano_banana_apply_color_palette to transfer color palette with geometry locking.'
+                    details: 'Read the reference palette, then invoke nano_banana_apply_color_palette with the complete palette to build the geometry-locked color override prompt.'
                 };
             } else if (/beautif|nano\s*banana[\s\w-]{0,30}(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
                 canSolveNatively = true;

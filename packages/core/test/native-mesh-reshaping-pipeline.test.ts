@@ -9,7 +9,9 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
 import {
     NativeMeshReshaperService,
     MeshReshapingService,
@@ -106,30 +108,67 @@ describe('Native Prompt-Driven Mesh Reshaping Pipeline (Tier 1)', () => {
         expect(fs.existsSync(outGlb)).toBe(true);
     });
 
-    it('4. should correctly dispatch Gemini agent tools mesh_reshape_via_prompt & mesh_apply_deformers', async () => {
+    it('4. should correctly dispatch Gemini agent tools mesh_reshape_via_prompt & mesh_apply_deformers on a given GLB', async () => {
         expect(MESH_SHAPING_TOOL_DECLARATIONS.length).toBeGreaterThanOrEqual(2);
+        // Input mesh for the tools: the service writes its cylinder benchmark to a GLB file.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-mesh-tools-'));
+        const inputGlbPath = path.join(dir, 'cylinder.glb');
+        await NativeMeshReshaperService.reshapeMesh({ benchmark: 'cylinder', operations: [{ type: 'taper', factor: 0.9, axis: 'y' }], outputGlbPath: inputGlbPath });
+        expect(fs.existsSync(inputGlbPath)).toBe(true);
 
-        // mesh_reshape_via_prompt
-        const promptOutcome = await meshShapingHandlers.mesh_reshape_via_prompt({
-            prompt: 'Taper by 0.5 and twist 45 degrees',
-            benchmark: 'cylinder'
-        }, {} as any);
+        try {
+            // mesh_reshape_via_prompt
+            const promptOutcome = await meshShapingHandlers.mesh_reshape_via_prompt({
+                prompt: 'Taper by 0.5 and twist 45 degrees',
+                inputGlbPath,
+                outputGlbPath: path.join(dir, 'reshaped.glb')
+            }, {} as any);
 
-        expect(promptOutcome.status).toBe('completed');
-        expect(promptOutcome.resultPayload.status).toBe('success');
-        expect(promptOutcome.summaryResult).toContain('Successfully reshaped mesh');
+            expect(promptOutcome.status).toBe('completed');
+            expect(promptOutcome.resultPayload.status).toBe('success');
+            expect(promptOutcome.summaryResult).toContain('Successfully reshaped mesh');
+            expect((promptOutcome.resultPayload.telemetry as any).inputVertices).toBeGreaterThan(0);
+            expect(fs.readFileSync(path.join(dir, 'reshaped.glb')).readUInt32LE(0)).toBe(0x46546C67);
 
-        // mesh_apply_deformers
-        const deformersOutcome = await meshShapingHandlers.mesh_apply_deformers({
-            benchmark: 'cube',
-            operations: [
-                { type: 'taper', factor: 0.6, axis: 'y' },
-                { type: 'twist', angle: 30, axis: 'y' }
-            ]
-        }, {} as any);
+            // mesh_apply_deformers
+            const deformersOutcome = await meshShapingHandlers.mesh_apply_deformers({
+                inputGlbPath,
+                outputGlbPath: path.join(dir, 'deformed.glb'),
+                operations: [
+                    { type: 'taper', factor: 0.6, axis: 'y' },
+                    { type: 'twist', angle: 30, axis: 'y' }
+                ]
+            }, {} as any);
 
-        expect(deformersOutcome.status).toBe('completed');
-        expect(deformersOutcome.resultPayload.status).toBe('success');
+            expect(deformersOutcome.status).toBe('completed');
+            expect(deformersOutcome.resultPayload.status).toBe('success');
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('4b. mesh tools fail instead of deforming a stand-in mesh or inventing operations', async () => {
+        await expect(meshShapingHandlers.mesh_reshape_via_prompt({ prompt: 'Taper by 0.5', benchmark: 'cylinder' }, {} as any))
+            .rejects.toBeInstanceOf(MissingInputError);
+        await expect(meshShapingHandlers.mesh_apply_deformers({ operations: [{ type: 'taper', factor: 0.6 }], inputGlbPath: path.join(os.tmpdir(), 'no-such-mesh.glb') }, {} as any))
+            .rejects.toThrow('does not exist');
+        await expect(meshShapingHandlers.mesh_apply_deformers({ operations: [], inputGlbPath: 'x.glb' }, {} as any))
+            .rejects.toThrow('mesh_apply_deformers needs operations');
+
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-mesh-noop-'));
+        const inputGlbPath = path.join(dir, 'in.glb');
+        fs.writeFileSync(inputGlbPath, Buffer.from('glTF'));
+        try {
+            // A prompt with no deformation in it is refused (the service would otherwise apply a stock taper and twist).
+            await expect(meshShapingHandlers.mesh_reshape_via_prompt({ prompt: 'make it nicer', inputGlbPath }, {} as any))
+                .rejects.toThrow('no deformation');
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+        for (const decl of MESH_SHAPING_TOOL_DECLARATIONS) {
+            expect(decl.parameters.required, decl.name).toContain('inputGlbPath');
+            expect(Object.keys(decl.parameters.properties || {}), decl.name).not.toContain('benchmark');
+        }
     });
 
     it('5. should route mesh deformation prompts natively to cpp-3d-engine via TaskCapabilityResolver', () => {

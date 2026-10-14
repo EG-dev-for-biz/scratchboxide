@@ -305,7 +305,8 @@ describe('Agent Lighting Intelligence - Unit 5: Gemini Agent Domain Pack & Opera
         const toolNames = LIGHTING_TOOL_DECLARATIONS.map(t => t.name);
         expect(toolNames).toContain('lighting_estimate_from_photo');
         expect(toolNames).toContain('lighting_configure_gaffer_rig');
-        expect(toolNames).toContain('lighting_optimize_closed_loop');
+        // It optimized against a synthetic plate and ignored the photo it was given, so it is not offered.
+        expect(toolNames).not.toContain('lighting_optimize_closed_loop');
 
         const handler = lightingHandlers.lighting_configure_gaffer_rig;
         const res = await handler({
@@ -323,21 +324,13 @@ describe('Agent Lighting Intelligence - Unit 5: Gemini Agent Domain Pack & Opera
         expect(res.summaryResult).toContain('8:1');
     });
 
-    it('should execute lighting_optimize_closed_loop handler and report convergence score', async () => {
+    it('has no lighting_optimize_closed_loop handler, and the resolver no longer points the model at it', async () => {
         const { lightingHandlers } = await import('../src/node/gemini/tools/lighting-tools');
-        const handler = lightingHandlers.lighting_optimize_closed_loop;
+        expect(lightingHandlers.lighting_optimize_closed_loop).toBeUndefined();
 
-        const res = await handler({
-            targetImagePath: 'mock_target.png',
-            initialRigStyle: 'three_point',
-            targetCorrelationScore: 0.95,
-            maxIterations: 15
-        }, {} as any);
-
-        expect(res.resultPayload.success).toBe(true);
-        expect(res.resultPayload.finalCorrelationScore).toBeGreaterThanOrEqual(0.95);
-        expect(res.summaryResult).toContain('Closed-loop lighting optimization converged');
-        expect(res.summaryResult).toContain('% correlation');
+        const { resolveTaskCapability } = await import('../src/node/agent/task-capability-resolver');
+        const capability = await resolveTaskCapability({ userGoal: 'match the lighting of this photo with a gaffer rig' });
+        expect(JSON.stringify(capability)).not.toContain('lighting_optimize_closed_loop');
     });
 
     it('should route cinematic lighting requests to Tier 1 native capabilities via task-capability-resolver', async () => {

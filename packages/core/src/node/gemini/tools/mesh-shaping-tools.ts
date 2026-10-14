@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import * as fs from 'fs-extra';
 import { NativeMeshReshaperService, MeshDeformationOp } from '../../3d-engine/native-mesh-reshaper-service';
 import {
     NativeTileRestructurerService,
@@ -15,10 +16,48 @@ import {
     type TileStyle,
     type RestructureMaterialMode
 } from '../../3d-engine/native-tile-restructurer-service';
-import type { ToolDeclaration, ToolHandler } from './types';
+import { GeneratorFailedError, MissingInputError } from '../../../common/errors/pipeline-errors';
+import type { ToolDeclaration, ToolHandler, ToolParameterSchema } from './types';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
+}
+
+const INPUT_GLB_PARAMETER: ToolParameterSchema = {
+    type: 'STRING',
+    description: 'Path to the input binary glTF 2.0 (.glb) mesh (required; the tool fails rather than deform a stand-in mesh).'
+};
+
+/** The mesh to process must exist on disk; the native binaries would otherwise build a benchmark mesh instead. */
+async function requireInputGlb(tool: string, value: unknown): Promise<string> {
+    const inputGlbPath = asString(value);
+    if (!inputGlbPath) {
+        throw new MissingInputError(tool, 'inputGlbPath', 'give the path of the .glb to process; no benchmark mesh is substituted');
+    }
+    if (!(await fs.pathExists(inputGlbPath))) {
+        throw new MissingInputError(tool, 'inputGlbPath', `${inputGlbPath} does not exist`);
+    }
+    return inputGlbPath;
+}
+
+/** A native run that read no vertices, reported failure, or wrote no GLB did not do what was asked. */
+function requireNativeOutput(tool: string, inputGlbPath: string, result: {
+    success: boolean; outputGlbPath: string; glbBuffer?: Buffer; stdout: string; stderr?: string;
+    telemetry: { inputVertices?: number; status?: string };
+}): void {
+    const detail = (result.stderr || result.stdout || '').trim().slice(-1500);
+    if (!/\[TELEMETRY\]/.test(result.stdout || '')) {
+        throw new GeneratorFailedError('cpp', `${tool}: the native pipeline reported no telemetry for ${inputGlbPath}. ${detail}`);
+    }
+    if (!result.success || (result.telemetry.status && result.telemetry.status !== 'success')) {
+        throw new GeneratorFailedError('cpp', `${tool}: the native pipeline reported status ${result.telemetry.status || 'failed'} for ${inputGlbPath}. ${detail}`);
+    }
+    if (!((result.telemetry.inputVertices ?? 0) > 0)) {
+        throw new GeneratorFailedError('cpp', `${tool}: the native pipeline read no vertices from ${inputGlbPath}. ${detail}`);
+    }
+    if (!result.glbBuffer) {
+        throw new GeneratorFailedError('cpp', `${tool}: the native pipeline wrote no GLB to ${result.outputGlbPath}. ${detail}`);
+    }
 }
 
 export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -32,20 +71,13 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Natural language description of desired deformations (e.g., "taper top by 40% and twist 45 degrees along Y", "bend 30 degrees towards X", "sculpt clay stroke along spine", "smooth surface").'
                 },
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path to input binary glTF 2.0 (.glb) mesh. If omitted, uses specified benchmark.'
-                },
+                inputGlbPath: INPUT_GLB_PARAMETER,
                 outputGlbPath: {
                     type: 'STRING',
                     description: 'Optional path where reshaped binary glTF 2.0 (.glb) will be written. Defaults to reshaped_<timestamp>.glb.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Synthetic benchmark mesh to use if inputGlbPath is not supplied: "cylinder", "cube", or "sculpture". Defaults to "cylinder".'
                 }
             },
-            required: ['prompt']
+            required: ['prompt', 'inputGlbPath']
         }
     },
     {
@@ -95,20 +127,13 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                         }
                     }
                 },
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path to input binary glTF 2.0 (.glb) mesh.'
-                },
+                inputGlbPath: INPUT_GLB_PARAMETER,
                 outputGlbPath: {
                     type: 'STRING',
                     description: 'Optional path where reshaped binary glTF 2.0 (.glb) will be written.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Synthetic benchmark mesh: "cylinder", "cube", or "sculpture".'
                 }
             },
-            required: ['operations']
+            required: ['operations', 'inputGlbPath']
         }
     },
     {
@@ -121,17 +146,10 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Natural language instruction (e.g. "Terrace the hillside into 3 steps, level a central sun plaza, and place 4 solar obelisks at the corners and a bio-dome at the apex").'
                 },
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path to input 3D tile binary glTF 2.0 (.glb) mesh.'
-                },
+                inputGlbPath: INPUT_GLB_PARAMETER,
                 outputGlbPath: {
                     type: 'STRING',
                     description: 'Optional path where restructured binary glTF 2.0 (.glb) will be written.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Synthetic benchmark tile to use if inputGlbPath is not supplied: "hillside_monument" or "city_district".'
                 },
                 materialMode: {
                     type: 'STRING',
@@ -142,7 +160,7 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     description: 'Clay shading preset if studio_clay mode: "ArchitecturalWhite", "Sandstone", "WarmTerracotta", "ConcreteBrutalist", or "SlateGrey".'
                 }
             },
-            required: ['prompt']
+            required: ['prompt', 'inputGlbPath']
         }
     },
     {
@@ -195,10 +213,10 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                         }
                     }
                 },
-                inputGlbPath: { type: 'STRING' },
-                outputGlbPath: { type: 'STRING' },
-                benchmark: { type: 'STRING' }
-            }
+                inputGlbPath: INPUT_GLB_PARAMETER,
+                outputGlbPath: { type: 'STRING' }
+            },
+            required: ['inputGlbPath']
         }
     }
 ];
@@ -209,19 +227,27 @@ const tileRestructurerService = new NativeTileRestructurerService();
 export const meshShapingHandlers: Record<string, ToolHandler> = {
     mesh_reshape_via_prompt: async (args, _ctx) => {
         const prompt = asString(args.prompt);
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        if (!prompt.trim()) {
+            throw new MissingInputError('mesh_reshape_via_prompt', 'prompt', 'describe the deformation to apply');
+        }
+        const inputGlbPath = await requireInputGlb('mesh_reshape_via_prompt', args.inputGlbPath);
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as 'cylinder' | 'cube' | 'sculpture') || 'cylinder';
+        // The service applies a stock taper and twist when it reads no operation from the prompt; refuse that instead.
+        const operations = reshaperService.parsePromptToOperations(prompt);
+        if (operations.length === 0) {
+            throw new MissingInputError('mesh_reshape_via_prompt', 'prompt',
+                `no deformation (taper, twist, bend, bulge, shear, lattice, sculpt, subdivide, repair, weathering) could be read from "${prompt}"; use mesh_apply_deformers with explicit operations`);
+        }
 
         const result = await reshaperService.reshapeMesh({
-            prompt,
+            operations,
             inputGlbPath,
-            outputGlbPath,
-            benchmark
+            outputGlbPath
         });
+        requireNativeOutput('mesh_reshape_via_prompt', inputGlbPath, result);
 
         return {
-            status: result.success ? 'completed' : 'failed',
+            status: 'completed',
             resultPayload: {
                 status: result.success ? 'success' : 'failed',
                 success: result.success,
@@ -235,19 +261,21 @@ export const meshShapingHandlers: Record<string, ToolHandler> = {
 
     mesh_apply_deformers: async (args, _ctx) => {
         const rawOps = Array.isArray(args.operations) ? (args.operations as MeshDeformationOp[]) : [];
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        if (rawOps.length === 0) {
+            throw new MissingInputError('mesh_apply_deformers', 'operations', 'give at least one deformation operation; none is chosen for you');
+        }
+        const inputGlbPath = await requireInputGlb('mesh_apply_deformers', args.inputGlbPath);
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as 'cylinder' | 'cube' | 'sculpture') || 'cylinder';
 
         const result = await reshaperService.reshapeMesh({
             operations: rawOps,
             inputGlbPath,
-            outputGlbPath,
-            benchmark
+            outputGlbPath
         });
+        requireNativeOutput('mesh_apply_deformers', inputGlbPath, result);
 
         return {
-            status: result.success ? 'completed' : 'failed',
+            status: 'completed',
             resultPayload: {
                 status: result.success ? 'success' : 'failed',
                 success: result.success,
@@ -261,9 +289,11 @@ export const meshShapingHandlers: Record<string, ToolHandler> = {
 
     tile_restructure_via_prompt: async (args, _ctx) => {
         const prompt = asString(args.prompt);
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        if (!prompt.trim()) {
+            throw new MissingInputError('tile_restructure_via_prompt', 'prompt', 'describe the restructuring to apply');
+        }
+        const inputGlbPath = await requireInputGlb('tile_restructure_via_prompt', args.inputGlbPath);
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as 'hillside_monument' | 'city_district') || 'hillside_monument';
         const materialMode = (asString(args.materialMode) as RestructureMaterialMode) || undefined;
         const clayPreset = asString(args.clayPreset) || undefined;
 
@@ -271,13 +301,13 @@ export const meshShapingHandlers: Record<string, ToolHandler> = {
             prompt,
             inputGlbPath,
             outputGlbPath,
-            benchmark,
             materialMode,
             clayPreset
         });
+        requireNativeOutput('tile_restructure_via_prompt', inputGlbPath, result);
 
         return {
-            status: result.success ? 'completed' : 'failed',
+            status: 'completed',
             resultPayload: {
                 status: result.success ? 'success' : 'failed',
                 success: result.success,
@@ -295,9 +325,8 @@ export const meshShapingHandlers: Record<string, ToolHandler> = {
         const clayPreset = asString(args.clayPreset) || 'ArchitecturalWhite';
         const terraforming = Array.isArray(args.terraforming) ? (args.terraforming as TerraformingOp[]) : [];
         const primitives = Array.isArray(args.primitives) ? (args.primitives as PrimitiveGraft[]) : [];
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        const inputGlbPath = await requireInputGlb('tile_apply_terraforming_and_primitives', args.inputGlbPath);
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as 'hillside_monument' | 'city_district') || 'hillside_monument';
 
         const result = await tileRestructurerService.restructureTile({
             config: {
@@ -308,12 +337,12 @@ export const meshShapingHandlers: Record<string, ToolHandler> = {
                 primitives
             },
             inputGlbPath,
-            outputGlbPath,
-            benchmark
+            outputGlbPath
         });
+        requireNativeOutput('tile_apply_terraforming_and_primitives', inputGlbPath, result);
 
         return {
-            status: result.success ? 'completed' : 'failed',
+            status: 'completed',
             resultPayload: {
                 status: result.success ? 'success' : 'failed',
                 success: result.success,

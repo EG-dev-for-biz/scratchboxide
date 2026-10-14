@@ -9,7 +9,9 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
 import {
     NativeTileRestructurerService,
     TileRestructurerService,
@@ -132,27 +134,50 @@ describe('Native 3D Tile Terraforming & Primitive Restructuring Pipeline (Tier 1
         const parametricTool = MESH_SHAPING_TOOL_DECLARATIONS.find(t => t.name === 'tile_apply_terraforming_and_primitives');
         expect(parametricTool).toBeDefined();
 
-        // Dispatch tile_restructure_via_prompt
-        const promptOutcome = await meshShapingHandlers.tile_restructure_via_prompt({
-            prompt: 'Terrace hillside and place 4 obelisks',
+        // The tools need a real input tile; the service writes its hillside benchmark to a GLB file for them.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tile-tools-'));
+        const inputGlbPath = path.join(dir, 'hillside.glb');
+        await NativeTileRestructurerService.restructureTile({
             benchmark: 'hillside_monument',
-            materialMode: 'studio_clay'
-        }, {} as any);
+            config: { style: 'NeoclassicalMonument', materialMode: 'studio_clay', clayPreset: 'ArchitecturalWhite', terraforming: [], primitives: [] },
+            outputGlbPath: inputGlbPath
+        });
+        expect(fs.existsSync(inputGlbPath)).toBe(true);
 
-        expect(promptOutcome.status).toBe('completed');
-        expect(promptOutcome.resultPayload.status).toBe('success');
-        expect(promptOutcome.summaryResult).toContain('Successfully restructured 3D tile');
+        try {
+            // Without an input tile the tools fail; no benchmark tile is substituted.
+            await expect(meshShapingHandlers.tile_restructure_via_prompt({ prompt: 'Terrace hillside', benchmark: 'hillside_monument' }, {} as any))
+                .rejects.toBeInstanceOf(MissingInputError);
+            await expect(meshShapingHandlers.tile_apply_terraforming_and_primitives({ terraforming: [] }, {} as any))
+                .rejects.toBeInstanceOf(MissingInputError);
 
-        // Dispatch tile_apply_terraforming_and_primitives
-        const parametricOutcome = await meshShapingHandlers.tile_apply_terraforming_and_primitives({
-            benchmark: 'hillside_monument',
-            style: 'NeoclassicalMonument',
-            terraforming: [{ type: 'terrace', stepHeight: 3.0, stepCount: 3 }],
-            primitives: [{ type: 'obelisk', count: 4, anchor: 'corners' }]
-        }, {} as any);
+            // Dispatch tile_restructure_via_prompt
+            const promptOutcome = await meshShapingHandlers.tile_restructure_via_prompt({
+                prompt: 'Terrace hillside and place 4 obelisks',
+                inputGlbPath,
+                outputGlbPath: path.join(dir, 'restructured.glb'),
+                materialMode: 'studio_clay'
+            }, {} as any);
 
-        expect(parametricOutcome.status).toBe('completed');
-        expect(parametricOutcome.resultPayload.status).toBe('success');
+            expect(promptOutcome.status).toBe('completed');
+            expect(promptOutcome.resultPayload.status).toBe('success');
+            expect(promptOutcome.summaryResult).toContain('Successfully restructured 3D tile');
+            expect((promptOutcome.resultPayload.telemetry as any).inputVertices).toBeGreaterThan(0);
+
+            // Dispatch tile_apply_terraforming_and_primitives
+            const parametricOutcome = await meshShapingHandlers.tile_apply_terraforming_and_primitives({
+                inputGlbPath,
+                outputGlbPath: path.join(dir, 'terraformed.glb'),
+                style: 'NeoclassicalMonument',
+                terraforming: [{ type: 'terrace', stepHeight: 3.0, stepCount: 3 }],
+                primitives: [{ type: 'obelisk', count: 4, anchor: 'corners' }]
+            }, {} as any);
+
+            expect(parametricOutcome.status).toBe('completed');
+            expect(parametricOutcome.resultPayload.status).toBe('success');
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 
     it('5. should execute direct-dispatch operator sb_restructure_tile_mesh in generative canvas engine', () => {

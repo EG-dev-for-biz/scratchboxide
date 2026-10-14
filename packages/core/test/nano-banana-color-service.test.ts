@@ -232,84 +232,75 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
     });
 
     describe('Gemini Agent Tools & Registry Integration', () => {
-        it('defines all 3 Nano Banana tools with proper schema properties', () => {
-            expect(NANO_BANANA_TOOL_DECLARATIONS.length).toBe(3);
+        const completePalette: ExtractedColorPalette = {
+            primaryTones: [{ name: 'Fjord Slate', hex: '#3A4A5C', role: 'Ambient' }],
+            accentTones: [{ name: 'Lichen Ochre', hex: '#B8952E', role: 'Specular' }],
+            shadowProfile: { tone: 'Blue-grey shadow', temperature: 'cool', hex: '#1C2430' },
+            highlightProfile: { tone: 'Pale morning light', temperature: 'warm', hex: '#F2E6C9' },
+            lightingAtmosphere: 'Overcast northern morning with soft directional light',
+            rawSummary: ''
+        };
 
-            const extractTool = NANO_BANANA_TOOL_DECLARATIONS.find(t => t.name === 'nano_banana_extract_color_palette');
-            expect(extractTool).toBeDefined();
-            expect(extractTool?.parameters.required).toContain('referenceImageUrl');
-
-            const applyTool = NANO_BANANA_TOOL_DECLARATIONS.find(t => t.name === 'nano_banana_apply_color_palette');
-            expect(applyTool).toBeDefined();
-            expect(applyTool?.parameters.required).toContain('targetImageUrl');
-            expect(applyTool?.parameters.required).toContain('palette');
-
-            const transferTool = NANO_BANANA_TOOL_DECLARATIONS.find(t => t.name === 'nano_banana_transfer_color');
-            expect(transferTool).toBeDefined();
-            expect(transferTool?.parameters.required).toContain('referenceImageUrl');
-            expect(transferTool?.parameters.required).toContain('targetImageUrl');
-        });
-
-        it('infers tool group as "workspace" for all nano_banana_* tools', () => {
-            expect(inferToolGroup('nano_banana_extract_color_palette')).toBe('workspace');
+        it('offers only the palette application tool: the extract and transfer tools returned a stock palette for any image', () => {
+            expect(NANO_BANANA_TOOL_DECLARATIONS.map(t => t.name)).toEqual(['nano_banana_apply_color_palette']);
+            const applyTool = NANO_BANANA_TOOL_DECLARATIONS[0];
+            expect(applyTool.parameters.required).toContain('targetImageUrl');
+            expect(applyTool.parameters.required).toContain('palette');
+            expect(applyTool.description).toContain('does not edit the image');
             expect(inferToolGroup('nano_banana_apply_color_palette')).toBe('workspace');
-            expect(inferToolGroup('nano_banana_transfer_color')).toBe('workspace');
+
+            const registry = createDefaultToolRegistry();
+            expect(registry.get('nano_banana_extract_color_palette')).toBeUndefined();
+            expect(registry.get('nano_banana_transfer_color')).toBeUndefined();
         });
 
-        it('registers tools in createDefaultToolRegistry and executes dispatch', async () => {
+        it('builds the override prompt from exactly the palette given', async () => {
             const registry = createDefaultToolRegistry();
-
-            // 1. Dispatch extraction tool
-            const extractOutcome = await registry.dispatch('nano_banana_extract_color_palette', {
-                referenceImageUrl: 'https://example.com/reference.jpg',
-                focusArea: 'global'
-            }, {} as any);
-
-            expect(extractOutcome.exec.status).toBe('completed');
-            expect((extractOutcome.resultPayload as any).success).toBe(true);
-            expect((extractOutcome.resultPayload as any).palette).toBeDefined();
-            expect((extractOutcome.resultPayload as any).markdownSwatches).toBeDefined();
-
-            // 2. Dispatch application tool
             const applyOutcome = await registry.dispatch('nano_banana_apply_color_palette', {
                 targetImageUrl: 'https://example.com/target.jpg',
-                palette: (extractOutcome.resultPayload as any).palette,
+                palette: completePalette,
                 preserveSkinTones: true,
                 contrastCurve: 'cinematic',
                 aspectRatio: '16:9'
             }, {} as any);
 
             expect(applyOutcome.exec.status).toBe('completed');
-            expect((applyOutcome.resultPayload as any).success).toBe(true);
-            expect((applyOutcome.resultPayload as any).geometryLocked).toBe(true);
-            expect((applyOutcome.resultPayload as any).applicationPrompt).toContain('GLOBAL COLOR OVERRIDE');
+            const prompt = (applyOutcome.resultPayload as any).applicationPrompt as string;
+            expect(prompt).toContain('GLOBAL COLOR OVERRIDE');
+            expect(prompt).toContain('Fjord Slate (#3A4A5C');
+            expect(prompt).toContain('Lichen Ochre (#B8952E');
+            // None of the builder's stock colors are filled in.
+            expect(prompt).not.toContain('#0F172A');
+            expect(prompt).not.toContain('#06B6D4');
+            expect(applyOutcome.exec.summaryResult).toContain('The image itself is not edited yet.');
 
-            // 3. Dispatch end-to-end transfer tool
-            const transferOutcome = await registry.dispatch('nano_banana_transfer_color', {
-                referenceImageUrl: 'https://example.com/palette_ref.jpg',
-                targetImageUrl: 'https://example.com/lineart_target.png',
-                preserveSkinTones: false,
-                contrastCurve: 'high-contrast'
+            const fromJson = await registry.dispatch('nano_banana_apply_color_palette', {
+                targetImageUrl: 'https://example.com/target.jpg',
+                palette: JSON.stringify(completePalette)
             }, {} as any);
-
-            expect(transferOutcome.exec.status).toBe('completed');
-            expect((transferOutcome.resultPayload as any).success).toBe(true);
-            expect((transferOutcome.resultPayload as any).telemetry.geometryLocked).toBe(true);
+            expect(fromJson.exec.status).toBe('completed');
         });
 
-        it('validates required arguments and throws informative errors', async () => {
+        it('fails with MissingInputError for a missing or incomplete palette instead of filling in stock colors', async () => {
             const registry = createDefaultToolRegistry();
 
-            const failExtract = await registry.dispatch('nano_banana_extract_color_palette', {}, {} as any);
-            expect(failExtract.exec.status).toBe('failed');
-            expect(failExtract.resultPayload.error).toContain('referenceImageUrl');
+            const missing = await registry.dispatch('nano_banana_apply_color_palette', { targetImageUrl: 'test.jpg' }, {} as any);
+            expect(missing.exec.status).toBe('failed');
+            expect(missing.resultPayload.error).toContain('palette');
 
-            const failApply = await registry.dispatch('nano_banana_apply_color_palette', { targetImageUrl: 'test.jpg' }, {} as any);
-            expect(failApply.exec.status).toBe('failed');
-            expect(failApply.resultPayload.error).toContain('palette');
+            const freeText = await registry.dispatch('nano_banana_apply_color_palette', { targetImageUrl: 'test.jpg', palette: 'warm sunset tones' }, {} as any);
+            expect(freeText.exec.status).toBe('failed');
+            expect(freeText.resultPayload.error).toContain('JSON object');
+
+            const noAccents = await registry.dispatch('nano_banana_apply_color_palette', {
+                targetImageUrl: 'test.jpg',
+                palette: { ...completePalette, accentTones: [] }
+            }, {} as any);
+            expect(noAccents.exec.status).toBe('failed');
+            expect(noAccents.resultPayload.error).toContain('palette.accentTones');
         });
 
-        it('buildToolDeclarations dynamically includes nano_banana tools on color transfer prompts', () => {
+        it('buildToolDeclarations includes the palette application tool on color transfer prompts', () => {
             const registry = createDefaultToolRegistry();
 
             const configs = buildToolDeclarations({
@@ -317,14 +308,14 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             }, registry);
 
             const funcDecls = configs?.flatMap(c => c.functionDeclarations || []) || [];
-            expect(funcDecls.some(d => d.name === 'nano_banana_extract_color_palette')).toBe(true);
             expect(funcDecls.some(d => d.name === 'nano_banana_apply_color_palette')).toBe(true);
-            expect(funcDecls.some(d => d.name === 'nano_banana_transfer_color')).toBe(true);
+            expect(funcDecls.some(d => d.name === 'nano_banana_extract_color_palette')).toBe(false);
+            expect(funcDecls.some(d => d.name === 'nano_banana_transfer_color')).toBe(false);
         });
     });
 
     describe('Task Capability Resolver Integration', () => {
-        it('resolves Nano Banana color transfer requests natively to Tier 1', () => {
+        it('resolves Nano Banana color transfer requests natively to Tier 1 with the tool that exists', () => {
             const resolution = TaskCapabilityResolver.resolveTaskCapability(
                 'Extract and apply color from reference image to target image using nano banana method 2'
             );
@@ -333,7 +324,7 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             expect(resolution.tier1Assessment.canSolveNatively).toBe(true);
             expect(resolution.tier1Assessment.primaryNativeEngine).toBe('google-models');
             expect(resolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('Nano Banana Color Transfer Pipeline'))).toBe(true);
-            expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toContain('nano_banana_transfer_color');
+            expect(resolution.tier1Assessment.suggestedNativeAction?.targetTool).toBe('nano_banana_apply_color_palette');
         });
     });
 });

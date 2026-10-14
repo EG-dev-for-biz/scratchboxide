@@ -181,7 +181,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 },
                 {
                     prompt: 'Track video points with TAPIR and solve 4DGS rigid clusters',
-                    expected: ['tapir_track_video_points', 'build_4dgs_from_video']
+                    expected: ['build_4dgs_from_video']
                 },
                 {
                     prompt: 'Build video timeline and audit with visual critic',
@@ -310,19 +310,20 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
     // Category 4: Real-World Google 3D Tiles & UTDRA Metrology
     // =========================================================================
     describe('4. Google 3D Tiles & UTDRA Decomposition Tools', () => {
-        it('executes utdra_probe_tile across geometric benchmarks', async () => {
+        it('executes utdra_probe_tile on a given tile GLB', async () => {
             const res = await registry.dispatch('utdra_probe_tile', {
-                benchmark: 'urban',
-                samplePointCount: 1500
+                inputGlbPath: existingGlbPath
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
             expect((res.resultPayload as any).telemetry.dominantDomain).toBeDefined();
+            expect((res.resultPayload as any).telemetry.inputTriangles).toBe(2);
         });
 
         it('executes utdra_decompose_tile with non-destructive classification', async () => {
             const res = await registry.dispatch('utdra_decompose_tile', {
-                benchmark: 'hybrid'
+                inputGlbPath: existingGlbPath,
+                outputGlbPath: path.join(testDir, 'utdra_decomposed.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).mode).toBe('full');
@@ -331,8 +332,9 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
 
         it('executes utdra_slice_elevation with Sutherland-Hodgman clipping', async () => {
             const res = await registry.dispatch('utdra_slice_elevation', {
-                cutoffY: 5.0,
-                benchmark: 'slicer'
+                cutoffY: 0.5,
+                inputGlbPath: existingGlbPath,
+                outputGlbPath: path.join(testDir, 'utdra_sliced.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
@@ -342,10 +344,17 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
         it('executes utdra_carve_bridge_voids', async () => {
             const res = await registry.dispatch('utdra_carve_bridge_voids', {
                 minVoidHeightMeters: 3.5,
-                benchmark: 'bridge'
+                inputGlbPath: existingGlbPath,
+                outputGlbPath: path.join(testDir, 'utdra_carved.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
+        });
+
+        it('fails a UTDRA call that names no tile instead of processing a benchmark mesh', async () => {
+            const res = await registry.dispatch('utdra_probe_tile', { benchmark: 'urban' }, mockContext);
+            expect(res.exec.status).toBe('failed');
+            expect(String((res.resultPayload as any).error)).toContain('utdra_probe_tile needs inputGlbPath');
         });
 
         it('executes google_3d_tiles_clay_blockout_runner dry run', async () => {
@@ -371,7 +380,8 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                     { type: 'taper', axis: 'y', factor: 0.65 },
                     { type: 'twist', axis: 'y', factor: 0.5 }
                 ],
-                benchmark: 'cylinder'
+                inputGlbPath: existingGlbPath,
+                outputGlbPath: path.join(testDir, 'mesh_deformed.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
@@ -381,7 +391,8 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
         it('executes mesh_reshape_via_prompt with parametric synthesis', async () => {
             const res = await registry.dispatch('mesh_reshape_via_prompt', {
                 prompt: 'taper the top of the cylinder by 35% and twist 20 degrees',
-                benchmark: 'cylinder'
+                inputGlbPath: existingGlbPath,
+                outputGlbPath: path.join(testDir, 'mesh_reshaped.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
@@ -391,7 +402,8 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
         it('executes tile_restructure_via_prompt for architectural terraforming', async () => {
             const res = await registry.dispatch('tile_restructure_via_prompt', {
                 prompt: 'flatten ground foundation and preserve upper architectural crown',
-                benchmark: 'hillside_monument'
+                inputGlbPath: existingGlbPath,
+                outputGlbPath: path.join(testDir, 'tile_restructured.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
@@ -402,10 +414,20 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 terraforming: [
                     { type: 'plateau_level', targetElevation: 0.0, radius: 25.0 }
                 ],
-                benchmark: 'city_district'
+                inputGlbPath: existingGlbPath,
+                outputGlbPath: path.join(testDir, 'tile_terraformed.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
+        });
+
+        it('fails a mesh tool that names no mesh instead of deforming a benchmark cylinder', async () => {
+            const res = await registry.dispatch('mesh_apply_deformers', {
+                operations: [{ type: 'taper', axis: 'y', factor: 0.65 }],
+                benchmark: 'cylinder'
+            }, mockContext);
+            expect(res.exec.status).toBe('failed');
+            expect(String((res.resultPayload as any).error)).toContain('mesh_apply_deformers needs inputGlbPath');
         });
     });
 
@@ -519,15 +541,15 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect((res.resultPayload as any).fillRate).toBeGreaterThan(0.5);
         });
 
-        it('executes nano_banana_extract_color_palette & nano_banana_apply_color_palette', async () => {
-            const extractRes = await registry.dispatch('nano_banana_extract_color_palette', {
-                referenceImageUrl: '/workspace/input_photo.png',
-                focusArea: 'global'
-            }, mockContext);
-            expect(extractRes.exec.status).toBe('completed');
-            const palette = (extractRes.resultPayload as any).palette;
-            expect(palette).toBeDefined();
-            expect(palette.primaryTones.length).toBeGreaterThan(0);
+        it('executes nano_banana_apply_color_palette with a complete palette (the stock-palette extract tool is gone)', async () => {
+            expect(registry.get('nano_banana_extract_color_palette')).toBeUndefined();
+            const palette = {
+                primaryTones: [{ name: 'Travertine', hex: '#D8CDB8' }],
+                accentTones: [{ name: 'Terracotta', hex: '#B5563A' }],
+                shadowProfile: { tone: 'Umber shadow', temperature: 'warm' },
+                highlightProfile: { tone: 'Late sun', temperature: 'warm' },
+                lightingAtmosphere: 'Low warm sun'
+            };
 
             const applyRes = await registry.dispatch('nano_banana_apply_color_palette', {
                 palette,
@@ -614,16 +636,8 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
     // Category 10: 4D Dynamic Gaussian Splats & TAPIR Point Tracking
     // =========================================================================
     describe('10. 4DGS Tracking & Dynamic Avatar Tools', () => {
-        it('executes tapir_track_video_points with sub-pixel optical flow', async () => {
-            const res = await registry.dispatch('tapir_track_video_points', {
-                samplerType: 'hybrid',
-                maxPoints: 128,
-                numFrames: 24,
-                backend: 'mock'
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).numPoints).toBe(128);
-            expect((res.resultPayload as any).backendUsed).toBe('mock');
+        it('does not offer tapir_track_video_points (it tracked self-made synthetic frames, never a video)', async () => {
+            expect(registry.get('tapir_track_video_points')).toBeUndefined();
         });
 
         it('executes build_4dgs_from_video with ARAP local rigidity graph', async () => {

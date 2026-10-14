@@ -8,13 +8,10 @@
  ********************************************************************************/
 
 import {
-    buildExtractPalettePrompt,
-    parseExtractedPalette,
     buildApplyPalettePrompt,
-    formatPaletteAsMarkdown,
-    executeTwoStepColorTransfer,
     type ExtractedColorPalette
 } from '../../../browser/generative-canvas/services/nano-banana-color-service';
+import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import type { ToolDeclaration, ToolHandler } from './types';
 
 function asString(val: unknown): string {
@@ -27,32 +24,49 @@ function asBoolean(val: unknown, defaultVal = false): boolean {
     return defaultVal;
 }
 
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const TEMPERATURES = ['warm', 'cool', 'neutral'];
+
+/**
+ * The palette exactly as the caller gave it (an object or its JSON text). Every part the application prompt
+ * maps is required: the prompt builder would otherwise fill gaps with its own stock colors.
+ */
+function requireCompletePalette(raw: unknown): ExtractedColorPalette {
+    const tool = 'nano_banana_apply_color_palette';
+    let palette: any = raw;
+    if (typeof raw === 'string') {
+        try {
+            palette = JSON.parse(raw);
+        } catch {
+            throw new MissingInputError(tool, 'palette', 'give the palette as a JSON object (primaryTones, accentTones, shadowProfile, highlightProfile, lightingAtmosphere), not free text');
+        }
+    }
+    if (!palette || typeof palette !== 'object') {
+        throw new MissingInputError(tool, 'palette', 'give the palette as a JSON object');
+    }
+    const tones = (list: unknown, key: string) => {
+        if (!Array.isArray(list) || list.length === 0 || !list.every(t => t && typeof t.name === 'string' && HEX_COLOR.test(String(t.hex)))) {
+            throw new MissingInputError(tool, `palette.${key}`, 'needs at least one { name, hex: "#RRGGBB" } tone');
+        }
+    };
+    tones(palette.primaryTones, 'primaryTones');
+    tones(palette.accentTones, 'accentTones');
+    for (const key of ['shadowProfile', 'highlightProfile']) {
+        const profile = palette[key];
+        if (!profile || typeof profile.tone !== 'string' || !TEMPERATURES.includes(profile.temperature)) {
+            throw new MissingInputError(tool, `palette.${key}`, 'needs { tone, temperature: "warm" | "cool" | "neutral" }');
+        }
+    }
+    if (typeof palette.lightingAtmosphere !== 'string' || !palette.lightingAtmosphere.trim()) {
+        throw new MissingInputError(tool, 'palette.lightingAtmosphere', 'needs a sentence describing the lighting');
+    }
+    return { rawSummary: '', ...palette } as ExtractedColorPalette;
+}
+
 export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
-        name: 'nano_banana_extract_color_palette',
-        description: 'Extract the complete color palette, dominant base tones, secondary accent swatches, shadow/highlight temperatures, and lighting atmosphere from an image using Nano Banana (Gemini 2.5 Flash / 3 Pro Image) multimodal visual inspection (Method 2 Step 1).',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                referenceImageUrl: {
-                    type: 'STRING',
-                    description: 'URL, base64 data URI, or local filepath of the reference image containing the desired color palette and lighting DNA.'
-                },
-                focusArea: {
-                    type: 'STRING',
-                    description: 'Specific region of the image to extract colors from: "global", "background", "subject", or "accents". Defaults to "global".'
-                },
-                outputFormat: {
-                    type: 'STRING',
-                    description: 'Desired format of the response: "json", "swatches", or "markdown". Defaults to "markdown".'
-                }
-            },
-            required: ['referenceImageUrl']
-        }
-    },
-    {
         name: 'nano_banana_apply_color_palette',
-        description: 'Construct the precision global color override prompt applying an extracted palette to a target image with strict non-negotiable geometry locking (Method 2 Step 2).',
+        description: 'Construct the precision global color override prompt that applies a given color palette to a target image with strict non-negotiable geometry locking (Method 2 Step 2). It returns the prompt text for an image model; it does not edit the image. The palette must be complete (read it from the reference image yourself): it is used as given, never filled in.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -62,7 +76,7 @@ export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 palette: {
                     type: 'OBJECT',
-                    description: 'Extracted color palette JSON object, summary string, or HEX swatches to apply.'
+                    description: 'Complete palette object: primaryTones and accentTones ([{ name, hex: "#RRGGBB", role? }], at least one each), shadowProfile and highlightProfile ({ tone, temperature: "warm" | "cool" | "neutral", hex? }) and lightingAtmosphere (sentence).'
                 },
                 preserveSkinTones: {
                     type: 'BOOLEAN',
@@ -87,110 +101,17 @@ export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['targetImageUrl', 'palette']
         }
-    },
-    {
-        name: 'nano_banana_transfer_color',
-        description: 'Execute the complete two-step Nano Banana Extract-then-Apply color palette transfer workflow (Method 2), extracting color DNA from a reference image and applying it to a target image with strict geometry locking.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                referenceImageUrl: {
-                    type: 'STRING',
-                    description: 'Source image from which to extract the color palette and lighting atmosphere.'
-                },
-                targetImageUrl: {
-                    type: 'STRING',
-                    description: 'Target image whose structure/geometry will be preserved while overriding its colors.'
-                },
-                preserveSkinTones: {
-                    type: 'BOOLEAN',
-                    description: 'When true, protects natural human facial and skin tones from unnatural color shifts.'
-                },
-                contrastCurve: {
-                    type: 'STRING',
-                    description: 'Contrast curve to apply: "cinematic", "natural", "high-contrast", or "muted". Defaults to "cinematic".'
-                },
-                aspectRatio: {
-                    type: 'STRING',
-                    description: 'Canvas aspect ratio (e.g. "16:9", "1:1", "4:3"). Defaults to "16:9".'
-                },
-                focusArea: {
-                    type: 'STRING',
-                    description: 'Focus area on the reference image: "global", "background", "subject", or "accents".'
-                },
-                targetFocusArea: {
-                    type: 'STRING',
-                    description: 'Focus area on the target image.'
-                },
-                customInstructions: {
-                    type: 'STRING',
-                    description: 'Optional additional artistic or styling directives.'
-                }
-            },
-            required: ['referenceImageUrl', 'targetImageUrl']
-        }
     }
 ];
 
 export const nanoBananaHandlers: Record<string, ToolHandler> = {
-    nano_banana_extract_color_palette: (args, _ctx) => {
-        const referenceImageUrl = asString(args.referenceImageUrl);
-        if (!referenceImageUrl) throw new Error('nano_banana_extract_color_palette: "referenceImageUrl" argument is required.');
-
-        const focusArea = (asString(args.focusArea) || 'global') as 'global' | 'background' | 'subject' | 'accents';
-        const outputFormat = asString(args.outputFormat) || 'markdown';
-
-        const extractionPrompt = buildExtractPalettePrompt({
-            referenceImageUrl,
-            focusArea
-        });
-
-        // Synthesize structured extracted palette
-        const sampleAnalysis = JSON.stringify({
-            primaryTones: [
-                { name: 'Prussian Night', hex: '#0B192C', role: 'Dominant Deep Background', percentage: 50 },
-                { name: 'Warm Terracotta', hex: '#E06B55', role: 'Base Architectural Surface', percentage: 30 }
-            ],
-            accentTones: [
-                { name: 'Sunburst Gold', hex: '#FFB84C', role: 'Key Light Reflection', percentage: 12 },
-                { name: 'Electric Cerulean', hex: '#1E90FF', role: 'Specular Rim Accent', percentage: 8 }
-            ],
-            shadowProfile: { tone: 'Deep cobalt shadow undertone', temperature: 'cool', hex: '#0B192C' },
-            highlightProfile: { tone: 'Warm golden raking light', temperature: 'warm', hex: '#FFF2CC' },
-            lightingAtmosphere: 'High-contrast cinematic twilight with saturated warm accents and deep cool shadows',
-            contrastProfile: 'cinematic',
-            rawSummary: `Palette extracted from ${referenceImageUrl} focusing on ${focusArea}.`
-        }, null, 2);
-
-        const palette: ExtractedColorPalette = parseExtractedPalette(sampleAnalysis);
-        const markdownSwatches = formatPaletteAsMarkdown(palette);
-
-        return {
-            resultPayload: {
-                success: true,
-                referenceImageUrl,
-                focusArea,
-                outputFormat,
-                extractionPrompt,
-                palette,
-                markdownSwatches
-            },
-            summaryResult: `Extracted color palette from reference image (${palette.primaryTones.length} primary tones, ${palette.accentTones.length} accents, ${palette.shadowProfile.temperature} shadows).`
-        };
-    },
-
     nano_banana_apply_color_palette: (args, _ctx) => {
         const targetImageUrl = asString(args.targetImageUrl);
         if (!targetImageUrl) throw new Error('nano_banana_apply_color_palette: "targetImageUrl" argument is required.');
-
-        let palette: ExtractedColorPalette | string;
-        if (typeof args.palette === 'object' && args.palette !== null) {
-            palette = args.palette as ExtractedColorPalette;
-        } else if (typeof args.palette === 'string') {
-            palette = parseExtractedPalette(args.palette);
-        } else {
-            throw new Error('nano_banana_apply_color_palette: "palette" argument is required (JSON object or string).');
+        if (args.palette === undefined || args.palette === null || args.palette === '') {
+            throw new MissingInputError('nano_banana_apply_color_palette', 'palette', 'give the complete palette to apply');
         }
+        const palette = requireCompletePalette(args.palette);
 
         const preserveSkinTones = asBoolean(args.preserveSkinTones, false);
         const contrastCurve = (asString(args.contrastCurve) || 'cinematic') as 'natural' | 'cinematic' | 'high-contrast' | 'muted';
@@ -219,38 +140,7 @@ export const nanoBananaHandlers: Record<string, ToolHandler> = {
                 geometryLocked: true,
                 globalColorOverride: true
             },
-            summaryResult: `Constructed Nano Banana global color override prompt for ${targetImageUrl} with non-negotiable geometry locking.`
-        };
-    },
-
-    nano_banana_transfer_color: (args, _ctx) => {
-        const referenceImageUrl = asString(args.referenceImageUrl);
-        if (!referenceImageUrl) throw new Error('nano_banana_transfer_color: "referenceImageUrl" argument is required.');
-
-        const targetImageUrl = asString(args.targetImageUrl);
-        if (!targetImageUrl) throw new Error('nano_banana_transfer_color: "targetImageUrl" argument is required.');
-
-        const preserveSkinTones = asBoolean(args.preserveSkinTones, false);
-        const contrastCurve = (asString(args.contrastCurve) || 'cinematic') as 'natural' | 'cinematic' | 'high-contrast' | 'muted';
-        const aspectRatio = asString(args.aspectRatio) || '16:9';
-        const focusArea = (asString(args.focusArea) || 'global') as 'global' | 'background' | 'subject' | 'accents';
-        const targetFocusArea = asString(args.targetFocusArea) || undefined;
-        const customInstructions = asString(args.customInstructions) || undefined;
-
-        const plan = executeTwoStepColorTransfer({
-            referenceImage: referenceImageUrl,
-            targetImage: targetImageUrl,
-            preserveSkinTones,
-            contrastCurve,
-            aspectRatio,
-            focusArea,
-            targetFocusArea,
-            customInstructions
-        });
-
-        return {
-            resultPayload: { ...plan } as Record<string, unknown>,
-            summaryResult: `Executed Nano Banana two-step color transfer from ${referenceImageUrl} to ${targetImageUrl} with geometry locking.`
+            summaryResult: `Constructed the Nano Banana global color override prompt for ${targetImageUrl} (${palette.primaryTones.length} base and ${palette.accentTones.length} accent tones, geometry locked). The image itself is not edited yet.`
         };
     }
 };
