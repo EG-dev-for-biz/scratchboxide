@@ -1666,6 +1666,7 @@ inline std::string stripStatsJson(const StripResult& r) {
     s << "  \"crowns\": {\"tree\": " << st.crownsTree << ", \"belowMinHeight\": " << st.crownsLow << ", \"cutAtBoundary\": " << st.crownsCut << ", \"tooSmall\": " << st.crownsTooSmall << "},\n";
     auto q3 = [](const std::array<double, 3>& q) { return "[" + json::num(q[0]) + ", " + json::num(q[1]) + ", " + json::num(q[2]) + "]"; };
     s << "  \"dispersionQuartiles\": {\"green\": " << q3(st.greenDispersionQuartiles) << ", \"other\": " << q3(st.otherDispersionQuartiles) << "},\n";
+    if (!r.topDown.empty()) s << "  \"topDown\": {\"x0\": " << json::num(r.topDownX0) << ", \"z0\": " << json::num(r.topDownZ0) << ", \"cell\": " << json::num(r.topDownCell) << ", \"width\": " << r.topDown.width << ", \"height\": " << r.topDown.height << "},\n";
     s << "  \"frameKnown\": " << (r.frame.known ? "true" : "false") << ",\n";
     s << "  \"stagesMs\": {";
     double total = 0;

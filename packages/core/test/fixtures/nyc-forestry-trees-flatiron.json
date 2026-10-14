@@ -1,0 +1,3916 @@
+{
+ "provenance": {
+  "source": "NYC Parks & Recreation, Forestry Tree Points (NYC Open Data, Socrata dataset hn5i-inap)",
+  "url": "https://data.cityofnewyork.us/d/hn5i-inap",
+  "query": "All records with location inside lat 40.7385..40.7440, lng -73.9925..-73.9860 (around Madison Square Park / Flatiron Building), retrieved via the Socrata JSON API",
+  "retrieved": "2026-10-14",
+  "trimmed": "Only tpstructure = Full (standing trees); fields kept: objectid, lat, lng, dbh (inches), condition, species. Retired points and stumps dropped.",
+  "records": 488
+ },
+ "trees": [
+  {
+   "objectid": "2118318",
+   "lat": 40.7385321,
+   "lng": -73.9863058,
+   "dbhIn": 5.0,
+   "condition": "Excellent",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "2150733",
+   "lat": 40.7385535,
+   "lng": -73.9866221,
+   "dbhIn": 16.0,
+   "condition": "Fair",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "2124753",
+   "lat": 40.7385715,
+   "lng": -73.9875408,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua - sweetgum"
+  },
+  {
+   "objectid": "2124754",
+   "lat": 40.7385894,
+   "lng": -73.9875298,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua - sweetgum"
+  },
+  {
+   "objectid": "1409105",
+   "lat": 40.7385937,
+   "lng": -73.9900885,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2150734",
+   "lat": 40.7385959,
+   "lng": -73.9867228,
+   "dbhIn": 17.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "1409112",
+   "lat": 40.7386115,
+   "lng": -73.9915856,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "1409106",
+   "lat": 40.7386269,
+   "lng": -73.9901674,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2150735",
+   "lat": 40.7386332,
+   "lng": -73.9868115,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "2118319",
+   "lat": 40.7386372,
+   "lng": -73.986556,
+   "dbhIn": 15.0,
+   "condition": "Good",
+   "species": "Quercus phellos - willow oak"
+  },
+  {
+   "objectid": "1409107",
+   "lat": 40.7386588,
+   "lng": -73.9902432,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409111",
+   "lat": 40.7386747,
+   "lng": -73.9915419,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2118320",
+   "lat": 40.7386759,
+   "lng": -73.9866482,
+   "dbhIn": 12.0,
+   "condition": "Good",
+   "species": "Quercus phellos - willow oak"
+  },
+  {
+   "objectid": "5028502",
+   "lat": 40.7386823,
+   "lng": -73.9874609,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua - sweetgum"
+  },
+  {
+   "objectid": "5028503",
+   "lat": 40.7387002,
+   "lng": -73.9874468,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua - sweetgum"
+  },
+  {
+   "objectid": "2118321",
+   "lat": 40.7387139,
+   "lng": -73.9867386,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2124756",
+   "lat": 40.7387156,
+   "lng": -73.9874358,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua - sweetgum"
+  },
+  {
+   "objectid": "1409832",
+   "lat": 40.7387203,
+   "lng": -73.9889213,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "14749068",
+   "lat": 40.7387478,
+   "lng": -73.9886182,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Acer miyabei 'State Street' -  'State Street' Miyabe maple"
+  },
+  {
+   "objectid": "2118322",
+   "lat": 40.7387582,
+   "lng": -73.9868441,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "1409833",
+   "lat": 40.738759,
+   "lng": -73.9890136,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2124757",
+   "lat": 40.7387966,
+   "lng": -73.9873779,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua - sweetgum"
+  },
+  {
+   "objectid": "14718774",
+   "lat": 40.738812,
+   "lng": -73.9869724,
+   "dbhIn": 15.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "5028504",
+   "lat": 40.7388121,
+   "lng": -73.9873653,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua - sweetgum"
+  },
+  {
+   "objectid": "5028505",
+   "lat": 40.7388276,
+   "lng": -73.9873528,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua - sweetgum"
+  },
+  {
+   "objectid": "1409110",
+   "lat": 40.7388413,
+   "lng": -73.9914265,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "1409847",
+   "lat": 40.7388542,
+   "lng": -73.9888699,
+   "dbhIn": 3.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "16059350",
+   "lat": 40.7388923,
+   "lng": -73.9913912,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Gleditsia triacanthos - Honeylocust"
+  },
+  {
+   "objectid": "1409846",
+   "lat": 40.7388995,
+   "lng": -73.9889772,
+   "dbhIn": 15.0,
+   "condition": "Fair",
+   "species": "Unknown - Unknown"
+  },
+  {
+   "objectid": "1409845",
+   "lat": 40.7389337,
+   "lng": -73.9890579,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Quercus phellos - willow oak"
+  },
+  {
+   "objectid": "2124464",
+   "lat": 40.7389504,
+   "lng": -73.9871105,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "2124463",
+   "lat": 40.739015,
+   "lng": -73.9870628,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2147479",
+   "lat": 40.7390827,
+   "lng": -73.9871717,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2124462",
+   "lat": 40.7391229,
+   "lng": -73.9869768,
+   "dbhIn": 13.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "4855187",
+   "lat": 40.7391256,
+   "lng": -73.9876936,
+   "dbhIn": 3.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2118327",
+   "lat": 40.7391384,
+   "lng": -73.986089,
+   "dbhIn": 15.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "2147480",
+   "lat": 40.7391583,
+   "lng": -73.9871165,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "4855186",
+   "lat": 40.7391661,
+   "lng": -73.987775,
+   "dbhIn": 3.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2118326",
+   "lat": 40.7391722,
+   "lng": -73.9861692,
+   "dbhIn": 16.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "2147481",
+   "lat": 40.7391724,
+   "lng": -73.9871061,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "1409857",
+   "lat": 40.7391882,
+   "lng": -73.9881249,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "4855185",
+   "lat": 40.7391935,
+   "lng": -73.9878376,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2118325",
+   "lat": 40.7392173,
+   "lng": -73.9862766,
+   "dbhIn": 12.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409858",
+   "lat": 40.7392321,
+   "lng": -73.9882291,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "11145355",
+   "lat": 40.7392407,
+   "lng": -73.9897461,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Liquidambar styraciflua 'Slender Silhouette' - 'Slender Silhouette' Sweetgum"
+  },
+  {
+   "objectid": "2147482",
+   "lat": 40.7392552,
+   "lng": -73.9870455,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2147483",
+   "lat": 40.739272,
+   "lng": -73.9870333,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2118324",
+   "lat": 40.7392721,
+   "lng": -73.9864067,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2147484",
+   "lat": 40.7393463,
+   "lng": -73.9869789,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2147485",
+   "lat": 40.7393703,
+   "lng": -73.9869613,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2146670",
+   "lat": 40.7395639,
+   "lng": -73.9870996,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2146671",
+   "lat": 40.7396014,
+   "lng": -73.9871887,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2146672",
+   "lat": 40.7396396,
+   "lng": -73.9872796,
+   "dbhIn": 10.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2146673",
+   "lat": 40.7396795,
+   "lng": -73.9873744,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2147488",
+   "lat": 40.7396825,
+   "lng": -73.9867343,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2147489",
+   "lat": 40.7397017,
+   "lng": -73.9867203,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2146674",
+   "lat": 40.7397169,
+   "lng": -73.9874634,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2146675",
+   "lat": 40.7397592,
+   "lng": -73.9875638,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "5028506",
+   "lat": 40.7397805,
+   "lng": -73.9896243,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "2147490",
+   "lat": 40.7397833,
+   "lng": -73.9866607,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2146676",
+   "lat": 40.7397966,
+   "lng": -73.9876529,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "2147491",
+   "lat": 40.7398033,
+   "lng": -73.9866462,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2145364",
+   "lat": 40.7398835,
+   "lng": -73.9875858,
+   "dbhIn": 12.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2146677",
+   "lat": 40.7398874,
+   "lng": -73.9878686,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Tilia americana - American basswood"
+  },
+  {
+   "objectid": "2145363",
+   "lat": 40.7399189,
+   "lng": -73.9876697,
+   "dbhIn": 15.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2146678",
+   "lat": 40.7399382,
+   "lng": -73.9879895,
+   "dbhIn": 13.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2145362",
+   "lat": 40.7399472,
+   "lng": -73.9877366,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2145361",
+   "lat": 40.7399818,
+   "lng": -73.9878186,
+   "dbhIn": 16.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "2147492",
+   "lat": 40.7399953,
+   "lng": -73.9865061,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2145360",
+   "lat": 40.7400156,
+   "lng": -73.9878988,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "2145359",
+   "lat": 40.7400455,
+   "lng": -73.9879694,
+   "dbhIn": 6.0,
+   "condition": "Fair",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "2146679",
+   "lat": 40.7400565,
+   "lng": -73.9882706,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "10196426",
+   "lat": 40.7401028,
+   "lng": -73.9881051,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Ulmus propinqua 'Emerald Sunshine' - 'Emerald Sunshine' Elm"
+  },
+  {
+   "objectid": "1691183",
+   "lat": 40.7401159,
+   "lng": -73.9884115,
+   "dbhIn": 17.0,
+   "condition": "Fair",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "2146680",
+   "lat": 40.7401935,
+   "lng": -73.9885965,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2146681",
+   "lat": 40.7402206,
+   "lng": -73.9886609,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Tilia americana - American basswood"
+  },
+  {
+   "objectid": "2145357",
+   "lat": 40.7402347,
+   "lng": -73.9884174,
+   "dbhIn": 13.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2146682",
+   "lat": 40.7402439,
+   "lng": -73.9887161,
+   "dbhIn": 4.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "14676474",
+   "lat": 40.7402618,
+   "lng": -73.9884818,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "2146683",
+   "lat": 40.7402758,
+   "lng": -73.9887919,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2145355",
+   "lat": 40.740289,
+   "lng": -73.9885462,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2146684",
+   "lat": 40.7402965,
+   "lng": -73.9888412,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2145354",
+   "lat": 40.740317,
+   "lng": -73.9886124,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "4855181",
+   "lat": 40.7403508,
+   "lng": -73.9924038,
+   "dbhIn": 4.0,
+   "condition": "Excellent",
+   "species": "Quercus coccinea - scarlet oak"
+  },
+  {
+   "objectid": "2145353",
+   "lat": 40.7403647,
+   "lng": -73.9887254,
+   "dbhIn": 13.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2147549",
+   "lat": 40.740395,
+   "lng": -73.9862149,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2147550",
+   "lat": 40.740419,
+   "lng": -73.9861974,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "1409776",
+   "lat": 40.7404395,
+   "lng": -73.9894927,
+   "dbhIn": 13.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "1409876",
+   "lat": 40.7404417,
+   "lng": -73.9872216,
+   "dbhIn": 7.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2145352",
+   "lat": 40.7404774,
+   "lng": -73.9889923,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4855184",
+   "lat": 40.7404892,
+   "lng": -73.991208,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Quercus phellos - willow oak"
+  },
+  {
+   "objectid": "2147551",
+   "lat": 40.740491,
+   "lng": -73.986145,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2145351",
+   "lat": 40.7405025,
+   "lng": -73.9890516,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2147552",
+   "lat": 40.7405199,
+   "lng": -73.986124,
+   "dbhIn": 4.0,
+   "condition": "Fair",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2145350",
+   "lat": 40.740528,
+   "lng": -73.9891122,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4855183",
+   "lat": 40.7405344,
+   "lng": -73.9913285,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Quercus phellos - willow oak"
+  },
+  {
+   "objectid": "2145349",
+   "lat": 40.7405472,
+   "lng": -73.9891576,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2145348",
+   "lat": 40.7405733,
+   "lng": -73.9892195,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409877",
+   "lat": 40.7405806,
+   "lng": -73.9875512,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4855182",
+   "lat": 40.7405845,
+   "lng": -73.991446,
+   "dbhIn": 6.0,
+   "condition": "Fair",
+   "species": "Quercus phellos - willow oak"
+  },
+  {
+   "objectid": "2147553",
+   "lat": 40.7405929,
+   "lng": -73.9860709,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "2147554",
+   "lat": 40.7406104,
+   "lng": -73.9860582,
+   "dbhIn": 6.0,
+   "condition": "Fair",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "1409784",
+   "lat": 40.7406907,
+   "lng": -73.989274,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "587505",
+   "lat": 40.7406917,
+   "lng": -73.9916875,
+   "dbhIn": 4.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2147555",
+   "lat": 40.7406921,
+   "lng": -73.9859988,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "1409783",
+   "lat": 40.7407193,
+   "lng": -73.9892481,
+   "dbhIn": 9.0,
+   "condition": "Poor",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409782",
+   "lat": 40.740808,
+   "lng": -73.9892241,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409781",
+   "lat": 40.7409639,
+   "lng": -73.989182,
+   "dbhIn": 7.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5028852",
+   "lat": 40.740971,
+   "lng": -73.9885649,
+   "dbhIn": 10.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5028851",
+   "lat": 40.7409889,
+   "lng": -73.9886025,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409780",
+   "lat": 40.7409892,
+   "lng": -73.9891752,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5028850",
+   "lat": 40.7410058,
+   "lng": -73.9886437,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409779",
+   "lat": 40.7410311,
+   "lng": -73.9891639,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409878",
+   "lat": 40.7410316,
+   "lng": -73.988622,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409879",
+   "lat": 40.7410478,
+   "lng": -73.9886605,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5028849",
+   "lat": 40.7410571,
+   "lng": -73.988775,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409778",
+   "lat": 40.741058,
+   "lng": -73.9891566,
+   "dbhIn": 9.0,
+   "condition": "Poor",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1409777",
+   "lat": 40.7410876,
+   "lng": -73.9891486,
+   "dbhIn": 7.0,
+   "condition": "Poor",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1416484",
+   "lat": 40.7411022,
+   "lng": -73.9907678,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "15320111",
+   "lat": 40.7411223,
+   "lng": -73.9908159,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Celtis occidentalis - common hackberry"
+  },
+  {
+   "objectid": "587509",
+   "lat": 40.7411348,
+   "lng": -73.992472,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Quercus velutina - black oak"
+  },
+  {
+   "objectid": "4192889",
+   "lat": 40.7411359,
+   "lng": -73.9881734,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Unknown - Unknown"
+  },
+  {
+   "objectid": "5910786",
+   "lat": 40.7411408,
+   "lng": -73.9908676,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Celtis occidentalis - common hackberry"
+  },
+  {
+   "objectid": "5108554",
+   "lat": 40.7411559,
+   "lng": -73.9881372,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Magnolia - magnolia"
+  },
+  {
+   "objectid": "1413286",
+   "lat": 40.7411568,
+   "lng": -73.9878619,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5105577",
+   "lat": 40.7411604,
+   "lng": -73.9879988,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Magnolia - magnolia"
+  },
+  {
+   "objectid": "5098976",
+   "lat": 40.7411804,
+   "lng": -73.9879914,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "5106818",
+   "lat": 40.7411944,
+   "lng": -73.9882976,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "5113306",
+   "lat": 40.7412037,
+   "lng": -73.9879662,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Magnolia - magnolia"
+  },
+  {
+   "objectid": "1413285",
+   "lat": 40.7412049,
+   "lng": -73.9878272,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192888",
+   "lat": 40.7412133,
+   "lng": -73.9882893,
+   "dbhIn": 20.0,
+   "condition": "Good",
+   "species": "Unknown - Unknown"
+  },
+  {
+   "objectid": "5102877",
+   "lat": 40.7412195,
+   "lng": -73.9879142,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Lagerstroemia - lagerstroemia"
+  },
+  {
+   "objectid": "5110877",
+   "lat": 40.7412203,
+   "lng": -73.9879398,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192887",
+   "lat": 40.74123,
+   "lng": -73.9884037,
+   "dbhIn": 28.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5105150",
+   "lat": 40.7412397,
+   "lng": -73.9880498,
+   "dbhIn": 25.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "5112883",
+   "lat": 40.7412632,
+   "lng": -73.9883776,
+   "dbhIn": 12.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "4192890",
+   "lat": 40.7412657,
+   "lng": -73.9882361,
+   "dbhIn": 15.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5099665",
+   "lat": 40.741276,
+   "lng": -73.988437,
+   "dbhIn": 29.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5101839",
+   "lat": 40.7412761,
+   "lng": -73.9883011,
+   "dbhIn": 15.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5098130",
+   "lat": 40.7412762,
+   "lng": -73.9883755,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192885",
+   "lat": 40.7412896,
+   "lng": -73.9885681,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "4192886",
+   "lat": 40.7412908,
+   "lng": -73.9884867,
+   "dbhIn": 26.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5100306",
+   "lat": 40.7412957,
+   "lng": -73.9885833,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "5113912",
+   "lat": 40.7412959,
+   "lng": -73.9880421,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Nyssa sylvatica - blackgum"
+  },
+  {
+   "objectid": "5103906",
+   "lat": 40.7413039,
+   "lng": -73.988496,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "5111316",
+   "lat": 40.741305,
+   "lng": -73.9885799,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "4192801",
+   "lat": 40.7413104,
+   "lng": -73.988042,
+   "dbhIn": 26.0,
+   "condition": "Fair",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "5104514",
+   "lat": 40.7413139,
+   "lng": -73.9884591,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5113926",
+   "lat": 40.7413197,
+   "lng": -73.9879741,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Aesculus x carnea - red horse-chestnut"
+  },
+  {
+   "objectid": "4192800",
+   "lat": 40.7413199,
+   "lng": -73.9879825,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Magnolia - magnolia"
+  },
+  {
+   "objectid": "4192884",
+   "lat": 40.7413229,
+   "lng": -73.9886323,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Prunus serrulata 'Green leaf' - 'Green leaf' Japanese flowering cherry"
+  },
+  {
+   "objectid": "1413284",
+   "lat": 40.7413257,
+   "lng": -73.98774,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5109932",
+   "lat": 40.7413293,
+   "lng": -73.9878585,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "5114297",
+   "lat": 40.7413394,
+   "lng": -73.9879515,
+   "dbhIn": 18.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192799",
+   "lat": 40.7413544,
+   "lng": -73.9879465,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Prunus cerasifera - cherry plum"
+  },
+  {
+   "objectid": "4192883",
+   "lat": 40.7413551,
+   "lng": -73.9886981,
+   "dbhIn": 20.0,
+   "condition": "Good",
+   "species": "Quercus coccinea - scarlet oak"
+  },
+  {
+   "objectid": "4192797",
+   "lat": 40.7413676,
+   "lng": -73.988255,
+   "dbhIn": 32.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192882",
+   "lat": 40.7413801,
+   "lng": -73.9887795,
+   "dbhIn": 28.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192798",
+   "lat": 40.741389,
+   "lng": -73.9879261,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Magnolia - magnolia"
+  },
+  {
+   "objectid": "4192792",
+   "lat": 40.741395,
+   "lng": -73.9885119,
+   "dbhIn": 28.0,
+   "condition": "Fair",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "5096587",
+   "lat": 40.7413986,
+   "lng": -73.9877799,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "5095910",
+   "lat": 40.7414048,
+   "lng": -73.9879178,
+   "dbhIn": 17.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192881",
+   "lat": 40.7414159,
+   "lng": -73.9887169,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192802",
+   "lat": 40.7414271,
+   "lng": -73.9878728,
+   "dbhIn": 15.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "4192791",
+   "lat": 40.7414274,
+   "lng": -73.9886056,
+   "dbhIn": 34.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192880",
+   "lat": 40.741429,
+   "lng": -73.9887842,
+   "dbhIn": 16.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5108722",
+   "lat": 40.741437,
+   "lng": -73.988016,
+   "dbhIn": 40.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192803",
+   "lat": 40.7414509,
+   "lng": -73.987818,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Prunus cerasifera - cherry plum"
+  },
+  {
+   "objectid": "5105499",
+   "lat": 40.7414529,
+   "lng": -73.9878665,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Quercus - Oak"
+  },
+  {
+   "objectid": "4192879",
+   "lat": 40.7414671,
+   "lng": -73.9888281,
+   "dbhIn": 13.0,
+   "condition": "Good",
+   "species": "Prunus cerasifera - cherry plum"
+  },
+  {
+   "objectid": "4192722",
+   "lat": 40.7414696,
+   "lng": -73.9880634,
+   "dbhIn": 37.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5107124",
+   "lat": 40.741472,
+   "lng": -73.9878151,
+   "dbhIn": 22.0,
+   "condition": "Good",
+   "species": "Quercus - Oak"
+  },
+  {
+   "objectid": "4192804",
+   "lat": 40.7414783,
+   "lng": -73.9878525,
+   "dbhIn": 17.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5095997",
+   "lat": 40.741488,
+   "lng": -73.9884365,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192878",
+   "lat": 40.7415028,
+   "lng": -73.9887842,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Cornus kousa - kousa dogwood"
+  },
+  {
+   "objectid": "4192805",
+   "lat": 40.7415069,
+   "lng": -73.9877788,
+   "dbhIn": 25.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "5113073",
+   "lat": 40.7415132,
+   "lng": -73.9888821,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192877",
+   "lat": 40.7415197,
+   "lng": -73.9888374,
+   "dbhIn": 12.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "4192794",
+   "lat": 40.741526,
+   "lng": -73.9884179,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Morus - mulberry"
+  },
+  {
+   "objectid": "4192795",
+   "lat": 40.741532,
+   "lng": -73.9883161,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Morus - mulberry"
+  },
+  {
+   "objectid": "5112341",
+   "lat": 40.7415327,
+   "lng": -73.9877619,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192806",
+   "lat": 40.741545,
+   "lng": -73.9877459,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "4192793",
+   "lat": 40.7415572,
+   "lng": -73.9883154,
+   "dbhIn": 25.0,
+   "condition": "Fair",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "5110347",
+   "lat": 40.7415578,
+   "lng": -73.9888861,
+   "dbhIn": 28.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5106600",
+   "lat": 40.7415599,
+   "lng": -73.9889185,
+   "dbhIn": 10.0,
+   "condition": "Fair",
+   "species": "Crataegus - Hawthorn"
+  },
+  {
+   "objectid": "4192876",
+   "lat": 40.7415749,
+   "lng": -73.9888494,
+   "dbhIn": 18.0,
+   "condition": "Fair",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192807",
+   "lat": 40.7415843,
+   "lng": -73.9877271,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Robinia pseudoacacia - black locust"
+  },
+  {
+   "objectid": "4192875",
+   "lat": 40.741591,
+   "lng": -73.9888813,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Ulmus parvifolia - Chinese elm"
+  },
+  {
+   "objectid": "4192723",
+   "lat": 40.7415935,
+   "lng": -73.9881549,
+   "dbhIn": 27.0,
+   "condition": "Fair",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "5102042",
+   "lat": 40.7416067,
+   "lng": -73.9888873,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "4192873",
+   "lat": 40.7416172,
+   "lng": -73.9888641,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "5108597",
+   "lat": 40.741618,
+   "lng": -73.9876323,
+   "dbhIn": 22.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "1416494",
+   "lat": 40.741622,
+   "lng": -73.9900186,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "10580168",
+   "lat": 40.7416299,
+   "lng": -73.9920254,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "5112491",
+   "lat": 40.7416326,
+   "lng": -73.9880781,
+   "dbhIn": 34.0,
+   "condition": "Good",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "4192872",
+   "lat": 40.7416327,
+   "lng": -73.9888249,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "4192788",
+   "lat": 40.7416333,
+   "lng": -73.9886356,
+   "dbhIn": 28.0,
+   "condition": "Fair",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "1416482",
+   "lat": 40.7416497,
+   "lng": -73.9920728,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Quercus velutina - black oak"
+  },
+  {
+   "objectid": "4192871",
+   "lat": 40.7416506,
+   "lng": -73.9888516,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "4192808",
+   "lat": 40.7416761,
+   "lng": -73.9876925,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Robinia pseudoacacia - black locust"
+  },
+  {
+   "objectid": "4192809",
+   "lat": 40.7416761,
+   "lng": -73.9876079,
+   "dbhIn": 17.0,
+   "condition": "Good",
+   "species": "Unknown - Unknown"
+  },
+  {
+   "objectid": "4192874",
+   "lat": 40.7416768,
+   "lng": -73.9888547,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192726",
+   "lat": 40.7416975,
+   "lng": -73.9879617,
+   "dbhIn": 34.0,
+   "condition": "Good",
+   "species": "Celtis occidentalis - common hackberry"
+  },
+  {
+   "objectid": "4622137",
+   "lat": 40.7416993,
+   "lng": -73.992191,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2109042",
+   "lat": 40.7417056,
+   "lng": -73.9889543,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "1416495",
+   "lat": 40.7417063,
+   "lng": -73.9902171,
+   "dbhIn": 11.0,
+   "condition": "Fair",
+   "species": "Tilia americana - American basswood"
+  },
+  {
+   "objectid": "4192725",
+   "lat": 40.7417125,
+   "lng": -73.9880958,
+   "dbhIn": 39.0,
+   "condition": "Good",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "5109666",
+   "lat": 40.7417197,
+   "lng": -73.9887653,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Maackia amurensis - Amur maackia"
+  },
+  {
+   "objectid": "5099369",
+   "lat": 40.7417244,
+   "lng": -73.9888732,
+   "dbhIn": 0.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "4192870",
+   "lat": 40.7417244,
+   "lng": -73.9888374,
+   "dbhIn": 32.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5100442",
+   "lat": 40.7417252,
+   "lng": -73.987943,
+   "dbhIn": 13.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "973094",
+   "lat": 40.7417257,
+   "lng": -73.992253,
+   "dbhIn": 13.0,
+   "condition": "Good",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "1416496",
+   "lat": 40.7417357,
+   "lng": -73.9902865,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "5108355",
+   "lat": 40.7417451,
+   "lng": -73.9880332,
+   "dbhIn": 20.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "4192728",
+   "lat": 40.74175,
+   "lng": -73.9877843,
+   "dbhIn": 23.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1416481",
+   "lat": 40.7417577,
+   "lng": -73.9923301,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "4192869",
+   "lat": 40.7417626,
+   "lng": -73.9888265,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Prunus cerasifera - cherry plum"
+  },
+  {
+   "objectid": "5102073",
+   "lat": 40.7417659,
+   "lng": -73.9875468,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192787",
+   "lat": 40.7417703,
+   "lng": -73.9887154,
+   "dbhIn": 32.0,
+   "condition": "Poor",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192810",
+   "lat": 40.7417734,
+   "lng": -73.9876802,
+   "dbhIn": 40.0,
+   "condition": "Fair",
+   "species": "Ulmus minor 'Atinia' - English elm"
+  },
+  {
+   "objectid": "4192727",
+   "lat": 40.7417786,
+   "lng": -73.9878782,
+   "dbhIn": 12.0,
+   "condition": "Good",
+   "species": "Prunus serrulata 'Green leaf' - 'Green leaf' Japanese flowering cherry"
+  },
+  {
+   "objectid": "5095381",
+   "lat": 40.7417821,
+   "lng": -73.9877668,
+   "dbhIn": 39.0,
+   "condition": "Good",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "4192812",
+   "lat": 40.7417856,
+   "lng": -73.9875186,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "4192868",
+   "lat": 40.7417947,
+   "lng": -73.9888218,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Prunus serrulata 'Green leaf' - 'Green leaf' Japanese flowering cherry"
+  },
+  {
+   "objectid": "1416497",
+   "lat": 40.7417973,
+   "lng": -73.9904314,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "2109043",
+   "lat": 40.7418014,
+   "lng": -73.9889288,
+   "dbhIn": 6.0,
+   "condition": "Fair",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "5105527",
+   "lat": 40.7418015,
+   "lng": -73.9878529,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192724",
+   "lat": 40.7418048,
+   "lng": -73.9879518,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "1416498",
+   "lat": 40.7418192,
+   "lng": -73.9904831,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "4192867",
+   "lat": 40.7418221,
+   "lng": -73.9888108,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "4192786",
+   "lat": 40.7418239,
+   "lng": -73.9885008,
+   "dbhIn": 35.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192866",
+   "lat": 40.7418379,
+   "lng": -73.9888486,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192709",
+   "lat": 40.7418624,
+   "lng": -73.988104,
+   "dbhIn": 44.0,
+   "condition": "Good",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "4192811",
+   "lat": 40.7418691,
+   "lng": -73.9876423,
+   "dbhIn": 24.0,
+   "condition": "Fair",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "1410859",
+   "lat": 40.7418726,
+   "lng": -73.986254,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "5108819",
+   "lat": 40.7418774,
+   "lng": -73.9888042,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "1416499",
+   "lat": 40.7418888,
+   "lng": -73.9906469,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2109044",
+   "lat": 40.7418929,
+   "lng": -73.9889045,
+   "dbhIn": 12.0,
+   "condition": "Fair",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "16269639",
+   "lat": 40.7418959,
+   "lng": -73.9862909,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Zelkova serrata 'Green Vase' - 'Green Vase' Zelkova"
+  },
+  {
+   "objectid": "1410858",
+   "lat": 40.7419061,
+   "lng": -73.9863336,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "4192710",
+   "lat": 40.7419065,
+   "lng": -73.9879799,
+   "dbhIn": 16.0,
+   "condition": "Poor",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "4192784",
+   "lat": 40.7419081,
+   "lng": -73.988627,
+   "dbhIn": 38.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192813",
+   "lat": 40.7419098,
+   "lng": -73.9874374,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "4192785",
+   "lat": 40.7419168,
+   "lng": -73.9885259,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Prunus serrulata 'Green leaf' - 'Green leaf' Japanese flowering cherry"
+  },
+  {
+   "objectid": "4192779",
+   "lat": 40.7419251,
+   "lng": -73.988446,
+   "dbhIn": 37.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1416500",
+   "lat": 40.7419445,
+   "lng": -73.990778,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "4192708",
+   "lat": 40.7419464,
+   "lng": -73.9882018,
+   "dbhIn": 15.0,
+   "condition": "Poor",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "4192711",
+   "lat": 40.741965,
+   "lng": -73.9879063,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192783",
+   "lat": 40.7419656,
+   "lng": -73.9885791,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5108112",
+   "lat": 40.7419667,
+   "lng": -73.9886554,
+   "dbhIn": 41.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192815",
+   "lat": 40.7419703,
+   "lng": -73.987387,
+   "dbhIn": 31.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "5114324",
+   "lat": 40.7419929,
+   "lng": -73.9887608,
+   "dbhIn": 25.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192780",
+   "lat": 40.7420049,
+   "lng": -73.9884585,
+   "dbhIn": 22.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192712",
+   "lat": 40.7420069,
+   "lng": -73.9878096,
+   "dbhIn": 40.0,
+   "condition": "Good",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "4192865",
+   "lat": 40.7420127,
+   "lng": -73.9887606,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Prunus serrulata 'Green leaf' - 'Green leaf' Japanese flowering cherry"
+  },
+  {
+   "objectid": "4192814",
+   "lat": 40.7420152,
+   "lng": -73.9875941,
+   "dbhIn": 36.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "5112945",
+   "lat": 40.7420163,
+   "lng": -73.987411,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "4192782",
+   "lat": 40.7420192,
+   "lng": -73.988529,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "14749067",
+   "lat": 40.7420537,
+   "lng": -73.9905864,
+   "dbhIn": 3.0,
+   "condition": "Poor",
+   "species": "Ulmus 'Patriot' - 'Patriot' Elm"
+  },
+  {
+   "objectid": "2109045",
+   "lat": 40.7420538,
+   "lng": -73.9888514,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192816",
+   "lat": 40.7420765,
+   "lng": -73.9874781,
+   "dbhIn": 14.0,
+   "condition": "Fair",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "4192781",
+   "lat": 40.7420919,
+   "lng": -73.9884679,
+   "dbhIn": 39.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192817",
+   "lat": 40.742092,
+   "lng": -73.9873983,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "4192864",
+   "lat": 40.7420961,
+   "lng": -73.9887027,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "4192713",
+   "lat": 40.7421147,
+   "lng": -73.988031,
+   "dbhIn": 21.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192714",
+   "lat": 40.7421248,
+   "lng": -73.9878158,
+   "dbhIn": 21.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "2109046",
+   "lat": 40.7421375,
+   "lng": -73.988826,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5113770",
+   "lat": 40.7421432,
+   "lng": -73.9876074,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "5098778",
+   "lat": 40.7421557,
+   "lng": -73.9876137,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "5100220",
+   "lat": 40.7421603,
+   "lng": -73.988512,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Pinus strobus - eastern white pine"
+  },
+  {
+   "objectid": "4192732",
+   "lat": 40.7421622,
+   "lng": -73.9875571,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192863",
+   "lat": 40.7421688,
+   "lng": -73.9886478,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5108333",
+   "lat": 40.7421717,
+   "lng": -73.9885098,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Lagerstroemia - lagerstroemia"
+  },
+  {
+   "objectid": "5109310",
+   "lat": 40.7421803,
+   "lng": -73.988596,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Crataegus - Hawthorn"
+  },
+  {
+   "objectid": "5095120",
+   "lat": 40.7421873,
+   "lng": -73.9874983,
+   "dbhIn": 14.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192721",
+   "lat": 40.7421993,
+   "lng": -73.9882949,
+   "dbhIn": 14.0,
+   "condition": "Good",
+   "species": "Cladrastis kentukea - Kentucky yellowwood"
+  },
+  {
+   "objectid": "4192819",
+   "lat": 40.7422029,
+   "lng": -73.9872643,
+   "dbhIn": 26.0,
+   "condition": "Poor",
+   "species": "Robinia pseudoacacia - black locust"
+  },
+  {
+   "objectid": "4192731",
+   "lat": 40.7422039,
+   "lng": -73.9875994,
+   "dbhIn": 22.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192862",
+   "lat": 40.7422212,
+   "lng": -73.9886839,
+   "dbhIn": 25.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192861",
+   "lat": 40.7422343,
+   "lng": -73.988593,
+   "dbhIn": 27.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "2109047",
+   "lat": 40.742236,
+   "lng": -73.9887903,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5098847",
+   "lat": 40.7422439,
+   "lng": -73.9879516,
+   "dbhIn": 30.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "4192733",
+   "lat": 40.7422671,
+   "lng": -73.987453,
+   "dbhIn": 13.0,
+   "condition": "Good",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "5141846",
+   "lat": 40.7422832,
+   "lng": -73.9871682,
+   "dbhIn": 17.0,
+   "condition": "Fair",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "4192860",
+   "lat": 40.7422891,
+   "lng": -73.9886557,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5528229",
+   "lat": 40.742294,
+   "lng": -73.991601,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192716",
+   "lat": 40.742294,
+   "lng": -73.987891,
+   "dbhIn": 30.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "4192734",
+   "lat": 40.7422944,
+   "lng": -73.9873628,
+   "dbhIn": 25.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5098252",
+   "lat": 40.7423057,
+   "lng": -73.9885882,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192859",
+   "lat": 40.7423069,
+   "lng": -73.9885601,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "16166517",
+   "lat": 40.7423094,
+   "lng": -73.9911233,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "10196786",
+   "lat": 40.7423141,
+   "lng": -73.9916482,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Eucommia ulmoides - Hardy Rubber Tree"
+  },
+  {
+   "objectid": "4192717",
+   "lat": 40.7423142,
+   "lng": -73.9877516,
+   "dbhIn": 23.0,
+   "condition": "Good",
+   "species": "Aesculus hippocastanum - horse chestnut"
+  },
+  {
+   "objectid": "4192720",
+   "lat": 40.742319,
+   "lng": -73.9882246,
+   "dbhIn": 17.0,
+   "condition": "Fair",
+   "species": "Ulmus parvifolia - Chinese elm"
+  },
+  {
+   "objectid": "4192730",
+   "lat": 40.7423206,
+   "lng": -73.9876103,
+   "dbhIn": 37.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1416503",
+   "lat": 40.7423355,
+   "lng": -73.9916986,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Tilia cordata - littleleaf linden"
+  },
+  {
+   "objectid": "5100127",
+   "lat": 40.7423388,
+   "lng": -73.9886399,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5028846",
+   "lat": 40.742348,
+   "lng": -73.988748,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192742",
+   "lat": 40.742348,
+   "lng": -73.9873049,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Prunus cerasifera - cherry plum"
+  },
+  {
+   "objectid": "4192743",
+   "lat": 40.7423517,
+   "lng": -73.9872541,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Cornus kousa - kousa dogwood"
+  },
+  {
+   "objectid": "5109495",
+   "lat": 40.7423694,
+   "lng": -73.9876118,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192741",
+   "lat": 40.7423825,
+   "lng": -73.987355,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Cornus kousa - kousa dogwood"
+  },
+  {
+   "objectid": "4192858",
+   "lat": 40.7423892,
+   "lng": -73.9886134,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192822",
+   "lat": 40.7423892,
+   "lng": -73.9870619,
+   "dbhIn": 27.0,
+   "condition": "Fair",
+   "species": "Quercus coccinea - scarlet oak"
+  },
+  {
+   "objectid": "4192744",
+   "lat": 40.7423897,
+   "lng": -73.9872156,
+   "dbhIn": 27.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "4192735",
+   "lat": 40.7423924,
+   "lng": -73.9874854,
+   "dbhIn": 32.0,
+   "condition": "Good",
+   "species": "Quercus palustris - pin oak"
+  },
+  {
+   "objectid": "2770301",
+   "lat": 40.7424031,
+   "lng": -73.988318,
+   "dbhIn": 26.0,
+   "condition": "Poor",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192857",
+   "lat": 40.7424034,
+   "lng": -73.9884865,
+   "dbhIn": 21.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1416504",
+   "lat": 40.7424152,
+   "lng": -73.9918864,
+   "dbhIn": 4.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "1418155",
+   "lat": 40.742418,
+   "lng": -73.9914596,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Tilia americana - American basswood"
+  },
+  {
+   "objectid": "5028845",
+   "lat": 40.7424195,
+   "lng": -73.9887198,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5108475",
+   "lat": 40.7424248,
+   "lng": -73.987331,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Cornus florida - flowering dogwood"
+  },
+  {
+   "objectid": "4192740",
+   "lat": 40.7424254,
+   "lng": -73.9874035,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Cornus kousa - kousa dogwood"
+  },
+  {
+   "objectid": "4192823",
+   "lat": 40.7424317,
+   "lng": -73.9870761,
+   "dbhIn": 20.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192718",
+   "lat": 40.7424321,
+   "lng": -73.987797,
+   "dbhIn": 60.0,
+   "condition": "Good",
+   "species": "Ulmus minor 'Atinia' - English elm"
+  },
+  {
+   "objectid": "5114953",
+   "lat": 40.7424438,
+   "lng": -73.9875562,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercis reniformis - Oklahoma redbud"
+  },
+  {
+   "objectid": "4192773",
+   "lat": 40.742447,
+   "lng": -73.9882344,
+   "dbhIn": 30.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5028844",
+   "lat": 40.7424494,
+   "lng": -73.9867217,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "4192772",
+   "lat": 40.7424518,
+   "lng": -73.9883268,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Aesculus x carnea - red horse-chestnut"
+  },
+  {
+   "objectid": "1416505",
+   "lat": 40.7424556,
+   "lng": -73.9919816,
+   "dbhIn": 4.0,
+   "condition": "Dead",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "5107711",
+   "lat": 40.7424556,
+   "lng": -73.9875403,
+   "dbhIn": 14.0,
+   "condition": "Good",
+   "species": "Ulmus pumila - Siberian elm"
+  },
+  {
+   "objectid": "4192824",
+   "lat": 40.742457,
+   "lng": -73.9870074,
+   "dbhIn": 21.0,
+   "condition": "Poor",
+   "species": "Quercus coccinea - scarlet oak"
+  },
+  {
+   "objectid": "5097517",
+   "lat": 40.7424609,
+   "lng": -73.987625,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "4192719",
+   "lat": 40.7424631,
+   "lng": -73.9879583,
+   "dbhIn": 13.0,
+   "condition": "Fair",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "15234434",
+   "lat": 40.7424637,
+   "lng": -73.9860296,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192739",
+   "lat": 40.7424695,
+   "lng": -73.9874724,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Amelanchier - serviceberry"
+  },
+  {
+   "objectid": "2145340",
+   "lat": 40.7424707,
+   "lng": -73.9886979,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192856",
+   "lat": 40.7424773,
+   "lng": -73.9885789,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5111909",
+   "lat": 40.7424921,
+   "lng": -73.9884721,
+   "dbhIn": 24.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1416506",
+   "lat": 40.7424963,
+   "lng": -73.9920774,
+   "dbhIn": 4.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "5028843",
+   "lat": 40.7424964,
+   "lng": -73.9866875,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "5028840",
+   "lat": 40.7425017,
+   "lng": -73.9861199,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "5113753",
+   "lat": 40.7425054,
+   "lng": -73.9882133,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192771",
+   "lat": 40.7425102,
+   "lng": -73.9883346,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192774",
+   "lat": 40.7425102,
+   "lng": -73.9881467,
+   "dbhIn": 35.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "16083667",
+   "lat": 40.7425137,
+   "lng": -73.9871487,
+   "dbhIn": 32.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192826",
+   "lat": 40.7425167,
+   "lng": -73.9869565,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "2145341",
+   "lat": 40.7425243,
+   "lng": -73.9886681,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5103804",
+   "lat": 40.7425252,
+   "lng": -73.9886042,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1410850",
+   "lat": 40.7425397,
+   "lng": -73.9862102,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "17115686",
+   "lat": 40.7425437,
+   "lng": -73.9921889,
+   "dbhIn": 3.0,
+   "condition": "Excellent",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "1410854",
+   "lat": 40.7425454,
+   "lng": -73.9866519,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "4192775",
+   "lat": 40.7425507,
+   "lng": -73.9880558,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "5111067",
+   "lat": 40.7425518,
+   "lng": -73.9881324,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "5106947",
+   "lat": 40.7425582,
+   "lng": -73.9880949,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "4192738",
+   "lat": 40.742566,
+   "lng": -73.9875601,
+   "dbhIn": 21.0,
+   "condition": "Good",
+   "species": "Quercus ellipsoidalis - northern pin oak"
+  },
+  {
+   "objectid": "5096091",
+   "lat": 40.7425674,
+   "lng": -73.9871824,
+   "dbhIn": 7.0,
+   "condition": "Fair",
+   "species": "Prunus cerasifera - cherry plum"
+  },
+  {
+   "objectid": "5112317",
+   "lat": 40.7425722,
+   "lng": -73.9879919,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "5110744",
+   "lat": 40.7425734,
+   "lng": -73.988066,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "5114976",
+   "lat": 40.7425761,
+   "lng": -73.9880591,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "1410851",
+   "lat": 40.7425786,
+   "lng": -73.9863023,
+   "dbhIn": 6.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "1416508",
+   "lat": 40.7425841,
+   "lng": -73.9922841,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "5109459",
+   "lat": 40.7425902,
+   "lng": -73.9879522,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "5028842",
+   "lat": 40.7425925,
+   "lng": -73.9866177,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "2145342",
+   "lat": 40.742597,
+   "lng": -73.9886289,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5113907",
+   "lat": 40.7425973,
+   "lng": -73.9883462,
+   "dbhIn": 16.0,
+   "condition": "Fair",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "1413275",
+   "lat": 40.742598,
+   "lng": -73.9868218,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192825",
+   "lat": 40.7426064,
+   "lng": -73.986917,
+   "dbhIn": 34.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192776",
+   "lat": 40.7426102,
+   "lng": -73.9879618,
+   "dbhIn": 27.0,
+   "condition": "Good",
+   "species": "Quercus coccinea - scarlet oak"
+  },
+  {
+   "objectid": "1411817",
+   "lat": 40.7426148,
+   "lng": -73.9861005,
+   "dbhIn": 6.0,
+   "condition": "Fair",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "5028841",
+   "lat": 40.7426166,
+   "lng": -73.9863926,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Zelkova serrata - Japanese zelkova"
+  },
+  {
+   "objectid": "5103977",
+   "lat": 40.7426234,
+   "lng": -73.9880021,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "4192745",
+   "lat": 40.7426239,
+   "lng": -73.9871701,
+   "dbhIn": 33.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192748",
+   "lat": 40.7426268,
+   "lng": -73.9874442,
+   "dbhIn": 34.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192827",
+   "lat": 40.7426338,
+   "lng": -73.9870219,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Cornus kousa - kousa dogwood"
+  },
+  {
+   "objectid": "4192777",
+   "lat": 40.7426394,
+   "lng": -73.9881373,
+   "dbhIn": 12.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192855",
+   "lat": 40.7426425,
+   "lng": -73.9885453,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1411816",
+   "lat": 40.7426446,
+   "lng": -73.9861712,
+   "dbhIn": 7.0,
+   "condition": "Fair",
+   "species": "Koelreuteria paniculata - goldenrain tree"
+  },
+  {
+   "objectid": "4192746",
+   "lat": 40.7426458,
+   "lng": -73.9872218,
+   "dbhIn": 34.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1413274",
+   "lat": 40.7426481,
+   "lng": -73.9867856,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192778",
+   "lat": 40.7426538,
+   "lng": -73.9882742,
+   "dbhIn": 16.0,
+   "condition": "Fair",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "5110172",
+   "lat": 40.7426657,
+   "lng": -73.9880453,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "5102203",
+   "lat": 40.7426706,
+   "lng": -73.9869209,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "1411815",
+   "lat": 40.742673,
+   "lng": -73.9862388,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "4192749",
+   "lat": 40.742685,
+   "lng": -73.9875698,
+   "dbhIn": 10.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "1418157",
+   "lat": 40.7426973,
+   "lng": -73.9921292,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "1413273",
+   "lat": 40.7427024,
+   "lng": -73.9867464,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192767",
+   "lat": 40.7427038,
+   "lng": -73.9880073,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192768",
+   "lat": 40.7427115,
+   "lng": -73.9878992,
+   "dbhIn": 34.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "13428038",
+   "lat": 40.7427174,
+   "lng": -73.9876886,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Unknown - Unknown"
+  },
+  {
+   "objectid": "5095503",
+   "lat": 40.7427225,
+   "lng": -73.988035,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Parrotia persica - Persian ironwood"
+  },
+  {
+   "objectid": "1411814",
+   "lat": 40.7427301,
+   "lng": -73.9863746,
+   "dbhIn": 16.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "16083666",
+   "lat": 40.7427343,
+   "lng": -73.9875918,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Acer rubrum - red maple"
+  },
+  {
+   "objectid": "4192829",
+   "lat": 40.7427422,
+   "lng": -73.9870125,
+   "dbhIn": 31.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192765",
+   "lat": 40.7427455,
+   "lng": -73.9882015,
+   "dbhIn": 34.0,
+   "condition": "Good",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "4192762",
+   "lat": 40.7427482,
+   "lng": -73.9877499,
+   "dbhIn": 25.0,
+   "condition": "Fair",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "5111988",
+   "lat": 40.7427483,
+   "lng": -73.9869001,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192751",
+   "lat": 40.7427525,
+   "lng": -73.9874434,
+   "dbhIn": 13.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "4192828",
+   "lat": 40.7427541,
+   "lng": -73.9869154,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192764",
+   "lat": 40.7427586,
+   "lng": -73.9883048,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "5113182",
+   "lat": 40.7427711,
+   "lng": -73.9869978,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "5100329",
+   "lat": 40.7427786,
+   "lng": -73.987068,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "5110214",
+   "lat": 40.74278,
+   "lng": -73.9884327,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192752",
+   "lat": 40.7427817,
+   "lng": -73.9873212,
+   "dbhIn": 22.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "4192750",
+   "lat": 40.7427831,
+   "lng": -73.9875343,
+   "dbhIn": 60.0,
+   "condition": "Good",
+   "species": "Ulmus minor 'Atinia' - English elm"
+  },
+  {
+   "objectid": "14904217",
+   "lat": 40.7427842,
+   "lng": -73.9867758,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Carpinus caroliniana - American hornbeam"
+  },
+  {
+   "objectid": "16083665",
+   "lat": 40.7427933,
+   "lng": -73.9877038,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Acer rubrum - red maple"
+  },
+  {
+   "objectid": "4192830",
+   "lat": 40.742799,
+   "lng": -73.9869461,
+   "dbhIn": 30.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192831",
+   "lat": 40.7427994,
+   "lng": -73.9870579,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Cornus kousa - kousa dogwood"
+  },
+  {
+   "objectid": "5096323",
+   "lat": 40.7428015,
+   "lng": -73.98702,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "4192766",
+   "lat": 40.7428021,
+   "lng": -73.9880833,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Prunus serrulata 'Green leaf' - 'Green leaf' Japanese flowering cherry"
+  },
+  {
+   "objectid": "5098332",
+   "lat": 40.7428036,
+   "lng": -73.9870754,
+   "dbhIn": 28.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5107656",
+   "lat": 40.7428103,
+   "lng": -73.9871105,
+   "dbhIn": 7.0,
+   "condition": "Good",
+   "species": "Crataegus - Hawthorn"
+  },
+  {
+   "objectid": "4192854",
+   "lat": 40.7428132,
+   "lng": -73.9884206,
+   "dbhIn": 27.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192769",
+   "lat": 40.7428211,
+   "lng": -73.9879485,
+   "dbhIn": 28.0,
+   "condition": "Fair",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "4192753",
+   "lat": 40.7428268,
+   "lng": -73.9873536,
+   "dbhIn": 15.0,
+   "condition": "Fair",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "4192763",
+   "lat": 40.7428316,
+   "lng": -73.9876982,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Acer saccharinum - silver maple"
+  },
+  {
+   "objectid": "5097382",
+   "lat": 40.7428324,
+   "lng": -73.9881793,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "14904218",
+   "lat": 40.7428326,
+   "lng": -73.986881,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Carpinus caroliniana - American hornbeam"
+  },
+  {
+   "objectid": "2145343",
+   "lat": 40.7428381,
+   "lng": -73.9885347,
+   "dbhIn": 2.0,
+   "condition": "Fair",
+   "species": "Celtis occidentalis - common hackberry"
+  },
+  {
+   "objectid": "4192833",
+   "lat": 40.7428399,
+   "lng": -73.9871817,
+   "dbhIn": 27.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "4192761",
+   "lat": 40.7428419,
+   "lng": -73.9877919,
+   "dbhIn": 24.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5100859",
+   "lat": 40.7428485,
+   "lng": -73.988396,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Prunus cerasifera - cherry plum"
+  },
+  {
+   "objectid": "4192832",
+   "lat": 40.7428613,
+   "lng": -73.987083,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5102358",
+   "lat": 40.7428628,
+   "lng": -73.9871454,
+   "dbhIn": 27.0,
+   "condition": "Fair",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1413270",
+   "lat": 40.7428662,
+   "lng": -73.9869702,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Carpinus betulus - European hornbeam"
+  },
+  {
+   "objectid": "4192754",
+   "lat": 40.7428685,
+   "lng": -73.9874069,
+   "dbhIn": 16.0,
+   "condition": "Fair",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "5100650",
+   "lat": 40.7428775,
+   "lng": -73.9882555,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Crataegus - Hawthorn"
+  },
+  {
+   "objectid": "4192852",
+   "lat": 40.7428783,
+   "lng": -73.9883972,
+   "dbhIn": 27.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192853",
+   "lat": 40.7428788,
+   "lng": -73.9883658,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Prunus serotina - black cherry"
+  },
+  {
+   "objectid": "2145344",
+   "lat": 40.742893,
+   "lng": -73.9884853,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192770",
+   "lat": 40.7428997,
+   "lng": -73.9880205,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192760",
+   "lat": 40.7428997,
+   "lng": -73.9877738,
+   "dbhIn": 21.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "5112199",
+   "lat": 40.7429031,
+   "lng": -73.988122,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "4192755",
+   "lat": 40.7429068,
+   "lng": -73.9875107,
+   "dbhIn": 16.0,
+   "condition": "Fair",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "1413269",
+   "lat": 40.7429082,
+   "lng": -73.98707,
+   "dbhIn": 3.0,
+   "condition": "Fair",
+   "species": "Carpinus caroliniana - American hornbeam"
+  },
+  {
+   "objectid": "5100507",
+   "lat": 40.7429102,
+   "lng": -73.9872416,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Magnolia grandiflora - southern magnolia"
+  },
+  {
+   "objectid": "5101109",
+   "lat": 40.7429197,
+   "lng": -73.9873245,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Ilex - holly"
+  },
+  {
+   "objectid": "4192835",
+   "lat": 40.7429257,
+   "lng": -73.9872427,
+   "dbhIn": 30.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192834",
+   "lat": 40.7429293,
+   "lng": -73.9873179,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Magnolia grandiflora - southern magnolia"
+  },
+  {
+   "objectid": "4192759",
+   "lat": 40.7429384,
+   "lng": -73.9878247,
+   "dbhIn": 11.0,
+   "condition": "Good",
+   "species": "Prunus serrulata 'Green leaf' - 'Green leaf' Japanese flowering cherry"
+  },
+  {
+   "objectid": "5113526",
+   "lat": 40.7429457,
+   "lng": -73.9883577,
+   "dbhIn": 1.0,
+   "condition": "Good",
+   "species": "Sorbus hybrida - oakleaf mountain ash"
+  },
+  {
+   "objectid": "2145345",
+   "lat": 40.7429478,
+   "lng": -73.9884259,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192851",
+   "lat": 40.7429526,
+   "lng": -73.9883047,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5103801",
+   "lat": 40.7429589,
+   "lng": -73.9873265,
+   "dbhIn": 29.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192850",
+   "lat": 40.7429609,
+   "lng": -73.9883485,
+   "dbhIn": 30.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1413268",
+   "lat": 40.7429708,
+   "lng": -73.9872183,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Carpinus caroliniana - American hornbeam"
+  },
+  {
+   "objectid": "5113647",
+   "lat": 40.7429792,
+   "lng": -73.9874562,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Prunus virginiana - chokecherry"
+  },
+  {
+   "objectid": "4192757",
+   "lat": 40.7429805,
+   "lng": -73.9876778,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192836",
+   "lat": 40.7429853,
+   "lng": -73.9873868,
+   "dbhIn": 28.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5104842",
+   "lat": 40.7429933,
+   "lng": -73.987843,
+   "dbhIn": 17.0,
+   "condition": "Good",
+   "species": "Styphnolobium japonicum - Japanese pagoda tree"
+  },
+  {
+   "objectid": "5106962",
+   "lat": 40.7429997,
+   "lng": -73.9874877,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Prunus virginiana - chokecherry"
+  },
+  {
+   "objectid": "2145346",
+   "lat": 40.7430113,
+   "lng": -73.98838,
+   "dbhIn": 3.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192847",
+   "lat": 40.7430181,
+   "lng": -73.9881982,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "4192849",
+   "lat": 40.7430217,
+   "lng": -73.9882953,
+   "dbhIn": 31.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5100930",
+   "lat": 40.7430346,
+   "lng": -73.9876429,
+   "dbhIn": 20.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5104539",
+   "lat": 40.7430349,
+   "lng": -73.9875431,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercidiphyllum japonicum - katsura tree"
+  },
+  {
+   "objectid": "1413267",
+   "lat": 40.7430352,
+   "lng": -73.9873711,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "4192837",
+   "lat": 40.7430508,
+   "lng": -73.9875387,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "5103618",
+   "lat": 40.7430613,
+   "lng": -73.9875372,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercidiphyllum japonicum - katsura tree"
+  },
+  {
+   "objectid": "4192848",
+   "lat": 40.7430634,
+   "lng": -73.9882405,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Cornus kousa - kousa dogwood"
+  },
+  {
+   "objectid": "4192838",
+   "lat": 40.7430675,
+   "lng": -73.9875889,
+   "dbhIn": 4.0,
+   "condition": "Good",
+   "species": "Malus - apple"
+  },
+  {
+   "objectid": "5111158",
+   "lat": 40.7430701,
+   "lng": -73.9881516,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Cercis canadensis - eastern redbud"
+  },
+  {
+   "objectid": "1413266",
+   "lat": 40.7430706,
+   "lng": -73.9874551,
+   "dbhIn": 3.0,
+   "condition": "Fair",
+   "species": "Carpinus caroliniana - American hornbeam"
+  },
+  {
+   "objectid": "5108749",
+   "lat": 40.7430756,
+   "lng": -73.9876358,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Prunus - Cherry"
+  },
+  {
+   "objectid": "5106075",
+   "lat": 40.7430788,
+   "lng": -73.988204,
+   "dbhIn": 28.0,
+   "condition": "Fair",
+   "species": "Ailanthus altissima - tree of heaven"
+  },
+  {
+   "objectid": "4192846",
+   "lat": 40.7430943,
+   "lng": -73.9880744,
+   "dbhIn": 32.0,
+   "condition": "Good",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "5105946",
+   "lat": 40.7430959,
+   "lng": -73.9881182,
+   "dbhIn": 29.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "2145347",
+   "lat": 40.7431027,
+   "lng": -73.988314,
+   "dbhIn": 1.0,
+   "condition": "Dead",
+   "species": "Quercus bicolor - swamp white oak"
+  },
+  {
+   "objectid": "5111511",
+   "lat": 40.7431064,
+   "lng": -73.987665,
+   "dbhIn": 25.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1413265",
+   "lat": 40.7431089,
+   "lng": -73.987546,
+   "dbhIn": 5.0,
+   "condition": "Fair",
+   "species": "Syringa reticulata - Japanese tree lilac"
+  },
+  {
+   "objectid": "4968865",
+   "lat": 40.7431238,
+   "lng": -73.9882162,
+   "dbhIn": 31.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "5109209",
+   "lat": 40.7431266,
+   "lng": -73.9879842,
+   "dbhIn": 18.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192839",
+   "lat": 40.7431268,
+   "lng": -73.9877106,
+   "dbhIn": 21.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1413264",
+   "lat": 40.7431448,
+   "lng": -73.9876312,
+   "dbhIn": 8.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "5103547",
+   "lat": 40.7431479,
+   "lng": -73.9882381,
+   "dbhIn": 21.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192840",
+   "lat": 40.7431697,
+   "lng": -73.9878023,
+   "dbhIn": 26.0,
+   "condition": "Good",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "5100254",
+   "lat": 40.7431737,
+   "lng": -73.9880579,
+   "dbhIn": 16.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1413263",
+   "lat": 40.7431919,
+   "lng": -73.9877429,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "4192845",
+   "lat": 40.7431968,
+   "lng": -73.9881136,
+   "dbhIn": 28.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "1418158",
+   "lat": 40.7431994,
+   "lng": -73.992436,
+   "dbhIn": 7.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "4192841",
+   "lat": 40.7432048,
+   "lng": -73.9878798,
+   "dbhIn": 33.0,
+   "condition": "Fair",
+   "species": "Ulmus americana - American elm"
+  },
+  {
+   "objectid": "1413262",
+   "lat": 40.7432265,
+   "lng": -73.987825,
+   "dbhIn": 5.0,
+   "condition": "Good",
+   "species": "Quercus rubra - northern red oak"
+  },
+  {
+   "objectid": "4192842",
+   "lat": 40.7432328,
+   "lng": -73.9879542,
+   "dbhIn": 19.0,
+   "condition": "Good",
+   "species": "Platanus x acerifolia - London planetree"
+  },
+  {
+   "objectid": "4192844",
+   "lat": 40.7432397,
+   "lng": -73.9881402,
+   "dbhIn": 31.0,
+   "condition": "Poor",
+   "species": "Ailanthus altissima - tree of heaven"
+  },
+  {
+   "objectid": "1413261",
+   "lat": 40.7432584,
+   "lng": -73.9879007,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Carpinus caroliniana - American hornbeam"
+  },
+  {
+   "objectid": "4192843",
+   "lat": 40.7432692,
+   "lng": -73.988045,
+   "dbhIn": 16.0,
+   "condition": "Good",
+   "species": "Ginkgo biloba - maidenhair tree"
+  },
+  {
+   "objectid": "1413260",
+   "lat": 40.7432925,
+   "lng": -73.9879816,
+   "dbhIn": 2.0,
+   "condition": "Good",
+   "species": "Tilia tomentosa - silver linden"
+  },
+  {
+   "objectid": "1418159",
+   "lat": 40.7433232,
+   "lng": -73.9923456,
+   "dbhIn": 6.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "2111744",
+   "lat": 40.7434122,
+   "lng": -73.991829,
+   "dbhIn": 10.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2111745",
+   "lat": 40.7434592,
+   "lng": -73.9919408,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "2111746",
+   "lat": 40.7434895,
+   "lng": -73.9920128,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "1418160",
+   "lat": 40.7436495,
+   "lng": -73.9921075,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "1418485",
+   "lat": 40.7437521,
+   "lng": -73.9923228,
+   "dbhIn": 9.0,
+   "condition": "Good",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "1418161",
+   "lat": 40.7438071,
+   "lng": -73.9919929,
+   "dbhIn": 7.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "1418162",
+   "lat": 40.7439402,
+   "lng": -73.9918962,
+   "dbhIn": 9.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  },
+  {
+   "objectid": "1411891",
+   "lat": 40.743957,
+   "lng": -73.9873544,
+   "dbhIn": 3.0,
+   "condition": "Fair",
+   "species": "Gleditsia triacanthos var. inermis - Thornless honeylocust"
+  },
+  {
+   "objectid": "1418164",
+   "lat": 40.7439739,
+   "lng": -73.9915355,
+   "dbhIn": 8.0,
+   "condition": "Fair",
+   "species": "Pyrus calleryana - Callery pear"
+  }
+ ]
+}
