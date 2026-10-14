@@ -16,7 +16,23 @@ import { GeospatialTileExtractionBridge, ExtractedLocationManifest } from '../..
 import { detectRealWorldLocationIntent } from '../../../browser/generative-canvas/services/Google3DTileService';
 import { synthesizeAdaptiveHeroObjectContract, generateAdaptiveHeroPythonSource } from '../../../common/spatial/adaptive-hero-synthesizer';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
-import { analyzePartConnectivity, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport } from '../../3d-engine/part-connectivity';
+import { analyzePartConnectivity, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import { describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
+import { GeminiClient } from '../gemini-client';
+
+let visionClient: GeminiClient | undefined;
+/** Sends the review prompt and clay renders to Gemini; uses the chat's model so the review runs on known credentials. */
+async function callVisionModel(prompt: string, images: Buffer[], model?: string): Promise<string> {
+    visionClient ??= new GeminiClient();
+    const { text } = await visionClient.generateContent({
+        model: model || 'gemini-3.7-flash',
+        prompt,
+        inlineData: images.map(png => ({ mimeType: 'image/png', data: png.toString('base64') })),
+        temperature: 0,
+        maxOutputTokens: 4096
+    });
+    return text;
+}
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -336,12 +352,28 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         }
 
         let structureReport: PartConnectivityReport | null = null;
+        let visualReview: (VisualReviewResult & { imagePaths?: string[] }) | undefined;
         if (glbBuf) {
+            let soup: TriangleSoup | null = null;
             try {
-                const soup = glbToTriangleSoup(glbBuf);
+                soup = glbToTriangleSoup(glbBuf);
                 if (soup) structureReport = analyzePartConnectivity(soup);
             } catch (err: any) {
                 console.warn('[execute_3d_python_script] Structural check skipped:', err?.message || err);
+            }
+            // Only inside a chat, where the user's request is known; renders three clay views and asks a
+            // vision model for objective shape errors the structure check cannot see (e.g. legs leaning wrong).
+            const userRequest = _ctx?.request?.prompt;
+            if (soup && userRequest && process.env.SCRATCHBOX_3D_VISUAL_REVIEW !== 'off') {
+                const reviewDesc = typeof args.description === 'string' ? args.description : '';
+                const { result: review, views } = await reviewModelVisually(soup, userRequest, reviewDesc,
+                    (prompt, images) => callVisionModel(prompt, images, _ctx?.request?.model));
+                const imagePaths = result.glbPath ? views.map((v, i) => {
+                    const p = result.glbPath!.replace(/\.glb$/i, `_review_${i}.png`);
+                    try { fs.writeFileSync(p, v.png); } catch { /* best effort */ }
+                    return p;
+                }) : undefined;
+                visualReview = { ...review, imagePaths };
             }
             const analysis = extractGlbAnalysis(glbBuf);
             bounds = analysis.bounds;
@@ -479,6 +511,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 gateReport: gateReport,
                 structureReport,
                 structuralIssues: structureReport ? describeFloatingParts(structureReport) : undefined,
+                visualReview,
+                visualIssues: visualReview ? describeVisualProblems(visualReview) : undefined,
                 locationManifest: extractedManifest,
                 locationGlbPath: extractedGlbPath,
                 geoAnchor: effectiveGeoAnchor,
@@ -534,7 +568,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     }
                 }
             },
-            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built object automatically grounded on top of scene terrain/tiles.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}`
+            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built object automatically grounded on top of scene terrain/tiles.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
         };
     }
 };

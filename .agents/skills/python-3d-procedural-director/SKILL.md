@@ -192,6 +192,7 @@ def add(mesh, name):
 
 seat = sb.create_cylinder(radius=0.17, height=SEAT_T, segments=96)
 seat.translate(0.0, SEAT_Y + SEAT_T / 2, 0.0)
+seat.weld_vertices()                  # cylinder caps arrive unwelded; subdividing them separately tears the rim
 seat.subdivide(2)
 add(seat, "seat")
 
