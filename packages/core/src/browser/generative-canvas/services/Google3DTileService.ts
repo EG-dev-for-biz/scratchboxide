@@ -190,7 +190,9 @@ export function detectRealWorldLocationIntent(
     };
   }
 
-  const combined = `${prompt} ${context?.docTitle || ''} ${context?.docContent || ''}`.toLowerCase();
+  // Patterns below are case-insensitive; the original-case text is kept so extracted place names read as written.
+  const combinedRaw = `${prompt} ${context?.docTitle || ''} ${context?.docContent || ''}`;
+  const combined = combinedRaw.toLowerCase();
 
   // Exclude purely generic non-geographic, space, or extraterrestrial prompts unless coordinates are explicitly given
   const isGenericNonGeo = /\b(?:outer space|solar system|planets?|galaxy|orbit(?:ing)?|molecule|molecular|atoms?|quantum|dna|particle simulation|mars|moon|lunar|asteroid|sci-fi|cyberpunk|spacecraft|rover)\b/i.test(prompt);
@@ -234,7 +236,7 @@ export function detectRealWorldLocationIntent(
   if (directLandmark) {
     return {
       isRealWorld: true,
-      landmarkName: directLandmark.formattedAddress || cleanedPrompt,
+      landmarkName: directLandmark.name || directLandmark.formattedAddress || cleanedPrompt,
       lat: directLandmark.lat,
       lng: directLandmark.lng,
       elevation: directLandmark.elevation ?? 0,
@@ -267,7 +269,7 @@ export function detectRealWorldLocationIntent(
   ];
 
   for (const pattern of naturalPatterns) {
-    const match = combined.match(pattern);
+    const match = combinedRaw.match(pattern);
     if (match && match[1]) {
       let target = match[1].trim();
 
@@ -291,7 +293,7 @@ export function detectRealWorldLocationIntent(
         if (directLandmark) {
           return {
             isRealWorld: true,
-            landmarkName: directLandmark.formattedAddress || (subLocation ? subLocation : target),
+            landmarkName: directLandmark.name || directLandmark.formattedAddress || (subLocation ? subLocation : target),
             lat: directLandmark.lat,
             lng: directLandmark.lng,
             elevation: directLandmark.elevation || 15.0,
@@ -455,7 +457,8 @@ export class Google3DTileService {
     }
 
     // Check built-in landmark registry
-    const registryMatch = GoogleMapsService.getInstance().resolveLandmarkSync(cleanQuery) || GoogleMapsService.getInstance().resolveLandmarkSync(strippedQuery);
+    // Match on the caller's original casing so the returned name reads as they wrote it.
+    const registryMatch = GoogleMapsService.getInstance().resolveLandmarkSync(queryOrCoords.trim()) || GoogleMapsService.getInstance().resolveLandmarkSync(strippedQuery);
     if (registryMatch) {
       return {
         lat: registryMatch.lat,
@@ -463,7 +466,7 @@ export class Google3DTileService {
         elevation: registryMatch.elevation ?? 0,
         elevationSource: 'landmark_registry',
         datum: 'MSL_EGM96',
-        landmarkName: registryMatch.formattedAddress || cleanQuery,
+        landmarkName: registryMatch.name || registryMatch.formattedAddress || cleanQuery,
         formattedAddress: registryMatch.formattedAddress,
         isResolved: true
       };
@@ -536,8 +539,14 @@ export class Google3DTileService {
    */
   public ingestTileRegionSync(options: TileIngestionOptions = {}): TileIngestionResult {
     const hasExplicitCoords = options.lat !== undefined && options.lng !== undefined && (options.lat !== 0 || options.lng !== 0);
+    // Explicit coordinates decide the position; a caller-supplied query still names the place
+    // (otherwise every coordinate-anchored tile is labelled "Geo (lat, lng)").
+    const queryName = options.query?.trim();
     const geo = hasExplicitCoords
-      ? this.resolveLocationSync({ lat: options.lat!, lng: options.lng!, elevation: options.elevation })
+      ? {
+          ...this.resolveLocationSync({ lat: options.lat!, lng: options.lng!, elevation: options.elevation }),
+          ...(queryName ? { landmarkName: queryName } : {})
+        }
       : this.resolveLocationSync(options.query || 'empire state building');
 
     if (!geo.isResolved || (geo.lat === 0 && geo.lng === 0 && options.lat === undefined)) {

@@ -447,7 +447,7 @@ export class Google3DTileBlockoutPipelineService {
           lat: Number(syncMatch.lat.toFixed(6)),
           lng: Number(syncMatch.lng.toFixed(6)),
           elevation: syncMatch.elevation || 15.0,
-          landmarkName: syncMatch.formattedAddress || rawQuery
+          landmarkName: syncMatch.name || syncMatch.formattedAddress || rawQuery
         };
       }
       const geo = await GoogleMapsService.getInstance().geocode(rawQuery);
