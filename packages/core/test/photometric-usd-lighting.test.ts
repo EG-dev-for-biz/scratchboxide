@@ -247,8 +247,8 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
             expect(result.location.name).toContain('The Plaza');
             expect(result.lightingRig).toBeDefined();
             expect(result.threeJsUniforms).toBeDefined();
-            expect(result.cameraPose).toBeDefined();
-            expect(result.cameraPose?.standoffMeters).toBeGreaterThan(10);
+            // Coordinates and a name carry no camera pose evidence, so no pose is invented.
+            expect(result.cameraPose).toBeUndefined();
             expect(result.usdExportPath).toBeDefined();
             expect(fs.existsSync(result.usdExportPath!)).toBe(true);
 

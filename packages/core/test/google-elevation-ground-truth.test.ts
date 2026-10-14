@@ -105,7 +105,7 @@ describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
     });
 
     describe('3. Procedural 3D Synthesizer Geospatial Anchor & Elevation Propagation', () => {
-        it('populates scene geoAnchor with elevationSource, datum, and real-world elevation', () => {
+        it('leaves a scene that names no location unanchored (clay void)', () => {
             const initialScene: Scene3DData = {
                 title: 'Shooting Range Proving Ground',
                 sceneType: 'environment',
@@ -118,18 +118,12 @@ describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
                 'tactical target practice shooting range with steel poppers'
             );
 
-            expect(synthesized.geoAnchor).toBeDefined();
-            expect(synthesized.geoAnchor?.elevation).toBeCloseTo(489.86, 1);
-            expect(synthesized.geoAnchor?.elevationSource).toBe('google_elevation');
-            expect(synthesized.geoAnchor?.datum).toBe('MSL_EGM96');
-            expect(synthesized.geoAnchor?.landmarkName).toContain('Angeles Shooting Ranges');
-
-            // Verify procedural C++ code generator metadata header includes ground elevation
-            expect(synthesized.cppGenerator?.sourceCode).toContain('Ground Elevation: 489.86m MSL [Google Elevation Ground Truth, Datum: EGM96]');
+            expect(synthesized.geoAnchor).toBeUndefined();
+            expect(synthesized.pythonGenerator || synthesized.cppGenerator?.sourceCode).toBeTruthy();
         });
 
-        it('full contextual scene synthesis attaches verified elevation metadata', () => {
-            const scene = synthesizeContextual3DScene('architectural glass pavilion cantilever over waterfall');
+        it('full contextual scene synthesis attaches verified elevation metadata for a named location', () => {
+            const scene = synthesizeContextual3DScene('architectural glass pavilion cantilever over Fallingwater, Mill Run, Pennsylvania');
             expect(scene.geoAnchor).toBeDefined();
             expect(scene.geoAnchor?.elevationSource).toBe('google_elevation');
             expect(scene.geoAnchor?.elevation).toBeCloseTo(394.03, 1); // Fallingwater

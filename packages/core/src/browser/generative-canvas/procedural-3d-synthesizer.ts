@@ -1805,6 +1805,9 @@ export function initializeSceneOperatorStack(scene: Scene3DData): Scene3DData {
             query: mapTileObj.lineage?.generation?.prompt || scene.geoAnchor.landmarkName || '3D Map Tile',
             lat: scene.geoAnchor.lat,
             lng: scene.geoAnchor.lng,
+            elevation: scene.geoAnchor.elevation,
+            elevationSource: scene.geoAnchor.elevationSource,
+            datum: scene.geoAnchor.datum,
             clayPreset: mapTileObj.lineage?.generation?.params?.clayPreset || 'warm-clay'
         });
     }
@@ -1928,7 +1931,7 @@ export function applyCreativeLocationCasting(
     const docContent = context?.docContent || (activeDoc?.sections ? activeDoc.sections.map(s => s.content || '').join(' ') : '');
 
     // Preserve Martian or extraterrestrial planetary anchors
-    if (scene.sceneType === 'mars_rover' || (scene.worldBranch && scene.worldBranch.includes('mars')) || /\b(?:mars|martian|rover|jezero)\b/i.test(prompt)) {
+    if (scene.sceneType === 'mars_rover' || (scene.worldBranch && scene.worldBranch.includes('mars')) || /\b(?:mars|martian|jezero)\b/i.test(prompt)) {
         if (!scene.geoAnchor || !scene.geoAnchor.landmarkName?.toLowerCase().includes('mars')) {
             scene.geoAnchor = {
                 lat: 18.38,
@@ -1943,16 +1946,17 @@ export function applyCreativeLocationCasting(
         return scene;
     }
 
-    // Check if the scene is an abstract, molecular, celestial, or open-domain adaptive spatial creation
     const isExplicitRealWorld = Boolean(detectRealWorldLocationIntent(prompt, context)?.isRealWorld);
-    const isAbstractOrSpatial = scene.sceneType === 'space' || scene.sceneType === 'molecular' || scene.sceneType === 'adaptive' || (scene.worldBranch && (scene.worldBranch.startsWith('spatial/') || scene.worldBranch.startsWith('space/')));
 
-    if (!isExplicitRealWorld && isAbstractOrSpatial && !scene.geoAnchor) {
-        // Leave unanchored spatial / abstract scene unpolluted by Earth coordinates
+    if (!isExplicitRealWorld && !scene.geoAnchor) {
+        // No real-world location named: stay in the grey clay void instead of casting the
+        // scene onto an unrelated Earth location.
         if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
             const domain = classifyDomain(prompt);
             const adaptive = synthesizeAdaptive3DScene(domain, scene.title, prompt);
-            if (adaptive.cppGenerator) {
+            if (adaptive.pythonGenerator) {
+                scene.pythonGenerator = adaptive.pythonGenerator;
+            } else if (adaptive.cppGenerator) {
                 scene.cppGenerator = adaptive.cppGenerator;
             }
         }
@@ -1970,7 +1974,9 @@ export function applyCreativeLocationCasting(
         if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
             const domain = classifyDomain(prompt);
             const adaptive = synthesizeAdaptive3DScene(domain, scene.title, prompt);
-            if (adaptive.cppGenerator) {
+            if (adaptive.pythonGenerator) {
+                scene.pythonGenerator = adaptive.pythonGenerator;
+            } else if (adaptive.cppGenerator) {
                 scene.cppGenerator = adaptive.cppGenerator;
             }
         }
@@ -2179,37 +2185,8 @@ function _synthesizeRawContextual3DSceneInner(
     // Specific-first ordering: a historical battlefield theme owns its own geo-anchored scene
     // (Lexington Green, Buckman Tavern, formations) and must not be shadowed by the generic
     // real-world tile path, which would otherwise relabel it as a 'worldbuilder' scene.
-    let realWorldLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
-    if (!realWorldLoc && theme !== 'battlefield' && theme !== 'vehicle' && theme !== 'glass_shatter') {
-        const isEnvironmental =
-            theme === 'worldbuilder' ||
-            theme === 'nature_atmosphere' ||
-            theme === 'geospatial' ||
-            theme === 'city' ||
-            theme === 'architecture' ||
-            /\b(?:mountain|alpine|peak|summit|cliff|glacier|volcano|rocky|ridge|canyon|desert|dunes|oasis|valley|forest|woods|jungle|rainforest|meadow|island|coast|beach|fjord|lake|river|waterfall|ruins?|temple|pyramid|monument|acropolis|colosseum|pavilion|villa|city|street|bridge|highway|outpost|facility|proving\s*ground|crater|terrain|landscape|ground|outdoor|earth|geolog(?:y|ical)|biome)\b/i.test(prompt);
-
-        if (isEnvironmental) {
-            const casted = CreativeLocationCastingService.getInstance().castLocation(prompt, {
-                theme,
-                docTitle,
-                docContent: context?.docContent
-            });
-            if (casted && casted.isRealWorld) {
-                realWorldLoc = {
-                    isRealWorld: true,
-                    query: casted.landmarkName,
-                    landmarkName: casted.landmarkName,
-                    lat: casted.lat,
-                    lng: casted.lng,
-                    elevation: casted.elevation,
-                    elevationSource: casted.elevationSource || 'google_elevation',
-                    datum: casted.datum || 'MSL_EGM96'
-                };
-            }
-        }
-    }
-
+    // Only a location the prompt actually names stages the scene on Earth; otherwise it stays in the clay void.
+    const realWorldLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
     // Determine procedural, object, and hero location classification
     const isExplicitProcedural = /\b(?:procedural|scratchbox\s*engine|create_building|create_tree|python|c\+\+|nanobind|customScript)\b/i.test(prompt);
     const isHeroObject = theme === 'vehicle' ||

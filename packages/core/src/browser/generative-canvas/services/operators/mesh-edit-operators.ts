@@ -1103,6 +1103,9 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             customColor?: number | string;
             detailLevel?: 'low' | 'medium' | 'high';
             name?: string;
+            /** Provenance of a caller-supplied elevation; the tile service only knows it was handed coordinates. */
+            elevationSource?: string;
+            datum?: string;
         }) => {
             const service = Google3DTileService.getInstance();
             const result = service.ingestTileRegionSync({
@@ -1135,8 +1138,8 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 lat: result.geoAnchor.lat,
                 lng: result.geoAnchor.lng,
                 elevation: result.geoAnchor.elevation,
-                elevationSource: (result.geoAnchor as any).elevationSource || 'google_elevation',
-                datum: (result.geoAnchor as any).datum || 'MSL_EGM96',
+                elevationSource: params.elevationSource || (result.geoAnchor as any).elevationSource || 'google_elevation',
+                datum: params.datum || (result.geoAnchor as any).datum || 'MSL_EGM96',
                 active: true,
                 landmarkName: result.geoAnchor.landmarkName,
                 castingRationale,

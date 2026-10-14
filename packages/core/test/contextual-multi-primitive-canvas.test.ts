@@ -110,15 +110,11 @@ async function runContextualPrimitiveTests() {
     const detectedCity = detect3DSceneTheme('build a cyberpunk city with skyscrapers');
     assert.strictEqual(detectedCity, 'city');
 
-    // Since 6e66ca1 ("ground 3D scenes in Google elevation data ...") environmental themes (city,
-    // architecture, nature, ...) are creatively cast by CreativeLocationCastingService to a real-world
-    // archetype location (cyberpunk city -> Shibuya Crossing) and rendered as a geo-anchored
-    // real-world clay 'worldbuilder' scene instead of a synthetic procedural city.
+    // A prompt that names no real-world location stays a procedural scene in the clay void;
+    // it is never cast onto an unrelated Earth location.
     const cityScene = synthesizeContextual3DScene('build a cyberpunk city with skyscrapers and flying traffic');
-    assert.strictEqual(cityScene.sceneType, 'worldbuilder');
-    assert.ok(cityScene.worldBranch?.startsWith('real-world/'), `City scene must be real-world grounded, got: ${cityScene.worldBranch}`);
-    assert.ok(cityScene.geoAnchor?.active && Number.isFinite(cityScene.geoAnchor.lat) && Number.isFinite(cityScene.geoAnchor.lng), 'City scene must carry an active geo anchor');
-    assert.ok(/shibuya|akihabara|tokyo/i.test(cityScene.title), `Cyberpunk city must be cast to the cyberpunk_megacity archetype location, got: ${cityScene.title}`);
+    assert.strictEqual(cityScene.sceneType, 'city');
+    assert.strictEqual(cityScene.geoAnchor, undefined, 'Unlocated city prompt must not be geo-anchored');
 
     const solarScene = synthesizeContextual3DScene('simulate planetary orbit and solar system with asteroid belt');
     assert.strictEqual(solarScene.sceneType, 'solar-system');
@@ -128,11 +124,9 @@ async function runContextualPrimitiveTests() {
     assert.strictEqual(molecularScene.sceneType, 'molecular');
 
     assert.strictEqual(detect3DSceneTheme('create an architectural blueprint and interior room'), 'architecture');
-    // Architecture/interior prompts are cast to the modern_architectural_pavilion archetype (6e66ca1).
     const archScene = synthesizeContextual3DScene('create an architectural blueprint and interior room');
-    assert.strictEqual(archScene.sceneType, 'worldbuilder');
-    assert.ok(archScene.worldBranch?.startsWith('real-world/'), `Architecture scene must be real-world grounded, got: ${archScene.worldBranch}`);
-    assert.ok(/fallingwater|bauhaus/i.test(archScene.title), `Interior/architecture prompt must be cast to the architectural pavilion archetype, got: ${archScene.title}`);
+    assert.strictEqual(archScene.sceneType, 'architecture');
+    assert.strictEqual(archScene.geoAnchor, undefined, 'Unlocated architecture prompt must not be geo-anchored');
     console.log('  ✓ Test 2 Passed: Procedural themes accurately detected and synthesized for City, Space, Molecular, and Architecture.');
 
     // -------------------------------------------------------------
