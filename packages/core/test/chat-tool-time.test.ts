@@ -100,11 +100,15 @@ describe('chat tool time', () => {
             ctx.signal?.addEventListener('abort', () => { toldToStop = true; });
         }));
         const stop = new AbortController();
-        setTimeout(() => stop.abort(), 200);
-        const started = Date.now();
-        await expect(service.streamGenerate({ prompt: 'bake', model: 'gemini-3.7-flash', mode: 'agent' }, () => undefined, stop.signal))
+        let stoppedAt = 0;
+        // Stop once the tool is running (its card is on screen), then time how long the turn takes to end.
+        const onEvent = (e: GeminiStreamEvent) => {
+            if (!stoppedAt && e.mcpExecution?.status === 'running') { stoppedAt = Date.now(); stop.abort(); }
+        };
+        await expect(service.streamGenerate({ prompt: 'bake', model: 'gemini-3.7-flash', mode: 'agent' }, onEvent, stop.signal))
             .rejects.toThrow(/aborted/i);
-        expect(Date.now() - started).toBeLessThan(1500); // not the 5 min default limit
+        expect(stoppedAt).toBeGreaterThan(0);
+        expect(Date.now() - stoppedAt).toBeLessThan(1000); // at once, not the 5 min default limit
         expect(toldToStop).toBe(true);
     });
 
