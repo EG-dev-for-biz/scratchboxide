@@ -154,7 +154,8 @@ describe.skipIf(!haveTile)('tile_refine on the photogrammetric test tile', () =>
             const t = iso.isolate.triangles;
             expect(iso.isolate.enabled).toBe(true);
             expect(t.input).toBe(stats.triangles.input);
-            expect(t.kept).toBe(t.core + t.closure + t.apron);
+            // scan triangles kept, plus the ground rebuilt on the terrain, plus what clipping at street level split or removed
+            expect(t.kept).toBe(t.core + t.closure + t.apron + t.ground + t.belowGroundDelta);
             expect(t.kept).toBeGreaterThan(1000);
             expect(t.kept).toBeLessThan(0.25 * t.input);
             expect(iso.triangles.input).toBe(t.kept);
