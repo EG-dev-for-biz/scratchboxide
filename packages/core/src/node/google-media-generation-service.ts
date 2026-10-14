@@ -38,7 +38,7 @@ export type GoogleMediaClientFactory = () => Promise<GoogleGenAI>;
 export type MediaGenerationStage = 'running' | 'downloading';
 
 /** Calls per model before an answer with no image part counts as a failure. */
-const EMPTY_IMAGE_RESPONSE_ATTEMPTS = 3;
+export const EMPTY_IMAGE_RESPONSE_ATTEMPTS = 3;
 
 export class GoogleMediaGenerationService {
     protected readonly credentials?: GoogleMediaCredentialsService;

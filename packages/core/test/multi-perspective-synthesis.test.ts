@@ -448,20 +448,56 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         const imgPng = encodePng(48, 36, Buffer.alloc(48 * 36 * 4, 200));
         const options = { inputImageBuffer: imgPng, faceResolution: 16, equirectangularWidth: 64, equirectangularHeight: 32 };
 
+        // A model that is not served falls back to the served list (like the media service) and says so.
         const unservedCalls: string[] = [];
         const unserved = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials(unservedCalls));
-        await expect(unserved.generate360Perspectives({ ...options, model: 'unserved-image-model' }))
-            .rejects.toThrow('unserved-image-model failed on the right perspective: models/unserved-image-model is not found');
-        expect(unservedCalls).toEqual(['unserved-image-model']);
+        const fellBack = await unserved.generate360Perspectives({ ...options, model: 'unserved-image-model' });
+        expect(unservedCalls.slice(0, 2)).toEqual(['unserved-image-model', 'gemini-3.1-flash-image']);
+        expect(fellBack.modelUsed).toBe('gemini-3.1-flash-image (requested unserved-image-model is not served)');
 
-        const empty = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials([], 'empty'));
+        // Every served model answering with no image, after the retries, is an error, not procedural copies.
+        const emptyCalls: string[] = [];
+        const empty = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials(emptyCalls, 'empty'));
         await expect(empty.generate360Perspectives(options))
-            .rejects.toThrow('gemini-3.1-flash-image returned no image for the right perspective (STOP)');
+            .rejects.toThrow(/No image model produced the right perspective: .* returned no image \(STOP\)/);
+        expect(emptyCalls.filter(m => m === 'gemini-3.1-flash-image').length).toBe(3);
+
+        // Any other model error ends the run.
+        const broken = new MultiPerspectivePanoramaSynthesisService({ createClient: async () => ({ models: { generateContent: async () => { throw Object.assign(new Error('quota exceeded'), { status: 429 }); } } }) } as any);
+        await expect(broken.generate360Perspectives(options)).rejects.toThrow('gemini-3.1-flash-image failed on the right perspective: quota exceeded');
 
         const unconfigured = new MultiPerspectivePanoramaSynthesisService({
             createClient: async () => { throw new Error('Google media credentials are not configured'); }
         } as any);
         await expect(unconfigured.generate360Perspectives(options))
             .rejects.toThrow(/needs Google credentials \(Google media credentials are not configured\)/);
+    });
+
+    it('asks again when the model answers with no image, and moves to the next served model on a 404', async () => {
+        const png = encodePng(24, 24, Buffer.alloc(24 * 24 * 4, 90));
+        const calls: string[] = [];
+        let emptiesLeft = 1; // the first answer has no image part (finish STOP), as gemini-3.1-flash-image sometimes does
+        const credentials: any = {
+            createClient: async () => ({
+                models: {
+                    generateContent: async ({ model }: { model: string }) => {
+                        calls.push(model);
+                        if (!SERVED_IMAGE_MODEL_IDS.includes(model)) throw Object.assign(new Error(`models/${model} is not found`), { status: 404 });
+                        if (emptiesLeft-- > 0) return { candidates: [{ finishReason: 'STOP', content: { parts: [] } }] };
+                        return { candidates: [{ finishReason: 'STOP', content: { parts: [{ inlineData: { data: png.toString('base64'), mimeType: 'image/png' } }] } }] };
+                    }
+                }
+            })
+        };
+        const service = new MultiPerspectivePanoramaSynthesisService(credentials);
+        const result = await service.generate360Perspectives({
+            inputImageBuffer: encodePng(48, 36, Buffer.alloc(48 * 36 * 4, 200)),
+            faceResolution: 16, equirectangularWidth: 64, equirectangularHeight: 32,
+            model: 'some-retired-image-model' // not served: falls through to the default list
+        });
+        expect(result.success).toBe(true);
+        // right: retired id 404s, then gemini-3.1-flash-image answers empty once and is asked again; the rest succeed first time
+        expect(calls.slice(0, 3)).toEqual(['some-retired-image-model', 'gemini-3.1-flash-image', 'gemini-3.1-flash-image']);
+        expect(calls.filter(m => m === 'some-retired-image-model').length).toBe(5);
     });
 });

@@ -88,3 +88,25 @@ test('the Vertex media client defaults to the chat location, where Gemini 3.x im
         restore('GOOGLE_CLOUD_LOCATION', saved.cloud);
     }
 });
+
+test('warns once when GOOGLE_CLOUD_LOCATION differs from the Vertex location in use', async () => {
+    const { GoogleMediaCredentialsService } = await import('../src/node/google-media-credentials-service');
+    const saved = { loc: process.env.GOOGLE_CLOUD_LOCATION, proj: process.env.GOOGLE_CLOUD_PROJECT };
+    process.env.GOOGLE_CLOUD_LOCATION = 'europe-west4';
+    process.env.GOOGLE_CLOUD_PROJECT = 'test-project';
+    const warnings: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => { warnings.push(a.join(' ')); };
+    try {
+        const svc = new GoogleMediaCredentialsService({ getPassword: async () => undefined, setPassword: async () => undefined, deletePassword: async () => false });
+        (svc as any).getVertexAuth = async () => ({ project: 'test-project' });
+        await svc.createVertexClient('global');
+        await svc.createVertexClient('global');
+        const relevant = warnings.filter(w => w.includes('GOOGLE_CLOUD_LOCATION'));
+        if (relevant.length !== 1 || !relevant[0].includes('SCRATCHBOX_VERTEX_LOCATION')) throw new Error(`expected one warning naming SCRATCHBOX_VERTEX_LOCATION, got ${JSON.stringify(warnings)}`);
+    } finally {
+        console.warn = orig;
+        if (saved.loc === undefined) delete process.env.GOOGLE_CLOUD_LOCATION; else process.env.GOOGLE_CLOUD_LOCATION = saved.loc;
+        if (saved.proj === undefined) delete process.env.GOOGLE_CLOUD_PROJECT; else process.env.GOOGLE_CLOUD_PROJECT = saved.proj;
+    }
+});
