@@ -16,7 +16,6 @@ import { GeospatialTileExtractionBridge, ExtractedLocationManifest, type Locatio
 import type { GeoAnchor } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { LocationUnresolvedError, PipelineError, TileExtractionError } from '../../../common/errors/pipeline-errors';
 import { assertUsableCoordinates, parseCoordinateText } from '../../../common/coordinate/parse-coordinates';
-import { synthesizeAdaptiveHeroObjectContract, generateAdaptiveHeroPythonSource } from '../../../common/spatial/adaptive-hero-synthesizer';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
 import { analyzePartConnectivity, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
 import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
@@ -179,7 +178,7 @@ export const PYTHON_3D_API_REFERENCE = `Verified scratchbox API. Only use names 
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and mounts the GLB it writes as a studio-clay 3D scene. Use it to build or refine procedural geometry: architecture (mansard roofs, townhouses, facades), nature (space colonization trees, foliage), mechanisms and abstract forms. It does not fetch real-world places on its own: for a place use google_3d_tiles_get_clay, and for a specific object or prop to be reverse-engineered from a reference use build_3d_object_from_reference. Optional location/coordinates extract the Google 3D Tiles around that place (raw studio clay, not remeshed) for the script to read through sb.geospatial.load_location() and mount them as the scene environment; if the place cannot be resolved or extracted, the call fails and the script is not run.\n\n' + PYTHON_3D_API_REFERENCE,
+        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new studio-clay 3D scene. Choose the tool by what the user asked for: a real-world place on its own goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference; an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. location/coordinates are only for a script that reads the real geometry of a place through sb.geospatial.load_location(): the place is resolved with Google Places, its Google 3D Tiles are extracted (raw tiles shown in studio clay, not remeshed, no trees) and shown under the result. If the place cannot be resolved or extracted, the call fails and the script is not run.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -189,16 +188,12 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 location: {
                     type: 'STRING',
-                    description: 'Optional place name or address, exactly as the user wrote it. It is resolved with Google Places (the result reports the address it resolved) and its Google 3D Tiles are extracted for the script and mounted as the environment.'
+                    description: 'Optional place name or address, exactly as the user wrote it, when the script reads that place through sb.geospatial.load_location(). It is resolved with Google Places (the result reports the address it resolved) and its Google 3D Tiles are extracted for the script.'
                 },
                 coordinates: {
                     type: 'ARRAY',
                     items: { type: 'NUMBER' },
                     description: 'Optional [latitude, longitude] or [latitude, longitude, elevation in metres], only when the user gave coordinates. Never supply coordinates from memory: pass the place as location instead.'
-                },
-                stageIntoActiveScene: {
-                    type: 'BOOLEAN',
-                    description: 'True only when the user asks to add this model to the 3D scene already on the canvas; it then keeps that scene\'s extracted location tiles and anchor. Otherwise the result opens as a new scene.'
                 },
                 description: {
                     type: 'STRING',
@@ -394,19 +389,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             ];
         }
 
-        // Staging is real only when tiles were extracted for this call, or when the model asked to add to the
-        // active scene and that scene already has extracted tiles. Nothing else is carried over or inferred.
-        const activeArtifact = _ctx?.request?.canvasState?.activeArtifact;
-        const activeData = activeArtifact?.type === '3d-scene' ? (activeArtifact?.data as any) : undefined;
-        const activeEnvTiles: any[] = args.stageIntoActiveScene === true && !extraction
-            ? (activeData?.objects || []).filter((o: any) => {
-                const role = o?.content?.metadata?.role;
-                const source = String(o?.content?.metadata?.source || '').toLowerCase();
-                return role === 'environment' || o?.content?.metadata?.isGround === true || source.includes('google3dtiles') || source.includes('google_3d_tiles');
-            })
-            : [];
-        const keepsActiveLocation = activeEnvTiles.length > 0 && !!activeData?.geoAnchor;
-
+        // The scene is staged only on tiles extracted for this call; nothing comes from the scene on the canvas.
         const resolvedLocName = extractedManifest?.resolvedAddress;
         const geoAnchor = extractedManifest
             ? {
@@ -417,8 +400,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 active: true,
                 landmarkName: extractedManifest.resolvedAddress
             }
-            : keepsActiveLocation ? activeData.geoAnchor : undefined;
-        const isStaged = !!extractedManifest || keepsActiveLocation;
+            : undefined;
+        const isStaged = !!extractedManifest;
 
         const stagedTitle = extractedManifest && !desc.toLowerCase().includes('staged')
             ? `${desc} — Staged in ${resolvedLocName}`
@@ -478,7 +461,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },
                 time: { startMs: 0, durationMs: 20000 },
                 lineage: { version: 1 }
-            }] : activeEnvTiles)
+            }] : [])
         ];
 
         return {
@@ -551,7 +534,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     }
                 }
             },
-            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.${extractedManifest ? ` Staged at ${resolvedLocName} (${extractedManifest.lat.toFixed(6)}, ${extractedManifest.lng.toFixed(6)}) on raw Google 3D Tiles in studio clay (not remeshed).` : keepsActiveLocation ? ' Added to the active scene\'s location.' : ''}${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
+            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.${extractedManifest ? ` Staged at ${resolvedLocName} (${extractedManifest.lat.toFixed(6)}, ${extractedManifest.lng.toFixed(6)}) on raw Google 3D Tiles in studio clay (not remeshed).` : ''}${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
         };
     }
 };
