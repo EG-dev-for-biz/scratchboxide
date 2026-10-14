@@ -14,12 +14,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
-import { AdaptiveSceneChunkPlanner, type ChunkDescriptor, type ChunkAllocationPlan } from './AdaptiveSceneChunkPlanner';
-import type {
-    Adaptive3DSceneContract,
-    AdaptiveSceneGraphBlueprint,
-    SceneChunkRegion
-} from '../../common/spatial/adaptive-3d-scene-contract';
+import { AdaptiveSceneChunkPlanner, type ChunkAllocationPlan } from './AdaptiveSceneChunkPlanner';
+import type { Adaptive3DSceneContract } from '../../common/spatial/adaptive-3d-scene-contract';
 
 export interface Adaptive3DSceneExecutionResult {
     success: boolean;
