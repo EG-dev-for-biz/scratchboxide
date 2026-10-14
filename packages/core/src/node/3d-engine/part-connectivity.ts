@@ -36,6 +36,8 @@ export interface PartConnectivityReport {
     passed: boolean;
     partCount: number;
     attachedPartCount: number;
+    /** Separate structures (groups of touching parts), the main one included; 0 when the check was skipped or empty. */
+    structureCount: number;
     toleranceMeters: number;
     floatingParts: FloatingPart[];
     skippedReason?: string;
@@ -234,7 +236,7 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
     const triCount = soup.indices.length / 3;
     const vertexCount = soup.positions.length / 3;
     if (triCount === 0) {
-        return { passed: true, partCount: 0, attachedPartCount: 0, toleranceMeters: 0, floatingParts: [] };
+        return { passed: true, partCount: 0, attachedPartCount: 0, structureCount: 0, toleranceMeters: 0, floatingParts: [] };
     }
 
     const point = (i: number): Vec3 => [soup.positions[i * 3], soup.positions[i * 3 + 1], soup.positions[i * 3 + 2]];
@@ -246,7 +248,7 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
     const diagonal = Math.hypot(gMax[0] - gMin[0], gMax[1] - gMin[1], gMax[2] - gMin[2]);
     const tolerance = options.toleranceMeters ?? Math.max(0.002, diagonal * 0.002);
     if (triCount > MAX_TRIANGLES) {
-        return { passed: true, partCount: 0, attachedPartCount: 0, toleranceMeters: tolerance, floatingParts: [], skippedReason: `model has ${triCount} triangles (limit ${MAX_TRIANGLES})` };
+        return { passed: true, partCount: 0, attachedPartCount: 0, structureCount: 0, toleranceMeters: tolerance, floatingParts: [], skippedReason: `model has ${triCount} triangles (limit ${MAX_TRIANGLES})` };
     }
 
     // 1. Weld coincident vertices, then union triangles into parts. Neighbouring cells are searched too:
@@ -416,6 +418,7 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
         passed: floatingParts.length === 0,
         partCount: parts.length,
         attachedPartCount: attached.size,
+        structureCount: structures.length,
         toleranceMeters: +tolerance.toFixed(4),
         floatingParts: floatingParts.slice(0, 12)
     };
