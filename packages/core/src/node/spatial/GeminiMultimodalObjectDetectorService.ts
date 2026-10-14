@@ -9,6 +9,7 @@
 
 import fs from 'fs';
 import { execSync } from 'child_process';
+import { defaultServiceAccountCandidatePaths } from '../gemini/gemini-client';
 
 export interface GeminiDetectedObject2D {
   label: string;
@@ -43,8 +44,25 @@ export interface GeminiDetectionResult {
  */
 export class GeminiMultimodalObjectDetectorService {
   public static readonly DEFAULT_MODEL = 'gemini-2.5-flash';
-  public static readonly DEFAULT_PROJECT = 'scratchbox-canvas';
   public static readonly DEFAULT_LOCATION = 'us-central1';
+
+  /**
+   * The project to bill: GOOGLE_CLOUD_PROJECT, else the configured service account's project.
+   * There is deliberately no hardcoded fallback project.
+   */
+  public static resolveProject(): string {
+    const fromEnv = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+    if (fromEnv) return fromEnv;
+    for (const credPath of defaultServiceAccountCandidatePaths()) {
+      try {
+        const projectId = JSON.parse(fs.readFileSync(credPath, 'utf8'))?.project_id;
+        if (typeof projectId === 'string' && projectId) return projectId;
+      } catch {
+        // Try the next candidate
+      }
+    }
+    throw new Error('No Google Cloud project configured: set GOOGLE_CLOUD_PROJECT or provide a service-account.json');
+  }
 
   /**
    * Retrieves an active Google Cloud OAuth2 access token.
@@ -90,7 +108,7 @@ export class GeminiMultimodalObjectDetectorService {
     }
   ): Promise<GeminiDetectionResult> {
     const model = options?.model || this.DEFAULT_MODEL;
-    const project = options?.project || process.env.GOOGLE_CLOUD_PROJECT || this.DEFAULT_PROJECT;
+    const project = options?.project || this.resolveProject();
     const location = options?.location || this.DEFAULT_LOCATION;
 
     let base64Data: string;
