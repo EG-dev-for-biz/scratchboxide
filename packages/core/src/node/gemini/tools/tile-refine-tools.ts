@@ -19,21 +19,43 @@ import {
 } from '../../3d-engine/tile-refine-service';
 import { PathTraversalError, resolveWithinRoot } from '../../security/path-guard';
 
-/**
- * The root tile_refine reads `tilePath` from: the workspace when the file is there, else the checkout that holds the
- * tile_refine sources, whose public/models is where the tile extraction tools write (the server runs from desktop-app/,
- * so the two differ). Falls back to the workspace, which then reports the path as missing or outside it.
- */
-export function tileRefineRootFor(tilePath: string, workspaceRoot: string): string {
-    if (typeof tilePath !== 'string' || !tilePath.trim()) return workspaceRoot;
-    for (const root of [workspaceRoot, findTileRefineRepoRoot()]) {
-        try {
-            if (fs.existsSync(resolveWithinRoot(root, tilePath.trim()))) return root;
-        } catch (err) {
-            if (!(err instanceof PathTraversalError)) throw err;
-        }
+/** The file `tilePath` names under `root`, when it exists there and stays inside it. */
+function existingWithin(root: string, tilePath: string): string | undefined {
+    try {
+        const file = resolveWithinRoot(root, tilePath);
+        return fs.existsSync(file) ? file : undefined;
+    } catch (err) {
+        if (err instanceof PathTraversalError) return undefined;
+        throw err;
     }
-    return workspaceRoot;
+}
+
+/**
+ * The root tile_refine reads `tilePath` from. The tile extraction tools write <repo>/public/models (the checkout that
+ * holds the tile_refine sources), while the server runs from desktop-app/, so the two roots differ. A relative path is
+ * looked up in the checkout first, then the workspace, so a stale copy left under the workspace never shadows the
+ * extraction's output; an absolute path is looked up in the workspace first. Falls back to the workspace, which then
+ * reports the path as missing or outside it. When a relative path names two different files (size or modification
+ * time), `note` says which one was used.
+ */
+export function tileRefineRootFor(tilePath: string, workspaceRoot: string): { root: string; note?: string } {
+    const wanted = typeof tilePath === 'string' ? tilePath.trim() : '';
+    if (!wanted) return { root: workspaceRoot };
+    const repoRoot = findTileRefineRepoRoot();
+    const found = (path.isAbsolute(wanted) ? [workspaceRoot, repoRoot] : [repoRoot, workspaceRoot])
+        .map(root => ({ root, file: existingWithin(root, wanted) }))
+        .filter((c): c is { root: string; file: string } => c.file !== undefined);
+    if (found.length === 0) return { root: workspaceRoot };
+    const [used, other] = found;
+    if (!other || other.file === used.file) return { root: used.root };
+    const a = fs.statSync(used.file);
+    const b = fs.statSync(other.file);
+    if (a.size === b.size && a.mtimeMs === b.mtimeMs) return { root: used.root };
+    const describe = (s: fs.Stats) => `${s.size} bytes, modified ${s.mtime.toISOString()}`;
+    return {
+        root: used.root,
+        note: `Two different copies of ${wanted} exist; used ${used.file} (${describe(a)}), not ${other.file} (${describe(b)}).`
+    };
 }
 
 export const TILE_REFINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -64,8 +86,12 @@ export const TILE_REFINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
 
 export const tileRefineHandlers: Record<string, ToolHandler> = {
     tile_refine: async (args, ctx): Promise<ToolHandlerOutcome> => {
+        // Set when the relative tilePath names two different files; the result says which one was refined.
+        let note: string | undefined;
         try {
-            const root = tileRefineRootFor(args.tilePath as string, ctx.workspaceRoot);
+            const resolved = tileRefineRootFor(args.tilePath as string, ctx.workspaceRoot);
+            const root = resolved.root;
+            note = resolved.note;
             const svc = getTileRefineService(root);
             const r = await svc.refine({
                 tilePath: args.tilePath as string,
@@ -92,9 +118,10 @@ export const tileRefineHandlers: Record<string, ToolHandler> = {
                 : r.published;
             return {
                 status: 'completed',
-                summaryResult: `Refined tile in ${(r.ms / 1000).toFixed(1)} s${r.cached ? ' (cached)' : ''}: ${r.stats.outputs?.triangles ?? '?'} triangles`,
+                summaryResult: `Refined tile in ${(r.ms / 1000).toFixed(1)} s${r.cached ? ' (cached)' : ''}: ${r.stats.outputs?.triangles ?? '?'} triangles${note ? `. ${note}` : ''}`,
                 resultPayload: {
                     status: 'success',
+                    ...(note ? { note } : {}),
                     texturedGlb: shown(r.texturedGlb),
                     clayGlb: shown(r.clayGlb),
                     rawClayGlb: r.rawClayGlb ? shown(r.rawClayGlb) : undefined,
@@ -110,8 +137,8 @@ export const tileRefineHandlers: Record<string, ToolHandler> = {
             const message = err instanceof Error ? err.message : String(err);
             return {
                 status: 'failed',
-                summaryResult: `tile_refine failed: ${message}`,
-                resultPayload: { status: 'error', code, message }
+                summaryResult: `tile_refine failed: ${message}${note ? ` ${note}` : ''}`,
+                resultPayload: { status: 'error', code, message, ...(note ? { note } : {}) }
             };
         }
     }

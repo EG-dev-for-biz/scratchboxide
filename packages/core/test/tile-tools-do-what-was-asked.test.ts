@@ -24,6 +24,8 @@ import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { tileRefineRootFor } from '../src/node/gemini/tools/tile-refine-tools';
 import { findTileRefineRepoRoot, TileRefineService } from '../src/node/3d-engine/tile-refine-service';
 import { Google3DTileCrawlerBaker } from '../src/node/spatial/Google3DTileCrawlerBaker';
+import { Google3DTileBlockoutPipelineService } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
+import { DistrictTooLargeError, GoogleTileDistrictCrawler } from '../src/node/spatial/GoogleTileDistrictCrawler';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
 const DESKTOP = path.join(REPO, 'desktop-app');
@@ -105,7 +107,7 @@ const realKey = process.env.GOOGLE_MAPS_API_KEY;
 const scratch: string[] = [];
 
 /** Serves the tileset, its leaves and the elevation API; records every requested path. */
-function serveTiles(): { requested: string[] } {
+function serveTiles(tileset: unknown = TILESET, leaves: Record<string, Buffer> = LEAVES): { requested: string[] } {
     const requested: string[] = [];
     globalThis.fetch = (async (input: any) => {
         const url = new URL(String(input));
@@ -114,9 +116,9 @@ function serveTiles(): { requested: string[] } {
             return new Response(JSON.stringify({ status: 'OK', results: [{ elevation: GROUND_H }] }), { status: 200 });
         }
         if (url.hostname === 'tile.googleapis.com' && url.pathname === '/v1/3dtiles/root.json') {
-            return new Response(JSON.stringify(TILESET), { status: 200 });
+            return new Response(JSON.stringify(tileset), { status: 200 });
         }
-        const leaf = LEAVES[path.basename(url.pathname)];
+        const leaf = leaves[path.basename(url.pathname)];
         if (url.hostname === 'tile.googleapis.com' && leaf) return new Response(new Uint8Array(leaf), { status: 200 });
         return new Response('not served by this test', { status: 404 });
     }) as typeof fetch;
@@ -173,7 +175,10 @@ describe('google_3d_tiles extraction radius', () => {
             { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 120, outputGlbPath: outGlb('flatiron_120.glb') }, {} as any);
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
-        expect(payload.radiusMeters).toBe(120);
+        expect(payload.requestedRadiusMeters).toBe(120);
+        expect(payload.coveredRadiusMeters).toBe(120);
+        expect(payload.truncated).toBe(false);
+        expect(payload.leafTiles).toEqual({ kept: 1, selected: 1 });
         expect(requested.some(p => p.endsWith('/near.glb'))).toBe(true);
         expect(requested.some(p => p.endsWith('/far.glb'))).toBe(false); // the roof 190 m out is beyond 120 m
         expect(payload.mesh.triangleCount).toBe(2);
@@ -187,9 +192,91 @@ describe('google_3d_tiles extraction radius', () => {
             { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, outputGlbPath: outGlb('flatiron_default.glb') }, {} as any);
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
-        expect(payload.radiusMeters).toBe(250);
+        expect(payload.requestedRadiusMeters).toBe(250);
+        expect(payload.coveredRadiusMeters).toBe(250);
+        expect(payload.truncated).toBe(false);
         expect(requested.some(p => p.endsWith('/far.glb'))).toBe(true);
         expect(payload.mesh.triangleCount).toBe(4);
+    });
+});
+
+describe('google_3d_tiles extraction beyond the leaf cap', () => {
+    // A 25 x 25 grid of 20 m leaves covering 500 m x 500 m around the anchor: 625 leaves, more than the 524 kept.
+    const CELL = 20;
+    const cells: Array<{ name: string; east: number; north: number }> = [];
+    for (let i = -12; i <= 12; i++) for (let j = -12; j <= 12; j++) cells.push({ name: `cell_${i + 12}_${j + 12}.glb`, east: i * CELL, north: j * CELL });
+    const half = CELL / 2;
+    const grid = {
+        root: {
+            boundingVolume: { box: enuBox([0, 0, 0], [5000, 5000, 500]) },
+            geometricError: 10000,
+            children: cells.map(c => ({
+                boundingVolume: { box: enuBox([c.east, c.north, 0], [half, half, 5]) },
+                geometricError: 2,
+                content: { uri: `/v1/3dtiles/datasets/T/files/${c.name}` }
+            }))
+        }
+    };
+    const gridLeaves = Object.fromEntries(cells.map(c => [c.name, leafGlb([
+        [c.east - half, c.north - half, 0], [c.east + half, c.north - half, 0], [c.east - half, c.north + half, 0], [c.east + half, c.north + half, 0]
+    ], QUAD)]));
+    /** Horizontal distance from the anchor to a cell's footprint. */
+    const footprintDistance = (c: { east: number; north: number }) => Math.hypot(Math.max(0, Math.abs(c.east) - half), Math.max(0, Math.abs(c.north) - half));
+
+    it('reports the radius the kept tiles cover, not the one asked for', async () => {
+        const { requested } = serveTiles(grid, gridLeaves);
+        const outcome = await createDefaultToolRegistry().dispatch('google_3d_tiles_get_full_texture',
+            { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 400, outputGlbPath: outGlb('grid_400.glb') }, {} as any);
+        const payload: any = outcome.resultPayload;
+        expect(outcome.exec.status).toBe('completed');
+
+        const downloaded = new Set(requested.filter(p => p.includes('/cell_')).map(p => path.basename(p)));
+        const dropped = cells.filter(c => !downloaded.has(c.name));
+        expect(downloaded.size).toBe(524);
+        expect(dropped).toHaveLength(625 - 524);
+        // complete out to the nearest left-out tile, which is well inside the 400 m asked for
+        const nearestDropped = Math.min(...dropped.map(footprintDistance));
+        expect(payload.requestedRadiusMeters).toBe(400);
+        expect(payload.truncated).toBe(true);
+        expect(payload.leafTiles).toEqual({ kept: 524, selected: 625 });
+        expect(payload.coveredRadiusMeters).toBeLessThan(400);
+        expect(Math.abs(payload.coveredRadiusMeters - Math.floor(nearestDropped))).toBeLessThanOrEqual(1);
+        for (const c of cells.filter(c => footprintDistance(c) < payload.coveredRadiusMeters)) expect(downloaded.has(c.name)).toBe(true);
+        expect(payload.mesh.triangleCount).toBe(2 * 524);
+
+        const summary = outcome.exec.summaryResult!;
+        expect(summary).toContain(`covers about ${payload.coveredRadiusMeters} m around the anchor (asked for 400 m; capped at 524 of the 625 tiles in that radius)`);
+        expect(summary).not.toContain('within 400 m');
+    });
+
+    it('fails with the crawler\'s "reduce the radius" error instead of running the blockout runner', async () => {
+        // more leaves than the crawler's 6000 cap, all within the radius
+        const box = enuBox([0, 0, 0], [half, half, 5]);
+        const crowded = {
+            root: {
+                boundingVolume: { box: enuBox([0, 0, 0], [5000, 5000, 500]) },
+                geometricError: 10000,
+                children: Array.from({ length: 6001 }, (_, i) => ({ boundingVolume: { box }, geometricError: 2, content: { uri: `/v1/3dtiles/datasets/T/files/crowd_${i}.glb` } }))
+            }
+        };
+        const { requested } = serveTiles(crowded, {});
+        const runner = vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'run').mockRejectedValue(new Error('the blockout runner ran'));
+        const outcome = await createDefaultToolRegistry().dispatch('google_3d_tiles_get_clay',
+            { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 2000, outputGlbPath: outGlb('crowded.glb') }, {} as any);
+        const payload: any = outcome.resultPayload;
+        expect(runner).not.toHaveBeenCalled();
+        expect(outcome.exec.status).toBe('failed');
+        expect(payload.error).toContain('District selects more than 6000 leaf tiles within 2000 m of the anchor; reduce the radius.');
+        expect(requested.some(p => p.includes('/crowd_'))).toBe(false);
+    });
+
+    it('the crawler signals a too-large district with a typed error, not only a message', async () => {
+        serveTiles();
+        const crawler = new GoogleTileDistrictCrawler({ apiKey: 'TEST_KEY', maxLeafTiles: 1 });
+        const err = await crawler.collectLeafTiles({ ...ANCHOR, heightGuessM: GROUND_H }, 250).catch(e => e);
+        expect(err).toBeInstanceOf(DistrictTooLargeError);
+        expect(err.code).toBe('district_too_large');
+        expect(err.message).toContain('reduce the radius');
     });
 });
 
@@ -262,11 +349,73 @@ describe('tile_refine reads the tiles the extraction tools write', () => {
 
     it('resolves the extraction output under the checkout when the workspace is desktop-app', () => {
         expect(fs.realpathSync(findTileRefineRepoRoot())).toBe(REPO);
-        expect(fs.realpathSync(tileRefineRootFor(tile, DESKTOP))).toBe(REPO);
-        expect(fs.realpathSync(tileRefineRootFor(`public/models/${name}.glb`, DESKTOP))).toBe(REPO);
-        // a file in the workspace stays there; a missing one is reported against the workspace
-        expect(tileRefineRootFor('package.json', DESKTOP)).toBe(DESKTOP);
-        expect(tileRefineRootFor('public/tiles/no_such_tile.glb', DESKTOP)).toBe(DESKTOP);
+        expect(fs.realpathSync(tileRefineRootFor(tile, DESKTOP).root)).toBe(REPO);
+        expect(fs.realpathSync(tileRefineRootFor(`public/models/${name}.glb`, DESKTOP).root)).toBe(REPO);
+        // a file only in the workspace stays there; a missing one is reported against the workspace
+        expect(tileRefineRootFor('vite.config.ts', DESKTOP)).toEqual({ root: DESKTOP });
+        expect(tileRefineRootFor('public/tiles/no_such_tile.glb', DESKTOP)).toEqual({ root: DESKTOP });
+        // an absolute path inside the workspace is still read from the workspace
+        expect(tileRefineRootFor(path.join(DESKTOP, 'vite.config.ts'), DESKTOP)).toEqual({ root: DESKTOP });
+    });
+
+    describe('when a relative path exists in both the workspace and the checkout', () => {
+        const both = `${name}_both`;
+        const rel = `public/models/${both}.glb`;
+        const repoCopy = path.join(REPO, rel);
+        let workspace: string;
+        let staleCopy: string;
+
+        beforeAll(() => {
+            // the workspace holds an older copy of a different size, as desktop-app/public/models did after an earlier incident
+            workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tile-root-ws-'));
+            staleCopy = path.join(workspace, rel);
+            fs.mkdirSync(path.dirname(staleCopy), { recursive: true });
+            fs.writeFileSync(staleCopy, Buffer.concat([Buffer.from('glTF'), crypto.randomBytes(32)]));
+            fs.utimesSync(staleCopy, new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'));
+            fs.writeFileSync(repoCopy, Buffer.concat([Buffer.from('glTF'), crypto.randomBytes(96)]));
+        });
+
+        afterAll(() => {
+            fs.rmSync(repoCopy, { force: true });
+            fs.rmSync(workspace, { recursive: true, force: true });
+        });
+
+        it('reads the checkout copy, where the extraction tools write, and says which copy it used', () => {
+            const { root, note } = tileRefineRootFor(rel, workspace);
+            expect(fs.realpathSync(root)).toBe(REPO);
+            expect(note).toContain(`used ${fs.realpathSync(repoCopy)} (100 bytes`);
+            expect(note).toContain(`not ${fs.realpathSync(staleCopy)} (36 bytes, modified 2026-01-01T00:00:00.000Z)`);
+        });
+
+        it('says nothing when the two copies match', () => {
+            const same = path.join(workspace, 'public', 'models', `${both}_same.glb`);
+            const repoSame = path.join(REPO, 'public', 'models', `${both}_same.glb`);
+            try {
+                fs.copyFileSync(repoCopy, same);
+                fs.copyFileSync(repoCopy, repoSame);
+                const t = new Date('2026-02-02T00:00:00Z');
+                fs.utimesSync(same, t, t);
+                fs.utimesSync(repoSame, t, t);
+                const resolved = tileRefineRootFor(`public/models/${both}_same.glb`, workspace);
+                expect(fs.realpathSync(resolved.root)).toBe(REPO);
+                expect(resolved.note).toBeUndefined();
+            } finally {
+                fs.rmSync(repoSame, { force: true });
+            }
+        });
+
+        it('tile_refine refines the checkout copy and reports the note', async () => {
+            vi.spyOn(TileRefineService.prototype, 'ensureBinary').mockResolvedValue({ path: fakeBin, built: false });
+            const outcome = await createDefaultToolRegistry().dispatch('tile_refine', { tilePath: rel }, { workspaceRoot: workspace } as any);
+            const payload: any = outcome.resultPayload;
+            expect(payload.message).toBeUndefined();
+            expect(outcome.exec.status).toBe('completed');
+            const refined = fs.readFileSync(payload.texturedGlb);
+            fs.rmSync(path.dirname(payload.texturedGlb), { recursive: true, force: true });
+            expect(Buffer.compare(refined, fs.readFileSync(repoCopy))).toBe(0);
+            expect(payload.note).toContain(`used ${fs.realpathSync(repoCopy)}`);
+            expect(outcome.exec.summaryResult).toContain(payload.note);
+        });
     });
 
     it('refines the absolute glbPath from a desktop-app workspace and returns absolute paths and /models URLs', async () => {

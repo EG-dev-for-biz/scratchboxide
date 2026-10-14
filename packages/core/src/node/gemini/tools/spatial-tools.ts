@@ -9,7 +9,7 @@
 
 import * as path from 'path';
 import * as THREE from 'three';
-import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, runTileClayBlockoutRunner } from '../../spatial/Google3DTileBlockoutPipelineService';
+import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, runTileClayBlockoutRunner, type Google3DTile3DObjectResult } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { recolor3DTilesGlb } from '../../spatial/GlbTextureRecolorService';
 import {
     healPanoramaSeam,
@@ -116,6 +116,15 @@ export interface GeospatialAnchorOrigin {
 // Google 3D Tiles Declarations & Handlers
 // ============================================================================
 
+/** The ground an extraction covers, as its summary states it: the radius the tiles really reach, not only the one asked for. */
+function describeTileExtent(result: Google3DTile3DObjectResult): string {
+    const { requestedRadiusMeters: asked, coveredRadiusMeters: covered, leafTiles } = result;
+    if (asked === undefined || covered === undefined) return '';
+    if (!result.truncated) return ` within ${asked} m of the anchor`;
+    const cap = leafTiles ? `; capped at ${leafTiles.kept} of the ${leafTiles.selected} tiles in that radius` : '';
+    return `; it covers about ${covered} m around the anchor (asked for ${asked} m${cap})`;
+}
+
 export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'google_3d_tiles_get_full_texture',
@@ -133,7 +142,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 radiusMeters: {
                     type: 'NUMBER',
-                    description: 'Extraction radius in metres around the anchor (default 250)'
+                    description: 'Extraction radius in metres around the anchor (default 250). The nearest 524 leaf tiles are kept; when the radius holds more, the result reports the smaller radius actually covered (coveredRadiusMeters, truncated). A radius that selects more than 6000 leaf tiles fails.'
                 },
                 stageIntoActiveScene: {
                     type: 'BOOLEAN',
@@ -175,7 +184,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 radiusMeters: {
                     type: 'NUMBER',
-                    description: 'Extraction radius in metres around the anchor (default 250)'
+                    description: 'Extraction radius in metres around the anchor (default 250). The nearest 524 leaf tiles are kept; when the radius holds more, the result reports the smaller radius actually covered (coveredRadiusMeters, truncated). A radius that selects more than 6000 leaf tiles fails.'
                 },
                 stageIntoActiveScene: {
                     type: 'BOOLEAN',
@@ -631,7 +640,10 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 geoAnchor: result.geoAnchor,
                 resolvedAddress: result.resolvedAddress,
                 glbPath: result.glbPath,
-                radiusMeters: result.radiusMeters,
+                requestedRadiusMeters: result.requestedRadiusMeters,
+                coveredRadiusMeters: result.coveredRadiusMeters,
+                truncated: result.truncated,
+                leafTiles: result.leafTiles,
                 mesh: result.mesh,
                 groundDatum: {
                     coordinateSystem: 'metric-enu',
@@ -649,7 +661,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 render: result.render,
                 ...(mountedArtifact ? { artifact: mountedArtifact } : {})
             },
-            summaryResult: `Google 3D Tiles ingested in full texture for ${result.resolvedAddress || query}${result.radiusMeters ? ` within ${result.radiusMeters} m of the anchor` : ''}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles). Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
+            summaryResult: `Google 3D Tiles ingested in full texture for ${result.resolvedAddress || query}${describeTileExtent(result)}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles). Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
         };
     },
 
@@ -793,7 +805,10 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 geoAnchor: result.geoAnchor,
                 resolvedAddress: result.resolvedAddress,
                 glbPath: result.glbPath,
-                radiusMeters: result.radiusMeters,
+                requestedRadiusMeters: result.requestedRadiusMeters,
+                coveredRadiusMeters: result.coveredRadiusMeters,
+                truncated: result.truncated,
+                leafTiles: result.leafTiles,
                 mesh: result.mesh,
                 groundDatum: {
                     coordinateSystem: 'metric-enu',
@@ -811,7 +826,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 render: result.render,
                 ...(mountedArtifact ? { artifact: mountedArtifact } : {})
             },
-            summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}${result.radiusMeters ? ` within ${result.radiusMeters} m of the anchor` : ''}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles). Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m [elevation: ${result.mesh?.boundingBox?.min[1]?.toFixed(1) ?? '0.0'}m to ${result.mesh?.boundingBox?.max[1]?.toFixed(1) ?? '0.0'}m]. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
+            summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}${describeTileExtent(result)}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles). Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m [elevation: ${result.mesh?.boundingBox?.min[1]?.toFixed(1) ?? '0.0'}m to ${result.mesh?.boundingBox?.max[1]?.toFixed(1) ?? '0.0'}m]. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
         };
     },
 

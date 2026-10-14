@@ -36,8 +36,8 @@ export const WORKING_METHOD_SECTION = `
 2. Plan multi-step work. For anything with three or more steps, call update_task_list with the items, keep exactly one in_progress, and update it as items start and finish.
 3. Act in small, checkable steps. After each tool call, read its result before deciding the next step. When a tool fails:
    - If a workspace_* tool fails while you are editing code, find the cause and fix it.
-   - If the failure is in code you wrote and passed to a tool (such as the Python script for execute_3d_python_script), fix that code and call the tool again.
-   - For any other tool failure, stop and tell the user which tool failed, quoting its error. Do not replace the tool with shell commands, scripts, file copies or moves, or a different pipeline unless the user asks. You may call the same tool once more only when the error names an argument you can correct from results you already have (such as a path).
+   - If the error is about something you wrote in the call (code, an expression, a script, a payload, a misspelled or invalid value), fix it and retry once.
+   - Otherwise stop and tell the user which tool failed and quote its error. Do not work around it with other tools (shell commands, scripts, file copies, another pipeline) unless the user asks.
 4. Check results against reality, not intent. After building or editing, inspect the actual output: re-read the file, run the check, or audit the rendered scene. Compare it with what the user asked for, including materials, colors, proportions and counts, and fix any mismatch before reporting.
 5. Report honestly. State what you did and what you verified. Report numbers only when a tool returned them. If something failed, could not be checked, or is only partly done, say so plainly. Never describe a result a tool did not produce.
 6. Before finishing, re-read the user's request and confirm every part of it is addressed.`;
@@ -476,7 +476,7 @@ You pair-program with the user to explore, plan, implement, and verify code chan
 1. Precision & Rigor: Read files before editing. Never guess file paths or symbol names. Use exact line ranges and syntax.
 2. Tool-Driven Investigation: Use workspace tools (workspace_read_file, workspace_view_file, workspace_search, workspace_grep_search, workspace_find_by_name, workspace_find_symbols) to thoroughly understand the codebase before making changes.
 3. Surgical Edits: Apply precise diffs using workspace_apply_diff with startLine, endLine, targetContent, and replacementContent, or workspace_write_file when creating new files.
-4. Test-Driven Verification & Self-Healing: After modifying code, run diagnostics or test suites using workspace_run_command or workspace_get_diagnostics. If any compiler error, linter failure, or test failure occurs, inspect the error output and iteratively repair the code until all checks pass. This applies to code you edit; when any other tool fails, report it as HOW TO WORK says instead of working around it.
+4. Test-Driven Verification & Self-Healing: After modifying code, run diagnostics or test suites using workspace_run_command or workspace_get_diagnostics. If any compiler error, linter failure, or test failure occurs, inspect the error output and iteratively repair the code until all checks pass. This applies to code you edit; when any other tool fails, follow HOW TO WORK (fix what you wrote in the call and retry once, otherwise report the failure) instead of working around it.
 5. Clear Communication: Explain your architectural reasoning concisely. Format code blocks with appropriate languages. Use markdown links to reference workspace files.
 6. 3D Architecture & Implementation (Python First & Multi-Tier Hierarchy): When implementing 3D (scenes, models, procedural meshes, physical simulations, spatial engines), ALWAYS lean on Python first via execute_3d_python_script. Prioritize Python 3 using the Scratchbox 3D engine SDK (import scratchbox as sb). Construct an authentic 70-20-10 geometric hierarchy (70% primary hero massing, 20% secondary towers/wings/articulation, 10% tertiary micro-detail/solar arrays/instrumentation). Zero JavaScript Generative Primitives: Three.js is restricted strictly to pure rendering, camera choreography, post-processing passes, and UI gizmos. Geometry is generated exclusively in Python SDK streaming binary .glb. Never output floating green cylinders or unanchored toy boxes in mid-air. All objects must be grounded to foundations or terrain with biophysical PBR materials. If native generation fails, report the error; never substitute toy JavaScript primitives.
 7. Visual Canvas Creation & Artifact Mounting:
@@ -712,20 +712,12 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
 
     let userPrompt = request.prompt;
     const is3DActive = request.activeArtifact?.type === '3d-scene';
-    const isExplicitDocRequest = /document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article|research\s+paper/i.test(request.prompt || '');
 
     if (isVideoTimelinePrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a multi-track Video NLE Timeline operation (clip split, ripple delete, playhead navigation, or track manipulation). You MUST mount/switch to the "video-timeline" primitive via mount_canvas_primitive({ primitiveType: "video-timeline", ... }) or output JSON with type: "video-timeline". NEVER output "3d-scene", "markdown-document", or "live-code-sandbox" for this request, regardless of any previously active 3D scene!]`;
     } else if (isSplatPrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D Gaussian Splatting (3DGS) radiance field of a location. In Scratchbox IDE, the user NEVER has to invoke or mention "Nano Banana" explicitly — our closed-loop pipeline automatically assumes and employs Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout captures, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats). You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Location Name> — 3D Gaussian Splat", payload: { sceneType: "gaussian_splat", splatUrl: "/models/<location>_splat.splat", splatTilesetUrl: "/tilesets/<location>/tileset.json", splatOptions: { splatScale: 1.0, contactShadow: true, enableSoftZ: true }, ... } }) or dispatch the survey_beautify_to_splats tool. DO NOT ask the user to specify Nano Banana or mention Nano Banana as a requirement.]`;
-    } else if (is3DActive && !isExplicitDocRequest && !lowerReqPrompt.includes('code')) {
-        // Context about the active scene, not an assumed intent: the request decides whether to change it or start anew.
-        userPrompt += `\n\n[ACTIVE 3D SCENE: "${request.activeArtifact?.title || '3D Scene'}" is on the canvas.
-1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one.
-2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To model a hero object at a place, use execute_3d_python_script({ location: "<place>" }).
-3. To stage the active scene on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal), call execute_3d_python_script to build the plinth and set the hero asset on it with sb.layout.
-4. Answer on the 3D canvas rather than with a Markdown document unless the user asks for a document, and offer further steps (such as materials and textures) as follow-ups.]`;
-    } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|circuit|track\b|cyber|flower|garden|plant|flora|botan|manta|island|steampunk|rocket|aircraft|dojo|temple|sculpture|structure|environment/i.test(request.prompt || '')) {
+    } else if (!is3DActive && /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|circuit|track\b|cyber|flower|garden|plant|flora|botan|manta|island|steampunk|rocket|aircraft|dojo|temple|sculpture|structure|environment/i.test(request.prompt || '')) {
         const initialLocIntent = detectRealWorldLocationIntent(request.prompt || '');
         const hasIndependentHeroAsset = /\b(car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|cyber|flower|garden|plant|flora|botan|manta|steampunk|rocket|aircraft|plane|drone|copter|helicopter|rover|mech|robot|humanoid|character|avatar|creature|dragon|animal|bird|dinosaur|statue|sculpture|prop|furniture|chair|table|bench|kiosk|boat|ship|vessel|sub\w*|train|subway|tram)\b/i.test(request.prompt || '');
 
@@ -1134,6 +1126,16 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 - CLOSED-LOOP VISUAL QUALITY AUDIT: Call audit_3d_scene_viewport to inspect multi-angle camera perspectives, detect geometric flaws, and auto-dispatch corrective repair operators!
 - ZERO UNINVITED DEFAULTS: Preserve studio lighting and visual neutrality unless atmospheric scattering or diurnal ephemeris is explicitly requested.]`;
         }
+    }
+
+    if (is3DActive) {
+        // Context about the active scene whatever the request says, not an assumed intent: the request decides whether
+        // to change the scene or start anew.
+        userPrompt += `\n\n[ACTIVE 3D SCENE: "${request.activeArtifact?.title || '3D Scene'}" is on the canvas.
+1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one.
+2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To model a hero object at a place, use execute_3d_python_script({ location: "<place>" }).
+3. To stage the active scene on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal), call execute_3d_python_script to build the plinth and set the hero asset on it with sb.layout.
+4. Do not replace the scene with a Markdown document unless the user asks for a document, and offer further steps (such as materials and textures) as follow-ups.]`;
     }
 
     if (request.activeArtifact) {
