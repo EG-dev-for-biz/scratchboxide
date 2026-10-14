@@ -53,6 +53,20 @@ describe('Scene 3D Auto-Framing & Standoff Camera', () => {
         expect(autoFrame!.position[1]).toBeGreaterThan(bounds.sphere.center.y);
     });
 
+    it('frames a small prop (a ~0.5 m stool) closely instead of from a fixed 15 m', () => {
+        const scene = new THREE.Scene();
+        const stool = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.45, 0.4), new THREE.MeshStandardMaterial());
+        stool.position.set(0, 0.225, 0);
+        scene.add(stool);
+
+        const bounds = computeSceneGeometryBounds(scene);
+        const autoFrame = calculateStandoffCamera(bounds, undefined, { fovDegrees: 45, force: true });
+        expect(autoFrame).not.toBeNull();
+        // Fills the frame: radius / sin(fov / 2) * margin, about 1.3 m here.
+        expect(autoFrame!.distance).toBeLessThan(3);
+        expect(autoFrame!.distance).toBeGreaterThan(bounds.sphere.radius * 1.5);
+    });
+
     it('detects camera clipping INSIDE the mesh and automatically backs out to standoff distance', () => {
         const scene = new THREE.Scene();
         const geom = new THREE.BoxGeometry(40, 20, 40);

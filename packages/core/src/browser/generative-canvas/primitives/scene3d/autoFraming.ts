@@ -25,7 +25,7 @@ export interface AutoFramingOptions {
     marginMultiplier?: number; // default: 1.35
     elevationDeg?: number;     // default: 28 degrees
     azimuthDeg?: number;       // default: 45 degrees
-    minDistance?: number;      // default: 15.0
+    minDistance?: number;      // default: 0.5 (only keeps the camera clear of the near plane)
     force?: boolean;
     /** Direction of key light (from origin towards light) to orient camera towards illuminated facade */
     keyLightDirection?: [number, number, number];
@@ -123,12 +123,13 @@ export function calculateStandoffCamera(
         marginMultiplier = 1.35,
         elevationDeg = 28.0,
         azimuthDeg = 45.0,
-        minDistance = 15.0,
+        minDistance = 0.5,
         force = false
     } = options;
 
     const center = bounds.sphere.center;
-    const radius = Math.max(bounds.sphere.radius, 1.0);
+    // Small floors only: a 1 m radius / 15 m distance minimum framed a 0.5 m prop from 15 m away, as a speck.
+    const radius = Math.max(bounds.sphere.radius, 0.05);
 
     // If cameraDef has an explicit position and not forced to re-frame, respect camera coordinates!
     if (!force && cameraDef?.position && Array.isArray(cameraDef.position) && cameraDef.position.length >= 3) {
