@@ -172,14 +172,15 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|bmp)$/i;
-function imageFiles(dirs: string[]): Map<string, number> {
+/** Every file under `dirs` with its modification time. */
+function filesIn(dirs: string[]): Map<string, number> {
     const found = new Map<string, number>();
     const walk = (dir: string, depth: number) => {
         if (depth > 6 || !fs.existsSync(dir)) return;
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) walk(full, depth + 1);
-            else if (IMAGE_EXT.test(entry.name)) found.set(full, fs.statSync(full).mtimeMs);
+            else if (entry.isFile()) found.set(full, fs.statSync(full).mtimeMs);
         }
     };
     dirs.forEach(d => walk(d, 0));
@@ -378,7 +379,7 @@ describe('build_3d_object_from_reference', () => {
 
     it('builds a clay 3d-scene from the spec without any image in the payload or on disk', async () => {
         const watched = [path.join(REPO_ROOT, 'build'), path.join(REPO_ROOT, 'public'), path.join(REPO_ROOT, '.scratchbox'), TMP];
-        const before = imageFiles(watched);
+        const before = filesIn(watched);
         const client = fakeClient({ specs: [JSON.stringify(VASE)], differences: ['{"differences": [{"problem": "the knob is slightly taller", "confidence": "low"}]}'] });
         const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top', dimensionsHintMeters: [0.36, 0.66, 0.36] });
         expect(out.status, String(out.resultPayload.error)).toBe('completed');
@@ -415,10 +416,18 @@ describe('build_3d_object_from_reference', () => {
         expect(payloadJson).not.toContain(REFERENCE_B64);
         expect(payloadJson).not.toContain('iVBORw0KGgo');
         expect(payloadJson).not.toMatch(/image\/(png|jpeg|webp)/);
-        const after = imageFiles(watched);
-        const added = [...after.entries()].filter(([file, mtime]) => before.get(file) !== mtime).map(([file]) => file)
+        // Other suites running in parallel may write their own images under build/, so the check is by content:
+        // no file written meanwhile holds the reference (raw or base64), and the builder's own folders hold no image.
+        const after = filesIn(watched);
+        const written = [...after.entries()].filter(([file, mtime]) => before.get(file) !== mtime).map(([file]) => file)
             .filter(file => !file.includes(`${path.sep}test-results${path.sep}`));
-        expect(added).toEqual([]);
+        const holdsReference = written.filter(file => {
+            const bytes = fs.readFileSync(file);
+            return bytes.includes(REFERENCE_PNG) || bytes.includes(Buffer.from(REFERENCE_B64));
+        });
+        expect(holdsReference).toEqual([]);
+        expect(written.filter(file => file.startsWith(TMP) && IMAGE_EXT.test(file))).toEqual([]);
+        expect(written.some(file => file.startsWith(MODELS_DIR) && file.endsWith('.glb'))).toBe(true);
     }, 180_000);
 
     it('runs no label-based orientation check: a flat disc whose id is "wheel" is accepted in one pass', async () => {
