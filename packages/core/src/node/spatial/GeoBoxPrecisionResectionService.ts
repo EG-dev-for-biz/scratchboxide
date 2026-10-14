@@ -250,35 +250,42 @@ export class GeoBoxPrecisionResectionService {
             };
         }
 
-        // 4. Try Google Maps Geocoding if API key or network is available
+        // 4. Benchmark anchors carry a surveyed camera pose (vantage, heading, pitch), so they must win
+        // over plain geocoding, which only yields the target point and would leave the pose unknown.
         if (queryText) {
-            try {
-                const anchor = await geocode3DTilesAddress(queryText);
-                return {
-                    name: anchor.landmarkName || queryText,
-                    targetCoords: {
-                        lat: anchor.lat,
-                        lng: anchor.lng,
-                        altitudeMeters: anchor.elevation ?? 15.0
-                    },
-                    groundElevation: anchor.elevation ?? 15.0,
-                    glbPath: request.glbPath
-                };
-            } catch {
-                // If geocoding failed or no API key, check benchmark anchors for test suite compatibility
-                const lower = queryText.toLowerCase();
-                for (const [key, benchmark] of Object.entries(BENCHMARK_GEO_ANCHORS)) {
-                    if (lower.includes(key)) {
-                        return {
-                            ...benchmark,
-                            glbPath: request.glbPath || benchmark.glbPath
-                        };
-                    }
+            const lower = queryText.toLowerCase();
+            for (const [key, benchmark] of Object.entries(BENCHMARK_GEO_ANCHORS)) {
+                if (lower.includes(key)) {
+                    return {
+                        ...benchmark,
+                        glbPath: request.glbPath || benchmark.glbPath
+                    };
+                }
+            }
+
+            // 5. Geocode the landmark name on its own first, so words in the prompt hint
+            // (e.g. "Central Park South") cannot redirect it to a different feature.
+            const queries = [request.targetLandmarkName?.trim(), queryText].filter((q, idx, arr): q is string => !!q && arr.indexOf(q) === idx);
+            for (const q of queries) {
+                try {
+                    const anchor = await geocode3DTilesAddress(q);
+                    return {
+                        name: anchor.landmarkName || q,
+                        targetCoords: {
+                            lat: anchor.lat,
+                            lng: anchor.lng,
+                            altitudeMeters: anchor.elevation ?? 15.0
+                        },
+                        groundElevation: anchor.elevation ?? 15.0,
+                        glbPath: request.glbPath
+                    };
+                } catch {
+                    // try the next query
                 }
             }
         }
 
-        // 5. Zero Presets Enforcement: NEVER default to Rome Colosseum or any random preset!
+        // 6. Zero Presets Enforcement: NEVER default to Rome Colosseum or any random preset!
         throw new Error(
             `Cannot resect camera pose: No geodetic coordinates or resolvable location query provided. ` +
             `Zero presets and no procedural fallbacks are enabled: please provide explicit coordinates ` +
@@ -422,9 +429,17 @@ export class GeoBoxPrecisionResectionService {
                 cameraCoords.altitudeMeters = bounds.estimatedAltitudeMeters;
             }
         } else {
-            // Compute vantage from heading and standoff distance relative to target
+            // Compute vantage from heading and standoff distance relative to target.
+            // Without point correspondences, a camera position, or a heading there is no pose evidence;
+            // refuse rather than inventing a camera due south of the target.
+            if (typeof request.headingDeg !== 'number') {
+                throw new Error(
+                    `Cannot resect camera pose for "${geo.name}": only the target location is known. ` +
+                    `Provide point correspondences (points2D/points3D), a camera position (cameraOpticalCenter/knownCoords), or headingDeg.`
+                );
+            }
             standoffDist = request.standoffDistanceMeters ?? 100.0;
-            headingDeg = request.headingDeg ?? 0.0;
+            headingDeg = request.headingDeg;
             pitchDeg = request.pitchDeg ?? 5.0;
 
             const headingRad = headingDeg * Math.PI / 180;

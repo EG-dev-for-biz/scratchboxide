@@ -157,7 +157,7 @@ describe('GeoBoxPrecisionResectionService API', () => {
     });
 
     it('enforces Zero Presets by throwing actionable error when no coordinates or query are provided', async () => {
-        await expect(service.resectCameraPose({}))
+        await expect(new GeoBoxPrecisionResectionService().resectCameraPose({}))
             .rejects
             .toThrow(/Cannot resect camera pose: No geodetic coordinates or resolvable location query provided/);
     });
@@ -206,6 +206,27 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
         expect(outcome.exec.status).toBe('completed');
         expect(outcome.exec.summaryResult).toContain('Sub-pixel edge alignment reached 100.0% overlap');
         expect((outcome.resultPayload as any).finalOverlapScorePct).toBe(100.0);
+    });
+
+    it('refuses to invent a camera pose when only the target location is known', async () => {
+        await expect(new GeoBoxPrecisionResectionService().resectCameraPose({
+            imagePath: 'unknown.jpg',
+            targetCoords: { lat: 35.6586, lng: 139.7454 }
+        })).rejects.toThrow(/only the target location is known/);
+    });
+
+    it('places the camera from a supplied heading when no other pose evidence exists', async () => {
+        const result = await new GeoBoxPrecisionResectionService().resectCameraPose({
+            imagePath: 'unknown.jpg',
+            targetCoords: { lat: 35.6586, lng: 139.7454 },
+            headingDeg: 90,
+            pitchDeg: 0,
+            standoffDistanceMeters: 100
+        });
+        expect(result.cameraAttitude.headingDeg).toBe(90);
+        // Looking east means the camera sits west of the target.
+        expect(result.cameraOpticalCenter.lng).toBeLessThan(139.7454);
+        expect(result.cameraOpticalCenter.lat).toBeCloseTo(35.6586, 4);
     });
 
     it('resolves native capability for geobox camera resectioning and edge overlap tasks', () => {
