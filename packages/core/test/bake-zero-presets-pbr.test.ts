@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { SurveySynthesisEngine, stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
@@ -16,8 +16,21 @@ import { SurveyTextureUnprojector, type StationPlate } from '../src/node/spatial
 import { NativeTilePathTracerService } from '../src/node/3d-engine/native-tile-path-tracer-service';
 import { decodePng, encodePng } from '../src/node/texture-processing';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
+import { requireAll, requireAsset, requireFile, withReason } from './helpers/requirements';
 
-const ARTIFACT_DIR = '/Users/eligreen/.gemini/antigravity/brain/7661fe23-d225-442c-9323-f94362db535b';
+// Photoreal plates generated in one developer's Antigravity session (not in the repo). Baked atlases and novel-view
+// screenshots go to the gitignored test-results/screenshots, never back into that session directory.
+const PLATE_DIR = '/Users/eligreen/.gemini/antigravity/brain/7661fe23-d225-442c-9323-f94362db535b';
+const ARTIFACT_DIR = path.resolve(__dirname, '../../../test-results/screenshots/bake-zero-presets-pbr');
+const PLATE_HOW_TO = 'photoreal plate generated outside the repo (Antigravity session artifacts); not reproducible from this checkout';
+/** The zero-preset scene GLB (gitignored build/ output) and its photoreal plate. */
+const sceneInputs = (glb: string, plate: string) => requireAll(
+    requireAsset(`build/${glb}`),
+    requireFile(path.join(PLATE_DIR, plate), PLATE_HOW_TO)
+);
+const scene2 = sceneInputs('scene_2_ziggurat.glb', 'scene_2_photorealistic_final.png');
+const scene3 = sceneInputs('scene_3_thruster.glb', 'scene_3_photorealistic_final.png');
+const scene1 = sceneInputs('scene_1_hydrothermal.glb', 'scene_1_photorealistic_final.png');
 const ANCHOR: GeodeticAnchor = {
     lat: 32.5363,
     lng: 44.4208,
@@ -25,9 +38,11 @@ const ANCHOR: GeodeticAnchor = {
 };
 
 describe('Frontier 1: Photorealism Texture Baking & UV Spatial Lock into 3D .GLB', () => {
-    it('Bakes photorealistic plates onto Zero-Preset Scene 2 (Babylonian Ziggurat Observatory) and renders from novel viewpoints', async () => {
+    beforeAll(() => fs.ensureDirSync(ARTIFACT_DIR));
+
+    it.skipIf(!scene2.ok)(withReason('Bakes photorealistic plates onto Zero-Preset Scene 2 (Babylonian Ziggurat Observatory) and renders from novel viewpoints', scene2), async () => {
         const glbPath = path.resolve(process.cwd(), 'build/scene_2_ziggurat.glb');
-        const platePngPath = path.join(ARTIFACT_DIR, 'scene_2_photorealistic_final.png');
+        const platePngPath = path.join(PLATE_DIR, 'scene_2_photorealistic_final.png');
         const outGlbPath = path.resolve(process.cwd(), 'build/scene_2_textured.glb');
 
         expect(fs.existsSync(glbPath)).toBe(true);
@@ -155,9 +170,9 @@ describe('Frontier 1: Photorealism Texture Baking & UV Spatial Lock into 3D .GLB
         console.log(`📸 Novel-Angle Path-Traced Screenshot saved to: ${novelArtifactPath}`);
     }, 180000);
 
-    it('Bakes photorealistic plates onto Zero-Preset Scene 3 (Fusion Thruster) and renders from novel viewpoints', async () => {
+    it.skipIf(!scene3.ok)(withReason('Bakes photorealistic plates onto Zero-Preset Scene 3 (Fusion Thruster) and renders from novel viewpoints', scene3), async () => {
         const glbPath = path.resolve(process.cwd(), 'build/scene_3_thruster.glb');
-        const platePngPath = path.join(ARTIFACT_DIR, 'scene_3_photorealistic_final.png');
+        const platePngPath = path.join(PLATE_DIR, 'scene_3_photorealistic_final.png');
         const outGlbPath = path.resolve(process.cwd(), 'build/scene_3_textured.glb');
 
         expect(fs.existsSync(glbPath)).toBe(true);
@@ -268,9 +283,9 @@ describe('Frontier 1: Photorealism Texture Baking & UV Spatial Lock into 3D .GLB
         console.log(`📸 Scene 3 Novel-Angle Path-Traced Screenshot saved to: ${novelArtifactPath}`);
     }, 180000);
 
-    it('Bakes photorealistic plates onto Zero-Preset Scene 1 (Hydrothermal Vent Chimney) and renders from novel viewpoints', async () => {
+    it.skipIf(!scene1.ok)(withReason('Bakes photorealistic plates onto Zero-Preset Scene 1 (Hydrothermal Vent Chimney) and renders from novel viewpoints', scene1), async () => {
         const glbPath = path.resolve(process.cwd(), 'build/scene_1_hydrothermal.glb');
-        const platePngPath = path.join(ARTIFACT_DIR, 'scene_1_photorealistic_final.png');
+        const platePngPath = path.join(PLATE_DIR, 'scene_1_photorealistic_final.png');
         const outGlbPath = path.resolve(process.cwd(), 'build/scene_1_textured.glb');
 
         expect(fs.existsSync(glbPath)).toBe(true);

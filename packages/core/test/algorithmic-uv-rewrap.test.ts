@@ -5,6 +5,19 @@ import { MaxRectsAtlasPacker } from '../src/node/spatial/TextureAtlasPacker';
 import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
+import { REPO_ROOT, requireAsset, withReason } from './helpers/requirements';
+
+// The shape-grounded repack of the Colosseum (gitignored; no producer script in the repo).
+const SHAPE_GROUNDED = 'public/models/colosseum_rome_shape_grounded.glb';
+const shapeGrounded = requireAsset(SHAPE_GROUNDED);
+/**
+ * Input for the generic engine operations (texel density, micro-detail tiling, tool dispatch, processGlb): the
+ * shape-grounded repack when present, otherwise the canonical textured Colosseum (79 submeshes, 79 JPEG textures),
+ * which is tracked as the Cloud Run spatial-separator asset (6bb97f1) so these paths run on a clean checkout.
+ */
+const colosseumInputPath = shapeGrounded.ok
+  ? path.join(REPO_ROOT, SHAPE_GROUNDED)
+  : path.join(REPO_ROOT, 'deploy/cloud-run/spatial-separator/assets/colosseum_rome_textured.glb');
 
 describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
   it('correctly calculates 2D affine determinant and inverse barycentric weights', () => {
@@ -72,8 +85,8 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
     expect(classifyMaterial(160, 155, 150, 78.0, 0.88)).toBe('asphalt');
   });
 
-  it('validates scene-wide repacked GLB model integrity across all 79 submeshes', () => {
-    const glbPath = path.resolve(__dirname, '../../../public/models/colosseum_rome_shape_grounded.glb');
+  it.skipIf(!shapeGrounded.ok)(withReason('validates scene-wide repacked GLB model integrity across all 79 submeshes', shapeGrounded), () => {
+    const glbPath = path.join(REPO_ROOT, SHAPE_GROUNDED);
     expect(fs.existsSync(glbPath)).toBe(true);
 
     const glb = fs.readFileSync(glbPath);
@@ -223,7 +236,7 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
   });
 
   it('computes texel density metrics and detects variance across submeshes', () => {
-    const colosseumPath = path.resolve(__dirname, '../../../public/models/colosseum_rome_shape_grounded.glb');
+    const colosseumPath = colosseumInputPath;
     const buffer = fs.readFileSync(colosseumPath);
     const metrics = AlgorithmicUvEngine.computeTexelDensity(buffer, 512);
 
@@ -282,7 +295,7 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
   });
 
   it('injects KHR_texture_transform for scale-invariant micro-detail tiling', async () => {
-    const colosseumPath = path.resolve(__dirname, '../../../public/models/colosseum_rome_shape_grounded.glb');
+    const colosseumPath = colosseumInputPath;
     const result = await AlgorithmicUvEngine.processGlb({
       inputGlbPath: colosseumPath,
       enableMicroDetailTiling: true,
@@ -304,7 +317,7 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
 
   it('dispatches uv_analyze_texel_density and algorithmic_uv_unwrap_rewrap with lithologyProfile via Gemini agent tool registry', async () => {
     const registry = createDefaultToolRegistry();
-    const colosseumPath = path.resolve(__dirname, '../../../public/models/colosseum_rome_shape_grounded.glb');
+    const colosseumPath = colosseumInputPath;
 
     expect(registry.has('uv_analyze_texel_density')).toBe(true);
 
@@ -514,7 +527,7 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
     });
 
     it('executes processGlb with auto-induced periodicity and biophysical contract', async () => {
-      const colosseumPath = path.resolve(__dirname, '../../../public/models/colosseum_rome_shape_grounded.glb');
+      const colosseumPath = colosseumInputPath;
       const result = await AlgorithmicUvEngine.processGlb({
         inputGlbPath: colosseumPath,
         mode: 'preserve-100-lock',

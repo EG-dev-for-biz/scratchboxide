@@ -16,6 +16,20 @@ import {
     SmplTreeService,
     NativeCppCompilerService
 } from '../src/node';
+import { requireAll, requireAsset, requireAssets, withReason } from './helpers/requirements';
+
+// Real Google 3D Tile tree-blob capture (gitignored). run_sb_veggie silently substitutes a synthetic noisy blob when
+// --fit-scan points at a missing file (scripts/run_sb_veggie.cpp), so tests about the real scan must not run without it.
+const REAL_BLOB = 'public/models/botanical_tests/real_tile_extracted_tree_blob.glb';
+const realBlob = requireAsset(REAL_BLOB);
+const REAL_FITTED_MODELS = [
+    'public/models/smpl_real_data_fitted_summer.glb',
+    'public/models/smpl_real_data_fitted_autumn.glb',
+    'public/models/smpl_real_data_winter_manifold.glb',
+    'public/models/smpl_real_data_side_by_side.glb',
+    'public/models/smpl_real_data_ghost_overlay.glb'
+];
+const realBlobAndFits = requireAll(realBlob, requireAssets(REAL_FITTED_MODELS));
 
 describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & Node.js)', () => {
     const service = new SbVeggieService();
@@ -157,7 +171,7 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
         }
     }, 30000);
 
-    it('7. should verify real Google 3D Tile tree blob inversion & canonical model generation', async () => {
+    it.skipIf(!realBlobAndFits.ok)(withReason('7. should verify real Google 3D Tile tree blob inversion & canonical model generation', realBlobAndFits), async () => {
         const realBlobPath = path.resolve(process.cwd(), 'public/models/botanical_tests/real_tile_extracted_tree_blob.glb');
         expect(fs.existsSync(realBlobPath)).toBe(true);
 
@@ -165,13 +179,7 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
         expect(realBlobStat.size).toBeGreaterThan(5000);
 
         // Verify all 5 real-scan fitted models were generated and have valid glTF headers
-        const generatedModels = [
-            'public/models/smpl_real_data_fitted_summer.glb',
-            'public/models/smpl_real_data_fitted_autumn.glb',
-            'public/models/smpl_real_data_winter_manifold.glb',
-            'public/models/smpl_real_data_side_by_side.glb',
-            'public/models/smpl_real_data_ghost_overlay.glb'
-        ];
+        const generatedModels = REAL_FITTED_MODELS;
 
         for (const relPath of generatedModels) {
             const absPath = path.resolve(process.cwd(), relPath);
@@ -188,7 +196,7 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
         }
     });
 
-    it('8. should solve 24-DOF Asymmetric Bough IK and reflect lopsided real-world canopy profile', () => {
+    it.skipIf(!realBlob.ok)(withReason('8. should solve 24-DOF Asymmetric Bough IK and reflect lopsided real-world canopy profile', realBlob), () => {
         const binPath = path.resolve(process.cwd(), 'build/run_sb_veggie');
         const realBlobPath = path.resolve(process.cwd(), 'public/models/botanical_tests/real_tile_extracted_tree_blob.glb');
         const testGlbPath = path.resolve(process.cwd(), 'build/test_asymmetric_ik.glb');
@@ -218,7 +226,7 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
         }
     });
 
-    it('9. should sample 3D Spatial Color Field from raw scan and ground botanical vertex colors', () => {
+    it.skipIf(!realBlob.ok)(withReason('9. should sample 3D Spatial Color Field from raw scan and ground botanical vertex colors', realBlob), () => {
         const binPath = path.resolve(process.cwd(), 'build/run_sb_veggie');
         const realBlobPath = path.resolve(process.cwd(), 'public/models/botanical_tests/real_tile_extracted_tree_blob.glb');
         const testColorGlb = path.resolve(process.cwd(), 'build/test_color_field_test.glb');

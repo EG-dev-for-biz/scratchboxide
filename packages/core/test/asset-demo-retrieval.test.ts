@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { requireAssets, withReason } from './helpers/requirements';
 
 describe('Public Asset Retrieval & Demo Integrity', () => {
   const publicDir = path.resolve(__dirname, '../../../public');
@@ -10,32 +11,38 @@ describe('Public Asset Retrieval & Demo Integrity', () => {
       {
         name: 'Empire State Building (High-Quality PBR)',
         relPath: 'models/spce_esb_isolated_full_quality_pbr.glb',
-        minSizeBytes: 15_000_000 // ~20.1 MB
+        minSizeBytes: 15_000_000, // ~20.1 MB
+        producer: 'scripts/generate_isolated_esb_pbr.py'
       },
       {
         name: 'Watertight Remeshed Empire State Building',
         relPath: 'cleaned_empire_state_building.glb',
-        minSizeBytes: 10_000_000 // ~13.3 MB
+        minSizeBytes: 10_000_000, // ~13.3 MB
+        producer: undefined
       },
       {
         name: 'SB-Human Parametric Rigged Humanoid',
         relPath: 'models/humanoid_10331522.glb',
-        minSizeBytes: 5_000_000 // ~9.8 MB
+        minSizeBytes: 5_000_000, // ~9.8 MB
+        producer: 'scripts/build_smooth_humanoid_glb.mjs'
       },
       {
         name: 'Midtown Manhattan Lowpoly Map',
         relPath: 'models/google_midtown_lowpoly_map.glb',
-        minSizeBytes: 200_000 // ~300 KB
+        minSizeBytes: 200_000, // ~300 KB
+        producer: 'scripts/generate_google_midtown_lowpoly_map.cpp'
       },
       {
         name: 'Analytical Cuboid Blockout',
         relPath: 'models/analytical_cuboid_blockout.glb',
-        minSizeBytes: 300_000 // ~427 KB
+        minSizeBytes: 300_000, // ~427 KB
+        producer: 'scripts/generate_analytical_cuboid_blockout.cpp'
       }
     ];
 
     models.forEach((m) => {
-      it(`retrieves 3D model "${m.name}" from public/${m.relPath}`, () => {
+      const asset = requireAssets([`public/${m.relPath}`], m.producer);
+      it.skipIf(!asset.ok)(withReason(`retrieves 3D model "${m.name}" from public/${m.relPath}`, asset), () => {
         const fullPath = path.join(publicDir, m.relPath);
         expect(fs.existsSync(fullPath), `Asset file missing: ${m.relPath}`).toBe(true);
         const stats = fs.statSync(fullPath);
@@ -76,7 +83,8 @@ describe('Public Asset Retrieval & Demo Integrity', () => {
     ];
 
     videos.forEach((v) => {
-      it(`retrieves video plate "${v.name}" from public/${v.relPath}`, () => {
+      const asset = requireAssets([`public/${v.relPath}`]);
+      it.skipIf(!asset.ok)(withReason(`retrieves video plate "${v.name}" from public/${v.relPath}`, asset), () => {
         const fullPath = path.join(publicDir, v.relPath);
         expect(fs.existsSync(fullPath), `Video file missing: ${v.relPath}`).toBe(true);
         const stats = fs.statSync(fullPath);
@@ -93,7 +101,10 @@ describe('Public Asset Retrieval & Demo Integrity', () => {
   });
 
   describe('3. 6-DOF Camera Solve Trajectories Retrieval', () => {
-    it('retrieves and parses plaza_hotel_camera_path.json with 361 frames @ 24fps', () => {
+    const plazaPath = requireAssets(['public/models/plaza_hotel_camera_path.json']);
+    const tilesPath = requireAssets(['public/models/google_tiles_camera_path.json']);
+
+    it.skipIf(!plazaPath.ok)(withReason('retrieves and parses plaza_hotel_camera_path.json with 361 frames @ 24fps', plazaPath), () => {
       const fullPath = path.join(publicDir, 'models/plaza_hotel_camera_path.json');
       expect(fs.existsSync(fullPath)).toBe(true);
 
@@ -115,7 +126,7 @@ describe('Public Asset Retrieval & Demo Integrity', () => {
       expect(typeof f0.fov).toBe('number');
     });
 
-    it('retrieves and parses google_tiles_camera_path.json with 72 frames @ 24fps', () => {
+    it.skipIf(!tilesPath.ok)(withReason('retrieves and parses google_tiles_camera_path.json with 72 frames @ 24fps', tilesPath), () => {
       const fullPath = path.join(publicDir, 'models/google_tiles_camera_path.json');
       expect(fs.existsSync(fullPath)).toBe(true);
 

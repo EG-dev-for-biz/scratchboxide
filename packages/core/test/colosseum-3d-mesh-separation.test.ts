@@ -7,8 +7,9 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import {
   Colosseum3DMeshSeparatorService,
@@ -17,11 +18,28 @@ import {
   type Separated3DScene
 } from '../src/node/spatial/Colosseum3DMeshSeparatorService';
 import { OrientedBoundingBoxSolver } from '../src/node/spatial/OrientedBoundingBoxSolver';
+import { REPO_ROOT } from './helpers/requirements';
+
+/**
+ * The canonical Colosseum mesh (234,679 vertices, 79 submeshes). public/models/ is gitignored, but the identical file
+ * is tracked as the Cloud Run spatial-separator asset (deploy/cloud-run/spatial-separator/assets/colosseum_clay.glb,
+ * added in 6bb97f1), so a clean checkout still exercises the separator on the real model.
+ */
+function resolveCanonicalColosseumGlb(): string {
+  const candidates = [
+    'public/models/colosseum_grounded.glb',
+    'public/models/colosseum_clay.glb',
+    'deploy/cloud-run/spatial-separator/assets/colosseum_clay.glb'
+  ].map(p => path.join(REPO_ROOT, p));
+  return candidates.find(p => fs.existsSync(p)) ?? candidates[candidates.length - 1];
+}
 
 describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OBB)', () => {
-  const modelPath = fs.existsSync(path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb'))
-    ? path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb')
-    : path.resolve(__dirname, '../../../public/models/colosseum_clay.glb');
+  const modelPath = resolveCanonicalColosseumGlb();
+  // Entity datasets are written to a temp dir: the tracked copies under deploy/ and public/ are deployment artifacts
+  // regenerated deliberately, not on every test run.
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-colosseum-separation-'));
+  afterAll(() => fs.rmSync(outDir, { recursive: true, force: true }));
 
   it('verifies the existence and size of the canonical Colosseum 3D model', () => {
     expect(fs.existsSync(modelPath)).toBe(true);
@@ -57,12 +75,7 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(categories.has('foliage')).toBe(true);
     expect(categories.has('terrain')).toBe(true);
 
-    const macroAssetsPath = path.resolve(__dirname, '../../../deploy/cloud-run/spatial-separator/assets/macro_entities.json');
-    fs.writeFileSync(macroAssetsPath, JSON.stringify(scene.objects, null, 2), 'utf8');
-    const macroPublicPath = path.resolve(__dirname, '../../../public/models/macro_entities.json');
-    if (fs.existsSync(path.dirname(macroPublicPath))) {
-      fs.writeFileSync(macroPublicPath, JSON.stringify(scene.objects, null, 2), 'utf8');
-    }
+    fs.writeFileSync(path.join(outDir, 'macro_entities.json'), JSON.stringify(scene.objects, null, 2), 'utf8');
   });
 
   it('extracts exact metric dimensions and vertex counts for key architectural monuments', () => {
@@ -160,12 +173,7 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(salviA).toBeDefined();
     expect(salviA!.category).toBe('urban_infrastructure');
 
-    const detailedAssetsPath = path.resolve(__dirname, '../../../deploy/cloud-run/spatial-separator/assets/detailed_entities.json');
-    fs.writeFileSync(detailedAssetsPath, JSON.stringify(scene.objects, null, 2), 'utf8');
-    const detailedPublicPath = path.resolve(__dirname, '../../../public/models/detailed_entities.json');
-    if (fs.existsSync(path.dirname(detailedPublicPath))) {
-      fs.writeFileSync(detailedPublicPath, JSON.stringify(scene.objects, null, 2), 'utf8');
-    }
+    fs.writeFileSync(path.join(outDir, 'detailed_entities.json'), JSON.stringify(scene.objects, null, 2), 'utf8');
   });
 
   it('OrientedBoundingBoxSolver mathematically minimizes bounding box volume along dominant yaw angle', () => {
@@ -287,11 +295,7 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(centralFornix).toBeDefined();
     expect(centralFornix!.orientedBoundingBox.dimensions[0]).toBeLessThan(25);
 
-    // Save updated total_entities.json
-    const assetsPath = path.resolve(__dirname, '../../../deploy/cloud-run/spatial-separator/assets/total_entities.json');
-    fs.writeFileSync(assetsPath, JSON.stringify(scene.objects, null, 2), 'utf8');
-    const publicPath = path.resolve(__dirname, '../../../public/models/total_entities.json');
-    fs.writeFileSync(publicPath, JSON.stringify(scene.objects, null, 2), 'utf8');
+    fs.writeFileSync(path.join(outDir, 'total_entities.json'), JSON.stringify(scene.objects, null, 2), 'utf8');
   });
 });
 

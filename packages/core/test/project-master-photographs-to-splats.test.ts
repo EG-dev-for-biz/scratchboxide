@@ -4,20 +4,31 @@ import * as fs from 'fs-extra';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
-import { SurveySynthesisEngine } from '../src/common/spatial/SurveySynthesisEngine';
+import { SurveySynthesisEngine, cameraBasis } from '../src/common/spatial/SurveySynthesisEngine';
 import { Splat3DTilesService } from '../src/node/spatial/Splat3DTilesService';
+import { SurveySplatPipelineService } from '../src/node/spatial/SurveySplatPipelineService';
+import { REPO_ROOT, HOW_TO, requireBinary, withReason } from './helpers/requirements';
 
 const execAsync = promisify(exec);
 
+// Station photographs are decoded with the `ffmpeg` CLI below.
+const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
+
 describe('Project Master Photographs to Gaussian Splats', () => {
-    it('unprojects master beautified photographs into 3D Gaussian Splats and fuses tileset', async () => {
-        const rootDir = path.resolve(__dirname, '../../../');
-        const glbPath = path.join(rootDir, 'public/models/colosseum_grounded.glb');
+    it.skipIf(!ffmpeg.ok)(withReason('unprojects master beautified photographs into 3D Gaussian Splats and fuses tileset', ffmpeg), async () => {
+        const rootDir = REPO_ROOT;
+        // public/models/ is gitignored; the identical canonical Colosseum mesh is tracked as the spatial-separator
+        // asset (deploy/cloud-run/spatial-separator/assets/colosseum_grounded.glb, 6bb97f1).
+        const glbPath = [
+            path.join(rootDir, 'public/models/colosseum_grounded.glb'),
+            path.join(rootDir, 'deploy/cloud-run/spatial-separator/assets/colosseum_grounded.glb')
+        ].find(p => fs.existsSync(p))!;
         const sourceStationsDir = path.join(rootDir, 'public/tilesets/colosseum/stations');
         const outDir = path.join(rootDir, 'build/test_colosseum_splats');
         const stationsDir = path.join(outDir, 'stations');
         await fs.ensureDir(stationsDir);
-        const baker = path.join(rootDir, 'build/station_to_splats');
+        // Compiles scripts/station_to_splats.cpp into build/ when the binary is missing or stale.
+        const baker = await new SurveySplatPipelineService().ensureBaker();
 
         const anchor = {
             lat: 41.8902,

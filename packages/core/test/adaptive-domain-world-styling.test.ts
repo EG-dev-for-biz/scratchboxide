@@ -8,6 +8,9 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as THREE from 'three';
 import {
   DEFAULT_ADAPTIVE_STYLE_CONTRACT,
@@ -17,6 +20,10 @@ import {
   AdaptiveDomainStyleService,
   AdaptiveStyleDeconstructionService
 } from '../src/node';
+import { REPO_ROOT, HOW_TO, requireBinary, withReason } from './helpers/requirements';
+
+// GlbTextureRecolorService decodes and re-encodes every texture by spawning `ffmpeg` from PATH.
+const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
 
 describe('Adaptive Domain Architecture: Universal Styling Engine', () => {
 
@@ -148,19 +155,26 @@ describe('Adaptive Domain Architecture: Universal Styling Engine', () => {
       expect(typeof palette.midtone.a).toBe('number');
     });
 
-    it('coordinates autonomous one-shot GLB restyling via restyleWorld', async () => {
-      const result = await AdaptiveDomainStyleService.restyleWorld({
-        referenceImage: 'mock_image.png',
-        inputGlbPath: 'public/colosseum_clay.glb',
-        outputPath: 'public/colosseum_clay_styled_test.glb',
-        promptHint: 'A glowing sunset with deep golden light',
-        fidelity: 'fast-analytical'
-      });
+    it.skipIf(!ffmpeg.ok)(withReason('coordinates autonomous one-shot GLB restyling via restyleWorld', ffmpeg), async () => {
+      // Textured Colosseum (79 JPEG textures); public/ copies are gitignored, this identical one is tracked (6bb97f1).
+      const inputGlbPath = path.join(REPO_ROOT, 'deploy/cloud-run/spatial-separator/assets/colosseum_clay.glb');
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-restyle-world-'));
+      try {
+        const result = await AdaptiveDomainStyleService.restyleWorld({
+          referenceImage: 'mock_image.png',
+          inputGlbPath,
+          outputPath: path.join(outDir, 'colosseum_clay_styled_test.glb'),
+          promptHint: 'A glowing sunset with deep golden light',
+          fidelity: 'fast-analytical'
+        });
 
-      expect(result.success).toBe(true);
-      expect(result.contract).toBeDefined();
-      expect(result.palette).toBeDefined();
-      expect(result.outputGlbPath).toContain('_styled_test.glb');
-    });
+        expect(result.success).toBe(true);
+        expect(result.contract).toBeDefined();
+        expect(result.palette).toBeDefined();
+        expect(result.outputGlbPath).toContain('_styled_test.glb');
+      } finally {
+        fs.rmSync(outDir, { recursive: true, force: true });
+      }
+    }, 300_000);
   });
 });

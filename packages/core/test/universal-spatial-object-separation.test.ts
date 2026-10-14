@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import {
   Universal3DObjectSeparationService,
   type UniversalSeparationOptions,
@@ -18,11 +19,31 @@ import {
 import { BoundingBoxComparisonService } from '../src/node/spatial/BoundingBoxComparisonService';
 import { GoogleTileAlignmentOptimizer } from '../src/node/spatial/GoogleTileAlignmentOptimizer';
 import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
+import { REPO_ROOT, requireAsset, withReason } from './helpers/requirements';
+
+/**
+ * The canonical Colosseum mesh. public/models/ is gitignored, but the identical file is tracked as the Cloud Run
+ * spatial-separator asset (deploy/cloud-run/spatial-separator/assets/colosseum_clay.glb, added in 6bb97f1).
+ */
+function resolveCanonicalColosseumGlb(): string {
+  const candidates = [
+    'public/models/colosseum_grounded.glb',
+    'public/models/colosseum_clay.glb',
+    'deploy/cloud-run/spatial-separator/assets/colosseum_clay.glb'
+  ].map(p => path.join(REPO_ROOT, p));
+  return candidates.find(p => fs.existsSync(p)) ?? candidates[candidates.length - 1];
+}
+
+// Raw Google 3D Tile captures of Washington Square Arch (gitignored; no producer script in the repo).
+const ARCH_RAW = 'public/models/washington_square_arch_nyc_raw.glb';
+const ARCH_HQ = 'public/models/washington_arch_hq.glb';
+const ARCH_TILE_100M = 'public/tiles/washington_square_arch_100m.glb';
+const archRaw = requireAsset(ARCH_RAW);
+const archHq = requireAsset(ARCH_HQ);
+const archTile = requireAsset(ARCH_TILE_100M);
 
 describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)', () => {
-  const colosseumModelPath = fs.existsSync(path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb'))
-    ? path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb')
-    : path.resolve(__dirname, '../../../public/models/colosseum_clay.glb');
+  const colosseumModelPath = resolveCanonicalColosseumGlb();
 
   it('separates arbitrary 3D geometry into discrete spatial entities without hardcoded presets', async () => {
     const service = new Universal3DObjectSeparationService();
@@ -123,9 +144,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     }
   });
 
-  it('performs vertex-level Tree Apex & Facade clustering on raw Google 3D Tile (Washington Square Arch)', async () => {
-    const archPath = path.resolve(__dirname, '../../../public/models/washington_square_arch_nyc_raw.glb');
-    if (!fs.existsSync(archPath)) return;
+  it.skipIf(!archRaw.ok)(withReason('performs vertex-level Tree Apex & Facade clustering on raw Google 3D Tile (Washington Square Arch)', archRaw), async () => {
+    const archPath = path.join(REPO_ROOT, ARCH_RAW);
 
     const scene = Universal3DObjectSeparationService.separate3DMesh(archPath, {
       granularity: 'detailed',
@@ -176,9 +196,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     }
   });
 
-  it('performs high-resolution semantic separation on HQ Leaf 3D Tile (Landmarks, Vehicles, Trees, Architecture)', async () => {
-    const hqPath = path.resolve(__dirname, '../../../public/models/washington_arch_hq.glb');
-    if (!fs.existsSync(hqPath)) return;
+  it.skipIf(!archHq.ok)(withReason('performs high-resolution semantic separation on HQ Leaf 3D Tile (Landmarks, Vehicles, Trees, Architecture)', archHq), async () => {
+    const hqPath = path.join(REPO_ROOT, ARCH_HQ);
 
     const scene = Universal3DObjectSeparationService.separate3DMesh(hqPath, {
       granularity: 'detailed',
@@ -222,9 +241,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     expect(oaks.length).toBeGreaterThan(50);
   });
 
-  it('verifies BoundingBoxComparisonService metrology and GoogleTileAlignmentOptimizer asset docking contracts on separated entities', async () => {
-    const hqPath = path.resolve(__dirname, '../../../public/models/washington_arch_hq.glb');
-    if (!fs.existsSync(hqPath)) return;
+  it.skipIf(!archHq.ok)(withReason('verifies BoundingBoxComparisonService metrology and GoogleTileAlignmentOptimizer asset docking contracts on separated entities', archHq), async () => {
+    const hqPath = path.join(REPO_ROOT, ARCH_HQ);
 
     const scene = Universal3DObjectSeparationService.separate3DMesh(hqPath, {
       granularity: 'detailed',
@@ -312,11 +330,11 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     expect(alignment.transformMatrix4x4.length).toBe(16);
   });
 
-  it('partitions fused 3D tile geometry into part-aware glTF primitives with independent PBR materials and local OBB UV coordinates', async () => {
-    const tileGlbPath = path.resolve(__dirname, '../../../public/tiles/washington_square_arch_100m.glb');
-    if (!fs.existsSync(tileGlbPath)) return;
+  it.skipIf(!archTile.ok)(withReason('partitions fused 3D tile geometry into part-aware glTF primitives with independent PBR materials and local OBB UV coordinates', archTile), async () => {
+    const tileGlbPath = path.join(REPO_ROOT, ARCH_TILE_100M);
 
-    const outGlbPath = path.resolve(__dirname, '../../../public/tiles/washington_square_arch_part_aware.glb');
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-part-aware-'));
+    const outGlbPath = path.join(outDir, 'washington_square_arch_part_aware.glb');
 
     const result = Universal3DObjectSeparationService.generatePartAwareGlb({
       glbPath: tileGlbPath,
@@ -375,9 +393,7 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     expect(uvResult.verticesProcessed).toBeGreaterThan(0);
 
     // Cleanup generated file
-    if (fs.existsSync(outGlbPath)) {
-      fs.unlinkSync(outGlbPath);
-    }
+    fs.rmSync(outDir, { recursive: true, force: true });
   });
 });
 
