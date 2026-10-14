@@ -635,7 +635,7 @@ def replicate_metric_array(
         for i in range(count):
             th = i * 2.0 * math.pi / count
             pos = c_v + (u_v * (radius * math.cos(th))) + (v_v * (radius * math.sin(th)))
-            fastener = _get_sb().create_cylinder(dims[0], dims[2] if len(dims) > 2 else dims[1], segments=12, color=color)
+            fastener = _get_sb().create_cylinder(radius=dims[0], height=dims[2] if len(dims) > 2 else dims[1], segments=12, color=color)
             fastener.translate(pos.x, pos.y, pos.z)
             mesh.append(fastener)
             
@@ -661,7 +661,7 @@ def replicate_metric_array(
                     tooth.translate(pos.x, pos.y, pos.z)
                     mesh.append(tooth)
                 else:
-                    rivet = _get_sb().create_cylinder(dims[0], dims[1], segments=10, color=color)
+                    rivet = _get_sb().create_cylinder(radius=dims[0], height=dims[1], segments=10, color=color)
                     rivet.translate(pos.x, pos.y, pos.z)
                     mesh.append(rivet)
                     
