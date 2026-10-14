@@ -55,18 +55,29 @@ async function runTests() {
     // Test 6: Verify Gemini Built-in Tools (Google Search and Code Execution) in buildToolDeclarations
     console.log('  Testing Test 6: Gemini Built-in Tools config...');
     
+    // Since de5b493 ("domain tool packs, capability routing") the TaskCapabilityResolver runs before tool
+    // selection and the core_workspace pack (workspace + canvas function declarations) is attached whenever
+    // workspace tools are allowed and the task is natively solvable, which includes plain prompts. Built-in
+    // tool behaviour is therefore isolated below with enableWorkspaceTools: false.
+    const toolsWithWorkspace = (service as any).buildToolDeclarations({ prompt: 'test' });
+    assert.ok(Array.isArray(toolsWithWorkspace), 'Should return an array');
+    assert.strictEqual(toolsWithWorkspace.length, 2);
+    assert.deepStrictEqual(toolsWithWorkspace[0], { googleSearch: {} }, 'Google Search stays first and enabled by default');
+    const workspaceDecls = toolsWithWorkspace[1].functionDeclarations.map((d: any) => d.name);
+    assert.ok(workspaceDecls.includes('workspace_read_file') && workspaceDecls.includes('mount_canvas_primitive'), 'Default request carries the core workspace + canvas declarations');
+
     // Case 6a: Default prompt with no options -> includes googleSearch by default
-    const toolsDefault = (service as any).buildToolDeclarations({ prompt: 'test' });
+    const toolsDefault = (service as any).buildToolDeclarations({ prompt: 'test', enableWorkspaceTools: false });
     assert.ok(Array.isArray(toolsDefault), 'Should return an array with Google Search enabled by default');
     assert.strictEqual(toolsDefault.length, 1);
     assert.deepStrictEqual(toolsDefault[0], { googleSearch: {} });
 
     // Case 6b: Explicitly disabled Google Search, no other tools -> undefined
-    const toolsDisabled = (service as any).buildToolDeclarations({ prompt: 'test', enableGoogleSearch: false });
+    const toolsDisabled = (service as any).buildToolDeclarations({ prompt: 'test', enableWorkspaceTools: false, enableGoogleSearch: false });
     assert.strictEqual(toolsDisabled, undefined, 'Should return undefined when Google Search is explicitly false and no other tools are set');
 
     // Case 6c: Google Search explicitly false, Code Execution enabled -> Code Execution only
-    const toolsCodeOnly = (service as any).buildToolDeclarations({ prompt: 'test', enableGoogleSearch: false, enableCodeExecution: true });
+    const toolsCodeOnly = (service as any).buildToolDeclarations({ prompt: 'test', enableWorkspaceTools: false, enableGoogleSearch: false, enableCodeExecution: true });
     assert.ok(Array.isArray(toolsCodeOnly), 'Should return an array');
     assert.strictEqual(toolsCodeOnly.length, 1);
     assert.deepStrictEqual(toolsCodeOnly[0], { codeExecution: {} });
@@ -74,6 +85,7 @@ async function runTests() {
     // Case 6d: Both built-in tools enabled
     const toolsBoth = (service as any).buildToolDeclarations({
         prompt: 'test',
+        enableWorkspaceTools: false,
         enableGoogleSearch: true,
         enableCodeExecution: true
     });
@@ -92,6 +104,7 @@ async function runTests() {
     };
     const toolsAll = (service as any).buildToolDeclarations({
         prompt: 'test',
+        enableWorkspaceTools: false,
         enableGoogleSearch: true,
         enableCodeExecution: true,
         attachedMcpTools: [dummyMcpTool]

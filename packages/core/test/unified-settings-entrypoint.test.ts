@@ -53,9 +53,11 @@ async function runUnifiedSettingsEntrypointTests() {
         (studioSource.includes("openSettingsToTab('general')") || studioSource.includes("openModal('settings')")),
         'Standard ⌘, shortcut must trigger Settings modal'
     );
+    // 6e66ca1 replaced the literal "← Back" text with an <IconArrowLeft /> + "Back" label.
     assert.ok(
-        settingsSource.includes('← Back'),
-        'Settings modal must retain "← Back" top button for dismissal'
+        /className="sb-cursor-settings-back-btn"\s*onClick=\{onClose\}\s*aria-label="Back"/.test(settingsSource) &&
+        settingsSource.includes('<IconArrowLeft') && settingsSource.includes('<span>Back</span>'),
+        'Settings modal must retain arrow-icon "Back" top button for dismissal'
     );
     assert.ok(
         settingsSource.includes("e.key === 'Escape'") || settingsSource.includes('Escape'),

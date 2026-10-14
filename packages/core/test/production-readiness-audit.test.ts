@@ -30,7 +30,12 @@ describe('Scratchbox IDE 100% Production Readiness Audit', () => {
             const sidebarSrc = fs.readFileSync(sidebarPath, 'utf8');
             expect(sidebarSrc).not.toContain('sb-sidebar-nav-demos');
             expect(sidebarSrc).not.toContain('onOpenDemos');
-            expect(sidebarSrc).not.toContain('Showcase Demos');
+            // fd6008a ("demos on frontpage") deliberately brought back a sidebar "Demos" entry; it must route
+            // to the Settings "Admin & Demos" tab rather than a standalone demo launcher/overlay.
+            const demosButton = /<button[^>]*onClick=\{\(\) => openSettingsToTab\('admin'\)\}[^>]*title="View Showcase Demos"[\s\S]*?<\/button>/.exec(sidebarSrc);
+            expect(demosButton).not.toBeNull();
+            expect(demosButton![0]).toContain('<span className="sb-nav-label">Demos</span>');
+            expect(sidebarSrc.match(/Showcase Demos/g) ?? []).toHaveLength(1);
         });
 
         it('SpotlightLauncherModal must not contain Explore Showcase Demos action item', () => {

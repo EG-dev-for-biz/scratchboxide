@@ -88,8 +88,14 @@ async function runProjectsModalTests() {
         settingsSource.includes('onOpenFolder') && settingsSource.includes('onOpenWorkspace'),
         'SettingsModal must provide native Open Folder and Open Workspace action triggers'
     );
+    // The "Custom Project Rules" row was removed from GeneralTab in 4f4e192 (GeneralTab cleaned to
+    // workspace root + file ops); project rules are managed in the dedicated Workspace Rules tab,
+    // which GeneralTab links to via "Manage Rules →".
     assert.ok(
-        settingsSource.includes('Custom Project Rules') || settingsSource.includes('Active Project Rules'),
+        settingsSource.includes("{ id: 'workspace', label: 'Workspace Rules' }") &&
+        settingsSource.includes('Project Directives (.scratchbox/rules/*.md)') &&
+        settingsSource.includes('workspaceRules.map(rule =>') &&
+        settingsSource.includes("setActiveTab('workspace')"),
         'SettingsModal must provide project rules management'
     );
     console.log('  ✓ Test 4 Passed: Workspace settings cleanly integrated into SettingsModal');

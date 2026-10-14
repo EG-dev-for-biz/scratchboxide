@@ -33,32 +33,38 @@ async function runCursorSettingsPageTests() {
     // -------------------------------------------------------------
     assert.ok(typesSource.includes("'general'"), "StudioSettingsTab must support 'general'");
     assert.ok(typesSource.includes("'models'"), "StudioSettingsTab must support 'models'");
-    assert.ok(typesSource.includes("'agents'"), "StudioSettingsTab must support 'agents'");
+    // 'agents' (and 10 other unwired mock tabs) were deliberately pruned in 4f4e192
+    // ("refactor(settings): prune unwired tabs ..."); the 10 operational tabs remain.
+    const settingsTabUnion = (typesSource.match(/export type StudioSettingsTab =([^;]*);/) || [])[1] || '';
+    for (const tab of ['general', 'appearance', 'models', 'workspace', 'skills', 'mcp', 'memories', 'shortcuts', 'admin', 'about']) {
+        assert.ok(settingsTabUnion.includes(`'${tab}'`), `StudioSettingsTab must support '${tab}'`);
+    }
+    assert.ok(!settingsTabUnion.includes("'agents'"), "StudioSettingsTab must not reintroduce the pruned, unwired 'agents' tab");
     console.log('  ✓ Test 1 Passed: StudioSettingsTab type incorporates Cursor settings tabs');
 
     // -------------------------------------------------------------
     // Test 2: Sidebar Navigation with NO ICONS and pure typography
     // -------------------------------------------------------------
-    assert.ok(settingsSource.includes('General'), 'Sidebar must contain "General" tab');
-    assert.ok(settingsSource.includes('Profile'), 'Sidebar must contain "Profile" tab');
-    assert.ok(settingsSource.includes('Appearance'), 'Sidebar must contain "Appearance" tab');
-    assert.ok(settingsSource.includes('Plan & Usage'), 'Sidebar must contain "Plan & Usage" tab');
-    assert.ok(settingsSource.includes('Agents'), 'Sidebar must contain "Agents" tab');
-    assert.ok(settingsSource.includes('Cloud Agents'), 'Sidebar must contain "Cloud Agents" tab');
-    assert.ok(settingsSource.includes('Git & PRs'), 'Sidebar must contain "Git & PRs" tab');
-    assert.ok(settingsSource.includes('Worktrees'), 'Sidebar must contain "Worktrees" tab');
-    assert.ok(settingsSource.includes('Browser & Network'), 'Sidebar must contain "Browser & Network" tab');
-    assert.ok(settingsSource.includes('Tab'), 'Sidebar must contain "Tab" tab');
-    assert.ok(settingsSource.includes('Code Intelligence'), 'Sidebar must contain "Code Intelligence" tab');
-    assert.ok(settingsSource.includes('Beta'), 'Sidebar must contain "Beta" tab');
-    assert.ok(settingsSource.includes('Docs'), 'Sidebar must contain "Docs" tab');
+    // Sidebar labels after 4f4e192 pruned the unwired Profile / Plan & Usage / Agents / Cloud Agents /
+    // Git & PRs / Worktrees / Browser & Network / Tab / Code Intelligence / Beta / Docs tabs.
+    const sidebarLabels = ['General', 'Appearance', 'Models & AI', 'Workspace Rules', 'Skills', 'MCP Tools', 'Memories', 'Shortcuts', 'Admin & Demos', 'About'];
+    for (const label of sidebarLabels) {
+        assert.ok(settingsSource.includes(`label: '${label}'`), `Sidebar must contain "${label}" tab`);
+    }
+    for (const pruned of ['Profile', 'Plan & Usage', 'Agents', 'Cloud Agents', 'Git & PRs', 'Worktrees', 'Browser & Network', 'Tab', 'Code Intelligence', 'Beta', 'Docs']) {
+        assert.ok(!settingsSource.includes(`label: '${pruned}'`), `Sidebar must not list the pruned, unwired "${pruned}" tab`);
+    }
 
     // Verify sidebar items do NOT render icon tags
     assert.ok(
         settingsSource.includes('sb-cursor-settings-nav-item') || settingsSource.includes('sb-settings-nav-item'),
         'Settings sidebar must use clean nav items'
     );
-    assert.ok(settingsSource.includes('← Back'), 'Settings sidebar must contain "← Back" top button');
+    // 6e66ca1 replaced the literal "← Back" text with an <IconArrowLeft /> + "Back" label.
+    assert.ok(
+        settingsSource.includes('sb-cursor-settings-back-btn') && settingsSource.includes('aria-label="Back"') && settingsSource.includes('<IconArrowLeft') && settingsSource.includes('<span>Back</span>'),
+        'Settings sidebar must contain the arrow-icon "Back" top button'
+    );
     assert.ok(settingsSource.includes('Search Settings'), 'Settings sidebar must contain "Search Settings" search bar');
     console.log('  ✓ Test 2 Passed: Typography-only no-icon sidebar navigation matches Cursor Desktop');
 
@@ -76,19 +82,20 @@ async function runCursorSettingsPageTests() {
     // -------------------------------------------------------------
     // Test 4: General Tab Grouped Settings Cards & Controls
     // -------------------------------------------------------------
-    assert.ok(settingsSource.includes('Scratchbox Account') || settingsSource.includes('Cursor Account'), 'General tab must contain account row');
-    assert.ok(settingsSource.includes('Startup'), 'General tab must contain "Startup" group header');
-    assert.ok(settingsSource.includes('Tips'), 'Startup group must contain "Tips" toggle');
-    assert.ok(settingsSource.includes('Window Restoration'), 'Startup group must contain "Window Restoration" dropdown');
-    assert.ok(settingsSource.includes('Continue Interrupted Agents'), 'Startup group must contain "Continue Interrupted Agents" toggle');
-    assert.ok(settingsSource.includes('Notifications'), 'General tab must contain "Notifications" group header');
-    assert.ok(settingsSource.includes('System Notifications'), 'Notifications group must contain "System Notifications" toggle');
-    assert.ok(settingsSource.includes('Warning Notifications'), 'Notifications group must contain "Warning Notifications" toggle');
-    assert.ok(settingsSource.includes('Menu Bar Icon'), 'Notifications group must contain "Menu Bar Icon" toggle');
-    assert.ok(settingsSource.includes('Completion Sound'), 'Notifications group must contain "Completion Sound" toggle');
-    assert.ok(settingsSource.includes('Privacy Mode'), 'General tab must contain "Privacy Mode" row');
-    assert.ok(settingsSource.includes('Log Out'), 'General tab must contain "Log Out" button');
-    console.log('  ✓ Test 4 Passed: General tab contains Startup, Notifications, and Privacy grouped controls');
+    // 4f4e192 deliberately cleaned GeneralTab "to focus on workspace root and file operations"
+    // (the unwired Account / Startup / Notifications / Privacy / Log Out mock controls were removed).
+    const generalTabSource = fs.readFileSync(path.resolve(__dirname, '../src/browser/generative-canvas/settings/tabs/GeneralTab.tsx'), 'utf-8');
+    assert.ok(generalTabSource.includes('Workspace &amp; Project'), 'General tab must contain "Workspace & Project" group header');
+    assert.ok(generalTabSource.includes('sb-cursor-group-card'), 'General tab must use grouped settings cards');
+    assert.ok(generalTabSource.includes('Active Workspace Root'), 'General tab must show the active workspace root');
+    assert.ok(generalTabSource.includes('onClick={onOpenFolder}'), 'General tab must wire "Open Folder..." to onOpenFolder');
+    assert.ok(generalTabSource.includes('onClick={onOpenWorkspace}'), 'General tab must wire "Open Workspace..." to onOpenWorkspace');
+    assert.ok(generalTabSource.includes('onClick={onCreateFile}'), 'General tab must wire "New File" to onCreateFile');
+    assert.ok(generalTabSource.includes("setActiveTab('workspace')") && generalTabSource.includes('Manage Rules'), 'General tab must link to workspace rules management');
+    for (const pruned of ['Window Restoration', 'Continue Interrupted Agents', 'System Notifications', 'Menu Bar Icon', 'Privacy Mode', 'Log Out']) {
+        assert.ok(!generalTabSource.includes(pruned), `General tab must not reintroduce the unwired "${pruned}" mock control`);
+    }
+    console.log('  ✓ Test 4 Passed: General tab contains wired workspace root and file operation controls');
 
     // -------------------------------------------------------------
     // Test 5: Sidebar Footer with Clean User Profile

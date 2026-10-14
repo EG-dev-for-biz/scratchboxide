@@ -2,6 +2,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import { GeminiService } from '../src/node/gemini-service';
 import { GeminiGenerateRequest, GeminiStreamEvent } from '../src/common/gemini-protocol';
+import { resolveVertexLocation, vertexHost } from '../src/node/gemini/gemini-client';
 
 async function runTests() {
     console.log('🧪 Running Gemini GenAI Managed & Custom Agents Test Suite...');
@@ -59,12 +60,22 @@ async function runTests() {
 
     const result = await service.streamGenerate(request, handleEvent);
 
-    // Assert URL composition
+    // Assert URL composition. 5f3c132 moved Vertex calls from us-central1 to the `global` location
+    // (Gemini 3.x publisher models are only served there; regional endpoints 404). The location is
+    // overridable via SCRATCHBOX_VERTEX_LOCATION, so derive the expected host from the same resolver.
+    const location = resolveVertexLocation();
     assert.strictEqual(
         capturedUrl,
-        'https://us-central1-aiplatform.googleapis.com/v1/projects/mock-project-id/locations/us-central1/publishers/google/agents/antigravity-preview-05-2026:interact?alt=sse',
-        'Request must target the correct regional endpoint URL'
+        `https://${vertexHost(location)}/v1/projects/mock-project-id/locations/${location}/publishers/google/agents/antigravity-preview-05-2026:interact?alt=sse`,
+        'Request must target the correct Vertex endpoint URL'
     );
+    if (!process.env.SCRATCHBOX_VERTEX_LOCATION?.trim()) {
+        assert.strictEqual(
+            capturedUrl,
+            'https://aiplatform.googleapis.com/v1/projects/mock-project-id/locations/global/publishers/google/agents/antigravity-preview-05-2026:interact?alt=sse',
+            'Request must target the global Vertex endpoint by default'
+        );
+    }
 
     // Assert request options and headers
     assert.strictEqual(capturedOptions.method, 'POST', 'HTTP method must be POST');

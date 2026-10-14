@@ -30,12 +30,19 @@ describe("Advanced Live Code Sandbox Features (1 - 4)", () => {
         it("should generate compliant modern C++20 source code according to AGENTS.md directives", () => {
             const cppSource = generateNativeCppGenerator("Alpine Mountain Range");
             expect(cppSource).toContain("#include \"scratchbox_engine.hpp\"");
-            expect(cppSource).toContain("#include \"scratchbox_math.hpp\"");
-            expect(cppSource).toContain("ProceduralTerrainSDF");
-            expect(cppSource).toContain("MarchingCubesVolume");
-            expect(cppSource).toContain("ComputeSmoothNormals");
-            expect(cppSource).toContain("GenerateProceduralColors");
-            expect(cppSource).toContain("GLBOutputStream");
+            // ef946fa ("integrate python 3d scene synthesis pipeline") replaced the marching-cubes SDF
+            // generator (scratchbox_math.hpp, ProceduralTerrainSDF, MarchingCubesVolume, GLBOutputStream)
+            // with a grounded heightfield terrain built on the unified scratchbox_engine.hpp API.
+            expect(cppSource).toContain("-std=c++20");
+            expect(cppSource).toContain("using namespace scratchbox;");
+            expect(cppSource).toContain("ScratchboxMesh terrain(");
+            expect(cppSource).toContain("FastNoise3D noise(");
+            expect(cppSource).toContain("noise.fBm(");
+            expect(cppSource).toContain("terrain.addVertex(");
+            expect(cppSource).toContain("terrain.addTriangle(");
+            expect(cppSource).toContain("terrain.recomputeSmoothNormals()");
+            expect(cppSource).toContain("Vec4 vertexColor(");
+            expect(cppSource).toContain("scratchbox::io::GlbWriter::streamChunk(terrain");
             expect(cppSource).toContain("Alpine Mountain Range");
         });
 

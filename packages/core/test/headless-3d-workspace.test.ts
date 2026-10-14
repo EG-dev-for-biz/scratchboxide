@@ -93,7 +93,12 @@ async function runHeadless3DWorkspaceTests() {
     assert.ok(sceneSource.includes('absolute inset-0 w-full h-full'), 'WebGL viewport frame must fill 100% full-bleed');
 
     // Core 3D engine capabilities preserved
-    assert.ok(sceneSource.includes('FogExp2'), 'Must configure depth/atmospheric fog for smooth horizon transition');
+    // d9be3d7 ("eliminate default atmosphere") / c66702f ("zero default haze/fog") removed the baseline
+    // FogExp2 from the primitive: fog starts null and syncAtmosphere (split out in 3c43c40) installs
+    // the FogExp2 horizon fog only when fog is explicitly requested.
+    const syncAtmosphereSource = fs.readFileSync(path.resolve(__dirname, '../src/browser/generative-canvas/primitives/scene3d/syncAtmosphere.ts'), 'utf-8');
+    assert.ok(sceneSource.includes('scene.fog = null') && sceneSource.includes('syncAtmosphere('), 'Scene3DPrimitive must start fog-free and delegate fog to syncAtmosphere');
+    assert.ok(/if \(explicitFogRequested\) \{[\s\S]*?scene\.fog = new THREE\.FogExp2\(/.test(syncAtmosphereSource), 'Must configure depth/atmospheric FogExp2 fog for smooth horizon transition when fog is requested');
     assert.ok(sceneSource.includes('worldBranch'), 'Must reactively track multiverse world branch');
     assert.ok(sceneSource.includes('renderMode'), 'Must reactively track render mode');
     assert.ok(sceneSource.includes('cameraMode'), 'Must reactively track camera mode');
