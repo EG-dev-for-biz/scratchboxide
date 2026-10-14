@@ -22,6 +22,7 @@ import { analyzePartConnectivity, glbToTriangleSoup } from '../src/node/3d-engin
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
 import { extractGlbAnalysis } from '../src/node/gemini/tools/python-3d-tools';
 import { buildObjectSpecScript, validateObjectBuildSpec, type ObjectBuildSpec } from '../src/common/spatial/object-build-spec';
+import { interpreterSpecProblems, measureBuild, passedEveryCheck } from '../src/node/3d-engine/reference-object-builder';
 import { REPO_ROOT } from './helpers/requirements';
 
 const SCREENSHOT_DIR = path.join(REPO_ROOT, 'test-results/screenshots');
@@ -158,6 +159,57 @@ describe('sb.object_spec interpreter', () => {
 
         const bead = await build('relief_bead', cylinder({ targetPartId: 'column', curves: [[[0.5, 0], [0.5, 1]]], widthMeters: 0.03, depthMeters: 0.01, sharpness: 0.5 }));
         expect(Math.max(...radiiAt(bead.soup, 0.5, 0.004))).toBeCloseTo(0.11, 3);
+    }, 180_000);
+
+    it('reports every problem only the interpreter can see at once, in a form the builder reads back', async () => {
+        const flat = revolve([[0, 0], [0, 0.015]]);
+        const spec: ObjectBuildSpec = {
+            subject: 'two coins', observations: [], boundingMeters: [0.2, 0.05, 0.2], expectedBodies: 2,
+            parts: [
+                { id: 'coin_a', label: 'a', revolve: flat },
+                { id: 'stud', label: 'stud on a', parentId: 'coin_a', attach: { u: 0.5, angleDeg: 0, normalOffsetMeters: 0 }, revolve: revolve([[0, 0], [0, 0.01], [0.01, 0]]) },
+                { id: 'coin_b', label: 'b', revolve: { ...flat, axisOrigin: [0.1, 0, 0] } }
+            ]
+        };
+        expect(validateObjectBuildSpec(spec)).toEqual([]);
+        const res = await NativePythonRunnerService.getInstance().runScript(buildObjectSpecScript(spec), { outputDir: OUT_DIR, timeoutMs: 120_000 });
+        expect(res.success).toBe(false);
+        const problems = interpreterSpecProblems(res.stderr);
+        // Both roots, once each; the stud fails with its parent's problem and is not listed again.
+        expect(problems).toHaveLength(2);
+        expect(problems![0]).toMatch(/^part "coin_a" revolve\.meridian: the outline encloses no area with the axis/);
+        expect(problems![1]).toMatch(/^part "coin_b" revolve\.meridian:/);
+        expect(interpreterSpecProblems('Traceback (most recent call last):\nZeroDivisionError: float division by zero')).toBeUndefined();
+    }, 180_000);
+
+    it('measures that every listed part is built and that each child touches its parent', async () => {
+        const vase: ObjectBuildSpec = {
+            subject: 'vase', observations: [], boundingMeters: [0.36, 0.66, 0.36], expectedBodies: 1,
+            parts: [
+                { id: 'vase', label: 'vase', revolve: revolve([[0, 0], [0, 0.12], [0.2, 0.18], [0.45, 0.1], [0.6, 0.14]], { smoothing: 0.8 }) },
+                { id: 'knob', label: 'knob', parentId: 'vase', attach: { u: 1, angleDeg: 0, normalOffsetMeters: -0.01 }, revolve: revolve([[-0.02, 0], [-0.02, 0.03], [0.04, 0.025], [0.06, 0]]) },
+                { id: 'spout', label: 'spout', parentId: 'vase', attach: { u: 0.5, angleDeg: 90, normalOffsetMeters: -0.01 },
+                    sweep: { controlPoints: [[0, 0, 0], [0.12, 0.08, 0]], closedLoop: false, smoothing: 0, profile: [{ t: 0, widthMeters: 0.03, heightMeters: 0.03, exponent: 2 }] } },
+                { id: 'spouts', label: 'three spouts', replicate: { seedPartId: 'spout', ring: { centerMeters: [0, 0, 0], axisDirection: [0, 1, 0], count: 3, spanDeg: 360, risePerCopyMeters: 0 } } }
+            ]
+        };
+        const joined = await build('checks_joined', vase);
+        const ok = measureBuild(vase, joined.glb);
+        expect(ok.parts.map(p => [p.id, p.built, p.touchesParent])).toEqual([['vase', true, undefined], ['knob', true, true], ['spout', true, true]]);
+        expect(ok.parts.every(p => p.triangles > 0 && Math.max(...p.sizeMeters) > 0.01)).toBe(true);
+        expect(passedEveryCheck(ok)).toBe(true);
+
+        // Lift the knob off the vase and count it as a second piece: the piece count matches, the attachment does not.
+        const lifted: ObjectBuildSpec = { ...vase, expectedBodies: 2, parts: vase.parts.map(p => p.id === 'knob' ? { ...p, attach: { u: 1, angleDeg: 0, normalOffsetMeters: 0.2 } } : p) };
+        const apart = measureBuild(lifted, (await build('checks_lifted', lifted)).glb);
+        expect(apart.connectivity.passed).toBe(true);
+        expect(apart.detachedParts).toEqual([{ id: 'knob', parentId: 'vase' }]);
+        expect(passedEveryCheck(apart)).toBe(false);
+
+        // Spread the replicated spouts off the body: copy 0 still touches, the others float, so the spout is detached.
+        const spread: ObjectBuildSpec = { ...vase, parts: vase.parts.map(p => p.id === 'spouts' ? { ...p, replicate: { seedPartId: 'spout', ring: { centerMeters: [0.6, 0, 0], axisDirection: [0, 1, 0], count: 3, spanDeg: 360, risePerCopyMeters: 0 } } } : p) };
+        const floating = measureBuild(spread, (await build('checks_spread', spread)).glb);
+        expect(floating.detachedParts.map(d => d.id)).toEqual(['spout']);
     }, 180_000);
 
     it('raises on an invalid spec instead of guessing, naming the field', async () => {
