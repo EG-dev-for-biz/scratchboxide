@@ -991,14 +991,6 @@ export {
     type TreeSynthesisBridgeResult
 } from './node/spatial/UniversalBotanicalBridgeService';
 
-// Photogrammetric Terrain Harmonizer Service
-export {
-    PhotogrammetricTerrainHarmonizerService,
-    type BotanicalStandDescriptor,
-    type CadastralMonumentPolygon,
-    type TerrainHarmonizeOptions,
-    type TerrainHarmonizeResult
-} from './node/spatial/PhotogrammetricTerrainHarmonizerService';
 
 // SB-Archi Universal Architectural Bridge Service
 export {
