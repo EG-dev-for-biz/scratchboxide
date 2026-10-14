@@ -143,7 +143,6 @@ export function hasExplicit3DDirective(text: string): boolean {
         /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?3d\s+\w+/i.test(text) ||
         /\b(?:[\w-]+\s+){0,4}in\s+3d\b/i.test(text) ||
         /\b(?:restructur\w*|terrafor\w*|demolish\w*|graft\w*)\s+(?:this\s+)?(?:3d\s+)?(?:tile|mesh|colosseum|landmark|building|acropolis|citadel|fortress|ruins)\b/i.test(text) ||
-        /\b(?:solarpunk\s+citadel|classical\s+acropolis|brutalist\s+fortress|gothic\s+(?:cathedral\s+)?ruins|brand[- ]?new)\b/i.test(text) ||
         /\b(?:google\s+)?3d\s+tiles?\b/i.test(text) ||
         /\b(?:switch\s+to|change\s+to|render\s+in|apply)\s+(?:[\w-]+\s+)?(?:clay|textured|pbr|wireframe|studio\s+gr[ea]y)\b/i.test(text) ||
         /\b(?:warm[- ]?clay|alabaster|onyx|terracotta|studio\s+gr[ea]y|porcelain|concrete)\s*(?:clay)?(?:\s+preset|\s+mode)?\b/i.test(text) ||
@@ -265,7 +264,7 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
         /\b(?:add|remove|delete|isolate|separate|hide|show)\s+(?:mesh|geometry|object|building|facade|tower|bounding\s*box|portal)\b/i.test(text) ||
         /\b(?:de-?light|shadow\s*lift|highlight\s*compress|travertine\s*cavitation)\b/i.test(text) ||
         /\b(?:cinematic\s+arc|canyon\s+push|orbit\s+360)\b/i.test(text) ||
-        /wireframe|wasm physics|camera|ambient light|rotate|orbit|mesh|texture|fog|lighting|clay|preset|restructur|terracotta|alabaster|onyx|porcelain|concrete|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|bounding box|separate|isolate|travertine|de-?light|portal|sun|sunset|sunrise|noon|dusk|golden hour|flight|wasd|fps|turntable|export|glb|usd|cinematic|canyon|tile|ground|skybox|clouds|shadow|stage|staging|plinth|pedestal|cyclorama|cove|beach|monaco|venice|boardwalk|vector/i.test(text)
+        /wireframe|wasm physics|camera|ambient light|rotate|orbit|mesh|texture|fog|lighting|clay|preset|restructur|terracotta|alabaster|onyx|porcelain|concrete|raw tile|original tile|bounding box|separate|isolate|travertine|de-?light|portal|sun|sunset|sunrise|noon|dusk|golden hour|flight|wasd|fps|turntable|export|glb|usd|cinematic|canyon|tile|ground|skybox|clouds|shadow|stage|staging|plinth|pedestal|cyclorama|cove|beach|monaco|venice|boardwalk|vector/i.test(text)
     );
     const is3DRequest = !isVideoTimelineRequest && !isExplicitMedia && (isExplicit3D || ((layoutMode === '3d' || activeArtifact?.type === '3d-scene') && isTileOr3DMutation));
     const isKanbanRequest = !isVideoTimelineRequest && (isExplicitKanban || ((layoutMode === 'kanban' || activeArtifact?.type === 'kanban-board') && /column|card|task|board|move/i.test(text)));
@@ -376,7 +375,7 @@ export function synthesize3DFallback(text: string, lower: string, activeArtifact
     const isNewSceneDirective = /\b(?:build|make|create|generate|render|model|sculpt|construct|synthesize|assemble|fabricate|forge|carve|extrude|shape|new|fresh|start|reconstruct)\b/i.test(text) && !/\b(?:brand-new|brand\s+new)\b/i.test(text);
     // A modification verb on an existing scene ("change to…", "run…", "set…") edits it rather than starting over.
     const hasModificationVerb = /^\s*(?:please\s+)?(?:change|switch|apply|set|turn|adjust|run|play|toggle|use|make\s+it)\b/i.test(text);
-    const isMutationDirective = !isNewSceneDirective && (hasModificationVerb || !/\b(?:ziggurat|etemenanki|babylon|mesopotamia|matterhorn|alpine|overpass)\b/i.test(text) && /restructur|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route|stage|staging|place|ground|anchor|situate|relocate|plinth|pedestal|cyclorama|cove|beach|monaco|venice|boardwalk|vector/i.test(text));
+    const isMutationDirective = !isNewSceneDirective && (hasModificationVerb || !/\b(?:ziggurat|etemenanki|babylon|mesopotamia|matterhorn|alpine|overpass)\b/i.test(text) && /restructur|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route|stage|staging|place|ground|anchor|situate|relocate|plinth|pedestal|cyclorama|cove|beach|monaco|venice|boardwalk|vector/i.test(text));
     const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(text);
     const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization|citadel|ziggurat|colosseum|matterhorn|planet|asteroid|geyser)\b/i.test(text);
     const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow|mycelium)\b/i.test(text);
@@ -437,185 +436,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
         objects: [...(current3D.objects || [])]
     };
 
-    // 1. Google 3D Tile Restructuring Presets & Raw/Restructured View Toggle (tile_restructuring_demo.html)
-    if (/\b(?:restructur\w*|terrafor\w*|demolish\w*|graft\w*)\b/i.test(text) || /\b(?:brand[- ]?new|solarpunk|acropolis|brutalist|gothic)\b/i.test(text) || /\b(?:show|view|switch\s+to|switch\s+back\s+to)\s+(?:original\s+)?(?:unedited\s+)?raw(?:\s+tile)?\b/i.test(text) || /\b(?:show|view|switch\s+to)\s+restructured(?:\s+tile)?\b/i.test(text)) {
-        if (/\b(?:show|view|switch\s+to|switch\s+back\s+to)\s+(?:original\s+)?(?:unedited\s+)?raw(?:\s+tile)?\b|\bshow\s+original(?:\s+tile)?\b|\bview\s+original\b/i.test(text)) {
-            // Raw Tile View
-            updated3D.objects = [{
-                id: 'tile-mesh-raw',
-                content: {
-                    type: '3d-scene',
-                    durableUri: '/models/colosseum_clay.glb',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { style: 'raw', vertexCount: 234679, triangleCount: 170802 }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }];
-            updated3D.title = 'Colosseum, Rome — Original Raw Photogrammetric 3D Tile';
-            updated3D.subtitle = 'Unedited Google Maps 3D Tile | Photogrammetric Massing | 234,679 Verts';
-            updated3D.renderMode = 'shaded';
-            updated3D.clayPreset = 'studio-grey';
-            updated3D.restructuringTelemetry = {
-                vertices: 234679,
-                triangles: 170802,
-                latency: '47ms C++20',
-                style: 'raw_unedited',
-                terraformOps: 0,
-                primitivesGrafted: 0,
-                outputGlbPath: '/models/colosseum_clay.glb'
-            };
-            explanation = `Switched viewport to **Original Raw Photogrammetric 3D Tile** (234,679 vertices, 170,802 triangles). Displaying unmodified studio grey clay massing.`;
-        } else if (/solarpunk/i.test(text)) {
-            // Solarpunk Citadel
-            updated3D.objects = [{
-                id: 'tile-restructured-solarpunk',
-                content: {
-                    type: '3d-scene',
-                    durableUri: '/models/colosseum_restructured_brand_new.glb',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { style: 'solarpunk', vertexCount: 382400, triangleCount: 235110 }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }];
-            updated3D.title = 'Colosseum — Solarpunk Terraced Citadel';
-            updated3D.subtitle = 'Astro C++20 Terraforming | 4 Stepped Tiers, 4 Solar Obelisks & Bio-Dome | 382,400 Verts';
-            updated3D.renderMode = 'shaded';
-            updated3D.clayPreset = 'warm-clay';
-            updated3D.restructuringTelemetry = {
-                vertices: 382400,
-                triangles: 235110,
-                latency: '68ms C++20',
-                style: 'solarpunk_citadel',
-                terraformOps: 18,
-                primitivesGrafted: 92,
-                outputGlbPath: '/models/colosseum_restructured_brand_new.glb'
-            };
-            updated3D.customMeshes = [
-                { id: 'tier-1', name: 'Stepped Terrace 1', type: 'box', geometry: { type: 'box', params: [90, 4, 90] }, material: { color: 0x8fa876, roughness: 0.85 } },
-                { id: 'tier-2', name: 'Stepped Terrace 2', type: 'box', geometry: { type: 'box', params: [70, 4, 70] }, material: { color: 0x7a9462, roughness: 0.85 } },
-                { id: 'obelisk-1', name: 'Solar Obelisk NW', type: 'cylinder', geometry: { type: 'cylinder', params: [1.2, 2.0, 18, 8] }, material: { color: 0xe8b898, roughness: 0.3 } },
-                { id: 'obelisk-2', name: 'Solar Obelisk NE', type: 'cylinder', geometry: { type: 'cylinder', params: [1.2, 2.0, 18, 8] }, material: { color: 0xe8b898, roughness: 0.3 } },
-                { id: 'biodome', name: 'Central Biosphere Dome', type: 'sphere', geometry: { type: 'sphere', params: [16, 32, 16] }, material: { color: 0x90caf9, roughness: 0.1, metalness: 0.2 } }
-            ];
-            explanation = `Restructured 3D tile into **Ancient Solarpunk Citadel** via Astro C++20 engine: hillside terraced into 4 stepped tiers, sun plaza leveled, 4 perimeter solar obelisks grafted, and central geodesic bio-dome erected (382,400 vertices in 68ms).`;
-        } else if (/acropolis|circular\s+colonnade|temple\s+tier/i.test(text)) {
-            // Classical Acropolis
-            updated3D.objects = [{
-                id: 'tile-restructured-acropolis',
-                content: {
-                    type: '3d-scene',
-                    durableUri: '/models/colosseum_restructured_brand_new.glb',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { style: 'classical_acropolis', vertexCount: 361200, triangleCount: 219800 }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }];
-            updated3D.title = 'Imperial Classical Acropolis';
-            updated3D.subtitle = 'Astro C++20 Terraforming | Grand Marble Plinth & 8-Column Circular Colonnade | 361,200 Verts';
-            updated3D.renderMode = 'shaded';
-            updated3D.clayPreset = 'alabaster';
-            updated3D.restructuringTelemetry = {
-                vertices: 361200,
-                triangles: 219800,
-                latency: '59ms C++20',
-                style: 'classical_acropolis',
-                terraformOps: 16,
-                primitivesGrafted: 76,
-                outputGlbPath: '/models/colosseum_restructured_brand_new.glb'
-            };
-            explanation = `Restructured 3D tile into **Imperial Classical Acropolis**: excavated monumental stepped terraces, leveled grand marble plinth, and grafted 8-column circular peripteral colonnade with stepped temple tiers (361,200 vertices in 59ms).`;
-        } else if (/brutalist|moat\s+trench|monolithic\s+pylon/i.test(text)) {
-            // Brutalist Fortress
-            updated3D.objects = [{
-                id: 'tile-restructured-brutalist',
-                content: {
-                    type: '3d-scene',
-                    durableUri: '/models/colosseum_restructured_brand_new.glb',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { style: 'brutalist_fortress', vertexCount: 329100, triangleCount: 198450 }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }];
-            updated3D.title = 'Brutalist Monolithic Fortress Massing';
-            updated3D.subtitle = 'Astro C++20 Terraforming | Perimeter Moat Trench & Monolithic Pylons | 329,100 Verts';
-            updated3D.renderMode = 'shaded';
-            updated3D.clayPreset = 'concrete';
-            updated3D.restructuringTelemetry = {
-                vertices: 329100,
-                triangles: 198450,
-                latency: '55ms C++20',
-                style: 'brutalist_fortress',
-                terraformOps: 12,
-                primitivesGrafted: 64,
-                outputGlbPath: '/models/colosseum_restructured_brand_new.glb'
-            };
-            explanation = `Restructured 3D tile into **Brutalist Monolithic Fortress Massing**: excavated perimeter moat trench, carved sunken central courtyard, and grafted heavy monolithic concrete pylons (329,100 vertices in 55ms).`;
-        } else if (/gothic|needle\s+spire|pointed\s+arch/i.test(text)) {
-            // Gothic Cathedral Ruins
-            updated3D.objects = [{
-                id: 'tile-restructured-gothic',
-                content: {
-                    type: '3d-scene',
-                    durableUri: '/models/colosseum_restructured_brand_new.glb',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { style: 'gothic_ruins', vertexCount: 354800, triangleCount: 214600 }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }];
-            updated3D.title = 'Gothic Cathedral Ruins';
-            updated3D.subtitle = 'Astro C++20 Terraforming | Sunken Basin, 4 Needle Spires & Pointed Portals | 354,800 Verts';
-            updated3D.renderMode = 'shaded';
-            updated3D.clayPreset = 'onyx';
-            updated3D.restructuringTelemetry = {
-                vertices: 354800,
-                triangles: 214600,
-                latency: '64ms C++20',
-                style: 'gothic_cathedral_ruins',
-                terraformOps: 15,
-                primitivesGrafted: 84,
-                outputGlbPath: '/models/colosseum_restructured_brand_new.glb'
-            };
-            explanation = `Restructured 3D tile into **Gothic Cathedral Ruins**: excavated deep sunken nave basin, placed 4 soaring needle spires at perimeter corners, and constructed pointed archway portals (354,800 vertices in 64ms).`;
-        } else {
-            // Default: Brand-New Restored Colosseum (tile_restructuring_demo.html Brand-New preset)
-            updated3D.objects = [{
-                id: 'tile-restructured-brand-new',
-                content: {
-                    type: '3d-scene',
-                    durableUri: '/models/colosseum_restructured_brand_new.glb',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { style: 'brand_new', vertexCount: 347680, triangleCount: 210219 }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }];
-            updated3D.title = 'Colosseum, Rome — Restored Brand-New Architecture';
-            updated3D.subtitle = 'Astro C++20 Terraforming | Full Four-Tier Colonnade Rebuilt | 347,680 Verts';
-            updated3D.renderMode = 'shaded';
-            updated3D.clayPreset = 'warm-clay';
-            updated3D.restructuringTelemetry = {
-                vertices: 347680,
-                triangles: 210219,
-                latency: '62ms C++20',
-                style: 'brand_new_restored',
-                terraformOps: 14,
-                primitivesGrafted: 80,
-                outputGlbPath: '/models/colosseum_restructured_brand_new.glb'
-            };
-            explanation = `Restructured 3D tile as **Brand-New Colosseum**: reconstructed collapsed outer southern facade, completed full 4-tier travertine arcades (80 Doric, Ionic, and Corinthian arches), restored intact arena podium, and generated unified manifold mesh (347,680 vertices, 210,219 triangles in 62ms).`;
-        }
-    } else if (/\b(?:3dgs|survey\s*stations?|survey\s*synthesis|radiance\s*field|splat\s*generation)\b/i.test(text)) {
+    if (/\b(?:3dgs|survey\s*stations?|survey\s*synthesis|radiance\s*field|splat\s*generation)\b/i.test(text)) {
         updated3D.renderMode = 'pbr';
         updated3D.sceneType = 'gaussian_splat';
         updated3D.splatUrl = '/models/world_360_san_marco.splat';
@@ -823,7 +644,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
             lastExecutionDurationMs: 199
         };
         explanation = `Executed **C++20 Astro 3D Engine Procedural Synthesis**: compiled \`world_generator.cpp\` via Clang -O3, generated procedural FastNoise3D terrain pedestal, settled 7-bone humanoid ragdoll, simulated XPBD orthotropic fabric drape, scattered 72 crystal spires, baked ray-traced ambient occlusion (RTAO) into COLOR_0, and streamed binary glTF 2.0 (19,104 vertices, 22,154 triangles).`;
-    } else if (/\b(?:clay|warm[- ]?clay|alabaster|onyx|studio[- ]?gr[ea]y|terracotta|porcelain|concrete)\b/i.test(text) && !/solarpunk|acropolis|brutalist|gothic/i.test(text)) {
+    } else if (/\b(?:clay|warm[- ]?clay|alabaster|onyx|studio[- ]?gr[ea]y|terracotta|porcelain|concrete)\b/i.test(text)) {
         let presetId: ClayPresetId = 'warm-clay';
         if (/alabaster|plaster|white\s+clay/i.test(text)) presetId = 'alabaster';
         else if (/onyx|basalt|black\s+clay|graphite/i.test(text)) presetId = 'onyx';
