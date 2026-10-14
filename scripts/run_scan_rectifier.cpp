@@ -58,6 +58,8 @@ static void usage() {
         "  seams:        --tjunction-tol M (0.03)  --no-tjunction  --seam-contact-tol M (0.05)  --seam-stiffness K (1000)  --seam-free-weight W (1)\n"
         "                --seam-stitch-tol M (0.015): after the guards, chunk borders that lay on another piece's face are put back on it\n"
         "                --seam-stitch-samples N (5 per boundary edge)  --no-seam-stitch\n"
+        "                --footprints FILE (building footprints, one ring per line: x z x z ...; unsnapped vertices\n"
+        "                outside them are ground and the stitch never moves them)  --footprint-ground-margin F (0.5)\n"
         "                --seam-face-tol M (0 = off: tie chunk borders to other pieces' faces inside the seam solve instead)\n"
         "                --seam-face-max-deg D (90: faces whose normal is within D of the border edge's face)  --seam-face-samples N (5 per edge)\n"
         "                --seam-full-contacts (tie all three axes instead of only the directions that open a gap)\n"
@@ -161,6 +163,24 @@ int main(int argc, char** argv) {
         else if (a == "--seam-stitch-tol") p.seamStitchTolerance = num("--seam-stitch-tol");
         else if (a == "--seam-stitch-samples") p.seamStitchSamples = static_cast<int>(num("--seam-stitch-samples"));
         else if (a == "--no-seam-stitch") p.seamStitchTolerance = 0;
+        else if (a == "--footprints") {
+            // One closed building footprint per line: x z x z ... in the mesh frame (e.g. Google Vector Tiles)
+            const std::string file = next("--footprints");
+            std::ifstream f(file);
+            if (!f) { std::cerr << "cannot read footprints file " << file << "\n"; return 2; }
+            std::string line;
+            while (std::getline(f, line)) {
+                std::vector<double> v;
+                const char* c = line.c_str();
+                char* end = nullptr;
+                for (double d = std::strtod(c, &end); end != c; d = std::strtod(c, &end)) { v.push_back(d); c = end; }
+                if (v.size() < 6 || v.size() % 2) continue;
+                std::vector<std::pair<double, double>> ring;
+                for (size_t k = 0; k + 1 < v.size(); k += 2) ring.emplace_back(v[k], v[k + 1]);
+                p.buildingFootprintsXZ.push_back(std::move(ring));
+            }
+        }
+        else if (a == "--footprint-ground-margin") p.footprintGroundMargin = num("--footprint-ground-margin");
         else if (a == "--seam-stitch-snapped-weight") p.seamStitchSnappedWeight = num("--seam-stitch-snapped-weight");
         else if (a == "--seam-full-contacts") p.seamProjectedContacts = false;
         else if (a == "--seam-symmetric-faces") p.seamFollowFaces = false;

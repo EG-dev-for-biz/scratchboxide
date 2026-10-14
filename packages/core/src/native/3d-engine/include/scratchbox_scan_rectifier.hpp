@@ -317,6 +317,11 @@ struct ScanRectifierParams {
     double seamStitchMaxFoldDeg{15.0};  // a stitch never makes a fold through a moved vertex sharper than this and than before
     int seamStitchMaxIterations{4000};  // PCG iteration cap per stitch component solve
     bool seamStitchTies{true};          // the stitch keeps the chunk-seam T-junction contacts in its system (stiff: slow)
+    // Building footprints (e.g. from Google Vector Tiles) as closed x/z rings in the mesh frame. When given, a vertex
+    // the solve left unsnapped that lies outside every footprint (or within footprintGroundMargin of one) is ground:
+    // the stitch holds it, so a T-junction tie to a flattened wall base cannot drag the street sideways.
+    std::vector<std::vector<std::pair<double, double>>> buildingFootprintsXZ;
+    double footprintGroundMargin{0.5};
 
     // --- D9 guards
     double guardMinNormalDot{0.2};
@@ -437,7 +442,7 @@ struct ScanRectifierStats {
     size_t boundaryGroups{0}, seamContacts{0}, seamFaceContacts{0}, seamFollowers{0}, tJunctionsClosed{0}, seamComponents{0}, seamLargestComponent{0};
     int seamSolves{0}, seamPasses{1};
     size_t seamSolverIterationsUsed{0}, seamSolverIterationsMax{0};
-    size_t stitchSamples{0}, stitchedGroups{0}, stitchHeld{0};
+    size_t stitchSamples{0}, stitchedGroups{0}, stitchHeld{0}, stitchGroundHeld{0};
     double seamMaxResidual{0};
     std::array<size_t, 6> gapHistogramBefore{}, gapHistogramAfter{};
     // D10
@@ -1359,7 +1364,7 @@ public:
           << "," << s.residualReasons[4] << "," << s.residualReasons[5] << "," << s.residualReasons[6] << "," << s.residualReasons[7] << "]"
           << ", \"restoredGroups\": " << s.guardRestored << ", \"restoredSeamGroups\": " << s.guardSeamRestored << ", \"collapseCandidates\": " << s.collapseCandidates << ", \"collapseKeptAsSlivers\": " << s.collapseKeptAsSlivers << "},\n";
         o << "  \"seams\": {\"boundaryGroups\": " << s.boundaryGroups << ", \"contacts\": " << s.seamContacts
-          << ", \"faceContacts\": " << s.seamFaceContacts << ", \"followers\": " << s.seamFollowers << ", \"stitchSamples\": " << s.stitchSamples << ", \"stitchedGroups\": " << s.stitchedGroups << ", \"stitchHeld\": " << s.stitchHeld << ", \"closedAtInput\": " << s.tJunctionsClosed << ", \"components\": " << s.seamComponents
+          << ", \"faceContacts\": " << s.seamFaceContacts << ", \"followers\": " << s.seamFollowers << ", \"stitchSamples\": " << s.stitchSamples << ", \"stitchedGroups\": " << s.stitchedGroups << ", \"stitchHeld\": " << s.stitchHeld << ", \"stitchGroundHeld\": " << s.stitchGroundHeld << ", \"closedAtInput\": " << s.tJunctionsClosed << ", \"components\": " << s.seamComponents
           << ", \"largestComponent\": " << s.seamLargestComponent << ", \"solves\": " << s.seamSolves << ", \"passes\": " << s.seamPasses
           << ", \"maxConstraintResidual_m\": " << s.seamMaxResidual
           << ", \"gapHistogramEdges_m\": [0,0.001,0.005,0.01,0.03,0.1], \"gapHistogramBefore\": ";
@@ -5231,6 +5236,26 @@ private:
          * face, protected crease or opposed pair around it, collapses a face or leaves the displacement budget is put
          * back and held, and the rest is solved again.
          */
+        /** True when p (x/z) is not well inside any building footprint: outside all, or within the margin of an edge. */
+        bool outsideFootprints(const V3& p) const {
+            for (const auto& ring : P.buildingFootprintsXZ) {
+                const size_t m = ring.size();
+                if (m < 3) continue;
+                bool inside = false;
+                double edgeDist = 1e300;
+                for (size_t i = 0, j = m - 1; i < m; j = i++) {
+                    const auto [xi, zi] = ring[i];
+                    const auto [xj, zj] = ring[j];
+                    if ((zi > p.z) != (zj > p.z) && p.x < (xj - xi) * (p.z - zi) / (zj - zi) + xi) inside = !inside;
+                    const double dx = xi - xj, dz = zi - zj, len2 = dx * dx + dz * dz;
+                    const double t = len2 > 0 ? std::clamp(((p.x - xj) * dx + (p.z - zj) * dz) / len2, 0.0, 1.0) : 0.0;
+                    edgeDist = std::min(edgeDist, std::hypot(p.x - (xj + t * dx), p.z - (zj + t * dz)));
+                }
+                if (inside && edgeDist > P.footprintGroundMargin) return false;
+            }
+            return true;
+        }
+
         void stitchPass() {
             if (!(P.seamStitchTolerance > 0) || P.seamStitchSamples <= 0) return;
             if (incCreaseStart.size() != G + 1) buildLocalIncidence();
@@ -5399,6 +5424,12 @@ private:
                 prior[v] = delta[vars[v]].norm() > 0 ? P.seamStitchSnappedWeight : P.seamStitchEpsilon;
             }
             std::vector<uint8_t> held(n, 0);
+            if (!P.buildingFootprintsXZ.empty()) {
+                for (size_t v = 0; v < n; ++v) {
+                    if (delta[vars[v]].norm() > 0) continue;  // snapped by the solve: not ground, may be stitched
+                    if (outsideFootprints(groupPos[vars[v]])) { held[v] = 4; ++S.stitchGroundHeld; }
+                }
+            }
             // the folds through each variable (pairs of its kept faces sharing an edge) and their angle before the stitch:
             // a stitch may not turn a smooth fold into a new crease (sharper than stitchMaxFoldDeg and sharper than before)
             auto foldDeg = [&](uint32_t t1, uint32_t t2) {

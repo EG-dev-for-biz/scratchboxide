@@ -350,7 +350,10 @@ describe('scan rectifier: synthetic crinkled building with an enclosed shell', (
             for (let i = 0; i < ch.indices.length / 3; i++) triLabel.push(ch.label);
             for (let i = 0; i < ch.positions.length / 3; i++) vertLabel.push(ch.label);
         }
-        const log = runCli(['--input', glb(), '--out', side(), '--rays', '64', '--rig-cams', '12', '--rig-aerial-res', '160', '--rig-street-width', '256', '--threads', '4']);
+        // Building outline (what the vector-tile footprints supply in production): main block plus frontispiece.
+        const footprints = path.join(tmp, 'synthetic.footprints.txt');
+        fs.writeFileSync(footprints, '-10 -15 10 -15 10 -3 10.45 -3 10.45 3 10 3 10 15 -10 15\n');
+        const log = runCli(['--input', glb(), '--out', side(), '--rays', '64', '--rig-cams', '12', '--rig-aerial-res', '160', '--rig-street-width', '256', '--threads', '4', '--footprints', footprints]);
         expect(log).toContain('run_scan_rectifier');
         scan = readGlbScan(glb());
         out = readSidecar(side());
@@ -365,6 +368,8 @@ describe('scan rectifier: synthetic crinkled building with an enclosed shell', (
         expect(stats.format).toBe('SBRX');
         expect(stats.input_counts.triangles).toBe(scan.triangles.length / 3);
         expect(stats.regions.wallRegions).toBeGreaterThanOrEqual(5);
+        // the footprints mark the ground plane: the stitch holds those vertices instead of sliding them with the walls
+        expect(stats.seams.stitchGroundHeld).toBeGreaterThan(0);
         // the grid of this scene is the x/z axes: a family at 0 (= 90) degrees, derived from the scan
         const fam = stats.families.map((f: { azimuthDeg_atan2_nz_nx_mod90: number }) => f.azimuthDeg_atan2_nz_nx_mod90);
         expect(fam.some((a: number) => Math.min(a, 90 - a) < 0.5)).toBe(true);
@@ -414,8 +419,8 @@ describe('scan rectifier: synthetic crinkled building with an enclosed shell', (
 
     it('is deterministic across thread counts', () => {
         const a = path.join(tmp, 'det1.bin'), b = path.join(tmp, 'det7.bin');
-        runCli(['--input', glb(), '--out', a, '--rays', '64', '--rig-cams', '12', '--rig-aerial-res', '160', '--rig-street-width', '256', '--threads', '1']);
-        runCli(['--input', glb(), '--out', b, '--rays', '64', '--rig-cams', '12', '--rig-aerial-res', '160', '--rig-street-width', '256', '--threads', '7']);
+        runCli(['--input', glb(), '--out', a, '--rays', '64', '--rig-cams', '12', '--rig-aerial-res', '160', '--rig-street-width', '256', '--threads', '1', '--footprints', path.join(tmp, 'synthetic.footprints.txt')]);
+        runCli(['--input', glb(), '--out', b, '--rays', '64', '--rig-cams', '12', '--rig-aerial-res', '160', '--rig-street-width', '256', '--threads', '7', '--footprints', path.join(tmp, 'synthetic.footprints.txt')]);
         expect(fs.readFileSync(a).equals(fs.readFileSync(b))).toBe(true);
         expect(fs.readFileSync(a).equals(fs.readFileSync(side()))).toBe(true);
     }, 180_000);
