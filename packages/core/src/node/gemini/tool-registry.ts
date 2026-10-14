@@ -153,6 +153,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('archie_')) return `Archie Architecture: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('sb_terrain_')) return `SB-Terrain Engine: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             if (name === 'execute_3d_python_script') return 'Python 3D Engine: Execute Procedural Script';
+            if (name === 'build_3d_object_from_reference') return '3D Object: Build from Internal Reference';
             return `Workspace Action: ${name}`;
         },
         cardTitle: (name, _status) => {
@@ -160,6 +161,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'ask_user_question') return 'User: Clarify Choice';
             if (name === 'present_execution_plan') return 'Plan: Review & Confirm';
             if (name === 'execute_3d_python_script') return 'Python 3D: Execute Script';
+            if (name === 'build_3d_object_from_reference') return '3D Object: Build';
             if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR';
             if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -180,6 +182,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'ask_user_question') return 'Ask user clarifying question with structured choices';
             if (name === 'present_execution_plan') return 'Present execution plan card for confirmation';
             if (name === 'execute_3d_python_script') return 'Execute procedural 3D Python script with Scratchbox C++20 engine';
+            if (name === 'build_3d_object_from_reference') return 'Draw an internal reference, read it into a build spec and build the object natively in clay';
             if (name.startsWith('location_')) return `Synthesize real-world location 3D Gaussian Splats: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return 'Recolor 3D tile GLB with material segmentation and PBR normal/roughness synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
