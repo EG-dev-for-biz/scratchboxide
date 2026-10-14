@@ -1,11 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseOrSynthesizeArtifact, generateNativeCppGenerator } from '../src/node/gemini/artifact-synthesis';
+import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
 import { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('Python 3D Scene Architecture & Grounded Zero-Defaults Verification', () => {
-    it('1. Synthesizes 3d-scene artifact directly from python scratchbox code block without falling back to live-code-sandbox', () => {
-        const pythonCode = `\`\`\`python
-import scratchbox as sb
+    it('1. Builds the 3d-scene the model sent with its scratchbox script, and mounts no scene from a bare code block', () => {
+        const pythonCode = `import scratchbox as sb
 
 # Create a grounded showcase pedestal
 pedestal = sb.geometry.create_studio_pedestal(radius=3.5, height=0.3, bevel_radius=0.04)
@@ -19,9 +18,15 @@ scene = sb.geometry.Mesh()
 scene.append(pedestal)
 scene.append(cube)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-\`\`\``;
+`;
 
-        const modelResponse = `Here is the procedural 3D scene designed using the Blender mental model:\n\n${pythonCode}\n\nThe scene is now rendered with a grounded pedestal.`;
+        // A script shown in prose is not an artifact the model declared.
+        const prose = `Here is the procedural 3D scene:\n\n\`\`\`python\n${pythonCode}\`\`\`\n\nThe scene is now rendered with a grounded pedestal.`;
+        expect(parseOrSynthesizeArtifact('Create a procedural 3D sculpture on a pedestal', prose, { prompt: 'Create a procedural 3D sculpture on a pedestal' } as any, [])).toBeUndefined();
+
+        const modelResponse = 'Here is the procedural 3D scene:\n```json\n'
+            + JSON.stringify({ type: '3d-scene', title: 'Pedestal sculpture', data: { pythonGenerator: { sourceCode: pythonCode } } })
+            + '\n```';
 
         const artifact = parseOrSynthesizeArtifact(
             'Create a procedural 3D sculpture on a pedestal',
@@ -40,21 +45,6 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
         expect(sceneData.pythonGenerator?.glbBase64).toBeDefined();
         expect(typeof sceneData.pythonGenerator?.glbBase64).toBe('string');
         expect(sceneData.pythonGenerator?.glbBase64?.length).toBeGreaterThan(50);
-    });
-
-    it('2. Neutralizes floating wavy cloth by emitting a grounded studio pedestal when terrain is not explicitly requested', () => {
-        const cppCode = generateNativeCppGenerator('Cyberpunk Outpost Laboratory');
-        expect(cppCode).toContain('generateStudioPedestal');
-        expect(cppCode).not.toContain('ProceduralTerrainSDF');
-        expect(cppCode).not.toContain('sphereBound * 0.15f');
-    });
-
-    it('3. Generates grounded geological terrain with edge damping to ground plane (y=0) when terrain is explicitly requested', () => {
-        const cppCode = generateNativeCppGenerator('Rocky Canyon Mountain Landscape');
-        expect(cppCode).toContain('Grounded Geological Terrain');
-        expect(cppCode).toContain('edgeFade');
-        expect(cppCode).not.toContain('ProceduralTerrainSDF');
-        expect(cppCode).not.toContain('sphereBound * 0.15f');
     });
 
     it('4. Executes the 5-Stage Spatial Architect pipeline with relative sockets, non-linear deformers, and catenary splines', async () => {

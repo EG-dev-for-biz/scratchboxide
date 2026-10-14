@@ -40,18 +40,18 @@ import {
 import type { McpBridge } from './mcp-bridge';
 import type { LensBridge } from './lens-bridge';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './prompt-builder';
-import { parseOrSynthesizeArtifact, type ArtifactSynthesisOptions } from './artifact-synthesis';
+import { parseOrSynthesizeArtifact } from './artifact-synthesis';
 import { AgentVerificationService } from './agent-verification-service';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
 
+/** The artifact the model wrote in its reply (tag or JSON envelope), or undefined; never built from the prompt. */
 export type ArtifactSynthesizer = (
     prompt: string,
     modelText: string,
     request: GeminiGenerateRequest,
     mcpExecutions: McpExecutionState[],
-    groundingMetadata?: GroundingMetadata,
-    options?: ArtifactSynthesisOptions
+    groundingMetadata?: GroundingMetadata
 ) => CanvasArtifact | undefined;
 
 export interface StreamingEngineOptions {
@@ -175,14 +175,6 @@ function runningExecution(id: string, toolName: string, args: Record<string, unk
         summaryResult: progress,
         args: args as Record<string, any> | undefined
     };
-}
-
-/**
- * Agent, plan and ask turns put things on the canvas through tools (mount_canvas_primitive). Any artifact taken
- * from their reply text must be one the model wrote, never one synthesized from the prompt's keywords.
- */
-export function isCodingMode(request: Pick<GeminiGenerateRequest, 'mode'>): boolean {
-    return request.mode === 'agent' || request.mode === 'plan' || request.mode === 'ask';
 }
 
 /** User-facing explanation for a model turn that ended with no text, tool result or artifact. */
@@ -382,7 +374,7 @@ export class StreamingEngine {
             }
         });
 
-        const artifact = this.synthesizeArtifact(request.prompt, state.accumulatedText, request, [], undefined, { modelAuthoredOnly: isCodingMode(request) });
+        const artifact = this.synthesizeArtifact(request.prompt, state.accumulatedText, request, []);
 
         const summary = {
             text: state.accumulatedText,
@@ -782,18 +774,11 @@ export class StreamingEngine {
             return { success: false, error, text: '', thoughts: accumulatedThoughts, mcpExecutions, modelUsed: model, usage: finalUsage };
         }
 
-        const codingMode = isCodingMode(request);
-        const hasJsonBlock = /```json\s*\{[\s\S]*\}\s*```/.test(accumulatedText);
-        const hasArtifactTag = /<scratchboxPrimitive[\s\S]*?>/i.test(accumulatedText);
-
-        // Agent modes create canvas artifacts through mount_canvas_primitive. If the model answered in prose
-        // only, synthesizing from prompt keywords (e.g. "World Cup" -> "world") invents a document it never wrote,
-        // and with a scene open it merged a template's geometry into that scene. So in these modes only a tag or
-        // JSON block the model wrote becomes an artifact; a prose reply leaves the canvas as it is.
-        const shouldSynthesize = !codingMode || hasJsonBlock || hasArtifactTag || !!request.activeArtifact;
-        const artifact = streamMountedArtifact || (shouldSynthesize
-            ? this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata, { modelAuthoredOnly: codingMode })
-            : undefined);
+        // Canvas artifacts come from mount_canvas_primitive or from a tag / JSON envelope the model wrote, in every
+        // mode. Synthesizing from prompt keywords (e.g. "World Cup" -> "world") invented documents and scenes the model
+        // never wrote, so a prose reply leaves the canvas as it is.
+        const artifact = streamMountedArtifact
+            || this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata);
 
         const summary = {
             text: accumulatedText,

@@ -15,12 +15,6 @@ import {
     morphDocToNodeGraph,
     morphDocToSandbox
 } from "../src/browser/generative-canvas/primitive-transformer-engine";
-import {
-    generateAdaptiveSandboxCode,
-    synthesizeKanbanFallback,
-    synthesizeGraphFallback,
-    synthesizeMetricsFallback
-} from "../src/browser/generative-canvas/hooks/sendMessageFallbacks";
 import { synthesizeContextual3DScene } from "../src/browser/generative-canvas/procedural-3d-synthesizer";
 import { synthesizeContextualVideoTimeline } from "../src/browser/generative-canvas/services/video/videoTimelineSynthesizer";
 import { classifySceneContent } from "../src/browser/generative-canvas/primitives/scene3d/syncSceneContent";
@@ -311,44 +305,6 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
             const sandbox = morphDocToSandbox(doc);
             expect(sandbox.files.length).toBeGreaterThanOrEqual(1);
             expect(sandbox.files[0].content).toContain("Quantum Key");
-        });
-    });
-
-    describe("Subsystem 4 & 5: sendMessageFallbacks Dynamic Titles & Synthesis", () => {
-        it("generates prompt-adaptive React code in generateAdaptiveSandboxCode", () => {
-            const code = generateAdaptiveSandboxCode("Keplerian planetary orbital mechanics", "Orbital Engine");
-            expect(code).toContain("Orbital Engine");
-            expect(code).toContain("useState");
-        });
-
-        it("synthesizes prompt-derived dynamic title in synthesizeKanbanFallback", () => {
-            const result = synthesizeKanbanFallback("Sourdough fermentation schedule", "sourdough fermentation schedule", undefined);
-            const board = result.artifact.data as any;
-            expect(board.title).toContain("Sourdough");
-            expect(board.title).not.toContain("GENERAL");
-            expect(board.columns.length).toBeGreaterThanOrEqual(3);
-        });
-
-        it("synthesizes prompt-derived dynamic title in synthesizeGraphFallback", () => {
-            const result = synthesizeGraphFallback("Ancient Greek inscription epigraphy", "ancient greek inscription epigraphy", undefined);
-            const graph = result.artifact.data as any;
-            expect(graph.title).toContain("Ancient Greek");
-            expect(graph.title).not.toContain("GENERAL");
-            expect(graph.nodes.length).toBeGreaterThanOrEqual(4);
-        });
-
-        it("synthesizes prompt-derived dynamic title in synthesizeMetricsFallback", () => {
-            const fakeArtifact: any = {
-                id: "art-1",
-                type: "metric-dashboard",
-                title: "Deep Ocean Trench Bathymetry Telemetry",
-                data: { title: "Deep Ocean Trench Bathymetry Telemetry", metrics: [] }
-            };
-            const result = synthesizeMetricsFallback(fakeArtifact);
-            const metrics = result.artifact.data as any;
-            expect(metrics.title).toContain("Deep Ocean");
-            expect(metrics.title).not.toContain("GENERAL");
-            expect(metrics.metrics.length).toBeGreaterThanOrEqual(4);
         });
     });
 

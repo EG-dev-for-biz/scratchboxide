@@ -15,10 +15,6 @@ import {
     synthesizeAdaptive3DScene
 } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
 import {
-    classifyFallbackPrompt,
-    synthesize3DFallback
-} from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
-import {
     detect3DSceneTheme,
     synthesizeContextual3DScene
 } from '../src/browser/generative-canvas/procedural-3d-synthesizer';

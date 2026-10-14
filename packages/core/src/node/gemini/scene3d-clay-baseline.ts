@@ -40,19 +40,6 @@ export function applyClayFirstPassBaseline<T extends Record<string, any>>(data: 
     return out as T;
 }
 
-/**
- * Only the sky, sun and atmosphere settings of a prompt-synthesized scene's features (its opt-in lighting). The
- * rest select or animate content, e.g. terrain biomes start playback and draw biome terrain, so an agent scene
- * takes them only from the model's payload or the scene already open.
- */
-export function lightingFeaturesOf(features: Record<string, any> | undefined): Record<string, any> {
-    const out: Record<string, any> = {};
-    for (const key of ATMOSPHERE_FEATURE_KEYS) {
-        if (features && features[key] !== undefined) out[key] = features[key];
-    }
-    return out;
-}
-
 /** Follow-up turns on a clay scene leave clay only when the user's words ask for surface materials. */
 export function releaseClayOnMaterialRequest<T extends Record<string, any>>(data: T, prompt: string, activeRenderMode: string | undefined): T {
     if (activeRenderMode !== 'clay') return data;

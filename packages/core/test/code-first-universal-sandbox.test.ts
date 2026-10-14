@@ -1,49 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { classifyFallbackPrompt, synthesizeSandboxFallback, generateAdaptiveSandboxCode } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { buildSandboxSrcDoc } from '../src/browser/generative-canvas/primitives/LiveCodeSandboxPrimitive';
 import { buildSystemInstruction, CANVAS_PRIMITIVES_SPECIFICATION } from '../src/node/gemini/prompt-builder';
 
 describe('Code-First Universal Application Creation & In-Situ Commenting', () => {
-    describe('Phase 1: Code-First Intent Engine & Adaptive Routing', () => {
-        it('identifies app creation queries as sandbox requests rather than static menus', () => {
-            const prompt1 = 'create a small app that tracks historical events of 1776';
-            const classification1 = classifyFallbackPrompt(prompt1);
-            expect(classification1.isSandboxRequest).toBe(true);
-
-            const prompt2 = 'build an interactive audio sequencer tool';
-            const classification2 = classifyFallbackPrompt(prompt2);
-            expect(classification2.isSandboxRequest).toBe(true);
-
-            const prompt3 = 'make a financial portfolio dashboard and calculator';
-            const classification3 = classifyFallbackPrompt(prompt3);
-            expect(classification3.isSandboxRequest).toBe(true);
-
-            const prompt4 = 'vibe-code a custom 3d camera blocking tool';
-            const classification4 = classifyFallbackPrompt(prompt4);
-            expect(classification4.isSandboxRequest).toBe(true);
-        });
-
-        it('synthesizes adaptive, interactive React code with real historical data for 1776 app', () => {
-            const fallback = synthesizeSandboxFallback('create a small app that tracks historical events of 1776', undefined);
-            expect(fallback.artifact).toBeDefined();
-            expect(fallback.artifact.type).toBe('live-code-sandbox');
-            const data = fallback.artifact.data as any;
-            expect(data.template).toBe('react');
-
-            const entryFile = data.files.find((f: any) => f.isEntry);
-            expect(entryFile).toBeDefined();
-            expect(entryFile.content).toContain('1776');
-            expect(entryFile.content).toContain('historical');
-            expect(entryFile.content).toContain('useState');
-        });
-
-        it('generates rich domain-adaptive React code for open-ended queries', () => {
-            const code = generateAdaptiveSandboxCode('orbital satellite tracking utility', 'Aerospace Tracker');
-            expect(code).toContain('Aerospace Tracker');
-            expect(code).toContain('useState');
-        });
-    });
-
     describe('Phase 2 & 3: In-Situ Visual Preview Commenting & Virtual @scratchbox/core SDK', () => {
         const dummyFiles = [
             { id: 'f1', name: 'App.tsx', language: 'react', content: 'export default function App() { return <div>Hello Sandbox</div>; }', isEntry: true }

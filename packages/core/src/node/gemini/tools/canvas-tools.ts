@@ -7,9 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type VideoTimelineData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
-import { synthesizeContextualVideoTimeline } from '../../../browser/generative-canvas/services/video/videoTimelineSynthesizer';
-import { synthesizeContextual3DScene } from '../../../browser/generative-canvas/procedural-3d-synthesizer';
+import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { normalizeModelVideoTimeline } from '../artifact-synthesis';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { NativeCppCompilerService } from '../../3d-engine/native-compiler-service';
 import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
@@ -18,7 +17,7 @@ import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
-import { applyClayFirstPassBaseline, lightingFeaturesOf, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
+import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -45,7 +44,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 payload: {
                     type: 'OBJECT',
-                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport.'
+                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted.'
                 }
             },
             required: ['primitiveType', 'title', 'payload']
@@ -224,26 +223,12 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         const prompt = _ctx?.request?.prompt || '';
 
         if (primitiveType === 'video-timeline') {
-            const activeVideoData = _ctx?.request?.activeArtifact?.type === 'video-timeline' ? (_ctx.request.activeArtifact.data as VideoTimelineData) : undefined;
-            const timelineData = synthesizeContextualVideoTimeline(prompt, title !== 'Visual Creation' ? title : undefined, activeVideoData);
-            if (payload && typeof payload === 'object') {
-                const p = payload as any;
-                if (p.tracks && Array.isArray(p.tracks) && p.tracks.length > 0) timelineData.tracks = p.tracks;
-                if (p.aspectRatio) timelineData.aspectRatio = p.aspectRatio;
-                if (p.fps) timelineData.fps = p.fps;
-                if (p.duration) timelineData.duration = p.duration;
-                if (p.currentTime !== undefined) timelineData.currentTime = p.currentTime;
-            }
+            // The model's tracks, clips and media as sent; only editor state (fps, playhead, zoom) is defaulted.
+            const timelineData = normalizeModelVideoTimeline(payload as Record<string, any>, title !== 'Visual Creation' ? title : undefined);
             payload = timelineData as any;
             title = timelineData.title;
-            summary = timelineData.subtitle || 'Multi-track non-linear video editing timeline with real-time WebGL compositor';
+            summary = asString(args.summary) || timelineData.subtitle || summary;
         } else if (primitiveType === '3d-scene') {
-            const contextual3D = synthesizeContextual3DScene(prompt, {
-                activeArtifact: _ctx?.request?.activeArtifact,
-                chatHistory: _ctx?.request?.chatHistory,
-                docTitle: title !== 'Visual Creation' ? title : undefined
-            });
-
             const p = payload && typeof payload === 'object' ? (payload as any) : {};
 
             // Geometry comes only from the model's payload. The prompt synthesizer's template generators drew
@@ -253,25 +238,26 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             let pythonGlbPath = p.pythonGenerator?.glbPath || p.glbPath;
 
             if (pythonScript && !pythonGlbBase64) {
+                // The script is the scene's geometry: if it does not produce a model, nothing is mounted.
+                let res: Awaited<ReturnType<NativePythonRunnerService['runScript']>>;
                 try {
-                    console.log('[mount_canvas_primitive] Executing procedural Python script, source length:', pythonScript.length);
-                    const runner = NativePythonRunnerService.getInstance();
-                    const res = await runner.runScript(pythonScript);
-                    console.log('[mount_canvas_primitive] Python runner result:', {
-                        success: res.success,
-                        executionTimeMs: res.executionTimeMs,
-                        glbBase64Length: res.glbBase64?.length,
-                        glbPath: res.glbPath,
-                        errorDetails: res.errorDetails,
-                        stderr: res.stderr ? res.stderr.slice(0, 300) : undefined
-                    });
-                    if (res.success && res.glbBase64) {
-                        pythonGlbBase64 = res.glbBase64;
-                        pythonGlbPath = res.glbPath;
-                    }
-                } catch (e) {
-                    console.warn('[mount_canvas_primitive] Error executing python script:', e);
+                    res = await NativePythonRunnerService.getInstance().runScript(pythonScript);
+                } catch (e: any) {
+                    const error = `The scene's Python script could not be run: ${e?.message || String(e)}`;
+                    return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
                 }
+                if (!res.success || !res.glbBase64) {
+                    const stderr = (res.errorDetails || res.stderr || '').trim();
+                    const detail = stderr ? stderr.slice(-4000) : (res.success ? 'it ran but wrote no model (GLB)' : `exit code ${res.exitCode}`);
+                    const error = `The scene's Python script failed: ${detail}`;
+                    return {
+                        status: 'failed',
+                        resultPayload: { success: false, error, exitCode: res.exitCode, stderr: res.stderr },
+                        summaryResult: `Failed: the scene's Python script did not produce a model. ${detail.split('\n').filter(Boolean).pop() || ''}`.trim()
+                    };
+                }
+                pythonGlbBase64 = res.glbBase64;
+                pythonGlbPath = res.glbPath;
             }
 
             let cppSource = p.cppGenerator?.sourceCode || p.cppSource;
@@ -301,32 +287,25 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 sourceCode: cppSource || p.cppGenerator?.sourceCode || '',
                 glbBase64: cppGlbBase64,
                 glbPath: cppGlbPath,
-                vertexCount: p.cppGenerator?.vertexCount || 50000,
-                triangleCount: p.cppGenerator?.triangleCount || 30000
+                // Counts only when the payload states them; none are made up for a GLB nobody measured.
+                vertexCount: p.cppGenerator?.vertexCount,
+                triangleCount: p.cppGenerator?.triangleCount
             } : p.cppGenerator;
 
             // The title is the model's too; the synthesizer's would name the tab after prompt keywords.
             title = p.title && p.title !== '4D Scene Workspace' ? p.title : (asString(args.title) || '3D Scene');
             summary = p.subtitle || summary;
 
-            // Only viewpoint, lighting and render settings may default from the synthesizer. Its meshes,
-            // scripts, operator stack (which replays its generator), geodetic anchor, splat files (picked from a
-            // landmark list), worldBranch and sceneType (which select viewport content) are not carried over;
-            // the payload's own are kept by the spread.
+            // Everything comes from the payload: no prompt synthesizer supplies a camera, lighting, render
+            // settings, meshes, scripts, an anchor or splat files. Unset fields take the viewport's neutral studio
+            // defaults and the clay baseline below.
             payload = {
                 ...p,
                 title,
                 subtitle: summary,
-                renderMode: p.renderMode || contextual3D.renderMode,
-                cameraMode: p.cameraMode || contextual3D.cameraMode,
                 customMeshes: [], // STRICT TIER-0 JS PRIMITIVE BAN: No fake mock arrays.
-                environment: p.environment || contextual3D.environment,
-                camera: p.camera || contextual3D.camera,
                 objects: Array.isArray(p.objects) ? p.objects : [],
-                features: {
-                    ...lightingFeaturesOf(contextual3D.features),
-                    ...(p.features || {})
-                },
+                features: { ...(p.features || {}) },
                 cppGenerator: cppGen,
                 pythonGenerator: pyGenerator
             };

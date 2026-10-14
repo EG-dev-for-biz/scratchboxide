@@ -13,7 +13,6 @@ import { detectRealWorldLocationIntent } from '../src/browser/generative-canvas/
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { CANVAS_TOOL_DECLARATIONS, canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
 import { buildContents } from '../src/node/gemini/prompt-builder';
-import { classifyFallbackPrompt } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
@@ -127,18 +126,6 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
             expect(userText).toContain('Nano Banana');
             expect(userText).toContain('NEVER has to invoke or mention "Nano Banana" explicitly');
             expect(userText).toContain('survey_beautify_to_splats');
-        });
-
-        it('classifyFallbackPrompt identifies gaussian splat prompt as 3D request without user saying "3D" or "nano banana"', () => {
-            const classification = classifyFallbackPrompt(
-                'Make a gaussian splat of the Colosseum',
-                undefined,
-                'editor',
-                undefined
-            );
-
-            expect(classification.is3DRequest).toBe(true);
-            expect(classification.isVideoTimelineRequest).toBe(false);
         });
     });
 

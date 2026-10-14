@@ -25,8 +25,7 @@ import {
     generateMotivatedEditorialImageSection,
     generateMotivatedVideoSection,
     generateMotivatedSvgSection,
-    generateMotivatedCitationSection,
-    synthesizeComprehensiveDocument
+    generateMotivatedCitationSection
 } from '../document-synthesis-engine';
 import {
     IconArrowDown,
@@ -307,35 +306,23 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
     workspacePath
 }) => {
     const mediaJobPoller = useMediaJobPoller();
+    /**
+     * Normalises the document the model or the user wrote (field aliases such as heading `title` -> `content`, a
+     * callout's "**Title:** body" prefix). Nothing is written into it: an empty document stays empty and an empty
+     * heading, callout title or subtitle stays empty (no template sections, headings or subtitles by keyword).
+     */
     const sanitizeDoc = (raw: MarkdownDocumentData): MarkdownDocumentData => {
-        const rawTitle = raw?.title || (raw as any)?.docTitle || (raw as any)?.name || (raw as any)?.summary;
-        let t = rawTitle && rawTitle !== 'Markdown Document' && !/^untitled/i.test(rawTitle)
-            ? rawTitle
-            : (activeArtifactTitle || activeArtifact?.title || 'Project Specification & Strategic Notes');
-        if (t === 'Markdown Document') {
-            t = activeArtifactTitle || activeArtifact?.title || 'Project Specification & Strategic Notes';
-        }
+        const named = (value: unknown): string | undefined =>
+            typeof value === 'string' && value.trim() && value !== 'Markdown Document' && !/^untitled/i.test(value) ? value : undefined;
+        const t = named(raw?.title) || named((raw as any)?.docTitle) || named((raw as any)?.name) || named((raw as any)?.summary)
+            || named(activeArtifactTitle) || named(activeArtifact?.title) || 'Untitled document';
 
         const rawSubtitle = raw?.subtitle || (raw as any)?.docSubtitle || (raw as any)?.description;
-        let subtitle = rawSubtitle;
-        if (!subtitle || /^(click\s+to\s+add\s+document\s+subtitle|document\s+subtitle|subtitle)\.{0,3}$/i.test(subtitle.trim())) {
-            if (/1776/i.test(t)) {
-                subtitle = 'Examining the Birth of a Nation, Enlightenment Philosophy, and the Crucible of Liberty';
-            } else if (/auth|security|identity|zero[- ]trust/i.test(t)) {
-                subtitle = 'Comprehensive Architecture, Protocol Specifications, Token Lifecycle, and Security Guardrails';
-            } else {
-                subtitle = `Strategic overview, architectural pillars, and execution roadmap for ${t}`;
-            }
-        }
+        const subtitle = typeof rawSubtitle === 'string' && !/^(click\s+to\s+add\s+document\s+subtitle|document\s+subtitle|subtitle)\.{0,3}$/i.test(rawSubtitle.trim())
+            ? rawSubtitle
+            : undefined;
 
-        let rawSections: any[] = Array.isArray(raw?.sections) ? raw.sections : [];
-        if (rawSections.length === 0 && t) {
-            const synthesized = synthesizeComprehensiveDocument(t, t);
-            rawSections = synthesized.sections || [];
-            if (!subtitle || subtitle.includes('Strategic overview, architectural pillars')) {
-                subtitle = synthesized.subtitle || subtitle;
-            }
-        }
+        const rawSections: any[] = Array.isArray(raw?.sections) ? raw.sections : [];
         const sections: MarkdownSection[] = [];
         let headingCount = 0;
 
@@ -346,65 +333,8 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
 
             if (type === 'heading') {
                 const rawContent = sec.content ?? (sec as any).heading ?? (sec as any).title ?? (sec as any).text ?? (sec as any).name ?? (sec as any).headingText ?? (sec as any).value ?? '';
-                let content = typeof rawContent === 'string' ? rawContent.trim() : '';
+                const content = typeof rawContent === 'string' ? rawContent.trim() : '';
                 const currentHeadingIdx = headingCount++;
-
-                // Check if content is empty or literal placeholder
-                if (!content || /^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3}|untitled(\s+section)?\.{0,3})$/i.test(content)) {
-                    const num = currentHeadingIdx + 1;
-                    const isHistory = /history|revolution|1776|civil war|empire|dynasty|battle|treaty|antiquity|medieval|renaissance/i.test(t);
-                    const isScience = /astronomy|eclipse|physics|quantum|biology|chemistry|geology|relativity|space|cosmology|neuroscience/i.test(t);
-                    const isTech = /auth|security|identity|software|system|architecture|api|database|cloud|algorithm|kubernetes|pipeline/i.test(t);
-                    const isBusiness = /business|strategy|executive|market|finance|investment|roi|quarterly|startup/i.test(t);
-
-                    if (isScience) {
-                        const scienceHeadings = [
-                            `1. Overview & Theoretical Foundations: ${t}`,
-                            '2. Key Pillars & Empirical Principles',
-                            '2.1 Structural Dynamics & Observational Methodology',
-                            '2.2 Quantitative Analysis & Comparative Metrics',
-                            '3. Experimental Verification & Observational Synthesis'
-                        ];
-                        content = scienceHeadings[currentHeadingIdx] || `${num}. Empirical Investigation & Findings`;
-                    } else if (isHistory) {
-                        const historyHeadings = [
-                            `1. Historical Context & Genesis: ${t}`,
-                            '2. Key Chronological Pillars & Turning Points',
-                            '2.1 Catalysts, Ideology & Primary Antecedents',
-                            '2.2 Critical Events, Battles & Structural Realignments',
-                            '3. Enduring Significance & Modern Historiography'
-                        ];
-                        content = historyHeadings[currentHeadingIdx] || `${num}. Historical Analysis & Primary Sources`;
-                    } else if (isTech) {
-                        const techHeadings = [
-                            `1. System Overview & Core Objectives: ${t}`,
-                            '2. Architectural Pillars & Protocol Chronology',
-                            '2.1 Modular Architecture, Invariants & Interface Contracts',
-                            '2.2 Reliability Engineering & Automated Guardrails',
-                            '3. Verification, Automated Testing & Operational Compliance'
-                        ];
-                        content = techHeadings[currentHeadingIdx] || `${num}. System Specification & Architecture`;
-                    } else if (isBusiness) {
-                        const businessHeadings = [
-                            `1. Strategic Overview & Market Opportunity: ${t}`,
-                            '2. Key Strategic Pillars & Value Proposition',
-                            '2.1 Target Market Economics & Competitive Landscape',
-                            '2.2 Operational Execution & Risk Mitigation',
-                            '3. Actionable Milestones & Strategic Roadmap'
-                        ];
-                        content = businessHeadings[currentHeadingIdx] || `${num}. Strategic Analysis & Delivery`;
-                    } else {
-                        const genericHeadings = [
-                            `1. Overview & Fundamental Principles: ${t}`,
-                            '2. Core Dimensions & System Design',
-                            '2.1 Invariant Structures & Primary Methodologies',
-                            '2.2 Operational Reliability & Comparative Analysis',
-                            '3. Actionable Milestones & Synthesis Checklist'
-                        ];
-                        content = genericHeadings[currentHeadingIdx] || `${num}. Implementation Details & Analysis`;
-                    }
-                }
-
                 sections.push({
                     ...sec,
                     id,
@@ -416,18 +346,14 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 let calloutTitle = sec.calloutTitle ?? (sec as any).title ?? (sec as any).heading ?? (sec as any).name ?? '';
                 let content = sec.content ?? (sec as any).text ?? (sec as any).body ?? '';
 
-                // If callout title is placeholder or empty, inspect content for embedded markdown title
+                // A callout with no title may carry its own in the body ("**Title:** body" or "[!NOTE] body").
                 if (!calloutTitle || /^(callout(\s+title)?\.{0,3}|note\.{0,3}|title\.{0,3})$/i.test(calloutTitle.trim())) {
                     const boldPrefixMatch = content.match(/^\*\*([^*:]+?)(?:\s*Callout)?:\*\*\s*([\s\S]*)$/i) || content.match(/^\[!([A-Z]+)\]\s*(.*)$/i);
                     if (boldPrefixMatch) {
                         calloutTitle = boldPrefixMatch[1].trim();
                         content = boldPrefixMatch[2].trim() || content;
-                    } else if (/1776/i.test(t)) {
-                        calloutTitle = 'Primary Source & Historical Context';
-                    } else if (/auth|security/i.test(t)) {
-                        calloutTitle = 'Security Guardrail & Cryptographic Protocol';
                     } else {
-                        calloutTitle = 'Core Architecture Insight';
+                        calloutTitle = '';
                     }
                 }
 
@@ -437,7 +363,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                     type: 'callout',
                     calloutType: sec.calloutType || 'info',
                     calloutTitle,
-                    content: content || calloutTitle
+                    content
                 });
             } else if (type === 'paragraph') {
                 const rawContent = sec.content ?? (sec as any).text ?? (sec as any).body ?? '';
@@ -453,11 +379,11 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
         });
 
         return {
-            title: t || 'Project Specification & Strategic Notes',
+            title: t,
             subtitle,
             author: getActiveUserName(raw?.author) || DEFAULT_ACTIVE_USER_NAME,
             lastUpdated: raw?.lastUpdated || 'Just now',
-            tags: Array.isArray(raw?.tags) ? raw.tags : ['Specification', 'Documentation'],
+            tags: Array.isArray(raw?.tags) ? raw.tags : [],
             sections
         };
     };

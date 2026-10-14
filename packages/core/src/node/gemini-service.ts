@@ -92,15 +92,14 @@ import {
     type ToolRegistry
 } from './gemini/tool-registry';
 import { SwarmBridge } from './gemini/swarm-bridge';
-import { StreamingEngine, isCodingMode } from './gemini/streaming';
+import { StreamingEngine } from './gemini/streaming';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './gemini/prompt-builder';
 import {
     extractCodeSandboxArtifact,
     extractDocumentTitle,
     markdownStringToSections,
     parseOrSynthesizeArtifact,
-    synthesizeComprehensiveDocument,
-    type ArtifactSynthesisOptions
+    synthesizeComprehensiveDocument
 } from './gemini/artifact-synthesis';
 
 export { DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS, DEFAULT_SUBAGENT_MODEL, FALLBACK_SUBAGENT_MODELS };
@@ -480,9 +479,9 @@ export class GeminiService {
             return finalResponse;
         }
 
-        // Agent, plan and ask turns change the canvas only through what the model wrote. A reply in prose leaves
-        // the open artifact as it is, so that is the artifact this turn produced (nothing is merged into it).
-        if (result.success && request.activeArtifact && isCodingMode(request)) {
+        // A turn changes the canvas only through what the model wrote, in every mode. A reply in prose leaves the
+        // open artifact as it is, so that is the artifact this turn produced (nothing is merged into it).
+        if (result.success && request.activeArtifact) {
             return {
                 ...result,
                 text: result.text || '',
@@ -571,7 +570,7 @@ export class GeminiService {
         return markdownStringToSections(md);
     }
 
-    /** Extract runnable code blocks into a live sandbox artifact, or synthesize one for app-like prompts. */
+    /** Turn the runnable code blocks in a reply into a live sandbox artifact; null when it has none. */
     public extractCodeSandboxArtifact(
         prompt: string,
         cleanContent: string,
@@ -590,16 +589,15 @@ export class GeminiService {
         return synthesizeComprehensiveDocument(prompt, customTitle);
     }
 
-    /** Parse JSON from model output or wrap markdown into a structured canvas primitive. */
+    /** The canvas artifact the model wrote in its reply (primitive tag or JSON envelope), or undefined. */
     private parseOrSynthesizeArtifact(
         prompt: string,
         modelText: string,
         request: GeminiGenerateRequest,
         mcpExecutions: McpExecutionState[],
-        groundingMetadata?: GroundingMetadata,
-        options?: ArtifactSynthesisOptions
+        groundingMetadata?: GroundingMetadata
     ): CanvasArtifact | undefined {
-        return parseOrSynthesizeArtifact(prompt, modelText, request, mcpExecutions, groundingMetadata, options);
+        return parseOrSynthesizeArtifact(prompt, modelText, request, mcpExecutions, groundingMetadata);
     }
 
     // ------------------------------------------------------------------

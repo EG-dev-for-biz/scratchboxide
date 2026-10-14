@@ -116,10 +116,9 @@ print(f"VERIFICATION_ELAPSED={time.time() - start:.3f}")
         expect(version).toBe(2);
     }, 60000);
 
-    it('2. Synthesizes a complex procedural architectural 3D scene from an AI prompt response', () => {
-        const pythonResponse = `Here is the architectural complex generated with Scratchbox 3D procedural engine:
-\`\`\`python
-import scratchbox as sb
+    it('2. Builds the procedural architectural 3D scene the model sent in its reply', () => {
+        // The model's own scene envelope with its sb script; a bare code block in prose is not mounted as a scene.
+        const script = `import scratchbox as sb
 
 scene = sb.geometry.Mesh("CitadelPlaza")
 
@@ -138,8 +137,10 @@ tree.translate(10.0, 0.4, 4.0)
 scene.merge(tree)
 
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-\`\`\`
-The scene features procedural rhythmic fenestration, recessed windows, foundation plinths, and botanical foliage.`;
+`;
+        const pythonResponse = 'Here is the architectural complex:\n```json\n'
+            + JSON.stringify({ type: '3d-scene', title: 'Citadel Plaza', data: { pythonGenerator: { sourceCode: script } } })
+            + '\n```';
 
         const artifact = parseOrSynthesizeArtifact(
             'Create a detailed architectural building with trees on a plaza',
