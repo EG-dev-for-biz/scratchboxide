@@ -95,15 +95,16 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
     ```
   - Execution logic must **never** branch on string matches (e.g. `if (topology === 'alpine_massif')`). Execution must read the continuous mathematical fields (`peakHeight`, `sharpnessExponent`, `screeNoiseAmplitude`).
 
-### Pillar 9: Ephemeral Multimodal Vision Conditioning (Fast Reference -> CAD-Grade C++20)
+### Pillar 9: Internal Reference Image -> Object Build Spec -> Native Clay (`build_3d_object_from_reference`)
 - **The Information Entropy Gap**:
-  - Short natural language prompts (e.g. *"arctic glaciated research station"*) have low information entropy, causing LLMs to collapse into generic tropes (a plain box with a radar dish).
-  - 2D diffusion models (Nano Banana Lite / Imagen 3 Fast) have infinite visual variety, composition, and micro-clutter, but direct 3D diffusion produces melted, non-manifold geometry with baked-in shadows.
-- **The 4-Stage Ephemeral Pipeline**:
-  1. *Ephemeral 2D Draft*: Synthesize an ephemeral reference image via Nano Banana Lite / Imagen 3 Fast to a temporary scratch path.
-  2. *Multimodal Vision Reverse-Engineering*: Gemini Multimodal Vision inspects the image as an architectural surveyor, translating visual forms into continuous physical fields of `Adaptive3DSceneContract` (measuring fenestration reveals, cantilevered floorplates, specific rooftop mechanical dimensions, and ridge profiles).
-  3. *Immediate Cleanup / Zero Chat Clutter*: The reference image is an internal, intermediate latent representation. It is **never** shown to the user in the chat UI and is unlinked immediately upon schema extraction.
-  4. *Bare-Metal C++20 Polygonization*: The C++20 engine polygonizes the schema with CAD-grade precision (sub-millimeter bevels, planar walls, authentic window reveals, 100,000+ vertices) in under 200 milliseconds.
+  - A short prompt for one object (e.g. *"a vintage brass telescope on a tripod"*) carries little shape information, so a model writing geometry straight from the words collapses into generic tropes.
+  - An image model has that shape information, but direct image-to-3D diffusion produces melted, non-manifold geometry with baked-in shadows.
+- **The pipeline** (`packages/core/src/node/3d-engine/reference-object-builder.ts`, tool `build_3d_object_from_reference`):
+  1. *Internal reference*: exactly `gemini-3.1-flash-lite-image` (Nano Banana Lite) draws one grey object at 1:1. The image stays in memory: it is never written to disk, the media store or `public/`, and never shown in the chat. No other image model is tried.
+  2. *Vision to spec*: the chat's own model, on the chat's credentials, reads the reference into an `ObjectBuildSpec` (`packages/core/src/common/spatial/object-build-spec.ts`): metric parts built from the 4 operators of Pillar 11 (sweep, revolve, replicate, relief), each child attached by parameter on its parent's surface. `validateObjectBuildSpec` and the interpreter report every problem by part and field; the model gets one corrective re-ask, then the call fails.
+  3. *Native build*: `sb.object_spec.build(SPEC)` (`packages/core/src/python/scratchbox/object_spec.py`) runs in the native Python engine and writes a clay GLB. The script, with its editable `SPEC`, is kept in `data.pythonGenerator.sourceCode`.
+  4. *Checks*: every listed part is built and touches its parent, the piece count equals `expectedBodies`, and the vision model compares a clay render with the reference. High-confidence differences go back for up to two revision passes; any left are listed verbatim in the result (`data.objectBuild.remainingDifferences`). A failed revision is reported as such, with the earlier build that passed every check.
+- Real places go to `google_3d_tiles_get_clay`; imagined environments, landscapes and multi-object scenes are scripted with `execute_3d_python_script`. The LLM chooses between them from the request's meaning, never from keywords.
 
 ### Pillar 10: Zero Canned Asset Libraries (Mathematical Grammars over Static Meshes)
 - **Strict Prohibition on Asset Libraries (Nouns)**: The codebase must never maintain catalogues of finished `.glb` / `.obj` models (`chiller_01.glb`, `pine_tree_03.glb`). Kitbashing violates ADA and fails on novel concepts.
@@ -145,12 +146,13 @@ export interface Adaptive3DSceneContract {
 ### Dynamic In-Memory Synthesizer
 [`Adaptive3DSceneSynthesizer`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/node/spatial/Adaptive3DSceneSynthesizer.ts):
 ```typescript
-import { Adaptive3DSceneSynthesizer } from '@scratchbox/core/node';
+import { Adaptive3DSceneSynthesizer, type Adaptive3DSceneContract } from '@scratchbox/core/node';
 
 const synthesizer = new Adaptive3DSceneSynthesizer();
 
-// 1. Synthesize contract from prompt (or LLM tool)
-const contract = synthesizer.synthesizeContractFromPrompt(userPrompt);
+// 1. The contract comes from the LLM (it writes the continuous fields from the request); there is no
+//    prompt-keyword contract synthesizer. Validate it against Adaptive3DSceneContract before compiling.
+const contract: Adaptive3DSceneContract = contractFromModel;
 
 // 2. Synthesize and compile C++20 on the fly -> streams binary .glb
 const result = await synthesizer.synthesizeAndCompile(contract, {
