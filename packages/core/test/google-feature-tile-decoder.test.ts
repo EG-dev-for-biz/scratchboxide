@@ -23,14 +23,17 @@ test('boundary loops follow each area encoding', () => {
     assert.deepStrictEqual(areaBoundaryLoops({ type: 'INDEXED_TRIANGLES', vertexOffsets: v(4) }), [[0, 1, 2, 3]]);
 });
 
-test('modeled volumes become triangle meshes with heights in meters above their base', () => {
+test('modeled volumes become triangle meshes with heights in meters, in the tile datum', () => {
     assert.deepStrictEqual(stripsToTriangles([{ vertexIndices: [0, 1, 2, 3] }]), [0, 1, 2, 2, 1, 3]);
     const tile = { x: 0, y: 0, zoom: 17 };
     const t = decodeFeatureTile({ ...tile, features: [{ types: ['FEATURE_TYPE_BUILDING'], geometry: { modeledVolumes: [{ vertexOffsets: { xOffsets: [10, 5, 0], yOffsets: [10, 0, 5], zOffsets: [50, 0, 100] }, strips: [{ vertexIndices: [0, 1, 2] }] }] } }] });
     const mv = t.modeledVolumes[0];
     assert.deepStrictEqual(mv.indices, [0, 1, 2]);
     const unit = gridUnitMeters(gridToLngLat(tile, 2048, 2048)[1], 17);
-    assert.deepStrictEqual(mv.vertices.map(v => Number((v[2] / unit).toFixed(6))), [0, 0, 100]);
+    // zOffsets are deltas: 50, 50, 150. The datum is kept (not shifted to the piece's own minimum) so pieces of one
+    // building in neighbouring tiles stay level with each other.
+    assert.deepStrictEqual(mv.vertices.map(v => Number((v[2] / unit).toFixed(6))), [50, 50, 150]);
+    assert.ok(Math.abs(mv.minZMeters - 50 * unit) < 1e-9 && Math.abs(mv.maxZMeters - 150 * unit) < 1e-9);
     assert.ok(Math.abs(mv.heightMeters - 100 * unit) < 1e-9);
 });
 

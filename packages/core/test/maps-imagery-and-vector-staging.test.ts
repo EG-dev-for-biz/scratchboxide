@@ -13,6 +13,7 @@ import {
     wgs84ToLocalEnu,
     EarClippingTriangulator
 } from '../src/node/spatial/GoogleVectorTileService';
+import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 
 describe('MapsImageryGroundingService (MIG via PanoID & 360 abilities)', () => {
     it('correctly parses and extracts grounding chunks from Vertex AI MIG payload', async () => {
@@ -207,4 +208,60 @@ describe('GoogleVectorTileService (3D Vector Tiles Staging)', () => {
             await fs.remove(tmpGlbDir);
         }
     });
+
+    it('seats the pieces of a modeled building split across two tiles at the same height', async () => {
+        const lat = 40.7411, lng = -73.9897, z = 18;
+        const n = 2 ** z;
+        const cx = Math.floor(((lng + 180) / 360) * n);
+        const latR = (lat * Math.PI) / 180;
+        const cy = Math.floor(((1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2) * n);
+        const deltas = (a: number[]) => a.map((v, i) => (i === 0 ? v : v - a[i - 1]));
+        // One wall slab per tile, meeting at the tile seam. In the shared datum the north half reaches down to z 0 and
+        // the south half to z 10, and both tops are at z 100.
+        const slab = (ys: [number, number], zMin: number) => {
+            const xs = [2000, 2100, 2000, 2100, 2000, 2100, 2000, 2100];
+            const yy = [ys[0], ys[0], ys[0], ys[0], ys[1], ys[1], ys[1], ys[1]];
+            const zz = [zMin, zMin, 100, 100, zMin, zMin, 100, 100];
+            return {
+                types: ['FEATURE_TYPE_BUILDING'],
+                geometry: { modeledVolumes: [{ vertexOffsets: { xOffsets: deltas(xs), yOffsets: deltas(yy), zOffsets: deltas(zz) }, strips: [{ vertexIndices: [0, 1, 2, 3] }, { vertexIndices: [4, 5, 6, 7] }, { vertexIndices: [0, 4, 2, 6] }] }] }
+            };
+        };
+        const mockTileFetch: typeof fetch = async (url: any) => {
+            const [, tz, tx, ty] = /featuretiles\/(\d+)\/(\d+)\/(\d+)/.exec(String(url))!.map(Number);
+            const features = tx !== cx ? [] : ty === cy ? [slab([4080, 4096], 0)] : ty === cy + 1 ? [slab([0, 16], 10)] : [];
+            const body = { x: tx, y: ty, zoom: tz, features };
+            return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => body, text: async () => JSON.stringify(body) } as any;
+        };
+        const origAuth = GoogleVectorTileService.authProvider;
+        GoogleVectorTileService.authProvider = async () => ({ token: 'test-token', project: 'test-project' });
+        const tmpGlbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-vector-split-'));
+        const tmpGlb = path.join(tmpGlbDir, 'split.glb');
+        try {
+            const res = await GoogleVectorTileService.stage3DVectorWorld({
+                latitude: lat, longitude: lng, zoom: z, radiusTiles: 1, outputGlbPath: tmpGlb, fetchImpl: mockTileFetch,
+                includeRoads: false, includeWater: false
+            } as any);
+            expect(res.success).toBe(true);
+            expect(res.stats.modeledVolumeCount).toBe(2);
+            expect(res.stats.buildingCount).toBe(1); // two pieces, one building
+            // Split the vertices at the seam (local z: north is negative) and compare each half's top
+            const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(tmpGlb);
+            const pts: Array<[number, number]> = [];
+            let groundY = Infinity;
+            for (let i = 1; i < mesh.vertices.length; i += 3) groundY = Math.min(groundY, mesh.vertices[i]);
+            // only the upper parts of the slabs (the staged scene also has a ground plane)
+            for (let i = 0; i < mesh.vertices.length; i += 3) if (mesh.vertices[i + 1] > groundY + 1) pts.push([mesh.vertices[i + 1], mesh.vertices[i + 2]]);
+            const zs = pts.map(p => p[1]).sort((a, b) => a - b);
+            const seamZ = (zs[0] + zs[zs.length - 1]) / 2;
+            // both slabs touch the seam, so leave out a band around it
+            const northTop = Math.max(...pts.filter(p => p[1] < seamZ - 0.1).map(p => p[0]));
+            const southTop = Math.max(...pts.filter(p => p[1] > seamZ + 0.1).map(p => p[0]));
+            expect(Math.abs(northTop - southTop)).toBeLessThan(1e-3);
+        } finally {
+            GoogleVectorTileService.authProvider = origAuth;
+            await fs.remove(tmpGlbDir);
+        }
+    });
 });
+
