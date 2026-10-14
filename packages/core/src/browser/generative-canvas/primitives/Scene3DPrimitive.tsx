@@ -2964,6 +2964,7 @@ int main(int argc, char** argv) {
                     const def = latestDef(obj);
                     model.name = `${EXTERNAL_OBJECT_ROOT_PREFIX}${obj.id}`;
                     model.userData.sbSourceUri = uri;
+                    model.userData.sbEnvironment = isEnvironmentDef(def);
                     applySpatial(model, def.space?.spatial3d);
 
                     model.traverse((child) => {

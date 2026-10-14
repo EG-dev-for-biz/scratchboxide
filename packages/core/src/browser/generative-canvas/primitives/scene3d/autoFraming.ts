@@ -41,6 +41,14 @@ export interface SceneBoundsResult {
  * Computes bounding box and sphere of scene geometry, ignoring helper grids, lights, and skies.
  * Intelligently identifies focal hero geometry vs massive flat ground planes to prevent camera over-retreat.
  */
+/** Environment layers (location tiles, ground) are tagged when attached; framing focuses on what sits on them. */
+function hasEnvironmentAncestor(object: THREE.Object3D): boolean {
+    for (let cur: THREE.Object3D | null = object; cur; cur = cur.parent) {
+        if (cur.userData?.sbEnvironment) return true;
+    }
+    return false;
+}
+
 export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResult {
     const box = new THREE.Box3();
     const focalBox = new THREE.Box3();
@@ -86,6 +94,7 @@ export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResul
             childBox.getSize(childSize);
             const isFlatGround = (name.includes('ground') || name.includes('plane') || name.includes('floor')) && childSize.y < 1.0 && Math.max(childSize.x, childSize.z) > 40.0;
             const isBackgroundTileOrTerrain =
+                hasEnvironmentAncestor(child) ||
                 name.includes('tile-clay') ||
                 name.includes('BakedTerrain') ||
                 name.includes('tile_mesh') ||

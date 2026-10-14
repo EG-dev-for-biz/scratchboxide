@@ -67,6 +67,23 @@ describe('Scene 3D Auto-Framing & Standoff Camera', () => {
         expect(autoFrame!.distance).toBeGreaterThan(bounds.sphere.radius * 1.5);
     });
 
+    it('frames the hero, not the location tiles it is staged on', () => {
+        const scene = new THREE.Scene();
+        const tiles = new THREE.Group();
+        tiles.name = 'external-object-staged-location-123';
+        tiles.userData.sbEnvironment = true;
+        tiles.add(new THREE.Mesh(new THREE.BoxGeometry(500, 60, 500), new THREE.MeshStandardMaterial()));
+        scene.add(tiles);
+        const bench = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.9, 0.6), new THREE.MeshStandardMaterial());
+        bench.position.set(3, 30.45, -2);
+        scene.add(bench);
+
+        const bounds = computeSceneGeometryBounds(scene);
+        expect(bounds.sphere.radius).toBeLessThan(2);
+        expect(bounds.sphere.center.x).toBeCloseTo(3);
+        expect(bounds.sphere.center.y).toBeCloseTo(30.45);
+    });
+
     it('detects camera clipping INSIDE the mesh and automatically backs out to standoff distance', () => {
         const scene = new THREE.Scene();
         const geom = new THREE.BoxGeometry(40, 20, 40);
