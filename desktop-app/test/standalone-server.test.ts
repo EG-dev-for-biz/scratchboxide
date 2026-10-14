@@ -69,7 +69,7 @@ async function runStandaloneServerTests() {
         const statusRes = await fetch(`${baseUrl}/gemini/status`);
         assert.strictEqual(statusRes.status, 200, '/gemini/status should return 200');
         const statusData = await statusRes.json();
-        assert.strictEqual(statusData.activeModel, 'gemini-3.8-flash');
+        assert.strictEqual(statusData.activeModel, 'gemini-4-argon');
         assert.ok(Array.isArray(statusData.availableModels));
         console.log('  ✓ Test 3 Passed: /gemini/status returns active model and availability');
 
