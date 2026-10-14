@@ -470,6 +470,7 @@ export class GeminiService {
                         artifact: event.artifact,
                         mcpExecutions: event.mcpExecution ? [event.mcpExecution] : undefined,
                         modelUsed: event.modelUsed || this.preferredModel,
+                        modelProvenance: event.modelProvenance,
                         usage: event.usage
                     };
                 }

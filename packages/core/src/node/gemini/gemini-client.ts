@@ -64,8 +64,13 @@ export interface GeminiClientOptions {
 }
 
 export interface ModelFallbackOptions {
-    /** Called with the model that succeeded so callers can remember it as preferred. */
+    /** Called with the model that succeeded. */
     onSuccess?: (model: string) => void;
+    /**
+     * Called when a candidate is not served and the next one will be tried, so callers can say which model
+     * answered instead and why (the fallback is never silent).
+     */
+    onFallback?: (skippedModel: string, reason: string, nextModel: string) => void;
     /** Error message when every candidate failed without a concrete error. */
     exhaustedMessage?: string;
     /**
@@ -102,6 +107,15 @@ export interface VertexGenerateContentJson {
     usageMetadata?: GenerateContentResponseUsageMetadata;
 }
 
+/**
+ * Which credential answered a request. The Gemini API key answers when no service account is configured, or when one
+ * is configured but cannot issue a token; the second case is a credential fallback, so `credentialNote` says why.
+ */
+export interface CredentialAnswer {
+    credential: 'vertex' | 'api-key';
+    credentialNote?: string;
+}
+
 /** Key-store slot shared with `GeminiService.saveCredentialsDirectly`. */
 export const KEY_STORE_SERVICE = 'scratchbox-ide.google-genai';
 export const KEY_STORE_GEMINI_ACCOUNT = 'api-key';
@@ -131,6 +145,16 @@ export function errorMessage(err: unknown): string {
 export function isModelNotFoundError(err: unknown): boolean {
     const message = errorMessage(err);
     return message.includes('404') || message.includes('not found');
+}
+
+/** A one-line reason for a model error, short enough to show on a chat message ("404: model not found"). */
+export function summarizeModelError(err: unknown): string {
+    const message = errorMessage(err).replace(/\s+/g, ' ').trim();
+    const inner = /"message"\s*:\s*"([^"]+)"/.exec(message)?.[1];
+    const status = /\((\d{3})\)/.exec(message)?.[1] ?? /\b(404|403|401|400|429|5\d\d)\b/.exec(message)?.[1];
+    const text = inner || message;
+    const clipped = text.length > 160 ? `${text.slice(0, 157)}...` : text;
+    return status && !clipped.includes(status) ? `${status}: ${clipped}` : clipped;
 }
 
 /** Transient upstream failures that are worth one or two backoff retries. */
@@ -471,6 +495,24 @@ export class GeminiClient {
             stopSequences?: string[];
         }
     ): Promise<VertexGenerateContentJson> {
+        return (await this.requestGenerateContent(model, contents, systemInstruction, generationConfig)).json;
+    }
+
+    /**
+     * Non-streaming `generateContent` on the same credential rule as chat: the Vertex service account when one is
+     * configured, the Gemini API key when there is none or it cannot issue a token (reported in `credentialNote`).
+     * A request Vertex answers with an error fails with that error; it is not re-sent with the API key.
+     */
+    async requestGenerateContent(
+        model: string,
+        contents: unknown[],
+        systemInstruction?: string,
+        generationConfig?: {
+            temperature?: number;
+            maxOutputTokens?: number;
+            stopSequences?: string[];
+        }
+    ): Promise<{ json: VertexGenerateContentJson } & CredentialAnswer> {
         const fetchFn = resolveFetch();
         const payload: Record<string, unknown> = {
             contents,
@@ -488,46 +530,52 @@ export class GeminiClient {
             };
         }
 
-        // Try Vertex AI first if service account authenticated
+        let credentialNote: string | undefined;
         if (this.ensureAuth() && this.auth && this.cachedProjectId) {
+            let vertexToken: AccessTokenResult | undefined;
             try {
-                const { token, projectId } = await this.getAccessToken();
-                const url = this.vertexModelUrl(projectId, model, 'generateContent');
-                const resp = await fetchFn(url, {
+                vertexToken = await this.getAccessToken();
+            } catch (err) {
+                credentialNote = `the Vertex AI service account could not get an access token (${summarizeModelError(err)})`;
+            }
+            if (vertexToken) {
+                const resp = await fetchFn(this.vertexModelUrl(vertexToken.projectId, model, 'generateContent'), {
                     method: 'POST',
                     headers: {
-                        'Authorization': `Bearer ${token}`,
+                        'Authorization': `Bearer ${vertexToken.token}`,
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify(payload)
                 });
-                if (resp.ok) {
-                    return (await resp.json()) as VertexGenerateContentJson;
+                if (!resp.ok) {
+                    throw new Error(`Vertex AI error (${resp.status}): ${await resp.text()}`);
                 }
-            } catch {
-                // Fall through to AI Studio API key
+                return { json: (await resp.json()) as VertexGenerateContentJson, credential: 'vertex' };
             }
         }
 
-        // Fallback to AI Studio Gemini API key
         const apiKey = await this.resolveApiKey();
-        if (apiKey) {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-            const resp = await fetchFn(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
-            if (resp.ok) {
-                return (await resp.json()) as VertexGenerateContentJson;
-            }
-            const errText = await resp.text();
-            throw new Error(`AI Studio API error (${resp.status}): ${errText}`);
+        if (!apiKey) {
+            throw new Error(credentialNote
+                ? `No Gemini API key is configured, and ${credentialNote}.`
+                : 'No Google Cloud service account or Gemini API key configured.');
         }
-
-        throw new Error('No Google Cloud service account or Gemini API key configured.');
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const resp = await fetchFn(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+        if (!resp.ok) {
+            throw new Error(`AI Studio API error (${resp.status}): ${await resp.text()}`);
+        }
+        return {
+            json: (await resp.json()) as VertexGenerateContentJson,
+            credential: 'api-key',
+            ...(credentialNote ? { credentialNote } : {})
+        };
     }
 
     /**
@@ -540,7 +588,7 @@ export class GeminiClient {
         inlineData?: Array<{ mimeType: string; data: string }>;
         temperature?: number;
         maxOutputTokens?: number;
-    }): Promise<{ text: string }> {
+    }): Promise<{ text: string } & CredentialAnswer> {
         const model = options.model || DEFAULT_GEMINI_MODEL;
         const parts: any[] = [];
         if (options.prompt) {
@@ -557,7 +605,7 @@ export class GeminiClient {
             }
         }
         const contents = [{ role: 'user', parts }];
-        const result = await this.fetchVertexOrAistudio(
+        const { json, ...answeredWith } = await this.requestGenerateContent(
             model,
             contents,
             options.systemInstruction,
@@ -566,8 +614,8 @@ export class GeminiClient {
                 maxOutputTokens: options.maxOutputTokens
             }
         );
-        const text = result?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-        return { text };
+        const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+        return { text, ...answeredWith };
     }
 
     // ------------------------------------------------------------------
@@ -577,16 +625,17 @@ export class GeminiClient {
     /**
      * Try each candidate model in order. Unknown-model (404) errors advance to the next
      * candidate; transient errors are retried with exponential backoff; anything else throws.
-     * `onSuccess` lets callers remember the model that worked.
+     * `onFallback` reports each skipped model and why, so the caller can say which model answered.
      */
     async withModelFallback<T>(
         candidates: string[],
         attempt: (model: string) => Promise<T>,
         options: ModelFallbackOptions = {}
     ): Promise<T> {
-        const { onSuccess, exhaustedMessage = 'Failed to generate with available AI models', retryTransient = true } = options;
+        const { onSuccess, onFallback, exhaustedMessage = 'Failed to generate with available AI models', retryTransient = true } = options;
         let lastError: unknown;
-        for (const model of candidates) {
+        for (let i = 0; i < candidates.length; i++) {
+            const model = candidates[i];
             try {
                 const result = retryTransient
                     ? await this.withTransientRetry(() => attempt(model))
@@ -596,6 +645,7 @@ export class GeminiClient {
             } catch (err: unknown) {
                 lastError = err;
                 if (isModelNotFoundError(err) && (options.canFallback?.(err) ?? true)) {
+                    if (i + 1 < candidates.length) onFallback?.(model, summarizeModelError(err), candidates[i + 1]);
                     continue;
                 }
                 throw err;

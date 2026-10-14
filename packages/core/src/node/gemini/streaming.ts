@@ -12,6 +12,7 @@ import type {
     GeminiGenerateResponse,
     GeminiStreamEvent,
     GroundingMetadata,
+    ModelAnswerProvenance,
     SubagentRequest,
     SubagentResponse
 } from '../../common/gemini-protocol';
@@ -21,6 +22,7 @@ import {
     GeminiClient,
     isModelNotFoundError,
     resolveFetch,
+    summarizeModelError,
     type FetchLike,
     type GeminiThinkingConfig,
     type VertexGenerateContentJson
@@ -196,6 +198,11 @@ export type StreamAuth =
     | { type: 'vertex'; token: string; projectId: string }
     | { type: 'api-key'; apiKey: string };
 
+/** Adds which model and credential answered to the turn's closing events (`done`, `error`). */
+function withProvenance(onEvent: StreamEventSink, provenance: ModelAnswerProvenance): StreamEventSink {
+    return event => onEvent(event.type === 'done' || event.type === 'error' ? { ...event, modelProvenance: provenance } : event);
+}
+
 /**
  * The `streamGenerate` core: Vertex SSE consumption, event shaping, the multi-turn tool-call
  * (ReAct) loop, grounding-metadata merging, agent interactions, and final artifact synthesis.
@@ -237,16 +244,20 @@ export class StreamingEngine {
     ): Promise<GeminiGenerateResponse> {
         throwIfAborted(signal);
 
+        // Vertex (service account) is preferred; the Gemini API key answers when there is no service account, or when
+        // one is configured but cannot issue a token. The second case is a credential fallback, so it is recorded
+        // and shown on the reply (credentialNote) rather than taken silently.
         let streamAuth: StreamAuth | undefined;
+        let credentialNote: string | undefined;
+        const serviceAccountConfigured = this.client.isAuthenticated();
         try {
             const { token, projectId } = await this.client.getAccessToken();
             if (token && projectId) {
                 streamAuth = { type: 'vertex', token, projectId };
             }
-        } catch {
-            const apiKey = await this.client.resolveApiKey();
-            if (apiKey) {
-                streamAuth = { type: 'api-key', apiKey };
+        } catch (err) {
+            if (serviceAccountConfigured) {
+                credentialNote = `the Vertex AI service account could not get an access token (${summarizeModelError(err)})`;
             }
         }
 
@@ -255,7 +266,9 @@ export class StreamingEngine {
             if (apiKey) {
                 streamAuth = { type: 'api-key', apiKey };
             } else {
-                throw new Error('No Google Cloud service account or Gemini API key configured.');
+                throw new Error(credentialNote
+                    ? `No Gemini API key is configured, and ${credentialNote}.`
+                    : 'No Google Cloud service account or Gemini API key configured.');
             }
         }
 
@@ -285,18 +298,36 @@ export class StreamingEngine {
                     text: subagentRes.result,
                     subagentResult: subagentRes
                 });
-            } catch {
-                // If subagent preprocessing fails, seamlessly proceed with primary model
+            } catch (err) {
+                // Preprocessing is advisory; the turn goes on without it, and says so.
+                onEvent({ type: 'subagent_done', text: `Skill preprocessing failed (${summarizeModelError(err)}); the main model answers without it.` });
             }
         }
 
         throwIfAborted(signal);
         const attempt = { modelResponded: false };
-        return this.client.withModelFallback(
-            this.client.getModelCandidates(request.model),
-            targetModel => this.executeVertexGeneration(targetModel, streamAuth!, request, onEvent, signal, attempt),
+        // The fallback list stays, but every turn starts from the requested (or configured) model again: a model that
+        // answered once is not made the default for later turns. Each skipped model is reported with its reason.
+        const candidates = this.client.getModelCandidates(request.model);
+        const skipped: Array<{ model: string; reason: string }> = [];
+        const auth = streamAuth;
+        const provenanceFor = (modelUsed: string): ModelAnswerProvenance => ({
+            requestedModel: candidates[0],
+            modelUsed,
+            ...(modelUsed !== candidates[0] && skipped.length > 0
+                ? { fallbackReason: skipped.map(s => `${s.model} unavailable: ${s.reason}`).join('; ') }
+                : {}),
+            credential: auth.type,
+            ...(credentialNote ? { credentialNote } : {})
+        });
+        const response = await this.client.withModelFallback(
+            candidates,
+            targetModel => this.executeVertexGeneration(targetModel, auth, request, withProvenance(onEvent, provenanceFor(targetModel)), signal, attempt),
             {
-                onSuccess: model => { this.client.preferredModel = model; },
+                onFallback: (model, reason, nextModel) => {
+                    skipped.push({ model, reason });
+                    onEvent({ type: 'status', text: `${model} is not available (${reason}); answering with ${nextModel}.`, modelUsed: nextModel });
+                },
                 // Partial output may already have been streamed; never replay a turn.
                 retryTransient: false,
                 // A missing model fails its first request. Once a model has answered, tools may have run (some for
@@ -304,6 +335,7 @@ export class StreamingEngine {
                 canFallback: () => !attempt.modelResponded
             }
         );
+        return { ...response, modelProvenance: provenanceFor(response.modelUsed) };
     }
 
     // ------------------------------------------------------------------
@@ -383,16 +415,18 @@ export class StreamingEngine {
             environmentId: state.environmentId,
             modelUsed: agent
         };
-        // Agent, plan and ask replies in prose yield no artifact; there is nothing to announce as complete.
+        // A reply in prose yields no artifact; there is nothing to announce as complete.
         if (artifact) {
             onEvent({ type: 'artifact_complete', ...summary });
         }
-        onEvent({ type: 'done', ...summary });
+        const modelProvenance: ModelAnswerProvenance = { requestedModel: agent, modelUsed: agent, credential: 'vertex' };
+        onEvent({ type: 'done', ...summary, modelProvenance });
 
         return {
             success: true,
             thoughts: state.accumulatedThoughts,
-            ...summary
+            ...summary,
+            modelProvenance
         };
     }
 
@@ -491,7 +525,12 @@ export class StreamingEngine {
                 prompt: transcript,
                 temperature: 0.2,
                 maxOutputTokens: 8192
-            }).then(r => r.text)
+            }).then(r => {
+                if (r.credentialNote) {
+                    onEvent({ type: 'status', text: `Earlier messages were summarized with the Gemini API key: ${r.credentialNote}.` });
+                }
+                return r.text;
+            })
         );
         const contents = buildContents(request);
         const tools = this.buildToolDeclarations(request);

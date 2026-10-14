@@ -29,7 +29,7 @@ import {
     InteractiveQuestionCardData,
     ExecutionPlanCardData
 } from '../canvas-types';
-import { AttachedMcpToolContext, AttachedSkillContext } from '../../../common/gemini-protocol';
+import { AttachedMcpToolContext, AttachedSkillContext, type ModelAnswerProvenance } from '../../../common/gemini-protocol';
 import { ChatRequestError, GeminiClient, type ChatFailureKind } from '../gemini-client';
 import { describeChatFailure } from './chatFailureMessage';
 import {
@@ -140,6 +140,8 @@ interface StreamProgress {
     groundingMetadata?: GroundingMetadata;
     questionCard?: InteractiveQuestionCardData;
     executionPlanCard?: ExecutionPlanCardData;
+    /** Which model and credential answered (from the stream's `done` event). */
+    modelProvenance?: ModelAnswerProvenance;
 }
 
 interface GenerationContext {
@@ -500,6 +502,9 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 if (event.groundingMetadata) {
                     progress.groundingMetadata = event.groundingMetadata;
                 }
+                if (event.modelProvenance) {
+                    progress.modelProvenance = event.modelProvenance;
+                }
                 if (event.artifact) {
                     // Mounted exactly as the backend sent it: words in the prompt never swap in a template
                     // artifact or switch on playback the model did not set.
@@ -685,7 +690,8 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
             steps: liveSteps.length > 0 ? liveSteps : undefined,
             questionCard: backend.streamQuestionCard,
-            executionPlanCard: backend.streamExecutionPlanCard
+            executionPlanCard: backend.streamExecutionPlanCard,
+            modelProvenance: ctx.progress.modelProvenance
         };
     } else if (usedBackend) {
         finalAssistantMsg = {
@@ -699,7 +705,8 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
             steps: liveSteps.length > 0 ? liveSteps : undefined,
             questionCard: backend.streamQuestionCard,
-            executionPlanCard: backend.streamExecutionPlanCard
+            executionPlanCard: backend.streamExecutionPlanCard,
+            modelProvenance: ctx.progress.modelProvenance
         };
     } else {
         throw new Error('finalizeBackendMessage called without a backend response');

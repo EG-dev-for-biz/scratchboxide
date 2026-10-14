@@ -696,7 +696,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     </div>
                 )}
 
-                {/* The background visual check of the canvas, or why it was unavailable */}
+                {/* Which model answered (and why, when not the requested one) and the background visual check */}
                 {!isUser && <MessageNotices message={msg} />}
 
                 {/* High-Fidelity Multimedia & Maps Grounding Cards */}

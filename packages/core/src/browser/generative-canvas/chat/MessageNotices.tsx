@@ -9,7 +9,35 @@
 
 import * as React from 'react';
 import type { ChatMessage } from '../canvas-types';
+import type { ModelAnswerProvenance } from '../../../common/gemini-protocol';
 import { isVisualAuditUnavailable, type VisualVerificationOutcome } from '../../../common/visual-verification-protocol';
+
+export interface ProvenanceDescription {
+    /** Always shown: which model and credential answered. */
+    label: string;
+    /** Shown prominently when the answer did not come from the requested model or the preferred credential. */
+    notice?: string;
+}
+
+const CREDENTIAL_LABEL: Record<ModelAnswerProvenance['credential'], string> = {
+    vertex: 'Vertex AI',
+    'api-key': 'Gemini API key'
+};
+
+/** "Answered by X — Y unavailable: <reason>" when the fallback list moved on; the model and credential always. */
+export function describeModelProvenance(p: ModelAnswerProvenance): ProvenanceDescription {
+    const notices: string[] = [];
+    if (p.modelUsed !== p.requestedModel) {
+        notices.push(`Answered by ${p.modelUsed} — ${p.fallbackReason || `${p.requestedModel} unavailable`}`);
+    }
+    if (p.credentialNote) {
+        notices.push(`Answered with the ${CREDENTIAL_LABEL['api-key']} — ${p.credentialNote}`);
+    }
+    return {
+        label: `Answered by ${p.modelUsed} · ${CREDENTIAL_LABEL[p.credential]}`,
+        notice: notices.length > 0 ? notices.join('. ') : undefined
+    };
+}
 
 export interface VisualCheckDescription {
     tone: 'pass' | 'fail' | 'unavailable';
@@ -27,19 +55,32 @@ export function describeVisualCheck(outcome: VisualVerificationOutcome): VisualC
 }
 
 const LINE_STYLE: React.CSSProperties = { fontSize: 11, lineHeight: 1.45, borderRadius: 8, padding: '5px 9px', wordBreak: 'break-word' };
+const NOTICE_STYLE: React.CSSProperties = { ...LINE_STYLE, background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.35)', color: '#fcd34d' };
 const TONE_STYLE: Record<VisualCheckDescription['tone'], React.CSSProperties> = {
     pass: { ...LINE_STYLE, background: 'rgba(16, 185, 129, 0.10)', border: '1px solid rgba(16, 185, 129, 0.30)', color: '#6ee7b7' },
     fail: { ...LINE_STYLE, background: 'rgba(245, 158, 11, 0.10)', border: '1px solid rgba(245, 158, 11, 0.30)', color: '#fcd34d' },
     unavailable: { ...LINE_STYLE, background: 'rgba(113, 113, 122, 0.14)', border: '1px solid rgba(161, 161, 170, 0.30)', color: '#d4d4d8' }
 };
 
-/** Footnote of an assistant message: the background visual check of the canvas, or why it was unavailable. */
+/**
+ * Footnotes of an assistant message: a notice when another model or credential answered than the one asked for,
+ * the background visual check (or why it was unavailable), and which model answered.
+ */
 export const MessageNotices: React.FC<{ message: ChatMessage }> = ({ message }) => {
+    const provenance = message.modelProvenance ? describeModelProvenance(message.modelProvenance) : undefined;
     const visual = message.visualAudit ? describeVisualCheck(message.visualAudit) : undefined;
-    if (!visual) return null;
+    if (!provenance && !visual) return null;
     return (
         <div className="sb-msg-notices" data-testid="sb-msg-notices" style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
-            <div data-testid="sb-visual-check" data-tone={visual.tone} style={TONE_STYLE[visual.tone]}>{visual.text}</div>
+            {provenance?.notice && (
+                <div data-testid="sb-model-fallback-notice" role="note" style={NOTICE_STYLE}>{provenance.notice}</div>
+            )}
+            {visual && (
+                <div data-testid="sb-visual-check" data-tone={visual.tone} style={TONE_STYLE[visual.tone]}>{visual.text}</div>
+            )}
+            {provenance && (
+                <div data-testid="sb-model-label" style={{ fontSize: 10, color: '#a1a1aa' }}>{provenance.label}</div>
+            )}
         </div>
     );
 };

@@ -154,7 +154,7 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
                 } satisfies SubagentResponse;
             },
             {
-                onSuccess: model => { this.client.preferredSubagentModel = model; },
+                // The answering model is reported as modelUsed; it is not made the default for later subagent calls.
                 exhaustedMessage: 'Failed to execute subagent with available models'
             }
         );

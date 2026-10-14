@@ -1391,6 +1391,8 @@ export interface ChatMessage {
     deepWriteProgress?: import('../../common/deep-write/deep-write-protocol').DeepWriteStreamEvent;
     deepWriteCheckpoint?: import('../../common/deep-write/deep-write-protocol').DeepWriteCheckpointEvent;
     deepWriteResumed?: boolean;
+    /** Which model and credential answered, and why when not the requested ones (shown on the message). */
+    modelProvenance?: import('../../common/gemini-protocol').ModelAnswerProvenance;
     /** The background vision check of the canvas, or why it could not run. */
     visualAudit?: import('../../common/visual-verification-protocol').VisualVerificationOutcome;
     textureMatrixContent?: import('../../common/media-generation-protocol').TextureMatrixResult;
