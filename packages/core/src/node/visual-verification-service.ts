@@ -26,6 +26,7 @@ import {
     VisualSelfCorrection3DLoopResult,
     computeCameraForViewportAngle
 } from '../common/visual-verification-protocol';
+import { auditChangesChosenEnvironment, sceneOptsIntoAtmosphere, sceneRendersClay, withoutUninvitedAtmosphere } from '../common/scene-atmosphere-opt-in';
 import { CanvasArtifact, Scene3DData, LiveCodeSandboxData } from '../browser/generative-canvas/canvas-types';
 import {
     DirectDispatchOperatorEngine,
@@ -77,6 +78,9 @@ export class VisualVerificationService {
         inlineData: { mimeType: string; data: string };
     } {
         const { base64Data, mimeType } = parseImagePayload(request.image);
+        const environmentNote = sceneOptsIntoAtmosphere(request.context?.sceneData)
+            ? 'This scene opts into an atmospheric sky through its own environment or features: a missing or broken sky is a defect, and visualFixes may tune environment.skybox and the atmosphere features it already has.'
+            : 'This scene does not opt into an atmospheric sky. Its neutral studio backdrop, grey clay void and render mode are intended: never score them down, never report a missing sky, and never propose a skybox, atmosphere, clouds, fog, god rays, render mode or world change.';
 
         const systemInstruction = `You are Scratchbox IDE's Autonomous Multimodal Vision QA & Visual Inspection Meta-Architect.
 Your task is to inspect the attached visual screenshot frame rendered from a generated UI artifact (such as a Three.js 3D WebGL Scene, a Live React Sandbox playground, or an interactive browser canvas) against the target user prompt and technical criteria.
@@ -84,12 +88,15 @@ Your task is to inspect the attached visual screenshot frame rendered from a gen
 CRITICAL QUALITY CRITERIA:
 ${VISUAL_VERIFICATION_CRITERIA.map(c => `- ${c}`).join('\n')}
 
+SCENE ENVIRONMENT:
+${environmentNote}
+
 INSPECTION TASKS:
 1. Score the overall visual rendering fidelity from 0 to 100 (score >= 80 is PASS, < 80 requires auto-correction).
 2. Identify any visual bugs:
-   - Monochromatic blank or black void screens.
+   - Monochromatic blank or black void screens (a flat neutral studio or grey clay backdrop is not a void).
    - Missing scene illumination, unlit models, or missing ambient/directional light.
-   - Shader artifacts, horizon clipping, or missing sky dome / atmospheric scattering.
+   - Shader artifacts or horizon clipping; a missing sky dome only when SCENE ENVIRONMENT says the scene opts into one.
    - Disconnected geometries, broken meshes, or misaligned camera angles.
    - Truncated UI layouts, CSS collisions, or blank canvas wrappers.
 3. Diagnose granular 3D defects with suggested operator fixes:
@@ -122,9 +129,9 @@ You MUST respond strictly with valid, unescaped JSON matching this schema:
   ],
   "visualFixes": {
     "lighting": { "ambientIntensity": number, "directionalIntensity": number },
-    "environment": { "skybox": "string", "lighting": "shaded", "ground": boolean },
+    "environment": { "lighting": "shaded", "ground": boolean },
     "camera": { "position": [number, number, number], "target": [number, number, number] },
-    "features": { "atmosphericScattering": boolean, "godRays": boolean },
+    "features": {},
     "scenePatches": {},
     "operatorDispatches": []
   }
@@ -265,7 +272,8 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
         const isVoid = !base64Data || base64Data.length < 30 || base64Data.includes('AAAAABJRU5ErkJggg==');
         const hasMissingLighting = sceneData?.environment?.lighting === 'none' ||
             (sceneData?.environment && !sceneData?.environment?.lighting);
-        const hasMissingSky = promptLower.includes('sky') && !sceneData?.environment?.skybox;
+        // A studio or clay void is the scene's choice; a sky is only missing when the scene asked for one.
+        const hasMissingSky = sceneOptsIntoAtmosphere(sceneData) && !sceneData?.environment?.skybox;
 
         const defects3D: VisualAudit3DDefect[] = [];
         const operatorDispatches: Array<{ operator: string; params?: any }> = [];
@@ -278,7 +286,6 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
         if ((isVoid && (promptLower.includes('unlit') || promptLower.includes('void') || promptLower.includes('broken') || hasMissingLighting)) || hasMissingLighting) {
             scorePenalty += 45;
             issues.push(isVoid ? 'Monochromatic void detected in rendered viewport' : 'Missing ambient and directional lighting');
-            issues.push('Atmospheric sky shaders uninitialized');
 
             defects3D.push({
                 defectType: 'unlit',
@@ -286,7 +293,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
                 description: 'Scene lacks illumination sources and balanced key/ambient lighting',
                 suggestedOperator: 'sb_setup_lighting',
                 suggestedParams: {
-                    preset: promptLower.includes('cyberpunk') ? 'cyberpunk' : (promptLower.includes('dawn') ? 'dawn' : 'three-point'),
+                    preset: 'three-point',
                     ambientIntensity: 0.5
                 }
             });
@@ -294,7 +301,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
             operatorDispatches.push({
                 operator: 'sb_setup_lighting',
                 params: {
-                    preset: promptLower.includes('cyberpunk') ? 'cyberpunk' : (promptLower.includes('dawn') ? 'dawn' : 'three-point'),
+                    preset: 'three-point',
                     ambientIntensity: 0.5
                 }
             });
@@ -326,8 +333,8 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
             }
         }
 
-        // 3. Diagnose Missing PBR Materials
-        if (sceneData?.customMeshes && sceneData.customMeshes.length > 0) {
+        // 3. Diagnose Missing PBR Materials (a clay scene has none by design)
+        if (sceneData?.customMeshes && sceneData.customMeshes.length > 0 && !sceneRendersClay(sceneData)) {
             for (const mesh of sceneData.customMeshes) {
                 const mat = mesh.material;
                 const hasNoPBR = !mat || (mat.roughness === undefined && mat.metalness === undefined && mat.color === undefined);
@@ -385,7 +392,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
         // 4. Diagnose Missing Skybox / Atmosphere
         if (hasMissingSky) {
             scorePenalty += 15;
-            issues.push('Missing atmospheric sky dome requested in prompt');
+            issues.push('Scene opts into an atmospheric sky but names no skybox');
 
             defects3D.push({
                 defectType: 'missing_skybox',
@@ -414,6 +421,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
             ? 'High-fidelity visual rendering verified. Scene displays crisp geometry, balanced lighting, and correct perspective framing.'
             : `Visual discrepancies detected: ${issues.join('; ')}`;
 
+        // Repairs light and frame the scene; its sky, atmosphere and render mode stay its own.
         const visualFixes = !pass ? {
             lighting: {
                 ambientIntensity: 0.5,
@@ -422,24 +430,11 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
                 groundColor: '#1e293b'
             },
             environment: {
-                skybox: promptLower.includes('cyberpunk') ? 'cyberpunk' : (promptLower.includes('dawn') ? 'dawn' : 'sky'),
+                skybox: sceneData?.environment?.skybox || 'studio',
                 lighting: 'shaded',
                 ground: true
             },
             camera: computeCameraForViewportAngle(currentAngle, sceneData),
-            features: {
-                atmosphericScattering: true,
-                godRays: promptLower.includes('sun') || promptLower.includes('ray'),
-                contrails: promptLower.includes('plane') || promptLower.includes('aircraft')
-            },
-            scenePatches: {
-                renderMode: 'pbr' as const,
-                environment: {
-                    skybox: promptLower.includes('cyberpunk') ? 'cyberpunk' : (promptLower.includes('dawn') ? 'dawn' : 'sky'),
-                    lighting: 'shaded',
-                    ground: true
-                }
-            },
             operatorDispatches
         } : undefined;
 
@@ -742,36 +737,55 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
                 objects: []
             };
 
-            // If operatorDispatches exist, execute on DirectDispatchOperatorEngine
+            // Atmosphere is opt-in (AGENTS.md): an audit may tune a sky the scene already has, never add one or leave clay.
+            const allowedFixes = withoutUninvitedAtmosphere(fixes, currentData);
+
+            // If operatorDispatches exist, execute on DirectDispatchOperatorEngine, dropping any that write what the filter protects
             const engine = createOperatorEngine(currentData);
             const opsToApply = audit.operatorDispatches || fixes.operatorDispatches || [];
+            let appliedOps = 0;
 
-            if (opsToApply.length > 0) {
-                for (const op of opsToApply) {
-                    engine.dispatch(op.operator, op.params || {});
+            for (const op of opsToApply) {
+                const before: Scene3DData = JSON.parse(JSON.stringify(engine.getSceneData()));
+                engine.dispatch(op.operator, op.params || {});
+                if (auditChangesChosenEnvironment(before, engine.getSceneData())) {
+                    engine.setSceneData(before);
+                } else {
+                    appliedOps++;
                 }
             }
 
+            const hasDirectives = Object.entries(allowedFixes).some(([key, value]) =>
+                key !== 'operatorDispatches' && value !== undefined && !(typeof value === 'object' && value !== null && Object.keys(value).length === 0)
+            );
+            if (appliedOps === 0 && !hasDirectives) {
+                return artifact;
+            }
+
+            const scene = engine.getSceneData();
             const repairedSceneData: Scene3DData = {
-                ...engine.getSceneData(),
-                renderMode: (fixes.scenePatches?.renderMode || engine.getSceneData().renderMode || 'shaded') as any,
+                ...scene,
                 environment: {
-                    ...(engine.getSceneData().environment || {}),
-                    ...(fixes.environment || {}),
-                    lighting: fixes.environment?.lighting || fixes.lighting?.ambientIntensity !== undefined ? 'shaded' : engine.getSceneData().environment?.lighting || 'shaded'
+                    ...(scene.environment || {}),
+                    ...(allowedFixes.environment || {}),
+                    lighting: allowedFixes.environment?.lighting || allowedFixes.lighting?.ambientIntensity !== undefined ? 'shaded' : scene.environment?.lighting || 'shaded'
                 },
                 camera: {
-                    ...(engine.getSceneData().camera || { position: [15, 12, 15], target: [0, 0, 0] }),
-                    ...(fixes.camera || {})
+                    ...(scene.camera || { position: [15, 12, 15], target: [0, 0, 0] }),
+                    ...(allowedFixes.camera || {})
                 },
                 features: {
-                    ...(engine.getSceneData().features || {}),
-                    ...(fixes.features || {})
+                    ...(scene.features || {}),
+                    ...(allowedFixes.features || {})
                 }
             };
 
-            if (fixes.scenePatches) {
-                Object.assign(repairedSceneData, fixes.scenePatches);
+            if (allowedFixes.scenePatches) {
+                // Patched environment / features blocks merge in, so a patch cannot drop a sky the scene already has.
+                const { environment, features, ...patches } = allowedFixes.scenePatches;
+                Object.assign(repairedSceneData, patches);
+                if (environment) repairedSceneData.environment = { ...repairedSceneData.environment, ...environment };
+                if (features) repairedSceneData.features = { ...repairedSceneData.features, ...features };
             }
 
             updatedArtifact.data = repairedSceneData;

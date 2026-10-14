@@ -15,8 +15,9 @@
  * Extracted verbatim from GenerativeCanvasStudio.tsx.
  */
 import * as React from 'react';
+import type { VisualCorrectionFixes } from '../../../common/visual-verification-protocol';
 import { ProjectItem } from '../ProjectsModal';
-import { CanvasArtifact, ChatSession } from '../canvas-types';
+import { CanvasArtifact, ChatSession, LiveCodeSandboxData, Scene3DData } from '../canvas-types';
 import { captureActiveCanvasScreenshot } from '../chat/streaming-utils';
 import { PRELOADED_SHOWCASE_DEMOS } from '../demos/preloadedDemos';
 import { GeminiClient } from '../gemini-client';
@@ -41,12 +42,60 @@ function isCuratedShowcaseArtifact(artifact: { id: string; version?: number }): 
     return curatedVersion !== undefined && (artifact.version || 1) === curatedVersion;
 }
 
+/**
+ * Whether the background audit may screenshot this artifact now. Never while a reply is still
+ * generating: a repair version written mid-stream is buried when the stream-end commit
+ * re-activates the version it streamed, leaving that one marked historical.
+ */
+export function shouldAuditArtifactInBackground(artifact: CanvasArtifact | null | undefined, isGenerating: boolean): artifact is CanvasArtifact {
+    if (!artifact || isGenerating) return false;
+    if (isCuratedShowcaseArtifact(artifact)) return false;
+    return artifact.type === '3d-scene' || artifact.type === 'live-code-sandbox' || artifact.type === 'interactive-browser';
+}
+
+function isFiniteVec3(value: unknown): value is [number, number, number] {
+    return Array.isArray(value) && value.length === 3 && value.every(n => typeof n === 'number' && Number.isFinite(n));
+}
+
+/**
+ * The data a background audit may write back, or null when it may write nothing. A 3D scene's
+ * sky, atmosphere, lighting, render mode, ground and world are its own choices, so the audit keeps
+ * at most a well-formed camera framing that actually moves the camera; a sandbox takes CSS fixes.
+ */
+export function backgroundAuditRepairData(artifact: CanvasArtifact, fixes: VisualCorrectionFixes): CanvasArtifact['data'] | null {
+    if (artifact.type === '3d-scene') {
+        const scene = (artifact.data || {}) as Scene3DData;
+        const fix = fixes.camera;
+        const framing = {
+            ...(isFiniteVec3(fix?.position) ? { position: fix!.position } : {}),
+            ...(isFiniteVec3(fix?.target) ? { target: fix!.target } : {}),
+            ...(typeof fix?.fov === 'number' && fix.fov > 0 && fix.fov < 180 ? { fov: fix.fov } : {})
+        };
+        if (Object.keys(framing).length === 0) return null;
+        const camera = { ...(scene.camera || { position: [15, 12, 15] as [number, number, number], target: [0, 0, 0] as [number, number, number] }), ...framing };
+        if (JSON.stringify(camera) === JSON.stringify(scene.camera)) return null;
+        return { ...scene, camera };
+    }
+    if (artifact.type === 'live-code-sandbox') {
+        const sandbox = artifact.data as LiveCodeSandboxData;
+        const files = Array.isArray(sandbox?.files) ? sandbox.files : [];
+        const cssIndex = files.findIndex(f => f.name?.endsWith('.css') || f.path?.endsWith('.css'));
+        if (!fixes.cssFixes || cssIndex === -1) return null;
+        return {
+            ...sandbox,
+            files: files.map((f, i) => i === cssIndex ? { ...f, content: `${f.content}\n/* Visual Auto-Repair Fixes */\n${fixes.cssFixes}` } : f)
+        };
+    }
+    return null;
+}
+
 export interface UseArtifactSyncDeps {
     activeArtifact: ChatState['activeArtifact'];
     activeWorkspace: ProjectItem;
     artifactHistory: ChatState['artifactHistory'];
     currentSessionId: ChatState['currentSessionId'];
     graphControllerRef: WorkspaceGraphCoordinator['graphControllerRef'];
+    isGenerating: boolean;
     layoutMode: ChatState['layoutMode'];
     lensControllerRef: WorkspaceGraphCoordinator['lensControllerRef'];
     messages: ChatState['messages'];
@@ -60,7 +109,7 @@ export interface UseArtifactSyncDeps {
 }
 
 export function useArtifactSync(deps: UseArtifactSyncDeps) {
-    const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
+    const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
 
     const handleUpdateArtifact = React.useCallback((updatedArtifact: CanvasArtifact) => {
         const canonicalArtifact = graphControllerRef.current.registerArtifact(
@@ -173,11 +222,7 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
 
     // Automated Background Visual Verification & Self-Correction Loop
     React.useEffect(() => {
-        if (!activeArtifact) return;
-        if (isCuratedShowcaseArtifact(activeArtifact)) return;
-        if (activeArtifact.type !== '3d-scene' && activeArtifact.type !== 'live-code-sandbox' && activeArtifact.type !== 'interactive-browser') {
-            return;
-        }
+        if (!shouldAuditArtifactInBackground(activeArtifact, isGenerating)) return;
 
         const artifactKey = `${activeArtifact.id}-v${activeArtifact.version || 1}`;
         if (verifiedArtifactKeysRef.current.has(artifactKey)) {
@@ -232,48 +277,16 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                     return prev;
                 });
 
-                // If fidelity score is low (< 80) and auto-repair directives exist, automatically apply visual self-correction
-                if (audit.visualFixes && audit.fidelityScore < 80) {
-                    const fixes = audit.visualFixes;
-                    let repairedData: any = { ...activeArtifact.data };
-
-                    if (activeArtifact.type === '3d-scene') {
-                        repairedData = {
-                            ...repairedData,
-                            renderMode: fixes.scenePatches?.renderMode || repairedData.renderMode || 'shaded',
-                            environment: {
-                                ...(repairedData.environment || {}),
-                                ...(fixes.environment || {}),
-                                lighting: fixes.environment?.lighting || (fixes.lighting ? 'shaded' : repairedData.environment?.lighting || 'shaded')
-                            },
-                            camera: {
-                                ...(repairedData.camera || { position: [15, 12, 15], target: [0, 0, 0] }),
-                                ...(fixes.camera || {})
-                            },
-                            features: {
-                                ...(repairedData.features || {}),
-                                ...(fixes.features || {})
-                            }
-                        };
-                        if (fixes.scenePatches) {
-                            Object.assign(repairedData, fixes.scenePatches);
-                        }
-                    } else if (activeArtifact.type === 'live-code-sandbox') {
-                        if (fixes.cssFixes && Array.isArray(repairedData.files)) {
-                            const cssFile = repairedData.files.find((f: any) => f.name?.endsWith('.css') || f.path?.endsWith('.css'));
-                            if (cssFile) {
-                                cssFile.content = `${cssFile.content}\n/* Visual Auto-Repair Fixes */\n${fixes.cssFixes}`;
-                            }
-                        }
-                    }
-
-                    const repairedArtifact: CanvasArtifact = {
+                // If fidelity score is low (< 80), apply what the audit may change; no new version when that is nothing
+                const repairedData = audit.visualFixes && audit.fidelityScore < 80
+                    ? backgroundAuditRepairData(activeArtifact, audit.visualFixes)
+                    : null;
+                if (repairedData) {
+                    handleUpdateArtifact({
                         ...activeArtifact,
                         version: (activeArtifact.version || 1) + 1,
                         data: repairedData
-                    };
-
-                    handleUpdateArtifact(repairedArtifact);
+                    });
                 }
             } catch (err) {
                 console.warn('[GenerativeCanvasStudio] Background visual verification completed with fallback:', err);
@@ -286,7 +299,7 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
             cancelled = true;
             clearTimeout(settleTimer);
         };
-    }, [activeArtifact, layoutMode, handleUpdateArtifact]);
+    }, [activeArtifact, isGenerating, layoutMode, handleUpdateArtifact]);
 
     return { handleUpdateArtifact };
 }

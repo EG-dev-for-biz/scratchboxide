@@ -199,7 +199,7 @@ export interface VisualSelfCorrection3DLoopResult {
 export const VISUAL_VERIFICATION_CRITERIA = [
     'Absence of monochromatic black/blank void frames',
     'Proper illumination and directional/ambient lighting balance',
-    'Atmospheric sky shaders, environment maps, or background context',
+    'Background true to the scene\'s own environment: a neutral studio or grey clay void is intended, and an atmospheric sky is expected only when the scene\'s environment or features opt into one',
     'Correct camera framing, target orientation, and field of view',
     'Complete geometry rendering without unhandled clipping or culling',
     'Physically-based rendering (PBR) materials with realistic roughness and metalness',
