@@ -99,7 +99,8 @@ import {
     extractDocumentTitle,
     markdownStringToSections,
     parseOrSynthesizeArtifact,
-    synthesizeComprehensiveDocument
+    synthesizeComprehensiveDocument,
+    type ArtifactSynthesisOptions
 } from './gemini/artifact-synthesis';
 
 export { DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS, DEFAULT_SUBAGENT_MODEL, FALLBACK_SUBAGENT_MODELS };
@@ -584,9 +585,10 @@ export class GeminiService {
         modelText: string,
         request: GeminiGenerateRequest,
         mcpExecutions: McpExecutionState[],
-        groundingMetadata?: GroundingMetadata
-    ): CanvasArtifact {
-        return parseOrSynthesizeArtifact(prompt, modelText, request, mcpExecutions, groundingMetadata);
+        groundingMetadata?: GroundingMetadata,
+        options?: ArtifactSynthesisOptions
+    ): CanvasArtifact | undefined {
+        return parseOrSynthesizeArtifact(prompt, modelText, request, mcpExecutions, groundingMetadata, options);
     }
 
     // ------------------------------------------------------------------
