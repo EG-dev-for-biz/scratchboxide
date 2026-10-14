@@ -166,7 +166,7 @@ export function createSpatialNode(
 ): UniversalSpatialNode {
     if (typeof idOrParams === 'object') {
         const params = idOrParams;
-        return {
+        return withInitialContentHash({
             id: params.id,
             name: params.name ?? params.id,
             type: params.type,
@@ -189,13 +189,13 @@ export function createSpatialNode(
             generatorRecipe: params.generatorRecipe,
             modifierStack: params.modifierStack ?? [],
             provenance: params.provenance
-        };
+        });
     }
 
     const id = idOrParams;
     const type = typeOrName;
     const opts = options ?? {};
-    return {
+    return withInitialContentHash({
         id,
         name: opts.name ?? id,
         type: opts.type ?? type,
@@ -218,7 +218,15 @@ export function createSpatialNode(
         generatorRecipe: opts.generatorRecipe,
         modifierStack: opts.modifierStack ?? [],
         provenance: opts.provenance
-    };
+    });
+}
+
+/** New nodes carry a content hash from the start so the first mutation can be detected as a change. */
+function withInitialContentHash(node: UniversalSpatialNode): UniversalSpatialNode {
+    if (!node.contentHash) {
+        node.contentHash = computeNodeContentHash(node);
+    }
+    return node;
 }
 
 /**
@@ -317,8 +325,9 @@ export function computeNodeContentHash(node: UniversalSpatialNode): string {
 
 /**
  * Traverses a spatial hierarchy and marks the target node and its ancestors as dirty.
+ * With no target id, marks `root` itself.
  */
-export function markNodeDirty(root: UniversalSpatialNode, targetNodeId: string): boolean {
+export function markNodeDirty(root: UniversalSpatialNode, targetNodeId: string = root.id): boolean {
     if (root.id === targetNodeId) {
         root.isDirty = true;
         root.version = (root.version ?? 1) + 1;

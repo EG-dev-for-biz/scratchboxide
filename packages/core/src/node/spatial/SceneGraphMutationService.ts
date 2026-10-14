@@ -47,11 +47,16 @@ export interface SpatialMutationDelta {
     nodeId: string;
     operation: MutationOperationType;
     payload: Record<string, any>;
+    /** Agent issuing the mutation; checked against the node's lease holder and recorded as provenance author. */
+    agentId?: string;
+    /** Alias of `agentId`. */
     authorAgent?: string;
     sourcePrompt?: string;
     ruleId?: string;
     expectedVersion?: number;
 }
+
+export type SpatialSceneGraphMutation = SpatialMutationDelta;
 
 export interface MutationCommitRecord {
     transactionId: string;
@@ -196,6 +201,7 @@ export class SceneGraphMutationService {
                 error: `Scene '${sceneId}' not found in registry.`
             };
         }
+        const authorAgent = delta.agentId || delta.authorAgent;
 
         // Validate lease if node is locked
         const lockKey = `${sceneId}:${delta.nodeId}`;
@@ -204,7 +210,7 @@ export class SceneGraphMutationService {
             const activeLease = this.activeLeases.get(lockedLeaseId);
             const now = Date.now();
             if (activeLease && now <= activeLease.expiresAt) {
-                const leaseMatches = (lease && lease.leaseId === lockedLeaseId) || (Boolean(delta.authorAgent) && activeLease.agentId === delta.authorAgent);
+                const leaseMatches = (lease && lease.leaseId === lockedLeaseId) || (Boolean(authorAgent) && activeLease.agentId === authorAgent);
                 if (!leaseMatches) {
                     return {
                         success: false,
@@ -379,7 +385,7 @@ export class SceneGraphMutationService {
 
             // Update provenance
             if (!targetNode.provenance) targetNode.provenance = {};
-            targetNode.provenance.authorAgent = delta.authorAgent || targetNode.provenance.authorAgent;
+            targetNode.provenance.authorAgent = authorAgent || targetNode.provenance.authorAgent;
             targetNode.provenance.sourcePrompt = delta.sourcePrompt || targetNode.provenance.sourcePrompt;
             targetNode.provenance.ruleId = delta.ruleId || targetNode.provenance.ruleId;
             targetNode.provenance.timestamp = Date.now();
@@ -392,7 +398,7 @@ export class SceneGraphMutationService {
                 transactionId: delta.transactionId,
                 sceneId,
                 timestamp: Date.now(),
-                authorAgent: delta.authorAgent || 'system',
+                authorAgent: authorAgent || 'system',
                 affectedNodeIds: [targetNode.id],
                 snapshotBefore
             });
@@ -449,23 +455,21 @@ export class SceneGraphMutationService {
     /**
      * Evaluates dirty subtrees incrementally via a generator callback.
      * Only invokes the generator for nodes that have changed, preserving clean nodes.
+     * Returns the number of nodes evaluated.
      */
     public async evaluateDirtySubtrees(
         sceneId: string,
         evaluator: (node: UniversalSpatialNode) => Promise<void>
-    ): Promise<string[]> {
+    ): Promise<number> {
         const root = this.scenes.get(sceneId);
-        if (!root) return [];
+        if (!root) return 0;
 
         const dirtyNodes = getDirtyNodes(root);
-        const evaluatedIds: string[] = [];
-
         for (const node of dirtyNodes) {
             await evaluator(node);
-            evaluatedIds.push(node.id);
         }
 
         clearDirtyFlags(root);
-        return evaluatedIds;
+        return dirtyNodes.length;
     }
 }

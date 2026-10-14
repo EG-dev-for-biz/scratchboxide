@@ -90,9 +90,14 @@ describe('Persistent Scene Graph Authority & Transactional Scopes', () => {
         payload: { floors: 6 }
       };
 
-      expect(() => {
-        service.applyMutation('test_scene', unauthorizedMutation);
-      }).toThrow(/exclusive lease held by agent 'facade_agent'/);
+      // applyMutation reports every rejection (missing scene/node, version conflict, lease violation)
+      // through MutationResult rather than throwing; scripts/verify_scene_graph_authority.ts, added in
+      // the same commit (f05f9f2), checks the same result contract.
+      const result = service.applyMutation('test_scene', unauthorizedMutation);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/exclusive lease held by agent 'facade_agent'/);
+      expect(buildingNode.parameters.floors).toBe(4);
+      expect(buildingNode.version).toBe(1);
     });
 
     it('allows Road Agent to concurrently mutate road nodes without stomping building', () => {
