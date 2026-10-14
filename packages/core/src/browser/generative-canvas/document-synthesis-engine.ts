@@ -259,7 +259,7 @@ export function buildDynamicThemeOnTheFly(promptOrTitle: string, extraContext?: 
     } else if (domain === 'arts') {
         openingHeaderTitle = `1. Artistic Origins & Aesthetic Framework: ${topic}`;
     } else {
-        openingHeaderTitle = `1. Overview & Fundamental Principles: ${topic}`;
+        openingHeaderTitle = `1. Overview & Key Facts: ${topic}`;
     }
 
     // 3. Subtopics
@@ -308,10 +308,10 @@ export function buildDynamicThemeOnTheFly(promptOrTitle: string, extraContext?: 
         };
     } else {
         subtopics = {
-            pillarTitle: '2. Core Pillars & Structural Analysis',
-            sub1Title: '2.1 Foundational Invariants & Methodologies',
-            sub2Title: '2.2 Operational Execution & Trade-Off Matrix',
-            milestoneTitle: '3. Actionable Milestones & Next Steps'
+            pillarTitle: '2. Key Facts, Events & Context',
+            sub1Title: '2.1 Primary Evidence & Notable Details',
+            sub2Title: '2.2 Broader Significance & Comparative Perspective',
+            milestoneTitle: '3. Open Questions & Further Reading'
         };
     }
 
@@ -648,53 +648,52 @@ export function buildDynamicThemeOnTheFly(promptOrTitle: string, extraContext?: 
         ? `Dialectical inquiry, epistemological foundations, and conceptual discourse on ${topic}`
         : domain === 'arts'
         ? `Aesthetic composition, historical evolution, and stylistic expressions of ${topic}`
-        : `Comprehensive analysis, operational framework, and strategic synthesis for ${topic}`;
+        : `Key facts, context, and analysis covering ${topic}`;
 
     const defaultTags = [
         domainLabel,
         topic.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20),
-        domain === 'science' ? 'EmpiricalResearch' : domain === 'history' ? 'HistoricalContext' : domain === 'technology' ? 'Architecture' : 'StrategicAnalysis',
-        'SystemDesign',
-        'Invariants'
+        domain === 'science' ? 'EmpiricalResearch' : domain === 'history' ? 'HistoricalContext' : domain === 'technology' ? 'TechAnalysis' : domain === 'arts' ? 'Arts' : domain === 'philosophy' ? 'Philosophy' : 'Analysis',
+        'Reference'
     ].filter(Boolean);
 
-    const narrativeParagraph1 = `The study and systematic formulation of ${topic} represents a crucial nexus within modern ${domain}. At its core, ${topic} addresses fundamental questions of organization, methodology, and structural invariants that govern both theoretical understanding and real-world execution. Formulating a rigorous framework for ${topic} requires establishing clear foundational definitions and analyzing how underlying principles interact under varying operational conditions.`;
+    const narrativeParagraph1 = `${capitalizedTopic} is a subject of broad significance that spans multiple dimensions — historical context, key figures or events, underlying principles, and real-world impact. Understanding it well requires situating its core elements within their wider context, tracing how conditions or decisions have shaped the present state, and recognizing the perspectives of those most directly involved.`;
 
-    const narrativeParagraph2 = `Historically and conceptually, the evolution of ${topic} reflects broader shifts toward systematic verification, decoupled modular boundaries, and scalable design. By establishing comprehensive invariants and recognizing cross-disciplinary dependencies, practitioners can navigate complex trade-offs without compromising fidelity, safety, or core performance characteristics.`;
+    const narrativeParagraph2 = `A deeper look at ${topic} reveals patterns that connect causes to outcomes, key actors to consequences, and individual decisions to collective results. Whether examined as a singular moment or an evolving process, the subject rewards careful attention to the forces, constraints, and opportunities that have defined it over time.`;
 
-    const narrativeParagraph3 = `A detailed mechanical examination reveals that ${topic} operates across distinct layered tiers. The primary tier establishes baseline parameters and input constraints; the intermediary tier orchestrates execution logic, transformation pipelines, and validation guardrails; and the external tier coordinates observable outputs, integration interfaces, and feedback mechanisms. This tripartite separation ensures high resilience and maintainability.`;
+    const narrativeParagraph3 = `Key dimensions of ${topic} include the primary facts and data points that anchor the subject, the sequence of events or mechanisms that produced the current state, and the ongoing debates or open questions that practitioners, scholars, and stakeholders continue to explore. Each of these layers contributes to a full and accurate understanding.`;
 
-    const narrativeParagraph4 = `Empirical evaluation and critical analysis demonstrate that long-term success with ${topic} relies upon continuous verification, transparent metrics, and adaptive refinement. As technical and operational requirements advance, systems grounded in these foundational paradigms remain adaptable, resilient, and capable of sustained convergence toward target outcomes.`;
+    const narrativeParagraph4 = `Looking ahead, the study of ${topic} opens avenues for further inquiry, comparison with related subjects, and application of lessons learned. Critical evaluation of sources, careful cross-referencing of evidence, and attention to multiple viewpoints all strengthen the quality of any analysis and ensure that conclusions rest on solid ground.`;
 
     const callout = {
-        title: `${capitalizedTopic} Principles & Invariants`,
+        title: `Key Takeaway: ${capitalizedTopic}`,
         type: 'info' as const,
-        content: `Foundational analysis of ${topic} demonstrates that clarity of invariants and rigorous boundary definition are prerequisites for long-term operational excellence and repeatable outcomes.`
+        content: `The most reliable understanding of ${topic} comes from grounding analysis in primary facts, situating those facts in context, and remaining open to nuance when evidence is incomplete or contested.`
     };
 
     const comparisonMatrix = {
-        title: `${capitalizedTopic} — Dimensional Comparison & Trade-off Matrix`,
-        headers: ['Dimension / Approach', 'Primary Invariant', 'Key Advantage', 'Operational Trade-off', 'Target SLA / Status'],
+        title: `${capitalizedTopic} — Key Dimensions at a Glance`,
+        headers: ['Dimension', 'What It Covers', 'Why It Matters', 'Key Sources / Evidence', 'Current Status'],
         rows: [
-            ['Foundational Architecture', 'Decoupled domain boundaries', 'Maximum modularity & resilience', 'Slightly higher initial coordination', 'Production Ready'],
-            ['Automated Verification', 'Continuous regression validation', 'Zero manual regressions', 'CI pipeline execution overhead', 'Enforced Active'],
-            ['Dynamic Optimization', 'Adaptive resource allocation', 'High efficiency & low latency', 'Dynamic profiling complexity', 'Optimized (< 50ms)'],
-            ['Iterative Evolution', 'Semantic versioning & telemetry', 'Seamless backward compatibility', 'Deprecation lifecycle management', 'Continuous Deployment']
+            ['Core Facts & Data', 'The established record of events, outcomes, and figures', 'Anchors all analysis in verifiable ground truth', 'Primary records, official statistics', 'Well-established'],
+            ['Historical Context', 'Preceding conditions and causative factors', 'Explains why things unfolded as they did', 'Archival research, contemporaneous accounts', 'Documented'],
+            ['Key Actors & Roles', 'Individuals, organizations, or forces involved', 'Attributes decisions and outcomes appropriately', 'Biographical records, official roles', 'On record'],
+            ['Open Questions', 'Disputed or incompletely documented aspects', 'Marks boundaries of current knowledge', 'Ongoing research, expert debate', 'In active discussion']
         ]
     };
 
     const checklistItems = [
-        { id: `chk-${Date.now()}-1`, text: `Establish foundational invariants and interface boundaries for ${topic}`, done: true },
-        { id: `chk-${Date.now()}-2`, text: 'Deploy automated validation pipelines and verification test suites', done: true },
-        { id: `chk-${Date.now()}-3`, text: 'Configure telemetry profiling, performance alerting, and operational metrics', done: true },
-        { id: `chk-${Date.now()}-4`, text: 'Execute end-to-end integration review and stakeholder sign-off', done: false }
+        { id: `chk-${Date.now()}-1`, text: `Verify primary facts about ${topic} against authoritative sources`, done: true },
+        { id: `chk-${Date.now()}-2`, text: `Identify the key events, dates, or figures central to ${topic}`, done: true },
+        { id: `chk-${Date.now()}-3`, text: 'Situate the subject within its broader historical or thematic context', done: true },
+        { id: `chk-${Date.now()}-4`, text: 'Note any open questions or areas where sources differ', done: false }
     ];
 
     const interactiveNodes = [
-        { id: 'node-1', label: '1. Invariant Formulation', detail: `Core principles and boundary constraints for ${topic}` },
-        { id: 'node-2', label: '2. Structural Decomposition', detail: 'Decoupled modules and systematic dependency mappings' },
-        { id: 'node-3', label: '3. Verification & Guardrails', detail: 'Empirical testing, error budgets, and validation tests' },
-        { id: 'node-4', label: '4. Convergence Horizon', detail: 'Living artifact synchronization and enduring performance' }
+        { id: 'node-1', label: '1. Core Facts', detail: `The verified record of events, outcomes, and key figures for ${topic}` },
+        { id: 'node-2', label: '2. Context & Background', detail: 'Preceding conditions, causative factors, and surrounding circumstances' },
+        { id: 'node-3', label: '3. Key Analysis', detail: 'Principal findings, patterns, and interpretations drawn from the evidence' },
+        { id: 'node-4', label: '4. Implications & Next Steps', detail: 'Open questions, lessons learned, and areas for further study' }
     ];
 
     const citations = domain === 'science' ? [
@@ -1951,10 +1950,11 @@ export function synthesizeComprehensiveDocument(
     // Explicit request for media/illustrations in prompt
     const promptWantsMedia = /with[- ](media|images?|diagrams?|video|maps?|visuals?|illustrations?)|multimedia|visual[- ]guide|diagrammatic|rich[- ]media/i.test(prompt);
 
-    // If options.includeMedia is provided, respect it; otherwise, default to not explicitly minimal
+    // Per the Multimedia Policy: DO NOT inject multimedia sections by default.
+    // Only include media when the caller opts in or the user explicitly asked for it.
     const shouldIncludeMedia = options?.includeMedia !== undefined
         ? options.includeMedia
-        : !isExplicitlyMinimal;
+        : promptWantsMedia;
 
     const sections: MarkdownSection[] = [
         {
