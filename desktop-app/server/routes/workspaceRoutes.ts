@@ -21,6 +21,7 @@ import {
     resolveWithinRoot
 } from '../../../packages/core/src/node/security/path-guard';
 import { createEmptyProjectGraph } from '../../../packages/core/src/common';
+import { DEFAULT_GEMINI_MODEL } from '../../../packages/core/src/node/gemini/gemini-client';
 import {
     WorkspaceConfigService,
     ChatSessionStore,
@@ -254,7 +255,7 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
                 await fs.writeJSON(configPath, {
                     workspaceName: cleanName,
                     theme: 'dark',
-                    defaultModel: 'gemini-3.8-flash',
+                    defaultModel: DEFAULT_GEMINI_MODEL,
                     thinkingBudget: 1024,
                     template: template || 'blank'
                 }, { spaces: 2 });

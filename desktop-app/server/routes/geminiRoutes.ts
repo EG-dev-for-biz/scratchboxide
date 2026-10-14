@@ -82,7 +82,8 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
     router.get('/models', (_req: Request, res: Response) => {
         res.json({
             models: [
-                { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', maxTokens: 1048576, description: 'Primary model with Native Reasoning & Fast Multimodal capabilities' },
+                { id: 'gemini-4-argon', name: 'Gemini 4 Argon', maxTokens: 1048576, description: 'Primary flagship reasoning model' },
+                { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', maxTokens: 1048576, description: 'Previous primary model with Native Reasoning & Fast Multimodal capabilities' },
                 { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', maxTokens: 1048576, description: 'Previous primary model (first fallback)' },
                 { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', maxTokens: 524288, description: 'High-efficiency Subagent Swarm worker' },
                 { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', maxTokens: 262144, description: 'Fallback worker agent' }
