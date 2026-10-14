@@ -290,7 +290,8 @@ export class BeautifyStationService {
         const initMetrics = evaluateEdgeOverlap(queryField, initialEdges);
         const minOverlap = thresholds.minOverlapPercent ?? 85.0;
         if (initMetrics.overlapScorePercent >= 90.0 || thresholds.maxIterations === 0) {
-            const passed = (thresholds.maxIterations === 0) ? true : (initMetrics.overlapScorePercent >= minOverlap);
+            // Draft mode skips optimization, not QC: a poor initial overlap still fails and triggers a reroll.
+            const passed = initMetrics.overlapScorePercent >= minOverlap;
             return {
                 qc: {
                     overlapPercent: initMetrics.overlapScorePercent,
