@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ballistic Glass Shatter</title>
+    <style>
+        :root {
+            --bg: #1b1e24;
+            --panel: rgba(18, 20, 26, 0.86);
+            --border: rgba(255, 255, 255, 0.10);
+            --text: #e7e9ee;
+            --muted: #9aa1ad;
+            --accent: #ff9a4a;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; overflow: hidden; }
+        #viewport { position: fixed; inset: 0; display: block; }
+        .panel { position: fixed; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; backdrop-filter: blur(8px); }
+        #info { top: 16px; left: 16px; max-width: 360px; padding: 14px 16px; }
+        #info h1 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+        #info p { margin: 0; color: var(--muted); font-size: 13px; }
+        #stats { margin-top: 10px; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-variant-numeric: tabular-nums; font-size: 12px; }
+        #stats dt { color: var(--muted); }
+        #stats dd { margin: 0; }
+        #timeline { left: 50%; bottom: 20px; transform: translateX(-50%); width: min(720px, calc(100% - 32px)); padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
+        #timeline button { flex: none; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border); background: rgba(255,255,255,0.06); color: var(--text); font-size: 15px; cursor: pointer; }
+        #timeline button:hover { background: rgba(255,255,255,0.12); }
+        #scrub { flex: 1; accent-color: var(--accent); }
+        #clock { flex: none; width: 76px; text-align: right; font-variant-numeric: tabular-nums; }
+        #status { top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 18px 22px; max-width: min(520px, calc(100% - 32px)); text-align: center; }
+        #status code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+        @media (max-width: 600px) { #info { right: 16px; max-width: none; } }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <canvas id="viewport"></canvas>
+
+    <div id="info" class="panel">
+        <h1>Ballistic Glass Shatter</h1>
+        <p>A supersonic round passes through a framed glass pane. Every frame is geometry from the native fracture engine (<code>scratchbox_fracture.hpp</code>): Voronoi shards thrown on ballistic arcs, the projectile, its Mach cone and the impact sparks.</p>
+        <dl id="stats"></dl>
+    </div>
+
+    <div id="timeline" class="panel" hidden>
+        <button id="play" title="Play / pause (space)" aria-label="Play or pause">⏸</button>
+        <input id="scrub" type="range" min="0" value="0" step="1" aria-label="Frame">
+        <span id="clock">0.0 ms</span>
+    </div>
+
+    <div id="status" class="panel">Loading frames…</div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+        const FRAME_DIR = 'models/glass_shatter/';
+        const statusEl = document.getElementById('status');
+
+        const canvas = document.getElementById('viewport');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.shadowMap.enabled = true;
+
+        // Neutral studio: room-light reflections for the glass, a key and a fill, no sky or fog.
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1b1e24);
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+        scene.environmentIntensity = 0.6;
+
+        const key = new THREE.DirectionalLight(0xffffff, 2.2);
+        key.position.set(4, 6, 5);
+        const fill = new THREE.DirectionalLight(0xdfe8ff, 0.6);
+        fill.position.set(-5, 2.5, 3);
+        scene.add(key, fill);
+
+        const camera = new THREE.PerspectiveCamera(38, 1, 0.05, 200);
+        camera.position.set(5.6, 2.0, 6.8);
+        const controls = new OrbitControls(camera, canvas);
+        controls.target.set(0, 0, 0.4);
+        controls.enableDamping = true;
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.3, 1.0);
+        composer.addPass(bloom);
+        composer.addPass(new OutputPass());
+
+        function resize() {
+            const w = window.innerWidth, h = window.innerHeight;
+            renderer.setSize(w, h, false);
+            composer.setSize(w, h);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function showError(html) {
+            statusEl.innerHTML = html;
+            statusEl.hidden = false;
+        }
+
+        let frames = [];
+        let current = 0;
+        let playing = true;
+        let elapsed = 0;
+
+        function showFrame(i) {
+            frames[current].scene.visible = false;
+            current = i;
+            frames[current].scene.visible = true;
+            const fr = frames[current].meta;
+            document.getElementById('scrub').value = String(i);
+            document.getElementById('clock').textContent = `${(fr.t * 1000).toFixed(1)} ms`;
+            document.getElementById('stats').innerHTML =
+                `<dt>Frame</dt><dd>${i + 1} / ${frames.length}</dd>` +
+                `<dt>Vertices</dt><dd>${fr.vertices.toLocaleString()}</dd>` +
+                `<dt>Triangles</dt><dd>${fr.triangles.toLocaleString()}</dd>`;
+        }
+
+        async function load() {
+            let manifest;
+            try {
+                const res = await fetch(FRAME_DIR + 'manifest.json', { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                manifest = await res.json();
+            } catch {
+                showError('The fracture frames have not been built yet. From the repository root run:<br><br><code>npx vite-node scripts/build_glass_shatter_demo.ts</code><br><br>then reload this page.');
+                return;
+            }
+
+            const loader = new GLTFLoader();
+            let done = 0;
+            frames = await Promise.all(manifest.frames.map(async meta => {
+                const gltf = await loader.loadAsync(FRAME_DIR + meta.file);
+                gltf.scene.visible = false;
+                gltf.scene.traverse(o => {
+                    if (!o.isMesh) return;
+                    o.castShadow = o.receiveShadow = true;
+                    // Glass parts carry KHR_materials_transmission; render them after the opaque frame.
+                    if (o.material?.transparent) o.renderOrder = 1;
+                });
+                scene.add(gltf.scene);
+                statusEl.textContent = `Loading frames… ${++done} / ${manifest.frames.length}`;
+                return { meta, scene: gltf.scene };
+            }));
+
+            statusEl.hidden = true;
+            const scrub = document.getElementById('scrub');
+            scrub.max = String(frames.length - 1);
+            document.getElementById('timeline').hidden = false;
+            showFrame(0);
+
+            const playBtn = document.getElementById('play');
+            const setPlaying = p => { playing = p; playBtn.textContent = p ? '⏸' : '▶'; };
+            playBtn.addEventListener('click', () => setPlaying(!playing));
+            scrub.addEventListener('input', () => { setPlaying(false); showFrame(Number(scrub.value)); });
+            window.addEventListener('keydown', e => {
+                if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+                if (e.code === 'ArrowRight') { setPlaying(false); showFrame(Math.min(frames.length - 1, current + 1)); }
+                if (e.code === 'ArrowLeft') { setPlaying(false); showFrame(Math.max(0, current - 1)); }
+            });
+        }
+
+        // Playback runs the 0.3 s event as a ~3 s slow-motion loop with a short hold at the end.
+        const SECONDS_PER_FRAME = 0.1;
+        const clock = new THREE.Clock();
+        renderer.setAnimationLoop(() => {
+            const dt = clock.getDelta();
+            if (playing && frames.length) {
+                elapsed += dt;
+                if (elapsed >= SECONDS_PER_FRAME) {
+                    elapsed = 0;
+                    showFrame((current + 1) % frames.length);
+                }
+            }
+            controls.update();
+            composer.render();
+        });
+
+        load().catch(err => showError(`Could not load the frames: ${String(err?.message || err)}`));
+    </script>
+</body>
+</html>
