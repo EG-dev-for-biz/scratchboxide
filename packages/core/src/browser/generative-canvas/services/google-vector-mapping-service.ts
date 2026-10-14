@@ -134,8 +134,17 @@ export class GoogleVectorMappingService {
    * into local ENU tangent plane coordinates.
    * Manhattan grid angle is 29° clockwise from True North.
    */
+  /**
+   * Grid offsets are authored with u = 0 at the Fifth Avenue building line, but the projection origin is
+   * ESB_GOOGLE_GEODETIC_ANCHOR, Google Geocoding's ROOFTOP point for the Empire State Building (the tower,
+   * mid-lot). Shifting the grid by half the ESB lot depth puts that lot's centroid on the rooftop point;
+   * uncorrected, every parcel and road sat ~54 m west along the streets (~30 m north in latitude).
+   */
+  public static readonly GRID_U_ORIGIN_OFFSET_M = 53.75;
+
   public static manhattanToEnu(uAvenueOffset: number, vStreetOffset: number): [number, number] {
     const theta = (29.0 * Math.PI) / 180.0;
+    uAvenueOffset += GoogleVectorMappingService.GRID_U_ORIGIN_OFFSET_M;
     const x = uAvenueOffset * Math.cos(theta) - vStreetOffset * Math.sin(theta);
     const z = uAvenueOffset * Math.sin(theta) + vStreetOffset * Math.cos(theta);
     return [x, z];
@@ -1263,8 +1272,10 @@ export class GoogleVectorMappingService {
     // 1. Check parcels first
     for (const p of mapping.parcels) {
       if (p.name.toLowerCase().includes(clean) || clean.includes(p.name.toLowerCase()) || p.id.toLowerCase() === clean) {
-        const avgLng = p.coordinatesWGS84.reduce((sum, c) => sum + c[0], 0) / p.coordinatesWGS84.length;
-        const avgLat = p.coordinatesWGS84.reduce((sum, c) => sum + c[1], 0) / p.coordinatesWGS84.length;
+        // Rings are closed (last = first); count each corner once.
+        const ring = openRing(p.coordinatesWGS84);
+        const avgLng = ring.reduce((sum, c) => sum + c[0], 0) / ring.length;
+        const avgLat = ring.reduce((sum, c) => sum + c[1], 0) / ring.length;
         return {
           lat: Number(avgLat.toFixed(6)),
           lng: Number(avgLng.toFixed(6)),
@@ -1279,8 +1290,9 @@ export class GoogleVectorMappingService {
     if (mapping.landscapes) {
       for (const l of mapping.landscapes) {
         if (l.name.toLowerCase().includes(clean) || clean.includes(l.name.toLowerCase()) || l.id.toLowerCase() === clean) {
-          const avgLng = l.coordinatesWGS84.reduce((sum, c) => sum + c[0], 0) / l.coordinatesWGS84.length;
-          const avgLat = l.coordinatesWGS84.reduce((sum, c) => sum + c[1], 0) / l.coordinatesWGS84.length;
+          const ring = openRing(l.coordinatesWGS84);
+          const avgLng = ring.reduce((sum, c) => sum + c[0], 0) / ring.length;
+          const avgLat = ring.reduce((sum, c) => sum + c[1], 0) / ring.length;
           return {
             lat: Number(avgLat.toFixed(6)),
             lng: Number(avgLng.toFixed(6)),
@@ -1394,3 +1406,9 @@ export const GOOGLE_VECTOR_MAP_PATH_B_CONFIG = {
   internalUsageAttributionIds: ['gmp_git_agentskills_v1']
 };
 
+
+/** A closed polygon ring without its repeated closing vertex. */
+function openRing<T extends ArrayLike<number>>(ring: T[]): T[] {
+  const n = ring.length;
+  return n > 1 && ring[0][0] === ring[n - 1][0] && ring[0][1] === ring[n - 1][1] ? ring.slice(0, -1) : ring;
+}
