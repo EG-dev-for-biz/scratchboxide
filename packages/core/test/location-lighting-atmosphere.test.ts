@@ -12,11 +12,26 @@ import {
 } from '../src/node';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
+import { KNOWN_RESECTION_LANDMARKS } from '../src/node/spatial/GeoBoxPrecisionResectionService';
+
+/** A surveyed reference pose passed explicitly; resolution never picks one from words in the prompt hint. */
+function fixturePose(key: keyof typeof KNOWN_RESECTION_LANDMARKS) {
+    const f = KNOWN_RESECTION_LANDMARKS[key];
+    return {
+        targetLandmarkName: f.name,
+        targetCoords: { lat: f.targetCoords.lat, lng: f.targetCoords.lng, alt: f.groundElevation },
+        cameraOpticalCenter: { lat: f.vantageCoords.lat, lng: f.vantageCoords.lng, alt: f.vantageCoords.altitudeMeters },
+        headingDeg: f.headingDeg,
+        pitchDeg: f.pitchDeg,
+        glbPath: f.glbPath
+    };
+}
 
 describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => {
     describe('1. Image Location Resection API', () => {
         it('should resect 6-DOF camera pose, geodetic coords, and 100% edge alignment via resectImageLocation', async () => {
             const result = await resectImageLocation({
+                ...fixturePose('colosseum'),
                 promptHint: 'Colosseum Rome dusk vantage point',
                 sensorFocalMm: 26.0,
                 optimizeTo100Percent: true
@@ -39,7 +54,7 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
         it('should resect camera pose via GeoBoxPrecisionResectionService instance method', async () => {
             const service = new GeoBoxPrecisionResectionService();
             const result = await service.resectImageLocation({
-                targetLandmarkName: 'Eiffel Tower',
+                ...fixturePose('eiffel'),
                 optimizeTo100Percent: true
             });
 
@@ -172,6 +187,7 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
         it('should execute geobox_resect_image_location tool', async () => {
             const registry = createDefaultToolRegistry();
             const response = await registry.dispatch('geobox_resect_image_location', {
+                ...fixturePose('colosseum'),
                 promptHint: 'Colosseum, Rome dusk',
                 optimizeTo100Percent: true
             }, {} as any);

@@ -16,13 +16,20 @@ import {
   Google3DTileService,
   generatePhotorealProceduralCppSource
 } from '../src/browser/generative-canvas/services/Google3DTileService';
+import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
 
 test('GeospatialPhotorealPipeline: Location-agnostic C++20 code generation', () => {
   const pipeline = GeospatialPhotorealPipeline.getInstance();
 
-  // Test 1: Empire State Building NYC
+  // A place name is not resolved offline (no landmark table): it must come with coordinates.
+  expect(() => pipeline.generatePhotorealCppSource({ query: 'Empire State Building' })).toThrow(LocationUnresolvedError);
+
+  // Test 1: Empire State Building NYC (explicit coordinates)
   const esbOptions: PhotorealReconstructionOptions = {
-    query: 'Empire State Building',
+    lat: 40.7484405,
+    lng: -73.9856644,
+    elevation: 15.0,
+    landmarkName: 'Empire State Building',
     footprintWidth: 65.0,
     footprintDepth: 55.0,
     towerHeight: 380.0,
@@ -38,7 +45,10 @@ test('GeospatialPhotorealPipeline: Location-agnostic C++20 code generation', () 
 
   // Test 2: San Francisco Ferry Building
   const sfOptions: PhotorealReconstructionOptions = {
-    query: 'san francisco ferry building',
+    lat: 37.7955,
+    lng: -122.3937,
+    elevation: 2.4,
+    landmarkName: 'San Francisco Ferry Building',
     footprintWidth: 45.0,
     footprintDepth: 35.0,
     towerHeight: 75.0,
@@ -121,16 +131,45 @@ test('GoogleMapsService: Multi-source geospatial endpoints (Aerial View, Solar, 
   expect(svUrl).toContain('size=1024x768');
   expect(svUrl).toContain('heading=90');
 
-  // Test Aerial View video API
-  const aerial = await service.fetchAerialViewVideo({ lat: 40.7484, lng: -73.9857 });
-  expect(aerial).toBeDefined();
+  // Aerial View: the API's own answer, never a demo URL. No key throws; 404 is the API's NOT_FOUND.
+  const savedKeys = { state: service.getApiKey(), g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+  service.setApiKey('');
+  delete process.env.GOOGLE_MAPS_API_KEY;
+  delete process.env.MAP_TILES_API_KEY;
+  try {
+    await expect(service.fetchAerialViewVideo({ lat: 40.7484, lng: -73.9857 })).rejects.toThrow(/No Google Maps API key/);
+    await expect(service.fetchBuildingSolarInsights({ lat: 40.7484, lng: -73.9857 })).rejects.toThrow(/No Google Maps API key/);
+  } finally {
+    service.setApiKey(savedKeys.state);
+    if (savedKeys.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = savedKeys.g;
+    if (savedKeys.m !== undefined) process.env.MAP_TILES_API_KEY = savedKeys.m;
+  }
+  const aerialFetch = (async (url: any) => new Response(JSON.stringify({
+    state: 'ACTIVE',
+    uris: { MP4_HIGH: { landscapeUri: 'https://example.test/high.mp4' } },
+    metadata: { videoId: 'vid-1' }
+  }), { status: 200 })) as typeof fetch;
+  const aerial = await service.fetchAerialViewVideo({ lat: 40.7484, lng: -73.9857 }, { apiKey: 'test-key', fetchImpl: aerialFetch });
   expect(aerial.state).toBe('ACTIVE');
-  expect(aerial.uris?.mp4High).toBeDefined();
+  expect(aerial.uris?.mp4High).toBe('https://example.test/high.mp4');
+  const notFound = await service.fetchAerialViewVideo('nowhere', { apiKey: 'test-key', fetchImpl: (async () => new Response('{}', { status: 404 })) as typeof fetch });
+  expect(notFound.state).toBe('NOT_FOUND');
 
-  // Test Solar API building insights
-  const solar = await service.fetchBuildingSolarInsights({ lat: 40.7484, lng: -73.9857 });
-  expect(solar).toBeDefined();
-  expect(solar.solarPotential?.maxArrayPanelsCount).toBeGreaterThan(0);
+  // Solar API building insights: returned as the API gave them; a failed call throws instead of inventing a roof.
+  const solarBody = {
+    name: 'buildings/ChIJ123',
+    center: { latitude: 40.7484, longitude: -73.9857 },
+    solarPotential: { maxArrayPanelsCount: 412, panelCapacityWatts: 400, roofSegmentStats: [] }
+  };
+  const solar = await service.fetchBuildingSolarInsights({ lat: 40.7484, lng: -73.9857 }, {
+    apiKey: 'test-key',
+    fetchImpl: (async () => new Response(JSON.stringify(solarBody), { status: 200 })) as typeof fetch
+  });
+  expect(solar.solarPotential?.maxArrayPanelsCount).toBe(412);
+  await expect(service.fetchBuildingSolarInsights({ lat: 40.7484, lng: -73.9857 }, {
+    apiKey: 'test-key',
+    fetchImpl: (async () => new Response(JSON.stringify({ error: { message: 'Requested entity was not found.' } }), { status: 404 })) as typeof fetch
+  })).rejects.toThrow(/Solar API gave no building insights.*not found/);
 });
 
 test('Google3DTileService: improveTileExtrusion converts raw tile block into photoreal mesh', () => {

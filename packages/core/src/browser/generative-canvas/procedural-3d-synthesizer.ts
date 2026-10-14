@@ -36,10 +36,7 @@ import {
     BatchExecutionResult
 } from './services/direct-dispatch-operator-engine';
 import {
-    detectRealWorldLocationIntent,
-    isResolvedLocation,
     Google3DTileService,
-    type RealWorldLocationIntent,
     type ClayPresetId
 } from './services/Google3DTileService';
 import {
@@ -67,13 +64,10 @@ export {
     type ProceduralMicroSurfaceConfig
 };
 export {
-    detectRealWorldLocationIntent,
-    isResolvedLocation,
     castCreativeLocation,
     CreativeLocationCastingService
 };
 export type {
-    RealWorldLocationIntent,
     ClayPresetId,
     CastedLocation,
     LocationCastingArchetype
@@ -167,11 +161,6 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         // -0.988. Historical Battlefield / Lexington 1776 / Castle Siege (checked before geospatial so Battle of Lexington 1776 is not treated as modern tile)
         if (/lexington|concord|1776|battle|revolution|redcoat|minuteman|militia|firing\s*line|bunker\s*hill|gettysburg|waterloo|siege|castle\s*siege|warfare|historical\s*scene/i.test(text)) {
             return 'battlefield';
-        }
-
-        // -0.985. Real-World Geospatially Anchored 3D Map Tiles (Google Photorealistic 3D Tiles)
-        if (isResolvedLocation(detectRealWorldLocationIntent(prompt, context))) {
-            return 'geospatial';
         }
 
         // -0.96. City / Metropolis / Cyberpunk / Urban Street Canyons / Skylines
@@ -1936,9 +1925,8 @@ export function applyCreativeLocationCasting(
         return scene;
     }
 
-    const isExplicitRealWorld = isResolvedLocation(detectRealWorldLocationIntent(prompt, context));
-
-    if (!isExplicitRealWorld && !scene.geoAnchor) {
+    // Prompt words never become places here; a location reaches a scene only through the location tools.
+    if (!scene.geoAnchor) {
         // No real-world location named: stay in the grey clay void instead of casting the
         // scene onto an unrelated Earth location.
         if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
@@ -2076,6 +2064,18 @@ export function synthesizeRawContextual3DScene(
     return applyCreativeLocationCasting(raw, prompt, context);
 }
 
+/** The shape template branches read a location in; templates no longer receive one (see realWorldLoc below). */
+interface TemplateLocation {
+    isRealWorld: boolean;
+    landmarkName: string;
+    query: string;
+    lat: number;
+    lng: number;
+    elevation?: number;
+    elevationSource?: string;
+    datum?: string;
+}
+
 function _synthesizeRawContextual3DSceneInner(
     prompt: string,
     context?: {
@@ -2178,9 +2178,9 @@ function _synthesizeRawContextual3DSceneInner(
     // (Lexington Green, Buckman Tavern, formations) and must not be shadowed by the generic
     // real-world tile path, which would otherwise relabel it as a 'worldbuilder' scene.
     // Only a location the prompt actually names stages the scene on Earth; otherwise it stays in the clay void.
-    const detectedLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
-    // Only coordinates stage a scene on Earth; an unresolved place name must not become an anchor at (0, 0).
-    const realWorldLoc = isResolvedLocation(detectedLoc) ? detectedLoc : undefined;
+    // Templates never turn prompt words into places: the model decides intent and resolves places with the
+    // location tools (Google Places), so a template scene has no real-world location.
+    const realWorldLoc = undefined as TemplateLocation | undefined;
     // Determine procedural, object, and hero location classification
     const isExplicitProcedural = /\b(?:procedural|scratchbox\s*engine|create_building|create_tree|python|c\+\+|nanobind|customScript)\b/i.test(prompt);
     const isHeroObject = theme === 'vehicle' ||

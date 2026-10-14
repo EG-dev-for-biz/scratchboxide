@@ -15,12 +15,30 @@ import {
 } from '../src/node/spatial/GeoBoxPrecisionResectionService';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
+
+/**
+ * A surveyed reference pose passed explicitly. Resolution never looks fixtures up by name: words in the
+ * prompt hint (e.g. "Colosseum") do not select a fixture or a place.
+ */
+function fixturePose(key: keyof typeof KNOWN_RESECTION_LANDMARKS): GeoBoxResectionRequest {
+    const f = KNOWN_RESECTION_LANDMARKS[key];
+    return {
+        targetLandmarkName: f.name,
+        targetCoords: { lat: f.targetCoords.lat, lng: f.targetCoords.lng, alt: f.groundElevation },
+        cameraOpticalCenter: { lat: f.vantageCoords.lat, lng: f.vantageCoords.lng, alt: f.vantageCoords.altitudeMeters },
+        headingDeg: f.headingDeg,
+        pitchDeg: f.pitchDeg,
+        glbPath: f.glbPath
+    };
+}
 
 describe('GeoBoxPrecisionResectionService API', () => {
     const service = new GeoBoxPrecisionResectionService();
 
     it('resects 6-DOF camera pose and geodetic optical center for Colosseum Rome', async () => {
         const request: GeoBoxResectionRequest = {
+            ...fixturePose('colosseum'),
             imagePath: 'public/images/colosseum_western_promenade.jpg',
             promptHint: 'Ground level view of Colosseum from western pedestrian promenade',
             optimizeTo100Percent: true,
@@ -60,8 +78,8 @@ describe('GeoBoxPrecisionResectionService API', () => {
 
     it('resects camera pose for Eiffel Tower Paris when prompted', async () => {
         const result = await service.resectCameraPose({
+            ...fixturePose('eiffel'),
             promptHint: 'Looking up at Eiffel Tower Champ de Mars',
-            targetLandmarkName: 'Eiffel Tower',
             optimizeTo100Percent: true
         });
 
@@ -159,7 +177,23 @@ describe('GeoBoxPrecisionResectionService API', () => {
     it('enforces Zero Presets by throwing actionable error when no coordinates or query are provided', async () => {
         await expect(new GeoBoxPrecisionResectionService().resectCameraPose({}))
             .rejects
-            .toThrow(/Cannot resect camera pose: No geodetic coordinates or resolvable location query provided/);
+            .toThrow(MissingInputError);
+        await expect(new GeoBoxPrecisionResectionService().resectCameraPose({}))
+            .rejects
+            .toThrow(/targetCoords, knownCoords, targetLandmarkName or promptHint/);
+    });
+
+    it('never picks a surveyed fixture from words in the prompt hint; without a Maps key the place lookup fails', async () => {
+        const saved = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+        delete process.env.GOOGLE_MAPS_API_KEY;
+        delete process.env.MAP_TILES_API_KEY;
+        try {
+            // "plaza" used to select The Plaza Hotel NYC for any query containing it (e.g. Plaza Mayor, Madrid).
+            await expect(service.resectCameraPose({ promptHint: 'Plaza Mayor, Madrid at dusk' })).rejects.toThrow(/Could not resolve location "Plaza Mayor, Madrid at dusk"/);
+        } finally {
+            if (saved.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved.g;
+            if (saved.m !== undefined) process.env.MAP_TILES_API_KEY = saved.m;
+        }
     });
 });
 
@@ -178,6 +212,7 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
         const outcome = await registry.dispatch(
             'geobox_resect_camera_pose',
             {
+                ...fixturePose('colosseum'),
                 imagePath: 'public/images/colosseum_western_promenade.jpg',
                 promptHint: 'Colosseum Rome western promenade',
                 optimizeTo100Percent: true
@@ -211,14 +246,14 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
     it('refuses to invent a camera pose when only the target location is known', async () => {
         await expect(new GeoBoxPrecisionResectionService().resectCameraPose({
             imagePath: 'unknown.jpg',
-            targetCoords: { lat: 35.6586, lng: 139.7454 }
+            targetCoords: { lat: 35.6586, lng: 139.7454, alt: 40.0 }
         })).rejects.toThrow(/only the target location is known/);
     });
 
     it('places the camera from a supplied heading when no other pose evidence exists', async () => {
         const result = await new GeoBoxPrecisionResectionService().resectCameraPose({
             imagePath: 'unknown.jpg',
-            targetCoords: { lat: 35.6586, lng: 139.7454 },
+            targetCoords: { lat: 35.6586, lng: 139.7454, alt: 40.0 },
             headingDeg: 90,
             pitchDeg: 0,
             standoffDistanceMeters: 100

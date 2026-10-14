@@ -337,21 +337,15 @@ describe('Comprehensive 3D Prompting & Synthesis Suite', () => {
             { prompt: 'Sydney Opera House architectural 3D tiles', expectedName: 'Sydney Opera House' }
         ];
 
-        for (const { prompt, expectedName } of geospatialPrompts) {
-            it(`binds real-world geodetic coordinates: "${prompt}"`, () => {
+        // Places are resolved by the location tools with Google Places, never from a name table in the
+        // template synthesizer: a named landmark gets no coordinates and no geospatial theme here.
+        for (const { prompt } of geospatialPrompts) {
+            it(`does not bind coordinates from a place name: "${prompt}"`, () => {
                 const classification = classifyFallbackPrompt(prompt, undefined, 'canvas', undefined);
                 expect(classification.is3DRequest).toBe(true);
-
-                const theme = detect3DSceneTheme(prompt);
-                expect(theme).toBe('geospatial');
-
+                expect(detect3DSceneTheme(prompt)).not.toBe('geospatial');
                 const scene = synthesizeContextual3DScene(prompt);
-                expect(scene.geoAnchor).toBeDefined();
-                expect(scene.geoAnchor?.active).toBe(true);
-                expect(scene.geoAnchor?.landmarkName).toContain(expectedName);
-                expect(typeof scene.geoAnchor?.lat).toBe('number');
-                expect(typeof scene.geoAnchor?.lng).toBe('number');
-                expect(scene.geoAnchor?.lat === 0 && scene.geoAnchor?.lng === 0).toBe(false);
+                expect(scene.geoAnchor).toBeUndefined();
             });
         }
 

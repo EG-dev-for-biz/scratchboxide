@@ -115,18 +115,14 @@ async function runCreativeLocationCastingTests(): Promise<void> {
     }
 
     // ========================================================================
-    // TEST 5: Explicit Real-World Landmark Prompt Preservation
+    // TEST 5: Named places are not looked up in a name table
     // ========================================================================
-    console.log('  Testing Case 5: Explicit landmark "Golden Gate Bridge"...');
+    console.log('  Testing Case 5: a named landmark is not resolved by casting...');
     {
-        const prompt = 'Golden Gate Bridge with morning maritime fog';
-        const casted = castCreativeLocation(prompt);
-
-        assert.strictEqual(casted.archetype, 'explicit_landmark');
-        assert.ok(casted.landmarkName.includes('Golden Gate Bridge'));
-        assert.ok(Math.abs(casted.lat - 37.8199) < 0.1, 'Latitude matches Golden Gate Bridge');
-        assert.ok(Math.abs(casted.lng - (-122.4783)) < 0.1, 'Longitude matches Golden Gate Bridge');
-        console.log(`  ✓ Case 5 Passed: "${prompt}" preserved explicit landmark anchor.`);
+        // Real places are resolved by the location tools with Google Places, not matched by name here.
+        const casted = castCreativeLocation('Golden Gate Bridge with morning maritime fog');
+        assert.notStrictEqual(casted.archetype, 'explicit_landmark');
+        console.log(`  ✓ Case 5 Passed: named landmark left to the location tools (${casted.archetype}).`);
     }
 
     // ========================================================================

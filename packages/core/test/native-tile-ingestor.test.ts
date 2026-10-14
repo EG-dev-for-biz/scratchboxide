@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
-import { synthesizeContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
+import { synthesizeContextual3DScene, generateGeospatialCpp3DSource } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 
 describe('Native C++20 Google 3D Tile Ingestion & Clay Rendering Pipeline', () => {
     const compiler = new NativeCppCompilerService();
@@ -116,18 +116,17 @@ int main() {
         }
     });
 
-    it('should synthesize real-world landmark with C++ generator, compile with staged assets, and stream GLB chunks', async () => {
-        const scene = synthesizeContextual3DScene('Create a 3d model of Ferry Building San Francisco in warm terracotta');
-        expect(scene.geoAnchor).toBeDefined();
-        expect(scene.geoAnchor?.landmarkName).toContain('Ferry Building');
-        expect(scene.cppGenerator).toBeDefined();
-        expect(scene.cppGenerator?.enabled).toBe(true);
-        expect(scene.cppGenerator?.sourceCode).toBeDefined();
-        expect(scene.cppGenerator?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
-        expect(scene.cppGenerator?.sourceCode).toContain('TileIngestor');
+    it('should compile a geospatial C++ generator for explicit coordinates with staged assets, and stream GLB chunks', async () => {
+        // A place named in a prompt is not looked up in a table: the template scene gets no anchor.
+        expect(synthesizeContextual3DScene('Create a 3d model of Ferry Building San Francisco in warm terracotta').geoAnchor).toBeUndefined();
+
+        const scene = { geoAnchor: { lat: 37.7955, lng: -122.3937, elevation: 2.4, landmarkName: 'Ferry Building, San Francisco' } };
+        const sourceCode = generateGeospatialCpp3DSource({ ...scene.geoAnchor, clayPreset: 'warm-clay' });
+        expect(sourceCode).toContain('#include "scratchbox_engine.hpp"');
+        expect(sourceCode).toContain('TileIngestor');
 
         // Compile and execute the generated C++ code with staged assets
-        const res = await compiler.compileSource(scene.cppGenerator!.sourceCode, {
+        const res = await compiler.compileSource(sourceCode, {
             name: 'test_ferry_building_' + Date.now(),
             optimization: '-O3',
             assets: [

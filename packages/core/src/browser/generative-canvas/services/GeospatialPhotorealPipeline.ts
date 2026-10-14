@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { Google3DTileService } from './Google3DTileService';
 import type { Media4DObject, Scene3DData } from '../canvas-types';
+import { MissingInputError } from '../../../common/errors/pipeline-errors';
 
 export interface PhotorealReconstructionOptions {
   query?: string;
@@ -62,18 +63,27 @@ export class GeospatialPhotorealPipeline {
     return GeospatialPhotorealPipeline.instance;
   }
 
+  /** Coordinates the caller gave (or a coordinate query); a place name or nothing at all is not resolved here. */
+  private resolveAnchor(options: PhotorealReconstructionOptions): { lat: number; lng: number; elevation: number; landmarkName?: string } {
+    const target = options.lat !== undefined && options.lng !== undefined
+      ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
+      : options.query;
+    if (!target) {
+      throw new MissingInputError('GeospatialPhotorealPipeline', 'lat/lng or query');
+    }
+    const geo = Google3DTileService.getInstance().resolveLocationSync(target);
+    if (geo.elevation === undefined) {
+      throw new MissingInputError('GeospatialPhotorealPipeline', 'elevation', 'the ground elevation in metres above sea level');
+    }
+    return { lat: geo.lat, lng: geo.lng, elevation: geo.elevation, landmarkName: geo.landmarkName };
+  }
+
   /**
    * Generates location-agnostic C++20 source code using the Scratchbox Astro Engine
    * to reconstruct high-fidelity photoreal architecture with PBR materials.
    */
   public generatePhotorealCppSource(options: PhotorealReconstructionOptions): string {
-    const tileService = Google3DTileService.getInstance();
-    const geo = tileService.resolveLocationSync(
-      options.query ||
-      (options.lat !== undefined && options.lng !== undefined
-        ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
-        : 'Empire State Building')
-    );
+    const geo = this.resolveAnchor(options);
 
     const landmarkName = options.landmarkName || geo.landmarkName || 'Universal Landmark';
     const cleanName = landmarkName.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
@@ -136,13 +146,7 @@ int main() {
    * Synthesizes a photorealistic 3D scene model for any geodetic anchor or landmark query.
    */
   public synthesizePhotorealScene(options: PhotorealReconstructionOptions): PhotorealReconstructionResult {
-    const tileService = Google3DTileService.getInstance();
-    const geo = tileService.resolveLocationSync(
-      options.query ||
-      (options.lat !== undefined && options.lng !== undefined
-        ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
-        : 'Empire State Building')
-    );
+    const geo = this.resolveAnchor(options);
 
     const landmarkName = options.landmarkName || geo.landmarkName || 'Universal Landmark';
     const width = options.footprintWidth ?? 65.0;

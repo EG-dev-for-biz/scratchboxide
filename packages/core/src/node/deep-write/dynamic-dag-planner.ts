@@ -19,7 +19,6 @@ import {
 } from '../../browser/generative-canvas/services/direct-dispatch-operator-engine';
 import {
     detect3DSceneTheme,
-    detectRealWorldLocationIntent,
     generateDefaultCpp3DSource
 } from '../../browser/generative-canvas/procedural-3d-synthesizer';
 
@@ -234,18 +233,7 @@ export class DynamicDagPlanner {
         const baseGeometryOps: BatchCommand[] = [];
         const requiredMeshIds: string[] = [];
 
-        const realWorldLoc = detectRealWorldLocationIntent(prompt, { docTitle: currentScene?.title });
-        if (realWorldLoc && realWorldLoc.isRealWorld && !isIncremental) {
-            baseGeometryOps.unshift({
-                operator: 'sb_import_3d_tile',
-                params: {
-                    query: realWorldLoc.query,
-                    lat: realWorldLoc.lat,
-                    lng: realWorldLoc.lng,
-                    clayPreset: 'warm-clay'
-                }
-            });
-        }
+        // Prompt words never become places here; the model resolves a place with the location tools.
 
         for (const bp of meshBlueprints) {
             requiredMeshIds.push(bp.id);
@@ -710,11 +698,6 @@ export class DynamicDagPlanner {
             fillLight: lightingPreset.fillLight,
             rimLight: lightingPreset.rimLight
         };
-        if (realWorldLoc && realWorldLoc.isRealWorld) {
-            lightingParams.latitude = realWorldLoc.lat;
-            lightingParams.longitude = realWorldLoc.lng;
-        }
-
         const lightingOps: BatchCommand[] = [
             {
                 operator: 'sb_setup_lighting',

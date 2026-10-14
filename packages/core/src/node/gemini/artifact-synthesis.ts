@@ -26,7 +26,6 @@ import {
     synthesizeMediaDocument
 } from '../../browser/generative-canvas/document-synthesis-engine';
 import { synthesizeContextual3DScene } from '../../browser/generative-canvas/procedural-3d-synthesizer';
-import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 import type { VideoTimelineData } from '../../browser/generative-canvas/services/video/videoTypes';
 import { synthesizeContextualVideoTimeline } from '../../browser/generative-canvas/services/video/videoTimelineSynthesizer';
 import {
@@ -3379,41 +3378,13 @@ export function parseOrSynthesizeArtifact(
             ...(hasTerrainBiomes ? { terrainBiomes: (active3DData?.features?.terrainBiomes || { biomeType: 'alpine' as const }) } : {})
         };
 
-        const locIntent = detectRealWorldLocationIntent(prompt, { docTitle: active3DData?.title });
-        const hasRealWorldStaging = !!locIntent?.isRealWorld;
-
-        const resolvedGeoAnchor = hasRealWorldStaging ? {
-            lat: locIntent.lat,
-            lng: locIntent.lng,
-            elevation: locIntent.elevation,
-            active: true,
-            landmarkName: locIntent.landmarkName
-        } : (active3DData?.geoAnchor || contextualSynthesized.geoAnchor || {
-            lat: 37.7900,
-            lng: -122.4000,
-            elevation: 15.2,
-            active: true,
-            landmarkName: isExplicitFlight ? 'Flight Corridor' : 'San Francisco Bay Airspace'
-        });
+        // Prompt words never become places and there is no default location: a location reaches the scene only
+        // through the location tools (or is already on the active scene).
+        const resolvedGeoAnchor = active3DData?.geoAnchor || contextualSynthesized.geoAnchor;
 
         let finalTitle = active3DData?.title || sceneTitle;
         let finalSubtitle = (isAnimateOnly && active3DData?.subtitle) ? active3DData.subtitle : (active3DData?.subtitle || sceneSummary);
         const isStagingRequest = /stage|ground|anchor|situate|place/i.test(prompt);
-        if (hasRealWorldStaging) {
-            if (isStagingRequest) {
-                const cleanBaseTitle = active3DData?.title
-                    ? active3DData.title.replace(/\s*—\s*Staged.*$/i, '')
-                    : sceneTitle.replace(/\s*—\s*Staged.*$/i, '').replace(/\s*—\s*ADA Hero Asset/i, '').replace(/\s*—\s*Procedural Vehicle/i, '');
-                finalTitle = `${cleanBaseTitle} — Staged in ${locIntent.landmarkName}`;
-                finalSubtitle = `Real-World Geospatial Staging | [${locIntent.lat.toFixed(4)}°, ${locIntent.lng.toFixed(4)}°] | Studio Grey Clay Grounding`;
-                sceneSummary = `Staged 3D asset at ${locIntent.landmarkName} with real-world geospatial grounding.`;
-            } else {
-                finalTitle = `${locIntent.landmarkName} (Studio Grey Clay 3D Tiles)`;
-                finalSubtitle = `Google Maps Photorealistic 3D Tiles in 18% Studio Grey Clay | Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}°`;
-                sceneSummary = `Ingested Google Maps Photorealistic 3D Tiles for ${locIntent.landmarkName} in Studio Grey Clay mode.`;
-            }
-        }
-
         const hasExecutedClayTool = _mcpExecutions.some(exec => exec.toolName === 'google_3d_tiles_get_clay');
         const resolvedObjects = (hasExecutedClayTool && !isStagingRequest)
             ? []
@@ -3462,7 +3433,7 @@ export function parseOrSynthesizeArtifact(
                                 isGround: true,
                                 metricScale: 1.0,
                                 groundDatumMeters: 0.0,
-                                location: res?.locationQuery || locIntent?.landmarkName
+                                location: res?.locationQuery
                             }
                         },
                         space: { spatial3d: { x: 0, y: 0, z: 0 } },

@@ -23,7 +23,7 @@ import {
   TileBlockoutPipelineRequest
 } from './Google3DTileBlockoutPipelineService';
 import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
-import { GoogleVectorMappingService } from '../../browser/generative-canvas/services/google-vector-mapping-service';
+import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
 import { OmniVideoService, buildBlockoutFirstLastPrompt } from '../video/OmniVideoService';
 import type {
   CameraSolveTrack,
@@ -244,52 +244,38 @@ export class GeoCameraMatchmovePipelineService {
   }
 
   /**
-   * Looks up a place name with the Google Geocoding API and its ground elevation with the Elevation API.
-   * Throws when there is no key or no result instead of substituting any preset location.
+   * Looks up coordinates or a place name with GoogleMapsService.geocode (one Google Places Text Search call for
+   * a name) and the ground elevation with the Elevation API. Throws LocationUnresolvedError when there is no key
+   * or no result; an elevation that cannot be measured stays undefined ('unavailable').
    */
   public async geocodeLandmarkAnchor(
     query: string,
     options: { apiKey?: string; fetchImpl?: typeof fetch; headingDeg?: number } = {}
-  ): Promise<GeoAnchor & { headingDeg: number; placeId: string; elevationSource: 'elevation-api' | 'unavailable' }> {
-    const clean = query.trim();
-
-    // 1. Direct coordinate regex: matches "40.7484, -73.9857" or "40.748400, -73.985700, 15.0"
-    const coordMatch = clean.match(/^([-+]?\d{1,2}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)(?:\s*,\s*([-+]?\d+(?:\.\d+)?))?$/);
-    if (coordMatch) {
-      const lat = parseFloat(coordMatch[1]);
-      const lng = parseFloat(coordMatch[2]);
-      const elev = coordMatch[3] ? parseFloat(coordMatch[3]) : 15.0;
-      return {
-        lat: Number(lat.toFixed(6)),
-        lng: Number(lng.toFixed(6)),
-        elevation: isNaN(elev) ? 15.0 : elev,
-        elevationSource: 'unavailable',
-        landmarkName: `Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
-        placeId: `coords_${lat}_${lng}`,
-        headingDeg: options.headingDeg ?? 0
-      };
+  ): Promise<GeoAnchor & { headingDeg: number; placeId: string; elevationSource: 'stated' | 'elevation-api' | 'unavailable' }> {
+    const maps = GoogleMapsService.getInstance();
+    const place = await maps.geocode(query, { apiKey: options.apiKey, fetchImpl: options.fetchImpl });
+    const lat = Number(place.lat.toFixed(6));
+    const lng = Number(place.lng.toFixed(6));
+    let elevation = place.elevation;
+    let elevationSource: 'stated' | 'elevation-api' | 'unavailable' = elevation !== undefined ? 'stated' : 'unavailable';
+    if (elevation === undefined) {
+      try {
+        elevation = await maps.getElevation(lat, lng, { apiKey: options.apiKey, fetchImpl: options.fetchImpl });
+        elevationSource = 'elevation-api';
+      } catch {
+        // No measured ground height: left undefined rather than guessed.
+      }
     }
-
-    // 2. Google Vector Tiles resolution (parcels, corridors, geodetic anchors)
-    const vectorAnchor = GoogleVectorMappingService.searchFeatures(clean);
-    if (vectorAnchor) {
-      return {
-        lat: vectorAnchor.lat,
-        lng: vectorAnchor.lng,
-        elevation: vectorAnchor.elevation || 15.0,
-        elevationSource: 'unavailable',
-        landmarkName: vectorAnchor.formattedAddress || clean,
-        placeId: vectorAnchor.placeId || `vector_${clean.replace(/\s+/g, '_')}`,
-        headingDeg: options.headingDeg ?? 0
-      };
-    }
-
-    // Zero presets and no procedural fallbacks are permitted: Google Geocoding API is strictly disabled
-    throw new Error(
-      `Cannot resolve geodetic anchor for query "${query}". ` +
-      `Google Geocoding API is strictly disabled: please provide explicit coordinates ` +
-      `(e.g. "40.748400, -73.985700" or { lat, lng }), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
-    );
+    return {
+      lat,
+      lng,
+      ...(elevation !== undefined ? { elevation } : {}),
+      elevationSource,
+      landmarkName: place.name || place.formattedAddress,
+      formattedAddress: place.formattedAddress,
+      placeId: place.placeId || `${place.locationType === 'COORDINATES' ? 'coords' : 'place'}_${lat}_${lng}`,
+      headingDeg: options.headingDeg ?? 0
+    };
   }
 
   /**

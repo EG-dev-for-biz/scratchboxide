@@ -150,12 +150,13 @@ describe('Google Maps 3D Tile Prompt Mutations Audit', () => {
     });
 
     describe('9. Real-World Geodetic Landmark Ingestion', () => {
-        it('ingests Ferry Building San Francisco', () => {
+        it('does not move the scene to a place named in the prompt: places are resolved by the location tools', () => {
             const prompt = 'Navigate to Ferry Building, San Francisco';
             const result = synthesize3DFallback(prompt, prompt.toLowerCase(), initial3DColosseumArtifact, [], undefined);
             const data = result.artifact?.data as Scene3DData;
-            expect(data.geoAnchor?.landmarkName).toContain('Ferry Building');
-            expect(data.title).toContain('Ferry Building');
+            expect(data.geoAnchor?.landmarkName ?? '').not.toContain('Ferry Building');
+            expect(data.title).not.toContain('Ferry Building');
+            expect(data.objects?.some(o => o.content?.durableUri === '/models/sf_ferry_raw.glb')).not.toBe(true);
         });
     });
 });

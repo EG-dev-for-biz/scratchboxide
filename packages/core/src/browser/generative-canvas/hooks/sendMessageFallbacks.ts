@@ -26,7 +26,7 @@ import {
 import { CLAY_PRESETS, ClayPresetId } from '../services/TileClayProcessor';
 import { isVibeToolRequest, synthesizeVibeToolSandbox } from '../vibe-tool-synthesizer';
 import { morphArtifact } from '../primitive-transformer-engine';
-import { synthesizeContextual3DScene, detectRealWorldLocationIntent } from '../procedural-3d-synthesizer';
+import { synthesizeContextual3DScene } from '../procedural-3d-synthesizer';
 import {
     extractDocumentTitleFromPrompt,
     synthesizeComprehensiveDocument,
@@ -112,8 +112,7 @@ export function hasExplicit3DDirective(text: string): boolean {
         /\b(?:dna\s*molecule|molecular\s*(?:physics|structure|model|lattice)|atomic\s*(?:orbitals?|bonds?|lattice)|quantum\s*atomic|crystal\s*lattice)\b/i.test(text) ||
         /\b(?:apartment\s*interior|interior\s*room|office\s*(?:loft|space)|loft\s*(?:office|space)|gallery\s*hall|architectural\s*interior)\b/i.test(text) ||
         /\b(?:mountain\s*terrain|desert\s*canyon|volcanic\s*island|sand\s*dunes|alpine\s*mountain)\b/i.test(text) ||
-        /\b(?:space\s*station|orbital\s*(?:station|habitat|defense)|deep\s*space|cyberpunk\s*(?:underground|bunker|city|alleyway)|hacker\s*bunker)\b/i.test(text) ||
-        (Boolean(detectRealWorldLocationIntent(text)?.isRealWorld) && /\b(?:3d|spatial|render|mesh|model|tiles?|build|make|create|generate|show|view)\b/i.test(text))
+        /\b(?:space\s*station|orbital\s*(?:station|habitat|defense)|deep\s*space|cyberpunk\s*(?:underground|bunker|city|alleyway)|hacker\s*bunker)\b/i.test(text)
     );
 
     const isAdvanced3DFeatureRequest = (
@@ -736,55 +735,6 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
         explanation = `Segmented discrete architectural entities and generated **Ground-Constrained 3D Oriented Bounding Boxes (OBB)** via PCA covariance analysis, reducing bounding box spatial volume by **74.2%** compared to Axis-Aligned Bounding Boxes (AABB).`;
     } else if (/export\s+(?:scene\s+)?(?:to\s+|as\s+)?(?:glb|gltf|usd)|download\s+glb/i.test(text)) {
         explanation = `Exported 3D scene asset as **standardized binary glTF 2.0 (.glb)** with embedded PBR metallic-roughness materials, vertex normals, and geodetic metadata.`;
-    } else if (detectRealWorldLocationIntent(text)?.isRealWorld) {
-        const locIntent = detectRealWorldLocationIntent(text)!;
-        updated3D.geoAnchor = {
-            lat: locIntent.lat,
-            lng: locIntent.lng,
-            elevation: locIntent.elevation,
-            landmarkName: locIntent.landmarkName,
-            active: true
-        };
-        const isStaging = /stage|ground|anchor|situate|place/i.test(text);
-        const currentHeroTitle = updated3D.title || '3D Asset';
-        if (isStaging) {
-            updated3D.title = `${currentHeroTitle} — Staged at ${locIntent.landmarkName}`;
-            updated3D.subtitle = `Geospatial 3D Staging | Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}° | Studio Grey Clay Grounding`;
-            explanation = `Staged active 3D asset at **${locIntent.landmarkName}** (${locIntent.lat.toFixed(4)}°, ${locIntent.lng.toFixed(4)}°) with real-world geospatial grounding. Next step: PBR materials & textures.`;
-        } else {
-            updated3D.title = locIntent.landmarkName;
-            updated3D.subtitle = `Google Maps Photorealistic 3D Tile | Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}°`;
-            explanation = `Geospatially ingested Google Maps Photorealistic 3D Tile for **${locIntent.landmarkName}** (Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}°, Alt ${locIntent.elevation.toFixed(1)}m).`;
-        }
-        if (/colosseum/i.test(locIntent.landmarkName) && (!isStaging || !updated3D.objects?.length)) {
-            updated3D.objects = [{
-                id: 'tile-colosseum',
-                content: {
-                    type: '3d-scene',
-                    durableUri: '/models/colosseum_clay.glb',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { vertexCount: 234679, triangleCount: 170802 }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }];
-            updated3D.camera = { position: [180, 120, 220], target: [0, 15, 0], fov: 45 };
-        } else if (/ferry/i.test(locIntent.landmarkName) && (!isStaging || !updated3D.objects?.length)) {
-            updated3D.objects = [{
-                id: 'tile-sf-ferry',
-                content: {
-                    type: '3d-scene',
-                    durableUri: '/models/sf_ferry_raw.glb',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { vertexCount: 215400, triangleCount: 148200 }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }];
-            updated3D.camera = { position: [140, 80, 160], target: [0, 10, 0], fov: 45 };
-        }
     } else if (/plinth|pedestal|cyclorama|curved cove|platform/i.test(text) || (/stage/i.test(text) && !/stage\s*_\s*3d/i.test(text))) {
         updated3D.title = `${updated3D.title || '3D Asset'} — Staged on Studio Plinth`;
         updated3D.subtitle = `Studio Plinth Staging | Curved Cyclorama Cove & Contact Grounding`;

@@ -12,8 +12,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
-import { GeospatialTileExtractionBridge, ExtractedLocationManifest } from '../../spatial/GeospatialTileExtractionBridge';
-import { detectRealWorldLocationIntent } from '../../../browser/generative-canvas/services/Google3DTileService';
+import { GeospatialTileExtractionBridge, ExtractedLocationManifest, type LocationExtractionResult } from '../../spatial/GeospatialTileExtractionBridge';
+import type { GeoAnchor } from '../../spatial/Google3DTileBlockoutPipelineService';
+import { LocationUnresolvedError, PipelineError, TileExtractionError } from '../../../common/errors/pipeline-errors';
+import { assertUsableCoordinates, parseCoordinateText } from '../../../common/coordinate/parse-coordinates';
 import { synthesizeAdaptiveHeroObjectContract, generateAdaptiveHeroPythonSource } from '../../../common/spatial/adaptive-hero-synthesizer';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
 import { analyzePartConnectivity, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
@@ -177,7 +179,7 @@ export const PYTHON_3D_API_REFERENCE = `Verified scratchbox API. Only use names 
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Universal 3D scene execution bus. Executes a procedural Python 3 script using the Scratchbox 3D Engine (import scratchbox as sb) for both procedural world synthesis and real-world locations. Generates architecture (mansard roofs, townhouses, facades), nature (space colonization trees, foliage), and procedural geometry. When a location is specified, passes Google 3D tile data through a shape extraction pipeline (separating terrain, architecture, and vegetation anchors like SB-Veggie) to allow procedural augmentation and populating.\n\n' + PYTHON_3D_API_REFERENCE,
+        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and mounts the GLB it writes as a studio-clay 3D scene. Use it to build or refine procedural geometry: architecture (mansard roofs, townhouses, facades), nature (space colonization trees, foliage), mechanisms and abstract forms. It does not fetch real-world places on its own: for a place use google_3d_tiles_get_clay, and for a specific object or prop to be reverse-engineered from a reference use build_3d_object_from_reference. Optional location/coordinates extract the Google 3D Tiles around that place (raw studio clay, not remeshed) for the script to read through sb.geospatial.load_location() and mount them as the scene environment; if the place cannot be resolved or extracted, the call fails and the script is not run.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -187,12 +189,16 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 location: {
                     type: 'STRING',
-                    description: 'Optional real-world location query or landmark name (e.g. "Eiffel Tower, Paris", "Monaco GP Circuit"). When provided, the engine automatically ingests leaf-LOD 3D tiles, runs the shape extraction pipeline to segment terrain, buildings, and vegetation clusters, and injects them into sb.geospatial.load_location() for procedural population.'
+                    description: 'Optional place name or address, exactly as the user wrote it. It is resolved with Google Places (the result reports the address it resolved) and its Google 3D Tiles are extracted for the script and mounted as the environment.'
                 },
                 coordinates: {
                     type: 'ARRAY',
                     items: { type: 'NUMBER' },
-                    description: 'Optional explicit WGS-84 geodetic coordinates [latitude, longitude] (e.g. [43.7384, 7.4246] or [40.7308, -73.9973]). In accordance with ADA Zero-Presets, whenever a novel, unlisted, or specific coordinate location is specified, supply coordinates directly to anchor geospatial 3D tiles without relying on static landmark dictionaries.'
+                    description: 'Optional [latitude, longitude] or [latitude, longitude, elevation in metres], only when the user gave coordinates. Never supply coordinates from memory: pass the place as location instead.'
+                },
+                stageIntoActiveScene: {
+                    type: 'BOOLEAN',
+                    description: 'True only when the user asks to add this model to the 3D scene already on the canvas; it then keeps that scene\'s extracted location tiles and anchor. Otherwise the result opens as a new scene.'
                 },
                 description: {
                     type: 'STRING',
@@ -208,10 +214,56 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
+interface PythonLocationRequest {
+    /** What the model passed: the place text, or the coordinate pair as typed. */
+    label: string;
+    target: string | GeoAnchor;
+}
+
+/** The place this call asks for, from `coordinates` (validated, never (0, 0)) or `location`; undefined when neither is given. */
+function readLocationRequest(args: Record<string, unknown>): PythonLocationRequest | undefined {
+    const location = typeof args.location === 'string' ? args.location.trim() : '';
+    const raw = args.coordinates;
+    let coords: GeoAnchor | undefined;
+    if (Array.isArray(raw) && raw.length >= 2) {
+        coords = { lat: Number(raw[0]), lng: Number(raw[1]), ...(raw.length >= 3 && raw[2] !== null && raw[2] !== undefined ? { elevation: Number(raw[2]) } : {}) };
+    } else if (typeof raw === 'string' && raw.trim()) {
+        const parsed = parseCoordinateText(raw);
+        if (!parsed) throw new LocationUnresolvedError(raw, 'coordinates must be [latitude, longitude] or { lat, lng }');
+        coords = parsed;
+    } else if (raw && typeof raw === 'object') {
+        const rc = raw as Record<string, unknown>;
+        coords = { lat: Number(rc.lat), lng: Number(rc.lng), ...(rc.elevation !== undefined ? { elevation: Number(rc.elevation) } : {}) };
+    } else if (raw !== undefined && raw !== null) {
+        throw new LocationUnresolvedError(String(raw), 'coordinates must be [latitude, longitude] or { lat, lng }');
+    }
+    if (coords) {
+        const label = `${coords.lat}, ${coords.lng}`;
+        assertUsableCoordinates(coords.lat, coords.lng, label);
+        if (coords.elevation !== undefined && !Number.isFinite(coords.elevation)) {
+            throw new LocationUnresolvedError(label, 'the elevation must be a number of metres');
+        }
+        return { label: location || label, target: { ...coords, ...(location ? { landmarkName: location } : {}) } };
+    }
+    return location ? { label: location, target: location } : undefined;
+}
+
+function failedOutcome(error: unknown, summary: string): ToolHandlerOutcome {
+    const err = error instanceof Error ? error : new Error(String(error));
+    return {
+        status: 'failed',
+        resultPayload: {
+            success: false,
+            error: err.message,
+            ...(err instanceof PipelineError ? { errorCode: err.code } : {}),
+            ...(err instanceof TileExtractionError ? { stage: err.stage } : {})
+        },
+        summaryResult: `${summary}: ${err.message}`
+    };
+}
 export const python3DHandlers: Record<string, (args: Record<string, unknown>, _ctx?: any) => Promise<ToolHandlerOutcome>> = {
     execute_3d_python_script: async (args: Record<string, unknown>, _ctx?: any): Promise<ToolHandlerOutcome> => {
         const script = typeof args.script === 'string' ? args.script : '';
-        const locationQuery = typeof args.location === 'string' ? args.location.trim() : '';
         const timeoutMs = typeof args.timeoutMs === 'number' ? args.timeoutMs : 45000;
 
         if (!script.trim()) {
@@ -227,72 +279,28 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
 
         const runner = NativePythonRunnerService.getInstance();
         const customEnv: NodeJS.ProcessEnv = { ...process.env };
-        let extractedManifest: ExtractedLocationManifest | undefined;
-        let extractedGlbPath: string | undefined;
 
-        // Parse explicit geodetic coordinates if provided (e.g. args.coordinates: [lat, lng])
-        const rawCoords = args.coordinates;
-        let explicitCoords: { lat: number; lng: number; elevation?: number } | undefined;
-        if (Array.isArray(rawCoords) && rawCoords.length >= 2) {
-            const lat = Number(rawCoords[0]);
-            const lng = Number(rawCoords[1]);
-            const elevation = rawCoords.length >= 3 ? Number(rawCoords[2]) : undefined;
-            if (!isNaN(lat) && !isNaN(lng)) {
-                explicitCoords = { lat, lng, elevation };
-            }
-        } else if (rawCoords && typeof rawCoords === 'object') {
-            const rc = rawCoords as any;
-            if (typeof rc.lat === 'number' && typeof rc.lng === 'number') {
-                explicitCoords = { lat: rc.lat, lng: rc.lng, elevation: rc.elevation };
-            }
-        }
-
-        // Auto-detect location if not explicitly provided in args.location or args.coordinates
-        let effectiveLocation = locationQuery;
-        let locIntent: ReturnType<typeof detectRealWorldLocationIntent> | undefined;
-
-        if (explicitCoords) {
-            locIntent = {
-                isRealWorld: true,
-                landmarkName: locationQuery || `Coordinates (${explicitCoords.lat.toFixed(4)}, ${explicitCoords.lng.toFixed(4)})`,
-                lat: explicitCoords.lat,
-                lng: explicitCoords.lng,
-                elevation: explicitCoords.elevation ?? 0,
-                elevationSource: 'explicit_coordinates',
-                datum: 'MSL_EGM96',
-                query: `${explicitCoords.lat}, ${explicitCoords.lng}`
-            };
-            effectiveLocation = locationQuery || locIntent.landmarkName;
-        } else if (effectiveLocation) {
-            locIntent = detectRealWorldLocationIntent(effectiveLocation);
-        } else if (typeof args.description === 'string' && args.description.trim()) {
-            const detected = detectRealWorldLocationIntent(args.description);
-            if (detected?.isRealWorld && detected.landmarkName && detected.elevationSource !== 'online_geocoding_required') {
-                effectiveLocation = detected.landmarkName;
-                locIntent = detected;
-            }
-        }
-
-        // 1. If location is requested or detected, run pre-flight tile extraction pipeline in clay mode
-        if (effectiveLocation || explicitCoords) {
-            try {
-                const extractionBridge = GeospatialTileExtractionBridge.getInstance();
-                const target = explicitCoords
-                    ? { lat: explicitCoords.lat, lng: explicitCoords.lng, elevation: explicitCoords.elevation, formattedAddress: effectiveLocation }
-                    : (locIntent && locIntent.isRealWorld && locIntent.lat !== 0)
-                        ? { lat: locIntent.lat, lng: locIntent.lng, elevation: locIntent.elevation, formattedAddress: locIntent.landmarkName || effectiveLocation }
-                        : effectiveLocation;
-                const extractResult = await extractionBridge.ingestAndExtract(target, { mode: 'clay' });
-                if (extractResult.success) {
-                    extractedManifest = extractResult.manifest;
-                    extractedGlbPath = extractResult.glbPath;
-                    customEnv.SCRATCHBOX_LOCATION_QUERY = effectiveLocation;
-                    customEnv.SCRATCHBOX_LOCATION_GLB = extractResult.glbPath;
-                    customEnv.SCRATCHBOX_LOCATION_MANIFEST = extractResult.manifestPath;
+        // 1. A requested place is resolved and extracted before the script runs. If that fails the call fails:
+        // the script is not run and nothing is mounted in place of the location.
+        let locationRequest: PythonLocationRequest | undefined;
+        let extraction: LocationExtractionResult | undefined;
+        try {
+            locationRequest = readLocationRequest(args);
+            if (locationRequest) {
+                extraction = await GeospatialTileExtractionBridge.getInstance().ingestAndExtract(locationRequest.target, { mode: 'clay' });
+                if (!extraction.success || extraction.mock) {
+                    throw new TileExtractionError('crawl', extraction.error || `no Google 3D Tiles were extracted for "${locationRequest.label}"`);
                 }
-            } catch (err: any) {
-                console.warn(`[execute_3d_python_script] Geospatial extraction warning for "${effectiveLocation}":`, err?.message || err);
             }
+        } catch (err) {
+            return failedOutcome(err, `Location "${locationRequest?.label ?? String(args.location ?? args.coordinates)}" could not be staged; the script was not run`);
+        }
+        const extractedManifest: ExtractedLocationManifest | undefined = extraction?.manifest;
+        const extractedGlbPath: string | undefined = extraction?.glbPath;
+        if (extraction && locationRequest) {
+            customEnv.SCRATCHBOX_LOCATION_QUERY = extraction.manifest.resolvedAddress;
+            customEnv.SCRATCHBOX_LOCATION_GLB = extraction.glbPath;
+            customEnv.SCRATCHBOX_LOCATION_MANIFEST = extraction.manifestPath;
         }
 
         // 2. Execute Python script
@@ -386,62 +394,51 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             ];
         }
 
-        const isRealWorld = !!effectiveLocation;
-        const resolvedLocName = locIntent?.landmarkName || effectiveLocation;
-        const resolvedGeoAnchor = (locIntent?.isRealWorld && locIntent.lat !== 0) ? {
-            lat: locIntent.lat,
-            lng: locIntent.lng,
-            elevation: locIntent.elevation,
-            elevationSource: locIntent.elevationSource || 'google_elevation',
-            datum: locIntent.datum || 'MSL_EGM96',
-            active: true,
-            landmarkName: resolvedLocName
-        } : undefined;
+        // Staging is real only when tiles were extracted for this call, or when the model asked to add to the
+        // active scene and that scene already has extracted tiles. Nothing else is carried over or inferred.
+        const activeArtifact = _ctx?.request?.canvasState?.activeArtifact;
+        const activeData = activeArtifact?.type === '3d-scene' ? (activeArtifact?.data as any) : undefined;
+        const activeEnvTiles: any[] = args.stageIntoActiveScene === true && !extraction
+            ? (activeData?.objects || []).filter((o: any) => {
+                const role = o?.content?.metadata?.role;
+                const source = String(o?.content?.metadata?.source || '').toLowerCase();
+                return role === 'environment' || o?.content?.metadata?.isGround === true || source.includes('google3dtiles') || source.includes('google_3d_tiles');
+            })
+            : [];
+        const keepsActiveLocation = activeEnvTiles.length > 0 && !!activeData?.geoAnchor;
 
-        const stagedTitle = isRealWorld && !desc.toLowerCase().includes('staged')
+        const resolvedLocName = extractedManifest?.resolvedAddress;
+        const geoAnchor = extractedManifest
+            ? {
+                lat: extractedManifest.lat,
+                lng: extractedManifest.lng,
+                ...(extractedManifest.altitudeMeters !== undefined ? { elevation: extractedManifest.altitudeMeters } : {}),
+                datum: 'MSL_EGM96',
+                active: true,
+                landmarkName: extractedManifest.resolvedAddress
+            }
+            : keepsActiveLocation ? activeData.geoAnchor : undefined;
+        const isStaged = !!extractedManifest || keepsActiveLocation;
+
+        const stagedTitle = extractedManifest && !desc.toLowerCase().includes('staged')
             ? `${desc} — Staged in ${resolvedLocName}`
             : desc;
-        const stagedSubtitle = isRealWorld && resolvedGeoAnchor
-            ? `Real-World Geospatial Staging | [${resolvedGeoAnchor.lat.toFixed(4)}°, ${resolvedGeoAnchor.lng.toFixed(4)}°] | Studio Grey Clay Grounding`
+        const stagedSubtitle = extractedManifest
+            ? `Real-World Geospatial Staging | ${resolvedLocName} [${extractedManifest.lat.toFixed(4)}°, ${extractedManifest.lng.toFixed(4)}°] | Studio Grey Clay Grounding`
             : `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`;
 
         let durableHeroUri: string | undefined = undefined;
-        const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
-        const canonicalModelsDir = path.resolve(repoRoot, 'public/models');
-
-        if (result.glbPath && fs.existsSync(result.glbPath) && fs.statSync(result.glbPath).size > 100) {
-            const fileName = path.basename(result.glbPath);
-            const canonicalDest = path.join(canonicalModelsDir, fileName);
-            if (path.resolve(result.glbPath) !== canonicalDest) {
-                try {
-                    if (!fs.existsSync(canonicalModelsDir)) fs.mkdirSync(canonicalModelsDir, { recursive: true });
-                    fs.copyFileSync(result.glbPath, canonicalDest);
-                } catch { }
+        let locationUri: string | undefined = undefined;
+        try {
+            if (result.glbPath && fs.existsSync(result.glbPath) && fs.statSync(result.glbPath).size > 100) {
+                durableHeroUri = publishToModels(result.glbPath);
             }
-            durableHeroUri = `/models/${fileName}`;
-        }
-
-        if (extractedGlbPath && fs.existsSync(extractedGlbPath)) {
-            const fileName = path.basename(extractedGlbPath);
-            const canonicalDest = path.join(canonicalModelsDir, fileName);
-            if (path.resolve(extractedGlbPath) !== canonicalDest) {
-                try {
-                    if (!fs.existsSync(canonicalModelsDir)) fs.mkdirSync(canonicalModelsDir, { recursive: true });
-                    fs.copyFileSync(extractedGlbPath, canonicalDest);
-                } catch { }
+            if (extractedGlbPath) {
+                locationUri = publishToModels(extractedGlbPath);
             }
+        } catch (err) {
+            return failedOutcome(err, 'The generated model could not be published to public/models');
         }
-
-        const activeArtifact = _ctx?.request?.canvasState?.activeArtifact;
-        const activeData = activeArtifact?.data as any;
-        const existingObjects = activeData?.objects || [];
-        const existingEnvTiles = existingObjects.filter((o: any) => {
-            const role = o?.content?.metadata?.role;
-            const source = (o?.content?.metadata?.source || '').toLowerCase();
-            return role === 'environment' || o?.content?.metadata?.isGround || source.includes('google3dtiles') || source.includes('googlevectortile');
-        });
-        const effectiveGeoAnchor = resolvedGeoAnchor || activeData?.geoAnchor;
-        const effectiveGroundTileMode = isRealWorld ? 'photoreal-clay' : (activeData?.groundTileMode || 'photoreal-clay');
 
         const stagedObjects = [
             ...(durableHeroUri ? [{
@@ -462,16 +459,17 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 time: { startMs: 0, durationMs: 20000 },
                 lineage: { version: 1 }
             }] : []),
-            ...(extractedGlbPath ? [{
+            ...(locationUri ? [{
                 id: `staged-location-${Date.now()}`,
                 content: {
                     type: '3d-model',
-                    durableUri: `/models/${path.basename(extractedGlbPath)}`,
+                    durableUri: locationUri,
                     mimeType: 'model/gltf-binary',
                     metadata: {
                         role: 'environment',
                         source: 'google_3d_tiles_clay',
                         isGround: true,
+                        remeshed: false,
                         metricScale: 1.0,
                         groundDatumMeters: 0.0,
                         location: resolvedLocName
@@ -480,7 +478,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },
                 time: { startMs: 0, durationMs: 20000 },
                 lineage: { version: 1 }
-            }] : existingEnvTiles)
+            }] : activeEnvTiles)
         ];
 
         return {
@@ -500,8 +498,9 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 visualIssues: visualReview ? describeVisualProblems(visualReview) : undefined,
                 locationManifest: extractedManifest,
                 locationGlbPath: extractedGlbPath,
-                geoAnchor: effectiveGeoAnchor,
-                locationQuery: effectiveLocation,
+                geoAnchor,
+                locationQuery: locationRequest?.label,
+                resolvedAddress: resolvedLocName,
                 groundDatum: {
                     coordinateSystem: 'metric-enu',
                     units: 'meters',
@@ -517,8 +516,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     data: {
                         title: stagedTitle,
                         subtitle: stagedSubtitle,
-                        worldBranch: isRealWorld ? `geospatial/${resolvedLocName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : 'procedural/python-scene',
-                        sceneType: isRealWorld ? 'real_world_landmark' : 'custom',
+                        worldBranch: resolvedLocName ? `geospatial/${resolvedLocName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : 'procedural/python-scene',
+                        sceneType: extractedManifest ? 'real_world_landmark' : 'custom',
                         renderMode: 'clay',
                         cameraMode: 'orbit',
                         animation: 'orbit',
@@ -530,7 +529,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                         environment: {
                             skybox: 'studio',
                             lighting: 'studio',
-                            ground: isRealWorld || existingEnvTiles.length > 0
+                            ground: isStaged
                         },
                         groundDatum: {
                             coordinateSystem: 'metric-enu',
@@ -539,8 +538,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                             groundDatumMeters: 0.0,
                             groundLogic: 'shared-metric-ground'
                         },
-                        groundTileMode: effectiveGroundTileMode,
-                        geoAnchor: effectiveGeoAnchor,
+                        ...(isStaged ? { groundTileMode: 'photoreal-clay', geoAnchor } : {}),
                         objects: stagedObjects,
                         pythonGenerator: {
                             enabled: true,
@@ -553,7 +551,20 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     }
                 }
             },
-            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built object automatically grounded on top of scene terrain/tiles.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
+            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.${extractedManifest ? ` Staged at ${resolvedLocName} (${extractedManifest.lat.toFixed(6)}, ${extractedManifest.lng.toFixed(6)}) on raw Google 3D Tiles in studio clay (not remeshed).` : keepsActiveLocation ? ' Added to the active scene\'s location.' : ''}${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
         };
     }
 };
+
+/** Copies a GLB into public/models (when it is not already there) and returns its /models URL; errors propagate. */
+function publishToModels(glbPath: string): string {
+    const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
+    const canonicalModelsDir = path.resolve(repoRoot, 'public/models');
+    const fileName = path.basename(glbPath);
+    const canonicalDest = path.join(canonicalModelsDir, fileName);
+    if (path.resolve(glbPath) !== canonicalDest) {
+        fs.mkdirSync(canonicalModelsDir, { recursive: true });
+        fs.copyFileSync(glbPath, canonicalDest);
+    }
+    return `/models/${fileName}`;
+}

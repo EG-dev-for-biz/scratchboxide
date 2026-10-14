@@ -165,11 +165,12 @@ describe('scene directives do not assume intent', () => {
         expect(text).toContain('stageIntoActiveScene: true only when staging the active scene');
     });
 
-    it('for a pure location request, offers full texture instead of a mandatory clay call', () => {
+    it('for a location request, offers full texture and lets the model decide the place; no coordinates from memory', () => {
         const text = userText('3d tiles of 40.7411, -73.9897 in full photo texture');
-        expect(text).toContain('PURE REAL-WORLD LOCATION QUERY');
         expect(text).not.toContain('MANDATORY DIRECT TOOL CALL');
-        expect(text).toContain('google_3d_tiles_get_full_texture({ query:');
+        expect(text).toContain('google_3d_tiles_get_full_texture when they ask for photo texture');
+        expect(text).toContain('Never supply coordinates from memory');
+        expect(text).not.toContain('latent knowledge');
     });
 
     it('adds the active-scene note whatever words the prompt uses', () => {

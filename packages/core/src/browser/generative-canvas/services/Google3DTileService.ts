@@ -14,8 +14,9 @@ import { TileClayProcessor, ClayPresetId, CLAY_PRESETS } from './TileClayProcess
 
 export type { ClayPresetId };
 import { GoogleMapsService, GeocodeResult } from './google-maps-service';
-import { GoogleVectorMappingService } from './google-vector-mapping-service';
 import type { Media4DObject, Scene3DData } from '../canvas-types';
+import { LocationUnresolvedError, MissingInputError } from '../../../common/errors/pipeline-errors';
+import { assertUsableCoordinates, formatCoordinates, parseCoordinateText } from '../../../common/coordinate/parse-coordinates';
 import { GeospatialPhotorealPipeline, PhotorealReconstructionOptions, PhotorealReconstructionResult } from './GeospatialPhotorealPipeline';
 import { UniversalTextureInducer, classifyGeometrySurfaces, ArchitecturalZone } from './UniversalTextureInducer';
 
@@ -65,15 +66,17 @@ export interface TileIngestionResult {
   glbBuffer?: ArrayBuffer;
 }
 
-export interface RealWorldLocationIntent {
-  isRealWorld: boolean;
-  landmarkName: string;
+/** A location resolved from explicit coordinates or a Google Places lookup. */
+export interface ResolvedTileLocation {
   lat: number;
   lng: number;
-  elevation: number;
+  /** Metres above sea level: as stated by the caller or from the Elevation API; undefined when neither gave one. */
+  elevation?: number;
   elevationSource?: string;
   datum?: string;
-  query: string;
+  landmarkName?: string;
+  formattedAddress?: string;
+  isResolved: boolean;
 }
 
 /**
@@ -170,212 +173,6 @@ export function generatePhotorealProceduralCppSource(options: PhotorealReconstru
   return GeospatialPhotorealPipeline.getInstance().generatePhotorealCppSource(options);
 }
 
-/**
- * Detects whether a prompt or surrounding context asks to model/reconstruct a real-world location or landmark.
- */
-/**
- * True when the intent carries real coordinates. A place the prompt names but nothing has geocoded yet
- * comes back at (0, 0) marked 'online_geocoding_required'; staging a scene there would put it at Null Island.
- */
-export function isResolvedLocation(intent: RealWorldLocationIntent | undefined): intent is RealWorldLocationIntent {
-  return !!intent?.isRealWorld && intent.elevationSource !== 'online_geocoding_required' && !(intent.lat === 0 && intent.lng === 0);
-}
-
-export function detectRealWorldLocationIntent(
-  prompt: string,
-  context?: { docTitle?: string; docContent?: string; location?: { lat: number; lng: number; elevation?: number } }
-): RealWorldLocationIntent | undefined {
-  if (context?.location && typeof context.location.lat === 'number' && typeof context.location.lng === 'number') {
-    return {
-      isRealWorld: true,
-      landmarkName: prompt.trim(),
-      lat: context.location.lat,
-      lng: context.location.lng,
-      elevation: context.location.elevation ?? GoogleMapsService.getInstance().getElevationSync(context.location.lat, context.location.lng),
-      elevationSource: 'explicit_coordinates',
-      datum: 'MSL_EGM96',
-      query: prompt.trim()
-    };
-  }
-
-  // Patterns below are case-insensitive; the original-case text is kept so extracted place names read as written.
-  const combinedRaw = `${prompt} ${context?.docTitle || ''} ${context?.docContent || ''}`;
-  const combined = combinedRaw.toLowerCase();
-
-  // Exclude purely generic non-geographic, space, or extraterrestrial prompts unless coordinates are explicitly given
-  const isGenericNonGeo = /\b(?:outer space|solar system|planets?|galaxy|orbit(?:ing)?|molecule|molecular|atoms?|quantum|dna|particle simulation|mars|moon|lunar|asteroid|sci-fi|cyberpunk|spacecraft|rover)\b/i.test(prompt);
-
-  // Check direct coordinate string pattern (e.g. "37.7955, -122.3937", "[40.7308, -73.9973]", or "lat: 40.7308, lng: -73.9973")
-  // Unlabeled pairs need decimals in both numbers and must not be part of a longer list, so counts like
-  // "10,000 vertices" or RGB triples like "0.55, 0.57, 0.60" are not read as coordinates.
-  const cleanCoords = combined.replace(/[\[\]\(\)]/g, ' ');
-  const labeledMatch = cleanCoords.match(/\b(?:lat|latitude)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)\s*[,;\s]\s*(?:lng|lon|long|longitude)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)/i);
-  const pairMatch = cleanCoords.match(/(?<![\d.,]\s*)([-+]?\d{1,2}\.\d+)\s*,\s*([-+]?\d{1,3}\.\d+)(?![\d.])(?!\s*,\s*[-+]?\d)/);
-  const coordMatch = labeledMatch || pairMatch;
-  if (coordMatch) {
-    const lat = parseFloat(coordMatch[1]);
-    const lng = parseFloat(coordMatch[2]);
-    if (!isNaN(lat) && !isNaN(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
-      const elevation = GoogleMapsService.getInstance().getElevationSync(lat, lng);
-      return {
-        isRealWorld: true,
-        landmarkName: `Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
-        lat,
-        lng,
-        elevation,
-        elevationSource: 'explicit_coordinates',
-        datum: 'MSL_EGM96',
-        query: `${lat}, ${lng}`
-      };
-    }
-  }
-
-  if (isGenericNonGeo) {
-    return undefined;
-  }
-
-  // Check direct landmark registry matches
-  const cleanedPrompt = prompt.trim()
-    .replace(/\b(?:in\s+)?(?:studio\s+)?(?:grey\s+)?clay(?:\s+mode)?(?:\s+3d)?(?:\s+tiles?)?|\b(?:in\s+)?3d\s+tiles?|\btiles?|\b(?:with|in)\s+(?:shadows?|3d|photorealistic|daylight|sunset|golden\s+hour(?:\s+light)?|night|pbr|trees|clouds|lighting|low\s+poly|high\s+poly)|\bas\s+a\s+(?:3d\s+)?splat|\bas\s+a\s+gaussian\s+splat|\bwith\s+splats?|\bas\s+3dgs|\b(?:with|using|via|from)\s+nano\s*banana\b/gi, '')
-    .replace(/[.,!?;:]+$/, '')
-    .trim();
-
-  const directLandmark = GoogleMapsService.getInstance().resolveLandmarkSync(cleanedPrompt) || GoogleMapsService.getInstance().resolveLandmarkSync(prompt.trim());
-  if (directLandmark) {
-    return {
-      isRealWorld: true,
-      landmarkName: directLandmark.name || directLandmark.formattedAddress || cleanedPrompt,
-      lat: directLandmark.lat,
-      lng: directLandmark.lng,
-      elevation: directLandmark.elevation ?? 0,
-      elevationSource: 'landmark_registry',
-      datum: 'MSL_EGM96',
-      query: cleanedPrompt || prompt.trim()
-    };
-  }
-
-  // Check if the prompt itself directly names a known vector feature (e.g. "Herald Square", "Penn Plaza", "Manhattan")
-  const directAnchor = GoogleVectorMappingService.searchFeatures(prompt.trim()) || GoogleVectorMappingService.searchFeatures(cleanedPrompt);
-  if (directAnchor && prompt.trim().split(/\s+/).length <= 4) {
-    return {
-      isRealWorld: true,
-      landmarkName: directAnchor.formattedAddress || prompt.trim(),
-      lat: directAnchor.lat,
-      lng: directAnchor.lng,
-      elevation: directAnchor.elevation,
-      elevationSource: 'google_vector_tiles',
-      datum: 'MSL_EGM96',
-      query: directAnchor.formattedAddress || prompt
-    };
-  }
-
-  // Check generic map tile / real world scene / 3D model / 3DGS keywords followed by a location name
-  const naturalPatterns = [
-    /(?:build|create|model|show|generate|render|reconstruct|view|explore|simulate|make)\s+(?:a|the)?\s*(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|scene|model|world|view|map|visualization|representation|environment|reconstruction|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)\s*(?:of|for|at|around|in)\s+)(.+)/i,
-    /(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)\s*(?:of|for|at|around|in)\s+)(.+)/i,
-    /\b(?:in|at|around|near)\s+([a-zA-Z0-9\s,.-]+?)(?:\s+(?:with|using|in\s+clay|photorealistic|in\s+3d|modeled)|$)/i
-  ];
-
-  for (const pattern of naturalPatterns) {
-    const match = combinedRaw.match(pattern);
-    if (match && match[1]) {
-      let target = match[1].trim();
-
-      // Clean target string (remove trailing stylistic instructions, punctuation, etc.)
-      target = target
-        .replace(/\b(?:in\s+clay|with\s+shadows?|in\s+3d|photorealistic|in\s+daylight|at\s+sunset|in\s+golden\s+hour(?:\s+light)?|at\s+night|in\s+pbr|with\s+trees|with\s+clouds|with\s+lighting|in\s+low\s+poly|in\s+high\s+poly|as\s+a\s+(?:3d\s+)?splat|as\s+a\s+gaussian\s+splat|with\s+splats?|as\s+3dgs|with\s+nano\s*banana|using\s+nano\s*banana|via\s+nano\s*banana|from\s+nano\s*banana)\b/gi, '')
-        .replace(/[.,!?;:]+$/, '')
-        .trim();
-
-      const stripped = target.replace(/^(?:the|a|an)\s+/i, '').trim();
-
-      const blacklist = ['me', 'us', 'the scene', 'a building', 'something', 'a world', 'a room', 'an object', 'a cube', 'a sphere', 'generic', 'blank', 'glass', 'plate of glass'];
-      if (stripped.length >= 2 && !blacklist.includes(stripped.toLowerCase())) {
-        // If the target contains an embedded prepositional location clause (e.g. "race car in central park" -> "central park")
-        const subLocMatch = target.match(/\b(?:in|at|around|near)\s+([a-zA-Z0-9\s,.-]+)$/i);
-        const subLocation = subLocMatch ? subLocMatch[1].trim() : null;
-
-        const directLandmark = (subLocation ? GoogleMapsService.getInstance().resolveLandmarkSync(subLocation) : undefined) ||
-                               GoogleMapsService.getInstance().resolveLandmarkSync(target) ||
-                               GoogleMapsService.getInstance().resolveLandmarkSync(stripped);
-        if (directLandmark) {
-          return {
-            isRealWorld: true,
-            landmarkName: directLandmark.name || directLandmark.formattedAddress || (subLocation ? subLocation : target),
-            lat: directLandmark.lat,
-            lng: directLandmark.lng,
-            elevation: directLandmark.elevation || 15.0,
-            elevationSource: 'google_maps_landmark',
-            datum: 'MSL_EGM96',
-            query: subLocation || target
-          };
-        }
-
-        const vAnchor = (subLocation ? GoogleVectorMappingService.searchFeatures(subLocation) : undefined) ||
-                        GoogleVectorMappingService.searchFeatures(target) ||
-                        GoogleVectorMappingService.searchFeatures(stripped);
-        if (vAnchor) {
-          return {
-            isRealWorld: true,
-            landmarkName: vAnchor.formattedAddress || (subLocation ? subLocation : target),
-            lat: vAnchor.lat,
-            lng: vAnchor.lng,
-            elevation: vAnchor.elevation,
-            elevationSource: 'google_vector_tiles',
-            datum: 'MSL_EGM96',
-            query: subLocation || target
-          };
-        }
-
-        const isExplicitGeospatialPattern = pattern === naturalPatterns[1];
-        const geoRegex = /\b(?:street|avenue|ave|blvd|boulevard|park|hotel|bridge|tower|plaza|harbor|square|pier|beach|monument|cathedral|hall|building|airport|stadium|museum|courthouse|terminal|station|road|circuit|colosseum|eiffel|pantheon|parthenon|acropolis|louvre|pyramid|sagrada|vatican|kremlin|taj\s*mahal|big\s*ben|stonehenge|chichen\s*itza|petra|machu\s*picchu|burj\s*khalifa|empire\s*state|space\s*needle|golden\s*gate|sydney\s*opera|nyc|new york|manhattan|brooklyn|sf|san francisco|paris|london|tokyo|rome|sydney|boston|chicago|seattle|la|los angeles|monaco|berlin|dubai|toronto)\b/i;
-        const hasGeoQualifier = geoRegex.test(target) || (subLocation ? geoRegex.test(subLocation) : false);
-
-        if (hasGeoQualifier || isExplicitGeospatialPattern) {
-          const effectiveTarget = (subLocation && geoRegex.test(subLocation)) ? subLocation : target;
-          return {
-            isRealWorld: true,
-            landmarkName: effectiveTarget,
-            lat: 0,
-            lng: 0,
-            elevation: 0,
-            elevationSource: 'online_geocoding_required',
-            datum: 'MSL_EGM96',
-            query: effectiveTarget
-          };
-        }
-      }
-    }
-  }
-
-  // If no natural pattern matched, but the prompt itself is a direct location name with geo qualifiers (e.g. "Eiffel Tower Paris", "Tokyo Tower", "Ferry Building SF")
-  const directTarget = prompt.trim()
-    .replace(/\b(?:in\s+)?(?:studio\s+)?(?:grey\s+)?clay(?:\s+mode)?(?:\s+3d)?(?:\s+tiles?)?|\b(?:in\s+)?3d\s+tiles?|\btiles?|\b(?:with|in)\s+(?:shadows?|3d|photorealistic|daylight|sunset|golden\s+hour(?:\s+light)?|night|pbr|trees|clouds|lighting|low\s+poly|high\s+poly)|\bas\s+a\s+(?:3d\s+)?splat|\bas\s+a\s+gaussian\s+splat|\bwith\s+splats?|\bas\s+3dgs|\b(?:with|using|via|from)\s+nano\s*banana\b/gi, '')
-    .replace(/[.,!?;:]+$/, '')
-    .trim();
-
-  const strippedDirect = directTarget.replace(/^(?:the|a|an)\s+/i, '').trim();
-  const blacklist = ['me', 'us', 'the scene', 'a building', 'something', 'a world', 'a room', 'an object', 'a cube', 'a sphere', 'generic', 'blank'];
-  const directWords = strippedDirect.split(/\s+/);
-  if (directWords.length <= 6 && strippedDirect.length >= 2 && !blacklist.includes(strippedDirect.toLowerCase())) {
-    const hasGeo = /\b(?:street|avenue|ave|blvd|boulevard|park|hotel|bridge|tower|plaza|harbor|square|pier|beach|monument|cathedral|hall|building|airport|stadium|museum|courthouse|terminal|station|road|circuit|colosseum|eiffel|pantheon|parthenon|acropolis|louvre|pyramid|sagrada|vatican|kremlin|taj\s*mahal|big\s*ben|stonehenge|chichen\s*itza|petra|machu\s*picchu|burj\s*khalifa|empire\s*state|space\s*needle|golden\s*gate|sydney\s*opera|nyc|new york|manhattan|brooklyn|sf|san francisco|paris|london|tokyo|rome|sydney|boston|chicago|seattle|la|los angeles|monaco|berlin|dubai|toronto)\b/i.test(strippedDirect);
-    if (hasGeo) {
-      return {
-        isRealWorld: true,
-        landmarkName: directTarget,
-        lat: 0,
-        lng: 0,
-        elevation: 0,
-        elevationSource: 'online_geocoding_required',
-        datum: 'MSL_EGM96',
-        query: directTarget
-      };
-    }
-  }
-
-  return undefined;
-}
-
 export class Google3DTileService {
   private static instance: Google3DTileService;
 
@@ -387,181 +184,91 @@ export class Google3DTileService {
   }
 
   /**
-   * Synchronously resolves landmark name, address string, or coordinate pair to geodetic anchor.
+   * Resolves explicit coordinates (an object, or text that is entirely "lat, lng") to a geodetic anchor.
+   * A place name needs Google Places, so it throws here: use resolveLocation. Nothing maps words to places,
+   * and elevation is only what the caller stated.
    */
   public resolveLocationSync(
     queryOrCoords: string | { lat: number; lng: number; elevation?: number }
-  ): { lat: number; lng: number; elevation: number; elevationSource?: string; datum?: string; landmarkName?: string; formattedAddress?: string; isResolved: boolean } {
+  ): ResolvedTileLocation {
     if (typeof queryOrCoords === 'object') {
-      const elevation = queryOrCoords.elevation !== undefined
-        ? queryOrCoords.elevation
-        : GoogleMapsService.getInstance().getElevationSync(queryOrCoords.lat, queryOrCoords.lng);
+      const label = formatCoordinates(queryOrCoords.lat, queryOrCoords.lng);
+      assertUsableCoordinates(queryOrCoords.lat, queryOrCoords.lng, label);
       return {
         lat: queryOrCoords.lat,
         lng: queryOrCoords.lng,
-        elevation,
-        elevationSource: 'explicit_coordinates',
+        ...(queryOrCoords.elevation !== undefined ? { elevation: queryOrCoords.elevation, elevationSource: 'explicit' } : {}),
         datum: 'MSL_EGM96',
-        landmarkName: `Geo (${queryOrCoords.lat.toFixed(4)}, ${queryOrCoords.lng.toFixed(4)})`,
+        landmarkName: label,
+        formattedAddress: label,
         isResolved: true
       };
     }
 
-    const cleanQuery = queryOrCoords.trim().toLowerCase();
-
-    // Check direct coordinate string format e.g. "37.7955, -122.3937" or "[37.7955, -122.3937]"
-    const cleanCoords = cleanQuery.replace(/[\[\]\(\)]/g, ' ').trim();
-    const coordMatch = cleanCoords.match(/^([-+]?[0-9]*\.?[0-9]+)[,\s]+([-+]?[0-9]*\.?[0-9]+)(?:[,\s]+([-+]?[0-9]*\.?[0-9]+))?$/);
-    if (coordMatch) {
-      const lat = parseFloat(coordMatch[1]);
-      const lng = parseFloat(coordMatch[2]);
-      const elevation = coordMatch[3] ? parseFloat(coordMatch[3]) : GoogleMapsService.getInstance().getElevationSync(lat, lng);
-      return {
-        lat,
-        lng,
-        elevation,
-        elevationSource: 'explicit_coordinates',
-        datum: 'MSL_EGM96',
-        landmarkName: `Lat ${lat.toFixed(4)}, Lng ${lng.toFixed(4)}`,
-        isResolved: true
-      };
+    const query = queryOrCoords.trim();
+    const coords = parseCoordinateText(query);
+    if (!coords) {
+      throw new LocationUnresolvedError(query, 'only coordinates resolve without the network; look the place up with resolveLocation (Google Places)');
     }
-
-    // Check Google Vector Mapping Service (features, road corridors, parcels)
-    const vectorAnchor = GoogleVectorMappingService.searchFeatures(cleanQuery);
-    if (vectorAnchor) {
-      return {
-        lat: vectorAnchor.lat,
-        lng: vectorAnchor.lng,
-        elevation: vectorAnchor.elevation,
-        elevationSource: 'google_vector_tiles',
-        datum: 'MSL_EGM96',
-        landmarkName: vectorAnchor.formattedAddress || cleanQuery,
-        formattedAddress: vectorAnchor.formattedAddress,
-        isResolved: true
-      };
-    }
-
-    const strippedQuery = cleanQuery
-      .replace(/^(?:the|a|an)\s+/i, '')
-      .replace(/\b(?:in\s+)?(?:studio\s+)?(?:grey\s+)?clay(?:\s+mode)?(?:\s+3d)?(?:\s+tiles?)?|\b(?:in\s+)?3d\s+tiles?|\btiles?|\b(?:with|in)\s+(?:shadows?|3d|photorealistic|daylight|sunset|golden\s+hour(?:\s+light)?|night|pbr|trees|clouds|lighting|low\s+poly|high\s+poly)|\bas\s+a\s+(?:3d\s+)?splat|\bas\s+a\s+gaussian\s+splat|\bwith\s+splats?|\bas\s+3dgs|\b(?:with|using|via|from)\s+nano\s*banana\b/gi, '')
-      .replace(/[.,!?;:]+$/, '')
-      .trim();
-
-    if (strippedQuery !== cleanQuery) {
-      const strippedAnchor = GoogleVectorMappingService.searchFeatures(strippedQuery);
-      if (strippedAnchor) {
-        return {
-          lat: strippedAnchor.lat,
-          lng: strippedAnchor.lng,
-          elevation: strippedAnchor.elevation,
-          elevationSource: 'google_vector_tiles',
-          datum: 'MSL_EGM96',
-          landmarkName: strippedAnchor.formattedAddress || strippedQuery,
-          formattedAddress: strippedAnchor.formattedAddress,
-          isResolved: true
-        };
-      }
-    }
-
-    // Check built-in landmark registry
-    // Match on the caller's original casing so the returned name reads as they wrote it.
-    const registryMatch = GoogleMapsService.getInstance().resolveLandmarkSync(queryOrCoords.trim()) || GoogleMapsService.getInstance().resolveLandmarkSync(strippedQuery);
-    if (registryMatch) {
-      return {
-        lat: registryMatch.lat,
-        lng: registryMatch.lng,
-        elevation: registryMatch.elevation ?? 0,
-        elevationSource: 'landmark_registry',
-        datum: 'MSL_EGM96',
-        landmarkName: registryMatch.name || registryMatch.formattedAddress || cleanQuery,
-        formattedAddress: registryMatch.formattedAddress,
-        isResolved: true
-      };
-    }
-
-    // In accordance with our online architecture: Never guess or silently default to mock coordinates!
-    return {
-      lat: 0,
-      lng: 0,
-      elevation: 0,
-      elevationSource: 'unresolved',
-      datum: 'MSL_EGM96',
-      landmarkName: queryOrCoords || 'Unresolved Location',
-      isResolved: false
-    };
+    return this.resolveLocationSync(coords);
   }
 
   /**
-   * Resolves landmark name, address string, or coordinate pair to geodetic anchor.
+   * Resolves a place name, address or coordinates. Place names are one Google Places Text Search call
+   * (GoogleMapsService.geocode); the ground elevation comes from the Elevation API, and stays undefined
+   * when that is unavailable. Failures throw LocationUnresolvedError.
    */
   public async resolveLocation(
     queryOrCoords: string | { lat: number; lng: number; elevation?: number }
-  ): Promise<{ lat: number; lng: number; elevation: number; landmarkName?: string; formattedAddress?: string; isResolved: boolean }> {
-    if (typeof queryOrCoords === 'object') {
-      const res = this.resolveLocationSync(queryOrCoords);
-      return { ...res, isResolved: true };
+  ): Promise<ResolvedTileLocation> {
+    const mapsService = GoogleMapsService.getInstance();
+    let resolved: ResolvedTileLocation;
+    if (typeof queryOrCoords === 'object' || parseCoordinateText(queryOrCoords.trim())) {
+      resolved = this.resolveLocationSync(queryOrCoords);
+    } else {
+      const geoResult: GeocodeResult = await mapsService.geocode(queryOrCoords);
+      resolved = {
+        lat: geoResult.lat,
+        lng: geoResult.lng,
+        datum: 'MSL_EGM96',
+        landmarkName: geoResult.name || geoResult.formattedAddress,
+        formattedAddress: geoResult.formattedAddress,
+        isResolved: true
+      };
     }
 
-    const cleanQuery = queryOrCoords.trim().toLowerCase();
-
-    // Check direct sync resolution (explicit coordinates or vector mapping)
-    const syncRes = this.resolveLocationSync(cleanQuery);
-    if (syncRes.isResolved && syncRes.lat !== 0) {
-      return syncRes;
-    }
-
-    // Attempt online geocoding via GoogleMapsService
-    try {
-      const mapsService = GoogleMapsService.getInstance();
-      const geoResult: GeocodeResult = await mapsService.geocode(cleanQuery);
-      if (geoResult && typeof geoResult.lat === 'number' && typeof geoResult.lng === 'number') {
-        let elev = geoResult.elevation;
-        if (elev === undefined || elev === 0) {
-          try {
-            elev = await mapsService.getElevation(geoResult.lat, geoResult.lng);
-          } catch {
-            elev = mapsService.getElevationSync(geoResult.lat, geoResult.lng);
-          }
-        }
-        return {
-          lat: geoResult.lat,
-          lng: geoResult.lng,
-          elevation: elev,
-          landmarkName: geoResult.formattedAddress || queryOrCoords,
-          formattedAddress: geoResult.formattedAddress,
-          isResolved: true
-        };
+    if (resolved.elevation === undefined) {
+      try {
+        resolved.elevation = await mapsService.getElevation(resolved.lat, resolved.lng);
+        resolved.elevationSource = 'google_elevation_api';
+      } catch {
+        // No measured ground height: elevation stays undefined rather than guessed.
       }
-    } catch {
-      // Ignore network errors and continue to throw actionable error
     }
-
-    throw new Error(
-      `[Google3DTileService] ADA Zero-Presets: Could not resolve geodetic coordinates or reach Google Maps 3D Tiles data sources for "${queryOrCoords}". In accordance with our online architecture, please verify network connectivity or provide explicit geodetic coordinates [lat, lng].`
-    );
+    return resolved;
   }
 
   /**
    * Ingests a 3D Google photorealistic map tile region into native clay geometry synchronously.
    */
   public ingestTileRegionSync(options: TileIngestionOptions = {}): TileIngestionResult {
-    const hasExplicitCoords = options.lat !== undefined && options.lng !== undefined && (options.lat !== 0 || options.lng !== 0);
+    const hasExplicitCoords = options.lat !== undefined && options.lng !== undefined;
     // Explicit coordinates decide the position; a caller-supplied query still names the place
     // (otherwise every coordinate-anchored tile is labelled "Geo (lat, lng)").
     const queryName = options.query?.trim();
-    const geo = hasExplicitCoords
+    if (!hasExplicitCoords && !queryName) {
+      throw new MissingInputError('ingestTileRegionSync', 'lat/lng or query');
+    }
+    const resolved = hasExplicitCoords
       ? {
           ...this.resolveLocationSync({ lat: options.lat!, lng: options.lng!, elevation: options.elevation }),
           ...(queryName ? { landmarkName: queryName } : {})
         }
-      : this.resolveLocationSync(options.query || 'empire state building');
-
-    if (!geo.isResolved || (geo.lat === 0 && geo.lng === 0 && options.lat === undefined)) {
-      throw new Error(
-        `[Google3DTileService] Could not resolve geodetic coordinates for "${options.query}". In accordance with our online architecture, please provide explicit geodetic coordinates [lat, lng] or verify Google Maps tile availability.`
-      );
+      : this.resolveLocationSync(queryName!);
+    if (resolved.elevation === undefined) {
+      throw new MissingInputError('ingestTileRegionSync', 'elevation', `no ground elevation is known at ${formatCoordinates(resolved.lat, resolved.lng)}; pass elevation in metres above sea level`);
     }
+    const geo = { ...resolved, elevation: resolved.elevation };
 
     const zoom = options.zoom ?? 17;
     const radius = options.radiusMeters ?? 160;
@@ -705,12 +412,13 @@ export class Google3DTileService {
    * Ingests a 3D Google photorealistic map tile region into native clay geometry.
    */
   public async ingestTileRegion(options: TileIngestionOptions = {}): Promise<TileIngestionResult> {
-    const geo = await this.resolveLocation(
-      options.query ||
-      (options.lat !== undefined && options.lng !== undefined
-        ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
-        : { lat: 40.7484, lng: -73.9857 })
-    );
+    const target = options.lat !== undefined && options.lng !== undefined
+      ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
+      : options.query;
+    if (!target) {
+      throw new MissingInputError('ingestTileRegion', 'lat/lng or query');
+    }
+    const geo = await this.resolveLocation(target);
 
     return this.ingestTileRegionSync({
       ...options,

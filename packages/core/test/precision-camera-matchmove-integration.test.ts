@@ -27,6 +27,20 @@ import type {
 } from '../src/common/vfx-plate-protocol';
 import type { Vec3 } from '../src/common/coordinate/LocalTangentPlane';
 
+
+/** A surveyed reference pose passed explicitly; resolution never picks one from words in the prompt hint. */
+function fixturePose(key: keyof typeof KNOWN_RESECTION_LANDMARKS) {
+    const f = KNOWN_RESECTION_LANDMARKS[key];
+    return {
+        targetLandmarkName: f.name,
+        targetCoords: { lat: f.targetCoords.lat, lng: f.targetCoords.lng, alt: f.groundElevation },
+        cameraOpticalCenter: { lat: f.vantageCoords.lat, lng: f.vantageCoords.lng, alt: f.vantageCoords.altitudeMeters },
+        headingDeg: f.headingDeg,
+        pitchDeg: f.pitchDeg,
+        glbPath: f.glbPath
+    };
+}
+
 describe('Precision Camera Matchmove Pipeline Integration Test Suite', () => {
     const resectionService = new GeoBoxPrecisionResectionService();
 
@@ -36,6 +50,7 @@ describe('Precision Camera Matchmove Pipeline Integration Test Suite', () => {
     it('1. Resects Frame 1 & Final Frame with 100% Certified Millimeter Precision', async () => {
         // Frame 1: Oblique Roofline Perspective (Plaza Hotel mansard & turret)
         const frame1Result = await resectionService.resectImageLocation({
+            ...fixturePose('plaza'),
             targetLandmarkName: 'The Plaza Hotel',
             promptHint: 'French Renaissance mansard gable roofline and copper turret overlooking Central Park South',
             optimizeTo100Percent: true,
@@ -57,6 +72,7 @@ describe('Precision Camera Matchmove Pipeline Integration Test Suite', () => {
         // Final Frame (Frame 360): Overhead Nadir Landing
         const finalFrameResult = await resectionService.resectImageLocation({
             targetLandmarkName: 'The Plaza Hotel',
+            targetCoords: { ...KNOWN_RESECTION_LANDMARKS.plaza.targetCoords, alt: KNOWN_RESECTION_LANDMARKS.plaza.groundElevation },
             promptHint: 'Nadir straight down overhead view of Grand Army Plaza street asphalt and lane markings',
             knownCoords: {
                 lat: 40.764500,

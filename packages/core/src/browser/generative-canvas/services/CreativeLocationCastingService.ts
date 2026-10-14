@@ -7,7 +7,6 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { detectRealWorldLocationIntent, type RealWorldLocationIntent } from './Google3DTileService';
 import { GoogleMapsService } from './google-maps-service';
 
 export type LocationCastingArchetype =
@@ -530,30 +529,8 @@ export class CreativeLocationCastingService {
   ): CastedLocation {
     const combined = `${prompt} ${options?.docTitle || ''} ${options?.docContent || ''}`.trim();
 
-    // 1. Check if the prompt explicitly targets a known landmark or explicit coordinates
-    const explicitIntent: RealWorldLocationIntent | undefined = detectRealWorldLocationIntent(prompt, {
-      docTitle: options?.docTitle,
-      docContent: options?.docContent
-    });
-
-    if (explicitIntent && explicitIntent.isRealWorld) {
-      return {
-        isRealWorld: true,
-        landmarkName: explicitIntent.landmarkName,
-        lat: explicitIntent.lat,
-        lng: explicitIntent.lng,
-        elevation: explicitIntent.elevation,
-        elevationSource: 'google_elevation',
-        datum: 'MSL_EGM96',
-        archetype: 'explicit_landmark',
-        rationale: `Direct real-world landmark request: ${explicitIntent.landmarkName}`,
-        suggestedEnvironment: {
-          skybox: 'golden_hour',
-          lighting: 'daylight',
-          clayPreset: 'warm-clay'
-        }
-      };
-    }
+    // Prompt words are never matched to real places here; places the user names are resolved by the
+    // location tools with Google Places.
 
     // 1b. Check if the prompt targets an extraterrestrial planetary body, asteroid, or deep space
     if (/\b(?:mars|martian|rover|jezero|curiosity|perseverance|opportunity|sojourner|moon|lunar\s*surface|planetary\s*surface|red\s*planet|asteroid|comet|deep\s*space|extraterrestrial|exoplanet|orbital\s*station|space\s*station)\b/i.test(combined)) {

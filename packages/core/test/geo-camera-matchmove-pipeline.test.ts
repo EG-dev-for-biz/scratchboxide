@@ -17,6 +17,7 @@ import {
   GeoMatchmoveRequest
 } from '../src/node/spatial/GeoCameraMatchmovePipelineService';
 import { requireAll, requireAsset, withReason } from './helpers/requirements';
+import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
 
 // The 15.04 s / 24 fps Plaza Hotel reference plate the dry-run assertions (361 frames) are written against.
 const referenceVideo32 = requireAsset('reference_video_32.mp4');
@@ -32,29 +33,57 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
   const ESB = { lat: 40.748817, lng: -73.985428, elevation: 15.0, landmarkName: 'Empire State Building', headingDeg: -29.0 };
   const EIFFEL = { lat: 48.85837, lng: 2.294481, elevation: 35.0, landmarkName: 'Eiffel Tower', headingDeg: 0.0 };
 
-  const geocodeFetch = (geocodeBody: any, elevationBody: any = { status: 'OK', results: [{ elevation: 18.66 }] }) => (async (input: any) => {
-    const url = String(input);
-    const body = url.includes('/geocode/') ? geocodeBody : elevationBody;
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-  }) as typeof fetch;
+  // Injected fetch: Places Text Search answers for place names, the Elevation API for heights.
+  const placesFetch = (place: any | undefined, elevation = 18.66) => {
+    const calls: Array<{ url: string; init?: any }> = [];
+    const impl = (async (input: any, init?: any) => {
+      const url = String(input);
+      calls.push({ url, init });
+      const body = url.includes('places:searchText')
+        ? (place ? { places: [place] } : {})
+        : { status: 'OK', results: [{ elevation }] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    return { impl, calls };
+  };
 
-  test('1. Geodetic anchors resolve through coordinates and Vector Tiles; Google Geocoding API is strictly disabled', async () => {
-    // 1. Direct coordinate parsing
+  test('1. Geodetic anchors resolve from coordinates or Google Places; nothing is looked up in a built-in table', async () => {
+    // 1. Direct coordinate parsing (no network)
     const coordAnchor = await service.geocodeLandmarkAnchor('40.764632, -73.974325, 18.66');
     assert.strictEqual(coordAnchor.lat, 40.764632);
     assert.strictEqual(coordAnchor.lng, -73.974325);
     assert.strictEqual(coordAnchor.elevation, 18.66);
+    assert.strictEqual(coordAnchor.elevationSource, 'stated');
 
-    // 2. Google Vector Tile resolution
-    const vectorAnchor = await service.geocodeLandmarkAnchor('Empire State Building');
-    assert.strictEqual(Number(vectorAnchor.lat.toFixed(4)), 40.7484);
-    assert.strictEqual(Number(vectorAnchor.lng.toFixed(4)), -73.9857);
+    // 2. A place name is one Places Text Search call; the ground height comes from the Elevation API
+    const esb = placesFetch({
+      displayName: { text: 'Empire State Building' },
+      formattedAddress: '20 W 34th St., New York, NY 10001, USA',
+      location: { latitude: 40.7484405, longitude: -73.9856644 }
+    }, 17.2);
+    const placeAnchor = await service.geocodeLandmarkAnchor('Empire State Building', { apiKey: 'test-key', fetchImpl: esb.impl });
+    assert.strictEqual(Number(placeAnchor.lat.toFixed(4)), 40.7484);
+    assert.strictEqual(Number(placeAnchor.lng.toFixed(4)), -73.9857);
+    assert.strictEqual(placeAnchor.landmarkName, 'Empire State Building');
+    assert.strictEqual(placeAnchor.elevation, 17.2);
+    assert.strictEqual(placeAnchor.elevationSource, 'elevation-api');
+    assert.ok(esb.calls[0].url.includes('places:searchText'));
 
-    // 3. Unresolvable query without coordinates or vector match throws strict zero-geocoding error
+    // 3. No result, or no key, throws LocationUnresolvedError instead of substituting a place
+    const none = placesFetch(undefined);
     await assert.rejects(
-      service.geocodeLandmarkAnchor('NonExistentCustomFantasyTower'),
-      /Google Geocoding API is strictly disabled/i
+      service.geocodeLandmarkAnchor('NonExistentCustomFantasyTower', { apiKey: 'test-key', fetchImpl: none.impl }),
+      (err: any) => err instanceof LocationUnresolvedError && /no place/i.test(err.message)
     );
+    const saved = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    delete process.env.MAP_TILES_API_KEY;
+    try {
+      await assert.rejects(service.geocodeLandmarkAnchor('Empire State Building'), LocationUnresolvedError);
+    } finally {
+      if (saved.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved.g;
+      if (saved.m !== undefined) process.env.MAP_TILES_API_KEY = saved.m;
+    }
 
     const explicit = service.resolveLandmarkAnchor(PLAZA);
     assert.strictEqual(explicit.lat, PLAZA.lat);

@@ -122,21 +122,13 @@ export class Location3DGaussianSplatService {
 
         progressReporter(0.02, `Resolving geodetic location for "${req.location}"...`);
 
-        // 1. Resolve geographic preset or synthesize from coordinates
-        const customAnchor: GeodeticAnchor | undefined = (req.lat !== undefined && req.lng !== undefined) ? {
-            lat: req.lat,
-            lng: req.lng,
-            elevationMeters: req.elevation || 0,
-            headingDeg: req.headingDeg || 0,
-            formattedAddress: req.location
-        } : undefined;
-
-        const preset = resolveSurveyPreset({
+        // 1. Resolve the location (coordinates, or a place name via Google Places) and plan the survey
+        const preset = await resolveSurveyPreset({
             location: req.location,
             lat: req.lat,
             lng: req.lng,
             elevationMeters: req.elevation,
-            anchor: customAnchor,
+            headingDeg: req.headingDeg,
             cameraCount: req.cameraCount,
             sigmaScale: req.sigmaScale,
             voxelSizeMeters: req.voxelSizeMeters,
@@ -151,9 +143,11 @@ export class Location3DGaussianSplatService {
             exposureScale: req.exposureScale
         }, root);
 
-        let glbPath = path.isAbsolute(preset.glbPath) ? preset.glbPath : path.resolve(root, preset.glbPath);
         const anchor = preset.anchor;
         const sanitizedName = (req.location || anchor.formattedAddress || 'location').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        let glbPath = preset.glbPath
+            ? (path.isAbsolute(preset.glbPath) ? preset.glbPath : path.resolve(root, preset.glbPath))
+            : path.resolve(root, `public/models/${sanitizedName}_clay.glb`);
 
         // If target GLB is not on disk, synthesize authentic clay mesh or check fallback models
         if (!fs.existsSync(glbPath)) {

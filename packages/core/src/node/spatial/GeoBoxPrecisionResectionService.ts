@@ -40,6 +40,9 @@ import {
     geocode3DTilesAddress,
     GeoAnchor
 } from './Google3DTileBlockoutPipelineService';
+import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { assertUsableCoordinates } from '../../common/coordinate/parse-coordinates';
 import { VfxLensInterchangeService } from '../../common/optics/VfxLensInterchangeService';
 import {
     VanishingPointHorizonEstimator,
@@ -120,8 +123,8 @@ export interface SubPixelOptimizationRequest {
 }
 
 /**
- * Optional benchmark anchors for offline test suite verification when network/Google Maps API is unavailable.
- * Never used as a blind default fallback for arbitrary user queries.
+ * Surveyed reference poses for tests. Resolution never consults them (no name or substring lookup):
+ * a test that wants one passes its coordinates explicitly.
  */
 export const BENCHMARK_GEO_ANCHORS: Record<string, {
     name: string;
@@ -189,8 +192,10 @@ export class GeoBoxPrecisionResectionService {
     }
 
     /**
-     * Resolves geodetic coordinates for ANY location on Earth without hardcoded monument defaults.
-     * Strictly enforces the Zero Presets directive.
+     * Resolves where the photo was taken. Explicit target or camera coordinates are used as given; otherwise the
+     * landmark name (or, without one, the prompt hint) is resolved with Google Places. Text is never scanned for
+     * landmark keywords or embedded numbers, and BENCHMARK_GEO_ANCHORS are never consulted. The ground elevation
+     * is the stated altitude or the Elevation API's; when neither is available this throws.
      */
     public async resolveGeodeticCoordinates(request: GeoBoxResectionRequest): Promise<{
         name: string;
@@ -203,94 +208,62 @@ export class GeoBoxPrecisionResectionService {
     }> {
         // 1. Explicit target coordinates provided
         if (request.targetCoords) {
+            const { lat, lng } = request.targetCoords;
+            assertUsableCoordinates(lat, lng, `${lat}, ${lng}`);
+            const ground = await this.groundElevation(lat, lng, request.targetCoords.alt);
             return {
-                name: request.targetLandmarkName || `Coordinates (${request.targetCoords.lat.toFixed(6)}, ${request.targetCoords.lng.toFixed(6)})`,
-                targetCoords: {
-                    lat: request.targetCoords.lat,
-                    lng: request.targetCoords.lng,
-                    altitudeMeters: request.targetCoords.alt ?? 15.0
-                },
-                groundElevation: request.targetCoords.alt ?? 15.0,
+                name: request.targetLandmarkName || `Coordinates (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
+                targetCoords: { lat, lng, altitudeMeters: ground },
+                groundElevation: ground,
                 glbPath: request.glbPath
             };
         }
 
         // 2. Explicit known camera coords provided
         if (request.knownCoords) {
+            const { lat, lng } = request.knownCoords;
+            assertUsableCoordinates(lat, lng, `${lat}, ${lng}`);
+            const ground = await this.groundElevation(lat, lng);
             return {
-                name: request.targetLandmarkName || `Location (${request.knownCoords.lat.toFixed(6)}, ${request.knownCoords.lng.toFixed(6)})`,
-                targetCoords: {
-                    lat: request.knownCoords.lat,
-                    lng: request.knownCoords.lng,
-                    altitudeMeters: request.knownCoords.alt ?? 15.0
-                },
-                vantageCoords: {
-                    lat: request.knownCoords.lat,
-                    lng: request.knownCoords.lng,
-                    altitudeMeters: request.knownCoords.alt ?? 25.0
-                },
-                groundElevation: request.knownCoords.alt ?? 15.0,
+                name: request.targetLandmarkName || `Location (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
+                targetCoords: { lat, lng, altitudeMeters: ground },
+                vantageCoords: { lat, lng, altitudeMeters: request.knownCoords.alt ?? ground + 2.0 },
+                groundElevation: ground,
                 glbPath: request.glbPath
             };
         }
 
-        // 3. Extract explicit numeric coordinates from text if present
-        const queryText = `${request.targetLandmarkName || ''} ${request.promptHint || ''} ${request.imagePath || ''}`.trim();
-        const coordRegex = /([-+]?\d{1,2}\.\d+)[,\s]+([-+]?\d{1,3}\.\d+)(?:[,\s]+([-+]?\d+(?:\.\d+)?))?/;
-        const match = queryText.match(coordRegex);
-        if (match) {
-            const lat = parseFloat(match[1]);
-            const lng = parseFloat(match[2]);
-            const alt = match[3] ? parseFloat(match[3]) : 15.0;
-            return {
-                name: request.targetLandmarkName || `Resolved Location (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
-                targetCoords: { lat, lng, altitudeMeters: alt },
-                groundElevation: alt,
-                glbPath: request.glbPath
-            };
+        // 3. One place lookup: the landmark name when given, else the prompt hint (coordinates in either are used as given).
+        const query = request.targetLandmarkName?.trim() || request.promptHint?.trim();
+        if (!query) {
+            throw new MissingInputError(
+                'geobox_resect_camera_pose',
+                'targetCoords, knownCoords, targetLandmarkName or promptHint',
+                'no location was given; zero presets: no default place'
+            );
         }
+        const anchor = await geocode3DTilesAddress(query);
+        const ground = await this.groundElevation(anchor.lat, anchor.lng, anchor.elevation);
+        return {
+            name: anchor.formattedAddress || anchor.landmarkName || query,
+            targetCoords: { lat: anchor.lat, lng: anchor.lng, altitudeMeters: ground },
+            groundElevation: ground,
+            glbPath: request.glbPath
+        };
+    }
 
-        // 4. Benchmark anchors carry a surveyed camera pose (vantage, heading, pitch), so they must win
-        // over plain geocoding, which only yields the target point and would leave the pose unknown.
-        if (queryText) {
-            const lower = queryText.toLowerCase();
-            for (const [key, benchmark] of Object.entries(BENCHMARK_GEO_ANCHORS)) {
-                if (lower.includes(key)) {
-                    return {
-                        ...benchmark,
-                        glbPath: request.glbPath || benchmark.glbPath
-                    };
-                }
-            }
-
-            // 5. Geocode the landmark name on its own first, so words in the prompt hint
-            // (e.g. "Central Park South") cannot redirect it to a different feature.
-            const queries = [request.targetLandmarkName?.trim(), queryText].filter((q, idx, arr): q is string => !!q && arr.indexOf(q) === idx);
-            for (const q of queries) {
-                try {
-                    const anchor = await geocode3DTilesAddress(q);
-                    return {
-                        name: anchor.landmarkName || q,
-                        targetCoords: {
-                            lat: anchor.lat,
-                            lng: anchor.lng,
-                            altitudeMeters: anchor.elevation ?? 15.0
-                        },
-                        groundElevation: anchor.elevation ?? 15.0,
-                        glbPath: request.glbPath
-                    };
-                } catch {
-                    // try the next query
-                }
-            }
+    /** The stated ground altitude, else the Elevation API's; throws when neither exists. */
+    private async groundElevation(lat: number, lng: number, stated?: number): Promise<number> {
+        if (typeof stated === 'number' && Number.isFinite(stated)) return stated;
+        try {
+            return await GoogleMapsService.getInstance().getElevation(lat, lng);
+        } catch (err) {
+            throw new MissingInputError(
+                'geobox_resect_camera_pose',
+                'ground elevation',
+                `no altitude was given for ${lat.toFixed(6)}, ${lng.toFixed(6)} and the Elevation API gave none (${err instanceof Error ? err.message : String(err)})`
+            );
         }
-
-        // 6. Zero Presets Enforcement: NEVER default to Rome Colosseum or any random preset!
-        throw new Error(
-            `Cannot resect camera pose: No geodetic coordinates or resolvable location query provided. ` +
-            `Zero presets and no procedural fallbacks are enabled: please provide explicit coordinates ` +
-            `(e.g. knownCoords: { lat, lng } or "lat, lng" in prompt) or configure an active Google Maps API key.`
-        );
     }
 
     /**

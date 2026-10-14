@@ -178,7 +178,7 @@ describe('Zero Building Clipping & Atomic Building Integrity', () => {
 
     it('should execute offline mock with atomic building integrity flags enabled', async () => {
       const result = await google3DTilesHandlers.google_3d_tiles_get_clay({
-        query: 'Midtown Manhattan, coordinates: 40.748400, -73.985700',
+        query: '40.748400, -73.985700',
         mockExecution: true,
         atomicBuildingIntegrity: true,
         zenithAltitudeMeters: 2000,

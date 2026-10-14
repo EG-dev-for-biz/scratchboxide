@@ -18,6 +18,7 @@ import {
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { ToolRegistry } from '../src/node/gemini/tool-registry';
 import { SPATIAL_TOOL_DECLARATIONS, spatialHandlers } from '../src/node/gemini/tools/spatial-tools';
+import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
 
 const OUT_TEST_DIR = path.resolve(process.cwd(), 'build/test_location_3dgs_service');
 
@@ -35,10 +36,13 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
             expect(typeof generateLocation3DGS).toBe('function');
         });
 
-        it('synthesizes location 3DGS for a recognized landmark (Rome Colosseum)', async () => {
+        it('synthesizes location 3DGS for a landmark given with its coordinates (Rome Colosseum)', async () => {
             const service = new Location3DGaussianSplatService();
             const request: Location3DGSRequest = {
                 location: 'Rome Colosseum',
+                lat: 41.8902,
+                lng: 12.4922,
+                elevation: 22.0,
                 cameraCount: 3,
                 width: 320,
                 bakeStride: 2,
@@ -83,26 +87,22 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
             expect(result.scene3DData.sceneType).toBe('gaussian_splat');
         }, 120000);
 
-        it('synthesizes location 3DGS for unfamiliar global landmark without pre-packaged profile (Eiffel Tower)', async () => {
-            const result = await generateLocation3DGS({
-                location: 'Eiffel Tower',
-                cameraCount: 3,
-                width: 320,
-                bakeStride: 2,
-                outDir: path.join(OUT_TEST_DIR, 'eiffel_tower'),
-                forceRebake: true
-            });
-
-            expect(result.success).toBe(true);
-            expect(result.locationName).toContain('Eiffel Tower');
-            // Must NOT fall back to lat: 0, lng: 0 or survey_box_ground!
-            expect(result.geoAnchor.lat).toBeCloseTo(48.8584, 2);
-            expect(result.geoAnchor.lng).toBeCloseTo(2.2945, 2);
-            expect(result.splatPath).toBeDefined();
-            expect(result.splatCount).toBeGreaterThan(50);
-            expect(result.scene3DData.sceneType).toBe('gaussian_splat');
-            expect(result.scene3DData.geoAnchor?.landmarkName).toContain('Eiffel Tower');
-        }, 120000);
+        it('resolves a place name only through Google Places: without a Maps key it fails instead of using a preset', async () => {
+            const saved = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+            delete process.env.GOOGLE_MAPS_API_KEY;
+            delete process.env.MAP_TILES_API_KEY;
+            try {
+                await expect(generateLocation3DGS({
+                    location: 'Eiffel Tower',
+                    cameraCount: 3,
+                    width: 320,
+                    outDir: path.join(OUT_TEST_DIR, 'eiffel_tower')
+                })).rejects.toBeInstanceOf(LocationUnresolvedError);
+            } finally {
+                if (saved.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved.g;
+                if (saved.m !== undefined) process.env.MAP_TILES_API_KEY = saved.m;
+            }
+        });
     });
 
     describe('2. Gemini Tool Declaration & Dispatch (location_generate_3dgs)', () => {
@@ -119,6 +119,9 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
 
             const res = await handler({
                 location: 'Grand Army Plaza',
+                lat: 40.7648,
+                lng: -73.9733,
+                elevation: 20.0,
                 cameraCount: 3,
                 width: 320,
                 bakeStride: 2,

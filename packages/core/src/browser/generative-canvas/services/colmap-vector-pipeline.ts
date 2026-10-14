@@ -17,7 +17,7 @@ import {
   ColmapGeoJsonFeatureCollection
 } from '../../../common/spatial/colmap-vector-reference-types';
 import { GoogleElevationService } from './google-elevation-service';
-import { GoogleVectorMappingService } from './google-vector-mapping-service';
+import { GoogleMapsService } from './google-maps-service';
 
 /**
  * Universal, Zero-Preset Processing Pipeline for
@@ -146,41 +146,17 @@ export class ColmapVectorPipeline {
   }
 
   /**
-   * Resolves query coordinates via direct coordinate parsing or Google Vector Tiles data.
-   * Strictly adheres to the zero Google Geocoding API directive.
+   * Resolves a coordinate string or a place name with GoogleMapsService.geocode: coordinates are used as given,
+   * anything else is one Google Places Text Search call. Failures throw LocationUnresolvedError.
    */
-  private async geocodeAddress(query: string, _apiKey?: string): Promise<{ lat: number; lng: number; formattedAddress: string; placeId?: string }> {
-    const clean = query.trim();
-
-    // 1. Direct coordinate regex: "40.7484, -73.9857"
-    const match = clean.match(/^([-+]?\d{1,2}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)$/);
-    if (match) {
-      const lat = parseFloat(match[1]);
-      const lng = parseFloat(match[2]);
-      return {
-        lat: Number(lat.toFixed(6)),
-        lng: Number(lng.toFixed(6)),
-        formattedAddress: `Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
-        placeId: `coords_${lat}_${lng}`
-      };
-    }
-
-    // 2. Google Vector Tiles resolution (parcels, corridors, geodetic anchors)
-    const vectorAnchor = GoogleVectorMappingService.searchFeatures(clean);
-    if (vectorAnchor) {
-      return {
-        lat: vectorAnchor.lat,
-        lng: vectorAnchor.lng,
-        formattedAddress: vectorAnchor.formattedAddress || clean,
-        placeId: vectorAnchor.placeId || `vector_${clean.replace(/\s+/g, '_')}`
-      };
-    }
-
-    throw new Error(
-      `Zero-Preset Error: Location "${query}" cannot be resolved. ` +
-      `Google Geocoding API is strictly disabled: please provide explicit coordinates ` +
-      `(e.g. "40.748400, -73.985700"), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
-    );
+  private async geocodeAddress(query: string, apiKey?: string): Promise<{ lat: number; lng: number; formattedAddress: string; placeId?: string }> {
+    const place = await GoogleMapsService.getInstance().geocode(query, { apiKey });
+    return {
+      lat: Number(place.lat.toFixed(6)),
+      lng: Number(place.lng.toFixed(6)),
+      formattedAddress: place.name && !place.formattedAddress.includes(place.name) ? `${place.name}, ${place.formattedAddress}` : place.formattedAddress,
+      placeId: place.placeId
+    };
   }
 
   private readonly engine = new SurveySynthesisEngine();

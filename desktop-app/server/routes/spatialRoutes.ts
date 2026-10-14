@@ -19,6 +19,8 @@ import {
     ImageToSplatService
 } from '../../../packages/core/src/node';
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
+import { getGoogle3DTilesClay } from '../../../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService';
+import { LocationUnresolvedError } from '../../../packages/core/src/common/errors/pipeline-errors';
 import { geoidUndulation } from '../../../packages/core/src/node/spatial/egm96-geoid';
 
 export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService): Router {
@@ -99,89 +101,41 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
         }
     });
 
+    // Resolves the query with Google Places (or as coordinates) and extracts fresh clay tiles there. There is no
+    // place table and no default model: an unresolvable place or a failed extraction is an error response.
     router.all('/query', async (req: Request, res: Response) => {
+        const query = (req.body?.query || req.query?.q || req.query?.query || '').toString().trim();
+        if (!query) {
+            res.status(400).json({ success: false, error: 'Query parameter is required' });
+            return;
+        }
         try {
-            const query = (req.body?.query || req.query?.q || req.query?.query || '').toString().trim();
-            if (!query) {
-                res.status(400).json({ success: false, error: 'Query parameter is required' });
-                return;
-            }
-
-            const lower = query.toLowerCase();
-            let glbFile = 'sf_ferry_raw.glb';
-            let landmarkName = 'San Francisco Ferry Building';
-            let lat = 37.7955;
-            let lng = -122.3937;
-            let vertexCount = 28004;
-            let triangleCount = 13920;
-            let reliefDeltaY = 191.2;
-
-            if (lower.includes('colosseum') || lower.includes('rome') || lower.includes('amphitheat')) {
-                glbFile = 'colosseum_clay.glb';
-                landmarkName = 'Colosseum, Rome';
-                lat = 41.8902;
-                lng = 12.4922;
-                vertexCount = 234679;
-                triangleCount = 170802;
-                reliefDeltaY = 84.12;
-            } else if (lower.includes('empire') || lower.includes('esb') || lower.includes('state building')) {
-                glbFile = 'esb_clay.glb';
-                landmarkName = 'Empire State Building, New York';
-                lat = 40.7484;
-                lng = -73.9857;
-                vertexCount = 28004;
-                triangleCount = 13920;
-                reliefDeltaY = 443.95;
-            } else if (lower.includes('ferry') || lower.includes('san francisco') || lower.includes('embarcadero')) {
-                glbFile = 'sf_ferry_raw.glb';
-                landmarkName = 'San Francisco Ferry Building';
-                lat = 37.7955;
-                lng = -122.3937;
-                vertexCount = 28004;
-                triangleCount = 13920;
-                reliefDeltaY = 191.2;
-            } else {
-                try {
-                    const { getGoogle3DTilesClay } = require('../../../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService');
-                    const targetGlb = path.resolve(process.cwd(), 'public/models', `tile_${Date.now()}.glb`);
-                    const result = await getGoogle3DTilesClay(query, {
-                        outputGlbPath: targetGlb,
-                        offlineMock: !process.env.GOOGLE_MAPS_API_KEY
-                    });
-                    if (result && result.success && fs.existsSync(result.glbPath)) {
-                        glbFile = path.basename(result.glbPath);
-                        landmarkName = result.resolvedAddress || query;
-                        lat = result.geoAnchor?.lat || lat;
-                        lng = result.geoAnchor?.lng || lng;
-                        vertexCount = result.mesh?.vertexCount || vertexCount;
-                        triangleCount = result.mesh?.triangleCount || triangleCount;
-                    }
-                } catch (e) {
-                    // Fallback to default
-                }
-            }
-
+            const result = await getGoogle3DTilesClay(query, {
+                outputGlbPath: path.resolve(process.cwd(), 'public/models', `tile_${Date.now()}.glb`)
+            });
+            const glbFile = path.basename(result.glbPath);
             res.json({
                 success: true,
                 query,
-                landmarkName,
+                landmarkName: result.resolvedAddress,
                 glbUrl: `/models/${glbFile}`,
                 glbPath: `public/models/${glbFile}`,
                 mesh: {
-                    vertexCount,
-                    triangleCount,
-                    reliefDeltaY
+                    vertexCount: result.mesh.vertexCount,
+                    triangleCount: result.mesh.triangleCount,
+                    reliefDeltaY: result.mesh.boundingBox.max[1] - result.mesh.boundingBox.min[1]
                 },
                 geoAnchor: {
-                    lat,
-                    lng,
-                    landmarkName
+                    lat: result.geoAnchor.lat,
+                    lng: result.geoAnchor.lng,
+                    landmarkName: result.resolvedAddress
                 }
             });
         } catch (err: any) {
-            res.status(500).json({
+            res.status(err instanceof LocationUnresolvedError ? 422 : 502).json({
                 success: false,
-                error: err?.message || 'Tile query failed'
+                error: err?.message || 'Tile query failed',
+                ...(typeof err?.code === 'string' ? { code: err.code } : {})
             });
         }
     });

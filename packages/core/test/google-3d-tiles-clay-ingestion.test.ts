@@ -9,6 +9,8 @@ import { test } from 'vitest';
  ********************************************************************************/
 
 import * as assert from 'assert';
+import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
+import { GoogleMapsService } from '../src/browser/generative-canvas/services/google-maps-service';
 import * as THREE from 'three';
 import { LocalTangentPlane } from '../src/common/coordinate/LocalTangentPlane';
 import { GeoFrame } from '../src/common/coordinate/GeoFrame';
@@ -138,19 +140,30 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
     {
         const tileService = Google3DTileService.getInstance();
 
-        // 1. Test Landmark Geocoding & Coordinate Resolution
-        const ferryResolved = await tileService.resolveLocation('san francisco ferry building');
-        assert.ok(ferryResolved, 'Should resolve Ferry Building landmark');
-        assert.ok(Math.abs(ferryResolved.lat - 37.7955) < 0.01, 'Latitude should match Ferry Building');
-        assert.ok(Math.abs(ferryResolved.lng - (-122.3937)) < 0.01, 'Longitude should match Ferry Building');
-
-        const eiffelResolved = await tileService.resolveLocation('eiffel tower');
-        assert.ok(eiffelResolved, 'Should resolve Eiffel Tower');
-        assert.ok(Math.abs(eiffelResolved.lat - 48.8584) < 0.01);
+        // 1. Coordinates resolve as given; a place name needs Google Places (no landmark table), so without
+        // a Maps key it throws instead of returning a dictionary entry.
+        const ferryResolved = await tileService.resolveLocation({ lat: 37.7955, lng: -122.3937, elevation: 2.4 });
+        assert.ok(Math.abs(ferryResolved.lat - 37.7955) < 1e-9, 'Latitude should match the given coordinates');
+        assert.strictEqual(ferryResolved.elevation, 2.4, 'Stated elevation is kept');
+        const maps = GoogleMapsService.getInstance();
+        const savedKeys = { state: maps.getApiKey(), g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+        maps.setApiKey('');
+        delete process.env.GOOGLE_MAPS_API_KEY;
+        delete process.env.MAP_TILES_API_KEY;
+        try {
+            await assert.rejects(tileService.resolveLocation('eiffel tower'), LocationUnresolvedError);
+        } finally {
+            maps.setApiKey(savedKeys.state);
+            if (savedKeys.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = savedKeys.g;
+            if (savedKeys.m !== undefined) process.env.MAP_TILES_API_KEY = savedKeys.m;
+        }
 
         // 2. Test Ingesting 3D Map Tile Region
         const ingestionOptions: TileIngestionOptions = {
             query: 'san francisco ferry building',
+            lat: 37.7955,
+            lng: -122.3937,
+            elevation: 2.4,
             zoom: 17,
             radiusMeters: 180,
             clayPreset: 'warm-clay',
@@ -226,9 +239,14 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
 
         const engine = createOperatorEngine(initialScene);
 
-        // 1. Test `sb_import_3d_tile`
+        // 1. Test `sb_import_3d_tile` (a place name alone is not resolved here: it needs coordinates)
+        const byName = await engine.dispatch('sb_import_3d_tile', { query: 'independence hall' });
+        assert.strictEqual(byName.success, false, 'A bare place name must not be resolved from a table');
         const importRes = await engine.dispatch('sb_import_3d_tile', {
             query: 'independence hall',
+            lat: 39.9489,
+            lng: -75.15,
+            elevation: 12.0,
             clayPreset: 'terracotta',
             radiusMeters: 120,
             detailLevel: 'medium'
@@ -289,6 +307,9 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
 
         const ingestion = await tileService.ingestTileRegion({
             query: 'san francisco',
+            lat: 37.7749,
+            lng: -122.4194,
+            elevation: 16.0,
             clayPreset: 'alabaster',
             radiusMeters: 100
         });

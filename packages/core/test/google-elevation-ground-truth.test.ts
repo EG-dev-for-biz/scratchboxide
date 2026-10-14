@@ -27,47 +27,48 @@ describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
     const mapsService = GoogleMapsService.getInstance();
     const castingService = CreativeLocationCastingService.getInstance();
 
-    describe('1. Google Maps Service & Verified Landmark/Archetype Registry', () => {
-        it('provides exact authoritative Google elevations for all proving grounds', () => {
-            // Angeles Shooting Ranges (Proving ground for outdoor range)
-            const angelesElev = mapsService.getElevationSync(34.3315, -118.3970);
-            expect(angelesElev).toBeCloseTo(489.86, 1);
+    describe('1. Google Maps Service elevation comes from the Elevation API only', () => {
+        const elevationFetch = (value: number | undefined, status = 200) => {
+            const urls: string[] = [];
+            const impl = (async (url: any) => {
+                urls.push(String(url));
+                const body = value === undefined ? { status: 'INVALID_REQUEST', results: [] } : { status: 'OK', results: [{ elevation: value }] };
+                return new Response(JSON.stringify(body), { status });
+            }) as typeof fetch;
+            return { impl, urls };
+        };
 
-            // Nürburgring Nordschleife (Proving ground for race track / stadium)
-            const nurburgElev = mapsService.getElevationSync(50.3356, 6.9475);
-            expect(nurburgElev).toBeCloseTo(620.76, 1);
-
-            // Bonneville Salt Flats (Proving ground for dry lakebed / flats)
-            const bonnevilleElev = mapsService.getElevationSync(40.7997, -113.8000);
-            expect(bonnevilleElev).toBeCloseTo(1284.72, 1);
-
-            // Death Valley Badwater Basin (Below sea level archetype)
-            const badwaterElev = mapsService.getElevationSync(36.2503, -116.8258);
-            expect(badwaterElev).toBeCloseTo(-84.69, 1);
-
-            // Mount Rainier (Alpine volcanic peak archetype)
-            const rainierElev = mapsService.getElevationSync(46.8523, -121.7603);
-            expect(rainierElev).toBeCloseTo(3818.67, 1);
-
-            // Fallingwater (Architectural cantilever over waterfall archetype)
-            const fallingwaterElev = mapsService.getElevationSync(39.9063, -79.4681);
-            expect(fallingwaterElev).toBeCloseTo(394.03, 1);
-
-            // Times Square (Urban canyon archetype)
-            const timesSquareElev = mapsService.getElevationSync(40.7580, -73.9855);
-            expect(timesSquareElev).toBeCloseTo(16.90, 1);
-        });
-
-        it('memoizes lookups into elevationCache', async () => {
+        it('returns the Elevation API value and memoizes it', async () => {
             const lat = 34.3315;
             const lng = -118.3970;
-            const elev = await mapsService.getElevation(lat, lng);
-            expect(elev).toBeCloseTo(489.86, 1);
+            const api = elevationFetch(489.861);
+            const elev = await mapsService.getElevation(lat, lng, { apiKey: 'test-key', fetchImpl: api.impl });
+            expect(elev).toBeCloseTo(489.86, 2);
+            expect(api.urls[0]).toContain('maps.googleapis.com/maps/api/elevation/json?locations=34.3315,-118.397');
 
-            // Cache check
             const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
-            expect(mapsService.elevationCache.has(cacheKey)).toBe(true);
-            expect(mapsService.elevationCache.get(cacheKey)).toBeCloseTo(489.86, 1);
+            expect((mapsService as any).elevationCache.get(cacheKey)).toBeCloseTo(489.86, 2);
+            const again = elevationFetch(1);
+            expect(await mapsService.getElevation(lat, lng, { apiKey: 'test-key', fetchImpl: again.impl })).toBeCloseTo(489.86, 2);
+            expect(again.urls.length).toBe(0);
+        });
+
+        it('throws instead of estimating when the API has no answer or there is no key', async () => {
+            await expect(mapsService.getElevation(50.3356, 6.9475, { apiKey: 'test-key', fetchImpl: elevationFetch(undefined).impl }))
+                .rejects.toThrow(/Elevation API gave no elevation/);
+            const saved = { state: mapsService.getApiKey(), g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+            mapsService.setApiKey('');
+            delete process.env.GOOGLE_MAPS_API_KEY;
+            delete process.env.MAP_TILES_API_KEY;
+            try {
+                await expect(mapsService.getElevation(40.7997, -113.8)).rejects.toThrow(/No Google Maps API key/);
+            } finally {
+                mapsService.setApiKey(saved.state);
+                if (saved.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved.g;
+                if (saved.m !== undefined) process.env.MAP_TILES_API_KEY = saved.m;
+            }
+            // There is no synchronous "nearest landmark" estimate any more.
+            expect((mapsService as any).getElevationSync).toBeUndefined();
         });
     });
 
@@ -122,12 +123,9 @@ describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
             expect(synthesized.pythonGenerator || synthesized.cppGenerator?.sourceCode).toBeTruthy();
         });
 
-        it('full contextual scene synthesis attaches verified elevation metadata for a named location', () => {
+        it('does not anchor a scene to a place named in the prompt (places come from the location tools)', () => {
             const scene = synthesizeContextual3DScene('architectural glass pavilion cantilever over Fallingwater, Mill Run, Pennsylvania');
-            expect(scene.geoAnchor).toBeDefined();
-            expect(scene.geoAnchor?.elevationSource).toBe('google_elevation');
-            expect(scene.geoAnchor?.elevation).toBeCloseTo(394.03, 1); // Fallingwater
-            expect(scene.geoAnchor?.datum).toBe('MSL_EGM96');
+            expect(scene.geoAnchor).toBeUndefined();
         });
     });
 

@@ -5,9 +5,9 @@ import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis
 import { synthesize3DFallback } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { synthesizeRawContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 import { synthesizeAdaptiveHeroObjectContract } from '../src/common/spatial/adaptive-hero-synthesizer';
-import { Google3DTileService, detectRealWorldLocationIntent } from '../src/browser/generative-canvas/services/Google3DTileService';
-import { GoogleVectorMappingService } from '../src/browser/generative-canvas/services/google-vector-mapping-service';
+import { Google3DTileService } from '../src/browser/generative-canvas/services/Google3DTileService';
 import { Google3DTileBlockoutPipelineService } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
+import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
 import { python3DHandlers } from '../src/node/gemini/tools/python-3d-tools';
 import type { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { requireAnyEnv, withReason } from './helpers/requirements';
@@ -97,11 +97,9 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(result.type).toBe('3d-scene');
             expect(result.type).not.toBe('markdown-document');
             const data = result.data as Scene3DData;
-            expect(data.geoAnchor).toBeDefined();
-            expect(data.geoAnchor?.landmarkName).toContain('Venice');
-            expect(data.geoAnchor?.lat).toBeCloseTo(33.9850, 2);
-            expect(data.geoAnchor?.lng).toBeCloseTo(-118.4695, 2);
-            expect(data.geoAnchor?.active).toBe(true);
+            // Words in the prompt never become coordinates, and there is no default location: the place is
+            // resolved by the location tools (Google Places), not by this synthesis step.
+            expect(data.geoAnchor).toBeUndefined();
         });
 
         it('mounts staged vector world GLB into objects when stage_3d_vector_world was executed', () => {
@@ -140,7 +138,7 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
     });
 
     describe('4. Client-side Fallback Mutation Invariants', () => {
-        it('mutates existing 3D scene without blowing away hero objects when staging at real-world location', () => {
+        it('keeps the existing 3D scene and its objects; a place name alone does not stage it anywhere', () => {
             const fallback = synthesize3DFallback(
                 'stage it at venice beach',
                 'stage it at venice beach',
@@ -152,8 +150,8 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(fallback.artifact).toBeDefined();
             expect(fallback.artifact?.type).toBe('3d-scene');
             const data = fallback.artifact?.data as Scene3DData;
-            expect(data.title).toContain('Venice Beach');
-            expect(data.geoAnchor?.landmarkName).toContain('Venice');
+            expect(data.geoAnchor).toBeUndefined();
+            expect(data.title).not.toContain('Staged at');
             expect(data.objects?.length).toBeGreaterThan(0);
         });
 
@@ -173,29 +171,16 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
     });
 
     describe('5. Initial Prompt with Explicit Location Invariant', () => {
-        it('synthesizes hero object staged in real-world location tiles for "build a 3d scene of race car in central park"', () => {
-            const scene = synthesizeRawContextual3DScene('build a 3d scene of race car in central park');
-
-            expect(scene.title).toContain('Central Park');
-            expect(scene.geoAnchor).toBeDefined();
-            expect(scene.geoAnchor?.landmarkName).toContain('Central Park');
-            expect(scene.geoAnchor?.lat).toBeCloseTo(40.78, 1);
-            expect(scene.geoAnchor?.lng).toBeCloseTo(-73.96, 1);
-            expect(scene.geoAnchor?.active).toBe(true);
-            expect(scene.renderMode).toBe('clay');
-            expect(scene.environment.ground).toBe(true);
-            expect(scene.objects?.length).toBeGreaterThan(0);
-        });
-
-        it('synthesizes hero object staged in real-world location tiles for "F1 car in monaco"', () => {
-            const scene = synthesizeRawContextual3DScene('F1 car in monaco');
-
-            expect(scene.title).toContain('Monaco');
-            expect(scene.geoAnchor).toBeDefined();
-            expect(scene.geoAnchor?.landmarkName).toContain('Monaco');
-            expect(scene.geoAnchor?.active).toBe(true);
-            expect(scene.renderMode).toBe('clay');
-            expect(scene.environment.ground).toBe(true);
+        it.each([
+            'build a 3d scene of race car in central park',
+            'F1 car in monaco',
+            'High-speed car race around Washington Square Park Arch with chicane',
+            'make me a car race in manhattan'
+        ])('does not turn the place named in "%s" into coordinates during template synthesis', (prompt) => {
+            const scene = synthesizeRawContextual3DScene(prompt);
+            expect(scene.geoAnchor).toBeUndefined();
+            const tileObject = scene.objects?.find(o => String(o.content?.metadata?.source || '').toLowerCase().includes('tile'));
+            expect(tileObject).toBeUndefined();
         });
 
         it('mounts hero GLB and location GLB when execute_3d_python_script runs with location staging', () => {
@@ -226,24 +211,8 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
 
             expect(result.type).toBe('3d-scene');
             const data = result.data as Scene3DData;
-            expect(data.title).toContain('Central Park');
-            expect(data.geoAnchor?.landmarkName).toContain('Central Park');
             expect(data.objects?.some(o => o.content?.durableUri === '/models/race_car.glb')).toBe(true);
             expect(data.objects?.some(o => o.content?.durableUri === '/build/3d-geospatial/central_park_tiles.glb')).toBe(true);
-        });
-
-        it('synthesizes hero GT race cars staged in Washington Square Park Arch tiles with 70-20-10 form', () => {
-            const prompt = 'High-speed car race around Washington Square Park Arch with chicane';
-            const scene = synthesizeRawContextual3DScene(prompt);
-
-            expect(scene.title).toContain('Washington Square Park Arch');
-            expect(scene.geoAnchor).toBeDefined();
-            expect(scene.geoAnchor?.landmarkName).toContain('Washington Square Park Arch');
-            expect(scene.geoAnchor?.lat).toBeCloseTo(40.7308, 2);
-            expect(scene.geoAnchor?.lng).toBeCloseTo(-73.9973, 2);
-            expect(scene.renderMode).toBe('clay');
-            expect(scene.environment.ground).toBe(true);
-            expect(scene.objects?.length).toBeGreaterThan(0);
         });
 
         it('synthesizes adaptive hero GT racer with 70-20-10 form hierarchy and upright wheels', () => {
@@ -267,72 +236,38 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(heroContract.materialAttributes?.renderMode).toBe('clay');
         });
 
-        it('detects authentic Manhattan location intent and coordinates for "make me a car race in manhattan"', () => {
-            const prompt = 'make me a car race in manhattan';
-            const locIntent = detectRealWorldLocationIntent(prompt);
-
-            expect(locIntent).toBeDefined();
-            expect(locIntent?.isRealWorld).toBe(true);
-            expect(locIntent?.landmarkName).toContain('Manhattan');
-            expect(locIntent?.lat).toBeCloseTo(40.7831, 2);
-            expect(locIntent?.lng).toBeCloseTo(-73.9712, 2);
-        });
-
-        it('resolves Manhattan queries to canonical geodetic anchor via GoogleVectorMappingService', () => {
-            const anchor = GoogleVectorMappingService.searchFeatures('manhattan');
-            expect(anchor).toBeDefined();
-            expect(anchor?.lat).toBeCloseTo(40.7484, 2);
-            expect(anchor?.lng).toBeCloseTo(-73.9857, 2);
-        });
-
-        it('resolves Manhattan queries via Google3DTileBlockoutPipelineService.prototype.resolveAddress', async () => {
+        it('resolves a place name only with Google Places: without a Maps key it throws LocationUnresolvedError', async () => {
             const service = new Google3DTileBlockoutPipelineService();
-            const resolved = await service.resolveAddress('Manhattan, New York');
-            expect(resolved).toBeDefined();
-            expect(resolved.lat).toBeGreaterThan(40.0);
-            expect(resolved.lng).toBeLessThan(-70.0);
-            expect(resolved.landmarkName).toBeDefined();
-        });
-
-        it('synthesizes scene staged in authentic Manhattan Google 3D tiles for "make me a car race in manhattan"', () => {
-            const prompt = 'make me a car race in manhattan';
-            const scene = synthesizeRawContextual3DScene(prompt);
-
-            expect(scene.title).toContain('Manhattan');
-            expect(scene.geoAnchor).toBeDefined();
-            expect(scene.geoAnchor?.landmarkName).toContain('Manhattan');
-            expect(scene.geoAnchor?.lat).toBeCloseTo(40.7831, 2);
-            expect(scene.geoAnchor?.lng).toBeCloseTo(-73.9712, 2);
-            expect(scene.renderMode).toBe('clay');
-            expect(scene.environment.ground).toBe(true);
-
-            // Objects must contain the Manhattan 3D tile object
-            const tileObject = scene.objects?.find(o => 
-                o.content?.type === 'map-3d' ||
-                o.id.startsWith('tile_mesh_') ||
-                o.id === 'google-3d-tiles-base' ||
-                o.id === 'google-vector-world-base' ||
-                o.content?.metadata?.source?.toLowerCase().includes('tile')
-            );
-            expect(tileObject).toBeDefined();
-            expect(tileObject?.content?.metadata?.source?.toLowerCase()).toContain('tile');
+            const saved = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+            delete process.env.GOOGLE_MAPS_API_KEY;
+            delete process.env.MAP_TILES_API_KEY;
+            try {
+                await expect(service.resolveAddress('Manhattan, New York')).rejects.toBeInstanceOf(LocationUnresolvedError);
+            } finally {
+                if (saved.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved.g;
+                if (saved.m !== undefined) process.env.MAP_TILES_API_KEY = saved.m;
+            }
         });
     });
 
     describe('4. ADA Standards & Zero-Preset Open-Domain Invariants', () => {
         const tileService = Google3DTileService.getInstance();
 
-        it('does NOT silently fall back to San Francisco when a novel/unresolvable location is requested', async () => {
-            // resolveLocationSync should report isResolved: false, NOT silently inject San Francisco coords
-            const syncResult = tileService.resolveLocationSync('unknown extraterrestrial geothermal base alpha');
-            expect(syncResult.isResolved).toBe(false);
-            expect(syncResult.lat).toBe(0);
-            expect(syncResult.lng).toBe(0);
+        it('does NOT silently fall back to San Francisco (or Null Island) when a location cannot be resolved', async () => {
+            // Place names need Google Places: the sync resolver throws instead of returning (0, 0)
+            expect(() => tileService.resolveLocationSync('unknown extraterrestrial geothermal base alpha')).toThrow(LocationUnresolvedError);
+            expect(() => tileService.resolveLocationSync('0, 0')).toThrow(LocationUnresolvedError);
 
-            // Asynchronous resolveLocation should reject with an ADA-actionable error instead of defaulting
-            await expect(tileService.resolveLocation('unknown fictitious underwater metropolis 404'))
-                .rejects
-                .toThrow(/ADA Zero-Presets|Could not resolve geodetic coordinates/);
+            // Without a Maps key the async resolver rejects instead of defaulting
+            const saved = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+            delete process.env.GOOGLE_MAPS_API_KEY;
+            delete process.env.MAP_TILES_API_KEY;
+            try {
+                await expect(tileService.resolveLocation('unknown fictitious underwater metropolis 404')).rejects.toBeInstanceOf(LocationUnresolvedError);
+            } finally {
+                if (saved.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved.g;
+                if (saved.m !== undefined) process.env.MAP_TILES_API_KEY = saved.m;
+            }
         });
 
         it('ingests open-domain geodetic coordinates directly via bracketed strings', () => {
@@ -340,15 +275,8 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(result.isResolved).toBe(true);
             expect(result.lat).toBeCloseTo(43.7384, 4);
             expect(result.lng).toBeCloseTo(7.4246, 4);
-            expect(result.elevationSource).toBe('explicit_coordinates');
-        });
-
-        it('detects real-world intent from raw WGS-84 coordinate strings in prompts', () => {
-            const detected = detectRealWorldLocationIntent('build 3d formula 1 car around [43.7384, 7.4246] in clay');
-            expect(detected).toBeDefined();
-            expect(detected?.isRealWorld).toBe(true);
-            expect(detected?.lat).toBeCloseTo(43.7384, 4);
-            expect(detected?.lng).toBeCloseTo(7.4246, 4);
+            // No elevation was stated, so none is reported (never a registry or 15 m guess).
+            expect(result.elevation).toBeUndefined();
         });
 
         it.skipIf(!mapsTilesKey.ok)(withReason('supports direct geodetic coordinates [lat, lng] in execute_3d_python_script without static dictionaries', mapsTilesKey), async () => {
@@ -366,7 +294,7 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(payload.geoAnchor).toBeDefined();
             expect(payload.geoAnchor.lat).toBeCloseTo(43.7384, 4);
             expect(payload.geoAnchor.lng).toBeCloseTo(7.4246, 4);
-            expect(payload.geoAnchor.elevationSource).toBe('explicit_coordinates');
+            expect(payload.resolvedAddress).toContain('43.738400');
             expect(payload.artifact.data.subtitle).toContain('43.7384');
         });
 

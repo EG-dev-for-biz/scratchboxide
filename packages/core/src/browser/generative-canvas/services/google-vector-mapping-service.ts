@@ -1261,81 +1261,6 @@ export class GoogleVectorMappingService {
   }
 
   /**
-   * Search vector features (parcels, roads, landscapes, geodetic anchor) by name or query.
-   * Direct alternative to Google Geocoding API using Google Vector Tile data.
-   */
-  public static searchFeatures(query: string): GoogleGeodeticAnchor | null {
-    if (!query || !query.trim()) return null;
-    const clean = query.trim().toLowerCase();
-    const mapping = this.getCanonicalMapping();
-
-    // 1. Check parcels first
-    for (const p of mapping.parcels) {
-      if (p.name.toLowerCase().includes(clean) || clean.includes(p.name.toLowerCase()) || p.id.toLowerCase() === clean) {
-        // Rings are closed (last = first); count each corner once.
-        const ring = openRing(p.coordinatesWGS84);
-        const avgLng = ring.reduce((sum, c) => sum + c[0], 0) / ring.length;
-        const avgLat = ring.reduce((sum, c) => sum + c[1], 0) / ring.length;
-        return {
-          lat: Number(avgLat.toFixed(6)),
-          lng: Number(avgLng.toFixed(6)),
-          elevation: p.baseElevation,
-          placeId: p.id,
-          formattedAddress: `${p.name}, New York, NY, USA`
-        };
-      }
-    }
-
-    // 2. Check landscapes
-    if (mapping.landscapes) {
-      for (const l of mapping.landscapes) {
-        if (l.name.toLowerCase().includes(clean) || clean.includes(l.name.toLowerCase()) || l.id.toLowerCase() === clean) {
-          const ring = openRing(l.coordinatesWGS84);
-          const avgLng = ring.reduce((sum, c) => sum + c[0], 0) / ring.length;
-          const avgLat = ring.reduce((sum, c) => sum + c[1], 0) / ring.length;
-          return {
-            lat: Number(avgLat.toFixed(6)),
-            lng: Number(avgLng.toFixed(6)),
-            elevation: mapping.anchor.elevation,
-            placeId: l.id,
-            formattedAddress: `${l.name}, New York, NY, USA`
-          };
-        }
-      }
-    }
-
-    // 3. Check roads
-    for (const r of mapping.roads) {
-      if (r.name.toLowerCase().includes(clean) || clean.includes(r.name.toLowerCase()) || r.id.toLowerCase() === clean) {
-        const midIdx = Math.floor(r.coordinatesWGS84.length / 2);
-        const midPt = r.coordinatesWGS84[midIdx];
-        return {
-          lat: Number(midPt[1].toFixed(6)),
-          lng: Number(midPt[0].toFixed(6)),
-          elevation: mapping.anchor.elevation,
-          placeId: r.id,
-          formattedAddress: `${r.name}, New York, NY, USA`
-        };
-      }
-    }
-
-    // 4. Check anchor (Empire State Building / Midtown Anchor)
-    // Only match when query specifically indicates Empire State Building or Midtown Manhattan grid anchor
-    if (
-      clean.includes('empire state') ||
-      clean.includes('esb') ||
-      clean === 'manhattan' ||
-      clean === 'midtown' ||
-      clean === 'midtown manhattan' ||
-      (clean.includes('34th st') && clean.includes('5th'))
-    ) {
-      return mapping.anchor;
-    }
-
-    return null;
-  }
-
-  /**
    * Find closest road corridor or parcel to coordinates.
    * Direct alternative to reverse geocoding via Google Vector Tile data.
    */
@@ -1405,10 +1330,3 @@ export const GOOGLE_VECTOR_MAP_PATH_B_CONFIG = {
   colmapSurveyCount: 15,
   internalUsageAttributionIds: ['gmp_git_agentskills_v1']
 };
-
-
-/** A closed polygon ring without its repeated closing vertex. */
-function openRing<T extends ArrayLike<number>>(ring: T[]): T[] {
-  const n = ring.length;
-  return n > 1 && ring[0][0] === ring[n - 1][0] && ring[0][1] === ring[n - 1][1] ? ring.slice(0, -1) : ring;
-}

@@ -10,7 +10,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, GeoAnchor } from './Google3DTileBlockoutPipelineService';
+import { TileExtractionError } from '../../common/errors/pipeline-errors';
 import { Universal3DObjectSeparationService, UniversalSeparatedScene, UniversalSeparatedObject } from './Universal3DObjectSeparationService';
 
 export interface ExtractedVegetationAnchor {
@@ -28,7 +30,8 @@ export interface ExtractedLocationManifest {
   resolvedAddress: string;
   lat: number;
   lng: number;
-  altitudeMeters: number;
+  /** Street level above sea level, measured from the tiles; absent only for a mock run. */
+  altitudeMeters?: number;
   tileGlbPath: string;
   totalVertices: number;
   totalTriangles: number;
@@ -59,6 +62,8 @@ export interface LocationExtractionResult {
   manifestPath: string;
   glbPath: string;
   error?: string;
+  /** True only for the test-only `mockExecution` mode (synthetic placeholder tile, not Google data). */
+  mock?: boolean;
 }
 
 export class GeospatialTileExtractionBridge {
@@ -72,8 +77,11 @@ export class GeospatialTileExtractionBridge {
   }
 
   /**
-   * Ingest real-world location tiles and run shape extraction pipeline.
-   * Supports both query string and explicit WGS-84 GeoAnchor geodetic coordinates.
+   * Extracts the Google 3D Tiles around a place or coordinate and runs the shape extraction pipeline.
+   * Every call extracts fresh tiles: there is no cache keyed by the query text, so a previous run (or a
+   * test placeholder written under the same name) is never returned in place of this place. Extraction
+   * failures propagate as typed errors. `mockExecution` is for tests only; its outputs default to a temp
+   * directory and the result says `mock: true`.
    */
   public async ingestAndExtract(
     queryOrCoords: string | GeoAnchor,
@@ -83,52 +91,31 @@ export class GeospatialTileExtractionBridge {
       mockExecution?: boolean;
     } = {}
   ): Promise<LocationExtractionResult> {
-    const outputDir = options.outputDir || path.resolve(process.cwd(), 'public/models');
+    const outputDir = options.outputDir
+      || (options.mockExecution
+        ? fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-location-extract-mock-'))
+        : path.resolve(process.cwd(), 'public/models'));
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
     const querySlug = typeof queryOrCoords === 'string'
       ? queryOrCoords
-      : `${(queryOrCoords as any).formattedAddress || queryOrCoords.landmarkName || 'geo'}_${queryOrCoords.lat.toFixed(4)}_${queryOrCoords.lng.toFixed(4)}`;
+      : `${queryOrCoords.landmarkName || 'geo'}_${queryOrCoords.lat.toFixed(4)}_${queryOrCoords.lng.toFixed(4)}`;
     const safeSlug = querySlug.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40);
     const tileGlbPath = path.join(outputDir, `${safeSlug}_tiles.glb`);
     const manifestPath = path.join(outputDir, `${safeSlug}_manifest.json`);
 
-    // Check disk cache for already extracted 3D tile GLB and manifest
-    if (fs.existsSync(tileGlbPath) && fs.existsSync(manifestPath)) {
-      try {
-        const cachedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        if (cachedManifest && cachedManifest.totalVertices && cachedManifest.totalVertices >= 1000) {
-          return {
-            success: true,
-            manifest: cachedManifest,
-            manifestPath,
-            glbPath: tileGlbPath
-          };
-        }
-      } catch {
-        // Corrupted cache, re-fetch
-      }
-    }
-
     // 1. Fetch 3D tiles (using full texture or studio grey clay)
-    let tileResult;
-    if (options.mode === 'clay') {
-      tileResult = await getGoogle3DTilesClay(queryOrCoords, {
-        outputGlbPath: tileGlbPath,
-        offlineMock: options.mockExecution
-      });
-    } else {
-      tileResult = await getGoogle3DTilesFullTexture(queryOrCoords, {
-        outputGlbPath: tileGlbPath,
-        offlineMock: options.mockExecution
-      });
-    }
+    const fetchTiles = options.mode === 'clay' ? getGoogle3DTilesClay : getGoogle3DTilesFullTexture;
+    const tileResult = await fetchTiles(queryOrCoords, {
+      outputGlbPath: tileGlbPath,
+      offlineMock: options.mockExecution
+    });
 
     if (!tileResult.success || !tileResult.glbPath || !fs.existsSync(tileResult.glbPath)) {
-      const targetDesc = typeof queryOrCoords === 'string' ? queryOrCoords : `lat: ${queryOrCoords.lat}, lng: ${queryOrCoords.lng}`;
-      throw new Error(`Failed to ingest 3D tiles for "${targetDesc}"`);
+      const targetDesc = typeof queryOrCoords === 'string' ? queryOrCoords : `${queryOrCoords.lat}, ${queryOrCoords.lng}`;
+      throw new TileExtractionError('crawl', tileResult.error || `no tile GLB was written for "${targetDesc}"`);
     }
 
     // 2. Separate shapes via Universal3DObjectSeparationService
@@ -175,7 +162,7 @@ export class GeospatialTileExtractionBridge {
       resolvedAddress: tileResult.resolvedAddress || queryString,
       lat: tileResult.geoAnchor.lat,
       lng: tileResult.geoAnchor.lng,
-      altitudeMeters: tileResult.geoAnchor.elevation ?? 0,
+      ...(tileResult.geoAnchor.elevation !== undefined ? { altitudeMeters: tileResult.geoAnchor.elevation } : {}),
       tileGlbPath: tileResult.glbPath,
       totalVertices: tileResult.mesh.vertexCount,
       totalTriangles: tileResult.mesh.triangleCount,
@@ -204,6 +191,7 @@ export class GeospatialTileExtractionBridge {
 
     return {
       success: true,
+      ...(tileResult.mock ? { mock: true } : {}),
       manifest,
       manifestPath,
       glbPath: tileResult.glbPath

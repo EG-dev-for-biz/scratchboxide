@@ -7,20 +7,37 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { GoogleVectorMappingService } from './google-vector-mapping-service';
+import { LocationUnresolvedError } from '../../../common/errors/pipeline-errors';
+import { assertUsableCoordinates, formatCoordinates, parseCoordinateText } from '../../../common/coordinate/parse-coordinates';
 
 export type GoogleMapType = 'roadmap' | 'satellite' | 'terrain' | 'hybrid';
+
+/** Google Places API (New) Text Search: the one geocoder for place names and addresses. */
+export const PLACES_TEXT_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
+export const PLACES_TEXT_SEARCH_FIELD_MASK = 'places.displayName,places.formattedAddress,places.location,places.viewport,places.types';
+
+export interface GeocodeOptions {
+    /** Maps Platform key; defaults to the configured key. */
+    apiKey?: string;
+    /** Injected for tests; defaults to the global fetch. */
+    fetchImpl?: typeof fetch;
+}
 
 export interface GeocodeResult {
     lat: number;
     lng: number;
+    /** Google's formatted address for a place, or the exact coordinates for a coordinate query. */
     formattedAddress: string;
-    /** Display name for the place the query named (see resolveLandmarkSync), when known. */
+    /** Google's display name for the place (Places Text Search), when the query was a place name. */
     name?: string;
     placeId?: string;
+    /** How the location was obtained: 'COORDINATES' or 'PLACES_TEXT_SEARCH'. */
     locationType?: string;
+    /** Metres above sea level, only when the query stated it. Places results carry no elevation. */
     elevation?: number;
     zoom?: number;
+    /** Places types of the matched place (e.g. "tourist_attraction"). */
+    types?: string[];
     bounds?: {
         north: number;
         south: number;
@@ -180,457 +197,6 @@ export interface GoogleMapsState {
 
 const STORAGE_KEY = 'scratchbox_google_maps_api_key_v1';
 
-// Comprehensive built-in geospatial landmark database for immediate offline resolution
-const LANDMARK_REGISTRY: Record<string, GeocodeResult> = {
-    // San Francisco & Bay Area
-    'san francisco ferry building': {
-        lat: 37.7955,
-        lng: -122.3937,
-        formattedAddress: '1 Ferry Building, San Francisco, CA 94105, USA',
-        placeId: 'ChIJ2Zwt_NCAhYARg1UvUuXwTqA',
-        elevation: 2.40,
-        zoom: 17
-    },
-    'ferry building': {
-        lat: 37.7955,
-        lng: -122.3937,
-        formattedAddress: '1 Ferry Building, San Francisco, CA 94105, USA',
-        placeId: 'ChIJ2Zwt_NCAhYARg1UvUuXwTqA',
-        elevation: 2.40,
-        zoom: 17
-    },
-    'coit tower': {
-        lat: 37.8024,
-        lng: -122.4058,
-        formattedAddress: '1 Telegraph Hill Blvd, San Francisco, CA 94133, USA',
-        placeId: 'ChIJ0yZ57aOAhYAR5r01oYtI32k',
-        elevation: 90.48,
-        zoom: 17
-    },
-    'coit tower, san francisco': {
-        lat: 37.8024,
-        lng: -122.4058,
-        formattedAddress: '1 Telegraph Hill Blvd, San Francisco, CA 94133, USA',
-        placeId: 'ChIJ0yZ57aOAhYAR5r01oYtI32k',
-        elevation: 90.48,
-        zoom: 17
-    },
-    'golden gate bridge': {
-        lat: 37.8199,
-        lng: -122.4783,
-        formattedAddress: 'Golden Gate Bridge, San Francisco, CA, USA',
-        placeId: 'ChIJ-Ue76VKBhYAR6gPjA5QJp7c',
-        elevation: 67.0,
-        zoom: 15
-    },
-    'san francisco': {
-        lat: 37.7749,
-        lng: -122.4194,
-        formattedAddress: 'San Francisco, CA, USA',
-        placeId: 'ChIJIQBpAG2ahYAR_6128GcTUEo',
-        elevation: 15.57,
-        zoom: 13
-    },
-    'silicon valley': {
-        lat: 37.3875,
-        lng: -122.0575,
-        formattedAddress: 'Mountain View, CA 94043, USA',
-        placeId: 'ChIJz2xYqM_Cj4AR82XbQ8-yq9U',
-        elevation: 28.77,
-        zoom: 14
-    },
-    'muir woods': {
-        lat: 37.8970,
-        lng: -122.5811,
-        formattedAddress: '1 Muir Woods Rd, Mill Valley, CA 94941',
-        placeId: 'ChIJ9T63B7CahYARhU1XN3TfSgM',
-        elevation: 124.64,
-        zoom: 16
-    },
-
-    // New York & East Coast
-    'manhattan': {
-        lat: 40.7831,
-        lng: -73.9712,
-        formattedAddress: 'Manhattan, New York, NY, USA',
-        placeId: 'ChIJyeZDuDocumentationPlaceId',
-        elevation: 15.0,
-        zoom: 14
-    },
-    'manhattan, new york': {
-        lat: 40.7831,
-        lng: -73.9712,
-        formattedAddress: 'Manhattan, New York, NY, USA',
-        placeId: 'ChIJyeZDuDocumentationPlaceId',
-        elevation: 15.0,
-        zoom: 14
-    },
-    'central park': {
-        lat: 40.785091,
-        lng: -73.968285,
-        formattedAddress: 'Central Park, New York, NY, USA',
-        placeId: 'ChIJ4zGFAZpYwokRGUGphPhSc3o',
-        elevation: 42.0,
-        zoom: 16
-    },
-    'central park, new york': {
-        lat: 40.785091,
-        lng: -73.968285,
-        formattedAddress: 'Central Park, New York, NY, USA',
-        placeId: 'ChIJ4zGFAZpYwokRGUGphPhSc3o',
-        elevation: 42.0,
-        zoom: 16
-    },
-    'washington square park arch': {
-        lat: 40.7308,
-        lng: -73.9973,
-        formattedAddress: 'Washington Square Park Arch, New York, NY 10012, USA',
-        placeId: 'ChIJV4qYV1ZZwokR8tMvY_K2B8s',
-        elevation: 10.0,
-        zoom: 17
-    },
-    'washington square park': {
-        lat: 40.7308,
-        lng: -73.9973,
-        formattedAddress: 'Washington Square Park, New York, NY 10012, USA',
-        placeId: 'ChIJV4qYV1ZZwokR8tMvY_K2B8s',
-        elevation: 10.0,
-        zoom: 17
-    },
-    'circuit de monaco': {
-        lat: 43.7384,
-        lng: 7.4246,
-        formattedAddress: 'Circuit de Monaco, Monaco',
-        placeId: 'ChIJwWvH3a7EzxIRq2u2U-5a0Z0',
-        elevation: 15.0,
-        zoom: 16
-    },
-    'monaco gp circuit': {
-        lat: 43.7384,
-        lng: 7.4246,
-        formattedAddress: 'Circuit de Monaco, Monaco',
-        placeId: 'ChIJwWvH3a7EzxIRq2u2U-5a0Z0',
-        elevation: 15.0,
-        zoom: 16
-    },
-    'monaco': {
-        lat: 43.7384,
-        lng: 7.4246,
-        formattedAddress: 'Monaco',
-        placeId: 'ChIJ5TCOcRaYzRIRx-ReU5kCG5w',
-        elevation: 15.0,
-        zoom: 15
-    },
-    'empire state building': {
-        lat: 40.7484,
-        lng: -73.9857,
-        formattedAddress: '20 W 34th St, New York, NY 10001, USA',
-        placeId: 'ChIJaXQRs6lZwokRY6EFpJnhNNE',
-        elevation: 18.53,
-        zoom: 17
-    },
-    'times square': {
-        lat: 40.7580,
-        lng: -73.9855,
-        formattedAddress: 'Manhattan, NY 10036, USA',
-        placeId: 'ChIJmQJIbh6xwokRLBow-vBhko0',
-        elevation: 16.90,
-        zoom: 17
-    },
-    'independence hall, philadelphia': {
-        lat: 39.9489,
-        lng: -75.1500,
-        formattedAddress: '520 Chestnut St, Philadelphia, PA 19106, USA',
-        placeId: 'ChIJnfn2L_bIxokRoPjTfGq3nU4',
-        elevation: 11.23,
-        zoom: 17
-    },
-    'independence hall': {
-        lat: 39.9489,
-        lng: -75.1500,
-        formattedAddress: '520 Chestnut St, Philadelphia, PA 19106, USA',
-        placeId: 'ChIJnfn2L_bIxokRoPjTfGq3nU4',
-        elevation: 11.23,
-        zoom: 17
-    },
-    'fallingwater': {
-        lat: 39.9063,
-        lng: -79.4678,
-        formattedAddress: '1491 Mill Run Rd, Mill Run, PA 15464',
-        placeId: 'ChIJX_Jt7g31NIgRyqZq2YvG5L4',
-        elevation: 394.03,
-        zoom: 17
-    },
-    'lexington battle green': {
-        lat: 42.4473,
-        lng: -71.2272,
-        formattedAddress: '1625 Massachusetts Ave, Lexington, MA 02420',
-        placeId: 'ChIJ-99F7uR344kRbqW9bW_M_B4',
-        elevation: 64.20,
-        zoom: 17
-    },
-
-    // California Archetype Proving Grounds & Natural Locations
-    'angeles shooting ranges': {
-        lat: 34.3094,
-        lng: -118.3995,
-        formattedAddress: '12651 Little Tujunga Canyon Rd, Lake View Terrace, CA 91342',
-        placeId: 'ChIJ3-d4tK-ZwoAR5tCkgL7Z9Qo',
-        elevation: 489.86,
-        zoom: 16
-    },
-    'topgolf las vegas': {
-        lat: 36.1097,
-        lng: -115.1638,
-        formattedAddress: '4627 Koval Ln, Las Vegas, NV 89109',
-        placeId: 'ChIJcQ_iB3bEyIARrK0iE3lA6iI',
-        elevation: 634.65,
-        zoom: 17
-    },
-    'sony pictures studios': {
-        lat: 34.0205,
-        lng: -118.3967,
-        formattedAddress: '10202 W Washington Blvd, Culver City, CA 90232',
-        placeId: 'ChIJ57N72pG7woARVnS7aX36m9A',
-        elevation: 28.13,
-        zoom: 17
-    },
-    'edwards air force base': {
-        lat: 34.9055,
-        lng: -117.8837,
-        formattedAddress: 'Kern County, California, USA',
-        placeId: 'ChIJV_w30t3Fw4ARV2_qQ6W1nTI',
-        elevation: 699.31,
-        zoom: 15
-    },
-    'mojave air and space port': {
-        lat: 35.0589,
-        lng: -118.1519,
-        formattedAddress: '1434 Flightline, Mojave, CA 93501',
-        placeId: 'ChIJk7L1E_pQw4ARfG2y2vWd_bM',
-        elevation: 838.84,
-        zoom: 16
-    },
-    'death valley badwater basin': {
-        lat: 36.2503,
-        lng: -116.8258,
-        formattedAddress: 'Badwater Basin, Death Valley, CA 92328',
-        placeId: 'ChIJb6t71z_vxIAR6dZzYxZ7zQ8',
-        elevation: -84.69,
-        zoom: 15
-    },
-    'badwater basin': {
-        lat: 36.2503,
-        lng: -116.8258,
-        formattedAddress: 'Badwater Basin, Death Valley, CA 92328',
-        placeId: 'ChIJb6t71z_vxIAR6dZzYxZ7zQ8',
-        elevation: -84.69,
-        zoom: 15
-    },
-    'venice beach': {
-        lat: 33.9850,
-        lng: -118.4695,
-        formattedAddress: 'Venice Beach Boardwalk, Venice, Los Angeles, CA 90291, USA',
-        placeId: 'ChIJ5b0U5dK6woAR8vT54nF4fS0',
-        elevation: 4.12,
-        zoom: 17
-    },
-    'venice beach boardwalk': {
-        lat: 33.9850,
-        lng: -118.4695,
-        formattedAddress: 'Venice Beach Boardwalk, Venice, Los Angeles, CA 90291, USA',
-        placeId: 'ChIJ5b0U5dK6woAR8vT54nF4fS0',
-        elevation: 4.12,
-        zoom: 17
-    },
-    'redwood national park': {
-        lat: 41.2132,
-        lng: -124.0046,
-        formattedAddress: 'Humboldt County, CA, USA',
-        placeId: 'ChIJ9T63B7CahYARhU1XN3TfSgM',
-        elevation: 146.09,
-        zoom: 14
-    },
-    'monterey bay canyon': {
-        lat: 36.6002,
-        lng: -121.8947,
-        formattedAddress: 'Monterey Bay National Marine Sanctuary, CA',
-        placeId: 'ChIJ3-d4tK-ZwoAR5tCkgL7Z9Qo',
-        elevation: 42.05,
-        zoom: 14
-    },
-    'bonneville salt flats': {
-        lat: 40.7997,
-        lng: -113.8569,
-        formattedAddress: 'Tooele County, UT 84083',
-        placeId: 'ChIJl7x5kQeQw4AR3z_m7qW1nTI',
-        elevation: 1284.72,
-        zoom: 15
-    },
-    'monument valley': {
-        lat: 36.9980,
-        lng: -110.0985,
-        formattedAddress: 'Indn Route 42, Oljato-Monument Valley, UT',
-        placeId: 'ChIJl7x5kQeQw4AR3z_m7qW1nTI',
-        elevation: 1661.00,
-        zoom: 15
-    },
-    'mount rainier': {
-        lat: 46.8523,
-        lng: -121.7603,
-        formattedAddress: 'Pierce County, WA, USA',
-        placeId: 'ChIJl7x5kQeQw4AR3z_m7qW1nTI',
-        elevation: 3818.67,
-        zoom: 14
-    },
-    'fermilab': {
-        lat: 41.8384,
-        lng: -88.2562,
-        formattedAddress: 'Kirk Rd and Pine St, Batavia, IL 60510',
-        placeId: 'ChIJl7x5kQeQw4AR3z_m7qW1nTI',
-        elevation: 227.02,
-        zoom: 16
-    },
-
-    // International Archetype Locations
-    'eiffel tower': {
-        lat: 48.8584,
-        lng: 2.2945,
-        formattedAddress: 'Champ de Mars, 5 Av. Anatole France, 75007 Paris, France',
-        placeId: 'ChIJLU7jZClu5kcR4PcOOO6p3I0',
-        elevation: 34.56,
-        zoom: 17
-    },
-    'tokyo tower': {
-        lat: 35.6586,
-        lng: 139.7454,
-        formattedAddress: '4 Chome-2-8 Shibakoen, Minato City, Tokyo 105-0011, Japan',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 23.48,
-        zoom: 17
-    },
-    'shibuya crossing': {
-        lat: 35.6595,
-        lng: 139.7004,
-        formattedAddress: '1 Chome Dogenzaka, Shibuya City, Tokyo 150-0043, Japan',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 15.29,
-        zoom: 17
-    },
-    'akihabara electric town': {
-        lat: 35.6983,
-        lng: 139.7731,
-        formattedAddress: 'Sotokanda, Chiyoda City, Tokyo 101-0021, Japan',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 5.63,
-        zoom: 17
-    },
-    'pinewood studios': {
-        lat: 51.5478,
-        lng: -0.5342,
-        formattedAddress: 'Pinewood Rd, Iver Heath, Slough SL0 0NH, United Kingdom',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 65.41,
-        zoom: 17
-    },
-    'nurburgring nordschleife': {
-        lat: 50.3356,
-        lng: 6.9475,
-        formattedAddress: 'Otto-Flimm-Straße, 53520 Nürburg, Germany',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 620.76,
-        zoom: 15
-    },
-    'the matterhorn': {
-        lat: 45.9763,
-        lng: 7.6586,
-        formattedAddress: '3920 Zermatt, Switzerland',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 4440.29,
-        zoom: 15
-    },
-    'matterhorn': {
-        lat: 45.9763,
-        lng: 7.6586,
-        formattedAddress: '3920 Zermatt, Switzerland',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 4440.29,
-        zoom: 15
-    },
-    'cern large hadron collider': {
-        lat: 46.2330,
-        lng: 6.0557,
-        formattedAddress: 'Esplanade des Particules 1, 1217 Meyrin, Switzerland',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 436.73,
-        zoom: 16
-    },
-    'mauna kea summit': {
-        lat: 19.8207,
-        lng: -155.4681,
-        formattedAddress: 'Mauna Kea Access Rd, Hilo, HI 96720',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 4196.99,
-        zoom: 16
-    },
-    'colosseum': {
-        lat: 41.8902,
-        lng: 12.4922,
-        formattedAddress: 'Piazza del Colosseo, 1, 00184 Roma RM, Italy',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 24.12,
-        zoom: 17
-    },
-    'pyramids of giza': {
-        lat: 29.9792,
-        lng: 31.1342,
-        formattedAddress: 'Al Haram, Giza Governorate, Egypt',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 181.35,
-        zoom: 16
-    },
-    'sydney opera house': {
-        lat: -33.8568,
-        lng: 151.2153,
-        formattedAddress: 'Bennelong Point, Sydney NSW 2000, Australia',
-        placeId: 'ChIJ3S-JXmauEmsRUcIaWtf4MzE',
-        elevation: 17.55,
-        zoom: 17
-    },
-    'normandy pointe du hoc': {
-        lat: 49.3949,
-        lng: -0.9892,
-        formattedAddress: '14450 Cricqueville-en-Bessin, France',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 30.92,
-        zoom: 16
-    },
-    'bauhaus dessau': {
-        lat: 51.8398,
-        lng: 12.2275,
-        formattedAddress: 'Gropiusallee 38, 06846 Dessau-Roßlau, Germany',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 61.62,
-        zoom: 17
-    },
-    'alma radio telescope': {
-        lat: -23.0293,
-        lng: -67.7550,
-        formattedAddress: 'Chajnantor Plateau, Atacama Desert, Chile',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 5026.46,
-        zoom: 15
-    },
-    'great barrier reef': {
-        lat: -16.9203,
-        lng: 145.7710,
-        formattedAddress: 'Coral Sea, Queensland, Australia',
-        placeId: 'ChIJG87679GLGGARy9gJ8VfS5yM',
-        elevation: 2.83,
-        zoom: 14
-    }
-};
-
 export class GoogleMapsService {
     private static instance: GoogleMapsService;
 
@@ -788,325 +354,188 @@ export class GoogleMapsService {
     }
 
     /**
-     * Synchronously resolves a query against the built-in landmark registry.
-     * The result's `name` is a display name for the place: the formatted address when it mentions
-     * the place the query named (e.g. "Central Park, New York, NY, USA"), otherwise the matched part
-     * of the query as the caller wrote it (e.g. "Colosseum" rather than "Piazza del Colosseo, 1, ...").
+     * The key for Maps Platform calls: an explicit one, else the configured key, else the process
+     * environment (on the server the key saved in Settings lands there after this service was created).
      */
-    public resolveLandmarkSync(query: string): GeocodeResult | undefined {
-        if (!query || !query.trim()) return undefined;
-        const original = query.trim();
-        const lower = original.toLowerCase();
-        const withName = (landmark: GeocodeResult, matchedLower: string, matchedText: string): GeocodeResult => ({
-            ...landmark,
-            name: landmark.formattedAddress.toLowerCase().includes(matchedLower) ? landmark.formattedAddress : matchedText
-        });
-        if (LANDMARK_REGISTRY[lower]) {
-            return withName(LANDMARK_REGISTRY[lower], lower, original);
-        }
-        const sortedEntries = Object.entries(LANDMARK_REGISTRY).sort((a, b) => b[0].length - a[0].length);
-        for (const [key, landmark] of sortedEntries) {
-            if (lower === key || lower.includes(key)) {
-                const at = lower.indexOf(key);
-                const matchedText = lower.length === original.length ? original.slice(at, at + key.length) : key;
-                return withName(landmark, key, matchedText);
-            }
-        }
-        for (const [key, landmark] of sortedEntries) {
-            if (key.includes(lower)) {
-                return withName(landmark, lower, original);
-            }
-        }
-        return undefined;
+    private resolveKey(explicit?: string): string {
+        const fromEnv = typeof process !== 'undefined' && process.env
+            ? process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || ''
+            : '';
+        return (explicit || this.state.apiKey || fromEnv || '').trim();
     }
 
     /**
-     * Resolve a location string or landmark into geographic coordinates (lat, lng, address)
+     * Resolves a place name, address or coordinate string to one location.
+     *
+     * Text that is entirely a coordinate pair is used as given. Anything else is one Google Places API (New)
+     * Text Search call, and the top result is returned with Google's own formatted address and display name,
+     * so callers can show exactly what was resolved. There is no built-in place table and no substring
+     * matching: no key, an HTTP error or no result throws LocationUnresolvedError.
      */
-    public async geocode(query: string): Promise<GeocodeResult> {
-        if (!query || !query.trim()) {
-            throw new Error('Geocoding query cannot be empty');
+    public async geocode(query: string, options: GeocodeOptions = {}): Promise<GeocodeResult> {
+        const cleanQuery = (query || '').trim();
+        if (!cleanQuery) {
+            throw new LocationUnresolvedError('', 'the location query is empty');
         }
 
-        const cleanQuery = query.trim();
-        const lower = cleanQuery.toLowerCase();
-
-        // 1. Check if raw coordinates string e.g. "37.7749, -122.4194" or "37.79° N, 122.40° W"
-        const coordMatch = cleanQuery.match(/([-+]?\d{1,3}(?:\.\d+)?)\s*°?\s*([NS])?[\s,;]+\s*([-+]?\d{1,3}(?:\.\d+)?)\s*°?\s*([EW])?/i);
-        if (coordMatch) {
-            let lat = parseFloat(coordMatch[1]);
-            const latHem = (coordMatch[2] || '').toUpperCase();
-            let lng = parseFloat(coordMatch[3]);
-            const lngHem = (coordMatch[4] || '').toUpperCase();
-
-            if (latHem === 'S') lat = -Math.abs(lat);
-            if (lngHem === 'W') lng = -Math.abs(lng);
-
-            if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                const result: GeocodeResult = {
-                    lat,
-                    lng,
-                    formattedAddress: `${Math.abs(lat).toFixed(4)}° ${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lng).toFixed(4)}° ${lng >= 0 ? 'E' : 'W'}`,
-                    locationType: 'GEOMETRIC_CENTER',
-                    elevation: 15.0,
-                    zoom: 15
-                };
-                this.state.lastResolvedPlace = result;
-                this.state.lastQuery = cleanQuery;
-                this.notifyListeners();
-                return result;
-            }
+        const coords = parseCoordinateText(cleanQuery);
+        if (coords) {
+            assertUsableCoordinates(coords.lat, coords.lng, cleanQuery);
+            return this.remember(cleanQuery, {
+                lat: coords.lat,
+                lng: coords.lng,
+                formattedAddress: formatCoordinates(coords.lat, coords.lng),
+                locationType: 'COORDINATES',
+                ...(coords.elevation !== undefined ? { elevation: coords.elevation } : {})
+            });
         }
 
-        // 2. Check built-in landmark registry
-        for (const [key, landmark] of Object.entries(LANDMARK_REGISTRY)) {
-            if (lower === key || lower.includes(key) || key.includes(lower)) {
-                this.state.lastResolvedPlace = landmark;
-                this.state.lastQuery = cleanQuery;
-                this.notifyListeners();
-                return landmark;
-            }
+        const key = this.resolveKey(options.apiKey);
+        if (!key) {
+            throw new LocationUnresolvedError(
+                cleanQuery,
+                'no Google Maps API key is configured, so place names cannot be looked up (add the key in Settings, or give coordinates as "lat, lng")'
+            );
+        }
+        const fetchImpl = options.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
+        if (!fetchImpl) {
+            throw new LocationUnresolvedError(cleanQuery, 'this runtime has no fetch, so Google Places cannot be called');
         }
 
-        // 3. Search Google Vector Tiles data (parcels, corridors, geodetic anchors)
-        const vectorAnchor = GoogleVectorMappingService.searchFeatures(cleanQuery);
-        if (vectorAnchor) {
-            const result: GeocodeResult = {
-                lat: vectorAnchor.lat,
-                lng: vectorAnchor.lng,
-                formattedAddress: vectorAnchor.formattedAddress || cleanQuery,
-                placeId: vectorAnchor.placeId || `vector_${cleanQuery.replace(/\s+/g, '_')}`,
-                locationType: 'ROOFTOP',
-                elevation: vectorAnchor.elevation || 15.0,
-                zoom: 17
-            };
-            this.state.lastResolvedPlace = result;
-            this.state.lastQuery = cleanQuery;
-            this.notifyListeners();
-            return result;
+        let response: Response;
+        try {
+            response = await fetchImpl(PLACES_TEXT_SEARCH_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Goog-Api-Key': key,
+                    'X-Goog-FieldMask': PLACES_TEXT_SEARCH_FIELD_MASK
+                },
+                body: JSON.stringify({ textQuery: cleanQuery, pageSize: 1 })
+            });
+        } catch (err) {
+            throw new LocationUnresolvedError(cleanQuery, `the Google Places request failed: ${err instanceof Error ? err.message : String(err)}`);
         }
 
-        // 4. Strict Zero Procedural Fallback & Zero Google Geocoding API:
-        // Google Geocoding API is strictly disabled in favor of Google Map Tile data and Vector Tiles.
-        throw new Error(
-            `Unable to resolve "${cleanQuery}". Google Geocoding API is strictly disabled: specify location via explicit geodetic coordinates ("lat, lng" or { lat, lng }), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
-        );
-    }
-
-    /**
-     * Reverse geocode coordinates into a formatted address and place ID using Google Vector Tiles data.
-     * Strictly adheres to the zero Google Geocoding API directive.
-     */
-    public async reverseGeocode(lat: number, lng: number): Promise<GeocodeResult> {
-        const cleanLat = Number(lat.toFixed(6));
-        const cleanLng = Number(lng.toFixed(6));
-        
-        // 1. Check offline registry for matches (nearby match within ~0.005 degrees)
-        for (const landmark of Object.values(LANDMARK_REGISTRY)) {
-            const latDiff = Math.abs(landmark.lat - cleanLat);
-            const lngDiff = Math.abs(landmark.lng - cleanLng);
-            if (latDiff < 0.005 && lngDiff < 0.005) {
-                return { ...landmark, lat: cleanLat, lng: cleanLng };
-            }
+        const body: any = await response.json().catch(() => undefined);
+        if (!response.ok) {
+            const detail = typeof body?.error?.message === 'string' ? `: ${body.error.message}` : '';
+            throw new LocationUnresolvedError(cleanQuery, `Google Places Text Search returned HTTP ${response.status}${detail}`);
+        }
+        const place = Array.isArray(body?.places) ? body.places[0] : undefined;
+        const lat = place?.location?.latitude;
+        const lng = place?.location?.longitude;
+        if (typeof lat !== 'number' || typeof lng !== 'number') {
+            throw new LocationUnresolvedError(cleanQuery, 'Google Places found no place for this text');
         }
 
-        // 2. Query Google Vector Tiles data for matching parcels or road corridors
-        const vectorMatch = GoogleVectorMappingService.findClosestRoadOrParcel(cleanLat, cleanLng);
-        if (vectorMatch.formattedAddress) {
-            return {
-                lat: cleanLat,
-                lng: cleanLng,
-                formattedAddress: vectorMatch.formattedAddress,
-                placeId: vectorMatch.parcel?.id || vectorMatch.road?.id || `vector_${cleanLat}_${cleanLng}`,
-                locationType: vectorMatch.parcel ? 'ROOFTOP' : 'GEOMETRIC_CENTER',
-                elevation: vectorMatch.parcel?.baseElevation || 15.0,
-                zoom: 17
-            };
-        }
-
-        // 3. Analytical geodetic string formatting
-        return {
-            lat: cleanLat,
-            lng: cleanLng,
-            formattedAddress: `${Math.abs(cleanLat).toFixed(4)}° ${cleanLat >= 0 ? 'N' : 'S'}, ${Math.abs(cleanLng).toFixed(4)}° ${cleanLng >= 0 ? 'E' : 'W'}`,
-            locationType: 'GEOMETRIC_CENTER',
-            elevation: 15.0,
-            zoom: 15
-        };
-    }
-
-    /**
-     * Synchronously resolves elevation from cache or verified Google Elevation registry.
-     * Guaranteed sub-millisecond return for 3D viewport and procedural scene initialization.
-     */
-    public getElevationSync(lat: number, lng: number): number {
-        const cleanLat = Number(lat.toFixed(6));
-        const cleanLng = Number(lng.toFixed(6));
-        const cacheKey = `${cleanLat.toFixed(4)},${cleanLng.toFixed(4)}`;
-
-        if (this.elevationCache.has(cacheKey)) {
-            return this.elevationCache.get(cacheKey)!;
-        }
-
-        // Check offline registry by proximity (<0.02 degrees ~ 2km)
-        let closestLandmark: GeocodeResult | null = null;
-        let minDistanceSq = Infinity;
-        for (const landmark of Object.values(LANDMARK_REGISTRY)) {
-            if (landmark.elevation === undefined) continue;
-            const latDiff = landmark.lat - cleanLat;
-            const lngDiff = landmark.lng - cleanLng;
-            const distSq = latDiff * latDiff + lngDiff * lngDiff;
-            if (distSq < minDistanceSq) {
-                minDistanceSq = distSq;
-                closestLandmark = landmark;
-            }
-        }
-
-        if (closestLandmark && minDistanceSq < 0.0004 && closestLandmark.elevation !== undefined) {
-            this.elevationCache.set(cacheKey, closestLandmark.elevation);
-            return closestLandmark.elevation;
-        }
-
-        return closestLandmark?.elevation ?? 15.0;
-    }
-
-    /**
-     * Ingest/retrieve elevation (MSL) for a coordinate using Google Elevation as source of truth.
-     */
-    public async getElevation(lat: number, lng: number): Promise<number> {
-        const cleanLat = Number(lat.toFixed(6));
-        const cleanLng = Number(lng.toFixed(6));
-        const cacheKey = `${cleanLat.toFixed(4)},${cleanLng.toFixed(4)}`;
-
-        // 1. Check in-memory elevation cache
-        if (this.elevationCache.has(cacheKey)) {
-            return this.elevationCache.get(cacheKey)!;
-        }
-
-        // 2. Check offline verified Google Elevation registry for exact or nearby match (<0.005 deg)
-        for (const landmark of Object.values(LANDMARK_REGISTRY)) {
-            const latDiff = Math.abs(landmark.lat - cleanLat);
-            const lngDiff = Math.abs(landmark.lng - cleanLng);
-            if (latDiff < 0.005 && lngDiff < 0.005 && landmark.elevation !== undefined) {
-                this.elevationCache.set(cacheKey, landmark.elevation);
-                return landmark.elevation;
-            }
-        }
-
-        // 3. Query Live Google Elevation API if key is present
-        if (this.hasApiKey() && typeof fetch !== 'undefined') {
-            try {
-                const endpoint = `https://maps.googleapis.com/maps/api/elevation/json?locations=${cleanLat},${cleanLng}&key=${encodeURIComponent(this.getApiKey())}`;
-                const response = await fetch(endpoint);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data && data.results && data.results.length > 0 && typeof data.results[0].elevation === 'number') {
-                        const googleElev = Number(data.results[0].elevation.toFixed(2));
-                        this.elevationCache.set(cacheKey, googleElev);
-                        return googleElev;
-                    }
+        const name: string | undefined = typeof place.displayName?.text === 'string' ? place.displayName.text : undefined;
+        const viewport = place.viewport;
+        const result: GeocodeResult = {
+            lat,
+            lng,
+            formattedAddress: typeof place.formattedAddress === 'string' && place.formattedAddress ? place.formattedAddress : (name || formatCoordinates(lat, lng)),
+            ...(name ? { name } : {}),
+            ...(Array.isArray(place.types) ? { types: place.types } : {}),
+            locationType: 'PLACES_TEXT_SEARCH',
+            ...(viewport?.low && viewport?.high ? {
+                bounds: {
+                    north: viewport.high.latitude,
+                    south: viewport.low.latitude,
+                    east: viewport.high.longitude,
+                    west: viewport.low.longitude
                 }
-            } catch (e) {
-                console.warn('Google Maps Elevation API query failed, falling back to registry:', e);
-            }
-        }
+            } : {})
+        };
+        return this.remember(cleanQuery, result);
+    }
 
-        // 4. Fallback to nearest verified landmark elevation in registry
-        const syncElevation = this.getElevationSync(cleanLat, cleanLng);
-        this.elevationCache.set(cacheKey, syncElevation);
-        return syncElevation;
+    private remember(query: string, result: GeocodeResult): GeocodeResult {
+        this.state.lastResolvedPlace = result;
+        this.state.lastQuery = query;
+        this.notifyListeners();
+        return result;
     }
 
     /**
-     * Query Google Places API (New) nearby search for POIs.
+     * Ground elevation (metres above sea level) at a coordinate from the Google Elevation API.
+     * Throws when there is no key or the API gives no value; it never estimates one.
+     */
+    public async getElevation(lat: number, lng: number, options: GeocodeOptions = {}): Promise<number> {
+        const cleanLat = Number(lat.toFixed(6));
+        const cleanLng = Number(lng.toFixed(6));
+        const cacheKey = `${cleanLat.toFixed(4)},${cleanLng.toFixed(4)}`;
+        const cached = this.elevationCache.get(cacheKey);
+        if (cached !== undefined) return cached;
+
+        const key = this.resolveKey(options.apiKey);
+        if (!key) {
+            throw new Error(`No Google Maps API key is configured, so the ground elevation at ${formatCoordinates(cleanLat, cleanLng)} cannot be looked up.`);
+        }
+        const fetchImpl = options.fetchImpl ?? fetch;
+        const endpoint = `https://maps.googleapis.com/maps/api/elevation/json?locations=${cleanLat},${cleanLng}&key=${encodeURIComponent(key)}`;
+        const response = await fetchImpl(endpoint);
+        const data: any = await response.json().catch(() => undefined);
+        const value = data?.results?.[0]?.elevation;
+        if (!response.ok || typeof value !== 'number') {
+            const status = data?.status ? ` ${data.status}` : '';
+            throw new Error(`Google Elevation API gave no elevation at ${formatCoordinates(cleanLat, cleanLng)} (HTTP ${response.status}${status}).`);
+        }
+        const elevation = Number(value.toFixed(2));
+        this.elevationCache.set(cacheKey, elevation);
+        return elevation;
+    }
+
+    /**
+     * Query Google Places API (New) nearby search for POIs. Throws when there is no key or the request fails.
      */
     public async fetchNearbyPlaces(
         centerLat: number,
         centerLng: number,
-        radiusMeters: number = 500
+        radiusMeters: number = 500,
+        options: GeocodeOptions = {}
     ): Promise<GooglePlaceFeature[]> {
-        const key = this.getApiKey();
-
-        if (key && typeof fetch !== 'undefined') {
-            const url = 'https://places.googleapis.com/v1/places:searchNearby';
-            const headers = {
+        const key = this.resolveKey(options.apiKey);
+        if (!key) {
+            throw new Error('No Google Maps API key is configured, so nearby places cannot be looked up.');
+        }
+        const fetchImpl = options.fetchImpl ?? fetch;
+        const response = await fetchImpl('https://places.googleapis.com/v1/places:searchNearby', {
+            method: 'POST',
+            headers: {
                 'Content-Type': 'application/json',
                 'X-Goog-Api-Key': key,
                 'X-Goog-FieldMask': 'places.id,places.displayName,places.location,places.primaryType,places.formattedAddress,places.rating'
-            };
-
-            const attempts = [
-                {
-                    includedTypes: ['natural_feature', 'park', 'landmark', 'tourist_attraction'],
-                    locationRestriction: {
-                        circle: {
-                            center: { latitude: centerLat, longitude: centerLng },
-                            radius: radiusMeters
-                        }
-                    },
-                    maxResultCount: 20
-                },
-                {
-                    locationRestriction: {
-                        circle: {
-                            center: { latitude: centerLat, longitude: centerLng },
-                            radius: radiusMeters
-                        }
-                    },
-                    maxResultCount: 20
-                }
-            ];
-
-            for (const body of attempts) {
-                try {
-                    const resp = await fetch(url, {
-                        method: 'POST',
-                        headers,
-                        body: JSON.stringify(body)
-                    });
-
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        if (data && Array.isArray(data.places) && data.places.length > 0) {
-                            return data.places.map((p: any) => ({
-                                id: p.id || `place_${Math.random().toString(36).substr(2, 9)}`,
-                                displayName: p.displayName?.text || p.primaryType || 'Landmark',
-                                primaryType: p.primaryType || 'point_of_interest',
-                                lat: p.location?.latitude ?? centerLat,
-                                lng: p.location?.longitude ?? centerLng,
-                                formattedAddress: p.formattedAddress,
-                                rating: p.rating
-                            }));
-                        }
-                    }
-                } catch (err) {
-                    console.warn('Google Places API fetch failed, trying next fallback:', err);
-                }
-            }
-        }
-
-        // Fallback: Procedural natural landmark/POI distribution
-        return [
-            {
-                id: 'procedural_park_1',
-                displayName: 'Central Green Reserve',
-                primaryType: 'park',
-                lat: centerLat + 0.0012,
-                lng: centerLng - 0.0008,
-                formattedAddress: 'Geodesic Park Corridor',
-                rating: 4.8
             },
-            {
-                id: 'procedural_landmark_2',
-                displayName: 'Spatio-Temporal Obelisk',
-                primaryType: 'landmark',
-                lat: centerLat - 0.0007,
-                lng: centerLng + 0.0011,
-                formattedAddress: 'LTP Ground Zero Marker',
-                rating: 4.9
-            }
-        ];
+            body: JSON.stringify({
+                locationRestriction: {
+                    circle: {
+                        center: { latitude: centerLat, longitude: centerLng },
+                        radius: radiusMeters
+                    }
+                },
+                maxResultCount: 20
+            })
+        });
+        const data: any = await response.json().catch(() => undefined);
+        if (!response.ok) {
+            const detail = typeof data?.error?.message === 'string' ? `: ${data.error.message}` : '';
+            throw new Error(`Google Places Nearby Search returned HTTP ${response.status}${detail}`);
+        }
+        const places: any[] = Array.isArray(data?.places) ? data.places : [];
+        return places
+            .filter(p => typeof p?.location?.latitude === 'number' && typeof p?.location?.longitude === 'number')
+            .map(p => ({
+                id: p.id,
+                displayName: p.displayName?.text ?? '',
+                primaryType: p.primaryType ?? '',
+                lat: p.location.latitude,
+                lng: p.location.longitude,
+                formattedAddress: p.formattedAddress,
+                rating: p.rating
+            }));
     }
+
 
     /**
      * Generate Google Static Maps URL with markers, paths, and styles
@@ -1317,9 +746,10 @@ export class GoogleMapsService {
     }
 
     /**
-     * Fetch Google Maps Aerial View API video metadata for cinematic orbital views
+     * Google Maps Aerial View API video lookup. 'NOT_FOUND' is the API's own answer for a place without a
+     * video; a missing key or any other failure throws.
      */
-    public async fetchAerialViewVideo(addressOrCoords: string | { lat: number; lng: number }): Promise<{
+    public async fetchAerialViewVideo(addressOrCoords: string | { lat: number; lng: number }, options: GeocodeOptions = {}): Promise<{
         state: 'PROCESSING' | 'ACTIVE' | 'NOT_FOUND';
         uris?: {
             mp4Medium?: string;
@@ -1332,54 +762,43 @@ export class GoogleMapsService {
             duration?: string;
         };
     }> {
-        const key = this.state.apiKey;
+        const key = this.resolveKey(options.apiKey);
+        if (!key) {
+            throw new Error('No Google Maps API key is configured, so the Aerial View API cannot be called.');
+        }
         const queryParam = typeof addressOrCoords === 'string'
             ? `address=${encodeURIComponent(addressOrCoords)}`
             : `latitude=${addressOrCoords.lat}&longitude=${addressOrCoords.lng}`;
-
-        if (!key) {
-            return {
-                state: 'ACTIVE',
-                uris: {
-                    mp4High: `https://storage.googleapis.com/scratchbox-aerial-demo/aerial_view_${typeof addressOrCoords === 'string' ? 'landmark' : 'coords'}.mp4`
-                },
-                metadata: {
-                    videoId: 'demo_aerial_video_01',
-                    captureDate: new Date().toISOString(),
-                    duration: '15s'
-                }
-            };
-        }
-
-        try {
-            const url = `https://aerialview.googleapis.com/v1/videos:lookupVideo?${queryParam}&key=${encodeURIComponent(key)}`;
-            const response = await fetch(url);
-            if (!response.ok) {
-                return { state: 'NOT_FOUND' };
-            }
-            const data = await response.json();
-            return {
-                state: data.state || 'ACTIVE',
-                uris: {
-                    mp4High: data.uris?.MP4_HIGH?.landscapeUri || data.uris?.MP4_HIGH?.portraitUri,
-                    mp4Medium: data.uris?.MP4_MEDIUM?.landscapeUri,
-                    hls: data.uris?.HLS?.landscapeUri
-                },
-                metadata: {
-                    videoId: data.metadata?.videoId,
-                    captureDate: data.metadata?.captureDate,
-                    duration: data.metadata?.duration
-                }
-            };
-        } catch {
+        const fetchImpl = options.fetchImpl ?? fetch;
+        const response = await fetchImpl(`https://aerialview.googleapis.com/v1/videos:lookupVideo?${queryParam}&key=${encodeURIComponent(key)}`);
+        if (response.status === 404) {
             return { state: 'NOT_FOUND' };
         }
+        const data: any = await response.json().catch(() => undefined);
+        if (!response.ok) {
+            const detail = typeof data?.error?.message === 'string' ? `: ${data.error.message}` : '';
+            throw new Error(`Google Aerial View API returned HTTP ${response.status}${detail}`);
+        }
+        return {
+            state: data?.state || 'ACTIVE',
+            uris: {
+                mp4High: data?.uris?.MP4_HIGH?.landscapeUri || data?.uris?.MP4_HIGH?.portraitUri,
+                mp4Medium: data?.uris?.MP4_MEDIUM?.landscapeUri,
+                hls: data?.uris?.HLS?.landscapeUri
+            },
+            metadata: {
+                videoId: data?.metadata?.videoId,
+                captureDate: data?.metadata?.captureDate,
+                duration: data?.metadata?.duration
+            }
+        };
     }
 
     /**
-     * Fetch Google Solar API building insights (rooftop geometry, pitch, azimuth, solar flux)
+     * Google Solar API building insights (roof segments with pitch, azimuth and sunshine) for the building
+     * closest to a coordinate. Returns the API's own answer; a missing key, no coverage or any failure throws.
      */
-    public async fetchBuildingSolarInsights(coords: { lat: number; lng: number }): Promise<{
+    public async fetchBuildingSolarInsights(coords: { lat: number; lng: number }, options: GeocodeOptions = {}): Promise<{
         name: string;
         center: { latitude: number; longitude: number };
         solarPotential?: {
@@ -1394,52 +813,23 @@ export class GoogleMapsService {
             }>;
         };
     }> {
-        const cleanLat = Number(coords.lat.toFixed(6));
-        const cleanLng = Number(coords.lng.toFixed(6));
-
-        // Resolve building footprint from Google Vector Tile data
-        const vectorLookup = GoogleVectorMappingService.findClosestRoadOrParcel(cleanLat, cleanLng);
-        const parcel = vectorLookup.parcel;
-
-        let roofArea = 1250.0;
-        let buildingName = `building_solar_${cleanLat}_${cleanLng}`;
-
-        if (parcel) {
-            buildingName = parcel.name;
-            if (parcel.polygonLocalENU && parcel.polygonLocalENU.length >= 3) {
-                let areaSum = 0;
-                const pts = parcel.polygonLocalENU;
-                for (let i = 0; i < pts.length; i++) {
-                    const j = (i + 1) % pts.length;
-                    areaSum += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
-                }
-                roofArea = Math.max(100.0, Math.abs(areaSum) / 2.0);
-            }
+        const key = this.resolveKey(options.apiKey);
+        if (!key) {
+            throw new Error('No Google Maps API key is configured, so the Solar API cannot be called.');
         }
-
-        const maxArrayArea = Math.round(roofArea * 0.75);
-        const maxPanels = Math.floor(maxArrayArea / 1.75);
-
-        return {
-            name: buildingName,
-            center: { latitude: cleanLat, longitude: cleanLng },
-            solarPotential: {
-                maxArrayPanelsCount: maxPanels,
-                panelCapacityWatts: 400,
-                roofSegmentStats: [
-                    {
-                        pitchDegrees: 0,
-                        azimuthDegrees: 180,
-                        stats: { areaMeters2: Number(roofArea.toFixed(1)), sunshineQuantiles: [850, 1080, 1260, 1420] },
-                        center: { latitude: cleanLat, longitude: cleanLng },
-                        boundingBox: {
-                            sw: { latitude: cleanLat - 0.0002, longitude: cleanLng - 0.0002 },
-                            ne: { latitude: cleanLat + 0.0002, longitude: cleanLng + 0.0002 }
-                        }
-                    }
-                ]
-            }
-        };
+        const params = new URLSearchParams({
+            'location.latitude': coords.lat.toFixed(6),
+            'location.longitude': coords.lng.toFixed(6),
+            key
+        });
+        const fetchImpl = options.fetchImpl ?? fetch;
+        const response = await fetchImpl(`https://solar.googleapis.com/v1/buildingInsights:findClosest?${params}`);
+        const data: any = await response.json().catch(() => undefined);
+        if (!response.ok || !data?.center) {
+            const detail = typeof data?.error?.message === 'string' ? `: ${data.error.message}` : '';
+            throw new Error(`Google Solar API gave no building insights at ${formatCoordinates(coords.lat, coords.lng)} (HTTP ${response.status}${detail}).`);
+        }
+        return data;
     }
 
     /**

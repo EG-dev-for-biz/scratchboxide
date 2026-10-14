@@ -9,7 +9,6 @@
 
 import { describe, it, expect } from 'vitest';
 import { synthesizeContextual3DScene, detect3DSceneTheme } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
-import { detectRealWorldLocationIntent } from '../src/browser/generative-canvas/services/Google3DTileService';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { CANVAS_TOOL_DECLARATIONS, canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
 import { buildContents } from '../src/node/gemini/prompt-builder';
@@ -54,53 +53,22 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
         });
     });
 
-    describe('2. detectRealWorldLocationIntent with Splat Prompts', () => {
-        it('detects real-world location from pure splat prompt without needing "3d" or "nano banana"', () => {
-            const intent = detectRealWorldLocationIntent('Make a gaussian splat of the Colosseum');
-            expect(intent).toBeDefined();
-            expect(intent?.isRealWorld).toBe(true);
-            expect(intent?.landmarkName).toContain('Colosseum');
-        });
-
-        it('detects real-world location from 3dgs prompt', () => {
-            const intent = detectRealWorldLocationIntent('Create a 3dgs of Grand Army Plaza');
-            expect(intent).toBeDefined();
-            expect(intent?.isRealWorld).toBe(true);
-            expect(intent?.landmarkName).toContain('Grand Army Plaza');
-        });
-    });
-
     describe('3. procedural-3d-synthesizer Location 3DGS Intent & Scene Generation', () => {
         it('detects 3DGS theme for location splat prompts', () => {
             const theme = detect3DSceneTheme('Make a gaussian splat of the Colosseum');
             expect(theme).toBe('gaussian_splat');
         });
 
-        it('synthesizes a 3D scene with splatUrl and gaussian-splat object without user mentioning nano banana', () => {
-            // User does NOT mention "nano banana"
-            const scene = synthesizeContextual3DScene('Make a gaussian splat of the Colosseum');
-            const data = scene as Scene3DData;
-
-            expect(data.title).toContain('Colosseum');
-            expect(data.sceneType).toBe('gaussian_splat');
-            expect(data.splatUrl).toBeDefined();
-            expect(data.splatUrl).toMatch(/\.(splat|spz)($|\?)/);
-            expect(data.objects).toBeDefined();
-            expect(data.objects?.some(o => o.content?.type === 'gaussian-splat' || o.content?.durableUri?.match(/\.(splat|spz)/))).toBe(true);
-            expect(data.geoAnchor).toBeDefined();
-            expect(data.geoAnchor?.lat).toBeCloseTo(41.8902, 2);
-            expect(data.geoAnchor?.lng).toBeCloseTo(12.4922, 2);
-            expect(data.subtitle).toContain('Nano Banana');
-        });
-
-        it('synthesizes a 3D scene with splatUrl for Empire State Building', () => {
-            const scene = synthesizeContextual3DScene('Generate a 3dgs of Empire State Building');
-            const data = scene as Scene3DData;
-
-            expect(data.title).toContain('Empire State');
-            expect(data.splatUrl).toBeDefined();
-            expect(data.splatUrl).toMatch(/\.(splat|spz)($|\?)/);
-            expect(data.geoAnchor?.lat).toBeCloseTo(40.7484, 2);
+        // A place named in a template prompt is never looked up in a table: no anchor and no canned splat for it.
+        // Location splats come from location_generate_3dgs, which resolves the place with Google Places.
+        it.each([
+            ['Make a gaussian splat of the Colosseum', 'Colosseum'],
+            ['Generate a 3dgs of Empire State Building', 'Empire State']
+        ])('"%s" gets no table-looked-up anchor or canned splat', (prompt, name) => {
+            const data = synthesizeContextual3DScene(prompt) as Scene3DData;
+            expect(data.title).toContain(name);
+            expect(data.geoAnchor).toBeUndefined();
+            expect(data.splatUrl).toBeUndefined();
         });
 
         it('a named place with no coordinates offline gets no invented anchor or stand-in splat', () => {
