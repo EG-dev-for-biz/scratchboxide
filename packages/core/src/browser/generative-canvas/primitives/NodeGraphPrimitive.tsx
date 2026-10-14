@@ -188,12 +188,12 @@ const LIBRARY_SECTIONS: { title: string; items: LibraryItem[] }[] = [
             {
                 id: 'ai-processor',
                 label: 'AI Processor',
-                subtitle: 'Gemini 3.7 Flash & Subagents',
+                subtitle: 'Gemini 3.8 Flash & Subagents',
                 category: 'ai' as GraphNodeCategory,
                 color: 'purple' as AccentColor,
                 description: 'Run LLM reasoning and code generation steps',
                 icon: <IconSparkles size={13} strokeWidth={1.8} />,
-                parameters: { model: 'gemini-3.7-flash', temperature: 0.2 }
+                parameters: { model: 'gemini-3.8-flash', temperature: 0.2 }
             },
             {
                 id: 'decision-gate',
@@ -693,7 +693,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                     color = 'purple';
                     parameters = {
                         baselineTexture: path,
-                        model: 'gemini-3.7-flash',
+                        model: 'gemini-3.8-flash',
                         temperature: 0.2
                     };
                 } else if (['.wav', '.mp3', '.md'].includes(ext)) {
@@ -853,14 +853,14 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
         const newNode: GraphNode = {
             id: newNodeId,
             label: 'AI Agent Processor',
-            subtitle: 'Gemini 3.7 Reasoning Stage',
+            subtitle: 'Gemini 3.8 Reasoning Stage',
             category: 'ai',
             color: 'purple',
             x: sourceNode.x + 360,
             y: sourceNode.y + (Math.random() > 0.5 ? 40 : -40),
             status: 'pending',
             parameters: {
-                model: 'gemini-3.7-flash',
+                model: 'gemini-3.8-flash',
                 temperature: 0.2,
                 systemPrompt: 'Process and enrich upstream pipeline payload'
             }
@@ -920,8 +920,8 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
             },
             ai: {
                 label: 'AI Agent Processor',
-                sub: 'Gemini 3.7 Flash Reasoning',
-                params: { model: 'gemini-3.7-flash', temperature: 0.2, systemPrompt: 'You are an autonomous workflow reasoner.' }
+                sub: 'Gemini 3.8 Flash Reasoning',
+                params: { model: 'gemini-3.8-flash', temperature: 0.2, systemPrompt: 'You are an autonomous workflow reasoner.' }
             },
             decision: {
                 label: 'Decision Gate',
@@ -2877,14 +2877,14 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                         <label className="sb-input-label">AI Model</label>
                                                         <select
                                                             className="sb-select-input"
-                                                            value={editingNode.parameters?.model || 'gemini-3.7-flash'}
+                                                            value={editingNode.parameters?.model || 'gemini-3.8-flash'}
                                                             onChange={e =>
                                                                 handleUpdateNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, model: e.target.value }
                                                                 })
                                                             }
                                                         >
-                                                            <option value="gemini-3.7-flash">High Reasoning Engine</option>
+                                                            <option value="gemini-3.8-flash">High Reasoning Engine</option>
                                                             <option value="gemini-3.5-flash-lite">Fast Subagent Intelligence</option>
                                                             <option value="gemini-3.1-flash-lite">Instant Local Fallback</option>
                                                         </select>

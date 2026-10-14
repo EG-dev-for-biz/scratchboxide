@@ -10,6 +10,7 @@
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { exec, spawn } from 'child_process';
+import { resolveWithinRoot } from '../security/path-guard';
 import type {
     VideoTimelineData,
     TimelineElement,
@@ -29,6 +30,25 @@ export interface CompositeJobRequest {
     preset?: string;
     dryRun?: boolean;
     customInputs?: Record<string, string>; // map clipId -> local file path
+    /**
+     * When set, every non-virtual FFmpeg input must be an http(s) URL or a local path that
+     * resolves inside this root (symlink-aware); anything else is rejected before spawning.
+     */
+    inputRoot?: string;
+}
+
+/** Protocols FFmpeg may open for media inputs (blocks concat:, subfile:, ftp:, gopher:, etc.). */
+export const FFMPEG_INPUT_PROTOCOL_WHITELIST = 'file,http,https,tcp,tls';
+
+/** Coerce caller-supplied numerics so they can never smuggle filtergraph syntax. */
+function finiteNumber(value: unknown, fallback: number): number {
+    const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+    return Number.isFinite(n) ? n : fallback;
+}
+
+/** Filtergraph link labels may only contain safe identifier characters. */
+function safeLabel(id: unknown): string {
+    return String(id ?? '').replace(/[^A-Za-z0-9_-]/g, '_') || 'clip';
 }
 
 export interface CompositeJobResult {
@@ -78,8 +98,9 @@ export class HeadlessVideoCompositorService {
         videoOutputTag: string;
         audioOutputTag: string;
     } {
-        const { width, height } = resolution;
-        const fps = timeline.fps || 30;
+        const width = Math.max(2, Math.round(finiteNumber(resolution?.width, 1920)));
+        const height = Math.max(2, Math.round(finiteNumber(resolution?.height, 1080)));
+        const fps = finiteNumber(timeline.fps, 0) || 30;
 
         // Gather all video elements ordered by tracks (bottom/background V1 to top overlay)
         const videoTracks = timeline.tracks.filter(t => t.type === 'video' || t.type === 'overlay');
@@ -89,7 +110,7 @@ export class HeadlessVideoCompositorService {
         const filterChains: string[] = [];
 
         // Base solid background canvas generator (e.g. black canvas of project duration)
-        const totalDuration = timeline.duration || 10;
+        const totalDuration = finiteNumber(timeline.duration, 0) || 10;
         // Input 0: virtual color background canvas
         inputs.push({
             path: `color=c=black:s=${width}x${height}:r=${fps}:d=${totalDuration}`,
@@ -104,8 +125,16 @@ export class HeadlessVideoCompositorService {
         for (const track of videoTracks) {
             if (track.visible === false) continue;
 
-            for (const el of track.elements) {
-                const clipFilePath = customInputs?.[el.id] || el.url || (el as any).sourceUrl || (el as any).src;
+            for (const rawEl of track.elements) {
+                const elLabel = safeLabel(rawEl.id);
+                const el = {
+                    ...rawEl,
+                    id: elLabel,
+                    duration: finiteNumber(rawEl.duration, 0),
+                    startTime: finiteNumber(rawEl.startTime, 0)
+                } as TimelineElement;
+                const clipFilePathRaw = customInputs?.[rawEl.id] || rawEl.url || (rawEl as any).sourceUrl || (rawEl as any).src;
+                const clipFilePath = typeof clipFilePathRaw === 'string' ? clipFilePathRaw : '';
                 const isVirtualColor = !clipFilePath || clipFilePath.startsWith('blob:') || clipFilePath.startsWith('data:');
 
                 if (isVirtualColor) {
@@ -136,13 +165,14 @@ export class HeadlessVideoCompositorService {
                 // 1.5 Generative VFX / Inpainting Patch
                 if (el.generativePatch && el.generativePatch.enabled && el.generativePatch.targetBox) {
                     const patch = el.generativePatch;
-                    const patchFilePath = customInputs?.[`${el.id}_patch`] || customInputs?.[el.id + '_patch'] || patch.patchUrl;
+                    const patchFilePathRaw = customInputs?.[`${rawEl.id}_patch`] || patch.patchUrl;
+                    const patchFilePath = typeof patchFilePathRaw === 'string' ? patchFilePathRaw : '';
 
                     const cropBox = el.generativePatch.targetBox;
-                    const cropW = Math.max(2, Math.round(cropBox.width));
-                    const cropH = Math.max(2, Math.round(cropBox.height));
-                    const cropX = Math.round(cropBox.x);
-                    const cropY = Math.round(cropBox.y);
+                    const cropW = Math.max(2, Math.round(finiteNumber(cropBox.width, 2)));
+                    const cropH = Math.max(2, Math.round(finiteNumber(cropBox.height, 2)));
+                    const cropX = Math.round(finiteNumber(cropBox.x, 0));
+                    const cropY = Math.round(finiteNumber(cropBox.y, 0));
 
                     inputIdx++;
                     const patchInputIdx = inputIdx;
@@ -175,7 +205,7 @@ export class HeadlessVideoCompositorService {
                     currentPatchTag = patchScaledTag;
 
                     // 1.5.3 Soft feathered alpha edge mask
-                    const r = Math.max(1, patch.featherRadius ?? 8);
+                    const r = Math.max(1, finiteNumber(patch.featherRadius, 8));
                     const patchFeatherTag = `[v_${el.id}_patch_feather_${patchStepIdx++}]`;
                     const alphaExpr = `min(1,min(min(X/${r},(${cropW}-1-X)/${r}),min(Y/${r},(${cropH}-1-Y)/${r})))*255`;
                     filterChains.push(`${currentPatchTag}format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${alphaExpr}'${patchFeatherTag}`);
@@ -183,7 +213,7 @@ export class HeadlessVideoCompositorService {
 
                     // 1.5.4 Film grain matching pass
                     if (patch.matchGrain !== false) {
-                        const grainInt = Math.max(1, Math.min(100, patch.grainIntensity ?? 12));
+                        const grainInt = Math.max(1, Math.min(100, finiteNumber(patch.grainIntensity, 12)));
                         const patchGrainedTag = `[v_${el.id}_patch_grain_${patchStepIdx++}]`;
                         filterChains.push(`${currentPatchTag}noise=alls=${grainInt}:allf=t+u${patchGrainedTag}`);
                         currentPatchTag = patchGrainedTag;
@@ -198,15 +228,15 @@ export class HeadlessVideoCompositorService {
                 // 2. Chroma keying filter
                 if (el.keying && el.keying.enabled) {
                     const keyColorHex = this.normalizeHexColor(el.keying.keyColor || '#00ff00');
-                    const similarity = (Math.max(1, Math.min(100, el.keying.tolerance ?? 35)) / 100).toFixed(2);
-                    const blend = (Math.max(0, Math.min(100, el.keying.softness ?? 15)) / 100).toFixed(2);
+                    const similarity = (Math.max(1, Math.min(100, finiteNumber(el.keying.tolerance, 35))) / 100).toFixed(2);
+                    const blend = (Math.max(0, Math.min(100, finiteNumber(el.keying.softness, 15))) / 100).toFixed(2);
                     
                     const keyedTag = `[v_${el.id}_keyed_${stepIdx++}]`;
                     filterChains.push(`${lastTag}chromakey=color=${keyColorHex}:similarity=${similarity}:blend=${blend}${keyedTag}`);
                     lastTag = keyedTag;
 
                     // Despill suppression
-                    const despillAmount = (el.keying.despill ?? 60) / 100;
+                    const despillAmount = finiteNumber(el.keying.despill, 60) / 100;
                     if (despillAmount > 0) {
                         const isBlue = keyColorHex.toLowerCase().includes('0000ff') || keyColorHex.toLowerCase().includes('blue');
                         const despillType = isBlue ? 'blue' : 'green';
@@ -217,8 +247,8 @@ export class HeadlessVideoCompositorService {
                 }
 
                 // 3. Layer Affine Transform (scale & positioning)
-                const scaleX = el.layerTransform?.scaleX ?? el.scale ?? 1.0;
-                const scaleY = el.layerTransform?.scaleY ?? el.scale ?? 1.0;
+                const scaleX = finiteNumber(el.layerTransform?.scaleX ?? el.scale, 1.0);
+                const scaleY = finiteNumber(el.layerTransform?.scaleY ?? el.scale, 1.0);
                 const targetW = Math.round(width * scaleX);
                 const targetH = Math.round(height * scaleY);
 
@@ -229,15 +259,16 @@ export class HeadlessVideoCompositorService {
                 }
 
                 // 4. Opacity
-                if (el.opacity !== undefined && el.opacity < 1.0) {
+                const opacity = el.opacity === undefined ? undefined : finiteNumber(el.opacity, 1.0);
+                if (opacity !== undefined && opacity < 1.0) {
                     const opacityTag = `[v_${el.id}_alpha_${stepIdx++}]`;
-                    filterChains.push(`${lastTag}colorchannelmixer=aa=${el.opacity.toFixed(2)}${opacityTag}`);
+                    filterChains.push(`${lastTag}colorchannelmixer=aa=${opacity.toFixed(2)}${opacityTag}`);
                     lastTag = opacityTag;
                 }
 
                 // 5. Overlay onto composite stack
-                const posX = el.layerTransform?.x ?? 0; // range -1 to 1 relative to half width
-                const posY = el.layerTransform?.y ?? 0;
+                const posX = finiteNumber(el.layerTransform?.x, 0); // range -1 to 1 relative to half width
+                const posY = finiteNumber(el.layerTransform?.y, 0);
 
                 // Center position offset: overlay center = (W - w)/2 + (posX * W / 2)
                 const xExpr = `(W-w)/2+(${posX}*W/2)`;
@@ -255,8 +286,8 @@ export class HeadlessVideoCompositorService {
         // Color grade the final master stream if globalGrade or LUT is present
         let finalVideoTag = currentBaseTag;
         if (timeline.globalGrade) {
-            const contrast = (timeline.globalGrade.contrast ?? 0) / 100 + 1.0;
-            const saturation = (timeline.globalGrade.saturation ?? 100) / 100;
+            const contrast = finiteNumber(timeline.globalGrade.contrast, 0) / 100 + 1.0;
+            const saturation = finiteNumber(timeline.globalGrade.saturation, 100) / 100;
             const gradedTag = '[v_master_graded]';
             filterChains.push(`${finalVideoTag}eq=contrast=${contrast.toFixed(2)}:saturation=${saturation.toFixed(2)}${gradedTag}`);
             finalVideoTag = gradedTag;
@@ -267,12 +298,13 @@ export class HeadlessVideoCompositorService {
         for (const track of audioTracks) {
             if (track.muted) continue;
             for (const el of track.elements) {
-                const audioPath = customInputs?.[el.id] || el.url;
+                const audioPathRaw = customInputs?.[el.id] || el.url;
+                const audioPath = typeof audioPathRaw === 'string' ? audioPathRaw : '';
                 if (audioPath && !audioPath.startsWith('blob:') && !audioPath.startsWith('data:')) {
                     inputs.push({
                         path: audioPath,
                         isVirtual: false,
-                        duration: el.duration
+                        duration: finiteNumber(el.duration, 0)
                     });
                     audioInputs.push(`[${inputIdx++}:a]`);
                 }
@@ -315,12 +347,12 @@ export class HeadlessVideoCompositorService {
 
         const args: string[] = ['-y'];
 
-        // Add inputs
+        // Add inputs (non-virtual inputs are restricted to file/http(s) protocols)
         for (const inp of inputs) {
             if (inp.isVirtual) {
                 args.push('-f', 'lavfi', '-i', inp.path);
             } else {
-                args.push('-i', inp.path);
+                args.push('-protocol_whitelist', FFMPEG_INPUT_PROTOCOL_WHITELIST, '-i', this.resolveMediaInput(inp.path, request.inputRoot));
             }
         }
 
@@ -335,8 +367,8 @@ export class HeadlessVideoCompositorService {
 
         // Codec & Quality
         const format = request.format || 'mp4';
-        const crf = request.crf !== undefined ? request.crf : 20;
-        const preset = request.preset || 'medium';
+        const crf = Math.round(finiteNumber(request.crf, 20));
+        const preset = typeof request.preset === 'string' && /^[a-z]+$/.test(request.preset) ? request.preset : 'medium';
 
         if (format === 'mp4' || format === 'mov') {
             args.push('-c:v', 'libx264', '-crf', crf.toString(), '-preset', preset, '-pix_fmt', 'yuv420p');
@@ -346,7 +378,7 @@ export class HeadlessVideoCompositorService {
             args.push('-f', 'gif');
         }
 
-        args.push('-t', (request.timeline.duration || 10).toString());
+        args.push('-t', (finiteNumber(request.timeline.duration, 0) || 10).toString());
         args.push(request.outputPath);
 
         const commandString = `${this.ffmpegPath} ${args.map(a => a.includes(' ') || a.includes(';') || a.includes('=') ? `"${a.replace(/"/g, '\\"')}"` : a).join(' ')}`;
@@ -429,8 +461,30 @@ export class HeadlessVideoCompositorService {
         });
     }
 
+    /**
+     * Validates a non-virtual media input. http(s) URLs pass through; when `inputRoot` is set,
+     * any other value must be a local path confined to that root (returned as an explicit
+     * `file:` URL so FFmpeg cannot reinterpret it as another protocol).
+     */
+    private resolveMediaInput(inputPath: string, inputRoot?: string): string {
+        if (/^https?:\/\//i.test(inputPath)) {
+            return inputPath;
+        }
+        if (!inputRoot) {
+            return inputPath;
+        }
+        if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(inputPath) && !/^file:/i.test(inputPath) && !/^[A-Za-z]:[\\/]/.test(inputPath)) {
+            throw Object.assign(new Error(`Unsupported media input protocol: ${inputPath.split(':')[0]}`), { code: 'invalid_media_input' });
+        }
+        const localPath = inputPath.replace(/^file:(\/\/)?/i, '');
+        return `file:${resolveWithinRoot(inputRoot, localPath)}`;
+    }
+
     private normalizeHexColor(hex: string): string {
-        const clean = hex.replace('#', '').trim();
+        const clean = String(hex ?? '').replace('#', '').trim();
+        if (!/^[0-9A-Fa-f]+$/.test(clean)) {
+            return '0x00FF00';
+        }
         if (clean.length === 6) {
             return `0x${clean.toUpperCase()}`;
         }
@@ -442,7 +496,7 @@ export class HeadlessVideoCompositorService {
     }
 
     private mapNamedColorToHex(color: string): string {
-        switch (color.toLowerCase()) {
+        switch (String(color).toLowerCase()) {
             case 'emerald':
             case 'green':
                 return '0x10b981';

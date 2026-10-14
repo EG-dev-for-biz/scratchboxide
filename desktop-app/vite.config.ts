@@ -96,7 +96,8 @@ export default defineConfig(({ mode }) => {
       'process.env.GOOGLE_MAPS_API_KEY': JSON.stringify(googleMapsKey),
       'process.env.MAP_TILES_API_KEY': JSON.stringify(googleMapsKey),
       'process.env.SCRATCHBOX_API_PORT': JSON.stringify(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001'),
-      'process.env.SCRATCHBOX_LAUNCH_TOKEN': JSON.stringify(process.env.SCRATCHBOX_LAUNCH_TOKEN || '')
+      // Never compile the launch token into served JS; it arrives via IPC or the launch URL.
+      'process.env.SCRATCHBOX_LAUNCH_TOKEN': JSON.stringify('')
     },
     server: {
       port: parseInt(process.env.SCRATCHBOX_WEB_PORT || '3030', 10),
@@ -119,6 +120,16 @@ export default defineConfig(({ mode }) => {
         '/spatial': apiProxy(),
         '/models': apiProxy(),
         '/tiles': apiProxy(),
+        '/renders': apiProxy(),
+        '/textures': apiProxy(),
+        '/extracted_textures': apiProxy(),
+        '/datasets': apiProxy(),
+        '/real_3d_tiles_captures': apiProxy(),
+        '/screenshots': apiProxy(),
+        '/splats': apiProxy(),
+        '/visual_proof_locations': apiProxy(),
+        '/visual_proof_real_tile': apiProxy(),
+        '/libs': apiProxy(),
         '/build': apiProxy(),
         '/cpp': apiProxy(),
         '^/(?!index\\.html$).*\\.html$': {

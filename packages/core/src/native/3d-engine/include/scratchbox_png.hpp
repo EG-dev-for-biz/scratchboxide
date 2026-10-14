@@ -263,7 +263,9 @@ inline DecodeResult decode(const uint8_t* data, size_t size, OutputFormat format
                 dstRow[x * 4 + 2] = b;
                 dstRow[x * 4 + 3] = a;
             } else if (outChannels == 1) {
-                dstRow[x] = static_cast<uint8_t>(0.2126f * r + 0.7152f * g + 0.0722f * b);
+                // Grayscale sources pass through exactly; otherwise round, since the
+                // float weights can land just under an integer (52 -> 51.999 -> 51).
+                dstRow[x] = (r == g && g == b) ? r : static_cast<uint8_t>(0.2126f * r + 0.7152f * g + 0.0722f * b + 0.5f);
             }
         }
 
@@ -272,6 +274,79 @@ inline DecodeResult decode(const uint8_t* data, size_t size, OutputFormat format
 
     res.ok = true;
     return res;
+}
+
+/**
+ * Compressed PNG encoder (zlib deflate + per-scanline adaptive filtering).
+ * texture::encodePng stays dependency-free and writes stored blocks; use this
+ * where the build links zlib and output size matters (e.g. textures in GLBs).
+ */
+inline std::vector<uint8_t> encode(const texture::ImageBuffer& img, int level = 6) {
+    if (img.empty() || (img.channels != 1 && img.channels != 3 && img.channels != 4)) return {};
+
+    const size_t bpp = static_cast<size_t>(img.channels);
+    const size_t rowLen = static_cast<size_t>(img.width) * bpp;
+    std::vector<uint8_t> filtered;
+    filtered.reserve(static_cast<size_t>(img.height) * (rowLen + 1));
+
+    std::vector<uint8_t> candidate(rowLen), best(rowLen);
+    const std::vector<uint8_t> zeroRow(rowLen, 0);
+    for (int y = 0; y < img.height; ++y) {
+        const uint8_t* cur = img.data.data() + static_cast<size_t>(y) * rowLen;
+        const uint8_t* up = y > 0 ? cur - rowLen : zeroRow.data();
+        uint8_t bestType = 0;
+        uint64_t bestCost = UINT64_MAX;
+        // PNG filter types 0..4; keep the one with the smallest sum of |signed residual|.
+        for (uint8_t type = 0; type <= 4; ++type) {
+            uint64_t cost = 0;
+            for (size_t i = 0; i < rowLen; ++i) {
+                int a = i >= bpp ? cur[i - bpp] : 0;
+                int b = up[i];
+                int c = i >= bpp ? up[i - bpp] : 0;
+                int pred = type == 0 ? 0 : type == 1 ? a : type == 2 ? b : type == 3 ? (a + b) / 2 : detail::paethPredictor(a, b, c);
+                uint8_t r = static_cast<uint8_t>(cur[i] - pred);
+                candidate[i] = r;
+                cost += static_cast<uint64_t>(std::abs(static_cast<int8_t>(r)));
+            }
+            if (cost < bestCost) {
+                bestCost = cost;
+                bestType = type;
+                best.swap(candidate);
+                candidate.resize(rowLen);
+            }
+        }
+        filtered.push_back(bestType);
+        filtered.insert(filtered.end(), best.begin(), best.end());
+    }
+
+    uLongf compLen = compressBound(static_cast<uLong>(filtered.size()));
+    std::vector<uint8_t> idat(compLen);
+    if (compress2(idat.data(), &compLen, filtered.data(), static_cast<uLong>(filtered.size()), level) != Z_OK) return {};
+    idat.resize(compLen);
+
+    std::vector<uint8_t> out = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+    auto be32 = [&](uint32_t v) {
+        out.push_back(static_cast<uint8_t>(v >> 24)); out.push_back(static_cast<uint8_t>(v >> 16));
+        out.push_back(static_cast<uint8_t>(v >> 8));  out.push_back(static_cast<uint8_t>(v));
+    };
+    auto chunk = [&](const char* type, const uint8_t* data, size_t len) {
+        be32(static_cast<uint32_t>(len));
+        size_t start = out.size();
+        out.insert(out.end(), type, type + 4);
+        if (len) out.insert(out.end(), data, data + len);
+        be32(static_cast<uint32_t>(crc32(0L, out.data() + start, static_cast<uInt>(len + 4))));
+    };
+    uint8_t ihdr[13] = {
+        static_cast<uint8_t>(img.width >> 24), static_cast<uint8_t>(img.width >> 16),
+        static_cast<uint8_t>(img.width >> 8), static_cast<uint8_t>(img.width),
+        static_cast<uint8_t>(img.height >> 24), static_cast<uint8_t>(img.height >> 16),
+        static_cast<uint8_t>(img.height >> 8), static_cast<uint8_t>(img.height),
+        8, static_cast<uint8_t>(img.channels == 4 ? 6 : img.channels == 3 ? 2 : 0), 0, 0, 0
+    };
+    chunk("IHDR", ihdr, sizeof(ihdr));
+    chunk("IDAT", idat.data(), idat.size());
+    chunk("IEND", nullptr, 0);
+    return out;
 }
 
 } // namespace png

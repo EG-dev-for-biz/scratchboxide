@@ -17,6 +17,7 @@ import {
 } from '../src/node/spatial/Universal3DObjectSeparationService';
 import { BoundingBoxComparisonService } from '../src/node/spatial/BoundingBoxComparisonService';
 import { GoogleTileAlignmentOptimizer } from '../src/node/spatial/GoogleTileAlignmentOptimizer';
+import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
 
 describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)', () => {
   const colosseumModelPath = fs.existsSync(path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb'))
@@ -181,7 +182,9 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
 
     const scene = Universal3DObjectSeparationService.separate3DMesh(hqPath, {
       granularity: 'detailed',
-      autoDetectSemanticCategories: true
+      autoDetectSemanticCategories: true,
+      landmarkName: 'Washington Square Arch',
+      landmarkType: 'triumphal_arch'
     });
 
     expect(scene).toBeDefined();
@@ -308,4 +311,73 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     expect(Math.abs(sourceBottomY - targetTileBounds.min[1])).toBeLessThan(0.001);
     expect(alignment.transformMatrix4x4.length).toBe(16);
   });
+
+  it('partitions fused 3D tile geometry into part-aware glTF primitives with independent PBR materials and local OBB UV coordinates', async () => {
+    const tileGlbPath = path.resolve(__dirname, '../../../public/tiles/washington_square_arch_100m.glb');
+    if (!fs.existsSync(tileGlbPath)) return;
+
+    const outGlbPath = path.resolve(__dirname, '../../../public/tiles/washington_square_arch_part_aware.glb');
+
+    const result = Universal3DObjectSeparationService.generatePartAwareGlb({
+      glbPath: tileGlbPath,
+      granularity: 'all',
+      outputGlbPath: outGlbPath,
+      localUvProjection: true,
+      facadeUvScale: 0.25,
+      focalInterestBounds: {
+        minX: -16.5,
+        maxX: 16.5,
+        minZ: -8.5,
+        maxZ: 8.5
+      },
+      landmarkName: 'Washington Square Arch',
+      landmarkType: 'triumphal_arch'
+    });
+
+    expect(result.glbBuffer).toBeDefined();
+    expect(result.glbBuffer.length).toBeGreaterThan(1000);
+    expect(result.materialCount).toBeGreaterThan(1);
+    expect(result.primitiveCount).toBeGreaterThan(1);
+    expect(result.entityCount).toBeGreaterThan(1);
+
+    // Parse the generated part-aware GLB
+    const parsed = AlgorithmicUvEngine.parseGlb(result.glbBuffer);
+    expect(parsed.json.materials.length).toBe(result.materialCount);
+    expect(parsed.json.meshes[0].primitives.length).toBe(result.primitiveCount);
+
+    // Verify materials have dedicated part categories in extras
+    const categories = parsed.json.materials.map((m: any) => m.extras?.category);
+    expect(categories).toContain('landmark');
+    expect(categories.some((c: string) => c === 'foliage_trees' || c === 'architecture' || c === 'terrain')).toBe(true);
+
+    // Verify each primitive has local OBB-conformal UV coordinates (TEXCOORD_0)
+    for (const prim of parsed.json.meshes[0].primitives) {
+      expect(prim.attributes.POSITION).toBeDefined();
+      expect(prim.attributes.TEXCOORD_0).toBeDefined();
+      expect(prim.material).toBeDefined();
+      const mat = parsed.json.materials[prim.material];
+      expect(mat.pbrMetallicRoughness).toBeDefined();
+      expect(mat.pbrMetallicRoughness.baseColorFactor).toBeDefined();
+      expect(mat.pbrMetallicRoughness.roughnessFactor).toBeGreaterThan(0);
+    }
+
+    // Verify integration with AlgorithmicUvEngine part-aware PBR processing
+    const uvResult = await AlgorithmicUvEngine.processGlb({
+      inputGlbBuffer: result.glbBuffer,
+      enablePartAwarePbr: true,
+      detailSynthesis: {
+        protectRoads: true,
+        protectFoliage: true
+      }
+    });
+
+    expect(uvResult.outputGlbBuffer?.length ?? 0).toBeGreaterThan(1000);
+    expect(uvResult.verticesProcessed).toBeGreaterThan(0);
+
+    // Cleanup generated file
+    if (fs.existsSync(outGlbPath)) {
+      fs.unlinkSync(outGlbPath);
+    }
+  });
 });
+

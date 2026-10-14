@@ -85,7 +85,7 @@ export interface ColosseumSeparationResult {
 
 /**
  * Service to separate, detect, unproject, and package individual 3D objects
- * from BeautifyStationService renders using Google Geocoding/Places and Gemini 3.7/2.5.
+ * from BeautifyStationService renders using Google Geocoding/Places and Gemini 3.8/2.5.
  */
 export class ColosseumObjectSeparationService {
   private geminiClient: GeminiClient;
@@ -180,7 +180,7 @@ export class ColosseumObjectSeparationService {
   }
 
   /**
-   * Detects distinct physical objects on the beautified plate using Gemini 3.7 / 2.5
+   * Detects distinct physical objects on the beautified plate using Gemini 3.8 / 2.5
    * with normalized 2D bounding boxes and TRELLIS-optimized 3D prompts.
    */
   public async detectVisionObjects(imagePath?: string): Promise<GeminiVisionBoundingBox[]> {
@@ -338,7 +338,7 @@ export class ColosseumObjectSeparationService {
     }
 
     try {
-      // In live environment with network access, execute Gemini 3.7 vision detection
+      // In live environment with network access, execute Gemini 3.8 vision detection
       const prompt = `You are a precision 3D geospatial vision analyst.
 Examine this architectural photograph of the Colosseum and surrounding Piazza del Colosseo.
 Detect all individual monuments, historical ruins, architectural facades, and trees.

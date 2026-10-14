@@ -139,7 +139,7 @@ function render404Page(reqPath) {
 <body>
     <div class="container">
         <h1>🔍 Demo Studio or Asset Not Found</h1>
-        <p>The requested path <code>${reqPath}</code> was not found on this demo server. You can return to the main showcase gallery or launch any of the active studios below:</p>
+        <p>The requested path <code>${escapeHtml(reqPath)}</code> was not found on this demo server. You can return to the main showcase gallery or launch any of the active studios below:</p>
         <a href="/" class="hub-btn">← Return to Showcase Demos Hub</a>
         <div class="grid">
             ${cardsHtml}
@@ -149,12 +149,94 @@ function render404Page(reqPath) {
 </html>`;
 }
 
+// ── Request-origin hardening ────────────────────────────────────────────────
+// This server runs native binaries, Python and billed Gemini calls and serves
+// the Google Maps browser key. Only pages served from this loopback origin
+// (plus explicit env allowlists) may talk to it.
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+function parseEnvList(...names) {
+    const out = new Set();
+    for (const name of names) {
+        for (const entry of String(process.env[name] || '').split(',')) {
+            const trimmed = entry.trim().replace(/\/+$/, '');
+            if (trimmed) out.add(trimmed.toLowerCase());
+        }
+    }
+    return out;
+}
+
+const ENV_ALLOWED_ORIGINS = parseEnvList('SERVE_PUBLIC_ALLOWED_ORIGINS', 'SCRATCHBOX_ALLOWED_ORIGINS');
+const ENV_ALLOWED_HOSTS = parseEnvList('SERVE_PUBLIC_ALLOWED_HOSTS');
+
+function isAllowedHost(hostHeader) {
+    if (!hostHeader) return false;
+    const host = String(hostHeader).toLowerCase();
+    if (ENV_ALLOWED_HOSTS.has(host)) return true;
+    const m = host.match(/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/);
+    if (!m) return false;
+    if (ENV_ALLOWED_HOSTS.has(m[1])) return true;
+    return LOOPBACK_HOSTNAMES.has(m[1]) && (m[2] === undefined || Number(m[2]) === PORT);
+}
+
+function isAllowedOrigin(origin) {
+    if (!origin) return false;
+    const normalized = String(origin).toLowerCase().replace(/\/+$/, '');
+    if (ENV_ALLOWED_ORIGINS.has(normalized)) return true;
+    let parsed;
+    try { parsed = new URL(normalized); } catch { return false; }
+    if (parsed.protocol !== 'http:') return false;
+    const port = parsed.port ? Number(parsed.port) : 80;
+    return LOOPBACK_HOSTNAMES.has(parsed.hostname) && port === PORT;
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/** Separator-aware containment: true when `candidate` is `root` or inside it. */
+function isWithinDir(root, candidate) {
+    const rel = path.relative(root, candidate);
+    return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/** Resolve a user-supplied relative path strictly inside `root`; returns null on escape. */
+function resolveInside(root, userPath) {
+    if (typeof userPath !== 'string' || !userPath || userPath.includes('\0')) return null;
+    const resolved = path.resolve(root, userPath.replace(/^[\\/]+/, ''));
+    return isWithinDir(root, resolved) ? resolved : null;
+}
+
+function rejectRequest(res, status, error) {
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Vary': 'Origin' });
+    res.end(JSON.stringify({ success: false, error }));
+}
+
 const server = http.createServer((req, res) => {
-    // CORS headers for all responses
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Private-Network', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+    // DNS-rebinding guard: only answer to loopback Host headers (or env allowlist).
+    if (!isAllowedHost(req.headers.host)) {
+        rejectRequest(res, 421, 'Host not allowed');
+        return;
+    }
+
+    // Origin guard: echo ACAO only for this server's loopback origins / env allowlist,
+    // and refuse any request that carries a foreign Origin.
+    const origin = req.headers.origin;
+    res.setHeader('Vary', 'Origin');
+    if (origin !== undefined) {
+        if (!isAllowedOrigin(origin)) {
+            rejectRequest(res, 403, 'Origin not allowed');
+            return;
+        }
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+    }
 
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -162,7 +244,30 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    let reqPath = decodeURI(req.url.split('?')[0]);
+    let reqPath;
+    try {
+        reqPath = decodeURI(req.url.split('?')[0]);
+    } catch {
+        rejectRequest(res, 400, 'Malformed URL');
+        return;
+    }
+
+    if (reqPath.startsWith('/api/')) {
+        // Block cross-site no-Origin subresource loads (<img>, navigations) against API routes.
+        const fetchSite = req.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none' && !isAllowedOrigin(origin)) {
+            rejectRequest(res, 403, 'Cross-site API request rejected');
+            return;
+        }
+        // Force CORS preflight for state-changing calls: no "simple" text/plain or form POSTs.
+        if (req.method === 'POST') {
+            const contentType = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+            if (contentType !== 'application/json') {
+                rejectRequest(res, 415, 'POST API requests require Content-Type: application/json');
+                return;
+            }
+        }
+    }
 
     // Handle 3D Tile Ingestion Query API
     if (reqPath === '/api/3d/tiles/query' || reqPath === '/api/tiles/query') {
@@ -695,16 +800,13 @@ const server = http.createServer((req, res) => {
                 const model = urlObj.searchParams.get('model') || params.model || 'washington_square_arch_nyc_raw.glb';
                 const granularity = urlObj.searchParams.get('granularity') || params.granularity || 'detailed';
 
-                const REPO_ROOT = path.resolve(__dirname, '..');
-                let resolvedInput = path.resolve(PUBLIC_DIR, 'models', path.basename(model));
-                if (!fs.existsSync(resolvedInput)) {
-                    resolvedInput = path.resolve(PUBLIC_DIR, model.replace(/^\//, ''));
-                }
-                if (!fs.existsSync(resolvedInput)) {
-                    resolvedInput = path.resolve(REPO_ROOT, model);
+                // Confine model lookups to PUBLIC_DIR (no REPO_ROOT / absolute path probing).
+                let resolvedInput = resolveInside(path.resolve(PUBLIC_DIR, 'models'), path.basename(String(model)));
+                if (!resolvedInput || !fs.existsSync(resolvedInput)) {
+                    resolvedInput = resolveInside(PUBLIC_DIR, String(model));
                 }
 
-                if (!fs.existsSync(resolvedInput)) {
+                if (!resolvedInput || !fs.existsSync(resolvedInput)) {
                     res.writeHead(404, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: false, error: `Model file not found: ${model}` }));
                     return;
@@ -762,12 +864,21 @@ const server = http.createServer((req, res) => {
                 const materialMode = params.materialMode || 'studio_clay';
 
                 const REPO_ROOT = path.resolve(__dirname, '..');
-                let resolvedInput = path.resolve(PUBLIC_DIR, inputGlb.replace(/^\//, ''));
-                if (!fs.existsSync(resolvedInput)) {
-                    resolvedInput = path.resolve(REPO_ROOT, inputGlb);
+                // Confine the input mesh to PUBLIC_DIR; reject traversal / absolute paths outright.
+                let resolvedInput = resolveInside(PUBLIC_DIR, String(inputGlb));
+                if (!resolvedInput) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'inputGlb must be a path inside public/' }));
+                    return;
                 }
                 if (!fs.existsSync(resolvedInput)) {
                     resolvedInput = path.resolve(PUBLIC_DIR, 'models/sf_ferry_raw.glb');
+                }
+                const materialModeOk = typeof materialMode === 'string' && /^[A-Za-z0-9_-]+$/.test(materialMode);
+                if (!materialModeOk) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Invalid materialMode' }));
+                    return;
                 }
 
                 const outFilename = `restructured_${Date.now()}.glb`;
@@ -835,6 +946,11 @@ const server = http.createServer((req, res) => {
                 let params = {};
                 try { params = JSON.parse(body); } catch {}
                 const landmark = params.landmark || 'colosseum';
+                if (typeof landmark !== 'string' || !/^[A-Za-z0-9_-]+$/.test(landmark)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Invalid landmark: must match /^[A-Za-z0-9_-]+$/' }));
+                    return;
+                }
                 const stationCount = parseInt(params.stationCount || '16', 10);
                 const voxelSize = parseFloat(params.voxelSize || '0.05');
                 const dropFoliage = params.dropFoliage !== false;
@@ -2291,7 +2407,7 @@ OUTPUT FORMAT (Strict JSON):
 
     let filePath = path.join(PUBLIC_DIR, reqPath);
 
-    if (!filePath.startsWith(PUBLIC_DIR)) {
+    if (!(filePath === PUBLIC_DIR || filePath.startsWith(PUBLIC_DIR + path.sep))) {
         res.writeHead(403, { 'Content-Type': 'text/plain' });
         res.end('Forbidden');
         return;
@@ -2392,6 +2508,7 @@ OUTPUT FORMAT (Strict JSON):
 server.listen(PORT, '127.0.0.1', () => {
     console.log(`[StaticServer] Serving ${PUBLIC_DIR} on http://127.0.0.1:${PORT}`);
     console.log(`[StaticServer] Showcase Portal available at http://127.0.0.1:${PORT}/demos/`);
+    if (process.env.SERVE_PUBLIC_SKIP_HYDRATE === '1') return;
     try {
         const { fork } = require('child_process');
         fork(path.resolve(__dirname, 'hydrate_demo_assets.cjs'), ['--quiet'], { stdio: 'ignore' });

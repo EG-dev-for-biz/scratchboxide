@@ -56,10 +56,11 @@ export const ModelsTab: React.FC = () => {
                             <label className="sb-form-label">Preferred AI Reasoning Engine</label>
                             <select
                                 className="sb-form-select"
-                                value={workspaceSettings.defaultModel || 'gemini-3.7-flash'}
+                                value={workspaceSettings.defaultModel || 'gemini-3.8-flash'}
                                 onChange={e => setWorkspaceSettings({ ...workspaceSettings, defaultModel: e.target.value })}
                             >
-                                <option value="gemini-3.7-flash">High Reasoning Engine (Autonomous &amp; Deep Thought)</option>
+                                <option value="gemini-3.8-flash">High Reasoning Engine (Autonomous &amp; Deep Thought)</option>
+                                <option value="gemini-3.7-flash">Previous Reasoning Engine (Gemini 3.7 Flash)</option>
                                 <option value="gemini-2.5-pro">Deep Architecture Analysis (Comprehensive Context)</option>
                                 <option value="gemini-2.5-flash">Fast Intelligence (Instant Code &amp; Generation)</option>
                             </select>

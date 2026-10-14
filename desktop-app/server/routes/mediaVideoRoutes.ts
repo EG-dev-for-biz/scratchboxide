@@ -220,16 +220,26 @@ export function createVideoRouter(videoCompositor: HeadlessVideoCompositorServic
                 return;
             }
 
-            let resolvedOutputPath = outputPath;
-            if (workspaceRoot) {
-                const safeRoot = requireWorkspaceRoot(workspaceRoot);
-                resolvedOutputPath = resolveWithinRoot(safeRoot, outputPath);
+            if (typeof outputPath !== 'string') {
+                res.status(400).json({ success: false, error: 'outputPath must be a string' });
+                return;
             }
+            if (customInputs !== undefined && (typeof customInputs !== 'object' || customInputs === null || Array.isArray(customInputs)
+                || Object.values(customInputs).some(v => typeof v !== 'string'))) {
+                res.status(400).json({ success: false, error: 'customInputs must map clip ids to path strings' });
+                return;
+            }
+
+            // Always confine output and local inputs to an allowed workspace root
+            // (requireWorkspaceRoot falls back to the server cwd, which must itself be allowlisted).
+            const safeRoot = requireWorkspaceRoot(workspaceRoot);
+            const resolvedOutputPath = resolveWithinRoot(safeRoot, outputPath);
 
             const result = await videoCompositor.execute({
                 timeline,
                 outputPath: resolvedOutputPath,
-                workspaceRoot,
+                workspaceRoot: safeRoot,
+                inputRoot: safeRoot,
                 resolution,
                 format,
                 crf,
@@ -242,6 +252,10 @@ export function createVideoRouter(videoCompositor: HeadlessVideoCompositorServic
         } catch (err: any) {
             if (isPathError(err)) {
                 sendError(res, err);
+                return;
+            }
+            if (err?.code === 'invalid_media_input') {
+                res.status(400).json({ success: false, error: err.message });
                 return;
             }
             res.status(500).json({ success: false, error: err?.message || 'Video compositing failed' });

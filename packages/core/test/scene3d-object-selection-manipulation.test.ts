@@ -38,71 +38,30 @@ import type {
     Scene3DData,
     SculptSettings
 } from '../src/browser/generative-canvas/canvas-types';
+import {
+    resolveSelectableObject,
+    extractSceneOutlinerItems,
+    findExternalObjectRoot,
+    externalObjectIdOf,
+    summarizeObjectGeometry,
+    EXTERNAL_OBJECT_ROOT_PREFIX
+} from '../src/browser/generative-canvas/primitives/scene3d/selection';
+import * as Scene3DPrimitiveModule from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 
 /**
- * Helper to resolve top-level selectable object from a raycast hit object.
+ * Builds a named entity (group of anonymous meshes) from raw buffers. The procedural synthesizers
+ * no longer emit JS primitive content (Tier-0 ban), so the hierarchy under test is assembled here.
  */
-export function resolveSelectableObject(hitObject: THREE.Object3D, sceneRoot: THREE.Object3D): THREE.Object3D {
-    let current: THREE.Object3D = hitObject;
-    let selectable: THREE.Object3D = hitObject;
-
-    while (current && current.parent && current.parent !== sceneRoot) {
-        // If parent is a semantic group (e.g. Buckman Tavern, soldier, tree) but not the top-level scene collection
-        if (current.parent.name && !current.parent.name.startsWith('sb-gizmo-') && current.parent.name !== 'historical-battlefield' && current.parent.name !== 'procedural-city' && current.parent.name !== 'procedural-scene') {
-            selectable = current.parent;
-        }
-        current = current.parent;
+function buildEntity(name: string, x: number, partCount = 2): THREE.Group {
+    const entity = new THREE.Group();
+    entity.name = name;
+    entity.position.x = x;
+    for (let i = 0; i < partCount; i++) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute([0, i, 0, 1, i, 0, 0, i + 1, 0], 3));
+        entity.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial()));
     }
-
-    return selectable;
-}
-
-/**
- * Helper to extract selectable items from a Three.js scene for the Outliner.
- */
-export function extractSceneOutlinerItems(scene: THREE.Scene): Array<{ id: string; name: string; type: string; object: THREE.Object3D; visible: boolean }> {
-    const items: Array<{ id: string; name: string; type: string; object: THREE.Object3D; visible: boolean }> = [];
-
-    scene.traverse((obj) => {
-        // Ignore internal helper objects, gizmos, cameras, lights, and cursor meshes
-        if (obj === scene) return;
-        if (obj.name && (obj.name.startsWith('sb-') || obj.name === 'historical-battlefield' || obj.name === 'procedural-city' || obj.name === 'procedural-scene')) return;
-        if (obj.userData?.isGizmo || obj.userData?.handleType) return;
-        if ((obj as any).isLight || (obj as any).isCamera) return;
-
-        // Collect top-level named groups or standalone meshes
-        const isTopLevelGroup = obj.parent === scene || (obj.parent && (obj.parent.name === 'historical-battlefield' || obj.parent.name === 'procedural-city' || obj.parent.name === 'procedural-scene'));
-        
-        if (isTopLevelGroup && obj.name) {
-            let itemType = 'mesh';
-            const nameLower = obj.name.toLowerCase();
-            if (nameLower.includes('tavern') || nameLower.includes('house') || nameLower.includes('meeting') || nameLower.includes('tower') || nameLower.includes('building')) {
-                itemType = 'building';
-            } else if (nameLower.includes('minuteman') || nameLower.includes('soldier') || nameLower.includes('redcoat') || nameLower.includes('regiment') || nameLower.includes('line')) {
-                itemType = 'unit';
-            } else if (nameLower.includes('tree') || nameLower.includes('elm')) {
-                itemType = 'tree';
-            } else if (nameLower.includes('ground') || nameLower.includes('terrain') || nameLower.includes('floor')) {
-                itemType = 'terrain';
-            } else if (nameLower.includes('smoke') || nameLower.includes('emitter') || nameLower.includes('particle')) {
-                itemType = 'emitter';
-            } else if (nameLower.includes('wall') || nameLower.includes('fence')) {
-                itemType = 'prop';
-            } else if (nameLower.includes('sun') || nameLower.includes('planet') || nameLower.includes('orbit')) {
-                itemType = 'celestial';
-            }
-
-            items.push({
-                id: obj.uuid,
-                name: obj.name,
-                type: itemType,
-                object: obj,
-                visible: obj.visible
-            });
-        }
-    });
-
-    return items;
+    return entity;
 }
 
 async function runObjectSelectionAndManipulationTests() {
@@ -124,6 +83,9 @@ async function runObjectSelectionAndManipulationTests() {
     scene.add(battlefieldGroup);
 
     assert.ok(battlefieldGroup, 'Battlefield group must be instantiated');
+    assert.strictEqual(battlefieldGroup.name, 'historical-battlefield', 'Synthesizer must return the named collection root');
+    ['Buckman Tavern', 'Lexington Meetinghouse', 'Minutemen Militia Line', 'British Redcoat Regiment', 'Lexington Green Ground']
+        .forEach((name, i) => battlefieldGroup.add(buildEntity(name, i * 10)));
 
     // Verify key semantic objects exist and have proper descriptive names
     const outlinerItems = extractSceneOutlinerItems(scene);
@@ -160,6 +122,38 @@ async function runObjectSelectionAndManipulationTests() {
     assert.strictEqual(resolved, tavernGroup, 'Resolving child mesh must return parent entity (Buckman Tavern)');
 
     console.log('  ✓ Test 2 Passed: Raycast child hit cleanly resolves to top-level selectable entity.');
+
+    // =========================================================================
+    // Test 2b: Loaded-model roots are collections, so picks resolve to their named parts
+    // =========================================================================
+    console.log('  Testing part-level resolution inside loaded-model roots...');
+    assert.strictEqual(Scene3DPrimitiveModule.resolveSelectableObject, resolveSelectableObject, 'Scene3DPrimitive must re-export the real resolver');
+    assert.strictEqual(Scene3DPrimitiveModule.extractSceneOutlinerItems, extractSceneOutlinerItems, 'Scene3DPrimitive must re-export the real outliner extractor');
+
+    const modelScene = new THREE.Scene();
+    const modelRoot = new THREE.Group();
+    modelRoot.name = `${EXTERNAL_OBJECT_ROOT_PREFIX}stage-x`;
+    modelScene.add(modelRoot);
+    const singlePrimitivePart = buildEntity('Hero_A', 0, 1).children[0] as THREE.Mesh;
+    singlePrimitivePart.name = 'Hero_A';
+    modelRoot.add(singlePrimitivePart);
+    const multiPrimitiveNode = buildEntity('District_Node', 5, 3);
+    modelRoot.add(multiPrimitiveNode);
+
+    assert.strictEqual(resolveSelectableObject(singlePrimitivePart, modelScene), singlePrimitivePart, 'A one-primitive glTF node (Mesh child of the root) must resolve to itself');
+    assert.strictEqual(resolveSelectableObject(multiPrimitiveNode.children[2], modelScene), multiPrimitiveNode, 'A primitive of a multi-primitive node must resolve to that node');
+    assert.strictEqual(findExternalObjectRoot(multiPrimitiveNode.children[0]), modelRoot, 'Parts must find their loaded-model root');
+    assert.strictEqual(findExternalObjectRoot(modelRoot), modelRoot, 'A root is its own loaded-model root');
+    assert.strictEqual(externalObjectIdOf(modelRoot), 'stage-x', 'The objects[] id must round-trip through the root name');
+    assert.strictEqual(findExternalObjectRoot(tavernGroup), null, 'Procedural entities are not loaded models');
+
+    const modelItems = extractSceneOutlinerItems(modelScene).map(i => i.name);
+    assert.deepStrictEqual(modelItems.sort(), ['District_Node', 'Hero_A', modelRoot.name].sort(), `Outliner must list the root and its parts (got ${modelItems})`);
+
+    const summary = summarizeObjectGeometry(modelRoot);
+    assert.deepStrictEqual(summary, { meshes: 4, vertices: 12, triangles: 4 }, `Geometry summary must total every mesh under the root (got ${JSON.stringify(summary)})`);
+
+    console.log('  ✓ Test 2b Passed: loaded-model roots resolve picks to named parts.');
 
     // =========================================================================
     // Test 3: Dynamic Gizmo Attachment & Screen-Space Invariant Scale

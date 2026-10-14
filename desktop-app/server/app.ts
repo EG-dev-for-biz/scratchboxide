@@ -52,6 +52,7 @@ import { createGeminiRouter } from './routes/geminiRoutes';
 import { createMemoriesRouter } from './routes/memoriesRoutes';
 import { createWorkspaceRouter, createGitRouter } from './routes/workspaceRoutes';
 import { createCppRouter } from './routes/cppRoutes';
+import { createTileRefineRouter } from './routes/tileRefineRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
 import {
     createTileCleanupRouter,
@@ -222,15 +223,20 @@ const OPEN_ROUTES: Array<{ method: string; path: string }> = [
     { method: 'GET', path: '/health' },
     { method: 'GET', path: '/api/browser/status' },
     { method: 'GET', path: '/api/models' },
-    { method: 'GET', path: '/api/models/status' },
-    { method: 'GET', path: '/api/auth/token' }
+    { method: 'GET', path: '/api/models/status' }
 ];
 
 /** GET routes consumed by EventSource, which cannot set headers: accept `?token=`. */
 const SSE_QUERY_TOKEN_ROUTES = new Set<string>(['/workspace/events/file-change']);
 
-/** Path prefixes that make up the authenticated API surface. */
-const PROTECTED_PREFIXES = ['/gemini', '/workspace', '/media', '/api'];
+/**
+ * Path prefixes that make up the authenticated API surface: every router
+ * mounted below. `/models` is deliberately absent — it is static `public/models`.
+ */
+const PROTECTED_PREFIXES = ['/gemini', '/workspace', '/media', '/api', '/3d', '/compiler', '/git', '/memories', '/video'];
+
+/** Methods that only read; anything else always requires the token. */
+const SAFE_METHODS = new Set(['GET', 'HEAD']);
 
 function safeEqual(a: string, b: string): boolean {
     const bufA = Buffer.from(a);
@@ -272,15 +278,17 @@ function createCorsMiddleware(allowedOrigins: Set<string>) {
     };
 }
 
-function createLaunchTokenMiddleware(token: string, allowedOrigins: Set<string>) {
+function createLaunchTokenMiddleware(token: string) {
     return (req: Request, res: Response, next: NextFunction): void => {
         if (req.method === 'OPTIONS') {
             next();
             return;
         }
         const routePath = req.path.replace(/\/+$/, '') || '/';
-        if (!PROTECTED_PREFIXES.some(prefix => routePath === prefix || routePath.startsWith(`${prefix}/`))) {
+        const isApiPath = PROTECTED_PREFIXES.some(prefix => routePath === prefix || routePath.startsWith(`${prefix}/`));
+        if (!isApiPath && SAFE_METHODS.has(req.method)) {
             // Static assets / SPA fallback are public application code.
+            // Non-GET requests are never public, whatever their path.
             next();
             return;
         }
@@ -289,12 +297,9 @@ function createLaunchTokenMiddleware(token: string, allowedOrigins: Set<string>)
             return;
         }
 
-        // In dev mode, permit requests from allowed origins (e.g. Vite dev server on :3030)
-        const origin = req.headers.origin;
-        if (process.env.NODE_ENV !== 'production' && typeof origin === 'string' && allowedOrigins.has(origin)) {
-            next();
-            return;
-        }
+        // No Origin-based bypass: a local process can send any Origin header.
+        // The token reaches the renderer out of band (Electron IPC, the Vite
+        // dev proxy, or the `?token=` launch URL), never from this server.
 
         let presented: string | undefined;
         const authorization = req.headers.authorization;
@@ -345,28 +350,34 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     if (options.staticDir && fs.existsSync(options.staticDir)) {
         app.use(express.static(options.staticDir, { index: 'index.html' }));
     }
-    const publicRoot = path.resolve(process.cwd(), 'public');
-    if (fs.existsSync(publicRoot)) {
-        app.use(express.static(publicRoot));
-        const demosShowcase = path.join(publicRoot, 'demos', 'showcase');
-        if (fs.existsSync(demosShowcase)) {
-            app.use(express.static(demosShowcase));
-        }
-        const demosExperiments = path.join(publicRoot, 'demos', 'experiments');
-        if (fs.existsSync(demosExperiments)) {
-            app.use(express.static(demosExperiments));
-        }
-    }
-    const repoPublicRoot = path.resolve(process.cwd(), '..', 'public');
-    if (fs.existsSync(repoPublicRoot)) {
-        app.use(express.static(repoPublicRoot));
-        const demosShowcase = path.join(repoPublicRoot, 'demos', 'showcase');
-        if (fs.existsSync(demosShowcase)) {
-            app.use(express.static(demosShowcase));
-        }
-        const demosExperiments = path.join(repoPublicRoot, 'demos', 'experiments');
-        if (fs.existsSync(demosExperiments)) {
-            app.use(express.static(demosExperiments));
+    const possiblePublicRoots = [
+        path.resolve(process.cwd(), 'public'),
+        path.resolve(process.cwd(), '..', 'public'),
+        path.resolve(__dirname, '..', '..', 'public'),
+        path.resolve(__dirname, '..', '..', '..', 'public')
+    ];
+    for (const pRoot of possiblePublicRoots) {
+        if (fs.existsSync(pRoot)) {
+            app.use(express.static(pRoot));
+            const subStaticDirs = [
+                'renders', 'models', 'textures', 'extracted_textures',
+                'datasets', 'splats', 'real_3d_tiles_captures', 'screenshots',
+                'visual_proof_locations', 'visual_proof_real_tile'
+            ];
+            for (const sub of subStaticDirs) {
+                const subPath = path.join(pRoot, sub);
+                if (fs.existsSync(subPath)) {
+                    app.use(`/${sub}`, express.static(subPath));
+                }
+            }
+            const demosShowcase = path.join(pRoot, 'demos', 'showcase');
+            if (fs.existsSync(demosShowcase)) {
+                app.use(express.static(demosShowcase));
+            }
+            const demosExperiments = path.join(pRoot, 'demos', 'experiments');
+            if (fs.existsSync(demosExperiments)) {
+                app.use(express.static(demosExperiments));
+            }
         }
     }
 
@@ -388,21 +399,12 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         } catch {}
     }
 
-    app.use(createLaunchTokenMiddleware(launchToken, allowedOrigins));
+    app.use(createLaunchTokenMiddleware(launchToken));
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
     app.get('/health', (_req: Request, res: Response) => {
         res.json({ ok: true, service: 'scratchbox-api', timestamp: Date.now() });
-    });
-
-    app.get('/api/auth/token', (req: Request, res: Response) => {
-        const origin = req.headers.origin;
-        if (origin && !allowedOrigins.has(origin)) {
-            res.status(403).json({ error: 'forbidden', message: 'Origin not allowed' });
-            return;
-        }
-        res.json({ success: true, token: launchToken });
     });
 
     /**
@@ -503,6 +505,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const cppRouter = createCppRouter(cppCompiler, routeContext);
     app.use('/3d', cppRouter);
     app.use('/compiler', cppRouter);
+    app.use('/3d/tiles', createTileRefineRouter(routeContext));
 
     // 5. Media & Video Compositor Endpoints
     const mediaRouter = createMediaRouter({

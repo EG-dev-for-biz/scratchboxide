@@ -367,6 +367,146 @@
     .ref-pose-icon { font-size: 20px; }
     .ref-pose-label { font-size: 9.5px; font-weight: 600; color: var(--text-muted); text-align: center; }
 
+    /* Dedicated User Reference Cards & Comparison HUD */
+    .ref-user-card {
+      position: relative;
+      background: rgba(15, 23, 42, 0.9) !important;
+      border: 1px solid rgba(56, 189, 248, 0.5) !important;
+      overflow: hidden;
+      padding: 4px !important;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .ref-user-card:hover {
+      border-color: var(--cyan) !important;
+      box-shadow: 0 4px 16px rgba(56, 189, 248, 0.3);
+      transform: translateY(-2px);
+    }
+    .ref-card-thumb-wrap {
+      width: 100%;
+      height: 52px;
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+      background: #000;
+    }
+    .ref-card-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .ref-badge-live {
+      position: absolute;
+      bottom: 2px;
+      left: 2px;
+      background: var(--cyan);
+      color: #040814;
+      font-size: 7.5px;
+      font-weight: 800;
+      padding: 1px 4px;
+      border-radius: 3px;
+      letter-spacing: 0.4px;
+    }
+    .ref-compare-hud {
+      position: absolute;
+      top: 68px;
+      right: 18px;
+      width: 320px;
+      max-width: calc(100vw - 36px);
+      background: rgba(10, 15, 29, 0.94);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: 12px;
+      backdrop-filter: blur(20px);
+      z-index: 100;
+      box-shadow: 0 16px 36px rgba(0,0,0,0.7), 0 0 24px rgba(56, 189, 248, 0.15);
+      flex-direction: column;
+      overflow: hidden;
+      animation: fadeInHUD 0.2s ease-out;
+    }
+    @keyframes fadeInHUD {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .ref-compare-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .ref-hud-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-size: 9.5px;
+      font-weight: 600;
+      padding: 3px 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .ref-hud-btn.active {
+      background: rgba(56, 189, 248, 0.25);
+      border-color: var(--cyan);
+      color: #fff;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+    }
+    .ref-compare-body {
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .ref-compare-preview-wrap {
+      width: 100%;
+      height: 180px;
+      border-radius: 8px;
+      overflow: hidden;
+      position: relative;
+      background: #000;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .ref-hud-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .ref-hud-badge {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      background: rgba(0, 0, 0, 0.75);
+      color: var(--cyan);
+      font-size: 8px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      letter-spacing: 0.5px;
+    }
+    .ref-compare-metrics {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 9.5px;
+      color: var(--text-muted);
+      line-height: 1.35;
+    }
+    .ref-metric-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .ref-metric-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-top: 3px;
+      flex-shrink: 0;
+    }
+    .ref-metric-dot.green { background: #10b981; box-shadow: 0 0 6px #10b981; }
+    .ref-metric-dot.pink { background: #ec4899; box-shadow: 0 0 6px #ec4899; }
+
     /* SB-Human Multi-Modality Skinning Studio Drawer */
     .skin-studio-drawer {
       display: none;
@@ -851,6 +991,8 @@
     <!-- Quick Pose & Reference Library Chips -->
     <div class="quick-chips-row">
       <button class="chip-btn" id="btn-toggle-ref-library" style="background:rgba(56, 189, 248, 0.15); border-color:var(--cyan); color:var(--cyan); font-weight:700;">🖼️ Reference Photos</button>
+      <button class="chip-btn" id="btn-user-ref-dorsal" style="background:linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(14, 165, 233, 0.12)); border-color:var(--cyan); color:#e0f2fe; font-weight:700;">📸 Match User Dorsal</button>
+      <button class="chip-btn" id="btn-user-ref-palmar" style="background:linear-gradient(135deg, rgba(236, 72, 153, 0.22), rgba(219, 39, 119, 0.12)); border-color:#f472b6; color:#fce7f3; font-weight:700;">📸 Match User Palmar (Tattoo)</button>
       <button class="chip-btn" id="btn-toggle-skin-drawer" style="background:rgba(236, 72, 153, 0.15); border-color:rgba(236, 72, 153, 0.4); color:#f472b6; font-weight:700;">🎨 Skinning Studio</button>
       <button class="chip-btn" data-pose="fist">✊ Clenched Fist</button>
       <button class="chip-btn" data-pose="peace">✌️ Peace Sign</button>
@@ -873,6 +1015,20 @@
         <span style="font-size:10px; color:var(--text-muted); cursor:pointer;" id="btn-close-ref-drawer">✕ Close</span>
       </div>
       <div class="ref-cards-grid">
+        <div class="ref-pose-card ref-user-card" data-ref-user="dorsal" title="Match User Dorsal Reference Photo">
+          <div class="ref-card-thumb-wrap">
+            <img src="/textures/reference_user/user_dorsal_raw.png" alt="User Dorsal" class="ref-card-img">
+            <span class="ref-badge-live">USER REF</span>
+          </div>
+          <div class="ref-pose-label" style="color:var(--cyan); font-weight:700;">User Hand (Dorsal)</div>
+        </div>
+        <div class="ref-pose-card ref-user-card" data-ref-user="palmar" title="Match User Palmar Reference Photo (Tattoo & Creases)">
+          <div class="ref-card-thumb-wrap">
+            <img src="/textures/reference_user/user_palmar_raw.png" alt="User Palmar" class="ref-card-img">
+            <span class="ref-badge-live" style="background:#ec4899;">USER REF</span>
+          </div>
+          <div class="ref-pose-label" style="color:#f472b6; font-weight:700;">User Hand (Palmar)</div>
+        </div>
         <div class="ref-pose-card" data-ref-pose="peace">
           <div class="ref-pose-icon">✌️</div>
           <div class="ref-pose-label">Peace Sign (V)</div>
@@ -1379,6 +1535,34 @@
     </div>
   </aside>
 
+  <!-- Floating Live Reference Photo Comparison HUD -->
+  <div id="ref-photo-compare-modal" class="ref-compare-hud" style="display:none;">
+    <div class="ref-compare-header">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span style="font-size:13px;">📸</span>
+        <span style="font-weight:700; color:var(--cyan); letter-spacing:0.5px; font-size:10.5px;">USER PHOTO VERIFICATION HUD</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button class="ref-hud-btn active" id="btn-hud-dorsal">Dorsal</button>
+        <button class="ref-hud-btn" id="btn-hud-palmar">Palmar</button>
+        <span style="font-size:12px; color:var(--text-dim); cursor:pointer; margin-left:4px; padding:0 4px;" id="btn-close-ref-hud" title="Close HUD">✕</span>
+      </div>
+    </div>
+    <div class="ref-compare-body">
+      <div class="ref-compare-preview-wrap">
+        <img id="ref-hud-img" src="/textures/reference_user/user_dorsal_raw.png" alt="User Reference Photo" class="ref-hud-img">
+        <div class="ref-hud-badge" id="ref-hud-badge">DORSAL REFERENCE (4K RAW)</div>
+      </div>
+      <div class="ref-compare-metrics" id="ref-compare-metrics">
+        <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Melanin IV-V:</strong> 0.46 (RGB [158, 120, 108])</span></div>
+        <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Surface Roughness:</strong> 0.96 (Matte stratum corneum, zero glare)</span></div>
+        <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Extensor Tendons:</strong> +2.2mm anatomical displacement cords</span></div>
+        <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Superficial Veins:</strong> +0.85mm dorsal venous network</span></div>
+        <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Nails:</strong> Squoval free edge, pink vascular bed, satin 0.52</span></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Bottom Left Floating Toolbar (Camera & Staging) -->
   <div class="bottom-toolbar">
     <!-- Model Selection -->
@@ -1389,16 +1573,25 @@
       <button class="tool-btn" data-model="split">50/50 Dual Comparison</button>
     </div>
 
+    <!-- Hand Chirality -->
+    <div class="toolbar-row">
+      <span class="toolbar-label">Chirality:</span>
+      <button class="tool-btn active" data-chirality="left" style="border-color: rgba(56,189,248,0.6); font-weight:700;">Left Hand (Photo Match)</button>
+      <button class="tool-btn" data-chirality="right">Right Hand (Mirrored)</button>
+      <button class="tool-btn" id="btn-toggle-ref-overlay" style="border-color: rgba(236,72,153,0.5); color:#f472b6; font-weight:700;">📸 Photo HUD Overlay</button>
+    </div>
+
     <!-- Camera Angles -->
     <div class="toolbar-row">
       <span class="toolbar-label">Camera:</span>
-      <button class="tool-btn active" data-cam="dorsal">Dorsal (Back)</button>
-      <button class="tool-btn" data-cam="palmar">Palmar (Palm)</button>
-      <button class="tool-btn" data-cam="macro_fingertip">Fingertip Macro</button>
-      <button class="tool-btn" data-cam="knuckles">Knuckles & Tendons</button>
-      <button class="tool-btn" data-cam="lateral">Lateral Profile</button>
-      <button class="tool-btn" data-cam="radial">Radial (Thumb)</button>
-      <button class="tool-btn" data-cam="ulnar">Ulnar (Pinky)</button>
+      <button class="tool-btn" data-cam="ref_dorsal_upright" style="border-color:var(--cyan); color:#e0f2fe; font-weight:700;">📸 Upright Dorsal</button>
+      <button class="tool-btn" data-cam="ref_palmar_upright" style="border-color:#f472b6; color:#fce7f3; font-weight:700;">📸 Upright Palmar</button>
+      <button class="tool-btn" data-cam="macro_tattoo">🖋️ Tattoo Macro</button>
+      <button class="tool-btn" data-cam="macro_nail">💅 Nail Macro</button>
+      <button class="tool-btn active" data-cam="dorsal">Dorsal</button>
+      <button class="tool-btn" data-cam="palmar">Palmar</button>
+      <button class="tool-btn" data-cam="knuckles">Knuckles</button>
+      <button class="tool-btn" data-cam="lateral">Lateral</button>
     </div>
 
     <!-- Skinning & Shading Modes -->
@@ -1495,18 +1688,18 @@
         melaninFraction: 0.35,
         pheomelaninRatio: 0.25,
         sss: 0.45,
-        roughness: 0.55,
+        roughness: 0.72,
         transScale: 2.2,
-        lipidWeight: 0.35,
+        lipidWeight: 0.05,
         skinPbrEnabled: true,
         skinNormalStrength: 1.25,
         skinPoreScale: 18.0,
         skinCavityAo: 0.85,
-        nailGloss: 0.86,
+        nailGloss: 0.65,
         nailPinkFlush: 0.70,
         nailLunula: 0.85,
         nailStriations: 1.40,
-        nailClearcoat: 0.88,
+        nailClearcoat: 0.45,
         surfelDensity: 35.0,
         surfelRadius: 0.45,
         surfelOpacity: 0.88,
@@ -1759,6 +1952,9 @@
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.localClippingEnabled = true;
@@ -1777,11 +1973,11 @@
     controls.minDistance = 0.15;
     controls.maxDistance = 1.2;
 
-    // Studio 3-Point Lighting Setup
-    const ambientLight = new THREE.AmbientLight(0x1e293b, 0.45);
+    // Studio Balanced Soft-Box Lighting Setup (Calibrated for Velvet Matte Skin & Authentic Exposure)
+    const ambientLight = new THREE.AmbientLight(0xfff1e6, 0.35);
     scene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.3);
+    const keyLight = new THREE.DirectionalLight(0xfffaf0, 0.55);
     keyLight.position.set(0.5, 0.8, 0.6);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.width = 2048;
@@ -1789,13 +1985,17 @@
     keyLight.shadow.bias = -0.0001;
     scene.add(keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0xdbeafe, 1.1);
+    const rimLight = new THREE.DirectionalLight(0xdbeafe, 0.20);
     rimLight.position.set(-0.6, 0.3, -0.6);
     scene.add(rimLight);
 
-    const fillLight = new THREE.DirectionalLight(0xfef3c7, 0.45);
+    const fillLight = new THREE.DirectionalLight(0xfef3c7, 0.25);
     fillLight.position.set(-0.5, -0.2, 0.5);
     scene.add(fillLight);
+
+    const palmarLight = new THREE.DirectionalLight(0xffedd5, 0.35);
+    palmarLight.position.set(0.2, -0.8, -0.2);
+    scene.add(palmarLight);
 
     // Floor shadow receiver disk (programmatic buffer)
     const floorGeom = createArcBufferGeometry(0.5, 0.0, 0, Math.PI * 2, 48);
@@ -1953,7 +2153,7 @@
       shader.uniforms.uSbTransDistort = { value: 0.65 };
       shader.uniforms.uSbTransPower = { value: 3.0 };
       shader.uniforms.uSbTransScale = { value: state.skin.transScale * state.skin.sss };
-      shader.uniforms.uSbLipidRoughness = { value: 0.15 };
+      shader.uniforms.uSbLipidRoughness = { value: 0.50 };
       shader.uniforms.uSbLipidWeight = { value: state.skin.lipidWeight };
       shader.uniforms.uSbCavityOccl = { value: state.skin.skinCavityAo };
 
@@ -2052,11 +2252,15 @@
         vec3 finalWorldNorm = vSbSkinWorldNorm;
         float nailFactor = clamp(vSbNailMask * uSbHasNails, 0.0, 1.0);
 
+        #if ( defined( USE_UV ) && ! defined( UVS_VERTEX_ONLY ) )
         vec2 skinUv = vUv * uSbSkinPoreScale;
         mat3 tbnSkin = getCotangentFrameSb(vSbSkinWorldNorm, vSbSkinWorldPos, skinUv);
         vec3 rawSkinNorm = texture2D(uSbSkinNormalMap, skinUv).xyz * 2.0 - 1.0;
         rawSkinNorm.xy *= uSbSkinNormalScale;
         vec3 perturbedSkinNorm = normalize(tbnSkin * normalize(rawSkinNorm));
+        #else
+        vec3 perturbedSkinNorm = vSbSkinWorldNorm;
+        #endif
 
         if (nailFactor > 0.01) {
             mat3 tbnNail = getCotangentFrameSb(vSbSkinWorldNorm, vSbSkinWorldPos, vSbNailCoord);
@@ -2082,11 +2286,21 @@
         if (nailFactor > 0.01) {
             vec4 nailAlbedoSample = texture2D(uSbNailAlbedoMap, vSbNailCoord);
             // Calibrated healthy capillary bed & lunula keratin
-            vec3 nailBedWarmth = vec3(0.84, 0.65 * (1.0 - uSbNailPinkFlush * 0.12), 0.60 * (1.0 - uSbNailPinkFlush * 0.18));
-            vec3 finalNailColor = mix(nailBedWarmth, nailAlbedoSample.rgb, 0.80);
+            vec3 nailBedWarmth = vec3(0.88, 0.62, 0.61);
+            // Lunula crescent near proximal fold
+            float arcProfile = 0.38 + 0.38 * (vSbNailCoord.x * 2.0 - 1.0) * (vSbNailCoord.x * 2.0 - 1.0);
+            float lunulaCrescent = clamp(((1.0 - vSbNailCoord.y) - arcProfile) / 0.15, 0.0, 1.0);
+            vec3 lunulaColor = vec3(0.95, 0.93, 0.90);
+            // Distal free edge ivory
+            float freeEdgeFactor = clamp((vSbNailCoord.y - 0.76) / 0.15, 0.0, 1.0);
+            vec3 freeEdgeColor = vec3(0.92, 0.89, 0.82);
+
+            vec3 composedNail = mix(nailBedWarmth, nailAlbedoSample.rgb, 0.50);
+            composedNail = mix(composedNail, lunulaColor, lunulaCrescent * 0.85 * uSbNailLunula);
+            composedNail = mix(composedNail, freeEdgeColor, freeEdgeFactor * 0.90);
 
             // Blend into fragColor based on nailFactor
-            dermalScattered = mix(dermalScattered, finalNailColor, nailFactor * 0.92);
+            dermalScattered = mix(dermalScattered, composedNail, nailFactor * 0.95);
         }
 
         // 5. Subcutaneous backlighting transmission (thin webbing & fingers glow red when back-lit)
@@ -2101,25 +2315,25 @@
         }
         #endif
 
-        // 6. Dual-Lobe micro-specular: crisp oily lipid glints + fingernail mirror clearcoat
+        // 6. Dual-Lobe micro-specular: diffuse velvety skin sheen + satiny keratin highlight
         #if NUM_DIR_LIGHTS > 0
         for (int i = 0; i < NUM_DIR_LIGHTS; ++i) {
           vec3 lightDir = directionalLights[i].direction;
           vec3 halfVec = normalize(lightDir + viewDir);
           float NdotH = max(0.0, dot(finalWorldNorm, halfVec));
 
-          // Skin lipid glint (Lobe 2)
+          // Velvety matte skin (Lobe 2 - diffuse microscopic sheen, zero oily glare)
           float lipidAlpha = uSbLipidRoughness * uSbLipidRoughness;
           float denomLipid = (NdotH * NdotH * (lipidAlpha - 1.0) + 1.0);
           float D_lipid = lipidAlpha / max(3.14159 * denomLipid * denomLipid, 1e-4);
-          dermalScattered += vec3(1.0) * (D_lipid * 0.05 * uSbLipidWeight * (1.0 - nailFactor));
+          dermalScattered += vec3(1.0) * (D_lipid * 0.012 * uSbLipidWeight * (1.0 - nailFactor));
 
-          // Nail high-gloss hard keratin clearcoat (mirror specular)
+          // Natural satiny nail keratin highlight
           if (nailFactor > 0.01) {
               float nailAlpha = uSbNailRoughness * uSbNailRoughness;
               float denomNail = (NdotH * NdotH * (nailAlpha - 1.0) + 1.0);
               float D_nail = nailAlpha / max(3.14159 * denomNail * denomNail, 1e-4);
-              dermalScattered += directionalLights[i].color * (D_nail * 0.18 * uSbNailClearcoat * nailFactor);
+              dermalScattered += directionalLights[i].color * (D_nail * 0.08 * uSbNailClearcoat * nailFactor);
           }
         }
         #endif
@@ -2504,13 +2718,17 @@
           gltfLoader.load('/models/sbhuman_hand_hyperreal.glb', (gltf) => {
             console.log('✅ Loaded Hyper-Real Hand GLB:', gltf);
             hyperRealMesh = gltf.scene;
-            hyperRealMesh.position.set(-0.055, 0, 0);
+            hyperRealMesh.position.set(-0.09, 0, 0);
 
             hyperRealMesh.traverse((child) => {
               if (child.isMesh) {
                 child.castShadow = true;
                 child.receiveShadow = true;
-                // Preserve original PBR material from GLB
+                // Preserve original PBR material from GLB, ensuring roughness is 1.0 so ORM roughness map controls micro-scattering
+                child.material.roughness = 1.0;
+                child.material.metalness = 0.0;
+                child.material.side = THREE.DoubleSide;
+                child.material.shadowSide = THREE.DoubleSide;
                 child.userData.pbrMaterial = child.material;
                 // 18% Studio Grey Clay Material
                 child.userData.clayMaterial = new THREE.MeshStandardMaterial({
@@ -2526,13 +2744,21 @@
                 // Wireframe Topology Material
                 child.userData.wireframeMaterial = new THREE.MeshStandardMaterial({
                   color: 0x38bdf8,
-                  wireframe: true
+                  wireframe: true,
+                  side: THREE.DoubleSide
                 });
               }
             });
 
             scene.add(hyperRealMesh);
             window.hyperRealMesh = hyperRealMesh;
+
+            // Default to Left Hand chirality to match user reference photos 1:1
+            if (window.setHandChirality) {
+              window.setHandChirality('left');
+            } else {
+              hyperRealMesh.scale.set(1, 1, 1);
+            }
 
             // Read initial model mode from URL query param (?model=hyperreal by default)
             const urlParams = new URLSearchParams(window.location.search);
@@ -3483,7 +3709,9 @@
         materials.melanin.color.setRGB(r, g, b);
         materials.melanin.roughness = state.skin.roughness;
         materials.melanin.sheen = 0.35 * state.skin.sss;
-        materials.melanin.sheenColor.setRGB(r * 1.3, g * 1.0, b * 0.9);
+        if (materials.melanin.sheenColor) {
+          materials.melanin.sheenColor.setRGB(r * 1.3, g * 1.0, b * 0.9);
+        }
         materials.melanin.transmission = 0.04 * state.skin.sss;
         if (materials.melanin.userData.shader) {
           const u = materials.melanin.userData.shader.uniforms;
@@ -3603,11 +3831,12 @@
       if (mode === 'hyperreal') {
         if (hyperRealMesh) {
           hyperRealMesh.visible = true;
-          hyperRealMesh.position.set(-0.055, 0, 0);
+          hyperRealMesh.position.set(-0.09, 0, 0);
         }
         if (skinnedMesh) {
           skinnedMesh.visible = false;
         }
+        state.showJoints = false;
         if (typeof jointMarkersGroup !== 'undefined') jointMarkersGroup.visible = false;
         if (typeof gizmoGroup !== 'undefined') gizmoGroup.visible = false;
         if (modeBadge) modeBadge.textContent = '✨ HYPER-REAL PBR';
@@ -3621,20 +3850,22 @@
           skinnedMesh.visible = true;
           skinnedMesh.position.copy(armRootOffset);
         }
-        if (typeof jointMarkersGroup !== 'undefined') jointMarkersGroup.visible = state.showJoints;
-        if (typeof gizmoGroup !== 'undefined') gizmoGroup.visible = state.showJoints;
+        state.showJoints = true;
+        if (typeof jointMarkersGroup !== 'undefined') jointMarkersGroup.visible = true;
+        if (typeof gizmoGroup !== 'undefined') gizmoGroup.visible = true;
         if (modeBadge) modeBadge.textContent = 'KINEMATIC RIG';
         if (statsBadge) statsBadge.textContent = '1,720 VERTS · 55 JOINTS';
       } else if (mode === 'split') {
         if (hyperRealMesh) {
           hyperRealMesh.visible = true;
-          hyperRealMesh.position.set(-0.055, 0, 0.08); // right offset
+          hyperRealMesh.position.set(-0.09, 0, 0.075); // right offset
         }
         if (skinnedMesh) {
           skinnedMesh.visible = true;
-          skinnedMesh.position.set(armRootOffset.x, armRootOffset.y, armRootOffset.z - 0.08); // left offset
+          skinnedMesh.position.set(armRootOffset.x, armRootOffset.y, armRootOffset.z - 0.075); // left offset
         }
-        if (typeof jointMarkersGroup !== 'undefined') jointMarkersGroup.visible = state.showJoints;
+        state.showJoints = false;
+        if (typeof jointMarkersGroup !== 'undefined') jointMarkersGroup.visible = false;
         if (typeof gizmoGroup !== 'undefined') gizmoGroup.visible = false;
         if (modeBadge) modeBadge.textContent = '50/50 DUAL COMPARISON';
         if (statsBadge) statsBadge.textContent = 'BASE (1.7k) vs HYPER-REAL (14k)';
@@ -4143,16 +4374,24 @@
      * ===================================================================== */
 
     const CAMERA_PRESETS = {
-      dorsal:          { pos: [0.01, 0.35, 0.01], target: [0.01, 0.0, 0.0] },
-      palmar:          { pos: [0.01, -0.35, 0.01], target: [0.01, 0.0, 0.0] },
-      macro_fingertip: { pos: [0.165, 0.055, -0.015], target: [0.130, 0.005, -0.015] },
-      lateral:         { pos: [0.02, 0.03, 0.32], target: [0.01, 0.0, 0.0] },
-      knuckles:        { pos: [-0.02, 0.28, -0.06], target: [0.01, 0.01, 0.0] },
-      radial:          { pos: [0.02, 0.08, 0.30], target: [0.01, 0.0, 0.0] },
-      ulnar:           { pos: [0.02, 0.08, -0.30], target: [0.01, 0.0, 0.0] }
+      dorsal:             { pos: [0.0, 0.32, 0.0], target: [0.0, 0.0, 0.0] },
+      palmar:             { pos: [0.0, -0.32, 0.0], target: [0.0, 0.0, 0.0] },
+      ref_dorsal_upright: { pos: [0.010, 0.56, 0.0], target: [0.010, 0.0, 0.0], up: [1, 0, 0] },
+      ref_palmar_upright: { pos: [0.010, -0.56, 0.0], target: [0.010, 0.0, 0.0], up: [1, 0, 0] },
+      macro_fingertip:    { pos: [0.108, 0.18, -0.009], target: [0.108, -0.007, -0.009], up: [1, 0, 0] },
+      macro_tattoo:       { pos: [-0.065, -0.18, -0.015], target: [-0.065, -0.01, -0.015], up: [1, 0, 0] },
+      macro_nail:         { pos: [0.095, 0.18, -0.015], target: [0.095, 0.0, -0.015], up: [1, 0, 0] },
+      lateral:            { pos: [0.0, 0.02, 0.30], target: [0.0, 0.0, 0.0] },
+      knuckles:           { pos: [-0.03, 0.25, -0.04], target: [-0.01, 0.01, 0.0] },
+      radial:             { pos: [0.0, 0.06, 0.28], target: [0.0, 0.0, 0.0] },
+      ulnar:              { pos: [0.0, 0.06, -0.28], target: [0.0, 0.0, 0.0] },
+      split_dorsal:       { pos: [0.0, 0.44, 0.0], target: [0.0, 0.0, 0.0] }
     };
 
     function setupCameraControls() {
+      // Expose camera and controls
+      window.camera = camera;
+      window.controls = controls;
       // Model Mode Selector Buttons
       document.querySelectorAll('[data-model]').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -4160,19 +4399,60 @@
         });
       });
 
+      // Hand Chirality Selector Buttons
+      document.querySelectorAll('[data-chirality]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          setHandChirality(btn.getAttribute('data-chirality'));
+        });
+      });
+
       // Camera Angle Preset Buttons
       document.querySelectorAll('[data-cam]').forEach(btn => {
         btn.addEventListener('click', (e) => {
-          document.querySelectorAll('[data-cam]').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-          const preset = CAMERA_PRESETS[btn.getAttribute('data-cam')];
-          if (preset) {
-            camera.position.set(...preset.pos);
-            controls.target.set(...preset.target);
-            controls.update();
-          }
+          const camKey = btn.getAttribute('data-cam');
+          window.setCameraPreset(camKey);
         });
       });
+
+      // Photo HUD overlay toggle
+      const btnRefOverlay = document.getElementById('btn-toggle-ref-overlay');
+      if (btnRefOverlay) {
+        btnRefOverlay.addEventListener('click', () => {
+          const hud = document.getElementById('ref-photo-compare-modal');
+          if (!hud) return;
+          const isVis = hud.style.display === 'flex';
+          hud.style.display = isVis ? 'none' : 'flex';
+          btnRefOverlay.classList.toggle('active', !isVis);
+        });
+      }
+
+      // HUD internal buttons
+      const btnHudDorsal = document.getElementById('btn-hud-dorsal');
+      const btnHudPalmar = document.getElementById('btn-hud-palmar');
+      const btnCloseHud = document.getElementById('btn-close-ref-hud');
+      if (btnHudDorsal) {
+        btnHudDorsal.addEventListener('click', () => window.loadUserReference('dorsal'));
+      }
+      if (btnHudPalmar) {
+        btnHudPalmar.addEventListener('click', () => window.loadUserReference('palmar'));
+      }
+      if (btnCloseHud) {
+        btnCloseHud.addEventListener('click', () => {
+          const hud = document.getElementById('ref-photo-compare-modal');
+          if (hud) hud.style.display = 'none';
+          if (btnRefOverlay) btnRefOverlay.classList.remove('active');
+        });
+      }
+
+      // Quick toolbar chips for direct user reference matching
+      const btnUserRefDorsal = document.getElementById('btn-user-ref-dorsal');
+      const btnUserRefPalmar = document.getElementById('btn-user-ref-palmar');
+      if (btnUserRefDorsal) {
+        btnUserRefDorsal.addEventListener('click', () => window.loadUserReference('dorsal'));
+      }
+      if (btnUserRefPalmar) {
+        btnUserRefPalmar.addEventListener('click', () => window.loadUserReference('palmar'));
+      }
 
       // Turntable Auto-Rotation Toggle
       const turntableBtn = document.getElementById('btn-toggle-turntable');
@@ -4189,14 +4469,106 @@
       window.setCameraPreset = (name) => {
         const preset = CAMERA_PRESETS[name];
         if (preset) {
-          camera.position.set(...preset.pos);
+          const wasDamping = controls.enableDamping;
+          controls.enableDamping = false;
+          if (preset.up) {
+            camera.up.set(...preset.up);
+          } else {
+            camera.up.set(0, 1, 0);
+          }
           controls.target.set(...preset.target);
+          camera.position.set(...preset.pos);
+          camera.lookAt(controls.target);
           controls.update();
+          controls.enableDamping = wasDamping;
+
           document.querySelectorAll('[data-cam]').forEach(b => {
             b.classList.toggle('active', b.getAttribute('data-cam') === name);
           });
         }
       };
+
+      function setHandChirality(ch) {
+        state.chirality = ch;
+        const isRight = ch === 'right';
+        const zScale = isRight ? -1 : 1;
+        if (hyperRealMesh) {
+          hyperRealMesh.scale.set(1, 1, zScale);
+        }
+        if (skinnedMesh) {
+          skinnedMesh.scale.set(1, 1, zScale);
+        }
+        document.querySelectorAll('[data-chirality]').forEach(b => {
+          b.classList.toggle('active', b.getAttribute('data-chirality') === ch);
+        });
+        showToast(`Chirality: ${isRight ? 'Right Hand (Mirrored)' : 'Left Hand (Photo Match)'}`, '🖐️', 2000);
+      }
+      window.setHandChirality = setHandChirality;
+
+      function showReferenceComparisonHUD(type = 'dorsal') {
+        const isDorsal = type === 'dorsal';
+        const hud = document.getElementById('ref-photo-compare-modal');
+        const hudImg = document.getElementById('ref-hud-img');
+        const hudBadge = document.getElementById('ref-hud-badge');
+        const hudMetrics = document.getElementById('ref-compare-metrics');
+        const btnDorsal = document.getElementById('btn-hud-dorsal');
+        const btnPalmar = document.getElementById('btn-hud-palmar');
+        const btnRefOverlay = document.getElementById('btn-toggle-ref-overlay');
+
+        if (!hud) return;
+        hud.style.display = 'flex';
+        if (btnRefOverlay) btnRefOverlay.classList.add('active');
+
+        if (btnDorsal) btnDorsal.classList.toggle('active', isDorsal);
+        if (btnPalmar) btnPalmar.classList.toggle('active', !isDorsal);
+
+        if (hudImg) {
+          hudImg.src = isDorsal ? '/textures/reference_user/user_dorsal_raw.png' : '/textures/reference_user/user_palmar_raw.png';
+        }
+        if (hudBadge) {
+          hudBadge.textContent = isDorsal ? 'DORSAL REFERENCE (4K RAW)' : 'PALMAR REFERENCE (4K RAW)';
+        }
+        if (hudMetrics) {
+          if (isDorsal) {
+            hudMetrics.innerHTML = `
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Melanin IV-V:</strong> 0.46 (RGB [158, 120, 108])</span></div>
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Surface Roughness:</strong> 0.96 (Matte stratum corneum, zero glare)</span></div>
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Extensor Tendons:</strong> +2.2mm anatomical displacement cords</span></div>
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Superficial Veins:</strong> +0.85mm dorsal venous network</span></div>
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Nails:</strong> Squoval free edge, pink vascular bed, satin 0.52</span></div>
+            `;
+          } else {
+            hudMetrics.innerHTML = `
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Wrist Inscription:</strong> "this strong" Cursive Tattoo (Subcutaneous)</span></div>
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Flexion Creases:</strong> Heart, Head & Life lines (AO furrows)</span></div>
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Volar Cushions:</strong> Thenar, hypothenar & lumbrical mounds</span></div>
+              <div class="ref-metric-item"><span class="ref-metric-dot green"></span><span><strong>Epidermis:</strong> Glabrous palmar sheet (Non-tiled, zero gloss)</span></div>
+            `;
+          }
+        }
+      }
+      window.showReferenceComparisonHUD = showReferenceComparisonHUD;
+
+      window.loadUserReference = function(type = 'dorsal') {
+        const isDorsal = type === 'dorsal';
+        setModelMode('hyperreal');
+        window.setHandChirality('left');
+        setSkinModality('pbr');
+        window.setCameraPreset(isDorsal ? 'ref_dorsal_upright' : 'ref_palmar_upright');
+        showReferenceComparisonHUD(type);
+
+        const promptInput = document.getElementById('prompt-input');
+        if (promptInput) {
+          promptInput.value = `User Hand Reference (${isDorsal ? 'Dorsal Tendons & Nails' : 'Palmar Tattoo & Creases'})`;
+        }
+        const refImg = new Image();
+        refImg.src = isDorsal ? '/textures/reference_user/user_dorsal_raw.png' : '/textures/reference_user/user_palmar_raw.png';
+        refImg.onload = () => {
+          renderAttachedImageChip(refImg);
+        };
+        showToast(`Matched User Reference (${isDorsal ? 'Dorsal' : 'Palmar + Tattoo'})`, '📸', 4000);
+      };
+
       window.setShadingMode = (mat) => setSkinModality(mat);
       window.applyHandPose = (name) => applyPresetPose(name);
 
@@ -4315,6 +4687,13 @@
 
       document.querySelectorAll('.ref-pose-card').forEach(card => {
         card.addEventListener('click', () => {
+          if (card.hasAttribute('data-ref-user')) {
+            const uType = card.getAttribute('data-ref-user');
+            if (refDrawer) refDrawer.style.display = 'none';
+            if (btnToggleRef) btnToggleRef.classList.remove('active');
+            window.loadUserReference(uType);
+            return;
+          }
           const pKey = card.getAttribute('data-ref-pose');
           const meta = REF_CARD_DATA[pKey];
           if (!meta) return;

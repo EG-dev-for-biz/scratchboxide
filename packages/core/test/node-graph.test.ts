@@ -89,11 +89,11 @@ async function runNodeGraphTests() {
             },
             ai: {
                 label: customLabel || 'AI Agent Processor',
-                subtitle: 'Gemini 3.7 Flash & Subagents',
+                subtitle: 'Gemini 3.8 Flash & Subagents',
                 color: 'purple',
                 status: 'running',
                 parameters: {
-                    model: 'gemini-3.7-flash',
+                    model: 'gemini-3.8-flash',
                     temperature: 0.2,
                     systemPrompt: 'You are an autonomous workflow reasoner.',
                     maxTokens: 4096
@@ -401,7 +401,7 @@ async function runNodeGraphTests() {
     assert.strictEqual(inputNode.category, 'input', 'Input trigger node supported');
     assert.strictEqual(inputNode.parameters?.triggerType, 'webhook');
     assert.strictEqual(aiNode.category, 'ai', 'AI processor node supported');
-    assert.strictEqual(aiNode.parameters?.model, 'gemini-3.7-flash');
+    assert.strictEqual(aiNode.parameters?.model, 'gemini-3.8-flash');
     assert.strictEqual(decisionNode.category, 'decision', 'Decision gate node supported');
     assert.ok(decisionNode.parameters?.rule.includes('confidence'));
     assert.strictEqual(mcpNode.category, 'mcp', 'MCP endpoint node supported');
@@ -463,10 +463,10 @@ async function runNodeGraphTests() {
     // =========================================================================
     const sampleAiNode = createNodePreset('ai', 'Custom Reasoning Agent');
     const validJsonPayload = JSON.stringify({
-        label: 'Enhanced Gemini 3.7 Reasoning',
+        label: 'Enhanced Gemini 3.8 Reasoning',
         subtitle: 'Multi-turn Agent Core',
         parameters: {
-            model: 'gemini-3.7-flash',
+            model: 'gemini-3.8-flash',
             temperature: 0.1,
             maxTokens: 8192,
             grounding: true
@@ -475,7 +475,7 @@ async function runNodeGraphTests() {
 
     const syncResult = syncNodeParameters(sampleAiNode, validJsonPayload);
     assert.strictEqual(syncResult.success, true);
-    assert.strictEqual(syncResult.updatedNode?.label, 'Enhanced Gemini 3.7 Reasoning');
+    assert.strictEqual(syncResult.updatedNode?.label, 'Enhanced Gemini 3.8 Reasoning');
     assert.strictEqual(syncResult.updatedNode?.parameters?.grounding, true);
     assert.strictEqual(syncResult.updatedNode?.parameters?.maxTokens, 8192);
 
@@ -684,7 +684,7 @@ async function runNodeGraphTests() {
         {
             title: 'Creative Media & AI',
             items: [
-                { id: 'ai-processor', label: 'AI Processor', subtitle: 'Gemini 3.7 Flash & Subagents', description: 'Run LLM reasoning and code generation steps' },
+                { id: 'ai-processor', label: 'AI Processor', subtitle: 'Gemini 3.8 Flash & Subagents', description: 'Run LLM reasoning and code generation steps' },
                 { id: '3d-scene', label: '3D Scene Node', subtitle: 'Spatial 3D Scene', description: 'Start an editable 3D Composition scene' }
             ]
         }

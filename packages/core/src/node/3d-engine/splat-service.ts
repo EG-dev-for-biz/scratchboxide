@@ -11,12 +11,12 @@ import * as fs from 'fs';
 import { decodeSpz } from '../../common/splat-spz-codec';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface SplatConversionOptions {
     inputPath?: string;
@@ -112,8 +112,7 @@ export class SplatService {
             throw new Error(`Splat CLI pipeline source not found at: ${sourcePath}`);
         }
 
-        const compileCmd = `clang++ -std=c++20 -O3 -I "${includePath}" -lz "${sourcePath}" -o "${this.binaryPath}"`;
-        await execAsync(compileCmd);
+        await execFileAsync('clang++', ['-std=c++20', '-O3', '-I', includePath, '-lz', sourcePath, '-o', this.binaryPath]);
         return this.binaryPath;
     }
 
@@ -133,29 +132,29 @@ export class SplatService {
         const isSynthetic = options.synthetic || (options.syntheticCount !== undefined && options.syntheticCount > 0);
 
         if (options.inputPath) {
-            args.push(`--input "${options.inputPath}"`);
+            args.push('--input', options.inputPath);
         }
         if (outSplat) {
-            args.push(`--out-splat "${outSplat}"`);
+            args.push('--out-splat', outSplat);
         }
         if (outSpz) {
-            args.push(`--out-spz "${outSpz}"`);
+            args.push('--out-spz', outSpz);
         }
         if (outGlb) {
-            args.push(`--out-glb "${outGlb}"`);
+            args.push('--out-glb', outGlb);
         }
         if (voxelSize && voxelSize > 0) {
-            args.push(`--voxelize ${voxelSize}`);
+            args.push('--voxelize', String(voxelSize));
         }
         if (isSynthetic) {
-            args.push(`--synthetic`);
+            args.push('--synthetic');
         }
         if (count && count > 0) {
-            args.push(`--count ${count}`);
+            args.push('--count', String(count));
         }
 
         try {
-            const { stdout } = await execAsync(`"${bin}" ${args.join(' ')}`);
+            const { stdout } = await execFileAsync(bin, args);
             const parsed = JSON.parse(stdout.trim()) as SplatPipelineResult;
             parsed.splatCount = parsed.numSplats;
             if (outGlb) parsed.glbPath = outGlb;

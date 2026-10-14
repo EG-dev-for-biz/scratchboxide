@@ -67,7 +67,7 @@ async function runCodebaseLensAgentToolsTests() {
 High performance developer workspace.
 
 > [!NOTE]
-> Connected via Gemini 3.7 Flash reasoning engine.
+> Connected via Gemini 3.8 Flash reasoning engine.
 
 ## 1. Modules
 - [x] Lens Protocol

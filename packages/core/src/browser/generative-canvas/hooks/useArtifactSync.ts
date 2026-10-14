@@ -18,10 +18,28 @@ import * as React from 'react';
 import { ProjectItem } from '../ProjectsModal';
 import { CanvasArtifact, ChatSession } from '../canvas-types';
 import { captureActiveCanvasScreenshot } from '../chat/streaming-utils';
+import { PRELOADED_SHOWCASE_DEMOS } from '../demos/preloadedDemos';
 import { GeminiClient } from '../gemini-client';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { WorkspaceGraphCoordinator } from '../studio/useWorkspaceGraphCoordinator';
 import { WorkspaceConfigClient } from '../workspace-config-client';
+
+/**
+ * Curated showcase demo artifacts are authored deliberately (camera framing, studio
+ * environment, render mode) and are exempt from background visual auto-repair, which
+ * screenshots before large GLBs finish loading and would rewrite them with uninvited
+ * sky / atmosphere / camera patches. The exemption is keyed on id AND the curated version:
+ * in-place viewport edits (selection / gizmo round-trips) keep both, while AI follow-ups reuse
+ * the id but bump the version, so those generations are still verified.
+ */
+const PRELOADED_SHOWCASE_ARTIFACT_VERSIONS: ReadonlyMap<string, number> = new Map(
+    PRELOADED_SHOWCASE_DEMOS.map(demo => [demo.artifact.id, demo.artifact.version || 1] as const)
+);
+
+function isCuratedShowcaseArtifact(artifact: { id: string; version?: number }): boolean {
+    const curatedVersion = PRELOADED_SHOWCASE_ARTIFACT_VERSIONS.get(artifact.id);
+    return curatedVersion !== undefined && (artifact.version || 1) === curatedVersion;
+}
 
 export interface UseArtifactSyncDeps {
     activeArtifact: ChatState['activeArtifact'];
@@ -156,6 +174,7 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
     // Automated Background Visual Verification & Self-Correction Loop
     React.useEffect(() => {
         if (!activeArtifact) return;
+        if (isCuratedShowcaseArtifact(activeArtifact)) return;
         if (activeArtifact.type !== '3d-scene' && activeArtifact.type !== 'live-code-sandbox' && activeArtifact.type !== 'interactive-browser') {
             return;
         }

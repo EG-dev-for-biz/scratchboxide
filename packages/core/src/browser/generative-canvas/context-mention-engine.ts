@@ -408,7 +408,7 @@ export function resolveContextMentionQuery(
         case 'docs': {
             const docsTopics = [
                 { name: 'Apple HIG Design System', desc: 'Liquid Glass, 8-pt grid, SF Pro typography', icon: '🍎' },
-                { name: 'Gemini 3.7 Flash & 2.5 API', desc: 'Hybrid reasoning, multimodal context, function calling', icon: '✨' },
+                { name: 'Gemini 3.8 Flash & 2.5 API', desc: 'Hybrid reasoning, multimodal context, function calling', icon: '✨' },
                 { name: 'Model Context Protocol (MCP) Spec', desc: 'JSON-RPC 2.0 tool endpoints, SSE & STDIO transports', icon: '🔌' },
                 { name: 'React 19 & Tailwind CSS v4', desc: 'Action hooks, server components, utility tokens', icon: '⚛️' }
             ];

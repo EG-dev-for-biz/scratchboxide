@@ -43,7 +43,7 @@ export function useArtifactExports(deps: UseArtifactExportsDeps) {
             sections: [
                 { id: 'sec-1', type: 'heading', level: 1, content: '1. Overview & Vision' },
                 { id: 'sec-2', type: 'paragraph', content: 'Scratchbox IDE empowers developers with an AI-native workspace featuring N8N workflow canvases, rich document specs, and Kanban sprint boards.' },
-                { id: 'sec-3', type: 'callout', calloutType: 'info', calloutTitle: 'Key Architecture Insight', content: 'Subagents running on Gemini Flash Lite handle ultra-fast data preprocessing while Gemini 3.7 Flash powers high-reasoning synthesis.' },
+                { id: 'sec-3', type: 'callout', calloutType: 'info', calloutTitle: 'Key Architecture Insight', content: 'Subagents running on Gemini Flash Lite handle ultra-fast data preprocessing while Gemini 3.8 Flash powers high-reasoning synthesis.' },
                 { id: 'sec-4', type: 'heading', level: 2, content: '2. Next Action Items' },
                 { id: 'sec-5', type: 'checklist', checklistItems: [
                     { id: 'c1', text: 'Verify N8N canvas node routing & simulation', done: true },

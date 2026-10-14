@@ -11,7 +11,7 @@ async function runChatMarkdownTests() {
     console.log('🧪 Running Chat Stream, Markdown & Code Block Test Suite...');
 
     // Test 1: Code Block Extraction with Language Detection
-    const sampleAssistantMessage = `Here is how you configure the Gemini 3.7 Flash subagent:
+    const sampleAssistantMessage = `Here is how you configure the Gemini 3.8 Flash subagent:
 
 \`\`\`typescript
 import { GoogleGenAI } from '@google/genai';
@@ -19,7 +19,7 @@ import { GoogleGenAI } from '@google/genai';
 export async function createAssistantStream(prompt: string): Promise<string> {
     const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const response = await client.models.generateContent({
-        model: 'gemini-3.7-flash',
+        model: 'gemini-3.8-flash',
         contents: prompt
     });
     return response.text;

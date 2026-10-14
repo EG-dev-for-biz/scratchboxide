@@ -32,7 +32,7 @@ import {
     createOperatorEngine
 } from '../browser/generative-canvas/services/direct-dispatch-operator-engine';
 
-export const DEFAULT_GEMINI_VISION_MODEL = 'gemini-3.7-flash';
+export const DEFAULT_GEMINI_VISION_MODEL = 'gemini-3.8-flash';
 export class VisualVerificationService {
     private auth?: GoogleAuth;
     private cachedProjectId?: string;
@@ -69,7 +69,7 @@ export class VisualVerificationService {
     }
 
     /**
-     * Build the structured multimodal instruction and prompt payload for Gemini 3.7 Flash.
+     * Build the structured multimodal instruction and prompt payload for Gemini 3.8 Flash.
      */
     public buildMultimodalPrompt(request: VisualVerificationRequest): {
         systemInstruction: string;
@@ -161,7 +161,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
                 this.initAuth();
             }
 
-            // If active Google Cloud service account is available, invoke live multimodal Gemini 3.7 Flash
+            // If active Google Cloud service account is available, invoke live multimodal Gemini 3.8 Flash
             if (this.auth && this.cachedProjectId) {
                 const client = await this.auth.getClient();
                 const tokenResponse = await client.getAccessToken();

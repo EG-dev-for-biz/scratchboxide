@@ -27,25 +27,18 @@ async function main() {
     console.log('  -> Hand Vertices:', transformed.numVertices);
     console.log('  -> Hand Triangles:', transformed.numTriangles);
 
-    // Bake Delighted PBR Texture Atlas (2048 x 2048)
-    console.log('[3/4] Baking delighted photographic PBR texture atlas (Albedo, Normal, ORM)...');
-    const palmRef = path.resolve('public/textures/humanoid/hand_palm_macro_ref.png');
-    const dorsalRef = path.resolve('public/textures/humanoid/hand_dorsal_macro_ref.png');
-    const nailRef = path.resolve('public/textures/humanoid/hand_nail_macro_ref.png');
+    // Bake Delighted Photographic PBR Texture Atlas (2048 x 2048) from User Reference Photos
+    console.log('[3/4] Baking photographic PBR texture atlas directly from user reference photos...');
+    const dorsalRef = path.resolve('public/textures/reference_user/user_dorsal_raw.png');
+    const palmarRef = path.resolve('public/textures/reference_user/user_palmar_raw.png');
     const texOutDir = path.resolve('public/textures/humanoid');
 
-    const texturePack = SbHumanHandTransformer.bakePbrTextures(
-        palmRef,
+    const texturePack = SbHumanHandTransformer.bakePhotographicPbrTextures(
         dorsalRef,
-        nailRef,
+        palmarRef,
         texOutDir,
         2048,
-        2048,
-        {
-            hydrationLevel: 0.68,
-            capillaryBloodVolume: 0.52,
-            dermalAgeFactor: 0.18
-        }
+        2048
     );
 
     console.log('  -> Albedo PNG size:', texturePack.albedoPng.length, 'bytes');

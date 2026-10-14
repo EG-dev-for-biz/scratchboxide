@@ -538,7 +538,7 @@ export class GoogleDriveService {
             },
             {
                 id: '1gdoc_agent_sprint_002',
-                name: 'Gemini 3.7 Flash Subagent Sprint Plan',
+                name: 'Gemini 3.8 Flash Subagent Sprint Plan',
                 mimeType: 'application/vnd.google-apps.document',
                 webViewLink: 'https://docs.google.com/document/d/1gdoc_agent_sprint_002/edit',
                 modifiedTime: '2026-09-27T12:00:00Z',

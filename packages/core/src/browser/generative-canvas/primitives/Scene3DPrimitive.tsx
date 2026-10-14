@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { GeoFrame } from '../../../common/coordinate/GeoFrame';
 import type {
     CanvasArtifact,
+    Media4DObject,
     Scene3DData,
     SculptBrushType,
     SculptFalloffType,
@@ -139,13 +140,24 @@ import { syncCustomShaders, tickCustomShaders } from './scene3d/syncCustomShader
 import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
 import { tickObjectAnimations } from './scene3d/objectAnimationRuntime';
 import type { PhysicsRuntimeState } from './scene3d/objectAnimationRuntime';
-import { attachViewportControls, stepCamera } from './scene3d/attachViewportControls';
+import { attachViewportControls, readWorldPose, stepCamera } from './scene3d/attachViewportControls';
 import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint';
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
+import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
+import {
+    resolveSelectableObject,
+    extractSceneOutlinerItems,
+    findExternalObjectRoot,
+    externalObjectIdOf,
+    isAttachedTo,
+    summarizeObjectGeometry,
+    EXTERNAL_OBJECT_ROOT_PREFIX
+} from './scene3d/selection';
+import { groupVariantSets, resolveActiveVariants, variantSetKeyOf } from './scene3d/variantSets';
 import type { VectorRoadmapConfig } from '../canvas-types';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
@@ -155,6 +167,8 @@ import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
 export { createArticulatedAircraft, createAirplaneMesh, updateFlightPhysics, animateAircraftFrame };
 export type { ArticulatedAircraftComponents };
+// Pick / outliner resolution lives in scene3d/selection.ts (unit-tested there); re-exported for API stability.
+export { resolveSelectableObject, extractSceneOutlinerItems };
 // The atmospheric sky dome is the service implementation itself (no wrapper indirection).
 const createAtmosphericSkyDome = createAtmosphericSkyDomeModule;
 export { createAtmosphericSkyDome };
@@ -611,16 +625,6 @@ import { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import { NativeSpatialBridge } from '../../../common/spatial/NativeSpatialBridge';
 import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussianSplatMesh';
 
-function disposeObject3D(root: THREE.Object3D): void {
-    root.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        mesh.geometry?.dispose();
-        const mat = mesh.material;
-        if (Array.isArray(mat)) mat.forEach(m => m.dispose());
-        else mat?.dispose();
-    });
-}
-
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
 // ==========================================
@@ -951,96 +955,6 @@ export class InHouseSplatViewer implements ISplatViewer {
 }
 
 /**
- * Resolves top-level selectable object from a raycast hit object.
- */
-export function resolveSelectableObject(hitObject: THREE.Object3D, sceneRoot: THREE.Object3D): THREE.Object3D {
-    let current: THREE.Object3D = hitObject;
-    let selectable: THREE.Object3D = hitObject;
-
-    while (current && current.parent && current.parent !== sceneRoot) {
-        const pName = current.parent.name || '';
-        if (pName && !pName.startsWith('sb-') && pName !== 'historical-battlefield' && pName !== 'procedural-city' && pName !== 'procedural-scene' && pName !== 'solar-system' && pName !== 'molecular-physics' && pName !== 'architectural-room' && pName !== 'procedural-worldbuilder' && pName !== 'procedural-spatial' && pName !== 'scene') {
-            selectable = current.parent;
-        }
-        current = current.parent;
-    }
-
-    return selectable;
-}
-
-/**
- * Extracts all selectable top-level objects in the Three.js scene for the Outliner.
- */
-export function extractSceneOutlinerItems(scene: THREE.Scene): Array<{ id: string; name: string; type: string; object: THREE.Object3D; visible: boolean }> {
-    const items: Array<{ id: string; name: string; type: string; object: THREE.Object3D; visible: boolean }> = [];
-    const seenUuids = new Set<string>();
-
-    const isExcluded = (obj: THREE.Object3D): boolean => {
-        if (obj === scene) return true;
-        const oName = obj.name || '';
-        if (oName.startsWith('sb-') || oName === 'historical-battlefield' || oName === 'procedural-city' || oName === 'procedural-scene' || oName === 'solar-system' || oName === 'molecular-physics' || oName === 'architectural-room' || oName === 'procedural-worldbuilder' || oName === 'procedural-spatial') return true;
-        if (oName === 'AtmosphericSkyDome' || oName === 'PhysicalSunDisc' || oName === 'volumetric-god-rays' || oName.includes('SkyDome') || oName.includes('SunDisc') || oName.includes('god-rays')) return true;
-        if (obj.userData?.isGizmo || obj.userData?.handleType) return true;
-        if ((obj as any).isLight || (obj as any).isCamera) return true;
-        if ((obj as any).isGridHelper || oName.includes('Grid Floor') || oName.includes('GridHelper')) return true;
-        return false;
-    };
-
-    scene.traverse((obj) => {
-        if (isExcluded(obj)) return;
-
-        const p = obj.parent;
-        const isRootChild = p === scene;
-        const isProceduralCollectionChild = !!(p && (
-            p.name === 'historical-battlefield' ||
-            p.name === 'procedural-city' ||
-            p.name === 'procedural-scene' ||
-            p.name === 'solar-system' ||
-            p.name === 'molecular-physics' ||
-            p.name === 'architectural-room' ||
-            p.name === 'procedural-worldbuilder' ||
-            p.name === 'procedural-spatial' ||
-            p.name === 'scene'
-        ));
-        const isNamedSemanticGroup = (obj instanceof THREE.Group || (obj as any).isMesh) && !seenUuids.has(obj.uuid);
-
-        if ((isRootChild || isProceduralCollectionChild) && isNamedSemanticGroup) {
-            seenUuids.add(obj.uuid);
-            const oName = obj.name || ((obj as any).isMesh ? `Mesh ${(obj as any).geometry?.type || 'Object'}` : `Group Object`);
-            let itemType = 'mesh';
-            const nameLower = oName.toLowerCase();
-            if (nameLower.includes('tavern') || nameLower.includes('house') || nameLower.includes('meeting') || nameLower.includes('tower') || nameLower.includes('skyscraper') || nameLower.includes('building') || nameLower.includes('desk') || nameLower.includes('chair') || nameLower.includes('wall') || nameLower.includes('room')) {
-                itemType = 'building';
-            } else if (nameLower.includes('minuteman') || nameLower.includes('soldier') || nameLower.includes('redcoat') || nameLower.includes('regiment') || nameLower.includes('line') || nameLower.includes('militia')) {
-                itemType = 'unit';
-            } else if (nameLower.includes('tree') || nameLower.includes('elm') || nameLower.includes('flora')) {
-                itemType = 'tree';
-            } else if (nameLower.includes('ground') || nameLower.includes('terrain') || nameLower.includes('floor') || nameLower.includes('green')) {
-                itemType = 'terrain';
-            } else if (nameLower.includes('smoke') || nameLower.includes('emitter') || nameLower.includes('particle') || nameLower.includes('cloud')) {
-                itemType = 'emitter';
-            } else if (nameLower.includes('wall') || nameLower.includes('fence') || nameLower.includes('pillar') || nameLower.includes('plinth')) {
-                itemType = 'prop';
-            } else if (nameLower.includes('sun') || nameLower.includes('planet') || nameLower.includes('orbit') || nameLower.includes('prism') || nameLower.includes('ring')) {
-                itemType = 'celestial';
-            } else if (nameLower.includes('vehicle') || nameLower.includes('hover') || nameLower.includes('car') || nameLower.includes('airplane') || nameLower.includes('aircraft') || nameLower.includes('drone')) {
-                itemType = 'vehicle';
-            }
-
-            items.push({
-                id: obj.uuid,
-                name: oName,
-                type: itemType,
-                object: obj,
-                visible: obj.visible
-            });
-        }
-    });
-
-    return items;
-}
-
-/**
  * Checks whether the incoming Scene3DData already possesses real geometry (meshes,
  * compiled/synthesized C++ or Python GLB buffers, source generators, splats, or 3D object URIs).
  * If false, the viewport universally auto-synthesizes rich contextual PBR meshes to guarantee
@@ -1064,6 +978,100 @@ export function hasRealSceneGeometry(scene: Scene3DData | undefined): boolean {
     return false;
 }
 
+/** Per-object load state for externally referenced models (objects[].content.durableUri). */
+interface ExternalLoadStatus {
+    phase: 'download' | 'parse' | 'ready' | 'error';
+    loaded: number;
+    /** 0 when the server sends no Content-Length. */
+    total: number;
+    error?: string;
+}
+
+/** Request URL for an objects[] durableUri: bare '/<file>.glb' paths are served from /models/. */
+function resolveExternalModelUri(rawUri: string): string {
+    if (rawUri.startsWith('/') && !rawUri.startsWith('/models/') && !rawUri.startsWith('/tiles/') && !rawUri.startsWith('/api/') && !rawUri.startsWith('/panoramas/')) {
+        const fileName = rawUri.split('/').pop();
+        if (fileName && (fileName.endsWith('.glb') || fileName.endsWith('.gltf'))) return `/models/${fileName}`;
+    }
+    return rawUri;
+}
+
+/** Objects sourced from a ground-tile service are only shown in the ground mode matching their source. */
+function isVisibleForGroundMode(obj: Media4DObject, groundTileMode: GroundTileMode, hasExplicit3DTileObject: boolean): boolean {
+    const source = (obj.content?.metadata?.source || '').toLowerCase();
+    if (source === 'googlevectortileservice' || source === 'google_vector_tile_service') {
+        return groundTileMode === 'vector-world-clay';
+    }
+    if (source === 'google3dtilesclay' || source === 'google_3d_tiles_clay') {
+        return groundTileMode === 'photoreal-clay' || hasExplicit3DTileObject;
+    }
+    if (source === 'google3dtilesfulltexture' || source === 'google_3d_tiles_full_texture') {
+        return groundTileMode === 'photoreal-textured' || hasExplicit3DTileObject;
+    }
+    return true;
+}
+
+const formatLoadStatus = (status: ExternalLoadStatus | undefined): string => {
+    if (!status || status.phase === 'ready') return '';
+    if (status.phase === 'error') return '!';
+    if (status.phase === 'parse') return 'parsing';
+    if (status.total > 0) return `${Math.min(99, Math.floor((status.loaded / status.total) * 100))}%`;
+    return status.loaded > 0 ? `${(status.loaded / 1048576).toFixed(0)} MB` : '…';
+};
+
+/** Shared look of the viewport HUD pills (mirrors .sb-3d-minimal-badge in unified-ui.css). */
+const HUD_PILL_STYLE: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    maxWidth: '100%',
+    boxSizing: 'border-box',
+    background: 'rgba(18, 18, 22, 0.8)',
+    backdropFilter: 'blur(24px) saturate(180%)',
+    WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+    // Longhands only: variants override borderColor, and React warns when shorthand and longhand mix.
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+    color: '#f4f4f5',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    fontSize: 10.5,
+    pointerEvents: 'auto',
+    userSelect: 'none'
+};
+const HUD_COLUMN_STYLE: React.CSSProperties = {
+    position: 'absolute',
+    top: 48,
+    right: 14,
+    zIndex: 20,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 6,
+    maxWidth: 'calc(100% - 72px)',
+    pointerEvents: 'none'
+};
+const HUD_SEGMENT_STYLE: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '3px 9px',
+    borderRadius: 9999,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: 'transparent',
+    background: 'transparent',
+    color: '#d4d4d8',
+    font: 'inherit',
+    whiteSpace: 'nowrap',
+    cursor: 'pointer'
+};
+const HUD_SEGMENT_ACTIVE_STYLE: React.CSSProperties = {
+    background: 'rgba(37, 99, 235, 0.4)',
+    borderColor: 'rgba(59, 130, 246, 0.55)',
+    color: '#dbeafe'
+};
+
 export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     data,
     onUpdate,
@@ -1082,6 +1090,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         camera: data?.camera || { position: [15, 12, 15], target: [0, 0, 0] },
         environment: data?.environment || { skybox: 'studio', lighting: 'studio', ground: true },
         features: data?.features,
+        // Carried so onUpdate round-trips (selection, gizmo edits) keep the authored render mode.
+        renderMode: data?.renderMode,
         customScript: data?.customScript || data?.code,
         pythonGenerator: data?.pythonGenerator,
         cppGenerator: data?.cppGenerator || (data?.pythonGenerator ? undefined : {
@@ -1163,6 +1173,23 @@ int main(int argc, char** argv) {
     const [outlinerSearchQuery, setOutlinerSearchQuery] = React.useState<string>('');
     const [sceneEntities, setSceneEntities] = React.useState<Array<{ id: string; name: string; type: string; object: THREE.Object3D; visible: boolean }>>([]);
     const selectionBoxRef = React.useRef<THREE.BoxHelper | null>(null);
+
+    // Variant sets: objects sharing an open `content.metadata.variantSet` key are alternatives of
+    // which exactly one is in the scene. The choice is viewer state, kept outside sceneData because
+    // the props sync rebuilds sceneData on every parent render.
+    const [variantChoice, setVariantChoice] = React.useState<Record<string, string>>({});
+    const variantSets = React.useMemo(() => groupVariantSets(sceneData.objects), [sceneData.objects]);
+    const activeVariantIds = React.useMemo(() => resolveActiveVariants(variantSets, variantChoice), [variantSets, variantChoice]);
+    const activeVariantIdsRef = useLatest(activeVariantIds);
+    const [externalLoadStatus, setExternalLoadStatus] = React.useState<Record<string, ExternalLoadStatus>>({});
+    // Bumped to re-run the loader for objects whose last load failed (nothing else changes then).
+    const [externalLoadRetryNonce, setExternalLoadRetryNonce] = React.useState(0);
+    // Object id -> URL of the request in flight; survives StrictMode / HMR effect re-runs so a model
+    // is never fetched and parsed twice, while a changed URL for the same id still starts a new load.
+    const pendingExternalLoadsRef = React.useRef<Map<string, string>>(new Map());
+    const loadProgressStampRef = React.useRef<Record<string, number>>({});
+    // Selecting outside sculpt mode skips the (multi-MB) history snapshot; it is taken when sculpt mode is entered.
+    const historyBaselinePendingRef = React.useRef<THREE.Mesh | null>(null);
 
     // Sculpting & Gizmo High-Performance Refs (always-fresh mirrors for the imperative viewport code)
     const toolModeRef = useLatest(toolMode);
@@ -1398,17 +1425,28 @@ int main(int argc, char** argv) {
             if (meshCandidate && meshCandidate.geometry) {
                 sculptMeshRef.current = meshCandidate;
                 historyStackRef.current.clear();
-                historyStackRef.current.pushState(meshCandidate.geometry);
+                // The baseline copies the whole position buffer (tens of MB on scan-scale meshes), so
+                // outside sculpt mode it is deferred until sculpt mode is entered.
+                if (toolModeRef.current === 'sculpt') {
+                    historyStackRef.current.pushState(meshCandidate.geometry);
+                    historyBaselinePendingRef.current = null;
+                } else {
+                    historyBaselinePendingRef.current = meshCandidate;
+                }
                 setCanUndo(false);
                 setCanRedo(false);
             }
 
-            // Update gizmo transform immediately
+            // Update gizmo transform immediately (world pose: the selection may be a part nested in a
+            // moved model root, while the gizmo is a scene-level group)
             if (transformGizmoGroupRef.current && gizmoEngineRef.current && threeCameraRef.current) {
+                const worldPos = new THREE.Vector3();
+                const worldQuat = new THREE.Quaternion();
+                readWorldPose(targetObj, worldPos, worldQuat);
                 gizmoEngineRef.current.updateGizmoTransform(
                     transformGizmoGroupRef.current,
-                    targetObj.position,
-                    targetObj.quaternion,
+                    worldPos,
+                    worldQuat,
                     transformSpaceRef.current,
                     threeCameraRef.current
                 );
@@ -1431,9 +1469,9 @@ int main(int argc, char** argv) {
         }
     }, [mutateSceneData]);
 
-    const handleFocusObject = React.useCallback((targetObj: THREE.Object3D) => {
+    /** Re-centres the orbit on `targetObj` and pulls the camera to a distance that frames it. */
+    const frameObject = React.useCallback((targetObj: THREE.Object3D) => {
         if (!targetObj || !threeCameraRef.current) return;
-        selectObject(targetObj);
         const box = new THREE.Box3().setFromObject(targetObj);
         const center = new THREE.Vector3();
         box.getCenter(center);
@@ -1450,7 +1488,25 @@ int main(int argc, char** argv) {
         const theta = Math.atan2(eye.x, eye.z);
         cameraRotationRef.current = { theta, phi, distance: targetDistance };
         threeCameraRef.current.lookAt(center);
-    }, [selectObject]);
+    }, []);
+
+    const handleFocusObject = React.useCallback((targetObj: THREE.Object3D) => {
+        if (!targetObj || !threeCameraRef.current) return;
+        selectObject(targetObj);
+        frameObject(targetObj);
+    }, [selectObject, frameObject]);
+
+    // Entering sculpt mode with a selection made elsewhere takes the deferred history baseline.
+    React.useEffect(() => {
+        const pending = historyBaselinePendingRef.current;
+        if (toolMode !== 'sculpt' || !pending) return;
+        historyBaselinePendingRef.current = null;
+        if (sculptMeshRef.current !== pending || !pending.geometry) return;
+        historyStackRef.current.clear();
+        historyStackRef.current.pushState(pending.geometry);
+        setCanUndo(false);
+        setCanRedo(false);
+    }, [toolMode]);
 
     const handleToggleObjectVisibility = React.useCallback((entityId: string, e?: React.MouseEvent) => {
         e?.stopPropagation();
@@ -1611,7 +1667,8 @@ int main(int argc, char** argv) {
                 timeline: data.timeline,
                 animation: data.animation,
                 geoAnchor: data.geoAnchor,
-                droneRoute: data.droneRoute
+                droneRoute: data.droneRoute,
+                renderMode: data.renderMode
             });
 
             if (effectiveWorldBranch) setWorldBranch(effectiveWorldBranch);
@@ -1807,8 +1864,7 @@ int main(int argc, char** argv) {
     const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
     const customMeshRegistryRef = React.useRef<CustomMeshRegistry>(new Map());
     const externalObjectsMapRef = React.useRef<Map<string, THREE.Object3D>>(new Map());
-    // Object id -> URI of a load still in flight, so effect re-runs during a load don't mount the model twice.
-    const pendingExternalLoadsRef = React.useRef<Map<string, string>>(new Map());
+    // In-flight external loads live in pendingExternalLoadsRef (declared with the variant/load state above).
     const pendingGeneratedGlbParsesRef = React.useRef(0);
 
     // Lets background visual verification wait for models to finish loading before it screenshots.
@@ -1964,13 +2020,15 @@ int main(int argc, char** argv) {
             uri: o.content?.durableUri,
             type: o.content?.type,
             space: o.space?.spatial3d,
-            source: o.content?.metadata?.source
+            source: o.content?.metadata?.source,
+            variantSet: variantSetKeyOf(o),
+            prefetch: !!o.content?.metadata?.prefetch
         })) || []);
         if (sceneData.splatUrl) {
-            objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined, source: 'splatUrl' });
+            objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined, source: 'splatUrl', variantSet: undefined, prefetch: false });
         }
-        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode });
-    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode]);
+        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode, activeVariants: activeVariantIds, retry: externalLoadRetryNonce });
+    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode, activeVariantIds, externalLoadRetryNonce]);
 
     // ---- 1. Renderer stack, overlays, controls and the render loop (mount once) ----
     React.useEffect(() => {
@@ -2001,6 +2059,8 @@ int main(int argc, char** argv) {
         (window as any).__SB_3D_SCENE_DATA__ = sceneData;
         (window as any).__SB_3D_CAMERA_TARGET__ = cameraTargetRef;
         (window as any).__SB_3D_CAMERA_ROTATION__ = cameraRotationRef;
+        // Loaded models by object id, including detached (inactive variant) ones kept for instant switching.
+        (window as any).__SB_3D_EXTERNAL_OBJECTS__ = externalObjectsMapRef.current;
         (window as any).__SB_SET_CAMERA_VIEW__ = (target: [number, number, number], rot: { theta: number; phi: number; distance: number }) => {
             if (cameraTargetRef.current) cameraTargetRef.current.set(target[0], target[1], target[2]);
             if (cameraRotationRef.current) {
@@ -2037,6 +2097,7 @@ int main(int argc, char** argv) {
             transformSpace: transformSpaceRef,
             sculptSettings: sculptSettingsRef,
             orbit: cameraRotationRef,
+            target: cameraTargetRef,
             keysPressed: keysPressedRef,
             gizmoEngine: gizmoEngineRef,
             gizmoGroup: transformGizmoGroupRef,
@@ -2062,6 +2123,8 @@ int main(int argc, char** argv) {
         let lastTickTime = performance.now();
         let lastTerrainSnapTime = 0;
         let lastHeadingUpdateTime = 0;
+        const gizmoWorldPos = new THREE.Vector3();
+        const gizmoWorldQuat = new THREE.Quaternion();
 
         const animate = () => {
             try {
@@ -2187,14 +2250,16 @@ int main(int argc, char** argv) {
                     selectionBoxRef.current.update();
                 }
 
-                // 12. Transform gizmo
-                if (transformGizmoGroupRef.current && selectedObjectRef.current) {
-                    transformGizmoGroupRef.current.visible = toolModeRef.current === 'transform';
-                    if (transformGizmoGroupRef.current.visible) {
+                // 12. Transform gizmo (hidden without a selection, e.g. after a variant switch cleared it;
+                // a gizmo with no target is inert and would float over nothing)
+                if (transformGizmoGroupRef.current) {
+                    transformGizmoGroupRef.current.visible = toolModeRef.current === 'transform' && !!selectedObjectRef.current;
+                    if (transformGizmoGroupRef.current.visible && selectedObjectRef.current) {
+                        readWorldPose(selectedObjectRef.current, gizmoWorldPos, gizmoWorldQuat);
                         gizmoEngineRef.current.updateGizmoTransform(
                             transformGizmoGroupRef.current,
-                            selectedObjectRef.current.position,
-                            selectedObjectRef.current.quaternion,
+                            gizmoWorldPos,
+                            gizmoWorldQuat,
                             transformSpaceRef.current,
                             camera
                         );
@@ -2206,7 +2271,8 @@ int main(int argc, char** argv) {
                     splatViewerRef.current.updateCamera(camera);
                 }
                 activeSplatMeshesRef.current.forEach(splatMesh => {
-                    if (typeof splatMesh.updateDepthSort === 'function') {
+                    // Detached (inactive variant) splats are not drawn, so skip their CPU sort.
+                    if (splatMesh.parent && typeof splatMesh.updateDepthSort === 'function') {
                         splatMesh.updateDepthSort(camera);
                     }
                 });
@@ -2254,10 +2320,12 @@ int main(int argc, char** argv) {
                 scene.remove(transformGizmoGroupRef.current);
                 transformGizmoGroupRef.current = null;
             }
-            activeSplatMeshesRef.current.forEach(splatMesh => splatMesh.dispose());
-            activeSplatMeshesRef.current.clear();
+            // Free loaded models (attached or detached variants) before the GL context goes away.
+            // Every splat mesh is also registered in the external-object map, so this releases it
+            // exactly once (through its own dispose()).
+            externalObjectsMapRef.current.forEach(obj3d => releaseObject3D(obj3d));
             externalObjectsMapRef.current.clear();
-            pendingExternalLoadsRef.current.clear();
+            activeSplatMeshesRef.current.clear();
             stack.dispose();
             stackRef.current = null;
             threeSceneRef.current = null;
@@ -2280,6 +2348,8 @@ int main(int argc, char** argv) {
                     terrainManager.snapObjectToGround(cppRoot, 0);
                 }
                 externalObjectsMapRef.current.forEach((model, id) => {
+                    // Cached inactive variants are detached; they are seated when re-attached.
+                    if (!model.parent) return;
                     const def = (sceneDataRef.current.objects || []).find(o => o.id === id);
                     const role = def?.content?.metadata?.role;
                     const source = (def?.content?.metadata?.source || '').toLowerCase();
@@ -2682,6 +2752,11 @@ int main(int argc, char** argv) {
     }, [sceneData.pythonGenerator?.glbBase64, sceneData.cppGenerator?.glbBase64]);
 
     // ---- 5c. External Model & Gaussian Splat Objects Ingestion (sceneData.objects[].content.durableUri, sceneData.splatUrl) ----
+    // Models load lazily: an object is fetched the first time it is shown, or up front when its
+    // metadata sets `prefetch`. Inactive variants are DETACHED from the scene but stay cached in
+    // externalObjectsMapRef, so picking, ground snapping, auto-framing and the outliner skip them
+    // while switching back is instant (no re-download, GPU resources retained).
+    const groundTileModeRef = useLatest({ effectiveGroundTileMode, hasExplicit3DTileObject });
     React.useEffect(() => {
         const stack = stackRef.current;
         if (!stack) return;
@@ -2703,52 +2778,137 @@ int main(int argc, char** argv) {
         }
 
         const currentMap = externalObjectsMapRef.current;
-        const pendingLoads = pendingExternalLoadsRef.current;
+        const pending = pendingExternalLoadsRef.current;
         const activeIds = new Set<string>();
+        /** Set when a cached model is attached, detached or released here (loads refresh on their own). */
+        let membershipChanged = false;
+
+        // Async callbacks re-read the latest declarations: the data may change while a model downloads.
+        const latestDef = (obj: Media4DObject): Media4DObject =>
+            (sceneDataRef.current.objects || []).find(o => o.id === obj.id) || obj;
+        /** True while `id` is still declared AND still points at `uri` (a result for an old URL is stale). */
+        const isCurrentSource = (id: string, uri: string): boolean => {
+            const def = (sceneDataRef.current.objects || []).find(o => o.id === id);
+            const raw = def?.content?.durableUri ?? (id === 'primary-location-splat' ? sceneDataRef.current.splatUrl : undefined);
+            return !!raw && resolveExternalModelUri(raw) === uri;
+        };
+        /** Detaches, frees and forgets a loaded model (attached or cached). */
+        const releaseLoaded = (id: string, obj3d: THREE.Object3D) => {
+            if (obj3d.parent) membershipChanged = true;
+            activeSplatMeshesRef.current.delete(id);
+            releaseObject3D(obj3d);
+            currentMap.delete(id);
+        };
+        const isActiveNow = (obj: Media4DObject): boolean => {
+            const key = variantSetKeyOf(obj);
+            return !key || activeVariantIdsRef.current[key] === obj.id;
+        };
+        const setStatus = (id: string, status: ExternalLoadStatus) =>
+            setExternalLoadStatus(prev => ({ ...prev, [id]: status }));
+        /**
+         * What a model's pose derives from: its authored transform and the ground it was seated on.
+         * A ground-mode switch swaps the surface under a snapped hero (tiles torn down or replaced), so
+         * it must fall back to its authored transform; re-runs that change neither (a variant switch,
+         * a retry) must not undo a ground snap.
+         */
+        const seatKeyOf = (s: Media4DObject['space']['spatial3d'] | undefined): string =>
+            JSON.stringify([s ?? null, groundTileModeRef.current]);
+        const applySpatial = (target: THREE.Object3D, s: Media4DObject['space']['spatial3d'] | undefined) => {
+            target.userData.sbSeatKey = seatKeyOf(s);
+            if (!s) return;
+            target.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
+            if (s.pitch !== undefined) target.rotation.x = (s.pitch * Math.PI) / 180;
+            if (s.yaw !== undefined) target.rotation.y = (s.yaw * Math.PI) / 180;
+            if (s.roll !== undefined) target.rotation.z = (s.roll * Math.PI) / 180;
+        };
+        const isEnvironmentDef = (def: Media4DObject | undefined): boolean => {
+            const role = def?.content?.metadata?.role;
+            const src = (def?.content?.metadata?.source || '').toLowerCase();
+            return role === 'environment' || !!def?.content?.metadata?.isGround || src.includes('google3dtiles') || src.includes('googlevectortile');
+        };
+        /**
+         * Seats a model as it is attached (snapping is absolute, so re-seating is idempotent):
+         * environment layers re-ground every attached hero; heroes snap onto the ground beneath them.
+         */
+        const settleOnGround = (model: THREE.Object3D, def: Media4DObject, liveScene: THREE.Scene) => {
+            const terrainManager = terrainManagerRef.current;
+            if (!terrainManager) return;
+            if (isEnvironmentDef(def)) {
+                const cppRoot = liveScene.getObjectByName('scratchbox-cpp-generated-root');
+                if (cppRoot) terrainManager.snapObjectToGround(cppRoot, 0);
+                currentMap.forEach((otherModel, otherId) => {
+                    if (otherId === def.id || !otherModel.parent) return;
+                    const otherDef = (sceneDataRef.current.objects || []).find(o => o.id === otherId);
+                    if (isEnvironmentDef(otherDef)) return;
+                    const os = otherDef?.space?.spatial3d;
+                    terrainManager.snapObjectToGround(otherModel, (os?.y !== undefined && os.y !== 0) ? os.y : 0);
+                });
+            } else {
+                const s = def.space?.spatial3d;
+                if (s?.y === 0 || s?.y === undefined) terrainManager.snapObjectToGround(model, 0);
+            }
+        };
+        const autoFrameIfNeeded = () => {
+            const live = stackRef.current;
+            if (!live) return;
+            const bounds = computeSceneGeometryBounds(live.scene);
+            const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: live.camera.fov });
+            if (autoFrame && autoFrame.autoFramed) {
+                cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
+                cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+                live.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
+                live.camera.lookAt(cameraTargetRef.current);
+            }
+        };
 
         const loader = new GLTFLoader();
 
         objects.forEach(obj => {
             const rawUri = obj.content?.durableUri;
             if (!rawUri) return;
-            let uri = rawUri;
-            if (uri.startsWith('/') && !uri.startsWith('/models/') && !uri.startsWith('/tiles/') && !uri.startsWith('/api/') && !uri.startsWith('/panoramas/')) {
-                const fileName = uri.split('/').pop();
-                if (fileName && (fileName.endsWith('.glb') || fileName.endsWith('.gltf'))) {
-                    uri = `/models/${fileName}`;
-                }
-            }
+            const uri = resolveExternalModelUri(rawUri);
             const isSplat = obj.content?.type === 'gaussian-splat' || !!uri.match(/\.(splat|spz)($|\?)/i);
             const isGltf = !!uri.match(/\.(glb|gltf)($|\?)/i);
             if (!isSplat && !isGltf) return;
             activeIds.add(obj.id);
 
-            const source = (obj.content?.metadata?.source || '').toLowerCase();
-            let isVisibleForGroundMode = true;
-            if (source === 'googlevectortileservice' || source === 'google_vector_tile_service') {
-                isVisibleForGroundMode = effectiveGroundTileMode === 'vector-world-clay';
-            } else if (source === 'google3dtilesclay' || source === 'google_3d_tiles_clay') {
-                isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-clay' || hasExplicit3DTileObject;
-            } else if (source === 'google3dtilesfulltexture' || source === 'google_3d_tiles_full_texture') {
-                isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-textured' || hasExplicit3DTileObject;
-            }
+            const visibleForGroundMode = isVisibleForGroundMode(obj, effectiveGroundTileMode, hasExplicit3DTileObject);
+            const variantKey = variantSetKeyOf(obj);
+            const isActiveVariant = !variantKey || activeVariantIds[variantKey] === obj.id;
 
             const existing = currentMap.get(obj.id);
-            if (existing) {
-                existing.visible = isVisibleForGroundMode;
+            // The object now points at another file: drop the stale model and load the new one below.
+            if (existing && existing.userData.sbSourceUri !== uri) releaseLoaded(obj.id, existing);
+            else if (existing) {
+                existing.visible = visibleForGroundMode;
                 const s = obj.space?.spatial3d;
-                if (s) {
-                    existing.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
-                    if (s.pitch !== undefined) existing.rotation.x = (s.pitch * Math.PI) / 180;
-                    if (s.yaw !== undefined) existing.rotation.y = (s.yaw * Math.PI) / 180;
-                    if (s.roll !== undefined) existing.rotation.z = (s.roll * Math.PI) / 180;
+                if (existing.userData.sbSeatKey !== seatKeyOf(s)) applySpatial(existing, s);
+                if (isActiveVariant && existing.parent !== scene) {
+                    scene.add(existing);
+                    membershipChanged = true;
+                    // Splats are never seated by their own load (only GLBs are), so a re-attach must
+                    // not seat them either or they would jump on every re-activation.
+                    if (!isSplat) settleOnGround(existing, obj, scene);
+                } else if (!isActiveVariant && existing.parent) {
+                    existing.parent.remove(existing);
+                    membershipChanged = true;
                 }
                 return;
             }
-            if (pendingLoads.get(obj.id) === uri) {
-                return;
-            }
-            pendingLoads.set(obj.id, uri);
+
+            // Lazy: an inactive variant is fetched on first activation unless it opts into prefetch.
+            if (!isActiveVariant && !obj.content?.metadata?.prefetch) return;
+            // In-flight dedupe: fingerprint changes and StrictMode / HMR re-runs must not fetch or parse
+            // the same file twice. A different URL for the id supersedes the request in flight.
+            if (pending.get(obj.id) === uri) return;
+            pending.set(obj.id, uri);
+            /** Ends this request's claim on the id; false when a newer request for the id superseded it. */
+            const settlePending = (): boolean => {
+                if (pending.get(obj.id) !== uri) return false;
+                pending.delete(obj.id);
+                return true;
+            };
+            setStatus(obj.id, { phase: 'download', loaded: 0, total: 0 });
 
             if (isSplat) {
                 PhotorealGaussianSplatMesh.fromUrl(uri, {
@@ -2756,36 +2916,24 @@ int main(int argc, char** argv) {
                     contactShadow: sceneData.splatOptions?.contactShadow ?? true,
                     enableRTC: sceneData.splatOptions?.enableRTC ?? true
                 }).then(splatMesh => {
-                    if (!stackRef.current?.scene || pendingLoads.get(obj.id) !== uri) {
+                    settlePending();
+                    const liveScene = stackRef.current?.scene;
+                    if (!liveScene || !isCurrentSource(obj.id, uri) || currentMap.has(obj.id)) {
                         splatMesh.dispose();
                         return;
                     }
-                    pendingLoads.delete(obj.id);
+                    const def = latestDef(obj);
                     splatMesh.name = `external-splat-${obj.id}`;
-                    const s = obj.space?.spatial3d;
-                    if (s) {
-                        splatMesh.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
-                        if (s.pitch !== undefined) splatMesh.rotation.x = (s.pitch * Math.PI) / 180;
-                        if (s.yaw !== undefined) splatMesh.rotation.y = (s.yaw * Math.PI) / 180;
-                        if (s.roll !== undefined) splatMesh.rotation.z = (s.roll * Math.PI) / 180;
-                    }
-                    stackRef.current.scene.add(splatMesh);
+                    splatMesh.userData.sbSourceUri = uri;
+                    applySpatial(splatMesh, def.space?.spatial3d);
+                    if (isActiveNow(def)) liveScene.add(splatMesh);
                     currentMap.set(obj.id, splatMesh);
                     activeSplatMeshesRef.current.set(obj.id, splatMesh);
+                    setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
                     refreshEntities();
-
-                    if (stackRef.current) {
-                        const bounds = computeSceneGeometryBounds(stackRef.current.scene);
-                        const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: stackRef.current.camera.fov });
-                        if (autoFrame && autoFrame.autoFramed) {
-                            cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
-                            cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
-                            stackRef.current.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
-                            stackRef.current.camera.lookAt(cameraTargetRef.current);
-                        }
-                    }
+                    if (splatMesh.parent) autoFrameIfNeeded();
                 }).catch(err => {
-                    pendingLoads.delete(obj.id);
+                    if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String(err?.message ?? err) });
                     console.warn(`[External Splat Loader Error] Failed to load ${uri}:`, err);
                 });
                 return;
@@ -2794,20 +2942,20 @@ int main(int argc, char** argv) {
             loader.load(
                 uri,
                 (gltf) => {
-                    if (!stackRef.current?.scene || pendingLoads.get(obj.id) !== uri) {
-                        disposeObject3D(gltf.scene);
+                    settlePending();
+                    const model = gltf.scene;
+                    // Use the LIVE stack: under StrictMode / HMR the scene captured by this effect run
+                    // can belong to an already disposed renderer stack.
+                    const liveStack = stackRef.current;
+                    const liveScene = liveStack?.scene;
+                    if (!liveStack || !liveScene || !isCurrentSource(obj.id, uri) || currentMap.has(obj.id)) {
+                        disposeObject3DDeep(model);
                         return;
                     }
-                    pendingLoads.delete(obj.id);
-                    const model = gltf.scene;
-                    model.name = `external-object-${obj.id}`;
-                    const s = obj.space?.spatial3d;
-                    if (s) {
-                        model.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
-                        if (s.pitch !== undefined) model.rotation.x = (s.pitch * Math.PI) / 180;
-                        if (s.yaw !== undefined) model.rotation.y = (s.yaw * Math.PI) / 180;
-                        if (s.roll !== undefined) model.rotation.z = (s.roll * Math.PI) / 180;
-                    }
+                    const def = latestDef(obj);
+                    model.name = `${EXTERNAL_OBJECT_ROOT_PREFIX}${obj.id}`;
+                    model.userData.sbSourceUri = uri;
+                    applySpatial(model, def.space?.spatial3d);
 
                     model.traverse((child) => {
                         if ((child as any).isMesh) {
@@ -2828,114 +2976,99 @@ int main(int argc, char** argv) {
                         }
                     });
 
-                    model.visible = isVisibleForGroundMode;
-                    scene.add(model);
+                    const ground = groundTileModeRef.current;
+                    model.visible = isVisibleForGroundMode(def, ground.effectiveGroundTileMode, ground.hasExplicit3DTileObject);
+                    const attach = isActiveNow(def);
+                    if (attach) liveScene.add(model);
                     model.updateMatrixWorld(true);
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
+                    setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
 
-                    const role = obj.content?.metadata?.role;
-                    const metaSource = (obj.content?.metadata?.source || '').toLowerCase();
-                    const isEnvTile = role === 'environment' ||
-                        obj.content?.metadata?.isGround ||
-                        metaSource.includes('google3dtiles') ||
-                        metaSource.includes('googlevectortile');
-
-                    if (isEnvTile) {
-                        // When environment 3D tiles finish loading, re-ground all active built/hero objects onto it
-                        if (terrainManagerRef.current) {
-                            const cppRoot = scene.getObjectByName('scratchbox-cpp-generated-root');
-                            if (cppRoot) {
-                                terrainManagerRef.current.snapObjectToGround(cppRoot, 0);
-                            }
-                            currentMap.forEach((otherModel, otherId) => {
-                                if (otherId !== obj.id) {
-                                    const otherDef = (sceneDataRef.current.objects || []).find(o => o.id === otherId);
-                                    const otherRole = otherDef?.content?.metadata?.role;
-                                    const otherSrc = (otherDef?.content?.metadata?.source || '').toLowerCase();
-                                    const isOtherEnv = otherRole === 'environment' ||
-                                        otherDef?.content?.metadata?.isGround ||
-                                        otherSrc.includes('google3dtiles') ||
-                                        otherSrc.includes('googlevectortile');
-                                    if (!isOtherEnv) {
-                                        const os = otherDef?.space?.spatial3d;
-                                        const offset = (os?.y !== undefined && os.y !== 0) ? os.y : 0;
-                                        terrainManagerRef.current?.snapObjectToGround(otherModel, offset);
-                                    }
-                                }
-                            });
-                        }
+                    if (attach) {
+                        settleOnGround(model, def, liveScene);
                     } else {
-                        // For built / hero objects: snap bottom of object to terrain or underlying 3D tile surface
-                        if (terrainManagerRef.current && (s?.y === 0 || s?.y === undefined)) {
-                            terrainManagerRef.current.snapObjectToGround(model, 0);
-                        }
+                        // Prefetched but inactive (seated when first attached): compile its programs and
+                        // upload its textures now so that first switch does not stall.
+                        const renderer = liveStack.renderer;
+                        renderer.compileAsync?.(model, liveStack.camera, liveScene).catch(() => undefined);
+                        model.traverse(child => {
+                            const mats = (child as THREE.Mesh).material;
+                            for (const mat of Array.isArray(mats) ? mats : mats ? [mats] : []) {
+                                for (const value of Object.values(mat)) {
+                                    if (value && (value as THREE.Texture).isTexture) renderer.initTexture(value as THREE.Texture);
+                                }
+                            }
+                        });
                     }
 
                     refreshEntities();
-
-                    if (stackRef.current) {
-                        const bounds = computeSceneGeometryBounds(stackRef.current.scene);
-                        const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: stackRef.current.camera.fov });
-                        if (autoFrame && autoFrame.autoFramed) {
-                            cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
-                            cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
-                            stackRef.current.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
-                            stackRef.current.camera.lookAt(cameraTargetRef.current);
-                        }
-                    }
+                    if (attach) autoFrameIfNeeded();
                 },
-                undefined,
+                (evt: ProgressEvent) => {
+                    if (pending.get(obj.id) !== uri) return; // superseded by a newer URL
+                    const now = performance.now();
+                    const total = evt.lengthComputable ? evt.total : 0;
+                    const downloaded = total > 0 && evt.loaded >= total;
+                    if (!downloaded && now - (loadProgressStampRef.current[obj.id] || 0) < 200) return;
+                    loadProgressStampRef.current[obj.id] = now;
+                    setStatus(obj.id, { phase: downloaded ? 'parse' : 'download', loaded: evt.loaded, total });
+                },
                 (err) => {
-                    pendingLoads.delete(obj.id);
+                    if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String((err as any)?.message ?? err) });
                     console.warn(`[External Model Loader Error] Failed to load ${uri}:`, err);
                 }
             );
         });
 
-        // Cleanup removed objects
-        for (const id of [...pendingLoads.keys()]) {
-            if (!activeIds.has(id)) pendingLoads.delete(id);
+        // Cleanup removed objects (attached or detached). An in-flight load for a removed object no
+        // longer counts as pending; its result is discarded when it lands (isCurrentSource fails).
+        for (const id of [...pending.keys()]) {
+            if (!activeIds.has(id)) pending.delete(id);
         }
-        for (const [id, obj3d] of currentMap.entries()) {
-            if (!activeIds.has(id)) {
-                scene.remove(obj3d);
-                activeSplatMeshesRef.current.delete(id);
-                if (typeof (obj3d as any).dispose === 'function') {
-                    (obj3d as any).dispose();
-                } else {
-                    obj3d.traverse((child) => {
-                        if ((child as any).geometry) (child as any).geometry.dispose();
-                        if ((child as any).material) {
-                            const m = (child as any).material;
-                            if (Array.isArray(m)) m.forEach(mat => mat.dispose());
-                            else m.dispose();
-                        }
-                    });
-                }
-                currentMap.delete(id);
-            }
+        for (const [id, obj3d] of Array.from(currentMap.entries())) {
+            if (!activeIds.has(id)) releaseLoaded(id, obj3d);
+        }
+        // Keep the outliner entities in step with what is actually in the scene after a cached switch.
+        if (membershipChanged) refreshEntities();
+        setExternalLoadStatus(prev => {
+            const stale = Object.keys(prev).filter(id => !activeIds.has(id));
+            if (stale.length === 0) return prev;
+            const next = { ...prev };
+            stale.forEach(id => delete next[id]);
+            return next;
+        });
+
+        // A selection inside a model that was just detached or removed would leave the box helper
+        // and gizmo floating over nothing.
+        const selected = selectedObjectRef.current;
+        if (selected && !isAttachedTo(selected, scene)) selectObjectRef.current(null);
+        // Same for the sculpt target and its undo snapshots: the brush would hover invisible geometry,
+        // S would snapshot a mesh that is not in the scene, and the copies (tens of MB on scan-scale
+        // meshes) would stay pinned until the next selection.
+        const pendingBaseline = historyBaselinePendingRef.current;
+        if (pendingBaseline && findExternalObjectRoot(pendingBaseline) && !isAttachedTo(pendingBaseline, scene)) {
+            historyBaselinePendingRef.current = null;
+        }
+        const sculptTarget = sculptMeshRef.current;
+        if (sculptTarget && findExternalObjectRoot(sculptTarget) && !isAttachedTo(sculptTarget, scene)) {
+            sculptMeshRef.current = null;
+            historyStackRef.current.clear();
+            setCanUndo(false);
+            setCanRedo(false);
+            if (brushCursorMeshRef.current) brushCursorMeshRef.current.visible = false;
         }
     }, [externalObjectsFingerprint]);
 
     React.useEffect(() => {
-        const stack = stackRef.current;
         const currentMap = externalObjectsMapRef.current;
         return () => {
-            if (stack && stack.scene) {
-                for (const [, obj3d] of currentMap.entries()) {
-                    stack.scene.remove(obj3d);
-                    obj3d.traverse((child) => {
-                        if ((child as any).geometry) (child as any).geometry.dispose();
-                        if ((child as any).material) {
-                            const m = (child as any).material;
-                            if (Array.isArray(m)) m.forEach(mat => mat.dispose());
-                            else m.dispose();
-                        }
-                    });
-                }
-            }
+            // Normally already emptied by the renderer-stack cleanup; kept as a safety net. The
+            // pending-load map is deliberately NOT cleared: a load landing after a StrictMode / HMR
+            // remount must still count as in flight (its onLoad re-checks the live stack).
+            currentMap.forEach(obj3d => releaseObject3D(obj3d));
             currentMap.clear();
+            activeSplatMeshesRef.current.clear();
         };
     }, []);
 
@@ -3495,7 +3628,10 @@ int main(int argc, char** argv) {
                     setSculptSettings(s => ({ ...s, brush: 'flatten' }));
                 } else {
                     e.preventDefault();
-                    handleFitToView();
+                    // Frame the selection when there is a visible one, otherwise the whole scene.
+                    const selected = selectedObjectRef.current;
+                    if (selected && selectionBoxRef.current?.visible) frameObject(selected);
+                    else handleFitToView();
                 }
             }
         };
@@ -3504,7 +3640,7 @@ int main(int argc, char** argv) {
         return () => {
             window.removeEventListener('keydown', handleGlobalKeyDown);
         };
-    }, [handleUndo, handleRedo, cameraMode, toolMode, handleFitToView]);
+    }, [handleUndo, handleRedo, cameraMode, toolMode, handleFitToView, frameObject]);
 
     // Synchronize radius changes to cursor ring
     React.useEffect(() => {
@@ -3538,6 +3674,25 @@ int main(int argc, char** argv) {
             transformGizmoGroupRef.current = newGizmo;
         }
     }, [transformMode, toolMode]);
+
+    // Selection readout: recomputed when the selected object changes (name/id state is set alongside the ref).
+    const selectedUuid = selectedObjectRef.current?.uuid;
+    const selectionSummary = React.useMemo(
+        () => (selectedObjectId ? summarizeObjectGeometry(selectedObjectRef.current) : null),
+        [selectedObjectId, selectedObjectName, selectedUuid]
+    );
+    // Loaded-model root of the selection: a click picks parts, so the chip offers the whole model
+    // (the same as alt-click) and names a selected root by its objects[] label instead of its node name.
+    const selectedModelRoot = selectedObjectId ? findExternalObjectRoot(selectedObjectRef.current) : null;
+    const selectedModelLabel = React.useMemo(() => {
+        if (!selectedModelRoot) return '';
+        const objectId = externalObjectIdOf(selectedModelRoot);
+        const def = sceneData.objects?.find(o => o.id === objectId);
+        return String(def?.content?.metadata?.variantLabel ?? objectId);
+    }, [selectedModelRoot, sceneData.objects]);
+    const isModelRootSelected = !!selectedModelRoot && selectedModelRoot === selectedObjectRef.current;
+    const selectionChipLabel = isModelRootSelected ? selectedModelLabel : (selectedObjectName || selectedObjectId || '');
+    const switchableVariantSets = React.useMemo(() => variantSets.filter(set => set.members.length >= 2), [variantSets]);
 
     // Active Feature Chips for Glass Badge
     const activeFeatureBadges = React.useMemo(() => {
@@ -3957,6 +4112,88 @@ int main(int argc, char** argv) {
                 )}
             </div>
 
+            {/* Variant switchers + selection readout. Own column under the badge row (which unified-ui.css
+                caps in width and keeps on one line); styled inline because packages/core is not run
+                through Tailwind. */}
+            {(switchableVariantSets.length > 0 || (selectedObjectId && selectionSummary)) && (
+                <div className="sb-3d-variant-hud" style={HUD_COLUMN_STYLE}>
+                    {switchableVariantSets.map(set => (
+                        <div
+                            key={set.key}
+                            data-testid="sb-3d-variant-switcher"
+                            data-variant-set={set.key}
+                            role="group"
+                            aria-label={set.key}
+                            style={{ ...HUD_PILL_STYLE, flexWrap: 'wrap', justifyContent: 'flex-end', gap: 2, padding: 2, borderRadius: 14 }}
+                        >
+                            {set.members.map(member => {
+                                const isActive = activeVariantIds[set.key] === member.id;
+                                const status = externalLoadStatus[member.id];
+                                const statusText = formatLoadStatus(status);
+                                const label = String(member.content?.metadata?.variantLabel ?? member.id);
+                                return (
+                                    <button
+                                        key={member.id}
+                                        type="button"
+                                        data-variant-object-id={member.id}
+                                        aria-pressed={isActive}
+                                        onClick={() => {
+                                            setVariantChoice(prev => ({ ...prev, [set.key]: member.id }));
+                                            // Choosing a variant whose load failed retries it (the choice alone may not change).
+                                            if (status?.phase === 'error') setExternalLoadRetryNonce(n => n + 1);
+                                        }}
+                                        title={status?.phase === 'error' ? `${label}: failed to load (${status.error}). Click to retry.` : label}
+                                        style={isActive ? { ...HUD_SEGMENT_STYLE, ...HUD_SEGMENT_ACTIVE_STYLE } : HUD_SEGMENT_STYLE}
+                                    >
+                                        <span>{label}</span>
+                                        {statusText && (
+                                            <span style={{ color: status?.phase === 'error' ? '#fbbf24' : '#a1a1aa', fontVariantNumeric: 'tabular-nums' }}>{statusText}</span>
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ))}
+                    {selectedObjectId && selectionSummary && (
+                        <div
+                            data-testid="sb-3d-selection-chip"
+                            title={`${selectionChipLabel} · ${selectionSummary.meshes} mesh(es) · ${selectionSummary.vertices.toLocaleString()} vertices · ${selectionSummary.triangles.toLocaleString()} triangles (F frames it)`}
+                            style={{ ...HUD_PILL_STYLE, gap: 6, padding: '3px 4px 3px 10px', borderRadius: 9999, borderColor: 'rgba(34, 211, 238, 0.35)' }}
+                        >
+                            <span style={{ width: 6, height: 6, borderRadius: 9999, background: '#22d3ee', flexShrink: 0 }} />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{selectionChipLabel}</span>
+                            {selectionSummary.meshes > 0 && (
+                                <span style={{ color: '#a1a1aa', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                                    {selectionSummary.vertices.toLocaleString()} v · {selectionSummary.triangles.toLocaleString()} tris
+                                </span>
+                            )}
+                            {selectedModelRoot && !isModelRootSelected && (
+                                <button
+                                    type="button"
+                                    data-testid="sb-3d-select-model-root"
+                                    onClick={() => selectObject(selectedModelRoot)}
+                                    title={`Select the whole model: ${selectedModelLabel} (Alt-click)`}
+                                    aria-label="Select the whole model"
+                                    style={{ ...HUD_SEGMENT_STYLE, height: 16, padding: '0 6px', borderColor: 'rgba(255, 255, 255, 0.18)' }}
+                                >
+                                    Whole model
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                onClick={() => selectObject(null)}
+                                title="Clear selection"
+                                aria-label="Clear selection"
+                                style={{ ...HUD_SEGMENT_STYLE, width: 16, height: 16, padding: 0, justifyContent: 'center' }}
+                            >
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                                    <path d="M18 6L6 18M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Vector Roadmap Reference Minimap & Ground Blueprint HUD */}
             <VectorRoadmapHUD
@@ -3980,7 +4217,9 @@ int main(int argc, char** argv) {
                 onSelectObject={(id) => {
                     if (id && threeSceneRef.current) {
                         const target = threeSceneRef.current.getObjectByName(id) ||
-                                       customMeshRegistryRef.current.get(id)?.mesh || null;
+                                       customMeshRegistryRef.current.get(id)?.mesh ||
+                                       // an objects[] id resolves to its loaded-model root
+                                       threeSceneRef.current.getObjectByName(`${EXTERNAL_OBJECT_ROOT_PREFIX}${id}`) || null;
                         selectObject(target);
                     } else {
                         selectObject(null);

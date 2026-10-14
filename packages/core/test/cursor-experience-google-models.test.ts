@@ -46,12 +46,12 @@ async function runCursorExperienceAndGoogleModelsTests() {
     ].join('\n');
 
     // -------------------------------------------------------------
-    // Test 1: Backend strictly uses Google Models (gemini-3.7-flash, gemini-3.5-flash-lite, gemini-2.5-pro, etc.)
+    // Test 1: Backend strictly uses Google Models (gemini-3.8-flash, gemini-3.5-flash-lite, gemini-2.5-pro, etc.)
     // -------------------------------------------------------------
-    assert.ok(serviceSource.includes("DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash'"), 'Primary model must be Google gemini-3.7-flash');
+    assert.ok(serviceSource.includes("DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash'"), 'Primary model must be Google gemini-3.8-flash');
     assert.ok(serviceSource.includes("DEFAULT_SUBAGENT_MODEL = 'gemini-3.5-flash-lite'"), 'Subagent model must be Google gemini-3.5-flash-lite');
     assert.ok(!serviceSource.includes('claude-') && !serviceSource.includes('gpt-4'), 'Backend must not reference non-Google models');
-    console.log('  ✓ Test 1 Passed: Backend strictly configured with Google Models (Gemini 3.7 Flash & Subagents)');
+    console.log('  ✓ Test 1 Passed: Backend strictly configured with Google Models (Gemini 3.8 Flash & Subagents)');
 
     // -------------------------------------------------------------
     // Test 2: UI does not expose raw model slugs to user (Model Privacy)
@@ -60,7 +60,7 @@ async function runCursorExperienceAndGoogleModelsTests() {
     assert.ok(settingsSource.includes('High Reasoning Engine'), 'SettingsModal must present capability tier "High Reasoning Engine"');
     assert.ok(settingsSource.includes('Fast Intelligence'), 'SettingsModal must present capability tier "Fast Intelligence"');
     assert.ok(!settingsSource.includes('Active Model: gemini-'), 'SettingsModal must not leak raw model slug string in status display');
-    assert.ok(!spotlightSource.includes('Gemini 3.7 reasoning'), 'SpotlightLauncherModal must use generic AI naming in user search');
+    assert.ok(!spotlightSource.includes('Gemini 3.8 reasoning'), 'SpotlightLauncherModal must use generic AI naming in user search');
     assert.ok(automationsSource.includes('Autonomous AI Agent'), 'AutomationsModal must describe AI node as Autonomous AI Agent');
     assert.ok(nodeGraphSource.includes('High Reasoning Engine'), 'NodeGraphPrimitive must describe model options as capability tiers');
     assert.ok(studioSource.includes('GenerativeCanvasStudio'), 'GenerativeCanvasStudio component verified');

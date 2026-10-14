@@ -11,16 +11,43 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { exec, execFile, execSync } from 'child_process';
+import { resolveWithinRoot } from '../security/path-guard';
+import { buildScrubbedEnv } from '../security/sandbox-policy';
+import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 const BUILD_STAMP = '.scratchbox-build-stamp';
 const BUILD_LOCK_STALE_MS = 20 * 60 * 1000;
 // One in-flight build per engine dir within this process; other processes are serialized by a lock directory.
 const nativeBuilds = new Map<string, Promise<string | null>>();
+
+/** Host variables a Python interpreter/venv legitimately needs beyond the sandbox allowlist. */
+const PYTHON_HOST_ENV_PASSTHROUGH = ['VIRTUAL_ENV', 'CONDA_PREFIX', 'CONDA_DEFAULT_ENV', 'PYTHONHOME'];
+
+/**
+ * Builds the child environment for model-authored Python scripts: the scrubbed sandbox env
+ * (PATH, HOME, TMPDIR, ... with no API keys or credentials) plus interpreter/venv variables,
+ * non-secret SCRATCHBOX_* engine settings, the caller's explicit `options.env`, and the
+ * runner-managed variables (PYTHONPATH, PYTHONUNBUFFERED, ...), which win last.
+ */
+export function buildPythonChildEnv(
+    callerEnv: Record<string, string | undefined> | undefined,
+    runnerEnv: Record<string, string>,
+    hostEnv: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+    const hostExtras: Record<string, string | undefined> = {};
+    for (const [name, value] of Object.entries(hostEnv)) {
+        if (name.startsWith('SCRATCHBOX_') || PYTHON_HOST_ENV_PASSTHROUGH.includes(name)) hostExtras[name] = value;
+    }
+    const env = buildScrubbedEnv(hostEnv, hostExtras);
+    // Variables the caller passes explicitly are deliberate inputs to the script; keep them verbatim.
+    for (const [name, value] of Object.entries(callerEnv || {})) {
+        if (typeof value === 'string') env[name] = value;
+    }
+    return { ...env, ...runnerEnv };
+}
 
 export interface PythonExecutionAsset {
     name: string;
@@ -253,7 +280,8 @@ export class NativePythonRunnerService {
         // Stage external assets
         if (options.assets && options.assets.length > 0) {
             for (const asset of options.assets) {
-                const assetPath = path.join(outputDir, asset.name);
+                // Asset names come from request bodies and tool args: keep them inside outputDir.
+                const assetPath = resolveWithinRoot(outputDir, asset.name);
                 if (typeof asset.content === 'string') {
                     if (asset.encoding === 'base64') {
                         fs.writeFileSync(assetPath, Buffer.from(asset.content, 'base64'));
@@ -310,19 +338,18 @@ export class NativePythonRunnerService {
             process.env.PYTHONPATH
         ].filter(Boolean).join(path.delimiter);
 
-        const env = {
-            ...process.env,
-            ...options.env,
+        // Scripts are model-authored: start from the scrubbed sandbox env (no API keys/credentials).
+        const env = buildPythonChildEnv(options.env, {
             PYTHONPATH: pythonPaths,
             PYTHONUNBUFFERED: '1',
             SCRATCHBOX_HUMAN_ASSETS_DIR: path.resolve(repoRoot, 'packages/core/assets/models')
-        };
+        });
 
-        const argsStr = (options.args || []).map(a => `"${a}"`).join(' ');
-        const cmd = `"${this.pythonExecutable}" "${scriptPath}" ${argsStr}`.trim();
+        // Argument array, no shell: args may carry model- or user-supplied text.
+        const argv = [scriptPath, ...(options.args || []).map(String)];
 
         try {
-            const { stdout, stderr } = await execAsync(cmd, {
+            const { stdout, stderr } = await execFileAsync(this.pythonExecutable, argv, {
                 cwd,
                 timeout,
                 maxBuffer: 64 * 1024 * 1024,
@@ -429,18 +456,16 @@ export class NativePythonRunnerService {
             process.env.PYTHONPATH
         ].filter(Boolean).join(path.delimiter);
 
-        const env = {
-            ...process.env,
-            ...options.env,
+        const env = buildPythonChildEnv(options.env, {
             PYTHONPATH: pythonPaths,
             PYTHONUNBUFFERED: '1'
-        };
+        });
 
-        const argsStr = (options.args || []).map(a => `"${a}"`).join(' ');
-        const cmd = `"${this.pythonExecutable}" "${scriptPath}" ${argsStr}`.trim();
+        // Argument array, no shell: args may carry model- or user-supplied text.
+        const argv = [scriptPath, ...(options.args || []).map(String)];
 
         try {
-            const stdout = execSync(cmd, {
+            const stdout = execFileSync(this.pythonExecutable, argv, {
                 cwd,
                 timeout,
                 maxBuffer: 64 * 1024 * 1024,

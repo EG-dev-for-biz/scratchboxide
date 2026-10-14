@@ -1,9 +1,10 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-10T15:05:08.129Z",
+  "timestamp": "2026-10-13T16:48:34.049Z",
   "videoRef": "<VIDEO_REF_0>",
+  "mock": true,
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_clay_blockout_camera.mp4",
-  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/41_890210_12_492231_tiles.glb",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/google_tiles_clay_area.offline_mock.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_frame_00.png",
   "storyboardPaths": [
@@ -28,43 +29,43 @@
   "errorTarget": 0.5,
   "renderMode": "clay",
   "mesh": {
-    "name": "Google3DTile_clay",
+    "name": "Google3DTile_clay_offline_mock",
     "vertexCount": 341,
     "triangleCount": 310,
     "submeshCount": 1,
     "boundingBox": {
       "min": [
-        -100,
-        -10,
-        -100
+        -150,
+        -1.4662957191467285,
+        -150
       ],
       "max": [
-        100,
-        200,
-        100
+        150,
+        90,
+        150
       ]
     },
     "boundingSphere": {
       "center": [
         0,
-        50,
+        44.266852140426636,
         0
       ],
-      "radius": 150
+      "radius": 217.00580824748815
     }
   },
   "collisionAudit": {
     "enabled": true,
     "violationsDetected": 0,
-    "minClearanceMeters": 65,
+    "minClearanceMeters": 45,
     "maxElevationAdjustment": 0,
     "pathAdjusted": false,
     "auditPassed": true
   },
   "tileMetrics": {
     "totalFramesCaptured": 72,
-    "averageSettleTimeMs": 45,
-    "maxTilesLoaded": 524,
+    "averageSettleTimeMs": 0,
+    "maxTilesLoaded": 0,
     "errorTarget": 0.5,
     "renderMode": "clay"
   }

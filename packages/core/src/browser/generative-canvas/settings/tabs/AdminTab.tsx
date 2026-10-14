@@ -46,16 +46,18 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         tags: ['Spatial Intelligence', 'Universal URN', 'Cadastre', 'Kinematic Splines', 'Sub-Millimeter ENU', 'Zero Fake Trees'],
         badge: 'SPATIAL SKELETON'
     },
-    // 0. Omnispatial Multi-Sensor 3D Synthesis Pipeline (Minimal Orthogonal Basis Proof)
+    // 0. Omnispatial Pipeline render-pass plate viewer (standalone HTML). Titled distinctly from
+    //    the interactive in-app Scene3D stage ("Omnispatial Multi-Sensor 3D Synthesis Pipeline"),
+    //    which loads the real stage GLBs into the app viewport.
     {
         id: 'omnispatial-synthesis-demo',
-        title: 'Omnispatial Multi-Sensor 3D Synthesis Pipeline',
-        subtitle: 'Minimal Orthogonal Basis Proof · 3D Tiles + 2D Vector Cadastre + Street View 360',
+        title: 'Omnispatial Pipeline · Render-Pass Plate Viewer',
+        subtitle: 'Pre-rendered PNG plate comparisons · 3D Tiles + 2D Vector Cadastre + Street View 360',
         category: 'Geospatial & 3D Tiles',
         path: '/omnispatial_synthesis_demo.html',
-        description: 'Synthesizes the Minimal Orthogonal Basis into metric digital twins: Google 3D Photo Tiles macro envelope rectified with 2D cadastral vector sharp 90° corners, and fused with Street View 360 for true 0.22m 3D recessed window bays and Art Deco entrance reveals.',
-        tags: ['Orthogonal Triad', 'Google 3D Tiles', 'Vector Cadastre', 'Street View 360', '90° Corners', '3D Window Bays', 'C++20 Clang'],
-        badge: 'ORTHOGONAL TRIAD'
+        description: 'Standalone page comparing pre-rendered Omnispatial pipeline render-pass plates (side-by-side, wipe slider, detail loupe) with a lightweight model preview. For full in-app viewport interaction on the real models (orbit, pan, zoom, part picking, Stage 1/2/3 switching), launch the in-app "Omnispatial Multi-Sensor 3D Synthesis Pipeline" stage instead.',
+        tags: ['Orthogonal Triad', 'Render-Pass Plates', 'Google 3D Tiles', 'Vector Cadastre', 'Street View 360'],
+        badge: 'PLATE VIEWER'
     },
     // 1. Next-Gen Astro 3D Viewport Studio (Universal 3D Benchmark)
     {

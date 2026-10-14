@@ -492,7 +492,46 @@ function connectDemoStudiosAndAssets() {
           fs.symlinkSync(relPath, targetPath);
           linkedCount++;
           log(`   🔗 Connected model: ${mFile} -> ${relPath}`);
-        } catch {}
+        } catch (err) {
+          console.warn(`   ⚠️  Could not link model ${mFile}: ${err && err.message ? err.message : err}`);
+        }
+      }
+    }
+  }
+
+  // 4. Synchronize desktop-app/public with root public/ assets
+  const desktopAppPublic = path.join(REPO_ROOT, 'desktop-app', 'public');
+  if (fs.existsSync(desktopAppPublic)) {
+    const syncDirs = ['renders', 'textures', 'extracted_textures', 'datasets', 'splats'];
+    for (const sDir of syncDirs) {
+      const srcDir = path.join(publicDir, sDir);
+      const dstDir = path.join(desktopAppPublic, sDir);
+      if (fs.existsSync(srcDir) && !fs.existsSync(dstDir)) {
+        try {
+          const relPath = path.relative(desktopAppPublic, srcDir);
+          fs.symlinkSync(relPath, dstDir, 'junction');
+          linkedCount++;
+          log(`   🔗 Connected desktop-app/public/${sDir} -> ${relPath}`);
+        } catch (err) {
+          console.warn(`   ⚠️  Could not link desktop-app/public/${sDir}: ${err && err.message ? err.message : err}`);
+        }
+      }
+    }
+
+    const appModelsDir = path.join(desktopAppPublic, 'models');
+    if (fs.existsSync(appModelsDir) && fs.existsSync(publicModelsDir)) {
+      const allRootModels = fs.readdirSync(publicModelsDir);
+      for (const mFile of allRootModels) {
+        const dstPath = path.join(appModelsDir, mFile);
+        if (!fs.existsSync(dstPath)) {
+          try {
+            const relPath = path.relative(appModelsDir, path.join(publicModelsDir, mFile));
+            fs.symlinkSync(relPath, dstPath);
+            linkedCount++;
+          } catch (err) {
+            console.warn(`   ⚠️  Could not link desktop-app/public/models/${mFile}: ${err && err.message ? err.message : err}`);
+          }
+        }
       }
     }
   }

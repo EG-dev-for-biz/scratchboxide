@@ -267,7 +267,7 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
                 subtitle: `Automation canvas node graph at ${filePath}`,
                 nodes: [
                     { id: 'n1', label: fileName, subtitle: 'Active File', category: 'input', x: 200, y: 150, status: 'completed' },
-                    { id: 'n2', label: 'AI Processor', subtitle: 'Gemini 3.7 Flash', category: 'ai', x: 450, y: 150, status: 'running' }
+                    { id: 'n2', label: 'AI Processor', subtitle: 'Gemini 3.8 Flash', category: 'ai', x: 450, y: 150, status: 'running' }
                 ],
                 edges: [
                     { id: 'e1', source: 'n1', target: 'n2', style: 'animated', color: 'indigo' }

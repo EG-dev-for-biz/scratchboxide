@@ -69,7 +69,7 @@ async function runTests() {
 
     const testDAG: SubagentDAGPlan = {
         planId: 'dag-feature-auth-refactor',
-        orchestratorModel: 'gemini-3.7-flash',
+        orchestratorModel: 'gemini-3.8-flash',
         goal: 'Refactor authentication middleware with parallel testing and security review',
         tasks: [
             {
@@ -228,15 +228,15 @@ async function runTests() {
     console.log('  ✓ Test 5 Passed: Losing speculative tasks cleanly cancelled via AbortSignal');
 
     // =========================================================================
-    // Test 6: GeminiService Orchestrator Model Verification (Gemini 3.7 Orchestrator)
+    // Test 6: GeminiService Orchestrator Model Verification (Gemini 3.8 Orchestrator)
     // =========================================================================
-    console.log('\n--- Section 6: Gemini 3.7 Orchestrator Integration ---');
+    console.log('\n--- Section 6: Gemini 3.8 Orchestrator Integration ---');
     const geminiService = new GeminiService();
     const status = await geminiService.getStatus();
 
-    assert.strictEqual(status.activeModel, 'gemini-3.7-flash', 'Master orchestrator must be Gemini 3.7 Flash');
+    assert.strictEqual(status.activeModel, 'gemini-3.8-flash', 'Master orchestrator must be Gemini 3.8 Flash');
     assert.strictEqual(status.subagentModel, 'gemini-3.5-flash-lite', 'Subagents must execute on Gemini 3.5 Flash Lite');
-    console.log('  ✓ Test 6 Passed: Gemini 3.7 Flash configured as orchestrator with Gemini 3.5 Flash Lite subagents');
+    console.log('  ✓ Test 6 Passed: Gemini 3.8 Flash configured as orchestrator with Gemini 3.5 Flash Lite subagents');
 
     // =========================================================================
     // Test 7: Real Subagent DAG Dispatch & Shared Blackboard Recording
@@ -248,7 +248,7 @@ async function runTests() {
 
     const automatedDAG: SubagentDAGPlan = {
         planId: 'dag-auto-analysis',
-        orchestratorModel: 'gemini-3.7-flash',
+        orchestratorModel: 'gemini-3.8-flash',
         goal: 'Autonomous exploration and review',
         tasks: [
             {

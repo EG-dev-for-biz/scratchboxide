@@ -9,6 +9,9 @@
 #include <chrono>
 #include <algorithm>
 #include <fstream>
+#include <map>
+#include <unordered_map>
+#include <cstdio>
 
 using namespace scratchbox;
 using namespace scratchbox::math;
@@ -355,10 +358,27 @@ int main(int argc, char** argv) {
     size_t districtTris = 0;
     size_t esbTris = 0;
 
+    // District triangles keep their original tile material, UVs and shared vertices, so
+    // Stage 3 can re-embed the authentic photogrammetric textures instead of three
+    // corner color samples per triangle.
+    std::map<uint32_t, ScratchboxMesh> districtByMaterial;
+    std::map<uint32_t, std::unordered_map<uint32_t, uint32_t>> districtRemap;
+    std::unordered_map<uint32_t, uint32_t> clayRemap;
+    auto remapInto = [&](ScratchboxMesh& dst, std::unordered_map<uint32_t, uint32_t>& remap, uint32_t src) {
+        auto it = remap.find(src);
+        if (it != remap.end()) return it->second;
+        Vertex v = tileVerts[src];
+        v.color = Vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        uint32_t idx = static_cast<uint32_t>(dst.vertices.size());
+        dst.addVertex(v);
+        remap.emplace(src, idx);
+        return idx;
+    };
+
     for (size_t i = 0; i < tileIndices.size(); i += 3) {
-        Vertex v0 = tileVerts[tileIndices[i]];
-        Vertex v1 = tileVerts[tileIndices[i + 1]];
-        Vertex v2 = tileVerts[tileIndices[i + 2]];
+        const Vertex& v0 = tileVerts[tileIndices[i]];
+        const Vertex& v1 = tileVerts[tileIndices[i + 1]];
+        const Vertex& v2 = tileVerts[tileIndices[i + 2]];
 
         float cx = (v0.position.x + v1.position.x + v2.position.x) / 3.0f;
         float cz = (v0.position.z + v1.position.z + v2.position.z) / 3.0f;
@@ -366,37 +386,23 @@ int main(int argc, char** argv) {
         // Bounding box for Empire State Building parcel (centered at 0,0)
         if (cx >= -65.0f && cx <= 65.0f && cz >= -46.0f && cz <= 46.0f) {
             esbTris++;
-        } else {
-            districtTris++;
-            // Sample authentic photogrammetric texture color into vertex colors
-            uint32_t matIdx = (i / 3 < tileScene.triangleMaterial.size()) ? tileScene.triangleMaterial[i / 3] : 0;
-            if (matIdx < tileScene.materials.size()) {
-                int imgIdx = tileScene.materials[matIdx].baseColorImage;
-                if (imgIdx >= 0 && imgIdx < static_cast<int>(tileScene.images.size())) {
-                    const auto& img = tileScene.images[imgIdx];
-                    if (img.decoded && !img.pixels.data.empty()) {
-                        auto sampleCol = [&](Vertex& v) {
-                            float u = v.uv.x - std::floor(v.uv.x);
-                            float vCoord = v.uv.y - std::floor(v.uv.y);
-                            Vec3 c = img.pixels.sampleBilinear(u, vCoord);
-                            v.color = Vec4(c.x, c.y, c.z, 1.0f);
-                        };
-                        sampleCol(v0);
-                        sampleCol(v1);
-                        sampleCol(v2);
-                    }
-                }
-            }
-
-            uint32_t b = static_cast<uint32_t>(meshDistrict.vertices.size());
-            meshDistrict.addVertex(v0);
-            meshDistrict.addVertex(v1);
-            meshDistrict.addVertex(v2);
-            meshDistrict.addTriangle(b, b + 1, b + 2);
+            continue;
         }
+        districtTris++;
+        uint32_t matIdx = (i / 3 < tileScene.triangleMaterial.size()) ? tileScene.triangleMaterial[i / 3] : 0;
+        ScratchboxMesh& chunk = districtByMaterial[matIdx];
+        auto& remap = districtRemap[matIdx];
+        uint32_t c0 = remapInto(chunk, remap, tileIndices[i]);
+        uint32_t c1 = remapInto(chunk, remap, tileIndices[i + 1]);
+        uint32_t c2 = remapInto(chunk, remap, tileIndices[i + 2]);
+        chunk.addTriangle(c0, c1, c2);
+        meshDistrict.addTriangle(remapInto(meshDistrict, clayRemap, tileIndices[i]),
+                                 remapInto(meshDistrict, clayRemap, tileIndices[i + 1]),
+                                 remapInto(meshDistrict, clayRemap, tileIndices[i + 2]));
     }
     std::cout << "Preserved Surrounding District: " << districtTris << " triangles (" 
-              << meshDistrict.vertices.size() << " vertices with photogrammetric colors)\n";
+              << meshDistrict.vertices.size() << " shared vertices, "
+              << districtByMaterial.size() << " photogrammetric texture chunks)\n";
 
     // ------------------------------------------------------------------------
     // D. Load Botanical Oak Tree from SB-Veggie
@@ -784,8 +790,6 @@ int main(int argc, char** argv) {
     meshTileSpire.material.name = "Mat_AuthenticTileSpire";
     meshTreeTrunk.material.name = "Mat_OakBark";
     meshTreeFoliage.material.name = "Mat_OakFoliage";
-    meshDistrict.material.name = "Mat_MidtownDistrict";
-
     std::vector<ScratchboxMesh> subMeshes = {
         std::move(meshLimestone),       // 0
         std::move(meshGranite),         // 1
@@ -798,8 +802,7 @@ int main(int argc, char** argv) {
         std::move(meshInterior),        // 8
         std::move(meshTileSpire),       // 9
         std::move(meshTreeTrunk),       // 10
-        std::move(meshTreeFoliage),     // 11
-        std::move(meshDistrict)         // 12
+        std::move(meshTreeFoliage)      // 11
     };
 
     // Synthesize PBR Texture Sets via Continuous Biophysical Manifold (ADA Pillar 3)
@@ -919,7 +922,7 @@ int main(int argc, char** argv) {
         ContinuousMaterialDescriptor dContext = getAnchorManifoldPoint(0);
         dContext.albedoLinear = Vec3(0.70f, 0.68f, 0.64f);
         dContext.roughnessBaseline = 0.80f;
-        materialSlots.push_back({12, "MidtownDistrict", dContext, 333});
+        (void)dContext; // District uses its authentic tile textures (appended below).
     }
 
     for (const auto& def : materialSlots) {
@@ -976,7 +979,7 @@ int main(int argc, char** argv) {
         EmbeddedTexture texAlbedo;
         texAlbedo.name = def.name + "_BaseColor";
         texAlbedo.mimeType = "image/png";
-        texAlbedo.data = encodePng(pbrSet.albedo);
+        texAlbedo.data = scratchbox::png::encode(pbrSet.albedo);
         texAlbedo.usage = TextureUsage::BASE_COLOR;
         texAlbedo.materialIndex = def.matIndex;
         embeddedTextures.push_back(std::move(texAlbedo));
@@ -984,7 +987,7 @@ int main(int argc, char** argv) {
         EmbeddedTexture texNormal;
         texNormal.name = def.name + "_Normal";
         texNormal.mimeType = "image/png";
-        texNormal.data = encodePng(pbrSet.normal);
+        texNormal.data = scratchbox::png::encode(pbrSet.normal);
         texNormal.usage = TextureUsage::NORMAL;
         texNormal.materialIndex = def.matIndex;
         embeddedTextures.push_back(std::move(texNormal));
@@ -992,7 +995,7 @@ int main(int argc, char** argv) {
         EmbeddedTexture texOrm;
         texOrm.name = def.name + "_ORM";
         texOrm.mimeType = "image/png";
-        texOrm.data = encodePng(pbrSet.orm);
+        texOrm.data = scratchbox::png::encode(pbrSet.orm);
         texOrm.usage = TextureUsage::ORM;
         texOrm.materialIndex = def.matIndex;
         embeddedTextures.push_back(std::move(texOrm));
@@ -1009,11 +1012,45 @@ int main(int argc, char** argv) {
         EmbeddedTexture texEmissive;
         texEmissive.name = "ArchitecturalGlazing_Emissive";
         texEmissive.mimeType = "image/png";
-        texEmissive.data = encodePng(emissiveImg);
+        texEmissive.data = scratchbox::png::encode(emissiveImg);
         texEmissive.usage = TextureUsage::EMISSIVE;
         texEmissive.materialIndex = 4;
         embeddedTextures.push_back(std::move(texEmissive));
     }
+
+    // Surrounding district: one submesh per tile material, carrying the original
+    // photogrammetric JPEG/PNG bytes losslessly (no re-encode, no color baking).
+    size_t districtTextured = 0, districtTextureBytes = 0;
+    for (auto& [matIdx, chunk] : districtByMaterial) {
+        char tag[32];
+        std::snprintf(tag, sizeof(tag), "TileTex_%03u_", matIdx);
+        chunk.name = std::string("MidtownDistrict_") + tag;
+        chunk.material.name = std::string("Mat_") + tag;
+        chunk.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        chunk.material.roughnessFactor = 0.82f;
+        chunk.material.metallicFactor = 0.04f;
+        int imgIdx = -1;
+        if (matIdx < tileScene.materials.size()) {
+            chunk.material.baseColorFactor = tileScene.materials[matIdx].baseColorFactor;
+            imgIdx = tileScene.materials[matIdx].baseColorImage;
+        }
+        int subIdx = static_cast<int>(subMeshes.size());
+        subMeshes.push_back(std::move(chunk));
+        if (imgIdx >= 0 && imgIdx < static_cast<int>(tileScene.images.size()) && !tileScene.images[imgIdx].encoded.empty()) {
+            const auto& img = tileScene.images[imgIdx];
+            EmbeddedTexture tex;
+            tex.name = std::string(tag) + "BaseColor";
+            tex.mimeType = img.mimeType;
+            tex.data = img.encoded;
+            tex.usage = TextureUsage::BASE_COLOR;
+            tex.materialIndex = subIdx;
+            districtTextureBytes += tex.data.size();
+            embeddedTextures.push_back(std::move(tex));
+            districtTextured++;
+        }
+    }
+    std::cout << "Embedded " << districtTextured << " authentic district textures ("
+              << (districtTextureBytes / 1e6) << " MB, original encoding)\n";
 
     bool ok3 = GlbWriter::writeMultiMeshToFile(subMeshes, stage3Path, embeddedTextures);
     if (ok3) {

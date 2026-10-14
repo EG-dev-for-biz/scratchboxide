@@ -560,7 +560,7 @@ export async function planWorldIntent(
 
     try {
         const ai = new GoogleGenAI({ apiKey });
-        const model = 'gemini-3.7-flash';
+        const model = 'gemini-3.8-flash';
 
         const systemInstruction = `You are an expert 3D World Designer and Scene Architect for Scratchbox IDE.
 Your task is to take a natural language world generation prompt (e.g. "medieval harbor under a storm", "desert canyons with robotic outposts", "frozen science research base", "cyberpunk skyline") and compile it into a structured, geomorphically consistent open-world 3D scene specification.
@@ -621,7 +621,7 @@ export async function planSwarmTasks(
 
     try {
         const ai = new GoogleGenAI({ apiKey });
-        const model = 'gemini-3.7-flash';
+        const model = 'gemini-3.8-flash';
 
         const systemInstruction = `You are an expert World Architect Coordinator.
 Your task is to take a natural language world generation prompt and partition it into parallel tasks for specialized sub-agents:

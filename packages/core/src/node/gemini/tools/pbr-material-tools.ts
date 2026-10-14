@@ -17,6 +17,7 @@ import {
     type NativePbrTextureSet
 } from '../../3d-engine/native-material-pbr-service';
 import { AdaptiveMaterialPbrService } from '../../3d-engine/adaptive-material-pbr-service';
+import { AdaptiveUvOrchestrator } from '../../3d-engine/adaptive-uv-orchestrator';
 import { GltfBinaryPacker } from '../../3d-engine/gltf-binary-packer';
 import { MaterialXService } from '../../3d-engine/materialx-service';
 import { UsdzPacker } from '../../3d-engine/usdz-packer';
@@ -151,8 +152,53 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 displacementScaleMeters: {
                     type: 'NUMBER',
                     description: 'Surface metric relief displacement amplitude in meters when format is "glb" (default: 0.04).'
+                },
+                targetMeshPath: {
+                    type: 'STRING',
+                    description: 'Optional absolute or relative path to a target 3D model (.glb) to adaptively wrap, seam-align, and texture.'
+                },
+                domain: {
+                    type: 'STRING',
+                    description: 'High-level semantic domain classification: "organic" (living anatomy, skin, digits, characters) or "nonorganic" (hard-surface CAD, stone architecture, vehicles).',
+                    enum: ['organic', 'nonorganic']
+                },
+                uvStrategy: {
+                    type: 'STRING',
+                    description: 'Explicit UV wrapping strategy override: "auto", "carrier_conformal_sheet", "elevation_stratified_conformal", "height_blended_triplanar", or "recipe_hybrid".',
+                    enum: ['auto', 'carrier_conformal_sheet', 'elevation_stratified_conformal', 'height_blended_triplanar', 'recipe_hybrid']
+                },
+                solarCoordinates: {
+                    type: 'OBJECT',
+                    description: 'Geodetic coordinates for real-world solar inverse de-lighting: { latitude: number, longitude: number, timestampIso?: string }.'
+                },
+                carrierSpinePoints: {
+                    type: 'ARRAY',
+                    description: 'Ordered 3D skeletal spine points [[x, y, z], ...] for organic SO(3) Frenet-Serret carrier-frame conformal unfolding.'
+                },
+                seamPaddingPx: {
+                    type: 'NUMBER',
+                    description: 'Gutter dilation padding in pixels around UV island borders (default: 8 for organic, 16 for high-rise facades, 0 for triplanar).'
                 }
             }
+        }
+    },
+    {
+        name: 'pbr_probe_mesh_topology',
+        description: 'Analyzes a 3D mesh (.glb) to evaluate whether it is organic or non-organic, determines the optimal UV wrapping technique (Carrier Sheet, Elevation-Stratified Conformal, Height-Blended Triplanar, or Recipe Hybrid), and computes the exact seam placement and seam mitigation strategy (Hermite margin overlap, MikkTSpace handedness, dilated gutters, or boundary welding).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                meshPath: {
+                    type: 'STRING',
+                    description: 'Absolute or relative path to the .glb mesh file to inspect.'
+                },
+                domain: {
+                    type: 'STRING',
+                    description: 'Optional domain hint: "organic" or "nonorganic".',
+                    enum: ['organic', 'nonorganic']
+                }
+            },
+            required: ['meshPath']
         }
     },
     {
@@ -206,6 +252,19 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const pbrMaterialHandlers: Record<string, ToolHandler> = {
+    pbr_probe_mesh_topology: async (args, _ctx) => {
+        const meshPath = asString(args.meshPath);
+        if (!meshPath) {
+            throw new Error('pbr_probe_mesh_topology requires meshPath argument.');
+        }
+        const domain = asString(args.domain) as any;
+        const probeResult = AdaptiveUvOrchestrator.probeTopology(meshPath, domain);
+        return {
+            resultPayload: probeResult as unknown as ToolResultPayload,
+            summaryResult: `Probed mesh topology for ${meshPath}: Classified as [${probeResult.domainClassification}] (Organicity: ${probeResult.organicityIndex.toFixed(2)}). Recommended UV strategy: [${probeResult.recommendedStrategy}]. Seam Strategy: ${probeResult.seamStrategy.seamPlacement} via ${probeResult.seamStrategy.seamMitigationMethod} (${probeResult.seamStrategy.recommendedGutterPaddingPx}px padding).`
+        };
+    },
+
     pbr_synthesize_material: async (args, _ctx) => {
         const startTime = performance.now();
         const service = new NativeMaterialPbrService();
@@ -216,6 +275,45 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         const height = asNumber(args.height, resParsed.height)!;
         const seed = asNumber(args.seed, 42)!;
         const format = (asString(args.format) || 'png_pack').toLowerCase();
+
+        // Target mesh adaptive routing
+        if (args.targetMeshPath) {
+            const meshPath = asString(args.targetMeshPath)!;
+            const domain = asString(args.domain) as any;
+            const uvStrategy = asString(args.uvStrategy) as any;
+            const outDir = asString(args.outputDir) || path.dirname(meshPath);
+            fs.mkdirSync(outDir, { recursive: true });
+            const filePrefix = asString(args.outputFileName) || `${path.basename(meshPath, path.extname(meshPath))}_adaptive_pbr`;
+            const outPath = path.join(outDir, `${filePrefix}.glb`);
+
+            const adaptiveResult = await AdaptiveUvOrchestrator.applyAdaptivePbr({
+                inputGlbPath: meshPath,
+                domain,
+                strategy: uvStrategy,
+                outputPath: outPath,
+                resolution: (args.resolution as any) || '2K',
+                formats: format === 'materialx' ? ['glb', 'materialx'] : format === 'usdz' ? ['glb', 'usdz'] : ['glb'],
+                solarDelighting: args.solarCoordinates ? {
+                    latitude: (args.solarCoordinates as any).latitude,
+                    longitude: (args.solarCoordinates as any).longitude,
+                    timestampIso: (args.solarCoordinates as any).timestampIso
+                } : undefined,
+                gutterPaddingPx: asNumber(args.seamPaddingPx, undefined)
+            });
+
+            const elapsedMs = Math.round(performance.now() - startTime);
+            return {
+                resultPayload: {
+                    appliedStrategy: adaptiveResult.appliedStrategy,
+                    domainClassification: adaptiveResult.domainClassification,
+                    topology: adaptiveResult.topology,
+                    seamStrategy: adaptiveResult.seamStrategy,
+                    outputFiles: adaptiveResult.outputFiles,
+                    executionTimeMs: elapsedMs
+                } as unknown as ToolResultPayload,
+                summaryResult: `Applied Adaptive PBR [${adaptiveResult.appliedStrategy}] (${adaptiveResult.domainClassification}) to ${meshPath}. Seam placement: ${adaptiveResult.seamStrategy.seamPlacement} (${adaptiveResult.seamStrategy.seamMitigationMethod}, ${adaptiveResult.seamStrategy.recommendedGutterPaddingPx}px padding). Output: ${outPath} (${elapsedMs}ms).`
+            };
+        }
 
         // 2. Resolve continuous descriptor
         const archetypeInput = args.archetype ? (typeof args.archetype === 'number' ? args.archetype : asString(args.archetype)) : undefined;

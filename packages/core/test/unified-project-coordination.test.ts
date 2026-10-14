@@ -246,7 +246,7 @@ export class AppController {
 
     const agentTransaction: ProjectAgentTransaction = {
         transactionId: 'tx-gemini-scaffold-001',
-        actor: { id: 'gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', kind: 'agent' },
+        actor: { id: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', kind: 'agent' },
         description: 'Scaffold Neural Network Simulator component and add tasks',
         mutations: [
             {
