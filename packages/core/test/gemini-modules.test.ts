@@ -61,12 +61,17 @@ test('GeminiClient model candidates, fallback and error classification', async (
 async function runClientAssertions(): Promise<void> {
     const client = makeClient();
     assert.deepStrictEqual(client.getModelCandidates(), [DEFAULT_GEMINI_MODEL, ...FALLBACK_GEMINI_MODELS]);
-    // 6f4a5d0 bumped the default to gemini-3.8-flash with gemini-3.7-flash as the first fallback.
+    // The default is gemini-4-argon with gemini-3.8-flash as the first fallback.
     // A requested model leads, followed by the remaining fallbacks with duplicates removed.
-    assert.deepStrictEqual(FALLBACK_GEMINI_MODELS, ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']);
-    assert.deepStrictEqual(client.getModelCandidates('gemini-2.5-flash'), ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-2.5-pro']);
+    assert.deepStrictEqual(FALLBACK_GEMINI_MODELS, ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']);
+    assert.deepStrictEqual(client.getModelCandidates('gemini-2.5-flash'), ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-2.5-pro']);
     assert.deepStrictEqual(client.getThinkingConfig({}), { thinkingBudget: 1024 });
     assert.deepStrictEqual(client.getThinkingConfig({ thinkingBudget: 42 }), { thinkingBudget: 42 });
+    // Gemini 4+ takes a thinking level instead of a token budget.
+    assert.deepStrictEqual(client.getThinkingConfig({ thinkingBudget: 1024 }, 'gemini-3.8-flash'), { thinkingBudget: 1024 });
+    assert.deepStrictEqual(client.getThinkingConfig({ thinkingBudget: 512 }, 'gemini-4-argon'), { thinkingLevel: 'LOW' });
+    assert.deepStrictEqual(client.getThinkingConfig({}, 'gemini-4-argon'), { thinkingLevel: 'MEDIUM' });
+    assert.deepStrictEqual(client.getThinkingConfig({ thinkingBudget: 4096 }, 'gemini-4-argon'), { thinkingLevel: 'HIGH' });
 
     assert.ok(isModelNotFoundError(new Error('AI request failed (404): model not found')));
     assert.ok(!isModelNotFoundError(new Error('AI request failed (500): boom')));

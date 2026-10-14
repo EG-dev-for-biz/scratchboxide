@@ -13,9 +13,9 @@ async function runTests() {
     console.log('🧪 Running Gemini 3.8 & Subagent (Gemini 3.5 Flash Lite / 3.1 Flash Lite) Test Suite...');
 
     // Test 1: Verify primary model constants
-    assert.strictEqual(DEFAULT_GEMINI_MODEL, 'gemini-3.8-flash', 'Primary model must be gemini-3.8-flash');
+    assert.strictEqual(DEFAULT_GEMINI_MODEL, 'gemini-4-argon', 'Primary model must be gemini-4-argon');
     assert.ok(Array.isArray(FALLBACK_GEMINI_MODELS), 'Fallback models must be an array');
-    console.log('  ✓ Test 1 Passed: Primary model is gemini-3.8-flash');
+    console.log('  ✓ Test 1 Passed: Primary model is gemini-4-argon');
 
     // Test 2: Verify subagent model constants
     assert.strictEqual(DEFAULT_SUBAGENT_MODEL, 'gemini-3.5-flash-lite', 'Primary subagent must be gemini-3.5-flash-lite');
@@ -27,7 +27,7 @@ async function runTests() {
     const status = await service.getStatus();
 
     assert.ok(status, 'Status must not be null');
-    assert.strictEqual(status.activeModel, 'gemini-3.8-flash');
+    assert.strictEqual(status.activeModel, 'gemini-4-argon');
     assert.strictEqual(status.subagentModel, 'gemini-3.5-flash-lite');
     assert.ok(status.availableSubagentModels && status.availableSubagentModels.includes('gemini-3.5-flash-lite'));
     console.log('  ✓ Test 3 Passed: Service status correctly reports primary and subagent models');

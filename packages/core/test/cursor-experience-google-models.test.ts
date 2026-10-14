@@ -48,7 +48,7 @@ async function runCursorExperienceAndGoogleModelsTests() {
     // -------------------------------------------------------------
     // Test 1: Backend strictly uses Google Models (gemini-3.8-flash, gemini-3.5-flash-lite, gemini-2.5-pro, etc.)
     // -------------------------------------------------------------
-    assert.ok(serviceSource.includes("DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash'"), 'Primary model must be Google gemini-3.8-flash');
+    assert.ok(serviceSource.includes("DEFAULT_GEMINI_MODEL = 'gemini-4-argon'"), 'Primary model must be Google gemini-4-argon');
     assert.ok(serviceSource.includes("DEFAULT_SUBAGENT_MODEL = 'gemini-3.5-flash-lite'"), 'Subagent model must be Google gemini-3.5-flash-lite');
     assert.ok(!serviceSource.includes('claude-') && !serviceSource.includes('gpt-4'), 'Backend must not reference non-Google models');
     console.log('  ✓ Test 1 Passed: Backend strictly configured with Google Models (Gemini 3.8 Flash & Subagents)');

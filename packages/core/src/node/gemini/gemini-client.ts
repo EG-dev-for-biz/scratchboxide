@@ -14,13 +14,15 @@ import { GoogleGenAI, type Content, type GenerateContentResponseUsageMetadata } 
 import type { GeminiGenerateRequest, GeminiStatus, GroundingMetadata } from '../../common/gemini-protocol';
 import { FileKeyStore, type KeyStore } from '../key-store';
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
-export const FALLBACK_GEMINI_MODELS = ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'];
+export const DEFAULT_GEMINI_MODEL = 'gemini-4-argon';
+export const FALLBACK_GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'];
 
 export const DEFAULT_SUBAGENT_MODEL = 'gemini-3.5-flash-lite';
 export const FALLBACK_SUBAGENT_MODELS = ['gemini-3.1-flash-lite-preview', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
 
 export const DEFAULT_THINKING_BUDGET = 1024;
+
+export type GeminiThinkingConfig = { thinkingBudget: number } | { thinkingLevel: 'LOW' | 'MEDIUM' | 'HIGH' };
 /** Gemini 3.x publisher models are served only from the `global` location; regional endpoints 404. */
 export const VERTEX_LOCATION = 'global';
 
@@ -430,8 +432,16 @@ export class GeminiClient {
     }
 
     /** Thinking-budget config for a request, honouring per-request overrides. */
-    getThinkingConfig(request: Pick<GeminiGenerateRequest, 'thinkingBudget'>): { thinkingBudget: number } {
-        return { thinkingBudget: request.thinkingBudget !== undefined ? request.thinkingBudget : this.thinkingBudget };
+    /**
+     * Gemini 4+ rejects `thinkingBudget` with a 400 and takes a `thinkingLevel` instead, so the
+     * token budget from settings is mapped onto a level for those models.
+     */
+    getThinkingConfig(request: Pick<GeminiGenerateRequest, 'thinkingBudget'>, model?: string): GeminiThinkingConfig {
+        const thinkingBudget = request.thinkingBudget !== undefined ? request.thinkingBudget : this.thinkingBudget;
+        if (Number(/^gemini-(\d+)/.exec(model ?? '')?.[1] ?? 0) >= 4) {
+            return { thinkingLevel: thinkingBudget < 1024 ? 'LOW' : thinkingBudget < 2048 ? 'MEDIUM' : 'HIGH' };
+        }
+        return { thinkingBudget };
     }
 
     vertexModelUrl(projectId: string, model: string, method: 'streamGenerateContent' | 'generateContent'): string {

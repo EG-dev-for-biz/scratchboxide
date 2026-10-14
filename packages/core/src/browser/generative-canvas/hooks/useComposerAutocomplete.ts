@@ -49,7 +49,7 @@ export function useComposerAutocomplete(deps: UseComposerAutocompleteDeps) {
         totalTokens: 1260,
         maxContextLimit: 128000,
         compressionRatio: 0.64,
-        activeModel: 'gemini-3.8-flash',
+        activeModel: 'gemini-4-argon',
         thinkingBudget: 1024,
         rawLogTokens: 3500,
         compactedTokens: 1260,

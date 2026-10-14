@@ -21,6 +21,7 @@ import {
     isModelNotFoundError,
     resolveFetch,
     type FetchLike,
+    type GeminiThinkingConfig,
     type VertexGenerateContentJson
 } from './gemini-client';
 import {
@@ -71,7 +72,7 @@ interface VertexStreamPayload {
     generationConfig: {
         temperature: number;
         maxOutputTokens: number;
-        thinkingConfig: { thinkingBudget: number };
+        thinkingConfig: GeminiThinkingConfig;
     };
     tools?: GeminiToolConfig[];
 }
@@ -462,7 +463,7 @@ export class StreamingEngine {
                 temperature: request.temperature !== undefined ? request.temperature : 0.7,
                 // Tool calls that carry a whole generated app run ~5k tokens; at 8192 they were cut off (MAX_TOKENS).
                 maxOutputTokens: 32768,
-                thinkingConfig: this.client.getThinkingConfig(request)
+                thinkingConfig: this.client.getThinkingConfig(request, model)
             }
         };
         if (tools && tools.length > 0) {
