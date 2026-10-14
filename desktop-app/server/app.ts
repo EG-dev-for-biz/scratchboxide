@@ -390,9 +390,11 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         app.use('/build/3d-python', express.static(repoBuild3dPython));
     }
 
-    // Trigger asynchronous background asset hydration for showcase demos
+    // Trigger asynchronous background asset hydration for showcase demos. Not under the test runner
+    // (vitest sets SCRATCHBOX_TEST=1): it would write offline placeholder assets into public/, which
+    // then make asset-gated tests run against stand-ins instead of skipping.
     const hydratorScript = path.resolve(process.cwd(), 'scripts', 'hydrate_demo_assets.cjs');
-    if (fs.existsSync(hydratorScript)) {
+    if (process.env.SCRATCHBOX_TEST !== '1' && fs.existsSync(hydratorScript)) {
         try {
             const { fork } = require('child_process');
             fork(hydratorScript, ['--quiet'], { stdio: 'ignore' });
