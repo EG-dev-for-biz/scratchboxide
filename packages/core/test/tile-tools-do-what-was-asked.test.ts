@@ -618,6 +618,15 @@ describe('a location request returns remeshed geometry', () => {
         expect(payload.artifact).toBeUndefined();
     });
 
+    it('both extraction tools fail with a typed missing-input error when no place is given', async () => {
+        for (const name of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay']) {
+            const outcome = await createDefaultToolRegistry().dispatch(name, { radiusMeters: 120 }, { request: { prompt: 'tiles' } } as any);
+            expect(outcome.exec.status).toBe('failed');
+            expect((outcome.resultPayload as any).error).toContain(`${name} needs query`);
+            expect((outcome.resultPayload as any).artifact).toBeUndefined();
+        }
+    });
+
     it('google_3d_tiles_get_clay refuses trees with remesh false, which would be raw tiles', async () => {
         serveTiles();
         const outcome = await ask('google_3d_tiles_get_clay', { remesh: false, trees: true }, 'clay_raw_trees.glb');

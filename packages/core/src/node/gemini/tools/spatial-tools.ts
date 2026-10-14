@@ -101,6 +101,7 @@ import type {
     VideoFrameData
 } from '../../../common/tracking/tapir-tracking-protocol';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../../3d-engine/location-clay-pipeline';
+import { MissingInputError, TileExtractionError } from '../../../common/errors/pipeline-errors';
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolResultPayload } from './types';
 
@@ -522,7 +523,7 @@ function modelUri(mountPath: string): string {
  */
 async function extractLocation(toolName: string, args: Record<string, unknown>, ctx: ToolContext, flavour: 'clay' | 'textured'): Promise<ToolHandlerOutcome> {
     const query = asString(args.query);
-    if (!query) throw new Error(`${toolName}: "query" argument is required.`);
+    if (!query) throw new MissingInputError(toolName, 'query', 'a place name, address or "lat, lng"');
     const remeshing = args.remesh !== false;
     if (!remeshing && args.trees === true) {
         throw new Error(`${toolName}: trees are rebuilt as part of remeshing; with remesh false the raw tiles keep their scanned trees. Ask again with remesh true, or without trees.`);
@@ -539,7 +540,7 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
     // remeshing runs the photo-textured tiles are extracted; the clay tool still shows the result as clay.
     const extract = flavour === 'textured' || remeshing ? getGoogle3DTilesFullTexture : getGoogle3DTilesClay;
     const result = await extract(query, options);
-    if (result.mock) throw new Error(`${toolName}: the extraction returned placeholder tiles, not Google 3D Tiles, so nothing is shown.`);
+    if (result.mock) throw new TileExtractionError('download', new Error(`${toolName}: the extraction returned placeholder tiles, not Google 3D Tiles, so nothing is shown.`));
 
     const pipeline: LocationClayResult | undefined = remeshing
         ? await runLocationClayPipeline({
