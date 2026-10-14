@@ -89,7 +89,15 @@ import {
     BROWSER_TOOL_DECLARATIONS,
     browserHandlers,
     TILE_REFINE_TOOL_DECLARATIONS,
-    tileRefineHandlers
+    tileRefineHandlers,
+    IMAGE_TO_PBR_TOOL_DECLARATIONS,
+    imageToPbrHandlers,
+    PBR_MATERIAL_TOOL_DECLARATIONS,
+    pbrMaterialHandlers,
+    LOCAL_SF3D_TOOL_DECLARATIONS,
+    localSf3DHandlers,
+    TURNAROUND_TOOL_DECLARATIONS,
+    turnaroundHandlers
 } from './tools';
 
 interface ToolRegistration {
@@ -635,6 +643,19 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of PYTHON_3D_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, python3DHandlers[decl.name], 'workspace');
+    }
+    // Declared in DEFAULT_TOOL_DECLARATIONS; without these the agent is offered tools it cannot dispatch.
+    for (const decl of IMAGE_TO_PBR_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, imageToPbrHandlers[decl.name], 'workspace');
+    }
+    for (const decl of PBR_MATERIAL_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, pbrMaterialHandlers[decl.name], 'workspace');
+    }
+    for (const decl of LOCAL_SF3D_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, localSf3DHandlers[decl.name], 'workspace');
+    }
+    for (const decl of TURNAROUND_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, turnaroundHandlers[decl.name], 'workspace');
     }
     for (const decl of LENS_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, lensHandlers[decl.name], 'lens');
