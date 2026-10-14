@@ -153,7 +153,7 @@ def test_pillar11_operators():
                 "distributionMode": "POLAR_RING",
                 "guidePoints": [(0.0, 0.3, 1.55), (0.0, 0.0, 1.0), (0.0, 0.48, 1.55)],
                 "pitchMeters": 0.06,
-                "seedGeometry": {"shape": "CYLINDRICAL_FASTENER", "dimensions": [0.012, 0.008, 0.004]}
+                "seedGeometry": sb.create_cylinder(radius=0.012, height=0.004)
             }
         ]
     }
