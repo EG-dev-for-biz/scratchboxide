@@ -12,7 +12,7 @@ import { synthesizeContextual3DScene, detect3DSceneTheme } from '../src/browser/
 import { detectRealWorldLocationIntent } from '../src/browser/generative-canvas/services/Google3DTileService';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { CANVAS_TOOL_DECLARATIONS, canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
-import { buildContents } from '../src/node/gemini/prompt-builder';
+import { buildContents, buildSystemInstruction } from '../src/node/gemini/prompt-builder';
 import { classifyFallbackPrompt } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
@@ -115,18 +115,18 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
     });
 
     describe('4. prompt-builder and fallback prompt classification', () => {
-        it('buildContents injects critical directive that Nano Banana pipeline is assumed for splat prompts', () => {
+        it('buildContents passes a splat prompt on as written; the agent instructions name the survey pipeline instead', async () => {
             const contents = buildContents({
                 prompt: 'Make a gaussian splat of the Colosseum'
             });
 
             expect(contents).toHaveLength(1);
-            const userText = contents[0].parts[0].text;
-            expect(userText).toContain('CRITICAL DIRECTIVE');
-            expect(userText).toContain('3D Gaussian Splatting');
-            expect(userText).toContain('Nano Banana');
-            expect(userText).toContain('NEVER has to invoke or mention "Nano Banana" explicitly');
-            expect(userText).toContain('survey_beautify_to_splats');
+            expect(contents[0].parts[0].text).toBe('Make a gaussian splat of the Colosseum');
+            const system = await buildSystemInstruction({ prompt: 'Make a gaussian splat of the Colosseum', mode: 'agent' });
+            expect(system).toContain('survey_synthesize_stations');
+            expect(system).toContain('survey_beautify_to_splats');
+            expect(system).toContain('never mount a splat path or tileset a tool did not produce');
+            expect(system).not.toContain("splatUrl: '/models/<location>_splat.splat'");
         });
 
         it('classifyFallbackPrompt identifies gaussian splat prompt as 3D request without user saying "3D" or "nano banana"', () => {

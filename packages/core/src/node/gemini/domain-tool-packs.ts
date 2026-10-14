@@ -13,6 +13,7 @@ import { CANVAS_TOOL_DECLARATIONS } from './tools/canvas-tools';
 import { WORKSPACE_TOOL_DECLARATIONS } from './tools/workspace-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS } from './tools/python-3d-tools';
 import { OBJECT_REFERENCE_TOOL_DECLARATIONS } from './tools/object-reference-tools';
+import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS } from './tools/sb-script-guide-tools';
 import {
     GOOGLE_3D_TILES_TOOL_DECLARATIONS,
     PANORAMA_TOOL_DECLARATIONS,
@@ -65,12 +66,14 @@ export const CORE_WORKSPACE_PACK: ToolPackDefinition = {
         ...CANVAS_TOOL_DECLARATIONS,
         ...WORKSPACE_TOOL_DECLARATIONS,
         ...PYTHON_3D_TOOL_DECLARATIONS,
+        ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
         ...OBJECT_REFERENCE_TOOL_DECLARATIONS
     ],
     toolNames: [
         ...CANVAS_TOOL_DECLARATIONS.map(d => d.name),
         ...WORKSPACE_TOOL_DECLARATIONS.map(d => d.name),
         ...PYTHON_3D_TOOL_DECLARATIONS.map(d => d.name),
+        ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS.map(d => d.name),
         ...OBJECT_REFERENCE_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };

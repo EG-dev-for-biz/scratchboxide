@@ -29,6 +29,7 @@ export * from './pbr-material-tools';
 export * from './local-sf3d-tools';
 export * from './tile-refine-tools';
 export * from './object-reference-tools';
+export * from './sb-script-guide-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -39,6 +40,7 @@ import { TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers } from './turnaround-t
 import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools';
 import { OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers } from './object-reference-tools';
+import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers } from './sb-script-guide-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
 import { SB_RIG_TOOL_DECLARATIONS, sbRigHandlers } from './sb-rig-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers } from './nano-banana-tools';
@@ -101,6 +103,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...WORKSPACE_TOOL_DECLARATIONS,
     ...PYTHON_3D_TOOL_DECLARATIONS,
     ...OBJECT_REFERENCE_TOOL_DECLARATIONS,
+    ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
     ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
     ...TILE_REFINE_TOOL_DECLARATIONS,
     ...BOTANICAL_TREE_TOOL_DECLARATIONS,
@@ -137,6 +140,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...workspaceHandlers,
     ...python3DHandlers,
     ...objectReferenceHandlers,
+    ...sbScriptGuideHandlers,
     ...google3DTilesHandlers,
     ...tileRefineHandlers,
     ...panoramaHandlers,

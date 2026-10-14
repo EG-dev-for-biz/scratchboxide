@@ -101,7 +101,9 @@ import {
     TURNAROUND_TOOL_DECLARATIONS,
     turnaroundHandlers,
     OBJECT_REFERENCE_TOOL_DECLARATIONS,
-    objectReferenceHandlers
+    objectReferenceHandlers,
+    SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
+    sbScriptGuideHandlers
 } from './tools';
 
 interface ToolRegistration {
@@ -154,6 +156,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('sb_terrain_')) return `SB-Terrain Engine: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             if (name === 'execute_3d_python_script') return 'Python 3D Engine: Execute Procedural Script';
             if (name === 'build_3d_object_from_reference') return '3D Object: Build from Internal Reference';
+            if (name === 'read_sb_script_guide') return 'Python 3D Engine: Read Script Guide';
             return `Workspace Action: ${name}`;
         },
         cardTitle: (name, _status) => {
@@ -162,6 +165,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'present_execution_plan') return 'Plan: Review & Confirm';
             if (name === 'execute_3d_python_script') return 'Python 3D: Execute Script';
             if (name === 'build_3d_object_from_reference') return '3D Object: Build';
+            if (name === 'read_sb_script_guide') return 'Python 3D: Script Guide';
             if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR';
             if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -183,6 +187,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'present_execution_plan') return 'Present execution plan card for confirmation';
             if (name === 'execute_3d_python_script') return 'Execute procedural 3D Python script with Scratchbox C++20 engine';
             if (name === 'build_3d_object_from_reference') return 'Draw an internal reference, read it into a build spec and build the object natively in clay';
+            if (name === 'read_sb_script_guide') return 'Read the rules for writing an sb Python script';
             if (name.startsWith('location_')) return `Synthesize real-world location 3D Gaussian Splats: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return 'Recolor 3D tile GLB with material segmentation and PBR normal/roughness synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -667,6 +672,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of OBJECT_REFERENCE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, objectReferenceHandlers[decl.name], 'workspace');
+    }
+    for (const decl of SB_SCRIPT_GUIDE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, sbScriptGuideHandlers[decl.name], 'workspace');
     }
     // Declared in DEFAULT_TOOL_DECLARATIONS; without these the agent is offered tools it cannot dispatch.
     for (const decl of IMAGE_TO_PBR_TOOL_DECLARATIONS) {

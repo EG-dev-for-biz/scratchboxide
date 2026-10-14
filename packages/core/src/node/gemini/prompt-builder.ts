@@ -450,16 +450,18 @@ export const SPATIAL_INTENT_POLICY = `
 
 ### 3D REQUESTS: CHOOSE THE TOOL BY WHAT IS ASKED FOR
 Decide from the meaning of the request, not from particular words, which case applies, then call that tool:
-- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place and returns Google 3D Tiles remeshed in studio grey clay, with trees. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
-- A specific object, prop, vehicle, creature, character, piece of furniture, artifact or an abstract form, with no place: call build_3d_object_from_reference with the request in the user's words plus any details from the conversation (and dimensionsHintMeters when they give a size). It draws an internal reference, reads it into a build spec and builds the object natively in clay.
-- An object at a real-world place: call build_3d_object_from_reference with location set to the place.
-Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. Use execute_3d_python_script when the user asks for a script or procedural code, to build supporting geometry such as a plinth, or to change a scene a script built; an object from build_3d_object_from_reference is changed by editing SPEC in its pythonGenerator.sourceCode and running that script with execute_3d_python_script. Do not build real places with scripts.
+- One specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) with no real place: call build_3d_object_from_reference with the request in the user's words plus any details from the conversation (and dimensionsHintMeters when they give a size). It draws an internal reference, reads it into a build spec and builds that one object natively in clay.
+- An imagined environment, a landscape, or a scene of several objects (anything that is neither one object nor a real place): write an sb Python script and run it with execute_3d_python_script. Call read_sb_script_guide before writing the script unless its rules ("WRITING SB PYTHON SCRIPTS") are already in these instructions.
+- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place and returns its Google 3D Tiles remeshed in studio grey clay; tell the user what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
+- One object at a real-world place: call build_3d_object_from_reference with location set to the place and placement set to where the object stands relative to the place's geocoded anchor (metres east and north of it, and the compass heading its front faces), worked out from what the user said, such as in front of an entrance or across a square. The anchor is often the middle of a building, so an object meant to stand beside it needs an offset.
+Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. execute_3d_python_script also builds supporting geometry such as a plinth and changes scenes a script built; an object from build_3d_object_from_reference is changed by editing SPEC in its pythonGenerator.sourceCode and running that script with execute_3d_python_script. Do not build real places with scripts.
 New objects and places start in studio grey clay with studio lighting and no ground. After building one, offer follow-ups in two groups instead of doing them: staging and environments (a real-world place, a plinth or cyclorama, atmosphere and sun position, or the studio void), then textures and materials (PBR, 2DGS surfels, 3DGS splats, algorithmic micro-texture).
 When one of these tools fails, report its error; do not substitute another tool's output.`;
 
 /**
- * How to write an sb Python script. Offered to every mode that can run execute_3d_python_script: the agent
- * writes scripts when the user asks for one or edits a scene a script built, and decides that itself.
+ * How to write an sb Python script. It is about 15k characters, so it is not in every system instruction: the agent
+ * reads it with read_sb_script_guide before writing a script, and it is included up front only while the active
+ * canvas artifact is a scene a script built (see scriptingInPlay).
  */
 export const SB_PYTHON_SCRIPT_GUIDE = `
 
@@ -662,6 +664,16 @@ FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stac
 - ZERO UNINVITED DEFAULTS: Preserve studio lighting and visual neutrality unless atmospheric scattering or diurnal ephemeris is explicitly requested.`;
 
 /**
+ * True while the active canvas artifact is a 3D scene a script built (it carries pythonGenerator source), so the
+ * agent is editing that script. Decided from the scene's state, never from words in the prompt.
+ */
+export function scriptingInPlay(request: Pick<GeminiGenerateRequest, 'activeArtifact'>): boolean {
+    const artifact = request.activeArtifact;
+    const source = (artifact?.data as { pythonGenerator?: { sourceCode?: unknown } } | undefined)?.pythonGenerator?.sourceCode;
+    return artifact?.type === '3d-scene' && typeof source === 'string' && source.trim().length > 0;
+}
+
+/**
  * Construct rich system instruction injecting Canvas Primitives, active Superpowers, and schemas.
  */
 export async function buildSystemInstruction(request: GeminiGenerateRequest, services: Partial<PromptContextServices> = {}): Promise<string> {
@@ -705,10 +717,8 @@ You pair-program with the user to explore, plan, implement, and verify code chan
    - ENCAPSULATED VIRTUAL SDK: For advanced UI needs (e.g. 3D viewports, audio visualizers, metrics cards), import clean abstractions from \`@scratchbox/core\` (\`Google3DViewport\`, \`AudioVisualizer\`, \`MetricCard\`, \`Notification\`) rather than writing verbose low-level WebGL scripts.
    - For creative, experimental, or unclassifiable ideas (games, audio synths, physics simulations, algorithms), eagerly mount an interactive 'live-code-sandbox' micro-app with first-class visual priority.
    - GUARDRAIL: NEVER search or edit internal IDE runtime directories (such as 'dist-electron/', 'packages/core/', or 'node_modules/') to satisfy user canvas creation prompts. Canvas creations are self-contained artifacts rendered directly in the stage via canvas primitives.
-8. Real-World 3DGS & Location Gaussian Splats (Implicit Nano Banana Pipeline):
-   - When the user asks to generate, create, or view a 3D Gaussian Splat (3DGS) of a location or landmark (e.g. 'make a gaussian splat of the Colosseum', 'give me a 3dgs of Grand Army Plaza', 'create a gaussian splat of the Empire State Building'), the user NEVER needs to explicitly invoke or mention 'Nano Banana'.
-   - In Scratchbox IDE, Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout ingestion, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats) are the ASSUMED canonical pipeline under the hood.
-   - Mount or configure the '3d-scene' primitive with sceneType: 'gaussian_splat', splatUrl: '/models/<location>_splat.splat', and splatTilesetUrl: '/tilesets/<location>/tileset.json', or dispatch the survey_beautify_to_splats tool. Never ask the user to specify or invoke Nano Banana.
+8. Gaussian Splats of Real Places:
+   - A Gaussian splat (3DGS) of a real place is built by the survey pipeline, which the user does not need to name: extract the place (google_3d_tiles_get_full_texture), place camera stations around it (survey_synthesize_stations), then run survey_beautify_to_splats on that GLB and stations JSON. Mount only the splat tileset that survey_beautify_to_splats returns; never mount a splat path or tileset a tool did not produce.
 
 ${CANVAS_PRIMITIVES_SPECIFICATION}`;
     } else if (isAsk) {
@@ -901,8 +911,8 @@ If a task needs a capability that is not available natively (e.g. neural image-t
         ? await buildSkillIndexSection(request.workspaceRoot, services.workspaceConfig, (request.attachedSkills || []).map(sk => sk.name))
         : '';
 
-    // The 3D intent policy goes to every prompt; the script guide wherever the agent may run a script.
-    const spatialSection = SPATIAL_INTENT_POLICY + (isPlan || isAsk ? '' : SB_PYTHON_SCRIPT_GUIDE);
+    // The 3D intent policy goes to every prompt; the script guide only while a script-built scene is being worked on.
+    const spatialSection = SPATIAL_INTENT_POLICY + (!isPlan && !isAsk && scriptingInPlay(request) ? SB_PYTHON_SCRIPT_GUIDE : '');
 
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
@@ -926,35 +936,23 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
         }
     }
 
-    const lowerReqPrompt = (request.prompt || '').toLowerCase();
-    const isVideoTimelinePrompt = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip/i.test(request.prompt || '') ||
-        ((lowerReqPrompt.includes('clip') || lowerReqPrompt.includes('timeline')) && (lowerReqPrompt.includes('split') || lowerReqPrompt.includes('cut') || lowerReqPrompt.includes('delete') || lowerReqPrompt.includes('playhead') || lowerReqPrompt.includes('ripple') || lowerReqPrompt.includes('track') || lowerReqPrompt.includes('video')));
-
-    const isSplatPrompt = /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(request.prompt || '');
-
+    // The request is passed on as written: nothing here matches words in it to steer the model toward a tool or
+    // primitive. Only the canvas state (what is active and what it holds) is added as context.
     let userPrompt = request.prompt;
     const is3DActive = request.activeArtifact?.type === '3d-scene';
-
-    if (isVideoTimelinePrompt) {
-        userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a multi-track Video NLE Timeline operation (clip split, ripple delete, playhead navigation, or track manipulation). You MUST mount/switch to the "video-timeline" primitive via mount_canvas_primitive({ primitiveType: "video-timeline", ... }) or output JSON with type: "video-timeline". NEVER output "3d-scene", "markdown-document", or "live-code-sandbox" for this request, regardless of any previously active 3D scene!]`;
-    } else if (isSplatPrompt) {
-        userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D Gaussian Splatting (3DGS) radiance field of a location. In Scratchbox IDE, the user NEVER has to invoke or mention "Nano Banana" explicitly — our closed-loop pipeline automatically assumes and employs Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout captures, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats). You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Location Name> — 3D Gaussian Splat", payload: { sceneType: "gaussian_splat", splatUrl: "/models/<location>_splat.splat", splatTilesetUrl: "/tilesets/<location>/tileset.json", splatOptions: { splatScale: 1.0, contactShadow: true, enableSoftZ: true }, ... } }) or dispatch the survey_beautify_to_splats tool. DO NOT ask the user to specify Nano Banana or mention Nano Banana as a requirement.]`;
-    }
 
     if (is3DActive) {
         // Context about the active scene whatever the request says, not an assumed intent: the request decides whether
         // to change the scene or start anew.
         userPrompt += `\n\n[ACTIVE 3D SCENE: "${request.activeArtifact?.title || '3D Scene'}" is on the canvas.
 1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one.
-2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To build an object at a place, call build_3d_object_from_reference with location.
+2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To build an object at a place, call build_3d_object_from_reference with location and placement.
 3. To stage the active scene on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal), call execute_3d_python_script to build the plinth and set the hero asset on it with sb.layout.
 4. Do not replace the scene with a Markdown document unless the user asks for a document, and offer further steps (such as materials and textures) as follow-ups.]`;
     }
 
     if (request.activeArtifact) {
-        if (!isVideoTimelinePrompt || request.activeArtifact.type === 'video-timeline') {
-            userPrompt += `\n\n[Active Canvas Stage Context: Artifact Title: "${request.activeArtifact.title}", Type: "${request.activeArtifact.type}"]`;
-        }
+        userPrompt += `\n\n[Active Canvas Stage Context: Artifact Title: "${request.activeArtifact.title}", Type: "${request.activeArtifact.type}"]`;
         if (request.activeArtifact.type === 'video-timeline' && request.activeArtifact.data) {
             const videoData = request.activeArtifact.data as VideoTimelineData;
             userPrompt += `\n[Active Video Timeline State: ${JSON.stringify({
@@ -965,10 +963,10 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
                 aspectRatio: videoData.aspectRatio,
                 tracks: videoData.tracks
             }).slice(0, 4000)}]`;
-        } else if (request.activeArtifact.type === 'markdown-document' && request.activeArtifact.data && !isVideoTimelinePrompt) {
+        } else if (request.activeArtifact.type === 'markdown-document' && request.activeArtifact.data) {
             const docData = request.activeArtifact.data as MarkdownDocumentData;
             userPrompt += `\n[Active Document Content: ${JSON.stringify({ title: docData.title, sections: docData.sections }).slice(0, 3000)}]`;
-        } else if (request.activeArtifact.type === '3d-scene' && request.activeArtifact.data && !isVideoTimelinePrompt) {
+        } else if (request.activeArtifact.type === '3d-scene' && request.activeArtifact.data) {
             const sceneData = request.activeArtifact.data as Scene3DData;
             const objectsSummary = (sceneData.customMeshes || []).map(m => ({
                 id: m.id,
