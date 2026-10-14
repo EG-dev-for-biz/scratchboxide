@@ -9,16 +9,18 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export type BotanicalMode = 'tree' | 'shrub' | 'auto' | 'streetscape';
 export type LeafMorphologyType = 'ovate' | 'serrated' | 'lobed';
 
 export interface BotanicalPipelineOptions {
+    /** The scan (.glb) to rebuild, or 'benchmark' for the built-in synthetic benchmark scan; required by the CLI. */
     inputGlbPath?: string;
     outputGlbPath?: string;
     mode?: BotanicalMode;
@@ -88,20 +90,25 @@ export class BotanicalVegetationService {
      * Ensures the native C++20 botanical synthesis binary is compiled and available.
      */
     async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) {
-            return this.binaryPath;
-        }
-
-        const sourcePath = path.resolve(process.cwd(), 'scripts/run_botanical_pipeline.cpp');
+        const sourcePath = [path.resolve(process.cwd(), 'scripts/run_botanical_pipeline.cpp'), path.resolve(__dirname, '../../../../scripts/run_botanical_pipeline.cpp')]
+            .find(p => fs.existsSync(p));
+        if (!sourcePath) throw new Error('scripts/run_botanical_pipeline.cpp not found');
         const includePath = this.compiler.getSdkIncludePath();
-        const outputDir = path.dirname(this.binaryPath);
+        // rebuilt when missing or older than its source or an engine header, so an old binary never runs
+        const binTime = fs.existsSync(this.binaryPath) ? fs.statSync(this.binaryPath).mtimeMs : -1;
+        const sources = [sourcePath, ...fs.readdirSync(includePath).filter(f => f.endsWith('.hpp') || f.endsWith('.h')).map(f => path.join(includePath, f))];
+        if (binTime >= 0 && sources.every(f => fs.statSync(f).mtimeMs <= binTime)) return this.binaryPath;
 
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
+        fs.mkdirSync(path.dirname(this.binaryPath), { recursive: true });
+        const tmp = `${this.binaryPath}.tmp-${process.pid}-${Date.now()}`;
+        const args = ['-std=c++20', '-O3', ...(process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? ['-march=native'] : []), '-I', includePath, sourcePath, '-o', tmp];
+        try {
+            await execFileAsync(process.env.CXX || 'clang++', args, { maxBuffer: 64 * 1024 * 1024 });
+        } catch (err) {
+            fs.rmSync(tmp, { force: true });
+            throw err;
         }
-
-        const compileCmd = `clang++ -std=c++20 -O3 -march=native -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}"`;
-        await execAsync(compileCmd);
+        fs.renameSync(tmp, this.binaryPath);
         return this.binaryPath;
     }
 

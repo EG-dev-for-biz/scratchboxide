@@ -37,6 +37,7 @@
 #include <string>
 #include <cmath>
 #include <chrono>
+#include <stdexcept>
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
@@ -142,40 +143,11 @@ public:
         size_t vegCount = 0;
         for (bool b : isVeg) if (b) vegCount++;
 
-        BotanicalBlobTelemetry tel;
-        if (vegCount > 0) {
-            tel = cleanup::BotanicalTelemetryExtractor::extractTelemetry(inputScan, isVeg, options.voxelResolution);
-        } else {
-            // Untextured or monochrome geometry fallback: treat upper 80% as canopy
-            tel.groundAnchor = Vec3(0, 0, 0);
-            Vec3 bMin(1e9f, 1e9f, 1e9f), bMax(-1e9f, -1e9f, -1e9f);
-            for (const auto& v : inputScan.vertices) {
-                bMin.x = std::min(bMin.x, v.position.x);
-                bMin.y = std::min(bMin.y, v.position.y);
-                bMin.z = std::min(bMin.z, v.position.z);
-                bMax.x = std::max(bMax.x, v.position.x);
-                bMax.y = std::max(bMax.y, v.position.y);
-                bMax.z = std::max(bMax.z, v.position.z);
-            }
-            tel.groundAnchor = Vec3((bMin.x + bMax.x) * 0.5f, bMin.y, (bMin.z + bMax.z) * 0.5f);
-            tel.totalHeight = std::max(1.0f, bMax.y - bMin.y);
-            tel.clearTrunkHeight = tel.totalHeight * 0.30f;
-            tel.crownBaseHeight = bMin.y + tel.clearTrunkHeight;
-            tel.crownHeight = tel.totalHeight - tel.clearTrunkHeight;
-            tel.crownCentroid = Vec3((bMin.x + bMax.x) * 0.5f, tel.crownBaseHeight + tel.crownHeight * 0.5f, (bMin.z + bMax.z) * 0.5f);
-            tel.crownExtents = bMax - bMin;
-            tel.volumetricDensity = 0.50f;
-            tel.isShrub = (tel.totalHeight < 2.5f);
-            tel.suggestedBaseRadius = std::clamp(tel.totalHeight * 0.035f, 0.08f, 0.50f);
-            tel.suggestedLeavesPerTip = 14;
-
-            // Generate synthetic bounding attractors
-            for (const auto& v : inputScan.vertices) {
-                if (v.position.y >= tel.crownBaseHeight) {
-                    tel.conformalAttractors.push_back(v.position);
-                }
-            }
+        // Vegetation is what the scan's colours say it is; a scan without vegetation is an error, never a guessed canopy.
+        if (vegCount == 0) {
+            throw std::runtime_error("the scan has no vertex-coloured vegetation (excess green); nothing to rebuild");
         }
+        BotanicalBlobTelemetry tel = cleanup::BotanicalTelemetryExtractor::extractTelemetry(inputScan, isVeg, options.voxelResolution);
 
         result.blobTelemetry = tel;
 

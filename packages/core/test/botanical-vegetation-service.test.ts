@@ -47,6 +47,7 @@ describe('Unified Botanical & Vegetation Pipeline Codebase API (Stages 11-15)', 
         expect(fs.existsSync(binPath)).toBe(true);
 
         const result = await service.synthesizeVegetation({
+            inputGlbPath: 'benchmark',
             mode: 'tree',
             leafMorphology: 'lobed',
             leafSize: 0.30,
@@ -72,10 +73,11 @@ describe('Unified Botanical & Vegetation Pipeline Codebase API (Stages 11-15)', 
         if (fs.existsSync(result.outputGlbPath)) {
             fs.unlinkSync(result.outputGlbPath);
         }
-    }, 45000);
+    }, 300000); // includes the clang -O3 build of the CLI on a cold checkout
 
     it('3. should synthesize multi-stem shrub with serrated birch foliage', async () => {
         const result = await service.synthesizeVegetation({
+            inputGlbPath: 'benchmark',
             mode: 'shrub',
             leafMorphology: 'serrated',
             leafSize: 0.25,
@@ -93,7 +95,7 @@ describe('Unified Botanical & Vegetation Pipeline Codebase API (Stages 11-15)', 
     }, 45000);
 
     it('4. should synthesize full rectified streetscape with tree collar and clinging ivy', async () => {
-        const result = await service.synthesizeStreetscape(undefined, {
+        const result = await service.synthesizeStreetscape('benchmark', {
             leafMorphology: 'ovate',
             leafSize: 0.28,
             enableIvy: true
@@ -110,4 +112,9 @@ describe('Unified Botanical & Vegetation Pipeline Codebase API (Stages 11-15)', 
             fs.unlinkSync(result.outputGlbPath);
         }
     }, 60000);
+
+    it('5. fails without a scan, and for a scan that does not exist, instead of substituting the benchmark', async () => {
+        await expect(service.synthesizeVegetation({ mode: 'tree' })).rejects.toThrow('--input <scan.glb> is required');
+        await expect(service.synthesizeVegetation({ mode: 'tree', inputGlbPath: '/nonexistent/scan.glb' })).rejects.toThrow('scan not found');
+    }, 300000);
 });
