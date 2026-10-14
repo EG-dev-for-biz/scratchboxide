@@ -9,6 +9,14 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { IMAGE_MODEL_PRIORITY, SkippedMediaModel, describeModelUsed, resolveImageModelId, resolveRequestedModels } from '../../common/media-generation-protocol';
+import { GeneratorFailedError, MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
+import { generateImageWithModels } from '../google-media-generation-service';
+import { FalTrellisService, type FalTrellisMultiInput, type FalTrellisResult } from './FalTrellisService';
+
+/** Image models a turnaround tries when none is named: Nano Banana Lite first, then the standard image list. */
+export const TURNAROUND_DEFAULT_MODELS = [resolveImageModelId('nano-banana-lite'), ...IMAGE_MODEL_PRIORITY];
 
 export type RigPreset = 'dcc-ortho-4' | 'turntable-8' | 'dome-hemisphere-12' | 'custom' | (string & {});
 
@@ -25,8 +33,6 @@ export interface CameraStation extends CameraPoseConfig {
     promptAngleDescriptor: string;
     referenceStationIndices: number[]; // Indices of images to pass as references
 }
-
-import { FalTrellisService } from './FalTrellisService';
 
 export interface IsolationOptions {
     /** Whether subject must float in 100% white void with zero ground or pedestal (default: true). */
@@ -52,16 +58,27 @@ export interface MultiAngleCaptureOptions {
     isolation?: IsolationOptions;
     /** Output directory for reference image artifacts. */
     outputDir?: string;
-    /** Downstream reconstruction pipeline target. */
+    /** Downstream reconstruction pipeline target (default 'none'; Trellis runs only when asked for). */
     downstreamTarget?: 'trellis-fal' | 'trellis' | 'none';
-    /** Enforced real-world metric dimensions for .glb post-processing. */
+    /**
+     * The subject's real-world size, returned with the result as the target size for scaling the GLB in the
+     * scene. The GLB itself is not rescaled; its measured bounds are reported separately.
+     */
     metricDimensions?: {
         lengthMeters?: number;
         widthMeters?: number;
         heightMeters?: number;
     };
-    /** Whether to run in mock/offline mode for testing without GPU/network. */
-    mockExecution?: boolean;
+    /** Image model id. When given, only that model is used; otherwise TURNAROUND_DEFAULT_MODELS, in order. */
+    model?: string;
+}
+
+/** Injected collaborators (tests pass fakes; production uses Google Gen AI credentials and Fal.ai). */
+export interface MultiAngleTurnaroundDependencies {
+    /** Creates the Google Gen AI client that generates the views. */
+    createClient?: () => Promise<any>;
+    /** Runs the downstream Trellis reconstruction. */
+    trellis?: { generate3DFromImages(input: FalTrellisMultiInput): Promise<FalTrellisResult> };
 }
 
 export interface CapturedView {
@@ -72,7 +89,9 @@ export interface CapturedView {
     cartesianPosition: [number, number, number];
     promptUsed: string;
     imagePath: string;
-    imageUrl: string;
+    mimeType: string;
+    /** The image model that produced this view. */
+    generatedBy: string;
     buffer: Buffer;
 }
 
@@ -82,18 +101,56 @@ export interface MultiAngleCaptureResult {
     rigPreset: string;
     stylePreset: string;
     views: CapturedView[];
+    /** The image model that produced every view. */
+    modelUsed: string;
+    /** Image models tried before modelUsed that produced nothing, with the reason (empty when the first answered). */
+    skippedModels: SkippedMediaModel[];
+    /** Which model produced the views and, when it was not the requested one, why. */
+    modelNote: string;
     downstreamGlb?: {
         path: string;
-        url: string;
         vertexCount: number;
         triangleCount: number;
         byteLength: number;
-        boundingBoxMeters: [number, number, number];
+        /** Extent of the reconstructed mesh in its own units, from the GLB's POSITION bounds (absent when the GLB has none). */
+        measuredExtent?: [number, number, number];
+        /** The size the caller gave for the subject (metricDimensions), for scaling the GLB in the scene. */
+        requestedDimensionsMeters?: { lengthMeters?: number; widthMeters?: number; heightMeters?: number };
     };
     totalDurationMs: number;
 }
 
+/** Extent [x, y, z] of a GLB's meshes from the POSITION accessor min/max that glTF requires; undefined when absent. */
+export function measureGlbExtent(glb: Buffer): [number, number, number] | undefined {
+    if (glb.length < 20 || glb.toString('utf8', 0, 4) !== 'glTF') return undefined;
+    const jsonLength = glb.readUInt32LE(12);
+    const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    let found = false;
+    for (const mesh of gltf.meshes || []) {
+        for (const prim of mesh.primitives || []) {
+            const accessor = gltf.accessors?.[prim.attributes?.POSITION];
+            if (!Array.isArray(accessor?.min) || !Array.isArray(accessor?.max)) continue;
+            for (let i = 0; i < 3; i++) {
+                min[i] = Math.min(min[i], accessor.min[i]);
+                max[i] = Math.max(max[i], accessor.max[i]);
+            }
+            found = true;
+        }
+    }
+    return found ? [max[0] - min[0], max[1] - min[1], max[2] - min[2]] : undefined;
+}
+
+function extensionFor(mimeType: string): string {
+    if (mimeType === 'image/jpeg') return 'jpg';
+    if (mimeType === 'image/webp') return 'webp';
+    return 'png';
+}
+
 export class MultiAngleTurnaroundService {
+    constructor(private readonly deps: MultiAngleTurnaroundDependencies = {}) {}
+
     public static readonly STANDARD_PRESETS: Record<string, CameraPoseConfig[]> = {
         'dcc-ortho-4': [
             { azimuthDeg: 45, elevationDeg: 30, label: 'iso', description: '3/4 isometric perspective down-angle' },
@@ -130,16 +187,26 @@ export class MultiAngleTurnaroundService {
     };
 
     /**
-     * Calculates the spherical and Cartesian camera station poses for a given rig configuration.
+     * Calculates the spherical and Cartesian camera station poses for a given rig configuration. An unknown rig,
+     * or 'custom' without poses, is an error rather than another rig.
      */
     public static computeStations(
         rigPreset: RigPreset = 'dcc-ortho-4',
         customPoses?: CameraPoseConfig[],
         standoffRadius = 2.0
     ): CameraStation[] {
-        const rawConfigs = rigPreset === 'custom' && customPoses && customPoses.length > 0
-            ? customPoses
-            : (this.STANDARD_PRESETS[rigPreset] || this.STANDARD_PRESETS['dcc-ortho-4']);
+        let rawConfigs: CameraPoseConfig[];
+        if (rigPreset === 'custom') {
+            if (!customPoses?.length) {
+                throw new MissingInputError('generate_multi_angle_turnaround', 'customPoses', 'a custom rig needs at least one { azimuthDeg, elevationDeg, label } pose');
+            }
+            rawConfigs = customPoses;
+        } else if (Object.prototype.hasOwnProperty.call(this.STANDARD_PRESETS, rigPreset)) {
+            rawConfigs = this.STANDARD_PRESETS[rigPreset];
+        } else {
+            throw new MissingInputError('generate_multi_angle_turnaround', 'rigPreset',
+                `unknown rig "${rigPreset}"; use ${Object.keys(this.STANDARD_PRESETS).join(', ')} or custom with customPoses`);
+        }
 
         return rawConfigs.map((cfg, idx) => {
             const thetaRad = (cfg.azimuthDeg * Math.PI) / 180;
@@ -183,8 +250,11 @@ export class MultiAngleTurnaroundService {
         const noShadows = isolation.suppressShadows !== false;
         const noText = isolation.suppressText !== false;
 
-        let styleDesc = 'sculpted entirely in 18 percent neutral studio grey clay with a matte ceramic surface finish';
-        if (stylePreset === 'pbr-delighted') {
+        // Named styles have tuned wording; any other style text is used as given rather than replaced by clay.
+        let styleDesc = `rendered in this style: ${stylePreset}`;
+        if (stylePreset === '18-percent-studio-clay') {
+            styleDesc = 'sculpted entirely in 18 percent neutral studio grey clay with a matte ceramic surface finish';
+        } else if (stylePreset === 'pbr-delighted') {
             styleDesc = 'rendered with clean unshadowed PBR textures and intrinsic diffuse albedo';
         } else if (stylePreset === 'photorealistic') {
             styleDesc = 'photorealistic high-fidelity physical capture';
@@ -219,15 +289,21 @@ export class MultiAngleTurnaroundService {
     }
 
     /**
-     * Executes the multi-angle turnaround capture workflow.
+     * Captures every station with an image model: station 0 from the prompt alone, later stations conditioned on
+     * the hero view and the previous view. The first model that answers produces every view (one model per rig
+     * keeps the subject consistent). With downstreamTarget 'trellis-fal' the views then go to Trellis on Fal.ai.
+     * Any step that cannot do its job throws (MissingInputError, MediaModelUnavailableError,
+     * GeneratorFailedError); no placeholder image or mesh is written in its place.
      */
     public async execute(options: MultiAngleCaptureOptions): Promise<MultiAngleCaptureResult> {
         const startTime = Date.now();
+        if (!options.subject?.trim()) {
+            throw new MissingInputError('generate_multi_angle_turnaround', 'subject', 'describe what to capture');
+        }
         const rigPreset = options.rigPreset || 'dcc-ortho-4';
         const stylePreset = options.stylePreset || '18-percent-studio-clay';
         const isolation = options.isolation || { floatingVoid: true, suppressShadows: true, suppressText: true };
         const outputDir = options.outputDir || path.resolve(process.cwd(), 'output/turnarounds');
-        await fs.promises.mkdir(outputDir, { recursive: true });
 
         const stations = MultiAngleTurnaroundService.computeStations(
             rigPreset,
@@ -235,28 +311,50 @@ export class MultiAngleTurnaroundService {
             options.standoffRadius
         );
 
+        let models = resolveRequestedModels(options.model, TURNAROUND_DEFAULT_MODELS);
+        let client: any;
+        try {
+            client = await (this.deps.createClient ? this.deps.createClient() : new GoogleMediaCredentialsService().createClient());
+        } catch (err: any) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${err?.message || err})`);
+        }
+        await fs.promises.mkdir(outputDir, { recursive: true });
+
         const capturedViews: CapturedView[] = [];
+        let modelUsed: string | undefined;
+        let skippedModels: SkippedMediaModel[] = [];
 
         for (const station of stations) {
-            const { positive } = MultiAngleTurnaroundService.buildPrompt(
+            const { positive, negative } = MultiAngleTurnaroundService.buildPrompt(
                 options.subject,
                 station,
                 stylePreset,
                 isolation
             );
-
-            const filename = `turnaround_${station.stationIndex.toString().padStart(2, '0')}_${station.label}.png`;
-            const filePath = path.join(outputDir, filename);
-
-            // In mock/offline execution mode, write lightweight valid PNG headers or mock buffers
-            let buffer: Buffer;
-            if (options.mockExecution || !process.env.GEMINI_API_KEY) {
-                buffer = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 1, 0, 0, 0, 1, 0, 8, 6, 0, 0, 0, 92, 114, 168, 102]);
-                await fs.promises.writeFile(filePath, buffer);
-            } else {
-                buffer = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-                await fs.promises.writeFile(filePath, buffer);
+            const references = station.referenceStationIndices.map(i => capturedViews[i]);
+            let answer;
+            try {
+                answer = await generateImageWithModels(client, {
+                    models,
+                    contents: [
+                        { text: `${positive} Avoid: ${negative}.` },
+                        ...references.map(view => ({ inlineData: { data: view.buffer.toString('base64'), mimeType: view.mimeType } }))
+                    ],
+                    imageConfig: { aspectRatio: '1:1' }
+                });
+            } catch (err: any) {
+                throw Object.assign(new MediaModelUnavailableError(err?.model || models[0], `${err?.reason || err?.message || err} (station ${station.label})`),
+                    { status: err?.status, mediaError: err?.mediaError });
             }
+            if (!modelUsed) {
+                modelUsed = answer.modelUsed;
+                skippedModels = answer.skippedModels;
+                models = [answer.modelUsed];
+            }
+
+            const filename = `turnaround_${station.stationIndex.toString().padStart(2, '0')}_${station.label}.${extensionFor(answer.mimeType)}`;
+            const filePath = path.join(outputDir, filename);
+            await fs.promises.writeFile(filePath, answer.data);
 
             capturedViews.push({
                 stationIndex: station.stationIndex,
@@ -266,51 +364,52 @@ export class MultiAngleTurnaroundService {
                 cartesianPosition: station.cartesianPosition,
                 promptUsed: positive,
                 imagePath: filePath,
-                imageUrl: `/images/${filename}`,
-                buffer
+                mimeType: answer.mimeType,
+                generatedBy: answer.modelUsed,
+                buffer: answer.data
             });
         }
 
         let downstreamGlb: MultiAngleCaptureResult['downstreamGlb'] = undefined;
 
-        // Downstream Trellis Execution (Fal.ai)
+        // Downstream Trellis Execution (Fal.ai), only when asked for
         if (options.downstreamTarget === 'trellis-fal' || options.downstreamTarget === 'trellis') {
-            const glbFilename = `trellis_${path.basename(outputDir)}_${Date.now()}.glb`;
-            const glbPath = path.join(outputDir, glbFilename);
-            const falService = new FalTrellisService({ mockExecution: options.mockExecution });
-
-            const falResult = await falService.generate3DFromImages({
+            const glbPath = path.join(outputDir, `trellis_${path.basename(outputDir)}_${Date.now()}.glb`);
+            const trellis = this.deps.trellis || new FalTrellisService();
+            const falResult = await trellis.generate3DFromImages({
                 imagePaths: capturedViews.map(v => v.imagePath),
                 destinationGlbPath: glbPath,
                 ssSamplingSteps: 12,
                 slatSamplingSteps: 12,
                 meshSimplify: 0.95
             });
-
-            if (falResult.success && falResult.localGlbPath) {
-                const bounds: [number, number, number] = [
-                    options.metricDimensions?.lengthMeters ?? 2.0,
-                    options.metricDimensions?.heightMeters ?? 1.5,
-                    options.metricDimensions?.widthMeters ?? 2.0
-                ];
-
-                downstreamGlb = {
-                    path: falResult.localGlbPath,
-                    url: `/models/${glbFilename}`,
-                    vertexCount: falResult.stats?.totalVertices ?? 0,
-                    triangleCount: falResult.stats?.totalTriangles ?? 0,
-                    byteLength: falResult.stats?.totalBytes ?? 0,
-                    boundingBoxMeters: bounds
-                };
+            if (!falResult.localGlbPath || !fs.existsSync(falResult.localGlbPath)) {
+                throw new GeneratorFailedError('fal-trellis', `Trellis returned no GLB at ${glbPath}`);
             }
+            const glb = await fs.promises.readFile(falResult.localGlbPath);
+            if (!falResult.stats || falResult.stats.totalVertices <= 0) {
+                throw new GeneratorFailedError('fal-trellis', `Trellis returned a GLB with no vertices (${falResult.localGlbPath})`);
+            }
+            downstreamGlb = {
+                path: falResult.localGlbPath,
+                vertexCount: falResult.stats.totalVertices,
+                triangleCount: falResult.stats.totalTriangles,
+                byteLength: glb.length,
+                measuredExtent: measureGlbExtent(glb),
+                requestedDimensionsMeters: options.metricDimensions
+            };
         }
 
+        const used = modelUsed || models[0];
         return {
             success: true,
             subject: options.subject,
             rigPreset,
             stylePreset,
             views: capturedViews,
+            modelUsed: used,
+            skippedModels,
+            modelNote: describeModelUsed(used, skippedModels),
             downstreamGlb,
             totalDurationMs: Date.now() - startTime
         };

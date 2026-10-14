@@ -11,7 +11,11 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { encodePng, decodePng } from '../texture-processing';
+import { decodeImageToRgba } from '../image-codec-ffmpeg';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
+import { generateImageWithModels, ImageModelAnswer } from '../google-media-generation-service';
+import { IMAGE_MODEL_PRIORITY, SkippedMediaModel, resolveRequestedModels } from '../../common/media-generation-protocol';
+import { MediaModelUnavailableError } from '../../common/errors/pipeline-errors';
 
 export interface PanoramaSeamOptions {
     inputImagePath?: string;
@@ -19,18 +23,28 @@ export interface PanoramaSeamOptions {
     prompt?: string;
     seamWidth?: number; // width in pixels of the vertical inpaint band (default 128)
     outputImagePath?: string;
+    /** Tests only: a procedural stand-in with no model call. modelUsed and the summary say so. */
     mockExecution?: boolean;
+    /** Image model id. When given, only that model is used; otherwise IMAGE_MODEL_PRIORITY, in order. */
     model?: string;
 }
 
-export interface PanoramaSeamResult {
+/** Which image model produced a panorama step, and the models skipped before it (see describeModelUsed). */
+export interface PanoramaModelReport {
+    modelUsed: string;
+    /** Image models tried before modelUsed that produced nothing, with the reason (empty when the first answered). */
+    skippedModels?: SkippedMediaModel[];
+    /** Which model produced the image and, when it was not the requested one, why. Tool summaries include it. */
+    modelNote: string;
+}
+
+export interface PanoramaSeamResult extends PanoramaModelReport {
     success: boolean;
     width: number;
     height: number;
     seamWidth: number;
     outputImagePath?: string;
     outputBuffer: Buffer;
-    modelUsed: string;
     summary: string;
 }
 
@@ -46,17 +60,18 @@ export interface PanoramaInpaintOptions {
     inpaintBothPolar?: boolean; // inpaint both ceiling and nadir
     prompt?: string;
     outputImagePath?: string;
+    /** Tests only: a procedural stand-in with no model call. modelUsed and the summary say so. */
     mockExecution?: boolean;
+    /** Image model id. When given, only that model is used; otherwise IMAGE_MODEL_PRIORITY, in order. */
     model?: string;
 }
 
-export interface PanoramaInpaintResult {
+export interface PanoramaInpaintResult extends PanoramaModelReport {
     success: boolean;
     width: number;
     height: number;
     outputImagePath?: string;
     outputBuffer: Buffer;
-    modelUsed: string;
     summary: string;
 }
 
@@ -102,7 +117,9 @@ export interface Generate360PanoramaOptions {
     healSeam?: boolean; // default true
     inpaintNadir?: boolean; // default false
     outputImagePath?: string;
+    /** Tests only: a procedural stand-in with no model call. modelUsed and the summary say so. */
     mockExecution?: boolean;
+    /** Image model id. When given, only that model is used; otherwise IMAGE_MODEL_PRIORITY, in order. */
     model?: string;
     structuredPrompt?: EquirectangularStructuredPrompt;
     useStructuredPrompt?: boolean;
@@ -111,14 +128,13 @@ export interface Generate360PanoramaOptions {
     seamEqualization?: 'laplacian_2band' | 'linear_smoothstep' | 'none';
 }
 
-export interface Generate360PanoramaResult {
+export interface Generate360PanoramaResult extends PanoramaModelReport {
     success: boolean;
     width: number;
     height: number;
     outputImagePath?: string;
     outputBuffer: Buffer;
     seamHealed: boolean;
-    modelUsed: string;
     summary: string;
     structuredPrompt?: EquirectangularStructuredPrompt;
 }
@@ -170,17 +186,17 @@ export interface Generate4KMonumentalPanoramaOptions {
     outputImagePath?: string;
 
     /**
-     * Optional offline mock execution flag for testing.
+     * Tests only: a procedural stand-in with no model call. modelUsed and the summary say so.
      */
     mockExecution?: boolean;
 
     /**
-     * Generative model identifier (defaults to 'imagen-3.0-generate-002' / 'gemini-3.1-flash-image').
+     * Image model id. When given, only that model is used; otherwise IMAGE_MODEL_PRIORITY, in order.
      */
     model?: string;
 }
 
-export interface Generate4KMonumentalPanoramaResult {
+export interface Generate4KMonumentalPanoramaResult extends PanoramaModelReport {
     success: boolean;
     width: number;
     height: number;
@@ -191,7 +207,6 @@ export interface Generate4KMonumentalPanoramaResult {
     polarSingularityCollapsed: boolean;
     qualityScore: number;
     qcReport: PanoramaQualityAuditResult;
-    modelUsed: string;
     summary: string;
     structuredPrompt?: EquirectangularStructuredPrompt;
 }
@@ -349,6 +364,39 @@ export class Google360PanoramaPipelineService {
 
     constructor(credentialsService?: GoogleMediaCredentialsService) {
         this.credentialsService = credentialsService || new GoogleMediaCredentialsService();
+    }
+
+    /**
+     * Generates or edits one image with the requested image model (or IMAGE_MODEL_PRIORITY when none is named,
+     * moving on only past models that are not served), decodes it and resamples it to width x height. Throws
+     * MediaModelUnavailableError when there are no credentials, no model produces an image, or the image does
+     * not decode; nothing is substituted for the model's output.
+     */
+    protected async generatePanoramaImage(
+        requestedModel: string | undefined,
+        contents: any[],
+        width: number,
+        height: number,
+        imageConfig?: { aspectRatio?: string }
+    ): Promise<{ rgba: Buffer; answer: ImageModelAnswer }> {
+        const models = resolveRequestedModels(requestedModel, IMAGE_MODEL_PRIORITY);
+        let client: any;
+        try {
+            client = await this.credentialsService.createClient();
+        } catch (err: any) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${err?.message || err})`);
+        }
+        const answer = await generateImageWithModels(client, { models, contents, imageConfig });
+        let decoded: { rgba: Buffer; width: number; height: number };
+        try {
+            decoded = await decodeImageToRgba(answer.data);
+        } catch (err: any) {
+            throw new MediaModelUnavailableError(answer.modelUsed, `the returned image could not be decoded (${err?.message || err})`);
+        }
+        const rgba = decoded.width === width && decoded.height === height
+            ? decoded.rgba
+            : Google360PanoramaPipelineService.resampleRgba(decoded.rgba, decoded.width, decoded.height, width, height);
+        return { rgba, answer };
     }
 
     /**
@@ -2433,8 +2481,9 @@ export class Google360PanoramaPipelineService {
      * Executes the 4-step seam-healing pipeline:
      * 1. Shift image horizontally by 50% so the outer seam moves to the center.
      * 2. Construct a soft vertical gradient mask centered down the seam.
-     * 3. Inpaint the seam with Google Vertex AI / Imagen 3 (or procedural fallback in mock mode).
+     * 3. Inpaint the seam with a Gemini image model (only mockExecution, for tests, heals procedurally).
      * 4. Reverse-shift by 50% and composite with original unshifted pixels.
+     * When no model inpaints the seam, this throws MediaModelUnavailableError; it never returns a procedural heal instead.
      */
     async healPanoramaSeam(options: PanoramaSeamOptions): Promise<PanoramaSeamResult> {
         let inputBuffer: Buffer;
@@ -2459,78 +2508,20 @@ export class Google360PanoramaPipelineService {
 
         // Step 3: Inpaint the centered seam
         let inpaintedRgba: Buffer;
-        let modelUsed = options.model || 'imagen-3.0-generate-002';
+        let report: PanoramaModelReport;
 
         if (options.mockExecution) {
             inpaintedRgba = Google360PanoramaPipelineService.proceduralSeamHeal(shiftedRgba, width, height, seamWidth);
-            modelUsed = 'procedural-seam-healer (mock)';
+            report = { modelUsed: 'procedural-seam-healer (mock)', modelNote: 'Mock run: procedural seam heal, no model call.' };
         } else {
-            try {
-                const client = await this.credentialsService.createClient();
-                const prompt = options.prompt || 'Continuous seamless panoramic landscape, photorealistic perspective, matching ambient lighting and textures across the seam';
-
-                if (typeof (client as any).models?.editImage === 'function') {
-                    const editRes: any = await (client as any).models.editImage({
-                        model: modelUsed,
-                        prompt,
-                        referenceImages: [
-                            {
-                                referenceImage: {
-                                    imageBytes: shiftedPng.toString('base64'),
-                                    mimeType: 'image/png'
-                                }
-                            },
-                            {
-                                referenceImage: {
-                                    imageBytes: maskPng.toString('base64'),
-                                    mimeType: 'image/png'
-                                },
-                                config: {
-                                    maskMode: 'MASK_MODE_USER_PROVIDED'
-                                }
-                            }
-                        ],
-                        config: {
-                            editMode: 'EDIT_MODE_INPAINT_INSERTION',
-                            numberOfImages: 1
-                        }
-                    });
-
-                    const imgBytes = editRes.generatedImages?.[0]?.image?.imageBytes;
-                    if (imgBytes) {
-                        const inpaintDecoded = decodePng(Buffer.from(imgBytes, 'base64'));
-                        inpaintedRgba = inpaintDecoded.rgba;
-                    } else {
-                        throw new Error('Imagen 3 editImage returned no image data');
-                    }
-                } else {
-                    // Multimodal generateContent fallback with Gemini
-                    const response: any = await client.models.generateContent({
-                        model: 'gemini-3.1-flash-image',
-                        contents: [
-                            { text: `${prompt}. Inpaint the center vertical masked seam seamlessly.` },
-                            { inlineData: { data: shiftedPng.toString('base64'), mimeType: 'image/png' } },
-                            { inlineData: { data: maskPng.toString('base64'), mimeType: 'image/png' } }
-                        ],
-                        config: {
-                            responseModalities: ['TEXT', 'IMAGE']
-                        }
-                    } as any);
-
-                    const part = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
-                    if (part?.inlineData?.data) {
-                        const inpaintDecoded = decodePng(Buffer.from(part.inlineData.data, 'base64'));
-                        inpaintedRgba = inpaintDecoded.rgba;
-                        modelUsed = 'gemini-3.1-flash-image';
-                    } else {
-                        throw new Error('generateContent returned no inpainting image part');
-                    }
-                }
-            } catch (err: any) {
-                // If API fails or offline, fall back gracefully to procedural inpainting
-                inpaintedRgba = Google360PanoramaPipelineService.proceduralSeamHeal(shiftedRgba, width, height, seamWidth);
-                modelUsed = `procedural-fallback (${err?.message || 'offline'})`;
-            }
+            const prompt = options.prompt || 'Continuous seamless panoramic landscape, photorealistic perspective, matching ambient lighting and textures across the seam';
+            const generated = await this.generatePanoramaImage(options.model, [
+                { text: `${prompt}. The first image is a 360 equirectangular panorama rolled by half its width, so its wrap-around seam runs down the vertical center. The second image is a mask: repaint only the white vertical band so the left and right halves join seamlessly, and keep every other pixel, the framing and the size unchanged.` },
+                { inlineData: { data: shiftedPng.toString('base64'), mimeType: 'image/png' } },
+                { inlineData: { data: maskPng.toString('base64'), mimeType: 'image/png' } }
+            ], width, height);
+            inpaintedRgba = generated.rgba;
+            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote };
         }
 
         // Step 4: Reverse shift by 50% and composite
@@ -2567,8 +2558,8 @@ export class Google360PanoramaPipelineService {
             seamWidth,
             outputImagePath: options.outputImagePath,
             outputBuffer,
-            modelUsed,
-            summary: `360 panorama seam healed successfully across ${seamWidth}px boundary (width: ${width}, height: ${height}, model: ${modelUsed}).`
+            ...report,
+            summary: `360 panorama seam healed across a ${seamWidth}px band (${width}x${height}). ${report.modelNote}`
         };
     }
 
@@ -2640,7 +2631,7 @@ export class Google360PanoramaPipelineService {
         }
 
         let inpaintedRgba: Buffer;
-        let modelUsed = options.model || 'imagen-3.0-generate-002';
+        let report: PanoramaModelReport;
 
         if (options.mockExecution) {
             inpaintedRgba = Buffer.from(decoded.rgba);
@@ -2678,60 +2669,27 @@ export class Google360PanoramaPipelineService {
                 }
             }
 
-            modelUsed = options.inpaintBothPolar
+            const mockLabel = options.inpaintBothPolar
                 ? 'procedural-polar-infiller (mock)'
                 : options.ceilingOnly
                     ? 'procedural-ceiling-infiller (mock)'
                     : 'procedural-nadir-cleaner (mock)';
+            report = { modelUsed: mockLabel, modelNote: 'Mock run: procedural infill, no model call.' };
         } else {
-            try {
-                const client = await this.credentialsService.createClient();
-                const defaultPrompt = options.inpaintBothPolar
-                    ? 'Photorealistic architectural ceiling and open sky above, clean floor pavement and ground below, matching scene lighting and perspective'
-                    : options.ceilingOnly
-                        ? 'Photorealistic architectural ceiling and open atmospheric sky dome, matching scene lighting, seamless transition'
-                        : 'Clean seamless ground texture, matching surrounding floor pavement or grass, zero tripod, shadow, or camera rig';
-                const prompt = options.prompt || defaultPrompt;
-
-                if (typeof (client as any).models?.editImage === 'function') {
-                    const editRes: any = await (client as any).models.editImage({
-                        model: modelUsed,
-                        prompt,
-                        referenceImages: [
-                            {
-                                referenceImage: {
-                                    imageBytes: inputBuffer.toString('base64'),
-                                    mimeType: 'image/png'
-                                }
-                            },
-                            {
-                                referenceImage: {
-                                    imageBytes: maskPng.toString('base64'),
-                                    mimeType: 'image/png'
-                                },
-                                config: { maskMode: 'MASK_MODE_USER_PROVIDED' }
-                            }
-                        ],
-                        config: {
-                            editMode: 'EDIT_MODE_INPAINT_INSERTION',
-                            numberOfImages: 1
-                        }
-                    });
-
-                    const imgBytes = editRes.generatedImages?.[0]?.image?.imageBytes;
-                    if (imgBytes) {
-                        inpaintedRgba = decodePng(Buffer.from(imgBytes, 'base64')).rgba;
-                    } else {
-                        throw new Error('Imagen 3 returned no image bytes');
-                    }
-                } else {
-                    inpaintedRgba = Buffer.from(decoded.rgba);
-                    modelUsed = 'procedural-nadir-fallback';
-                }
-            } catch (err: any) {
-                inpaintedRgba = Buffer.from(decoded.rgba);
-                modelUsed = `fallback (${err?.message || 'offline'})`;
-            }
+            const defaultPrompt = options.inpaintBothPolar
+                ? 'Photorealistic architectural ceiling and open sky above, clean floor pavement and ground below, matching scene lighting and perspective'
+                : options.ceilingOnly
+                    ? 'Photorealistic architectural ceiling and open atmospheric sky dome, matching scene lighting, seamless transition'
+                    : 'Clean seamless ground texture, matching surrounding floor pavement or grass, zero tripod, shadow, or camera rig';
+            const prompt = options.prompt || defaultPrompt;
+            // The model edits the panorama; only the masked region of its answer is blended back in below.
+            const generated = await this.generatePanoramaImage(options.model, [
+                { text: `${prompt}. The first image is a 360 equirectangular panorama and the second is a mask: repaint only the white region of the mask, and keep every other pixel, the framing and the size unchanged.` },
+                { inlineData: { data: encodePng(width, height, decoded.rgba).toString('base64'), mimeType: 'image/png' } },
+                { inlineData: { data: maskPng.toString('base64'), mimeType: 'image/png' } }
+            ], width, height);
+            inpaintedRgba = generated.rgba;
+            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote };
         }
 
         const finalRgba = Google360PanoramaPipelineService.blendImageAlpha(
@@ -2756,8 +2714,8 @@ export class Google360PanoramaPipelineService {
             height,
             outputImagePath: options.outputImagePath,
             outputBuffer,
-            modelUsed,
-            summary: `Panorama inpainting completed successfully (width: ${width}, height: ${height}, model: ${modelUsed}).`
+            ...report,
+            summary: `Panorama inpainted (${width}x${height}). ${report.modelNote}`
         };
     }
 
@@ -2887,6 +2845,8 @@ export class Google360PanoramaPipelineService {
                 outputBuffer: monumental.outputBuffer,
                 seamHealed: monumental.seamEqualized,
                 modelUsed: monumental.modelUsed,
+                skippedModels: monumental.skippedModels,
+                modelNote: monumental.modelNote,
                 structuredPrompt: monumental.structuredPrompt,
                 summary: monumental.summary
             };
@@ -2895,7 +2855,7 @@ export class Google360PanoramaPipelineService {
         const width = options.width || 2048;
         const height = options.height || 1024;
         let generatedRgba: Buffer;
-        let modelUsed = options.model || 'imagen-3.0-generate-002';
+        let report: PanoramaModelReport;
 
         // Resolve structured prompt
         let structuredPrompt: EquirectangularStructuredPrompt;
@@ -2943,51 +2903,20 @@ export class Google360PanoramaPipelineService {
                     }
                 }
             }
-            modelUsed = 'procedural-synthesizer (mock)';
+            report = { modelUsed: 'procedural-synthesizer (mock)', modelNote: 'Mock run: procedural gradient panorama, no model call.' };
         } else {
-            try {
-                const client = await this.credentialsService.createClient();
-                const fullPrompt = options.useStructuredPrompt === false
-                    ? `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360 equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, 8k resolution, seamless horizontal environment${options.style ? `, ${options.style}` : ''}`
-                    : JSON.stringify(structuredPrompt, null, 2);
-
-                const response: any = await client.models.generateContent({
-                    model: 'gemini-3.1-flash-image',
-                    contents: [{ text: fullPrompt }],
-                    config: {
-                        responseModalities: ['TEXT', 'IMAGE'],
-                        imageConfig: {
-                            aspectRatio: '21:9'
-                        }
-                    }
-                } as any);
-
-                const part = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
-                if (part?.inlineData?.data) {
-                    const dec = decodePng(Buffer.from(part.inlineData.data, 'base64'));
-                    generatedRgba = dec.rgba;
-                    modelUsed = 'gemini-3.1-flash-image';
-                } else {
-                    throw new Error('generateContent returned no image part');
-                }
-            } catch (err: any) {
-                // Procedural fallback
-                generatedRgba = Buffer.alloc(width * height * 4);
-                for (let y = 0; y < height; y++) {
-                    for (let x = 0; x < width; x++) {
-                        const idx = (y * width + x) * 4;
-                        generatedRgba[idx] = 100;
-                        generatedRgba[idx + 1] = 150;
-                        generatedRgba[idx + 2] = 200;
-                        generatedRgba[idx + 3] = 255;
-                    }
-                }
-                modelUsed = `procedural-fallback (${err?.message || 'offline'})`;
-            }
+            const fullPrompt = options.useStructuredPrompt === false
+                ? `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360 equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, 8k resolution, seamless horizontal environment${options.style ? `, ${options.style}` : ''}`
+                : JSON.stringify(structuredPrompt, null, 2);
+            // The model answers at its own size (21:9); the panorama is resampled to the requested 2:1 canvas.
+            const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height, { aspectRatio: '21:9' });
+            generatedRgba = generated.rgba;
+            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote };
         }
 
         let outputBuffer = encodePng(width, height, generatedRgba);
         let seamHealed = false;
+        const stepNotes: string[] = [];
 
         if (options.healSeam !== false) {
             const seamRes = await this.healPanoramaSeam({
@@ -2997,6 +2926,7 @@ export class Google360PanoramaPipelineService {
             });
             outputBuffer = seamRes.outputBuffer;
             seamHealed = true;
+            stepNotes.push(`Seam heal: ${seamRes.modelNote}`);
         }
 
         if (options.inpaintNadir) {
@@ -3007,6 +2937,7 @@ export class Google360PanoramaPipelineService {
                 model: options.model
             });
             outputBuffer = nadirRes.outputBuffer;
+            stepNotes.push(`Nadir infill: ${nadirRes.modelNote}`);
         }
 
         if (options.invertSphericalCurvature) {
@@ -3027,9 +2958,9 @@ export class Google360PanoramaPipelineService {
             outputImagePath: options.outputImagePath,
             outputBuffer,
             seamHealed,
-            modelUsed,
+            ...report,
             structuredPrompt,
-            summary: `360 panorama generated successfully from prompt (dimensions: ${width}x${height}, seamHealed: ${seamHealed}, model: ${modelUsed}).`
+            summary: `360 panorama generated from prompt (${width}x${height}, seamHealed: ${seamHealed}). ${report.modelNote}${stepNotes.length ? ` ${stepNotes.join(' ')}` : ''}`
         };
     }
 
@@ -3049,9 +2980,7 @@ export class Google360PanoramaPipelineService {
         const enablePolarCaps = options.enablePolarCaps === true; // default false
         const enforcePolarSingularity = options.enforcePolarSingularity !== false; // default true
         let rawRgba: Buffer;
-        let rawW = width;
-        let rawH = height;
-        let modelUsed = options.model || 'imagen-3.0-generate-002';
+        let report: PanoramaModelReport;
 
         // Resolve structured prompt
         let structuredPrompt: EquirectangularStructuredPrompt;
@@ -3112,57 +3041,16 @@ export class Google360PanoramaPipelineService {
                     }
                 }
             }
-            modelUsed = 'procedural-synthesizer (4k mock)';
+            report = { modelUsed: 'procedural-synthesizer (4k mock)', modelNote: 'Mock run: procedural panorama, no model call.' };
         } else {
-            try {
-                const client = await this.credentialsService.createClient();
-                const fullPrompt = `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360-degree equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, monumental architecture, 8k resolution, seamless horizontal environment, crisp ceiling dome, reflection floor${options.style ? `, ${options.style}` : ''}`;
-
-                const response: any = await client.models.generateContent({
-                    model: 'gemini-3.1-flash-image',
-                    contents: [{ text: fullPrompt }],
-                    config: {
-                        responseModalities: ['TEXT', 'IMAGE'],
-                        imageConfig: {
-                            aspectRatio: '21:9'
-                        }
-                    }
-                } as any);
-
-                const part = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
-                if (part?.inlineData?.data) {
-                    const dec = decodePng(Buffer.from(part.inlineData.data, 'base64'));
-                    rawRgba = dec.rgba;
-                    rawW = dec.width;
-                    rawH = dec.height;
-                    modelUsed = 'gemini-3.1-flash-image';
-                } else {
-                    throw new Error('generateContent returned no image part');
-                }
-            } catch (err: any) {
-                // Procedural fallback
-                rawRgba = Buffer.alloc(width * height * 4);
-                for (let y = 0; y < height; y++) {
-                    const row = y * width * 4;
-                    for (let x = 0; x < width; x++) {
-                        const idx = row + x * 4;
-                        rawRgba[idx] = 120;
-                        rawRgba[idx + 1] = 135;
-                        rawRgba[idx + 2] = 160;
-                        rawRgba[idx + 3] = 255;
-                    }
-                }
-                modelUsed = `procedural-fallback (${err?.message || 'offline'})`;
-            }
+            const fullPrompt = `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360-degree equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, monumental architecture, 8k resolution, seamless horizontal environment, crisp ceiling dome, reflection floor${options.style ? `, ${options.style}` : ''}`;
+            // Resampled to the target 4K canvas (4096x2048) from the model's own 21:9 answer.
+            const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height, { aspectRatio: '21:9' });
+            rawRgba = generated.rgba;
+            report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote };
         }
 
-        // Resample/upscale to target 4K (4096x2048) if dimensions differ
-        let canvasRgba: Buffer;
-        if (rawW !== width || rawH !== height) {
-            canvasRgba = Google360PanoramaPipelineService.resampleRgba(rawRgba, rawW, rawH, width, height);
-        } else {
-            canvasRgba = Buffer.from(rawRgba);
-        }
+        let canvasRgba: Buffer = Buffer.from(rawRgba);
 
         // 1. Seam Equalization (SO(1) cyclic horizontal shift + Laplacian 2-band frequency separation)
         let seamEqualized = false;
@@ -3246,7 +3134,7 @@ export class Google360PanoramaPipelineService {
             await fs.writeFile(options.outputImagePath, outputBuffer);
         }
 
-        const summary = `Generated 4K Monumental 360 Panorama (${width}x${height}, ${(width * height / 1e6).toFixed(2)} MP). Seam Equalized: ${seamEqualized} (${seamMethod}). Polar Discs Removed: ${polarCapsRemoved}. Polar Singularity Collapsed: ${polarSingularityCollapsed}. QC Score: ${qcReport.qualityScore}/100 (${qcReport.pass ? 'PASS' : 'WARN'}). Model: ${modelUsed}.`;
+        const summary = `Generated 4K Monumental 360 Panorama (${width}x${height}, ${(width * height / 1e6).toFixed(2)} MP). Seam Equalized: ${seamEqualized} (${seamMethod}). Polar Discs Removed: ${polarCapsRemoved}. Polar Singularity Collapsed: ${polarSingularityCollapsed}. QC Score: ${qcReport.qualityScore}/100 (${qcReport.pass ? 'PASS' : 'WARN'}). ${report.modelNote}`;
 
         return {
             success: true,
@@ -3259,7 +3147,7 @@ export class Google360PanoramaPipelineService {
             polarSingularityCollapsed,
             qualityScore: qcReport.qualityScore,
             qcReport,
-            modelUsed,
+            ...report,
             summary,
             structuredPrompt
         };
@@ -3462,7 +3350,8 @@ export class Google360PanoramaPipelineService {
 
         let outputBuffer = encodePng(panoWidth, panoHeight, panoRgba);
 
-        // 5. Seam healing if requested
+        // 5. Seam healing if requested (an image model inpaints the seam band; see healPanoramaSeam)
+        let seamNote = '';
         if (options.healSeam !== false) {
             const seamRes = await this.healPanoramaSeam({
                 inputImageBuffer: outputBuffer,
@@ -3470,6 +3359,7 @@ export class Google360PanoramaPipelineService {
                 model: options.model
             });
             outputBuffer = seamRes.outputBuffer;
+            seamNote = ` Seam heal: ${seamRes.modelNote}`;
         }
 
         if (options.outputImagePath) {
@@ -3484,9 +3374,9 @@ export class Google360PanoramaPipelineService {
             outputImagePath: options.outputImagePath,
             outputBuffer,
             coverageRatio: proj.coverageRatio,
-            // Purely procedural (inward gnomonic projection): no model is called, mock or not.
-            modelUsed: 'inward-gnomonic-synthesizer (procedural, no model call)',
-            summary: `360 panorama generated from perspective image successfully (${panoWidth}x${panoHeight}, coverage: ${(proj.coverageRatio * 100).toFixed(1)}%).`
+            // The projection is procedural; only the optional seam heal calls an image model, and the summary names it.
+            modelUsed: 'inward-gnomonic-synthesizer (procedural projection)',
+            summary: `360 panorama generated from perspective image (${panoWidth}x${panoHeight}, coverage: ${(proj.coverageRatio * 100).toFixed(1)}%).${seamNote}`
         };
     }
 
@@ -3717,12 +3607,16 @@ export class Google360PanoramaPipelineService {
         const margin4k = 64;
         const padded = Google360PanoramaPipelineService.addCyclicBoundaryPadding(inputRgba, width, height, margin4k);
 
-        // Step 3: 4x Super-Resolution Upscaling to 16K
+        // Step 3: 4x upscaling to 16K. The app runs only its local wrap-aware bilinear upscaler; a super-resolution
+        // engine it does not run is refused rather than reported as used.
+        if (options.engine && options.engine !== 'bicubic_fast') {
+            throw new Error(`upscalePanorama16K: the ${options.engine} engine is not run by the app; only the local interpolating upscaler is available.`);
+        }
         const upResult = Google360PanoramaPipelineService.upscalePanorama4x(padded.paddedRgba, padded.paddedWidth, padded.paddedHeight);
         const upscaledRgba = upResult.rgba;
         const upscaledW = upResult.width;
         const upscaledH = upResult.height;
-        const engineUsed = options.engine || 'google_vertex_ai_endpoint';
+        const engineUsed = 'local-bilinear-4x (wrap-aware interpolation, no super-resolution model)';
 
         // Step 4: Crop pre-padding margins back to exact 2:1 equirectangular (16384 x 8192)
         const margin16k = margin4k * 4; // 256px
@@ -3761,12 +3655,13 @@ export class Google360PanoramaPipelineService {
                 try {
                     execSync(`ffmpeg -y -i "${tempPngPath}" -q:v 2 -pix_fmt yuv444p "${options.outputImagePath}" 2>/dev/null`);
                     outputBuffer = await fs.readFile(options.outputImagePath);
-                } catch {
+                } catch (ffmpegErr: any) {
                     try {
                         execSync(`sips -s format jpeg -s formatOptions 88 "${tempPngPath}" --out "${options.outputImagePath}" 2>/dev/null`);
                         outputBuffer = await fs.readFile(options.outputImagePath);
-                    } catch {
-                        await fs.writeFile(options.outputImagePath, outputBuffer);
+                    } catch (sipsErr: any) {
+                        // Never write PNG bytes under a .jpg name.
+                        throw new Error(`upscalePanorama16K: could not encode JPEG (ffmpeg: ${ffmpegErr?.message || ffmpegErr}; sips: ${sipsErr?.message || sipsErr})`);
                     }
                 } finally {
                     await fs.remove(tempPngPath).catch(() => {});
@@ -3789,7 +3684,7 @@ export class Google360PanoramaPipelineService {
             seamHealed: true,
             durationMs,
             qualityAudit,
-            summary: `16K Ultra-Res 360 Panorama synthesized (${outW}x${outH}, 134.2 MP) with cyclic wrap, polar caps, and QC Pass (${qualityAudit.qualityScore}/100) in ${durationMs}ms.`
+            summary: `16K Ultra-Res 360 Panorama synthesized (${outW}x${outH}, 134.2 MP) by local bilinear 4x interpolation (no super-resolution model) with cyclic wrap, polar caps, and QC ${qualityAudit.pass ? 'Pass' : 'Warn'} (${qualityAudit.qualityScore}/100) in ${durationMs}ms.`
         };
     }
 

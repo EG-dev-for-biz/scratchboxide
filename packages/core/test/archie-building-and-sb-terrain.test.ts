@@ -258,41 +258,16 @@ describe('SB-Terrain Multi-Material Ground Engine (Universal)', () => {
         expect(result.metrics.rockCount + result.metrics.grassCount + result.metrics.pavementCount).toBe(10);
     });
 
-    it('In-App Gemini Agent Tools: dispatches archie_refine_building_structure and sb_terrain_classify_materials', async () => {
+    it('In-App Gemini Agent Tools: archie_refine_building_structure and sb_terrain_classify_materials are not offered (they refined a demo box and three demo planes, never the scene)', async () => {
         const { createDefaultToolRegistry } = await import('../src/node/gemini/tool-registry');
         const registry = createDefaultToolRegistry();
 
-        const mockContext: any = {
-            request: {},
-            workspaceRoot: process.cwd(),
-            sandbox: {},
-            lsp: {},
-            contextGraph: {},
-            browserProxy: {},
-            lens: {}
-        };
+        expect(registry.get('archie_refine_building_structure')).toBeUndefined();
+        expect(registry.get('sb_terrain_classify_materials')).toBeUndefined();
+        expect(registry.declarations().map(d => d.name)).not.toContain('archie_refine_building_structure');
+        expect(registry.declarations().map(d => d.name)).not.toContain('sb_terrain_classify_materials');
 
-        // 1. Dispatch archie_refine_building_structure
-        const archieOutcome = await registry.dispatch('archie_refine_building_structure', {
-            palette: 'roman_ochre',
-            plinthDepth: 2.5,
-            plinthPadding: 0.35
-        }, mockContext);
-
-        expect(archieOutcome.exec.status).toBe('completed');
-        expect(archieOutcome.resultPayload.success).toBe(true);
-        expect(archieOutcome.resultPayload.palette).toBe('roman_ochre');
-
-        // 2. Dispatch sb_terrain_classify_materials
-        const terrainOutcome = await registry.dispatch('sb_terrain_classify_materials', {
-            layer: 'all',
-            rockSlopeThresholdDeg: 30,
-            pavementMaxSlopeDeg: 12
-        }, mockContext);
-
-        expect(terrainOutcome.exec.status).toBe('completed');
-        expect(terrainOutcome.resultPayload.success).toBe(true);
-        expect((terrainOutcome.resultPayload.metrics as any).totalSubmeshes).toBe(3);
+        // The canvas operators below act on the live scene's own meshes and stay available.
     });
 
     it('Direct-Dispatch Canvas Operators: executes sb_refine_building_structure and sb_classify_terrain_materials', async () => {

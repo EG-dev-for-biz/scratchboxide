@@ -7,11 +7,37 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { MultiAngleTurnaroundService } from '../src/node/spatial/MultiAngleTurnaroundService';
+import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
+import { MediaModelUnavailableError, MissingInputError } from '../src/common/errors/pipeline-errors';
+import { encodePng } from '../src/node/texture-processing';
+
+/**
+ * A fake Gen AI image client (no network): answers each call with a distinct small PNG and records the model,
+ * the prompt and how many reference images came with it. Models outside `served` answer 404.
+ */
+function fakeTurnaroundClient(served = ['gemini-3.1-flash-lite-image', 'gemini-3.1-flash-image']) {
+    const calls: Array<{ model: string; prompt: string; referenceCount: number }> = [];
+    const images: Buffer[] = [];
+    const client: any = {
+        models: {
+            generateContent: async ({ model, contents }: { model: string; contents: any[] }) => {
+                calls.push({ model, prompt: contents[0]?.text || '', referenceCount: contents.filter(c => c.inlineData).length });
+                if (!served.includes(model)) {
+                    throw Object.assign(new Error(`models/${model} is not found`), { status: 404 });
+                }
+                const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 40 + images.length * 30));
+                images.push(png);
+                return { candidates: [{ content: { parts: [{ inlineData: { data: png.toString('base64'), mimeType: 'image/png' } }] } }] };
+            }
+        }
+    };
+    return { client, calls, images };
+}
 import {
     TURNAROUND_TOOL_DECLARATIONS,
     turnaroundHandlers
@@ -112,9 +138,10 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
     });
 
     describe('End-to-End Execution', () => {
-        it('executes turnaround workflow without a downstream reconstruction target', async () => {
+        it('generates every view with the image model, conditioning each on the hero and previous views', async () => {
             const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-turnaround-'));
-            const service = new MultiAngleTurnaroundService();
+            const fake = fakeTurnaroundClient();
+            const service = new MultiAngleTurnaroundService({ createClient: async () => fake.client });
 
             const result = await service.execute({
                 subject: 'weathered post-apocalyptic buggy',
@@ -122,15 +149,63 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
                 stylePreset: '18-percent-studio-clay',
                 outputDir: tmpDir,
                 downstreamTarget: 'none',
-                metricDimensions: { lengthMeters: 4.2, heightMeters: 1.6, widthMeters: 2.1 },
-                mockExecution: true
+                metricDimensions: { lengthMeters: 4.2, heightMeters: 1.6, widthMeters: 2.1 }
             });
 
             expect(result.success).toBe(true);
             expect(result.views).toHaveLength(4);
             expect(result.downstreamGlb).toBeUndefined();
+            expect(result.modelUsed).toBe('gemini-3.1-flash-lite-image');
+            expect(result.modelNote).toBe('Generated with gemini-3.1-flash-lite-image.');
+            // Station 0 from text only; station 1 with the hero view; stations 2 and 3 with hero + previous.
+            expect(fake.calls.map(c => c.referenceCount)).toEqual([0, 1, 2, 2]);
+            expect(fake.calls[0].prompt).toContain('weathered post-apocalyptic buggy');
+            expect(fake.calls[0].prompt).toContain('Avoid:');
+            for (const [i, view] of result.views.entries()) {
+                // Each file holds the model's answer for that station, not a placeholder header.
+                expect(fs.readFileSync(view.imagePath).equals(fake.images[i])).toBe(true);
+                expect(view.generatedBy).toBe('gemini-3.1-flash-lite-image');
+            }
 
             await fs.promises.rm(tmpDir, { recursive: true, force: true });
+        });
+
+        it('fails instead of writing placeholder views when no image model can be reached', async () => {
+            const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-turnaround-nocreds-'));
+            const service = new MultiAngleTurnaroundService({ createClient: async () => { throw new Error('Google media credentials are not configured'); } });
+            await expect(service.execute({ subject: 'drone', outputDir: tmpDir })).rejects.toBeInstanceOf(MediaModelUnavailableError);
+            expect(fs.readdirSync(tmpDir)).toEqual([]);
+            await fs.promises.rm(tmpDir, { recursive: true, force: true });
+        });
+
+        it('walks the default list past an unserved Nano Banana Lite and says so; a named model is the only one tried', async () => {
+            const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-turnaround-models-'));
+            const fake = fakeTurnaroundClient(['gemini-3.1-flash-image']);
+            const service = new MultiAngleTurnaroundService({ createClient: async () => fake.client });
+            const result = await service.execute({ subject: 'drone', outputDir: tmpDir });
+            expect(result.modelUsed).toBe('gemini-3.1-flash-image');
+            expect(result.skippedModels.map(s => s.model)).toEqual(['gemini-3.1-flash-lite-image']);
+            expect(result.modelNote).toContain('not the requested gemini-3.1-flash-lite-image');
+            // After the first view, the rig stays on the model that answered.
+            expect(fake.calls.map(c => c.model)).toEqual(['gemini-3.1-flash-lite-image', 'gemini-3.1-flash-image', 'gemini-3.1-flash-image', 'gemini-3.1-flash-image', 'gemini-3.1-flash-image']);
+
+            const pinned = fakeTurnaroundClient(['gemini-3.1-flash-image']);
+            const pinnedService = new MultiAngleTurnaroundService({ createClient: async () => pinned.client });
+            await expect(pinnedService.execute({ subject: 'drone', outputDir: tmpDir, model: 'nano-banana-lite' })).rejects.toBeInstanceOf(MediaModelUnavailableError);
+            expect(pinned.calls.map(c => c.model)).toEqual(['gemini-3.1-flash-lite-image']);
+            await fs.promises.rm(tmpDir, { recursive: true, force: true });
+        });
+
+        it('rejects an unknown rig or an empty custom rig instead of using another rig', () => {
+            expect(() => MultiAngleTurnaroundService.computeStations('orbit-99')).toThrow(MissingInputError);
+            expect(() => MultiAngleTurnaroundService.computeStations('custom', [])).toThrow(MissingInputError);
+        });
+
+        it('uses a style it has no tuned wording for as written, instead of switching to clay', () => {
+            const [station] = MultiAngleTurnaroundService.computeStations('dcc-ortho-4');
+            const { positive } = MultiAngleTurnaroundService.buildPrompt('lantern', station, 'cel-shaded watercolor');
+            expect(positive).toContain('rendered in this style: cel-shaded watercolor');
+            expect(positive).not.toContain('grey clay');
         });
     });
 
@@ -156,19 +231,31 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
 
         it('executes tool handler via dispatch', async () => {
             const handler = turnaroundHandlers['generate_multi_angle_turnaround'];
+            const fake = fakeTurnaroundClient();
+            vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(fake.client);
             // Temp workspace root: the handler writes to <workspaceRoot>/output/turnarounds/<ts>.
             const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-turnaround-ws-'));
-            const res = await handler(
-                {
-                    subject: 'test sci-fi console',
-                    rigPreset: 'dcc-ortho-4',
-                    mockExecution: true
-                },
-                { workspaceRoot, activeCanvasType: '3d-scene' }
-            );
+            let res;
+            try {
+                res = await handler(
+                    {
+                        subject: 'test sci-fi console',
+                        rigPreset: 'dcc-ortho-4',
+                        // not a tool parameter any more: the views are generated
+                        mockExecution: true
+                    },
+                    { workspaceRoot, activeCanvasType: '3d-scene' }
+                );
+            } finally {
+                vi.restoreAllMocks();
+            }
 
-            expect(res.summaryResult).toContain('Captured 4 consistent views');
+            expect(res.summaryResult).toContain('Captured 4 views of "test sci-fi console"');
+            expect(res.summaryResult).toContain('Generated with gemini-3.1-flash-lite-image.');
             expect((res.resultPayload as any).views).toHaveLength(4);
+            expect((res.resultPayload as any).views[0].buffer).toBeUndefined();
+            expect(fake.calls).toHaveLength(4);
+            expect(Object.keys(TURNAROUND_TOOL_DECLARATIONS[0].parameters.properties || {})).not.toContain('mockExecution');
 
             // Clean up created output dir
             const outViews = (res.resultPayload as any).views;

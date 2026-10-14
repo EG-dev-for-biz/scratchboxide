@@ -7,11 +7,33 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { GeminiService } from '../src/node/gemini-service';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
+import { UTDRA_TOOL_DECLARATIONS } from '../src/node/gemini/tools/spatial-tools';
+import { UniversalTileDecompositionService, type UtdraBenchmarkType } from '../src/node/3d-engine/universal-tile-decomposition-service';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
+
+// Test inputs: the service writes its synthetic benchmark meshes to GLB files, which the tools then read like any tile.
+const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-utdra-fixtures-'));
+const fixtures = new Map<string, Promise<string>>();
+function benchmarkGlb(benchmark: UtdraBenchmarkType): Promise<string> {
+    if (!fixtures.has(benchmark)) {
+        const outputGlbPath = path.join(fixtureDir, `${benchmark}.glb`);
+        fixtures.set(benchmark, new UniversalTileDecompositionService()
+            .decomposeTile({ benchmark, mode: 'probe', outputGlbPath })
+            .then(() => {
+                expect(fs.existsSync(outputGlbPath)).toBe(true);
+                return outputGlbPath;
+            }));
+    }
+    return fixtures.get(benchmark)!;
+}
+afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
 
 describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
     it('exposes utdra_probe_tile, utdra_decompose_tile, utdra_slice_elevation, and utdra_carve_bridge_voids in Gemini tool declarations', () => {
@@ -46,11 +68,35 @@ describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
         expect(bridgeTool.description).toMatch(/bridge/i);
     });
 
+    it('requires an existing input GLB: no benchmark mesh stands in for a missing one', async () => {
+        const registry = createDefaultToolRegistry();
+        for (const [tool, args] of [
+            ['utdra_probe_tile', {}],
+            ['utdra_decompose_tile', { benchmark: 'hybrid' }],
+            ['utdra_slice_elevation', { cutoffY: 5 }],
+            ['utdra_carve_bridge_voids', { benchmark: 'bridge' }]
+        ] as const) {
+            const outcome = await registry.dispatch(tool, args as any, {} as any);
+            expect(outcome.exec.status, tool).toBe('failed');
+            expect(String((outcome.resultPayload as any).error), tool).toContain(`${tool} needs inputGlbPath`);
+        }
+        const absent = await registry.dispatch('utdra_probe_tile', { inputGlbPath: path.join(os.tmpdir(), 'no-such-tile.glb') }, {} as any);
+        expect(absent.exec.status).toBe('failed');
+        expect(String((absent.resultPayload as any).error)).toContain('does not exist');
+        const noCut = await registry.dispatch('utdra_slice_elevation', { inputGlbPath: await benchmarkGlb('slicer') }, {} as any);
+        expect(noCut.exec.status).toBe('failed');
+        expect(String((noCut.resultPayload as any).error)).toContain('cutoffY');
+        for (const decl of UTDRA_TOOL_DECLARATIONS) {
+            expect(decl.parameters.required, decl.name).toContain('inputGlbPath');
+            expect(Object.keys(decl.parameters.properties || {}), decl.name).not.toContain('benchmark');
+        }
+    });
+
     it('executes utdra_probe_tile via tool registry', async () => {
         const registry = createDefaultToolRegistry();
         const outcome = await registry.dispatch(
             'utdra_probe_tile',
-            { benchmark: 'urban' },
+            { inputGlbPath: await benchmarkGlb('urban') },
             {} as any
         );
 
@@ -68,7 +114,7 @@ describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
         const outcome = await registry.dispatch(
             'utdra_decompose_tile',
             {
-                benchmark: 'hybrid',
+                inputGlbPath: await benchmarkGlb('hybrid'),
                 mode: 'full'
             },
             {} as any
@@ -88,7 +134,7 @@ describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
         const outcome = await registry.dispatch(
             'utdra_slice_elevation',
             {
-                benchmark: 'slicer',
+                inputGlbPath: await benchmarkGlb('slicer'),
                 cutoffY: 5.0
             },
             {} as any
@@ -107,7 +153,7 @@ describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
         const outcome = await registry.dispatch(
             'utdra_carve_bridge_voids',
             {
-                benchmark: 'bridge',
+                inputGlbPath: await benchmarkGlb('bridge'),
                 minVoidHeightMeters: 4.0
             },
             {} as any

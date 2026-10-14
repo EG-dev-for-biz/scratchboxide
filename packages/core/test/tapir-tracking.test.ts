@@ -15,7 +15,7 @@ import {
 } from '../src/common/tracking/PointTrackingModel';
 import type { VideoFrameData } from '../src/common/tracking/tapir-tracking-protocol';
 import { TapirTrackingService } from '../src/node/spatial/TapirTrackingService';
-import { tapir4dgsHandlers } from '../src/node/gemini/tools/spatial-tools';
+import { tapir4dgsHandlers, TAPIR_4DGS_TOOL_DECLARATIONS } from '../src/node/gemini/tools/spatial-tools';
 
 function createSyntheticVideo(
     numFrames: number = 5,
@@ -171,19 +171,8 @@ describe('SyntheticTracker & TapirTrackingService', () => {
 });
 
 describe('Gemini Agent Tool: tapir_track_video_points', () => {
-    it('executes tracking tool handler with synthetic generation and cycle consistency', async () => {
-        const res = await tapir4dgsHandlers.tapir_track_video_points({
-            numFrames: 4,
-            frameWidth: 80,
-            frameHeight: 60,
-            backend: 'lk_flow',
-            samplerType: 'grid',
-            maxPoints: 8
-        });
-
-        expect(res.summaryResult).toContain('Tracked');
-        expect(res.summaryResult).toContain('frames using LK_FLOW');
-        expect((res.resultPayload as any).backendUsed).toBe('lk_flow');
-        expect((res.resultPayload as any).numFrames).toBe(4);
+    it('is not offered: it tracked frames it synthesized itself and took no video', () => {
+        expect(tapir4dgsHandlers.tapir_track_video_points).toBeUndefined();
+        expect(TAPIR_4DGS_TOOL_DECLARATIONS.map(d => d.name)).not.toContain('tapir_track_video_points');
     });
 });

@@ -173,23 +173,16 @@ export class OffsetViewSynthesisService {
                 // Copy warped rgb directly in mock mode
                 await fs.copy(offsetRgb, inpaintedRgb);
             } else {
-                try {
-                    const prompt = options.prompt || 'Seamless highly detailed continuous background under consistent cinematic lighting, photorealistic matching albedo';
-                    const inpaintRes = await inpaintPanorama({
-                        inputImagePath: offsetRgb,
-                        maskImagePath: offsetMask,
-                        prompt,
-                        outputImagePath: inpaintedRgb,
-                        mockExecution: false
-                    });
-
-                    if (!inpaintRes.success) {
-                        throw new Error('Imagen inpaint failed');
-                    }
-                } catch (e: any) {
-                    console.warn(`[OffsetSynthesis] [Pose ${i}] Imagen inpainting failed: ${e.message}. Falling back to warped image.`);
-                    await fs.copy(offsetRgb, inpaintedRgb);
-                }
+                // The disocclusion holes are filled by an image model or the run fails (MediaModelUnavailableError);
+                // the warped image with its holes is never splatted in place of the inpainted view.
+                const prompt = options.prompt || 'Seamless highly detailed continuous background under consistent cinematic lighting, photorealistic matching albedo';
+                await inpaintPanorama({
+                    inputImagePath: offsetRgb,
+                    maskImagePath: offsetMask,
+                    prompt,
+                    outputImagePath: inpaintedRgb,
+                    mockExecution: false
+                });
             }
 
             console.log(`[OffsetSynthesis] [Pose ${i}] Generating depth map for inpainted view...`);

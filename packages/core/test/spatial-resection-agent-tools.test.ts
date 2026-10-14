@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { encodePng } from '../src/node/texture-processing';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { buildSystemInstruction } from '../src/node/gemini/prompt-builder';
@@ -104,22 +108,62 @@ describe('Spatial 2D-to-3D Resection & Pose Estimation Agent Tools', () => {
             expect(payload.translationCamera[2]).toBeCloseTo(40, 1);
         });
 
-        it('should dispatch spatial_match_features_2d_3d and extract correspondences', async () => {
-            const response = await registry.dispatch('spatial_match_features_2d_3d', {
-                queryImagePath: 'public/test_images/storefront.jpg',
-                maxKeypoints: 200,
-                loweRatio: 0.80,
-                crossCheck: true
+        it('should dispatch spatial_match_features_2d_3d on the two given images and recover their offset', async () => {
+            // A photo and a "render" of the same blocky texture, the render shifted by (+7, +4) px.
+            const w = 200, h = 150, dx = 7, dy = 4;
+            const texture = (x: number, y: number) => {
+                const cell = ((Math.floor(x / 13) * 73856093) ^ (Math.floor(y / 11) * 19349663)) >>> 0;
+                return 40 + (cell % 180);
+            };
+            const image = (shiftX: number, shiftY: number) => {
+                const rgba = Buffer.alloc(w * h * 4);
+                for (let y = 0; y < h; y++) {
+                    for (let x = 0; x < w; x++) {
+                        const v = texture(x - shiftX + 50, y - shiftY + 50);
+                        const i = (y * w + x) * 4;
+                        rgba[i] = v; rgba[i + 1] = v; rgba[i + 2] = v; rgba[i + 3] = 255;
+                    }
+                }
+                return encodePng(w, h, rgba);
+            };
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-feature-match-'));
+            const queryImagePath = path.join(dir, 'photo.png');
+            const renderImagePath = path.join(dir, 'render.png');
+            fs.writeFileSync(queryImagePath, image(0, 0));
+            fs.writeFileSync(renderImagePath, image(dx, dy));
+            try {
+                const response = await registry.dispatch('spatial_match_features_2d_3d', {
+                    queryImagePath,
+                    renderImagePath,
+                    maxKeypoints: 300,
+                    loweRatio: 0.8,
+                    crossCheck: true
+                }, {} as any);
+
+                expect(response.exec.status).toBe('completed');
+                expect(response.exec.summaryResult).toContain(`Matched ${queryImagePath} against ${renderImagePath}`);
+                const payload: any = response.resultPayload;
+                expect(payload.queryImageSize).toEqual([w, h]);
+                expect(payload.matchesCount).toBeGreaterThan(10);
+                const offsets = payload.matches.map((m: any) => [m.point2[0] - m.point1[0], m.point2[1] - m.point1[1]]);
+                const near = offsets.filter(([ox, oy]: number[]) => Math.abs(ox - dx) <= 1 && Math.abs(oy - dy) <= 1);
+                expect(near.length / offsets.length).toBeGreaterThan(0.8);
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        });
+
+        it('spatial_match_features_2d_3d fails when an image is not given or does not exist (no synthetic images instead)', async () => {
+            const missingRender = await registry.dispatch('spatial_match_features_2d_3d', { queryImagePath: 'photo.png' }, {} as any);
+            expect(missingRender.exec.status).toBe('failed');
+            expect(String((missingRender.resultPayload as any).error)).toContain('renderImagePath');
+
+            const absent = await registry.dispatch('spatial_match_features_2d_3d', {
+                queryImagePath: path.join(os.tmpdir(), 'no-such-photo.png'),
+                renderImagePath: path.join(os.tmpdir(), 'no-such-render.png')
             }, {} as any);
-
-            expect(response.exec.status).toBe('completed');
-            expect(response.exec.summaryResult).toContain('Extracted visual features');
-            expect(response.exec.summaryResult).toContain('query keypoints');
-
-            const payload: any = response.resultPayload;
-            expect(payload.queryKeypointsCount).toBeGreaterThan(0);
-            expect(payload.referenceKeypointsCount).toBeGreaterThan(0);
-            expect(payload.matchesCount).toBeGreaterThan(0);
+            expect(absent.exec.status).toBe('failed');
+            expect(String((absent.resultPayload as any).error)).toContain('does not exist');
         });
 
         it('should dispatch spatial_closed_loop_edge_align and converge to high overlap', async () => {
