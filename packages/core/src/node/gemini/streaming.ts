@@ -17,6 +17,7 @@ import type {
 } from '../../common/gemini-protocol';
 import type { CanvasArtifact, McpExecutionState } from '../../browser/generative-canvas/canvas-types';
 import {
+    DEFAULT_SUBAGENT_MODEL,
     GeminiClient,
     isModelNotFoundError,
     resolveFetch,
@@ -24,6 +25,7 @@ import {
     type GeminiThinkingConfig,
     type VertexGenerateContentJson
 } from './gemini-client';
+import { compactChatHistory, HISTORY_SUMMARY_INSTRUCTION } from './history-compaction';
 import {
     buildToolDeclarations,
     inferToolGroup,
@@ -450,6 +452,15 @@ export class StreamingEngine {
             : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
 
         const systemInstructionText = await buildSystemInstruction(request, this.promptServices());
+        request.chatHistory = await compactChatHistory(request.chatHistory, transcript =>
+            this.client.generateContent({
+                model: DEFAULT_SUBAGENT_MODEL,
+                systemInstruction: HISTORY_SUMMARY_INSTRUCTION,
+                prompt: transcript,
+                temperature: 0.2,
+                maxOutputTokens: 8192
+            }).then(r => r.text)
+        );
         const contents = buildContents(request);
         const tools = this.buildToolDeclarations(request);
 

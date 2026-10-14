@@ -389,10 +389,19 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             }
         }
 
-        const chatHistory = updatedMessages.slice(-4).map(m => ({
-            role: (m.sender === 'assistant' ? 'model' : 'user') as ('user' | 'model'),
-            text: m.text
-        }));
+        // The whole conversation before this message; the server summarizes older turns when it
+        // outgrows the context budget. Assistant turns note which tools ran, since their results
+        // are not replayed.
+        const chatHistory = updatedMessages
+            .slice(0, -1)
+            .filter(m => m.sender !== 'system' && !m.isStreaming)
+            .map(m => {
+                const tools = (m.mcpExecutions || [])
+                    .map(e => `${e.toolName} (${e.status})${e.summaryResult ? `: ${e.summaryResult.slice(0, 200)}` : ''}`);
+                const text = tools.length > 0 ? `${m.text}\n\n[Tools run: ${tools.join('; ')}]` : m.text;
+                return { role: (m.sender === 'assistant' ? 'model' : 'user') as ('user' | 'model'), text };
+            })
+            .filter(m => m.text.trim());
 
         // Format attached @-context items into groundable prompt context
         let effectivePrompt = text.trim();
