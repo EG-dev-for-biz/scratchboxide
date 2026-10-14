@@ -4159,6 +4159,7 @@ int main(int argc, char** argv) {
                                 const label = String(member.content?.metadata?.variantLabel ?? member.id);
                                 return (
                                     <button
+                                        className="sb-hud-segment"
                                         key={member.id}
                                         type="button"
                                         data-variant-object-id={member.id}
@@ -4195,6 +4196,7 @@ int main(int argc, char** argv) {
                             )}
                             {selectedModelRoot && !isModelRootSelected && (
                                 <button
+                                    className="sb-hud-segment"
                                     type="button"
                                     data-testid="sb-3d-select-model-root"
                                     onClick={() => selectObject(selectedModelRoot)}
@@ -4206,6 +4208,7 @@ int main(int argc, char** argv) {
                                 </button>
                             )}
                             <button
+                                className="sb-hud-segment"
                                 type="button"
                                 onClick={() => selectObject(null)}
                                 title="Clear selection"
