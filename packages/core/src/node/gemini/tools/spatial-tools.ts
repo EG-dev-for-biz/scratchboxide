@@ -738,7 +738,11 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         const zenithAltitudeMeters = typeof args.zenithAltitudeMeters === 'number' ? args.zenithAltitudeMeters : undefined;
         const radiusMeters = typeof args.radiusMeters === 'number' && args.radiusMeters > 0 ? args.radiusMeters : undefined;
 
-        const result = await getGoogle3DTilesClay(query, {
+        // Remeshing reads window and pier relief from the photographs, which clay tiles do not carry; so when it
+        // runs, the photo-textured tiles are extracted and the remeshed result is still shown as clay.
+        const remeshing = args.remesh !== false && args.mockExecution !== true;
+        const extract = remeshing ? getGoogle3DTilesFullTexture : getGoogle3DTilesClay;
+        const result = await extract(query, {
             outputGlbPath,
             offlineMock,
             atomicBuildingIntegrity,

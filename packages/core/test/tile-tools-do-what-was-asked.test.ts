@@ -462,6 +462,9 @@ describe('a location request returns remeshed geometry', () => {
             expect(obj.content.metadata).toMatchObject({ remeshed: true, rawGlbPath: payload.glbPath });
             expect(payload.remesh).toMatchObject({ ok: true, triangles: 46_220, inputTriangles: 403_385 });
             expect(outcome.exec.summaryResult).toContain('Remeshed (403,385 -> 46,220 triangles) in 12.3 s');
+            // remeshing reads facade relief from the photographs, so even the clay tool extracts photo tiles; the
+            // mounted result is the remeshed clay model
+            expect(payload.mode).toBe('full-texture');
         });
 
         it(`${name} isolates the structure at the anchor when asked`, async () => {
@@ -479,6 +482,7 @@ describe('a location request returns remeshed geometry', () => {
             expect(refine).not.toHaveBeenCalled();
             expect((outcome.resultPayload as any).artifact.data.objects[0].content.metadata.remeshed).toBe(false);
             expect(outcome.exec.summaryResult).toContain('Returned as raw tiles (not remeshed).');
+            expect((outcome.resultPayload as any).mode).toBe(name.endsWith('_clay') ? 'clay' : 'full-texture');
         });
 
         it(`${name} says so when remeshing fails, and shows the raw tiles`, async () => {
