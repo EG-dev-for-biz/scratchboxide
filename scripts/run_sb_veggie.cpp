@@ -2,6 +2,8 @@
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless SB-Veggie Parametric Botanical Synthesis & Inversion CLI.
+ * --fit-scan <scan.glb> fits the template to the scan's vertex-coloured vegetation (--max-iterations N); a missing,
+ * unreadable or colourless scan is an error (non-zero exit, ERROR: on stderr), never a synthetic benchmark.
  * Suitable for In-App Native Execution, Service Pipelines, and Cloud Run.
  *
  * Streams binary glTF 2.0 (.glb) chunks or writes to disk.
@@ -29,44 +31,11 @@ using namespace scratchbox::sb_veggie;
 using namespace scratchbox::botanical;
 using namespace scratchbox::io;
 
-// Helper to create a synthetic noisy photogrammetry tree blob for benchmark fitting
-static ScratchboxMesh createBenchmarkTreeBlob() {
-    ScratchboxMesh blob("benchmark_raw_tree_blob");
-
-    // Ellipsoidal canopy blob centered at y=6.0m
-    int uSteps = 16, vSteps = 12;
-    float rx = 3.6f, ry = 2.8f, rz = 3.4f;
-    Vec3 center(0.0f, 6.0f, 0.0f);
-
-    for (int v = 0; v <= vSteps; ++v) {
-        float theta = static_cast<float>(v) / vSteps * PI;
-        for (int u = 0; u < uSteps; ++u) {
-            float phi = static_cast<float>(u) / uSteps * TWO_PI;
-
-            // Add surface photogrammetry noise
-            float noise = std::sin(phi * 3.0f) * std::cos(theta * 4.0f) * 0.25f;
-            Vec3 pos(
-                center.x + (rx + noise) * std::sin(theta) * std::cos(phi),
-                center.y + (ry + noise) * std::cos(theta),
-                center.z + (rz + noise) * std::sin(theta) * std::sin(phi)
-            );
-            blob.addVertex(Vertex{pos, Vec3(0, 1, 0), Vec2(0, 0), Vec4(0.22f, 0.40f, 0.18f, 1.0f)});
-        }
-    }
-
-    // Cylindrical trunk blob
-    int tRings = 8, tRad = 8;
-    for (int r = 0; r <= tRings; ++r) {
-        float y = static_cast<float>(r) / tRings * 4.0f;
-        float radius = 0.55f * (1.0f - y * 0.08f);
-        for (int s = 0; s < tRad; ++s) {
-            float a = static_cast<float>(s) / tRad * TWO_PI;
-            Vec3 pos(std::cos(a) * radius, y, std::sin(a) * radius);
-            blob.addVertex(Vertex{pos, Vec3(std::cos(a), 0, std::sin(a)), Vec2(0, 0), Vec4(0.28f, 0.20f, 0.14f, 1.0f)});
-        }
-    }
-
-    return blob;
+// Scan fitting (--fit-scan <scan.glb>) fits the template to the vertex-coloured vegetation of a real scan. A missing
+// or unreadable scan, or one without vertex-coloured vegetation, is an error: nothing is fitted to anything else.
+static int fail(int code, const std::string& message) {
+    std::cerr << "ERROR: " << message << std::endl;
+    return code;
 }
 
 int main(int argc, char** argv) {
@@ -75,7 +44,7 @@ int main(int argc, char** argv) {
     std::string archetypeStr = "decurrent";
     bool exportOverlay = false;
     bool sideBySide = false;
-    bool runFitBenchmark = false;
+    int maxIterations = 25;
     bool generateLeaves = true;
     SbVeggieParams params = SbVeggieParams::createNeutral();
     bool userSeasonSpecified = false;
@@ -111,8 +80,8 @@ int main(int argc, char** argv) {
             } else if (mode == "winter-manifold" || mode == "winter") {
                 generateLeaves = false;
             }
-        } else if (arg == "--benchmark-fit" || arg == "--benchmarkFit") {
-            runFitBenchmark = true;
+        } else if (arg == "--max-iterations" && i + 1 < argc) {
+            maxIterations = std::max(1, std::stoi(argv[++i]));
         } else if (arg == "--no-leaves" || arg == "--noLeaves" || arg == "--bare") {
             generateLeaves = false;
         } else if (arg == "--pbr-textures" || arg == "--pbrTextures") {
@@ -143,6 +112,14 @@ int main(int argc, char** argv) {
             params.collarFlare = std::stof(argv[++i]);
         } else if (arg == "--wind-x" && i + 1 < argc) {
             params.windVector.x = std::stof(argv[++i]);
+        } else if (arg == "--wind-y" && i + 1 < argc) {
+            params.windVector.y = std::stof(argv[++i]);
+        } else if (arg == "--reaction-wood" && i + 1 < argc) {
+            params.reactionWood = std::stof(argv[++i]);
+        } else if (arg == "--envelope-normals" && i + 1 < argc) {
+            params.transferEnvelopeNormals = std::stoi(argv[++i]) != 0;
+        } else if (arg == "--generate-leaves" && i + 1 < argc) {
+            generateLeaves = std::stoi(argv[++i]) != 0;
         } else if (arg == "--wind-z" && i + 1 < argc) {
             params.windVector.z = std::stof(argv[++i]);
         } else if (arg == "--wind-time" && i + 1 < argc) {
@@ -180,10 +157,12 @@ int main(int argc, char** argv) {
     bool hasExplicitAnchor = false;
 
     // 2. Perform Inversion Solver if requested
-    if (!fitScanPath.empty() || runFitBenchmark) {
+    if (!fitScanPath.empty()) {
         std::vector<Vec3> scanPoints;
-        if (!fitScanPath.empty() && fs::exists(fitScanPath)) {
+        if (!fs::exists(fitScanPath)) return fail(2, "scan not found: " + fitScanPath);
+        {
             rawScanMesh = GlbReader::readGlb(fitScanPath);
+            if (rawScanMesh.vertices.empty()) return fail(3, "could not read any geometry from the scan " + fitScanPath);
             std::vector<Vec3> vegPoints;
             float minY = 1e9f;
             Vec3 vegCentroid(0.0f, 0.0f, 0.0f);
@@ -208,19 +187,12 @@ int main(int argc, char** argv) {
                 std::cout << "[SB-Veggie] Harvested vegetation anchor from scan: (" 
                           << harvestedAnchor.x << ", " << harvestedAnchor.y << ", " << harvestedAnchor.z << ")" << std::endl;
             } else {
-                for (const auto& v : rawScanMesh.vertices) {
-                    scanPoints.push_back(v.position);
-                }
-            }
-        } else {
-            rawScanMesh = createBenchmarkTreeBlob();
-            for (const auto& v : rawScanMesh.vertices) {
-                scanPoints.push_back(v.position);
+                return fail(4, "the scan " + fitScanPath + " has no vertex-coloured vegetation (excess green) to fit the tree to; nothing was fitted");
             }
         }
 
         SbVeggieOptimizerOptions opt;
-        opt.maxIterations = 25;
+        opt.maxIterations = maxIterations;
         optResult = SbVeggieOptimizer::fitToScan(scanPoints, tmpl, opt, hasExplicitAnchor ? &harvestedAnchor : nullptr);
         int savedMorphology = params.leafMorphology;
         float savedCupping = params.leafCupping;
@@ -296,21 +268,7 @@ int main(int argc, char** argv) {
         bool isIsolatedBlob = rawScanMesh.vertices.size() < 3000;
 
         if (sideBySide) {
-            std::string atlasPath = "public/models/botanical_tests/tree_tile_atlas.jpg";
-            bool hasScanTexture = false;
-            std::vector<uint8_t> scanAtlasJpg;
-            if (fs::exists(atlasPath)) {
-                std::ifstream f(atlasPath, std::ios::binary | std::ios::ate);
-                if (f.is_open()) {
-                    std::streamsize sz = f.tellg();
-                    f.seekg(0, std::ios::beg);
-                    scanAtlasJpg.resize(static_cast<size_t>(sz));
-                    if (f.read(reinterpret_cast<char*>(scanAtlasJpg.data()), sz)) {
-                        hasScanTexture = true;
-                    }
-                }
-            }
-
+            // the scan is shown with its own vertex colours (never a texture from another file)
             ScratchboxMesh rawScanTree("RawPhotogrammetryScan");
             rawScanTree.material.name = "material_raw_photogrammetry_scan";
             rawScanTree.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, 1.0f); // Authentic photogrammetry colors
@@ -339,10 +297,7 @@ int main(int argc, char** argv) {
                     nv1.position = (nv1.position - centerOffset) + Vec3(-sideShift, 0.0f, 0.0f);
                     nv2.position = (nv2.position - centerOffset) + Vec3(-sideShift, 0.0f, 0.0f);
                     
-                    // If authentic scan texture atlas is present, use neutral 1.0 color so texture is 100% authentic
-                    if (hasScanTexture) {
-                        nv0.color = nv1.color = nv2.color = Vec4(1.0f, 1.0f, 1.0f, 1.0f);
-                    } else if (v0.color.w > 0.5f && (v0.color.x != 1.0f || v0.color.y != 1.0f || v0.color.z != 1.0f)) {
+                    if (v0.color.w > 0.5f && (v0.color.x != 1.0f || v0.color.y != 1.0f || v0.color.z != 1.0f)) {
                         nv0.color = v0.color;
                         nv1.color = v1.color;
                         nv2.color = v2.color;
@@ -377,20 +332,7 @@ int main(int argc, char** argv) {
             if (!fittedFoliage.vertices.empty()) {
                 exportSubmeshes.push_back(fittedFoliage); // Submesh 1 -> Foliage material
             }
-            int scanSubmeshIdx = static_cast<int>(exportSubmeshes.size());
-            exportSubmeshes.push_back(rawScanTree);   // Submesh 2 -> Authentic photogrammetry scan
-            
-            if (hasScanTexture && !scanAtlasJpg.empty()) {
-                EmbeddedTexture scanTex;
-                scanTex.usage = TextureUsage::BASE_COLOR;
-                scanTex.materialIndex = scanSubmeshIdx;
-                scanTex.mimeType = "image/jpeg";
-                scanTex.data = std::move(scanAtlasJpg);
-                embeddedTextures.push_back(scanTex);
-                std::cout << "[run_sb_veggie] Attached authentic tile texture atlas (" 
-                          << (scanTex.data.size() / 1024) << " KB) to RawPhotogrammetryScan (material " 
-                          << scanSubmeshIdx << ")\n";
-            }
+            exportSubmeshes.push_back(rawScanTree);   // Submesh 2 -> the photogrammetry scan
 
             glbBytes = GlbWriter::serializeMultiMeshToGlb(exportSubmeshes, embeddedTextures);
         } else if (exportOverlay) {
@@ -469,10 +411,10 @@ int main(int argc, char** argv) {
     }
 
     std::ofstream outFile(outputPath, std::ios::binary);
-    if (outFile.is_open()) {
-        outFile.write(reinterpret_cast<const char*>(glbBytes.data()), static_cast<std::streamsize>(glbBytes.size()));
-        outFile.close();
-    }
+    if (!outFile.is_open()) return fail(5, "could not write " + outputPath);
+    outFile.write(reinterpret_cast<const char*>(glbBytes.data()), static_cast<std::streamsize>(glbBytes.size()));
+    outFile.close();
+    if (!outFile) return fail(5, "could not write " + outputPath);
 
     // 5. Output Telemetry
     std::cout << "\n======================================================================\n";

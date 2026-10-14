@@ -71,10 +71,8 @@ export interface SbVeggieSynthesizeOptions {
 }
 
 export interface SbVeggieInversionOptions {
-    /** Input photogrammetry scan or 3D tile mesh path (.glb) */
-    inputScanPath?: string;
-    /** Use synthetic noisy photogrammetry benchmark blob if no input file */
-    benchmarkFit?: boolean;
+    /** The scan to fit (.glb with vertex-coloured vegetation); required, never replaced by a synthetic stand-in */
+    inputScanPath: string;
     archetype?: SbVeggieArchetype;
     maxIterations?: number;
     phenology?: SbVeggiePhenologyParams;
