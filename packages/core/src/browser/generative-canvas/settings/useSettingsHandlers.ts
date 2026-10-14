@@ -193,10 +193,15 @@ export function useSettingsHandlers(deps: UseSettingsHandlersDeps) {
 
     const handleSaveWorkspaceSettings = async () => {
         setIsSavingWorkspace(true);
-        const res = await WorkspaceConfigClient.getInstance().saveWorkspaceConfig(process.cwd(), {
-            settings: workspaceSettings
-        });
-        setIsSavingWorkspace(false);
+        let res: { success: boolean; message?: string };
+        try {
+            // An empty root lets the server fall back to its own workspace root.
+            res = await WorkspaceConfigClient.getInstance().saveWorkspaceConfig(activeWorkspace?.path ?? '', {
+                settings: workspaceSettings
+            });
+        } finally {
+            setIsSavingWorkspace(false);
+        }
         if (res.success) {
             setSaveFeedback('Workspace configuration saved to .scratchbox/config.json');
             setTimeout(() => setSaveFeedback(undefined), 3000);

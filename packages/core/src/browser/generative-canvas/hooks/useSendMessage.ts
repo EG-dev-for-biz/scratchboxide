@@ -36,6 +36,7 @@ import { describeChatFailure } from './chatFailureMessage';
 import { resolveModeForArtifact } from '../guardrails-service';
 import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
+import { WorkspaceConfigClient } from '../workspace-config-client';
 import { ProjectItem } from '../ProjectsModal';
 import { streamTokensAsync } from '../chat/streaming-utils';
 import {
@@ -432,11 +433,14 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             effectivePrompt = `${effectivePrompt}\n${contextLines.join('\n')}`;
         }
 
+        // Model and thinking budget come from Settings > Models & AI; when nothing is saved the
+        // backend's own defaults apply.
+        const { settings: savedSettings } = await WorkspaceConfigClient.getInstance().fetchWorkspaceConfig(d.activeWorkspace?.path);
         await GeminiClient.getInstance().streamGenerate(
             {
                 prompt: effectivePrompt,
-                model: 'gemini-3.8-flash',
-                thinkingBudget: 1024,
+                model: savedSettings?.defaultModel || undefined,
+                thinkingBudget: savedSettings?.thinkingBudget,
                 enableGoogleSearch: googleSearchGrounding !== false,
                 attachedSkills: attachedSkillsContext,
                 attachedMcpTools: attachedMcpContext,
