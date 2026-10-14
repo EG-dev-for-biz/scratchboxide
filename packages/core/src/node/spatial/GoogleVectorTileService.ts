@@ -55,6 +55,14 @@ export const DEFAULT_GOOGLE_MAPS_API_KEY = (typeof process !== 'undefined'
     ? process.env?.MAP_TILES_API_KEY || process.env?.GOOGLE_MAPS_API_KEY || ''
     : '');
 
+/** The tile source returned no vector data (wrong endpoint, raster tile, or HTTP error). */
+export class VectorTileUnavailableError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'VectorTileUnavailableError';
+    }
+}
+
 export interface VectorFeaturePolygon {
     id: string;
     type: 'Polygon';
@@ -360,8 +368,14 @@ export class GoogleVectorTileService {
                 : `https://tile.googleapis.com/v1/2d/vectortiles/${z}/${x}/${y}?key=${apiKey}`;
 
             const res = await fetchImpl(url);
-            if (!res.ok) {
-                return emptyResult;
+            // Google's Map Tiles API serves 2D tiles as PNG images and has no vector-tile endpoint
+            // (/v1/2d/vectortiles returns 404). Say so instead of staging an empty world as if it had loaded.
+            const contentType = res.headers?.get?.('content-type') || '';
+            if (!res.ok || contentType.startsWith('image/')) {
+                throw new VectorTileUnavailableError(
+                    `Google vector tile ${z}/${x}/${y} unavailable (HTTP ${res.status}${contentType ? `, ${contentType}` : ''}): ` +
+                    'the Map Tiles API serves 2D tiles as raster images, not vector data, so no building, road or water geometry was loaded.'
+                );
             }
 
             const arrayBuffer = await res.arrayBuffer();
@@ -369,6 +383,7 @@ export class GoogleVectorTileService {
             this.tileCache.set(cacheKey, decoded);
             return decoded;
         } catch (err: any) {
+            if (err instanceof VectorTileUnavailableError) throw err;
             console.warn(`[GoogleVectorTileService] Error fetching tile ${z}/${x}/${y}: ${err?.message}`);
             return emptyResult;
         }
