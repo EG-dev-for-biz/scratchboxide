@@ -24,13 +24,19 @@
  * Robustness: ffmpeg reads its input from a temporary file (never stdin; `-nostdin`), and
  * every invocation has a timeout, because ffmpeg occasionally blocked forever in read() on a
  * stdin pipe, hanging synchronous callers.
+ *
+ * Without ffmpeg (not installed, or it fails), JPEG decode/encode fall back to the in-process
+ * jpeg-js codec and PNG encode to texture-processing's encodePng. jpeg-js uses the same JFIF
+ * equations but replicates (rather than interpolates) subsampled chroma, and always encodes
+ * 4:4:4. WebP still needs ffmpeg (or macOS `sips` in the synchronous decoder).
  */
 
 import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { decodePng } from './texture-processing';
+import * as jpegJs from 'jpeg-js';
+import { decodePng, encodePng } from './texture-processing';
 
 export interface RgbaImage {
     width: number;
@@ -203,9 +209,22 @@ function decodePngImage(buf: Buffer): RgbaImage {
     return { width: d.width, height: d.height, rgba: Buffer.from(d.rgba) };
 }
 
+/** In-process JPEG decode (jpeg-js), used when ffmpeg is unavailable or fails. Throws with both causes. */
+function decodeJpegInProcess(buf: Buffer, label: string, ffmpegError: unknown): RgbaImage {
+    try {
+        const d = jpegJs.decode(buf, { useTArray: true, formatAsRGBA: true, maxResolutionInMP: 250, maxMemoryUsageInMB: 2048 });
+        if (d.data.length !== d.width * d.height * 4) throw new Error(`expected ${d.width * d.height * 4} bytes for ${d.width}x${d.height}, got ${d.data.length}`);
+        return { width: d.width, height: d.height, rgba: Buffer.from(d.data.buffer, d.data.byteOffset, d.data.byteLength) };
+    } catch (e) {
+        const why = ffmpegError ? `ffmpeg: ${(ffmpegError as Error).message}; ` : '';
+        throw new Error(`${label}: could not decode the JPEG (${why}jpeg-js: ${(e as Error).message})`);
+    }
+}
+
 /**
- * Decodes an encoded image (JPEG, PNG, WebP) into RGBA8 (PNG in-process, JPEG / WebP through ffmpeg).
- * Throws when the format is unknown, ffmpeg fails or times out, or the output size does not match the header.
+ * Decodes an encoded image (JPEG, PNG, WebP) into RGBA8 (PNG in-process, JPEG / WebP through ffmpeg, JPEG
+ * in-process with jpeg-js when ffmpeg is unavailable or fails). Throws when the format is unknown, no decoder
+ * succeeds, or the output size does not match the header.
  */
 export async function decodeImageToRgba(encoded: Buffer | Uint8Array): Promise<RgbaImage> {
     const buf = Buffer.isBuffer(encoded) ? encoded : Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
@@ -214,15 +233,20 @@ export async function decodeImageToRgba(encoded: Buffer | Uint8Array): Promise<R
     if (fmt === 'png') return decodePngImage(buf);
     const dims = readImageDimensions(buf);
     if (!dims && fmt === 'jpeg') throw new Error('decodeImageToRgba: could not read image dimensions from header');
-    const raw = await withTempFileAsync(buf, `.${fmt === 'jpeg' ? 'jpg' : fmt}`, file =>
-        runFfmpeg(fmt === 'jpeg' ? DECODE_JPEG_ARGS(file) : DECODE_RGBA_ARGS(file), 'decodeImageToRgba'));
-    if (!dims) throw new Error('decodeImageToRgba: could not read image dimensions from header');
-    return finishDecode(fmt, raw, dims, 'decodeImageToRgba');
+    try {
+        const raw = await withTempFileAsync(buf, `.${fmt === 'jpeg' ? 'jpg' : fmt}`, file =>
+            runFfmpeg(fmt === 'jpeg' ? DECODE_JPEG_ARGS(file) : DECODE_RGBA_ARGS(file), 'decodeImageToRgba'));
+        if (!dims) throw new Error('decodeImageToRgba: could not read image dimensions from header');
+        return finishDecode(fmt, raw, dims, 'decodeImageToRgba');
+    } catch (e) {
+        if (fmt !== 'jpeg') throw e;
+        return decodeJpegInProcess(buf, 'decodeImageToRgba', e);
+    }
 }
 
 /**
  * Synchronous decodeImageToRgba (same colour conversion), for callers that cannot await. ffmpeg runs with a
- * timeout and one retry; on macOS `sips` is the last resort.
+ * timeout and one retry; JPEGs then fall back to jpeg-js, and on macOS `sips` is the last resort.
  */
 export function decodeImageToRgbaSync(encoded: Buffer | Uint8Array): RgbaImage {
     const buf = Buffer.isBuffer(encoded) ? encoded : Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
@@ -236,6 +260,13 @@ export function decodeImageToRgbaSync(encoded: Buffer | Uint8Array): RgbaImage {
             const raw = withTempFile(buf, `.${fmt === 'jpeg' ? 'jpg' : fmt}`, file =>
                 runFfmpegSync(fmt === 'jpeg' ? DECODE_JPEG_ARGS(file) : DECODE_RGBA_ARGS(file), 'decodeImageToRgbaSync', dims.width * dims.height * 4 + 4096));
             return finishDecode(fmt, raw, dims, 'decodeImageToRgbaSync');
+        } catch (e) {
+            ffmpegError = e;
+        }
+    }
+    if (fmt === 'jpeg') {
+        try {
+            return decodeJpegInProcess(buf, 'decodeImageToRgbaSync', ffmpegError);
         } catch (e) {
             ffmpegError = e;
         }
@@ -273,6 +304,7 @@ export interface JpegEncodeOptions {
 /**
  * Encodes RGBA8 (alpha ignored) to a baseline JPEG: exact JFIF RGB -> Y'CbCr here, ffmpeg's mjpeg encoder
  * only compresses the planes (and subsamples chroma for '420'), so the round trip carries no colour bias.
+ * Without ffmpeg, jpeg-js encodes at the same quality (always 4:4:4).
  */
 export async function encodeRgbaToJpeg(rgba: Buffer | Uint8Array, width: number, height: number, options: JpegEncodeOptions = {}): Promise<Buffer> {
     if (rgba.length !== width * height * 4) {
@@ -281,27 +313,37 @@ export async function encodeRgbaToJpeg(rgba: Buffer | Uint8Array, width: number,
     const qscale = jpegQualityToQscale(options.quality ?? 90);
     const pixFmt = options.chroma === '444' ? 'yuvj444p' : 'yuvj420p';
     const planes = rgbaToJfifYcc444(rgba, width, height);
-    const out = await withTempFileAsync(planes, '.yuv', file => runFfmpeg([
-        '-v', 'error',
-        '-f', 'rawvideo', '-pix_fmt', 'yuvj444p', '-s', `${width}x${height}`, '-i', file,
-        '-frames:v', '1', '-pix_fmt', pixFmt, '-q:v', String(qscale), '-qmin', String(qscale), '-qmax', String(qscale),
-        '-f', 'mjpeg', 'pipe:1'
-    ], 'encodeRgbaToJpeg'));
-    if (sniffImageFormat(out) !== 'jpeg') throw new Error('encodeRgbaToJpeg: ffmpeg did not produce a JPEG');
+    let out: Buffer;
+    try {
+        out = await withTempFileAsync(planes, '.yuv', file => runFfmpeg([
+            '-v', 'error',
+            '-f', 'rawvideo', '-pix_fmt', 'yuvj444p', '-s', `${width}x${height}`, '-i', file,
+            '-frames:v', '1', '-pix_fmt', pixFmt, '-q:v', String(qscale), '-qmin', String(qscale), '-qmax', String(qscale),
+            '-f', 'mjpeg', 'pipe:1'
+        ], 'encodeRgbaToJpeg'));
+    } catch {
+        out = jpegJs.encode({ data: rgba, width, height }, Math.max(1, Math.min(100, options.quality ?? 90))).data;
+    }
+    if (sniffImageFormat(out) !== 'jpeg') throw new Error('encodeRgbaToJpeg: encoder did not produce a JPEG');
     return out;
 }
 
-/** Encodes RGBA8 to PNG through ffmpeg (lossless, keeps alpha). */
+/** Encodes RGBA8 to PNG through ffmpeg, or in-process without it (lossless, keeps alpha). */
 export async function encodeRgbaToPng(rgba: Buffer | Uint8Array, width: number, height: number): Promise<Buffer> {
     if (rgba.length !== width * height * 4) {
         throw new Error(`encodeRgbaToPng: buffer has ${rgba.length} bytes, expected ${width * height * 4}`);
     }
     const input = Buffer.isBuffer(rgba) ? rgba : Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength);
-    const out = await withTempFileAsync(input, '.rgba', file => runFfmpeg([
-        '-v', 'error',
-        '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${width}x${height}`, '-i', file,
-        '-frames:v', '1', '-c:v', 'png', '-f', 'image2pipe', 'pipe:1'
-    ], 'encodeRgbaToPng'));
-    if (sniffImageFormat(out) !== 'png') throw new Error('encodeRgbaToPng: ffmpeg did not produce a PNG');
+    let out: Buffer;
+    try {
+        out = await withTempFileAsync(input, '.rgba', file => runFfmpeg([
+            '-v', 'error',
+            '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${width}x${height}`, '-i', file,
+            '-frames:v', '1', '-c:v', 'png', '-f', 'image2pipe', 'pipe:1'
+        ], 'encodeRgbaToPng'));
+    } catch {
+        out = encodePng(width, height, input);
+    }
+    if (sniffImageFormat(out) !== 'png') throw new Error('encodeRgbaToPng: encoder did not produce a PNG');
     return out;
 }
