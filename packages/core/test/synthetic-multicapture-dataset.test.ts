@@ -189,7 +189,8 @@ describe('Synthetic Multi-Capture Nerfstudio Dataset Pipeline', () => {
   });
 
   describe('5. Demo Multi-Camera transforms.json Verification', () => {
-    it('generates and updates models/performer_4dgs/demos/10331522/transforms.json with all 4 calibrated camera frames', () => {
+    // Written into the per-test temp dir: the test must not overwrite the installed demo's transforms.json.
+    it('generates a demo-layout transforms.json (10331522 hero + 3 survey cameras) with all 4 calibrated camera frames', () => {
       const rig = NerfstudioDatasetService.generateOrbitalCameraRig({
         target: [0.0, 1.0, 0.0],
         radius: 2.4,
@@ -209,7 +210,7 @@ describe('Synthetic Multi-Capture Nerfstudio Dataset Pipeline', () => {
         }
       });
 
-      const demoTransformsPath = path.resolve(__dirname, '../../../models/performer_4dgs/demos/10331522/transforms.json');
+      const demoTransformsPath = path.join(tempDir, 'transforms.json');
       const transformsData = {
         camera_model: 'OPENCV',
         fl_x: 2484,

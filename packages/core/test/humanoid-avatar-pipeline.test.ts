@@ -22,6 +22,15 @@ import {
     ConcertStagePerformerService,
     PerformerSkinningMode
 } from '../src/browser/generative-canvas/services/ConcertStagePerformerService';
+import { requireAssets, withReason } from './helpers/requirements';
+
+const DEMO_DIR = 'models/performer_4dgs/demos/2785536';
+// Actor 2785536 needs its GVHMR body (PBR modalities), its 4DGS PLY (radiance modalities) and its motion track.
+const demoActor = requireAssets(
+    [`${DEMO_DIR}/gvhmr_body.json`, `${DEMO_DIR}/human_4dgs.ply`, `${DEMO_DIR}/motion.json`],
+    'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)'
+);
+const itActor = (title: string, fn: () => unknown) => it.skipIf(!demoActor.ok)(withReason(title, demoActor), fn);
 
 describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
     it('computes biophysical melanin albedos conforming to physical optical absorption', () => {
@@ -52,7 +61,7 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         expect(redRatioPheo).toBeGreaterThanOrEqual(redRatioEu);
     });
 
-    it('SbHumanAvatarService lists actors and catalogs multi-modal skinning adapters', async () => {
+    itActor('SbHumanAvatarService lists actors and catalogs multi-modal skinning adapters', async () => {
         const service = new SbHumanAvatarService();
         const actors = await service.listActors();
 
@@ -70,7 +79,7 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         }
     });
 
-    it('PbrMeshSkinAdapter evaluates frame and exports rigged glTF 2.0 with skin and bones', async () => {
+    itActor('PbrMeshSkinAdapter evaluates frame and exports rigged glTF 2.0 with skin and bones', async () => {
         const service = new SbHumanAvatarService();
         const adapter = await service.getSkinAdapter('2785536', 'pbr-standard');
         expect(adapter).toBeInstanceOf(PbrMeshSkinAdapter);
@@ -127,7 +136,7 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         expect(gltf.nodes[1].name).toBe('pelvis');
     });
 
-    it('PbrMeshSkinAdapter applies melanin pigmentation in exportArtifact', async () => {
+    itActor('PbrMeshSkinAdapter applies melanin pigmentation in exportArtifact', async () => {
         const service = new SbHumanAvatarService();
         const adapter = await service.getSkinAdapter('2785536', 'pbr-melanin');
 
@@ -151,7 +160,7 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         expect(baseColor[0]).toBeLessThan(0.4);
     });
 
-    it('Gaussian4DGSSkinAdapter evaluates frames and exports valid .splat binary', async () => {
+    itActor('Gaussian4DGSSkinAdapter evaluates frames and exports valid .splat binary', async () => {
         const service = new SbHumanAvatarService();
         const adapter = await service.getSkinAdapter('2785536', '4dgs-radiance');
         expect(adapter).toBeInstanceOf(Gaussian4DGSSkinAdapter);
@@ -169,7 +178,7 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         expect(splatBuffer.byteLength).toBe((frame0.gaussianCount ?? 0) * 32);
     });
 
-    it('humanoid avatar Gemini spatial tools respond with correct schemas and payloads', async () => {
+    it('humanoid avatar Gemini spatial tools declare their schemas and are cross-registered', () => {
         expect(HUMANOID_AVATAR_TOOL_DECLARATIONS.length).toBe(4);
         const names = HUMANOID_AVATAR_TOOL_DECLARATIONS.map(d => d.name);
         expect(names).toContain('humanoid_avatar_list');
@@ -177,6 +186,14 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         expect(names).toContain('humanoid_avatar_skin');
         expect(names).toContain('humanoid_avatar_animate');
 
+        // Cross-compatibility in avatar4dgsHandlers
+        expect(typeof avatar4dgsHandlers.humanoid_avatar_list).toBe('function');
+        expect(typeof avatar4dgsHandlers.humanoid_avatar_get).toBe('function');
+        expect(typeof avatar4dgsHandlers.humanoid_avatar_skin).toBe('function');
+        expect(typeof avatar4dgsHandlers.humanoid_avatar_animate).toBe('function');
+    });
+
+    itActor('humanoid avatar Gemini spatial tools respond with correct payloads', async () => {
         // Test humanoid_avatar_list
         const listRes = await humanoidAvatarHandlers.humanoid_avatar_list({});
         expect(listRes.summaryResult).toContain('Found');
@@ -210,12 +227,6 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         expect(animRes.summaryResult).toContain('Animated actor');
         const animPayload = animRes.resultPayload as any;
         expect(animPayload.bounds).toBeDefined();
-
-        // Cross-compatibility in avatar4dgsHandlers
-        expect(typeof avatar4dgsHandlers.humanoid_avatar_list).toBe('function');
-        expect(typeof avatar4dgsHandlers.humanoid_avatar_get).toBe('function');
-        expect(typeof avatar4dgsHandlers.humanoid_avatar_skin).toBe('function');
-        expect(typeof avatar4dgsHandlers.humanoid_avatar_animate).toBe('function');
     });
 
     it('ConcertStagePerformerService seamlessly accepts rigged PBR SkinnedMesh and updates skeleton', () => {

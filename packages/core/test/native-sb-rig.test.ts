@@ -20,12 +20,18 @@ import * as path from 'path';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { parseGlb, serializeGlb, readSceneGeometry } from '../src/node/3d-engine/glb-geometry-patcher';
 import { readSkinnedGlb, skinPositions, renderPreviewPng, parseGlbChunks, principalAxes, SkinnedGlb } from './helpers/skinned-glb-preview';
+import { encodePng } from '../src/node/texture-processing';
 
 const REPO = path.resolve(__dirname, '../../..');
 const WORK = path.join(REPO, 'test-results/sb-rig');
 const SHOTS = path.join(REPO, 'test-results/screenshots');
-const HAND = path.join(REPO, 'public/models/sbhuman_hand_hyperreal.glb');
-const HAND_TWO_PARTS = path.join(REPO, 'public/models/sbhuman_hand_recreation.glb');
+// The SB-Human hand GLBs are gitignored local assets. When they are absent the hand cases run on fixtures built
+// in beforeAll from the runner's own synthetic 5-digit claw: one with an embedded PNG baseColorTexture (textured
+// asset) and one with an extra detached part (two-component asset).
+const REAL_HAND = path.join(REPO, 'public/models/sbhuman_hand_hyperreal.glb');
+const REAL_HAND_TWO_PARTS = path.join(REPO, 'public/models/sbhuman_hand_recreation.glb');
+let HAND = REAL_HAND;
+let HAND_TWO_PARTS = REAL_HAND_TWO_PARTS;
 
 type V3 = number[];
 const dist = (a: V3, b: V3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -61,6 +67,60 @@ async function rig(name: string, args: string[], { synthetic = false, expectFail
     const glb = readSkinnedGlb(fs.readFileSync(output));
     const truth = synthetic ? JSON.parse(fs.readFileSync(path.join(WORK, `${name}.truth.json`), 'utf8')) : undefined;
     return { exitCode: exec.exitCode, stdout: exec.stdout, stderr: exec.stderr, report, glb, output, truth };
+}
+
+/** Adds an embedded PNG image as the base colour texture of material 0 (the claw already carries TEXCOORD_0). */
+function withPngTexture(src: string, dst: string) {
+    const doc = parseGlb(fs.readFileSync(src));
+    const W = 16, H = 16;
+    const rgba = Buffer.alloc(W * H * 4);
+    for (let i = 0; i < W * H; i++) rgba.set([180 + (i % 5) * 10, 140, 120 + (i % 3) * 20, 255], i * 4);
+    const png = encodePng(W, H, rgba);
+    const offset = (doc.bin.length + 3) & ~3;
+    const bin = Buffer.concat([doc.bin, Buffer.alloc(offset - doc.bin.length), png]);
+    doc.json.bufferViews!.push({ buffer: 0, byteOffset: offset, byteLength: png.length } as any);
+    doc.json.images = [{ bufferView: doc.json.bufferViews!.length - 1, mimeType: 'image/png' }];
+    (doc.json as any).textures = [{ source: 0 }];
+    const materials = (doc.json as any).materials;
+    materials[0].pbrMetallicRoughness = { ...materials[0].pbrMetallicRoughness, baseColorTexture: { index: 0, texCoord: 0 } };
+    doc.json.buffers![0].byteLength = bin.length;
+    doc.bin = bin;
+    fs.writeFileSync(dst, serializeGlb(doc));
+}
+
+/** Adds a small detached octahedron just beyond the highest vertex as a second primitive (a second component). */
+function withDetachedPart(src: string, dst: string) {
+    const doc = parseGlb(fs.readFileSync(src));
+    const positions = readSceneGeometry(doc).positions;
+    let top = 0;
+    let minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < positions.length / 3; i++) {
+        const y = positions[i * 3 + 1];
+        if (y > positions[top * 3 + 1]) top = i;
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+    }
+    const r = (maxY - minY) * 0.02;
+    const c = [positions[top * 3], positions[top * 3 + 1] + 2 * r, positions[top * 3 + 2]];
+    const verts = new Float32Array([
+        c[0] + r, c[1], c[2], c[0] - r, c[1], c[2], c[0], c[1] + r, c[2],
+        c[0], c[1] - r, c[2], c[0], c[1], c[2] + r, c[0], c[1], c[2] - r
+    ]);
+    const idx = new Uint32Array([0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5]);
+    const vertOffset = (doc.bin.length + 3) & ~3;
+    const idxOffset = vertOffset + verts.byteLength;
+    const bin = Buffer.concat([doc.bin, Buffer.alloc(vertOffset - doc.bin.length), Buffer.from(verts.buffer), Buffer.from(idx.buffer)]);
+    const views = doc.json.bufferViews!;
+    views.push({ buffer: 0, byteOffset: vertOffset, byteLength: verts.byteLength, target: 34962 } as any);
+    views.push({ buffer: 0, byteOffset: idxOffset, byteLength: idx.byteLength, target: 34963 } as any);
+    const accessors = doc.json.accessors!;
+    accessors.push({ bufferView: views.length - 2, componentType: 5126, count: 6, type: 'VEC3',
+        min: [c[0] - r, c[1] - r, c[2] - r], max: [c[0] + r, c[1] + r, c[2] + r] } as any);
+    accessors.push({ bufferView: views.length - 1, componentType: 5125, count: idx.length, type: 'SCALAR' } as any);
+    (doc.json.meshes![0] as any).primitives.push({ attributes: { POSITION: accessors.length - 2 }, indices: accessors.length - 1, material: 0 });
+    doc.json.buffers![0].byteLength = bin.length;
+    doc.bin = bin;
+    fs.writeFileSync(dst, serializeGlb(doc));
 }
 
 function leafChains(r: Report) {
@@ -112,6 +172,21 @@ describe('SB-Rig native auto-rigger (C++20)', () => {
         const compiled = await compiler.compileSource(source, { outputBinaryName: 'run_sb_rig_pipeline_test', extraFlags: flags });
         expect(compiled.success, compiled.compilerOutput).toBe(true);
         binary = compiled.binaryPath!;
+
+        if (!fs.existsSync(REAL_HAND) || !fs.existsSync(REAL_HAND_TWO_PARTS)) {
+            const claw = path.join(WORK, 'fixture_claw5.glb');
+            const gen = await compiler.executeBinary(binary, ['--synthetic', 'claw', '--digits', '5', '--synthetic-out', claw,
+                '--output', path.join(WORK, 'fixture_claw5_rigged.glb')], WORK);
+            expect(gen.exitCode, gen.stderr).toBe(0);
+            if (!fs.existsSync(REAL_HAND)) {
+                HAND = path.join(WORK, 'fixture_hand_textured.glb');
+                withPngTexture(claw, HAND);
+            }
+            if (!fs.existsSync(REAL_HAND_TWO_PARTS)) {
+                HAND_TWO_PARTS = path.join(WORK, 'fixture_hand_two_parts.glb');
+                withDetachedPart(claw, HAND_TWO_PARTS);
+            }
+        }
     }, 300_000);
 
     it('discovers exactly one leaf chain per appendage for 1, 3, 5 and 7 digits with no code change', async () => {

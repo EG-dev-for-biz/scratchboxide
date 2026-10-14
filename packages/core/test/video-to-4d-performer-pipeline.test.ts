@@ -17,13 +17,23 @@ import {
 } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
 import { SbHumanLoader } from '../src/common/spatial/SbHumanLoader';
 import { Dynamic4DGaussianSplatService } from '../src/node/3d-engine/Dynamic4DGaussianSplatService';
+import { HOW_TO, requireAssets, requireBinary, withReason } from './helpers/requirements';
+
+// The canonical .sbhuman template (gitignored, no generator script in the repo). Without it the service samples a
+// procedural proxy whose canonical skeleton already has the arms down, so T-pose-specific checks need the template.
+const sbhuman = requireAssets(['public/models/sbhuman_neutral.sbhuman']);
+const demoHeroFrames = requireAssets(
+    ['10331522', '2785536'].map(id => `models/performer_4dgs/demos/${id}/canonical_frame.jpg`),
+    'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)'
+);
+const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
 
 describe('VideoTo4DPerformerPipelineService', () => {
-    const testOutputDir = path.resolve(process.cwd(), 'temp_test_performer_4d');
+    let testOutputDir: string;
     let pipeline: VideoTo4DPerformerPipelineService;
 
     beforeAll(async () => {
-        await fs.ensureDir(testOutputDir);
+        testOutputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-video-to-4d-'));
         pipeline = new VideoTo4DPerformerPipelineService();
     });
 
@@ -80,6 +90,21 @@ describe('VideoTo4DPerformerPipelineService', () => {
         }
     });
 
+    it.skipIf(!sbhuman.ok)(withReason('3a. should relax the T-pose .sbhuman template into the hero resting pose', sbhuman), async () => {
+        const dummyHeroPath = path.join(testOutputDir, 'test_hero.jpg');
+        const morphology = await pipeline.solvePerformerMorphology(dummyHeroPath, 1.78);
+        const canonical = pipeline.generateCanonicalPosedGaussians(morphology, 500, 1.78);
+
+        expect(canonical.heroPoseJoints).toBeDefined();
+        const heroJoints = canonical.heroPoseJoints!;
+        // Wrists (indices 20, 21) in T-pose are at shoulder height (~1.35m); in Hero resting pose they hang at hips (~0.90m)
+        expect(heroJoints[20][1]).toBeLessThan(canonical.canonicalJoints[20][1] - 0.25);
+        expect(heroJoints[21][1]).toBeLessThan(canonical.canonicalJoints[21][1] - 0.25);
+        // Arms are adducted inwards towards torso: |X| is significantly reduced
+        expect(Math.abs(heroJoints[20][0])).toBeLessThan(Math.abs(canonical.canonicalJoints[20][0]) - 0.25);
+        expect(Math.abs(heroJoints[21][0])).toBeLessThan(Math.abs(canonical.canonicalJoints[21][0]) - 0.25);
+    });
+
     it('3. should backproject optical camera rays and transfer RGB texture', async () => {
         const dummyHeroPath = path.join(testOutputDir, 'test_hero.jpg');
         const morphology = await pipeline.solvePerformerMorphology(dummyHeroPath, 1.78);
@@ -95,13 +120,6 @@ describe('VideoTo4DPerformerPipelineService', () => {
         };
 
         expect(canonical.heroPoseJoints).toBeDefined();
-        const heroJoints = canonical.heroPoseJoints!;
-        // Wrists (indices 20, 21) in T-pose are at shoulder height (~1.35m); in Hero resting pose they hang at hips (~0.90m)
-        expect(heroJoints[20][1]).toBeLessThan(canonical.canonicalJoints[20][1] - 0.25);
-        expect(heroJoints[21][1]).toBeLessThan(canonical.canonicalJoints[21][1] - 0.25);
-        // Arms are adducted inwards towards torso: |X| is significantly reduced
-        expect(Math.abs(heroJoints[20][0])).toBeLessThan(Math.abs(canonical.canonicalJoints[20][0]) - 0.25);
-        expect(Math.abs(heroJoints[21][0])).toBeLessThan(Math.abs(canonical.canonicalJoints[21][0]) - 0.25);
 
         const textured = pipeline.backprojectVideoTextures(
             canonical.gaussians,
@@ -218,7 +236,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
         expect(frame0.bounds.max[1] - frame0.bounds.min[1]).toBeGreaterThan(1.2);
     });
 
-    it('7. should parse .sbhuman binary model and verify surface area and topology', async () => {
+    it.skipIf(!sbhuman.ok)(withReason('7. should parse .sbhuman binary model and verify surface area and topology', sbhuman), async () => {
         const sbHumanPath = path.resolve(process.cwd(), 'public/models/sbhuman_neutral.sbhuman');
         expect(await fs.pathExists(sbHumanPath)).toBe(true);
 
@@ -265,7 +283,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
         }
     });
 
-    it('8. should solve distinct morphology and sample real albedos across multiple demo performers', async () => {
+    it.skipIf(!demoHeroFrames.ok)(withReason('8. should solve distinct morphology and sample real albedos across multiple demo performers', demoHeroFrames), async () => {
         const demoIds = ['10331522', '2785536', '5435720', '15443888', '5885633'];
         const results: Record<string, any> = {};
 
@@ -475,7 +493,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
         }
     });
 
-    it('11. should extract optical silhouette landmarks and track video-bound kinematics with ground clamping', async () => {
+    it('11. should extract optical silhouette landmarks from an A-pose frame buffer', async () => {
         // 1. Create synthetic 64x128 rgb24 buffer representing an A-pose human silhouette
         const W = 64;
         const H = 128;
@@ -512,7 +530,9 @@ describe('VideoTo4DPerformerPipelineService', () => {
         // Ankles near bottom
         expect(landmarks[27].y).toBeGreaterThan(0.80);
         expect(landmarks[28].y).toBeGreaterThan(0.80);
+    });
 
+    it.skipIf(!ffmpeg.ok)(withReason('11b. should track video-bound kinematics with ground clamping from a synthetic MP4', ffmpeg), async () => {
         // 2. Generate a real 1-second synthetic MP4 video to verify video-bound motion extraction
         const tempVideoPath = path.join(os.tmpdir(), `test_performer_motion_${Date.now()}.mp4`);
         const { execSync } = await import('child_process');

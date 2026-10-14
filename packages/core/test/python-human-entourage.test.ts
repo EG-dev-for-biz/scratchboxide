@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 import * as fs from 'fs';
+import { requireAssets, withReason } from './helpers/requirements';
+
+// sb.Human loads the scan-grounded .sbhuman template (10,475 vertices). Without it the engine falls back to a
+// ~2.6k-vertex procedural body, so the high-poly assertions below need the gitignored template files.
+const sbhuman = requireAssets(['neutral', 'male', 'female'].map(v => `public/models/sbhuman_${v}.sbhuman`));
 
 describe('Python SB-Human Entourage & Grounding Verification', () => {
-    it('1. Synthesizes architectural scale entourage figure via sb.Human and World.add_human', async () => {
+    it.skipIf(!sbhuman.ok)(withReason('1. Synthesizes architectural scale entourage figure via sb.Human and World.add_human', sbhuman), async () => {
         const runner = NativePythonRunnerService.getInstance();
 
         const script = `
@@ -49,7 +54,7 @@ print("PYTHON_HUMAN_TEST_SUCCESS")
         expect(result.glbPath && fs.existsSync(result.glbPath)).toBe(true);
     });
 
-    it('2. Solves 2-bone IK foot grounding and adapts elevation when grounded on terrain', async () => {
+    it.skipIf(!sbhuman.ok)(withReason('2. Solves 2-bone IK foot grounding and adapts elevation when grounded on terrain', sbhuman), async () => {
         const runner = NativePythonRunnerService.getInstance();
 
         const script = `
@@ -93,7 +98,7 @@ print("PYTHON_HUMAN_GROUNDING_SUCCESS")
         expect(result.glbBase64).toBeDefined();
     });
 
-    it('3. Exposes nanobind native human module classes directly (SbHumanModel, Skeleton, GenderMorph)', async () => {
+    it.skipIf(!sbhuman.ok)(withReason('3. Exposes nanobind native human module classes directly (SbHumanModel, Skeleton, GenderMorph)', sbhuman), async () => {
         const runner = NativePythonRunnerService.getInstance();
 
         const script = `

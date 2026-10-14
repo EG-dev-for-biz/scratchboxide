@@ -31,11 +31,14 @@ import { Dynamic4DGaussianSplatService } from '../src/node/3d-engine/Dynamic4DGa
 import { PerformerPoseTrack, PoseLandmarkTuple } from '../src/node/spatial/PerformerPoseTrackService';
 import { GvhmrBody, GvhmrBodyService } from '../src/node/spatial/GvhmrBodyService';
 import { MultiviewCloudService } from '../src/node/spatial/MultiviewCloudService';
+import { encodePng } from '../src/node/texture-processing';
+import { requireAssets, requirePythonModules, withReason } from './helpers/requirements';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const DEMOS_DIR = path.join(REPO_ROOT, 'models/performer_4dgs/demos');
 const FEATURED_DEMOS = ['10331522', '2785536', '5435720', '15443888', '5885633'];
 const CANONICAL: Vec3[] = new HumanoidMotionBridgeService().getDefaultCanonicalJoints();
+const PERFORMER_PRODUCER = 'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)';
 
 function rotY(deg: number): Mat3 {
     const a = (deg * Math.PI) / 180;
@@ -267,10 +270,21 @@ describe('Pose-track retargeting and camera resection', () => {
 
     it('refuses to emit a motionless avatar from a still image unless explicitly allowed', async () => {
         const pipeline = new VideoTo4DPerformerPipelineService();
-        const hero = path.join(DEMOS_DIR, '2785536', 'canonical_frame.jpg');
-        const out = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sbx-4d-still-'));
-        await expect(pipeline.executePipeline({ videoPath: hero, outputDir: out, numGaussians: 2000 })).rejects.toThrow(/No performer motion could be tracked/);
-        expect(fs.existsSync(path.join(out, 'motion.json'))).toBe(false);
+        // Any still image exercises the refusal; a small generated PNG stands in for a demo hero frame.
+        const root = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sbx-4d-still-'));
+        const hero = path.join(root, 'still', 'hero.png');
+        fs.mkdirSync(path.dirname(hero));
+        const W = 32, H = 64;
+        const rgba = Buffer.alloc(W * H * 4, 128);
+        for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
+        fs.writeFileSync(hero, encodePng(W, H, rgba));
+        const out = path.join(root, 'out');
+        try {
+            await expect(pipeline.executePipeline({ videoPath: hero, outputDir: out, numGaussians: 2000 })).rejects.toThrow(/No performer motion could be tracked/);
+            expect(fs.existsSync(path.join(out, 'motion.json'))).toBe(false);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
     });
 });
 
@@ -350,9 +364,11 @@ describe('Viewer skinning parity', () => {
         a.forEach((r, j) => expectMatClose(b[j], r, 6));
     });
 
-    it('matches the NumPy port used by the multi-view refinement trainer', () => {
-        const python = [path.join(require('os').homedir(), '.cache/scratchbox/gvhmr-venv/bin/python'), 'python3']
-            .find(p => !p.includes('/') || fs.existsSync(p))!;
+    const python = [path.join(require('os').homedir(), '.cache/scratchbox/gvhmr-venv/bin/python'), 'python3']
+        .find(p => !p.includes('/') || fs.existsSync(p))!;
+    const numpy = requirePythonModules(python, ['numpy']);
+
+    it.skipIf(!numpy.ok)(withReason('matches the NumPy port used by the multi-view refinement trainer', numpy), () => {
         let seed = 11;
         const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.3;
         const posed = CANONICAL.map(j => [j[0] + rnd(), j[1] + rnd(), j[2] + rnd()] as Vec3);
@@ -373,8 +389,9 @@ describe('Featured Performer demo avatars', () => {
     const service = new Dynamic4DGaussianSplatService(REPO_ROOT);
 
     for (const id of FEATURED_DEMOS) {
-        describe(id, () => {
-            const dir = path.join(DEMOS_DIR, id);
+        const dir = path.join(DEMOS_DIR, id);
+        const avatar = requireAssets([path.join(dir, 'motion.json'), path.join(dir, 'human_4dgs.ply')], PERFORMER_PRODUCER);
+        describe.skipIf(!avatar.ok)(withReason(id, avatar), () => {
 
             it('carries GVHMR-recovered motion with real joint travel', () => {
                 const motion = JSON.parse(fs.readFileSync(path.join(dir, 'motion.json'), 'utf-8'));

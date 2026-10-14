@@ -12,15 +12,35 @@
  * path as the execute_3d_python_script tool) against the compiled scratchbox_native module.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 import { readSkinnedGlb, renderPreviewPng, principalAxes } from './helpers/skinned-glb-preview';
+import { SbRigService } from '../src/node/3d-engine/sb-rig-service';
+import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 
 const REPO = path.resolve(__dirname, '../../..');
 const WORK = path.join(REPO, 'test-results/sb-rig-python');
-const HAND = path.join(REPO, 'public/models/sbhuman_hand_hyperreal.glb');
+const REAL_HAND = path.join(REPO, 'public/models/sbhuman_hand_hyperreal.glb');
+// The SB-Human hand GLB is a gitignored local asset. Without it these cases rig the SB-Rig runner's own synthetic
+// 5-digit claw (UV-mapped, one material), generated once into the work directory.
+let HAND = REAL_HAND;
+
+/** Writes the SB-Rig runner's synthetic 5-digit claw into `dir` and returns its path. */
+async function syntheticClawGlb(dir: string): Promise<string> {
+    fs.mkdirSync(dir, { recursive: true });
+    const out = path.join(dir, 'fixture_claw5.glb');
+    const binary = await new SbRigService().ensureBinary();
+    const exec = await new NativeCppCompilerService().executeBinary(binary, ['--synthetic', 'claw', '--digits', '5', '--synthetic-out', out,
+        '--output', path.join(dir, 'fixture_claw5_rigged.glb')], dir);
+    if (exec.exitCode !== 0) throw new Error(`SB-Rig synthetic claw generation failed: ${exec.stderr}`);
+    return out;
+}
+
+beforeAll(async () => {
+    if (!fs.existsSync(REAL_HAND)) HAND = await syntheticClawGlb(WORK);
+}, 300_000);
 
 function lastJsonLine(stdout: string): any {
     const line = stdout.trim().split('\n').reverse().find(l => l.startsWith('{'));

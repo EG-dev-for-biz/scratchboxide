@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { execSync } from 'child_process';
 import {
     Dynamic4DGaussianSplatService,
@@ -20,12 +21,20 @@ import {
     AVATAR_4DGS_TOOL_DECLARATIONS
 } from '../src/node/gemini/tools/spatial-tools';
 import { VideoMotionTrackResult } from '../src/node/video/MediaPipeVideoDirectorService';
+import { requireAssets, withReason } from './helpers/requirements';
+
+const DEMO_DIR = 'models/performer_4dgs/demos/2785536';
+const demoAvatar = requireAssets(
+    [`${DEMO_DIR}/human_4dgs.ply`, `${DEMO_DIR}/motion.json`],
+    'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)'
+);
+const itAvatar = (title: string, fn: () => unknown) => it.skipIf(!demoAvatar.ok)(withReason(title, demoAvatar), fn);
 
 describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () => {
     const splatService = new Dynamic4DGaussianSplatService();
     const bridgeService = new HumanoidMotionBridgeService();
 
-    it('should discover Performer avatars in local catalog', () => {
+    itAvatar('should discover Performer avatars in local catalog', () => {
         const avatars = splatService.listAvatars();
         expect(avatars.length).toBeGreaterThan(0);
 
@@ -39,7 +48,7 @@ describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () =>
         expect(demo?.hasGeoManifest).toBe(true);
     });
 
-    it('should load avatar metadata, parse 35k Gaussians PLY, and bind bone weights', () => {
+    itAvatar('should load avatar metadata, parse 35k Gaussians PLY, and bind bone weights', () => {
         const { gaussians, motion, details } = splatService.loadAvatar('2785536');
         expect(details.id).toBe('2785536');
         expect(gaussians.length).toBe(35000);
@@ -64,7 +73,7 @@ describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () =>
         expect(sumW).toBeCloseTo(1.0, 3);
     });
 
-    it('should animate and deform Gaussians for specific frame indices via LBS', () => {
+    itAvatar('should animate and deform Gaussians for specific frame indices via LBS', () => {
         const frame0 = splatService.animateFrame('2785536', 0);
         expect(frame0.frameIndex).toBe(0);
         expect(frame0.numSplats).toBe(35000);
@@ -86,7 +95,7 @@ describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () =>
         expect(totalDisp).toBeGreaterThan(0.001);
     });
 
-    it('should serialize deformed Gaussians into standard 32-byte .splat binary format', () => {
+    itAvatar('should serialize deformed Gaussians into standard 32-byte .splat binary format', () => {
         const splatBuffer = splatService.exportSplatBuffer('2785536', 0);
         const expectedBytes = 35000 * 32; // 1,120,000 bytes
         expect(splatBuffer.byteLength).toBe(expectedBytes);
@@ -117,7 +126,7 @@ describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () =>
         expect(a).toBeGreaterThan(0);
     });
 
-    it('should export Decomposed4DSplatScene compatible with 4DGS streaming', () => {
+    itAvatar('should export Decomposed4DSplatScene compatible with 4DGS streaming', () => {
         const decomposed = splatService.exportDecomposed4DScene('2785536', 6);
         expect(decomposed.numFrames).toBe(6);
         expect(decomposed.canonicalSubject.length).toBe(35000);
@@ -209,8 +218,9 @@ describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () =>
 
     it('should compile and run native C++20 Gaussian humanoid skinning header cleanly', () => {
         const includePath = path.resolve(__dirname, '../src/native/3d-engine/include');
-        const testCppPath = path.resolve(__dirname, 'test_4dgs_humanoid.cpp');
-        const testBinPath = path.resolve(__dirname, 'test_4dgs_humanoid_bin');
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-4dgs-humanoid-'));
+        const testCppPath = path.join(tmpDir, 'test_4dgs_humanoid.cpp');
+        const testBinPath = path.join(tmpDir, 'test_4dgs_humanoid_bin');
 
         const testCppContent = `
 #include "scratchbox_4dgs_humanoid.hpp"
@@ -262,12 +272,11 @@ int main() {
             const runOutput = execSync(`"${testBinPath}"`, { encoding: 'utf-8' }).trim();
             expect(runOutput).toBe('SUCCESS');
         } finally {
-            if (fs.existsSync(testCppPath)) fs.unlinkSync(testCppPath);
-            if (fs.existsSync(testBinPath)) fs.unlinkSync(testBinPath);
+            fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
 
-    it('should expose Gemini agent tools and successfully invoke handlers', async () => {
+    it('should expose Gemini agent tool declarations', () => {
         expect(AVATAR_4DGS_TOOL_DECLARATIONS.length).toBe(5);
         const toolNames = AVATAR_4DGS_TOOL_DECLARATIONS.map(d => d.name);
         expect(toolNames).toContain('avatar_4dgs_list');
@@ -275,7 +284,9 @@ int main() {
         expect(toolNames).toContain('avatar_4dgs_animate');
         expect(toolNames).toContain('avatar_4dgs_retarget');
         expect(toolNames).toContain('performer_4d_create_from_video');
+    });
 
+    itAvatar('should successfully invoke the Gemini agent tool handlers', async () => {
         // Test avatar_4dgs_list
         const listRes = await avatar4dgsHandlers.avatar_4dgs_list({});
         expect(listRes.summaryResult).toContain('Found');
