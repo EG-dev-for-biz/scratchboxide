@@ -26,9 +26,10 @@
  * stdin pipe, hanging synchronous callers.
  *
  * Without ffmpeg (not installed, or it fails), JPEG decode/encode fall back to the in-process
- * jpeg-js codec and PNG encode to texture-processing's encodePng. jpeg-js uses the same JFIF
- * equations but replicates (rather than interpolates) subsampled chroma, and always encodes
- * 4:4:4. WebP still needs ffmpeg (or macOS `sips` in the synchronous decoder).
+ * jpeg-js codec and PNG encode to texture-processing's encodePng. Decoded Y'CbCr planes go
+ * through the same exact JFIF conversion; jpeg-js replicates (rather than interpolates)
+ * subsampled chroma, and always encodes 4:4:4. WebP still needs ffmpeg (or macOS `sips` in the
+ * synchronous decoder).
  */
 
 import { spawn, spawnSync } from 'child_process';
@@ -61,7 +62,7 @@ export function sniffImageFormat(buf: Buffer | Uint8Array): EncodedImageFormat {
 }
 
 /**
- * Reads pixel dimensions from a JPEG (any SOFn marker) or PNG (IHDR) header without decoding.
+ * Reads pixel dimensions from a JPEG (any SOFn marker), PNG (IHDR) or WebP (VP8 / VP8L / VP8X) header without decoding.
  * Returns null when the header cannot be parsed.
  */
 export function readImageDimensions(input: Buffer | Uint8Array): { width: number; height: number } | null {
@@ -70,6 +71,20 @@ export function readImageDimensions(input: Buffer | Uint8Array): { width: number
     if (fmt === 'png') {
         if (buf.length < 24) return null;
         return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    }
+    if (fmt === 'webp') {
+        // First chunk after "RIFF....WEBP": VP8X (extended), VP8 (lossy) or VP8L (lossless).
+        if (buf.length < 30) return null;
+        const chunk = buf.toString('ascii', 12, 16);
+        if (chunk === 'VP8X') return { width: 1 + buf.readUIntLE(24, 3), height: 1 + buf.readUIntLE(27, 3) };
+        if (chunk === 'VP8 ' && buf[23] === 0x9d && buf[24] === 0x01 && buf[25] === 0x2a) {
+            return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+        }
+        if (chunk === 'VP8L' && buf[20] === 0x2f) {
+            const bits = buf.readUInt32LE(21);
+            return { width: 1 + (bits & 0x3fff), height: 1 + ((bits >>> 14) & 0x3fff) };
+        }
+        return null;
     }
     if (fmt === 'jpeg') {
         let pos = 2;
@@ -210,11 +225,49 @@ function decodePngImage(buf: Buffer): RgbaImage {
 }
 
 /** In-process JPEG decode (jpeg-js), used when ffmpeg is unavailable or fails. Throws with both causes. */
+/** Component count (from the SOF marker) and the Adobe APP14 colour transform byte, when present. */
+function jpegColourLayout(buf: Buffer): { components: number; adobeTransform?: number } {
+    let pos = 2, components = 0, adobeTransform: number | undefined;
+    while (pos + 4 <= buf.length) {
+        if (buf[pos] !== 0xff) { pos++; continue; }
+        const marker = buf[pos + 1];
+        if (marker === 0xff) { pos++; continue; }
+        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { pos += 2; continue; }
+        if (marker === 0xd9 || marker === 0xda) break;
+        const segLen = buf.readUInt16BE(pos + 2);
+        if (marker === 0xee && segLen >= 14 && buf.toString('ascii', pos + 4, pos + 9) === 'Adobe') adobeTransform = buf[pos + 15];
+        const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+        if (isSof && pos + 9 < buf.length) components = buf[pos + 9];
+        pos += 2 + segLen;
+    }
+    return { components, adobeTransform };
+}
+
+/**
+ * In-process JPEG decode (jpeg-js), used when ffmpeg is unavailable or fails. Throws with both causes.
+ * jpeg-js truncates its own Y'CbCr -> RGB result (a -0.4 to -0.5 level bias per channel), so for plain Y'CbCr JPEGs
+ * it hands back the raw planes and the exact, rounded JFIF conversion above does the rest. An Adobe marker forces
+ * jpeg-js's own transform, so those (and grey / CMYK) keep its default path.
+ */
 function decodeJpegInProcess(buf: Buffer, label: string, ffmpegError: unknown): RgbaImage {
     try {
-        const d = jpegJs.decode(buf, { useTArray: true, formatAsRGBA: true, maxResolutionInMP: 250, maxMemoryUsageInMB: 2048 });
-        if (d.data.length !== d.width * d.height * 4) throw new Error(`expected ${d.width * d.height * 4} bytes for ${d.width}x${d.height}, got ${d.data.length}`);
-        return { width: d.width, height: d.height, rgba: Buffer.from(d.data.buffer, d.data.byteOffset, d.data.byteLength) };
+        const layout = jpegColourLayout(buf);
+        const ycc = layout.components === 3 && layout.adobeTransform === undefined;
+        const rgbAsIs = layout.components === 3 && layout.adobeTransform === 0;
+        const d = jpegJs.decode(buf, {
+            useTArray: true, formatAsRGBA: true, maxResolutionInMP: 250, maxMemoryUsageInMB: 2048,
+            ...(ycc || rgbAsIs ? { colorTransform: false } : {})
+        });
+        const n = d.width * d.height;
+        if (d.data.length !== n * 4) throw new Error(`expected ${n * 4} bytes for ${d.width}x${d.height}, got ${d.data.length}`);
+        if (!ycc) return { width: d.width, height: d.height, rgba: Buffer.from(d.data.buffer, d.data.byteOffset, d.data.byteLength) };
+        const planes = Buffer.alloc(n * 3);
+        for (let i = 0; i < n; i++) {
+            planes[i] = d.data[i * 4];
+            planes[n + i] = d.data[i * 4 + 1];
+            planes[2 * n + i] = d.data[i * 4 + 2];
+        }
+        return { width: d.width, height: d.height, rgba: jfifYcc444ToRgba(planes, d.width, d.height) };
     } catch (e) {
         const why = ffmpegError ? `ffmpeg: ${(ffmpegError as Error).message}; ` : '';
         throw new Error(`${label}: could not decode the JPEG (${why}jpeg-js: ${(e as Error).message})`);

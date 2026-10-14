@@ -44,8 +44,8 @@ import {
     StreetViewFeatureRegistrar, evaluateFeatureGates, featurePoseQuality, DEFAULT_FEATURE_GATES,
     type FeatureGateInput, type FeaturePanoInput
 } from '../src/node/spatial/StreetViewFeatureRegistrar';
-import { encodeRgbaToJpeg, resolveFfmpegPath } from '../src/node/image-codec-ffmpeg';
-import { findBinary, HOW_TO, requireAll, requireAsset, requireFile, withReason, type Requirement } from './helpers/requirements';
+import { encodeRgbaToJpeg } from '../src/node/image-codec-ffmpeg';
+import { requireAll, requireAsset, requireFile, withReason } from './helpers/requirements';
 import * as os from 'os';
 import { encodePng } from '../src/node/texture-processing';
 
@@ -61,10 +61,6 @@ const tileReq = requireAsset(TILE, 'scripts/extract_esb_tile.html (ESB Google 3D
 const fixturesReq = requireAll(tileReq, requireFile(path.join(SV_FIXTURES, 'sv_meta.json'),
     'cached real Street View frames; set STREETVIEW_FIXTURE_DIR or copy .scratchbox/streetview_fixtures/esb from a machine that has it'));
 const hasTile = tileReq.ok;
-/** encodeRgbaToJpeg spawns resolveFfmpegPath() (FFMPEG_PATH, else `ffmpeg` on PATH). */
-const ffmpeg: Requirement = findBinary(resolveFfmpegPath()) !== null
-    ? { ok: true, reason: '' }
-    : { ok: false, reason: `\`${resolveFfmpegPath()}\` not found (set FFMPEG_PATH or ${HOW_TO.ffmpeg})` };
 
 let scan: ScanMesh;
 let ground: GroundModel;
@@ -371,7 +367,7 @@ describe('Street View billing safety', () => {
         expect(fs.existsSync(path.join(root, 'l.json'))).toBe(false);
     });
 
-    it.skipIf(!ffmpeg.ok)(withReason('concurrent runs sharing the ledger cannot spend more than the cap', ffmpeg), async () => {
+    it('concurrent runs sharing the ledger cannot spend more than the cap', async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-ledger-'));
         const ledgerPath = path.join(root, 'ledger.json');
         fs.writeFileSync(ledgerPath, JSON.stringify({ billedImageRequests: 78, keys: [] }));
