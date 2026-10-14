@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { isReadOnlyMode, READ_ONLY_TOOLS } from './tool-permissions';
 import type { GeminiGenerateRequest } from '../../common/gemini-protocol';
 import type { McpExecutionState } from '../../browser/generative-canvas/canvas-types';
 import { errorMessage } from './gemini-client';
@@ -548,6 +549,11 @@ export function buildToolDeclarations(
         }
     }
 
+    // Plan and Ask may only use tools that cannot change anything (enforced again at execution).
+    const offeredDeclarations = isReadOnlyMode(request.mode)
+        ? allFunctionDeclarations.filter(d => READ_ONLY_TOOLS.has(d.name))
+        : allFunctionDeclarations;
+
     const tools: GeminiToolConfig[] = [];
     if (request.enableGoogleSearch !== false) {
         tools.push({ googleSearch: {} });
@@ -556,8 +562,8 @@ export function buildToolDeclarations(
     if (request.enableCodeExecution && !is3DSceneRequest) {
         tools.push({ codeExecution: {} });
     }
-    if (allFunctionDeclarations.length > 0) {
-        tools.push({ functionDeclarations: allFunctionDeclarations });
+    if (offeredDeclarations.length > 0) {
+        tools.push({ functionDeclarations: offeredDeclarations });
     }
 
     return tools.length > 0 ? tools : undefined;

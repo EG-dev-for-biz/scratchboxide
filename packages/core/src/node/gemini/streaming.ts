@@ -26,6 +26,7 @@ import {
     type VertexGenerateContentJson
 } from './gemini-client';
 import { compactChatHistory, HISTORY_SUMMARY_INSTRUCTION } from './history-compaction';
+import { toolBlockedReason } from './tool-permissions';
 import {
     buildToolDeclarations,
     inferToolGroup,
@@ -788,16 +789,22 @@ export class StreamingEngine {
         }
     }
 
-    /** Route a model tool call to the registry, falling back to synthesised MCP telemetry. */
+    /** Route a model tool call to the registry. Calls that cannot run are reported as failures, never as success. */
     async executeToolCall(toolCall: GeminiFunctionCall, request: GeminiGenerateRequest): Promise<ToolExecutionResult> {
         const toolName = toolCall.name || '';
+        const blocked = toolBlockedReason(request.mode, toolName);
+        if (blocked) {
+            return failedToolResult(toolName, blocked, 'scratchbox-permissions');
+        }
         const ctx = this.toolContext(request);
         if (this.registry.has(toolName) || inferToolGroup(toolName) !== 'mcp') {
             return this.registry.dispatch(toolName, toolCall.args, ctx);
         }
-        const exec = this.mcp.synthesizeExecution({ name: toolName, args: toolCall.args }, this.lens);
-        const resultPayload = (exec.humanFriendlyOutput as Record<string, unknown> | undefined) || { status: 'success' };
-        return { exec, resultPayload };
+        return failedToolResult(
+            toolName,
+            `${toolName} is not connected to a live MCP server in this app, so nothing was executed. Tell the user it could not run; do not describe a result.`,
+            'mcp-unconnected'
+        );
     }
 
     private processChunk(
@@ -1047,3 +1054,19 @@ export function mergeGroundingMetadata(
 }
 
 export { isModelNotFoundError };
+
+/** A tool result that tells both the model and the chat UI the call did not run. */
+function failedToolResult(toolName: string, message: string, serverId: string): ToolExecutionResult {
+    const exec: McpExecutionState = {
+        id: `exec-failed-${Date.now()}`,
+        mcpServerId: serverId,
+        mcpName: 'Scratchbox',
+        toolName,
+        humanTitle: toolName,
+        status: 'failed',
+        timestamp: new Date().toLocaleTimeString(),
+        steps: [{ id: 's1', title: `Run ${toolName}`, status: 'failed', durationMs: 0 }],
+        summaryResult: message
+    };
+    return { exec, resultPayload: { success: false, error: message } };
+}
