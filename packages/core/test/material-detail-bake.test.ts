@@ -33,10 +33,8 @@ import { encodePng } from '../src/node/texture-processing';
 import { encodeRgbaToJpeg, decodeImageToRgba } from '../src/node/image-codec-ffmpeg';
 import { upsampleBicubic3 } from '../src/node/spatial/StreetViewTextureFusion';
 import { linearRgbToLab, luminance8 } from '../src/node/spatial/StreetViewStage3Metrics';
-import { HOW_TO, requireBinary, withReason } from './helpers/requirements';
 
 // The synthetic scan's tiles are JPEGs: encodeRgbaToJpeg / decodeImageToRgba run ffmpeg (FFMPEG_PATH or PATH).
-const ffmpeg = requireBinary(process.env.FFMPEG_PATH || 'ffmpeg', HOW_TO.ffmpeg);
 
 const SCREENSHOT_DIR = path.resolve(process.cwd(), 'test-results/screenshots');
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-matbake-'));
@@ -136,7 +134,7 @@ function accessorBytes(glb: Buffer, accessor: number): Buffer {
 }
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 
-describe.skipIf(!ffmpeg.ok)(withReason('MaterialDetailBaker', ffmpeg), () => {
+describe('MaterialDetailBaker', () => {
     const TILE = 32, SIZE = 16; // 0.5 m tile texels
     let glbIn: Buffer;
     let tileA: Float32Array;

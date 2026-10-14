@@ -103,6 +103,26 @@ describe('image-codec-ffmpeg', () => {
     });
 });
 
+describe('readImageDimensions: WebP', () => {
+    it('reads VP8L, VP8 and VP8X headers (real 1x1 files)', () => {
+        for (const b64 of [
+            'UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==', // lossless (VP8L)
+            'UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA', // lossy (VP8)
+            'UklGRkoAAABXRUJQVlA4WAoAAAAQAAAAAAAAAAAAQUxQSAwAAAARBxAR/Q9ERP8DAABWUDggGAAAABQBAJ0BKgEAAQAAAP4AAA3AAP7mtQAAAA==' // alpha (VP8X)
+        ]) expect(readImageDimensions(Buffer.from(b64, 'base64'))).toEqual({ width: 1, height: 1 });
+    });
+
+    it('reads large sizes from each header layout (WebP container spec offsets)', () => {
+        const riff = (chunk: string, payload: Buffer) => Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP'), Buffer.from(chunk), Buffer.alloc(4), payload]);
+        const vp8l = Buffer.alloc(10); vp8l[0] = 0x2f; vp8l.writeUInt32LE((2047 - 1) | ((1151 - 1) << 14), 1);
+        expect(readImageDimensions(riff('VP8L', vp8l))).toEqual({ width: 2047, height: 1151 });
+        const vp8 = Buffer.alloc(10); vp8.set([0x9d, 0x01, 0x2a], 3); vp8.writeUInt16LE(4000, 6); vp8.writeUInt16LE(3000 | 0x4000, 8); // top bits = scale
+        expect(readImageDimensions(riff('VP8 ', vp8))).toEqual({ width: 4000, height: 3000 });
+        const vp8x = Buffer.alloc(10); vp8x.writeUIntLE(16384 - 1, 4, 3); vp8x.writeUIntLE(9000 - 1, 7, 3);
+        expect(readImageDimensions(riff('VP8X', vp8x))).toEqual({ width: 16384, height: 9000 });
+    });
+});
+
 /** Without ffmpeg (FFMPEG_PATH pointed at a missing binary) JPEG and PNG go through the in-process codecs. */
 describe('image-codec-ffmpeg without ffmpeg (in-process fallback)', () => {
     const REPO = path.resolve(__dirname, '../../..');
@@ -118,7 +138,8 @@ describe('image-codec-ffmpeg without ffmpeg (in-process fallback)', () => {
         const a = await decodeImageToRgba(jpg), b = decodeImageToRgbaSync(jpg);
         expect([a.width, a.height, a.rgba.length]).toEqual([W, H, W * H * 4]);
         expect(Buffer.compare(a.rgba, b.rgba)).toBe(0);
-        for (const v of meanDiff(img, a.rgba)) expect(Math.abs(v)).toBeLessThan(0.75);
+        // same bound as the ffmpeg path; jpeg-js's own (truncating) conversion measured about -0.45 here
+        for (const v of meanDiff(img, a.rgba)) expect(Math.abs(v)).toBeLessThan(0.25);
         let abs = 0;
         for (let i = 0; i < img.length; i++) if (i % 4 !== 3) abs += Math.abs(a.rgba[i] - img[i]);
         expect(abs / (W * H * 3)).toBeLessThan(4); // q92 on a noisy image: a few levels per channel
@@ -152,7 +173,8 @@ describe('image-codec-ffmpeg without ffmpeg (in-process fallback)', () => {
             let abs = 0;
             for (let i = 0; i < ref.rgba.length; i++) if (i % 4 !== 3) abs += Math.abs(ours.rgba[i] - ref.rgba[i]);
             // jpeg-js replicates subsampled chroma where ImageIO interpolates: small per-texel differences, no bias
-            for (const v of d) expect(Math.abs(v)).toBeLessThan(1);
+            // (its own truncating conversion measured (-0.33, -0.48, -0.43) against ImageIO)
+            for (const v of d) expect(Math.abs(v)).toBeLessThan(0.2);
             expect(abs / (ref.width * ref.height * 3)).toBeLessThan(3);
             // side-by-side (ImageIO | jpeg-js) for the visual record (gitignored)
             const W = ref.width, H = ref.height, both = Buffer.alloc(W * 2 * H * 4);
@@ -163,6 +185,14 @@ describe('image-codec-ffmpeg without ffmpeg (in-process fallback)', () => {
         } finally {
             fs.rmSync(tmp, { recursive: true, force: true });
         }
+    });
+
+    it('repeated JPEG decode/encode cycles do not drift', async () => {
+        const W = 128, H = 96, img = testImage(W, H);
+        let cur = img;
+        for (let i = 0; i < 5; i++) cur = (await decodeImageToRgba(await encodeRgbaToJpeg(cur, W, H, { quality: 95 }))).rgba;
+        // a truncating decode drifted about -0.4 levels per cycle (-1.8 after 5)
+        for (const v of meanDiff(img, cur)) expect(Math.abs(v)).toBeLessThan(0.3);
     });
 
     it('encodes PNG in-process losslessly', async () => {
