@@ -85,6 +85,29 @@ describe('streaming: a tool call that never returns', () => {
     });
 });
 
+describe('streaming: a prose answer in agent mode', () => {
+    it('does not invent a canvas artifact from keywords in the prompt', async () => {
+        const service = new GeminiService();
+        (service as any).auth = { getClient: async () => ({ getAccessToken: async () => ({ token: 'mock-token' }) }) };
+        (service as any).cachedProjectId = 'mock-project';
+        (globalThis as any).fetch = async () => ({
+            ok: true,
+            text: async () => 'data: {"candidates":[{"content":{"parts":[{"text":"Spain won the 2026 FIFA World Cup, beating Argentina 1-0 after extra time."}]},"finishReason":"STOP"}]}\ndata: [DONE]',
+            body: null
+        });
+        const events: GeminiStreamEvent[] = [];
+        // "World Cup" used to match the creation-keyword pattern ("world") and produce a template document.
+        const response = await service.streamGenerate(
+            { prompt: 'Who won the most recent FIFA World Cup? Answer in two sentences and cite your source.', model: 'gemini-3.7-flash', mode: 'agent', enableWorkspaceTools: true },
+            e => events.push(e)
+        );
+        expect(response.success).toBe(true);
+        expect(response.text).toContain('Spain');
+        expect(response.artifact).toBeUndefined();
+        expect(events.some(e => e.artifact)).toBe(false);
+    });
+});
+
 describe('streaming: a model turn that produces nothing', () => {
     const run = async (sse: string) => {
         const service = new GeminiService();

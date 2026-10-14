@@ -695,9 +695,10 @@ export class StreamingEngine {
         const isCodingMode = request.mode === 'agent' || request.mode === 'plan' || request.mode === 'ask';
         const hasJsonBlock = /```json\s*\{[\s\S]*\}\s*```/.test(accumulatedText);
         const hasArtifactTag = /<scratchboxPrimitive[\s\S]*?>/i.test(accumulatedText);
-        const isCanvasCreationPrompt = /3d|scene|world|model|asteroid|flight|plane|spatial|terrain|mesh|sandbox|app\b|component|widget|calculator|preview|landing\s*page|doc\b|document|spec\b|proposal|paper|essay|report|board|kanban|graph\b|flow\b|pipeline|diagram|dashboard|picture|video|generate|create|render|build\s+(?:a|an)|design\s+(?:a|an)|clip|timeline|playhead|ripple|razor|nle|audio\s*mix|track/i.test(request.prompt);
 
-        const shouldSynthesize = !isCodingMode || hasJsonBlock || hasArtifactTag || isCanvasCreationPrompt || !!request.activeArtifact;
+        // Agent modes create canvas artifacts through mount_canvas_primitive. If the model answered in prose
+        // only, synthesizing from prompt keywords (e.g. "World Cup" -> "world") invents a document it never wrote.
+        const shouldSynthesize = !isCodingMode || hasJsonBlock || hasArtifactTag || !!request.activeArtifact;
         const artifact = streamMountedArtifact || (shouldSynthesize
             ? this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata)
             : undefined);
