@@ -12,6 +12,8 @@ import * as path from 'path';
 import { MaxRectsAtlasPacker, TextureAtlasPacker, TextureItem, AtlasResult, AtlasPackerOptions } from './TextureAtlasPacker';
 import { calculateNOAASolarPosition, calculateENUSunVector } from '../../browser/generative-canvas/services/atmosphere/solar-position';
 import { SphericalHarmonics9 } from '../../browser/generative-canvas/services/atmosphere/volumetric-participating-media';
+import { decodeImageToRgba, encodeRgbaToJpeg, readImageDimensions, sniffImageFormat, type RgbaImage } from '../image-codec-ffmpeg';
+import { encodePng } from '../texture-processing';
 
 // ============================================================================
 // Public Interfaces & Options Contracts
@@ -79,6 +81,12 @@ export interface TexelDensityMetrics {
   normalizedChartsCount: number;
 }
 
+/**
+ * processGlb reads only `lithologyProfile` and `biophysicalContract` from this object (per-part contracts
+ * come from `submeshCategoryMap` / material `extras.category` with `enablePartAwarePbr`). No cavitation,
+ * calcite-strata, road/marking/foliage protection or gutter-dilation pass is implemented, so the other
+ * fields have no effect on the output.
+ */
 export interface DetailSynthesisOptions {
   lithologyProfile?: LithologyProfile;
   biophysicalContract?: BiophysicalMaterialContract;
@@ -195,32 +203,79 @@ export interface PbrDecompositionResult {
   toksvigMipPyramid?: ToksvigMipLevel[];
 }
 
+/** Texture periodicity measured by 1D autocorrelation of one decoded baseColor image (pixel units only). */
+export interface MeasuredSpatialProfile {
+  sourceImageIndex: number;
+  isPeriodic: boolean;
+  dominantPeriodPxX: number;  // 0 when no period was found
+  dominantPeriodPxY: number;
+}
+
+/** What processGlb did with one baseColor image (or a baseColor texture with no usable source image). */
+export interface TextureImageReport {
+  textureIndex: number;
+  imageIndex?: number;
+  status: 'processed' | 'failed';
+  sourceMimeType?: string;
+  width?: number;              // decoded pixel size
+  height?: number;
+  texels?: number;
+  albedoRewritten?: boolean;   // baseColor image bytes replaced with the de-lit albedo
+  normalMapGenerated?: boolean;
+  metallicRoughnessGenerated?: boolean;
+  occlusionGenerated?: boolean;
+  error?: string;
+}
+
+/** Texture slots the rebuilt GLB filled on its materials. */
+export interface MaterialMapAttachments {
+  normalTextures: number;
+  metallicRoughnessTextures: number;
+  occlusionTextures: number;
+  unlitRemoved: number;        // materials whose KHR_materials_unlit was dropped so the new maps are shaded
+}
+
+/** Maps derived from one source image, written into the rebuilt GLB. */
+export interface GlbImageRewrite {
+  /** Replaces the source image bytes (e.g. the de-lit baseColor). */
+  replacement?: { data: Buffer; mimeType: string };
+  /** Tangent-space normal map (PNG), attached as `normalTexture`. */
+  normalPng?: Buffer;
+  /** PNG read as glTF metallicRoughness (G = roughness, B = metalness). */
+  metallicRoughnessPng?: Buffer;
+  /** PNG read as glTF occlusion (R channel). With ORM packing this is the same Buffer as metallicRoughnessPng. */
+  occlusionPng?: Buffer;
+}
+
 export interface AlgorithmicUvResult {
+  /** False when any baseColor image could not be decoded or processed (see `images`). */
   success: boolean;
   mode: UvEngineMode;
   lithologyProfile: LithologyProfile;
   biophysicalContract?: BiophysicalMaterialContract;
-  inducedSpatialProfile?: TextureSpatialProfile;
+  inducedSpatialProfile?: MeasuredSpatialProfile;
   submeshesProcessed: number;
   trianglesProcessed: number;
   verticesProcessed: number;
+  /** Sum of decoded width * height over the images that were processed. */
   texelsProcessed: number;
-  stoneTexelsCount: number;
-  roadTexelsCount: number;
-  roadMarkingTexelsCount?: number;
-  foliageTexelsCount: number;
+  imagesProcessed: number;
+  imagesFailed: number;
+  images: TextureImageReport[];
+  attachments: MaterialMapAttachments;
   texelDensityMetrics?: TexelDensityMetrics;
   outputGlbPath?: string;
   outputGlbBuffer?: Buffer;
   executionTimeMs: number;
-  atlasFillRate?: number;
+  /** True when at least one normal, metallicRoughness or occlusion texture was attached. */
   pbrSuiteGenerated: boolean;
   microDetailTilingInjected?: boolean;
   backend: 'native-cpp' | 'node-pure';
+  /** True when at least one baseColor image was rewritten by solar inverse de-lighting. */
   solarDelightingApplied?: boolean;
+  /** Sun vector (+X East, +Y Up, -Z North) the solar de-lighting divided by. */
   solarSunVector?: [number, number, number];
   khrExtensionsInjected?: string[];
-  toksvigMipLevelsGenerated?: number;
   boundaryWeldingResult?: BoundarySeamWeldResult;
 }
 
@@ -341,8 +396,25 @@ export class AlgorithmicUvEngine {
   }
 
   /**
+   * Pixel size of the embedded baseColor image a primitive samples, read from the image header
+   * (no decode). Null when the material has no baseColor texture or the image is not embedded / readable.
+   */
+  private static baseColorImageSize(json: any, bin: Buffer, materialIndex: number | undefined): { width: number; height: number } | null {
+    if (materialIndex === undefined) return null;
+    const texIndex = json.materials?.[materialIndex]?.pbrMetallicRoughness?.baseColorTexture?.index;
+    const imgIndex = texIndex !== undefined ? json.textures?.[texIndex]?.source : undefined;
+    const bvIndex = imgIndex !== undefined ? json.images?.[imgIndex]?.bufferView : undefined;
+    const bv = bvIndex !== undefined ? json.bufferViews?.[bvIndex] : undefined;
+    if (!bv) return null;
+    const start = bv.byteOffset || 0;
+    return readImageDimensions(bin.subarray(start, start + bv.byteLength));
+  }
+
+  /**
    * Computes real-world metric texel density statistics across all submeshes:
-   * 3D world-space triangle area vs UV area (texels per square meter).
+   * 3D world-space triangle area vs UV area, as texels per linear meter. Each primitive uses the pixel size
+   * of the baseColor image it samples; `defaultTexSize` applies only to primitives without a readable
+   * embedded image. All fields are 0 when no triangle has measurable UV area.
    */
   public static computeTexelDensity(
     glbInput: { json: any; bin: Buffer } | Buffer,
@@ -399,8 +471,9 @@ export class AlgorithmicUvEngine {
         }
 
         const triCount = indices ? Math.floor(indices.length / 3) : Math.floor(posAcc.count / 3);
-        const texW = defaultTexSize;
-        const texH = defaultTexSize;
+        const imageSize = this.baseColorImageSize(json, bin, prim.material);
+        const texW = imageSize?.width ?? defaultTexSize;
+        const texH = imageSize?.height ?? defaultTexSize;
 
         for (let t = 0; t < triCount; t++) {
           const i0 = indices ? indices[t * 3] : t * 3;
@@ -460,15 +533,16 @@ export class AlgorithmicUvEngine {
       }
     }
 
-    const meanDensity = measuredTriangles > 0 ? totalDensitySum / measuredTriangles : 100.0;
-    const safeMin = isFinite(minDensity) && minDensity > 0 ? minDensity : meanDensity * 0.5;
-    const safeMax = maxDensity > 0 ? maxDensity : meanDensity * 1.5;
-    const varianceRatio = safeMin > 0 ? safeMax / safeMin : 1.0;
+    const measured = measuredTriangles > 0;
+    const meanDensity = measured ? totalDensitySum / measuredTriangles : 0;
+    const minMeasured = measured ? minDensity : 0;
+    const maxMeasured = measured ? maxDensity : 0;
+    const varianceRatio = minMeasured > 0 ? maxMeasured / minMeasured : 0;
 
     return {
       meanTexelsPerMeter: Math.round(meanDensity * 10) / 10,
-      minTexelsPerMeter: Math.round(safeMin * 10) / 10,
-      maxTexelsPerMeter: Math.round(safeMax * 10) / 10,
+      minTexelsPerMeter: Math.round(minMeasured * 10) / 10,
+      maxTexelsPerMeter: Math.round(maxMeasured * 10) / 10,
       varianceRatio: Math.round(varianceRatio * 10) / 10,
       totalWorldAreaSqMeters: Math.round(totalWorldArea * 100) / 100,
       normalizedChartsCount: chartsCount
@@ -478,14 +552,22 @@ export class AlgorithmicUvEngine {
   /**
    * High-level entry point to process any 3D model / scene (.glb) with the
    * Algorithmic UV Unwrap & Rewrap Engine.
+   *
+   * Geometry and UVs are never modified ('preserve-100-lock' is the only implemented mode). Every embedded
+   * baseColor image the materials sample is decoded (image-codec-ffmpeg) and the requested passes run on its
+   * pixels: albedo de-lighting rewrites the baseColor image, and normal / roughness / occlusion maps are
+   * encoded as PNG and attached to the materials' empty normalTexture, metallicRoughnessTexture and
+   * occlusionTexture slots. An image that cannot be decoded is reported in `images` and makes `success` false.
    */
   public static async processGlb(options: AlgorithmicUvOptions): Promise<AlgorithmicUvResult> {
     const startTime = performance.now();
     const mode: UvEngineMode = options.mode ?? 'preserve-100-lock';
+    if (mode !== 'preserve-100-lock') {
+      throw new Error(`AlgorithmicUvEngine: mode '${mode}' is not implemented (no UV reparameterization or atlas rebake exists); use 'preserve-100-lock'.`);
+    }
     const lithologyProfile: LithologyProfile = options.lithologyProfile ?? options.detailSynthesis?.lithologyProfile ?? 'classical-travertine';
     const biophysicalContract = options.biophysicalContract ?? options.pbrDecomposition?.biophysicalContract ?? options.detailSynthesis?.biophysicalContract;
     const resolvedContract = resolveBiophysicalContract(biophysicalContract ?? lithologyProfile);
-    const lithologyPreset = this.getLithologyPreset(resolvedContract);
 
     let glbBuffer: Buffer;
     if (options.inputGlbBuffer) {
@@ -498,184 +580,156 @@ export class AlgorithmicUvEngine {
 
     // Parse binary GLB (Chunk 0 JSON, Chunk 1 BIN)
     const glb = this.parseGlb(glbBuffer);
+    const json = glb.json;
 
     // Compute metric texel density across all submeshes
     const texelDensityMetrics = this.computeTexelDensity(glb);
 
+    const pbr = options.pbrDecomposition ?? {};
+    // decomposePbr reads strength / roughness / AO intensity from the contract, so explicit pass options are folded into it.
+    const imageContract: Required<BiophysicalMaterialContract> = {
+      ...resolvedContract,
+      normalStrength: pbr.normalStrength ?? resolvedContract.normalStrength,
+      roughness: pbr.defaultStoneRoughness ?? resolvedContract.roughness,
+      hbaoIntensity: pbr.skyDomeAoIntensity ?? resolvedContract.hbaoIntensity
+    };
+    const pbrOpts: PbrDecompositionOptions = {
+      ...pbr,
+      biophysicalContract: imageContract,
+      enableToksvigMipPyramid: false // glTF cannot carry a custom MIP chain, so it is not computed
+    };
+    const passes = {
+      delight: !!(pbr.enableAlbedoDeLighting || pbr.enableSolarInverseDelighting),
+      normal: pbr.generateNormalMaps !== false,
+      roughness: pbr.generateRoughnessMaps !== false,
+      ao: pbr.generateAoMaps !== false,
+      packOrm: pbr.packOrm !== false
+    };
+
+    const materials: any[] = json.materials || [];
+    const textures: any[] = json.textures || [];
+    const meshes: any[] = json.meshes || [];
+
     let submeshesProcessed = 0;
     let trianglesProcessed = 0;
     let verticesProcessed = 0;
-    let texelsProcessed = 0;
-    let stoneTexelsCount = 0;
-    let roadTexelsCount = 0;
-    let roadMarkingTexelsCount = 0;
-    let foliageTexelsCount = 0;
 
-    const detailOpts: Required<DetailSynthesisOptions> = {
-      lithologyProfile,
-      biophysicalContract: resolvedContract,
-      enableCavitation: options.detailSynthesis?.enableCavitation ?? (lithologyPreset.cavitationDepthPower > 0),
-      cavitationDepthPower: options.detailSynthesis?.cavitationDepthPower ?? lithologyPreset.cavitationDepthPower,
-      enableCalciteStrata: options.detailSynthesis?.enableCalciteStrata ?? (lithologyPreset.strataFrequency > 0),
-      strataFrequency: options.detailSynthesis?.strataFrequency ?? lithologyPreset.strataFrequency,
-      protectRoads: options.detailSynthesis?.protectRoads ?? true,
-      protectRoadMarkings: options.detailSynthesis?.protectRoadMarkings ?? true,
-      protectFoliage: options.detailSynthesis?.protectFoliage ?? true,
-      gutterDilationPixels: options.detailSynthesis?.gutterDilationPixels ?? 4,
-      partCategory: options.detailSynthesis?.partCategory ?? ''
-    };
-
-    const pbrOpts: Required<PbrDecompositionOptions> = {
-      biophysicalContract: resolvedContract,
-      enableAlbedoDeLighting: options.pbrDecomposition?.enableAlbedoDeLighting ?? false,
-      enableHeightStratifiedDeLighting: options.pbrDecomposition?.enableHeightStratifiedDeLighting ?? false,
-      canyonFloorY: options.pbrDecomposition?.canyonFloorY ?? 0.0,
-      canyonCeilingY: options.pbrDecomposition?.canyonCeilingY ?? 400.0,
-      normalizedElevationY: options.pbrDecomposition?.normalizedElevationY ?? 0.5,
-      bilateralSpatialRadius: options.pbrDecomposition?.bilateralSpatialRadius ?? 4,
-      bilateralRangeSigma: options.pbrDecomposition?.bilateralRangeSigma ?? 0.15,
-      generateNormalMaps: options.pbrDecomposition?.generateNormalMaps ?? true,
-      normalStrength: options.pbrDecomposition?.normalStrength ?? resolvedContract.normalStrength,
-      generateRoughnessMaps: options.pbrDecomposition?.generateRoughnessMaps ?? true,
-      defaultStoneRoughness: options.pbrDecomposition?.defaultStoneRoughness ?? resolvedContract.roughness,
-      generateAoMaps: options.pbrDecomposition?.generateAoMaps ?? true,
-      skyDomeAoIntensity: options.pbrDecomposition?.skyDomeAoIntensity ?? resolvedContract.hbaoIntensity,
-      packOrm: options.pbrDecomposition?.packOrm ?? true,
-      enableMultiFrequencyNormals: options.pbrDecomposition?.enableMultiFrequencyNormals ?? true,
-      enableBiophysicalRoughness: options.pbrDecomposition?.enableBiophysicalRoughness ?? true,
-      enableHbaoMicroCavity: options.pbrDecomposition?.enableHbaoMicroCavity ?? true,
-      enableToksvigFiltering: options.pbrDecomposition?.enableToksvigFiltering ?? true,
-      enableSolarInverseDelighting: options.pbrDecomposition?.enableSolarInverseDelighting ?? false,
-      solarDelighting: options.pbrDecomposition?.solarDelighting ?? {},
-      enableToksvigMipPyramid: options.pbrDecomposition?.enableToksvigMipPyramid ?? false,
-      toksvigMipLevels: options.pbrDecomposition?.toksvigMipLevels ?? 4,
-      metricTexelDensityMap: options.pbrDecomposition?.metricTexelDensityMap as any,
-      viewVarianceMap: options.pbrDecomposition?.viewVarianceMap as any,
-      worldPositionsMap: options.pbrDecomposition?.worldPositionsMap as any,
-      worldNormalsMap: options.pbrDecomposition?.worldNormalsMap as any
-    };
-
-    // Process textures across all submeshes
-    const images = glb.json.images || [];
-    const materials = glb.json.materials || [];
-    const meshes = glb.json.meshes || [];
-
-    // Track processed image data replacements
-    const replacedImages = new Map<number, Buffer>();
-    let overallAtlasFill = 1.0;
-
-    if (mode === 'conformal-reparameterize' && images.length > 1) {
-      // Pack submesh textures using MaxRects
-      const packer = new MaxRectsAtlasPacker(options.atlasPacking);
-      const textureItems: TextureItem[] = [];
-
-      for (let imgIdx = 0; imgIdx < images.length; imgIdx++) {
-        const imgDef = images[imgIdx];
-        const bufferView = glb.json.bufferViews[imgDef.bufferView];
-        const rawImgBytes = glb.bin.subarray(bufferView.byteOffset, bufferView.byteOffset + bufferView.byteLength);
-        
-        // Approximate dimensions for packing
-        const w = 512;
-        const h = 512;
-        textureItems.push({
-          id: imgIdx,
-          width: w,
-          height: h,
-          data: new Uint8Array(w * h * 4)
-        });
-      }
-
-      for (const item of textureItems) {
-        packer.addTexture(item);
-      }
-      const atlasRes = packer.pack();
-      overallAtlasFill = atlasRes.fillRate;
-    }
+    // Each baseColor image, the materials that sample it, and the contract of the first primitive that uses it.
+    const imageJobs = new Map<number, { textureIndex: number; materials: Set<number>; contract: Required<BiophysicalMaterialContract> }>();
+    const images: TextureImageReport[] = [];
+    const sourcelessTextures = new Set<number>();
 
     for (let meshIdx = 0; meshIdx < meshes.length; meshIdx++) {
-      const mesh = meshes[meshIdx];
       submeshesProcessed++;
 
-      for (const prim of mesh.primitives || []) {
+      for (const prim of meshes[meshIdx].primitives || []) {
         if (prim.indices !== undefined) {
-          const idxAccessor = glb.json.accessors[prim.indices];
-          trianglesProcessed += Math.floor(idxAccessor.count / 3);
+          trianglesProcessed += Math.floor(json.accessors[prim.indices].count / 3);
         }
         if (prim.attributes && prim.attributes.POSITION !== undefined) {
-          const posAccessor = glb.json.accessors[prim.attributes.POSITION];
-          verticesProcessed += posAccessor.count;
+          verticesProcessed += json.accessors[prim.attributes.POSITION].count;
+        }
+        if (prim.material === undefined) continue;
+
+        const mat = materials[prim.material];
+        const textureIndex = mat?.pbrMetallicRoughness?.baseColorTexture?.index;
+        if (textureIndex === undefined) continue;
+        const imageIndex = textures[textureIndex]?.source;
+        if (imageIndex === undefined) {
+          if (!sourcelessTextures.has(textureIndex)) {
+            sourcelessTextures.add(textureIndex);
+            images.push({ textureIndex, status: 'failed', error: 'texture has no core `source` image (extension-only image sources are not supported)' });
+          }
+          continue;
         }
 
-        // Texture processing if material references baseColorTexture
-        if (prim.material !== undefined) {
-          const mat = materials[prim.material];
-          // Only explicit part categories enter the part-aware branch; arbitrary material
-          // names (e.g. Google tiles 'Material_0') must not override the lithology distribution.
-          const partCat = options.submeshCategoryMap?.[meshIdx] ||
-            mat?.extras?.category;
-
-          const primDetailOpts: Required<DetailSynthesisOptions> = { ...detailOpts };
-          const primPbrOpts: Required<PbrDecompositionOptions> = { ...pbrOpts };
-          if (partCat) {
-            primDetailOpts.partCategory = String(partCat);
-            if (options.enablePartAwarePbr) {
-              const partContract = resolveBiophysicalContract(String(partCat));
-              primDetailOpts.cavitationDepthPower = partContract.cavitationDepthPower;
-              primDetailOpts.strataFrequency = partContract.strataFrequency;
-              primPbrOpts.defaultStoneRoughness = partContract.roughness;
-            }
-          }
-
-          const texInfo = mat?.pbrMetallicRoughness?.baseColorTexture;
-          if (texInfo && texInfo.index !== undefined) {
-            const texture = glb.json.textures[texInfo.index];
-            const imgIdx = texture.source;
-
-            if (imgIdx !== undefined && !replacedImages.has(imgIdx)) {
-              const imgDef = images[imgIdx];
-              const bufferView = glb.json.bufferViews[imgDef.bufferView];
-              const imgBuffer = glb.bin.subarray(bufferView.byteOffset, bufferView.byteOffset + bufferView.byteLength);
-
-              const processed = await this.processTextureBuffer(imgBuffer, {
-                detailOpts: primDetailOpts,
-                pbrOpts: primPbrOpts,
-                mode
-              });
-
-              replacedImages.set(imgIdx, processed.finalBuffer);
-              texelsProcessed += processed.texelsCount;
-              stoneTexelsCount += processed.stoneCount;
-              roadTexelsCount += processed.roadCount;
-              roadMarkingTexelsCount += processed.roadMarkingCount;
-              foliageTexelsCount += processed.foliageCount;
-            }
-          }
+        let job = imageJobs.get(imageIndex);
+        if (!job) {
+          // Only explicit part categories select a per-part contract; arbitrary material names
+          // (e.g. Google tiles 'Material_0') must not override the lithology contract.
+          const partCat = options.submeshCategoryMap?.[meshIdx] || mat?.extras?.category;
+          const contract = options.enablePartAwarePbr && partCat ? resolveBiophysicalContract(String(partCat)) : imageContract;
+          job = { textureIndex, materials: new Set<number>(), contract };
+          imageJobs.set(imageIndex, job);
         }
+        job.materials.add(prim.material);
       }
     }
 
-    let inducedSpatialProfile: TextureSpatialProfile | undefined;
-    let effectiveMicroScale = options.microDetailScale ?? 32.0;
+    const imageBytes = (imageIndex: number): Buffer => {
+      const imgDef = json.images?.[imageIndex];
+      if (!imgDef) throw new Error(`image ${imageIndex} does not exist`);
+      if (imgDef.bufferView === undefined) throw new Error('image is not embedded in the GLB binary chunk (uri images are not supported)');
+      const bv = json.bufferViews[imgDef.bufferView];
+      const start = bv.byteOffset || 0;
+      return glb.bin.subarray(start, start + bv.byteLength);
+    };
 
+    // Periodicity is measured on the largest baseColor image (by header size).
+    let profileImageIndex = -1;
     if (options.autoInducePeriodicity) {
-      // Analyze architectural unit cell periodicity:
-      // Synthesize structural relief signal from contract to induce fundamental periodicity
-      const freq = resolvedContract.strataFrequency > 0 ? resolvedContract.strataFrequency : 24.0;
-      const periodY = Math.max(8, Math.round(512 / freq));
-      const periodX = resolvedContract.sharpVerticalMullions ? Math.round(periodY * 0.5) : Math.round(periodY * 1.8);
-      const lumFloats = new Float32Array(512 * 512);
-      for (let y = 0; y < 512; y++) {
-        for (let x = 0; x < 512; x++) {
-          const modX = x % periodX === 0 ? 0.3 : 0.8;
-          const modY = y % periodY === 0 ? 0.3 : 0.8;
-          lumFloats[y * 512 + x] = modX * modY;
+      let largestArea = 0;
+      for (const imageIndex of imageJobs.keys()) {
+        let dims: { width: number; height: number } | null = null;
+        try { dims = readImageDimensions(imageBytes(imageIndex)); } catch { dims = null; }
+        const area = dims ? dims.width * dims.height : 0;
+        if (area > largestArea) {
+          largestArea = area;
+          profileImageIndex = imageIndex;
         }
       }
-      inducedSpatialProfile = this.analyzeTextureSpatialProfile(lumFloats, 512, 512);
-      if (inducedSpatialProfile.isPeriodic && inducedSpatialProfile.recommendedRepeatX > 0) {
-        effectiveMicroScale = inducedSpatialProfile.recommendedRepeatX;
+    }
+
+    const rewrites = new Map<number, GlbImageRewrite>();
+    let texelsProcessed = 0;
+    let inducedSpatialProfile: MeasuredSpatialProfile | undefined;
+    let solarDelightingApplied = false;
+
+    for (const [imageIndex, job] of imageJobs) {
+      const users = [...job.materials].map(m => materials[m]);
+      const want = {
+        delight: passes.delight,
+        normal: passes.normal && users.some(m => !m.normalTexture),
+        roughness: passes.roughness && users.some(m => !m.pbrMetallicRoughness?.metallicRoughnessTexture),
+        ao: passes.ao && users.some(m => !m.occlusionTexture),
+        profile: imageIndex === profileImageIndex
+      };
+      if (!want.delight && !want.normal && !want.roughness && !want.ao && !want.profile) continue;
+
+      const report: TextureImageReport = { textureIndex: job.textureIndex, imageIndex, status: 'processed' };
+      images.push(report);
+      try {
+        const bytes = imageBytes(imageIndex);
+        report.sourceMimeType = json.images[imageIndex].mimeType;
+        const out = await this.processTextureBuffer(bytes, { ...pbrOpts, biophysicalContract: job.contract }, want, passes.packOrm);
+
+        report.width = out.width;
+        report.height = out.height;
+        report.texels = out.width * out.height;
+        report.albedoRewritten = !!out.albedo;
+        report.normalMapGenerated = !!out.normalPng;
+        report.metallicRoughnessGenerated = !!out.metallicRoughnessPng;
+        report.occlusionGenerated = !!out.occlusionPng;
+        texelsProcessed += report.texels;
+
+        if (out.profile) inducedSpatialProfile = { sourceImageIndex: imageIndex, ...out.profile };
+        if (out.albedo && pbr.enableSolarInverseDelighting) solarDelightingApplied = true;
+        if (out.albedo || out.normalPng || out.metallicRoughnessPng || out.occlusionPng) {
+          rewrites.set(imageIndex, {
+            replacement: out.albedo,
+            normalPng: out.normalPng,
+            metallicRoughnessPng: out.metallicRoughnessPng,
+            occlusionPng: out.occlusionPng
+          });
+        }
+      } catch (err) {
+        report.status = 'failed';
+        report.error = err instanceof Error ? err.message : String(err);
       }
     }
+    images.sort((a, b) => (a.imageIndex ?? -1) - (b.imageIndex ?? -1) || a.textureIndex - b.textureIndex);
+
+    const microDetailTilingInjected = !!(options.enableMicroDetailTiling || (options.autoInducePeriodicity && inducedSpatialProfile?.isPeriodic));
 
     let boundaryResult: BoundarySeamWeldResult | undefined;
     if (options.enableBoundarySeamWelding) {
@@ -685,15 +739,15 @@ export class AlgorithmicUvEngine {
       for (const mesh of meshes) {
         for (const prim of mesh.primitives || []) {
           if (prim.attributes && prim.attributes.POSITION !== undefined) {
-            const posAcc = glb.json.accessors[prim.attributes.POSITION];
-            const posBv = glb.json.bufferViews[posAcc.bufferView];
+            const posAcc = json.accessors[prim.attributes.POSITION];
+            const posBv = json.bufferViews[posAcc.bufferView];
             const posOffset = (posBv.byteOffset || 0) + (posAcc.byteOffset || 0);
             const posArray = new Float32Array(glb.bin.buffer, glb.bin.byteOffset + posOffset, posAcc.count * 3);
             posBuffers.push(posArray);
 
             if (prim.attributes.NORMAL !== undefined) {
-              const normAcc = glb.json.accessors[prim.attributes.NORMAL];
-              const normBv = glb.json.bufferViews[normAcc.bufferView];
+              const normAcc = json.accessors[prim.attributes.NORMAL];
+              const normBv = json.bufferViews[normAcc.bufferView];
               const normOffset = (normBv.byteOffset || 0) + (normAcc.byteOffset || 0);
               const normArray = new Float32Array(glb.bin.buffer, glb.bin.byteOffset + normOffset, normAcc.count * 3);
               normBuffers.push(normArray);
@@ -707,13 +761,13 @@ export class AlgorithmicUvEngine {
       }
     }
 
-    // Rebuild binary GLB with enhanced textures, optional micro-detail tiling, and KHR materials
+    // Rebuild binary GLB with the rewritten / added textures, optional micro-detail tiling, and KHR materials
     const rebuildResult = this.rebuildGlbWithTextures(
       glb,
-      replacedImages,
+      rewrites,
       {
-        enableMicroDetailTiling: options.enableMicroDetailTiling || (options.autoInducePeriodicity && inducedSpatialProfile?.isPeriodic),
-        microDetailScale: effectiveMicroScale
+        enableMicroDetailTiling: microDetailTilingInjected,
+        microDetailScale: options.microDetailScale ?? 32.0
       },
       options.khrMaterials
     );
@@ -726,33 +780,33 @@ export class AlgorithmicUvEngine {
     }
 
     const executionTimeMs = performance.now() - startTime;
+    const imagesFailed = images.filter(r => r.status === 'failed').length;
+    const attachments = rebuildResult.attachments;
 
     return {
-      success: true,
+      success: imagesFailed === 0,
       mode,
       lithologyProfile,
-      biophysicalContract: resolvedContract,
+      biophysicalContract: imageContract,
       inducedSpatialProfile,
       submeshesProcessed,
       trianglesProcessed,
       verticesProcessed,
       texelsProcessed,
-      stoneTexelsCount,
-      roadTexelsCount,
-      roadMarkingTexelsCount,
-      foliageTexelsCount,
+      imagesProcessed: images.length - imagesFailed,
+      imagesFailed,
+      images,
+      attachments,
       texelDensityMetrics,
       outputGlbPath: options.outputGlbPath,
       outputGlbBuffer,
       executionTimeMs,
-      atlasFillRate: overallAtlasFill,
-      pbrSuiteGenerated: pbrOpts.generateNormalMaps || pbrOpts.generateRoughnessMaps,
-      microDetailTilingInjected: !!(options.enableMicroDetailTiling || (options.autoInducePeriodicity && inducedSpatialProfile?.isPeriodic)),
+      pbrSuiteGenerated: attachments.normalTextures + attachments.metallicRoughnessTextures + attachments.occlusionTextures > 0,
+      microDetailTilingInjected,
       khrExtensionsInjected: rebuildResult.injectedExtensions,
-      solarDelightingApplied: !!pbrOpts.enableSolarInverseDelighting,
-      solarSunVector: pbrOpts.enableSolarInverseDelighting ? (pbrOpts.solarDelighting?.sunVector ?? [0.45, 0.75, -0.48]) : undefined,
+      solarDelightingApplied,
+      solarSunVector: solarDelightingApplied ? this.resolveSolarSunVector(pbr.solarDelighting) : undefined,
       boundaryWeldingResult: boundaryResult,
-      toksvigMipLevelsGenerated: pbrOpts.enableToksvigMipPyramid ? (pbrOpts.toksvigMipLevels ?? 4) : undefined,
       backend: 'node-pure'
     };
   }
@@ -868,6 +922,17 @@ export class AlgorithmicUvEngine {
         // Blend via RNM
         const n_blend = this.blendNormalsRNM(n_macro, n_meso);
         const n_final = this.blendNormalsRNM(n_blend, n_micro);
+
+        // RNM of strongly tilted layers can rotate past the horizon (z < 0) at hard luminance edges; a
+        // tangent-space normal must face out of the surface, so clamp z and keep the xy direction.
+        const minZ = 0.1;
+        if (n_final[2] < minZ) {
+          const xyLen = Math.hypot(n_final[0], n_final[1]) || 1.0;
+          const xyScale = Math.sqrt(1.0 - minZ * minZ) / xyLen;
+          n_final[0] *= xyScale;
+          n_final[1] *= xyScale;
+          n_final[2] = minZ;
+        }
 
         const idx = (y * w + x) * 4;
         out[idx]     = Math.round((n_final[0] * 0.5 + 0.5) * 255);
@@ -1038,6 +1103,17 @@ export class AlgorithmicUvEngine {
 
     const total = nDotL * directWeight + ambient * ambientWeight;
     return Math.max(epsilon, Math.min(1.8, total));
+  }
+
+  /** Sun vector used by solar inverse de-lighting: `sunVector` when given, else NOAA ephemeris at the configured site and time. */
+  public static resolveSolarSunVector(cfg: SolarDelightingConfig = {}): [number, number, number] {
+    if (cfg.sunVector) return cfg.sunVector;
+    const lat = cfg.latitude ?? 40.74844;
+    const lng = cfg.longitude ?? -73.98566;
+    const date = cfg.timestampIso ? new Date(cfg.timestampIso) : new Date('2024-06-21T14:30:00Z');
+    const pos = calculateNOAASolarPosition(date, lat, lng);
+    const sun = calculateENUSunVector(pos.altitudeRad, pos.azimuthRad);
+    return [sun.x, sun.y, sun.z];
   }
 
   /**
@@ -1282,32 +1358,40 @@ export class AlgorithmicUvEngine {
     const dirs = 8;
     const angleStep = (2.0 * Math.PI) / dirs;
 
+    // Integer step offsets per (direction, radius): Math.round(x + c) === x + Math.round(c) for integer x.
+    const stepsPerDir = radiusPixels >= 2 ? Math.floor(radiusPixels / 2) : 0;
+    const stepDx = new Int32Array(dirs * stepsPerDir);
+    const stepDy = new Int32Array(dirs * stepsPerDir);
+    for (let d = 0; d < dirs; d++) {
+      const phi = d * angleStep;
+      const dirX = Math.cos(phi);
+      const dirY = Math.sin(phi);
+      for (let s = 0; s < stepsPerDir; s++) {
+        const r = 2 + 2 * s;
+        stepDx[d * stepsPerDir + s] = Math.round(dirX * r);
+        stepDy[d * stepsPerDir + s] = Math.round(dirY * r);
+      }
+    }
+
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const centerH = virtualHeight[y * w + x];
         let totalOcclusion = 0.0;
 
         for (let d = 0; d < dirs; d++) {
-          const phi = d * angleStep;
-          const dirX = Math.cos(phi);
-          const dirY = Math.sin(phi);
-          let maxSinHorizon = 0.0;
-
-          for (let r = 2; r <= radiusPixels; r += 2) {
-            const sx = Math.round(x + dirX * r);
-            const sy = Math.round(y + dirY * r);
+          // sin(atan(t)) = t / sqrt(1 + t^2) is monotonic, so the horizon sine is taken once from the max tangent.
+          let maxTan = 0.0;
+          for (let s = 0; s < stepsPerDir; s++) {
+            const sx = x + stepDx[d * stepsPerDir + s];
+            const sy = y + stepDy[d * stepsPerDir + s];
             if (sx < 0 || sx >= w || sy < 0 || sy >= h) break;
 
-            const sampleH = virtualHeight[sy * w + sx];
-            const deltaH = sampleH - centerH;
-            const dist = r;
-            const tanAngle = deltaH / dist;
-            const sinAngle = tanAngle / Math.sqrt(1.0 + tanAngle * tanAngle);
-            if (sinAngle > maxSinHorizon) {
-              maxSinHorizon = sinAngle;
+            const tanAngle = (virtualHeight[sy * w + sx] - centerH) / (2 + 2 * s);
+            if (tanAngle > maxTan) {
+              maxTan = tanAngle;
             }
           }
-          totalOcclusion += maxSinHorizon;
+          totalOcclusion += maxTan / Math.sqrt(1.0 + maxTan * maxTan);
         }
 
         const aoVal = Math.max(0.05, Math.min(1.0, 1.0 - (totalOcclusion / dirs) * intensity * 1.35));
@@ -1530,17 +1614,7 @@ export class AlgorithmicUvEngine {
     // 1b. Solar Inverse De-Lighting via NOAA Ephemeris & Ramamoorthi SH9 Irradiance
     if (options.enableSolarInverseDelighting) {
       const cfg = options.solarDelighting || {};
-      let sunVec: [number, number, number] = [0.45, 0.75, -0.48];
-      if (cfg.sunVector) {
-        sunVec = cfg.sunVector;
-      } else {
-        const lat = cfg.latitude ?? 40.74844;
-        const lng = cfg.longitude ?? -73.98566;
-        const date = cfg.timestampIso ? new Date(cfg.timestampIso) : new Date('2024-06-21T14:30:00Z');
-        const pos = calculateNOAASolarPosition(date, lat, lng);
-        const sun = calculateENUSunVector(pos.altitudeRad, pos.azimuthRad);
-        sunVec = [sun.x, sun.y, sun.z];
-      }
+      const sunVec = this.resolveSolarSunVector(cfg);
 
       const skyShCoeffs: [number, number, number][] = cfg.skyShCoeffs ?? [
         [0.65, 0.72, 0.85],
@@ -1777,85 +1851,81 @@ export class AlgorithmicUvEngine {
   }
 
   // ==========================================================================
-  // Internal Texture Processing & Detail Injection
+  // Internal Texture Processing
   // ==========================================================================
 
+  /** decodePng handles only 8-bit, non-interlaced grey / RGB / RGBA; reject the variants it would silently mis-decode. */
+  private static assertDecodablePng(buf: Buffer): void {
+    if (buf.length < 29 || buf.toString('ascii', 12, 16) !== 'IHDR') throw new Error('PNG has no IHDR chunk');
+    const bitDepth = buf[24];
+    const colorType = buf[25];
+    const interlace = buf[28];
+    if (bitDepth !== 8 || ![0, 2, 6].includes(colorType) || interlace !== 0) {
+      throw new Error(`unsupported PNG variant (bit depth ${bitDepth}, colour type ${colorType}, interlace ${interlace}); only 8-bit non-interlaced grey / RGB / RGBA PNGs decode`);
+    }
+  }
+
+  /**
+   * Decodes one baseColor image and runs the requested passes on its pixels. Throws when the image cannot be
+   * decoded. Returns only what was computed: `albedo` when de-lighting ran (JPEG sources stay JPEG, others
+   * become PNG), and PNG normal / metallicRoughness / occlusion maps at the image's own resolution.
+   */
   private static async processTextureBuffer(
-    imgBuffer: Uint8Array,
-    ctx: {
-      detailOpts: Required<DetailSynthesisOptions>;
-      pbrOpts: Required<PbrDecompositionOptions>;
-      mode: UvEngineMode;
-    }
+    imgBuffer: Buffer,
+    pbrOpts: PbrDecompositionOptions,
+    want: { delight: boolean; normal: boolean; roughness: boolean; ao: boolean; profile: boolean },
+    packOrm: boolean
   ): Promise<{
-    finalBuffer: Buffer;
-    texelsCount: number;
-    stoneCount: number;
-    roadCount: number;
-    roadMarkingCount: number;
-    foliageCount: number;
+    width: number;
+    height: number;
+    albedo?: { data: Buffer; mimeType: string };
+    normalPng?: Buffer;
+    metallicRoughnessPng?: Buffer;
+    occlusionPng?: Buffer;
+    profile?: Omit<MeasuredSpatialProfile, 'sourceImageIndex'>;
   }> {
-    // If running in Node, we process raw pixels or preserve existing buffer
-    // For universal portability across environments, we inspect pixel dimensions
-    const width = 512;
-    const height = 512;
-    const totalTexels = width * height;
+    const format = sniffImageFormat(imgBuffer);
+    if (format === 'png') this.assertDecodablePng(imgBuffer);
+    const decoded: RgbaImage = await decodeImageToRgba(imgBuffer);
+    const { width, height } = decoded;
+    if (!(width > 0 && height > 0) || decoded.rgba.length !== width * height * 4) {
+      throw new Error(`decoder returned ${decoded.rgba.length} bytes for a ${width}x${height} image`);
+    }
+    const rgba = new Uint8Array(decoded.rgba.buffer, decoded.rgba.byteOffset, decoded.rgba.byteLength);
+    const out: Awaited<ReturnType<typeof AlgorithmicUvEngine.processTextureBuffer>> = { width, height };
 
-    let stoneCount = 0;
-    let roadCount = 0;
-    let roadMarkingCount = 0;
-    let foliageCount = 0;
-
-    // Semantic distribution based on lithology & urban profile (Part-Aware)
-    const partCat = ctx.detailOpts.partCategory?.toLowerCase();
-    // Whole-token matching (with simple plural tolerance) so e.g. 'carved'/'scarp' never match 'car'.
-    const partTokens = new Set((partCat || '').split(/[^a-z0-9]+/).filter(Boolean));
-    const hasPartToken = (...names: string[]): boolean =>
-      names.some(n => partTokens.has(n) || partTokens.has(`${n}s`));
-    if (partCat) {
-      if (hasPartToken('foliage', 'tree', 'plant')) {
-        foliageCount = totalTexels;
-        stoneCount = 0;
-        roadCount = 0;
-        roadMarkingCount = 0;
-      } else if (hasPartToken('road', 'terrain', 'asphalt', 'ground')) {
-        roadCount = Math.floor(totalTexels * 0.95);
-        roadMarkingCount = totalTexels - roadCount;
-        stoneCount = 0;
-        foliageCount = 0;
-      } else if (hasPartToken('architecture', 'monument', 'landmark', 'building')) {
-        stoneCount = totalTexels;
-        roadCount = 0;
-        roadMarkingCount = 0;
-        foliageCount = 0;
-      } else if (hasPartToken('vehicle', 'car')) {
-        stoneCount = 0;
-        roadCount = 0;
-        roadMarkingCount = 0;
-        foliageCount = 0;
-      } else {
-        stoneCount = totalTexels;
+    if (want.profile) {
+      const lum = new Float32Array(width * height);
+      for (let i = 0; i < lum.length; i++) {
+        lum[i] = (0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2]) / 255.0;
       }
-    } else if (ctx.detailOpts.lithologyProfile === 'modern-curtain-wall') {
-      stoneCount = Math.floor(totalTexels * 0.450); // Glazing / spandrel panels
-      roadCount = Math.floor(totalTexels * 0.420);
-      roadMarkingCount = Math.floor(totalTexels * 0.050);
-      foliageCount = Math.floor(totalTexels * 0.080);
-    } else {
-      stoneCount = Math.floor(totalTexels * 0.758);
-      roadCount = Math.floor(totalTexels * 0.162);
-      roadMarkingCount = Math.floor(totalTexels * 0.025); // ~2.5% road markings protected
-      foliageCount = Math.floor(totalTexels * 0.055);
+      const p = this.analyzeTextureSpatialProfile(lum, width, height);
+      out.profile = { isPeriodic: p.isPeriodic, dominantPeriodPxX: p.dominantPeriodPxX, dominantPeriodPxY: p.dominantPeriodPxY };
     }
 
-    return {
-      finalBuffer: Buffer.from(imgBuffer),
-      texelsCount: totalTexels,
-      stoneCount,
-      roadCount,
-      roadMarkingCount,
-      foliageCount
-    };
+    if (!want.delight && !want.normal && !want.roughness && !want.ao) return out;
+
+    const pbr = await this.decomposePbr(rgba, pbrOpts, width, height);
+    const asBuffer = (u: Uint8Array) => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
+
+    if (want.delight) {
+      out.albedo = format === 'jpeg'
+        ? { data: await encodeRgbaToJpeg(pbr.albedo, width, height, { quality: 92 }), mimeType: 'image/jpeg' }
+        : { data: encodePng(width, height, asBuffer(pbr.albedo)), mimeType: 'image/png' };
+    }
+    if (want.normal && pbr.normal) {
+      // decomposePbr's normals point +Y toward the image bottom; glTF tangent space has +Y toward the image top.
+      const normal = Buffer.from(pbr.normal);
+      for (let i = 1; i < normal.length; i += 4) normal[i] = 255 - normal[i];
+      out.normalPng = encodePng(width, height, normal);
+    }
+    if ((want.roughness || want.ao) && pbr.orm) {
+      // ORM: R = occlusion, G = roughness, B = metalness. glTF metallicRoughness ignores R and occlusion reads only R.
+      const orm = encodePng(width, height, asBuffer(pbr.orm));
+      if (want.roughness) out.metallicRoughnessPng = orm;
+      if (want.ao) out.occlusionPng = packOrm || !pbr.ao ? orm : encodePng(width, height, asBuffer(pbr.ao));
+    }
+    return out;
   }
 
   // ==========================================================================
@@ -1893,19 +1963,102 @@ export class AlgorithmicUvEngine {
     return { json, bin };
   }
 
+  /**
+   * Re-serializes a GLB with per-image rewrites applied: replacement bytes for source images, and new
+   * normal / metallicRoughness / occlusion textures attached to every material whose baseColor samples a
+   * rewritten image (only into empty slots; authored maps are kept). New textures reuse the baseColor's
+   * sampler, texCoord and KHR_texture_transform. KHR_materials_unlit is dropped from materials that gain a
+   * map, since unlit shading would ignore it. With rewrites the binary chunk is rebuilt compactly.
+   */
   public static rebuildGlbWithTextures(
     glb: { json: any; bin: Buffer },
-    replacements: Map<number, Buffer>,
+    rewrites: Map<number, GlbImageRewrite>,
     tilingOpts?: { enableMicroDetailTiling?: boolean; microDetailScale?: number },
     khrOpts?: KhrMaterialsConfig
-  ): { buffer: Buffer; injectedExtensions: string[] } {
+  ): { buffer: Buffer; injectedExtensions: string[]; attachments: MaterialMapAttachments } {
     const injectedExtensions: string[] = [];
-    if (replacements.size === 0 && !tilingOpts?.enableMicroDetailTiling && !khrOpts?.enableKhrMaterialsExtensions) {
-      return { buffer: this.serializeGlb(glb.json, glb.bin), injectedExtensions };
+    const attachments: MaterialMapAttachments = { normalTextures: 0, metallicRoughnessTextures: 0, occlusionTextures: 0, unlitRemoved: 0 };
+    if (rewrites.size === 0 && !tilingOpts?.enableMicroDetailTiling && !khrOpts?.enableKhrMaterialsExtensions) {
+      return { buffer: this.serializeGlb(glb.json, glb.bin), injectedExtensions, attachments };
     }
 
     const newJson = JSON.parse(JSON.stringify(glb.json));
     let currentBin = glb.bin;
+
+    // Images appended by this rebuild, keyed by their PNG buffer (an ORM PNG backs two slots but is stored once).
+    const addedImages = new Map<Buffer, number>();
+    if (rewrites.size > 0) {
+      if (newJson.buffers?.[0]?.uri !== undefined) {
+        throw new Error('AlgorithmicUvEngine: GLB buffer 0 is an external uri; only GLBs with an embedded binary chunk can be rewritten');
+      }
+      newJson.images = newJson.images || [];
+      newJson.textures = newJson.textures || [];
+      const addedTextures = new Map<string, number>();
+      const textureFor = (png: Buffer, sampler: number | undefined): number => {
+        let imageIndex = addedImages.get(png);
+        if (imageIndex === undefined) {
+          imageIndex = newJson.images.push({ mimeType: 'image/png' }) - 1;
+          addedImages.set(png, imageIndex);
+        }
+        const key = `${imageIndex}:${sampler ?? ''}`;
+        let textureIndex = addedTextures.get(key);
+        if (textureIndex === undefined) {
+          textureIndex = newJson.textures.push(sampler !== undefined ? { sampler, source: imageIndex } : { source: imageIndex }) - 1;
+          addedTextures.set(key, textureIndex);
+        }
+        return textureIndex;
+      };
+
+      for (const mat of newJson.materials || []) {
+        const baseInfo = mat.pbrMetallicRoughness?.baseColorTexture;
+        if (!baseInfo || baseInfo.index === undefined) continue;
+        const baseTex = newJson.textures[baseInfo.index];
+        const rewrite = baseTex?.source !== undefined ? rewrites.get(baseTex.source) : undefined;
+        if (!rewrite) continue;
+
+        const textureRef = (png: Buffer): any => {
+          const ref: any = { index: textureFor(png, baseTex.sampler) };
+          if (baseInfo.texCoord !== undefined) ref.texCoord = baseInfo.texCoord;
+          if (baseInfo.extensions?.KHR_texture_transform) {
+            ref.extensions = { KHR_texture_transform: JSON.parse(JSON.stringify(baseInfo.extensions.KHR_texture_transform)) };
+          }
+          return ref;
+        };
+
+        let attached = false;
+        if (rewrite.normalPng && !mat.normalTexture) {
+          mat.normalTexture = textureRef(rewrite.normalPng);
+          attachments.normalTextures++;
+          attached = true;
+        }
+        if (rewrite.metallicRoughnessPng && !mat.pbrMetallicRoughness.metallicRoughnessTexture) {
+          // The texture holds absolute roughness (G) and metalness (B), so the factors must not scale it.
+          mat.pbrMetallicRoughness.metallicRoughnessTexture = textureRef(rewrite.metallicRoughnessPng);
+          mat.pbrMetallicRoughness.roughnessFactor = 1.0;
+          mat.pbrMetallicRoughness.metallicFactor = 1.0;
+          attachments.metallicRoughnessTextures++;
+          attached = true;
+        }
+        if (rewrite.occlusionPng && !mat.occlusionTexture) {
+          mat.occlusionTexture = textureRef(rewrite.occlusionPng);
+          attachments.occlusionTextures++;
+          attached = true;
+        }
+        if (attached && mat.extensions?.KHR_materials_unlit) {
+          delete mat.extensions.KHR_materials_unlit;
+          if (Object.keys(mat.extensions).length === 0) delete mat.extensions;
+          attachments.unlitRemoved++;
+        }
+      }
+
+      if (attachments.unlitRemoved > 0 && Array.isArray(newJson.extensionsUsed)) {
+        const stillUnlit = (newJson.materials || []).some((m: any) => m.extensions?.KHR_materials_unlit);
+        if (!stillUnlit) {
+          newJson.extensionsUsed = newJson.extensionsUsed.filter((e: string) => e !== 'KHR_materials_unlit');
+          if (newJson.extensionsUsed.length === 0) delete newJson.extensionsUsed;
+        }
+      }
+    }
 
     if (tilingOpts?.enableMicroDetailTiling) {
       if (!newJson.extensionsUsed) newJson.extensionsUsed = [];
@@ -1916,19 +2069,20 @@ export class AlgorithmicUvEngine {
 
       const scaleVal = tilingOpts.microDetailScale ?? 32.0;
       for (const mat of newJson.materials || []) {
-        if (mat.pbrMetallicRoughness?.baseColorTexture) {
-          mat.pbrMetallicRoughness.baseColorTexture.extensions = {
-            KHR_texture_transform: {
-              scale: [scaleVal, scaleVal]
-            }
-          };
-        }
-        if (mat.normalTexture) {
-          mat.normalTexture.extensions = {
-            KHR_texture_transform: {
-              scale: [scaleVal, scaleVal]
-            }
-          };
+        const slots = [
+          mat.pbrMetallicRoughness?.baseColorTexture,
+          mat.pbrMetallicRoughness?.metallicRoughnessTexture,
+          mat.normalTexture,
+          mat.occlusionTexture
+        ];
+        for (const slot of slots) {
+          if (slot) {
+            slot.extensions = {
+              KHR_texture_transform: {
+                scale: [scaleVal, scaleVal]
+              }
+            };
+          }
         }
       }
     }
@@ -2004,29 +2158,51 @@ export class AlgorithmicUvEngine {
       }
     }
 
-    for (const [imgIdx, newImgBuffer] of replacements.entries()) {
-      const imgDef = newJson.images[imgIdx];
-      const bufferView = newJson.bufferViews[imgDef.bufferView];
-
-      if (newImgBuffer.length <= bufferView.byteLength) {
-        // Drop-in replacement
-        newImgBuffer.copy(currentBin, bufferView.byteOffset);
-        bufferView.byteLength = newImgBuffer.length;
-      } else {
-        // Append to binary chunk and align to 4 bytes
-        const alignedOffset = (currentBin.length + 3) & ~3;
-        const padding = alignedOffset - currentBin.length;
-        const expandedBin = Buffer.alloc(alignedOffset + newImgBuffer.length);
-        currentBin.copy(expandedBin, 0);
-        newImgBuffer.copy(expandedBin, alignedOffset);
-
-        bufferView.byteOffset = alignedOffset;
-        bufferView.byteLength = newImgBuffer.length;
-        currentBin = expandedBin;
+    if (rewrites.size > 0) {
+      // Rebuild buffer 0: every bufferView is copied to a 4-byte aligned offset (replaced images take their
+      // new bytes), then the added PNGs are appended as new bufferViews.
+      const views: any[] = newJson.bufferViews = newJson.bufferViews || [];
+      const viewReplacements = new Map<number, Buffer>();
+      for (const [imageIndex, rewrite] of rewrites) {
+        const imgDef = newJson.images[imageIndex];
+        if (!rewrite.replacement || imgDef?.bufferView === undefined) continue;
+        viewReplacements.set(imgDef.bufferView, rewrite.replacement.data);
+        imgDef.mimeType = rewrite.replacement.mimeType;
       }
+
+      const chunks: Buffer[] = [];
+      let length = 0;
+      const place = (data: Buffer): number => {
+        const pad = (4 - (length % 4)) % 4;
+        if (pad) {
+          chunks.push(Buffer.alloc(pad));
+          length += pad;
+        }
+        const offset = length;
+        chunks.push(data);
+        length += data.length;
+        return offset;
+      };
+
+      for (let v = 0; v < views.length; v++) {
+        const bv = views[v];
+        if ((bv.buffer ?? 0) !== 0) continue;
+        const start = bv.byteOffset || 0;
+        const data = viewReplacements.get(v) ?? glb.bin.subarray(start, start + bv.byteLength);
+        bv.byteOffset = place(data);
+        bv.byteLength = data.length;
+      }
+      for (const [png, imageIndex] of addedImages) {
+        const byteOffset = place(png);
+        newJson.images[imageIndex].bufferView = views.push({ buffer: 0, byteOffset, byteLength: png.length }) - 1;
+      }
+
+      currentBin = Buffer.concat(chunks, length);
+      if (!newJson.buffers || newJson.buffers.length === 0) newJson.buffers = [{ byteLength: 0 }];
+      newJson.buffers[0].byteLength = currentBin.length;
     }
 
-    return { buffer: this.serializeGlb(newJson, currentBin), injectedExtensions };
+    return { buffer: this.serializeGlb(newJson, currentBin), injectedExtensions, attachments };
   }
 
   public static serializeGlb(json: any, bin: Buffer): Buffer {
