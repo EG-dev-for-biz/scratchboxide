@@ -1762,9 +1762,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 zoom: { type: 'NUMBER', description: 'Vector tile zoom level (default: 16).' },
                 radiusTiles: { type: 'NUMBER', description: 'Neighbor tile radius around center (default: 1 for a 3x3 tile grid).' },
                 style: { type: 'STRING', description: 'Material styling mode (default: "studio_clay" for 18% Studio Grey Clay).' },
-                populate: { type: 'BOOLEAN', description: 'Whether to procedurally populate world with streetlamps, street trees, and traffic vehicles (default: true).' },
+                populate: { type: 'BOOLEAN', description: 'Whether to procedurally populate world with streetlamps and traffic vehicles (default: true). No trees are placed: a location\'s trees are measured from its photo tiles by google_3d_tiles_get_clay.' },
                 includeTraffic: { type: 'BOOLEAN', description: 'Include background vehicles aligned in lanes (default: true).' },
-                includeTrees: { type: 'BOOLEAN', description: 'Include street trees and park foliage (default: false; deferred to authentic Google 3D Tiles).' },
                 includeStreetlamps: { type: 'BOOLEAN', description: 'Include curbside streetlamps (default: true).' },
                 includeSidewalks: { type: 'BOOLEAN', description: 'Include elevated sidewalks with beveled granite curbs (default: true).' },
                 heroStaging: {
@@ -5454,9 +5453,6 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
         const outputGlbPath = asString(args.outputGlbPath);
         const populate = args.populate !== false;
         const includeTraffic = args.includeTraffic !== false;
-        // Reality Grounding Invariant: procedural tree generation is false by default.
-        // Authentic tree foliage is extracted from Google 3D Photorealistic Tiles or Solar dataLayers.
-        const includeTrees = args.includeTrees === true;
         const includeStreetlamps = args.includeStreetlamps !== false;
         const includeSidewalks = args.includeSidewalks !== false;
         const heroStaging = args.heroStaging && typeof args.heroStaging === 'object' ? args.heroStaging as any : undefined;
@@ -5471,7 +5467,6 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                 style,
                 outputGlbPath: outputGlbPath || undefined,
                 includeTraffic,
-                includeTrees,
                 includeStreetlamps,
                 includeSidewalks,
                 heroStaging
@@ -5498,7 +5493,6 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                             longitude,
                             buildingCount: result.stats.buildingCount,
                             roadSegmentCount: result.stats.roadSegmentCount,
-                            treeCount: result.stats.treeCount,
                             streetlampCount: result.stats.streetlampCount,
                             trafficVehicleCount: result.stats.trafficVehicleCount,
                             vertexCount: result.stats.vertexCount,
@@ -5513,7 +5507,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                     ...prevArtifact,
                     version: (prevArtifact.version || 1) + 1,
                     title: `${prevArtifact.title || '3D Scene'} — Staged at [${latitude.toFixed(4)}, ${longitude.toFixed(4)}]`,
-                    summary: `Staged active 3D asset with real-world Google Vector Tiles world population (${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road segments, ${result.stats.treeCount} trees in 18% Studio Grey Clay).`,
+                    summary: `Staged active 3D asset with real-world Google Vector Tiles world population (${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road segments in 18% Studio Grey Clay).`,
                     data: {
                         ...prevData,
                         groundTileMode: 'vector-world-clay',
@@ -5528,7 +5522,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                     ...result,
                     ...(mountedArtifact ? { artifact: mountedArtifact } : {})
                 } as unknown as ToolResultPayload,
-                summaryResult: `Successfully staged populated 3D vector world in 18% Studio Grey Clay at [${latitude}, ${longitude}]. Generated ${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road cross-sections, ${result.stats.streetlampCount} streetlamps, ${result.stats.treeCount} trees, ${result.stats.trafficVehicleCount} vehicles, and ${result.stats.waterPolygonCount} water polygons into standard binary GLB (${result.stats.vertexCount} vertices, ${result.stats.triangleCount} triangles). GLB: ${result.glbPath}.${heroSummary}`
+                summaryResult: `Successfully staged populated 3D vector world in 18% Studio Grey Clay at [${latitude}, ${longitude}]. Generated ${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road cross-sections, ${result.stats.streetlampCount} streetlamps, ${result.stats.trafficVehicleCount} vehicles, and ${result.stats.waterPolygonCount} water polygons into standard binary GLB (${result.stats.vertexCount} vertices, ${result.stats.triangleCount} triangles). GLB: ${result.glbPath}.${heroSummary}`
             };
         } else {
             const result = await GoogleVectorTileService.stage3DVectorWorld({

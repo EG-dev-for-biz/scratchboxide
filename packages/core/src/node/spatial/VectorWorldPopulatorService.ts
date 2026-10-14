@@ -135,7 +135,6 @@ export interface VectorWorldPopulationOptions {
     // World Population Props
     includeStreetlamps?: boolean;
     streetlampPitchMeters?: number;
-    includeTrees?: boolean;
     includeTraffic?: boolean;
     trafficDensity?: number; // vehicles per 100m of lane
     // Hero Staging
@@ -147,7 +146,6 @@ export interface VectorWorldPopulationStats {
     roadSegmentCount: number;
     waterPolygonCount: number;
     streetlampCount: number;
-    treeCount: number;
     trafficVehicleCount: number;
     vertexCount: number;
     triangleCount: number;
@@ -172,8 +170,9 @@ export interface VectorWorldPopulationResult {
  * World Population Staging Service leveraging 3D Vector Tiles.
  * Ingests 2D roadmap vector tiles, extracts topologically consistent road networks,
  * building parcels, and landuse areas into SI metric space, sweeps 5-tier road cross-sections,
- * articluates architectural edifices, and procedurally populates street furniture,
- * urban vegetation, and traffic streams.
+ * articluates architectural edifices, and procedurally populates street furniture and traffic streams.
+ * It places no trees: tree positions are never invented (every 18 m along roads, random points in parks);
+ * a location's trees are measured from its photo tiles and rebuilt by google_3d_tiles_get_clay.
  */
 export class VectorWorldPopulatorService {
     /**
@@ -630,7 +629,6 @@ export class VectorWorldPopulatorService {
 
         // Counters
         let streetlampCount = 0;
-        let treeCount = 0;
         let trafficVehicleCount = 0;
         let roadSegmentCount = 0;
 
@@ -646,14 +644,11 @@ export class VectorWorldPopulatorService {
         const lampPitch = options.streetlampPitchMeters ?? 25.0;
         const includeTraffic = options.includeTraffic !== false;
         const trafficDensity = options.trafficDensity ?? 0.25;
-        // Reality Grounding Invariant: procedural tree generation is false by default.
-        // Authentic tree foliage is extracted from Google 3D Photorealistic Tiles or Solar dataLayers.
-        const includeTrees = options.includeTrees === true;
         const buildingArticulation = options.buildingArticulation !== false;
         const heightScale = options.buildingHeightScale ?? 1.0;
 
         // ------------------------------------------------------------------------
-        // 1. PROCEDURAL PROP GENERATORS (Streetlamps, Trees, Traffic Vehicles)
+        // 1. PROCEDURAL PROP GENERATORS (Streetlamps, Traffic Vehicles)
         // ------------------------------------------------------------------------
 
         // Helper to spawn a 3D streetlamp at (px, pz) oriented along normalVec
@@ -714,60 +709,6 @@ export class VectorWorldPopulatorService {
             );
 
             streetlampCount++;
-        };
-
-        // Helper to spawn a procedural botanical tree at (px, py, pz)
-        const spawnTree = (px: number, py: number, pz: number, scale = 1.0) => {
-            const trunkHeight = 2.4 * scale;
-            const trunkRadius = 0.18 * scale;
-            const crownRadius = 1.8 * scale;
-            const crownBaseY = py + trunkHeight * 0.8;
-            const crownHeight = 3.6 * scale;
-
-            // Hexagonal tapered trunk
-            const sides = 6;
-            for (let i = 0; i < sides; i++) {
-                const a0 = (i / sides) * Math.PI * 2;
-                const a1 = ((i + 1) / sides) * Math.PI * 2;
-                const dx0 = Math.cos(a0) * trunkRadius;
-                const dz0 = Math.sin(a0) * trunkRadius;
-                const dx1 = Math.cos(a1) * trunkRadius;
-                const dz1 = Math.sin(a1) * trunkRadius;
-
-                addQuad(
-                    [px + dx0, py, pz + dz0],
-                    [px + dx1, py, pz + dz1],
-                    [px + dx1 * 0.7, py + trunkHeight, pz + dz1 * 0.7],
-                    [px + dx0 * 0.7, py + trunkHeight, pz + dz0 * 0.7],
-                    [dx0, 0, dz0]
-                );
-            }
-
-            // Layered conical foliage tiers (2 tiers for botanical silhouette)
-            const tiers = 2;
-            for (let t = 0; t < tiers; t++) {
-                const tierBaseY = crownBaseY + t * (crownHeight * 0.45);
-                const tierTopY = tierBaseY + crownHeight * 0.7;
-                const tierR = crownRadius * (1.0 - t * 0.25);
-                const crownSides = 8;
-                const apexIdx = addVertex(px, tierTopY, pz, 0, 1, 0, 0.5, 0.5);
-
-                const ringStart = currentVertexCount;
-                for (let i = 0; i < crownSides; i++) {
-                    const ang = (i / crownSides) * Math.PI * 2;
-                    const cx = px + Math.cos(ang) * tierR;
-                    const cz = pz + Math.sin(ang) * tierR;
-                    addVertex(cx, tierBaseY, cz, Math.cos(ang), 0.2, Math.sin(ang), 0.5 + Math.cos(ang) * 0.5, 0.5 + Math.sin(ang) * 0.5);
-                    expandBounds(cx, tierBaseY, cz);
-                }
-
-                for (let i = 0; i < crownSides; i++) {
-                    const next = (i + 1) % crownSides;
-                    indices.push(ringStart + i, ringStart + next, apexIdx);
-                }
-            }
-
-            treeCount++;
         };
 
         // Helper to spawn a procedural vehicle in a lane
@@ -832,7 +773,6 @@ export class VectorWorldPopulatorService {
 
                 let accumulatedDistance = 0;
                 let lastLampDist = -lampPitch * 0.5;
-                let lastTreeDist = -12.0;
 
                 for (let i = 0; i < r.points.length - 1; i++) {
                     const p0 = r.points[i];
@@ -930,15 +870,6 @@ export class VectorWorldPopulatorService {
                         const lampY = sampleElevation(lampX, lampZ) + 0.02 + curbHeight;
                         spawnStreetlamp(lampX, lampY, lampZ, [forwardX, forwardZ], [perpX, perpZ]);
                         lastLampDist = segMidDist;
-                    }
-
-                    // Street trees in sidewalk zone (every ~18m, offset from lamps)
-                    if (includeTrees && (segMidDist - lastTreeDist) >= 18.0) {
-                        const treeX = p0.x - perpX * (halfW + sidewalkWidth * 0.5);
-                        const treeZ = p0.z - perpZ * (halfW + sidewalkWidth * 0.5);
-                        const treeY = sampleElevation(treeX, treeZ) + 0.02 + curbHeight;
-                        spawnTree(treeX, treeY, treeZ, 0.95);
-                        lastTreeDist = segMidDist;
                     }
 
                     // Traffic vehicles in lanes
@@ -1042,27 +973,6 @@ export class VectorWorldPopulatorService {
                 }
 
                 buildingCount++;
-            }
-        }
-
-        // ------------------------------------------------------------------------
-        // 4. PARKS & BOTANICAL POPULATION
-        // ------------------------------------------------------------------------
-        if (includeTrees) {
-            for (const lu of graph.landuse) {
-                if (lu.type === 'park' || lu.type === 'grass') {
-                    // Tree scattering based on polygon area
-                    const numParkTrees = Math.min(25, Math.max(3, Math.floor(lu.areaM2 / 250)));
-                    for (let t = 0; t < numParkTrees; t++) {
-                        // Sample point within centroid radius
-                        const angle = Math.random() * Math.PI * 2;
-                        const dist = Math.random() * Math.sqrt(lu.areaM2 * 0.25);
-                        const tx = lu.centroid.x + Math.cos(angle) * dist;
-                        const tz = lu.centroid.z + Math.sin(angle) * dist;
-                        const ty = sampleElevation(tx, tz) + 0.05;
-                        spawnTree(tx, ty, tz, 1.1 + Math.random() * 0.3);
-                    }
-                }
             }
         }
 
@@ -1233,7 +1143,6 @@ export class VectorWorldPopulatorService {
                 roadSegmentCount,
                 waterPolygonCount,
                 streetlampCount,
-                treeCount,
                 trafficVehicleCount,
                 vertexCount: currentVertexCount,
                 triangleCount: Math.floor(indices.length / 3),

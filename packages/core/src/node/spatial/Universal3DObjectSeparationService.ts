@@ -530,17 +530,8 @@ export class Universal3DObjectSeparationService {
       }
     }
 
-    // Ensure at least one entity in main categories if submeshes exist
-    if (terrainIndices.length === 0 && submeshes.length > 0) {
-      terrainIndices.push(submeshes[0]!.submeshIndex);
-    }
-    if (monumentIndices.length === 0 && architectureIndices.length > 0) {
-      monumentIndices.push(architectureIndices.shift()!);
-    }
-    if (foliageIndices.length === 0 && architectureIndices.length > 1) {
-      foliageIndices.push(architectureIndices.pop()!);
-    }
-
+    // Only categories the heuristics actually found are reported: a submesh is never moved into a category (terrain,
+    // monument, foliage) just so that category exists, and an empty category is not given the whole model's box.
     const clustersConfig = [
       {
         id: 'sep-monument-core',
@@ -600,7 +591,7 @@ export class Universal3DObjectSeparationService {
       });
     }
 
-    return clustersConfig.map(cfg => {
+    return clustersConfig.filter(cfg => cfg.indices.length > 0).map(cfg => {
       const extractedVertices: [number, number, number][] = [];
       for (const smIdx of cfg.indices) {
         const sm = submeshes.find(s => s.submeshIndex === smIdx);
@@ -616,11 +607,6 @@ export class Universal3DObjectSeparationService {
           extractedVertices.push(sm.min);
           extractedVertices.push(sm.max);
         }
-      }
-
-      if (extractedVertices.length === 0) {
-        extractedVertices.push(overallBox.min);
-        extractedVertices.push(overallBox.max);
       }
 
       return {

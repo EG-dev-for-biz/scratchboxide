@@ -194,7 +194,6 @@ describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () 
             outputGlbPath: outGlb,
             includeTraffic: true,
             trafficDensity: 1.0, // High density to ensure vehicle instances spawn
-            includeTrees: true,
             includeStreetlamps: true,
             streetlampPitchMeters: 15.0,
             includeSidewalks: true,
@@ -215,7 +214,8 @@ describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () 
         expect(result.stats.buildingCount).toBe(2);
         expect(result.stats.roadSegmentCount).toBeGreaterThan(0);
         expect(result.stats.streetlampCount).toBeGreaterThan(0);
-        expect(result.stats.treeCount).toBeGreaterThan(0);
+        // no invented trees: the populator places none (a location's trees are measured from its photo tiles)
+        expect((result.stats as any).treeCount).toBeUndefined();
         expect(result.stats.trafficVehicleCount).toBeGreaterThan(0);
         expect(result.stats.vertexCount).toBeGreaterThan(500);
         expect(result.stats.triangleCount).toBeGreaterThan(200);
