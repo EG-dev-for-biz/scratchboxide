@@ -105,16 +105,23 @@ export class SceneKeyframeVideoService {
         });
 
         // 3. Compile Omni 1.1 keyframe motion brief
-        const omniPrompt = buildMinimalOmniVideoPrompt({
+        const omniPromptText = buildMinimalOmniVideoPrompt({
             blockoutVideoRef: '<VIDEO_REF_0>',
             primarySubject: request.prompt
         });
 
         // 4. Dispatch video generation via Interactions API
+        // Input must be a flat array: text first, then inline image parts
+        const inputPayload = [
+            { type: 'text', text: omniPromptText },
+            { type: 'image', mime_type: 'image/png', data: startBeauty.image.toString('base64') },
+            { type: 'image', mime_type: 'image/png', data: endBeauty.image.toString('base64') }
+        ];
+
         const client = await this.getClient();
         const response = await client.interactions.create({
             model: 'gemini-omni-1.1-flash-preview',
-            input: omniPrompt,
+            input: inputPayload,
             generation_config: {
                 video_config: {
                     task: 'image_to_video'
@@ -123,32 +130,43 @@ export class SceneKeyframeVideoService {
             response_format: {
                 aspect_ratio: `${width}:${height}`,
                 duration: `${durationSeconds}s`
-            },
-            // Pass the generated beauties as starting/reference parameters
-            images: [
-                {
-                    inlineData: {
-                        mimeType: 'image/png',
-                        data: startBeauty.image.toString('base64')
-                    }
-                },
-                {
-                    inlineData: {
-                        mimeType: 'image/png',
-                        data: endBeauty.image.toString('base64')
-                    }
-                }
-            ]
+            }
         });
 
-        // Parse video output bytes
-        const part = response.steps?.[0]?.model_output?.content?.parts?.[0];
-        if (!part || !part.inlineData || !part.inlineData.data) {
+        // Parse video output: iterate steps for model_output, then content for video part
+        let videoPart: { data?: string; uri?: string; mime_type?: string; mimeType?: string } | undefined;
+        for (const step of response?.steps ?? []) {
+            if (step?.type !== 'model_output') continue;
+            for (const part of step?.content ?? []) {
+                const mime = part?.mime_type ?? part?.mimeType ?? '';
+                if ((part?.type === 'video' || mime.startsWith('video/')) && (part?.data || part?.uri)) {
+                    videoPart = part;
+                    break;
+                }
+            }
+            if (videoPart) break;
+        }
+
+        if (!videoPart) {
             throw new Error('No video data returned from Gemini Omni Interactions API');
         }
 
+        let videoData: Buffer;
+        if (videoPart.data) {
+            videoData = Buffer.from(videoPart.data, 'base64');
+        } else {
+            // URI-based download: strip any trailing :download token before constructing the URL
+            const rawUri = videoPart.uri as string;
+            const fileId = rawUri.split('/').pop()?.split('?')[0]?.replace(':download', '') ?? '';
+            const apiKey = (client as any)._apiKey ?? process.env.GEMINI_API_KEY ?? '';
+            const downloadUrl = `https://generativelanguage.googleapis.com/v1beta/files/${fileId}:download?alt=media&key=${apiKey}`;
+            const res = await fetch(downloadUrl);
+            if (!res.ok) throw new Error(`Failed to download video from Omni API: ${res.status} ${res.statusText}`);
+            videoData = Buffer.from(await res.arrayBuffer());
+        }
+
         return {
-            video: Buffer.from(part.inlineData.data, 'base64'),
+            video: videoData,
             startImage: startBeauty.image,
             endImage: endBeauty.image
         };

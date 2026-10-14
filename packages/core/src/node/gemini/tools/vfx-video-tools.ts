@@ -16,6 +16,8 @@ import {
 import { HeadlessVideoEditorService } from '../../video/HeadlessVideoEditorService';
 import { HeadlessVideoCompositorService } from '../../video/HeadlessVideoCompositorService';
 import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirectorService';
+import { buildContactSheet, normalizePlates } from '../../video/ConditioningPlateService';
+import { checkVideo } from '../../video/GenerativeVideoQAService';
 import type { VideoTimelineData } from '../../../browser/generative-canvas/services/video/videoTypes';
 import type { ToolDeclaration, ToolHandler } from './types';
 
@@ -1664,19 +1666,155 @@ export const directorHandlers: Record<string, ToolHandler> = {
 };
 
 // ============================================================================
-// 5. Aggregated Tool Declarations & Handlers
+// 5. Conditioning Plate Tools
+// ============================================================================
+
+export const CONDITIONING_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'build_conditioning_contact_sheet',
+        description: 'Composites multiple conditioning images into a single borderless multi-panel strip. More panels = higher constraint density when used as an Omni keyframe conditioning input. Returns path, dimensions, and panel count.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePaths: {
+                    type: 'ARRAY',
+                    items: { type: 'STRING' },
+                    description: 'Absolute paths to input images for the panels.'
+                },
+                panelWidthPx: { type: 'NUMBER', description: 'Width of each panel in pixels (default: 512).' },
+                panelHeightPx: { type: 'NUMBER', description: 'Height of each panel in pixels (default: 512).' },
+                columns: { type: 'NUMBER', description: 'Number of columns (default: all images in one row).' },
+                outputPath: { type: 'STRING', description: 'Absolute output path for the composited strip PNG.' }
+            },
+            required: ['imagePaths', 'outputPath']
+        }
+    },
+    {
+        name: 'normalize_conditioning_plates',
+        description: 'Normalizes conditioning plates to a uniform size and checks spatial anchor stability. Scans the bottom 25 rows for non-transparent pixels to derive the base center anchor. Spread > maxAnchorDriftPx (default: 5px) indicates detectable spatial drift.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePaths: {
+                    type: 'ARRAY',
+                    items: { type: 'STRING' },
+                    description: 'Absolute paths to input images.'
+                },
+                targetWidth: { type: 'NUMBER', description: 'Target width for all output plates.' },
+                targetHeight: { type: 'NUMBER', description: 'Target height for all output plates.' },
+                outputDir: { type: 'STRING', description: 'Directory to write normalized plates.' },
+                maxAnchorDriftPx: { type: 'NUMBER', description: 'Max allowed anchor drift in pixels before check fails (default: 5).' }
+            },
+            required: ['imagePaths', 'targetWidth', 'targetHeight', 'outputDir']
+        }
+    }
+];
+
+export const conditioningHandlers: Record<string, ToolHandler> = {
+    build_conditioning_contact_sheet: async (args, _ctx) => {
+        const imagePaths = Array.isArray(args.imagePaths) ? (args.imagePaths as string[]) : [];
+        const outputPath = asString(args.outputPath);
+        if (!imagePaths.length || !outputPath) {
+            return { resultPayload: { error: 'imagePaths and outputPath are required' }, summaryResult: 'Failed: missing required args.' };
+        }
+        const result = await buildContactSheet({
+            imagePaths,
+            panelWidthPx: asNumber(args.panelWidthPx),
+            panelHeightPx: asNumber(args.panelHeightPx),
+            columns: asNumber(args.columns),
+            outputPath
+        });
+        return {
+            resultPayload: result as unknown as Record<string, unknown>,
+            summaryResult: `Contact sheet: ${result.panelCount} panels → ${result.widthPx}×${result.heightPx}px at ${result.outputPath}`
+        };
+    },
+
+    normalize_conditioning_plates: async (args, _ctx) => {
+        const imagePaths = Array.isArray(args.imagePaths) ? (args.imagePaths as string[]) : [];
+        const targetWidth = asNumber(args.targetWidth) ?? 0;
+        const targetHeight = asNumber(args.targetHeight) ?? 0;
+        const outputDir = asString(args.outputDir);
+        if (!imagePaths.length || !targetWidth || !targetHeight || !outputDir) {
+            return { resultPayload: { error: 'imagePaths, targetWidth, targetHeight, outputDir are required' }, summaryResult: 'Failed: missing required args.' };
+        }
+        const result = await normalizePlates({
+            imagePaths,
+            targetWidth,
+            targetHeight,
+            outputDir,
+            maxAnchorDriftPx: asNumber(args.maxAnchorDriftPx)
+        });
+        const status = result.driftCheckPassed ? '✅ drift check passed' : `⚠️ drift ${result.maxDriftPx.toFixed(1)}px exceeds threshold`;
+        return {
+            resultPayload: result as unknown as Record<string, unknown>,
+            summaryResult: `Normalized ${result.outputPaths.length} plates — ${status}`
+        };
+    }
+};
+
+// ============================================================================
+// 6. Video QA Tool
+// ============================================================================
+
+export const VIDEO_QA_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'video_qa_check',
+        description: 'Runs multi-metric QA on a generated video: delta spike detection (morph-cut artefacts < 4.1 clean, 4.1–15.0 acceptable, > 15.0 = morph-cut), global PSNR (> 38 dB), worst-block PSNR (> 28 dB), temporal stability, and color bias (< 2 DN/channel). Returns a structured QA report.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                videoPath: { type: 'STRING', description: 'Absolute path to the video file to analyze.' },
+                deltaSpikeThreshold: { type: 'NUMBER', description: 'Max acceptable per-frame delta (default: 15.0).' },
+                psnrGlobalMin: { type: 'NUMBER', description: 'Min global PSNR in dB (default: 38).' },
+                psnrWorstBlockMin: { type: 'NUMBER', description: 'Min worst-block PSNR in dB (default: 28).' },
+                colorBiasMax: { type: 'NUMBER', description: 'Max color bias per channel in DN (default: 2.0).' },
+                workDir: { type: 'STRING', description: 'Working directory for extracted frames (optional).' }
+            },
+            required: ['videoPath']
+        }
+    }
+];
+
+export const videoQAHandlers: Record<string, ToolHandler> = {
+    video_qa_check: async (args, _ctx) => {
+        const videoPath = asString(args.videoPath);
+        if (!videoPath) {
+            return { resultPayload: { error: 'videoPath is required' }, summaryResult: 'Failed: videoPath is required.' };
+        }
+        const report = await checkVideo(videoPath, {
+            deltaSpikeThreshold: asNumber(args.deltaSpikeThreshold),
+            psnrGlobalMin: asNumber(args.psnrGlobalMin),
+            psnrWorstBlockMin: asNumber(args.psnrWorstBlockMin),
+            colorBiasMax: asNumber(args.colorBiasMax),
+            workDir: asString(args.workDir) || undefined
+        });
+        const icon = report.passed ? '✅' : '❌';
+        return {
+            resultPayload: report as unknown as Record<string, unknown>,
+            summaryResult: `${icon} Video QA: ${report.summary} (${report.frameCount} frames, max delta ${report.deltaSpike.maxDelta.toFixed(1)}, PSNR ${report.psnrGlobal.toFixed(1)} dB)`
+        };
+    }
+};
+
+// ============================================================================
+// 7. Aggregated Tool Declarations & Handlers
 // ============================================================================
 
 export const VFX_VIDEO_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...AI_BEAUTIFY_TOOL_DECLARATIONS,
     ...FFMPEG_TOOL_DECLARATIONS,
     ...COMPOSITOR_TOOL_DECLARATIONS,
-    ...DIRECTOR_TOOL_DECLARATIONS
+    ...DIRECTOR_TOOL_DECLARATIONS,
+    ...CONDITIONING_TOOL_DECLARATIONS,
+    ...VIDEO_QA_TOOL_DECLARATIONS
 ];
 
 export const vfxVideoHandlers: Record<string, ToolHandler> = {
     ...aiBeautifyHandlers,
     ...ffmpegHandlers,
     ...compositorHandlers,
-    ...directorHandlers
+    ...directorHandlers,
+    ...conditioningHandlers,
+    ...videoQAHandlers
 };

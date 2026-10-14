@@ -1231,6 +1231,58 @@ export function buildFrameMotivatedPerformerVideoPrompt(
     };
 }
 
+// ---------------------------------------------------------------------------
+// Negative constraint engineering helpers
+// ---------------------------------------------------------------------------
+
+export type NegativeConstraintName =
+    | 'NO_AIRBORNE_FLIGHT'
+    | 'SINGLE_CONTINUOUS_TAKE'
+    | 'CHIRALITY_RIGHT_HAND'
+    | 'FRONT_FACE_ONLY'
+    | 'NO_FINGER_SPLAY'
+    | (string & {});
+
+export interface NegativeConstraintBlock {
+    name: NegativeConstraintName;
+    lines: string[];
+}
+
+export const CONSTRAINT_SINGLE_TAKE =
+    'CRITICAL REQUIREMENT — SINGLE CONTINUOUS UNINTERRUPTED TAKE WITH ZERO CUTS:\n' +
+    '- Absolutely ZERO camera cuts throughout the entire duration.\n' +
+    '- ZERO dissolves, ZERO jump cuts, ZERO camera angle changes.\n' +
+    '- Completely locked-off static camera position throughout.\n' +
+    '- The shot is one single continuous recording, never edited.';
+
+export const CONSTRAINT_NO_DRIFT =
+    'CRITICAL INVARIANT — ZERO SPATIAL DRIFT:\n' +
+    '- The subject must not translate laterally or drift in the frame.\n' +
+    '- AT NO POINT does the camera pan, tilt, or reposition.\n' +
+    '- Subject base position is pixel-identical from frame 1 to the last frame.';
+
+export const CONSTRAINT_NO_MORPH =
+    'CRUCIAL MOTION CONSTRAINT — NO MORPH CUTS:\n' +
+    '- ZERO morph-cuts, ZERO dissolve transitions between interpolated states.\n' +
+    '- Motion must be physically continuous throughout.\n' +
+    '- NEVER introduce a sudden appearance change between frames.';
+
+export const CONSTRAINT_NO_AIRBORNE =
+    'CRITICAL INVARIANT — NO AIRBORNE FLIGHT:\n' +
+    '- THE OBJECT MUST NEVER FLY, NEVER FLOAT, AND NEVER FLIP THROUGH THE AIR.\n' +
+    '- AT NO POINT DOES THE OBJECT DETACH OR LEAVE THE SUBJECT\'S HAND.\n' +
+    '- THERE ARE ABSOLUTELY ZERO AIRBORNE FRAMES.\n' +
+    '- At every single frame, the object remains firmly held, touched, and gripped.';
+
+export function buildNegativeConstraintBlock(block: NegativeConstraintBlock): string {
+    return `CRITICAL INVARIANT — ${block.name}:\n${block.lines.map(l => `- ${l}`).join('\n')}`;
+}
+
+/** Prepend constraint blocks to a prompt body. Constraints appear in the first third as required. */
+export function prependConstraints(constraints: string[], body: string): string {
+    return [...constraints, '', body].join('\n');
+}
+
 
 
 
