@@ -168,7 +168,7 @@ export function useSettingsHandlers(deps: UseSettingsHandlersDeps) {
         if (trimmed) {
             setMapsFeedback({ message: 'Google Maps API key saved successfully.' });
         } else {
-            setMapsFeedback({ message: 'Google Maps API key cleared. Running in procedural fallback mode.' });
+            setMapsFeedback({ message: 'Google Maps API key cleared. Place lookups (Places API (New)) and Google 3D Tiles need a key.' });
         }
         setTimeout(() => setMapsFeedback(null), 3500);
     };
