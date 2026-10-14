@@ -15,7 +15,7 @@ import * as os from 'os';
 import { spawn, execFile, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
-import { GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler';
+import { DistrictTooLargeError, GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler';
 import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel';
 import { GoogleVectorMappingService } from '../../browser/generative-canvas/services/google-vector-mapping-service';
 import {
@@ -215,6 +215,18 @@ export interface Google3DTile3DObjectResult {
   manifest: Record<string, any>;
   /** True only when produced by the explicit `offlineMock` test mode (placeholder data, not real tiles). */
   mock?: boolean;
+  /** Ground radius around the anchor, in metres, that was asked for (direct tile crawl only). */
+  requestedRadiusMeters?: number;
+  /**
+   * Ground radius around the anchor, in metres, within which every selected leaf tile is in the GLB (direct tile crawl
+   * only). Equals requestedRadiusMeters unless the leaf cap dropped tiles; then it is how far the kept tiles reach
+   * before the nearest dropped one.
+   */
+  coveredRadiusMeters?: number;
+  /** True when the requested radius selected more leaf tiles than the cap and the farthest ones were left out. */
+  truncated?: boolean;
+  /** Leaf tiles in the GLB, and leaf tiles the requested radius selected (direct tile crawl only). */
+  leafTiles?: { kept: number; selected: number };
   error?: string;
   /**
    * The GLB's local frame (x east, y up, z south). Y = 0 is the street surface measured in the tiles, at
@@ -2487,6 +2499,16 @@ export class Google3DTileBlockoutPipelineService {
             return distA - distB;
           });
           const leafSubset = sortedLeaves.length > maxLeaves ? sortedLeaves.slice(0, maxLeaves) : sortedLeaves;
+          // The cap drops the leaves whose centres lie farthest from the anchor, so the district is complete only out to
+          // the nearest dropped leaf's footprint. (A leaf without a box cannot be placed; it does not shorten the radius.)
+          const droppedLeaves = sortedLeaves.slice(leafSubset.length);
+          const truncated = droppedLeaves.length > 0;
+          const coveredRadiusMeters = truncated
+            ? Math.floor(droppedLeaves.reduce(
+              (r, leaf) => (leaf.box.length >= 12 ? Math.min(r, GoogleTileDistrictCrawler.footprintDistance(leaf.box, anchorFrame)) : r),
+              radiusMeters
+            ))
+            : radiusMeters;
           const buffers = await crawler.downloadLeaves(leafSubset, session);
           const parsed = buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b));
           const district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, {
@@ -2526,6 +2548,10 @@ export class Google3DTileBlockoutPipelineService {
             glbBuffer: district.glb,
             glbPath: outputGlbPath,
             frame: { lat: anchor.lat, lng: anchor.lng, originEllipsoidalHeightM: district.originEllipsoidalHeightM, localToEcef: district.localToEcef },
+            requestedRadiusMeters: radiusMeters,
+            coveredRadiusMeters,
+            truncated,
+            leafTiles: { kept: leafSubset.length, selected: sortedLeaves.length },
             mesh,
             quality: {
               source: 'Google Maps Platform Photorealistic 3D Tiles API',
@@ -2552,6 +2578,9 @@ export class Google3DTileBlockoutPipelineService {
           };
         }
       } catch (crawlErr: any) {
+        // Too large a radius is the caller's to fix; the blockout runner would ignore the radius and could run for many
+        // minutes. Request and parsing failures still fall back to it.
+        if (crawlErr instanceof DistrictTooLargeError) throw crawlErr;
         console.warn('[fetch3DObject] Direct leaf crawler encountered error, falling back to blockout runner:', crawlErr?.message || crawlErr);
       }
     }

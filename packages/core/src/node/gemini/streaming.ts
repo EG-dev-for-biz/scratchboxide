@@ -730,7 +730,7 @@ export class StreamingEngine {
                         name: toolName,
                         response: {
                             name: toolName,
-                            content: prepareToolResultForModel(toolName, resultPayload)
+                            content: toolResultForModel(toolName, exec, resultPayload)
                         }
                     }
                 });
@@ -1115,6 +1115,26 @@ export function prepareToolResultForModel(toolName: string, obj: any): any {
     }
     console.warn(`[Gemini] ${toolName} result is ${serialized.length} chars; truncating to ${MAX_MODEL_TOOL_RESULT_CHARS} for the model.`);
     return `${serialized.slice(0, MAX_MODEL_TOOL_RESULT_CHARS)}… [truncated, ${serialized.length - MAX_MODEL_TOOL_RESULT_CHARS} more chars]`;
+}
+
+/**
+ * Told to the model with a failed tool's result. One instruction for every tool: the model judges whether the error is
+ * about its own input (which it can fix) or not (which it reports), rather than the app guessing from the arguments.
+ */
+export const TOOL_FAILURE_INSTRUCTION = 'This tool call failed. If the error is about something you wrote in the call (code, an expression, a script, a payload, a misspelled or invalid value), fix it and retry once. Otherwise stop and tell the user which tool failed and quote its error; do not work around it with other tools (shell commands, scripts, file copies, another pipeline) unless the user asks.';
+
+/**
+ * What the model receives for a tool call. A failure comes wrapped with TOOL_FAILURE_INSTRUCTION, except for
+ * workspace_* tools (the model is editing code and fixes what fails) and timed-out calls, whose payload already says
+ * not to call the tool again.
+ */
+export function toolResultForModel(toolName: string, exec: Pick<McpExecutionState, 'status'> | undefined, resultPayload: any): any {
+    const prepared = prepareToolResultForModel(toolName, resultPayload);
+    const failed = exec?.status === 'failed' || resultPayload?.success === false || resultPayload?.status === 'error' || resultPayload?.status === 'failed';
+    if (!failed || resultPayload?.timedOut === true || toolName.startsWith('workspace_')) {
+        return prepared;
+    }
+    return { toolFailed: true, result: prepared, instruction: TOOL_FAILURE_INSTRUCTION };
 }
 
 export function sanitizeToolResultForModel(obj: any): any {

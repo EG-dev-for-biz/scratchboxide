@@ -168,6 +168,16 @@ function stableTileId(box: number[], geometricError: number): string {
     return crypto.createHash('sha1').update(key).digest('hex');
 }
 
+/** The circle selects more leaf tiles than one crawl may take. Callers surface it rather than retry another way: the fix is a smaller radius. */
+export class DistrictTooLargeError extends Error {
+    readonly code = 'district_too_large';
+
+    constructor(readonly maxLeafTiles: number, readonly radiusM: number) {
+        super(`District selects more than ${maxLeafTiles} leaf tiles within ${radiusM} m of the anchor; reduce the radius.`);
+        this.name = 'DistrictTooLargeError';
+    }
+}
+
 function stripCredentials(uri: string): string {
     const url = new URL(uri, TILES_ORIGIN);
     url.searchParams.delete('key');
@@ -214,6 +224,11 @@ export class GoogleTileDistrictCrawler {
 
     /** Whether a 3D Tiles oriented box, projected onto the tangent plane, touches the circle of `radiusM` around the frame origin. */
     static footprintIntersectsCircle(box: number[], frame: LocalFrame, radiusM: number): boolean {
+        return GoogleTileDistrictCrawler.footprintDistance(box, frame) <= radiusM;
+    }
+
+    /** Horizontal distance from the frame origin to a 3D Tiles oriented box projected onto the tangent plane (0 when the footprint covers the origin). */
+    static footprintDistance(box: number[], frame: LocalFrame): number {
         const c: Vec3 = [box[0], box[1], box[2]];
         const axes: Vec3[] = [[box[3], box[4], box[5]], [box[6], box[7], box[8]], [box[9], box[10], box[11]]];
         const pts: Array<[number, number]> = [];
@@ -234,19 +249,20 @@ export class GoogleTileDistrictCrawler {
             upper.push(p);
         }
         const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
-        if (hull.length < 3) return Math.hypot(pts[0][0], pts[0][1]) <= radiusM;
+        if (hull.length < 3) return Math.hypot(pts[0][0], pts[0][1]);
         let inside = true;
         for (let i = 0; i < hull.length; i++) {
             if (cross(hull[i], hull[(i + 1) % hull.length], [0, 0]) < 0) { inside = false; break; }
         }
-        if (inside) return true;
+        if (inside) return 0;
+        let nearest = Infinity;
         for (let i = 0; i < hull.length; i++) {
             const a = hull[i], b = hull[(i + 1) % hull.length];
             const dx = b[0] - a[0], dy = b[1] - a[1];
             const t = Math.max(0, Math.min(1, (-a[0] * dx - a[1] * dy) / (dx * dx + dy * dy || 1)));
-            if (Math.hypot(a[0] + t * dx, a[1] + t * dy) <= radiusM) return true;
+            nearest = Math.min(nearest, Math.hypot(a[0] + t * dx, a[1] + t * dy));
         }
-        return false;
+        return nearest;
     }
 
     private async limited<T>(task: () => Promise<T>): Promise<T> {
@@ -317,7 +333,7 @@ export class GoogleTileDistrictCrawler {
                             box: leafBox
                         });
                         if (leaves.length > this.maxLeafTiles) {
-                            throw new Error(`District selects more than ${this.maxLeafTiles} leaf tiles; reduce the radius.`);
+                            throw new DistrictTooLargeError(this.maxLeafTiles, radiusM);
                         }
                     } else {
                         excludedCoarseLeaves++;
