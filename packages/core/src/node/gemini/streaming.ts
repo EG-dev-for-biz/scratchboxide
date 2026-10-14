@@ -669,7 +669,7 @@ export class StreamingEngine {
                         name: toolName,
                         response: {
                             name: toolName,
-                            content: sanitizeToolResultForModel(resultPayload)
+                            content: prepareToolResultForModel(toolName, resultPayload)
                         }
                     }
                 });
@@ -962,6 +962,21 @@ function extractAgentStepText(step: AgentStep): string {
  * Sanitizes tool results before returning to Gemini's prompt context.
  * Strips huge binary base64 strings (like GLBs or images) so they do not exhaust the 1M token limit.
  */
+const MAX_MODEL_NUMERIC_ARRAY = 64;
+/** Per-tool-result cap (~50k tokens) so a few large results cannot overflow the model's 1M-token context. */
+const MAX_MODEL_TOOL_RESULT_CHARS = 200_000;
+
+/** Sanitize a tool result for the model, then cap its serialized size. */
+export function prepareToolResultForModel(toolName: string, obj: any): any {
+    const clean = sanitizeToolResultForModel(obj);
+    const serialized = JSON.stringify(clean) ?? '';
+    if (serialized.length <= MAX_MODEL_TOOL_RESULT_CHARS) {
+        return clean;
+    }
+    console.warn(`[Gemini] ${toolName} result is ${serialized.length} chars; truncating to ${MAX_MODEL_TOOL_RESULT_CHARS} for the model.`);
+    return `${serialized.slice(0, MAX_MODEL_TOOL_RESULT_CHARS)}… [truncated, ${serialized.length - MAX_MODEL_TOOL_RESULT_CHARS} more chars]`;
+}
+
 export function sanitizeToolResultForModel(obj: any): any {
     if (obj === null || obj === undefined) return obj;
     if (typeof obj === 'string') {
@@ -971,6 +986,10 @@ export function sanitizeToolResultForModel(obj: any): any {
         return obj;
     }
     if (Array.isArray(obj)) {
+        // Vertex, index and UV buffers are useless to the model and can run to millions of tokens.
+        if (obj.length > MAX_MODEL_NUMERIC_ARRAY && obj.every(v => typeof v === 'number')) {
+            return `[numeric array omitted, length: ${obj.length}]`;
+        }
         return obj.map(sanitizeToolResultForModel);
     }
     if (typeof obj === 'object') {
