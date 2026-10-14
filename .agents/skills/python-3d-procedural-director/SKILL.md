@@ -88,51 +88,47 @@ To guarantee domain-agnostic universality (the Alien Planet Test), agents must c
 
 ### Python Implementation Patterns
 
+Every example in this file runs as-is in `execute_3d_python_script` (checked by `packages/core/test/skill-guide-examples.test.ts`).
+
 ```python
 import scratchbox as sb
-import math
 
-# 1. SE(3) Lie Group Curve Sweep (e.g. Aerodynamic Roll Cage / Suspension Arm)
-carrier_curve = [
-    [0.0, 0.2, 1.2],
-    [0.4, 0.8, 0.4],
-    [0.6, 1.1, -0.6],
-    [0.5, 0.9, -1.8]
-]
-arm_mesh = sb.shaper.sweep_curve(
-    carrier_curve,
-    radius=0.04,
-    radial_segments=16,
-    taper_end=0.6,
-    twist_rad=math.pi / 4.0
+# 1. SE(3) Lie Group Curve Sweep (e.g. Suspension Arm / Hose / Tentacle)
+arm = sb.sweep_curve_profile(
+    path=[(0.0, 0.2, 1.2), (0.4, 0.8, 0.4), (0.6, 1.1, -0.6), (0.5, 0.9, -1.8)],
+    profile="CIRCULAR",
+    profile_dimensions=(0.04, 0.04),
+    scale_taper=(1.0, 0.6),      # radius scale at start, end
+    twist_deg=45.0
 )
 
-# 2. Harmonic Solid of Revolution (e.g. Fluted Turbine Hub / Drilled Rotor)
-rotor_mesh = sb.shaper.harmonic_revolution(
-    z_min=0.0,
-    z_max=0.35,
-    radial_profile=[0.4, 0.42, 0.38, 0.25],
-    harmonic_lobes=16,          # 16 cooling vents / flutes
-    harmonic_amplitude=0.015,
-    helical_twist=0.5
+# 2. Harmonic Solid of Revolution (e.g. Fluted Turbine Hub): profile_curve is (height, radius) pairs
+rotor = sb.revolve_harmonic_solid(
+    profile_curve=[(0.0, 0.40), (0.12, 0.42), (0.24, 0.38), (0.35, 0.25)],
+    harmonic_lobe_count=16,      # 16 cooling flutes; 0 = smooth turning
+    harmonic_depth_ratio=0.04,
+    helix_pitch_meters=0.5       # 0 = straight flutes
 )
 
-# 3. Affine Metric Replicator (e.g. Hexagonal Wheel Bolt Circle)
-bolt_seed = sb.mesh.create_cylinder(radius=0.012, height=0.02, segments=6)
-bolt_array = sb.shaper.affine_replicate_circle(
-    seed_mesh=bolt_seed,
-    radius=0.15,
-    count=6,
-    axis="Z"
+# 3. Affine Metric Replicator (e.g. Wheel Bolt Circle)
+# POLAR_RING guide_points = [center, ring normal, a point on the ring]; CURVE_1D = a polyline
+bolts = sb.replicate_metric_array(
+    distribution_mode="POLAR_RING",
+    guide_points=[(0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.15, 0.0, 0.0)],
+    pitch_meters=0.157,          # about 6 bolts on a 0.15 m radius
+    seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.012, 0.02, 0.02)}
 )
 
-# 4. Isoparametric Normal Relief (e.g. Hood Panel Shut Line Groove)
-sb.shaper.apply_normal_relief(
-    chassis_mesh,
-    curve_points=[[-0.5, 0.8, 0.6], [0.0, 0.82, 0.8], [0.5, 0.8, 0.6]],
-    groove_width=0.008,
-    groove_depth=-0.005
-)
+# 4. Normal Relief (surface micro-detail): displace a densely tessellated surface along its normals.
+# There is no curve-guided groove operator yet; shut lines need their own geometry (e.g. thin sweeps).
+panel = sb.create_plane(width=1.0, height=0.6, seg_x=128, seg_y=80)
+panel.displace_along_normals(frequency=24.0, amplitude=0.004)
+
+scene = sb.Scene()
+for part in (arm, rotor, bolts, panel):
+    part.set_material(sb.PbrMaterial.clay())
+    scene.add_mesh(part)
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 ```
 
 ---
@@ -187,54 +183,52 @@ import math
 scene = sb.Scene()
 clay_material = sb.PbrMaterial.clay()
 
+def add(mesh, name):
+    mesh.name = name
+    mesh.set_material(clay_material)
+    scene.add_mesh(mesh)
+
 # =========================================================================
 # 70% PRIMARY EDIFICE: Sculpted Monocoque Chassis
 # =========================================================================
-chassis = sb.mesh.create_box(width=1.6, height=0.55, length=4.2, subdivisions=32)
-# Apply non-linear aerodynamic tapering and belly bulge
-sb.shaper.taper(chassis, factor=0.45, axis="Z", origin=[0, 0, 2.1])
-sb.shaper.bulge(chassis, factor=0.25, radius=1.2, center=[0, 0, 0.2])
-chassis.set_material(clay_material)
-scene.add_mesh("Primary_Chassis", chassis)
+chassis = sb.create_box(width=1.6, height=0.55, depth=4.2)
+chassis.subdivide(6)                               # deformers need vertices to bend
+# Non-linear deformers take integer axes: 0 = X, 1 = Y, 2 = Z
+sb.shaper.taper(chassis, axis=2, factor=0.45)
+sb.shaper.bulge(chassis, center=sb.math.Vec3(0.0, 0.0, 0.2), radius=1.2, strength=0.25)
+add(chassis, "Primary_Chassis")
 
 # =========================================================================
 # 20% SECONDARY ASSEMBLIES: Aerodynamic Wings & Wheel Assemblies
 # =========================================================================
-# Front splitter & rear diffuser
-front_wing = sb.mesh.create_box(width=1.8, height=0.08, length=0.6, subdivisions=16)
-sb.shaper.bend(front_wing, angle_deg=12.0, axis="Y")
+front_wing = sb.create_box(width=1.8, height=0.08, depth=0.6)
+front_wing.subdivide(4)
+sb.shaper.bend(front_wing, main_axis=0, bend_axis=1, angle_deg=12.0, radius=2.0)
 front_wing.translate(0.0, -0.15, 1.9)
-front_wing.set_material(clay_material)
-scene.add_mesh("Front_Wing", front_wing)
+add(front_wing, "Front_Wing")
 
-# 4 Hollow-Spoke Wheels via Harmonic Solids of Revolution
+# 4 five-lobe rims via Harmonic Solids of Revolution, revolved around the X (axle) axis
 for x_side, z_pos in [(-0.85, 1.4), (0.85, 1.4), (-0.88, -1.3), (0.88, -1.3)]:
-    wheel = sb.shaper.harmonic_revolution(
-        z_min=-0.16, z_max=0.16,
-        radial_profile=[0.38, 0.40, 0.40, 0.38],
-        harmonic_lobes=5,            # 5-spoke lightweight rim
-        harmonic_amplitude=0.03
+    wheel = sb.revolve_harmonic_solid(
+        axis=(1.0, 0.0, 0.0),
+        profile_curve=[(-0.16, 0.38), (-0.08, 0.40), (0.08, 0.40), (0.16, 0.38)],
+        harmonic_lobe_count=5,
+        harmonic_depth_ratio=0.08
     )
-    wheel.rotate_y(math.pi / 2.0)
     wheel.translate(x_side, 0.0, z_pos)
-    wheel.set_material(clay_material)
-    scene.add_mesh(f"Wheel_{x_side}_{z_pos}", wheel)
+    add(wheel, f"Wheel_{x_side}_{z_pos}")
 
 # =========================================================================
-# 10% TERTIARY MICRO-DETAILS: Fasteners, Grilles & Exhaust Tips
+# 10% TERTIARY MICRO-DETAILS: Hood Louvers
 # =========================================================================
-# Affine Replicator: Hood cooling louver array
-louver_blade = sb.mesh.create_box(width=0.4, height=0.015, length=0.04, subdivisions=4)
-sb.shaper.taper(louver_blade, factor=0.7, axis="X")
-louvers = sb.shaper.affine_replicate_linear(
-    seed_mesh=louver_blade,
-    direction=[0, 0, 1],
-    pitch=0.06,
-    count=8
+# Affine Replicator: tilted louver vanes every 6 cm along a line over the hood
+louvers = sb.replicate_metric_array(
+    distribution_mode="CURVE_1D",
+    guide_points=[(0.0, 0.32, 0.1), (0.0, 0.32, 0.6)],
+    pitch_meters=0.06,
+    seed_geometry={"shape": "ANGLED_LOUVER_VANE", "dimensions": (0.4, 0.015, 0.04), "tiltAngleDeg": 20.0}
 )
-louvers.translate(0.0, 0.32, 0.4)
-louvers.set_material(clay_material)
-scene.add_mesh("Hood_Louvers", louvers)
+add(louvers, "Hood_Louvers")
 
 # Write binary glTF 2.0 (.glb)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
@@ -247,17 +241,34 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 `sb.rig` discovers a joint tree and 4-bone skin weights from a mesh's geometry alone (hands, creatures, tentacles, branching props); there is no preset skeleton and no Blender. Full reference: `docs/processes/sb-rig-auto-rigger.md`.
 
 ```python
+import math
 import scratchbox as sb
+from scratchbox_native.math import Vec3, Vec4
 
-# In-memory mesh built in this script -> skinned .glb bytes
-result = sb.rig.solve(mesh)                      # sb.rig.Params() defaults are scale-independent
+# A bent, knobbly tube (lofted rings along a quarter arc) stands in for a tail or tentacle.
+slices = []
+for i in range(121):
+    t = i / 120.0
+    a = t * math.pi / 2
+    centre = Vec3((1 - math.cos(a)) * 3.0, math.sin(a) * 3.0, 0.0)
+    nx, ny = -math.cos(a), math.sin(a)
+    r = 0.35 + 0.08 * math.sin(t * math.pi * 6)
+    slices.append([Vec3(centre.x + nx * r * math.cos(p), centre.y + ny * r * math.cos(p), r * math.sin(p))
+                   for p in (2 * math.pi * k / 48 for k in range(48))])
+mesh = sb.geometry.create_loft(slices, True, Vec4(0.55, 0.57, 0.6, 1.0))
+
+# In-memory mesh -> skinned .glb bytes
+params = sb.rig.Params()
+params.root_hint = (0.0, 0.0, 0.0)               # start the hierarchy at the tube's base
+result = sb.rig.solve(mesh, params)
 result.rename({"Chain1": "Tail", "Root": "TailBase"})   # chain name -> Tail1..n, or exact joint names
 open(OUTPUT_GLB_PATH, "wb").write(sb.rig.export_skinned_glb_bytes(mesh, result))
 
 # Existing .glb file (textures, UVs and materials are carried over byte for byte)
+sb.io.write_glb("tail.glb", mesh)
 p = sb.rig.Params()
-p.root_hint = (-0.32, -0.92, -0.06)             # start the hierarchy at a cut limb end
-p.chain_hints = [[(0.40, 0.55, 0.03), (0.40, 0.54, 0.15), (0.31, 0.45, 0.21), (0.25, 0.36, 0.22)]]  # a digit fused into the body
-result = sb.rig.rig_glb("in.glb", "out.glb", p, {"Chain3": "LeftIndex"}, "out.sbrig.json")
-print(result, result.chains)                     # read chain end positions, then rename / add hints
+p.root_hint = (0.0, 0.0, 0.0)
+# p.chain_hints = [[(x, y, z), ...]]            # optional: trace a limb the solver misses, e.g. a digit fused to the body
+file_result = sb.rig.rig_glb("tail.glb", "tail_rigged.glb", p, {"Chain1": "Tail"}, "tail.sbrig.json")
+print(file_result, file_result.chains)            # read chain end positions, then rename / add hints
 ```

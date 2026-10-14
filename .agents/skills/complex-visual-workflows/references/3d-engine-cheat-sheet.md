@@ -22,52 +22,47 @@ This reference document provides the canonical API contracts, C++20 engine heade
 
 ## 2. Python Nanobind Engine (`import scratchbox as sb`)
 
+Runs as-is in `execute_3d_python_script` (checked by `packages/core/test/skill-guide-examples.test.ts`).
+
 ```python
 import scratchbox as sb
-import math
 
-# 1. Initialize Scene and Material
+# 1. Scene and material
 scene = sb.Scene()
-clay_mat = sb.PbrMaterial.clay(roughness=0.85, albedo=(0.57, 0.57, 0.59))
+clay_mat = sb.PbrMaterial.clay()          # 18% studio grey clay
+
+def add(mesh, name):
+    mesh.name = name
+    mesh.set_material(clay_mat)
+    scene.add_mesh(mesh)
+
+spine_path = [(0.0, 0.0, -2.0), (0.2, 0.8, -0.5), (-0.1, 1.2, 1.0), (0.0, 1.5, 2.5)]
 
 # 2. Operator 1: SE(3) Lie Group Curve Sweep (Truss, Hoses, Ribs)
-spline = sb.CatmullRomCurve3D([
-    (0.0, 0.0, -2.0),
-    (0.2, 0.8, -0.5),
-    (-0.1, 1.2, 1.0),
-    (0.0, 1.5, 2.5)
-])
-chassis_sweep = sb.LieSweep(spline, profile_radius=0.12, taper_start=0.9, taper_end=0.6, twist_turns=0.25)
-scene.add_mesh(chassis_sweep.polygonize(radial_segments=24, step_count=80), material=clay_mat, name="chassis_spine")
+add(sb.sweep_curve_profile(path=spine_path, profile_dimensions=(0.12, 0.12),
+                           scale_taper=(0.9, 0.6), twist_deg=90.0), "chassis_spine")
 
 # 3. Operator 2: Harmonic Solid of Revolution (Rims, Flanges, Thrusters)
-# K lobes create cog teeth or flutes; K=0 creates smooth turnings
-wheel_hub = sb.HarmonicRevolve(
-    radius_func=lambda z: 0.45 + 0.08 * math.sin(z * 8.0) if z < 0.2 else 0.52,
-    z_min=0.0, z_max=0.35,
-    harmonic_lobes=5,   # 5-spoke hollow alloy rim
-    helical_twist=0.1
-)
-scene.add_mesh(wheel_hub.polygonize(segments=64), material=clay_mat, name="wheel_rim_fl")
+# profile_curve is (height, radius) pairs; K lobes make cog teeth or flutes, K=0 a smooth turning.
+# The default axis is Y; wheels revolve around the axle (X), or the complexity gate rejects them as flat discs.
+add(sb.revolve_harmonic_solid(axis=(1.0, 0.0, 0.0),
+                              profile_curve=[(0.0, 0.45), (0.1, 0.52), (0.2, 0.47), (0.35, 0.52)],
+                              harmonic_lobe_count=5, harmonic_depth_ratio=0.1,
+                              helix_pitch_meters=3.5), "wheel_rim_fl")
 
-# 4. Operator 3: Affine Metric Replicators (Fasteners, Louvers, Vanes)
-replicator = sb.AffineMetricReplicator(
-    seed_geometry=sb.Cylinder(radius=0.015, height=0.04, segments=12),
-    pitch_meters=0.18,
-    distribution_curve=spline
-)
-scene.add_mesh(replicator.generate_instanced_mesh(), material=clay_mat, name="structural_fasteners")
+# 4. Operator 3: Affine Metric Replicator (Fasteners, Louvers, Vanes) along the same path
+add(sb.replicate_metric_array(distribution_mode="CURVE_1D", guide_points=spine_path, pitch_meters=0.18,
+                              seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.015, 0.04)}),
+    "structural_fasteners")
 
-# 5. Operator 4: Isoparametric Normal Relief Fields (Panel Shut Lines)
-chassis_mesh = chassis_sweep.polygonize(24, 80)
-sb.apply_normal_displacement(
-    chassis_mesh,
-    relief_func=lambda u, v, pos: -0.012 if (math.sin(u * 20.0 * math.pi) > 0.96) else 0.0
-)
+# 5. Operator 4: Normal Relief. Only noise-style displacement exists today
+# (Mesh.displace_along_normals, Mesh.tessellate_and_displace); there is no curve-guided groove operator.
+panel = sb.create_plane(width=1.2, height=0.8, seg_x=128, seg_y=96)
+panel.displace_along_normals(frequency=20.0, amplitude=0.006)
+add(panel, "relief_panel")
 
-# 6. Stream directly to binary .glb
-glb_bytes = scene.export_glb(binary=True, embed_pbr=True)
-sb.write_file("output/hero_asset.glb", glb_bytes)
+# 6. Write binary .glb (the runner defines OUTPUT_GLB_PATH)
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 ```
 
 ---
