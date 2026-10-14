@@ -13,7 +13,9 @@
  * - coordinates are read only from text that is entirely a coordinate pair, and (0, 0) is rejected;
  * - tile extraction uses the leaf crawler only (no headless-runner fallback);
  * - execute_3d_python_script fails, without running the script, when the requested place cannot be extracted;
- * - the extraction bridge never returns a cached GLB in place of a fresh extraction.
+ * - the extraction bridge never returns a cached GLB in place of a fresh extraction;
+ * - the Places key comes from the same sources as the rest of the app, and a refused key says what to enable;
+ * - template scenes and the location splat service never stand in a place, a canned model or a template.
  * All network calls are injected; nothing here is billed.
  */
 
@@ -28,6 +30,8 @@ import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-r
 import { python3DHandlers, PYTHON_3D_TOOL_DECLARATIONS } from '../src/node/gemini/tools/python-3d-tools';
 import { LocationUnresolvedError, TileExtractionError } from '../src/common/errors/pipeline-errors';
 import { GoogleMapsService, PLACES_TEXT_SEARCH_FIELD_MASK, PLACES_TEXT_SEARCH_URL } from '../src/browser/generative-canvas/services/google-maps-service';
+import { synthesizeContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
+import { Location3DGaussianSplatService } from '../src/node/spatial/Location3DGaussianSplatService';
 
 /** A fetch that answers Places Text Search with `place` (or no result) and records each request. */
 function placesFetch(place?: Record<string, unknown>) {
@@ -127,6 +131,49 @@ describe('resolveAddress: Google Places Text Search, never a dictionary', () => 
     });
 });
 
+describe('Places key sources and refusals', () => {
+    const service = new Google3DTileBlockoutPipelineService();
+    const flatiron = { displayName: { text: 'Flatiron Building' }, formattedAddress: '175 5th Ave, New York, NY 10010, USA', location: { latitude: 40.7411, longitude: -73.9897 } };
+
+    it('uses the Maps key saved in Settings when the caller passes none', async () => {
+        GoogleMapsService.getInstance().setApiKey('settings-maps-key');
+        const fake = placesFetch(flatiron);
+        const anchor = await service.resolveAddress('Flatiron Building, New York', undefined, fake.impl);
+        expect(anchor.formattedAddress).toBe('Flatiron Building, 175 5th Ave, New York, NY 10010, USA');
+        expect(fake.calls).toHaveLength(1);
+        expect(fake.calls[0].init.headers['X-Goog-Api-Key']).toBe('settings-maps-key');
+    });
+
+    it('otherwise reads GOOGLE_MAPS_API_KEY, then MAP_TILES_API_KEY, at call time', async () => {
+        process.env.MAP_TILES_API_KEY = 'tiles-env-key';
+        const tiles = placesFetch(flatiron);
+        await service.resolveAddress('Flatiron Building, New York', undefined, tiles.impl);
+        expect(tiles.calls[0].init.headers['X-Goog-Api-Key']).toBe('tiles-env-key');
+
+        process.env.GOOGLE_MAPS_API_KEY = 'maps-env-key';
+        const maps = placesFetch(flatiron);
+        await service.resolveAddress('Flatiron Building, New York', undefined, maps.impl);
+        expect(maps.calls[0].init.headers['X-Goog-Api-Key']).toBe('maps-env-key');
+        delete process.env.GOOGLE_MAPS_API_KEY;
+        delete process.env.MAP_TILES_API_KEY;
+    });
+
+    it('a 403 PERMISSION_DENIED tells the user to enable "Places API (New)" for that key', async () => {
+        const refused = (async () => new Response(JSON.stringify({
+            error: {
+                code: 403,
+                message: 'Requests to this API places.googleapis.com method google.maps.places.v1.Places.SearchText are blocked.',
+                status: 'PERMISSION_DENIED'
+            }
+        }), { status: 403 })) as typeof fetch;
+        const err = await service.resolveAddress('Flatiron Building, New York', 'restricted-key', refused).catch(e => e);
+        expect(err).toBeInstanceOf(LocationUnresolvedError);
+        expect(err.message).toMatch(/HTTP 403 PERMISSION_DENIED: Requests to this API places\.googleapis\.com/);
+        expect(err.message).toMatch(/enable "Places API \(New\)" for the key's Google Cloud project/);
+        expect(err.message).toMatch(/add "Places API \(New\)" to them/);
+    });
+});
+
 describe('fetch3DObject: the leaf crawler or a typed failure, never the headless runner', () => {
     const anchor = { lat: 40.7411, lng: -73.9897 };
 
@@ -167,12 +214,16 @@ describe('fetch3DObject: the leaf crawler or a typed failure, never the headless
 describe('execute_3d_python_script: a requested place is extracted or the call fails', () => {
     const script = 'import scratchbox as sb\nscene = sb.Scene()\nsb.io.write_glb(OUTPUT_GLB_PATH, scene)';
 
-    it('no longer advertises itself as the way to stage real-world locations', () => {
+    it('routes places to google_3d_tiles_get_clay and single objects to build_3d_object_from_reference', () => {
         const decl = PYTHON_3D_TOOL_DECLARATIONS.find(d => d.name === 'execute_3d_python_script')!;
-        expect(decl.description).toContain('for a place use google_3d_tiles_get_clay');
-        expect(decl.description).toContain('build_3d_object_from_reference');
+        expect(decl.description).toContain('a real-world place on its own goes to google_3d_tiles_get_clay');
+        expect(decl.description).toContain('one specific object, or an abstract form, goes to build_3d_object_from_reference');
+        expect(decl.description).toContain('an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here');
+        expect(decl.description).toContain('nothing is carried over from the scene already on the canvas');
         expect(decl.description).not.toMatch(/for both procedural world synthesis and real-world locations/);
+        expect(decl.description).not.toMatch(/mansard|townhouses|space colonization/);
         expect(String((decl.parameters.properties as any).coordinates.description)).toMatch(/Never supply coordinates from memory/);
+        expect((decl.parameters.properties as any).stageIntoActiveScene).toBeUndefined();
     });
 
     it('a failing extraction returns failed with no artifact, and the script is not run', async () => {
@@ -213,7 +264,7 @@ describe('execute_3d_python_script: a requested place is extracted or the call f
         const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
         vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 1 } as any);
         const outcome = await python3DHandlers.execute_3d_python_script(
-            { script, description: 'Race car staged in Central Park, New York at 40.7829, -73.9654' },
+            { script, description: 'Race car staged in Central Park, New York at 40.7829, -73.9654', stageIntoActiveScene: true },
             { request: { canvasState: { activeArtifact: { type: '3d-scene', data: { geoAnchor: { lat: 41.89, lng: 12.49 }, objects: [{ id: 'old-tiles', content: { metadata: { role: 'environment', source: 'google_3d_tiles_clay' } } }] } } } } }
         );
         expect(outcome.status).toBe('completed');
@@ -248,6 +299,54 @@ describe('GeospatialTileExtractionBridge: every call extracts fresh tiles', () =
             expect(fs.readFileSync(result.glbPath).toString('ascii', 0, 4)).toBe('glTF');
         } finally {
             fs.rmSync(outputDir, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('template scenes never stand in a place or an object build', () => {
+    it('neither the python tool nor the template synthesizer uses the keyword hero-object templates', () => {
+        for (const file of ['../src/node/gemini/tools/python-3d-tools.ts', '../src/browser/generative-canvas/procedural-3d-synthesizer.ts']) {
+            const source = fs.readFileSync(path.resolve(__dirname, file), 'utf8');
+            expect(source, file).not.toMatch(/adaptive-hero-synthesizer|synthesizeAdaptiveHero/);
+            expect(source, file).not.toMatch(/CreativeLocationCastingService|castCreativeLocation/);
+        }
+    });
+
+    it('object prompts do not become an "ADA Hero Asset" template, and no scene gets a location from prompt words', () => {
+        for (const prompt of ['build a 3d drone', 'a robot arm machine', 'race car in Central Park, New York', 'F1 car at the Monaco GP circuit', 'downtown city skyline']) {
+            const scene = synthesizeContextual3DScene(prompt);
+            expect(scene.title, prompt).not.toMatch(/ADA Hero Asset|Staged in|3D Real-World Clay Model/);
+            expect(scene.geoAnchor, prompt).toBeUndefined();
+            expect(JSON.stringify(scene.objects || []), prompt).not.toMatch(/google-tiles|Google3DTilesClay/);
+        }
+    });
+});
+
+describe("Location3DGaussianSplatService: the place's own fresh tiles or a failure", () => {
+    it('a failed extraction fails the call; stale or canned GLBs on disk are never used', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-splat-no-canned-'));
+        try {
+            const models = path.join(root, 'public/models');
+            fs.mkdirSync(models, { recursive: true });
+            for (const name of ['flatiron_clay.glb', 'flatiron_grounded.glb', 'flatiron.glb', 'survey_box_ground.glb', 'colosseum_clay.glb']) {
+                fs.writeFileSync(path.join(models, name), Buffer.from('glTF-canned'));
+            }
+            const generate = vi.fn(async () => { throw new Error('no image generation in this test'); });
+            const service = new Location3DGaussianSplatService({ workspaceRoot: root });
+            const err = await service.generate({
+                location: 'Flatiron',
+                lat: 40.7411,
+                lng: -73.9897,
+                elevation: 12,
+                workspaceRoot: root,
+                generator: { name: 'refuse', generate } as any
+            }).catch(e => e);
+            expect(err).toBeInstanceOf(TileExtractionError);
+            expect(err.message).toMatch(/no Google Maps API key/);
+            expect(generate).not.toHaveBeenCalled();
+            expect(fs.readFileSync(path.join(models, 'flatiron_clay.glb')).toString()).toBe('glTF-canned');
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
         }
     });
 });
