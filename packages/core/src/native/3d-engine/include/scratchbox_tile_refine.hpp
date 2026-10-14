@@ -113,7 +113,33 @@ struct VisibilityParams {
     int targetResolution{768};
 };
 
+// Facade flatten (after rectify, before relief). The scan's wall planes are found as (azimuth, offset) density modes of
+// its near-vertical faces, each refit robustly (area-weighted, inliers within fitBand) and coplanar ones merged. A
+// vertex within `band` of a plane and inside its support moves exactly onto it when one of its faces lies along the
+// plane (normal within parallelDeg); pulled by two planes at least cornerMinDeg apart it moves onto their line. Vertices
+// beyond the band (protrusions, recesses) stay, as do vertices whose faces all lie across the planes. Weld groups move
+// together, T-junctions on open seams stay on their partner edge, and a move that would flip a face is reverted.
+struct FacadeFlattenParams {
+    double band{0.10};            // m; <= 0 turns the pass off
+    double parallelDeg{30.0};
+    double fitBand{0.15};         // plane fit: inlier faces lie within this of the plane (m)
+    int fitIterations{4};
+    double mergeAngleDeg{2.0};    // planes within this angle...
+    double mergeOffset{0.08};     // ...whose inlier centroids lie within this of each other's plane are one plane (m)
+    double minPlaneArea{25.0};    // inlier area of a plane that is flattened onto (m^2)
+    double supportMargin{0.5};    // in-plane margin beyond the inlier extent (m)
+    double cornerMinDeg{15.0};
+    double maxCornerMoveFactor{2.0};  // a move onto a corner line is at most this x band
+    double sliverArea{1e-4};      // faces below this area (m^2) carry no orientation
+    double maxAbsNy{0.5};         // planes: |n.y| below this (walls)
+    double detectOffsetBin{0.05}; // detector cells: 1 degree of azimuth by this much offset (m)
+    int detectAzSmooth{2};        // a cell's score sums the cells within +- this many degrees...
+    int detectOffsetSmooth{2};    // ...and +- this many offset bins
+    int detectMaxIterations{64};
+};
+
 struct TileRefineParams {
+    FacadeFlattenParams flatten;
     int threads{0};
     double anchorX{0}, anchorZ{0};
     double roiRadius{60.0};            // the region of interest is the anchor's footprint grown by this (m)
@@ -749,6 +775,10 @@ private:
             if (!rect.ok) { res.error = "rectifier failed: " + rect.error; return res; }
         }
         lap("rectify");
+        if (P.flatten.band > 0) {
+            facadeFlatten();
+            lap("facade_flatten");
+        }
         if (const char* dump = std::getenv("SB_DUMP_RECTIFIED")) {
             // diagnostics: rectified positions (float32 x 3V) then flags (uint8 x T)
             std::vector<uint8_t> bytes(rect.positions.size() * 4 + rect.flags.size());
@@ -1953,6 +1983,557 @@ private:
         }
         js << ", \"sites\": [";
         for (size_t i = 0; i < sites.size(); ++i) js << (i ? "," : "") << vec(sites[i].eye);
+        js << "]},\n";
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Facade flatten (see FacadeFlattenParams). Runs on rect.positions in place, before the rectifier checks, so the
+    // reported rectify flips / displacement / open edges include it; its own counters go to "flatten".
+    // ----------------------------------------------------------------------------------------
+    void facadeFlatten() {
+        const FacadeFlattenParams& FP = P.flatten;
+        const double band = FP.band;
+        const double kPi = 3.14159265358979323846;
+        const double cosPar = std::cos(FP.parallelDeg * kPi / 180.0);
+        const double cosMerge = std::cos(FP.mergeAngleDeg * kPi / 180.0);
+        const double cosCorner = std::cos(FP.cornerMinDeg * kPi / 180.0);
+        // faces further than this from a seed's normal cannot become inliers of the plane it refits to
+        const double cosSeedReach = std::cos(std::min(89.0, FP.parallelDeg + 15.0) * kPi / 180.0);
+        std::vector<std::pair<const char*, double>> stageMs;
+        Clock::time_point stageStart = Clock::now();
+        auto stage = [&](const char* name) {
+            const auto now = Clock::now();
+            stageMs.push_back({name, std::chrono::duration<double, std::milli>(now - stageStart).count()});
+            stageStart = now;
+        };
+
+        std::vector<float>& pos = rect.positions;
+        const size_t nV = pos.size() / 3;
+        std::vector<V3> Q0(nV);
+        for (size_t v = 0; v < nV; ++v) Q0[v] = V3{pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]};
+        std::vector<uint32_t> kept;
+        for (size_t t = 0; t < F; ++t) if (rect.flags[t] == scan_rectifier::kFlagKeep) kept.push_back(static_cast<uint32_t>(t));
+
+        // Weld groups move together: the rectifier's, unioned with every vertex at the same position (0.01 mm, as the
+        // open-edge census welds) so no seam opens; canon[v], the first vertex at v's position, gives v its output bit for bit.
+        struct QKey {
+            int64_t x, y, z;
+            bool operator==(const QKey& o) const { return x == o.x && y == o.y && z == o.z; }
+        };
+        struct QKeyHash {
+            size_t operator()(const QKey& k) const {
+                uint64_t h = static_cast<uint64_t>(k.x) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(k.y) * 0xC2B2AE3D27D4EB4Full ^
+                             static_cast<uint64_t>(k.z) * 0x165667B19E3779F9ull;
+                return static_cast<size_t>(h ^ (h >> 31));
+            }
+        };
+        auto qkey = [](const V3& p) { return QKey{std::llround(p.x * 1e5), std::llround(p.y * 1e5), std::llround(p.z * 1e5)}; };
+        std::vector<uint32_t> grp(nV);
+        size_t G = 0;
+        if (rect.groupOfVertex.size() == nV) {
+            grp = rect.groupOfVertex;
+            for (uint32_t g : grp) G = std::max<size_t>(G, static_cast<size_t>(g) + 1);
+        } else {
+            std::iota(grp.begin(), grp.end(), 0u);
+            G = nV;
+        }
+        std::vector<uint32_t> canon(nV);
+        size_t mergedByPosition = 0;
+        {
+            std::vector<uint32_t> up(G);
+            std::iota(up.begin(), up.end(), 0u);
+            auto root = [&](uint32_t x) { while (up[x] != x) x = up[x] = up[up[x]]; return x; };
+            std::unordered_map<QKey, uint32_t, QKeyHash> seen;
+            seen.reserve(nV);
+            for (size_t v = 0; v < nV; ++v) {
+                auto it = seen.emplace(qkey(Q0[v]), static_cast<uint32_t>(v));
+                canon[v] = it.first->second;
+                if (it.second) continue;
+                const uint32_t a = root(grp[it.first->second]), b = root(grp[v]);
+                if (a != b) { up[b] = a; ++mergedByPosition; }
+            }
+            std::vector<uint32_t> ren(G, UINT32_MAX);
+            size_t G2 = 0;
+            for (size_t g = 0; g < G; ++g) {
+                const uint32_t r = root(static_cast<uint32_t>(g));
+                if (ren[r] == UINT32_MAX) ren[r] = static_cast<uint32_t>(G2++);
+            }
+            for (size_t v = 0; v < nV; ++v) grp[v] = ren[root(grp[v])];
+            G = G2;
+        }
+        std::vector<uint32_t> memStart(G + 1, 0), mem(nV);
+        for (size_t v = 0; v < nV; ++v) ++memStart[grp[v] + 1];
+        for (size_t g = 0; g < G; ++g) memStart[g + 1] += memStart[g];
+        {
+            std::vector<uint32_t> fill(memStart.begin(), memStart.end() - 1);
+            for (size_t v = 0; v < nV; ++v) mem[fill[grp[v]]++] = static_cast<uint32_t>(v);
+        }
+        auto rep = [&](uint32_t g) { return Q0[mem[memStart[g]]]; };
+        std::vector<uint32_t> triStart(G + 1, 0), triOf;
+        for (uint32_t t : kept) for (int k = 0; k < 3; ++k) ++triStart[grp[rawIdx[3 * t + k]] + 1];
+        for (size_t g = 0; g < G; ++g) triStart[g + 1] += triStart[g];
+        triOf.resize(triStart[G]);
+        {
+            std::vector<uint32_t> fill(triStart.begin(), triStart.end() - 1);
+            for (uint32_t t : kept) for (int k = 0; k < 3; ++k) triOf[fill[grp[rawIdx[3 * t + k]]]++] = t;
+        }
+        auto crossOf = [&](const std::vector<V3>& Qp, uint32_t t) {
+            const V3 a = Qp[rawIdx[3 * t]], b = Qp[rawIdx[3 * t + 1]], c = Qp[rawIdx[3 * t + 2]];
+            return (b - a).cross(c - a);
+        };
+        std::vector<V3> nRaw(F), nRect(F);
+        for (uint32_t t : kept) {
+            const V3 a{rawPos[3 * rawIdx[3 * t]], rawPos[3 * rawIdx[3 * t] + 1], rawPos[3 * rawIdx[3 * t] + 2]};
+            const V3 b{rawPos[3 * rawIdx[3 * t + 1]], rawPos[3 * rawIdx[3 * t + 1] + 1], rawPos[3 * rawIdx[3 * t + 1] + 2]};
+            const V3 c{rawPos[3 * rawIdx[3 * t + 2]], rawPos[3 * rawIdx[3 * t + 2] + 1], rawPos[3 * rawIdx[3 * t + 2] + 2]};
+            nRaw[t] = (b - a).cross(c - a);
+            nRect[t] = crossOf(Q0, t);
+        }
+        stage("setup");
+
+        // ---- planes
+        struct FPlane { V3 n, c, t1, t2; double d{0}, area{0}, lo1{0}, hi1{0}, lo2{0}, hi2{0}, rmsIn{0}; std::vector<uint32_t> tris, inl; };
+        auto inlier = [&](uint32_t t, const V3& n, double d) {
+            const V3 cr = nRect[t];
+            const double l = cr.norm();
+            if (l < 2e-8 || cr.dot(n) / l < cosPar) return false;
+            for (int k = 0; k < 3; ++k) if (std::abs(Q0[rawIdx[3 * t + k]].dot(n) - d) > FP.fitBand) return false;
+            return true;
+        };
+        // area-weighted least-squares plane of the faces (exact second moments of the triangles)
+        auto fit = [&](const std::vector<uint32_t>& tris, V3& n, V3& c, double& d, double& area) {
+            double A = 0, S1[3] = {0, 0, 0}, S2[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+            for (uint32_t t : tris) {
+                const V3 vs[3] = {Q0[rawIdx[3 * t]], Q0[rawIdx[3 * t + 1]], Q0[rawIdx[3 * t + 2]]};
+                const double ar = 0.5 * (vs[1] - vs[0]).cross(vs[2] - vs[0]).norm();
+                if (ar <= 0) continue;
+                A += ar;
+                const double co[3][3] = {{vs[0].x, vs[0].y, vs[0].z}, {vs[1].x, vs[1].y, vs[1].z}, {vs[2].x, vs[2].y, vs[2].z}};
+                for (int k = 0; k < 3; ++k) S1[k] += ar * (co[0][k] + co[1][k] + co[2][k]) / 3.0;
+                for (int k = 0; k < 3; ++k)
+                    for (int l = 0; l < 3; ++l) {
+                        double s = 0, sk = 0, sl = 0;
+                        for (int i = 0; i < 3; ++i) { s += co[i][k] * co[i][l]; sk += co[i][k]; sl += co[i][l]; }
+                        S2[k][l] += ar / 12.0 * (s + sk * sl);
+                    }
+            }
+            if (A <= 0) return false;
+            const double cc[3] = {S1[0] / A, S1[1] / A, S1[2] / A};
+            double C[3][3];
+            for (int k = 0; k < 3; ++k) for (int l = 0; l < 3; ++l) C[k][l] = S2[k][l] / A - cc[k] * cc[l];
+            double ev[3];
+            V3 vec[3];
+            scan_rectifier::detail::symmetricEigen3(C, ev, vec);
+            V3 nn = vec[0].normalized();
+            if (nn.dot(n) < 0) nn = nn * -1.0;
+            n = nn;
+            c = V3{cc[0], cc[1], cc[2]};
+            d = n.dot(c);
+            area = A;
+            return true;
+        };
+        auto refine = [&](FPlane& pl) {
+            for (int it = 0; it < FP.fitIterations; ++it) {
+                std::vector<uint32_t> in;
+                for (uint32_t t : pl.tris) if (inlier(t, pl.n, pl.d)) in.push_back(t);
+                V3 n = pl.n, c;
+                double d = 0, A = 0;
+                if (in.empty() || !fit(in, n, c, d, A)) { pl.inl.clear(); pl.area = 0; return; }
+                pl.n = n; pl.c = c; pl.d = d; pl.area = A; pl.inl = std::move(in);
+            }
+        };
+        std::vector<FPlane> planes;
+        size_t detectIterations = 0;
+        {
+            // Sequential mode extraction. A cell is 1 degree of azimuth by detectOffsetBin of offset along the cell's
+            // horizontal normal; its score is the live face area in the cells within +-detectAzSmooth degrees and
+            // +-detectOffsetSmooth bins. The best cell seeds a plane and the refit takes its inliers out (when it holds
+            // no plane, the seed cells' faces are retired instead); scores follow every retired face incrementally.
+            const double sb = FP.detectOffsetBin;
+            const int64_t kOffBias = int64_t{1} << 39;
+            auto cellKey = [&](int ab, int64_t s) { return (static_cast<uint64_t>(ab) << 40) | static_cast<uint64_t>(s + kOffBias); };
+            auto cellAz = [](uint64_t k) { return static_cast<int>(k >> 40); };
+            auto cellOff = [&](uint64_t k) { return static_cast<int64_t>(k & ((uint64_t{1} << 40) - 1)) - kOffBias; };
+            auto cellNormal = [&](int ab) { const double ac = (ab + 0.5) * kPi / 180.0; return V3{std::sin(ac), 0, -std::cos(ac)}; };
+            struct WallFace { uint64_t key; uint32_t t; };
+            std::vector<WallFace> wall;
+            std::vector<uint64_t> faceCell(F, 0);
+            for (uint32_t t : kept) {
+                const double l = nRect[t].norm();
+                if (0.5 * l < FP.sliverArea || std::abs(nRect[t].y / l) >= FP.maxAbsNy) continue;
+                const V3 n = nRect[t] * (1.0 / l);
+                const int ab = static_cast<int>(std::floor(std::atan2(n.x, -n.z) * 180.0 / kPi + 360.0)) % 360;
+                const V3 c = (Q0[rawIdx[3 * t]] + Q0[rawIdx[3 * t + 1]] + Q0[rawIdx[3 * t + 2]]) * (1.0 / 3.0);
+                const uint64_t key = cellKey(ab, std::llround(cellNormal(ab).dot(c) / sb));
+                wall.push_back({key, t});
+                faceCell[t] = key;
+            }
+            std::sort(wall.begin(), wall.end(), [](const WallFace& a, const WallFace& b) { return a.key < b.key || (a.key == b.key && a.t < b.t); });
+            struct Cell { uint32_t begin, end, live; double area, score; };
+            std::unordered_map<uint64_t, Cell> cells;
+            for (size_t i = 0; i < wall.size();) {
+                size_t e = i;
+                double a = 0;
+                while (e < wall.size() && wall[e].key == wall[i].key) a += 0.5 * nRect[wall[e++].t].norm();
+                cells.emplace(wall[i].key, Cell{static_cast<uint32_t>(i), static_cast<uint32_t>(e), static_cast<uint32_t>(e - i), a, 0.0});
+                i = e;
+            }
+            auto forNeighbours = [&](uint64_t k, auto&& fn) {
+                const int ab = cellAz(k);
+                const int64_t s = cellOff(k);
+                for (int da = -FP.detectAzSmooth; da <= FP.detectAzSmooth; ++da)
+                    for (int64_t ds = -FP.detectOffsetSmooth; ds <= FP.detectOffsetSmooth; ++ds) {
+                        auto it = cells.find(cellKey(((ab + da) % 360 + 360) % 360, s + ds));
+                        if (it != cells.end()) fn(it->second);
+                    }
+            };
+            for (auto& kv : cells) forNeighbours(kv.first, [&](const Cell& nb) { kv.second.score += nb.area; });
+            std::vector<uint8_t> used(F, 0);
+            auto retire = [&](uint32_t t) {
+                if (used[t]) return;
+                used[t] = 1;
+                const double a = 0.5 * nRect[t].norm();
+                Cell& c = cells.find(faceCell[t])->second;
+                c.area -= a;
+                --c.live;
+                forNeighbours(faceCell[t], [&](Cell& nb) { nb.score -= a; });
+            };
+            for (int iter = 0; iter < FP.detectMaxIterations; ++iter) {
+                ++detectIterations;
+                double best = 0;
+                uint64_t bk = 0;
+                bool found = false;
+                for (const auto& kv : cells) {
+                    if (!kv.second.live) continue;
+                    const double sc = kv.second.score;
+                    if (!found || sc > best || (sc == best && kv.first < bk)) { best = sc; bk = kv.first; found = true; }
+                }
+                if (!found || best < FP.minPlaneArea) break;
+                FPlane pl;
+                pl.n = cellNormal(cellAz(bk));
+                pl.d = static_cast<double>(cellOff(bk)) * sb;
+                for (const WallFace& w : wall)
+                    if (!used[w.t] && nRect[w.t].dot(pl.n) >= cosSeedReach * nRect[w.t].norm()) pl.tris.push_back(w.t);
+                refine(pl);
+                if (pl.area < FP.minPlaneArea) {
+                    forNeighbours(bk, [&](Cell& nb) { for (uint32_t i = nb.begin; i < nb.end; ++i) retire(wall[i].t); });
+                    continue;
+                }
+                for (uint32_t t : pl.inl) retire(t);
+                pl.tris = pl.inl;
+                planes.push_back(std::move(pl));
+            }
+        }
+        stage("detect");
+        {
+            // merge coplanar planes (union-find), refit on the union of their faces
+            std::vector<int> par(planes.size());
+            std::iota(par.begin(), par.end(), 0);
+            auto root = [&](int i) { while (par[i] != i) i = par[i] = par[par[i]]; return i; };
+            for (size_t i = 0; i < planes.size(); ++i)
+                for (size_t j = i + 1; j < planes.size(); ++j) {
+                    const auto& a = planes[i];
+                    const auto& b = planes[j];
+                    if (a.n.dot(b.n) < cosMerge) continue;
+                    if (std::abs(a.n.dot(b.c) - a.d) > FP.mergeOffset || std::abs(b.n.dot(a.c) - b.d) > FP.mergeOffset) continue;
+                    par[root(static_cast<int>(j))] = root(static_cast<int>(i));
+                }
+            std::vector<FPlane> merged;
+            std::vector<int> slot(planes.size(), -1);
+            for (size_t i = 0; i < planes.size(); ++i) {
+                const int r = root(static_cast<int>(i));
+                if (slot[r] < 0) { slot[r] = static_cast<int>(merged.size()); merged.push_back(planes[r]); merged.back().tris.clear(); }
+                auto& m = merged[slot[r]];
+                m.tris.insert(m.tris.end(), planes[i].tris.begin(), planes[i].tris.end());
+            }
+            planes.clear();
+            for (auto& m : merged) {
+                refine(m);
+                if (m.area < FP.minPlaneArea) continue;
+                // in-plane support box over the inliers
+                m.t1 = std::abs(m.n.y) < 0.9 ? V3{0, 1, 0}.cross(m.n).normalized() : V3{1, 0, 0}.cross(m.n).normalized();
+                m.t2 = m.n.cross(m.t1).normalized();
+                m.lo1 = m.lo2 = 1e300;
+                m.hi1 = m.hi2 = -1e300;
+                double s2 = 0, A = 0;
+                for (uint32_t t : m.inl) {
+                    double dd[3];
+                    for (int k = 0; k < 3; ++k) {
+                        const V3 q = Q0[rawIdx[3 * t + k]];
+                        m.lo1 = std::min(m.lo1, m.t1.dot(q)); m.hi1 = std::max(m.hi1, m.t1.dot(q));
+                        m.lo2 = std::min(m.lo2, m.t2.dot(q)); m.hi2 = std::max(m.hi2, m.t2.dot(q));
+                        dd[k] = q.dot(m.n) - m.d;
+                    }
+                    const double ar = 0.5 * nRect[t].norm();
+                    s2 += ar / 6.0 * (dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2] + dd[0] * dd[1] + dd[1] * dd[2] + dd[0] * dd[2]);
+                    A += ar;
+                }
+                m.rmsIn = A > 0 ? std::sqrt(s2 / A) : 0;
+                planes.push_back(std::move(m));
+            }
+        }
+        const int K = static_cast<int>(planes.size());
+        stage("merge");
+
+        // ---- per weld group: stay, move onto one plane, or onto the line of two
+        struct Dec { int a{-1}, b{-1}; };
+        auto moveOf = [&](const V3& p, const Dec& d, V3& delta) {
+            if (d.a < 0) { delta = V3{}; return true; }
+            const FPlane& A = planes[d.a];
+            const double ra = A.n.dot(p) - A.d;
+            if (d.b < 0) { delta = A.n * -ra; return true; }
+            const FPlane& B = planes[d.b];
+            const double rb = B.n.dot(p) - B.d, c = A.n.dot(B.n), det = 1 - c * c;
+            if (det < 1e-9) return false;
+            const double al = (-ra + c * rb) / det, be = (-rb + c * ra) / det;
+            delta = A.n * al + B.n * be;
+            return true;
+        };
+        std::vector<Dec> dec(G);
+        size_t candGroups = 0, notOnFacade = 0, cornerTooFar = 0;
+        for (size_t g = 0; g < G; ++g) {
+            if (triStart[g] == triStart[g + 1]) continue;
+            const V3 p = rep(static_cast<uint32_t>(g));
+            int cand[8];
+            int nc = 0;
+            for (int k = 0; k < K && nc < 8; ++k) {
+                const FPlane& pl = planes[k];
+                if (std::abs(pl.n.dot(p) - pl.d) > band) continue;
+                const double a1 = pl.t1.dot(p), a2 = pl.t2.dot(p);
+                if (a1 < pl.lo1 - FP.supportMargin || a1 > pl.hi1 + FP.supportMargin || a2 < pl.lo2 - FP.supportMargin || a2 > pl.hi2 + FP.supportMargin) continue;
+                cand[nc++] = k;
+            }
+            if (!nc) continue;
+            ++candGroups;
+            double acc[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // incident face area along each candidate
+            bool across = false;                       // an incident face lies along none of them
+            for (uint32_t q = triStart[g]; q < triStart[g + 1]; ++q) {
+                const uint32_t t = triOf[q];
+                const double l = nRect[t].norm();
+                if (0.5 * l < FP.sliverArea) continue;
+                const V3 un = nRect[t] * (1.0 / l);
+                bool along = false;
+                for (int i = 0; i < nc; ++i) if (un.dot(planes[cand[i]].n) >= cosPar) { acc[i] += 0.5 * l; along = true; }
+                if (!along) across = true;
+            }
+            // nearest first among the planes carrying an incident face (parallel tiers resolve to their own); with only
+            // slivers around, the nearest plane
+            auto residual = [&](int i) { return std::abs(planes[cand[i]].n.dot(p) - planes[cand[i]].d); };
+            int order[8];
+            std::iota(order, order + nc, 0);
+            std::sort(order, order + nc, [&](int i, int j) {
+                const bool ai = acc[i] > 0, aj = acc[j] > 0;
+                if (ai != aj) return ai;
+                return residual(i) < residual(j);
+            });
+            Dec d;
+            d.a = cand[order[0]];
+            if (acc[order[0]] <= 0) {
+                if (across) { ++notOnFacade; continue; }
+            } else {
+                for (int i = 1; i < nc && acc[order[i]] > 0; ++i)
+                    if (std::abs(planes[d.a].n.dot(planes[cand[order[i]]].n)) <= cosCorner) { d.b = cand[order[i]]; break; }
+                V3 delta;
+                if (d.b >= 0 && (!moveOf(p, d, delta) || delta.norm() > FP.maxCornerMoveFactor * band)) { ++cornerTooFar; continue; }
+            }
+            dec[g] = d;
+        }
+        stage("decide");
+
+        // ---- T-junctions on open seams: a vertex lying on another face's open edge (v on a-b at s)
+        std::vector<std::array<uint32_t, 3>> tj;
+        {
+            std::vector<uint64_t> ek;
+            for (uint32_t t : kept) {
+                const uint32_t w[3] = {grp[rawIdx[3 * t]], grp[rawIdx[3 * t + 1]], grp[rawIdx[3 * t + 2]]};
+                if (w[0] == w[1] || w[1] == w[2] || w[0] == w[2]) continue;
+                for (int k = 0; k < 3; ++k) {
+                    const uint32_t a = std::min(w[k], w[(k + 1) % 3]), b = std::max(w[k], w[(k + 1) % 3]);
+                    ek.push_back((static_cast<uint64_t>(a) << 32) | b);
+                }
+            }
+            std::sort(ek.begin(), ek.end());
+            std::vector<Segment> segs;
+            std::vector<uint8_t> onB(G, 0);
+            for (size_t i = 0; i < ek.size();) {
+                size_t e = i;
+                while (e < ek.size() && ek[e] == ek[i]) ++e;
+                if (e - i == 1) {
+                    const uint32_t a = static_cast<uint32_t>(ek[i] >> 32), b = static_cast<uint32_t>(ek[i] & 0xffffffffu);
+                    segs.push_back({rep(a), rep(b), a, b});
+                    onB[a] = onB[b] = 1;
+                }
+                i = e;
+            }
+            SegmentGrid sg(segs, 2e-3);
+            for (size_t g = 0; g < G; ++g) {
+                if (!onB[g]) continue;
+                const V3 p = rep(static_cast<uint32_t>(g));
+                sg.near(p, [&](const Segment& s, uint32_t) {
+                    if (s.va == g || s.vb == g) return false;
+                    if (pointSegmentDistance(p, s.a, s.b) <= 1e-3) tj.push_back({static_cast<uint32_t>(g), s.va, s.vb});
+                    return false;
+                });
+            }
+            std::sort(tj.begin(), tj.end());
+            tj.erase(std::unique(tj.begin(), tj.end()), tj.end());
+        }
+        std::vector<double> tjS(tj.size());
+        for (size_t i = 0; i < tj.size(); ++i) {
+            const V3 a = rep(tj[i][1]), b = rep(tj[i][2]), p = rep(tj[i][0]);
+            const double L2 = (b - a).dot(b - a);
+            tjS[i] = L2 > 0 ? std::clamp((p - a).dot(b - a) / L2, 0.0, 1.0) : 0.5;
+        }
+        stage("tjunctions");
+
+        // ---- apply; revert moves that flip a face or make two vertices meet; repeat
+        std::vector<V3> Qn(Q0);
+        size_t tjTouched = 0;
+        double tjMaxViolation = 0;
+        auto applyAll = [&]() {
+            // seam closure: every T-junction keeps its vertex on its partner edge (D_v = (1-s) D_a + s D_b); groups that
+            // stay are fixed, moving groups give up as little of their target as the constraints need (Kaczmarz)
+            std::vector<V3> D(G);
+            std::vector<uint8_t> touched(G, 0);
+            std::vector<uint32_t> active;
+            for (size_t i = 0; i < tj.size(); ++i)
+                if (dec[tj[i][0]].a >= 0 || dec[tj[i][1]].a >= 0 || dec[tj[i][2]].a >= 0) active.push_back(static_cast<uint32_t>(i));
+            tjMaxViolation = 0;
+            if (!active.empty()) {
+                for (size_t g = 0; g < G; ++g) if (dec[g].a >= 0) moveOf(rep(static_cast<uint32_t>(g)), dec[g], D[g]);
+                for (int sweep = 0; sweep < 2000; ++sweep) {
+                    double mx = 0;
+                    for (uint32_t i : active) {
+                        const uint32_t v = tj[i][0], a = tj[i][1], b = tj[i][2];
+                        const double sp = tjS[i];
+                        const double mv = dec[v].a >= 0 ? 1.0 : 0.0, ma = dec[a].a >= 0 ? 1.0 : 0.0, mb = dec[b].a >= 0 ? 1.0 : 0.0;
+                        const V3 e = D[v] - D[a] * (1 - sp) - D[b] * sp;
+                        const double en = e.norm();
+                        if (en < 1e-7) continue;
+                        const double W = mv + ma * (1 - sp) * (1 - sp) + mb * sp * sp;
+                        if (W <= 0) continue;
+                        mx = std::max(mx, en);
+                        D[v] = D[v] - e * (mv / W);
+                        D[a] = D[a] + e * (ma * (1 - sp) / W);
+                        D[b] = D[b] + e * (mb * sp / W);
+                        if (mv > 0) touched[v] = 1;
+                        if (ma > 0) touched[a] = 1;
+                        if (mb > 0) touched[b] = 1;
+                    }
+                    tjMaxViolation = mx;
+                    if (mx < 1e-6) break;
+                }
+            }
+            tjTouched = 0;
+            for (size_t g = 0; g < G; ++g) {
+                if (touched[g]) ++tjTouched;
+                for (uint32_t m = memStart[g]; m < memStart[g + 1]; ++m) {
+                    const uint32_t v = mem[m];
+                    V3 delta;
+                    if (dec[g].a < 0) Qn[v] = Q0[v];
+                    else if (touched[g]) Qn[v] = Q0[v] + D[g];
+                    else if (moveOf(Q0[v], dec[g], delta)) Qn[v] = Q0[v] + delta;
+                    else Qn[v] = Q0[v];
+                    // the output is float32: guard what will be written
+                    Qn[v] = V3{static_cast<float>(Qn[v].x), static_cast<float>(Qn[v].y), static_cast<float>(Qn[v].z)};
+                }
+            }
+            for (size_t v = 0; v < nV; ++v) if (canon[v] != v) Qn[v] = Qn[canon[v]];
+        };
+        auto movedVertex = [&](uint32_t v) { return Qn[v].x != Q0[v].x || Qn[v].y != Q0[v].y || Qn[v].z != Q0[v].z; };
+        size_t flipReverted = 0, meetReverted = 0;
+        const int kFarthestRounds = 40, kMaxRounds = 200;
+        int guardRounds = 0;
+        bool clean = false;
+        for (; guardRounds < kMaxRounds; ++guardRounds) {
+            applyAll();
+            std::vector<uint32_t> bad;
+            for (uint32_t t : kept) {
+                if (!movedVertex(rawIdx[3 * t]) && !movedVertex(rawIdx[3 * t + 1]) && !movedVertex(rawIdx[3 * t + 2])) continue;
+                const V3 n1 = crossOf(Qn, t);
+                const double a0 = nRect[t].norm(), a1 = n1.norm();
+                const bool rawOk = nRaw[t].norm() < 2e-8 || n1.dot(nRaw[t]) >= 0;
+                const bool rectOk = a0 < 2e-8 || (a1 >= 2e-8 && n1.dot(nRect[t]) >= 0);
+                if (rawOk && rectOk) continue;
+                if (guardRounds < kFarthestRounds) {
+                    // the face's group that moved farthest goes back; a later round takes more when it still flips
+                    int far = -1;
+                    double farD = -1;
+                    for (int k = 0; k < 3; ++k) {
+                        const uint32_t v = rawIdx[3 * t + k];
+                        if (dec[grp[v]].a < 0) continue;
+                        const double dd = (Qn[v] - Q0[v]).norm();
+                        if (dd > farD) { farD = dd; far = static_cast<int>(grp[v]); }
+                    }
+                    if (far >= 0) bad.push_back(static_cast<uint32_t>(far));
+                } else {
+                    for (int k = 0; k < 3; ++k) if (dec[grp[rawIdx[3 * t + k]]].a >= 0) bad.push_back(grp[rawIdx[3 * t + k]]);
+                }
+            }
+            {
+                // distinct vertices must not meet (a corner line can pull two onto one point, which the census then welds
+                // into a topology change): the moved groups of such a pair go back
+                std::unordered_map<QKey, uint32_t, QKeyHash> at;
+                at.reserve(nV);
+                for (size_t v = 0; v < nV; ++v) {
+                    if (canon[v] != v) continue;
+                    auto it = at.emplace(qkey(Qn[v]), static_cast<uint32_t>(v));
+                    if (it.second) continue;
+                    const uint32_t ga = grp[it.first->second], gb = grp[v];
+                    if (ga == gb) continue;
+                    for (uint32_t g : {ga, gb}) if (dec[g].a >= 0) bad.push_back(g);
+                    ++meetReverted;
+                }
+            }
+            if (bad.empty()) { clean = true; break; }
+            for (uint32_t g : bad) if (dec[g].a >= 0) { dec[g] = Dec{}; ++flipReverted; }
+        }
+        if (!clean) {
+            // the guard did not settle: flatten nothing
+            std::fill(dec.begin(), dec.end(), Dec{});
+            applyAll();
+        }
+        stage("apply_and_guard");
+
+        // ---- stats: moves, flips, open edges against the pre-flatten mesh (matched on pre-flatten positions)
+        std::vector<double> disp;
+        size_t movedGroups = 0, cornerGroups = 0;
+        for (size_t g = 0; g < G; ++g) if (dec[g].a >= 0) { ++movedGroups; if (dec[g].b >= 0) ++cornerGroups; }
+        for (size_t v = 0; v < nV; ++v) { const double d = (Qn[v] - Q0[v]).norm(); if (d > 0) disp.push_back(d); }
+        size_t flipsRaw = 0, flipsRect = 0;
+        for (uint32_t t : kept) {
+            const V3 n1 = crossOf(Qn, t);
+            if (nRaw[t].norm() >= 2e-8 && n1.dot(nRaw[t]) < 0) ++flipsRaw;
+            if (nRect[t].norm() >= 2e-8 && n1.dot(nRect[t]) < 0) ++flipsRect;
+        }
+        std::vector<std::array<uint32_t, 3>> keptT;
+        keptT.reserve(kept.size());
+        for (uint32_t t : kept) keptT.push_back({rawIdx[3 * t], rawIdx[3 * t + 1], rawIdx[3 * t + 2]});
+        std::vector<Segment> bBefore;
+        const OpenEdgeStats eBefore = openEdgeCensus(Q0, keptT, &bBefore, nullptr, nullptr, 0.1, threads);
+        const OpenEdgeStats eAfter = openEdgeCensus(Qn, keptT, nullptr, &bBefore, &Q0, 0.1, threads);
+        for (size_t v = 0; v < nV; ++v) {
+            pos[3 * v] = static_cast<float>(Qn[v].x);
+            pos[3 * v + 1] = static_cast<float>(Qn[v].y);
+            pos[3 * v + 2] = static_cast<float>(Qn[v].z);
+        }
+        stage("census");
+        js << "  \"flatten\": {\"band_m\": " << num(band) << ", \"parallelDeg\": " << num(FP.parallelDeg) << ", \"planes\": " << K
+           << ", \"detectIterations\": " << detectIterations << ", \"groupsMergedByPosition\": " << mergedByPosition
+           << ", \"candidateGroups\": " << candGroups << ", \"notOnFacade\": " << notOnFacade << ", \"cornerTooFar\": " << cornerTooFar
+           << ", \"movedGroups\": " << movedGroups << ", \"cornerGroups\": " << cornerGroups << ", \"movedVertices\": " << disp.size()
+           << ", \"displacement_m\": " << dist(Distribution::of(disp)) << ", \"tJunctions\": " << tj.size() << ", \"tjTouchedGroups\": " << tjTouched
+           << ", \"tjMaxViolation_m\": " << num(tjMaxViolation) << ", \"flipReverted\": " << flipReverted << ", \"meetReverted\": " << meetReverted
+           << ", \"guardRounds\": " << guardRounds << ", \"guardSettled\": " << (clean ? "true" : "false")
+           << ", \"flipsVsRaw\": " << flipsRaw << ", \"flipsVsRectified\": " << flipsRect
+           << ", \"openEdgesBefore\": " << edges(eBefore) << ", \"openEdgesAfter\": " << edges(eAfter) << ", \"stagesMs\": {";
+        for (size_t i = 0; i < stageMs.size(); ++i) js << (i ? ", " : "") << "\"" << stageMs[i].first << "\": " << num(stageMs[i].second);
+        js << "}, \"planeList\": [";
+        for (int k = 0; k < K; ++k) {
+            const auto& pl = planes[k];
+            js << (k ? "," : "") << "{\"n\": " << vec(pl.n) << ", \"d\": " << num(pl.d) << ", \"inlierArea_m2\": " << num(pl.area)
+               << ", \"inlierRms_m\": " << num(pl.rmsIn) << ", \"inliers\": " << pl.inl.size() << "}";
+        }
         js << "]},\n";
     }
 

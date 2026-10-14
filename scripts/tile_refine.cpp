@@ -47,9 +47,14 @@ static void usage() {
         "                          removed (default 6)\n"
         "  --below-ground-margin M isolate: clip surfaces more than M below the terrain (default 0.3; < 0: off)\n"
         "  --interior-inset M      isolate: drop upward-facing floors at least M inside the footprint under the top (default 2.5; < 0: off)\n"
-        "  --out-raw-clay PATH     also write the (isolated) raw scan, unmodified, as studio clay"
+        "  --out-raw-clay PATH     also write the (isolated) raw scan, unmodified, as studio clay\n"
         "  --roi-radius M          relief region of interest: the anchor's footprint grown by M (default 60; <0 = whole tile)\n"
         "  --no-relief             skip the photometric relief (rectified scan only)\n"
+        "  --flatten-band M        facade flatten: vertices within M of a detected wall plane move onto it (default 0.10)\n"
+        "  --no-flatten            skip the facade flatten\n"
+        "  --flatten-parallel-deg DEG  facade flatten: a face lies along a plane within DEG (default 30)\n"
+        "  --flatten-min-area M2   facade flatten: smallest wall plane flattened onto (default 25)\n"
+        "  --flatten-corner-deg DEG  facade flatten: planes at least DEG apart meet in a corner line (default 15)\n"
         "  --thumbs DIR            write raw-vs-output thumbnails (aerial, hero facade, street) into DIR\n"
         "  --threads N             worker threads (default: all cores)\n"
         "  tolerances:\n"
@@ -101,6 +106,11 @@ int main(int argc, char** argv) {
         else if (a == "--interior-inset") p.isolateInteriorInset = num();
         else if (a == "--out-raw-clay") p.rawClayPath = next();
         else if (a == "--no-relief") p.relief = false;
+        else if (a == "--flatten-band") p.flatten.band = num();
+        else if (a == "--no-flatten") p.flatten.band = 0;
+        else if (a == "--flatten-parallel-deg") p.flatten.parallelDeg = num();
+        else if (a == "--flatten-min-area") p.flatten.minPlaneArea = num();
+        else if (a == "--flatten-corner-deg") p.flatten.cornerMinDeg = num();
         else if (a == "--thumbs") p.thumbsDir = next();
         else if (a == "--threads") p.threads = static_cast<int>(num());
         else if (a == "--max-disp") p.rect.maxDisplacement = num();
