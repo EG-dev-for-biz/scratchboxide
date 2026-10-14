@@ -2014,6 +2014,14 @@ int main(int argc, char** argv) {
     const customMeshesRef = useLatest(sceneData.customMeshes);
     const shadersFingerprint = React.useMemo(() => JSON.stringify(sceneData.shaders ?? null), [sceneData.shaders]);
     const shadersRef = useLatest(sceneData.shaders);
+    // execute_3d_python_script records its GLB both as the generator output (drawn by effect 5b) and as a
+    // hero object pointing at the same file; drawing both stacked two copies of every generated model.
+    const generatorGlbFile = React.useMemo(() => {
+        const gen = sceneData.pythonGenerator?.glbBase64 ? sceneData.pythonGenerator
+            : sceneData.cppGenerator?.glbBase64 ? sceneData.cppGenerator : undefined;
+        return gen?.glbPath ? gen.glbPath.split('/').pop() : undefined;
+    }, [sceneData.pythonGenerator?.glbBase64, sceneData.pythonGenerator?.glbPath, sceneData.cppGenerator?.glbBase64, sceneData.cppGenerator?.glbPath]);
+
     const externalObjectsFingerprint = React.useMemo(() => {
         const objs = (sceneData.objects?.map(o => ({
             id: o.id,
@@ -2027,8 +2035,8 @@ int main(int argc, char** argv) {
         if (sceneData.splatUrl) {
             objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined, source: 'splatUrl', variantSet: undefined, prefetch: false });
         }
-        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode, activeVariants: activeVariantIds, retry: externalLoadRetryNonce });
-    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode, activeVariantIds, externalLoadRetryNonce]);
+        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode, activeVariants: activeVariantIds, retry: externalLoadRetryNonce, generatorGlbFile });
+    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode, activeVariantIds, externalLoadRetryNonce, generatorGlbFile]);
 
     // ---- 1. Renderer stack, overlays, controls and the render loop (mount once) ----
     React.useEffect(() => {
@@ -2763,7 +2771,8 @@ int main(int argc, char** argv) {
         const scene = stack.scene;
         if (!scene) return;
 
-        const rawObjects = sceneData.objects || [];
+        const rawObjects = (sceneData.objects || []).filter(o =>
+            !generatorGlbFile || o.content?.durableUri?.split('/').pop() !== generatorGlbFile);
         const objects = [...rawObjects];
         if (sceneData.splatUrl && !objects.some(o => o.content?.durableUri === sceneData.splatUrl)) {
             objects.push({
