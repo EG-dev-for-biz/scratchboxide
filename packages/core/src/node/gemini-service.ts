@@ -62,7 +62,8 @@ import {
 } from '../browser/generative-canvas/lenses';
 import {
     VisualVerificationRequest,
-    VisualAuditResult,
+    VisualVerificationOutcome,
+    VisualAuditUnavailable,
     MultiAngleAuditOptions,
     MultiAngleVisualAuditResult,
     VisualSelfCorrection3DOptions,
@@ -234,7 +235,7 @@ export class GeminiService {
     }
 
     protected readonly visualVerificationService?: VisualVerificationService;
-    private fallbackVisualVerificationService = new VisualVerificationService();
+    private fallbackVisualVerificationService = new VisualVerificationService(this.client);
 
     public getVisualVerificationService(): VisualVerificationService {
         return this.visualVerificationService || this.fallbackVisualVerificationService;
@@ -305,13 +306,13 @@ export class GeminiService {
     // Visual verification
     // ------------------------------------------------------------------
 
-    /** Multimodal Vision QA verification across Scratchbox visual surfaces. */
-    async verifyVisual(request: VisualVerificationRequest): Promise<VisualAuditResult> {
+    /** Multimodal Vision QA verification across Scratchbox visual surfaces ({status: 'unavailable'} when it cannot run). */
+    async verifyVisual(request: VisualVerificationRequest): Promise<VisualVerificationOutcome> {
         return this.getVisualVerificationService().verifyVisual(request);
     }
 
     /** Multi-angle visual audit across canonical viewport camera angles. */
-    async audit3DSceneMultiAngle(options: MultiAngleAuditOptions): Promise<MultiAngleVisualAuditResult> {
+    async audit3DSceneMultiAngle(options: MultiAngleAuditOptions): Promise<MultiAngleVisualAuditResult | VisualAuditUnavailable> {
         return this.getVisualVerificationService().audit3DSceneMultiAngle(options);
     }
 

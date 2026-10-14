@@ -117,6 +117,8 @@ export interface VisualCorrectionFixes {
 }
 
 export interface VisualAuditResult {
+    /** The vision model inspected the frame and returned this audit. */
+    status?: 'verified';
     pass: boolean; // True if fidelityScore >= 80 and no fatal visual bugs
     fidelityScore: number; // 0 to 100
     critique: string; // Concise multimodal AI critique of visual rendering
@@ -132,6 +134,25 @@ export interface VisualAuditResult {
     autoRepaired?: boolean;
     modelUsed?: string;
     targetArtifactId?: string;
+}
+
+/**
+ * The vision check did not run, or its reply could not be read (no frame, no credentials, the model failed or
+ * answered without a score). Nothing was scored and nothing may be repaired on its account.
+ */
+export interface VisualAuditUnavailable {
+    status: 'unavailable';
+    error: string;
+    /** The vision model that was asked. */
+    modelUsed?: string;
+    targetArtifactId?: string;
+    timestamp?: string;
+}
+
+export type VisualVerificationOutcome = VisualAuditResult | VisualAuditUnavailable;
+
+export function isVisualAuditUnavailable(outcome: unknown): outcome is VisualAuditUnavailable {
+    return !!outcome && typeof outcome === 'object' && (outcome as VisualAuditUnavailable).status === 'unavailable';
 }
 
 export interface MultiAngleVisualAuditResult {
@@ -163,8 +184,10 @@ export interface VisualSelfCorrectionOptions {
 
 export interface VisualSelfCorrectionLoopResult {
     artifact: CanvasArtifact;
-    audit: VisualAuditResult;
+    /** The last audit, or why the vision check could not run (the loop stops there and repairs nothing more). */
+    audit: VisualVerificationOutcome;
     iterations: number;
+    /** The audits the vision model returned. */
     history: VisualAuditResult[];
     repaired: boolean;
 }
@@ -186,8 +209,11 @@ export interface VisualSelfCorrection3DLoopResult {
     operatorEngine: any;
     iterations: number;
     converged: boolean;
-    initialFidelityScore: number;
-    finalFidelityScore: number;
+    /** Undefined when no audit was ever scored (the vision check was unavailable). */
+    initialFidelityScore?: number;
+    finalFidelityScore?: number;
+    /** Set when the vision check could not run; the loop stopped there. */
+    visionUnavailable?: VisualAuditUnavailable;
     auditHistory: Array<{ iteration: number; multiAngleAudit: MultiAngleVisualAuditResult }>;
     executedOperators: Array<{ operator: string; params?: any; result?: any }>;
     repaired: boolean;

@@ -15,7 +15,14 @@
  * Extracted verbatim from GenerativeCanvasStudio.tsx.
  */
 import * as React from 'react';
-import { auditCameraFraming, type VisualAuditResult } from '../../../common/visual-verification-protocol';
+import {
+    auditCameraFraming,
+    isVisualAuditUnavailable,
+    type VisualAuditResult,
+    type VisualAuditUnavailable,
+    type VisualVerificationOutcome,
+    type VisualVerificationRequest
+} from '../../../common/visual-verification-protocol';
 import { ProjectItem } from '../ProjectsModal';
 import { CanvasArtifact, ChatSession, LiveCodeSandboxData, Scene3DData } from '../canvas-types';
 import { captureActiveCanvasScreenshot } from '../chat/streaming-utils';
@@ -99,6 +106,49 @@ export function backgroundAuditRepair(artifact: CanvasArtifact, audit: VisualAud
     if (repairWritten.has(artifactVersionKey(repaired))) return null;
     repairWritten.add(artifactVersionKey(repaired));
     return repaired;
+}
+
+/**
+ * One background visual check of `artifact`: capture the canvas, have the vision model inspect it, and decide the
+ * repair. The outcome is what the chat shows. When there is no frame or the check is unavailable (no credentials,
+ * the model failed, no score), the outcome says why and nothing is repaired.
+ */
+export async function runBackgroundVisualCheck(
+    artifact: CanvasArtifact,
+    capture: () => string | null,
+    verify: (request: VisualVerificationRequest) => Promise<VisualVerificationOutcome>,
+    repairWritten: Set<string>
+): Promise<{ outcome: VisualVerificationOutcome; repaired: CanvasArtifact | null }> {
+    const unavailable = (error: string): VisualAuditUnavailable => ({
+        status: 'unavailable',
+        error,
+        targetArtifactId: artifact.id,
+        timestamp: new Date().toLocaleTimeString()
+    });
+    const frame = capture();
+    if (!frame) {
+        return { outcome: unavailable('No frame of the canvas could be captured.'), repaired: null };
+    }
+    let outcome: VisualVerificationOutcome;
+    try {
+        outcome = await verify({
+            image: frame,
+            prompt: artifact.title || 'Interactive 3D Spatial Canvas or UI Sandbox',
+            artifactType: artifact.type,
+            context: {
+                artifactId: artifact.id,
+                title: artifact.title,
+                sceneData: artifact.type === '3d-scene' ? (artifact.data as any) : undefined
+            }
+        });
+    } catch (err) {
+        return { outcome: unavailable(err instanceof Error ? err.message : String(err)), repaired: null };
+    }
+    if (isVisualAuditUnavailable(outcome)) {
+        return { outcome, repaired: null };
+    }
+    // A failing score (< 80) applies what the audit may change; no new version when that is nothing.
+    return { outcome, repaired: backgroundAuditRepair(artifact, outcome, repairWritten) };
 }
 
 export interface UseArtifactSyncDeps {
@@ -261,45 +311,37 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                     await new Promise(resolve => setTimeout(resolve, 300));
                     if (cancelled) return;
                 }
-                const screenshot = captureActiveCanvasScreenshot(layoutMode);
                 const client = GeminiClient.getInstance();
-
-                const audit = await client.verifyVisual({
-                    image: screenshot,
-                    prompt: activeArtifact.title || 'Interactive 3D Spatial Canvas or UI Sandbox',
-                    artifactType: activeArtifact.type,
-                    context: {
-                        artifactId: activeArtifact.id,
-                        title: activeArtifact.title,
-                        sceneData: activeArtifact.type === '3d-scene' ? (activeArtifact.data as any) : undefined
-                    }
-                });
+                const { outcome, repaired } = await runBackgroundVisualCheck(
+                    activeArtifact,
+                    () => captureActiveCanvasScreenshot(layoutMode),
+                    request => client.verifyVisual(request),
+                    repairWrittenKeysRef.current
+                );
                 if (cancelled) {
                     return;
                 }
 
-                // Attach audit result to latest assistant message in chat
+                // The latest assistant message shows the result, including "Visual check unavailable: <why>".
                 setMessages(prev => {
                     const lastIdx = prev.length - 1;
                     if (lastIdx >= 0 && prev[lastIdx].sender === 'assistant') {
                         const updated = [...prev];
                         updated[lastIdx] = {
                             ...updated[lastIdx],
-                            visualAudit: audit
+                            visualAudit: outcome
                         };
                         return updated;
                     }
                     return prev;
                 });
 
-                // If fidelity score is low (< 80), apply what the audit may change; no new version when that is nothing
-                const repaired = backgroundAuditRepair(activeArtifact, audit, repairWrittenKeysRef.current);
                 if (repaired) {
                     // Registration can rename a timestamped id, so remember the version as it lands too.
                     repairWrittenKeysRef.current.add(artifactVersionKey(handleUpdateArtifact(repaired)));
                 }
             } catch (err) {
-                console.warn('[GenerativeCanvasStudio] Background visual verification completed with fallback:', err);
+                console.error('[useArtifactSync] Background visual check could not be recorded:', err);
             } finally {
                 isVerifyingVisualRef.current = false;
             }

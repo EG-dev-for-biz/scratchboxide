@@ -1391,7 +1391,8 @@ export interface ChatMessage {
     deepWriteProgress?: import('../../common/deep-write/deep-write-protocol').DeepWriteStreamEvent;
     deepWriteCheckpoint?: import('../../common/deep-write/deep-write-protocol').DeepWriteCheckpointEvent;
     deepWriteResumed?: boolean;
-    visualAudit?: import('../../common/visual-verification-protocol').VisualAuditResult;
+    /** The background vision check of the canvas, or why it could not run. */
+    visualAudit?: import('../../common/visual-verification-protocol').VisualVerificationOutcome;
     textureMatrixContent?: import('../../common/media-generation-protocol').TextureMatrixResult;
     questionCard?: InteractiveQuestionCardData;
     executionPlanCard?: ExecutionPlanCardData;

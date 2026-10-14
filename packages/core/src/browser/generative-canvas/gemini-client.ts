@@ -28,7 +28,7 @@ import {
     GeminiTtsResponse
 } from '../../common/gemini-protocol';
 import { AgentSessionState, AgentStreamEvent } from '../../common/agent-checkpoint-protocol';
-import { VisualVerificationRequest, VisualAuditResult } from '../../common/visual-verification-protocol';
+import { VisualVerificationRequest, VisualVerificationOutcome } from '../../common/visual-verification-protocol';
 
 /** Where a chat request failed: the local server was unreachable, it returned an error, or the AI request itself failed. */
 export type ChatFailureKind = 'unreachable' | 'server' | 'ai';
@@ -148,7 +148,7 @@ export class GeminiClient {
     /**
      * Multimodal Vision QA inspection of rendered canvas viewport.
      */
-    async verifyVisual(request: VisualVerificationRequest): Promise<VisualAuditResult> {
+    async verifyVisual(request: VisualVerificationRequest): Promise<VisualVerificationOutcome> {
         const res = await fetch(`${this.endpoint()}/verify-visual`, {
             method: 'POST',
             headers: {
@@ -169,7 +169,7 @@ export class GeminiClient {
     /**
      * Multimodal Vision QA with auto-repair directives applied to artifact.
      */
-    async verifyAndRepair(request: VisualVerificationRequest, artifact?: any): Promise<{ success: boolean; audit: VisualAuditResult; repairedArtifact?: any }> {
+    async verifyAndRepair(request: VisualVerificationRequest, artifact?: any): Promise<{ success: boolean; audit: VisualVerificationOutcome; repairedArtifact?: any }> {
         const res = await fetch(`${this.endpoint()}/verify-and-repair`, {
             method: 'POST',
             headers: {

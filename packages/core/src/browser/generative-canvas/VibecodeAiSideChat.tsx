@@ -9,6 +9,7 @@
 
 import * as React from 'react';
 import { ChatMessage, WorkspaceFileType, AgentExecutionStep } from './canvas-types';
+import { isVisualAuditUnavailable } from '../../common/visual-verification-protocol';
 import {
     IconArrowDown,
     IconArrowUp,
@@ -429,8 +430,14 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                                 />
                             </div>
 
+                            {isVisualAuditUnavailable(msg.visualAudit) && (
+                                <div className="sb-visual-audit-card mt-3 mb-2 p-3 bg-slate-900/90 rounded-xl border border-slate-600/40 text-[11px] text-slate-300">
+                                    Visual check unavailable: {msg.visualAudit.error}
+                                </div>
+                            )}
+
                             {/* Autonomous Multimodal Vision QA Audit Card */}
-                            {msg.visualAudit && (
+                            {msg.visualAudit && !isVisualAuditUnavailable(msg.visualAudit) && (
                                 <div className="sb-visual-audit-card mt-3 mb-2 p-3 bg-slate-900/90 rounded-xl border border-blue-500/30 shadow-lg animate-fadeIn text-xs">
                                     <div className="flex items-center justify-between gap-2 mb-2">
                                         <div className="flex items-center gap-1.5 text-blue-400 font-semibold text-[11px]">
@@ -444,7 +451,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                                         }`}>
                                             <span>Fidelity {msg.visualAudit.fidelityScore}/100</span>
                                             <span>•</span>
-                                            <span>{msg.visualAudit.pass ? 'Verified' : 'Auto-Repaired'}</span>
+                                            <span>{msg.visualAudit.pass ? 'Passed' : 'Below 80'}</span>
                                         </div>
                                     </div>
 

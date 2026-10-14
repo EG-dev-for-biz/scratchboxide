@@ -40,7 +40,7 @@ export interface InteractiveBrowserPrimitiveProps {
     onUpdate?: (updatedData: InteractiveBrowserData) => void;
     onPromptAction?: (promptText: string) => void;
     onMorphArtifact?: (artifact: CanvasArtifact, targetType: string) => void;
-    onCaptureReady?: (captureFn: () => string) => void;
+    onCaptureReady?: (captureFn: () => string | null) => void;
     onVisualVerification?: (screenshotDataUrl: string) => void;
     hideTopbar?: boolean;
 }
@@ -48,7 +48,7 @@ export interface InteractiveBrowserPrimitiveProps {
 /**
  * Captures a screenshot data URL of the active interactive browser viewport or iframe.
  */
-export function captureBrowserScreenshot(containerOrIframe?: HTMLElement | null): string {
+export function captureBrowserScreenshot(containerOrIframe?: HTMLElement | null): string | null {
     if (containerOrIframe) {
         if (containerOrIframe instanceof HTMLIFrameElement) {
             try {
@@ -85,8 +85,8 @@ export function captureBrowserScreenshot(containerOrIframe?: HTMLElement | null)
         }
     }
 
-    // High-resolution deterministic PNG fallback
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    // No readable canvas: report no frame (never a placeholder image for the visual check to inspect).
+    return null;
 }
 
 const DEFAULT_BOOKMARKS = [
@@ -186,7 +186,7 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
     }, []);
 
     // Frame Capture & Automated Verification Hooks
-    const captureFrame = React.useCallback((): string => {
+    const captureFrame = React.useCallback((): string | null => {
         return captureBrowserScreenshot(iframeRef.current);
     }, []);
 

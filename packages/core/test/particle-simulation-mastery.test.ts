@@ -308,15 +308,16 @@ int main() {
         fs.writeFileSync(screenshotPath, Buffer.from(base64Data, 'base64'));
         expect(fs.existsSync(screenshotPath)).toBe(true);
 
-        // Vision QA Evaluation
-        const visualService = new VisualVerificationService();
+        // Vision QA: the score comes only from the vision model. With no credentials (the client here has none, so no
+        // live call is made) the check reports itself unavailable instead of scoring the frame from scene metadata.
+        const visualService = new VisualVerificationService({ getGenAIClient: async () => undefined });
         const auditResult = await visualService.verifyVisual({
             image: screenshotDataUrl,
             prompt: 'Dynamic 3D particle vortex simulation with blackbody thermal radiance and curl noise turbulence',
             artifactType: '3d-scene'
         });
 
-        expect(auditResult).toBeDefined();
-        expect(auditResult.fidelityScore).toBeGreaterThanOrEqual(70);
+        expect(auditResult.status).toBe('unavailable');
+        expect(auditResult).not.toHaveProperty('fidelityScore');
     });
 });
