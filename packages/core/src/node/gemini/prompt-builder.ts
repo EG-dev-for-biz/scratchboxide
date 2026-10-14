@@ -39,6 +39,37 @@ export const WORKING_METHOD_SECTION = `
 5. Report honestly. State what you did and what you verified. Report numbers only when a tool returned them. If something failed, could not be checked, or is only partly done, say so plainly. Never describe a result a tool did not produce.
 6. Before finishing, re-read the user's request and confirm every part of it is addressed.`;
 
+/** Knowledge files are sent in full up to this size (~40k tokens); past it the model gets an index to read from. */
+const MAX_INLINE_KNOWLEDGE_CHARS = 150_000;
+
+/**
+ * The project's reference files (.scratchbox/knowledge/). Small sets go in whole; large sets become an
+ * index the model reads from on demand with workspace_read_file, so they never crowd out the task.
+ */
+export async function buildProjectKnowledgeSection(
+    workspaceRoot: string | undefined,
+    workspaceConfig: WorkspaceConfigService | undefined
+): Promise<string> {
+    if (!workspaceConfig) return '';
+    let files;
+    try {
+        files = await workspaceConfig.loadProjectKnowledge(workspaceRoot || '');
+    } catch (err) {
+        console.warn('[Gemini] Failed to load project knowledge', err);
+        return '';
+    }
+    if (files.length === 0) return '';
+    const textChars = files.reduce((n, f) => n + (f.content?.length || 0), 0);
+    if (textChars <= MAX_INLINE_KNOWLEDGE_CHARS) {
+        const blocks = files.map(f => f.content !== undefined
+            ? `<knowledge path="${f.path}">\n${f.content.trim()}\n</knowledge>`
+            : `<knowledge path="${f.path}" bytes="${f.bytes}">(binary or over 2 MB, not shown; read it with workspace_read_file if needed)</knowledge>`);
+        return `\n\n### PROJECT KNOWLEDGE (reference files the user added to this project):\n${blocks.join('\n\n')}\n`;
+    }
+    const index = files.map(f => `- ${f.path} (${Math.round(f.bytes / 1024)} KB${f.content === undefined ? ', binary or large' : ''})`).join('\n');
+    return `\n\n### PROJECT KNOWLEDGE (reference files the user added to this project):\nThese files are too large to include in full. Read the ones relevant to the task with workspace_read_file before relying on them:\n${index}\n`;
+}
+
 /** Upper bound on project instructions in the system prompt (~50k tokens). */
 const MAX_PROJECT_INSTRUCTION_CHARS = 200_000;
 
@@ -619,12 +650,13 @@ If a task needs a capability that is not available natively (e.g. neural image-t
 
     const projectInstructionsSection = await buildProjectInstructionsSection(request.workspaceRoot, services.workspaceConfig);
     const workingMethodSection = isCodingMode ? WORKING_METHOD_SECTION : '';
+    const projectKnowledgeSection = await buildProjectKnowledgeSection(request.workspaceRoot, services.workspaceConfig);
 
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
         : '\n\nDeliver insightful, Cupertino-grade results. Output a friendly intro explanation followed by the complete ```json codeblock.';
 
-    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
+    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
 }
 
 /**

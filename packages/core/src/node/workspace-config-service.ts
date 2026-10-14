@@ -62,6 +62,14 @@ export interface AgentInstructions {
     customInstructions?: string;
 }
 
+export interface ProjectKnowledgeFile {
+    /** Path relative to the workspace root. */
+    path: string;
+    bytes: number;
+    /** Text content; undefined for binary files and files over 2 MB. */
+    content?: string;
+}
+
 export interface ArtifactSyncResult {
     success: boolean;
     writtenFiles: string[];
@@ -476,6 +484,29 @@ export class WorkspaceConfigService {
             customSkills,
             customMcpServers
         };
+    }
+
+    /** Files the user put in `<workspace>/.scratchbox/knowledge/` (recursively), text content included. */
+    async loadProjectKnowledge(workspaceRoot: string): Promise<ProjectKnowledgeFile[]> {
+        const root = path.resolve(workspaceRoot || process.cwd());
+        const dir = path.join(root, '.scratchbox', 'knowledge');
+        if (!(await fs.pathExists(dir))) return [];
+        const files: ProjectKnowledgeFile[] = [];
+        const walk = async (d: string): Promise<void> => {
+            for (const entry of await fs.readdir(d, { withFileTypes: true })) {
+                if (entry.name.startsWith('.')) continue;
+                const full = path.join(d, entry.name);
+                if (entry.isDirectory()) { await walk(full); continue; }
+                if (!entry.isFile()) continue;
+                const { size } = await fs.stat(full);
+                // Large files are listed but not loaded; the agent reads them on demand.
+                const buf = size <= 2 * 1024 * 1024 ? await fs.readFile(full) : undefined;
+                const isText = !!buf && !buf.subarray(0, 8000).includes(0);
+                files.push({ path: path.relative(root, full), bytes: size, content: isText ? buf!.toString('utf-8') : undefined });
+            }
+        };
+        await walk(dir);
+        return files.sort((a, b) => a.path.localeCompare(b.path));
     }
 
     /**

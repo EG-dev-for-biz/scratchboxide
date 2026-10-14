@@ -56,7 +56,17 @@ export function isProtectedInternalPath(filePath: string): boolean {
     return forbiddenPatterns.some(pat => normalized.includes(pat));
 }
 
+/** Project knowledge (.scratchbox/knowledge/) is meant to be read by the agent, though the rest of .scratchbox is not. */
+function isProjectKnowledgePath(filePath: string): boolean {
+    const segments = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
+    const i = segments.indexOf('.scratchbox');
+    return i >= 0 && segments[i + 1] === 'knowledge' && !segments.includes('..');
+}
+
+const READ_OPERATIONS = new Set(['read', 'view', 'list directory']);
+
 export function assertSafeWorkspacePath(filePath: string, operation: string): void {
+    if (READ_OPERATIONS.has(operation) && isProjectKnowledgePath(filePath)) return;
     if (isProtectedInternalPath(filePath)) {
         throw new Error(
             `Scratchbox Sandbox Protection: Access denied for ${operation} on internal IDE runtime path "${filePath}". ` +
