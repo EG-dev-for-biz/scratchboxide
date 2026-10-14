@@ -594,7 +594,7 @@ if _native is not None and hasattr(_native, "geometry"):
         return vec_c, mat
 
     _orig_create_cylinder = getattr(_geom, "create_cylinder", None)
-    def create_cylinder(radius=None, radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, material=None, capped=True, **kwargs):
+    def create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, material=None, capped=True, *, radius=None, **kwargs):
         rt = float(radius if radius is not None else radius_top)
         rb = float(radius if radius is not None else radius_bottom)
         c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.8, 0.8, 1.0))
