@@ -12,7 +12,6 @@ import * as assert from 'assert';
 import {
     NANO_BANANA_STYLES,
     synthesizeContextualNanoBananaPrompt,
-    lookupCuratedNanoBananaImage,
     NanoBananaPromptContext
 } from '../src/browser/generative-canvas/nano-banana-service';
 import { synthesizeComprehensiveDocument } from '../src/browser/generative-canvas/document-synthesis-engine';
@@ -37,10 +36,8 @@ async function runNanoBananaPromptingTests() {
     assert.ok(signingResult.prompt.includes('Philadelphia') || signingResult.prompt.includes('Pennsylvania State House') || signingResult.prompt.includes('Assembly Room'), 'Prompt includes historical location setting');
     assert.ok(/parchment|quill|colonial|frock|Georgian/i.test(signingResult.prompt), 'Prompt includes authentic period entities (parchment/quill/Georgian)');
     assert.ok(/35mm|cinematic|anamorphic|film|lighting|lens/i.test(signingResult.prompt), 'Prompt includes cinematic film optics and lighting');
-    assert.ok(signingResult.attribution.includes('Nano Banana'), 'Attribution specifies Nano Banana');
-    assert.ok(signingResult.curatedImageUrl.startsWith('http') || signingResult.curatedImageUrl.startsWith('data:image/svg+xml') || signingResult.curatedImageUrl.includes('<svg'), 'Curated image URL or vector is provided');
-    // Ensure it does NOT use the generic stamp/railway collage
-    assert.ok(!signingResult.curatedImageUrl.includes('photo-1582555172866'), 'Does not use generic postcard collage');
+    // A prompt and its style only: no catalog image or model credit comes with it (the media job makes the image).
+    assert.deepStrictEqual(Object.keys(signingResult).sort(), ['prompt', 'styleLabel'], 'Result carries no stock image or attribution');
     console.log('  ✓ Test 1 Passed: Rich contextual prompt generated for Declaration of Independence Signing.');
 
     // Test 2: Style Transformations on the same historical context
@@ -51,25 +48,10 @@ async function runNanoBananaPromptingTests() {
 
     const engravingResult = synthesizeContextualNanoBananaPrompt({ ...signingContext, styleId: 'vintage-engraving' });
     assert.ok(/engraving|copperplate|cross-hatching|etching|sepia|intaglio/i.test(engravingResult.prompt), 'Engraving style contains printmaking keywords');
-    assert.ok(engravingResult.curatedImageUrl.startsWith('http') || engravingResult.curatedImageUrl.startsWith('data:image/svg+xml') || engravingResult.curatedImageUrl.includes('<svg'), 'Engraving image URL exists');
 
     const blueprintResult = synthesizeContextualNanoBananaPrompt({ ...signingContext, styleId: 'architectural' });
     assert.ok(/architectural|blueprint|schematic|drafting|elevation/i.test(blueprintResult.prompt), 'Blueprint style contains drafting keywords');
     console.log('  ✓ Test 2 Passed: Style switching modifies aesthetic directives while retaining deep historical context.');
-
-    // Test 3: Curated high-relevance image catalog lookup
-    console.log('\nTest 3: Curated image catalog precision...');
-    const declImage = lookupCuratedNanoBananaImage('1776-revolution', 'Reenactment of the Declaration of Independence Signing', 'oil-painting');
-    assert.ok(declImage.url, 'Declaration image exists');
-    assert.ok(declImage.title.includes('Declaration') || declImage.title.includes('Congress'), 'Image title matches Declaration theme');
-
-    const delawareImage = lookupCuratedNanoBananaImage('1776-revolution', "Washington's Crossing of the Delaware", 'oil-painting');
-    assert.ok(delawareImage.url, 'Delaware crossing image exists');
-    assert.ok(delawareImage.title.includes('Delaware') || delawareImage.title.includes('Washington'), 'Image title matches Washington Crossing Delaware');
-
-    const zeroTrustImage = lookupCuratedNanoBananaImage('auth-zerotrust-security', 'PKCE Handshake and Passkey Verification', 'architectural');
-    assert.ok(zeroTrustImage.url, 'Zero trust image exists');
-    console.log('  ✓ Test 3 Passed: Curated catalog delivers distinct, high-relevance imagery for each scene.');
 
     // Test 4: Document Synthesis Engine Integration
     console.log('\nTest 4: Verifying Document Synthesis Engine produces contextual Nano Banana metadata...');
@@ -78,8 +60,8 @@ async function runNanoBananaPromptingTests() {
     assert.ok(editorialSec, 'Editorial/video section exists in synthesized 1776 document');
     assert.ok(editorialSec?.visualPrompt, 'Section contains rich visualPrompt');
     assert.ok(editorialSec?.visualPrompt?.includes('1776') || editorialSec?.visualPrompt?.includes('Washington') || editorialSec?.visualPrompt?.includes('Declaration'), 'visualPrompt contains contextual entities');
-    assert.ok(editorialSec?.attribution?.includes('Nano Banana'), 'Attribution reflects Nano Banana generation');
-    assert.ok(!editorialSec?.imageUrl?.includes('photo-1582555172866'), 'Section does not use generic postage stamp photo');
+    assert.strictEqual(editorialSec?.attribution, undefined, 'No model is credited before an image was generated');
+    assert.strictEqual(editorialSec?.imageUrl, undefined, 'No stock image stands in for the generation');
     console.log('  ✓ Test 4 Passed: Document synthesis engine seamlessly creates contextually enriched Nano Banana sections.');
 
     // Test 5: Verify all style presets in NANO_BANANA_STYLES have complete metadata

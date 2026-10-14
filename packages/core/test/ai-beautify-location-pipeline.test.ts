@@ -122,7 +122,9 @@ async function runAiBeautifyPipelineTests() {
     assert.strictEqual(restyledSection.type, 'location-image');
     assert.ok(restyledSection.visualPrompt && restyledSection.visualPrompt.includes('Winter 1776 blizzard'));
     assert.ok(restyledSection.stylePreset && restyledSection.stylePreset.includes('Cinematic'));
-    assert.ok(restyledSection.attribution && restyledSection.attribution.includes('Nano Banana Pro'));
+    // Restyling writes the prompt only: no catalog image is swapped in and no model is credited before a generation ran.
+    assert.strictEqual(restyledSection.imageUrl, originalSection.imageUrl);
+    assert.strictEqual(restyledSection.attribution, undefined);
     assert.ok(restyledSection.dateTag && restyledSection.dateTag.includes('1776'));
 
     console.log('  ✓ Test 4 Passed: beautifyLocationSection successfully transforms and stamps document location block');

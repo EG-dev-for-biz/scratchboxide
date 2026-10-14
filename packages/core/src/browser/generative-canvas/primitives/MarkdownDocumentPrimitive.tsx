@@ -55,11 +55,60 @@ import {
 } from '../canvas-icons';
 import { InlineMarkdown } from '../ChatMarkdownRenderer';
 import { NANO_BANANA_STYLES, synthesizeContextualNanoBananaPrompt } from '../nano-banana-service';
-import { beautifyLocationSection } from '../services/location-beautify-service';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
-import { IMAGE_MODEL_PRIORITY } from '../../../common/media-generation-protocol';
+import { IMAGE_MODEL_PRIORITY, type MediaGenerationJob } from '../../../common/media-generation-protocol';
 export { NANO_BANANA_STYLES };
+
+/**
+ * What a finished media job writes onto a document section: the generated asset, credited to the model that
+ * actually made it (and the requested model when another one in the fallback list answered).
+ */
+export function sectionMediaFromJob(job: MediaGenerationJob, assetUrl: string, isVideo: boolean, requestedModel?: string): Partial<MarkdownSection> {
+    const modelUsed = job.result?.modelUsed || job.modelUsed;
+    const attribution = !modelUsed
+        ? undefined
+        : requestedModel && modelUsed !== requestedModel
+            ? `Generated with ${modelUsed} (requested ${requestedModel}, which did not answer)`
+            : `Generated with ${modelUsed}`;
+    return {
+        imageUrl: assetUrl,
+        thumbnailUrl: assetUrl,
+        videoUrl: isVideo ? assetUrl : undefined,
+        attribution,
+        mediaError: undefined
+    };
+}
+
+/** What a failed generation writes onto a document section: the error, and no change to its image. */
+export function sectionMediaFailure(err: unknown, isVideo: boolean): Partial<MarkdownSection> {
+    const message = err instanceof Error ? err.message : typeof err === 'string' ? err : 'unknown error';
+    return { mediaError: `${isVideo ? 'Video' : 'Image'} generation failed: ${message}` };
+}
+
+const MEDIA_NOTICE_BASE: React.CSSProperties = {
+    position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+    minHeight: 120, padding: '14px 18px', fontSize: 12, lineHeight: 1.45, wordBreak: 'break-word'
+};
+
+/**
+ * The state of a section's image or video frame when there is nothing real to show: the generation error, an image
+ * file that failed to load, or no media yet. No stock photo or drawn placeholder is shown in its place.
+ */
+export const SectionMediaNotice: React.FC<{ kind: 'image' | 'video'; error?: string; regenerating?: boolean; missing?: boolean; brokenUrl?: string }> = ({ kind, error, regenerating, missing, brokenUrl }) => {
+    if (error && !regenerating) {
+        return <div data-testid="sb-doc-media-error" role="alert" style={{ ...MEDIA_NOTICE_BASE, background: 'rgba(127, 29, 29, 0.35)', color: '#fecaca' }}>{error}</div>;
+    }
+    if (brokenUrl) {
+        return <div data-testid="sb-doc-media-broken" role="alert" style={{ ...MEDIA_NOTICE_BASE, color: '#fcd34d' }}>The {kind} file could not be loaded: {brokenUrl}</div>;
+    }
+    if (missing) {
+        return regenerating
+            ? <div data-testid="sb-doc-media-generating" style={{ ...MEDIA_NOTICE_BASE, color: '#a1a1aa' }}>Generating {kind}…</div>
+            : <div data-testid="sb-doc-media-missing" style={{ ...MEDIA_NOTICE_BASE, color: '#a1a1aa' }}>No {kind} yet. Describe it in the prompt below to generate one.</div>;
+    }
+    return null;
+};
 
 export interface MarkdownDocumentPrimitiveProps {
     data: MarkdownDocumentData;
@@ -79,59 +128,6 @@ export interface MarkdownDocumentPrimitiveProps {
     workspacePath?: string;
 }
 
-export const THEME_STYLE_PRESETS: Record<string, Record<string, { url: string; prompt: string }>> = {
-    '1776-revolution': {
-        'oil-painting': {
-            url: 'https://images.unsplash.com/photo-1578301978693-85fa9c0320b9?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'Masterpiece 18th-century classical oil painting of General George Washington crossing the ice-choked Delaware River on Christmas night 1776, dramatic stormy sky, Continental soldiers in wooden Durham boats, lantern illumination on icy waves, rich museum fine art texture.'
-        },
-        'cinematic-film': {
-            url: 'https://images.unsplash.com/photo-1533158307587-828f0a76ef46?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'Cinematic 35mm film still of 1776 colonial winter encampment, Continental Army soldiers gathered around glowing firelight, heavy snow falling, dramatic atmospheric haze, anamorphic lens character.'
-        },
-        'vintage-engraving': {
-            url: 'https://images.unsplash.com/photo-1582555172866-f73bb12a2ab3?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'Intricate antique copperplate engraving of the Second Continental Congress in Philadelphia July 1776, fine cross-hatching, sepia archival paper patina, high-resolution historical document illustration.'
-        },
-        'architectural': {
-            url: 'https://images.unsplash.com/photo-1575881875475-31024b156660?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'Architectural elevation and historical reconstruction blueprint of Independence Hall Assembly Room in Philadelphia 1776, Georgian colonial proportions, crisp drafting lines on aged parchment.'
-        },
-        'modern-editorial': {
-            url: 'https://images.unsplash.com/photo-1461360370896-922624d12aa1?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'High-end fine art gallery editorial photography of antique parchment Declaration of Independence with natural museum window light and shallow depth of field.'
-        }
-    },
-    'auth-zerotrust-security': {
-        'architectural': {
-            url: 'https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'Ultra-clean modern technical schematic of a zero-trust distributed mesh network, glowing cyan routing channels, biometric passkey hardware tokens, and low-latency edge proxy nodes on dark slate canvas.'
-        },
-        'neural-ai': {
-            url: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'Cryptographic data matrix with glowing green and cyan terminal code, secure enclave memory isolation barriers, and asymmetric key rotation streams.'
-        },
-        'modern-editorial': {
-            url: 'https://images.unsplash.com/photo-1563986768609-322da13575f3?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'Minimalist high-tech hardware security key on dark matte granite surface, soft volumetric studio lighting, Cupertino-grade macro product photography.'
-        }
-    },
-    'ai-machine-learning': {
-        'neural-ai': {
-            url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'Multi-modal generative AI tensor network visualization, glowing transformer attention heads, vector embedding manifolds, and autonomous subagent routing nodes in vivid indigo and magenta.'
-        },
-        'cinematic-film': {
-            url: 'https://images.unsplash.com/photo-1620712943543-bcc4688e7485?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'High-density accelerated GPU computing cluster in dark datacenter with glowing fiber optic cables and soft holographic architectural overlays.'
-        },
-        'architectural': {
-            url: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=1600&q=85',
-            prompt: 'System architecture diagram of distributed autonomous reasoning engines and multi-agent task execution graphs, clean isometric vector blueprint.'
-        }
-    }
-};
-
 export function extractDomain(url?: string): string | undefined {
     if (!url) return undefined;
     try {
@@ -141,129 +137,6 @@ export function extractDomain(url?: string): string | undefined {
         const match = url.match(/^(?:https?:\/\/)?(?:www\.)?([^\/\?#]+)/i);
         return match ? match[1] : undefined;
     }
-}
-
-export function getTopicFallbackSvg(title: string, tag?: string, themeName?: string): string {
-    const combined = `${title || ''} ${tag || ''} ${themeName || ''}`.toLowerCase();
-    const is1776 = /1776|declaration|independence|philadelphia|washington|revolution|colonial/i.test(combined);
-    const isAuth = /auth|security|oauth|passkey|jwt|zero[- ]trust/i.test(combined);
-    const isAI = /ai|neural|model|llm|intelligence|transformer/i.test(combined);
-
-    const bgGradStart = is1776 ? '#2a1a10' : isAuth ? '#081726' : isAI ? '#160826' : '#18181b';
-    const bgGradEnd = is1776 ? '#140c06' : isAuth ? '#030810' : isAI ? '#090212' : '#09090b';
-    const accentColor = is1776 ? '#f59e0b' : isAuth ? '#38bdf8' : isAI ? '#c084fc' : '#3b82f6';
-    const accentSubtle = is1776 ? 'rgba(245, 158, 11, 0.16)' : isAuth ? 'rgba(56, 189, 248, 0.16)' : isAI ? 'rgba(192, 132, 252, 0.16)' : 'rgba(59, 130, 246, 0.16)';
-    const icon = is1776 ? '🏛️' : isAuth ? '🛡️' : isAI ? '🧠' : '📐';
-    const badgeText = tag || (is1776 ? 'Historical Landmark • 1776' : isAuth ? 'Security Specification' : isAI ? 'AI Architecture' : 'Editorial Spec');
-
-    const cleanTitle = (title || 'Visual Context').replace(/[<>&"]/g, '');
-    const cleanBadge = (badgeText || '').replace(/[<>&"]/g, '');
-
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" width="100%" height="100%">
-  <defs>
-    <linearGradient id="bg-${cleanTitle.slice(0, 8)}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="${bgGradStart}"/>
-      <stop offset="100%" stop-color="${bgGradEnd}"/>
-    </linearGradient>
-    <radialGradient id="radial-${cleanTitle.slice(0, 8)}" cx="50%" cy="42%" r="55%">
-      <stop offset="0%" stop-color="${accentColor}" stop-opacity="0.22"/>
-      <stop offset="100%" stop-color="${accentColor}" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-
-  <rect width="1200" height="640" fill="url(#bg-${cleanTitle.slice(0, 8)})"/>
-  <rect width="1200" height="640" fill="url(#radial-${cleanTitle.slice(0, 8)})"/>
-
-  <!-- Decorative Frame -->
-  <rect x="24" y="24" width="1152" height="592" rx="18" fill="none" stroke="${accentColor}" stroke-opacity="0.3" stroke-width="1.5" stroke-dasharray="8 6"/>
-
-  <!-- Center Artwork Icon Badge -->
-  <g transform="translate(600, 240)">
-    <circle r="68" fill="${accentSubtle}" stroke="${accentColor}" stroke-opacity="0.5" stroke-width="2"/>
-    <text font-size="52" text-anchor="middle" dominant-baseline="central">${icon}</text>
-  </g>
-
-  <!-- Title & Metadata -->
-  <text x="600" y="375" fill="#f8fafc" font-size="28" font-weight="700" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif">${cleanTitle}</text>
-  
-  <g transform="translate(600, 430)">
-    <rect x="-150" y="-17" width="300" height="34" rx="17" fill="${accentSubtle}" stroke="${accentColor}" stroke-opacity="0.6" stroke-width="1.2"/>
-    <text x="0" y="5" fill="${accentColor}" font-size="13" font-weight="600" letter-spacing="0.8" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">${cleanBadge}</text>
-  </g>
-</svg>`;
-
-    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-export function getLocationFallbackSvg(title: string, contextLabel?: string, metadata?: string, themeName?: string): string {
-    const combined = `${title || ''} ${contextLabel || ''} ${themeName || ''}`.toLowerCase();
-    const variant = /1776|declaration|independence|philadelphia|washington|revolution|colonial|historic/i.test(combined)
-        ? 'historical'
-        : /auth|security|oauth|passkey|zero[- ]trust|datacenter|edge/i.test(combined)
-            ? 'infrastructure'
-            : 'archive';
-    const palette = variant === 'historical'
-        ? { start: '#241b14', end: '#100d0a', line: '#b89662', text: '#f3eadc', quiet: '#c7b89f' }
-        : variant === 'infrastructure'
-            ? { start: '#101c26', end: '#080d12', line: '#6f91a8', text: '#edf4f7', quiet: '#a9bac4' }
-            : { start: '#1b1d20', end: '#0d0e10', line: '#8f969d', text: '#f1f2f3', quiet: '#b2b6bb' };
-    const escapeSvgText = (value: string): string => value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
-    const clampWords = (value: string, maxChars: number): string => {
-        const normalized = value.replace(/\s+/g, ' ').trim();
-        return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
-    };
-    const titleWords = (title || 'Geographic landmark').replace(/\s+/g, ' ').trim().split(' ');
-    const titleLines = titleWords.reduce<string[]>((lines, word) => {
-        const activeLine = lines[lines.length - 1] || '';
-        if (!activeLine || `${activeLine} ${word}`.length <= 42) {
-            lines[lines.length - 1] = activeLine ? `${activeLine} ${word}` : word;
-        } else {
-            lines.push(word);
-        }
-        return lines;
-    }, ['']).slice(0, 2);
-    const titleWasClamped = titleWords.join(' ').length > titleLines.join(' ').length;
-    const cleanTitleLines = titleLines.map((line, index) => {
-        const constrainedLine = clampWords(line, index === 1 && titleWasClamped ? 38 : 42);
-        const displayLine = index === 1 && titleWasClamped
-            ? `${constrainedLine.replace(/…$/, '')}…`
-            : constrainedLine;
-        return escapeSvgText(displayLine);
-    });
-    const cleanContext = escapeSvgText(clampWords(contextLabel || 'Location context', 42).slice(0, 42));
-    const cleanMetadata = escapeSvgText(clampWords(metadata || 'Archival geographic reference', 74).slice(0, 74));
-    const titleTspans = cleanTitleLines.map((line, index) =>
-        `<tspan x="600" dy="${index === 0 ? 0 : 42}">${line}</tspan>`
-    ).join('');
-
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" width="100%" height="100%">
-  <defs>
-    <linearGradient id="location-plate-bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="${palette.start}"/>
-      <stop offset="100%" stop-color="${palette.end}"/>
-    </linearGradient>
-    <radialGradient id="location-plate-light" cx="50%" cy="42%" r="48%">
-      <stop offset="0%" stop-color="${palette.line}" stop-opacity="0.13"/>
-      <stop offset="100%" stop-color="${palette.line}" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-  <rect width="1200" height="675" fill="url(#location-plate-bg)"/>
-  <rect width="1200" height="675" fill="url(#location-plate-light)"/>
-  <path d="M88 92h1024M88 583h1024" stroke="${palette.line}" stroke-opacity="0.28"/>
-  <g transform="translate(600 260)" fill="none" stroke="${palette.line}" stroke-width="5">
-    <path d="M0-67c-39 0-70 31-70 70 0 52 70 122 70 122S70 55 70 3c0-39-31-70-70-70Z"/>
-    <path d="M-35 4h70M-27 4v39M-9 4v39M9 4v39M27 4v39M-39 45h78M-30-8 0-27 30-8Z" stroke-width="4"/>
-  </g>
-  <text x="600" y="440" fill="${palette.text}" font-size="34" font-weight="650" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif">${titleTspans}</text>
-  <text x="600" y="555" fill="${palette.quiet}" font-size="16" text-anchor="middle" letter-spacing="0.4" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">${cleanMetadata}</text>
-</svg>`;
-
-    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
 // Source: Google Maps Platform Code Assist
@@ -429,6 +302,8 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
         stylePreset?: string;
     } | null>(null);
     const [regeneratingImages, setRegeneratingImages] = React.useState<Record<string, boolean>>({});
+    // Section id -> the image URL that failed to load (shown as such, never swapped for a drawn stand-in).
+    const [brokenMedia, setBrokenMedia] = React.useState<Record<string, string>>({});
     const [openStyleMenuSectionId, setOpenStyleMenuSectionId] = React.useState<string | null>(null);
     const [copiedPromptSectionId, setCopiedPromptSectionId] = React.useState<string | null>(null);
 
@@ -813,114 +688,77 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
             : 'cinematic-film'
         );
 
+        const isVideo = section.type === 'video';
+        let activePrompt: string;
+        let styleLabel: string | undefined;
         if (section.type === 'location-image') {
-            const restyled = beautifyLocationSection(section, {
-                styleId: styleKey,
-                docTitle: doc.title
-            });
-
-            setTimeout(() => {
+            // The AI Beautify prompt restyles a 3D tiles render, which a document section does not have; without a
+            // reference frame only the user's own description can be generated (nothing is swapped in instead).
+            const described = (section.prompt || '').trim();
+            if (!described) {
                 handleUpdateSection(section.id, {
-                    imageUrl: restyled.imageUrl,
-                    thumbnailUrl: restyled.thumbnailUrl,
-                    stylePreset: restyled.stylePreset,
-                    visualPrompt: restyled.visualPrompt,
-                    attribution: restyled.attribution,
-                    imageTitle: restyled.imageTitle || section.imageTitle,
-                    caption: restyled.caption || section.caption,
-                    dateTag: restyled.dateTag || section.dateTag
+                    mediaError: 'Restyling a location image needs a 3D tiles render to work from, and this section has none. Describe the image you want in the prompt to generate one.'
                 });
                 setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
-            }, 500);
-            return;
+                return;
+            }
+            activePrompt = described;
+            styleLabel = section.stylePreset;
+        } else {
+            // Surrounding context (nearby headings, paragraphs, callouts) grounds the prompt.
+            const secIndex = (doc.sections || []).findIndex(s => s.id === section.id);
+            const adjacentSections = (doc.sections || []).slice(Math.max(0, secIndex - 2), secIndex + 3);
+            const adjacentText = adjacentSections.map(s => s.content || s.caption || s.calloutTitle || s.locationName || s.videoTitle || '').join(' ');
+            const synth = synthesizeContextualNanoBananaPrompt({
+                docTitle: doc.title,
+                docSubtitle: doc.subtitle,
+                sectionTitle: section.imageTitle || section.videoTitle || section.locationName,
+                sectionContent: section.caption || section.description || section.content,
+                adjacentText,
+                styleId: styleKey
+            });
+            activePrompt = section.prompt || section.visualPrompt || synth.prompt;
+            styleLabel = synth.styleLabel;
         }
 
-        // Find surrounding context (nearby headings, paragraphs, callouts in doc.sections)
-        const secIndex = (doc.sections || []).findIndex(s => s.id === section.id);
-        const adjacentSections = (doc.sections || []).slice(Math.max(0, secIndex - 2), secIndex + 3);
-        const adjacentText = adjacentSections.map(s => s.content || s.caption || s.calloutTitle || s.locationName || s.videoTitle || '').join(' ');
-
-        const synth = synthesizeContextualNanoBananaPrompt({
-            docTitle: doc.title,
-            docSubtitle: doc.subtitle,
-            sectionTitle: section.imageTitle || section.videoTitle || section.locationName,
-            sectionContent: section.caption || section.description || section.content,
-            adjacentText,
-            styleId: styleKey
-        });
-
-        const activePrompt = section.prompt || section.visualPrompt || synth.prompt;
-        const isVideo = section.type === 'video';
+        const modelPriority = isVideo
+            ? ['google/omni-1.1', 'gemini-omni-flash-video', 'veo-3.1-generate-preview']
+            : IMAGE_MODEL_PRIORITY;
+        // A failed generation leaves the section's image as it was and shows why; nothing stands in for it.
+        const fail = (err: unknown) => {
+            handleUpdateSection(section.id, sectionMediaFailure(err, isVideo));
+            setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
+        };
 
         try {
             const client = MediaGenerationClient.getInstance();
             const wsPath = workspacePath || (typeof window !== 'undefined' ? (window as any).__scratchbox_active_workspace_path : undefined) || '';
-            const idempotencyKey = `doc-media-${section.id}-${Date.now()}`;
-
             const job = await client.start({
                 kind: isVideo ? 'video' : 'image',
                 prompt: activePrompt,
                 workspaceRoot: wsPath,
-                idempotencyKey,
+                idempotencyKey: `doc-media-${section.id}-${Date.now()}`,
                 aspectRatio: '16:9',
-                modelPriority: isVideo
-                    ? ['google/omni-1.1', 'gemini-omni-flash-video', 'veo-3.1-generate-preview']
-                    : IMAGE_MODEL_PRIORITY
+                modelPriority
             });
-
-            if (job) {
-                // Fallback to the contextual synthesized asset on failure / quota / transport errors.
-                const applyCuratedFallback = () => {
+            // Polling is owned by useMediaJobPoller: aborted + interval cleared on unmount.
+            mediaJobPoller.startPolling({
+                jobId: job.id,
+                workspaceRoot: wsPath,
+                intervalMs: 2000,
+                onComplete: done => {
                     handleUpdateSection(section.id, {
-                        imageUrl: synth.curatedImageUrl,
-                        thumbnailUrl: synth.curatedImageUrl,
-                        stylePreset: synth.styleLabel,
-                        visualPrompt: activePrompt,
-                        attribution: synth.attribution,
-                        imageTitle: section.imageTitle || section.videoTitle || synth.imageTitle,
-                        caption: section.caption || synth.caption
+                        ...sectionMediaFromJob(done, client.contentUrl(job.id, wsPath), isVideo, modelPriority[0]),
+                        stylePreset: styleLabel,
+                        visualPrompt: activePrompt
                     });
                     setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
-                };
-                // Polling is owned by useMediaJobPoller: aborted + interval cleared on unmount.
-                mediaJobPoller.startPolling({
-                    jobId: job.id,
-                    workspaceRoot: wsPath,
-                    intervalMs: 2000,
-                    onComplete: () => {
-                        const resultUrl = client.contentUrl(job.id, wsPath);
-                        handleUpdateSection(section.id, {
-                            imageUrl: resultUrl,
-                            thumbnailUrl: resultUrl,
-                            videoUrl: isVideo ? resultUrl : undefined,
-                            stylePreset: synth.styleLabel,
-                            visualPrompt: activePrompt,
-                            attribution: isVideo ? 'Generated with Google Omni 1.1' : 'Generated with Google Nano Banana 2',
-                            imageTitle: section.imageTitle || section.videoTitle || synth.imageTitle,
-                            caption: section.caption || synth.caption
-                        });
-                        setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
-                    },
-                    onError: applyCuratedFallback
-                });
-                return;
-            }
-        } catch (genErr) {
-            console.warn('[MarkdownDocumentPrimitive] Live media generation fallback to contextual asset:', genErr);
-        }
-
-        setTimeout(() => {
-            handleUpdateSection(section.id, {
-                imageUrl: synth.curatedImageUrl,
-                thumbnailUrl: synth.curatedImageUrl,
-                stylePreset: synth.styleLabel,
-                visualPrompt: activePrompt,
-                attribution: synth.attribution,
-                imageTitle: section.imageTitle || section.videoTitle || synth.imageTitle,
-                caption: section.caption || synth.caption
+                },
+                onError: (err, failedJob) => fail(failedJob?.error?.message ? new Error(failedJob.error.message) : err)
             });
-            setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
-        }, 500);
+        } catch (err) {
+            fail(err);
+        }
     };
 
     const handleSelectDiagramNode = (sectionId: string, nodeId: string, e?: React.MouseEvent) => {
@@ -1522,27 +1360,24 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
 
                 {/* Multi-Modal Block 1: Clean Editorial Location & Spatial Imagery */}
                 {section.type === 'location-image' && (() => {
-                    const currentImgUrl = section.imageUrl || 'https://images.unsplash.com/photo-1575881875475-31024b156660?auto=format&fit=crop&w=1600&q=85';
+                    // Only the section's own image: no stock photo or drawn stand-in when it has none or it fails to load.
+                    const currentImgUrl = section.imageUrl || section.thumbnailUrl || '';
+                    const imageBroken = !!currentImgUrl && brokenMedia[section.id] === currentImgUrl;
                     const displayTitle = section.locationName || section.imageTitle || 'Geographic Landmark';
-                    const displayCaption = section.caption || 'Historical location context and geographic setting supporting this narrative specification.';
+                    const displayCaption = section.caption || '';
                     const displayDateTag = section.dateTag || (section.locationName ? section.locationName.split(',')[0] : 'Historical Landmark');
                     const displayAttribution = section.attribution || (section.coordinates ? `Historical Landmark • ${section.coordinates.lat.toFixed(4)}° N, ${Math.abs(section.coordinates.lng).toFixed(4)}° W` : 'Historical Landmark');
 
                     return (
                         <figure className="sb-editorial-image-card sb-doc-editorial-image-card sb-doc-location-card group">
                             <div className="sb-editorial-image-frame sb-location-media-frame">
-                                <img
+                                <SectionMediaNotice kind="image" error={section.mediaError} regenerating={Boolean(regeneratingImages[section.id])} missing={!currentImgUrl} brokenUrl={imageBroken ? currentImgUrl : undefined} />
+                                {currentImgUrl && !imageBroken && <img
                                     src={currentImgUrl}
                                     alt={displayTitle}
                                     className="sb-editorial-image-element sb-location-image-element"
                                     loading="lazy"
-                                    onError={(e) => {
-                                        const target = e.currentTarget;
-                                        const fallback = getLocationFallbackSvg(displayTitle, displayDateTag, displayAttribution, doc.title);
-                                        if (target.src !== fallback) {
-                                            target.src = fallback;
-                                        }
-                                    }}
+                                    onError={() => setBrokenMedia(prev => ({ ...prev, [section.id]: currentImgUrl }))}
                                     onClick={() => setLightboxImage({
                                         url: currentImgUrl,
                                         title: displayTitle,
@@ -1550,7 +1385,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                         attribution: displayAttribution,
                                         dateTag: displayDateTag
                                     })}
-                                />
+                                />}
                                 <div className="sb-editorial-image-scrim" />
                                 {displayDateTag && (
                                     <div className="sb-editorial-badge sb-location-context-label">
@@ -1694,28 +1529,25 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 {(section.type === 'editorial-image' || section.type === 'image') && (() => {
                     const isRegenerating = Boolean(regeneratingImages[section.id]);
                     const isStyleMenuOpen = openStyleMenuSectionId === section.id;
-                    const currentImgUrl = section.imageUrl || section.thumbnailUrl || 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=1600&q=85';
-                    const displayTitle = section.imageTitle || section.locationName || 'Visual Reconstruction & Narrative Context';
-                    const displayCaption = section.caption || section.description || 'High-fidelity editorial visual reconstruction supporting this narrative specification.';
-                    const displayDateTag = section.dateTag || 'Historical Archive';
-                    const displayAttribution = section.attribution || 'Visual Archive • Nano Banana Synthesis';
+                    // Only the section's own image: no stock photo, drawn stand-in or model credit when it has none.
+                    const currentImgUrl = section.imageUrl || section.thumbnailUrl || '';
+                    const imageBroken = !!currentImgUrl && brokenMedia[section.id] === currentImgUrl;
+                    const displayTitle = section.imageTitle || section.locationName || 'Image';
+                    const displayCaption = section.caption || section.description || '';
+                    const displayDateTag = section.dateTag;
+                    const displayAttribution = section.attribution;
 
                     return (
                         <figure className="sb-editorial-image-card sb-doc-editorial-image-card group">
                             {/* Image Frame Viewport */}
                             <div className="sb-editorial-image-frame">
-                                <img
+                                <SectionMediaNotice kind="image" error={section.mediaError} regenerating={isRegenerating} missing={!currentImgUrl} brokenUrl={imageBroken ? currentImgUrl : undefined} />
+                                {currentImgUrl && !imageBroken && <img
                                     src={currentImgUrl}
                                     alt={displayTitle}
                                     className={`sb-editorial-image-element ${isRegenerating ? 'sb-image-loading' : ''}`}
                                     loading="lazy"
-                                    onError={(e) => {
-                                        const target = e.currentTarget;
-                                        const fallback = getTopicFallbackSvg(displayTitle, displayDateTag, doc.title);
-                                        if (target.src !== fallback) {
-                                            target.src = fallback;
-                                        }
-                                    }}
+                                    onError={() => setBrokenMedia(prev => ({ ...prev, [section.id]: currentImgUrl }))}
                                     onClick={() => setLightboxImage({
                                         url: currentImgUrl,
                                         title: displayTitle,
@@ -1725,7 +1557,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                         prompt: section.visualPrompt || section.prompt,
                                         stylePreset: section.stylePreset
                                     })}
-                                />
+                                />}
 
                                 {/* Subtle gradient scrim */}
                                 <div className="sb-editorial-image-scrim" />
@@ -1965,41 +1797,41 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 {section.type === 'video' && (() => {
                     const isRegenerating = Boolean(regeneratingImages[section.id]);
                     const isStyleMenuOpen = openStyleMenuSectionId === section.id;
-                    const currentImgUrl = section.imageUrl || section.thumbnailUrl || 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=1600&q=85';
-                    const displayTitle = section.videoTitle || section.imageTitle || 'Video Walkthrough';
-                    const displayCaption = section.caption || section.description || 'Walkthrough and timeline simulation.';
-                    const displayDuration = section.duration || '03:00';
-                    const displayAttribution = section.attribution || 'Visual Simulation Archive';
+                    // Only the section's own frame: no stock photo, drawn stand-in, invented duration or credit.
+                    const currentImgUrl = section.imageUrl || section.thumbnailUrl || '';
+                    const imageBroken = !!currentImgUrl && brokenMedia[section.id] === currentImgUrl;
+                    const displayTitle = section.videoTitle || section.imageTitle || 'Video';
+                    const displayCaption = section.caption || section.description || '';
+                    const displayDuration = section.duration;
+                    const displayAttribution = section.attribution;
+                    const durationTag = displayDuration ? `Duration: ${displayDuration}` : undefined;
 
                     return (
                         <figure className="sb-editorial-image-card sb-doc-editorial-image-card sb-doc-video-card group">
                             <div className="sb-editorial-image-frame relative">
-                                <img
+                                <SectionMediaNotice kind="video" error={section.mediaError} regenerating={isRegenerating} missing={!currentImgUrl} brokenUrl={imageBroken ? currentImgUrl : undefined} />
+                                {currentImgUrl && !imageBroken && <img
                                     src={currentImgUrl}
                                     alt={displayTitle}
                                     className={`sb-editorial-image-element ${isRegenerating ? 'sb-image-loading' : ''}`}
                                     loading="lazy"
-                                    onError={(e) => {
-                                        const target = e.currentTarget;
-                                        const fallback = getTopicFallbackSvg(displayTitle, `Duration: ${displayDuration}`, doc.title);
-                                        if (target.src !== fallback) {
-                                            target.src = fallback;
-                                        }
-                                    }}
+                                    onError={() => setBrokenMedia(prev => ({ ...prev, [section.id]: currentImgUrl }))}
                                     onClick={() => setLightboxImage({
                                         url: currentImgUrl,
                                         title: displayTitle,
                                         caption: displayCaption,
                                         attribution: displayAttribution,
-                                        dateTag: `Duration: ${displayDuration}`,
+                                        dateTag: durationTag,
                                         prompt: section.visualPrompt || section.prompt,
                                         stylePreset: section.stylePreset
                                     })}
-                                />
+                                />}
                                 <div className="sb-editorial-image-scrim" />
-                                <div className="sb-editorial-badge">
-                                    <span>▶ {displayDuration}</span>
-                                </div>
+                                {displayDuration && (
+                                    <div className="sb-editorial-badge">
+                                        <span>▶ {displayDuration}</span>
+                                    </div>
+                                )}
                                 <div className="sb-editorial-overlay-actions">
                                     <button
                                         type="button"

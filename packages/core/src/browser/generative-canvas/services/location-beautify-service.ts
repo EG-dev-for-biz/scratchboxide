@@ -9,7 +9,6 @@
 
 import { MarkdownSection } from '../canvas-types';
 import { DocumentTheme, detectDocumentTheme } from '../document-synthesis-engine';
-import { lookupCuratedNanoBananaImage } from '../nano-banana-service';
 import type { ColmapCameraPose } from '../../../common/spatial/colmap-vector-reference-types';
 export interface NanoBananaStyle {
     id: string;
@@ -708,22 +707,14 @@ export function beautifyLocationSection(
         mood: options.mood || 'golden-hour'
     });
 
-    const curated = lookupCuratedNanoBananaImage(locContext.theme, section.locationName || options.docTitle, styleId);
-
-    const attribution = curated.attribution
-        ? (curated.attribution.includes('Nano Banana') ? curated.attribution : `${curated.attribution} • Nano Banana Pro`)
-        : `Photorealistic 3D Tile Beautify • ${locContext.locationName} • Nano Banana Pro`;
-
+    // The restyle prompt only: the section keeps its own image and credit until a generation replaces them
+    // (no catalog image is swapped in and credited to a model).
     return {
         ...section,
         type: 'location-image',
         locationName: section.locationName || locContext.locationName,
-        imageUrl: curated.url || section.imageUrl,
-        thumbnailUrl: curated.url || section.imageUrl,
         stylePreset: styleObj.label,
         visualPrompt: beautifyPrompt,
-        attribution,
-        dateTag: curated.dateTag || (eraContext.includes('1776') ? 'Colonial Era • 1776' : 'Historical Landmark'),
-        caption: curated.caption || section.caption || `High-fidelity architectural reconstruction of ${section.locationName || locContext.locationName} with authentic historical textures.`
+        dateTag: section.dateTag || (eraContext.includes('1776') ? 'Colonial Era • 1776' : 'Historical Landmark')
     };
 }

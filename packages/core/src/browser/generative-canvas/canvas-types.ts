@@ -371,6 +371,8 @@ export interface MarkdownSection {
     mapHeading?: number;
     mapZoom?: number;
     alt?: string;
+    /** The last image/video generation for this section failed; the error as the media job reported it. */
+    mediaError?: string;
 
     // 2. Video / Temporal Moment Reconstruction
     videoUrl?: string;
