@@ -18,7 +18,7 @@ spec:
       containerConcurrency: 80
       timeoutSeconds: 300
       containers:
-      - image: gcr.io/scratchbox-canvas/scratchbox-spatial-separator:latest
+      - image: gcr.io/scoutscan/scratchbox-spatial-separator:latest
         ports:
         - name: http1
           containerPort: 8080

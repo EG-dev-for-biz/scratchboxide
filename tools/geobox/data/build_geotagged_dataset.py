@@ -145,7 +145,7 @@ def main():
     parser.add_argument("--output-dir", type=str, default="build/geobox_data", help="Local directory for shards")
     parser.add_argument("--shard-size", type=int, default=16, help="Samples per shard")
     parser.add_argument("--upload-gcs", action="store_true", help="Upload shards to GCS bucket")
-    parser.add_argument("--gcs-bucket", type=str, default="gs://scratchbox-canvas-geobox/data/train", help="GCS target path")
+    parser.add_argument("--gcs-bucket", type=str, default="gs://scoutscan-geobox/data/train", help="GCS target path")
     args = parser.parse_args()
 
     shards = build_shards(args.output_dir, shard_size=args.shard_size)

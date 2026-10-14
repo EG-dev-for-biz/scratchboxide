@@ -7,7 +7,7 @@ set -euo pipefail
 
 PROJECT=$(gcloud config get-value project 2>/dev/null)
 REGION=us-central1
-BUCKET=scratchbox-canvas-multiview-artifacts
+BUCKET=scoutscan-multiview-artifacts
 JOB=sbx-multiview-diffusion
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/cloud-run-source-deploy/$JOB:latest"
 SRC="${1:-$HOME/dev/multiview-main}"

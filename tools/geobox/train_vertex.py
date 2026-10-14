@@ -106,7 +106,7 @@ def main():
         if os.path.exists("build/geobox_data/shard-00000.tar"):
             train_pattern = "build/geobox_data/*.tar"
         else:
-            train_pattern = "gs://scratchbox-canvas-geobox/data/train/*.tar"
+            train_pattern = "gs://scoutscan-geobox/data/train/*.tar"
 
     if not args.dry_run:
         print(f"🌐 [GeoBox Trainer] Connecting to dataset pattern: {train_pattern}")

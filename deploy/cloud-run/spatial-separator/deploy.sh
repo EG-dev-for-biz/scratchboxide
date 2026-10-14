@@ -11,7 +11,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "${REPO_ROOT}"
 
-PROJECT_ID="${1:-scratchbox-canvas}"
+PROJECT_ID="${1:-scoutscan}"
 REGION="${2:-us-central1}"
 SERVICE_NAME="scratchbox-spatial-separator"
 IMAGE_TAG="us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${SERVICE_NAME}:latest"

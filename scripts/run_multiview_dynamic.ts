@@ -37,8 +37,8 @@ async function main() {
     let job: MultiviewJob;
     let final;
     if (resume) {
-        job = { jobId: resume, bucket: 'scratchbox-canvas-multiview-artifacts', backend: flag('zone') ? 'gce' : 'cloudrun',
-            zone: flag('zone'), jobUri: `gs://scratchbox-canvas-multiview-artifacts/jobs/${resume}` };
+        job = { jobId: resume, bucket: 'scoutscan-multiview-artifacts', backend: flag('zone') ? 'gce' : 'cloudrun',
+            zone: flag('zone'), jobUri: `gs://scoutscan-multiview-artifacts/jobs/${resume}` };
         final = await cloud.waitForCompletion(job, log);
     } else if (backend === 'cloudrun') {
         // Cloud Run caps GPU tasks at 1 hour: stage the diffusion output first, then refine from it.

@@ -2599,10 +2599,8 @@ export async function uploadPptxToGoogleSlides(pptxPath, title) {
   const { JWT } = await import('google-auth-library');
 
   const saCandidates = [
-    '/Users/eligreen/.gemini/antigravity/brain/ac7cb5ba-ca0b-4872-b699-a89e29c9c80e/google_service_account.json',
-    '/Users/eligreen/.gemini/antigravity/brain/b545620b-4fcf-4171-9ece-7a2c47573e3f/google_service_account.json',
-    '/Users/eligreen/dev/SCRATCHBOX-STUDIO/attached_assets/Pasted--type-service-account-project-id-scratchbox-canvas-priv_1787240560989.txt',
     process.env.GOOGLE_APPLICATION_CREDENTIALS,
+    path.resolve(process.cwd(), 'service-account.json'),
   ];
 
   let saPath = null;

@@ -54,6 +54,7 @@ async function uploadToFalStorage(buf, falKey, contentType = 'image/png') {
 
 let cachedToken = null;
 let tokenExpiry = 0;
+let gcpProjectId = null;
 
 async function getGoogleAccessToken() {
     const now = Math.floor(Date.now() / 1000);
@@ -66,7 +67,12 @@ async function getGoogleAccessToken() {
         sa = typeof secrets.GOOGLE_SERVICE_ACCOUNT_JSON === 'string' ? JSON.parse(secrets.GOOGLE_SERVICE_ACCOUNT_JSON) : secrets.GOOGLE_SERVICE_ACCOUNT_JSON;
     }
     
+    if (!sa) {
+        const saPath = path.resolve(__dirname, '..', 'service-account.json');
+        if (fs.existsSync(saPath)) sa = JSON.parse(fs.readFileSync(saPath, 'utf8'));
+    }
     if (!sa) return null;
+    gcpProjectId = sa.project_id;
     
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
     const claim = Buffer.from(JSON.stringify({
@@ -638,7 +644,7 @@ const server = http.createServer(async (req, res) => {
                     const cleanMask = (mask || '').replace(/^data:image\/\w+;base64,/, '');
 
                     // Vertex AI Imagen 3 / 2 inpainting endpoint
-                    const vertexUrl = 'https://us-central1-aiplatform.googleapis.com/v1/projects/scratchbox-canvas/locations/us-central1/publishers/google/models/imagegeneration@006:predict';
+                    const vertexUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/${gcpProjectId}/locations/us-central1/publishers/google/models/imagegeneration@006:predict`;
                     const vertexPayload = JSON.stringify({
                         instances: [{
                             prompt: prompt,
@@ -703,9 +709,7 @@ const server = http.createServer(async (req, res) => {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     ok: true,
-                    engine: 'patchmatch',
-                    account: 'credit@scratchbox-canvas.iam.gserviceaccount.com',
-                    project: 'scratchbox-canvas'
+                    engine: 'patchmatch'
                 }));
             } catch (err) {
                 console.error('Inpaint route error:', err);

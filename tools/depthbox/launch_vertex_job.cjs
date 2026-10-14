@@ -51,7 +51,7 @@ async function main() {
         console.warn('⚠️ No GCP service account found in secrets.json or service-account.json. Simulating submission.');
     }
 
-    const projectId = credentials?.project_id || 'scratchbox-canvas';
+    const projectId = credentials?.project_id || 'scoutscan';
     console.log(`🔑 GCP Project: ${projectId}`);
     console.log(`📍 Region: ${region}`);
 

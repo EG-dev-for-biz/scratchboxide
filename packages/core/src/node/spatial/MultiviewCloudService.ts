@@ -59,7 +59,7 @@ export interface MultiviewJob {
     execution?: string;
 }
 
-const DEFAULT_BUCKET = 'scratchbox-canvas-multiview-artifacts';
+const DEFAULT_BUCKET = 'scoutscan-multiview-artifacts';
 const IMAGE_FAMILY = 'common-cu129-ubuntu-2204-nvidia-580';
 const JOB_SCRIPTS = ['scripts/run_gvhmr.py', 'scripts/refine_multiview_avatar.py', 'scripts/sbx_skinning.py', 'deploy/multiview-cloudrun/entrypoint.sh'];
 const CLOUD_RUN_JOB = 'sbx-multiview-diffusion';

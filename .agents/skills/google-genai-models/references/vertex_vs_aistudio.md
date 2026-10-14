@@ -43,7 +43,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 import { GoogleGenAI } from '@google/genai';
 const ai = new GoogleGenAI({
   vertexAI: {
-    project: serviceAccount.project_id || 'scratchbox-canvas',
+    project: serviceAccount.project_id || 'scoutscan',
     location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'
   }
 });

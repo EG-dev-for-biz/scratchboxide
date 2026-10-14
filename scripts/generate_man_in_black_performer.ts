@@ -10,7 +10,7 @@ import {
 
 // Generates an original (fictional) 1960s-style country performer as a Performer 4DGS-ready source clip:
 // neutral #808080 studio, flat light, 9:16 head-to-toe, A-pose Frame 0, locked camera, 8 s @ 1080p.
-// Usage: GOOGLE_CLOUD_PROJECT=scratchbox-canvas npx vite-node scripts/generate_man_in_black_performer.ts [--image-only] [--reuse-image]
+// Usage: GOOGLE_CLOUD_PROJECT=scoutscan npx vite-node scripts/generate_man_in_black_performer.ts [--image-only] [--reuse-image]
 
 const DEMO_ID = 'man-in-black';
 

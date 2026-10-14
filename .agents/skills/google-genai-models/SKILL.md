@@ -46,7 +46,7 @@ The workspace provides automatic dual-credential resolution through [scripts/goo
 
 ### Credential Resolution Hierarchy
 1. **Google AI Studio API Key**: Automatically extracted from `secrets.json` (`GEMINI_API_KEY`, `GOOGLE_GENAI_API_KEY`, or `GOOGLE_AI_API_KEY`) or environment variables.
-2. **Google Cloud Vertex AI**: Automatically loaded from `secrets.json` (`GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`), targeting GCP project (e.g. `scoutscan` or `scratchbox-canvas`) in `us-central1` or `global`.
+2. **Google Cloud Vertex AI**: Automatically loaded from `secrets.json` (`GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`), targeting GCP project (`scoutscan`; never `scratchbox-canvas`, which must not be billed) in `us-central1` or `global`.
 3. **Application Default Credentials (ADC)**: Resolves active credentials via `gcloud auth application-default login`.
 
 To diagnose credential status at any time, run:

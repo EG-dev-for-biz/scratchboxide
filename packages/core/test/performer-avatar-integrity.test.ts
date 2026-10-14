@@ -447,7 +447,7 @@ describe('Multi-view cloud job', () => {
         expect(create).toContain('--no-address');
         expect(create).toContain('--accelerator=type=nvidia-tesla-a100,count=1');
         expect(create.find(a => a.startsWith('--metadata='))).toContain('views-per-layer=6,layer-pitches=[0,30]');
-        expect(calls.some(c => c[0] === 'gsutil' && c.at(-1) === 'gs://scratchbox-canvas-multiview-artifacts/jobs/test-job/input.mp4')).toBe(true);
+        expect(calls.some(c => c[0] === 'gsutil' && c.at(-1) === 'gs://scoutscan-multiview-artifacts/jobs/test-job/input.mp4')).toBe(true);
     });
 
     it('executes the Cloud Run GPU job with per-run environment overrides by default', () => {

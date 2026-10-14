@@ -3,7 +3,7 @@ import * as fs from 'fs-extra';
 import { execFileSync } from 'child_process';
 import { VideoTo4DPerformerPipelineService } from '../packages/core/src/node/spatial/VideoTo4DPerformerPipelineService';
 
-const GCS_SAMPLES = 'gs://scratchbox-canvas-multiview-artifacts/samples';
+const GCS_SAMPLES = 'gs://scoutscan-multiview-artifacts/samples';
 
 // Motion, body shape, hero frame and texture all come from the performer's source video via GVHMR
 // (cached gvhmr_body.json is reused unless --retrack; --mediapipe selects the landmark fallback).

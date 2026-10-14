@@ -46,17 +46,18 @@ async function main() {
     console.log(`📸 Start Frame:    ${startFramePath}`);
     console.log('✨ [Omni 1.1] Loading service account credentials...');
     const secretsPath = path.resolve(__dirname, '../secrets.json');
-    if (!fs.existsSync(secretsPath)) {
-        throw new Error('secrets.json not found');
+    const saPath = path.resolve(__dirname, '../service-account.json');
+    const secrets = fs.existsSync(secretsPath) ? JSON.parse(fs.readFileSync(secretsPath, 'utf8')) : {};
+    let credentials = secrets.GOOGLE_SERVICE_ACCOUNT_JSON
+        || (fs.existsSync(saPath) ? JSON.parse(fs.readFileSync(saPath, 'utf8')) : undefined);
+    if (!credentials) {
+        throw new Error('No service account: set GOOGLE_SERVICE_ACCOUNT_JSON in secrets.json or add service-account.json');
     }
-
-    const secrets = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
-    let credentials = secrets.GOOGLE_SERVICE_ACCOUNT_JSON;
     if (typeof credentials === 'string') {
         credentials = JSON.parse(credentials);
     }
 
-    const projectId = credentials.project_id || 'scratchbox-canvas';
+    const projectId = credentials.project_id;
     console.log(`🔑 [Omni 1.1] Authenticating with project: ${projectId} (${credentials.client_email})...`);
 
     const auth = new GoogleAuth({
