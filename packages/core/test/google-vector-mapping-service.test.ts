@@ -125,14 +125,21 @@ describe('GoogleVectorMappingService', () => {
     }
   });
 
-  it('syncs canonical vector mapping dataset to public/data/google_midtown_vector_mapping.json', async () => {
+  it('serializes the canonical vector mapping dataset (google_midtown_vector_mapping.json) to disk', async () => {
     const fs = await import('fs');
     const path = await import('path');
+    const os = await import('os');
     const mapping = GoogleVectorMappingService.generateCanonicalMidtownMapping();
-    const targetPath = path.resolve(process.cwd(), 'public/data/google_midtown_vector_mapping.json');
+    // Temp dir: public/data/google_midtown_vector_mapping.json is tracked and must not be rewritten by tests.
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-vector-mapping-'));
+    const targetPath = path.join(outDir, 'google_midtown_vector_mapping.json');
 
-    fs.writeFileSync(targetPath, JSON.stringify(mapping, null, 2), 'utf8');
-    expect(fs.existsSync(targetPath)).toBe(true);
+    try {
+      fs.writeFileSync(targetPath, JSON.stringify(mapping, null, 2), 'utf8');
+      expect(fs.existsSync(targetPath)).toBe(true);
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
   });
 
   it('provides valid Path B Google Maps JavaScript Vector Map configuration and COLMAP GeoJSON', () => {

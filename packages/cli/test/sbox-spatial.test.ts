@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
+import * as os from 'os';
 import * as fs from 'fs-extra';
 import { SpatialRepository } from '../src/state/spatial-repository';
 import { runCli } from '../src/index';
@@ -20,8 +21,8 @@ describe('Scratchbox CLI (sbox) — Spatial Multiverse Version Control & 3D Proc
 
   beforeEach(async () => {
     originalCwd = process.cwd();
-    tempDir = path.resolve(__dirname, `../../.temp-cli-test-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
-    await fs.ensureDir(tempDir);
+    // Outside the repo (was packages/.temp-cli-test-*); realpath so cwd-relative paths compare equal on macOS (/var -> /private/var).
+    tempDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-cli-spatial-')));
     process.chdir(tempDir);
   });
 

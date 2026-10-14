@@ -7,8 +7,9 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import {
@@ -18,21 +19,42 @@ import {
 } from '../src/node/spatial/NerfstudioDatasetService';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import { encodePng } from '../src/node/texture-processing';
+import { SbVeggieService } from '../src/node/3d-engine/sb-veggie-service';
+import { REPO_ROOT, requireAll, requireAsset, withReason } from './helpers/requirements';
+
+const TREE_BLOB = 'public/models/botanical_tests/real_tile_extracted_tree_blob.glb';
+const PBR_GLB = 'public/models/colosseum_rome_1k_pbr.glb';
+const FUSED_SPLAT = 'public/tilesets/colosseum/fused.splat';
+const treeBlob = requireAsset(TREE_BLOB);
+const sceneAssets = requireAll(
+    requireAsset(PBR_GLB, 'scripts/apply_colosseum_1k_pbr_suite.cjs'),
+    requireAsset(FUSED_SPLAT, 'scripts/rebake_colosseum_authoritative_3dgs.ts')
+);
 
 describe('MVP 4-Step Pipeline: Tree Reshaping -> Chained Multi-View Restyle -> Nerfstudio Bundle (Sky-Masked) -> Scene Integration', () => {
-    const rootDir = path.resolve(__dirname, '../../..');
-    const datasetDir = path.join(rootDir, 'public/datasets/colosseum_mvp_nerfstudio');
-    const reshapedGlbPath = path.join(rootDir, 'public/models/mvp_tree_reshaped.glb');
-    const rawTileBlobPath = path.join(rootDir, 'public/models/botanical_tests/real_tile_extracted_tree_blob.glb');
-    const colosseumGlbPath = path.join(rootDir, 'public/models/colosseum_rome_1k_pbr.glb');
+    const rootDir = REPO_ROOT;
+    // Generated outputs go to a temp dir, never into public/.
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-mvp-4step-'));
+    afterAll(() => fs.rmSync(workDir, { recursive: true, force: true }));
+    const datasetDir = path.join(workDir, 'colosseum_mvp_nerfstudio');
+    const reshapedGlbPath = path.join(workDir, 'mvp_tree_reshaped.glb');
+    const rawTileBlobPath = path.join(rootDir, TREE_BLOB);
+    // Steps 2-3 only use the Colosseum geometry. The 1K PBR GLB is geometry-locked to the canonical textured mesh
+    // (same 234,679 vertices / 170,802 triangles, see colosseum-1k-pbr-pipeline.test.ts), which is tracked as the
+    // spatial-separator asset (6bb97f1); fall back to it when the gitignored PBR bake is absent.
+    const colosseumGlbPath = [
+        path.join(rootDir, PBR_GLB),
+        path.join(rootDir, 'deploy/cloud-run/spatial-separator/assets/colosseum_rome_textured.glb')
+    ].find(p => fs.existsSync(p)) ?? path.join(rootDir, PBR_GLB);
 
     // -------------------------------------------------------------------------
     // STEP 1: Reshape tree blobs using sb-veggie
     // -------------------------------------------------------------------------
     describe('Step 1: Reshape tree blobs using sb-veggie', () => {
-        it('fits real photogrammetry tree blob scan and produces watertight PBR botanical tree', () => {
+        it.skipIf(!treeBlob.ok)(withReason('fits real photogrammetry tree blob scan and produces watertight PBR botanical tree', treeBlob), async () => {
             expect(fs.existsSync(rawTileBlobPath)).toBe(true);
-            const binPath = path.join(rootDir, 'build/run_sb_veggie');
+            // run_sb_veggie silently falls back to a synthetic blob when --fit-scan is missing, hence the gate above.
+            const binPath = await new SbVeggieService().ensureBinary();
             expect(fs.existsSync(binPath)).toBe(true);
 
             // Execute native C++20 inversion
@@ -58,7 +80,7 @@ describe('MVP 4-Step Pipeline: Tree Reshaping -> Chained Multi-View Restyle -> N
             expect(version).toBe(2);
 
             console.log(`[Step 1 PASS] Reshaped tree GLB verified: ${reshapedGlbPath} (${(stat.size / 1024 / 1024).toFixed(1)} MB)`);
-        }, 45000);
+        }, 120000);
     });
 
     // -------------------------------------------------------------------------
@@ -325,7 +347,7 @@ describe('MVP 4-Step Pipeline: Tree Reshaping -> Chained Multi-View Restyle -> N
     // STEP 4: Put into scene with textured blockout
     // -------------------------------------------------------------------------
     describe('Step 4: Put into scene with textured blockout', () => {
-        it('verifies textured blockout mesh and 3DGS radiance field files are in place for Soft-Z scene integration', () => {
+        it.skipIf(!sceneAssets.ok)(withReason('verifies textured blockout mesh and 3DGS radiance field files are in place for Soft-Z scene integration', sceneAssets), () => {
             const tileGlbPath = path.join(rootDir, 'public/models/colosseum_rome_1k_pbr.glb');
             const splatPath = path.join(rootDir, 'public/tilesets/colosseum/fused.splat');
             const tilesetPath = path.join(rootDir, 'public/tilesets/colosseum/tileset.json');

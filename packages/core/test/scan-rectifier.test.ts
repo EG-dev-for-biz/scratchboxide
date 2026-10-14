@@ -27,12 +27,14 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { encodePng } from '../src/node/texture-processing';
+import { requireAsset, withReason } from './helpers/requirements';
 
 const REPO = path.resolve(__dirname, '../../..');
 const INCLUDE = path.join(REPO, 'packages/core/src/native/3d-engine/include');
 const CLI_SRC = path.join(REPO, 'scripts/run_scan_rectifier.cpp');
 const TILE = path.join(REPO, 'public/tiles/scan_studio_tile_esb_77197_98526.glb');
 const SHOTS = path.join(REPO, 'test-results/screenshots');
+const tileReq = requireAsset(TILE, 'scripts/extract_esb_tile.html (ESB Google 3D Tiles extraction)');
 
 // ---------------------------------------------------------------------------------------------
 // Independent GLB I/O (scene-order walk identical to the glTF spec traversal the reader uses)
@@ -745,7 +747,7 @@ describe('scan rectifier: thin walls keep their order and piers stay proud', () 
 // ---------------------------------------------------------------------------------------------
 // 2. Real Google 3D tile (ESB district)
 // ---------------------------------------------------------------------------------------------
-describe.skipIf(!fs.existsSync(TILE))('scan rectifier: real ESB district tile', () => {
+describe.skipIf(!tileReq.ok)(withReason('scan rectifier: real ESB district tile', tileReq), () => {
     let scan: Scan;
     let out: Sidecar;
     let stats: any;

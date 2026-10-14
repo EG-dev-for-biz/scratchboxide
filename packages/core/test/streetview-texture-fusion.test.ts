@@ -28,7 +28,13 @@ import { SurveyTextureUnprojector, type StationPlate } from '../src/node/spatial
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
 import { encodePng } from '../src/node/texture-processing';
-import { decodeImageToRgba, encodeRgbaToJpeg, readImageDimensions } from '../src/node/image-codec-ffmpeg';
+import { decodeImageToRgba, encodeRgbaToJpeg, readImageDimensions, resolveFfmpegPath } from '../src/node/image-codec-ffmpeg';
+import { findBinary, HOW_TO, withReason, type Requirement } from './helpers/requirements';
+
+/** encodeRgbaToJpeg spawns resolveFfmpegPath() (FFMPEG_PATH, else `ffmpeg` on PATH). */
+const ffmpeg: Requirement = findBinary(resolveFfmpegPath()) !== null
+    ? { ok: true, reason: '' }
+    : { ok: false, reason: `\`${resolveFfmpegPath()}\` not found (set FFMPEG_PATH or ${HOW_TO.ffmpeg})` };
 
 const SCREENSHOT_DIR = path.resolve(process.cwd(), 'test-results/screenshots');
 const WORK_DIR = path.resolve(process.cwd(), 'build/test_streetview_texture_fusion');
@@ -247,7 +253,8 @@ function psnr(se: number, n: number): number {
     return n > 0 ? 10 * Math.log10((255 * 255) / Math.max(1e-9, se / n)) : 0;
 }
 
-describe('StreetViewTextureFusion: Street View detail fused onto scan textures', () => {
+// The synthetic scene's textures are JPEG-encoded with ffmpeg.
+describe.skipIf(!ffmpeg.ok)(withReason('StreetViewTextureFusion: Street View detail fused onto scan textures', ffmpeg), () => {
     let scene: SyntheticScene;
     let plates: StationPlate[];
     let result: StreetViewTextureFusionResult;
@@ -481,7 +488,7 @@ describe('StreetViewTextureFusion helpers and SurveyTextureUnprojector opt-in mo
         expect(d[5]).toBe(Infinity); // separate chart: no feather leak across the gutter
     });
 
-    it('compactGlb drops orphan images and keeps referenced bytes verbatim', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('compactGlb drops orphan images and keeps referenced bytes verbatim', ffmpeg), async () => {
         const scene = await buildSyntheticScene();
         const { json, bin } = AlgorithmicUvEngine.parseGlb(scene.glb);
         const compact = compactGlb(json, bin);
@@ -494,7 +501,7 @@ describe('StreetViewTextureFusion helpers and SurveyTextureUnprojector opt-in mo
         }
     });
 
-    it('returns accumulators with GL texel centres and face incidence without encoding textures', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('returns accumulators with GL texel centres and face incidence without encoding textures', ffmpeg), async () => {
         const scene = await buildSyntheticScene();
         const plate = renderPlate(PLATES[0], scene.glb, 0);
         const { primitives } = SurveyTextureUnprojector.loadMeshPrimitives(scene.glb, 512, { decodeAllIndexTypes: true });

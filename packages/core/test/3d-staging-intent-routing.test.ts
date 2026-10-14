@@ -10,6 +10,12 @@ import { GoogleVectorMappingService } from '../src/browser/generative-canvas/ser
 import { Google3DTileBlockoutPipelineService } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import { python3DHandlers } from '../src/node/gemini/tools/python-3d-tools';
 import type { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
+import { requireAnyEnv, withReason } from './helpers/requirements';
+
+// execute_3d_python_script with a location ingests live Google 3D Tiles (GeospatialTileExtractionBridge ->
+// getGoogle3DTilesClay). Without a Maps key the leaf crawler is skipped and the headless-Chrome blockout
+// runner waits on tiles that never stream (watchdogs >= 60s, overall >= 5 min), so the test can only run online.
+const mapsTilesKey = requireAnyEnv(['GOOGLE_MAPS_API_KEY', 'MAP_TILES_API_KEY'], 'live Google Photorealistic 3D Tiles ingestion for location staging');
 
 describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () => {
     const mockBasketballCourtArtifact: CanvasArtifact = {
@@ -345,7 +351,7 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(detected?.lng).toBeCloseTo(7.4246, 4);
         });
 
-        it('supports direct geodetic coordinates [lat, lng] in execute_3d_python_script without static dictionaries', async () => {
+        it.skipIf(!mapsTilesKey.ok)(withReason('supports direct geodetic coordinates [lat, lng] in execute_3d_python_script without static dictionaries', mapsTilesKey), async () => {
             // Passing explicit coordinates directly in tool arguments
             const outcome = await python3DHandlers.execute_3d_python_script({
                 script: 'import scratchbox as sb\nscene = sb.Scene()\nsb.io.write_glb(OUTPUT_GLB_PATH, scene)',

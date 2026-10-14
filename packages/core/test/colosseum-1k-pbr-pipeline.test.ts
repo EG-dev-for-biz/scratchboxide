@@ -1,6 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { requireAll, requireAssets, withReason } from './helpers/requirements';
+
+const PRODUCER = 'scripts/apply_colosseum_1k_pbr_suite.cjs';
+const PBR_GLB = 'public/models/colosseum_rome_1k_pbr.glb';
+const HERO_MAPS = [
+    'public/models/colosseum_stone_texture_39_1k_albedo.jpg',
+    'public/models/colosseum_stone_texture_39_1k_normal.jpg',
+    'public/models/colosseum_stone_texture_39_1k_roughness.jpg',
+    'public/models/colosseum_stone_texture_39_1k_ao.jpg',
+    'public/models/colosseum_stone_texture_39_1k_orm.jpg',
+    'public/models/colosseum_foliage_texture_hero_1k_albedo.png',
+    'public/models/colosseum_foliage_texture_hero_1k_alpha.jpg'
+];
+const ORIGINAL_GLB = 'public/models/colosseum_rome_textured.glb';
+const pbrGlb = requireAssets([PBR_GLB], PRODUCER);
+const heroMaps = requireAssets(HERO_MAPS, PRODUCER);
+const driftInputs = requireAll(pbrGlb, requireAssets([ORIGINAL_GLB]));
 
 describe('Roman Colosseum 1K PBR Suite & Morphological Tensor Validation', () => {
     const glbPath = path.resolve(__dirname, '../../../public/models/colosseum_rome_1k_pbr.glb');
@@ -12,13 +29,13 @@ describe('Roman Colosseum 1K PBR Suite & Morphological Tensor Validation', () =>
     const heroFoliageAlbedo = path.resolve(__dirname, '../../../public/models/colosseum_foliage_texture_hero_1k_albedo.png');
     const heroFoliageAlpha = path.resolve(__dirname, '../../../public/models/colosseum_foliage_texture_hero_1k_alpha.jpg');
 
-    it('should verify the 1K PBR GLB exists and exceeds 90 MB', () => {
+    it.skipIf(!pbrGlb.ok)(withReason('should verify the 1K PBR GLB exists and exceeds 90 MB', pbrGlb), () => {
         expect(fs.existsSync(glbPath)).toBe(true);
         const stats = fs.statSync(glbPath);
         expect(stats.size).toBeGreaterThan(50 * 1024 * 1024); // > 50 MB (compacted from 174 MB with WebP & EXT_texture_webp)
     });
 
-    it('should verify all 5 hero stone inspection maps exist for Mesh 39 and hero foliage maps exist', () => {
+    it.skipIf(!heroMaps.ok)(withReason('should verify all 5 hero stone inspection maps exist for Mesh 39 and hero foliage maps exist', heroMaps), () => {
         expect(fs.existsSync(heroMesh39Albedo)).toBe(true);
         expect(fs.existsSync(heroMesh39Normal)).toBe(true);
         expect(fs.existsSync(heroMesh39Roughness)).toBe(true);
@@ -28,7 +45,7 @@ describe('Roman Colosseum 1K PBR Suite & Morphological Tensor Validation', () =>
         expect(fs.existsSync(heroFoliageAlpha)).toBe(true);
     });
 
-    it('should verify GLB internal structure: 79 submeshes, PBR standard materials, zero unlit, and foliage alphaMode MASK', () => {
+    it.skipIf(!pbrGlb.ok)(withReason('should verify GLB internal structure: 79 submeshes, PBR standard materials, zero unlit, and foliage alphaMode MASK', pbrGlb), () => {
         const buffer = fs.readFileSync(glbPath);
         const magic = buffer.readUInt32LE(0);
         expect(magic).toBe(0x46546C67); // 'glTF' in hex
@@ -92,7 +109,7 @@ describe('Roman Colosseum 1K PBR Suite & Morphological Tensor Validation', () =>
         }
     });
 
-    it('should verify exact 0.000 mm geometric drift lock against original Colosseum mesh', () => {
+    it.skipIf(!driftInputs.ok)(withReason('should verify exact 0.000 mm geometric drift lock against original Colosseum mesh', driftInputs), () => {
         const originalGlbPath = path.resolve(__dirname, '../../../public/models/colosseum_rome_textured.glb');
         const origBuffer = fs.readFileSync(originalGlbPath);
         const origJsonLen = origBuffer.readUInt32LE(12);

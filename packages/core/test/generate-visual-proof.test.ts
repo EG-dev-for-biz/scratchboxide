@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import {
     SpatialPoseEstimatorService,
     Point2D,
@@ -278,9 +279,15 @@ describe('Generate Visual Proof Dashboard', () => {
             }
         });
 
-        const outputPath = path.resolve(__dirname, '../../../public/visual_proof_alignment.html');
-        fs.writeFileSync(outputPath, htmlContent, 'utf-8');
-        expect(fs.existsSync(outputPath)).toBe(true);
+        // Written to a temp dir: public/visual_proof_alignment.html is tracked.
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-visual-proof-'));
+        try {
+            const outputPath = path.join(outDir, 'visual_proof_alignment.html');
+            fs.writeFileSync(outputPath, htmlContent, 'utf-8');
+            expect(fs.existsSync(outputPath)).toBe(true);
+        } finally {
+            fs.rmSync(outDir, { recursive: true, force: true });
+        }
     });
 });
 

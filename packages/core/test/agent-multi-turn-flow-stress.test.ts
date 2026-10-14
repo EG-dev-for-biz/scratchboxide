@@ -7,7 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import {
@@ -16,11 +17,18 @@ import {
     buildToolDeclarations
 } from '../src/node/gemini/tool-registry';
 import type { ToolContext } from '../src/node/gemini/tools/types';
+import { requireAssets, withReason } from './helpers/requirements';
+
+const avatar2785536 = requireAssets(
+    ['models/performer_4dgs/demos/2785536/human_4dgs.ply', 'models/performer_4dgs/demos/2785536/motion.json'],
+    'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)'
+);
 
 describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', () => {
     let registry: ToolRegistry;
     let mockContext: ToolContext;
-    const testDir = path.resolve(__dirname, '../../test_scratch_agent_journeys');
+    // Agent workspace for the journeys; kept out of the repo (packages/ is tracked).
+    const testDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-agent-journeys-')));
     const existingGlbPath = path.resolve(__dirname, '../../../public/colosseum_clay_styled_test.glb');
 
     beforeAll(() => {
@@ -75,6 +83,10 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         };
     });
 
+    afterAll(() => {
+        fs.rmSync(testDir, { recursive: true, force: true });
+    });
+
     // =========================================================================
     // Journey 1: Photorealistic Real-World Landmark Ingestion & VFX Compositing
     // =========================================================================
@@ -83,7 +95,9 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         const blockoutRes = await registry.dispatch('google_3d_tiles_clay_blockout_runner', {
             query: '41.890210, 12.492231',
             trajectoryPreset: 'cinematic_arc',
-            mockExecution: true
+            mockExecution: true,
+            // The mock tile GLB defaults to public/models; keep it in the test workspace
+            outputGlbPath: path.join(testDir, 'clay_blockout.glb')
         }, mockContext);
         expect(blockoutRes.exec.status).toBe('completed');
         expect((blockoutRes.resultPayload as any).videoRef).toBe('<VIDEO_REF_0>');
@@ -145,7 +159,7 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
     // =========================================================================
     // Journey 2: Performer Avatar & 4D Dynamic Gaussian Splatting
     // =========================================================================
-    it('Journey 2: Executes complete 5-step Performer Avatar & 4DGS pipeline', async () => {
+    it('Journey 2, steps 1-4: builds performer prompts, tracks points and builds the 4DGS rigidity graph', async () => {
         // Step 1: Build Neutral Studio Performer Prompt (Strict #808080 studio baseline)
         const neutralRes = await registry.dispatch('build_neutral_performer_prompt', {
             subject: 'Contemporary dancer in fitted athletic apparel',
@@ -189,7 +203,9 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         }, mockContext);
         expect(arapRes.exec.status).toBe('completed');
         expect((arapRes.resultPayload as any).telemetry).toBeDefined();
+    });
 
+    it.skipIf(!avatar2785536.ok)(withReason('Journey 2, step 5: animates the installed Performer avatar and exports deformed splats', avatar2785536), async () => {
         // Step 5: Animate Avatar and Export Deformed Splats
         const animRes = await registry.dispatch('avatar_4dgs_animate', {
             avatarId: '2785536',

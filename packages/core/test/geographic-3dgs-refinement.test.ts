@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import * as http from 'http';
@@ -15,10 +16,24 @@ import { spawn } from 'child_process';
 import { SurveySynthesisEngine } from '../src/common/spatial/SurveySynthesisEngine';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
 import { decodePng } from '../src/node/texture-processing';
+import { SurveySplatPipelineService } from '../src/node/spatial/SurveySplatPipelineService';
+import { requireBinary, withReason, type Requirement } from './helpers/requirements';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../');
 const PUBLIC_DIR = path.join(REPO_ROOT, 'public');
-const SHOT_DIR = path.join(REPO_ROOT, 'docs/screenshots');
+
+// SurveySplatPipelineService.ensureBaker() compiles scripts/station_to_splats.cpp with $CXX (default clang++).
+const cxx = requireBinary(process.env.CXX || 'clang++', 'install a C++20 compiler (Xcode command line tools / clang)');
+
+const CHROME_CANDIDATES = [
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser'
+];
+const chromePath = CHROME_CANDIDATES.find(p => fs.existsSync(p));
+const chrome: Requirement = chromePath
+    ? { ok: true, reason: '' }
+    : { ok: false, reason: `headless Chrome not found (looked in ${CHROME_CANDIDATES.join(', ')}); install Google Chrome or Chromium` };
 
 function computeImageChroma(pngBuffer: Buffer): { medianChroma: number; meanChroma: number; nonVoidCount: number } {
     const decoded = decodePng(pngBuffer);
@@ -99,13 +114,15 @@ describe('Geographical 3DGS Abilities Refinement & Survey System Tuning', () => 
         }
     });
 
-    it('2. Verifies chromaticity-preserving color calibration and clean unprojection parameters', async () => {
-        // Compile or ensure station_to_splats binary exists
-        const bakerPath = path.resolve(REPO_ROOT, 'build/station_to_splats');
+    it.skipIf(!cxx.ok)(withReason('2. Verifies chromaticity-preserving color calibration and clean unprojection parameters', cxx), async () => {
+        // Compile or ensure station_to_splats binary exists. build/ is a gitignored build-output folder, so
+        // the binary only exists when some earlier run compiled it: build it here instead of depending on that.
+        const bakerPath = await new SurveySplatPipelineService().ensureBaker();
+        expect(bakerPath).toBe(path.resolve(REPO_ROOT, 'build/station_to_splats'));
         expect(fs.existsSync(bakerPath)).toBe(true);
-    });
+    }, 300_000);
 
-    it('3. Serves geographic_3dgs_studio.html and captures visual verification screenshot with loaded 3D tile', async () => {
+    it('3. Serves geographic_3dgs_studio.html with the Google 3D tile mesh, 3DGS and Soft-Z controls', async () => {
         const studioHtmlPath = path.join(PUBLIC_DIR, 'geographic_3dgs_studio.html');
         expect(fs.existsSync(studioHtmlPath)).toBe(true);
 
@@ -113,10 +130,16 @@ describe('Geographical 3DGS Abilities Refinement & Survey System Tuning', () => 
         expect(htmlContent).toContain('Geographical 3DGS Studio');
         expect(htmlContent).toContain('PhotorealGaussianSplatMesh');
         expect(htmlContent).toContain('Google 3D Tile Mesh');
-        expect(htmlContent).toContain('colosseum_rome_textured.glb');
+        // The studio loads the 1K PBR derivative of the Colosseum Google tile
+        // (scripts/apply_colosseum_1k_pbr_suite.cjs: colosseum_rome_textured.glb -> colosseum_rome_1k_pbr.glb,
+        // 01c5cf9). The studio has referenced that file since it was first committed (39352e9).
+        expect(htmlContent).toContain('/models/colosseum_rome_1k_pbr.glb');
         expect(htmlContent).toContain('tileMeshLoaded');
         expect(htmlContent).toContain('geographic-3dtiles-survey');
         expect(htmlContent).toContain('Soft-Z Volumetric Interleaving');
+    });
+
+    it.skipIf(!chrome.ok)(withReason('3b. Captures a headless-Chrome verification screenshot of the served studio', chrome), async () => {
 
         // Spin up ephemeral test server
         const mimeTypes: Record<string, string> = {
@@ -149,41 +172,50 @@ describe('Geographical 3DGS Abilities Refinement & Survey System Tuning', () => 
         const port = (server.address() as any).port;
         const pageUrl = `http://127.0.0.1:${port}/geographic_3dgs_studio.html`;
 
-        await fs.ensureDir(SHOT_DIR);
-        const shotPath = path.join(SHOT_DIR, '135_geographic_3dgs_studio.png');
+        // Screenshot goes to a private temp dir, not docs/screenshots.
+        const shotDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-geographic-3dgs-studio-'));
+        const shotPath = path.join(shotDir, '135_geographic_3dgs_studio.png');
+        const profileDir = path.join(shotDir, 'chrome-profile');
 
-        // Check if headless chrome is available
-        const chromeCandidates = [
-            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-            '/usr/bin/google-chrome',
-            '/usr/bin/chromium-browser'
-        ];
-        let chromePath = chromeCandidates.find(p => fs.existsSync(p));
-
-        if (chromePath) {
+        try {
+            // Recent Chrome builds write the --screenshot file but keep the headless browser process
+            // alive afterwards, so wait for either exit or a written, size-stable screenshot, then stop it.
             await new Promise<void>((resolve) => {
                 const proc = spawn(chromePath!, [
                     '--headless=new',
                     '--hide-scrollbars',
+                    '--no-first-run',
                     '--window-size=1920,1080',
+                    `--user-data-dir=${profileDir}`,
                     `--screenshot=${shotPath}`,
                     pageUrl
-                ]);
-                proc.on('close', (code) => {
+                ], { stdio: 'ignore' });
+                let lastSize = -1;
+                const finish = () => {
+                    clearInterval(poll);
+                    clearTimeout(deadline);
+                    if (proc.exitCode === null) proc.kill('SIGKILL');
                     resolve();
-                });
-                proc.on('error', () => resolve());
+                };
+                const poll = setInterval(() => {
+                    const size = fs.existsSync(shotPath) ? fs.statSync(shotPath).size : -1;
+                    if (size > 0 && size === lastSize) finish();
+                    lastSize = size;
+                }, 500);
+                const deadline = setTimeout(finish, 90_000);
+                proc.on('close', finish);
+                proc.on('error', finish);
             });
 
-            if (fs.existsSync(shotPath)) {
-                const stat = await fs.stat(shotPath);
-                expect(stat.size).toBeGreaterThan(10000);
-                const buf = await fs.readFile(shotPath);
-                const chroma = computeImageChroma(buf);
-                expect(chroma.nonVoidCount).toBeGreaterThan(1000);
-            }
+            expect(fs.existsSync(shotPath)).toBe(true);
+            const stat = await fs.stat(shotPath);
+            expect(stat.size).toBeGreaterThan(10000);
+            const buf = await fs.readFile(shotPath);
+            const chroma = computeImageChroma(buf);
+            expect(chroma.nonVoidCount).toBeGreaterThan(1000);
+        } finally {
+            server.close();
+            await fs.remove(shotDir);
         }
-
-        server.close();
-    });
+    }, 120_000);
 });

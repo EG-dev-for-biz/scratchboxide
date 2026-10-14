@@ -20,6 +20,11 @@ import {
     imageToPbrHandlers
 } from '../src/node/gemini/tools/image-to-pbr-tools';
 import { AdaptiveMaterialPbrService } from '../src/node/3d-engine/adaptive-material-pbr-service';
+import { HOW_TO, requireBinary, withReason } from './helpers/requirements';
+
+// AdaptiveMaterialPbrService.decodeToRgba spawns bare `ffmpeg` from PATH (it does not read FFMPEG_PATH),
+// so the requirement is exactly a PATH lookup.
+const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
 
 /**
  * Creates a synthetic uncompressed PNG buffer using AdaptiveMaterialPbrService.
@@ -66,7 +71,7 @@ describe('ImageToAdaptivePbrService & Gemini Agent Tool (Zero-Preset Adaptive PB
         expect(serviceSource).not.toMatch(/switch\s*\(\s*materialCategory\s*\)/);
     });
 
-    it('transforms a 2D image into a metric aspect-locked PBR displaced plane (.glb) in < 150ms', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('transforms a 2D image into a metric aspect-locked PBR displaced plane (.glb) in < 150ms', ffmpeg), async () => {
         const width = 128;
         const height = 64; // Aspect ratio = 2.0
         const testImageBuf = await createSyntheticImageBuffer(width, height);
@@ -145,7 +150,7 @@ describe('ImageToAdaptivePbrService & Gemini Agent Tool (Zero-Preset Adaptive PB
         expect(gltf.images).toHaveLength(3);
     });
 
-    it('generates flat plane with upright normals when displacementScaleMeters is 0.0', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('generates flat plane with upright normals when displacementScaleMeters is 0.0', ffmpeg), async () => {
         const width = 64;
         const height = 64;
         const testImageBuf = await createSyntheticImageBuffer(width, height);
@@ -192,7 +197,7 @@ describe('ImageToAdaptivePbrService & Gemini Agent Tool (Zero-Preset Adaptive PB
         }
     });
 
-    it('executes Gemini agent tool image_to_adaptive_pbr_plane with file persistence and diagnostic maps', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('executes Gemini agent tool image_to_adaptive_pbr_plane with file persistence and diagnostic maps', ffmpeg), async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbr-plane-test-'));
         const inputImgPath = path.join(tmpDir, 'source.png');
         const outputGlbPath = path.join(tmpDir, 'output_plane.glb');

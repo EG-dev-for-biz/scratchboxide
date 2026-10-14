@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { SurveySynthesisEngine } from '../src/common/spatial/SurveySynthesisEngine';
@@ -8,6 +9,35 @@ import { createGoogleStationImageGenerator, type StationImageGenerator } from '.
 import { GoogleMediaGenerationService } from '../src/node/google-media-generation-service';
 import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
 import { MediaAssetStore } from '../src/node/media-asset-store';
+import { requireAll, requireAsset, withReason, type Requirement } from './helpers/requirements';
+
+const esbGlb = requireAsset('public/models/esb_grounded.glb');
+const colosseumGlb = requireAsset('public/models/colosseum_grounded.glb');
+const gapGlb = requireAsset('public/models/gap_grounded.glb');
+
+/**
+ * Vertex AI credentials as GoogleMediaCredentialsService.getVertexAuth() resolves them: a service-account
+ * file (env path or one of its default locations), inline GOOGLE_SERVICE_ACCOUNT_JSON, or a project id.
+ */
+function requireVertexCredentials(): Requirement {
+    const envNames = ['GOOGLE_APPLICATION_CREDENTIALS', 'GEMINI_SERVICE_ACCOUNT_PATH', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT'];
+    if (envNames.some(n => !!process.env[n])) return { ok: true, reason: '' };
+    const files = [
+        path.join(process.cwd(), 'service-account.json'),
+        path.join(process.cwd(), '.scratchbox-ide', 'service-account.json'),
+        path.join(os.homedir(), '.scratchbox-ide', 'service-account.json'),
+        path.join(os.homedir(), 'service-account.json')
+    ];
+    if (files.some(f => fs.existsSync(f))) return { ok: true, reason: '' };
+    return { ok: false, reason: `no Vertex AI credentials (set one of ${envNames.join(' / ')} or provide ~/.scratchbox-ide/service-account.json) for real Nano Banana station generation` };
+}
+const colosseumReqs = requireAll(colosseumGlb, requireVertexCredentials());
+
+// Every bake writes its tileset into a private temp dir, never into public/tilesets/<location>.
+const OUT_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-geo-survey-splats-'));
+afterAll(() => {
+    fs.removeSync(OUT_ROOT);
+});
 
 /**
  * Computes the distribution of chroma across all non-transparent pixels in a PNG buffer.
@@ -189,9 +219,9 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
     const engine = new SurveySynthesisEngine();
     const svc = new SurveySplatPipelineService({ generator });
 
-    it('bakes fresh 3DGS tileset for Location 1: Empire State Building', async () => {
+    it.skipIf(!esbGlb.ok)(withReason('bakes fresh 3DGS tileset for Location 1: Empire State Building', esbGlb), async () => {
         const glbPath = path.resolve(process.cwd(), 'public/models/esb_grounded.glb');
-        const outDir = path.resolve(process.cwd(), 'public/tilesets/esb');
+        const outDir = path.join(OUT_ROOT, 'esb');
         const anchor = {
             lat: 40.7484,
             lng: -73.9857,
@@ -253,7 +283,7 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
         expect(fs.existsSync(result.fusedSplatPath)).toBe(true);
     }, 1800000);
 
-    it('bakes fresh 3DGS tileset for Location 2: Rome Colosseum', async () => {
+    it.skipIf(!colosseumReqs.ok)(withReason('bakes fresh 3DGS tileset for Location 2: Rome Colosseum', colosseumReqs), async () => {
         // Ensure Vertex AI service account credentials are used for real generation
         delete process.env.GEMINI_API_KEY;
         delete process.env.GOOGLE_AI_API_KEY;
@@ -271,7 +301,7 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
         const realSvc = new SurveySplatPipelineService({ generator: realGenerator });
 
         const glbPath = path.resolve(process.cwd(), 'public/models/colosseum_grounded.glb');
-        const outDir = path.resolve(process.cwd(), 'public/tilesets/colosseum');
+        const outDir = path.join(OUT_ROOT, 'colosseum');
         const anchor = {
             lat: 41.8902,
             lng: 12.4922,
@@ -380,9 +410,9 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
         expect(medianSigma).toBeLessThanOrEqual(0.05);
     }, 1800000);
 
-    it('bakes fresh 3DGS tileset for Location 3: Grand Army Plaza', async () => {
+    it.skipIf(!gapGlb.ok)(withReason('bakes fresh 3DGS tileset for Location 3: Grand Army Plaza', gapGlb), async () => {
         const glbPath = path.resolve(process.cwd(), 'public/models/gap_grounded.glb');
-        const outDir = path.resolve(process.cwd(), 'public/tilesets/gap');
+        const outDir = path.join(OUT_ROOT, 'gap');
         const anchor = {
             lat: 40.7648,
             lng: -73.9733,

@@ -9,8 +9,18 @@
 
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
-import * as fs from 'fs-extra';
-import { HeadlessVideoEditorService } from '../src/node/video/HeadlessVideoEditorService';
+import { HeadlessVideoEditorService, resolveBinary } from '../src/node/video/HeadlessVideoEditorService';
+import { findBinary, HOW_TO, requireAll, requireAsset, withReason, type Requirement } from './helpers/requirements';
+
+/**
+ * The service runs whatever resolveBinary() returns (FFMPEG_PATH / FFPROBE_PATH, then
+ * /opt/homebrew/bin, /usr/local/bin, /usr/bin, then PATH), so the requirement checks exactly that.
+ */
+function requireResolvedTool(name: 'ffmpeg' | 'ffprobe'): Requirement {
+    const resolved = resolveBinary(name);
+    if (findBinary(resolved) !== null) return { ok: true, reason: '' };
+    return { ok: false, reason: `\`${name}\` not found (set ${name.toUpperCase()}_PATH or ${HOW_TO.ffmpeg})` };
+}
 
 describe('HeadlessVideoEditorService', () => {
     const service = new HeadlessVideoEditorService();
@@ -28,12 +38,8 @@ describe('HeadlessVideoEditorService', () => {
     });
 
     describe('Probe Metadata', () => {
-        it('probes a real video file and extracts duration, dimensions, and streams', async () => {
-            if (!(await fs.pathExists(sampleVideoPath))) {
-                console.warn('Skipping real probe test: sample video does not exist');
-                return;
-            }
-
+        const probeReq = requireAll(requireAsset('public/videos/interaction_input_video.mp4'), requireResolvedTool('ffprobe'));
+        it.skipIf(!probeReq.ok)(withReason('probes a real video file and extracts duration, dimensions, and streams', probeReq), async () => {
             const metadata = await service.probeMedia(sampleVideoPath);
             expect(metadata.durationSec).toBeGreaterThan(0);
             expect(metadata.width).toBeGreaterThan(0);

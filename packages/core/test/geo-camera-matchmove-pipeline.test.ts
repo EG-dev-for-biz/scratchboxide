@@ -16,6 +16,14 @@ import {
   GeoCameraMatchmovePipelineService,
   GeoMatchmoveRequest
 } from '../src/node/spatial/GeoCameraMatchmovePipelineService';
+import { requireAll, requireAsset, withReason } from './helpers/requirements';
+
+// The 15.04 s / 24 fps Plaza Hotel reference plate the dry-run assertions (361 frames) are written against.
+const referenceVideo32 = requireAsset('reference_video_32.mp4');
+const texturedTileMesh = requireAsset(
+  'public/models/google_tiles_textured_area.glb',
+  'getGoogle3DTilesFullTexture in packages/core/src/node/spatial/Google3DTileBlockoutPipelineService.ts (needs Google Maps Tiles API access)'
+);
 
 describe('GeoCameraMatchmovePipelineService Test Suite', () => {
   const service = new GeoCameraMatchmovePipelineService();
@@ -140,7 +148,7 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
     assert.ok(dist > 50, 'Canyon flythrough must travel along street vector');
   });
 
-  test('4. End-to-End Dry-Run Execution & Trajectory File Persistence', async () => {
+  test.skipIf(!referenceVideo32.ok)(withReason('4. End-to-End Dry-Run Execution & Trajectory File Persistence', referenceVideo32), async () => {
     const tmpDir = path.join(os.tmpdir(), `sbox_matchmove_test_${Date.now()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
 
@@ -255,7 +263,7 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
     assert.ok(midSectionAnchors.length >= 5, 'High-curvature canopy transition must have dense keyframe concentration');
   });
 
-  test('7. Precision 6-DoF Solver (Hermite-Slerp & Sub-Pixel 3D Tile Edge Alignment)', async () => {
+  test.skipIf(!requireAll(texturedTileMesh, referenceVideo32).ok)(withReason('7. Precision 6-DoF Solver (Hermite-Slerp & Sub-Pixel 3D Tile Edge Alignment)', requireAll(texturedTileMesh, referenceVideo32)), async () => {
     const plazaAnchor = service.resolveLandmarkAnchor(PLAZA);
     const mockMetadata = {
       durationSec: 15.04,
@@ -274,6 +282,8 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
       25
     );
 
+    // Proof PNGs default to the tracked public/images; keep them out of the repo.
+    const proofDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-precision-proofs-'));
     const precisionResult = service.solvePrecisionTrajectory(
       mockMetadata,
       plazaAnchor,
@@ -281,9 +291,11 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
       plazaAnchor.headingDeg,
       {
         lensDistortion: { k1: -0.015, k2: 0.002, p1: 0, p2: 0 },
-        tileMeshPath: path.resolve(process.cwd(), 'public/models/google_tiles_textured_area.glb')
+        tileMeshPath: path.resolve(process.cwd(), 'public/models/google_tiles_textured_area.glb'),
+        proofOutputDir: proofDir
       }
     );
+    fs.removeSync(proofDir);
 
     assert.ok(precisionResult.pathData, 'Precision path data must be produced');
     assert.strictEqual(precisionResult.pathData.frames.length, 361, 'Continuous interpolated frames must equal 361');

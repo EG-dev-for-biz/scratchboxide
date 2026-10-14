@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { requireAll, requireAssets, withReason } from './helpers/requirements';
+
+const PRODUCER = 'scripts/run_colosseum_recipe_pbr_cli.ts (scripts/apply_colosseum_recipe_pbr_suite.ts; the KTX2 variant needs basisu and ffmpeg)';
 
 const MODELS = path.resolve(__dirname, '../../../public/models');
 const SOURCE = path.join(MODELS, 'colosseum_rome_textured.glb');
 const JPEG_GLB = path.join(MODELS, 'colosseum_rome_recipe_pbr.glb');
 const KTX2_GLB = path.join(MODELS, 'colosseum_rome_recipe_pbr_ktx2.glb');
+const jpegInputs = requireAll(requireAssets(['public/models/colosseum_rome_textured.glb']), requireAssets(['public/models/colosseum_rome_recipe_pbr.glb'], PRODUCER));
+const ktx2Inputs = requireAll(requireAssets(['public/models/colosseum_rome_textured.glb']), requireAssets(['public/models/colosseum_rome_recipe_pbr_ktx2.glb'], PRODUCER));
 const KTX2_MAGIC = Buffer.from([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function readGlb(file: string) {
@@ -43,7 +48,7 @@ function expectDetailMaps(gltf: any) {
   return recipe;
 }
 
-describe.skipIf(!fs.existsSync(JPEG_GLB))('Recipe PBR GLB (original JPEG textures)', () => {
+describe.skipIf(!jpegInputs.ok)(withReason('Recipe PBR GLB (original JPEG textures)', jpegInputs), () => {
   it('keeps every source image byte-for-byte and declares mesh quantization', () => {
     const src = readGlb(SOURCE);
     const out = readGlb(JPEG_GLB);
@@ -58,7 +63,7 @@ describe.skipIf(!fs.existsSync(JPEG_GLB))('Recipe PBR GLB (original JPEG texture
   });
 });
 
-describe.skipIf(!fs.existsSync(SOURCE))('Recipe PBR GLB (KTX2 / Basis Universal textures)', () => {
+describe.skipIf(!ktx2Inputs.ok)(withReason('Recipe PBR GLB (KTX2 / Basis Universal textures)', ktx2Inputs), () => {
   it('stores one mipmapped KTX2 image per texture via KHR_texture_basisu', () => {
     expect(fs.existsSync(KTX2_GLB)).toBe(true);
     const src = readGlb(SOURCE);

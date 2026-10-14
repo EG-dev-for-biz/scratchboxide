@@ -57,7 +57,10 @@ async function runStandaloneAppTests() {
     assert.ok(viteConfig.includes('/gemini'), 'vite.config.ts must proxy /gemini');
     assert.ok(viteConfig.includes('/workspace'), 'vite.config.ts must proxy /workspace');
     assert.ok(viteConfig.includes('/media'), 'vite.config.ts must proxy /media');
-    assert.ok(viteConfig.includes('/api/browser'), 'vite.config.ts must proxy /api/browser');
+    // ddf9ba7 replaced the per-route '/api/browser', '/api/video', '/api/tools' entries with one global
+    // '/api' proxy (with launch-token injection), which also covers /api/browser.
+    assert.ok(viteConfig.includes("'/api': apiProxy()"), 'vite.config.ts must proxy /api (covers /api/browser)');
+    assert.ok(viteConfig.includes("proxyReq.setHeader('X-Scratchbox-Token', token)"), 'vite.config.ts /api proxy must inject the launch token');
     console.log('  ✓ Test 3 Passed: vite.config.ts configures dev server & backend proxies');
 
     // 4. src/main.tsx and src/App.tsx mount clean GenerativeCanvasStudio
@@ -73,7 +76,10 @@ async function runStandaloneAppTests() {
     assert.ok(fs.existsSync(electronMainPath), 'electron/main.ts must exist');
     const electronMain = fs.readFileSync(electronMainPath, 'utf-8');
     assert.ok(electronMain.includes('BrowserWindow'), 'electron/main.ts must create BrowserWindow');
-    assert.ok(electronMain.includes('hiddenInset'), 'electron/main.ts must configure modern titleBarStyle hiddenInset');
+    // af250cf deliberately switched from titleBarStyle 'hiddenInset' to a frameless 'hidden' title bar with
+    // the macOS traffic lights moved off-screen.
+    assert.ok(electronMain.includes("titleBarStyle: 'hidden'"), 'electron/main.ts must configure frameless titleBarStyle hidden');
+    assert.ok(electronMain.includes('trafficLightPosition: { x: -100, y: -100 }'), 'electron/main.ts must hide the native traffic light controls');
     console.log('  ✓ Test 5 Passed: Electron main process configured for modern desktop container');
 
     console.log('\n🎉 ALL STANDALONE APP ARCHITECTURE TESTS PASSED SUCCESSFULLY!\n');

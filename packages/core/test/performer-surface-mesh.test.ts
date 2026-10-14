@@ -17,6 +17,9 @@ import {
     SurfaceSplat,
     decodeSurfaceGlb
 } from '../src/node/spatial/PerformerSurfaceMeshService';
+import { requireAsset, withReason } from './helpers/requirements';
+
+const SURFACE_PRODUCER = 'scripts/build_performer_surfaces.ts (from the demo built by scripts/regenerate_5_demos.ts)';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const DEMOS_DIR = path.join(REPO_ROOT, 'models/performer_4dgs/demos');
@@ -213,6 +216,14 @@ describe('Rebuilt Photoreal Surface meshes', () => {
             && fs.existsSync(path.join(DEMOS_DIR, id, 'gvhmr_body.json')))
         : [];
 
+    // The per-demo cases below are generated from whatever is installed; say so when nothing is.
+    if (demos.length === 0) {
+        it.skip(withReason('per-demo rebuilt surface checks', {
+            ok: false,
+            reason: `no demo has both public/models/humanoid_<id>.glb and models/performer_4dgs/demos/<id>/gvhmr_body.json (gitignored; regenerate with ${SURFACE_PRODUCER})`
+        }), () => {});
+    }
+
     for (const id of demos) {
         it(`${id}: surface lies on its trained splats in the canonical pose`, () => {
             const mesh = decodeSurfaceGlb(fs.readFileSync(path.join(PUBLIC_MODELS, `humanoid_${id}.glb`)));
@@ -287,7 +298,9 @@ describe('Rebuilt Photoreal Surface meshes', () => {
         });
     }
 
-    it('man-in-black: front face has authentic smooth skin tone without black/white static', () => {
+    const manInBlack = requireAsset('public/models/humanoid_man-in-black.glb',
+        'scripts/build_performer_surfaces.ts man-in-black (source clip from scripts/generate_man_in_black_performer.ts)');
+    it.skipIf(!manInBlack.ok)(withReason('man-in-black: front face has authentic smooth skin tone without black/white static', manInBlack), () => {
         const mesh = decodeSurfaceGlb(fs.readFileSync(path.join(PUBLIC_MODELS, 'humanoid_man-in-black.glb')));
         const nv = mesh.positions.length / 3;
         const col = mesh.colors!;

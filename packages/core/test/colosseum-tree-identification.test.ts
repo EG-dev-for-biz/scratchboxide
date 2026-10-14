@@ -7,9 +7,10 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import {
   ColosseumTreeIdentificationEngine,
   BOTANICAL_ZONES,
@@ -18,9 +19,23 @@ import {
   type BotanicalZone
 } from '../src/node/spatial/ColosseumTreeIdentificationEngine';
 import { Colosseum3DMeshSeparatorService } from '../src/node/spatial/Colosseum3DMeshSeparatorService';
+import { REPO_ROOT } from './helpers/requirements';
+
+/**
+ * The canonical Colosseum mesh. public/models/ is gitignored, but the identical file is tracked as the Cloud Run
+ * spatial-separator asset (deploy/cloud-run/spatial-separator/assets/colosseum_clay.glb, added in 6bb97f1).
+ */
+function resolveCanonicalColosseumGlb(): string {
+  const candidates = ['public/models/colosseum_clay.glb', 'deploy/cloud-run/spatial-separator/assets/colosseum_clay.glb']
+    .map(p => path.join(REPO_ROOT, p));
+  return candidates.find(p => fs.existsSync(p)) ?? candidates[candidates.length - 1];
+}
 
 describe('ColosseumTreeIdentificationEngine (High-Accuracy Botanical 3D Foliage)', () => {
-  const modelPath = path.resolve(__dirname, '../../../public/models/colosseum_clay.glb');
+  const modelPath = resolveCanonicalColosseumGlb();
+  // The trees dataset is written to a temp dir, not over the tracked deploy/ asset.
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-colosseum-trees-'));
+  afterAll(() => fs.rmSync(outDir, { recursive: true, force: true }));
 
   it('identifies 1,260 discrete botanical trees across 13 geographic zones', () => {
     const trees = ColosseumTreeIdentificationEngine.getIdentifiedTrees();
@@ -135,8 +150,7 @@ describe('ColosseumTreeIdentificationEngine (High-Accuracy Botanical 3D Foliage)
     }
 
     // Save dedicated trees_dataset.json artifact
-    const assetsPath = path.resolve(__dirname, '../../../deploy/cloud-run/spatial-separator/assets/trees_dataset.json');
-    fs.writeFileSync(assetsPath, JSON.stringify(scene.objects, null, 2), 'utf8');
+    fs.writeFileSync(path.join(outDir, 'trees_dataset.json'), JSON.stringify(scene.objects, null, 2), 'utf8');
   });
 
   it('generates physically grounded tree stands (97 stands) with zero monument collision and ground datum lock', () => {

@@ -7,9 +7,11 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
+import os from 'os';
 import path from 'path';
 import fs from 'fs';
+import { requireAll, requireAsset, withReason, type Requirement } from './helpers/requirements';
 import {
     SpatialPoseEstimatorService,
     rodriguesToRotationMatrix,
@@ -34,6 +36,8 @@ interface LocationStage1TestConfig {
     focalLengthMm: number;
     clayColor: [number, number, number];
     getMesh: () => RenderMesh3D;
+    /** Gitignored GLB the mesh is loaded from; procedural locations have none. */
+    meshAsset?: Requirement;
     getPose: (mesh: RenderMesh3D) => CameraPose6DOF;
     features3D?: Point3D[];
     cameraT?: Point3D;
@@ -86,17 +90,20 @@ function computeMeshCentroid(mesh: RenderMesh3D): [number, number, number] {
     return [cx / count, cy / count, cz / count];
 }
 
+const RAW_TILE_PRODUCER = 'a raw Google Photorealistic 3D Tiles capture (needs Google Map Tiles API access)';
+const COLMAP_VECTOR_PRODUCER = 'scripts/run_colmap_vector_pipeline.cjs (ColmapVectorPipelineService)';
+
 describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matching & Projection Rays', () => {
     const width = 960;
     const height = 640;
-    const outDir = path.resolve(process.cwd(), 'public/visual_proof_locations');
+    // Proof PNGs go to a private temp dir instead of public/visual_proof_locations.
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-stage1-feature-matching-'));
+    afterAll(() => {
+        fs.rmSync(outDir, { recursive: true, force: true });
+    });
     const artifactDir = process.env.ANTIGRAVITY_ARTIFACT_DIR && fs.existsSync(process.env.ANTIGRAVITY_ARTIFACT_DIR)
         ? process.env.ANTIGRAVITY_ARTIFACT_DIR
         : null;
-
-    if (!fs.existsSync(outDir)) {
-        fs.mkdirSync(outDir, { recursive: true });
-    }
 
     const TEST_LOCATIONS: LocationStage1TestConfig[] = [
         // ====================================================================
@@ -115,6 +122,7 @@ describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matchin
             cameraRotW: [0.08, -0.05, 0.02],
             standoffMeters: 240,
             clayColor: [225, 212, 192], // Travertine Roman stone albedo
+            meshAsset: requireAsset('public/models/colosseum_rome_textured.glb'),
             getMesh: () => HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(path.resolve('public/models/colosseum_rome_textured.glb')),
             getPose: (mesh) => {
                 const [cx, cy, cz] = computeMeshCentroid(mesh);
@@ -149,6 +157,7 @@ describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matchin
             cameraRotW: [0.06, -0.04, 0.01],
             standoffMeters: 220,
             clayColor: [215, 215, 210], // Granite limestone albedo
+            meshAsset: requireAsset('public/models/nyc_grand_army_plaza_raw.glb', RAW_TILE_PRODUCER),
             getMesh: () => HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(path.resolve('public/models/nyc_grand_army_plaza_raw.glb')),
             getPose: (mesh) => {
                 const [cx, cy, cz] = computeMeshCentroid(mesh);
@@ -183,6 +192,7 @@ describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matchin
             cameraRotW: [0.10, -0.06, 0.03],
             standoffMeters: 110,
             clayColor: [180, 195, 215], // Cool architectural steel/glass albedo
+            meshAsset: requireAsset('public/models/google_tiles_textured_area.glb', 'getGoogle3DTilesFullTexture in packages/core/src/node/spatial/Google3DTileBlockoutPipelineService.ts (needs Google Map Tiles API access)'),
             getMesh: () => HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(path.resolve('public/models/google_tiles_textured_area.glb')),
             getPose: (mesh) => {
                 const [cx, cy, cz] = computeMeshCentroid(mesh);
@@ -217,6 +227,7 @@ describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matchin
             cameraRotW: [0.05, -0.03, 0.01],
             standoffMeters: 320,
             clayColor: [205, 205, 210], // Indiana limestone albedo
+            meshAsset: requireAsset('public/models/google_greybox_esb.glb', 'scripts/generate_google_greybox_esb.cpp'),
             getMesh: () => HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(path.resolve('public/models/google_greybox_esb.glb')),
             getPose: (mesh) => {
                 const [cx, cy, cz] = computeMeshCentroid(mesh);
@@ -255,6 +266,7 @@ describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matchin
             cameraRotW: [0.07, -0.05, 0.02],
             standoffMeters: 200,
             clayColor: [235, 235, 230], // White precast concrete shell tiles
+            meshAsset: requireAsset('public/data/colmap_vector_export/-33.8568_151.2153_clay.glb', COLMAP_VECTOR_PRODUCER),
             getMesh: () => HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(path.resolve('public/data/colmap_vector_export/-33.8568_151.2153_clay.glb')),
             getPose: (mesh) => {
                 const [cx, cy, cz] = computeMeshCentroid(mesh);
@@ -289,6 +301,7 @@ describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matchin
             cameraRotW: [0.06, -0.04, 0.02],
             standoffMeters: 210,
             clayColor: [185, 175, 160], // Puddle iron bronze albedo
+            meshAsset: requireAsset('public/data/colmap_vector_export/48.8584_2.2945_clay.glb', COLMAP_VECTOR_PRODUCER),
             getMesh: () => HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(path.resolve('public/data/colmap_vector_export/48.8584_2.2945_clay.glb')),
             getPose: (mesh) => {
                 const [cx, cy, cz] = computeMeshCentroid(mesh);
@@ -323,6 +336,7 @@ describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matchin
             cameraRotW: [0.05, -0.03, 0.01],
             standoffMeters: 190,
             clayColor: [220, 225, 235], // White steel pipe lattice albedo
+            meshAsset: requireAsset('public/data/colmap_vector_export/35.7100_139.8107_clay.glb', COLMAP_VECTOR_PRODUCER),
             getMesh: () => HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(path.resolve('public/data/colmap_vector_export/35.7100_139.8107_clay.glb')),
             getPose: (mesh) => {
                 const [cx, cy, cz] = computeMeshCentroid(mesh);
@@ -592,22 +606,29 @@ describe('Stage 1 Multi-Location Verification: 2D-to-3D Keypoint Feature Matchin
         }
     ];
 
-    it('verifies all 12 diverse locations in the array exist and can be loaded', () => {
+    it('defines 12 diverse locations across all 3 tiers, each with at least 5 key features', () => {
         expect(TEST_LOCATIONS.length).toBe(12);
 
         const tiers = new Set(TEST_LOCATIONS.map(loc => loc.tier));
         expect(tiers.size).toBe(3);
 
         for (const loc of TEST_LOCATIONS) {
-            const mesh = loc.getMesh();
-            expect(mesh.vertices.length).toBeGreaterThan(0);
-            expect(mesh.indices.length).toBeGreaterThan(0);
             expect(loc.keyFeatures.length).toBeGreaterThanOrEqual(5);
         }
     });
 
+    const allMeshAssets = requireAll(...TEST_LOCATIONS.filter(loc => loc.meshAsset).map(loc => loc.meshAsset!));
+    it.skipIf(!allMeshAssets.ok)(withReason('verifies all 12 diverse locations in the array exist and can be loaded', allMeshAssets), () => {
+        for (const loc of TEST_LOCATIONS) {
+            const mesh = loc.getMesh();
+            expect(mesh.vertices.length).toBeGreaterThan(0);
+            expect(mesh.indices.length).toBeGreaterThan(0);
+        }
+    });
+
     describe.each(TEST_LOCATIONS)('Location: $name ($tier)', (loc) => {
-        it('executes Stage 1 2D-to-3D keypoint matching, sightline rays, and PnP resectioning', () => {
+        const meshAsset = loc.meshAsset ?? { ok: true, reason: '' };
+        it.skipIf(!meshAsset.ok)(withReason('executes Stage 1 2D-to-3D keypoint matching, sightline rays, and PnP resectioning', meshAsset), () => {
             const mesh = loc.getMesh();
             const pose = loc.getPose(mesh);
 

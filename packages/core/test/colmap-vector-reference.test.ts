@@ -9,6 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { describe, it, expect } from 'vitest';
 import { ColmapVectorPipeline } from '../src/browser/generative-canvas/services/colmap-vector-pipeline';
 import { ColmapVectorPipelineService } from '../src/node/spatial/ColmapVectorPipelineService';
@@ -335,7 +336,8 @@ describe('Universal COLMAP Vector Reference Pipeline (Zero Presets)', () => {
   describe('7. Dedicated Studio Grey Clay 3D Tiles Ingestion (getGoogle3DTilesClay)', () => {
     it('should ingest Google Maps 3D Tiles in studio grey clay mode and wrap survey stations around real mesh', async () => {
       const nodeService = new ColmapVectorPipelineService();
-      const tmpOutDir = path.resolve(process.cwd(), 'public/data/colmap_vector_export/test_clay');
+      // Temp dir: never write test exports into the tracked public/data/colmap_vector_export folder.
+      const tmpOutDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-colmap-vector-clay-'));
       const result = await nodeService.execute(
         {
           anchor: {

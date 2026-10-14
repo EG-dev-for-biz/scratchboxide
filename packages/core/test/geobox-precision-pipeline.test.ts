@@ -28,6 +28,13 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { requireFile, withReason } from './helpers/requirements';
+
+// build/ is gitignored: the report only exists after the Python benchmark has been run on this machine.
+const precisionReport = requireFile(
+    'build/geobox_precision_report.html',
+    'build output of `python3 tools/geobox/eval/test_precision_pipeline.py` (downloads its landmark test images)'
+);
 
 describe('GeoBoxPrecisionPipeline', () => {
     it('computes Haversine distance with high fidelity across global landmarks', () => {
@@ -96,7 +103,7 @@ describe('GeoBoxPrecisionPipeline', () => {
         expect(offsetGeo.altitudeMeters).toBeCloseTo(45.0, 1);
     });
 
-    it('validates GeoBox Precision Report artifact existence and structural integrity', () => {
+    it.skipIf(!precisionReport.ok)(withReason('validates GeoBox Precision Report artifact existence and structural integrity', precisionReport), () => {
         const reportPath = path.resolve(__dirname, '../../../build/geobox_precision_report.html');
         expect(fs.existsSync(reportPath)).toBe(true);
 

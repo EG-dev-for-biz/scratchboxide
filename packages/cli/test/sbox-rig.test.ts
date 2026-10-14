@@ -7,15 +7,35 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { runCli } from '../src/index';
 import { parseRigArgs } from '../src/commands/rig';
+import { SbRigService } from '../../core/src/node/3d-engine/sb-rig-service';
+import { NativeCppCompilerService } from '../../core/src/node/3d-engine/native-compiler-service';
 
 const REPO = path.resolve(__dirname, '../../..');
-const HAND = path.join(REPO, 'public/models/sbhuman_hand_hyperreal.glb');
+const REAL_HAND = path.join(REPO, 'public/models/sbhuman_hand_hyperreal.glb');
 const OUT = path.join(REPO, 'test-results/sbox-rig/hand_rigged.glb');
+// The SB-Human hand GLB is a gitignored local asset. Without it these cases rig the SB-Rig runner's own synthetic
+// 5-digit claw (UV-mapped, one material), generated once into the work directory.
+let HAND = REAL_HAND;
+
+/** Writes the SB-Rig runner's synthetic 5-digit claw into `dir` and returns its path. */
+async function syntheticClawGlb(dir: string): Promise<string> {
+    fs.mkdirSync(dir, { recursive: true });
+    const out = path.join(dir, 'fixture_claw5.glb');
+    const binary = await new SbRigService().ensureBinary();
+    const exec = await new NativeCppCompilerService().executeBinary(binary, ['--synthetic', 'claw', '--digits', '5', '--synthetic-out', out,
+        '--output', path.join(dir, 'fixture_claw5_rigged.glb')], dir);
+    if (exec.exitCode !== 0) throw new Error(`SB-Rig synthetic claw generation failed: ${exec.stderr}`);
+    return out;
+}
+
+beforeAll(async () => {
+    if (!fs.existsSync(REAL_HAND)) HAND = await syntheticClawGlb(path.dirname(OUT));
+}, 300_000);
 
 describe('sbox rig', () => {
     it('parses hints, renames, params and --flag=value forms (negative coordinates included)', () => {

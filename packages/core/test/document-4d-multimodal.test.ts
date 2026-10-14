@@ -114,10 +114,14 @@ async function run4DMultimodalDocumentTests() {
     assert.ok(!primitiveSource.includes('4D Temporal Simulation'), 'MarkdownDocumentPrimitive must not render "4D Temporal Simulation" badge');
     assert.ok(!primitiveSource.includes('+ 4D Diagram'), 'MarkdownDocumentPrimitive must not contain "+ 4D Diagram" button label');
     assert.ok(!primitiveSource.includes('4D Diagram'), 'MarkdownDocumentPrimitive must not contain "4D Diagram" label');
-    assert.ok(primitiveSource.includes('+ Diagram'), 'MarkdownDocumentPrimitive uses clean "+ Diagram" quick action');
-    assert.ok(primitiveSource.includes('+ Video'), 'MarkdownDocumentPrimitive uses clean "+ Video" quick action');
-    assert.ok(primitiveSource.includes('+ Map'), 'MarkdownDocumentPrimitive uses clean "+ Map" quick action');
-    assert.ok(primitiveSource.includes('+ Citation'), 'MarkdownDocumentPrimitive uses clean "+ Citation" quick action');
+    // 354a655 ("style(ui): polish visual hierarchy ...") grouped the "+ Diagram / + Video / + Map /
+    // + Citation" buttons into a labelled "Insert" capsule (sb-doc-btn-group) with plain labels.
+    assert.ok(primitiveSource.includes('sb-doc-btn-group') && primitiveSource.includes('>Insert</span>'), 'MarkdownDocumentPrimitive groups media quick actions in an "Insert" capsule');
+    const insertActions: Array<[string, string]> = [['svg-diagram', 'Diagram'], ['video', 'Video'], ['location-image', 'Map'], ['citation', 'Citation']];
+    for (const [sectionType, label] of insertActions) {
+        const actionRe = new RegExp(`handleAddSection\\(doc\\.sections\\?\\.length \\|\\| 0, '${sectionType}'\\)[\\s\\S]{0,200}?<span>${label}</span>`);
+        assert.ok(actionRe.test(primitiveSource), `MarkdownDocumentPrimitive uses clean "${label}" insert quick action`);
+    }
     console.log('  ✓ Test 6 Passed: MarkdownDocumentPrimitive has eliminated all gimmicky 4D labels in favor of clean editorial controls.');
 
     // Test 7: Verify Clean Editorial Titles & Descriptions in Synthesized Documents

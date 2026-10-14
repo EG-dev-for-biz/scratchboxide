@@ -253,28 +253,31 @@ export interface VideoEditorJobResult {
     [key: string]: unknown;
 }
 
-export function resolveMediaFilePath(filePath: string): string {
-    if (!filePath) return filePath;
-    const candidates = [
+function mediaPathCandidates(filePath: string): string[] {
+    return [
         filePath,
         path.resolve(process.cwd(), filePath),
         path.resolve(process.cwd(), 'desktop-app', 'public', filePath),
         path.resolve(process.cwd(), 'desktop-app', 'public', filePath.replace(/^\/?(?:desktop-app\/public\/)?/, '')),
         path.resolve(process.cwd(), 'public', filePath.replace(/^\/?(?:public\/)?/, ''))
     ];
+}
+
+export function resolveMediaFilePath(filePath: string): string {
+    if (!filePath) return filePath;
+    const candidates = mediaPathCandidates(filePath);
     for (const c of candidates) {
         if (fs.existsSync(c)) return c;
     }
-    // Fuzzy fallback for synthesis / restyled aliases
-    if (filePath.includes('synthesis')) {
-        const alt = filePath.replace('synthesis', 'restyled');
-        const resolvedAlt = resolveMediaFilePath(alt);
-        if (fs.existsSync(resolvedAlt)) return resolvedAlt;
-    }
-    if (filePath.includes('restyled')) {
-        const alt = filePath.replace('restyled', 'synthesis');
-        const resolvedAlt = resolveMediaFilePath(alt);
-        if (fs.existsSync(resolvedAlt)) return resolvedAlt;
+    // Fuzzy fallback for synthesis / restyled aliases. Only one alias hop: recursing into
+    // resolveMediaFilePath here would bounce synthesis <-> restyled forever when neither exists.
+    const aliases: string[] = [];
+    if (filePath.includes('synthesis')) aliases.push(filePath.replace('synthesis', 'restyled'));
+    if (filePath.includes('restyled')) aliases.push(filePath.replace('restyled', 'synthesis'));
+    for (const alt of aliases) {
+        for (const c of mediaPathCandidates(alt)) {
+            if (fs.existsSync(c)) return c;
+        }
     }
     return candidates[1];
 }

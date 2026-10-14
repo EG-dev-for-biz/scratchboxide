@@ -80,10 +80,16 @@ async function runCursorStylingComprehensiveTests() {
     // -------------------------------------------------------------
     // Test 4: Cursor Settings Page with Typography-Only Sidebar
     // -------------------------------------------------------------
-    assert.ok(settingsSource.includes('← Back'), 'Settings modal has "← Back" top action');
+    // 6e66ca1 replaced the literal "← Back" text with an <IconArrowLeft /> + "Back" label.
+    assert.ok(
+        settingsSource.includes('sb-cursor-settings-back-btn') && settingsSource.includes('aria-label="Back"') && settingsSource.includes('<IconArrowLeft') && settingsSource.includes('<span>Back</span>'),
+        'Settings modal has arrow-icon "Back" top action'
+    );
     assert.ok(settingsSource.includes('Search Settings'), 'Settings modal has search bar');
     assert.ok(settingsSource.includes('Plugins, MCPs, Skills, and Rules have moved to Customize'), 'Settings modal includes Customize banner');
-    assert.ok(settingsSource.includes('Scratchbox Account') || settingsSource.includes('Cursor Account'), 'Settings modal contains account section');
+    // 4f4e192 removed the unwired "Scratchbox Account" mock row from GeneralTab; the account identity
+    // now lives in the sidebar footer user row.
+    assert.ok(settingsSource.includes('sb-cursor-settings-user-row') && settingsSource.includes('initialsOf(activeUserName)'), 'Settings modal contains account (user) section');
     assert.ok(settingsSource.includes('sb-cursor-toggle'), 'Settings modal contains Apple/Cursor green toggle switches');
     console.log('  ✓ Test 4 Passed: Cursor Settings Page with typography-only no-icon sidebar verified');
 

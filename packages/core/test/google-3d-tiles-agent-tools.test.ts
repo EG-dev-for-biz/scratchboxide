@@ -7,13 +7,23 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { GeminiService } from '../src/node/gemini-service';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
+import { requireAsset, withReason } from './helpers/requirements';
+
+const colosseumGroundedGlb = requireAsset('public/models/colosseum_grounded.glb');
 
 describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
+    // Mock-mode tile ingestion writes a GLB; keep it out of the repo (default output is public/models/).
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-google-3d-tiles-agent-tools-'));
+    afterAll(() => fs.rmSync(outDir, { recursive: true, force: true }));
+
     it('exposes google_3d_tiles_get_full_texture and google_3d_tiles_get_clay in Gemini tool declarations', () => {
         const geminiService = new GeminiService();
         const request: GeminiGenerateRequest = {
@@ -48,7 +58,8 @@ describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
             'google_3d_tiles_get_full_texture',
             {
                 query: '40.748400, -73.985700',
-                mockExecution: true
+                mockExecution: true,
+                outputGlbPath: path.join(outDir, 'full_texture.glb')
             },
             {} as any
         );
@@ -70,7 +81,8 @@ describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
             'google_3d_tiles_get_clay',
             {
                 query: '40.748400, -73.985700',
-                mockExecution: true
+                mockExecution: true,
+                outputGlbPath: path.join(outDir, 'clay.glb')
             },
             {} as any
         );
@@ -98,7 +110,7 @@ describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
         expect(resolution.tier1Assessment.suggestedNativeAction?.primitiveType).toBe('3d-scene');
     });
 
-    it('exposes plan_adaptive_survey_rig in tool declarations and dispatches with real GLB', async () => {
+    it('exposes plan_adaptive_survey_rig in tool declarations', () => {
         const geminiService = new GeminiService();
         const request: GeminiGenerateRequest = {
             prompt: 'Plan an adaptive photogrammetric survey rig for the Colosseum 3D model',
@@ -112,7 +124,9 @@ describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
         expect(adaptiveRigTool).toBeDefined();
         expect(adaptiveRigTool.parameters.required).toContain('glbPath');
         expect(adaptiveRigTool.description).toMatch(/Adaptive Scene-Aware Survey Rig Planning/i);
+    });
 
+    it.skipIf(!colosseumGroundedGlb.ok)(withReason('dispatches plan_adaptive_survey_rig with real GLB', colosseumGroundedGlb), async () => {
         const registry = createDefaultToolRegistry();
         const glbPath = 'public/models/colosseum_grounded.glb';
         const outcome = await registry.dispatch(

@@ -159,8 +159,13 @@ async function runUnifiedStylingAuditTests() {
     for (const filePath of tsxFiles) {
         // Ignore embedded source templates (e.g. Live Code starter apps) — they are user-facing
         // sample code, not Scratchbox UI, so their buttons are not subject to the design system.
+        // Likewise ignore `<button` text that only appears inside line comments or regex literals
+        // (e.g. ChatMarkdownRenderer's parser for model-emitted `<button>` pills, added in 5f8e5b4):
+        // those are not rendered button elements.
         const content = fs.readFileSync(filePath, 'utf-8')
-            .replace(/`(?:\\[\s\S]|[^`\\])*`/g, literal => literal.includes('<button') ? '``' : literal);
+            .replace(/`(?:\\[\s\S]|[^`\\])*`/g, literal => literal.includes('<button') ? '``' : literal)
+            .replace(/^[ \t]*\/\/.*$/gm, line => line.includes('<button') ? '' : line)
+            .replace(/\/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])*<button(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])*\/[dgimsuy]*/g, '/(?:)/');
         for (const buttonAttributes of extractButtonAttributes(content)) {
             totalButtonsFound++;
             

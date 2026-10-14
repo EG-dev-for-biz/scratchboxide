@@ -11,6 +11,11 @@ import { describe, it, expect } from 'vitest';
 import { ImageToAdaptivePbrService } from '../src/node/3d-engine/image-to-adaptive-pbr-service';
 import { AdaptiveMaterialPbrService } from '../src/node/3d-engine/adaptive-material-pbr-service';
 import { GltfBinaryPacker } from '../src/node/3d-engine/gltf-binary-packer';
+import { HOW_TO, requireBinary, withReason } from './helpers/requirements';
+
+// AdaptiveMaterialPbrService.decodeToRgba spawns bare `ffmpeg` from PATH (it does not read FFMPEG_PATH),
+// so the requirement is exactly a PATH lookup.
+const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
 
 describe('ImageToAdaptivePbrService (Unified Architecture & C++20 Acceleration)', () => {
     // Generate a synthetic test texture (e.g. 64x64 procedural relief pattern)
@@ -29,7 +34,7 @@ describe('ImageToAdaptivePbrService (Unified Architecture & C++20 Acceleration)'
         }
     }
 
-    it('generates a valid binary glTF 2.0 (.glb) plane with metric displacement and PBR maps', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('generates a valid binary glTF 2.0 (.glb) plane with metric displacement and PBR maps', ffmpeg), async () => {
         const imageBuffer = await AdaptiveMaterialPbrService.encodeFromRgba(rawRgba, width, height, true);
 
         const result = await ImageToAdaptivePbrService.processImageToPbrPlane({
@@ -75,7 +80,7 @@ describe('ImageToAdaptivePbrService (Unified Architecture & C++20 Acceleration)'
         expect(gltf.samplers[0].wrapT).toBe(33071);
     });
 
-    it('supports toroidal seamless tiling with REPEAT wrap mode and UV scaling', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('supports toroidal seamless tiling with REPEAT wrap mode and UV scaling', ffmpeg), async () => {
         const imageBuffer = await AdaptiveMaterialPbrService.encodeFromRgba(rawRgba, width, height, true);
 
         const result = await ImageToAdaptivePbrService.processImageToPbrPlane({
@@ -99,7 +104,7 @@ describe('ImageToAdaptivePbrService (Unified Architecture & C++20 Acceleration)'
         expect(gltf.samplers[0].wrapT).toBe(10497);
     });
 
-    it('executes native C++20 acceleration path with zero runtime error', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('executes native C++20 acceleration path with zero runtime error', ffmpeg), async () => {
         const imageBuffer = await AdaptiveMaterialPbrService.encodeFromRgba(rawRgba, width, height, true);
 
         const result = await ImageToAdaptivePbrService.generatePbrDisplacedPlane({

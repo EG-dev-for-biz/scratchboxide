@@ -7,8 +7,9 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as path from 'path';
+import * as os from 'os';
 import * as fs from 'fs-extra';
 import {
     reprojectZenithPanorama,
@@ -18,6 +19,10 @@ import { decodePng, encodePng } from '../src/node/texture-processing';
 
 describe('Demo Asset 4K Regeneration with Subtle Inpainting & Seam Healing', () => {
     const demoDir = path.resolve(__dirname, '../../../public/images');
+    // Inputs are read from the tracked public/images; regenerated outputs go to a temp dir so the
+    // test never overwrites the committed *_360_4k.png demo assets.
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-regenerate-demo-assets-'));
+    afterAll(() => fs.removeSync(outDir));
 
     const demoAssets = [
         {
@@ -79,7 +84,7 @@ describe('Demo Asset 4K Regeneration with Subtle Inpainting & Seam Healing', () 
     for (const asset of demoAssets) {
         it(`regenerates and certifies 100/100 QC Pass for ${asset.title} with subtle inpainting`, async () => {
             const basePath = path.join(demoDir, asset.baseFile);
-            const targetPath = path.join(demoDir, asset.targetFile);
+            const targetPath = path.join(outDir, asset.targetFile);
 
             expect(await fs.pathExists(basePath)).toBe(true);
 

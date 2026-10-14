@@ -90,7 +90,7 @@ export default function App() {
 
 Let me know if you would like to tune the emission rate!`;
 
-    const synthSandboxArtifact = parseOrSynthesizeArtifact('Make a particle burst sandbox', rawTsxModelOutput, mockRequest as any);
+    const synthSandboxArtifact = parseOrSynthesizeArtifact('Make a particle burst sandbox', rawTsxModelOutput, mockRequest as any, []);
     assert.strictEqual(synthSandboxArtifact.type, 'live-code-sandbox');
     assert.strictEqual(synthSandboxArtifact.title, 'Particle Burst System');
     assert.strictEqual(synthSandboxArtifact.summary, 'High performance particle accelerator');
@@ -114,7 +114,7 @@ This document defines the agent graph and orchestration protocol.
 - Supervisor Controller
 </scratchboxPrimitive>`;
 
-    const synthDocArtifact = parseOrSynthesizeArtifact('Design agent architecture spec', docModelOutput, { prompt: 'Design agent architecture spec' } as any);
+    const synthDocArtifact = parseOrSynthesizeArtifact('Design agent architecture spec', docModelOutput, { prompt: 'Design agent architecture spec' } as any, []);
     assert.strictEqual(synthDocArtifact.type, 'markdown-document');
     assert.strictEqual(synthDocArtifact.title, 'Autonomous Agent Topology');
     assert.ok(synthDocArtifact.data.sections.length >= 1);
@@ -131,7 +131,7 @@ This document defines the agent graph and orchestration protocol.
 \`\`\`
 </scratchboxPrimitive>`;
 
-    const synthJsonArtifact = parseOrSynthesizeArtifact('Render deep space nebula', jsonModelOutput, { prompt: 'Render deep space nebula' } as any);
+    const synthJsonArtifact = parseOrSynthesizeArtifact('Render deep space nebula', jsonModelOutput, { prompt: 'Render deep space nebula' } as any, []);
     assert.strictEqual(synthJsonArtifact.type, '3d-scene');
     assert.strictEqual(synthJsonArtifact.title, 'Deep Space Nebula');
     assert.strictEqual(synthJsonArtifact.data.environment.skybox, 'space-nebula');
@@ -214,7 +214,7 @@ const audioCtx = new AudioContext();`;
         'sorting algorithm visualizer'
     ];
     for (const userPrompt of routingTests) {
-        const artifact = parseOrSynthesizeArtifact(userPrompt, 'Sure! Let me set that up for you.', { prompt: userPrompt } as any);
+        const artifact = parseOrSynthesizeArtifact(userPrompt, 'Sure! Let me set that up for you.', { prompt: userPrompt } as any, []);
         assert.strictEqual(artifact.type, 'live-code-sandbox', `Prompt "${userPrompt}" must route to live-code-sandbox`);
     }
     console.log('  ✓ 4.5 All micro-app domain prompts route directly to live-code-sandbox');

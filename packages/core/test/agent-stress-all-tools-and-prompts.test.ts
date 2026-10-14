@@ -7,7 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import {
@@ -18,17 +19,75 @@ import {
 import { DEFAULT_TOOL_DECLARATIONS } from '../src/node/gemini/tools';
 import type { ToolContext } from '../src/node/gemini/tools/types';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
+import { encodePng } from '../src/node/texture-processing';
+import { requireAssets, withReason } from './helpers/requirements';
+
+const avatar2785536 = requireAssets(
+    ['models/performer_4dgs/demos/2785536/human_4dgs.ply', 'models/performer_4dgs/demos/2785536/motion.json'],
+    'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)'
+);
+
+/** Writes a minimal textured binary glTF 2.0 (one UV-mapped quad with an embedded PNG baseColorTexture). */
+function writeTexturedQuadGlb(filePath: string): void {
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+    const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]);
+    const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
+    const W = 8, H = 8;
+    const rgba = Buffer.alloc(W * H * 4);
+    for (let i = 0; i < W * H; i++) rgba.set([200, 180 - (i % 7) * 10, 150, 255], i * 4);
+    const png = encodePng(W, H, rgba);
+    const pad4 = (n: number) => (n + 3) & ~3;
+    const chunks = [Buffer.from(positions.buffer), Buffer.from(uvs.buffer), Buffer.from(indices.buffer), png];
+    const views: Array<{ buffer: number; byteOffset: number; byteLength: number }> = [];
+    let offset = 0;
+    for (const c of chunks) {
+        views.push({ buffer: 0, byteOffset: offset, byteLength: c.length });
+        offset = pad4(offset + c.length);
+    }
+    const bin = Buffer.alloc(offset);
+    chunks.forEach((c, i) => c.copy(bin, views[i].byteOffset));
+    const json = {
+        asset: { version: '2.0', generator: 'agent-stress-all-tools-and-prompts.test' },
+        scene: 0,
+        scenes: [{ nodes: [0] }],
+        nodes: [{ mesh: 0 }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, indices: 2, material: 0 }] }],
+        materials: [{ name: 'Stone', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, roughnessFactor: 0.8, metallicFactor: 0 } }],
+        textures: [{ source: 0 }],
+        images: [{ bufferView: 3, mimeType: 'image/png' }],
+        buffers: [{ byteLength: bin.length }],
+        bufferViews: views,
+        accessors: [
+            { bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+            { bufferView: 1, componentType: 5126, count: 4, type: 'VEC2' },
+            { bufferView: 2, componentType: 5123, count: 6, type: 'SCALAR' }
+        ]
+    };
+    let jsonBuf = Buffer.from(JSON.stringify(json), 'utf-8');
+    jsonBuf = Buffer.concat([jsonBuf, Buffer.alloc(pad4(jsonBuf.length) - jsonBuf.length, 0x20)]);
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(0x46546c67, 0);
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + jsonBuf.length + 8 + bin.length, 8);
+    const chunkHeader = (len: number, type: number) => {
+        const b = Buffer.alloc(8);
+        b.writeUInt32LE(len, 0);
+        b.writeUInt32LE(type, 4);
+        return b;
+    };
+    fs.writeFileSync(filePath, Buffer.concat([header, chunkHeader(jsonBuf.length, 0x4e4f534a), jsonBuf, chunkHeader(bin.length, 0x004e4942), bin]));
+}
 
 describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => {
     let registry: ToolRegistry;
     let mockContext: ToolContext;
-    const testDir = path.resolve(__dirname, '../../test_scratch_agent_tools');
-    const existingGlbPath = path.resolve(__dirname, '../../../public/colosseum_clay_styled_test.glb');
+    // Agent workspace for the tool calls; kept out of the repo (packages/ is tracked).
+    const testDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-agent-tools-')));
+    // Any textured GLB exercises the UV rewrap tool; a generated quad replaces the gitignored Colosseum test GLB.
+    const existingGlbPath = path.join(testDir, 'textured_quad.glb');
 
     beforeAll(() => {
-        if (!fs.existsSync(testDir)) {
-            fs.mkdirSync(testDir, { recursive: true });
-        }
+        writeTexturedQuadGlb(existingGlbPath);
 
         registry = createDefaultToolRegistry();
 
@@ -75,6 +134,10 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 success: true
             }) as any
         };
+    });
+
+    afterAll(() => {
+        fs.rmSync(testDir, { recursive: true, force: true });
     });
 
     // =========================================================================
@@ -289,7 +352,9 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             const res = await registry.dispatch('google_3d_tiles_clay_blockout_runner', {
                 query: '41.890210, 12.492231',
                 trajectoryPreset: 'cinematic_arc',
-                mockExecution: true
+                mockExecution: true,
+                // The mock tile GLB defaults to public/models; keep it in the test workspace
+                outputGlbPath: path.join(testDir, 'clay_blockout.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).videoRef).toBe('<VIDEO_REF_0>');
@@ -573,7 +638,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect((res.resultPayload as any).telemetry).toBeDefined();
         });
 
-        it('executes avatar_4dgs_list and avatar_4dgs_get', async () => {
+        it.skipIf(!avatar2785536.ok)(withReason('executes avatar_4dgs_list and avatar_4dgs_get', avatar2785536), async () => {
             const listRes = await registry.dispatch('avatar_4dgs_list', {}, mockContext);
             expect(listRes.exec.status).toBe('completed');
             expect((listRes.resultPayload as any).totalAvatars).toBeGreaterThanOrEqual(1);
@@ -583,7 +648,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect((getRes.resultPayload as any).details).toBeDefined();
         });
 
-        it('executes avatar_4dgs_animate with deformation telemetry', async () => {
+        it.skipIf(!avatar2785536.ok)(withReason('executes avatar_4dgs_animate with deformation telemetry', avatar2785536), async () => {
             const res = await registry.dispatch('avatar_4dgs_animate', {
                 avatarId: '2785536',
                 frameIndex: 0,

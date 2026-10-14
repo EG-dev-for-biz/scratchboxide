@@ -25,100 +25,56 @@ async function runAllCursorSettingsTabsTests() {
     const source = readSettingsSources();
     const css = fs.readFileSync(unifiedCssPath, 'utf-8');
 
-    // -------------------------------------------------------------
-    // Tab 1: Profile Tab
-    // -------------------------------------------------------------
-    assert.ok(source.includes('Profile Image'), 'Profile tab must render "Profile Image" section');
-    assert.ok(source.includes('Upload image'), 'Profile tab must provide "Upload image" button');
-    assert.ok(source.includes('First Name') && source.includes('Last Name'), 'Profile tab must provide First Name and Last Name fields');
-    assert.ok(source.includes('Claim handle'), 'Profile tab must provide "Claim handle" action');
-    assert.ok(source.includes('Public Profile'), 'Profile tab must provide "Public Profile" toggle');
-    console.log('  ✓ Test 1 Passed: Profile tab with avatar uploader, name fields, handle claiming, and public profile toggle verified');
+    // Commit 4f4e192 ("refactor(settings): prune unwired tabs and enhance 3D geospatial pipeline")
+    // deliberately removed 11 unwired mock tabs (Plan & Usage, Cloud Agents, Worktrees, Tab, Beta,
+    // Git & PRs, Code Intelligence, Browser & Network, Profile, Agents, Docs) and rebound Appearance
+    // to StudioAppearanceConfig. The checks below verify that deliberate state.
+    const tabsDir = path.resolve(__dirname, '../src/browser/generative-canvas/settings/tabs');
 
     // -------------------------------------------------------------
-    // Tab 2: Appearance Tab
+    // Tab 1: Profile (pruned) -> identity lives in the sidebar footer user row
     // -------------------------------------------------------------
-    assert.ok(source.includes('Tool Call Density'), 'Appearance tab must render "Tool Call Density" slider');
-    assert.ok(source.includes('Code Block Word Wrap'), 'Appearance tab must render "Code Block Word Wrap" toggle');
-    assert.ok(source.includes('Themed Diff Backgrounds'), 'Appearance tab must render "Themed Diff Backgrounds" toggle');
-    assert.ok(source.includes('Hue') && source.includes('Intensity'), 'Appearance tab must render Hue & Intensity color sliders');
-    assert.ok(source.includes('UI Font Size') && source.includes('Code Font Size'), 'Appearance tab must render font size steppers');
-    assert.ok(source.includes('return a + b;'), 'Appearance tab must render live code diff preview box');
-    assert.ok(source.includes('const result = a + b;'), 'Appearance tab live diff preview must show green addition line');
-    console.log('  ✓ Test 2 Passed: Appearance tab with tool density slider, color tints, font steppers, and live diff preview verified');
+    assert.ok(!fs.existsSync(path.join(tabsDir, 'ProfileTab.tsx')), 'Unwired ProfileTab.tsx must stay pruned (4f4e192)');
+    assert.ok(source.includes('sb-cursor-settings-user-row'), 'Settings sidebar footer must render the user row');
+    assert.ok(source.includes('initialsOf(activeUserName)'), 'Settings user row must render the active user initials avatar');
+    assert.ok(source.includes('sb-cursor-user-name'), 'Settings user row must render the active user name');
+    console.log('  ✓ Test 1 Passed: Profile identity rendered in sidebar footer user row (mock Profile tab pruned)');
 
     // -------------------------------------------------------------
-    // Tab 3: Plan & Usage Tab
+    // Tab 2: Appearance Tab (bound to StudioAppearanceConfig)
     // -------------------------------------------------------------
-    assert.ok(source.includes('CURRENT PLAN'), 'Plan tab must render "CURRENT PLAN" card');
-    assert.ok(source.includes('UPGRADE AVAILABLE'), 'Plan tab must render "UPGRADE AVAILABLE" card');
-    assert.ok(source.includes('Included in Pro'), 'Plan tab must render "Included in Pro" usage section');
-    assert.ok(source.includes('On-Demand Usage'), 'Plan tab must render "On-Demand Usage" section');
-    assert.ok(source.includes('Monthly Limit'), 'Plan tab must render "Monthly Limit" selector');
-    console.log('  ✓ Test 3 Passed: Plan & Usage tab with dual plan cards, usage meters, and on-demand limit selector verified');
+    const appearanceSource = fs.readFileSync(path.join(tabsDir, 'AppearanceTab.tsx'), 'utf-8');
+    assert.ok(appearanceSource.includes('onAppearanceConfigChange'), 'Appearance tab must persist changes through onAppearanceConfigChange');
+    assert.ok(appearanceSource.includes('Canvas Density') && appearanceSource.includes('canvasDensity: density'), 'Appearance tab must render a wired "Canvas Density" segmented control');
+    assert.ok(appearanceSource.includes('Glass Surface Blur') && appearanceSource.includes('glassBlur: blur'), 'Appearance tab must render a wired "Glass Surface Blur" segmented control');
+    assert.ok(appearanceSource.includes('enableSpringMotion: !appearanceConfig.enableSpringMotion'), 'Appearance tab must render a wired spring motion toggle');
+    assert.ok(appearanceSource.includes('hapticFeedback: !appearanceConfig.hapticFeedback'), 'Appearance tab must render a wired haptic feedback toggle');
+    assert.ok(appearanceSource.includes('showLineNumbersInCode: !appearanceConfig.showLineNumbersInCode'), 'Appearance tab must render a wired line numbers toggle');
+    assert.ok(appearanceSource.includes('autoAttachSuperpowers: !appearanceConfig.autoAttachSuperpowers'), 'Appearance tab must render a wired superpowers auto-attach toggle');
+    console.log('  ✓ Test 2 Passed: Appearance tab bound to StudioAppearanceConfig (density, blur, motion, haptics, editor toggles) verified');
 
     // -------------------------------------------------------------
-    // Tab 4: Agents Tab
+    // Tabs 3-9: Plan & Usage, Agents, Git & PRs, Worktrees, Browser & Network, Tab, Code Intelligence
+    // were unwired mocks and are pruned; they must not come back as dead UI.
     // -------------------------------------------------------------
-    assert.ok(source.includes('Submit with ⌘ + Enter') || source.includes('Submit with Cmd+Enter'), 'Agents tab must render "Submit with ⌘ + Enter" toggle');
-    assert.ok(source.includes('Default Environment'), 'Agents tab must render "Default Environment" dropdown');
-    assert.ok(source.includes('New Messages'), 'Agents tab must render "New Messages" steer behavior');
-    assert.ok(source.includes('Agent Autocomplete'), 'Agents tab must render "Agent Autocomplete" toggle');
-    assert.ok(source.includes('Auto-Approve Mode Transitions'), 'Agents tab must render "Auto-Approve Mode Transitions" toggle');
-    assert.ok(source.includes('Third-Party Imports'), 'Agents tab must render "Third-Party Imports" group');
-    assert.ok(source.includes('Remote Control'), 'Agents tab must render "Remote Control" group');
-    assert.ok(source.includes('Context and Tools') || source.includes('Context & Tools'), 'Agents tab must render "Context and Tools" group');
-    assert.ok(source.includes('Run Mode'), 'Agents tab must render "Run Mode" dropdown with Run Everything (Unsandboxed)');
-    console.log('  ✓ Test 4 Passed: Agents tab with conversation controls, third-party imports, remote control, and run mode verified');
-
-    // -------------------------------------------------------------
-    // Tab 5: Git & PRs Tab
-    // -------------------------------------------------------------
-    assert.ok(source.includes('Review Provider'), 'Git & PRs tab must render "Review Provider" selector');
-    assert.ok(source.includes('PR Link Destination'), 'Git & PRs tab must render "PR Link Destination" selector');
-    assert.ok(source.includes('Commit Attribution'), 'Git & PRs tab must render "Commit Attribution" toggle');
-    assert.ok(source.includes('PR Attribution'), 'Git & PRs tab must render "PR Attribution" toggle');
-    assert.ok(source.includes('Branch Prefix'), 'Git & PRs tab must render "Branch Prefix" input');
-    console.log('  ✓ Test 5 Passed: Git & PRs tab with review provider, attribution toggles, and branch prefix input verified');
-
-    // -------------------------------------------------------------
-    // Tab 6: Worktrees Tab
-    // -------------------------------------------------------------
-    assert.ok(source.includes('Max Worktrees'), 'Worktrees tab must render "Max Worktrees" counter stepper');
-    assert.ok(source.includes('Max Total Size (GB)'), 'Worktrees tab must render "Max Total Size (GB)" counter stepper');
-    assert.ok(source.includes('Cursor-Managed Worktrees') || source.includes('Scratchbox-Managed Worktrees'), 'Worktrees tab must render "Cursor-Managed Worktrees" section');
-    console.log('  ✓ Test 6 Passed: Worktrees tab with cleanup limits and worktree manager verified');
-
-    // -------------------------------------------------------------
-    // Tab 7: Browser & Network Tab
-    // -------------------------------------------------------------
-    assert.ok(source.includes('Browser Automation'), 'Browser & Network tab must render "Browser Automation" selector');
-    assert.ok(source.includes('Browser Protection'), 'Browser & Network tab must render "Browser Protection" toggle');
-    assert.ok(source.includes('Open Local Links in Cursor Browser') || source.includes('Open Local Links in Scratchbox Browser'), 'Browser & Network tab must render "Open Local Links" toggle');
-    assert.ok(source.includes('HTTP Compatibility Mode'), 'Browser & Network tab must render "HTTP Compatibility Mode" selector');
-    assert.ok(source.includes('Required Domains'), 'Browser & Network tab must render "Required Domains" row with Copy/Show');
-    assert.ok(source.includes('Network Diagnostics'), 'Browser & Network tab must render "Network Diagnostics" with Run Diagnostic');
-    console.log('  ✓ Test 7 Passed: Browser & Network tab with browser automation, HTTP/2 compatibility, and diagnostics verified');
-
-    // -------------------------------------------------------------
-    // Tab 8: Tab (Autocomplete) Tab
-    // -------------------------------------------------------------
-    assert.ok(source.includes('Cursor Tab') || source.includes('Scratchbox Tab'), 'Tab settings must render "Cursor Tab" master toggle');
-    assert.ok(source.includes('Partial Accepts'), 'Tab settings must render "Partial Accepts" toggle');
-    assert.ok(source.includes('Suggestions While Commenting'), 'Tab settings must render "Suggestions While Commenting" toggle');
-    assert.ok(source.includes('Whitespace-Only Suggestions'), 'Tab settings must render "Whitespace-Only Suggestions" toggle');
-    assert.ok(source.includes('Auto Import for Python'), 'Tab settings must render "Auto Import for Python" toggle');
-    assert.ok(source.includes('Ignored Files'), 'Tab settings must render "Ignored Files" glob input');
-    console.log('  ✓ Test 8 Passed: Tab autocomplete settings with partial accepts, auto-imports, and glob ignore verified');
-
-    // -------------------------------------------------------------
-    // Tab 9: Code Intelligence Tab
-    // -------------------------------------------------------------
-    assert.ok(source.includes('Index Repositories for Instant Grep'), 'Code Intelligence tab must render "Index Repositories for Instant Grep" toggle');
-    assert.ok(source.includes('Hierarchical Cursor Ignore') || source.includes('Hierarchical Scratchbox Ignore'), 'Code Intelligence tab must render "Hierarchical Cursor Ignore" toggle');
-    assert.ok(source.includes('Enable LSPs'), 'Code Intelligence tab must render "Enable LSPs" toggle');
-    assert.ok(source.includes('Maximum Local LSP Workspaces'), 'Code Intelligence tab must render "Maximum Local LSP Workspaces" stepper');
-    console.log('  ✓ Test 9 Passed: Code Intelligence tab with codebase indexing, cursorignore, and LSP limits verified');
+    const prunedTabs: Array<[string, string, string]> = [
+        ['PlanTab.tsx', 'plan', 'Monthly Limit'],
+        ['AgentsTab.tsx', 'agents', 'Auto-Approve Mode Transitions'],
+        ['CloudAgentsTab.tsx', 'cloud-agents', "label: 'Cloud Agents'"],
+        ['GitPrsTab.tsx', 'git-prs', 'PR Link Destination'],
+        ['WorktreesTab.tsx', 'worktrees', 'Max Worktrees'],
+        ['BrowserNetworkTab.tsx', 'browser-network', 'HTTP Compatibility Mode'],
+        ['TabTab.tsx', 'tab', 'Whitespace-Only Suggestions'],
+        ['CodeIntelligenceTab.tsx', 'code-intelligence', 'Maximum Local LSP Workspaces'],
+        ['BetaTab.tsx', 'beta', "label: 'Beta'"],
+        ['DocsTab.tsx', 'docs', "label: 'Docs'"]
+    ];
+    for (const [file, id, marker] of prunedTabs) {
+        assert.ok(!fs.existsSync(path.join(tabsDir, file)), `Unwired ${file} must stay pruned (4f4e192)`);
+        assert.ok(!source.includes(`activeTab === '${id}'`), `SettingsModal must not render the pruned '${id}' tab`);
+        assert.ok(!source.includes(marker), `Settings sources must not contain pruned '${id}' tab UI ("${marker}")`);
+    }
+    console.log('  ✓ Tests 3-9 Passed: unwired Plan, Agents, Git & PRs, Worktrees, Browser & Network, Tab, Code Intelligence tabs stay pruned');
 
     // -------------------------------------------------------------
     // Tab 10: CSS Styling Verification for Steppers, Sliders & Diff Box

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import {
   Google3DTileBlockoutPipelineService
 } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
@@ -180,7 +181,9 @@ describe('Zero Building Clipping & Atomic Building Integrity', () => {
         query: 'Midtown Manhattan, coordinates: 40.748400, -73.985700',
         mockExecution: true,
         atomicBuildingIntegrity: true,
-        zenithAltitudeMeters: 2000
+        zenithAltitudeMeters: 2000,
+        // Keep the mock tile GLB out of public/models
+        outputGlbPath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tile-integrity-')), 'midtown_clay.glb')
       }, {} as any);
 
       expect(result.resultPayload.success).toBe(true);

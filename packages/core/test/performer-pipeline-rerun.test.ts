@@ -1,26 +1,31 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import {
     VideoTo4DPerformerPipelineService,
     VideoTo4DPerformerOptions
 } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
+import { REPO_ROOT, requireAsset, withReason } from './helpers/requirements';
+
+const FIXTURE_HERO = 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg';
+const fixtureHero = requireAsset(FIXTURE_HERO);
 
 describe('PerformerPipelineRerun', () => {
     let pipeline: VideoTo4DPerformerPipelineService;
-    const testOutputDir = path.resolve(process.cwd(), 'tmp/test_performer_rerun');
+    let testOutputDir: string;
 
     beforeEach(async () => {
         pipeline = new VideoTo4DPerformerPipelineService();
-        await fs.ensureDir(testOutputDir);
+        testOutputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-performer-rerun-'));
     });
 
     afterEach(async () => {
         await fs.remove(testOutputDir);
     });
 
-    it('successfully triggers and executes on-demand pipeline rerun with custom parameters', async () => {
-        const fixtureHeroPath = path.resolve(process.cwd(), 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg');
+    it.skipIf(!fixtureHero.ok)(withReason('successfully triggers and executes on-demand pipeline rerun with custom parameters', fixtureHero), async () => {
+        const fixtureHeroPath = path.join(REPO_ROOT, FIXTURE_HERO);
         expect(fs.existsSync(fixtureHeroPath)).toBe(true);
 
         const customOptions: VideoTo4DPerformerOptions = {

@@ -33,6 +33,10 @@ import { encodePng } from '../src/node/texture-processing';
 import { encodeRgbaToJpeg, decodeImageToRgba } from '../src/node/image-codec-ffmpeg';
 import { upsampleBicubic3 } from '../src/node/spatial/StreetViewTextureFusion';
 import { linearRgbToLab, luminance8 } from '../src/node/spatial/StreetViewStage3Metrics';
+import { HOW_TO, requireBinary, withReason } from './helpers/requirements';
+
+// The synthetic scan's tiles are JPEGs: encodeRgbaToJpeg / decodeImageToRgba run ffmpeg (FFMPEG_PATH or PATH).
+const ffmpeg = requireBinary(process.env.FFMPEG_PATH || 'ffmpeg', HOW_TO.ffmpeg);
 
 const SCREENSHOT_DIR = path.resolve(process.cwd(), 'test-results/screenshots');
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-matbake-'));
@@ -132,7 +136,7 @@ function accessorBytes(glb: Buffer, accessor: number): Buffer {
 }
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 
-describe('MaterialDetailBaker', () => {
+describe.skipIf(!ffmpeg.ok)(withReason('MaterialDetailBaker', ffmpeg), () => {
     const TILE = 32, SIZE = 16; // 0.5 m tile texels
     let glbIn: Buffer;
     let tileA: Float32Array;
@@ -306,7 +310,10 @@ describe('MaterialDetailBaker', () => {
         expect(r.reports.find(x => x.imageIndex === 0)!.reason).toMatch(/sharpness gain/);
         for (let i = 0; i < 3; i++) expect(sha((await imageOf(r.glb, i)).bytes)).toBe(sha((await imageOf(glbIn, i)).bytes));
     });
+});
 
+// buildDetailMap is pure math on in-memory buffers: it needs neither ffmpeg nor the synthetic scan above.
+describe('MaterialDetailBaker detail maps', () => {
     it('detail maps are band-limited ratios around 1', () => {
         const W = 64, Y = new Float32Array(W * W);
         for (let i = 0; i < W * W; i++) Y[i] = 0.4 * detail((i % W) / 32, Math.floor(i / W) / 32);

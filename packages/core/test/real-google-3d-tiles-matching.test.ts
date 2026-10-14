@@ -7,9 +7,11 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
+import os from 'os';
 import path from 'path';
 import fs from 'fs';
+import { requireAll, requireAsset, withReason } from './helpers/requirements';
 import {
     SpatialPoseEstimatorService,
     type Point3D,
@@ -27,11 +29,22 @@ import {
     type CameraPose6DOF
 } from '../src/node/spatial/SubPixelEdgeAlignmentOptimizer.js';
 
+const tileGlb = requireAsset(
+    'public/models/google_tiles_textured_area.glb',
+    'getGoogle3DTilesFullTexture in packages/core/src/node/spatial/Google3DTileBlockoutPipelineService.ts (needs Google Map Tiles API access)'
+);
+const colosseumGlb = requireAsset('public/models/colosseum_rome_textured.glb');
+const bothGlbs = requireAll(tileGlb, colosseumGlb);
+
 describe('Real Google Photorealistic 3D Tiles Matching & Precision Resection', () => {
     const tileGlbPath = path.resolve(process.cwd(), 'public/models/google_tiles_textured_area.glb');
     const colosseumGlbPath = path.resolve(process.cwd(), 'public/models/colosseum_rome_textured.glb');
+    const proofDirs: string[] = [];
+    afterAll(() => {
+        for (const dir of proofDirs) fs.rmSync(dir, { recursive: true, force: true });
+    });
 
-    it('loads authentic Google 3D Tiles meshes directly from disk (.glb)', () => {
+    it.skipIf(!bothGlbs.ok)(withReason('loads authentic Google 3D Tiles meshes directly from disk (.glb)', bothGlbs), () => {
         expect(fs.existsSync(tileGlbPath)).toBe(true);
         expect(fs.existsSync(colosseumGlbPath)).toBe(true);
 
@@ -46,7 +59,7 @@ describe('Real Google Photorealistic 3D Tiles Matching & Precision Resection', (
         expect(colosseumMesh.indices.length).toBeGreaterThan(500000);  // 170,588 triangles * 3
     });
 
-    it('solves exact 6-DOF camera pose from real 3D tile surface vertices using solvePnP', () => {
+    it.skipIf(!tileGlb.ok)(withReason('solves exact 6-DOF camera pose from real 3D tile surface vertices using solvePnP', tileGlb), () => {
         const tileMesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(tileGlbPath);
 
         const intrinsics: CameraIntrinsics = {
@@ -102,7 +115,7 @@ describe('Real Google Photorealistic 3D Tiles Matching & Precision Resection', (
         expect(solved.translationCamera[2]).toBeCloseTo(t_gt[2], 2);
     });
 
-    it('rejects outlier visual correspondences on real 3D tile points using solvePnPRansac', () => {
+    it.skipIf(!tileGlb.ok)(withReason('rejects outlier visual correspondences on real 3D tile points using solvePnPRansac', tileGlb), () => {
         const tileMesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(tileGlbPath);
 
         const intrinsics: CameraIntrinsics = {
@@ -172,7 +185,7 @@ describe('Real Google Photorealistic 3D Tiles Matching & Precision Resection', (
         expect(ransacResult.pose.translationCamera[2]).toBeCloseTo(t_gt[2], 1);
     });
 
-    it('renders real 3D tile mesh and executes closed-loop edge optimization to sub-pixel convergence', () => {
+    it.skipIf(!tileGlb.ok)(withReason('renders real 3D tile mesh and executes closed-loop edge optimization to sub-pixel convergence', tileGlb), () => {
         const tileMesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(tileGlbPath);
 
         // Calculate centroid of real 3D tile mesh
@@ -240,9 +253,11 @@ describe('Real Google Photorealistic 3D Tiles Matching & Precision Resection', (
         expect(optResult.subpixelResidualPx).toBeLessThan(0.25);
     });
 
-    it('generates, exports, and verifies visual PNG proof artifacts across all 4 resection stages on real Google 3D tile mesh', () => {
+    it.skipIf(!tileGlb.ok)(withReason('generates, exports, and verifies visual PNG proof artifacts across all 4 resection stages on real Google 3D tile mesh', tileGlb), () => {
         const tileMesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(tileGlbPath);
-        const outDir = path.resolve(process.cwd(), 'public/visual_proof_real_tile');
+        // Proof PNGs go to a private temp dir instead of public/visual_proof_real_tile.
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-real-tile-proof-'));
+        proofDirs.push(outDir);
         const artifactDir = process.env.ANTIGRAVITY_ARTIFACT_DIR && fs.existsSync(process.env.ANTIGRAVITY_ARTIFACT_DIR)
             ? process.env.ANTIGRAVITY_ARTIFACT_DIR
             : null;

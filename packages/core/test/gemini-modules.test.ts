@@ -61,7 +61,10 @@ test('GeminiClient model candidates, fallback and error classification', async (
 async function runClientAssertions(): Promise<void> {
     const client = makeClient();
     assert.deepStrictEqual(client.getModelCandidates(), [DEFAULT_GEMINI_MODEL, ...FALLBACK_GEMINI_MODELS]);
-    assert.deepStrictEqual(client.getModelCandidates('gemini-2.5-flash'), ['gemini-2.5-flash', 'gemini-2.5-pro']);
+    // 6f4a5d0 bumped the default to gemini-3.8-flash with gemini-3.7-flash as the first fallback.
+    // A requested model leads, followed by the remaining fallbacks with duplicates removed.
+    assert.deepStrictEqual(FALLBACK_GEMINI_MODELS, ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']);
+    assert.deepStrictEqual(client.getModelCandidates('gemini-2.5-flash'), ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-2.5-pro']);
     assert.deepStrictEqual(client.getThinkingConfig({}), { thinkingBudget: 1024 });
     assert.deepStrictEqual(client.getThinkingConfig({ thinkingBudget: 42 }), { thinkingBudget: 42 });
 

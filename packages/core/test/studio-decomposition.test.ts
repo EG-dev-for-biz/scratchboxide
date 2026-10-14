@@ -103,13 +103,17 @@ test('GenerativeCanvasStudio.tsx contains no hard-coded /Users/ paths', () => {
 
 test('settings tabs each live in their own file under settings/tabs', () => {
     const tabsDir = path.join(GENERATIVE_CANVAS_DIR, 'settings', 'tabs');
+    // 4f4e192 ("refactor(settings): prune unwired tabs ...") deliberately deleted the 11 unwired mock
+    // tabs (Profile, Plan, Agents, CloudAgents, GitPrs, Worktrees, BrowserNetwork, Tab, CodeIntelligence,
+    // Beta, Docs) and kept these 10 operational tabs.
     const expected = [
-        'GeneralTab', 'ProfileTab', 'AppearanceTab', 'PlanTab', 'AgentsTab', 'CloudAgentsTab', 'ModelsTab',
-        'GitPrsTab', 'WorktreesTab', 'BrowserNetworkTab', 'TabTab', 'CodeIntelligenceTab', 'BetaTab',
-        'WorkspaceTab', 'SkillsTab', 'McpTab', 'ShortcutsTab', 'AboutTab', 'MemoriesTab', 'DocsTab'
+        'GeneralTab', 'AppearanceTab', 'ModelsTab', 'WorkspaceTab', 'SkillsTab', 'McpTab',
+        'MemoriesTab', 'ShortcutsTab', 'AdminTab', 'AboutTab'
     ];
+    const settingsEntry = fs.readFileSync(path.join(GENERATIVE_CANVAS_DIR, 'SettingsModal.tsx'), 'utf-8');
     for (const name of expected) {
         assert.ok(fs.existsSync(path.join(tabsDir, `${name}.tsx`)), `settings/tabs/${name}.tsx must exist`);
+        assert.ok(settingsEntry.includes(`import { ${name} } from './settings/tabs/${name}'`), `SettingsModal must import ${name} from its own file`);
     }
     const reducer = fs.readFileSync(path.join(GENERATIVE_CANVAS_DIR, 'settings', 'settingsReducer.ts'), 'utf-8');
     assert.ok(reducer.includes('useReducer'), 'settingsReducer.ts must back the settings store with useReducer');

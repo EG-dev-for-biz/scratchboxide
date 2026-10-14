@@ -39,9 +39,17 @@ async function runStreamlinedDashboardTests() {
     // -------------------------------------------------------------
     // Test 2: Studio Welcome Stage - Quick Mode / Capability Pills Bar
     // -------------------------------------------------------------
-    assert.ok(studioSource.includes('sb-welcome-mode-strip') || studioSource.includes('sb-quick-actions-bar'), 'Studio must render quick mode strip');
-    assert.ok(studioSource.includes('sb-welcome-mode-btn') || studioSource.includes('sb-quick-action-pill'), 'Studio must render quick mode buttons');
-    console.log('  ✓ Test 2 Passed: Quick mode starter strip (Agent, Ask, Plan, Live Analytics) integrated');
+    // 23a53e1 ("refactor(ui): purge UI redundancies ...") deliberately removed the duplicate welcome
+    // mode strip from the empty hero: "mode selection lives in composer". The hero keeps a quick
+    // creation starter strip (sb-starter-prompts-grid / sb-starter-chip).
+    assert.ok(!studioSource.includes('sb-welcome-mode-strip'), 'Empty hero must not duplicate the composer mode selector');
+    assert.ok(studioSource.includes('sb-starter-prompts-grid'), 'Studio must render quick starter strip');
+    assert.ok(studioSource.includes('sb-starter-chip') && studioSource.includes('onClick={() => handleSendMessage(item.prompt)}'), 'Studio must render quick starter buttons that send their prompt');
+    assert.ok(studioSource.includes('sb-cursor-mode-selector'), 'Studio composer must render the mode selector');
+    for (const mode of ['agent', 'ask', 'plan']) {
+        assert.ok(studioSource.includes(`setAiInteractionMode('${mode}')`), `Composer mode selector must switch to '${mode}' mode`);
+    }
+    console.log('  ✓ Test 2 Passed: Quick starter strip in hero + Agent/Ask/Plan mode selector in composer integrated');
 
     // -------------------------------------------------------------
     // Test 3: Metric Dashboard Primitive - Streamlined Toolbar & Controls

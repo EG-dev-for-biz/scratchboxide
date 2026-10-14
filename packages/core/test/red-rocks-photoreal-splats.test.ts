@@ -7,12 +7,14 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs-extra';
+import * as os from 'os';
 import * as path from 'path';
 import * as http from 'http';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { requireAsset, requireAssets, withReason } from './helpers/requirements';
 import {
   PhotorealGaussianSplatMesh,
   type SplatData
@@ -27,6 +29,25 @@ const execAsync = promisify(exec);
 const ROOT_DIR = path.resolve(__dirname, '../../../');
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 const SHOT_DIR = path.join(ROOT_DIR, 'docs/screenshots');
+
+const redRocksGlb = requireAsset('public/models/red_rocks_amphitheatre.glb', 'the Google 3D Tiles Red Rocks capture (see scripts/build_red_rocks_3dgs.ts)');
+const manInBlackSplat = requireAsset('public/models/performer_4dgs/demos/man-in-black/man-in-black.splat', 'scripts/generate_man_in_black_performer.ts');
+const redRocksVenue3dgs = requireAssets([
+  'public/tilesets/red_rocks/fused.splat',
+  'public/tilesets/red_rocks/fused.spz',
+  'public/models/red_rocks_venue.splat',
+  'public/models/red_rocks_venue.spz'
+], 'scripts/build_red_rocks_3dgs.ts or scripts/run_pathtraced_3dgs_red_rocks.ts');
+const redRocksShots = requireAssets([
+  'docs/screenshots/65_red_rocks_photoreal_splats_vip_front.png',
+  'docs/screenshots/66_red_rocks_photoreal_splats_mix_board.png',
+  'docs/screenshots/67_red_rocks_photoreal_splats_aerial_drone.png'
+], 'scripts/capture_red_rocks_photoreal.cjs');
+
+const tempDirs: string[] = [];
+afterAll(() => {
+  for (const dir of tempDirs) fs.removeSync(dir);
+});
 
 function decodeRgba(pngBuffer: Buffer): { width: number; height: number; data: Buffer } {
   // Simple PNG chunk reader or luminance inspector
@@ -49,7 +70,7 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(service.group).toBeDefined();
   });
 
-  it('2. Verifies authentic Google 3D Tiles Red Rocks GLB asset integrity', async () => {
+  it.skipIf(!redRocksGlb.ok)(withReason('2. Verifies authentic Google 3D Tiles Red Rocks GLB asset integrity', redRocksGlb), async () => {
     const glbPath = path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb');
     expect(await fs.pathExists(glbPath)).toBe(true);
 
@@ -68,9 +89,8 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(version).toBe(2);
   });
 
-  it('3. Parses binary .splat file from Performer 4DGS man-in-black demo and constructs PhotorealGaussianSplatMesh', async () => {
+  it.skipIf(!manInBlackSplat.ok)(withReason('3. Parses binary .splat file from Performer 4DGS man-in-black demo and constructs PhotorealGaussianSplatMesh', manInBlackSplat), async () => {
     const splatPath = path.join(PUBLIC_DIR, 'models/performer_4dgs/demos/man-in-black/man-in-black.splat');
-    if (!(await fs.pathExists(splatPath))) return;
 
     const buf = await fs.readFile(splatPath);
     expect(buf.byteLength).toBe(1120000); // 35,000 splats * 32 bytes
@@ -137,7 +157,7 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(html).toContain('3dgs_venue');
   });
 
-  it('5. Verifies reconstructed 3DGS Red Rocks venue assets exist and are valid', async () => {
+  it.skipIf(!redRocksVenue3dgs.ok)(withReason('5. Verifies reconstructed 3DGS Red Rocks venue assets exist and are valid', redRocksVenue3dgs), async () => {
     const fusedSplat = path.join(PUBLIC_DIR, 'tilesets/red_rocks/fused.splat');
     const fusedSpz = path.join(PUBLIC_DIR, 'tilesets/red_rocks/fused.spz');
     const tilesetJson = path.join(PUBLIC_DIR, 'tilesets/red_rocks/tileset.json');
@@ -160,12 +180,10 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(tileset.root.transform).toHaveLength(16);
   });
 
-  it('6. Verifies persisted photorealistic screenshots across multiple viewpoints', async () => {
+  it.skipIf(!redRocksShots.ok)(withReason('6. Verifies persisted photorealistic screenshots across multiple viewpoints', redRocksShots), async () => {
     const vipShot = path.join(SHOT_DIR, '65_red_rocks_photoreal_splats_vip_front.png');
     const mixShot = path.join(SHOT_DIR, '66_red_rocks_photoreal_splats_mix_board.png');
     const droneShot = path.join(SHOT_DIR, '67_red_rocks_photoreal_splats_aerial_drone.png');
-
-    if (!(await fs.pathExists(vipShot))) return;
 
     expect(await fs.pathExists(vipShot)).toBe(true);
     expect(await fs.pathExists(mixShot)).toBe(true);
@@ -183,7 +201,26 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
 
   it('7. Synthesizes Red Rocks venue through Location3DGaussianSplatService facade', async () => {
     const { Location3DGaussianSplatService } = await import('../src/node/spatial/Location3DGaussianSplatService');
-    const service = new Location3DGaussianSplatService();
+    // Run against a temp workspace so the pipeline never rewrites the tracked tileset in
+    // public/tilesets/red_rocks (pose JSONs, tileset.json, tree.json) or drops synthesized
+    // GLBs into public/models. Seed it with the tracked cached station plates so the run
+    // still bakes from the committed beautified images instead of regenerating them.
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-red-rocks-3dgs-'));
+    tempDirs.push(workspaceRoot);
+    const outDir = path.join(workspaceRoot, 'public/tilesets/red_rocks');
+    const srcStations = path.join(PUBLIC_DIR, 'tilesets/red_rocks/stations');
+    await fs.ensureDir(path.join(outDir, 'stations'));
+    for (const name of await fs.readdir(srcStations)) {
+      if (/^station_\d+(_beautified\.png|\.pose\.json)$/.test(name)) {
+        await fs.copy(path.join(srcStations, name), path.join(outDir, 'stations', name));
+      }
+    }
+    if (redRocksGlb.ok) {
+      // Use the real Google 3D Tiles capture when this machine has it.
+      await fs.ensureDir(path.join(workspaceRoot, 'public/models'));
+      await fs.symlink(path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb'), path.join(workspaceRoot, 'public/models/red_rocks_amphitheatre.glb'));
+    }
+    const service = new Location3DGaussianSplatService({ workspaceRoot });
 
     const result = await service.generate({
       location: 'Red Rocks Amphitheatre',
@@ -194,8 +231,8 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
       cameraCount: 12,
       width: 960,
       bakeStride: 2,
-      outDir: path.join(PUBLIC_DIR, 'tilesets/red_rocks'),
-      forceRebake: false // reuse cached stations for instant verification
+      outDir,
+      forceRebake: false // reuse cached station plates instead of regenerating them
     });
 
     expect(result.success).toBe(true);

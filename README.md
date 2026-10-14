@@ -91,6 +91,30 @@ npm test           # vitest: packages/core/test/**  +  desktop-app/test/**
 `npm run test:core` / `npm run test:desktop` run one workspace; `npm run test:watch` watches.
 CI (`.github/workflows/ci.yml`) runs all four plus a no-push Docker build.
 
+#### Test prerequisites
+
+A clean checkout runs the suite with no failures caused by the machine: anything a test needs that is not in git
+makes that test **skip with a reason** instead of failing. The reason is appended to the test title as
+`[skipped: ...]` (see `packages/core/test/helpers/requirements.ts`), so `npx vitest run --reporter=verbose`
+or `--reporter=json` lists exactly what is missing and how to get it.
+
+| Prerequisite | Needed by | Without it |
+|---|---|---|
+| Node 22+ and `npm install` | everything | — |
+| Python 3.10+ venv: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` (nanobind + cmake) | Python 3D engine tests; `vitest.global-setup.ts` builds `scratchbox_native` from `.venv` on the first run | those tests fail |
+| `clang++` with C++20 (Xcode CLT / `apt install clang`), `zlib` | native C++ engine tests | those tests fail |
+| `ffmpeg` (`brew install ffmpeg` / `apt install ffmpeg`; `FFMPEG_PATH` is honoured where the code honours it) | JPEG/video encode, Street View, texture fusion, media pipelines | skipped |
+| `cwebp` (`brew install webp` / `apt install webp`; or `SCRATCHBOX_CWEBP_PATH`) | WebP texture compression | skipped |
+| `numpy` on the `python3` in PATH | NumPy skinning-parity test (`scripts/sbx_skinning.py`) | skipped |
+| `torch`, `numpy`, `Pillow` (`tools/depth/requirements.txt`) | panorama depth / walkable world | skipped |
+| Google Chrome / Chromium | headless screenshot tests | skipped |
+| `GOOGLE_MAPS_API_KEY` or `MAP_TILES_API_KEY`; Vertex AI credentials | live Google 3D Tiles ingestion, Vertex image generation | skipped |
+| Gitignored binary assets (`public/models/*.glb`, `models/performer_4dgs/**`, `*.sbhuman`, video plates, ...) | asset-backed integration tests | skipped, naming the file and its producer script; `npm run hydrate` downloads the ones in `manifests/demos_asset_manifest.json` when a mirror is reachable (its offline placeholders count as missing) |
+
+CI installs the Python venv, `numpy`, `ffmpeg` and `webp`, so only asset-, credential- and torch-backed tests skip there.
+Tests write their outputs to `os.tmpdir()` (or the gitignored `test-results/`, `build/`, `.scratchbox/`) and must never
+overwrite tracked files: after `npm test`, `git status` should be clean.
+
 ## Repository layout
 
 ```

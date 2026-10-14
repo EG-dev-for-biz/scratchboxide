@@ -9,6 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { describe, it, expect } from 'vitest';
 import {
   ProceduralSfMDatasetService,
@@ -201,7 +202,7 @@ describe('ProceduralSfMDatasetService (Procedural Structure SfM / COLMAP Generat
 
   describe('6. Disk Export Integration', () => {
     it('should export all dataset files to target directory', async () => {
-      const outDir = path.resolve(process.cwd(), 'public/data/test_procedural_sfm');
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-procedural-sfm-'));
       const poses = ProceduralSfMDatasetService.generateTrajectory({ numViews: 3, radius: 2.0 });
       const points = ProceduralSfMDatasetService.sampleProceduralGeometry('box', 20, 1.0);
       const bundle = ProceduralSfMDatasetService.serializeBundle(poses, points);

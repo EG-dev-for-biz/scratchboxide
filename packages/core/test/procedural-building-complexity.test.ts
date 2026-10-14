@@ -7,8 +7,9 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, onTestFinished } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
@@ -78,9 +79,9 @@ print(f"VERIFICATION_TRIANGLE_COUNT={scene.triangle_count}")
 print(f"VERIFICATION_ELAPSED={time.time() - start:.3f}")
 `;
 
-        const outDir = path.resolve(process.cwd(), 'public/test_output');
-        fs.mkdirSync(outDir, { recursive: true });
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-procedural-building-complexity-'));
         const outGlb = path.join(outDir, 'monumental_civic_plaza.glb');
+        onTestFinished(() => fs.rmSync(outDir, { recursive: true, force: true }));
 
         const result = await runner.runScript(pythonScript, {
             outputGlbPath: outGlb,

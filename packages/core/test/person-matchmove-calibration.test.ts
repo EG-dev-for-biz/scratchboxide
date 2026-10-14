@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as path from 'path';
+import * as os from 'os';
 import * as fs from 'fs-extra';
 import { 
     adaptiveMatchmoveHandlers 
@@ -212,16 +213,17 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
         expect(calibResult.resultPayload.peakAccelerationMps2).toBeLessThan(10.0);
         expect(calibResult.resultPayload.kinematicsSafe).toBe(true);
 
-        // Verify and write artifacts for public inspection
-        const reportPath = path.resolve(__dirname, '../../../public/models/person_subject_adaptive_metrology_report.json');
-        await fs.ensureDir(path.dirname(reportPath));
+        // Verify and write artifacts (to a temp dir: tests must not write into public/)
+        const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-person-matchmove-'));
+        const reportPath = path.join(artifactDir, 'person_subject_adaptive_metrology_report.json');
         await fs.writeJson(reportPath, calibResult.resultPayload.metrologyReport, { spaces: 2 });
 
-        const splinePath = path.resolve(__dirname, '../../../public/models/person_subject_trajectory_spline.json');
+        const splinePath = path.join(artifactDir, 'person_subject_trajectory_spline.json');
         await fs.writeJson(splinePath, calibResult.resultPayload.trajectory, { spaces: 2 });
 
         expect(fs.existsSync(reportPath)).toBe(true);
         expect(fs.existsSync(splinePath)).toBe(true);
+        await fs.remove(artifactDir);
 
         // Run verification tool
         const verifyResult = await adaptiveMatchmoveHandlers.adaptive_matchmove_verify_metrology({

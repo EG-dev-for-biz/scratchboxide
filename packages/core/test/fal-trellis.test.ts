@@ -10,15 +10,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { FalTrellisService } from '../src/node/spatial/FalTrellisService';
 import { MultiAngleTurnaroundService } from '../src/node/spatial/MultiAngleTurnaroundService';
 import { GltfBinaryPacker } from '../src/node/3d-engine/gltf-binary-packer';
 
 describe('FalTrellisService & MultiAngle Integration Test Suite', () => {
-    const testDir = path.resolve(__dirname, 'tmp_fal_trellis_test');
+    // Per-test temp dir outside the repo (was packages/core/test/tmp_fal_trellis_test).
+    let testDir = '';
 
     beforeEach(() => {
-        fs.mkdirSync(testDir, { recursive: true });
+        testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-fal-trellis-'));
     });
 
     afterEach(() => {

@@ -15,6 +15,8 @@ export interface GeocodeResult {
     lat: number;
     lng: number;
     formattedAddress: string;
+    /** Display name for the place the query named (see resolveLandmarkSync), when known. */
+    name?: string;
     placeId?: string;
     locationType?: string;
     elevation?: number;
@@ -787,22 +789,32 @@ export class GoogleMapsService {
 
     /**
      * Synchronously resolves a query against the built-in landmark registry.
+     * The result's `name` is a display name for the place: the formatted address when it mentions
+     * the place the query named (e.g. "Central Park, New York, NY, USA"), otherwise the matched part
+     * of the query as the caller wrote it (e.g. "Colosseum" rather than "Piazza del Colosseo, 1, ...").
      */
     public resolveLandmarkSync(query: string): GeocodeResult | undefined {
         if (!query || !query.trim()) return undefined;
-        const lower = query.trim().toLowerCase();
+        const original = query.trim();
+        const lower = original.toLowerCase();
+        const withName = (landmark: GeocodeResult, matchedLower: string, matchedText: string): GeocodeResult => ({
+            ...landmark,
+            name: landmark.formattedAddress.toLowerCase().includes(matchedLower) ? landmark.formattedAddress : matchedText
+        });
         if (LANDMARK_REGISTRY[lower]) {
-            return LANDMARK_REGISTRY[lower];
+            return withName(LANDMARK_REGISTRY[lower], lower, original);
         }
         const sortedEntries = Object.entries(LANDMARK_REGISTRY).sort((a, b) => b[0].length - a[0].length);
         for (const [key, landmark] of sortedEntries) {
             if (lower === key || lower.includes(key)) {
-                return landmark;
+                const at = lower.indexOf(key);
+                const matchedText = lower.length === original.length ? original.slice(at, at + key.length) : key;
+                return withName(landmark, key, matchedText);
             }
         }
         for (const [key, landmark] of sortedEntries) {
             if (key.includes(lower)) {
-                return landmark;
+                return withName(landmark, lower, original);
             }
         }
         return undefined;

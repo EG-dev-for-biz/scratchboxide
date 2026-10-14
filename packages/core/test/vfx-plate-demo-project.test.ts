@@ -16,6 +16,10 @@ import {
     type InterpolatedCameraPose
 } from '../src/browser/generative-canvas/services/video/VfxPlateMatchmoveService';
 import type { VideoTimelineData } from '../src/browser/generative-canvas/services/video/videoTypes';
+import { requireAssets, withReason } from './helpers/requirements';
+
+// Gitignored media the demo project points at (the plate video and the CG monolith inpaint mesh).
+const demoMedia = requireAssets(['public/videos/plaza_hotel_blockout_camera.mp4', 'public/models/cg_architectural_monolith.glb']);
 
 describe('VFX Plate Anti-Drift Demo Project Integration Suite', () => {
     describe('Timeline Synthesizer Demo Recognition', () => {
@@ -77,6 +81,12 @@ describe('VFX Plate Anti-Drift Demo Project Integration Suite', () => {
             expect(plateElement.isVfxPlate).toBe(true);
             expect(plateElement.sourcePath).toBe('videos/plaza_hotel_blockout_camera.mp4');
             expect(plateElement.vfxPlate?.trackingMarkers).toHaveLength(8);
+        });
+
+        it.skipIf(!demoMedia.ok)(withReason('resolves the project plate video and CG monolith inpaint asset on disk', demoMedia), () => {
+            const projectPath = path.resolve(__dirname, '../../../projects/vfx_plate_anti_drift_demo.scratchbox.json');
+            const tl: VideoTimelineData = JSON.parse(fs.readFileSync(projectPath, 'utf8')).timeline;
+            const plateElement = tl.tracks[0].elements[0];
 
             // Verify real video file exists on disk and is non-zero
             const realVideoPath = path.resolve(__dirname, '../../../public', plateElement.sourcePath);

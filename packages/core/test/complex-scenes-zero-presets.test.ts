@@ -13,13 +13,16 @@ import * as path from 'path';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 import { NativeTilePathTracerService } from '../src/node/3d-engine/native-tile-path-tracer-service';
 
-const ARTIFACT_DIR = '/Users/eligreen/.gemini/antigravity/brain/7661fe23-d225-442c-9323-f94362db535b';
+// Visual records of the three renders (gitignored). This used to be a hard-coded path into one developer's Antigravity
+// session directory, which does not exist on other machines and made copyFileSync throw ENOENT.
+const ARTIFACT_DIR = path.resolve(process.cwd(), 'test-results/screenshots');
 
 test('Zero-Presets 3D Pipeline: Generates and Renders 3 Complex Unrelated Scenes with Full Physical PBR', async () => {
     const pythonRunner = NativePythonRunnerService.getInstance();
     const pathTracer = new NativeTilePathTracerService();
     const workDir = path.resolve(process.cwd(), 'build/zero_presets_renders');
     fs.mkdirSync(workDir, { recursive: true });
+    fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
     // =========================================================================
     // SCENE 1: Deep-Sea Hydrothermal Vent Caldera (Basalt, Magma Glow, Pyrite)
@@ -172,7 +175,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, meshes)
 `;
 
     const res1 = await pythonRunner.runScript(scene1Script, { timeoutMs: 30000 });
-    expect(res1.success).toBe(true);
+    expect(res1.success, res1.errorDetails ?? res1.stderr).toBe(true);
     expect(res1.glbPath).toBeDefined();
 
     const outDir1 = path.join(workDir, 'scene_1_hydrothermal_vent');
@@ -341,7 +344,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, meshes)
 `;
 
     const res2 = await pythonRunner.runScript(scene2Script, { timeoutMs: 30000 });
-    expect(res2.success).toBe(true);
+    expect(res2.success, res2.errorDetails ?? res2.stderr).toBe(true);
     expect(res2.glbPath).toBeDefined();
 
     const outDir2 = path.join(workDir, 'scene_2_babylonian_ziggurat');
@@ -480,7 +483,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, meshes)
 `;
 
     const res3 = await pythonRunner.runScript(scene3Script, { timeoutMs: 30000 });
-    expect(res3.success).toBe(true);
+    expect(res3.success, res3.errorDetails ?? res3.stderr).toBe(true);
     expect(res3.glbPath).toBeDefined();
 
     const outDir3 = path.join(workDir, 'scene_3_fusion_thruster');

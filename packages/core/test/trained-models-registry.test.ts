@@ -14,11 +14,29 @@ import {
     TrainedModelRegistryService,
     SpatialAssetVaultService
 } from '../src/node';
+import { requireAll, requireAssets, withReason } from './helpers/requirements';
+
+// Every model family the registry discovers is a gitignored local artifact.
+const sbhuman = requireAssets(['neutral', 'male', 'female'].map(v => `public/models/sbhuman_${v}.sbhuman`));
+const performerPly = requireAssets(
+    ['models/performer_4dgs/demos/2785536/human_4dgs.ply'],
+    'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)'
+);
+const performerViewport = requireAll(
+    performerPly,
+    requireAssets(['public/models/humanoid_2785536.glb'], 'scripts/build_performer_surfaces.ts'),
+    requireAssets(['public/models/humanoid_2785536.splat'])
+);
+const geobox = requireAll(
+    requireAssets(['build/geobox_checkpoints/geobox_real_trained.pt'], 'GeoBox training (tools/geobox/train_vertex.py)'),
+    requireAssets(['build/geobox_checkpoints/coordinates_100K.npy'], 'tools/geobox/model/gps_gallery/download_100k_gallery.py')
+);
+const allFamilies = requireAll(sbhuman, performerPly, geobox);
 
 describe('Trained Neural Model Codebase Placement & Integration', () => {
     const registry = new TrainedModelRegistryService();
 
-    it('1. should discover trained models across native core families', () => {
+    it.skipIf(!allFamilies.ok)(withReason('1. should discover trained models across native core families', allFamilies), () => {
         const all = registry.discoverAllModels();
         expect(all.length).toBeGreaterThan(0);
 
@@ -31,7 +49,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(summary.families.geobox).toBeGreaterThanOrEqual(2);
     });
 
-    it('2. should properly resolve parametric humanoid body models (.sbhuman)', () => {
+    it.skipIf(!sbhuman.ok)(withReason('2. should properly resolve parametric humanoid body models (.sbhuman)', sbhuman), () => {
         const sbNeutral = registry.getSbHumanModel('neutral');
         expect(sbNeutral).toBeDefined();
         expect(fs.existsSync(sbNeutral!)).toBe(true);
@@ -46,7 +64,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(fs.statSync(sbNeutral!).size).toBeGreaterThan(1024 * 1024); // > 1 MB (.sbhuman is ~1.96 MB)
     });
 
-    it('3. should provide Performer 4DGS humanoid avatar manifests and viewport assets', () => {
+    it.skipIf(!performerViewport.ok)(withReason('3. should provide Performer 4DGS humanoid avatar manifests and viewport assets', performerViewport), () => {
         const avatar = registry.get4DGSAvatar('2785536');
         expect(avatar).toBeDefined();
         expect(avatar!.id).toBe('2785536');
@@ -60,7 +78,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(fs.existsSync(avatar!.glbPath!)).toBe(true);
     });
 
-    it('4. should resolve GeoBox vision-location checkpoints and spherical coordinates gallery', () => {
+    it.skipIf(!geobox.ok)(withReason('4. should resolve GeoBox vision-location checkpoints and spherical coordinates gallery', geobox), () => {
         const pt = registry.getGeoBoxCheckpoint('real_trained');
         const gallery = registry.discoverGeoBoxModels().find(m => m.format === 'npy');
 

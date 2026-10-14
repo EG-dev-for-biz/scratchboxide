@@ -68,10 +68,19 @@ test('GeospatialPhotorealPipeline: Location-agnostic C++20 code generation', () 
 });
 
 test('GeospatialPhotorealPipeline: Scene synthesis with PBR materials and ground details', () => {
-  const service = Google3DTileService.getInstance();
+  // Google3DTileService.synthesizePhotorealLandmark was a thin delegate to
+  // GeospatialPhotorealPipeline.synthesizePhotorealScene; commit 025cfe0 removed the delegate,
+  // so exercise the pipeline method it forwarded to.
+  // Free-text queries are no longer resolved offline: deb84c7 removed the
+  // OFFLINE_TEST_FIXTURE_COORDINATES landmark table (zero presets; AGENTS.md "queries must supply
+  // explicit geodetic coordinates or an active Google Maps API key"), so pass the anchor explicitly.
+  const pipeline = GeospatialPhotorealPipeline.getInstance();
 
-  const result = service.synthesizePhotorealLandmark({
-    query: 'The Plaza Hotel NYC',
+  const result = pipeline.synthesizePhotorealScene({
+    lat: 40.7644,
+    lng: -73.9744,
+    elevation: 18.0,
+    landmarkName: 'The Plaza Hotel NYC',
     footprintWidth: 70.0,
     footprintDepth: 60.0,
     towerHeight: 75.0,

@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { SceneSpatialAssertionService } from '../src/node/spatial/SceneSpatialAssertionService';
 import { google3DTilesHandlers } from '../src/node/gemini/tools/spatial-tools';
 import { Adaptive3DSceneSynthesizer } from '../src/node/spatial/Adaptive3DSceneSynthesizer';
@@ -9,6 +10,8 @@ import { Adaptive3DSceneSynthesizer } from '../src/node/spatial/Adaptive3DSceneS
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const NATIVE_BUILD_DIR = path.join(REPO_ROOT, 'packages/core/src/native/3d-engine/build_py');
 const PYTHON_DIR = path.join(REPO_ROOT, 'packages/core/src/python');
+// Scratch scripts and GLBs go to a temp dir, not the repo root.
+const SCRATCH_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-spatial-solver-'));
 
 function getPythonCmd(): string {
     const candidatePaths = [
@@ -37,7 +40,7 @@ layout = sb.layout
 
 ${scriptBody}
 `;
-    const tempScript = path.join(REPO_ROOT, `scratch_solver_test_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.py`);
+    const tempScript = path.join(SCRATCH_DIR, `scratch_solver_test_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.py`);
     fs.writeFileSync(tempScript, fullScript, 'utf8');
     const pyExe = getPythonCmd();
     try {
@@ -58,6 +61,7 @@ ${scriptBody}
 }
 
 describe('Neuro-Symbolic 3D Pipeline: Spatial Constraint Solver & Assertion Engine', () => {
+    afterAll(() => fs.rmSync(SCRATCH_DIR, { recursive: true, force: true }));
 
     it('1. SpatialConstraintSolver: Solves SUPPORTED_BY with exact contact alignment', () => {
         const script = `
@@ -117,7 +121,7 @@ print(f"{overlap_x:.3f}")
     });
 
     it('4. SceneSpatialAssertionService: Audits contacts and detects penetrations vs certified layouts', () => {
-        const tempGlb = path.join(REPO_ROOT, `test_scene_contacts_${Date.now()}.glb`);
+        const tempGlb = path.join(SCRATCH_DIR, `test_scene_contacts_${Date.now()}.glb`);
         const script = `
 scene = sb.geometry.Mesh("CertifiedScene")
 plinth = sb.create_box(width=12.0, height=1.0, depth=12.0)
@@ -140,7 +144,7 @@ sb.io.write_glb("${tempGlb}", scene)
     });
 
     it('5. SceneSpatialAssertionService & Tool Registry: sb_assert_scene_contacts & sb_audit_scene_hierarchy handlers', async () => {
-        const tempGlb = path.join(REPO_ROOT, `test_scene_hierarchy_${Date.now()}.glb`);
+        const tempGlb = path.join(SCRATCH_DIR, `test_scene_hierarchy_${Date.now()}.glb`);
         const script = `
 scene = sb.geometry.Mesh("HierarchyTestScene")
 # Generate dense structure with sub-parts
@@ -229,7 +233,7 @@ print(f"{len(violations)},{plinth.bounds.min.y:.3f},{tower.bounds.min.y:.3f},{pl
     });
 
     it('9. Floating Asset Detection: auditContacts flags a mesh hovering >2cm above its support', () => {
-        const tempGlb = path.join(REPO_ROOT, `test_floating_${Date.now()}.glb`);
+        const tempGlb = path.join(SCRATCH_DIR, `test_floating_${Date.now()}.glb`);
         const script = `
 scene = sb.geometry.Mesh("FloatingScene")
 ground = sb.create_box(width=20.0, height=1.0, depth=20.0)

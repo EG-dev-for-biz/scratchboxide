@@ -22,7 +22,13 @@ import {
     fetchFrames, effectiveBillingCap, mergeLegacyLedger, readLedger, frameKey, STREETVIEW_BILLING_HARD_CAP,
     type CandidateFrame, type PanoRecord
 } from '../src/node/spatial/StreetViewSurveyPlanner';
-import { encodeRgbaToJpeg } from '../src/node/image-codec-ffmpeg';
+import { encodeRgbaToJpeg, resolveFfmpegPath } from '../src/node/image-codec-ffmpeg';
+import { findBinary, HOW_TO, withReason, type Requirement } from './helpers/requirements';
+
+/** encodeRgbaToJpeg spawns resolveFfmpegPath() (FFMPEG_PATH, else `ffmpeg` on PATH). */
+const ffmpeg: Requirement = findBinary(resolveFfmpegPath()) !== null
+    ? { ok: true, reason: '' }
+    : { ok: false, reason: `\`${resolveFfmpegPath()}\` not found (set FFMPEG_PATH or ${HOW_TO.ffmpeg})` };
 
 const KEY = 'TESTKEY_zq81mv03xx7';
 
@@ -83,7 +89,7 @@ describe('Street View billing cap and ledger', () => {
         expect(readLedger(ledgerPath).billedImageRequests).toBe(80);
     });
 
-    it('counts billed requests in one ledger shared by every cache directory', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('counts billed requests in one ledger shared by every cache directory', ffmpeg), async () => {
         const ledgerPath = path.join(root, 'shared', 'ledger.json');
         const c1 = { images: 0, urls: [] as string[] };
         const r1 = await fetchFrames([frame(10), frame(20), frame(30)], panos, { apiKey: KEY, cacheDir: path.join(root, 'outA'), ledgerPath, maxBilledRequests: 2, fetchImpl: fakeFetch(c1) });
@@ -131,7 +137,7 @@ describe('Street View billing cap and ledger', () => {
         expect(readLedger(ledgerPath).billedImageRequests).toBe(5);
     });
 
-    it('never returns a cached frame of another size (the cache key has no size)', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('never returns a cached frame of another size (the cache key has no size)', ffmpeg), async () => {
         const ledgerPath = path.join(root, 'ledger.json');
         const cacheDir = path.join(root, 'out');
         const counter = { images: 0, urls: [] as string[] };
@@ -140,7 +146,7 @@ describe('Street View billing cap and ledger', () => {
         expect(counter.images).toBe(1);
     });
 
-    it('writes no file and no file name containing the API key', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('writes no file and no file name containing the API key', ffmpeg), async () => {
         const ledgerPath = path.join(root, 'ledger.json');
         const counter = { images: 0, urls: [] as string[] };
         await fetchFrames([frame(1), frame(2)], panos, { apiKey: KEY, cacheDir: path.join(root, 'out'), ledgerPath, fetchImpl: fakeFetch(counter) });

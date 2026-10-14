@@ -16,6 +16,10 @@ import { COMPOSITOR_VERT, COMPOSITOR_FRAG } from '../src/browser/generative-canv
 import { VideoCompositor } from '../src/browser/generative-canvas/services/video/VideoCompositor';
 import { HeadlessVideoCompositorService } from '../src/node/video/HeadlessVideoCompositorService';
 import type { VideoTimelineData, TimelineElement } from '../src/browser/generative-canvas/services/video/videoTypes';
+import { HOW_TO, requireBinary, withReason } from './helpers/requirements';
+
+// HeadlessVideoCompositorService runs bare `ffmpeg` from PATH (it does not read FFMPEG_PATH).
+const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
 
 describe('Video Compositing Engine - Full Stack Compositor & Headless Service', () => {
     const defaultRequest = {
@@ -302,7 +306,7 @@ describe('Video Compositing Engine - Full Stack Compositor & Headless Service', 
             }
         };
 
-        it('detects ffmpeg binary in the host environment', async () => {
+        it.skipIf(!ffmpeg.ok)(withReason('detects ffmpeg binary in the host environment', ffmpeg), async () => {
             const available = await headlessService.isFfmpegAvailable();
             expect(available).toBe(true);
         });

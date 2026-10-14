@@ -17,10 +17,42 @@ import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-
 import { NativeTilePathTracerService } from '../src/node/3d-engine/native-tile-path-tracer-service';
 import { resolveBinary } from '../src/node/video/HeadlessVideoEditorService';
 import { decodePng } from '../src/node/texture-processing';
+import { HOW_TO, requireAll, requireAsset, requireBinary, withReason } from './helpers/requirements';
 
 const REPO_ROOT = process.cwd();
 const TILE_GLB = path.resolve(REPO_ROOT, 'public/models/nyc_grand_army_plaza_raw.glb');
 const ARCH_GLB = path.resolve(REPO_ROOT, 'public/models/washington_square_arch_nyc_raw.glb');
+
+const RAW_TILE_PRODUCER = 'a raw Google Photorealistic 3D Tiles capture (needs Google Map Tiles API access)';
+const tileGlb = requireAsset('public/models/nyc_grand_army_plaza_raw.glb', RAW_TILE_PRODUCER);
+const archGlb = requireAsset('public/models/washington_square_arch_nyc_raw.glb', RAW_TILE_PRODUCER);
+const ffmpegBin = requireBinary('ffmpeg', HOW_TO.ffmpeg);
+
+/** Smallest valid GLB (one triangle, no materials): enough for request validation that only needs a real file. */
+function writeTinyGlb(file: string): string {
+    const positions = Buffer.from(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
+    const json = {
+        asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0 }, mode: 4 }] }],
+        accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
+        bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: positions.length }],
+        buffers: [{ byteLength: positions.length }]
+    };
+    let js = Buffer.from(JSON.stringify(json));
+    while (js.length % 4) js = Buffer.concat([js, Buffer.from(' ')]);
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(0x46546c67, 0);
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + js.length + 8 + positions.length, 8);
+    const jsonChunk = Buffer.alloc(8);
+    jsonChunk.writeUInt32LE(js.length, 0);
+    jsonChunk.writeUInt32LE(0x4e4f534a, 4);
+    const binChunk = Buffer.alloc(8);
+    binChunk.writeUInt32LE(positions.length, 0);
+    binChunk.writeUInt32LE(0x004e4942, 4);
+    fs.writeFileSync(file, Buffer.concat([header, jsonChunk, js, binChunk, positions]));
+    return file;
+}
 
 const RESULT_JSON_HARNESS = String.raw`
 #include <iostream>
@@ -114,7 +146,11 @@ describe('Native tile path tracer (Blender-referenced, no Blender dependency)', 
         const compiled = await compiler.compileSource(RESULT_JSON_HARNESS + body, {
             outputDir: workDir,
             outputBinaryName: name,
-            optimization: '-O2'
+            optimization: '-O2',
+            // scratchbox_png.hpp (included by scratchbox_gltf_scene.hpp) inflates IDAT with zlib's
+            // uncompress(), so programs that read GLB textures must link zlib, as
+            // NativeTilePathTracerService does for the real tracer ('-pthread', '-lz').
+            extraFlags: ['-lz']
         });
         if (!compiled.success || !compiled.binaryPath) {
             throw new Error(`Compilation of ${name} failed:\n${compiled.compilerOutput}`);
@@ -130,7 +166,7 @@ describe('Native tile path tracer (Blender-referenced, no Blender dependency)', 
         return JSON.parse(line.slice('RESULT '.length));
     }
 
-    it('decodes baseline 4:2:0 tile JPEGs to match ffmpeg', async () => {
+    it.skipIf(!requireAll(tileGlb, ffmpegBin).ok)(withReason('decodes baseline 4:2:0 tile JPEGs to match ffmpeg', requireAll(tileGlb, ffmpegBin)), async () => {
         const jpgPath = path.join(workDir, 'tile_texture_0.jpg');
         const rgbPath = path.join(workDir, 'tile_texture_0.rgb');
         const lumaPath = path.join(workDir, 'tile_texture_0.luma');
@@ -183,7 +219,7 @@ int main(int argc, char** argv) {
         expect(psnr(rgb, refRgb)).toBeGreaterThan(30);
     });
 
-    it('reads GLB scenes with node transforms, materials and decoded textures', async () => {
+    it.skipIf(!requireAll(tileGlb, archGlb).ok)(withReason('reads GLB scenes with node transforms, materials and decoded textures', requireAll(tileGlb, archGlb)), async () => {
         const program = String.raw`
 #include "scratchbox_gltf_scene.hpp"
 int main(int argc, char** argv) {
@@ -456,11 +492,13 @@ int main() {
 
     it('rejects a render request without an explicit sun', async () => {
         const service = new NativeTilePathTracerService();
-        await expect(service.render({ glbPath: ARCH_GLB, outputDir: path.join(workDir, 'no_sun') } as any))
+        // The sun check runs on the request before any rendering, so any existing GLB will do.
+        const glbPath = writeTinyGlb(path.join(workDir, 'tiny_triangle.glb'));
+        await expect(service.render({ glbPath, outputDir: path.join(workDir, 'no_sun') } as any))
             .rejects.toThrow(/sun/i);
     });
 
-    it('keeps contrast in the depth pass when the ground plane reaches the horizon', async () => {
+    it.skipIf(!archGlb.ok)(withReason('keeps contrast in the depth pass when the ground plane reaches the horizon', archGlb), async () => {
         const service = new NativeTilePathTracerService();
         const result = await service.render({
             glbPath: ARCH_GLB,
@@ -480,7 +518,7 @@ int main() {
         expect(p90 - p10).toBeGreaterThanOrEqual(40);
     });
 
-    it('renders a tile end-to-end in relit and baked modes with the sun from the native ephemeris', async () => {
+    it.skipIf(!archGlb.ok)(withReason('renders a tile end-to-end in relit and baked modes with the sun from the native ephemeris', archGlb), async () => {
         const service = new NativeTilePathTracerService();
         for (const mode of ['relit', 'baked'] as const) {
             const result = await service.render({
@@ -515,7 +553,7 @@ int main() {
         }
     });
 
-    it('renders a geometry-only clay blockout with one uniform albedo in place of the captured textures', async () => {
+    it.skipIf(!archGlb.ok)(withReason('renders a geometry-only clay blockout with one uniform albedo in place of the captured textures', archGlb), async () => {
         const service = new NativeTilePathTracerService();
         const common = {
             glbPath: ARCH_GLB, width: 96, height: 64, samplesPerPixel: 4, maxBounces: 1, groundPlane: false,

@@ -175,15 +175,20 @@ test('Universal Scene Synthesis & Photorealistic Mastery Integration Suite', asy
     );
     assert.strictEqual(detectedTheme, 'universal_scene');
 
+    // The prompt names a hero object ("reactor"), so synthesis goes to the ADA hero synthesizer rather than
+    // the closed 'universal_scene' preset (013d47c): a Python 70-20-10 generator in the 18% clay studio void,
+    // with no client-side toy meshes while a native generator is active (8ce8cca Tier-0 ban).
     const synthesizedScene = synthesizeContextual3DScene(
         'Assemble a universal photorealistic entire scene with quantum reactor core, micro clutter, and cinematic 3-point studio lighting.'
     );
-    assert.strictEqual(synthesizedScene.sceneType, 'universal_scene');
-    assert.strictEqual(synthesizedScene.renderMode, 'pbr');
-    assert.strictEqual(synthesizedScene.environment?.lighting, 'cinematic_3point_studio');
+    assert.strictEqual(synthesizedScene.renderMode, 'clay');
+    assert.strictEqual(synthesizedScene.environment?.skybox, 'studio');
     assert.strictEqual(synthesizedScene.features?.curvatureAO, true);
-    assert.strictEqual(synthesizedScene.features?.multiLayerWeathering, true);
-    assert.ok(synthesizedScene.customMeshes && synthesizedScene.customMeshes.length >= 4);
+    assert.strictEqual(synthesizedScene.features?.cinematic3PointLighting, true);
+    assert.strictEqual(synthesizedScene.pythonGenerator?.enabled, true);
+    assert.ok(synthesizedScene.pythonGenerator?.sourceCode?.includes('import scratchbox as sb'));
+    assert.ok(synthesizedScene.pythonGenerator?.sourceCode?.includes('70-20-10 Geometric Form Hierarchy'));
+    assert.strictEqual(synthesizedScene.customMeshes?.length ?? 0, 0);
 
     // =========================================================================
     // Test 4: Procedural C++20 Generator Source Code Generation

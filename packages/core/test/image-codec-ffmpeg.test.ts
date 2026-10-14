@@ -17,9 +17,16 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-    encodeRgbaToJpeg, decodeImageToRgba, decodeImageToRgbaSync, rgbaToJfifYcc444, jfifYcc444ToRgba, readImageDimensions
+    encodeRgbaToJpeg, decodeImageToRgba, decodeImageToRgbaSync, rgbaToJfifYcc444, jfifYcc444ToRgba, readImageDimensions,
+    resolveFfmpegPath
 } from '../src/node/image-codec-ffmpeg';
 import { encodePng } from '../src/node/texture-processing';
+import { findBinary, HOW_TO, withReason, type Requirement } from './helpers/requirements';
+
+/** The codec spawns resolveFfmpegPath() (FFMPEG_PATH, else `ffmpeg` on PATH), so require exactly that. */
+const ffmpeg: Requirement = findBinary(resolveFfmpegPath()) !== null
+    ? { ok: true, reason: '' }
+    : { ok: false, reason: `\`${resolveFfmpegPath()}\` not found (set FFMPEG_PATH or ${HOW_TO.ffmpeg})` };
 
 /** Deterministic photo-like test image: smooth colour gradients plus fine texture. */
 function testImage(w: number, h: number): Buffer {
@@ -53,7 +60,7 @@ describe('image-codec-ffmpeg', () => {
         expect(worst).toBeLessThanOrEqual(2);
     });
 
-    it('JPEG encode -> decode has no colour bias (4:4:4 and 4:2:0)', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('JPEG encode -> decode has no colour bias (4:4:4 and 4:2:0)', ffmpeg), async () => {
         const W = 256, H = 192, img = testImage(W, H);
         for (const chroma of ['444', '420'] as const) {
             const jpg = await encodeRgbaToJpeg(img, W, H, { quality: 92, chroma });
@@ -65,7 +72,7 @@ describe('image-codec-ffmpeg', () => {
         }
     }, 60000);
 
-    it('the synchronous decoder matches the asynchronous one and PNG decodes in-process', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('the synchronous decoder matches the asynchronous one and PNG decodes in-process', ffmpeg), async () => {
         const W = 96, H = 64, img = testImage(W, H);
         const jpg = await encodeRgbaToJpeg(img, W, H, { quality: 90 });
         const a = await decodeImageToRgba(jpg), b = decodeImageToRgbaSync(jpg);
@@ -81,6 +88,14 @@ describe('image-codec-ffmpeg', () => {
         for (let y = 0; y < H; y++) { img.copy(both, y * W * 8, y * W * 4, (y + 1) * W * 4); b.rgba.copy(both, y * W * 8 + W * 4, y * W * 4, (y + 1) * W * 4); }
         fs.writeFileSync(path.join(dir, 'image_codec_ffmpeg_jpeg_roundtrip.png'), encodePng(W * 2, H, both));
     }, 60000);
+
+    // Same PNG checks as above, kept runnable without ffmpeg (PNG never spawns it).
+    it('PNG decodes in-process (sync and async) without ffmpeg', async () => {
+        const W = 96, H = 64, img = testImage(W, H);
+        const png = encodePng(W, H, img);
+        expect(Buffer.compare(decodeImageToRgbaSync(png).rgba, img)).toBe(0);
+        expect(Buffer.compare((await decodeImageToRgba(png)).rgba, img)).toBe(0);
+    });
 
     it('rejects unknown formats', async () => {
         await expect(decodeImageToRgba(Buffer.from('not an image'))).rejects.toThrow(/unrecognised/);

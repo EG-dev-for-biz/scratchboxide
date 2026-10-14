@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { VideoTo4DPerformerPipelineService } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
+import { REPO_ROOT, requireAssets, withReason } from './helpers/requirements';
 
 // Rebuilds every featured performer from its cached GVHMR SB-Human body into a temp directory.
 // The shipped demos are regenerated from source video by scripts/regenerate_5_demos.ts, never by tests.
@@ -16,9 +17,13 @@ describe('Regenerate All 5 Demo PLYs', () => {
     ];
 
     for (const demo of demos) {
-        it(`rebuilds ${demo.id} from its hero frame and GVHMR body`, async () => {
-            const demoDir = path.resolve(process.cwd(), 'models/performer_4dgs/demos', demo.id);
-            const gvhmrBodyPath = path.join(demoDir, 'gvhmr_body.json');
+        const demoDir = path.join(REPO_ROOT, 'models/performer_4dgs/demos', demo.id);
+        const gvhmrBodyPath = path.join(demoDir, 'gvhmr_body.json');
+        const inputs = requireAssets(
+            [gvhmrBodyPath, path.join(demoDir, 'canonical_frame.jpg')],
+            'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)'
+        );
+        it.skipIf(!inputs.ok)(withReason(`rebuilds ${demo.id} from its hero frame and GVHMR body`, inputs), async () => {
             expect(fs.existsSync(gvhmrBodyPath)).toBe(true);
 
             const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), `sbx-regen-${demo.id}-`));
@@ -33,7 +38,9 @@ describe('Regenerate All 5 Demo PLYs', () => {
                     outputDir,
                     targetHeightMeters: demo.height,
                     numGaussians: 35000,
-                    exportNerfstudioDataset: false
+                    exportNerfstudioDataset: false,
+                    // Keep the viewport GLB copy out of public/models (it would overwrite the shipped demo surface)
+                    viewportModelsDir: outputDir
                 });
 
                 expect(result.telemetry.motionSource).toBe('gvhmr');

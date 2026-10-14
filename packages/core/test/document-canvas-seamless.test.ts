@@ -40,7 +40,14 @@ async function runDocumentCanvasTests() {
     // Test 2: Verify CSS definitions for seamless Notion-grade typography and border elimination in index.css
     const indexCssPath = path.resolve(__dirname, '../src/browser/style/index.css');
     assert.ok(fs.existsSync(indexCssPath), 'index.css exists');
-    const indexCss = fs.readFileSync(indexCssPath, 'utf8');
+    // 39352e9 cut index.css down to ~570 lines; 998bf72 moved the component rules that were still rendered
+    // into legacy-restored.css (imported from src/style.css right before index.css). The base editor rules
+    // therefore live in index.css + legacy-restored.css together.
+    const legacyRestoredCssPath = path.resolve(__dirname, '../src/browser/style/legacy-restored.css');
+    assert.ok(fs.existsSync(legacyRestoredCssPath), 'legacy-restored.css exists');
+    const styleEntry = fs.readFileSync(path.resolve(__dirname, '../src/style.css'), 'utf8');
+    assert.ok(styleEntry.includes('@import "./browser/style/legacy-restored.css"') && styleEntry.includes('@import "./browser/style/index.css"'), 'style.css ships legacy-restored.css and index.css');
+    const indexCss = fs.readFileSync(indexCssPath, 'utf8') + '\n' + fs.readFileSync(legacyRestoredCssPath, 'utf8');
 
     assert.ok(indexCss.includes('.sb-doc-seamless-textarea'), 'index.css defines .sb-doc-seamless-textarea');
     assert.ok(indexCss.includes('.sb-doc-seamless-input'), 'index.css defines .sb-doc-seamless-input');

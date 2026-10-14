@@ -118,35 +118,37 @@ async function runComprehensiveAppAuditTests() {
     // Section 7: Settings Modal & All Tabs Verification
     // -------------------------------------------------------------
     const settingsSrc = readSettingsSources();
+    // Commit 4f4e192 ("refactor(settings): prune unwired tabs ...") deliberately removed 11 unwired mock
+    // tabs (Plan & Usage incl. its "100% Free" promo, Cloud Agents, Worktrees, Tab, Beta, Git & PRs,
+    // Code Intelligence, Browser & Network, Profile, Agents, Docs) and kept these 10 operational tabs.
     const requiredSettingsTabs = [
         'general',
-        'profile',
         'appearance',
-        'plan',
-        'agents',
-        'cloud-agents',
-        'git-prs',
-        'worktrees',
-        'browser-network',
-        'tab',
-        'code-intelligence',
-        'beta',
-        'docs',
+        'models',
         'workspace',
         'skills',
         'mcp',
+        'memories',
         'shortcuts',
+        'admin',
         'about'
     ];
+    const prunedSettingsTabs = ['profile', 'plan', 'agents', 'cloud-agents', 'git-prs', 'worktrees', 'browser-network', 'tab', 'code-intelligence', 'beta', 'docs'];
 
     for (const tab of requiredSettingsTabs) {
         assert.ok(
             settingsSrc.includes(`'${tab}'`) || settingsSrc.includes(`"${tab}"`),
             `SettingsModal must handle tab "${tab}"`
         );
+        assert.ok(settingsSrc.includes(`activeTab === '${tab}'`), `SettingsModal must render a panel for tab "${tab}"`);
     }
-    assert.ok(settingsSrc.includes('100% Free') || settingsSrc.includes('Free Active') || settingsSrc.includes('LIMITED TIME PROMO'), 'Plan tab must verify 100% Free Limited-Time Promotion');
-    console.log('  ✓ Test 7 Passed: Settings Modal & All 18 Tabs verified (including 100% Free Promotion, Shortcuts, About, Workspace, Skills, MCP)');
+    const canvasTypesSrc = fs.readFileSync(path.resolve(__dirname, '../src/browser/generative-canvas/canvas-types.ts'), 'utf-8');
+    const settingsTabUnion = (canvasTypesSrc.match(/export type StudioSettingsTab =([^;]*);/) || [])[1] || '';
+    assert.ok(settingsTabUnion.length > 0, 'canvas-types.ts must declare the StudioSettingsTab union');
+    for (const tab of prunedSettingsTabs) {
+        assert.ok(!settingsTabUnion.includes(`'${tab}'`), `Pruned settings tab "${tab}" must not be reintroduced into StudioSettingsTab without wiring`);
+    }
+    console.log('  ✓ Test 7 Passed: Settings Modal & all 10 operational tabs verified (unwired mock tabs pruned in 4f4e192)');
 
     // -------------------------------------------------------------
     // Section 8: Spotlight Launcher & Context Mention Autocomplete

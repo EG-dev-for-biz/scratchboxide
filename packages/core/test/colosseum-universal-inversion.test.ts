@@ -78,7 +78,11 @@ describe('Colosseum Universal Multi-Modal Object Inversion (1,670 Objects)', () 
   });
 
   it('should verify the 360° Colosseum amphitheater glB model contains 196,568 vertices across ambulatories, hypogeum and 320 bays', () => {
-    const fullGlbPath = path.resolve(__dirname, '../../../public/colosseum_sb_archi_full.glb');
+    // public/ copy is gitignored; the identical model is tracked as the spatial-separator asset (6bb97f1).
+    const fullGlbPath = [
+      path.resolve(__dirname, '../../../public/colosseum_sb_archi_full.glb'),
+      path.join(assetsDir, 'colosseum_sb_archi_full.glb')
+    ].find(p => fs.existsSync(p)) ?? path.join(assetsDir, 'colosseum_sb_archi_full.glb');
     expect(fs.existsSync(fullGlbPath)).toBe(true);
     const buf = fs.readFileSync(fullGlbPath);
     expect(buf.readUInt32LE(0)).toBe(0x46546c67); // 'glTF' magic
