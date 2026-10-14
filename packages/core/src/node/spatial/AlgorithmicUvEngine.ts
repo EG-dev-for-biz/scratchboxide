@@ -1477,6 +1477,19 @@ export class AlgorithmicUvEngine {
     albedoOut.set(albedoRgba);
 
     // 1. Intrinsic Image Decomposition (Albedo A vs Irradiance S separation)
+    // Shading is the slowly varying part of luminance, estimated per UV chart (4-connected painted texels, alpha > 0)
+    // so neighbouring charts never mix. Each chart's texels in a coarse grid cell (16 cells across the short side)
+    // form a node; the edge-aware bilateral smooths node luminance within the chart (bilateralSpatialRadius is in
+    // cells, and nodes under half a cell of texels do not centre the range term), and each texel blends the nodes
+    // around it weighted by how close their shading is to the texel's local luminance, so hard shadow edges stay
+    // sharp. Texels are divided by shading relative to the mean shading, so shadows lift and highlights drop while
+    // the image keeps its overall brightness (a high-percentile "lit level" brightens the whole image whenever sky,
+    // blank background or another bright non-surface region is present). Because the reference is per image, the
+    // same lit surface can come out at different brightness in images with very different shadow fractions. Finer
+    // grids treat window-sized detail as shading and divide it away. Charts smaller than one cell are left as they
+    // are: there is too little area to tell their lighting from their albedo. Charts come from alpha, so a caller
+    // that bleeds texels into its gutters first (SurveyTextureUnprojector does, 4 px) merges charts that sit closer
+    // than twice the bleed. A hard shadow edge in the middle of a cell can still leave a faint band.
     if (options.enableAlbedoDeLighting) {
       const spatialR = options.bilateralSpatialRadius ?? 4;
       const rangeSigma = options.bilateralRangeSigma ?? 0.15;
@@ -1484,46 +1497,177 @@ export class AlgorithmicUvEngine {
       const heightStratified = options.enableHeightStratifiedDeLighting ?? false;
       // Shadow lift factor: in deep street canyons (normY -> 0), shadow lift is amplified
       const canyonElevationWeight = heightStratified ? Math.pow(1.0 - Math.min(1.0, Math.max(0.0, normY)), 2.0) : 0.0;
+      const rangeDenom = 2 * rangeSigma * rangeSigma;
 
+      const lum = new Float32Array(totalPixels);
+      for (let i = 0; i < totalPixels; i++) {
+        lum[i] = (0.299 * albedoRgba[i * 4] + 0.587 * albedoRgba[i * 4 + 1] + 0.114 * albedoRgba[i * 4 + 2]) / 255.0;
+      }
+
+      // Charts: 4-connected components of painted texels (union-find)
+      const chart = new Int32Array(totalPixels).fill(-1);
+      const parent: number[] = [];
+      const find = (a: number): number => {
+        while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; }
+        return a;
+      };
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const idx = (y * width + x) * 4;
-          const r = albedoRgba[idx] / 255.0;
-          const g = albedoRgba[idx + 1] / 255.0;
-          const b = albedoRgba[idx + 2] / 255.0;
-          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-
-          let sumWeights = 0.0;
-          let sumLum = 0.0;
-
-          for (let dy = -spatialR; dy <= spatialR; dy++) {
-            const ny = y + dy;
-            if (ny < 0 || ny >= height) continue;
-            for (let dx = -spatialR; dx <= spatialR; dx++) {
-              const nx = x + dx;
-              if (nx < 0 || nx >= width) continue;
-
-              const nidx = (ny * width + nx) * 4;
-              const nLum = 0.299 * (albedoRgba[nidx] / 255.0) +
-                           0.587 * (albedoRgba[nidx + 1] / 255.0) +
-                           0.114 * (albedoRgba[nidx + 2] / 255.0);
-
-              const spatialDist = (dx * dx + dy * dy);
-              const rangeDist = (nLum - lum) * (nLum - lum);
-              const weight = Math.exp(-spatialDist / (2 * spatialR * spatialR) - rangeDist / (2 * rangeSigma * rangeSigma));
-
-              sumLum += nLum * weight;
-              sumWeights += weight;
-            }
+          const i = y * width + x;
+          if (albedoRgba[i * 4 + 3] === 0) continue;
+          const left = x > 0 ? chart[i - 1] : -1;
+          const up = y > 0 ? chart[i - width] : -1;
+          if (left < 0 && up < 0) {
+            chart[i] = parent.length;
+            parent.push(parent.length);
+          } else if (left >= 0 && up >= 0) {
+            const a = find(left), b = find(up);
+            if (a !== b) parent[b] = a;
+            chart[i] = a;
+          } else {
+            chart[i] = left >= 0 ? left : up;
           }
-
-          const shading = Math.max(0.2, Math.min(1.0, sumWeights > 0 ? sumLum / sumWeights : lum));
-          // Apply canyon shadow lift: boosts luminance when shading is low in deep street canyons
-          const canyonLift = 1.0 + 0.35 * canyonElevationWeight * Math.max(0.0, 0.6 - shading);
-          albedoOut[idx] = Math.min(255, Math.round((r / shading) * canyonLift * 255));
-          albedoOut[idx + 1] = Math.min(255, Math.round((g / shading) * canyonLift * 255));
-          albedoOut[idx + 2] = Math.min(255, Math.round((b / shading) * canyonLift * 255));
         }
+      }
+      const chartSize = new Int32Array(parent.length);
+      for (let i = 0; i < totalPixels; i++) {
+        if (chart[i] >= 0) { chart[i] = find(chart[i]); chartSize[chart[i]]++; }
+      }
+
+      // Nodes: the texels of one chart inside one coarse cell
+      const cell = Math.max(1, Math.floor(Math.min(width, height) / 16));
+      const cw = Math.ceil(width / cell);
+      const ch = Math.ceil(height / cell);
+      const fullCell = cell * cell;
+      const nodeKey = (c: number, k: number) => k * cw * ch + c;
+      const nodeOf = new Map<number, number>();
+      const nodeCell: number[] = [];
+      const nodeChart: number[] = [];
+      const nodeLum: number[] = [];
+      const nodeCount: number[] = [];
+      const texelNode = new Int32Array(totalPixels).fill(-1);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = y * width + x;
+          const k = chart[i];
+          if (k < 0 || chartSize[k] < fullCell) continue;
+          const c = Math.floor(y / cell) * cw + Math.floor(x / cell);
+          let n = nodeOf.get(nodeKey(c, k));
+          if (n === undefined) {
+            n = nodeCell.length;
+            nodeOf.set(nodeKey(c, k), n);
+            nodeCell.push(c); nodeChart.push(k); nodeLum.push(0); nodeCount.push(0);
+          }
+          nodeLum[n] += lum[i];
+          nodeCount[n]++;
+          texelNode[i] = n;
+        }
+      }
+      const nodeTotal = nodeCell.length;
+      for (let n = 0; n < nodeTotal; n++) nodeLum[n] /= nodeCount[n];
+
+      // Bilateral over each chart's nodes, weighted by texel count; sparse nodes are filled spatially
+      const R = Math.max(0, Math.round(spatialR));
+      const spatialDenom = 2 * Math.max(0.5, spatialR) * Math.max(0.5, spatialR);
+      const nodeShading = new Float32Array(nodeTotal);
+      for (let n = 0; n < nodeTotal; n++) {
+        const cx = nodeCell[n] % cw, cy = Math.floor(nodeCell[n] / cw);
+        const centre = nodeCount[n] >= 0.5 * fullCell ? nodeLum[n] : NaN;
+        let sumWeights = 0.0;
+        let sumLum = 0.0;
+        for (let dy = -R; dy <= R; dy++) {
+          const ny = cy + dy;
+          if (ny < 0 || ny >= ch) continue;
+          for (let dx = -R; dx <= R; dx++) {
+            const nx = cx + dx;
+            if (nx < 0 || nx >= cw) continue;
+            const m = nodeOf.get(nodeKey(ny * cw + nx, nodeChart[n]));
+            if (m === undefined) continue;
+            const rangeDist = Number.isNaN(centre) ? 0 : (nodeLum[m] - centre) * (nodeLum[m] - centre);
+            const weight = nodeCount[m] * Math.exp(-(dx * dx + dy * dy) / spatialDenom - rangeDist / rangeDenom);
+            sumLum += nodeLum[m] * weight;
+            sumWeights += weight;
+          }
+        }
+        nodeShading[n] = Math.max(0.2, Math.min(1.0, sumLum / sumWeights));
+      }
+
+      // Guide: mean luminance of painted texels within a small window (integral images)
+      const rg = Math.max(1, Math.round(cell / 8));
+      const iw = width + 1;
+      const sumImg = new Float64Array(iw * (height + 1));
+      const cntImg = new Float64Array(iw * (height + 1));
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = y * width + x;
+          const on = albedoRgba[i * 4 + 3] !== 0 ? 1 : 0;
+          const o = (y + 1) * iw + x + 1;
+          sumImg[o] = lum[i] * on + sumImg[o - iw] + sumImg[o - 1] - sumImg[o - iw - 1];
+          cntImg[o] = on + cntImg[o - iw] + cntImg[o - 1] - cntImg[o - iw - 1];
+        }
+      }
+
+      // Neighbouring nodes of the same chart in the 3x3 cells around each node's cell
+      const neighbours: number[][] = new Array(nodeTotal);
+      for (let n = 0; n < nodeTotal; n++) {
+        const cx = nodeCell[n] % cw, cy = Math.floor(nodeCell[n] / cw);
+        const list: number[] = [];
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = cx + dx, ny = cy + dy;
+            if (nx < 0 || ny < 0 || nx >= cw || ny >= ch) continue;
+            const m = nodeOf.get(nodeKey(ny * cw + nx, nodeChart[n]));
+            if (m !== undefined) list.push(m);
+          }
+        }
+        neighbours[n] = list;
+      }
+
+      const texelShading = new Float32Array(totalPixels);
+      let shadingSum = 0.0;
+      let shaded = 0;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = y * width + x;
+          const n = texelNode[i];
+          if (n >= 0) {
+            const x0 = Math.max(0, x - rg), x1 = Math.min(width, x + rg + 1);
+            const y0 = Math.max(0, y - rg), y1 = Math.min(height, y + rg + 1);
+            const cnt = cntImg[y1 * iw + x1] - cntImg[y0 * iw + x1] - cntImg[y1 * iw + x0] + cntImg[y0 * iw + x0];
+            const guide = cnt > 0
+              ? (sumImg[y1 * iw + x1] - sumImg[y0 * iw + x1] - sumImg[y1 * iw + x0] + sumImg[y0 * iw + x0]) / cnt
+              : lum[i];
+            const fx = (x + 0.5) / cell, fy = (y + 0.5) / cell;
+            let sw = 0.0, ss = 0.0, sw0 = 0.0, ss0 = 0.0;
+            for (const m of neighbours[n]) {
+              const ddx = fx - ((nodeCell[m] % cw) + 0.5);
+              const ddy = fy - (Math.floor(nodeCell[m] / cw) + 0.5);
+              const confidence = Math.min(1.0, nodeCount[m] / (0.5 * fullCell));
+              const ws = Math.exp(-(ddx * ddx + ddy * ddy) / 0.5) * confidence;
+              const dr = nodeShading[m] - guide;
+              const wr = Math.exp(-(dr * dr) / rangeDenom);
+              sw += ws * wr; ss += ws * wr * nodeShading[m];
+              sw0 += ws; ss0 += ws * nodeShading[m];
+            }
+            texelShading[i] = sw > 1e-6 * sw0 ? ss / sw : ss0 / sw0;
+            shadingSum += texelShading[i];
+            shaded++;
+          }
+        }
+      }
+
+      const meanShading = shaded > 0 ? shadingSum / shaded : 1.0;
+      for (let i = 0; i < totalPixels; i++) {
+        const idx = i * 4;
+        if (albedoRgba[idx + 3] === 0) continue;
+        // Charts too small to separate lighting from albedo keep their pixels
+        const shading = texelNode[i] >= 0 ? texelShading[i] : meanShading;
+        // Apply canyon shadow lift: boosts luminance when shading is low in deep street canyons
+        const canyonLift = 1.0 + 0.35 * canyonElevationWeight * Math.max(0.0, 0.6 - shading);
+        const gain = (meanShading / shading) * canyonLift;
+        albedoOut[idx] = Math.min(255, Math.round(albedoRgba[idx] * gain));
+        albedoOut[idx + 1] = Math.min(255, Math.round(albedoRgba[idx + 1] * gain));
+        albedoOut[idx + 2] = Math.min(255, Math.round(albedoRgba[idx + 2] * gain));
       }
     }
 
@@ -1558,31 +1702,38 @@ export class AlgorithmicUvEngine {
       const ambientWeight = cfg.ambientWeight ?? 0.35;
       const eps = cfg.regularizationEpsilon ?? 0.18;
 
+      // Estimate local tangent-space normal from luminance gradient
+      const getL = (px: number, py: number) => {
+        const cx = Math.max(0, Math.min(width - 1, px));
+        const cy = Math.max(0, Math.min(height - 1, py));
+        const cidx = (cy * width + cx) * 4;
+        return (0.299 * albedoRgba[cidx] + 0.587 * albedoRgba[cidx + 1] + 0.114 * albedoRgba[cidx + 2]) / 255.0;
+      };
+      const irradianceMap = new Float32Array(totalPixels);
+      let irradianceSum = 0.0;
+      let painted = 0;
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const idx = (y * width + x) * 4;
-          const r = albedoOut[idx] / 255.0;
-          const g = albedoOut[idx + 1] / 255.0;
-          const b = albedoOut[idx + 2] / 255.0;
-
-          // Estimate local tangent-space normal from luminance gradient
-          const getL = (px: number, py: number) => {
-            const cx = Math.max(0, Math.min(width - 1, px));
-            const cy = Math.max(0, Math.min(height - 1, py));
-            const cidx = (cy * width + cx) * 4;
-            return (0.299 * albedoRgba[cidx] + 0.587 * albedoRgba[cidx + 1] + 0.114 * albedoRgba[cidx + 2]) / 255.0;
-          };
+          if (albedoRgba[(y * width + x) * 4 + 3] === 0) continue;
           const dx = (getL(x + 1, y) - getL(x - 1, y)) * 1.5;
           const dy = (getL(x, y + 1) - getL(x, y - 1)) * 1.5;
           const normal: [number, number, number] = [-dx, -dy, 1.0];
-
           const irradiance = this.computeSolarIrradiance(normal, sunVec, skyShCoeffs, directWeight, ambientWeight, eps);
-
-          // E(N) inverse division to obtain directional-light-free albedo
-          albedoOut[idx]     = Math.min(255, Math.max(0, Math.round((r / irradiance) * 255)));
-          albedoOut[idx + 1] = Math.min(255, Math.max(0, Math.round((g / irradiance) * 255)));
-          albedoOut[idx + 2] = Math.min(255, Math.max(0, Math.round((b / irradiance) * 255)));
+          irradianceMap[y * width + x] = irradiance;
+          irradianceSum += irradiance;
+          painted++;
         }
+      }
+
+      // E(N) inverse division relative to the mean irradiance: removes the directional light, keeps the brightness
+      const meanIrradiance = painted > 0 ? irradianceSum / painted : 1.0;
+      for (let i = 0; i < totalPixels; i++) {
+        const idx = i * 4;
+        if (albedoRgba[idx + 3] === 0) continue;
+        const gain = meanIrradiance / irradianceMap[i];
+        albedoOut[idx]     = Math.min(255, Math.max(0, Math.round(albedoOut[idx] * gain)));
+        albedoOut[idx + 1] = Math.min(255, Math.max(0, Math.round(albedoOut[idx + 1] * gain)));
+        albedoOut[idx + 2] = Math.min(255, Math.max(0, Math.round(albedoOut[idx + 2] * gain)));
       }
     }
 

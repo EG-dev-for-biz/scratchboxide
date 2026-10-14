@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import { encodePng } from '../src/node/texture-processing';
 import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
 import { calculateNOAASolarPosition, calculateENUSunVector } from '../src/browser/generative-canvas/services/atmosphere/solar-position';
 import { IMAGE_MODEL_PRIORITY_DRAFT } from '../src/common/media-generation-protocol';
@@ -269,5 +272,126 @@ describe('Algorithmic UV PBR Pipeline: NOAA Solar De-Lighting, Toksvig AA & Mate
     expect(IMAGE_MODEL_PRIORITY_DRAFT).toBeDefined();
     expect(IMAGE_MODEL_PRIORITY_DRAFT[0]).toBe('nano-banana-lite');
     expect(IMAGE_MODEL_PRIORITY_DRAFT).toContain('gemini-2.5-flash-image');
+  });
+});
+
+describe('decomposePbr de-lighting: brightness kept, shadows lifted, detail and charts intact', () => {
+  type Img = { rgba: Uint8Array; w: number; h: number };
+  const luma = (b: Uint8Array, i: number) => 0.299 * b[i] + 0.587 * b[i + 1] + 0.114 * b[i + 2];
+  const stats = (img: Img, pred: (x: number, y: number) => boolean) => {
+    let s = 0, s2 = 0, n = 0;
+    for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) {
+      const i = (y * img.w + x) * 4;
+      if (img.rgba[i + 3] === 0 || !pred(x, y)) continue;
+      const v = luma(img.rgba, i); s += v; s2 += v * v; n++;
+    }
+    return { mean: s / n, std: Math.sqrt(Math.max(0, s2 / n - (s / n) ** 2)), n };
+  };
+  const nearWhite = (img: Img) => {
+    let w = 0, n = 0;
+    for (let i = 0; i < img.rgba.length; i += 4) if (img.rgba[i + 3]) { n++; if (luma(img.rgba, i) > 235) w++; }
+    return w / n;
+  };
+  const make = (w: number, h: number, value: (x: number, y: number) => number | null): Img => {
+    const rgba = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const v = value(x, y);
+      if (v === null) continue;
+      const i = (y * w + x) * 4;
+      rgba[i] = Math.round(v); rgba[i + 1] = Math.round(v * 0.95); rgba[i + 2] = Math.round(v * 0.88); rgba[i + 3] = 255;
+    }
+    return { rgba, w, h };
+  };
+  const delight = async (img: Img, opts: Record<string, unknown> = { enableAlbedoDeLighting: true }): Promise<Img> => {
+    const res = await AlgorithmicUvEngine.decomposePbr(img.rgba, { ...opts, generateNormalMaps: false, generateRoughnessMaps: false, generateAoMaps: false }, img.w, img.h);
+    return { rgba: res.albedo, w: img.w, h: img.h };
+  };
+  const shot = (name: string, before: Img, after: Img) => {
+    const dir = path.resolve(__dirname, '../../../test-results/screenshots');
+    fs.mkdirSync(dir, { recursive: true });
+    const { w, h } = before, strip = Buffer.alloc(w * 2 * h * 4);
+    for (let y = 0; y < h; y++) {
+      Buffer.from(before.rgba.buffer, before.rgba.byteOffset + y * w * 4, w * 4).copy(strip, y * w * 8);
+      Buffer.from(after.rgba.buffer, after.rgba.byteOffset + y * w * 4, w * 4).copy(strip, y * w * 8 + w * 4);
+    }
+    for (let i = 3; i < strip.length; i += 4) strip[i] = 255;
+    fs.writeFileSync(path.join(dir, `algorithmic_uv_delighting_${name}.png`), encodePng(w * 2, h, strip));
+  };
+
+  // Facade: light stone (200) with dark windows (60), a soft shadow band over the left part, 16 px alpha-0 gutter
+  const isWindow = (x: number, y: number) => x % 24 >= 8 && x % 24 < 16 && y % 32 >= 8 && y % 32 < 20;
+  const facade = (w: number, shadowEnd: number, gutter = 16) => make(w, w, (x, y) => {
+    if (x < gutter || y < gutter || x >= w - gutter || y >= w - gutter) return null;
+    return (isWindow(x, y) ? 60 : 200) * (1 - 0.55 / (1 + Math.exp((x - shadowEnd) / 6)));
+  });
+
+  for (const [label, opts] of [
+    ['albedo', { enableAlbedoDeLighting: true }],
+    ['albedo_and_noaa_solar', {
+      enableAlbedoDeLighting: true, enableSolarInverseDelighting: true,
+      solarDelighting: { latitude: 40.7411, longitude: -73.9897, timestampIso: '2026-10-14T17:17:00Z' }
+    }]
+  ] as const) {
+    it(`${label}: same mean brightness, shadow band lifted to the lit stone, window contrast kept, gutter untouched`, async () => {
+      const input = facade(256, 0.4 * 256);
+      const out = await delight(input, opts);
+      shot(`facade_${label}`, input, out);
+      const litStone = (x: number, y: number) => x > 0.6 * 256 && !isWindow(x, y);
+      const shadedStone = (x: number, y: number) => x < 0.3 * 256 && !isWindow(x, y);
+      const all = () => true;
+      expect(Math.abs(stats(out, all).mean - stats(input, all).mean) / stats(input, all).mean).toBeLessThan(0.08);
+      expect(stats(out, shadedStone).mean).toBeGreaterThan(0.85 * stats(out, litStone).mean);
+      const contrast = (img: Img) => stats(img, litStone).mean - stats(img, (x, y) => x > 0.6 * 256 && isWindow(x, y)).mean;
+      expect(contrast(out)).toBeGreaterThan(0.7 * contrast(input));
+      expect(nearWhite(out)).toBeLessThan(0.05);
+      for (let i = 0; i < out.rgba.length; i += 4) if (!input.rgba[i + 3]) expect(out.rgba[i] | out.rgba[i + 1] | out.rgba[i + 2] | out.rgba[i + 3]).toBe(0);
+    });
+  }
+
+  it('a hard shadow edge inside a cell leaves no dark band on the shadow side and no bright band on the lit side', async () => {
+    // 512 px (32 px cells); the edge at x = 250 falls inside a cell
+    const input = make(512, 512, (x, y) => (200 + ((x * 7 + y * 13) % 5) - 2) * (x < 250 ? 0.45 : 1));
+    const out = await delight(input);
+    shot('hard_edge', input, out);
+    const lit = stats(out, x => x >= 330).mean;
+    expect(stats(out, x => x < 170).mean).toBeGreaterThan(0.9 * lit);
+    expect(stats(out, x => x >= 234 && x < 246).mean).toBeGreaterThan(0.85 * lit); // half a cell before the edge
+    const litNearEdge = stats(out, x => x >= 254 && x < 266).mean;
+    expect(litNearEdge).toBeLessThan(1.08 * lit);
+    expect(litNearEdge).toBeGreaterThan(0.92 * lit);
+  });
+
+  it('neighbouring UV charts do not bleed into each other: the gain is constant inside each flat chart', async () => {
+    // Two flat charts (no shading) separated by a 2 px gutter, boundaries off the 32 px grid
+    const input = make(512, 512, (x, y) => (y < 8 || y >= 504 ? null : x >= 8 && x < 301 ? 180 : x >= 303 && x < 504 ? 90 : null));
+    const out = await delight(input);
+    shot('two_charts', input, out);
+    expect(stats(out, x => x >= 8 && x < 301).std).toBeLessThan(2);
+    expect(stats(out, x => x >= 303 && x < 504).std).toBeLessThan(2);
+  });
+
+  it('a partial grid cell at the image edge does not divide away a narrow dark border or clip the stone beside it', async () => {
+    // 1000 px: 62 px cells, the last column of cells is 8 px wide and holds only the border
+    const input = make(1000, 1000, x => (x >= 992 ? 40 : 200));
+    const out = await delight(input);
+    shot('partial_cell', input, out);
+    expect(nearWhite(out)).toBeLessThan(0.005);
+    expect(stats(out, x => x >= 992).mean).toBeLessThan(1.3 * stats(input, x => x >= 992).mean);
+    const far = stats(out, x => x < 800).mean;
+    expect(Math.abs(stats(out, x => x >= 960 && x < 992).mean - far) / far).toBeLessThan(0.08);
+  });
+
+  it('a large bright non-surface region (blank background, sky) does not brighten the rest of the image', async () => {
+    // Facade on the left 60%, a flat near-white background on the right 40%
+    const input = make(512, 512, (x, y) => (x >= 307 ? 228 : isWindow(x, y) ? 60 : 160));
+    const out = await delight(input);
+    shot('bright_background', input, out);
+    const facadeStone = (x: number, y: number) => x < 280 && !isWindow(x, y);
+    const all = () => true;
+    expect(Math.abs(stats(out, all).mean - stats(input, all).mean) / stats(input, all).mean).toBeLessThan(0.08);
+    // The darker facade lifts somewhat toward the background (brightness can't tell material from shadow: about
+    // +15% here); a reference set by the bright region instead would lift it by about +45% and wash it out.
+    expect(stats(out, facadeStone).mean).toBeLessThan(1.25 * stats(input, facadeStone).mean);
+    expect(nearWhite(out)).toBeLessThan(0.45);
   });
 });
