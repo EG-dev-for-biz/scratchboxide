@@ -143,7 +143,7 @@ export class WorkspaceConfigService {
                     const stat = await fs.stat(filePath);
                     if (stat.isFile()) {
                         const raw = await fs.readFile(filePath, 'utf-8');
-                        const skill = this.parseSkillMarkdown(file, raw);
+                        const skill = { ...this.parseSkillMarkdown(file, raw), sourcePath: filePath };
                         skills.push(skill);
                     }
                 }
@@ -161,14 +161,14 @@ export class WorkspaceConfigService {
                     const skillMdPath = path.join(entryPath, 'SKILL.md');
                     if (await fs.pathExists(skillMdPath)) {
                         const raw = await fs.readFile(skillMdPath, 'utf-8');
-                        const skill = this.parseSkillMarkdown(entry, raw);
+                        const skill = { ...this.parseSkillMarkdown(entry, raw), sourcePath: skillMdPath };
                         if (!skills.some(s => s.id === skill.id || s.name === skill.name)) {
                             skills.push(skill);
                         }
                     }
                 } else if (stat.isFile() && (entry.endsWith('.md') || entry.endsWith('.markdown'))) {
                     const raw = await fs.readFile(entryPath, 'utf-8');
-                    const skill = this.parseSkillMarkdown(entry, raw);
+                    const skill = { ...this.parseSkillMarkdown(entry, raw), sourcePath: entryPath };
                     if (!skills.some(s => s.id === skill.id || s.name === skill.name)) {
                         skills.push(skill);
                     }
@@ -200,11 +200,19 @@ export class WorkspaceConfigService {
             bodyContent = fmMatch[2].trim();
 
             const lines = fmText.split('\n');
-            for (const line of lines) {
+            for (let li = 0; li < lines.length; li++) {
+                const line = lines[li];
                 const colonIdx = line.indexOf(':');
-                if (colonIdx > 0) {
+                if (colonIdx > 0 && !/^\s/.test(line)) {
                     const key = line.slice(0, colonIdx).trim().toLowerCase();
-                    const val = line.slice(colonIdx + 1).trim();
+                    let val = line.slice(colonIdx + 1).trim();
+                    // YAML block scalars (">-", "|") and wrapped values continue on indented lines.
+                    if (/^[>|][-+]?$/.test(val) || val === '') {
+                        const folded: string[] = [];
+                        while (li + 1 < lines.length && /^\s+\S/.test(lines[li + 1])) folded.push(lines[++li].trim());
+                        val = folded.join(val.startsWith('|') ? '\n' : ' ');
+                    }
+                    val = val.replace(/^(['"])(.*)\1$/, '$2');
 
                     if (key === 'name') name = val;
                     if (key === 'tagline') tagline = val;
@@ -486,6 +494,30 @@ export class WorkspaceConfigService {
         };
     }
 
+    /** The workspace and each parent up to the repository root (or home), outermost first. */
+    private async ancestorDirs(root: string): Promise<string[]> {
+        const dirs: string[] = [];
+        for (let dir = root; ; dir = path.dirname(dir)) {
+            dirs.unshift(dir);
+            if (dir === os.homedir() || (await fs.pathExists(path.join(dir, '.git')))) break;
+            if (path.dirname(dir) === dir) break;
+        }
+        return dirs;
+    }
+
+    /**
+     * Skills available to the agent: .scratchbox/skills and .agents/skills in the workspace and its parents
+     * up to the repository root. A skill closer to the workspace wins over one with the same name above it.
+     */
+    async discoverAgentSkills(workspaceRoot: string): Promise<SkillItem[]> {
+        const root = path.resolve(workspaceRoot || process.cwd());
+        const byName = new Map<string, SkillItem>();
+        for (const dir of await this.ancestorDirs(root)) {
+            for (const skill of await this.discoverProjectSkills(dir)) byName.set(skill.name, skill);
+        }
+        return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     /** Files the user put in `<workspace>/.scratchbox/knowledge/` (recursively), text content included. */
     async loadProjectKnowledge(workspaceRoot: string): Promise<ProjectKnowledgeFile[]> {
         const root = path.resolve(workspaceRoot || process.cwd());
@@ -516,12 +548,7 @@ export class WorkspaceConfigService {
      */
     async loadAgentInstructions(workspaceRoot: string): Promise<AgentInstructions> {
         const root = path.resolve(workspaceRoot || process.cwd());
-        const ancestors: string[] = [];
-        for (let dir = root; ; dir = path.dirname(dir)) {
-            ancestors.unshift(dir);
-            if (dir === os.homedir() || (await fs.pathExists(path.join(dir, '.git')))) break;
-            if (path.dirname(dir) === dir) break;
-        }
+        const ancestors = await this.ancestorDirs(root);
 
         const files: AgentInstructionFile[] = [];
         for (const dir of ancestors) {

@@ -442,6 +442,8 @@ export interface SkillItem {
     version?: string;
     promptStarters: string[];
     rawContent?: string;
+    /** Where a discovered skill's markdown lives on disk. */
+    sourcePath?: string;
     dateAdded?: string;
 }
 

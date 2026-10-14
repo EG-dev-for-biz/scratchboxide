@@ -39,6 +39,30 @@ export const WORKING_METHOD_SECTION = `
 5. Report honestly. State what you did and what you verified. Report numbers only when a tool returned them. If something failed, could not be checked, or is only partly done, say so plainly. Never describe a result a tool did not produce.
 6. Before finishing, re-read the user's request and confirm every part of it is addressed.`;
 
+/**
+ * Names and one-line descriptions of every skill the project offers. Bodies stay out of the prompt
+ * until the agent calls load_skill, so many skills cost little context.
+ */
+export async function buildSkillIndexSection(
+    workspaceRoot: string | undefined,
+    workspaceConfig: WorkspaceConfigService | undefined,
+    alreadyAttached: string[] = []
+): Promise<string> {
+    if (!workspaceConfig) return '';
+    let skills;
+    try {
+        skills = await workspaceConfig.discoverAgentSkills(workspaceRoot || '');
+    } catch (err) {
+        console.warn('[Gemini] Failed to discover skills', err);
+        return '';
+    }
+    const attached = new Set(alreadyAttached);
+    const listed = skills.filter(sk => !attached.has(sk.name));
+    if (listed.length === 0) return '';
+    const lines = listed.map(sk => `- ${sk.name}: ${(sk.description || sk.tagline || '').replace(/\s+/g, ' ').slice(0, 240)}`);
+    return `\n\n### AVAILABLE SKILLS\nThese are expert procedures for this project. When the task matches one, call load_skill with its name and follow it before doing the work:\n${lines.join('\n')}\n`;
+}
+
 /** Knowledge files are sent in full up to this size (~40k tokens); past it the model gets an index to read from. */
 const MAX_INLINE_KNOWLEDGE_CHARS = 150_000;
 
@@ -496,7 +520,7 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
             superpowersSection += `\n--- [SUPERPOWER: ${skill.name}] ---\n`;
             superpowersSection += `Description: ${skill.description}\n`;
             if (skill.rawContent) {
-                superpowersSection += `Rules & Instructions:\n${skill.rawContent.slice(0, 3000)}\n`;
+                superpowersSection += `Rules & Instructions:\n${skill.rawContent.slice(0, 60_000)}\n`;
             }
         }
     }
@@ -651,12 +675,15 @@ If a task needs a capability that is not available natively (e.g. neural image-t
     const projectInstructionsSection = await buildProjectInstructionsSection(request.workspaceRoot, services.workspaceConfig);
     const workingMethodSection = isCodingMode ? WORKING_METHOD_SECTION : '';
     const projectKnowledgeSection = await buildProjectKnowledgeSection(request.workspaceRoot, services.workspaceConfig);
+    const skillIndexSection = isCodingMode
+        ? await buildSkillIndexSection(request.workspaceRoot, services.workspaceConfig, (request.attachedSkills || []).map(sk => sk.name))
+        : '';
 
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
         : '\n\nDeliver insightful, Cupertino-grade results. Output a friendly intro explanation followed by the complete ```json codeblock.';
 
-    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
+    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${skillIndexSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
 }
 
 /**

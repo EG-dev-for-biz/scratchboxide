@@ -28,6 +28,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
     'browser_extract_content',
     'audit_3d_scene_viewport',
     'invoke_subagent',
+    'load_skill',
     'ask_user_question',
     'present_execution_plan',
     'update_task_list'

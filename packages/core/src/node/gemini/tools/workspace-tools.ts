@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { WorkspaceConfigService } from '../../workspace-config-service';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import type { SymbolKind } from '../../../common/context-graph-protocol';
@@ -257,6 +258,18 @@ export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 pathPrefix: { type: 'STRING', description: 'Optional subfolder or path prefix to filter results' }
             },
             required: ['query']
+        }
+    },
+    {
+        name: 'load_skill',
+        description: 'Load the full instructions of a project skill listed under AVAILABLE SKILLS. Call it before starting a task that matches the skill, then follow what it says. The result lists the skill\'s supporting files; pass one as `file` to read it.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                name: { type: 'STRING', description: 'The skill name exactly as listed' },
+                file: { type: 'STRING', description: 'Optional: a supporting file from the skill\'s `files` list to read instead of its main instructions' }
+            },
+            required: ['name']
         }
     },
     {
@@ -839,6 +852,44 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: { status: 'success', pattern, totalMatches: matches.length, matches },
             summaryResult: `Found ${matches.length} matches for pattern "${pattern}".`
+        };
+    },
+
+    async load_skill(args, ctx) {
+        const name = asString(args.name).trim();
+        if (!name) throw new Error('name is required for load_skill.');
+        const skills = await new WorkspaceConfigService().discoverAgentSkills(ctx.workspaceRoot);
+        const skill = skills.find(sk => sk.name === name) || skills.find(sk => sk.name.toLowerCase() === name.toLowerCase());
+        if (!skill || !skill.rawContent) {
+            throw new Error(`No skill named "${name}". Available: ${skills.map(sk => sk.name).join(', ') || 'none'}.`);
+        }
+        const dir = skill.sourcePath && path.basename(skill.sourcePath) === 'SKILL.md' ? path.dirname(skill.sourcePath) : undefined;
+        const files: string[] = [];
+        if (dir) {
+            const walk = async (d: string): Promise<void> => {
+                for (const entry of await fs.readdir(d, { withFileTypes: true })) {
+                    const full = path.join(d, entry.name);
+                    if (entry.isDirectory()) await walk(full);
+                    else if (entry.isFile() && entry.name !== 'SKILL.md') files.push(path.relative(dir, full));
+                }
+            };
+            await walk(dir);
+        }
+
+        const file = asString(args.file).trim();
+        if (file) {
+            const target = dir ? path.resolve(dir, file) : undefined;
+            if (!dir || !target || !target.startsWith(dir + path.sep) || !files.includes(path.relative(dir, target))) {
+                throw new Error(`"${file}" is not a file of skill "${skill.name}". Files: ${files.join(', ') || 'none'}.`);
+            }
+            return {
+                resultPayload: { name: skill.name, file, content: await fs.readFile(target, 'utf-8') },
+                summaryResult: `Read ${file} from skill "${skill.name}".`
+            };
+        }
+        return {
+            resultPayload: { name: skill.name, instructions: skill.rawContent, files },
+            summaryResult: `Loaded skill "${skill.name}".`
         };
     },
 
