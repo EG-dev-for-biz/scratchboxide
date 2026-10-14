@@ -44,6 +44,30 @@ jobs:
       - name: Install
         run: npm ci
 
+      # The Python 3D engine module (scratchbox_native) is built on the first test run by
+      # vitest.global-setup.ts from .venv (nanobind + cmake); without it the Python engine tests fail.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # numpy on the PATH python3: the skinning-parity test runs scripts/sbx_skinning.py with it.
+      - name: Python venv for the native engine
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+          python -m pip install numpy
+
+      # Media tests shell out to ffmpeg (JPEG/video encode) and cwebp (WebP textures); they skip
+      # with a reason when the binary is missing, so install them here to keep CI covering them.
+      - name: System tools for media tests (ffmpeg, cwebp)
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg webp
+          else
+            brew install ffmpeg webp
+          fi
+
       # The CLI resolves @scratchbox/core through its built dist/, so core must be built before typecheck.
       - name: Build core
         run: npm run build:core
