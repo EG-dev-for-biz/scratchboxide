@@ -16,6 +16,7 @@ import type { CodebasePatternAnalysis } from '../../common/pattern-matching-prot
 import type { LspDiagnosticFeedbackService } from '../lsp-diagnostic-feedback-service';
 import type { ConversationDiffMemoryService } from '../conversation-diff-memory-service';
 import type { UserMemoriesService } from '../user-memories-service';
+import type { WorkspaceConfigService } from '../workspace-config-service';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -24,6 +25,38 @@ export interface PromptContextServices {
     lsp: LspDiagnosticFeedbackService;
     diffMemory: ConversationDiffMemoryService;
     memories: UserMemoriesService;
+    workspaceConfig: WorkspaceConfigService;
+}
+
+/** Upper bound on project instructions in the system prompt (~50k tokens). */
+const MAX_PROJECT_INSTRUCTION_CHARS = 200_000;
+
+/**
+ * The project's own instructions (AGENTS.md / SCRATCHBOX.md up the tree, .scratchbox/rules, and the
+ * Custom Project Instructions setting). These are the user's standing orders, so they go first.
+ */
+export async function buildProjectInstructionsSection(
+    workspaceRoot: string | undefined,
+    workspaceConfig: WorkspaceConfigService | undefined
+): Promise<string> {
+    if (!workspaceConfig) return '';
+    let instructions;
+    try {
+        instructions = await workspaceConfig.loadAgentInstructions(workspaceRoot || '');
+    } catch (err) {
+        console.warn('[Gemini] Failed to load project instructions', err);
+        return '';
+    }
+    const blocks: string[] = instructions.files.map(f => `<instructions path="${f.path}">\n${f.content.trim()}\n</instructions>`);
+    if (instructions.customInstructions) {
+        blocks.push(`<instructions source="Settings > Custom Project Instructions">\n${instructions.customInstructions}\n</instructions>`);
+    }
+    if (blocks.length === 0) return '';
+    let body = blocks.join('\n\n');
+    if (body.length > MAX_PROJECT_INSTRUCTION_CHARS) {
+        body = `${body.slice(0, MAX_PROJECT_INSTRUCTION_CHARS)}\n… [project instructions truncated at ${MAX_PROJECT_INSTRUCTION_CHARS} chars]`;
+    }
+    return `\n\n### PROJECT INSTRUCTIONS (from the user's workspace; follow these over any default behavior below):\n${body}\n`;
 }
 
 export interface CompiledPrompt {
@@ -504,7 +537,7 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
     let memoriesSection = '';
     if (services.memories) {
         try {
-            memoriesSection = await services.memories.buildPromptInjectionText();
+            memoriesSection = await services.memories.buildPromptInjectionText(request.workspaceRoot);
         } catch (err) {
             // Ignore memory injection errors safely
         }
@@ -573,11 +606,13 @@ When the user is attempting to accomplish something specific (especially 3D-rela
      - **Attached Skills & Tools**: Canvas primitives, Generative UI, modern web, Chrome DevTools, Google Maps Platform.
 If a task needs a capability that is not available natively (e.g. neural image-to-3D diffusion, neural video-to-video restyling, monocular dense depth estimation, or custom LoRA checkpoints), tell the user plainly that it is not supported instead of approximating it or simulating a result.`;
 
+    const projectInstructionsSection = await buildProjectInstructionsSection(request.workspaceRoot, services.workspaceConfig);
+
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
         : '\n\nDeliver insightful, Cupertino-grade results. Output a friendly intro explanation followed by the complete ```json codeblock.';
 
-    return `${basePersona}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
+    return `${basePersona}${projectInstructionsSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
 }
 
 /**

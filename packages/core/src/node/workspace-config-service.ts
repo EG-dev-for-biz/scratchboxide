@@ -51,6 +51,17 @@ export interface FullWorkspaceConfig {
     customMcpServers: McpServerItem[];
 }
 
+export interface AgentInstructionFile {
+    path: string;
+    content: string;
+}
+
+export interface AgentInstructions {
+    workspaceRoot: string;
+    files: AgentInstructionFile[];
+    customInstructions?: string;
+}
+
 export interface ArtifactSyncResult {
     success: boolean;
     writtenFiles: string[];
@@ -465,6 +476,44 @@ export class WorkspaceConfigService {
             customSkills,
             customMcpServers
         };
+    }
+
+    /**
+     * Everything the agent must see on every turn for this project: root directive files from the
+     * workspace and each parent up to the repository root (outermost first, like CLAUDE.md), the
+     * workspace's `.scratchbox/rules/*`, and the Custom Project Instructions setting.
+     */
+    async loadAgentInstructions(workspaceRoot: string): Promise<AgentInstructions> {
+        const root = path.resolve(workspaceRoot || process.cwd());
+        const ancestors: string[] = [];
+        for (let dir = root; ; dir = path.dirname(dir)) {
+            ancestors.unshift(dir);
+            if (dir === os.homedir() || (await fs.pathExists(path.join(dir, '.git')))) break;
+            if (path.dirname(dir) === dir) break;
+        }
+
+        const files: AgentInstructionFile[] = [];
+        for (const dir of ancestors) {
+            const dirRules = dir === root
+                ? await this.discoverProjectRules(dir)
+                : (await this.discoverProjectRules(dir)).filter(r => r.isRootDirectives);
+            for (const rule of dirRules) {
+                if (rule.content.trim()) files.push({ path: rule.path, content: rule.content });
+            }
+        }
+
+        let customInstructions: string | undefined;
+        try {
+            const configPath = path.join(root, '.scratchbox', 'config.json');
+            if (await fs.pathExists(configPath)) {
+                const text = (await fs.readJson(configPath))?.settings?.customPromptInstructions;
+                if (typeof text === 'string' && text.trim()) customInstructions = text.trim();
+            }
+        } catch (e) {
+            console.warn('Failed to read custom project instructions', e);
+        }
+
+        return { workspaceRoot: root, files, customInstructions };
     }
 
     /**

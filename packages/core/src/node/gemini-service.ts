@@ -38,6 +38,7 @@ import {
 } from '../browser/generative-canvas/canvas-types';
 import { ProjectContextGraphService } from './project-context-graph-service';
 import { UserMemoriesService } from './user-memories-service';
+import { WorkspaceConfigService } from './workspace-config-service';
 import { BrowserProxyService } from './browser-proxy-service';
 import { CodebasePatternEngine } from './codebase-pattern-engine';
 import { LspDiagnosticFeedbackService } from './lsp-diagnostic-feedback-service';
@@ -220,6 +221,8 @@ export class GeminiService {
         return this.memoriesService || this.fallbackMemoriesService;
     }
 
+    private readonly workspaceConfigService = new WorkspaceConfigService();
+
     protected readonly browserProxy?: BrowserProxyService;
     private fallbackBrowserProxy = new BrowserProxyService();
 
@@ -247,7 +250,8 @@ export class GeminiService {
             patternEngine: this.getPatternEngine(),
             lsp: this.getLspFeedbackService(),
             diffMemory: this.getDiffMemoryService(),
-            memories: this.getMemoriesService()
+            memories: this.getMemoriesService(),
+            workspaceConfig: this.workspaceConfigService
         };
     }
 
