@@ -35,6 +35,10 @@ export interface GoogleMediaGenerationOptions {
 
 export type GoogleMediaClientFactory = () => Promise<GoogleGenAI>;
 export type MediaGenerationStage = 'running' | 'downloading';
+
+/** Calls per model before an answer with no image part counts as a failure. */
+const EMPTY_IMAGE_RESPONSE_ATTEMPTS = 3;
+
 export class GoogleMediaGenerationService {
     protected readonly credentials?: GoogleMediaCredentialsService;
 
@@ -111,22 +115,28 @@ export class GoogleMediaGenerationService {
         let lastUnsupported: MediaGenerationError | undefined;
         for (const model of models) {
             try {
-                const response: any = await client.models.generateContent({
-                    model,
-                    contents,
-                    config: {
-                        responseModalities: ['TEXT', 'IMAGE'],
-                        imageConfig: {
-                            aspectRatio: request.aspectRatio,
-                            imageSize: resolvedImageSize
+                let response: any;
+                let parts: any[] = [];
+                let imagePart: any;
+                // Image models sometimes finish (STOP) with no image part; ask again before giving up on the model.
+                for (let attempt = 0; attempt < EMPTY_IMAGE_RESPONSE_ATTEMPTS && !imagePart; attempt++) {
+                    response = await client.models.generateContent({
+                        model,
+                        contents,
+                        config: {
+                            responseModalities: ['TEXT', 'IMAGE'],
+                            imageConfig: {
+                                aspectRatio: request.aspectRatio,
+                                imageSize: resolvedImageSize
+                            }
                         }
+                    } as any);
+                    if (response.promptFeedback?.blockReason) {
+                        throw new Error(`Safety filter blocked prompt: ${response.promptFeedback.blockReason}`);
                     }
-                } as any);
-                if (response.promptFeedback?.blockReason) {
-                    throw new Error(`Safety filter blocked prompt: ${response.promptFeedback.blockReason}`);
+                    parts = response.candidates?.[0]?.content?.parts || [];
+                    imagePart = parts.find(part => part.inlineData?.data);
                 }
-                const parts: any[] = response.candidates?.[0]?.content?.parts || [];
-                const imagePart = parts.find(part => part.inlineData?.data);
                 if (!imagePart) {
                     const finishReason = response.candidates?.[0]?.finishReason;
                     throw new Error(finishReason

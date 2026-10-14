@@ -151,3 +151,32 @@ async function runGoogleMediaGenerationServiceTests(): Promise<void> {
 test('google-media-generation-service.test', async () => {
     await runGoogleMediaGenerationServiceTests();
 }, 180_000);
+
+test('an image model that answers without an image is asked again before the request fails', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'scratchbox-google-media-empty-'));
+    const png = Buffer.from('89504e470d0a1a0a', 'hex');
+    const empty = { candidates: [{ finishReason: 'STOP', content: { parts: [] } }] };
+    const withImage = { candidates: [{ finishReason: 'STOP', content: { parts: [{ inlineData: { data: png.toString('base64'), mimeType: 'image/png' } }] } }] };
+    const run = async (answers: any[]) => {
+        let calls = 0;
+        const client: any = { models: { generateContent: async () => answers[Math.min(calls++, answers.length - 1)] } };
+        const service = new GoogleMediaGenerationService(new MediaAssetStore(), async () => client);
+        const result = await service.generateImage({
+            kind: 'image', prompt: 'station', workspaceRoot, idempotencyKey: `empty-${answers.length}`, modelPriority: ['gemini-3.1-flash-image']
+        }).catch((e: Error) => e);
+        return { result, calls };
+    };
+    try {
+        const recovered = await run([empty, empty, withImage]);
+        assert.ok(!(recovered.result instanceof Error), String(recovered.result));
+        assert.strictEqual(recovered.calls, 3);
+        const bytes = await fs.readFile(path.join(workspaceRoot, (recovered.result as any).asset.relativePath));
+        assert.ok(bytes.equals(png), 'stored asset is the image from the third answer');
+
+        const exhausted = await run([empty]);
+        assert.ok(exhausted.result instanceof Error && /returned no image \(STOP\)/.test(exhausted.result.message), String(exhausted.result));
+        assert.strictEqual(exhausted.calls, 3, 'gives up after three empty answers');
+    } finally {
+        await fs.remove(workspaceRoot);
+    }
+});
