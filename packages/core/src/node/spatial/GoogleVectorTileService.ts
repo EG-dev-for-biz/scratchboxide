@@ -15,6 +15,7 @@ import { decodeFeatureTile, type DecodedModeledVolume } from './google-feature-t
 import { fetchSolarDsm, type DsmRaster } from './solar-dsm';
 import { convexHull, densifyRoads, fuseBuilding, streetLevelNear, type FusedBuilding, type LngLat } from './building-shape-fusion';
 import { geoidUndulation } from './egm96-geoid';
+import type { TileMeshRaycaster } from './tile-mesh-raycast';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 
@@ -129,6 +130,19 @@ export interface VectorWorldStagingOptions {
     solarDsm?: DsmRaster | boolean;
     /** DSM radius when fetched (default 175 m, the area the Solar API serves around the anchor). */
     solarDsmRadiusMeters?: number;
+    /**
+     * Photorealistic 3D Tiles mesh of the area (an extracted GLB). Buildings are seated on its street surface,
+     * measured on their nearby roads, so they sit flush with the tiles; base and roof residuals are reported.
+     */
+    tileMesh?: TileMeshRaycaster;
+}
+
+export interface TileAlignmentStats {
+    buildingsSnapped: number;
+    /** |tile street level - DSM street level| per building (both MSL), meters. */
+    groundVsDsm?: { median: number; p90: number; n: number };
+    /** |tile roof (median surface inside the footprint) - built roof top| per extruded building, meters. */
+    roofVsBuilt?: { median: number; p90: number; n: number };
 }
 
 export interface VectorWorldFusionStats {
@@ -148,6 +162,7 @@ export interface VectorWorldFusionStats {
 
 export interface VectorWorldStagingStats {
     fusion?: VectorWorldFusionStats;
+    tileAlignment?: TileAlignmentStats;
     buildingCount: number;
     /** Buildings drawn from Google's true 3D modeled volumes (part of buildingCount). */
     modeledVolumeCount?: number;
@@ -645,6 +660,50 @@ export class GoogleVectorTileService {
             fusedStats[f.confidence]++;
             return f;
         };
+
+        // Prompt 5 of the alignment guide: seat each building on the 3D tile surface. A ray straight down at the
+        // building centre hits its own roof in the photoreal mesh, so the street level is read on nearby roads.
+        const tileRoadPoints: LngLat[] = options.tileMesh ? (roadPoints.length ? roadPoints : densifyRoads(allRoads.map(r => r.points as LngLat[]))) : [];
+        const groundDiffs: number[] = [], roofDiffs: number[] = [];
+        let snapped = 0;
+        const tileGroundMsl = (ring: LngLat[]): number | undefined => {
+            if (!options.tileMesh) return undefined;
+            const c = ring.reduce((a, p) => [a[0] + p[0] / ring.length, a[1] + p[1] / ring.length], [0, 0]);
+            const kx = 111_320 * Math.cos((c[1] * Math.PI) / 180);
+            const hits: number[] = [];
+            for (const [lng, lat] of tileRoadPoints) {
+                if (Math.hypot((lng - c[0]) * kx, (lat - c[1]) * 111_320) > 60) continue;
+                const h = options.tileMesh.topHitMsl(lat, lng);
+                if (h !== undefined) hits.push(h);
+            }
+            if (hits.length < 5) return undefined;
+            hits.sort((a, b) => a - b);
+            return hits[Math.floor(hits.length * 0.2)];
+        };
+        const tileRoofMsl = (ring: LngLat[]): number | undefined => {
+            if (!options.tileMesh) return undefined;
+            const lngs = ring.map(p => p[0]), lats = ring.map(p => p[1]);
+            const lat0 = (Math.min(...lats) + Math.max(...lats)) / 2, kx = 111_320 * Math.cos((lat0 * Math.PI) / 180);
+            const inRing = (lng: number, lat: number) => {
+                let inside = false;
+                for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+                    if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+                }
+                return inside;
+            };
+            const hits: number[] = [];
+            for (let lat = Math.min(...lats); lat <= Math.max(...lats); lat += 2 / 111_320) {
+                for (let lng = Math.min(...lngs); lng <= Math.max(...lngs); lng += 2 / kx) {
+                    if (!inRing(lng, lat)) continue;
+                    const h = options.tileMesh.topHitMsl(lat, lng);
+                    if (h !== undefined) hits.push(h);
+                }
+            }
+            if (hits.length < 3) return undefined;
+            hits.sort((a, b) => a - b);
+            return hits[Math.floor(hits.length / 2)];
+        };
         const ltp = getCachedLocalTangentPlane(options.latitude, options.longitude, anchorElevation);
 
         const sampleElevation = (x: number, z: number): number => {
@@ -695,8 +754,16 @@ export class GoogleVectorTileService {
             if (fused?.heightMeters !== undefined) height = fused.heightMeters;
             height *= heightScale;
 
-            const groundElevations = fused
-                ? localRing.map(() => fused.groundMsl! - anchorElevation)
+            const tileGround = tileGroundMsl(b.ring as LngLat[]);
+            if (tileGround !== undefined) {
+                snapped++;
+                if (fused?.groundMsl !== undefined) groundDiffs.push(Math.abs(tileGround - fused.groundMsl));
+                const tileRoof = tileRoofMsl(b.ring as LngLat[]);
+                if (tileRoof !== undefined) roofDiffs.push(Math.abs(tileRoof - (tileGround + height)));
+            }
+            const groundMsl = tileGround ?? fused?.groundMsl;
+            const groundElevations = groundMsl !== undefined
+                ? localRing.map(() => groundMsl - anchorElevation)
                 : localRing.map(p => sampleElevation(p.x, p.z));
             const minGroundY = Math.min(...groundElevations);
             const maxGroundY = Math.max(...groundElevations);
@@ -768,7 +835,13 @@ export class GoogleVectorTileService {
             // A modeled volume keeps its own shape; fusion only seats it on the measured street level.
             const base = convexHull(mv.vertices.filter(v => v[2] < 2).map(v => [v[0], v[1]] as LngLat));
             const fusedMv = fuse(mv.id, base, mv.heightMeters, 'modeled');
-            const groundY = fusedMv ? fusedMv.groundMsl! - anchorElevation : sampleElevation(cx, cz);
+            const tileGroundMv = tileGroundMsl(base);
+            if (tileGroundMv !== undefined) {
+                snapped++;
+                if (fusedMv?.groundMsl !== undefined) groundDiffs.push(Math.abs(tileGroundMv - fusedMv.groundMsl));
+            }
+            const mvGroundMsl = tileGroundMv ?? fusedMv?.groundMsl;
+            const groundY = mvGroundMsl !== undefined ? mvGroundMsl - anchorElevation : sampleElevation(cx, cz);
             const pos = local.map((p, k) => [p.x, groundY + mv.vertices[k][2] * heightScale, p.z] as [number, number, number]);
             for (let t = 0; t + 2 < mv.indices.length; t += 3) {
                 const a = pos[mv.indices[t]], b2 = pos[mv.indices[t + 1]], c = pos[mv.indices[t + 2]];
@@ -989,6 +1062,14 @@ export class GoogleVectorTileService {
                 buildingCount,
                 modeledVolumeCount,
                 flatFootprintCount,
+                tileAlignment: options.tileMesh ? (() => {
+                    const summary = (d: number[]) => {
+                        if (!d.length) return undefined;
+                        const sorted = [...d].sort((a, b) => a - b);
+                        return { median: sorted[Math.floor(sorted.length / 2)], p90: sorted[Math.floor(sorted.length * 0.9)], n: sorted.length };
+                    };
+                    return { buildingsSnapped: snapped, groundVsDsm: summary(groundDiffs), roofVsBuilt: summary(roofDiffs) };
+                })() : undefined,
                 fusion: (() => {
                     const n = geoidUndulation(options.latitude, options.longitude);
                     return {

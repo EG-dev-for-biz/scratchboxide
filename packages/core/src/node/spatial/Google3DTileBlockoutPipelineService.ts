@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { geoidUndulation } from './egm96-geoid';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
@@ -215,6 +216,11 @@ export interface Google3DTile3DObjectResult {
   /** True only when produced by the explicit `offlineMock` test mode (placeholder data, not real tiles). */
   mock?: boolean;
   error?: string;
+  /**
+   * The GLB's local frame (x east, y up, z south). Y = 0 is the street surface measured in the tiles, at
+   * originEllipsoidalHeightM above the WGS84 ellipsoid, so a vertex's ellipsoid height is y + originEllipsoidalHeightM.
+   */
+  frame?: { lat: number; lng: number; originEllipsoidalHeightM: number; localToEcef: number[] };
 }
 
 export interface Google3DTilesQueryOptions {
@@ -770,7 +776,7 @@ export class Google3DTileBlockoutPipelineService {
    *   +Y = Up
    *   +Z = -North (South)
    */
-  public buildLocalTransformMatrix(origin: GeoAnchor, geoidHeight: number = -30.0): {
+  public buildLocalTransformMatrix(origin: GeoAnchor, geoidHeight: number = geoidUndulation(origin.lat, origin.lng)): {
     matrixValues: number[];
     matrix4x4: number[][];
   } {
@@ -972,7 +978,9 @@ export class Google3DTileBlockoutPipelineService {
       elevation: 15.0,
       landmarkName: 'Midtown Manhattan, coordinates: 40.748400, -73.985700'
     };
-    const geoidHeight = request.geoidHeight ?? -30.0;
+    // Tiles are in ellipsoid heights; the anchor elevation is above sea level. EGM96 undulation at the anchor
+    // (was a fixed -30 m: right for New York, ~78 m off in Rome).
+    const geoidHeight = request.geoidHeight ?? geoidUndulation(geo.lat, geo.lng);
     const { matrixValues } = this.buildLocalTransformMatrix(geo, geoidHeight);
 
     const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || DEFAULT_GOOGLE_MAPS_TILES_API_KEY;
@@ -2517,6 +2525,7 @@ export class Google3DTileBlockoutPipelineService {
             resolvedAddress: geoAnchor.landmarkName || (typeof queryOrCoords === 'string' ? queryOrCoords : undefined),
             glbBuffer: district.glb,
             glbPath: outputGlbPath,
+            frame: { lat: anchor.lat, lng: anchor.lng, originEllipsoidalHeightM: district.originEllipsoidalHeightM, localToEcef: district.localToEcef },
             mesh,
             quality: {
               source: 'Google Maps Platform Photorealistic 3D Tiles API',
