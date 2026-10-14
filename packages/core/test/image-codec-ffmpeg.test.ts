@@ -13,12 +13,12 @@
  * the asynchronous one, PNG decodes in-process, and the JFIF conversion pair is the identity up to rounding.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-    encodeRgbaToJpeg, decodeImageToRgba, decodeImageToRgbaSync, rgbaToJfifYcc444, jfifYcc444ToRgba, readImageDimensions,
-    resolveFfmpegPath
+    encodeRgbaToJpeg, encodeRgbaToPng, decodeImageToRgba, decodeImageToRgbaSync, rgbaToJfifYcc444, jfifYcc444ToRgba,
+    readImageDimensions, resolveFfmpegPath
 } from '../src/node/image-codec-ffmpeg';
 import { encodePng } from '../src/node/texture-processing';
 import { findBinary, HOW_TO, withReason, type Requirement } from './helpers/requirements';
@@ -100,5 +100,82 @@ describe('image-codec-ffmpeg', () => {
     it('rejects unknown formats', async () => {
         await expect(decodeImageToRgba(Buffer.from('not an image'))).rejects.toThrow(/unrecognised/);
         expect(() => decodeImageToRgbaSync(Buffer.from('not an image'))).toThrow(/unrecognised/);
+    });
+});
+
+/** Without ffmpeg (FFMPEG_PATH pointed at a missing binary) JPEG and PNG go through the in-process codecs. */
+describe('image-codec-ffmpeg without ffmpeg (in-process fallback)', () => {
+    const REPO = path.resolve(__dirname, '../../..');
+    const FACADE_JPG = path.join(REPO, 'desktop-app/public/test_esb_facade.jpg'); // real 4:2:0 baseline photo
+    let saved: string | undefined;
+    beforeAll(() => { saved = process.env.FFMPEG_PATH; process.env.FFMPEG_PATH = '/nonexistent/ffmpeg-for-test'; });
+    afterAll(() => { if (saved === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = saved; });
+
+    it('encodes a JPEG and decodes it back (sync and async agree) with no colour bias', async () => {
+        const W = 256, H = 192, img = testImage(W, H);
+        const jpg = await encodeRgbaToJpeg(img, W, H, { quality: 92 });
+        expect(readImageDimensions(jpg)).toEqual({ width: W, height: H });
+        const a = await decodeImageToRgba(jpg), b = decodeImageToRgbaSync(jpg);
+        expect([a.width, a.height, a.rgba.length]).toEqual([W, H, W * H * 4]);
+        expect(Buffer.compare(a.rgba, b.rgba)).toBe(0);
+        for (const v of meanDiff(img, a.rgba)) expect(Math.abs(v)).toBeLessThan(0.75);
+        let abs = 0;
+        for (let i = 0; i < img.length; i++) if (i % 4 !== 3) abs += Math.abs(a.rgba[i] - img[i]);
+        expect(abs / (W * H * 3)).toBeLessThan(4); // q92 on a noisy image: a few levels per channel
+    });
+
+    it('decodes a real 4:2:0 photo to its header size (sync and async agree)', async () => {
+        const jpg = fs.readFileSync(FACADE_JPG);
+        const dims = readImageDimensions(jpg)!;
+        const dec = await decodeImageToRgba(jpg);
+        expect({ width: dec.width, height: dec.height }).toEqual(dims);
+        expect(dec.rgba.length).toBe(dims.width * dims.height * 4);
+        expect(Buffer.compare(dec.rgba, decodeImageToRgbaSync(jpg).rgba)).toBe(0);
+        // the photo is not blank: real tonal range in every channel
+        for (let c = 0; c < 3; c++) {
+            let lo = 255, hi = 0;
+            for (let i = c; i < dec.rgba.length; i += 4) { lo = Math.min(lo, dec.rgba[i]); hi = Math.max(hi, dec.rgba[i]); }
+            expect(hi - lo).toBeGreaterThan(100);
+        }
+    });
+
+    it.skipIf(process.platform !== 'darwin' || !fs.existsSync('/usr/bin/sips'))('matches Apple ImageIO (sips) on the 4:2:0 photo', async () => {
+        const jpg = fs.readFileSync(FACADE_JPG);
+        const ours = await decodeImageToRgba(jpg);
+        const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'codec-sips-'));
+        try {
+            fs.writeFileSync(path.join(tmp, 'in.jpg'), jpg);
+            require('child_process').execFileSync('/usr/bin/sips', ['-s', 'format', 'png', path.join(tmp, 'in.jpg'), '--out', path.join(tmp, 'ref.png')], { stdio: 'pipe' });
+            const ref = decodeImageToRgbaSync(fs.readFileSync(path.join(tmp, 'ref.png')));
+            expect([ref.width, ref.height]).toEqual([ours.width, ours.height]);
+            const d = meanDiff(ref.rgba, ours.rgba);
+            let abs = 0;
+            for (let i = 0; i < ref.rgba.length; i++) if (i % 4 !== 3) abs += Math.abs(ours.rgba[i] - ref.rgba[i]);
+            // jpeg-js replicates subsampled chroma where ImageIO interpolates: small per-texel differences, no bias
+            for (const v of d) expect(Math.abs(v)).toBeLessThan(1);
+            expect(abs / (ref.width * ref.height * 3)).toBeLessThan(3);
+            // side-by-side (ImageIO | jpeg-js) for the visual record (gitignored)
+            const W = ref.width, H = ref.height, both = Buffer.alloc(W * 2 * H * 4);
+            for (let y = 0; y < H; y++) { ref.rgba.copy(both, y * W * 8, y * W * 4, (y + 1) * W * 4); ours.rgba.copy(both, y * W * 8 + W * 4, y * W * 4, (y + 1) * W * 4); }
+            const dir = path.resolve(process.cwd(), 'test-results/screenshots');
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, 'image_codec_jpegjs_vs_imageio.png'), encodePng(W * 2, H, both));
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+
+    it('encodes PNG in-process losslessly', async () => {
+        const W = 96, H = 64, img = testImage(W, H);
+        const png = await encodeRgbaToPng(img, W, H);
+        expect(Buffer.compare((await decodeImageToRgba(png)).rgba, img)).toBe(0);
+    });
+
+    it('a corrupt JPEG fails loudly, naming both decoders', async () => {
+        const bad = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 7)]);
+        await expect(decodeImageToRgba(bad)).rejects.toThrow(/dimensions|jpeg-js/);
+        const header = fs.readFileSync(FACADE_JPG).subarray(0, 2000); // valid header, truncated scan
+        await expect(decodeImageToRgba(header)).rejects.toThrow(/ffmpeg.*jpeg-js/);
+        // (the synchronous decoder's last resort on macOS, sips, accepts truncated JPEGs, so it is not asserted here)
     });
 });
