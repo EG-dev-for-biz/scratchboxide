@@ -15,8 +15,9 @@
  * Extracted verbatim from GenerativeCanvasStudio.tsx.
  */
 import * as React from 'react';
+import { auditCameraFraming, type VisualAuditResult } from '../../../common/visual-verification-protocol';
 import { ProjectItem } from '../ProjectsModal';
-import { CanvasArtifact, ChatSession } from '../canvas-types';
+import { CanvasArtifact, ChatSession, LiveCodeSandboxData, Scene3DData } from '../canvas-types';
 import { captureActiveCanvasScreenshot } from '../chat/streaming-utils';
 import { PRELOADED_SHOWCASE_DEMOS } from '../demos/preloadedDemos';
 import { GeminiClient } from '../gemini-client';
@@ -41,12 +42,72 @@ function isCuratedShowcaseArtifact(artifact: { id: string; version?: number }): 
     return curatedVersion !== undefined && (artifact.version || 1) === curatedVersion;
 }
 
+/**
+ * Whether the background audit may screenshot this artifact now. Never while a reply is still
+ * generating: a repair version written mid-stream is buried when the stream-end commit
+ * re-activates the version it streamed, leaving that one marked historical.
+ */
+export function shouldAuditArtifactInBackground(artifact: CanvasArtifact | null | undefined, isGenerating: boolean): artifact is CanvasArtifact {
+    if (!artifact || isGenerating) return false;
+    if (isCuratedShowcaseArtifact(artifact)) return false;
+    return artifact.type === '3d-scene' || artifact.type === 'live-code-sandbox' || artifact.type === 'interactive-browser';
+}
+
+function artifactVersionKey(artifact: { id: string; version?: number }): string {
+    return `${artifact.id}-v${artifact.version || 1}`;
+}
+
+/**
+ * The data a background audit may write back, or null when it may write nothing. A 3D scene's
+ * sky, atmosphere, lighting, render mode, ground and world are its own choices, so the audit keeps
+ * at most a camera framing, and only when it reported a framing defect (`defects3D`) on a scene whose
+ * geometry is all in customMeshes, the bounds that framing is computed from. A sandbox takes CSS fixes.
+ */
+export function backgroundAuditRepairData(artifact: CanvasArtifact, audit: VisualAuditResult): CanvasArtifact['data'] | null {
+    if (artifact.type === '3d-scene') {
+        const scene = (artifact.data || {}) as Scene3DData;
+        const framing = auditCameraFraming(audit, scene);
+        if (!framing) return null;
+        const camera = { ...(scene.camera || { position: [15, 12, 15] as [number, number, number], target: [0, 0, 0] as [number, number, number] }), ...framing };
+        if (JSON.stringify(camera) === JSON.stringify(scene.camera)) return null;
+        return { ...scene, camera };
+    }
+    if (artifact.type === 'live-code-sandbox') {
+        const cssFixes = audit.visualFixes?.cssFixes;
+        const sandbox = artifact.data as LiveCodeSandboxData;
+        const files = Array.isArray(sandbox?.files) ? sandbox.files : [];
+        const cssIndex = files.findIndex(f => f.name?.endsWith('.css') || f.path?.endsWith('.css'));
+        if (!cssFixes || cssIndex === -1) return null;
+        return {
+            ...sandbox,
+            files: files.map((f, i) => i === cssIndex ? { ...f, content: `${f.content}\n/* Visual Auto-Repair Fixes */\n${cssFixes}` } : f)
+        };
+    }
+    return null;
+}
+
+/**
+ * The version a failing background audit writes, or null. Each version is repaired at most once,
+ * and a version the repair wrote is never repaired again, so audits cannot chain new versions.
+ * `repairWritten` holds the keys of versions this loop wrote (the caller adds the registered one too).
+ */
+export function backgroundAuditRepair(artifact: CanvasArtifact, audit: VisualAuditResult, repairWritten: Set<string>): CanvasArtifact | null {
+    if (audit.fidelityScore >= 80 || !audit.visualFixes || repairWritten.has(artifactVersionKey(artifact))) return null;
+    const data = backgroundAuditRepairData(artifact, audit);
+    if (!data) return null;
+    const repaired: CanvasArtifact = { ...artifact, version: (artifact.version || 1) + 1, data };
+    if (repairWritten.has(artifactVersionKey(repaired))) return null;
+    repairWritten.add(artifactVersionKey(repaired));
+    return repaired;
+}
+
 export interface UseArtifactSyncDeps {
     activeArtifact: ChatState['activeArtifact'];
     activeWorkspace: ProjectItem;
     artifactHistory: ChatState['artifactHistory'];
     currentSessionId: ChatState['currentSessionId'];
     graphControllerRef: WorkspaceGraphCoordinator['graphControllerRef'];
+    isGenerating: boolean;
     layoutMode: ChatState['layoutMode'];
     lensControllerRef: WorkspaceGraphCoordinator['lensControllerRef'];
     messages: ChatState['messages'];
@@ -60,7 +121,7 @@ export interface UseArtifactSyncDeps {
 }
 
 export function useArtifactSync(deps: UseArtifactSyncDeps) {
-    const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
+    const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
 
     const handleUpdateArtifact = React.useCallback((updatedArtifact: CanvasArtifact) => {
         const canonicalArtifact = graphControllerRef.current.registerArtifact(
@@ -165,22 +226,21 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                 return next;
             });
         }
+        return canonicalArtifact;
     }, [currentSessionId, persistSessionsImmediately]);
 
     // Track verified artifact keys (id + version) to avoid redundant loops
     const verifiedArtifactKeysRef = React.useRef<Set<string>>(new Set());
+    // Versions the background repair wrote: never audited or repaired again, so repairs cannot chain
+    const repairWrittenKeysRef = React.useRef<Set<string>>(new Set());
     const isVerifyingVisualRef = React.useRef<boolean>(false);
 
     // Automated Background Visual Verification & Self-Correction Loop
     React.useEffect(() => {
-        if (!activeArtifact) return;
-        if (isCuratedShowcaseArtifact(activeArtifact)) return;
-        if (activeArtifact.type !== '3d-scene' && activeArtifact.type !== 'live-code-sandbox' && activeArtifact.type !== 'interactive-browser') {
-            return;
-        }
+        if (!shouldAuditArtifactInBackground(activeArtifact, isGenerating)) return;
 
-        const artifactKey = `${activeArtifact.id}-v${activeArtifact.version || 1}`;
-        if (verifiedArtifactKeysRef.current.has(artifactKey)) {
+        const artifactKey = artifactVersionKey(activeArtifact);
+        if (verifiedArtifactKeysRef.current.has(artifactKey) || repairWrittenKeysRef.current.has(artifactKey)) {
             return;
         }
 
@@ -232,48 +292,11 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                     return prev;
                 });
 
-                // If fidelity score is low (< 80) and auto-repair directives exist, automatically apply visual self-correction
-                if (audit.visualFixes && audit.fidelityScore < 80) {
-                    const fixes = audit.visualFixes;
-                    let repairedData: any = { ...activeArtifact.data };
-
-                    if (activeArtifact.type === '3d-scene') {
-                        repairedData = {
-                            ...repairedData,
-                            renderMode: fixes.scenePatches?.renderMode || repairedData.renderMode || 'shaded',
-                            environment: {
-                                ...(repairedData.environment || {}),
-                                ...(fixes.environment || {}),
-                                lighting: fixes.environment?.lighting || (fixes.lighting ? 'shaded' : repairedData.environment?.lighting || 'shaded')
-                            },
-                            camera: {
-                                ...(repairedData.camera || { position: [15, 12, 15], target: [0, 0, 0] }),
-                                ...(fixes.camera || {})
-                            },
-                            features: {
-                                ...(repairedData.features || {}),
-                                ...(fixes.features || {})
-                            }
-                        };
-                        if (fixes.scenePatches) {
-                            Object.assign(repairedData, fixes.scenePatches);
-                        }
-                    } else if (activeArtifact.type === 'live-code-sandbox') {
-                        if (fixes.cssFixes && Array.isArray(repairedData.files)) {
-                            const cssFile = repairedData.files.find((f: any) => f.name?.endsWith('.css') || f.path?.endsWith('.css'));
-                            if (cssFile) {
-                                cssFile.content = `${cssFile.content}\n/* Visual Auto-Repair Fixes */\n${fixes.cssFixes}`;
-                            }
-                        }
-                    }
-
-                    const repairedArtifact: CanvasArtifact = {
-                        ...activeArtifact,
-                        version: (activeArtifact.version || 1) + 1,
-                        data: repairedData
-                    };
-
-                    handleUpdateArtifact(repairedArtifact);
+                // If fidelity score is low (< 80), apply what the audit may change; no new version when that is nothing
+                const repaired = backgroundAuditRepair(activeArtifact, audit, repairWrittenKeysRef.current);
+                if (repaired) {
+                    // Registration can rename a timestamped id, so remember the version as it lands too.
+                    repairWrittenKeysRef.current.add(artifactVersionKey(handleUpdateArtifact(repaired)));
                 }
             } catch (err) {
                 console.warn('[GenerativeCanvasStudio] Background visual verification completed with fallback:', err);
@@ -286,7 +309,7 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
             cancelled = true;
             clearTimeout(settleTimer);
         };
-    }, [activeArtifact, layoutMode, handleUpdateArtifact]);
+    }, [activeArtifact, isGenerating, layoutMode, handleUpdateArtifact]);
 
     return { handleUpdateArtifact };
 }
