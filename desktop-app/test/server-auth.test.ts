@@ -41,15 +41,16 @@ test('server-auth: launch token, CORS allowlist and open endpoints', async () =>
         const browserStatus = await fetch(`${baseUrl}/api/browser/status`);
         assert.strictEqual(browserStatus.status, 200, '/api/browser/status must be open');
 
-        // /api/auth/token is open and returns the launch token
-        const tokenFetch = await fetch(`${baseUrl}/api/auth/token`, { headers: { Origin: 'http://127.0.0.1:3030' } });
-        assert.strictEqual(tokenFetch.status, 200, '/api/auth/token must return 200 for allowed origin');
-        const tokenFetchBody = await tokenFetch.json();
-        assert.strictEqual(tokenFetchBody.token, token, '/api/auth/token must match app.locals.launchToken');
+        // The token is never served over HTTP, to any caller
+        for (const headers of [{}, { Origin: 'http://127.0.0.1:3030' }, { 'Sec-Fetch-Site': 'same-origin' }] as Array<Record<string, string>>) {
+            const tokenFetch = await fetch(`${baseUrl}/api/auth/token`, { headers });
+            assert.strictEqual(tokenFetch.status, 401, '/api/auth/token must not exist as an open route');
+            assert.ok(!(await tokenFetch.text()).includes(token), 'token must never appear in a response');
+        }
 
-        // Dev mode allowed origin bypasses token check
+        // An allowed Origin header is not a credential (any local process can send it)
         const devOriginFetch = await fetch(`${baseUrl}/gemini/models`, { headers: { Origin: 'http://127.0.0.1:3030' } });
-        assert.strictEqual(devOriginFetch.status, 200, 'requests from allowed dev origin must succeed in dev mode');
+        assert.strictEqual(devOriginFetch.status, 401, 'allowed Origin without a token must be rejected');
 
         // No token → 401 JSON
         const noToken = await fetch(`${baseUrl}/gemini/models`);
@@ -108,6 +109,19 @@ test('server-auth: launch token, CORS allowlist and open endpoints', async () =>
         // Open endpoints stay open even with a bad origin? No — CORS applies first.
         const healthBadOrigin = await fetch(`${baseUrl}/health`, { headers: { Origin: 'https://evil.example' } });
         assert.strictEqual(healthBadOrigin.status, 403);
+
+        // Code-execution, git, memories and video routers require the token too
+        for (const route of ['/3d/run-python', '/3d/python/run', '/3d/compile', '/compiler/compile', '/git/status', '/memories', '/video/composite']) {
+            const res = await fetch(`${baseUrl}${route}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ script: 'print(1)', sourceCode: 'int main(){}' })
+            });
+            assert.strictEqual(res.status, 401, `${route} must require the launch token`);
+        }
+        // Non-GET requests are never public, even outside the API prefixes
+        const unknownPost = await fetch(`${baseUrl}/not-an-api-path`, { method: 'POST' });
+        assert.strictEqual(unknownPost.status, 401, 'POST outside API prefixes must require the token');
 
         // Exported tools are no longer served from the API origin
         const toolFromApi = await fetch(`${baseUrl}/tools/some-tool`, { headers: { Authorization: `Bearer ${token}` } });

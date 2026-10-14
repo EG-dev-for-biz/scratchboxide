@@ -309,7 +309,7 @@ export function createInitialSettingsState({ propGoogleSearchGrounding }: Settin
         bidirectionalFilesystemSync: saved.bidirectionalFilesystemSync ?? true,
         workspaceRules: [],
         workspaceSettings: {
-        defaultModel: 'gemini-3.7-flash',
+        defaultModel: 'gemini-3.8-flash',
         thinkingBudget: 1024,
         customPromptInstructions: '',
         autoAttachSuperpowers: true

@@ -21,6 +21,7 @@ import {
   type DecomposedCluster
 } from './UniversalVertexSpatialClusteringEngine';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
+import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
 
 export type UniversalSpatialCategory =
   | 'landmark'
@@ -55,7 +56,7 @@ export interface VehicleMetadata {
 }
 
 export interface LandmarkMetadata {
-  landmarkType: 'triumphal_arch' | 'obelisk_spire' | 'amphitheatre' | 'historic_monument' | 'sculptural_focal_point';
+  landmarkType: 'triumphal_arch' | 'obelisk_spire' | 'amphitheatre' | 'historic_monument' | 'sculptural_focal_point' | (string & {});
   historicName: string;
   architecturalStyle: string;
   prominenceRatio: number;
@@ -80,6 +81,8 @@ export interface UniversalSeparatedObject {
   vertexCount: number;
   triangleCount: number;
   submeshIndices: number[];
+  vertexIndices?: number[];
+  extractedVertices?: [number, number, number][];
   colorHex: string;
   trellisPrompt: string;
   routingRecommendation?: DownstreamGeneratorRouting;
@@ -138,6 +141,35 @@ export interface UniversalSeparationOptions {
     fx?: number;
     fy?: number;
   };
+  focalInterestBounds?: {
+    minX?: number;
+    maxX?: number;
+    minZ?: number;
+    maxZ?: number;
+    minH?: number;
+    maxH?: number;
+  };
+  landmarkName?: string;
+  landmarkType?: 'triumphal_arch' | 'obelisk_spire' | 'amphitheatre' | 'historic_monument' | 'sculptural_focal_point' | (string & {});
+  architecturalStyle?: string;
+  modelName?: string;
+  outputGlbPath?: string;
+  localUvProjection?: boolean;
+  facadeUvScale?: number;
+  /**
+   * When true, each separated object carries its raw `extractedVertices` point list.
+   * Off by default: the point lists are large and bloat serialized/JSON payloads.
+   */
+  includeExtractedVertices?: boolean;
+}
+
+export interface PartAwareGlbResult {
+  glbBuffer: Buffer;
+  scene: UniversalSeparatedScene;
+  materialCount: number;
+  primitiveCount: number;
+  entityCount: number;
+  outputPath?: string;
 }
 
 export interface UniversalSeparationAndSceneResult {
@@ -220,6 +252,22 @@ export class Universal3DObjectSeparationService {
         return new Uint16Array(buffer.buffer, buffer.byteOffset + offset, count);
       } else if (acc.componentType === 5125) {
         return new Uint32Array(buffer.buffer, buffer.byteOffset + offset, count);
+      } else if (acc.componentType === 5121) {
+        // UNSIGNED_BYTE indices (common in Google 3D Tiles): widen so they are not mistaken for a non-indexed mesh.
+        return Uint16Array.from(new Uint8Array(buffer.buffer, buffer.byteOffset + offset, count));
+      }
+      return null;
+    };
+
+    const getAccessorVec2 = (accIndex?: number): Float32Array | null => {
+      if (accIndex === undefined || accIndex === null) return null;
+      const acc = gltf.accessors?.[accIndex];
+      if (!acc || acc.bufferView === undefined) return null;
+      const bv = gltf.bufferViews[acc.bufferView];
+      const offset = binOffset + (bv.byteOffset || 0) + (acc.byteOffset || 0);
+      const count = acc.count || 0;
+      if (acc.componentType === 5126 && acc.type === 'VEC2') {
+        return new Float32Array(buffer.buffer, buffer.byteOffset + offset, count * 2);
       }
       return null;
     };
@@ -232,6 +280,7 @@ export class Universal3DObjectSeparationService {
 
         const posAccIdx = prim.attributes.POSITION;
         const normAccIdx = prim.attributes.NORMAL;
+        const uvAccIdx = prim.attributes.TEXCOORD_0;
         const indicesAccIdx = prim.indices;
 
         const acc = gltf.accessors[posAccIdx];
@@ -244,6 +293,7 @@ export class Universal3DObjectSeparationService {
         const max: [number, number, number] = [acc.max[0], acc.max[1], acc.max[2]];
         const positions = getAccessorData(posAccIdx);
         const normals = getAccessorData(normAccIdx);
+        const uvs = getAccessorVec2(uvAccIdx);
         const indices = getAccessorIndices(indicesAccIdx);
 
         submeshData.push({
@@ -253,6 +303,7 @@ export class Universal3DObjectSeparationService {
           positions,
           indices,
           normals,
+          uvs,
           submeshIndex: mIdx
         });
 
@@ -308,6 +359,8 @@ export class Universal3DObjectSeparationService {
       category: UniversalSpatialCategory;
       submeshIndices: number[];
       extractedVertices: [number, number, number][];
+      vertexIndices?: number[];
+      vertexSubmeshIndices?: number[];
       colorHex: string;
       prompt: string;
       roughness: number;
@@ -324,7 +377,13 @@ export class Universal3DObjectSeparationService {
         overallMax,
         {
           granularity: options.granularity,
-          minVerticesPerEntity: options.minVerticesPerEntity
+          minVerticesPerEntity: options.minVerticesPerEntity,
+          focalInterestBounds: options.focalInterestBounds,
+          landmarkName: options.landmarkName,
+          landmarkType: options.landmarkType,
+          architecturalStyle: options.architecturalStyle,
+          modelName: options.modelName,
+          geoAnchor: options.geoAnchor
         }
       );
     }
@@ -358,6 +417,8 @@ export class Universal3DObjectSeparationService {
         vertexCount: vCount,
         triangleCount: triCount,
         submeshIndices: cluster.submeshIndices,
+        vertexIndices: cluster.vertexIndices,
+        ...(options.includeExtractedVertices ? { extractedVertices: cluster.extractedVertices } : {}),
         colorHex: cluster.colorHex,
         trellisPrompt: cluster.prompt,
         routingRecommendation,
@@ -372,6 +433,15 @@ export class Universal3DObjectSeparationService {
         landmarkMetadata: (cluster as any).landmarkMetadata
       };
     });
+
+    this._lastSubmeshData = submeshData;
+    // Submesh-qualified vertex ownership, aligned with `objects` by index (kept internal so
+    // the public result stays compact).
+    this._lastObjectVertexRefs = clusters.map(c =>
+      c.vertexIndices && c.vertexSubmeshIndices && c.vertexSubmeshIndices.length === c.vertexIndices.length
+        ? { submeshIndices: c.vertexSubmeshIndices, vertexIndices: c.vertexIndices }
+        : undefined
+    );
 
     const objectCounts: Record<string, number> = {};
     for (const obj of objects) {
@@ -664,6 +734,362 @@ export class Universal3DObjectSeparationService {
     return {
       scene,
       populatedScene
+    };
+  }
+
+  private _lastSubmeshData?: SubmeshGeometryInput[];
+  private _lastObjectVertexRefs?: ({ submeshIndices: number[]; vertexIndices: number[] } | undefined)[];
+
+  /**
+   * Partitions continuous 3D tile geometry into discrete glTF primitives with
+   * independent PBR material slots and local OBB-conformal UV coordinates.
+   * Completely eliminates texture shearing on diagonal facades and cross-domain
+   * material bleeding across architecture, roads, vehicles, and foliage.
+   */
+  public static generatePartAwareGlb(options: UniversalSeparationOptions & {
+    outputGlbPath?: string;
+    localUvProjection?: boolean;
+    facadeUvScale?: number;
+  }): PartAwareGlbResult {
+    const service = new Universal3DObjectSeparationService();
+    return service.generatePartAwareGlb(options);
+  }
+
+  public generatePartAwareGlb(options: UniversalSeparationOptions & {
+    outputGlbPath?: string;
+    localUvProjection?: boolean;
+    facadeUvScale?: number;
+  }): PartAwareGlbResult {
+    const scene = this.separateSync(options);
+    const submeshData = this._lastSubmeshData || [];
+
+    const hexToRgba = (hex: string, alpha = 1.0): [number, number, number, number] => {
+      let clean = (hex || '#888888').replace('#', '');
+      if (clean.length === 3) {
+        clean = clean.split('').map(c => c + c).join('');
+      }
+      const num = parseInt(clean, 16);
+      if (isNaN(num)) return [0.7, 0.7, 0.7, alpha];
+      const r = ((num >> 16) & 255) / 255;
+      const g = ((num >> 8) & 255) / 255;
+      const b = (num & 255) / 255;
+      return [Number(r.toFixed(4)), Number(g.toFixed(4)), Number(b.toFixed(4)), alpha];
+    };
+
+    const outGltf: any = {
+      asset: {
+        version: '2.0',
+        generator: 'Scratchbox Part-Aware 3D Tile Pipeline'
+      },
+      scene: 0,
+      scenes: [{ nodes: [0] }],
+      nodes: [{ name: 'SceneRoot', mesh: 0 }],
+      meshes: [{ name: scene.modelName || 'Decomposed3DTile', primitives: [] }],
+      materials: [],
+      accessors: [],
+      bufferViews: []
+    };
+    const bufferViewsArray: Buffer[] = [];
+
+    const addBufferView = (buf: Buffer, isIndex: boolean): number => {
+      const idx = bufferViewsArray.length;
+      bufferViewsArray.push(buf);
+      outGltf.bufferViews.push({
+        buffer: 0,
+        byteOffset: 0,
+        byteLength: buf.length,
+        target: isIndex ? 34963 : 34962
+      });
+      return idx;
+    };
+
+    const addAccessor = (
+      bvIdx: number,
+      compType: number,
+      count: number,
+      typeStr: string,
+      minMax?: { min: number[]; max: number[] }
+    ): number => {
+      const idx = outGltf.accessors.length;
+      outGltf.accessors.push({
+        bufferView: bvIdx,
+        byteOffset: 0,
+        componentType: compType,
+        count,
+        type: typeStr,
+        ...(minMax ? { min: minMax.min, max: minMax.max } : {})
+      });
+      return idx;
+    };
+
+    const hasLocalUv = options.localUvProjection !== false;
+    const s = options.facadeUvScale ?? 0.25;
+
+    const pushMaterial = (
+      name: string,
+      baseColor: string,
+      roughness: number,
+      metallic: number,
+      extras: Record<string, unknown>
+    ): number => {
+      const [r, g, b, a] = hexToRgba(baseColor);
+      outGltf.materials.push({
+        name,
+        pbrMetallicRoughness: {
+          baseColorFactor: [r, g, b, a],
+          roughnessFactor: roughness,
+          metallicFactor: metallic
+        },
+        extras
+      });
+      return outGltf.materials.length - 1;
+    };
+
+    // One material per separated object (stable ordering: material i <-> scene.objects[i]).
+    const objMaterialIdx: number[] = scene.objects.map(obj =>
+      pushMaterial(
+        `mat_${obj.category}_${obj.id}`,
+        obj.material.baseColor || obj.colorHex,
+        obj.material.roughness ?? 0.7,
+        obj.material.metalness ?? 0.05,
+        {
+          category: obj.category,
+          partId: obj.id,
+          name: obj.name,
+          routing: obj.routingRecommendation,
+          obb: {
+            center: obj.orientedBoundingBox.center,
+            dimensions: obj.orientedBoundingBox.dimensions,
+            yawDeg: obj.orientedBoundingBox.yawDeg
+          }
+        }
+      )
+    );
+
+    // Residual bucket for triangles no object claims: reuse the clustering engine's residual
+    // object when present, otherwise lazily create a dedicated residual material/primitive.
+    const RESIDUAL_OBJECT_ID = 'infra-urban-props';
+    const residualObjIdx = scene.objects.findIndex(o => o.id === RESIDUAL_OBJECT_ID);
+    const RESIDUAL_SYNTHETIC = -2;
+    const residualKey = residualObjIdx >= 0 ? residualObjIdx : RESIDUAL_SYNTHETIC;
+    let syntheticResidualMatIdx = -1;
+
+    // Per-object vertex ownership is qualified by glTF mesh index (submeshIndex), never array position.
+    const vertexRefs = this._lastObjectVertexRefs || [];
+
+    const computeVertexNormals = (pos: Float32Array | ArrayLike<number>, vCount: number, tris: ArrayLike<number>): Float32Array => {
+      const n = new Float32Array(vCount * 3);
+      for (let t = 0; t + 2 < tris.length; t += 3) {
+        const i0 = tris[t]!, i1 = tris[t + 1]!, i2 = tris[t + 2]!;
+        const ax = pos[i1 * 3]! - pos[i0 * 3]!, ay = pos[i1 * 3 + 1]! - pos[i0 * 3 + 1]!, az = pos[i1 * 3 + 2]! - pos[i0 * 3 + 2]!;
+        const bx = pos[i2 * 3]! - pos[i0 * 3]!, by = pos[i2 * 3 + 1]! - pos[i0 * 3 + 1]!, bz = pos[i2 * 3 + 2]! - pos[i0 * 3 + 2]!;
+        const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx; // area-weighted
+        for (const vi of [i0, i1, i2]) {
+          n[vi * 3] += nx; n[vi * 3 + 1] += ny; n[vi * 3 + 2] += nz;
+        }
+      }
+      for (let v = 0; v < vCount; v++) {
+        const len = Math.hypot(n[v * 3]!, n[v * 3 + 1]!, n[v * 3 + 2]!);
+        if (len > 1e-12) {
+          n[v * 3] /= len; n[v * 3 + 1] /= len; n[v * 3 + 2] /= len;
+        } else {
+          n[v * 3] = 0; n[v * 3 + 1] = 1; n[v * 3 + 2] = 0;
+        }
+      }
+      return n;
+    };
+
+    const emitPrimitive = (
+      sm: SubmeshGeometryInput,
+      normals: Float32Array,
+      tris: number[],
+      obb: OrientedBoundingBox3D | null,
+      matIdx: number
+    ): void => {
+      const pos = sm.positions!;
+      const cosY = Math.cos(-(obb?.yawRad || 0));
+      const sinY = Math.sin(-(obb?.yawRad || 0));
+      const center = obb?.center ?? [0, 0, 0];
+
+      const localMap = new Map<number, number>();
+      const remapIndices: number[] = [];
+      const partPositions: number[] = [];
+      const partNormals: number[] = [];
+      const partUvs: number[] = [];
+
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+      for (const origVi of tris) {
+        let newVi = localMap.get(origVi);
+        if (newVi === undefined) {
+          newVi = localMap.size;
+          localMap.set(origVi, newVi);
+
+          const px = pos[origVi * 3]!;
+          const py = pos[origVi * 3 + 1]!;
+          const pz = pos[origVi * 3 + 2]!;
+
+          if (px < minX) minX = px; if (py < minY) minY = py; if (pz < minZ) minZ = pz;
+          if (px > maxX) maxX = px; if (py > maxY) maxY = py; if (pz > maxZ) maxZ = pz;
+
+          const nx = normals[origVi * 3]!;
+          const ny = normals[origVi * 3 + 1]!;
+          const nz = normals[origVi * 3 + 2]!;
+
+          let u = 0, v = 0;
+          if (hasLocalUv) {
+            const dx = px - center[0];
+            const dz = pz - center[2];
+            const lx = dx * cosY - dz * sinY;
+            const ly = py - center[1];
+            const lz = dx * sinY + dz * cosY;
+
+            const lnx = nx * cosY - nz * sinY;
+            const lny = ny;
+            const lnz = nx * sinY + nz * cosY;
+
+            if (Math.abs(lny) >= 0.70) {
+              u = lx * s;
+              v = lz * s;
+            } else if (Math.abs(lnx) > Math.abs(lnz)) {
+              u = lz * s;
+              v = ly * s;
+            } else {
+              u = lx * s;
+              v = ly * s;
+            }
+          } else if (sm.uvs) {
+            u = sm.uvs[origVi * 2]!;
+            v = sm.uvs[origVi * 2 + 1]!;
+          }
+
+          partPositions.push(px, py, pz);
+          partNormals.push(nx, ny, nz);
+          partUvs.push(u, v);
+        }
+        remapIndices.push(newVi);
+      }
+
+      const partVCount = localMap.size;
+      if (partVCount === 0) return;
+      const posArr = new Float32Array(partPositions);
+      const normArr = new Float32Array(partNormals);
+      const uvArr = new Float32Array(partUvs);
+      // 65535 is reserved (primitive restart) for UNSIGNED_SHORT, so switch to 32-bit above it.
+      const idxArr: Uint16Array | Uint32Array = partVCount > 65535
+        ? new Uint32Array(remapIndices)
+        : new Uint16Array(remapIndices);
+      const idxComponentType = idxArr instanceof Uint32Array ? 5125 : 5123;
+
+      const posBv = addBufferView(Buffer.from(posArr.buffer, posArr.byteOffset, posArr.byteLength), false);
+      const posAcc = addAccessor(posBv, 5126, partVCount, 'VEC3', { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] });
+
+      const normBv = addBufferView(Buffer.from(normArr.buffer, normArr.byteOffset, normArr.byteLength), false);
+      const normAcc = addAccessor(normBv, 5126, partVCount, 'VEC3');
+
+      const uvBv = addBufferView(Buffer.from(uvArr.buffer, uvArr.byteOffset, uvArr.byteLength), false);
+      const uvAcc = addAccessor(uvBv, 5126, partVCount, 'VEC2');
+
+      const idxBv = addBufferView(Buffer.from(idxArr.buffer, idxArr.byteOffset, idxArr.byteLength), true);
+      const idxAcc = addAccessor(idxBv, idxComponentType, idxArr.length, 'SCALAR');
+
+      outGltf.meshes[0].primitives.push({
+        attributes: {
+          POSITION: posAcc,
+          NORMAL: normAcc,
+          TEXCOORD_0: uvAcc
+        },
+        indices: idxAcc,
+        material: matIdx,
+        mode: 4
+      });
+    };
+
+    // Split every source submesh per triangle across the objects that own its vertices, so
+    // each triangle is emitted exactly once (no duplicated geometry / z-fighting).
+    for (const sm of submeshData) {
+      if (!sm.positions || sm.positions.length === 0) continue;
+      const smIdx = sm.submeshIndex;
+      const vTotal = Math.floor(sm.positions.length / 3);
+
+      const vertToObj = new Int32Array(vTotal).fill(-1);
+      let wholeSubmeshOwner = -1;
+      for (let oIdx = 0; oIdx < scene.objects.length; oIdx++) {
+        const refs = vertexRefs[oIdx];
+        if (refs) {
+          for (let k = 0; k < refs.vertexIndices.length; k++) {
+            if (refs.submeshIndices[k] !== smIdx) continue;
+            const vi = refs.vertexIndices[k]!;
+            if (vi >= 0 && vi < vTotal) vertToObj[vi] = oIdx;
+          }
+        } else if (wholeSubmeshOwner < 0 && scene.objects[oIdx]!.submeshIndices.includes(smIdx)) {
+          // Submesh-granular clusters (macro mode) own their whole submesh; first claimant wins.
+          wholeSubmeshOwner = oIdx;
+        }
+      }
+
+      let triIndices: number[];
+      if (sm.indices && sm.indices.length > 0) {
+        triIndices = Array.from(sm.indices);
+      } else {
+        triIndices = [];
+        for (let i = 0; i < vTotal; i++) triIndices.push(i);
+      }
+
+      const normals = sm.normals && sm.normals.length >= vTotal * 3
+        ? sm.normals
+        : computeVertexNormals(sm.positions, vTotal, triIndices);
+
+      const objTris = new Map<number, number[]>();
+      for (let t = 0; t + 2 < triIndices.length; t += 3) {
+        const i0 = triIndices[t]!, i1 = triIndices[t + 1]!, i2 = triIndices[t + 2]!;
+        if (i0 >= vTotal || i1 >= vTotal || i2 >= vTotal) continue;
+        let assigned = vertToObj[i0]!;
+        if (assigned < 0) assigned = vertToObj[i1]!;
+        if (assigned < 0) assigned = vertToObj[i2]!;
+        if (assigned < 0) assigned = wholeSubmeshOwner;
+        if (assigned < 0) assigned = residualKey;
+
+        let bucket = objTris.get(assigned);
+        if (!bucket) { bucket = []; objTris.set(assigned, bucket); }
+        bucket.push(i0, i1, i2);
+      }
+
+      for (const [key, tris] of objTris) {
+        if (tris.length === 0) continue;
+        if (key === RESIDUAL_SYNTHETIC) {
+          if (syntheticResidualMatIdx < 0) {
+            syntheticResidualMatIdx = pushMaterial('mat_residual_unassigned', '#9ca3af', 0.9, 0.0, {
+              category: 'residual',
+              partId: 'residual-unassigned',
+              name: 'Unassigned Residual Geometry'
+            });
+          }
+          emitPrimitive(sm, normals, tris, null, syntheticResidualMatIdx);
+        } else {
+          const obj = scene.objects[key]!;
+          emitPrimitive(sm, normals, tris, obj.orientedBoundingBox, objMaterialIdx[key]!);
+        }
+      }
+    }
+
+    const packResult = GltfBinaryPacker.packGlb(outGltf, bufferViewsArray, true);
+    if (options.outputGlbPath) {
+      const dir = path.dirname(options.outputGlbPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(options.outputGlbPath, packResult.glbBuffer);
+    }
+
+    return {
+      glbBuffer: packResult.glbBuffer,
+      scene,
+      materialCount: outGltf.materials.length,
+      primitiveCount: outGltf.meshes[0].primitives.length,
+      entityCount: scene.objects.length,
+      outputPath: options.outputGlbPath
     };
   }
 }

@@ -866,48 +866,106 @@ const demoVectorWorldStagingData: Scene3DData = {
 // ----------------------------------------------------------------------------------
 // Demo: Omnispatial Multi-Sensor 3D Synthesis Pipeline (Minimal Orthogonal Basis)
 // ----------------------------------------------------------------------------------
+// The three real pipeline GLBs are co-registered (identical metric bounds, no node
+// transforms), so they share one origin and form a single open variant set. The
+// viewport groups objects by `metadata.variantSet` and orders them by `variantOrder`;
+// no code branches on stage names or labels. `role: 'environment'` exempts each stage
+// from ground snapping so a later-loaded stage never lands on an earlier stage's roof.
+const OMNISPATIAL_STAGE_VARIANT_SET = 'omnispatial-pipeline-stages';
+
 const demoOmnispatialSynthesisData: Scene3DData = {
     title: 'Omnispatial Multi-Sensor 3D Synthesis Pipeline',
     subtitle: 'Minimal Orthogonal Basis Proof: 3D Tiles + 2D Vector Cadastre + Street View 360',
-    sceneType: 'city',
-    renderMode: 'clay',
+    sceneType: 'adaptive',
+    // Stages 1 and 2 carry an authored studio-grey clay material; 'pbr' keeps Stage 3's
+    // embedded Street View textures instead of swapping every material for clay.
+    renderMode: 'pbr',
     cameraMode: 'orbit',
-    selectedMeshId: 'omnispatial-stage3-esb',
+    toolMode: 'view',
+    // ~700 m standoff, outside the ~482 m bounding radius, so auto-framing respects it.
     camera: {
-        position: [0, 18, 55],
-        target: [0, 18, 0],
+        position: [423, 419, 504],
+        target: [0, 180, 0],
         fov: 45
     },
     environment: {
         skybox: 'studio',
         lighting: 'studio',
-        ground: true,
-        groundColor: '#1e293b',
-        ambientIntensity: 0.95
+        ground: false,
+        ambientIntensity: 0.95,
+        // The GLBs already contain the surrounding district; never stream Google tiles over them.
+        groundTileMode: 'none'
     },
     geoAnchor: {
         lat: 40.7484,
         lng: -73.9857,
-        elevation: 381,
-        active: true,
+        active: false,
         landmarkName: 'Empire State Building, NYC',
         castingArchetype: 'Omnispatial Digital Twin',
         castingRationale: 'Google 3D Photo Tiles + 2D Vector Cadastre + Street View 360 Fused into Metric 3D Geometry'
     },
     objects: [
         {
-            id: 'omnispatial-stage3-esb',
+            id: 'omnispatial-stage1-raw-scan',
             content: {
                 type: '3d-model',
-                durableUri: '/models/omnispatial_stage3_full_synthesis.glb',
+                durableUri: '/models/omnispatial_stage1_real_clay_tile.glb',
                 mimeType: 'model/gltf-binary',
                 metadata: {
-                    materialPreset: '18% Studio Grey Clay (roughness: 0.85, metalness: 0.05)',
-                    cornerOrthogonalityError: '0.00°',
-                    windowBayInsetDepth: '0.22m',
-                    entrancePortalRevealDepth: '0.85m',
-                    triangleCount: 32580,
-                    vertexCount: 64820
+                    role: 'environment',
+                    variantSet: OMNISPATIAL_STAGE_VARIANT_SET,
+                    variantOrder: 1,
+                    variantLabel: 'Stage 1 · ESB raw scan',
+                    materialPreset: 'Authored Studio Grey Clay (Mat_StudioGreyClay, roughness: 0.85)',
+                    vertexCount: 27311,
+                    triangleCount: 19985,
+                    meshCount: 1,
+                    textureCount: 0
+                }
+            },
+            space: {
+                spatial3d: { x: 0, y: 0, z: 0 }
+            }
+        },
+        {
+            id: 'omnispatial-stage2-vector-refined',
+            content: {
+                type: '3d-model',
+                durableUri: '/models/omnispatial_stage2_vector_refined.glb',
+                mimeType: 'model/gltf-binary',
+                metadata: {
+                    role: 'environment',
+                    variantSet: OMNISPATIAL_STAGE_VARIANT_SET,
+                    variantOrder: 2,
+                    variantLabel: 'Stage 2 · ESB refined (clay)',
+                    materialPreset: 'Authored Studio Grey Clay (Mat_StudioGreyClay, roughness: 0.85)',
+                    vertexCount: 352768,
+                    triangleCount: 295353,
+                    meshCount: 1,
+                    textureCount: 0
+                }
+            },
+            space: {
+                spatial3d: { x: 0, y: 0, z: 0 }
+            }
+        },
+        {
+            id: 'omnispatial-stage3-streetview-pbr',
+            content: {
+                type: '3d-model',
+                durableUri: '/models/omnispatial_real_stage3_streetview_pbr.glb',
+                mimeType: 'model/gltf-binary',
+                metadata: {
+                    role: 'environment',
+                    variantSet: OMNISPATIAL_STAGE_VARIANT_SET,
+                    variantOrder: 3,
+                    variantLabel: 'Stage 3 · ESB refined (photo-textured)',
+                    variantDefault: true,
+                    materialPreset: 'Original Google 3D Tile photo textures (unlit)',
+                    vertexCount: 362484,
+                    triangleCount: 295353,
+                    meshCount: 24,
+                    textureCount: 24
                 }
             },
             space: {
@@ -971,15 +1029,17 @@ export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
         tags: ['Orthogonal Triad', 'Google 3D Tiles', 'Vector Cadastre', 'Street View 360', '90° Corners', '3D Window Bays', 'C++20 Clang'],
         highlightBadge: 'ORTHOGONAL TRIAD',
         artifact: {
-            id: 'art-demo-omnispatial-synthesis',
+            // New id so stale persisted copies of the old single-GLB artifact (session
+            // storage, version history, project graph head) never shadow the real stages.
+            id: 'art-demo-omnispatial-real-stages',
             type: '3d-scene',
             title: 'Omnispatial Multi-Sensor 3D Synthesis Pipeline',
-            summary: 'Minimal Orthogonal Basis Proof fusing 3D Photo Tiles, 2D Vector Cadastre, and Street View 360 into true 3D geometry.',
+            summary: 'The real Google 3D Tile scan of the ESB district: raw, refined by tile_refine (hidden shells culled, facades rectified, photometric relief), and refined with its original photo textures, as one switchable, co-registered stage set.',
             data: demoOmnispatialSynthesisData,
             createdAt: new Date().toISOString(),
             version: 1
         },
-        introMessage: 'Welcome to the Omnispatial Multi-Sensor 3D Synthesis Pipeline demo! This showcase tests our Minimal Orthogonal Basis theory: raw 3D photogrammetric tiles provide volumetric massing, 2D vector tiles rectify corners to exact 90° right angles, and Street View 360 carves true 0.22m 3D recessed window bays and Art Deco entrance reveals.'
+        introMessage: 'Welcome to the Omnispatial Multi-Sensor 3D Synthesis Pipeline demo! This scene loads the real pipeline models, not render plates: Stage 1 is the raw Google 3D Tile scan in clay, Stage 2 is the same scan refined by tile_refine (hidden shells culled, facades and corners rectified, relief lifted from the tile photos) in clay, and Stage 3 is the refined scan with its original photo textures. Drag to orbit, Shift-drag or right-drag to pan, and use the mouse wheel to zoom. Click any part of the model to pick it individually, and use the stage switcher in the top-right corner of the viewport to swap between Stage 1, 2 and 3.'
     },
     {
         id: 'demo-nextgen-astra-viewport',

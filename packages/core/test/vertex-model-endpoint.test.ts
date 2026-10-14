@@ -19,8 +19,8 @@ describe('Vertex model endpoint', () => {
 
     it('targets the global endpoint by default, where the Gemini 3.x default model is published', () => {
         delete process.env.SCRATCHBOX_VERTEX_LOCATION;
-        const url = new GeminiClient().vertexModelUrl('proj', 'gemini-3.7-flash', 'streamGenerateContent');
-        expect(url).toBe('https://aiplatform.googleapis.com/v1/projects/proj/locations/global/publishers/google/models/gemini-3.7-flash:streamGenerateContent?alt=sse');
+        const url = new GeminiClient().vertexModelUrl('proj', 'gemini-3.8-flash', 'streamGenerateContent');
+        expect(url).toBe('https://aiplatform.googleapis.com/v1/projects/proj/locations/global/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse');
     });
 
     it('honours a regional override with the regional host', () => {

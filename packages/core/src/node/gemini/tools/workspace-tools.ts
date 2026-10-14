@@ -10,6 +10,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import type { SymbolKind } from '../../../common/context-graph-protocol';
+import { resolveWithinRoot, PathTraversalError } from '../../security/path-guard';
 import type { ToolDeclaration, ToolHandler, ToolContext, ToolHandlerOutcome } from './types';
 
 export const IGNORED_DIRS = [
@@ -67,7 +68,23 @@ export function assertSafeWorkspacePath(filePath: string, operation: string): vo
 
 const asString = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback);
 const asNumber = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined);
-const resolveInRoot = (root: string, rel: string): string => (path.isAbsolute(rel) ? rel : path.join(root, rel));
+const PLAN_MODE_READ_ONLY_MESSAGE = 'Planning Mode is active (read-only). File modifications are not permitted during the planning phase. Present your plan to the user for approval first.';
+
+/**
+ * Resolves a tool-supplied path against the workspace root, confining it to that root
+ * (absolute paths, `../` escapes and symlinked escapes are refused). `/` and `` mean the root itself.
+ */
+function resolveInRoot(root: string, rel: string): string {
+    const candidate = !rel || rel === '/' ? '.' : rel;
+    try {
+        return resolveWithinRoot(root, candidate);
+    } catch (err) {
+        if (err instanceof PathTraversalError) {
+            throw new Error(`Access denied: path "${rel}" is outside the workspace root. Workspace tools may only access files inside the workspace.`);
+        }
+        throw err;
+    }
+}
 
 // ============================================================================
 // Workspace Declarations & Handlers
@@ -307,7 +324,7 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
 
     async workspace_write_file(args, ctx) {
         if (ctx.request.mode === 'plan') {
-            throw new Error('Planning Mode is active (read-only). File modifications are not permitted during the planning phase. Present your plan to the user for approval first.');
+            throw new Error(PLAN_MODE_READ_ONLY_MESSAGE);
         }
         const relPath = asString(args.filePath);
         assertSafeWorkspacePath(relPath, 'write');
@@ -324,7 +341,7 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
 
     async workspace_apply_diff(args, ctx) {
         if (ctx.request.mode === 'plan') {
-            throw new Error('Planning Mode is active (read-only). File modifications are not permitted during the planning phase. Present your plan to the user for approval first.');
+            throw new Error(PLAN_MODE_READ_ONLY_MESSAGE);
         }
         const relPath = asString(args.filePath);
         assertSafeWorkspacePath(relPath, 'diff edit');
@@ -519,6 +536,11 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
     },
 
     async workspace_run_command(args, ctx) {
+        if (ctx.request.mode === 'plan') {
+            // Shell commands can mutate the workspace (mv, cp, sed -i, redirects), so they are
+            // gated exactly like write_file/apply_diff during the read-only planning phase.
+            throw new Error(PLAN_MODE_READ_ONLY_MESSAGE);
+        }
         const root = ctx.workspaceRoot;
         const cmd = asString(args.command);
         if (!cmd) throw new Error('command is required.');

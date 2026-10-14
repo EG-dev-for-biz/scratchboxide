@@ -1616,7 +1616,7 @@ You MUST respond with a single valid JSON object containing no markdown wrapping
                 {
                     prompt: `Execute stage "${stage.id}" within the global goal plan. Respond with your structured stage JSON output.`,
                     systemInstruction,
-                    model: 'gemini-3.7-flash',
+                    model: 'gemini-3.8-flash',
                     temperature: 0.2,
                     thinkingBudget: 1024
                 },

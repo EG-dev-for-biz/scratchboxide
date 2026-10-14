@@ -38,6 +38,20 @@ const BACKEND_HOST = '127.0.0.1';
 const BACKEND_PORT = parseInt(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001', 10);
 const TOOLS_PORT = parseInt(process.env.SCRATCHBOX_TOOLS_PORT || '3002', 10);
 const DEV_RENDERER_URL = process.env.SCRATCHBOX_RENDERER_URL || `http://${BACKEND_HOST}:${process.env.SCRATCHBOX_WEB_PORT || '3030'}`;
+const API_BASE = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+
+/** True when `url` is on one of the origins the app renderer is loaded from. */
+function isAppOrigin(url: string | undefined): boolean {
+    if (!url) {
+        return false;
+    }
+    try {
+        const origin = new URL(url).origin;
+        return origin === new URL(DEV_RENDERER_URL).origin || origin === new URL(API_BASE).origin;
+    } catch {
+        return false;
+    }
+}
 
 const isDev = (process.env.NODE_ENV === 'development') ||
     (!app.isPackaged && process.env.NODE_ENV !== 'production' && process.env.SCRATCHBOX_STANDALONE !== 'true');
@@ -198,12 +212,33 @@ function registerIpcHandlers(): void {
         return dialog.showSaveDialog(mainWindow, dialogOptions as SaveDialogOptions);
     });
 
-    ipcMain.handle('scratchbox:execute-command', async (_event, command: unknown, cwd?: unknown) => {
+    ipcMain.handle('scratchbox:execute-command', async (event, command: unknown, cwd?: unknown) => {
         if (typeof command !== 'string' || !command.trim()) {
             return { stdout: '', stderr: 'Invalid command', code: 1 };
         }
+        // Only the app's own top-level page may ask, never a subframe
+        // (sandboxes, proxied pages) or a navigated-away document.
+        const sender = event.senderFrame;
+        if (!mainWindow || !sender || sender.parent !== null || !isAppOrigin(sender.url)) {
+            return { stdout: '', stderr: 'Command execution is not permitted from this frame', code: 1 };
+        }
+        const workingDir = typeof cwd === 'string' && cwd.trim() ? cwd : process.cwd();
+        // A shell string from the renderer may originate in model output or
+        // injected content, so the user must see and approve it every time.
+        const { response } = await dialog.showMessageBox(mainWindow, {
+            type: 'warning',
+            buttons: ['Cancel', 'Run'],
+            defaultId: 0,
+            cancelId: 0,
+            title: 'Run shell command?',
+            message: 'Scratchbox wants to run this command:',
+            detail: `${command}\n\nWorking directory: ${workingDir}`,
+            noLink: true
+        });
+        if (response !== 1) {
+            return { stdout: '', stderr: 'Command cancelled by user', code: 1 };
+        }
         return new Promise(resolve => {
-            const workingDir = typeof cwd === 'string' && cwd.trim() ? cwd : process.cwd();
             exec(command, { cwd: workingDir, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
                 resolve({
                     stdout: stdout || '',
@@ -216,7 +251,7 @@ function registerIpcHandlers(): void {
 }
 
 function createWindow(): void {
-    const apiBase = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+    const apiBase = API_BASE;
     const icon = resolveAppIconPath();
     mainWindow = new BrowserWindow({
         width: 1440,
@@ -298,7 +333,7 @@ function createWindow(): void {
 
     // Keep the renderer on the app origin; anything else opens in the system browser.
     mainWindow.webContents.on('will-navigate', (event, url) => {
-        const allowed = url.startsWith(DEV_RENDERER_URL) || url.startsWith('file://') || url.startsWith(apiBase);
+        const allowed = isAppOrigin(url);
         if (!allowed) {
             event.preventDefault();
             try {

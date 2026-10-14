@@ -114,7 +114,7 @@ describe('Unified Long-Running Agent & Multi-Domain Verification Suite', () => {
 
         const plan = {
             planId: `dag_plan_${Date.now()}`,
-            orchestratorModel: 'gemini-3.7-flash',
+            orchestratorModel: 'gemini-3.8-flash',
             goal: 'Deconstruct architectural geometry and audit lighting',
             tasks: [
                 {

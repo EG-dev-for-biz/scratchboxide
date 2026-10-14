@@ -75,7 +75,7 @@ export const MemoriesTab: React.FC = () => {
                             <span className="sb-badge-unified sb-badge-blue">ACTIVE</span>
                         </div>
                         <div className="sb-cursor-row-desc">
-                            Automatically supply active writing voice profiles, visual presets, and project facts to Gemini 3.7 Flash and subagent orchestrators.
+                            Automatically supply active writing voice profiles, visual presets, and project facts to Gemini 3.8 Flash and subagent orchestrators.
                         </div>
                     </div>
                     <button

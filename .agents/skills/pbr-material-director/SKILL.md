@@ -76,6 +76,17 @@ The engine natively supports continuous arbitrary power-of-two and rectangular r
 - **8K ($8192 \times 8192$)**: IMAX, large-format close-up VFX (~5 s).
 - **12K ($12288 \times 12288$)**: Ultimate cinematic fidelity, competitive with Hyper3D Rodin Master tier (~12 s).
 
+### 4. Chroma-Preserving Shadow Lifting (Prohibition on Scalar RGB Scaling)
+- **The Scalar Desaturation Trap**: When de-lighting aerial or photographic stone textures, never multiply $R, G, B$ by a scalar `lift = 1.0 + k * shadowFrac^2`. In colorimetry, scaling RGB in dark crevices raises luminance without expanding chroma, bleaching rich amber/ochre travertine recesses into flat chalky grey.
+- **Polar Chroma Expansion**: De-lighting kernels must transform into polar chroma spaces (HSV or CIELAB) and expand saturation proportionally to shadow depth:
+  $$S_{\text{lifted}} = \operatorname{clamp}\left( S \cdot \left(1.0 + \beta \left(\frac{L_{\text{target}} - L}{L_{\text{target}}}\right)\right), \; 0.0, \; 1.0 \right)$$
+  This guarantees that shadowed arcades and architectural recesses preserve authentic warm limonite mineral patinas.
+
+### 5. Cross-Source Gamut Balancing & Diffuse Studio Wash Mitigation
+- **Gamut Disparity in Hybrid Scenes**: Digital DCC botanical libraries author foliage textures with high chlorophyll chromaticity ($S \approx 0.60\text{–}0.70$), while aerial photogrammetric stone has naturally low chroma ($S \approx 0.17\text{–}0.24$) due to atmospheric Rayleigh haze.
+- **Biophysical Eco-Region Clamping**: When instancing botanical foliage into photogrammetric scenes, clamp foliage saturation to the target eco-region ($S \approx 0.38\text{–}0.42$ for Mediterranean arid pine/cypress) to prevent trees from appearing hyper-saturated or tropical.
+- **Achromatic Studio Wash Compensation**: Neutral studio environment maps in Three.js or `<model-viewer>` scatter pure white diffuse light across pale stone ($R \approx 1.0, M = 0.0$). Apply a $+15\%\text{–}25\%$ warm-chroma compensation curve on pale limestone/travertine albedos to prevent the stone from appearing washed out and bleached.
+
 ---
 
 ## 3. Gemini Agent Tools & TypeScript APIs
@@ -175,3 +186,101 @@ $$\mathbf{n}_{\text{rnm}} = \operatorname{normalize}\begin{pmatrix} \mathbf{n}_{
 | **Compute & Cost** | **Zero GPU / Apple Clang native ($0)** | High-cost cloud GPU cluster ($$$) | Local Desktop GPU | Host Dependent | NVIDIA GPU (PyTorch) |
 | **Binary glTF 2.0 Output** | **Direct binary `.glb` plane & plinth** | Cloud export mesh | Manual export | DCC Export | Python numpy export |
 | **Curvature Wear Coupling** | **Analytical Scharr curvature burnish** | Probabilistic texture diffusion | Manual painting layer | Manual procedural graph | ❌ |
+
+---
+
+## 6. Scenario-Adaptive UV Wrapping & Seam Mitigation Engine (`AdaptiveUvOrchestrator`)
+
+### 1. Organic vs. Non-Organic Continuous Classification ($\Omega \in [0.0, 1.0]$)
+In compliance with the **Adaptive Domain Architecture (ADA)**, surface classification is evaluated as a continuous organicity index $\Omega \in [0.0, 1.0]$:
+- **Organic ($\Omega \to 1.0$)**: Living anatomy, articulated limbs, digits, creatures, and deforming surfaces. Requires strain-preserving parameterization and natural occlusion seams.
+- **Non-Organic ($\Omega \to 0.0$)**: Hard-surface CAD, architectural edifices, infrastructure, props, and photogrammetric scans. Requires rigid, reveal-aligned, or completely seam-free unwrapping.
+
+### 2. Scenario-Adaptive UV Strategy & Seam Decision Matrix
+
+| Scenario & Mesh Topology | Optimal UV Strategy | Seam Placement | Seam Adjustment & Mitigation Technique |
+| :--- | :--- | :--- | :--- |
+| **Organic: Deforming Limbs / Digits / Avatars** ($\Omega \ge 0.5$, articulated) | **$\mathrm{SO}(3)$ Carrier-Frame Conformal Sheets** (`scratchbox_carrier.hpp`) | Natural anatomical occlusion lines (lateral inter-digital neutral line; extensor-flexor boundary). NEVER on joints, knuckles, or front faces. | **Hermite Margin Overlap** ($\ge 8\,\text{px}$) + **Continuous Metric Arc-Length** ($v$-axis) + **MikkTSpace Handedness** ($\mathbf{B} = \operatorname{sign} \cdot (\mathbf{N} \times \mathbf{T})$) + **Harmonic Dirichlet Boundary Smoothing**. |
+| **Non-Organic: Rigid CAD / Vehicles / Props** ($\Omega < 0.5$, boxy/compact) | **Height-Blended Triplanar** (`scratchbox_triplanar.hpp`) | **Zero Seams (Seam-Free)**! | No UV unwrapping or seam cuts needed. Normal-weighted projection ($w_i = n_i^k / \sum n_j^k$, $k \ge 4$) blended with height map transitions. |
+| **Non-Organic: High-Rise Architecture** ($\Omega < 0.5, Y \ge 35\text{m}$, aspect $\ge 1.5$) | **Elevation-Stratified Conformal Mapping** (`AlgorithmicUvEngine.ts`) | Architectural reveals, internal re-entrant corners, window mullions, and chamfers. | **Wall-Corner Co-Planar Unfolding** + **16-pixel Dilation Gutters** (`gutterDilationPixels: 16`) + **Laplacian Crevice Ambient Occlusion** (visually masks micro-filtering differences) + **NOAA Solar Inverse De-Lighting**. |
+| **Non-Organic: Massive Photogrammetric Tile Scans** ($\ge 10$ submeshes) | **Hybrid Recipe PBR** (`HybridRecipePbrService.ts`) | Existing drone camera capture boundaries. | **KD-Tree Boundary Seam Welding** (`weldTileBoundarySeams`) + **Affine Edge Altitude (`_SBEDGEH`) & Octahedral Neighbor Normals (`_SBNBRA`)** for GPU micro-beveling across seams without geometry mutation. |
+
+### 3. Agent Tool Invocations
+
+#### A. Probe Mesh Topology & Compute Seam Strategy
+```json
+{
+  "name": "pbr_probe_mesh_topology",
+  "arguments": {
+    "meshPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/character_arm.glb",
+    "domain": "organic"
+  }
+}
+```
+**Returns**: `domainClassification`, `organicityIndex`, `recommendedStrategy`, `seamStrategy` (`seamPlacement`, `seamMitigationMethod`, `recommendedGutterPaddingPx`, `tangentSpaceHandednessGuaranteed`, `seamRationale`).
+
+#### B. Synthesize & Apply Adaptive PBR to Target Mesh
+```json
+{
+  "name": "pbr_synthesize_material",
+  "arguments": {
+    "targetMeshPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/empire_state_building.glb",
+    "domain": "nonorganic",
+    "uvStrategy": "elevation_stratified_conformal",
+    "solarCoordinates": {
+      "latitude": 40.748817,
+      "longitude": -73.985428,
+      "timestampIso": "2026-10-11T14:30:00Z"
+    },
+    "seamPaddingPx": 16,
+    "resolution": "4K"
+  }
+}
+```
+
+---
+
+## 7. Low-Frequency Ratio De-Lighting & Direct Street View Texture Remaking
+
+### 1. Inadequacy of Scalar Shadow Multiplication
+When de-lighting photogrammetric surfaces, scalar adjustments ($V \leftarrow V + k \cdot \text{shadow}$) leave visible transition penumbras and fail to replace the muddy, low-chroma pixel data inside subterranean or shadowed vaults.
+
+### 2. Separable 2D Box Filter Illuminance Extraction
+1. Extract low-frequency spatial illumination using a fast separable box filter:
+   $$Y_{\text{smooth}}(x, y) = \frac{1}{(2R+1)^2} \sum_{i=-R}^R \sum_{j=-R}^R Y(x+i, y+j), \quad R = 16$$
+2. Compute high-frequency structural detail ratio:
+   $$D(x, y) = \operatorname{clamp}\left(\frac{Y(x, y)}{\max(0.04f, Y_{\text{smooth}}(x, y))}, \; 0.72, \; 1.28\right)$$
+3. Modulate authentic Street View PBR base albedo (e.g. Roman Travertine $L \approx 70.3, a \approx 6.0, b \approx 28.6$):
+   $$\mathbf{a}_{\text{out}}(x, y) = \text{Albedo}_{\text{StreetView}} \cdot D(x, y)$$
+4. Deep shadows ($Y \approx Y_{\text{smooth}}$) seamlessly resolve to pure sunlit stone, while high-frequency ashlar joints and carving relief ($Y < Y_{\text{smooth}}$) are razor-sharp.
+
+---
+
+## 8. Organic Anatomical Zero-Gap UV Wrapping & Multi-Aspect Blending
+
+### 1. The 4 Failure Modes of Planar/Dual-Aspect Organic Texturing
+When mapping 2D photographic references onto complex 3D organic anatomy (such as hands, articulated digits, limbs, and facial structures), naive planar or dual-aspect projection fails due to:
+1. **Grazing-Angle Singularity ($\mathbf{n} \cdot \mathbf{d}_{\text{cam}} \to 0$)**: Surface area shrinks to zero ($dA_{\text{proj}} \to 0$), smearing 1-pixel photo edges into elongated longitudinal streaks down the sides of fingers and limbs.
+2. **Missing Lateral Information**: Planar front/back photos provide zero observation of the lateral flanks ($360^\circ$ perimeter).
+3. **Gutter Mipmap Bleed**: Abrupt UV island termination without dilation causes GPU downsampling to sample the black background ($[0,0,0,0]$), creating dark outline fringes on outer silhouettes.
+4. **Histological Decal Warping**: Keratin nail plates, cuticles, and subcutaneous carbon tattoos warp when subjected to whole-body global unwraps.
+
+### 2. The Five-Stage Zero-Gap Solution Architecture
+To guarantee 100% gap-free, non-stretched, and artifact-free organic unwraps:
+1. **$\mathrm{SO}(3)$ Carrier-Frame Cylindrical Unwrapping (`scratchbox_carrier.hpp`)**:
+   - Sweeps an orthonormal Frenet-Serret frame ($\mathbf{T}, \mathbf{N}, \mathbf{B}$) along kinematic bone splines $\mathbf{C}(t)$.
+   - Evaluates continuous metric longitudinal arc-length $v = t^*$ and circumferential polar angle $u = \frac{\theta + \pi}{2\pi}$.
+   - Unwraps digits $360^\circ$ with a single seam routed strictly along the lateral inter-digital contact line (hidden from view).
+2. **Trilateral Normal-Weighted Continuous Blending**:
+   - $w_{\text{dorsal}} = \max(0, \mathbf{n} \cdot \mathbf{d}_{\text{dorsal}})^2$
+   - $w_{\text{palmar}} = \max(0, \mathbf{n} \cdot \mathbf{d}_{\text{palmar}})^2$
+   - $w_{\text{flank}} = \max(0, 1.0 - (w_{\text{dorsal}} + w_{\text{palmar}}))$
+   - Fills lateral profiles with melanin-calibrated procedural skin micro-texture matching the subject's Fitzpatrick scale.
+3. **Voronoi Gutter Dilation ($\ge 16\,\text{px}$)**:
+   - Floods border pixels outward into atlas gutters via Euclidean distance transforms (`AlgorithmicUvEngine.ts`), preventing black mipmap downsampling fringes on silhouettes.
+4. **Decoupled Local Decal Frames**:
+   - Pinned orthonormal frames for fingernails ($x_n, y_n \in [-1, 1]$) with 4-zone biological histology (ivory free edge, vascular bed, onychodermal band, lunula).
+   - Dedicated local UV window for tattoos/scars ($u \in [0.46, 0.66], v \in [0.84, 0.94]$) with dermal carbon scattering and $C^1$ Hermite alpha tapers.
+5. **Screen-Space AI Inpainting for Concave Clefts**:
+   - Orbits camera into concave saddles (interdigital web spaces, negative Gaussian curvature $K < 0$).
+   - Renders 24px occlusion ribbon mask, calls Imagen 3 / Gemini multimodal inpainting, and inverse-reprojects seamless skin bridges back into the UV atlas.

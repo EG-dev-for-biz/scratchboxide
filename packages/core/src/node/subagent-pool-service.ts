@@ -163,7 +163,7 @@ export class SubagentPoolService {
         this.maxWorkers = Math.min(Math.max(config.maxConcurrentWorkers || 32, 1), 64);
         this.defaultTimeoutMs = config.defaultWorkerTimeoutMs || 30000;
         this.enableBackpressure = config.enableAdaptiveBackpressure ?? true;
-        this.orchestratorModel = config.orchestratorModel || 'gemini-3.7-flash';
+        this.orchestratorModel = config.orchestratorModel || 'gemini-3.8-flash';
         this.workerModel = config.workerModel || 'gemini-3.5-flash-lite';
         this.blackboard = new SubagentBlackboard();
         this.geminiService = geminiService;

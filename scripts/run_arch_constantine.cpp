@@ -99,9 +99,9 @@ int main(int argc, char* argv[]) {
     auto tStart = std::chrono::high_resolution_clock::now();
 
     // 1. Historical & Architectural Geodetic Coordinates
-    // District placement coordinates from total_entities.json
-    Vec3 worldCenter(-139.62f, 31.5f, -45.28f);
-    float worldYawRad = 0.29025f; // 16.63 degrees in radians
+    // Ground elevation verified at Y = 5.70m, Footprint Center: (-140.60, -47.11), Yaw: 111.21 deg (1.9411 rad)
+    Vec3 worldCenter(-140.60f, 5.70f, -47.11f);
+    float worldYawRad = 1.9411f; // 111.21 degrees in radians
     float cosYaw = std::cos(worldYawRad);
     float sinYaw = std::sin(worldYawRad);
 

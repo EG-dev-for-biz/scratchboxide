@@ -219,7 +219,7 @@ export class SelfImprovementService {
     }
 
     /**
-     * Construct a grounded TDD self-correction prompt for Google Gemini 3.7 / 3.5.
+     * Construct a grounded TDD self-correction prompt for Google Gemini 3.8 / 3.5.
      */
     buildTddCorrectionPrompt(context: {
         testName: string;

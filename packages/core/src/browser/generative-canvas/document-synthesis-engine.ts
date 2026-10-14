@@ -565,7 +565,7 @@ export function buildDynamicThemeOnTheFly(promptOrTitle: string, extraContext?: 
             secondaryColor,
             diagramType,
             openingHeaderTitle,
-            narrativeParagraph1: 'Modern artificial intelligence architectures have transcended rigid monolithic models to embrace dynamic multi-agent reasoning meshes. Leveraging state-of-the-art transformer backbones like Gemini 3.7 Flash with adaptive thinking budgets, reasoning engines orchestrate autonomous subagents capable of continuous tool execution, multimodal comprehension, and iterative refinement.',
+            narrativeParagraph1: 'Modern artificial intelligence architectures have transcended rigid monolithic models to embrace dynamic multi-agent reasoning meshes. Leveraging state-of-the-art transformer backbones like Gemini 3.8 Flash with adaptive thinking budgets, reasoning engines orchestrate autonomous subagents capable of continuous tool execution, multimodal comprehension, and iterative refinement.',
             narrativeParagraph2: 'The core of the reasoning loop hinges on self-reflective chain-of-thought processing and explicit tool grounding via the Model Context Protocol (MCP). By separating high-level strategic planning from localized execution subagents, the architecture achieves deterministic tool invocations and verifiable outputs.',
             narrativeParagraph3: 'Context management utilizes multi-head latent attention (MLA) and efficient KV-cache quantization to sustain long-horizon context windows exceeding one million tokens. This enables real-time ingestion of complex multi-file codebases, high-resolution visual inputs, and historical interaction transcripts without semantic degradation.',
             narrativeParagraph4: 'Autonomous subagent collaboration occurs over structured reactive channels, allowing specialized subagents—such as researchers, test runners, and visual synthesizers—to execute concurrently. Guardrails including automated lint feedback, schema validation, and sandboxed command execution ensure safe, deterministic operations.',
@@ -573,13 +573,13 @@ export function buildDynamicThemeOnTheFly(promptOrTitle: string, extraContext?: 
             callout: {
                 title: 'Autonomous Reasoning & Tool Mesh',
                 type: 'info',
-                content: 'Integrating Gemini 3.7 Flash thinking budgets with Model Context Protocol (MCP) creates a resilient, self-correcting agent execution loop.'
+                content: 'Integrating Gemini 3.8 Flash thinking budgets with Model Context Protocol (MCP) creates a resilient, self-correcting agent execution loop.'
             },
             comparisonMatrix: {
                 title: 'Neural Architecture & Inference Strategies',
                 headers: ['Model Architecture', 'Context Window', 'Reasoning Latency', 'Tool Grounding Fidelity', 'Deployment Profile'],
                 rows: [
-                    ['Gemini 3.7 Flash Thinking', '1,000,000+ Tokens', 'Adaptive (Dynamic Budget)', 'Native MCP Grounding (High)', 'Production Primary'],
+                    ['Gemini 3.8 Flash Thinking', '1,000,000+ Tokens', 'Adaptive (Dynamic Budget)', 'Native MCP Grounding (High)', 'Production Primary'],
                     ['Dense Transformer LLM', '128,000 Tokens', 'Static Linear Attention', 'Prompt-Engineered Functions', 'Legacy Baseline'],
                     ['Mixture of Experts (MoE)', '256,000 Tokens', 'High Throughput / Sparse', 'API Connector Plugins', 'General Serving'],
                     ['Recurrent State Space Models', '500,000 Tokens', 'Ultra-Low Sub-Second', 'Restricted Context Recall', 'Specialized Edge']
@@ -587,7 +587,7 @@ export function buildDynamicThemeOnTheFly(promptOrTitle: string, extraContext?: 
             },
             interactiveNodes: [
                 { id: 'node-ingest', label: 'Multi-Modal Ingestion', detail: 'Prompt, audio, and visual token vectorization' },
-                { id: 'node-attention', label: 'Attention Core', detail: 'Gemini 3.7 Flash thinking budget and reasoning trace' },
+                { id: 'node-attention', label: 'Attention Core', detail: 'Gemini 3.8 Flash thinking budget and reasoning trace' },
                 { id: 'node-mcp', label: 'MCP Live Tool Mesh', detail: 'Grounded real-world execution with schema verification' },
                 { id: 'node-stage', label: 'Live Visual Stage', detail: 'Real-time reactive canvas primitive synchronization' }
             ],
@@ -980,7 +980,7 @@ export function generateAiArchitectureSvg(title: string): string {
   <g transform="translate(260, 40)">
     <rect width="180" height="150" rx="10" fill="rgba(30, 41, 59, 0.85)" stroke="#818cf8" stroke-width="1.5"/>
     <text x="14" y="32" fill="#818cf8" font-size="11" font-weight="700" font-family="-apple-system, sans-serif">2. ATTENTION ENGINE</text>
-    <text x="14" y="60" fill="#f8fafc" font-size="13" font-weight="600" font-family="-apple-system, sans-serif">Gemini 3.7 Flash Core</text>
+    <text x="14" y="60" fill="#f8fafc" font-size="13" font-weight="600" font-family="-apple-system, sans-serif">Gemini 3.8 Flash Core</text>
     <text x="14" y="85" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Multi-Head Flash Attention</text>
     <text x="14" y="103" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Adaptive Thinking Budget</text>
     <text x="14" y="121" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Subagent DAG Routing</text>
@@ -1050,7 +1050,7 @@ export function generateGenericArchitectureSvg(title: string): string {
     <rect width="170" height="130" rx="10" fill="rgba(30, 41, 59, 0.85)" stroke="#ec4899" stroke-width="1.5"/>
     <text x="16" y="35" fill="#ec4899" font-size="11" font-weight="700" font-family="-apple-system, sans-serif">3. REASONING CORE</text>
     <text x="16" y="65" fill="#f8fafc" font-size="13" font-weight="600" font-family="-apple-system, sans-serif">AI &amp; MCP Tool Mesh</text>
-    <text x="16" y="90" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Gemini 3.7 Flash Engine</text>
+    <text x="16" y="90" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Gemini 3.8 Flash Engine</text>
     <text x="16" y="110" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Live MCP Protocols</text>
   </g>
 
@@ -1370,7 +1370,7 @@ export function generateMotivatedLocationSection(theme: DocumentTheme, contextTe
             type: 'location-image',
             locationName: 'AI Systems Laboratory & High-Density GPU Cluster (Cambridge MA)',
             coordinates: { lat: 42.3619, lng: -71.0906 },
-            caption: 'Accelerated computing research cluster training and serving multi-modal Gemini 3.7 reasoning and autonomous agent subpools.',
+            caption: 'Accelerated computing research cluster training and serving multi-modal Gemini 3.8 reasoning and autonomous agent subpools.',
             visualPrompt: 'Advanced neural research computing laboratory with high-density GPU supercluster, glowing fiber arrays, and holographic architectural monitors.',
             imageUrl: 'https://images.unsplash.com/photo-1620712943543-bcc4688e7485?auto=format&fit=crop&w=1600&q=85',
             mapZoom: 14,
@@ -1558,7 +1558,7 @@ export function generateMotivatedSvgSection(theme: DocumentTheme, contextText?: 
             svgContent: generateAiArchitectureSvg(title || 'AI Architecture'),
             interactiveNodes: [
                 { id: 'node-ingest', label: 'Multi-Modal Ingestion', detail: 'Prompt, audio, and visual token vectorization' },
-                { id: 'node-attention', label: 'Attention Core', detail: 'Gemini 3.7 Flash thinking budget and reasoning trace' },
+                { id: 'node-attention', label: 'Attention Core', detail: 'Gemini 3.8 Flash thinking budget and reasoning trace' },
                 { id: 'node-mcp', label: 'MCP Live Tool Mesh', detail: 'Grounded real-world execution with schema verification' },
                 { id: 'node-stage', label: 'Live Visual Stage', detail: 'Real-time reactive canvas primitive synchronization' }
             ]

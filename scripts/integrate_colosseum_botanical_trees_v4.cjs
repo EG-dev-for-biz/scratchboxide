@@ -26,39 +26,51 @@ async function main() {
     const { PhotogrammetricTerrainHarmonizerService } = await import(servicePath);
 
     // Define Authentic Cadastral Monument Footprint for Flavian Amphitheatre (Colosseum)
-    // Centroid: [+16.72, -21.01], Semi-Major: 102.0m, Semi-Minor: 100.0m, Yaw: 18.36 deg (0.3204 rad)
+    // Major axis is aligned with North-South (Z-axis, radiusZ = 122.0m, fully enclosing northern attic to Z = -153.7m)
+    // Minor axis is aligned with East-West (X-axis, radiusX = 98.0m, fully enclosing outer arcades)
+    // Center: (12.58, -31.69), rotation = -5 deg
+    // 1.0m buffer strictly protects the monument structure while allowing adjacent facade tree blobs to be detected and replaced
     const colosseumPoly = PhotogrammetricTerrainHarmonizerService.generateEllipticalPolygon(
-        16.72,
-        -21.01,
-        102.0,
-        100.0,
+        12.58,
+        -31.69,
+        98.0,
+        122.0,
         64,
-        18.36 * Math.PI / 180
+        -5.0 * Math.PI / 180
     );
 
     // Define Cadastral Building & Monument Polygons (Pillar 2: 100% Immutable Dirichlet Locks)
-    // 1. Northern Block (Via Nicola Salvi / Piazza del Colosseo commercial & residential palazzo strictly X: [20, 58], Z: [-180, -135])
-    const northSalviPoly = PhotogrammetricTerrainHarmonizerService.generateRectangularPolygon(20, -180, 58, -135);
+    // 1. Northern Block (Via Nicola Salvi / Piazza del Colosseo commercial & residential palazzo strictly X: [15, 65], Z: [-190, -130])
+    const northSalviPoly = PhotogrammetricTerrainHarmonizerService.generateRectangularPolygon(15, -190, 65, -130);
     // 2. Northwest Block (Via dei Fori Imperiali / Metro Colosseo palazzo block)
-    const nwMetroPoly = PhotogrammetricTerrainHarmonizerService.generateRectangularPolygon(-110, -195, -60, -150);
-    // 3. Western Monumental Complex (Arch of Constantine & Temple of Venus and Roma platform)
-    const westMonumentsPoly = PhotogrammetricTerrainHarmonizerService.generateRectangularPolygon(-180, -55, -60, 60);
+    const nwMetroPoly = PhotogrammetricTerrainHarmonizerService.generateRectangularPolygon(-120, -200, -55, -145);
+    // 3. Arch of Constantine (Strict metric footprint: X in [-150, -131], Z in [-62, -33])
+    const archPoly = PhotogrammetricTerrainHarmonizerService.generateRectangularPolygon(-150, -62, -131, -33);
+    // 4. Temple of Venus and Roma platform podium (Strict metric footprint: X in [-175, -105], Z in [12, 65])
+    const venusPoly = PhotogrammetricTerrainHarmonizerService.generateRectangularPolygon(-175, 12, -105, 65);
 
     console.log(`[Botanical Integration v4] Executing dynamic 3D photo tile canopy resection & harmonization...`);
     const result = await PhotogrammetricTerrainHarmonizerService.harmonizeGlb(baseBuf, {
         autoResectStands: true,
         renderMode: RENDER_MODE,
+        datumCutoffElevation: -15.0,
         monumentPolygons: [
             {
                 id: 'monument_flavian_amphitheatre',
-                name: 'Flavian Amphitheatre (Colosseum)',
+                name: 'Flavian Amphitheatre & Pedestrian Concourse',
                 localPolygonEnu: colosseumPoly,
+                bufferMeters: 1.0
+            },
+            {
+                id: 'monument_arch_constantine',
+                name: 'Arch of Constantine Footprint',
+                localPolygonEnu: archPoly,
                 bufferMeters: 2.0
             },
             {
-                id: 'monument_arch_constantine_and_venus',
-                name: 'Arch of Constantine & Temple of Venus/Roma',
-                localPolygonEnu: westMonumentsPoly,
+                id: 'monument_temple_of_venus',
+                name: 'Temple of Venus and Roma Platform',
+                localPolygonEnu: venusPoly,
                 bufferMeters: 2.0
             }
         ],
@@ -67,34 +79,31 @@ async function main() {
                 id: 'building_nicola_salvi_palazzo',
                 name: 'Via Nicola Salvi Palazzo Block',
                 localPolygonEnu: northSalviPoly,
-                bufferMeters: 2.0
+                bufferMeters: 3.0
             },
             {
                 id: 'building_metro_colosseo_block',
                 name: 'Metro Colosseo Palazzo Block',
                 localPolygonEnu: nwMetroPoly,
-                bufferMeters: 2.0
+                bufferMeters: 3.0
             }
         ],
-        resectGridCellSizeMeters: 3.0,
-        minTreeHeightMeters: 2.2,
-        maxTreeHeightMeters: 34.0,
-        minTrunkSpacingMeters: 4.0,
-        fadeRadiusMultiplier: 1.45,
-        maxCanopyThicknessMeters: 34.0,
+        resectGridCellSizeMeters: 2.5,
+        minTreeHeightMeters: 2.0,
+        maxTreeHeightMeters: 80.0,
+        minTrunkSpacingMeters: 6.5,
+        fadeRadiusMultiplier: 1.8,
+        maxCanopyThicknessMeters: 80.0,
         autoSamplePerimeterElevation: true,
         preserveRuins: true,
-        // Pillar 1: Full Topological Curtain Wall Excision
         pruneCurtainWalls: true,
         curtainWallSpanThresholdMeters: 3.5,
-        // Pillar 3: Continuous Biome Canopy Resection (Parco del Celio & Colle Oppio Full Coverage)
         enableDenseCanopyFill: true,
-        denseCanopySpacingMeters: 7.0,
-        // Pillar 4: Perimeter Staging & Floating Shard Pruning
-        maxPerimeterRadiusMeters: 185.0,
-        perimeterCenter: [16.72, -21.01],
+        denseCanopySpacingMeters: 8.0,
+        pruneElevatedCanopyTriangles: true,
         pruneSkyShards: true,
-        skyShardHagThresholdMeters: 26.0
+        maxPerimeterRadiusMeters: 260.0,
+        perimeterCenter: [12.58, -31.69]
     });
 
     console.log(`[Botanical Integration v4] Processed ${result.totalVertices.toLocaleString()} vertices.`);

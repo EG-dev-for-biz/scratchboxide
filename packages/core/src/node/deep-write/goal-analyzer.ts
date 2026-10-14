@@ -94,7 +94,7 @@ You MUST respond with a single valid JSON object containing no markdown codebloc
                 {
                     prompt: userPrompt,
                     systemInstruction,
-                    model: 'gemini-3.7-flash',
+                    model: 'gemini-3.8-flash',
                     temperature: 0.1, // low temperature for high JSON structure accuracy
                     thinkingBudget: 512
                 },

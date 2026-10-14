@@ -10,7 +10,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
-import { spawn, exec } from 'child_process';
+import * as os from 'os';
+import { spawn, execFile, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
 import { GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler';
@@ -26,7 +27,7 @@ import type {
   SensorFormatPreset
 } from '../../common/optics/physical-camera-protocol';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // WGS-84 Ellipsoid constants
 const WGS84_A = 6378137.0; // semi-major axis (meters)
@@ -146,7 +147,17 @@ export interface TileBlockoutPipelineRequest {
   headlessChromePath?: string;
   ffmpegPath?: string;
   port?: number;
+  /**
+   * Explicit opt-in for tests only: skip Chrome/network and write clearly-marked placeholder artifacts
+   * (result and manifest carry `mock: true`). Never used as an automatic fallback.
+   */
   offlineMock?: boolean;
+  /** Reject if headless Chrome has not uploaded its first frame within this many ms (default 35000). */
+  timeoutMs?: number;
+  /** Reject if the runner makes no HTTP request for this many ms at any point (default max(60s, 2x maxSettleWaitMs + 10s)). */
+  inactivityTimeoutMs?: number;
+  /** Hard cap on total render time before FFmpeg encoding (default scales with frame count and maxSettleWaitMs). */
+  overallTimeoutMs?: number;
   atomicBuildingIntegrity?: boolean;
   enforceZeroBuildingClipping?: boolean;
   zenithAltitudeMeters?: number;
@@ -201,6 +212,8 @@ export interface Google3DTile3DObjectResult {
   quality: Google3DTileQualityReport;
   render: Google3DTileRenderOutput;
   manifest: Record<string, any>;
+  /** True only when produced by the explicit `offlineMock` test mode (placeholder data, not real tiles). */
+  mock?: boolean;
   error?: string;
 }
 
@@ -246,6 +259,8 @@ export interface TileClayBlockoutRunnerRequest {
 
 export interface TileClayBlockoutRunnerResult {
   success: boolean;
+  /** True only when produced by the explicit `offlineMock` test mode (placeholder data, not real tiles). */
+  mock?: boolean;
   videoRef: '<VIDEO_REF_0>';
   blockoutVideoPath: string;
   webmVideoPath?: string;
@@ -270,6 +285,8 @@ export interface TileClayBlockoutRunnerResult {
 
 export interface TileBlockoutPipelineResult {
   success: boolean;
+  /** True only when produced by the explicit `offlineMock` test mode (placeholder data, not real tiles). */
+  mock?: boolean;
   videoRef: '<VIDEO_REF_0>';
   outputVideoPath: string;
   glbBuffer?: Buffer;
@@ -1741,27 +1758,84 @@ export class Google3DTileBlockoutPipelineService {
     }
 
     const htmlContent = this.generateRunnerHtml(resolvedRequest, cameraPathData);
+    // The runner HTML is served from memory under a unique per-run route; nothing is written to disk.
     const runnerFileName = `s4d_tile_blockout_runner_${Date.now()}_${Math.floor(Math.random() * 100000)}.html`;
+
+    const maxSettleWaitMs = request.lodQuality?.maxSettleWaitMs ?? 25000;
+    const startupTimeoutMs = request.timeoutMs ?? 35000;
+    const inactivityTimeoutMs = request.inactivityTimeoutMs ?? Math.max(60000, maxSettleWaitMs * 2 + 10000);
+    const overallTimeoutMs = request.overallTimeoutMs
+      ?? Math.max(5 * 60000, cameraPathData.totalFrames * (maxSettleWaitMs + 5000) + 120000);
 
     const requestedPort = request.port ?? 0;
     let actualPort = requestedPort;
     let receivedFrames = 0;
-    let chromeProcess: any = null;
-    let watchdogTimer: any = null;
+    let chromeProcess: ChildProcess | null = null;
+    let chromeExitDescription: string | null = null;
+    let chromeStderrTail = '';
+    let chromeProfileDir: string | null = null;
+    let watchdogTimer: NodeJS.Timeout | null = null;
     let collisionAuditData: any = null;
     let uploadedGlbBuffer: Buffer | null = null;
-    let meshStats: Google3DTileMeshStats = {
-      name: `Google3DTile_${isTexturedMode ? 'textured' : 'clay'}`,
-      submeshCount: 1,
-      vertexCount: 1024,
-      triangleCount: 512,
-      boundingBox: { min: [-100, -10, -100], max: [100, 200, 100] },
-      boundingSphere: { center: [0, 50, 0], radius: 150 }
-    };
+    let meshStats: Google3DTileMeshStats | null = null;
+    let doneReceived = false;
+    let settled = false;
+    const startedAt = Date.now();
+    let lastActivityAt = startedAt;
 
     return new Promise<TileBlockoutPipelineResult>((resolve, reject) => {
+      const removeChromeProfileDir = () => {
+        if (!chromeProfileDir) return;
+        try {
+          fs.rmSync(chromeProfileDir, { recursive: true, force: true });
+          chromeProfileDir = null;
+        } catch (_) {
+          // Chrome may still be releasing files; the exit handler retries.
+        }
+      };
+
+      const stopWatchdog = () => {
+        if (watchdogTimer) {
+          clearInterval(watchdogTimer);
+          watchdogTimer = null;
+        }
+      };
+
+      const killChrome = () => {
+        if (chromeProcess && chromeProcess.exitCode === null && chromeProcess.signalCode === null) {
+          try { chromeProcess.kill('SIGKILL'); } catch (_) {}
+        }
+      };
+
+      const settleReject = (reason: string) => {
+        if (settled) return;
+        settled = true;
+        stopWatchdog();
+        killChrome();
+        try { server.close(); } catch (_) {}
+        removeChromeProfileDir();
+        const tail = chromeStderrTail.trim();
+        reject(new Error(
+          `[Google 3D Tiles] Blockout render failed: ${reason}. ` +
+          `Frames received: ${receivedFrames}/${cameraPathData.totalFrames}. ` +
+          `Chrome binary: ${this.chromePath}` +
+          (chromeExitDescription ? `; ${chromeExitDescription}` : '') +
+          `. Set CHROME_BIN or pass headlessChromePath to point at a working Chrome/Chromium; ` +
+          `pass offlineMock: true only for tests that must not launch a browser.` +
+          (tail ? `\nChrome stderr (tail):\n${tail}` : '')
+        ));
+      };
+
+      const settleResolve = (result: TileBlockoutPipelineResult) => {
+        if (settled) return;
+        settled = true;
+        removeChromeProfileDir();
+        resolve(result);
+      };
+
       const server = http.createServer((req, res) => {
         const reqPath = req.url?.split('?')[0] || '';
+        lastActivityAt = Date.now();
 
         if (req.method === 'POST' && reqPath === '/report-collision-audit') {
           let body = '';
@@ -1789,11 +1863,12 @@ export class Google3DTileBlockoutPipelineService {
               if (payload.base64) {
                 uploadedGlbBuffer = Buffer.from(payload.base64, 'base64');
                 fs.writeFileSync(outputGlbPath, uploadedGlbBuffer);
+                meshStats = payload.meshStats
+                  || this.computeGlbMeshStats(uploadedGlbBuffer, `Google3DTile_${isTexturedMode ? 'textured' : 'clay'}`);
               }
-              if (payload.meshStats) {
-                meshStats = payload.meshStats;
+              if (meshStats) {
+                console.log(`📦 3D Tile Mesh Object exported: ${meshStats.vertexCount} vertices, ${meshStats.triangleCount} triangles -> ${outputGlbPath}`);
               }
-              console.log(`📦 3D Tile Mesh Object exported: ${meshStats.vertexCount} vertices, ${meshStats.triangleCount} triangles -> ${outputGlbPath}`);
               res.writeHead(200, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ status: 'ok' }));
             } catch (err: any) {
@@ -1809,6 +1884,7 @@ export class Google3DTileBlockoutPipelineService {
           req.on('data', chunk => { body += chunk; });
           req.on('end', () => {
             try {
+              lastActivityAt = Date.now();
               const payload = JSON.parse(body);
               const base64Data = payload.dataUrl.replace(/^data:image\/jpeg;base64,/, '');
               const buffer = Buffer.from(base64Data, 'base64');
@@ -1824,10 +1900,10 @@ export class Google3DTileBlockoutPipelineService {
                 maxTilesLoaded = payload.tilesLoaded;
               }
 
-              // Extract Frame 0 for Stage 2 Nano Banana Restyling (<IMAGE_REF_0> precursor)
+              // Extract Frame 0 for Stage 2 Nano Banana Restyling (<IMAGE_REF_0> precursor).
+              // The PNG is transcoded from this JPEG by FFmpeg once recording completes.
               if (payload.index === 0) {
                 fs.writeFileSync(firstFramePath, buffer);
-                fs.writeFileSync(firstFramePngPath, buffer);
               }
 
               // Save Storyboard beat keyframes
@@ -1856,96 +1932,130 @@ export class Google3DTileBlockoutPipelineService {
         }
 
         if (req.method === 'POST' && reqPath === '/done') {
-          if (watchdogTimer) clearTimeout(watchdogTimer);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ status: 'complete' }));
+          if (settled || doneReceived) return;
+          doneReceived = true;
+          stopWatchdog();
 
-          console.log(`🎉 All ${cameraPathData.totalFrames} 3D tile frames received! Compiling video via FFmpeg...`);
-          if (chromeProcess) {
-            chromeProcess.kill();
+          console.log(`🎉 ${receivedFrames}/${cameraPathData.totalFrames} 3D tile frames received! Compiling video via FFmpeg...`);
+          killChrome();
+
+          if (receivedFrames === 0) {
+            settleReject('Runner signalled completion without uploading any frames');
+            return;
           }
 
-          // Compile MP4 and optionally WebM via FFmpeg
-          const compileCmd = `${this.ffmpegPath} -y -framerate ${fps} -i "${framesDir}/frame_%04d.jpg" -c:v libx264 -pix_fmt yuv420p -b:v ${bitrate} "${outputVideoPath}"`;
-
-          exec(compileCmd, async (ffmpegErr, _stdout, stderr) => {
-            server.close();
-
-            if (ffmpegErr) {
-              return reject(new Error(`FFmpeg MP4 encoding failed: ${ffmpegErr.message}\n${stderr}`));
-            }
-
-            if (compileWebm) {
-              const webmPath = outputVideoPath.replace(/\.mp4$/, '.webm');
+          (async () => {
+            try {
+              server.close();
+              const frameGlob = path.join(framesDir, 'frame_%04d.jpg');
+              // Compile MP4 and optionally WebM via FFmpeg (argument arrays: no shell interpolation of paths)
               try {
-                await execAsync(`${this.ffmpegPath} -y -framerate ${fps} -i "${framesDir}/frame_%04d.jpg" -c:v libvpx-vp9 -b:v 4M "${webmPath}"`);
-              } catch (e) {
-                // WebM is optional
+                await execFileAsync(this.ffmpegPath, [
+                  '-y', '-framerate', String(fps), '-i', frameGlob,
+                  '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-b:v', String(bitrate), outputVideoPath
+                ], { maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60000 });
+              } catch (ffmpegErr: any) {
+                throw new Error(`FFmpeg MP4 encoding failed (${this.ffmpegPath}): ${ffmpegErr.message}\n${ffmpegErr.stderr || ''}`);
               }
-            }
 
-            const avgSettle = settleTimes.length > 0
-              ? settleTimes.reduce((a, b) => a + b, 0) / settleTimes.length
-              : 0;
+              try {
+                await execFileAsync(this.ffmpegPath, ['-y', '-i', firstFramePath, firstFramePngPath], { timeout: 60000 });
+              } catch (pngErr: any) {
+                throw new Error(`FFmpeg failed to transcode Frame 0 to PNG (${firstFramePngPath}): ${pngErr.message}\n${pngErr.stderr || ''}`);
+              }
 
-            const manifest = {
-              version: '1.0.0',
-              timestamp: new Date().toISOString(),
-              videoRef: '<VIDEO_REF_0>',
-              outputVideoPath,
-              outputGlbPath,
-              firstFramePath,
-              firstFramePngPath,
-              storyboardPaths,
-              fps,
-              totalFrames: cameraPathData.totalFrames,
-              durationSec: cameraPathData.durationSec,
-              geoAnchor: request.geoAnchor,
-              errorTarget: request.lodQuality?.errorTarget ?? 0.5,
-              renderMode: request.atmosphere?.renderMode ?? 'clay',
-              mesh: meshStats,
-              collisionAudit: collisionAuditData || {
-                enabled: request.collision?.enabled ?? true,
-                violationsDetected: 0,
-                minClearanceMeters: 17.0,
-                maxElevationAdjustment: 0,
-                pathAdjusted: false,
-                auditPassed: true
-              },
-              tileMetrics: {
-                totalFramesCaptured: receivedFrames,
-                averageSettleTimeMs: Math.round(avgSettle),
-                maxTilesLoaded,
+              if (compileWebm) {
+                const webmPath = outputVideoPath.replace(/\.mp4$/, '.webm');
+                try {
+                  await execFileAsync(this.ffmpegPath, [
+                    '-y', '-framerate', String(fps), '-i', frameGlob, '-c:v', 'libvpx-vp9', '-b:v', '4M', webmPath
+                  ], { maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60000 });
+                } catch (e: any) {
+                  // WebM is an optional secondary encode; the MP4 above is the canonical output.
+                  console.warn(`[Google 3D Tiles] Optional WebM encode failed: ${e?.message || e}`);
+                }
+              }
+
+              if (!uploadedGlbBuffer || !meshStats) {
+                throw new Error(
+                  `Runner finished recording (${receivedFrames} frames, video at ${outputVideoPath}) but never exported the 3D tile GLB ` +
+                  `(GLTFExporter failed or no tiles were loaded); refusing to report a mesh for ${outputGlbPath}`
+                );
+              }
+
+              const avgSettle = settleTimes.length > 0
+                ? settleTimes.reduce((a, b) => a + b, 0) / settleTimes.length
+                : 0;
+
+              const collisionAudit = collisionAuditData || (() => {
+                // Runner did not report an audit: compute it analytically from the camera path.
+                const audit = this.auditCameraClearance(cameraPathData, request.collision?.minClearanceMeters ?? 5.0);
+                return {
+                  enabled: request.collision?.enabled ?? true,
+                  violationsDetected: audit.violationsDetected,
+                  minClearanceMeters: audit.minClearanceMeters,
+                  maxElevationAdjustment: 0,
+                  pathAdjusted: false,
+                  auditPassed: audit.auditPassed
+                };
+              })();
+
+              const manifest = {
+                version: '1.0.0',
+                timestamp: new Date().toISOString(),
+                videoRef: '<VIDEO_REF_0>',
+                mock: false,
+                outputVideoPath,
+                outputGlbPath,
+                firstFramePath,
+                firstFramePngPath,
+                storyboardPaths,
+                fps,
+                totalFrames: cameraPathData.totalFrames,
+                durationSec: cameraPathData.durationSec,
+                geoAnchor: request.geoAnchor,
                 errorTarget: request.lodQuality?.errorTarget ?? 0.5,
-                renderMode: request.atmosphere?.renderMode ?? 'clay'
-              }
-            };
+                renderMode: request.atmosphere?.renderMode ?? 'clay',
+                mesh: meshStats,
+                collisionAudit,
+                tileMetrics: {
+                  totalFramesCaptured: receivedFrames,
+                  averageSettleTimeMs: Math.round(avgSettle),
+                  maxTilesLoaded,
+                  errorTarget: request.lodQuality?.errorTarget ?? 0.5,
+                  renderMode: request.atmosphere?.renderMode ?? 'clay'
+                }
+              };
 
-            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+              fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
-            const glbBuffer = uploadedGlbBuffer || (fs.existsSync(outputGlbPath) ? fs.readFileSync(outputGlbPath) : Buffer.alloc(0));
-
-            resolve({
-              success: true,
-              videoRef: '<VIDEO_REF_0>',
-              outputVideoPath,
-              glbBuffer,
-              glbPath: outputGlbPath,
-              mesh: meshStats,
-              firstFramePath,
-              firstFramePngPath,
-              storyboardPaths,
-              manifestPath,
-              frameCount: cameraPathData.totalFrames,
-              fps,
-              durationSec: cameraPathData.durationSec,
-              geoAnchor: resolvedRequest.geoAnchor!,
-              resolvedAddress: resolvedRequest.address,
-              collisionAudit: manifest.collisionAudit,
-              tileMetrics: manifest.tileMetrics,
-              manifest
-            });
-          });
+              settleResolve({
+                success: true,
+                mock: false,
+                videoRef: '<VIDEO_REF_0>',
+                outputVideoPath,
+                glbBuffer: uploadedGlbBuffer,
+                glbPath: outputGlbPath,
+                mesh: meshStats,
+                firstFramePath,
+                firstFramePngPath,
+                storyboardPaths,
+                manifestPath,
+                frameCount: receivedFrames,
+                fps,
+                durationSec: cameraPathData.durationSec,
+                geoAnchor: resolvedRequest.geoAnchor!,
+                resolvedAddress: resolvedRequest.address,
+                collisionAudit: manifest.collisionAudit,
+                tileMetrics: manifest.tileMetrics,
+                manifest
+              });
+            } catch (err: any) {
+              settleReject(err?.message || String(err));
+            }
+          })();
           return;
         }
 
@@ -2006,29 +2116,24 @@ export class Google3DTileBlockoutPipelineService {
         }
       });
 
-      const cleanup = () => {
-        try {
-          const legacyPath = path.join(process.cwd(), 'public/s4d_tile_blockout_runner.html');
-          if (fs.existsSync(legacyPath)) {
-            fs.unlinkSync(legacyPath);
-          }
-        } catch (_) {}
-      };
+      server.on('error', (err: NodeJS.ErrnoException) => {
+        settleReject(`Blockout recorder HTTP server error on 127.0.0.1:${requestedPort}: ${err.message}`);
+      });
 
       server.listen(requestedPort, '127.0.0.1', () => {
         const addr = server.address();
         actualPort = typeof addr === 'object' && addr ? addr.port : requestedPort;
         console.log(`🌐 3D Tile blockout recorder server running on http://127.0.0.1:${actualPort}`);
 
-        const tmpDir = fs.mkdtempSync('/tmp/chrome_tile_blockout_');
+        chromeProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome_tile_blockout_'));
         const args = [
           '--headless=new',
-          `--user-data-dir=${tmpDir}`,
+          `--user-data-dir=${chromeProfileDir}`,
           '--no-sandbox',
           '--no-proxy-server',
           '--proxy-bypass-list=*',
           '--use-gl=angle',
-          '--use-angle=metal',
+          ...(process.platform === 'darwin' ? ['--use-angle=metal'] : []),
           '--run-all-compositor-stages-before-draw',
           '--disable-gpu-vsync',
           '--disable-frame-rate-limit',
@@ -2036,7 +2141,7 @@ export class Google3DTileBlockoutPipelineService {
           `http://127.0.0.1:${actualPort}/${runnerFileName}?mode=${encodeURIComponent(request.atmosphere?.renderMode || 'clay')}`
         ];
 
-        console.log(`🚀 Launching headless Chrome with Apple Metal GPU in ${tmpDir}`);
+        console.log(`🚀 Launching headless Chrome (${this.chromePath}) with profile ${chromeProfileDir}`);
         const cleanEnv = { ...process.env };
         delete cleanEnv.http_proxy;
         delete cleanEnv.https_proxy;
@@ -2045,61 +2150,50 @@ export class Google3DTileBlockoutPipelineService {
         delete cleanEnv.HTTPS_PROXY;
         delete cleanEnv.ALL_PROXY;
 
-        chromeProcess = spawn(this.chromePath, args, { env: cleanEnv });
+        const proc = spawn(this.chromePath, args, { env: cleanEnv });
+        chromeProcess = proc;
 
-        let didFallback = false;
-        const triggerFallback = (reason: string) => {
-          if (didFallback) return;
-          didFallback = true;
-          clearTimeout(watchdogTimer);
-          cleanup();
-          try { server.close(); } catch (_) {}
-          console.warn(`[Google 3D Tiles] ${reason}. Gracefully falling back to geodetic tile synthesis.`);
-          this.runOfflineMock(
-            resolvedRequest,
-            cameraPathData,
-            outputVideoPath,
-            outputGlbPath,
-            framesDir,
-            firstFramePath,
-            firstFramePngPath,
-            storyboardsDir,
-            manifestPath,
-            fps,
-            storyboardBeats
-          ).then(resolve).catch(reject);
-        };
-
-        const watchdogTimeoutMs = (request as any).timeoutMs ?? (process.platform === 'darwin' ? 35000 : 35000);
-        watchdogTimer = setTimeout(() => {
-          if (receivedFrames === 0) {
-            try { chromeProcess?.kill('SIGKILL'); } catch (_) {}
-            triggerFallback(`Headless Chrome watchdog timeout after ${watchdogTimeoutMs}ms`);
+        // Startup, inactivity and overall deadlines: a stall at any point (before or after the first frame)
+        // kills Chrome, closes the server and rejects instead of hanging forever.
+        watchdogTimer = setInterval(() => {
+          if (settled || doneReceived) return;
+          const now = Date.now();
+          if (receivedFrames === 0 && now - startedAt > startupTimeoutMs) {
+            settleReject(`Headless Chrome produced no frames within the ${startupTimeoutMs}ms startup timeout`);
+          } else if (now - lastActivityAt > inactivityTimeoutMs) {
+            settleReject(`Headless Chrome stalled: no runner activity for ${inactivityTimeoutMs}ms`);
+          } else if (now - startedAt > overallTimeoutMs) {
+            settleReject(`Blockout render exceeded the ${overallTimeoutMs}ms overall timeout`);
           }
-        }, watchdogTimeoutMs);
+        }, Math.max(50, Math.min(1000, Math.floor(startupTimeoutMs / 4))));
 
-        chromeProcess.stdout?.on('data', (d: Buffer) => console.log('[Chrome]:', d.toString().trim()));
-        chromeProcess.stderr?.on('data', (d: Buffer) => {
-          const s = d.toString().trim();
-          if (!s.includes('GLX') && !s.includes('dbus')) {
-            console.log('[Chrome]:', s);
+        proc.stdout?.on('data', (d: Buffer) => console.log('[Chrome]:', d.toString().trim()));
+        proc.stderr?.on('data', (d: Buffer) => {
+          const s = d.toString();
+          chromeStderrTail = (chromeStderrTail + s).slice(-4000);
+          const trimmed = s.trim();
+          if (!trimmed.includes('GLX') && !trimmed.includes('dbus')) {
+            console.log('[Chrome]:', trimmed);
           }
         });
-        chromeProcess.on('error', (err: any) => {
-          triggerFallback(`Headless Chrome launch error: ${err.message}`);
+        proc.on('error', (err: Error) => {
+          settleReject(`Headless Chrome failed to launch: ${err.message}`);
         });
 
-        chromeProcess.on('exit', (code: number) => {
-          if (code !== 0 && receivedFrames === 0) {
-            triggerFallback(`Headless Chrome exited with code ${code}`);
+        proc.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+          chromeExitDescription = `Chrome exited with code ${code}${signal ? ` (signal ${signal})` : ''}`;
+          if (!doneReceived) {
+            settleReject(`Headless Chrome exited before the runner finished (code ${code}${signal ? `, signal ${signal}` : ''})`);
           }
+          removeChromeProfileDir();
         });
       });
     });
   }
 
   /**
-   * Offline mock execution for fast unit tests without requiring a GPU display or live network.
+   * Explicit opt-in offline mock (`offlineMock: true`) for unit tests that must not launch a browser or touch the network.
+   * Never used as a fallback: every artifact it writes is placeholder data, and the result/manifest carry `mock: true`.
    */
   private async runOfflineMock(
     request: TileBlockoutPipelineRequest,
@@ -2116,9 +2210,13 @@ export class Google3DTileBlockoutPipelineService {
   ): Promise<TileBlockoutPipelineResult> {
     const storyboardPaths: string[] = [];
 
-    // Create minimal valid 1x1 JPEG placeholder buffer
+    // Minimal valid 1x1 placeholder images (JPEG for frames/beats, PNG for the Frame 0 PNG path)
     const mockJpgBuffer = Buffer.from(
       '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=',
+      'base64'
+    );
+    const mockPngBuffer = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
       'base64'
     );
 
@@ -2129,7 +2227,7 @@ export class Google3DTileBlockoutPipelineService {
 
       if (i === 0) {
         fs.writeFileSync(firstFramePath, mockJpgBuffer);
-        fs.writeFileSync(firstFramePngPath, mockJpgBuffer);
+        fs.writeFileSync(firstFramePngPath, mockPngBuffer);
       }
 
       const beatStep = Math.max(1, Math.floor(cameraPathData.totalFrames / storyboardBeats));
@@ -2142,41 +2240,27 @@ export class Google3DTileBlockoutPipelineService {
       }
     }
 
-    // Write empty or mock video file if ffmpeg is bypassed, preserving existing production videos
+    // Placeholder (non-playable) video marker; never overwrite an existing real video
     if (!fs.existsSync(outputVideoPath) || fs.statSync(outputVideoPath).size <= 100) {
-      fs.writeFileSync(outputVideoPath, Buffer.from('mock-mp4-blockout-video'));
+      fs.writeFileSync(outputVideoPath, Buffer.from('offline-mock placeholder: not a real MP4'));
     }
 
-    // Generate synthetic 3D tile mesh and pack standard binary glTF 2.0 (.glb)
+    // Synthetic geodetic tile packed as binary glTF 2.0 (.glb). Never reuse a pre-existing (possibly stale or
+    // production) GLB at the output path: if one exists, write the mock to a clearly named sibling instead.
     const isTextured = request.mode === 'full-texture' || request.mode === 'textured' || request.atmosphere?.renderMode === 'textured';
     const originAlt = {
       lat: request.geoAnchor!.lat,
       lng: request.geoAnchor!.lng,
       alt: request.geoAnchor!.elevation ?? 0
     };
-    let mergedGlb: Buffer;
-    let vertexCount = 0;
-    let triangleCount = 0;
-    // Offline mock: reuse what the caller already wrote at the output path, otherwise write an explicitly synthetic tile
-    if (!fs.existsSync(outputGlbPath)) {
-      const syntheticTile = Google3DTileCrawlerBaker.createSyntheticGeodeticTile(originAlt, 200);
-      fs.writeFileSync(outputGlbPath, Google3DTileCrawlerBaker.mergeTileMeshes([syntheticTile], originAlt).glbBuffer);
-    }
-    // Canonical output: Express and Vite serve public/models directly without mirroring
-    mergedGlb = fs.readFileSync(outputGlbPath);
-    const parsedStats = this.parseGlbMeshStatistics(mergedGlb);
-    if (!parsedStats) throw new Error(`Could not read mesh statistics from ${outputGlbPath}`);
-    vertexCount = parsedStats.vertexCount;
-    triangleCount = parsedStats.triangleCount;
-    const submeshCount = parsedStats.submeshCount;
-    const meshStats: Google3DTileMeshStats = {
-      name: `Google3DTile_${isTextured ? 'textured' : 'clay'}`,
-      vertexCount,
-      triangleCount,
-      submeshCount,
-      boundingBox: { min: [-100, -10, -100], max: [100, 200, 100] },
-      boundingSphere: { center: [0, 50, 0], radius: 150 }
-    };
+    const mockGlbPath = fs.existsSync(outputGlbPath)
+      ? outputGlbPath.replace(/(\.glb)?$/i, '.offline_mock.glb')
+      : outputGlbPath;
+    const syntheticTile = Google3DTileCrawlerBaker.createSyntheticGeodeticTile(originAlt, 200);
+    const mergedGlb = Google3DTileCrawlerBaker.mergeTileMeshes([syntheticTile], originAlt).glbBuffer;
+    fs.writeFileSync(mockGlbPath, mergedGlb);
+    const meshStats = this.computeGlbMeshStats(mergedGlb, `Google3DTile_${isTextured ? 'textured' : 'clay'}_offline_mock`);
+    if (!meshStats) throw new Error(`Could not read mesh statistics from synthetic offline-mock tile ${mockGlbPath}`);
 
     const collisionAudit = this.auditCameraClearance(
       cameraPathData,
@@ -2187,8 +2271,9 @@ export class Google3DTileBlockoutPipelineService {
       version: '1.0.0',
       timestamp: new Date().toISOString(),
       videoRef: '<VIDEO_REF_0>',
+      mock: true,
       outputVideoPath,
-      outputGlbPath,
+      outputGlbPath: mockGlbPath,
       firstFramePath,
       firstFramePngPath,
       storyboardPaths,
@@ -2208,9 +2293,10 @@ export class Google3DTileBlockoutPipelineService {
         auditPassed: collisionAudit.auditPassed
       },
       tileMetrics: {
+        // No tiles were streamed in offline mock mode: settle/tile metrics are zero, not fabricated.
         totalFramesCaptured: cameraPathData.totalFrames,
-        averageSettleTimeMs: 45,
-        maxTilesLoaded: 524,
+        averageSettleTimeMs: 0,
+        maxTilesLoaded: 0,
         errorTarget: request.lodQuality?.errorTarget ?? 0.5,
         renderMode: request.atmosphere?.renderMode ?? 'clay'
       }
@@ -2220,10 +2306,11 @@ export class Google3DTileBlockoutPipelineService {
 
     return {
       success: true,
+      mock: true,
       videoRef: '<VIDEO_REF_0>',
       outputVideoPath,
       glbBuffer: mergedGlb,
-      glbPath: outputGlbPath,
+      glbPath: mockGlbPath,
       mesh: meshStats,
       firstFramePath,
       firstFramePngPath,
@@ -2241,9 +2328,35 @@ export class Google3DTileBlockoutPipelineService {
   }
 
   /**
+   * Builds mesh statistics (counts + POSITION accessor bounds) directly from a binary glTF buffer.
+   */
+  private computeGlbMeshStats(glbBuffer: Buffer, name: string): Google3DTileMeshStats | null {
+    const stats = this.parseGlbMeshStatistics(glbBuffer);
+    if (!stats || !stats.bounds) return null;
+    const { min, max } = stats.bounds;
+    const center: [number, number, number] = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+    return {
+      name,
+      vertexCount: stats.vertexCount,
+      triangleCount: stats.triangleCount,
+      submeshCount: stats.submeshCount,
+      boundingBox: { min, max },
+      boundingSphere: {
+        center,
+        radius: Math.hypot((max[0] - min[0]) / 2, (max[1] - min[1]) / 2, (max[2] - min[2]) / 2)
+      }
+    };
+  }
+
+  /**
    * Fast binary glTF 2.0 chunk-0 JSON parser to extract exact geometry statistics.
    */
-  private parseGlbMeshStatistics(glbBuffer: Buffer): { vertexCount: number; triangleCount: number; submeshCount: number } | null {
+  private parseGlbMeshStatistics(glbBuffer: Buffer): {
+    vertexCount: number;
+    triangleCount: number;
+    submeshCount: number;
+    bounds?: { min: [number, number, number]; max: [number, number, number] };
+  } | null {
     try {
       if (glbBuffer.length < 20) return null;
       const magic = glbBuffer.toString('utf8', 0, 4);
@@ -2256,6 +2369,7 @@ export class Google3DTileBlockoutPipelineService {
       let vertexCount = 0;
       let triangleCount = 0;
       let submeshCount = 0;
+      let bounds: { min: [number, number, number]; max: [number, number, number] } | undefined;
       if (Array.isArray(gltf.meshes) && Array.isArray(gltf.accessors)) {
         for (const mesh of gltf.meshes) {
           if (!mesh.primitives) continue;
@@ -2264,6 +2378,17 @@ export class Google3DTileBlockoutPipelineService {
             if (prim.attributes && prim.attributes.POSITION !== undefined) {
               const acc = gltf.accessors[prim.attributes.POSITION];
               if (acc && typeof acc.count === 'number') vertexCount += acc.count;
+              // glTF 2.0 requires min/max on POSITION accessors; use them for exact local bounds
+              if (acc && Array.isArray(acc.min) && Array.isArray(acc.max) && acc.min.length >= 3 && acc.max.length >= 3) {
+                if (!bounds) {
+                  bounds = { min: [acc.min[0], acc.min[1], acc.min[2]], max: [acc.max[0], acc.max[1], acc.max[2]] };
+                } else {
+                  for (let k = 0; k < 3; k++) {
+                    bounds.min[k] = Math.min(bounds.min[k], acc.min[k]);
+                    bounds.max[k] = Math.max(bounds.max[k], acc.max[k]);
+                  }
+                }
+              }
             }
             if (prim.indices !== undefined) {
               const acc = gltf.accessors[prim.indices];
@@ -2272,7 +2397,7 @@ export class Google3DTileBlockoutPipelineService {
           }
         }
       }
-      return { vertexCount, triangleCount, submeshCount: Math.max(1, submeshCount) };
+      return { vertexCount, triangleCount, submeshCount: Math.max(1, submeshCount), bounds };
     } catch {
       return null;
     }
@@ -2452,21 +2577,18 @@ export class Google3DTileBlockoutPipelineService {
       }
     });
 
-    const mesh: Google3DTileMeshStats = result.mesh || {
-      name: `Google3DTile_${isTextured ? 'textured' : 'clay'}`,
-      vertexCount: 1024,
-      triangleCount: 512,
-      submeshCount: 1,
-      boundingBox: { min: [-100, -10, -100], max: [100, 200, 100] },
-      boundingSphere: { center: [0, 50, 0], radius: 150 }
-    };
+    if (!result.mesh || !result.glbBuffer || result.glbBuffer.length === 0) {
+      throw new Error(`[fetch3DObject] Blockout runner returned no 3D tile mesh for ${outputGlbPath}`);
+    }
+    const mesh: Google3DTileMeshStats = result.mesh;
 
     return {
       success: result.success,
+      mock: result.mock === true,
       mode,
       geoAnchor,
       resolvedAddress: result.resolvedAddress || (typeof queryOrCoords === 'string' ? queryOrCoords : undefined),
-      glbBuffer: result.glbBuffer || Buffer.alloc(0),
+      glbBuffer: result.glbBuffer,
       glbPath: result.glbPath || outputGlbPath,
       mesh,
       quality: {
@@ -2686,8 +2808,13 @@ export async function runTileClayBlockoutRunner(
   const defaultWebm = outputVideoPath.replace(/\.mp4$/i, '.webm');
   const webmVideoPath = fs.existsSync(defaultWebm) ? defaultWebm : undefined;
 
+  if (!result.mesh) {
+    throw new Error(`[runTileClayBlockoutRunner] Blockout runner returned no clay mesh statistics for ${outputGlbPath}`);
+  }
+
   return {
     success: result.success,
+    mock: result.mock === true,
     videoRef: '<VIDEO_REF_0>',
     blockoutVideoPath: result.outputVideoPath,
     webmVideoPath,
@@ -2696,14 +2823,7 @@ export async function runTileClayBlockoutRunner(
     clayGlbPath: result.glbPath || outputGlbPath,
     glbBuffer: result.glbBuffer,
     cameraPath: parsedCameraPath,
-    meshStats: result.mesh || {
-      name: 'Google3DTile_clay',
-      vertexCount: 1024,
-      triangleCount: 512,
-      submeshCount: 1,
-      boundingBox: { min: [-100, -10, -100], max: [100, 200, 100] },
-      boundingSphere: { center: [0, 50, 0], radius: 150 }
-    },
+    meshStats: result.mesh,
     geoAnchor: result.geoAnchor,
     resolvedAddress: result.resolvedAddress,
     frameCount: result.frameCount,

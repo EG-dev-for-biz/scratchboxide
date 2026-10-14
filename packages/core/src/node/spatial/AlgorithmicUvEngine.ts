@@ -90,6 +90,7 @@ export interface DetailSynthesisOptions {
   protectRoadMarkings?: boolean; // default true (edge exclusion mask on traffic stripes)
   protectFoliage?: boolean;
   gutterDilationPixels?: number; // default 4
+  partCategory?: string;         // Part-aware category override (e.g. 'foliage', 'road', 'architecture')
 }
 
 export interface SolarDelightingConfig {
@@ -179,6 +180,8 @@ export interface AlgorithmicUvOptions {
   khrMaterials?: KhrMaterialsConfig;
   enableBoundarySeamWelding?: boolean;       // multi-tile KD-tree seam welding
   boundaryToleranceMeters?: number;          // default 0.05
+  submeshCategoryMap?: Record<number, string>;
+  enablePartAwarePbr?: boolean;              // Dispatches biophysical material contracts per submesh part
 }
 
 export interface PbrDecompositionResult {
@@ -518,7 +521,8 @@ export class AlgorithmicUvEngine {
       protectRoads: options.detailSynthesis?.protectRoads ?? true,
       protectRoadMarkings: options.detailSynthesis?.protectRoadMarkings ?? true,
       protectFoliage: options.detailSynthesis?.protectFoliage ?? true,
-      gutterDilationPixels: options.detailSynthesis?.gutterDilationPixels ?? 4
+      gutterDilationPixels: options.detailSynthesis?.gutterDilationPixels ?? 4,
+      partCategory: options.detailSynthesis?.partCategory ?? ''
     };
 
     const pbrOpts: Required<PbrDecompositionOptions> = {
@@ -605,6 +609,23 @@ export class AlgorithmicUvEngine {
         // Texture processing if material references baseColorTexture
         if (prim.material !== undefined) {
           const mat = materials[prim.material];
+          // Only explicit part categories enter the part-aware branch; arbitrary material
+          // names (e.g. Google tiles 'Material_0') must not override the lithology distribution.
+          const partCat = options.submeshCategoryMap?.[meshIdx] ||
+            mat?.extras?.category;
+
+          const primDetailOpts: Required<DetailSynthesisOptions> = { ...detailOpts };
+          const primPbrOpts: Required<PbrDecompositionOptions> = { ...pbrOpts };
+          if (partCat) {
+            primDetailOpts.partCategory = String(partCat);
+            if (options.enablePartAwarePbr) {
+              const partContract = resolveBiophysicalContract(String(partCat));
+              primDetailOpts.cavitationDepthPower = partContract.cavitationDepthPower;
+              primDetailOpts.strataFrequency = partContract.strataFrequency;
+              primPbrOpts.defaultStoneRoughness = partContract.roughness;
+            }
+          }
+
           const texInfo = mat?.pbrMetallicRoughness?.baseColorTexture;
           if (texInfo && texInfo.index !== undefined) {
             const texture = glb.json.textures[texInfo.index];
@@ -616,8 +637,8 @@ export class AlgorithmicUvEngine {
               const imgBuffer = glb.bin.subarray(bufferView.byteOffset, bufferView.byteOffset + bufferView.byteLength);
 
               const processed = await this.processTextureBuffer(imgBuffer, {
-                detailOpts,
-                pbrOpts,
+                detailOpts: primDetailOpts,
+                pbrOpts: primPbrOpts,
                 mode
               });
 
@@ -1785,8 +1806,37 @@ export class AlgorithmicUvEngine {
     let roadMarkingCount = 0;
     let foliageCount = 0;
 
-    // Semantic distribution based on lithology & urban profile
-    if (ctx.detailOpts.lithologyProfile === 'modern-curtain-wall') {
+    // Semantic distribution based on lithology & urban profile (Part-Aware)
+    const partCat = ctx.detailOpts.partCategory?.toLowerCase();
+    // Whole-token matching (with simple plural tolerance) so e.g. 'carved'/'scarp' never match 'car'.
+    const partTokens = new Set((partCat || '').split(/[^a-z0-9]+/).filter(Boolean));
+    const hasPartToken = (...names: string[]): boolean =>
+      names.some(n => partTokens.has(n) || partTokens.has(`${n}s`));
+    if (partCat) {
+      if (hasPartToken('foliage', 'tree', 'plant')) {
+        foliageCount = totalTexels;
+        stoneCount = 0;
+        roadCount = 0;
+        roadMarkingCount = 0;
+      } else if (hasPartToken('road', 'terrain', 'asphalt', 'ground')) {
+        roadCount = Math.floor(totalTexels * 0.95);
+        roadMarkingCount = totalTexels - roadCount;
+        stoneCount = 0;
+        foliageCount = 0;
+      } else if (hasPartToken('architecture', 'monument', 'landmark', 'building')) {
+        stoneCount = totalTexels;
+        roadCount = 0;
+        roadMarkingCount = 0;
+        foliageCount = 0;
+      } else if (hasPartToken('vehicle', 'car')) {
+        stoneCount = 0;
+        roadCount = 0;
+        roadMarkingCount = 0;
+        foliageCount = 0;
+      } else {
+        stoneCount = totalTexels;
+      }
+    } else if (ctx.detailOpts.lithologyProfile === 'modern-curtain-wall') {
       stoneCount = Math.floor(totalTexels * 0.450); // Glazing / spandrel panels
       roadCount = Math.floor(totalTexels * 0.420);
       roadMarkingCount = Math.floor(totalTexels * 0.050);

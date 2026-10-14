@@ -430,7 +430,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
         await GeminiClient.getInstance().streamGenerate(
             {
                 prompt: effectivePrompt,
-                model: 'gemini-3.7-flash',
+                model: 'gemini-3.8-flash',
                 thinkingBudget: 1024,
                 enableGoogleSearch: googleSearchGrounding !== false,
                 attachedSkills: attachedSkillsContext,

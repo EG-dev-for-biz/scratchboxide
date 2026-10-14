@@ -118,8 +118,8 @@
             align-items: center;
             gap: 10px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-            flex: 1;
-            max-width: 600px;
+            width: 320px;
+            flex-shrink: 0;
         }
 
         .search-icon {
@@ -732,7 +732,7 @@
             <div class="location-query-box">
                 <span class="search-icon">📍</span>
                 <input type="text" id="addressInput" class="location-input" 
-                       value="350 5th Ave, New York, NY 10118 (Empire State Building)" 
+                       value="Colosseum, Rome" 
                        placeholder="Enter any address, coordinate, or landmark...">
                 <button class="action-btn" id="executePipelineBtn">
                     <span>Synthesize Corridor</span>
@@ -744,8 +744,8 @@
         <!-- Presets and View Mode Selector -->
         <div class="nav-right" style="display: flex; align-items: center; gap: 10px;">
             <div class="preset-pills">
-                <div class="preset-pill active" id="pillLocESB" onclick="loadLocation('Empire State Building, NY')">Empire State</div>
-                <div class="preset-pill" id="pillLocColosseum" onclick="loadLocation('Colosseum, Rome')">Colosseum, Rome</div>
+                <div class="preset-pill" id="pillLocESB" onclick="loadLocation('Empire State Building, NY')">Empire State</div>
+                <div class="preset-pill active" id="pillLocColosseum" onclick="loadLocation('Colosseum, Rome')">Colosseum, Rome</div>
                 <div class="preset-pill" onclick="loadLocation('Chrysler Building, NY')">Chrysler</div>
                 <div class="preset-pill" onclick="loadLocation('Rockefeller Center, NY')">Rockefeller</div>
                 <div class="preset-pill" onclick="loadLocation('One World Trade Center, NY')">One WTC</div>
@@ -768,24 +768,23 @@
             <!-- Left Pane: Authentic Raw Google Maps 3D Tile in Studio Grey Clay -->
             <div class="viewport-half" id="paneLeft">
                 <img id="imgLeft" class="plate-image" 
-                     src="/renders/real_tile_esb_clay_closeup/beauty.png" 
+                     src="/renders/colosseum/clean_stage1_clay.png" 
                      alt="Stage 1 Authentic Google 3D Tile in Clay">
                 <div class="viewport-header-badge">
                     <span class="badge-stage-tag"><span>●</span> Stage 1: Google Photorealistic 3D Tile</span>
-                    <span class="badge-title">18% Studio Grey Clay Baseline</span>
-                    <span class="badge-sub">169,588 Authentic Scan Triangles · Real Sensor Noise</span>
+                    <span class="badge-title" id="leftPaneTitle">18% Studio Grey Clay Baseline</span>
+                    <span class="badge-sub" id="leftPaneSub">537,940 Photogrammetric Vertices · 411,950 Triangles · 18% Studio Clay · Zero Distortion</span>
                 </div>
             </div>
 
             <!-- Right Pane: Codebase Refined & Street View PBR Texturing -->
             <div class="viewport-half" id="paneRight">
                 <img id="imgRight" class="plate-image" 
-                     src="/renders/real_tile_esb_stage3_pbr/beauty.png" 
-                     alt="Stage 3 Street View PBR Texturing">
+                     src="/renders/colosseum/clean_stage3_master.png" 
+                     alt="Stage 3 Photogrammetric Tile & Botanical Fusion">
                 <div class="viewport-header-badge">
-                    <span class="badge-stage-tag" style="color: var(--accent-emerald);"><span>●</span> Stage 3: Codebase PBR Synthesis</span>
-                    <span class="badge-title" id="rightPaneTitle">Solar De-Lighted Real-Scan PBR</span>
-                    <span class="badge-sub" id="rightPaneSub">0-Drift Inverse Barycentric · Street View Fusion · Toksvig AA</span>
+                    <span class="badge-stage-tag" style="color: var(--accent-emerald);"><span>●</span> <span id="rightPaneTitle">Stage 3: Codebase PBR Synthesis</span></span>
+                    <span class="badge-sub" id="rightPaneSub">200,293 Depressed Foliage Vertices · 621 Dynamic Botanical Stands (1,203 Nodes) · 264,849 Locked Monument Vertices · Zero Drift · Zero Wall Trees</span>
                 </div>
             </div>
         </div>
@@ -794,12 +793,12 @@
         <div class="wipe-slider-layout" id="wipeSliderView">
             <div class="wipe-layer-base">
                 <img id="imgWipeBase" class="plate-image" 
-                     src="/renders/real_tile_esb_stage3_pbr/beauty.png" 
+                     src="/renders/colosseum/clean_stage3_master.png" 
                      alt="Wipe Base Stage 3">
             </div>
             <div class="wipe-layer-reveal" id="wipeReveal">
                 <img id="imgWipeReveal" class="plate-image" 
-                     src="/renders/real_tile_esb_clay_closeup/beauty.png" 
+                     src="/renders/colosseum/clean_stage1_clay.png" 
                      alt="Wipe Reveal Stage 1">
                 <div class="wipe-handle" id="wipeHandle">⇄</div>
             </div>
@@ -809,25 +808,30 @@
         <div class="loupe-viewer-layout" id="loupeViewerLayout">
             <div class="loupe-container" id="loupeContainer">
                 <img id="imgLoupeBase" class="plate-image" 
-                     src="/renders/real_tile_esb_stage3_pbr/beauty.png" 
+                     src="/renders/colosseum/clean_stage3_master.png" 
                      alt="Macro Detail Loupe Inspection">
                 <div class="loupe-glass" id="loupeGlass"></div>
-                <div class="loupe-instruction-pill">Move cursor across facade to inspect 2.5x de-lighted Indiana limestone, bronze spandrels, and Scharr normals</div>
+                <div class="loupe-instruction-pill">Move cursor across facade to inspect 2.5x travertine strata, archway soffits, and botanical stands</div>
             </div>
         </div>
 
         <!-- Mode D: Interactive 3D Orbit Viewport (<model-viewer> Zero Three.js) -->
         <div class="orbit-3d-layout" id="orbit3dLayout">
             <model-viewer id="mainModelViewer"
-                          src="/models/omnispatial_real_stage3_streetview_pbr.glb"
-                          poster="/renders/real_tile_esb_stage3_pbr/beauty.png"
+                          src="/models/colosseum_stage3_master_pbr.glb"
+                          poster="/renders/colosseum/clean_stage3_master.png"
                           alt="3D Spatial Model"
                           auto-rotate
                           camera-controls
-                          bounds="tight"
+                          camera-orbit="35deg 62deg 520m"
+                          camera-target="0m 0m 0m"
+                          field-of-view="30deg"
+                          min-camera-orbit="auto auto 5m"
+                          max-camera-orbit="auto auto 2000m"
+                          min-field-of-view="5deg"
                           touch-action="pan-y"
-                          shadow-intensity="1.2"
-                          exposure="1.0"
+                          shadow-intensity="0"
+                          exposure="1.05"
                           loading="eager"
                           style="width: 100%; height: 100%;">
             </model-viewer>
@@ -997,31 +1001,31 @@
                 name: 'Empire State Building, NY',
                 stages: {
                     1: {
-                        beauty: '/renders/real_tile_esb_clay_closeup/beauty.png',
-                        albedo: '/renders/real_tile_esb_clay_closeup/albedo.png',
-                        normal: '/renders/real_tile_esb_clay_closeup/normal.png',
-                        depth:  '/renders/real_tile_esb_clay_closeup/depth.png',
-                        glb:    '/models/omnispatial_real_stage1_clay.glb',
+                        beauty: '/renders/omnispatial_stage1_clay/beauty.png',
+                        albedo: '/renders/omnispatial_stage1_clay/albedo.png',
+                        normal: '/renders/omnispatial_stage1_clay/normal.png',
+                        depth:  '/renders/omnispatial_stage1_clay/depth.png',
+                        glb:    '/models/omnispatial_stage1_real_clay_tile.glb',
                         title:  'Stage 1: Authentic Google 3D Tile in Clay',
-                        sub:    '169,588 Authentic Scan Triangles · Real Sensor Noise'
+                        sub:    '169,588 Authentic Scan Triangles · 70 Tile Submeshes · Real Sensor Noise'
                     },
                     2: {
-                        beauty: '/renders/real_tile_esb_stage2_refined/beauty.png',
-                        albedo: '/renders/real_tile_esb_stage2_refined/albedo.png',
-                        normal: '/renders/real_tile_esb_stage2_refined/normal.png',
-                        depth:  '/renders/real_tile_esb_stage2_refined/depth.png',
-                        glb:    '/models/omnispatial_real_stage2_vector_refined.glb',
+                        beauty: '/renders/omnispatial_stage2_vector/beauty.png',
+                        albedo: '/renders/omnispatial_stage2_vector/albedo.png',
+                        normal: '/renders/omnispatial_stage2_vector/normal.png',
+                        depth:  '/renders/omnispatial_stage2_vector/depth.png',
+                        glb:    '/models/omnispatial_stage2_vector_refined.glb',
                         title:  'Stage 2: Vector Shape Refinement',
-                        sub:    'Corner Straightener (90° Ortho) · Planar Decimator · Conformed Curbs'
+                        sub:    '642,482 Triangles · 4-Sided 90° Setbacks · 154,414 Preserved District Triangles · 16 SB-Veggie Oaks'
                     },
                     3: {
-                        beauty: '/renders/real_tile_esb_stage3_pbr/beauty.png',
-                        albedo: '/renders/real_tile_esb_stage3_pbr/albedo.png',
-                        normal: '/renders/real_tile_esb_stage3_pbr/normal.png',
-                        depth:  '/renders/real_tile_esb_stage3_pbr/depth.png',
+                        beauty: '/renders/omnispatial_stage3_pbr/beauty.png',
+                        albedo: '/renders/omnispatial_stage3_pbr/albedo.png',
+                        normal: '/renders/omnispatial_stage3_pbr/normal.png',
+                        depth:  '/renders/omnispatial_stage3_pbr/depth.png',
                         glb:    '/models/omnispatial_real_stage3_streetview_pbr.glb',
                         title:  'Stage 3: Solar De-Lighted Real-Scan PBR',
-                        sub:    '0-Drift Inverse Barycentric · Street View Fusion · Toksvig AA'
+                        sub:    '642,482 Triangles · 37 Synthesized PBR Maps · 61 Authentic Tile Textures (Lossless)'
                     }
                 },
                 hud: {
@@ -1051,7 +1055,7 @@
                         depth:  '/renders/colosseum/clean_stage2_vector.png',
                         glb:    '/models/colosseum_stage2_vector_refined.glb',
                         title:  'Stage 2: Vitruvian Architecture & Botanical Stands',
-                        sub:    '537,940 Vertices · 73,559 C^1 Hermite Depressed Vertices · 75 Resected Botanical Stands (Parasol Pines, Cypresses, Holm Oaks) · 262,968 Locked Vertices'
+                        sub:    '537,940 Vertices · 200,293 C^1 Hermite Depressed Vertices · 621 Resected Botanical Stands (Parasol Pines, Cypresses, Holm Oaks) · 264,849 Locked Vertices'
                     },
                     3: {
                         beauty: '/renders/colosseum/clean_stage3_master.png',
@@ -1060,7 +1064,7 @@
                         depth:  '/renders/colosseum/clean_stage3_master.png',
                         glb:    '/models/colosseum_stage3_master_pbr.glb',
                         title:  'Stage 3: Photogrammetric Tile & Botanical Fusion',
-                        sub:    '73,559 Depressed Foliage Vertices · 75 Dynamic Botanical Stands (146 Nodes) · 262,968 Locked Monument Vertices · Zero Drift'
+                        sub:    '200,293 Depressed Foliage Vertices · 621 Dynamic Botanical Stands (1,203 Nodes) · 264,849 Locked Monument Vertices · Zero Drift · Zero Wall Trees'
                     }
                 },
                 hud: {
@@ -1072,8 +1076,8 @@
                 }
             }
         };
-        let activeLocationKey = 'esb';
-        let stageImages = locationDatasets['esb'].stages;
+        let activeLocationKey = 'colosseum';
+        let stageImages = locationDatasets['colosseum'].stages;
 
         function setViewMode(mode) {
             currentViewMode = mode;
@@ -1088,13 +1092,8 @@
             document.getElementById('orbit3dLayout').style.display = mode === 'orbit-3d' ? 'block' : 'none';
 
             if (mode === 'wipe') {
-                if (activeLocationKey === 'colosseum') {
-                    document.getElementById('imgWipeReveal').src = '/renders/colosseum/stage1_clay_orbit.png';
-                    document.getElementById('imgWipeBase').src = '/renders/colosseum/stage3_pbr_orbit.png';
-                } else {
-                    document.getElementById('imgWipeReveal').src = stageImages[1][currentPass] || stageImages[1].beauty;
-                    document.getElementById('imgWipeBase').src = stageImages[currentStage][currentPass] || stageImages[currentStage].beauty;
-                }
+                document.getElementById('imgWipeReveal').src = stageImages[1][currentPass] || stageImages[1].beauty;
+                document.getElementById('imgWipeBase').src = stageImages[currentStage][currentPass] || stageImages[currentStage].beauty;
             }
 
             if (mode === 'loupe') {
@@ -1370,9 +1369,29 @@
 
         addressInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
-                triggerPipelineExecution(addressInput.value.trim() || 'Empire State Building, NY');
+                triggerPipelineExecution(addressInput.value.trim() || 'Colosseum, Rome');
             }
         });
+
+        function initDemo() {
+            const params = new URLSearchParams(window.location.search);
+            const locParam = params.get('location') || params.get('loc');
+            if (locParam && (locParam.toLowerCase().includes('esb') || locParam.toLowerCase().includes('empire'))) {
+                loadLocation('Empire State Building, NY');
+            } else if (locParam && (locParam.toLowerCase().includes('coloss') || locParam.toLowerCase().includes('rome'))) {
+                loadLocation('Colosseum, Rome');
+            } else if (locParam && locationDatasets[locParam]) {
+                loadLocation(locationDatasets[locParam].name);
+            } else {
+                loadLocation('Colosseum, Rome');
+            }
+        }
+
+        if (document.readyState === 'loading') {
+            window.addEventListener('DOMContentLoaded', initDemo);
+        } else {
+            initDemo();
+        }
     </script>
 </body>
 </html>

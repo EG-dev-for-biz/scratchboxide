@@ -360,7 +360,7 @@ export interface MarkdownDocumentData {
 // ==========================================
 export type GraphNodeCategory =
     | 'input'       // Input triggers (Webhook, Cron, Event, Chat)
-    | 'ai'          // AI agent processors (Gemini 3.7 Flash, Subagents, Code Gen)
+    | 'ai'          // AI agent processors (Gemini 3.8 Flash, Subagents, Code Gen)
     | 'decision'    // Decision gates (If/Else, Switch, Condition check)
     | 'mcp'         // MCP endpoints (Stripe, GitHub, Figma, Web Search)
     | 'cli'         // CLI scripts (Bash, Test runner, Build pipeline)

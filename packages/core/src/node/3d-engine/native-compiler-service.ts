@@ -10,6 +10,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { resolveWithinRoot } from '../security/path-guard';
+import { buildScrubbedEnv } from '../security/sandbox-policy';
 import * as crypto from 'crypto';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
@@ -25,6 +27,18 @@ const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 const pchBuilds = new Map<string, Promise<boolean>>();
+
+/**
+ * Environment for executing generated binaries: the sandbox allowlist (PATH, HOME, TMPDIR, ...)
+ * plus non-secret SCRATCHBOX_* engine settings such as SCRATCHBOX_HUMAN_ASSETS_DIR.
+ */
+export function buildGeneratedBinaryEnv(hostEnv: NodeJS.ProcessEnv = process.env): Record<string, string> {
+    const engineVars: Record<string, string | undefined> = {};
+    for (const [name, value] of Object.entries(hostEnv)) {
+        if (name.startsWith('SCRATCHBOX_')) engineVars[name] = value;
+    }
+    return buildScrubbedEnv(hostEnv, engineVars);
+}
 
 export class NativeCppCompilerService {
     private static instance?: NativeCppCompilerService;
@@ -191,7 +205,8 @@ export class NativeCppCompilerService {
         // Stage external assets (e.g., downloaded photorealistic 3D tile GLBs or geodetic anchors)
         if (options.assets && options.assets.length > 0) {
             for (const asset of options.assets) {
-                const assetPath = path.join(outputDir, asset.name);
+                // Asset names come from request bodies and tool args: keep them inside outputDir.
+                const assetPath = resolveWithinRoot(outputDir, asset.name);
                 if (typeof asset.content === 'string') {
                     if (asset.encoding === 'base64') {
                         fs.writeFileSync(assetPath, Buffer.from(asset.content, 'base64'));
@@ -369,6 +384,9 @@ export class NativeCppCompilerService {
         try {
             const { stdout, stderr } = await execFileAsync(binaryPath, binaryArgs, {
                 cwd,
+                // Generated binaries run model-authored code: never hand them host secrets
+                // (GEMINI_API_KEY, GOOGLE_MAPS_API_KEY, GOOGLE_APPLICATION_CREDENTIALS, ...).
+                env: buildGeneratedBinaryEnv(),
                 timeout: 60000,
                 maxBuffer: 100 * 1024 * 1024 // 100MB buffer for heavy mesh streams
             });

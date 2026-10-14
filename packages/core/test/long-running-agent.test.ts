@@ -123,8 +123,8 @@ Compilation failed.
     assert.strictEqual(flowSession.status, 'failed', 'Session status should compile as failed on cancellation');
     console.log('  ✓ Test 6 Passed: Resilient play, pause, resume, and cancellation signals handled gracefully');
 
-    // Test 7: Native Gemini 3.7 Reasoning & Turn-based Tool Loop Validation
-    console.log('  Running Test 7: Native Gemini 3.7 Reasoning & Turn-based Tool Loop Validation...');
+    // Test 7: Native Gemini 3.8 Reasoning & Turn-based Tool Loop Validation
+    console.log('  Running Test 7: Native Gemini 3.8 Reasoning & Turn-based Tool Loop Validation...');
     const tddSession = await agentService.createSession('tdd-self-correcting-test', 10);
     const tddEvents: AgentStreamEvent[] = [];
 
@@ -138,8 +138,8 @@ Compilation failed.
         connected: true,
         serviceAccount: 'scratchbox-test@scratchbox.iam.gserviceaccount.com',
         projectId: 'scratchbox-test-project',
-        activeModel: 'gemini-3.7-flash',
-        availableModels: ['gemini-3.7-flash', 'gemini-3.1-pro-preview'],
+        activeModel: 'gemini-3.8-flash',
+        availableModels: ['gemini-3.8-flash', 'gemini-3.1-pro-preview'],
         thinkingBudget: 2048,
         authMethod: 'service-account'
     });
@@ -149,13 +149,13 @@ Compilation failed.
         // Stream simulated thought events
         onGeminiEvent({
             type: 'thought',
-            thought: 'Gemini 3.7 Reasoning Loop: Analyzing the failing test trace...',
-            modelUsed: req.model || 'gemini-3.7-flash'
+            thought: 'Gemini 3.8 Reasoning Loop: Analyzing the failing test trace...',
+            modelUsed: req.model || 'gemini-3.8-flash'
         });
         onGeminiEvent({
             type: 'thought',
             thought: 'Synthesizing minimal patch for core-logic file to export missing bindings.',
-            modelUsed: req.model || 'gemini-3.7-flash'
+            modelUsed: req.model || 'gemini-3.8-flash'
         });
         mockThoughtsEmitted = true;
 
@@ -186,8 +186,8 @@ Compilation failed.
         return {
             success: true,
             text: `\`\`\`json\n${JSON.stringify(blueprint, null, 2)}\n\`\`\``,
-            thoughts: ['Gemini 3.7 Reasoning Loop: Analyzing the failing test trace...'],
-            modelUsed: req.model || 'gemini-3.7-flash'
+            thoughts: ['Gemini 3.8 Reasoning Loop: Analyzing the failing test trace...'],
+            modelUsed: req.model || 'gemini-3.8-flash'
         };
     };
 
@@ -214,7 +214,47 @@ Compilation failed.
     const stepCompleteEvents = tddEvents.filter(e => e.type === 'step_complete');
     assert.ok(stepCompleteEvents.length > 0, 'Must successfully execute turn-based action steps and complete milestones');
 
-    console.log('  ✓ Test 7 Passed: Native Gemini 3.7 Reasoning & Turn-based Tool Loop successfully validated!');
+    console.log('  ✓ Test 7 Passed: Native Gemini 3.8 Reasoning & Turn-based Tool Loop successfully validated!');
+
+    // Test 8: Gemini failures surface as a failed run (no silent simulated blueprint substitution)
+    console.log('  Running Test 8: Gemini failures fail the run instead of falling back to simulation...');
+    {
+        const geminiAny = (agentService as any).geminiService;
+        const savedGetStatus = geminiAny.getStatus;
+        const savedStreamGenerate = geminiAny.streamGenerate;
+        agentService.setBlueprintSimulation(false);
+        try {
+            // A: streamGenerate throws -> agent_error + failed status, no "Simulated" thoughts
+            process.env.SCRATCHBOX_TEST_USE_REAL_AI = 'true';
+            geminiAny.getStatus = async () => ({ connected: true });
+            geminiAny.streamGenerate = async () => { throw new Error('503 model overloaded'); };
+            const errSession = await agentService.createSession('gemini-error-surface', 10);
+            const errEvents: AgentStreamEvent[] = [];
+            await agentService.runMilestoneLoop(errSession.sessionId, e => errEvents.push(e));
+            assert.strictEqual(errSession.status, 'failed', 'Gemini errors must fail the run');
+            assert.ok(errEvents.some(e => e.type === 'agent_error' && e.message.includes('503 model overloaded')),
+                'agent_error event must carry the underlying Gemini error');
+            assert.ok(!errEvents.some(e => e.message.includes('Simulated')), 'No simulated thought events may be emitted');
+            assert.strictEqual(errSession.milestones[0].status, 'failed');
+            assert.ok(!errEvents.some(e => e.type === 'milestone_complete'), 'No milestone may complete without a real blueprint');
+
+            // B: Gemini disconnected with simulation disabled -> failed run naming the cause
+            delete process.env.SCRATCHBOX_TEST_USE_REAL_AI;
+            geminiAny.getStatus = async () => ({ connected: false });
+            const offlineSession = await agentService.createSession('gemini-offline-surface', 10);
+            const offlineEvents: AgentStreamEvent[] = [];
+            await agentService.runMilestoneLoop(offlineSession.sessionId, e => offlineEvents.push(e));
+            assert.strictEqual(offlineSession.status, 'failed', 'Disconnected Gemini must fail the run');
+            assert.ok(offlineEvents.some(e => e.type === 'agent_error' && /Gemini is not connected/.test(e.message)));
+            assert.ok(!offlineEvents.some(e => e.message.includes('Simulated')));
+        } finally {
+            delete process.env.SCRATCHBOX_TEST_USE_REAL_AI;
+            geminiAny.getStatus = savedGetStatus;
+            geminiAny.streamGenerate = savedStreamGenerate;
+            agentService.setBlueprintSimulation(undefined);
+        }
+    }
+    console.log('  ✓ Test 8 Passed: Gemini errors surface as failed runs with agent_error events');
 
     // Cleanup environment
     await sandboxService.destroyEnvironment('test-env');

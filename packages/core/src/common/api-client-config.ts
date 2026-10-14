@@ -45,6 +45,8 @@ interface HostGlobal {
     scratchbox?: ScratchboxWindowConfig;
     scratchboxDesktop?: { getLaunchToken?: () => unknown };
     location?: { href: string; origin: string };
+    history?: { replaceState(data: unknown, unused: string, url?: string): void };
+    sessionStorage?: { getItem(key: string): string | null; setItem(key: string, value: string): void };
     fetch?: (...args: any[]) => Promise<any>;
     EventSource?: any;
     Headers?: any;
@@ -197,19 +199,42 @@ export function withApiTokenQuery(url: string): string {
 
 let installed = false;
 
-let acquireTokenPromise: Promise<string | undefined> | undefined;
+const LAUNCH_URL_TOKEN_PARAM = 'token';
+const SESSION_TOKEN_KEY = 'scratchbox.launchToken';
 
 /**
- * Proactively fetch the launch token from the backend /api/auth/token endpoint
- * if not already populated. Safe to call multiple times (memoized while pending).
+ * Browser mode receives the token the way Jupyter does: the server/dev
+ * launcher prints `http://host/?token=…`. Take it from the URL once, keep it
+ * for this tab's session, and strip it from the address bar and history.
+ * The API deliberately has no endpoint that hands the token out.
+ */
+function takeLaunchUrlToken(win: HostGlobal): string | undefined {
+    try {
+        if (win.location) {
+            const url = new URL(win.location.href);
+            const fromUrl = url.searchParams.get(LAUNCH_URL_TOKEN_PARAM);
+            if (fromUrl) {
+                url.searchParams.delete(LAUNCH_URL_TOKEN_PARAM);
+                win.history?.replaceState(null, '', url.toString());
+                win.sessionStorage?.setItem(SESSION_TOKEN_KEY, fromUrl);
+                return fromUrl;
+            }
+        }
+        return win.sessionStorage?.getItem(SESSION_TOKEN_KEY) || undefined;
+    } catch {
+        // Storage can be blocked; the token then lasts until reload.
+        return undefined;
+    }
+}
+
+/**
+ * Resolve the launch token from out-of-band sources only: host config,
+ * Electron IPC, or the launch URL. Safe to call multiple times.
  */
 export async function acquireLaunchToken(): Promise<string | undefined> {
     const existing = getLaunchToken();
     if (existing) {
         return existing;
-    }
-    if (acquireTokenPromise) {
-        return acquireTokenPromise;
     }
     const win = hostWindow();
     const desktop = win?.scratchboxDesktop;
@@ -224,34 +249,14 @@ export async function acquireLaunchToken(): Promise<string | undefined> {
             // Ignore desktop IPC error
         }
     }
-    const apiBase = getApiBase();
-    if (!apiBase && typeof window === 'undefined') {
-        return undefined;
-    }
-    const targetUrl = apiBase ? `${apiBase}/api/auth/token` : '/api/auth/token';
-    acquireTokenPromise = (async () => {
-        try {
-            const globalFetch = (win && typeof win.fetch === 'function') ? win.fetch.bind(win) : (globalThis as any).fetch;
-            if (typeof globalFetch !== 'function') return undefined;
-            const res = await globalFetch(targetUrl, {
-                method: 'GET',
-                headers: { 'Accept': 'application/json' }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data && typeof data.token === 'string' && data.token) {
-                    setLaunchToken(data.token);
-                    return data.token;
-                }
-            }
-        } catch {
-            // Ignore network errors
-        } finally {
-            acquireTokenPromise = undefined;
+    if (win) {
+        const fromUrl = takeLaunchUrlToken(win);
+        if (fromUrl) {
+            setLaunchToken(fromUrl);
+            return fromUrl;
         }
-        return undefined;
-    })();
-    return acquireTokenPromise;
+    }
+    return undefined;
 }
 
 /**
@@ -264,6 +269,11 @@ export function installApiAuth(): void {
         return;
     }
     installed = true;
+
+    // Strip a launch-URL token from the address bar before anything else runs.
+    if (!getLaunchToken()) {
+        setLaunchToken(takeLaunchUrlToken(win));
+    }
 
     const originalFetch = win.fetch.bind(win);
     const RequestCtor = win.Request;

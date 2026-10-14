@@ -14,13 +14,15 @@
  *   1. Settings -> Models:
  *      - Check/enable "Override OpenAI Base URL"
  *      - Base URL: http://127.0.0.1:4000/v1
- *      - OpenAI API Key: sk-vertex-local (any placeholder)
+ *      - OpenAI API Key: the proxy token (env VERTEX_PROXY_TOKEN; if unset, a random
+ *        token is generated at startup and printed to the console)
  *   2. Under Models:
  *      - Click "+ Add model" and enter: "gemini-2.5-flash" or "gemini-2.5-pro" or "claude-3-7-sonnet"
  *   3. Select the model in Chat, Composer, or Inline Edit!
  */
 
 import http from 'http';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -145,14 +147,41 @@ function openAiToAnthropicMessages(messages) {
 
 const PORT = parseInt(process.env.VERTEX_PROXY_PORT || '4000', 10);
 
-const server = http.createServer(async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
+// Shared-secret auth: every request must present this token (Authorization: Bearer <token>
+// or x-api-key). Without it any website / local process could spend the user's GCP quota.
+const PROXY_TOKEN_FROM_ENV = Boolean(process.env.VERTEX_PROXY_TOKEN && process.env.VERTEX_PROXY_TOKEN.trim());
+const PROXY_TOKEN = PROXY_TOKEN_FROM_ENV
+  ? process.env.VERTEX_PROXY_TOKEN.trim()
+  : `sk-vertex-${crypto.randomBytes(24).toString('hex')}`;
+const PROXY_TOKEN_BUF = Buffer.from(PROXY_TOKEN, 'utf8');
 
+// Vertex model IDs only: letters, digits, '.', '_', '@', '-'. No '/', '?', '#', ':' or '..'
+// so the value cannot redirect the bearer-authenticated request to another aiplatform path.
+const MODEL_ID_PATTERN = /^[A-Za-z0-9._@-]+$/;
+function isValidModelId(model) {
+  return typeof model === 'string' && model.length <= 128 && MODEL_ID_PATTERN.test(model) && !model.includes('..');
+}
+
+function isAuthorized(req) {
+  const authHeader = String(req.headers['authorization'] || '');
+  const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+  const presented = bearer || String(req.headers['x-api-key'] || '').trim();
+  if (!presented) return false;
+  const presentedBuf = Buffer.from(presented, 'utf8');
+  return presentedBuf.length === PROXY_TOKEN_BUF.length && crypto.timingSafeEqual(presentedBuf, PROXY_TOKEN_BUF);
+}
+
+const server = http.createServer(async (req, res) => {
+  // No CORS headers: browsers on other origins cannot call this proxy (Authorization forces a preflight).
   if (req.method === 'OPTIONS') {
-    res.writeHead(200);
+    res.writeHead(204);
     res.end();
+    return;
+  }
+
+  if (!isAuthorized(req)) {
+    res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer' });
+    res.end(JSON.stringify({ error: { message: 'Unauthorized: missing or invalid proxy token' } }));
     return;
   }
 
@@ -180,6 +209,11 @@ const server = http.createServer(async (req, res) => {
       try {
         const payload = JSON.parse(body);
         const rawModel = payload.model || 'gemini-2.5-flash';
+        if (!isValidModelId(rawModel)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Invalid model id: must match /^[A-Za-z0-9._@-]+$/' } }));
+          return;
+        }
         const stream = payload.stream !== false;
         const token = await getAccessToken();
         const projectId = config.creds.project_id;
@@ -197,7 +231,7 @@ const server = http.createServer(async (req, res) => {
           }
 
           const { system, messages } = openAiToAnthropicMessages(payload.messages || []);
-          const vertexUrl = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/anthropic/models/${vertexModel}:${stream ? 'streamRawPredict' : 'rawPredict'}`;
+          const vertexUrl = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/anthropic/models/${encodeURIComponent(vertexModel)}:${stream ? 'streamRawPredict' : 'rawPredict'}`;
 
           const vertexPayload = {
             anthropic_version: 'vertex-2023-10-16',
@@ -430,7 +464,12 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`   1. Settings -> Models:`);
   console.log(`      - Enable "Override OpenAI Base URL"`);
   console.log(`      - Set to: http://127.0.0.1:${PORT}/v1`);
-  console.log(`      - Set OpenAI API Key: sk-vertex-local`);
+  if (PROXY_TOKEN_FROM_ENV) {
+    console.log(`      - Set OpenAI API Key: <value of VERTEX_PROXY_TOKEN>`);
+  } else {
+    console.log(`      - Set OpenAI API Key: ${PROXY_TOKEN}`);
+    console.log(`        (generated for this run; set VERTEX_PROXY_TOKEN to pin it)`);
+  }
   console.log(`   2. Under Models list:`);
   console.log(`      - Add: "gemini-2.5-flash"  (Ultra-fast coding & inline edits)`);
   console.log(`      - Add: "gemini-2.5-pro"    (Deep reasoning & complex code)`);

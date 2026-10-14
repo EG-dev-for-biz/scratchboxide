@@ -70,6 +70,16 @@ export {
 } from './node/3d-engine/photorealism-evaluator';
 export { PhotorealTileCleanupService, TileCleanupOptions, TileCleanupMetrics, TileCleanupResult } from './node/3d-engine/tile-cleanup-service';
 export {
+    TileRefineService,
+    TileRefineError,
+    getTileRefineService,
+    findTileRefineRepoRoot,
+    summarizeTileRefineStats,
+    type TileRefineRequest,
+    type TileRefineResult,
+    type TileRefineServiceOptions
+} from './node/3d-engine/tile-refine-service';
+export {
     MeshletPipelineService,
     type MeshletBuildOptions,
     type MeshletData,
@@ -1193,10 +1203,19 @@ export {
     type SpatialVectorDataSet
 } from './node/spatial/SpatialVectorDataService';
 
+export {
+  AdaptiveUvOrchestrator,
+  type AdaptiveUvStrategy,
+  type TextureDomain,
+  type SeamAdjustmentStrategy,
+  type TopologyProbeResult,
+  type AdaptiveSolarDelightingConfig,
+  type AdaptivePbrRequest,
+  type AdaptiveUvPbrResult
+} from './node/3d-engine/adaptive-uv-orchestrator';
 
-
-
-
-
-
-
+export {
+  HybridRecipePbrService,
+  type HybridRecipeOptions,
+  type HybridRecipeResult
+} from './node/3d-engine/hybrid-recipe-pbr-service';

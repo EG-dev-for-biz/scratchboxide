@@ -56,7 +56,7 @@ async function runDeepWriteIntelligentPlanningTests() {
             const currentResponse = this.responses[this.responseIndex] || '';
             this.responseIndex++;
             onEvent({ type: 'text', text: currentResponse });
-            return { success: true, text: currentResponse, modelUsed: 'mock-gemini-3.7-flash' };
+            return { success: true, text: currentResponse, modelUsed: 'mock-gemini-3.8-flash' };
         }
     })();
 

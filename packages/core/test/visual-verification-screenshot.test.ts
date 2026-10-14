@@ -110,7 +110,7 @@ async function runVisualVerificationTests() {
     console.log('  ✓ Test 2 Passed: Screenshot engine captures WebGL, sandbox, browser, and active studio viewports.');
 
     // -------------------------------------------------------------
-    // Test 3: Multimodal Prompt Construction for Gemini 3.7 Flash
+    // Test 3: Multimodal Prompt Construction for Gemini 3.8 Flash
     // -------------------------------------------------------------
     console.log('  Testing 3: Multimodal Vision QA Prompt & Instruction Construction...');
     const visualService = new VisualVerificationService();

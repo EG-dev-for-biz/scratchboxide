@@ -77,6 +77,22 @@ async function runMediaGenerationJobServiceTests(): Promise<void> {
         assert.strictEqual(failed.error?.code, 'quota');
         assert.strictEqual(failed.error?.retryable, true);
 
+        // Kinds without a generator must fail explicitly, never "complete" with a fabricated asset
+        for (const kind of ['audio', '3d'] as const) {
+            const unsupported = await service.create({
+                kind,
+                prompt: `Generate ${kind}`,
+                workspaceRoot,
+                idempotencyKey: `unsupported-${kind}`
+            } as any);
+            const unsupportedResult = await service.process(unsupported.id, workspaceRoot);
+            assert.strictEqual(unsupportedResult.status, 'failed', `${kind} jobs must fail, not succeed with mock media`);
+            assert.strictEqual(unsupportedResult.error?.code, 'unsupported');
+            assert.strictEqual(unsupportedResult.error?.retryable, false);
+            assert.match(unsupportedResult.error?.message || '', new RegExp(`kind '${kind}' is not supported`));
+            assert.strictEqual(unsupportedResult.result, undefined, 'No asset may be attached to an unsupported-kind job');
+        }
+
         const queued = await service.create({
             kind: 'image',
             prompt: 'Cancel this',

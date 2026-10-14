@@ -21,7 +21,7 @@ async function runGoogleSearchGroundingTests() {
     let capturedOptions: any = {};
 
     const mockSseWithGrounding = [
-        'data: {"id": "gen-1", "candidates": [{"content": {"parts": [{"text": "Scratchbox IDE is powered by Gemini 3.7 Flash."}]}, "groundingMetadata": {"webSearchQueries": ["Scratchbox IDE release 2026", "Gemini 3.7 Flash features"], "groundingChunks": [{"web": {"uri": "https://scratchbox.ai/docs", "title": "Scratchbox IDE Documentation"}}, {"web": {"uri": "https://ai.google.dev/gemini", "title": "Google Gemini API"}}], "searchEntryPoint": {"renderedContent": "<div>Google Search Widget</div>"}}}]}',
+        'data: {"id": "gen-1", "candidates": [{"content": {"parts": [{"text": "Scratchbox IDE is powered by Gemini 3.8 Flash."}]}, "groundingMetadata": {"webSearchQueries": ["Scratchbox IDE release 2026", "Gemini 3.8 Flash features"], "groundingChunks": [{"web": {"uri": "https://scratchbox.ai/docs", "title": "Scratchbox IDE Documentation"}}, {"web": {"uri": "https://ai.google.dev/gemini", "title": "Google Gemini API"}}], "searchEntryPoint": {"renderedContent": "<div>Google Search Widget</div>"}}}]}',
         'data: [DONE]'
     ].join('\n');
 
@@ -42,7 +42,7 @@ async function runGoogleSearchGroundingTests() {
 
     // Prompt without specifying enableGoogleSearch -> should default to TRUE
     const requestDefault: GeminiGenerateRequest = {
-        prompt: 'What are the latest features of Scratchbox IDE and Gemini 3.7?'
+        prompt: 'What are the latest features of Scratchbox IDE and Gemini 3.8?'
     };
 
     const responseDefault = await service.streamGenerate(requestDefault, handleEvent);
@@ -60,7 +60,7 @@ async function runGoogleSearchGroundingTests() {
     assert.ok(responseDefault.groundingMetadata, 'Response must contain captured groundingMetadata');
     assert.deepStrictEqual(
         responseDefault.groundingMetadata?.webSearchQueries,
-        ['Scratchbox IDE release 2026', 'Gemini 3.7 Flash features'],
+        ['Scratchbox IDE release 2026', 'Gemini 3.8 Flash features'],
         'Web search queries must be parsed accurately'
     );
     assert.strictEqual(
@@ -82,7 +82,7 @@ async function runGoogleSearchGroundingTests() {
     // Verify stream events emitted grounding & status
     const groundingEvents = streamEvents.filter(e => e.type === 'grounding');
     assert.ok(groundingEvents.length >= 1, 'Stream must emit at least 1 grounding event');
-    assert.deepStrictEqual(groundingEvents[0].groundingMetadata?.webSearchQueries, ['Scratchbox IDE release 2026', 'Gemini 3.7 Flash features']);
+    assert.deepStrictEqual(groundingEvents[0].groundingMetadata?.webSearchQueries, ['Scratchbox IDE release 2026', 'Gemini 3.8 Flash features']);
 
     const searchStatusEvents = streamEvents.filter(e => e.type === 'status' && e.text?.includes('Google Search Grounding active'));
     assert.ok(searchStatusEvents.length >= 1, 'Stream must emit status notification for active Google search queries');

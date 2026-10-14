@@ -53,7 +53,10 @@ function attachListenErrorHandler(server: http.Server, label: string, port: numb
 
 const apiServer = app.listen(PORT, HOST, () => {
     console.log(`🚀 Scratchbox Standalone Backend API listening on http://${HOST}:${PORT}`);
-    if (process.env.SCRATCHBOX_PRINT_LAUNCH_TOKEN === '1') {
+    if (staticDir) {
+        // Browser mode: the token travels in the URL once, never via an API endpoint.
+        console.log(`🔑 Open in a browser: http://${HOST === '0.0.0.0' ? '127.0.0.1' : HOST}:${PORT}/?token=${app.locals.launchToken}`);
+    } else if (process.env.SCRATCHBOX_PRINT_LAUNCH_TOKEN === '1') {
         console.log(`[Scratchbox API] Launch token: ${app.locals.launchToken}`);
     }
 });

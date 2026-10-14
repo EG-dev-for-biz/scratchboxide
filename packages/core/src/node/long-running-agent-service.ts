@@ -48,6 +48,7 @@ export class LongRunningAgentService {
     private actionHistoryHashes = new Map<string, Set<string>>(); // sessionId -> Set of action hashes
     private pauseSignals = new Map<string, boolean>(); // sessionId -> pause boolean
     private cancelSignals = new Map<string, boolean>(); // sessionId -> cancel boolean
+    private blueprintSimulationOverride: boolean | undefined;
 
     constructor(
         private sandboxService: ContainerSandboxService = new ContainerSandboxService(),
@@ -439,22 +440,36 @@ Adhere strictly to the following JSON format:
                 patches?: Array<{ path: string; content?: string }>;
             };
 
-            // Check if we are running in an offline test suite to bypass blocking Google auth network requests
-            const isTestMode = typeof process !== 'undefined' && 
-                (process.env.NODE_ENV === 'test' || 
-                 process.argv.join(' ').includes('test') || 
-                 process.env.SCRATCHBOX_TEST === 'true');
+            // Simulated blueprints are an explicit opt-in (test suites / SCRATCHBOX_AGENT_SIMULATION=1), never a fallback.
+            const simulationOptIn = this.isBlueprintSimulationEnabled();
 
             let useRealAi = false;
+            let aiUnavailableReason = '';
             if (typeof process !== 'undefined' && process.env.SCRATCHBOX_TEST_USE_REAL_AI === 'true') {
                 useRealAi = true;
-            } else if (!isTestMode && this.geminiService) {
-                try {
-                    const geminiStatus = await this.geminiService.getStatus();
-                    useRealAi = !!(geminiStatus && geminiStatus.connected);
-                } catch {
-                    useRealAi = false;
+            } else if (!simulationOptIn) {
+                if (!this.geminiService) {
+                    aiUnavailableReason = 'No Gemini service is attached to the long-running agent';
+                } else {
+                    try {
+                        const geminiStatus = await this.geminiService.getStatus();
+                        useRealAi = !!(geminiStatus && geminiStatus.connected);
+                        if (!useRealAi) {
+                            aiUnavailableReason = `Gemini is not connected${(geminiStatus as any)?.error ? ` (${(geminiStatus as any).error})` : ''}`;
+                        }
+                    } catch (statusErr: any) {
+                        aiUnavailableReason = `Gemini status check failed: ${statusErr?.message || statusErr}`;
+                    }
                 }
+            }
+
+            if (!useRealAi && !simulationOptIn) {
+                return this.failBlueprintGeneration(
+                    sessionId,
+                    milestone,
+                    onEvent,
+                    `${aiUnavailableReason || 'Gemini is unavailable'}. Connect Gemini credentials to run the autonomous loop.`
+                );
             }
 
             if (useRealAi) {
@@ -479,23 +494,20 @@ Adhere strictly to the following JSON format:
 
                     // Parse JSON from response text
                     const jsonMatch = geminiRes.text.match(/```json\s*([\s\S]*?)\s*```/) || geminiRes.text.match(/(\{[\s\S]*"actionType"[\s\S]*\})/);
-                    if (jsonMatch) {
-                        blueprint = JSON.parse(jsonMatch[1]);
-                    } else {
-                        // Fallback parsing
-                        blueprint = {
-                            actionType: geminiRes.text.includes('refactor') ? 'refactor_core' : 'patch_files',
-                            filesModified: ['src/core.ts'],
-                            description: geminiRes.text.slice(0, 100),
-                            commands: ['echo "running tests"']
-                        };
+                    if (!jsonMatch) {
+                        throw new Error(`Model response did not contain a JSON action blueprint: ${geminiRes.text.slice(0, 200)}`);
                     }
+                    blueprint = JSON.parse(jsonMatch[1]);
                 } catch (err: any) {
-                    blueprint = await this.simulateBlueprintGeneration(sessionId, milestone, attempts, lastError);
+                    return this.failBlueprintGeneration(
+                        sessionId,
+                        milestone,
+                        onEvent,
+                        `Blueprint generation with ${routing.modelTarget} failed on attempt ${attempts}: ${err?.message || err}`
+                    );
                 }
             } else {
-                // Not connected or offline mode: Run high-fidelity offline simulation
-                // Emit simulated thoughts so tests can verify the stream events!
+                // Explicit simulation opt-in only (see isBlueprintSimulationEnabled). Events are labelled "Simulated".
                 onEvent({
                     type: 'agent_thought',
                     sessionId,
@@ -570,10 +582,10 @@ Adhere strictly to the following JSON format:
             let sandboxResult: any = { exitCode: 0, stdout: 'success', stderr: '', timedOut: false };
             for (const cmd of commands) {
                 let actualCmd = cmd;
-                const isSimulatedFailingGoal = isTestMode && (state.goal.toLowerCase().includes('fail') || state.goal.toLowerCase().includes('repetition'));
+                const isSimulatedFailingGoal = simulationOptIn && (state.goal.toLowerCase().includes('fail') || state.goal.toLowerCase().includes('repetition'));
                 if (isSimulatedFailingGoal && attempts < 3) {
                     actualCmd = 'exit 1';
-                } else if (isTestMode && milestone.description.toLowerCase().includes('fail')) {
+                } else if (simulationOptIn && milestone.description.toLowerCase().includes('fail')) {
                     actualCmd = 'exit 1';
                 }
 
@@ -673,7 +685,49 @@ Adhere strictly to the following JSON format:
     }
 
     /**
-     * Helper to simulate a generated action blueprint when offline or without credentials.
+     * Enable or disable simulated (non-AI) action blueprints. Off by default outside test environments.
+     * Pass `undefined` to fall back to environment detection.
+     */
+    setBlueprintSimulation(enabled: boolean | undefined): void {
+        this.blueprintSimulationOverride = enabled;
+    }
+
+    /**
+     * Simulated blueprints are only used on explicit opt-in: setBlueprintSimulation(true),
+     * SCRATCHBOX_AGENT_SIMULATION=1, or a test runner environment (NODE_ENV=test / SCRATCHBOX_TEST=true).
+     */
+    private isBlueprintSimulationEnabled(): boolean {
+        if (this.blueprintSimulationOverride !== undefined) {
+            return this.blueprintSimulationOverride;
+        }
+        if (typeof process === 'undefined') {
+            return false;
+        }
+        return process.env.SCRATCHBOX_AGENT_SIMULATION === '1'
+            || process.env.NODE_ENV === 'test'
+            || process.env.SCRATCHBOX_TEST === 'true';
+    }
+
+    /**
+     * Surface a blueprint-generation failure: emit an agent_error event and fail the run (no simulated substitute).
+     */
+    private failBlueprintGeneration(
+        sessionId: string,
+        milestone: AgentMilestone,
+        onEvent: (event: AgentStreamEvent) => void,
+        reason: string
+    ): false {
+        const state = this.sessions.get(sessionId);
+        if (state) {
+            state.status = 'failed';
+        }
+        milestone.status = 'failed';
+        onEvent(this.createEvent('agent_error', sessionId, `Action blueprint generation failed for milestone "${milestone.description}": ${reason}`));
+        return false;
+    }
+
+    /**
+     * Simulated action blueprint, used only when simulation is explicitly enabled (tests / opt-in).
      */
     private async simulateBlueprintGeneration(
         sessionId: string,
@@ -920,7 +974,7 @@ Adhere strictly to the following JSON format:
             return {
                 depthLevel: 'medium',
                 thinkingBudget: 2048,
-                modelTarget: 'gemini-3.7-flash',
+                modelTarget: 'gemini-3.8-flash',
                 estimatedEntropy
             };
         } else {

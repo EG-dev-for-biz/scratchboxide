@@ -550,4 +550,3 @@ export type {
     StagingAnchorProposal
 } from './node/spatial/SpatialVectorDataService';
 
-

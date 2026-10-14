@@ -112,7 +112,7 @@ async function runTests() {
     // Test 3: Verify standard Gemini models include googleSearch tool by default
     let standardCaptureOptions: any = {};
     const mockSseStandard = [
-        'data: {"id": "std-1", "candidates": [{"content": {"parts": [{"text": "Gemini response with search grounding."}]}, "groundingMetadata": {"webSearchQueries": ["Gemini 3.7 live specs"], "groundingChunks": [{"web": {"uri": "https://ai.google.dev", "title": "Google AI"}}]}}]}',
+        'data: {"id": "std-1", "candidates": [{"content": {"parts": [{"text": "Gemini response with search grounding."}]}, "groundingMetadata": {"webSearchQueries": ["Gemini 3.8 live specs"], "groundingChunks": [{"web": {"uri": "https://ai.google.dev", "title": "Google AI"}}]}}]}',
         'data: [DONE]'
     ].join('\n');
 
@@ -127,13 +127,13 @@ async function runTests() {
 
     const stdStreamEvents: GeminiStreamEvent[] = [];
     const stdResult = await service.streamGenerate(
-        { prompt: 'Tell me about Gemini 3.7 features' },
+        { prompt: 'Tell me about Gemini 3.8 features' },
         (e) => stdStreamEvents.push(e)
     );
 
     const stdBody = JSON.parse(standardCaptureOptions.body);
     assert.ok(stdBody.tools?.some((t: any) => t.googleSearch !== undefined), 'Standard model request must include { googleSearch: {} } by default');
-    assert.ok(stdResult.groundingMetadata?.webSearchQueries?.includes('Gemini 3.7 live specs'), 'Result must include parsed webSearchQueries');
+    assert.ok(stdResult.groundingMetadata?.webSearchQueries?.includes('Gemini 3.8 live specs'), 'Result must include parsed webSearchQueries');
     assert.strictEqual(stdResult.groundingMetadata?.groundingChunks?.[0]?.web?.uri, 'https://ai.google.dev', 'Result must include parsed grounding chunk URI');
     console.log('  ✓ Test 3 Passed: Standard Gemini model generation enables Google Search tool by default and captures grounding metadata');
 

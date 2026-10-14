@@ -1384,6 +1384,24 @@ struct PbrTextureMappingOptions {
     int roofMaterialIndex{11};        // 11 = Weathered Concrete
     int spireMaterialIndex{29};       // 29 = Stainless Steel 316
     bool deLightVertexColors{true};   // Normalize / strip baked ambient shadows
+
+    // Part-aware local OBB frame options (eliminates diagonal shearing on rotated facades)
+    bool useLocalObbFrame{false};
+    Vec3 obbCenter{0.0f, 0.0f, 0.0f};
+    float obbYawRad{0.0f};
+    float relativePlinthRatio{0.05f}; // Max 5% of height for plinth
+    float relativeSpireRatio{0.95f};  // Top 5% of height for spire (if height >= 80m)
+};
+
+struct PartSemanticFrame {
+    std::string partId;
+    std::string category;             // "architecture", "monument", "foliage", "road", "terrain", "vehicle"
+    Vec3 obbCenter{0.0f, 0.0f, 0.0f};
+    Vec3 obbDimensions{1.0f, 1.0f, 1.0f};
+    float yawRad{0.0f};
+    Vec4 baseColor{0.8f, 0.8f, 0.8f, 1.0f};
+    float roughness{0.7f};
+    float metalness{0.05f};
 };
 
 class TilePbrTextureMapper {
@@ -1403,6 +1421,15 @@ public:
         texturedMesh.name = cleanedMesh.name + "_pbr_textured";
         texturedMesh.material = PbrMaterial::stoneLimestone();
 
+        // Calculate continuous vertical span
+        float meshMinY = 1e9f;
+        float meshMaxY = -1e9f;
+        for (const auto& v : cleanedMesh.vertices) {
+            if (v.position.y < meshMinY) meshMinY = v.position.y;
+            if (v.position.y > meshMaxY) meshMaxY = v.position.y;
+        }
+        float meshHeight = std::max(1.0f, meshMaxY - meshMinY);
+
         // Color factors for physical PBR archetypes
         const Vec4 colLimestone(0.85f, 0.81f, 0.74f, 1.0f);
         const Vec4 colGlass(0.12f, 0.16f, 0.20f, 0.95f);
@@ -1410,36 +1437,59 @@ public:
         const Vec4 colConcrete(0.58f, 0.56f, 0.53f, 1.0f);
         const Vec4 colSpire(0.92f, 0.93f, 0.95f, 1.0f);
 
+        const bool hasLocalFrame = opt.useLocalObbFrame || std::abs(opt.obbYawRad) > 1e-4f;
+        const float cosY = hasLocalFrame ? std::cos(-opt.obbYawRad) : 1.0f;
+        const float sinY = hasLocalFrame ? std::sin(-opt.obbYawRad) : 0.0f;
+
         for (size_t i = 0; i < texturedMesh.vertices.size(); ++i) {
             Vertex& v = texturedMesh.vertices[i];
             const Vec3& p = v.position;
             const Vec3& n = v.normal;
 
-            // 1. Continuous Metric World-Space Box UV Unwrapping (1.0m = 1.0 UV)
-            if (std::abs(n.y) >= 0.70f) {
+            Vec3 pLocal = p;
+            Vec3 nLocal = n;
+            if (hasLocalFrame) {
+                float dx = p.x - opt.obbCenter.x;
+                float dz = p.z - opt.obbCenter.z;
+                pLocal.x = dx * cosY - dz * sinY;
+                pLocal.y = p.y - opt.obbCenter.y;
+                pLocal.z = dx * sinY + dz * cosY;
+
+                float ndx = n.x;
+                float ndz = n.z;
+                nLocal.x = ndx * cosY - ndz * sinY;
+                nLocal.y = n.y;
+                nLocal.z = ndx * sinY + ndz * cosY;
+            }
+
+            // 1. Continuous Metric Local/World-Space Box UV Unwrapping (1.0m = 1.0 UV)
+            // Eliminates diagonal shearing by projecting along local OBB axes
+            if (std::abs(nLocal.y) >= 0.70f) {
                 // Horizontal surfaces (roofs, terraces, promenade)
-                v.uv = Vec2(p.x * opt.facadeUvScale, p.z * opt.facadeUvScale);
-            } else if (std::abs(n.x) > std::abs(n.z)) {
-                // East / West Facades
-                v.uv = Vec2(p.z * opt.facadeUvScale, p.y * opt.facadeUvScale);
+                v.uv = Vec2(pLocal.x * opt.facadeUvScale, pLocal.z * opt.facadeUvScale);
+            } else if (std::abs(nLocal.x) > std::abs(nLocal.z)) {
+                // Local East / West Facades
+                v.uv = Vec2(pLocal.z * opt.facadeUvScale, pLocal.y * opt.facadeUvScale);
             } else {
-                // North / South Facades
-                v.uv = Vec2(p.x * opt.facadeUvScale, p.y * opt.facadeUvScale);
+                // Local North / South Facades
+                v.uv = Vec2(pLocal.x * opt.facadeUvScale, pLocal.y * opt.facadeUvScale);
             }
 
             // 2. Semantic Material Assignment & De-Lighting
-            if (p.y <= 1.8f) {
+            // Uses continuous relative elevation ratios (hRel) instead of hardcoded meter constants
+            float relH = (p.y - meshMinY) / meshHeight;
+            if (relH <= opt.relativePlinthRatio && (p.y - meshMinY) <= 2.5f) {
                 // Base Plinth: Honed Charcoal Granite
                 v.color = colGranite;
-            } else if (p.y >= 381.0f) {
+            } else if ((relH >= opt.relativeSpireRatio && meshHeight >= 80.0f) || p.y >= 381.0f) {
                 // Mooring Mast & Spire: Stainless Steel 316
                 v.color = colSpire;
-            } else if (std::abs(n.y) >= 0.70f) {
+            } else if (std::abs(nLocal.y) >= 0.70f) {
                 // Setback Terraces & Roofs: Weathered Concrete
                 v.color = colConcrete;
             } else {
                 // Vertical Facades: Differentiate between window spandrel bands and limestone piers
-                float floorPhase = std::fmod(p.y, opt.floorToFloorHeight);
+                float floorPhase = std::fmod(p.y - meshMinY, opt.floorToFloorHeight);
                 if (floorPhase > 1.2f && floorPhase < (1.2f + opt.windowBandHeight)) {
                     // Window Glazing Band: Low-E Glass
                     v.color = colGlass;
@@ -1448,6 +1498,82 @@ public:
                     v.color = colLimestone;
                 }
             }
+        }
+
+        texturedMesh.recomputeNormals();
+        return texturedMesh;
+    }
+
+    /**
+     * Applies part-aware PBR materials to a mesh partitioned by discrete semantic parts.
+     */
+    static ScratchboxMesh applyPartAwarePbrMaterials(
+        const ScratchboxMesh& cleanedMesh,
+        const std::vector<PartSemanticFrame>& parts,
+        const PbrTextureMappingOptions& baseOpt = {}
+    ) {
+        if (cleanedMesh.vertices.empty() || parts.empty()) {
+            return applyPbrMaterials(cleanedMesh, baseOpt);
+        }
+
+        ScratchboxMesh texturedMesh = cleanedMesh;
+        texturedMesh.name = cleanedMesh.name + "_part_aware_textured";
+
+        for (size_t i = 0; i < texturedMesh.vertices.size(); ++i) {
+            Vertex& v = texturedMesh.vertices[i];
+            const Vec3& p = v.position;
+
+            // Find closest / enclosing part semantic frame
+            int bestPartIdx = 0;
+            float bestDistSq = 1e9f;
+
+            for (size_t pi = 0; pi < parts.size(); ++pi) {
+                const auto& part = parts[pi];
+                float cosY = std::cos(-part.yawRad);
+                float sinY = std::sin(-part.yawRad);
+                float dx = p.x - part.obbCenter.x;
+                float dz = p.z - part.obbCenter.z;
+                float lx = dx * cosY - dz * sinY;
+                float ly = p.y - part.obbCenter.y;
+                float lz = dx * sinY + dz * cosY;
+
+                // Check distance normalized by half-extents
+                float hx = std::max(0.1f, part.obbDimensions.x * 0.5f);
+                float hy = std::max(0.1f, part.obbDimensions.y * 0.5f);
+                float hz = std::max(0.1f, part.obbDimensions.z * 0.5f);
+
+                float dNormSq = (lx / hx) * (lx / hx) + (ly / hy) * (ly / hy) + (lz / hz) * (lz / hz);
+                if (dNormSq < bestDistSq) {
+                    bestDistSq = dNormSq;
+                    bestPartIdx = static_cast<int>(pi);
+                }
+            }
+
+            const auto& assignedPart = parts[bestPartIdx];
+            float cosY = std::cos(-assignedPart.yawRad);
+            float sinY = std::sin(-assignedPart.yawRad);
+            float dx = p.x - assignedPart.obbCenter.x;
+            float dz = p.z - assignedPart.obbCenter.z;
+            Vec3 pLocal(dx * cosY - dz * sinY, p.y - assignedPart.obbCenter.y, dx * sinY + dz * cosY);
+
+            Vec3 nLocal = v.normal;
+            float ndx = v.normal.x;
+            float ndz = v.normal.z;
+            nLocal.x = ndx * cosY - ndz * sinY;
+            nLocal.y = v.normal.y;
+            nLocal.z = ndx * sinY + ndz * cosY;
+
+            // UV coordinate projection in local OBB tangent space
+            if (std::abs(nLocal.y) >= 0.70f) {
+                v.uv = Vec2(pLocal.x * baseOpt.facadeUvScale, pLocal.z * baseOpt.facadeUvScale);
+            } else if (std::abs(nLocal.x) > std::abs(nLocal.z)) {
+                v.uv = Vec2(pLocal.z * baseOpt.facadeUvScale, pLocal.y * baseOpt.facadeUvScale);
+            } else {
+                v.uv = Vec2(pLocal.x * baseOpt.facadeUvScale, pLocal.y * baseOpt.facadeUvScale);
+            }
+
+            // Assign base color calibrated to part category
+            v.color = assignedPart.baseColor;
         }
 
         texturedMesh.recomputeNormals();

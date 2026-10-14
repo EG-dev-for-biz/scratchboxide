@@ -67,7 +67,7 @@ export const AUTOMATION_CANVAS_TEMPLATES: AutomationTemplateItem[] = [
                 subtitle: 'Real-time document format converter and Google Drive cloud synchronizer',
                 nodes: [
                     { id: 'node-gdrive-trigger', label: 'Document Change Trigger', subtitle: 'On Spec Save / Update', category: 'input', color: 'blue', x: 60, y: 160, status: 'completed', parameters: { event: 'document.save', debounceMs: 1000 } },
-                    { id: 'node-gdrive-ai', label: 'AI Document Formatter', subtitle: 'Autonomous AI Agent', category: 'ai', color: 'purple', x: 420, y: 80, status: 'running', parameters: { model: 'gemini-3.7-flash', format: 'google-docs' } },
+                    { id: 'node-gdrive-ai', label: 'AI Document Formatter', subtitle: 'Autonomous AI Agent', category: 'ai', color: 'purple', x: 420, y: 80, status: 'running', parameters: { model: 'gemini-3.8-flash', format: 'google-docs' } },
                     { id: 'node-gdrive-mcp', label: 'Google Drive & Docs MCP', subtitle: 'create_document / upload_file', category: 'mcp', color: 'blue', x: 420, y: 280, status: 'completed', parameters: { server: 'mcp-google-drive', tools: ['create_document', 'upload_file', 'list_drive_files', 'search_drive'] } },
                     { id: 'node-gdrive-sync', label: 'Google Docs Exporter', subtitle: 'docs.google.com sync', category: 'database', color: 'emerald', x: 780, y: 160, status: 'completed', parameters: { autoSync: true, notify: true } }
                 ],
@@ -101,7 +101,7 @@ export const AUTOMATION_CANVAS_TEMPLATES: AutomationTemplateItem[] = [
                 subtitle: 'Visual node graph & logic builder with bi-directional wiring & parameter editing',
                 nodes: [
                     { id: 'node-trigger', label: 'Webhook Trigger', subtitle: 'POST /api/v1/events', category: 'input', color: 'blue', x: 60, y: 160, status: 'completed', parameters: { triggerType: 'webhook', endpoint: '/api/v1/events', httpMethod: 'POST' } },
-                    { id: 'node-ai', label: 'AI Reasoning Engine', subtitle: 'Autonomous AI Agent', category: 'ai', color: 'purple', x: 420, y: 80, status: 'running', parameters: { model: 'gemini-3.7-flash', temperature: 0.2 } },
+                    { id: 'node-ai', label: 'AI Reasoning Engine', subtitle: 'Autonomous AI Agent', category: 'ai', color: 'purple', x: 420, y: 80, status: 'running', parameters: { model: 'gemini-3.8-flash', temperature: 0.2 } },
                     { id: 'node-mcp', label: 'MCP Integrations', subtitle: 'Stripe & GitHub Tools', category: 'mcp', color: 'indigo', x: 420, y: 280, status: 'pending', parameters: { server: 'mcp-stripe', tool: 'get_balance' } },
                     { id: 'node-gate', label: 'Decision Gate', subtitle: 'Confidence > 0.85', category: 'decision', color: 'amber', x: 780, y: 160, status: 'pending', parameters: { rule: 'payload.confidence > 0.85' } },
                     { id: 'node-cli', label: 'CLI Test Runner', subtitle: 'yarn test:verification', category: 'cli', color: 'emerald', x: 1140, y: 80, status: 'pending', parameters: { command: 'yarn test' } },

@@ -686,3 +686,162 @@ async function runBlockoutPipelineTests() {
 test('Google 3D Tile Blockout Video Pipeline Test Suite', async () => {
   await runBlockoutPipelineTests();
 });
+
+// =========================================================================
+// No silent fake success: offline mock is explicit opt-in and Chrome failures reject
+// =========================================================================
+
+const failureAnchor: GeoAnchor = { lat: 40.7484405, lng: -73.9856644, elevation: 15.0, landmarkName: 'Empire State Building' };
+
+function listChromeProfileDirs(): string[] {
+  return fs.readdirSync(os.tmpdir()).filter(name => name.startsWith('chrome_tile_blockout_'));
+}
+
+async function makeFailureOutputs(prefix: string) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  return {
+    tmpDir,
+    output: {
+      outputVideoPath: path.join(tmpDir, 'blockout.mp4'),
+      outputGlbPath: path.join(tmpDir, 'area.glb'),
+      framesDir: path.join(tmpDir, 'frames'),
+      firstFramePath: path.join(tmpDir, 'first.jpg'),
+      firstFramePngPath: path.join(tmpDir, 'first.png'),
+      storyboardsDir: path.join(tmpDir, 'storyboards'),
+      manifestPath: path.join(tmpDir, 'manifest.json'),
+      compileWebm: false
+    }
+  };
+}
+
+test('offlineMock results are explicitly marked mock, never reuse a pre-existing GLB, and carry no fabricated tile metrics', async () => {
+  const service = new Google3DTileBlockoutPipelineService();
+  const { tmpDir, output } = await makeFailureOutputs('scratchbox-tile-mock-marking-');
+  try {
+    // A pre-existing (stale / production) GLB at the output path must be neither reused nor overwritten
+    const staleBytes = Buffer.from('glTF-stale-production-asset');
+    await fs.writeFile(output.outputGlbPath, staleBytes);
+
+    const result = await service.run({
+      geoAnchor: failureAnchor,
+      cameraPath: create3DTilesTrajectory(failureAnchor, { durationSec: 0.5, fps: 8 }),
+      offlineMock: true,
+      output
+    });
+
+    assert.strictEqual(result.mock, true, 'Offline mock results must be flagged mock: true');
+    assert.strictEqual(result.manifest.mock, true, 'Offline mock manifest must be flagged mock: true');
+    assert.strictEqual(result.tileMetrics.averageSettleTimeMs, 0, 'No fabricated settle time');
+    assert.strictEqual(result.manifest.tileMetrics.maxTilesLoaded, 0, 'No fabricated tile counts');
+    assert.ok(fs.readFileSync(output.outputGlbPath).equals(staleBytes), 'Pre-existing GLB must not be overwritten');
+    assert.notStrictEqual(result.glbPath, output.outputGlbPath, 'Pre-existing GLB must not be reported as the mock output');
+    assert.ok(result.glbPath!.endsWith('.offline_mock.glb'));
+    assert.strictEqual(result.glbBuffer!.toString('ascii', 0, 4), 'glTF');
+    assert.ok(result.glbBuffer!.equals(fs.readFileSync(result.glbPath!)));
+    // Bounds come from the GLB POSITION accessors, not a fixed placeholder box
+    assert.notDeepStrictEqual(result.mesh!.boundingBox, { min: [-100, -10, -100], max: [100, 200, 100] });
+    // The PNG path holds real PNG bytes (not JPEG bytes)
+    const png = fs.readFileSync(output.firstFramePngPath);
+    assert.strictEqual(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'First frame PNG must be a real PNG');
+
+    const fetched = await getGoogle3DTilesClay(failureAnchor, { offlineMock: true, outputGlbPath: path.join(tmpDir, 'clay_api.glb') });
+    assert.strictEqual(fetched.mock, true, 'fetch3DObject must propagate the mock flag');
+    assert.strictEqual(fetched.quality.leafLodSettled, false, 'Mock results must not claim leaf LOD settlement');
+  } finally {
+    await fs.remove(tmpDir);
+  }
+}, 120_000);
+
+test('missing Chrome binary rejects with an actionable error instead of falling back to mock output', async () => {
+  const missingChrome = path.join(os.tmpdir(), `no-such-chrome-${Date.now()}`);
+  const service = new Google3DTileBlockoutPipelineService(missingChrome);
+  const { tmpDir, output } = await makeFailureOutputs('scratchbox-tile-missing-chrome-');
+  const profilesBefore = new Set(listChromeProfileDirs());
+  try {
+    await assert.rejects(
+      service.run({
+        geoAnchor: failureAnchor,
+        cameraPath: create3DTilesTrajectory(failureAnchor, { durationSec: 0.5, fps: 8 }),
+        output
+      }),
+      (err: Error) => {
+        assert.match(err.message, /Headless Chrome failed to launch/);
+        assert.ok(err.message.includes(missingChrome), 'Error must name the Chrome binary');
+        assert.match(err.message, /CHROME_BIN/);
+        return true;
+      }
+    );
+    assert.ok(!fs.existsSync(output.outputVideoPath), 'No placeholder video may be written on failure');
+    assert.ok(!fs.existsSync(output.manifestPath), 'No manifest may be written on failure');
+    assert.ok(!fs.existsSync(output.firstFramePngPath), 'No placeholder first frame may be written on failure');
+    assert.ok(!fs.existsSync(output.outputGlbPath), 'No synthetic GLB may be written on failure');
+    const leaked = listChromeProfileDirs().filter(d => !profilesBefore.has(d));
+    assert.deepStrictEqual(leaked, [], 'Chrome profile dir must be removed on failure');
+  } finally {
+    await fs.remove(tmpDir);
+  }
+}, 60_000);
+
+test('Chrome exiting non-zero rejects with the exit code and stderr tail', async () => {
+  const { tmpDir, output } = await makeFailureOutputs('scratchbox-tile-chrome-exit-');
+  const fakeChrome = path.join(tmpDir, 'fake-chrome.sh');
+  await fs.writeFile(fakeChrome, '#!/bin/sh\necho "FATAL: GPU process unavailable" 1>&2\nexit 21\n', { mode: 0o755 });
+  const service = new Google3DTileBlockoutPipelineService(fakeChrome);
+  try {
+    await assert.rejects(
+      service.run({
+        geoAnchor: failureAnchor,
+        cameraPath: create3DTilesTrajectory(failureAnchor, { durationSec: 0.5, fps: 8 }),
+        output
+      }),
+      (err: Error) => {
+        assert.match(err.message, /exited before the runner finished \(code 21/);
+        assert.match(err.message, /FATAL: GPU process unavailable/);
+        return true;
+      }
+    );
+    assert.ok(!fs.existsSync(output.outputVideoPath));
+    assert.ok(!fs.existsSync(output.manifestPath));
+  } finally {
+    await fs.remove(tmpDir);
+  }
+}, 60_000);
+
+test('a runner that stalls after the first frame is killed by the inactivity timeout and rejects', async () => {
+  const { tmpDir, output } = await makeFailureOutputs('scratchbox-tile-chrome-stall-');
+  // Fake "Chrome": uploads one frame to the recorder URL (last argv), then hangs forever.
+  const fakeChrome = path.join(tmpDir, 'fake-chrome-stall.cjs');
+  await fs.writeFile(fakeChrome, `#!${process.execPath}
+const http = require('http');
+const url = new URL(process.argv[process.argv.length - 1]);
+const body = JSON.stringify({ index: 0, dataUrl: 'data:image/jpeg;base64,/9j/4AAQ', settleTimeMs: 5, tilesLoaded: 1 });
+const req = http.request({ host: url.hostname, port: url.port, path: '/upload-frame', method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => res.resume());
+req.end(body);
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+  const service = new Google3DTileBlockoutPipelineService(fakeChrome);
+  const startedAt = Date.now();
+  try {
+    await assert.rejects(
+      service.run({
+        geoAnchor: failureAnchor,
+        cameraPath: create3DTilesTrajectory(failureAnchor, { durationSec: 0.5, fps: 8 }),
+        timeoutMs: 10_000,
+        inactivityTimeoutMs: 1_500,
+        output
+      }),
+      (err: Error) => {
+        assert.match(err.message, /stalled: no runner activity for 1500ms/);
+        assert.match(err.message, /Frames received: 1\//);
+        return true;
+      }
+    );
+    assert.ok(Date.now() - startedAt < 9_000, 'Inactivity timeout must fire well before the startup timeout');
+    assert.ok(fs.existsSync(path.join(output.framesDir, 'frame_0000.jpg')), 'The real uploaded frame is kept for diagnosis');
+    assert.ok(!fs.existsSync(output.outputVideoPath), 'No video may be reported for a stalled run');
+    assert.ok(!fs.existsSync(output.manifestPath));
+  } finally {
+    await fs.remove(tmpDir);
+  }
+}, 60_000);
