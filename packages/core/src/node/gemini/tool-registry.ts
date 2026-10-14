@@ -96,9 +96,12 @@ import {
     PBR_MATERIAL_TOOL_DECLARATIONS,
     pbrMaterialHandlers,
     LOCAL_SF3D_TOOL_DECLARATIONS,
+    LOCAL_SF3D_OFFERED_BY_DEFAULT,
     localSf3DHandlers,
     TURNAROUND_TOOL_DECLARATIONS,
-    turnaroundHandlers
+    turnaroundHandlers,
+    OBJECT_REFERENCE_TOOL_DECLARATIONS,
+    objectReferenceHandlers
 } from './tools';
 
 interface ToolRegistration {
@@ -106,6 +109,12 @@ interface ToolRegistration {
     group: ToolGroup;
     declaration: ToolDeclaration;
     handler: ToolHandler;
+    /** False for tools that run only when a request names them; they stay dispatchable but are not offered by group. */
+    offeredByDefault: boolean;
+}
+
+export interface ToolRegistrationOptions {
+    offeredByDefault?: boolean;
 }
 
 interface GroupPresentation {
@@ -324,8 +333,8 @@ export class ToolRegistry {
     private readonly tools = new Map<string, ToolRegistration>();
     private fallback?: ToolFallbackHandler;
 
-    register(name: string, declaration: ToolDeclaration, handler: ToolHandler, group: ToolGroup = inferToolGroup(name)): this {
-        this.tools.set(name, { name, group, declaration: { ...declaration, name }, handler });
+    register(name: string, declaration: ToolDeclaration, handler: ToolHandler, group: ToolGroup = inferToolGroup(name), options: ToolRegistrationOptions = {}): this {
+        this.tools.set(name, { name, group, declaration: { ...declaration, name }, handler, offeredByDefault: options.offeredByDefault !== false });
         return this;
     }
 
@@ -350,11 +359,11 @@ export class ToolRegistry {
         return Array.from(this.tools.values()).filter(t => !group || t.group === group).map(t => t.name);
     }
 
-    /** Declarations for the given groups (all groups when omitted), in registration order. */
+    /** Declarations offered by default for the given groups (all groups when omitted), in registration order. */
     declarations(groups?: ToolGroup[]): ToolDeclaration[] {
         const wanted = groups ? new Set(groups) : undefined;
         return Array.from(this.tools.values())
-            .filter(t => !wanted || wanted.has(t.group))
+            .filter(t => t.offeredByDefault && (!wanted || wanted.has(t.group)))
             .map(t => sanitizeToolDeclaration(t.declaration));
     }
 
@@ -653,6 +662,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     for (const decl of PYTHON_3D_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, python3DHandlers[decl.name], 'workspace');
     }
+    for (const decl of OBJECT_REFERENCE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, objectReferenceHandlers[decl.name], 'workspace');
+    }
     // Declared in DEFAULT_TOOL_DECLARATIONS; without these the agent is offered tools it cannot dispatch.
     for (const decl of IMAGE_TO_PBR_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, imageToPbrHandlers[decl.name], 'workspace');
@@ -661,7 +673,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
         registry.register(decl.name, decl, pbrMaterialHandlers[decl.name], 'workspace');
     }
     for (const decl of LOCAL_SF3D_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, localSf3DHandlers[decl.name], 'workspace');
+        registry.register(decl.name, decl, localSf3DHandlers[decl.name], 'workspace', { offeredByDefault: LOCAL_SF3D_OFFERED_BY_DEFAULT });
     }
     for (const decl of TURNAROUND_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, turnaroundHandlers[decl.name], 'workspace');
