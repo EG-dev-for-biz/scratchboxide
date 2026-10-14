@@ -137,7 +137,7 @@ tree = sb.create_tree(attractor_count=100, crown_center=(0, 4, 0), crown_extents
 tree.translate(10.0, 0.4, 4.0)
 scene.merge(tree)
 
-sb.io.export_glb(scene)
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 \`\`\`
 The scene features procedural rhythmic fenestration, recessed windows, foundation plinths, and botanical foliage.`;
 

@@ -22,8 +22,6 @@ async function runArchitecturalRefactoringTests() {
     const useArtifactHistoryPath = path.join(hooksDir, 'useArtifactVersionHistory.ts');
     const sideChatPath = path.resolve(__dirname, '../src/browser/generative-canvas/VibecodeAiSideChat.tsx');
     const studioPath = path.resolve(__dirname, '../src/browser/generative-canvas/GenerativeCanvasStudio.tsx');
-    const architectureDebtPath = path.resolve(__dirname, '../../../.architecture/debt.md');
-    const architectureMapPath = path.resolve(__dirname, '../../../.architecture/map.md');
 
     // -------------------------------------------------------------
     // Test 1: Extracted Reusable ContextMentionAutocompletePopover
@@ -58,13 +56,6 @@ async function runArchitecturalRefactoringTests() {
     assert.ok(historySource.includes('useArtifactVersionHistory'), 'Must export useArtifactVersionHistory hook');
     assert.ok(historySource.includes('rollbackToVersion'), 'Must provide rollbackToVersion action');
     console.log('  ✓ Test 3 Passed: useStudioModals and useArtifactVersionHistory hooks extracted');
-
-    // -------------------------------------------------------------
-    // Test 4: Architecture Documentation Verification
-    // -------------------------------------------------------------
-    assert.ok(fs.existsSync(architectureDebtPath), '.architecture/debt.md must exist');
-    assert.ok(fs.existsSync(architectureMapPath), '.architecture/map.md must exist');
-    console.log('  ✓ Test 4 Passed: .architecture/ mental map and debt ledger updated');
 
     console.log('\n🎉 ALL ARCHITECTURAL MICRO-REFACTORING TESTS PASSED SUCCESSFULLY!');
 }

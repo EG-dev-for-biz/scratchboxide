@@ -18,7 +18,7 @@ cube.translate(0.0, 1.0, 0.0)
 scene = sb.geometry.Mesh()
 scene.append(pedestal)
 scene.append(cube)
-sb.io.export_glb(scene)
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 \`\`\``;
 
         const modelResponse = `Here is the procedural 3D scene designed using the Blender mental model:\n\n${pythonCode}\n\nThe scene is now rendered with a grounded pedestal.`;

@@ -581,7 +581,8 @@ describe('scan rectifier: T-junction chunk seams stay closed while snapping', ()
     }, 120_000);
 
     it('opens the seam when the two chunks move independently (--no-seam-coherence)', () => {
-        const gaps = gapsFor('seams_independent', ['--no-seam-coherence', '--no-tjunction']);
+        // The post-guard seam stitch would put the borders back together, so disable it too.
+        const gaps = gapsFor('seams_independent', ['--no-seam-coherence', '--no-tjunction', '--no-seam-stitch']);
         expect(Math.max(...gaps)).toBeGreaterThan(0.03);
     }, 120_000);
 });
