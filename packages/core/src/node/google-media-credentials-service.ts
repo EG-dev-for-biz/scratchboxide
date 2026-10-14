@@ -63,8 +63,11 @@ export class GoogleMediaCredentialsService {
         return this.createVertexClient();
     }
 
-    /** Vertex AI client from service-account or project credentials; never uses an API key. */
-    async createVertexClient(location: string = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'): Promise<GoogleGenAI> {
+    /**
+     * Vertex AI client from service-account or project credentials; never uses an API key. Defaults to the
+     * same location as chat, since regional endpoints such as us-central1 serve only gemini-2.5-flash-image.
+     */
+    async createVertexClient(location: string = resolveVertexLocation()): Promise<GoogleGenAI> {
         const auth = await this.getVertexAuth();
         return new GoogleGenAI({
             vertexai: true,

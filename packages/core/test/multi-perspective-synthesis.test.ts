@@ -20,6 +20,28 @@ import { Google360PanoramaPipelineService } from '../src/node/spatial/Google360P
 import { encodePng } from '../src/node/texture-processing';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 
+// Image model ids the Gemini API and Vertex AI answer to; the fake client 404s anything else, as both backends do.
+const SERVED_IMAGE_MODEL_IDS = ['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-2.5-flash-image', 'gemini-3.1-flash-lite-image'];
+
+/** Credentials whose client answers served ids with a flat 24x24 PNG of `level`, records every model asked, and 404s the rest. */
+function fakeImageCredentials(calls: string[], answer: 'image' | 'empty' = 'image', level = 90): any {
+    const png = encodePng(24, 24, Buffer.alloc(24 * 24 * 4, level));
+    return {
+        createClient: async () => ({
+            models: {
+                generateContent: async ({ model }: { model: string }) => {
+                    calls.push(model);
+                    if (!SERVED_IMAGE_MODEL_IDS.includes(model)) {
+                        throw Object.assign(new Error(`models/${model} is not found`), { status: 404 });
+                    }
+                    const parts = answer === 'image' ? [{ inlineData: { data: png.toString('base64'), mimeType: 'image/png' } }] : [];
+                    return { candidates: [{ finishReason: 'STOP', content: { parts } }] };
+                }
+            }
+        })
+    };
+}
+
 describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
 
     it('defines complete 6-camera canonical cube rig covering full sphere', () => {
@@ -209,7 +231,8 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         }
         const imgPng = encodePng(imgW, imgH, imgRgba);
 
-        const service = new MultiPerspectivePanoramaSynthesisService();
+        const calls: string[] = [];
+        const service = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials(calls));
         const result = await service.generate360Perspectives({
             inputImageBuffer: imgPng,
             faceResolution: 32,
@@ -219,6 +242,8 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         });
 
         expect(result.success).toBe(true);
+        expect(calls).toEqual(Array(5).fill('gemini-3.1-flash-image'));
+        expect(result.modelUsed).toBe('gemini-3.1-flash-image');
         expect(result.coverageAngleDegrees.horizontal).toBe(360.0);
         expect(result.coverageAngleDegrees.vertical).toBe(180.0);
         expect(result.perspectivesSynthesized).toContain('top');
@@ -258,10 +283,12 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
             faceResolution: 32,
             equirectangularWidth: 128,
             equirectangularHeight: 64,
+            mockExecution: true,
             outputDir: tmpDir
         }, {} as any);
 
         expect(execution.exec.summaryResult).toContain('360°x180°');
+        expect(execution.exec.summaryResult).toContain('no model call');
         expect(execution.exec.summaryResult).toContain('TOP');
         expect(execution.exec.summaryResult).toContain('BOTTOM');
 
@@ -390,10 +417,51 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         });
 
         expect(result.success).toBe(true);
-        expect(result.modelUsed).toContain('nano-banana-2');
-        expect(result.summary).toContain('nano-banana-2');
+        expect(result.modelUsed).toBe('gemini-3.1-flash-image mock: procedural copies, no model call');
+        expect(result.summary).toContain('gemini-3.1-flash-image mock: procedural copies, no model call');
         expect(result.perspectivesSynthesized).toHaveLength(5);
 
         await fs.remove(tmpDir);
+    });
+
+    it('sends the API model id for a product name and builds every perspective from the model answer', async () => {
+        const imgPng = encodePng(48, 36, Buffer.alloc(48 * 36 * 4, 200));
+        const calls: string[] = [];
+        const service = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials(calls, 'image', 90));
+        const result = await service.generate360Perspectives({
+            inputImageBuffer: imgPng,
+            faceResolution: 16,
+            equirectangularWidth: 64,
+            equirectangularHeight: 32,
+            model: 'nano-banana-2'
+        });
+
+        expect(calls).toEqual(Array(5).fill('gemini-3.1-flash-image'));
+        expect(result.modelUsed).toBe('gemini-3.1-flash-image');
+        // The model answered a flat level-90 image; away from the welded seam the back face is that answer, not a copy of the level-200 input.
+        const back = result.perspectives.back.rgba;
+        const center = (8 * 16 + 8) * 4;
+        expect([back[center], back[center + 1], back[center + 2]]).toEqual([90, 90, 90]);
+    });
+
+    it('reports a failed or empty model answer instead of returning procedural copies', async () => {
+        const imgPng = encodePng(48, 36, Buffer.alloc(48 * 36 * 4, 200));
+        const options = { inputImageBuffer: imgPng, faceResolution: 16, equirectangularWidth: 64, equirectangularHeight: 32 };
+
+        const unservedCalls: string[] = [];
+        const unserved = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials(unservedCalls));
+        await expect(unserved.generate360Perspectives({ ...options, model: 'unserved-image-model' }))
+            .rejects.toThrow('unserved-image-model failed on the right perspective: models/unserved-image-model is not found');
+        expect(unservedCalls).toEqual(['unserved-image-model']);
+
+        const empty = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials([], 'empty'));
+        await expect(empty.generate360Perspectives(options))
+            .rejects.toThrow('gemini-3.1-flash-image returned no image for the right perspective (STOP)');
+
+        const unconfigured = new MultiPerspectivePanoramaSynthesisService({
+            createClient: async () => { throw new Error('Google media credentials are not configured'); }
+        } as any);
+        await expect(unconfigured.generate360Perspectives(options))
+            .rejects.toThrow(/needs Google credentials \(Google media credentials are not configured\)/);
     });
 });

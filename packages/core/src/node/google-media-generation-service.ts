@@ -22,6 +22,7 @@ import {
     VIDEO_MODEL_PRIORITY,
     VideoGenerationRequest,
     classifyMediaGenerationError,
+    resolveImageModelId,
     validateMediaGenerationRequest
 } from '../common/media-generation-protocol';
 import { GoogleMediaCredentialsService } from './google-media-credentials-service';
@@ -395,14 +396,11 @@ export class GoogleMediaGenerationService {
         const rawList = requested?.length ? requested : defaults;
         const expanded: string[] = [];
 
-        for (const model of rawList) {
-            if (!model) continue;
+        for (const requestedModel of rawList) {
+            if (!requestedModel) continue;
+            const model = resolveImageModelId(requestedModel);
             const m = model.toLowerCase();
-            if (m.includes('nano-banana-lite') || m === 'nano-banana-lite') {
-                expanded.push(model, 'gemini-2.5-flash-image', 'gemini-3.1-flash-image', 'nano-banana-2');
-            } else if (m.includes('nano-banana') || m === 'nano-banana-2' || m === 'google/nano-banana-pro') {
-                expanded.push(model, 'gemini-3.1-flash-image', 'imagen-3.0-generate-002', 'gemini-3-pro-image', 'gemini-2.5-flash-image');
-            } else if (m.includes('omni') || m === 'google/omni-1.1' || m === 'omni-1.1-video' || m === 'gemini-omni-flash-video' || m === 'omni-product') {
+            if (m.includes('omni') || m === 'google/omni-1.1' || m === 'omni-1.1-video' || m === 'gemini-omni-flash-video' || m === 'omni-product') {
                 expanded.push(model, 'veo-3.1-fast-generate-preview', 'veo-3.1-generate-preview', 'veo-3.1-lite-generate-preview');
             } else {
                 expanded.push(model);

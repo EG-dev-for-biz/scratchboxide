@@ -7,21 +7,35 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+// API model ids; the Gemini API and Vertex AI serve image models under the same ids.
 export const IMAGE_MODEL_PRIORITY = [
-    'nano-banana-2',
-    'google/nano-banana-pro',
     'gemini-3.1-flash-image',
-    'imagen-3.0-generate-002',
     'gemini-3-pro-image',
     'gemini-2.5-flash-image'
 ];
 
 export const IMAGE_MODEL_PRIORITY_DRAFT = [
-    'nano-banana-lite',
     'gemini-2.5-flash-image',
-    'gemini-3.1-flash-image',
-    'nano-banana-2'
+    'gemini-3.1-flash-image'
 ];
+
+/**
+ * Product names (and an Imagen id neither backend serves) that callers and saved documents still send, mapped
+ * to the API model id that serves them. Sending one of these names as-is costs a 404 round trip.
+ */
+export const IMAGE_MODEL_ALIASES: Record<string, string> = {
+    'nano-banana-2': 'gemini-3.1-flash-image',
+    'google/nano-banana-pro': 'gemini-3-pro-image',
+    'nano-banana-pro': 'gemini-3-pro-image',
+    'nano-banana-lite': 'gemini-3.1-flash-lite-image',
+    'imagen-3.0-generate-002': 'gemini-3.1-flash-image'
+};
+
+/** The API model id for an image model name; a name that is not an alias passes through unchanged. */
+export function resolveImageModelId(model: string): string {
+    const key = model.toLowerCase();
+    return Object.prototype.hasOwnProperty.call(IMAGE_MODEL_ALIASES, key) ? IMAGE_MODEL_ALIASES[key] : model;
+}
 
 export const VIDEO_MODEL_PRIORITY = [
     'google/omni-1.1',
