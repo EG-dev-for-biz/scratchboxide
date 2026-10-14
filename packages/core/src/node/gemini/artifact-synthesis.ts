@@ -19,6 +19,7 @@ import type {
     SandboxTemplate,
     Scene3DData
 } from '../../browser/generative-canvas/canvas-types';
+import { normalizePrimitiveType } from '../../browser/generative-canvas/canvas-types';
 import {
     synthesizeComprehensiveDocument as synthesizeDocumentFromEngine,
     ensureCompleteSections,
@@ -38,7 +39,7 @@ import {
 } from '../../browser/generative-canvas/services/adaptive-domain-engine';
 import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
 import { TaskCapabilityResolver } from '../agent/task-capability-resolver';
-import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from './scene3d-clay-baseline';
+import { applyClayFirstPassBaseline, lightingFeaturesOf, releaseClayOnMaterialRequest } from './scene3d-clay-baseline';
 export { synthesizeContextualVideoTimeline };
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
@@ -2517,7 +2518,7 @@ export function parseOrSynthesizeArtifact(
     // 0. Unified Artifact Tag Architecture (<scratchboxPrimitive type="..." title="..." summary="..." version="...">)
     const primitiveTag = extractScratchboxPrimitiveTag(modelText);
     if (primitiveTag.matched && primitiveTag.type) {
-        let tagType = primitiveTag.type as PrimitiveType;
+        let tagType = (normalizePrimitiveType(primitiveTag.type) ?? primitiveTag.type) as PrimitiveType;
         const tagPayload = primitiveTag.rawPayload || '';
 
         // Attempt 1: Inner payload is a JSON code block or raw JSON object
@@ -2528,7 +2529,11 @@ export function parseOrSynthesizeArtifact(
                 const parsed = JSON.parse(jsonInTag[1]!);
                 if (parsed) {
                     parsedTagData = parsed.data !== undefined ? parsed.data : parsed;
-                    if (parsed.type) tagType = parsed.type;
+                    // An inner `type` re-types the tag when it names a primitive; under modelAuthoredOnly any other
+                    // `type` is just a field of the data.
+                    const innerType = normalizePrimitiveType(parsed.type);
+                    if (innerType) tagType = innerType;
+                    else if (parsed.type && !modelAuthoredOnly) tagType = parsed.type;
                 }
             } catch {
                 // Ignore JSON parse error, fall through to specialized tagType synthesizers
@@ -2622,7 +2627,8 @@ export function parseOrSynthesizeArtifact(
             }
         }
 
-        if (parsedTagData) {
+        // Under modelAuthoredOnly the tag must name a canvas primitive; an unknown type is not mounted.
+        if (parsedTagData && (!modelAuthoredOnly || normalizePrimitiveType(tagType))) {
             const isSameType = request.activeArtifact?.type === tagType;
             const effectiveVersion = (isSameType && request.activeArtifact) ? (request.activeArtifact.version || 1) + 1 : (primitiveTag.version || 1);
             const effectiveId = (isSameType && request.activeArtifact) ? request.activeArtifact.id : `art-${tagType}-${Date.now()}`;
@@ -2648,20 +2654,12 @@ export function parseOrSynthesizeArtifact(
     if (jsonMatch) {
         try {
             const parsed = JSON.parse(jsonMatch[1]);
-            // A model-authored artifact names its primitive explicitly; any other JSON block is just part of the reply.
-            const isEnvelope = !!parsed && typeof parsed.type === 'string' && parsed.data !== undefined && parsed.data !== null;
+            const envelopeType = normalizePrimitiveType(parsed?.type);
+            // A model-authored artifact names a canvas primitive and carries its data. Any other JSON block, such
+            // as an API payload or a webhook event ({"type": "invoice.paid", "data": ...}), is just part of the reply.
+            const isEnvelope = !!parsed && typeof parsed === 'object' && !!envelopeType && parsed.data !== undefined && parsed.data !== null;
             if (parsed && (!modelAuthoredOnly || isEnvelope)) {
-                let type = parsed.type as string;
-                if (type === 'action-checklist') type = 'checklist';
-                if (type === 'skills-manager') type = 'skills-hub';
-                if (type === 'rendered-document' || type === 'document') type = 'markdown-document';
-                if (type === 'flow-graph' || type === 'graph') type = 'node-graph';
-                if (type === 'metrics' || type === 'dashboard') type = 'metric-dashboard';
-                if (type === 'kanban') type = 'kanban-board';
-                if (type === 'form') type = 'interactive-form';
-                if (type === 'sandbox' || type === 'code-sandbox' || type === 'playground' || type === 'code-playground') type = 'live-code-sandbox';
-                if (type === '3d' || type === 'scene-3d' || type === 'spatial-scene' || type === '3d_scene' || type === '3d-world' || type === 'r3f-scene') type = '3d-scene';
-                if (type === 'video-timeline' || type === 'video' || type === 'timeline' || type === 'video-editor' || type === 'nle' || type === 'video_timeline') type = 'video-timeline';
+                let type = (envelopeType ?? parsed.type) as string;
 
                 let data = parsed.data;
                 const isVideoTimelineRequest = type === 'video-timeline' || request.activeArtifact?.type === 'video-timeline' ||
@@ -2791,27 +2789,49 @@ export function parseOrSynthesizeArtifact(
                     const hasControlSurfaces = /control\s*surface|aileron|elevator|rudder|flap/i.test(prompt) || !!data?.features?.controlSurfaces || !!active3DData?.features?.controlSurfaces;
                     const hasTerrainBiomes = /biome|terrain|canyon|alpine|mountain|coastal|desert/i.test(prompt) || !!data?.features?.terrainBiomes || !!active3DData?.features?.terrainBiomes;
 
-                    const effectiveFeatures = {
-                        ...(contextualSynthesized.features || {}),
-                        ...(isTopicChange ? {} : (active3DData?.features || {})),
-                        ...(data?.features || {}),
-                        ...(hasGodRays && hasAtmosphere ? { godRays: true } : {}),
-                        ...(hasAtmosphere ? { atmosphericScattering: true } : {}),
-                        ...(hasContrails ? { contrails: true } : {}),
-                        ...(hasControlSurfaces ? { controlSurfaces: true } : {}),
-                        ...(hasTerrainBiomes ? { terrainBiomes: (data?.features?.terrainBiomes || active3DData?.features?.terrainBiomes || { biomeType: 'alpine' as const }) } : {})
-                    };
+                    const effectiveFeatures = modelAuthoredOnly
+                        ? (() => {
+                            // The model's features, else the open scene's. From the prompt only opt-in sky, sun and
+                            // atmosphere: words such as "mountain" must not switch on terrain biomes (which start
+                            // playback and draw biome terrain), contrails or control surfaces.
+                            const authored: NonNullable<Scene3DData['features']> = {
+                                ...lightingFeaturesOf(contextualSynthesized.features),
+                                ...(isTopicChange ? {} : (active3DData?.features || {})),
+                                ...(data?.features || {})
+                            };
+                            return {
+                                ...authored,
+                                ...(hasAtmosphere && !authored.atmosphericScattering ? { atmosphericScattering: true } : {}),
+                                ...(hasGodRays && hasAtmosphere && !authored.godRays ? { godRays: true } : {})
+                            };
+                        })()
+                        : {
+                            ...(contextualSynthesized.features || {}),
+                            ...(isTopicChange ? {} : (active3DData?.features || {})),
+                            ...(data?.features || {}),
+                            ...(hasGodRays && hasAtmosphere ? { godRays: true } : {}),
+                            ...(hasAtmosphere ? { atmosphericScattering: true } : {}),
+                            ...(hasContrails ? { contrails: true } : {}),
+                            ...(hasControlSurfaces ? { controlSurfaces: true } : {}),
+                            ...(hasTerrainBiomes ? { terrainBiomes: (data?.features?.terrainBiomes || active3DData?.features?.terrainBiomes || { biomeType: 'alpine' as const }) } : {})
+                        };
 
                     const isVehicleTheme = /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt) || /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(effectiveTitle);
 
                     const scene3DData: Scene3DData = {
                         title: effectiveTitle,
                         subtitle: effectiveSubtitle,
-                        worldBranch: isVehicleTheme ? (data?.worldBranch && !/city|urban|street/i.test(data.worldBranch) ? data.worldBranch : 'studio/showroom') : (data?.worldBranch || (isTopicChange ? undefined : active3DData?.worldBranch) || contextualSynthesized.worldBranch),
-                        sceneType: isVehicleTheme ? 'custom' : (data?.sceneType || (isTopicChange ? undefined : active3DData?.sceneType) || contextualSynthesized.sceneType),
+                        // worldBranch and sceneType select what the viewport draws (a splat world, a flight), so under
+                        // modelAuthoredOnly they are the model's or the open scene's, never a template's or a keyword's.
+                        worldBranch: modelAuthoredOnly
+                            ? (data?.worldBranch || (isTopicChange ? undefined : active3DData?.worldBranch))
+                            : isVehicleTheme ? (data?.worldBranch && !/city|urban|street/i.test(data.worldBranch) ? data.worldBranch : 'studio/showroom') : (data?.worldBranch || (isTopicChange ? undefined : active3DData?.worldBranch) || contextualSynthesized.worldBranch),
+                        sceneType: modelAuthoredOnly
+                            ? (data?.sceneType || (isTopicChange ? undefined : active3DData?.sceneType))
+                            : isVehicleTheme ? 'custom' : (data?.sceneType || (isTopicChange ? undefined : active3DData?.sceneType) || contextualSynthesized.sceneType),
                         renderMode: data?.renderMode || (isTopicChange ? undefined : active3DData?.renderMode) || contextualSynthesized.renderMode || 'pbr',
                         cameraMode: data?.cameraMode || (isTopicChange ? undefined : active3DData?.cameraMode) || contextualSynthesized.cameraMode || 'orbit',
-                        animation: sceneAnimation,
+                        animation: modelAuthoredOnly ? (data?.animation || (isTopicChange ? undefined : active3DData?.animation)) : sceneAnimation,
                         camera: data?.camera || (isTopicChange ? contextualSynthesized.camera : (active3DData?.camera || contextualSynthesized.camera)) || {
                             position: [15, 12, 20],
                             target: [0, 2, 0],
@@ -2830,7 +2850,8 @@ export function parseOrSynthesizeArtifact(
                             ...(data?.environment || {}),
                             skybox: data?.environment?.skybox || (hasAtmosphere ? 'realistic-sky' : (active3DData?.environment?.skybox || contextualSynthesized.environment?.skybox || 'studio')),
                         },
-                        timeline: sceneTimeline,
+                        // Playback too: without a timeline from the model or the open scene, nothing starts playing.
+                        timeline: modelAuthoredOnly ? (data?.timeline || (isTopicChange ? undefined : active3DData?.timeline)) : sceneTimeline,
                         customScript: data?.customScript || data?.code || (isTopicChange ? undefined : active3DData?.customScript) || templateFallback?.customScript,
                         code: data?.code || data?.customScript || (isTopicChange ? undefined : active3DData?.code) || templateFallback?.code,
                         shaders: data?.shaders || (isTopicChange ? undefined : active3DData?.shaders) || templateFallback?.shaders,

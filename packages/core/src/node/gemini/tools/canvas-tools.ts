@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { CanvasArtifact, PrimitiveType, ArtifactData, VideoTimelineData, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type VideoTimelineData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
 import { synthesizeContextualVideoTimeline } from '../../../browser/generative-canvas/services/video/videoTimelineSynthesizer';
 import { synthesizeContextual3DScene } from '../../../browser/generative-canvas/procedural-3d-synthesizer';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
@@ -18,7 +18,7 @@ import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
-import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
+import { applyClayFirstPassBaseline, lightingFeaturesOf, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -204,18 +204,26 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
 
 export const canvasHandlers: Record<string, ToolHandler> = {
     async mount_canvas_primitive(args, _ctx) {
-        let primitiveType = (asString(args.primitiveType) || '3d-scene') as PrimitiveType;
+        // The model names the primitive; an alias maps to its primitive, and prompt words never re-type it.
+        const requestedType = asString(args.primitiveType);
+        const primitiveType = normalizePrimitiveType(requestedType);
+        if (!primitiveType) {
+            const error = requestedType
+                ? `Unknown primitiveType "${requestedType}". Use one of: ${PRIMITIVE_TYPES.join(', ')}.`
+                : `primitiveType is required. Use one of: ${PRIMITIVE_TYPES.join(', ')}.`;
+            return {
+                status: 'failed',
+                resultPayload: { success: false, error },
+                summaryResult: `Failed: ${error}`
+            };
+        }
         let title = asString(args.title) || 'Visual Creation';
         let summary = asString(args.summary) || `Synthesized ${title} on visual canvas.`;
         let payload = (args.payload && typeof args.payload === 'object') ? args.payload as ArtifactData : ({} as any);
 
         const prompt = _ctx?.request?.prompt || '';
-        const lowerPrompt = prompt.toLowerCase();
-        const isVideoTimelinePrompt = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip/i.test(prompt) ||
-            ((lowerPrompt.includes('clip') || lowerPrompt.includes('timeline')) && (lowerPrompt.includes('split') || lowerPrompt.includes('cut') || lowerPrompt.includes('delete') || lowerPrompt.includes('playhead') || lowerPrompt.includes('ripple') || lowerPrompt.includes('track') || lowerPrompt.includes('video')));
 
-        if (isVideoTimelinePrompt || primitiveType === 'video-timeline' || (primitiveType as string) === 'video-editor' || (primitiveType as string) === 'timeline' || (primitiveType as string) === 'nle') {
-            primitiveType = 'video-timeline';
+        if (primitiveType === 'video-timeline') {
             const activeVideoData = _ctx?.request?.activeArtifact?.type === 'video-timeline' ? (_ctx.request.activeArtifact.data as VideoTimelineData) : undefined;
             const timelineData = synthesizeContextualVideoTimeline(prompt, title !== 'Visual Creation' ? title : undefined, activeVideoData);
             if (payload && typeof payload === 'object') {
@@ -302,24 +310,21 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             summary = p.subtitle || summary;
 
             // Only viewpoint, lighting and render settings may default from the synthesizer. Its meshes,
-            // scripts, operator stack (which replays its generator) and geodetic anchor are not carried over.
+            // scripts, operator stack (which replays its generator), geodetic anchor, splat files (picked from a
+            // landmark list), worldBranch and sceneType (which select viewport content) are not carried over;
+            // the payload's own are kept by the spread.
             payload = {
                 ...p,
                 title,
                 subtitle: summary,
-                worldBranch: p.worldBranch || contextual3D.worldBranch,
-                sceneType: p.sceneType || contextual3D.sceneType,
                 renderMode: p.renderMode || contextual3D.renderMode,
                 cameraMode: p.cameraMode || contextual3D.cameraMode,
-                splatUrl: p.splatUrl || contextual3D.splatUrl,
-                splatTilesetUrl: p.splatTilesetUrl || contextual3D.splatTilesetUrl,
-                splatOptions: p.splatOptions || contextual3D.splatOptions,
                 customMeshes: [], // STRICT TIER-0 JS PRIMITIVE BAN: No fake mock arrays.
                 environment: p.environment || contextual3D.environment,
                 camera: p.camera || contextual3D.camera,
                 objects: Array.isArray(p.objects) ? p.objects : [],
                 features: {
-                    ...(contextual3D.features || {}),
+                    ...lightingFeaturesOf(contextual3D.features),
                     ...(p.features || {})
                 },
                 cppGenerator: cppGen,

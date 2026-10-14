@@ -181,7 +181,7 @@ function runningExecution(id: string, toolName: string, args: Record<string, unk
  * Agent, plan and ask turns put things on the canvas through tools (mount_canvas_primitive). Any artifact taken
  * from their reply text must be one the model wrote, never one synthesized from the prompt's keywords.
  */
-function isCodingMode(request: GeminiGenerateRequest): boolean {
+export function isCodingMode(request: Pick<GeminiGenerateRequest, 'mode'>): boolean {
     return request.mode === 'agent' || request.mode === 'plan' || request.mode === 'ask';
 }
 
@@ -391,7 +391,10 @@ export class StreamingEngine {
             environmentId: state.environmentId,
             modelUsed: agent
         };
-        onEvent({ type: 'artifact_complete', ...summary });
+        // Agent, plan and ask replies in prose yield no artifact; there is nothing to announce as complete.
+        if (artifact) {
+            onEvent({ type: 'artifact_complete', ...summary });
+        }
         onEvent({ type: 'done', ...summary });
 
         return {

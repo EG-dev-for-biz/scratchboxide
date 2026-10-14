@@ -131,7 +131,7 @@ import { syncTilesLayer, snapGroupFiguresToGround } from './scene3d/syncTilesLay
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
 import { syncAtmosphere } from './scene3d/syncAtmosphere';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
-import { syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
+import { hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
 import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCustomMeshes';
@@ -1958,14 +1958,14 @@ int main(int argc, char** argv) {
         hasActiveScript,
         has3DTiles,
         hasCustomMeshes: Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0,
-        hasNonFallbackObjects: Array.isArray(sceneData.objects) && sceneData.objects.length > 0 && !sceneData.objects.some(o => o.content?.durableUri === 'internal:mesh'),
+        hasNonFallbackObjects: hasNonFallbackObjectContent(sceneData),
         hasCppGenerator: !!sceneData.cppGenerator?.glbBase64 || !!(sceneData.cppGenerator?.sourceCode && sceneData.cppGenerator.sourceCode.trim().length > 0),
         hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64 || !!(sceneData.pythonGenerator?.sourceCode && sceneData.pythonGenerator.sourceCode.trim().length > 0),
         selectedShape,
         sculptWireframe: !!sculptSettings.wireframeOverlay
     }), [
         sceneData.sceneType, sceneData.title, worldBranch, isAirplane, sceneData.features?.contrails, hasActiveScript,
-        has3DTiles, sceneData.customMeshes, sceneData.objects,
+        has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.splatUrl, sceneData.splatTilesetUrl,
         sceneData.cppGenerator?.glbBase64, sceneData.cppGenerator?.sourceCode,
         sceneData.pythonGenerator?.glbBase64, sceneData.pythonGenerator?.sourceCode,
         selectedShape, sculptSettings.wireframeOverlay

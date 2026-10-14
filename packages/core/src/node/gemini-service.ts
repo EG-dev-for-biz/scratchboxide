@@ -92,7 +92,7 @@ import {
     type ToolRegistry
 } from './gemini/tool-registry';
 import { SwarmBridge } from './gemini/swarm-bridge';
-import { StreamingEngine } from './gemini/streaming';
+import { StreamingEngine, isCodingMode } from './gemini/streaming';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './gemini/prompt-builder';
 import {
     extractCodeSandboxArtifact,
@@ -461,7 +461,7 @@ export class GeminiService {
     /** Generate a structured canvas artifact with the primary model and optional subagent preprocessing. */
     async generateArtifact(request: GeminiGenerateRequest): Promise<GeminiGenerateResponse> {
         let finalResponse: GeminiGenerateResponse | undefined;
-        await this.streamGenerate(request, event => {
+        const result = await this.streamGenerate(request, event => {
             if (event.type === 'done' || event.type === 'artifact_complete') {
                 if (event.artifact) {
                     finalResponse = {
@@ -480,7 +480,18 @@ export class GeminiService {
             return finalResponse;
         }
 
-        throw new Error('AI generation completed without producing an artifact');
+        // Agent, plan and ask turns change the canvas only through what the model wrote. A reply in prose leaves
+        // the open artifact as it is, so that is the artifact this turn produced (nothing is merged into it).
+        if (result.success && request.activeArtifact && isCodingMode(request)) {
+            return {
+                ...result,
+                text: result.text || '',
+                artifact: request.activeArtifact,
+                modelUsed: result.modelUsed || this.preferredModel
+            };
+        }
+
+        throw new Error(result.success === false && result.error ? result.error : 'AI generation completed without producing an artifact');
     }
 
     /**
