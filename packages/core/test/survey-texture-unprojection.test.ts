@@ -526,6 +526,55 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         expect(fs.existsSync(outResampledGlbPath)).toBe(true);
     });
 
+    it('reports progress per station and per baked texture, in order, for the chat', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stations = [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR), stationFromLookAt(2, [25, 0, 0], [0, 0, 0], optics, ANCHOR)];
+        const gen: StationImageGenerator = { name: 'echo', async generate(a) { return a.blockoutPng; } };
+        const reports: Array<[string, number]> = [];
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath, anchor: ANCHOR, stations, generator: gen, beautifyContext: { locationName: 'Progress Test' },
+            options: { renderWidth: 256, renderHeight: 144, resolution: 256, draft: true, outGlbPath: path.join(TEST_DIR, 'cube_progress_test.glb') },
+            onProgress: (message, fraction) => reports.push([message, fraction])
+        });
+        expect(result.success).toBe(true);
+        const messages = reports.map(r => r[0]);
+        expect(messages.slice(0, 2)).toEqual(['Beautifying station 1/2', 'Beautifying station 2/2']);
+        expect(messages.some(m => /^Baking texture 1\/\d+$/.test(m))).toBe(true);
+        const fractions = reports.map(r => r[1]);
+        expect(fractions.every((f, i) => f >= 0 && f < 1 && (i === 0 || f >= fractions[i - 1]))).toBe(true);
+    });
+
+    it('stops between stations when the caller aborts (the chat Stop button or a deadline)', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stations = [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR), stationFromLookAt(2, [25, 0, 0], [0, 0, 0], optics, ANCHOR)];
+        const stop = new AbortController();
+        let calls = 0;
+        const gen: StationImageGenerator = { name: 'stop-after-one', async generate(a) { calls++; stop.abort(); return a.blockoutPng; } };
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath, anchor: ANCHOR, stations, generator: gen, beautifyContext: { locationName: 'Stop Test' },
+            options: { renderWidth: 256, renderHeight: 144, resolution: 256, draft: true, outGlbPath: path.join(TEST_DIR, 'cube_stop_test.glb') },
+            signal: stop.signal
+        })).rejects.toMatchObject({ name: 'AbortError' });
+        expect(calls).toBe(1);
+        expect(fs.existsSync(path.join(TEST_DIR, 'cube_stop_test.glb'))).toBe(false);
+    });
+
+    it('a Stop during the texture bake ends it before the output is written', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stations = [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR)];
+        const gen: StationImageGenerator = { name: 'echo', async generate(a) { return a.blockoutPng; } };
+        const stop = new AbortController();
+        const out = path.join(TEST_DIR, 'cube_stop_during_bake.glb');
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath, anchor: ANCHOR, stations, generator: gen, beautifyContext: { locationName: 'Bake Stop' },
+            options: { renderWidth: 256, renderHeight: 144, resolution: 256, draft: true, outGlbPath: out },
+            // the Stop arrives as an I/O-style event while the first submesh is baking
+            onProgress: message => { if (message.startsWith('Baking texture 1/')) setImmediate(() => stop.abort()); },
+            signal: stop.signal
+        })).rejects.toMatchObject({ name: 'AbortError' });
+        expect(fs.existsSync(out)).toBe(false);
+    });
+
     it('enforces fidelity routing: rejects mismatched generator fidelity', async () => {
         const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
         const stSouth = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);

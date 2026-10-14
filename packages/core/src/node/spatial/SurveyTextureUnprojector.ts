@@ -216,6 +216,16 @@ export interface SurveyTexturePipelineRequest {
     generator?: StationImageGenerator;
     precomputedPlates?: StationPlate[];
     options?: SurveyTextureUnprojectorOptions;
+    /** Progress for long runs (one report per station and per baked submesh); `fraction` is 0..1. */
+    onProgress?: (message: string, fraction: number) => void;
+    /** Stops the run between stations and between submeshes. */
+    signal?: AbortSignal;
+}
+
+/** Throws the signal's reason (or a plain abort error) once the caller has asked the pipeline to stop. */
+function throwIfStopped(signal?: AbortSignal): void {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : Object.assign(new Error('Survey texture bake was stopped'), { name: 'AbortError' });
 }
 
 export interface MeshPrimitiveData {
@@ -331,7 +341,8 @@ export class SurveyTextureUnprojector {
                 request.stations,
                 request.beautifyContext,
                 generator,
-                options
+                options,
+                request
             );
         }
 
@@ -346,7 +357,11 @@ export class SurveyTextureUnprojector {
 
         // 4. Unproject each submesh primitive into its own original-UV atlas
         const submeshResults: SubmeshTextureResult[] = [];
+        // Stations are most of the time when they are generated here; baking the atlases is the rest.
+        const bakeStart = request.precomputedPlates && request.precomputedPlates.length > 0 ? 0 : 0.6;
         for (let i = 0; i < primitives.length; i++) {
+            throwIfStopped(request.signal);
+            request.onProgress?.(`Baking texture ${i + 1}/${primitives.length}`, bakeStart + (1 - bakeStart) * (i / primitives.length));
             const prim = primitives[i];
             let primW: number;
             let primH: number;
@@ -362,7 +377,10 @@ export class SurveyTextureUnprojector {
             const sub = await this.unprojectPrimitiveToAtlas(prim, i, preparedCameras, options, primW, primH);
             console.log(`[SurveyTextureUnprojector] Submesh ${i + 1}/${primitives.length} finished in ${((performance.now() - subT0) / 1000).toFixed(2)}s`);
             submeshResults.push(sub);
+            // The bake is synchronous per submesh; yield so a Stop (an I/O event) can land between submeshes.
+            await new Promise<void>(resolve => setImmediate(resolve));
         }
+        throwIfStopped(request.signal);
 
         // 5. Embed per-submesh textures into GLB without mutating original UV accessors.
         //    With encodeTextures === false there is nothing to embed: the input GLB is returned as-is.
@@ -1270,7 +1288,8 @@ export class SurveyTextureUnprojector {
         stations: ColmapCameraPose[],
         beautifyContext?: StationBeautifyContext,
         generator?: StationImageGenerator,
-        options?: SurveyTextureUnprojectorOptions
+        options?: SurveyTextureUnprojectorOptions,
+        progress: Pick<SurveyTexturePipelineRequest, 'onProgress' | 'signal'> = {}
     ): Promise<StationPlate[]> {
         const renderService = new SurveyStationRenderService();
         await renderService.loadMesh(glbBuffer);
@@ -1281,7 +1300,9 @@ export class SurveyTextureUnprojector {
         const plates: StationPlate[] = [];
         let previousAccepted: BeautifyStationResult | undefined;
 
-        for (const st of stations) {
+        for (const [stationIndex, st] of stations.entries()) {
+            throwIfStopped(progress.signal);
+            progress.onProgress?.(`${generator ? 'Beautifying' : 'Rendering'} station ${stationIndex + 1}/${stations.length}`, 0.6 * (stationIndex / stations.length));
             // Auto aspect ratio resolution per station
             let targetAspect = st.aspectRatio;
             const pitch = Math.abs(st.pitchDegrees || 0);
@@ -1311,7 +1332,8 @@ export class SurveyTextureUnprojector {
                         height: stationH,
                         aspectRatio: options?.aspectRatio || 'auto',
                         draft: isDraft,
-                        reference: previousAccepted
+                        reference: previousAccepted,
+                        signal: progress.signal
                     }
                 );
                 if (bRes.accepted) {

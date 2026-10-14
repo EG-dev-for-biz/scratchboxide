@@ -579,7 +579,8 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
         const res = await ctx.sandbox.executeCommand(envId, {
             command: cmd,
             cwd: cwdArg ? resolveInRoot(root, cwdArg) : root,
-            timeoutMs
+            timeoutMs,
+            signal: ctx.signal
         });
 
         return {
@@ -905,7 +906,7 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
             throw new Error('Subagents are not available in this context, so nothing was delegated.');
         }
 
-        const run = await ctx.runSubagent(context ? `${prompt}\n\nCONTEXT FROM THE CALLER:\n${context}` : prompt, ctx.request);
+        const run = await ctx.runSubagent(context ? `${prompt}\n\nCONTEXT FROM THE CALLER:\n${context}` : prompt, ctx.request, ctx.signal);
         if (!run.success) {
             throw new Error(`Subagent [${role}] failed: ${run.error || 'no report'}`);
         }

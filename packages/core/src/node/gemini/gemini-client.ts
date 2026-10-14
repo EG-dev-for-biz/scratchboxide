@@ -73,6 +73,8 @@ export interface ModelFallbackOptions {
      * output may already have been emitted to the caller.
      */
     retryTransient?: boolean;
+    /** Whether a model-not-found error may still move on to the next candidate (default: always). */
+    canFallback?: (err: unknown) => boolean;
 }
 
 export interface AccessTokenResult {
@@ -593,7 +595,7 @@ export class GeminiClient {
                 return result;
             } catch (err: unknown) {
                 lastError = err;
-                if (isModelNotFoundError(err)) {
+                if (isModelNotFoundError(err) && (options.canFallback?.(err) ?? true)) {
                     continue;
                 }
                 throw err;

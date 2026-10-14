@@ -1120,7 +1120,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     const { executeDeepWritePipeline, handleDeepWriteResume } = useDeepWritePipeline({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, setActiveArtifact, setCurrentSessionId, setIsGenerating, setMessages, setSessions });
 
-    const { sendMessage: handleSendMessage } = useSendMessage({
+    const { sendMessage: handleSendMessage, cancelInFlight: handleStopGenerating, streamInFlight } = useSendMessage({
         inputValue,
         isGenerating,
         setInputValue,
@@ -1239,7 +1239,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         handleSelectAutocompleteSkill,
         handleSelectAutocompleteContext,
         activeArtifactTitle: activeArtifact?.title,
-        sendMessage: () => handleSendMessage()
+        sendMessage: () => handleSendMessage(),
+        stopGenerating: handleStopGenerating,
+        canStop: streamInFlight
     };
 
     const messageListProps = {

@@ -100,7 +100,7 @@ import type {
     TrackerBackend,
     VideoFrameData
 } from '../../../common/tracking/tapir-tracking-protocol';
-import type { ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
+import type { ToolContext, ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
 
 function asString(val: unknown, fallback = ''): string {
     return typeof val === 'string' ? val : fallback;
@@ -1928,6 +1928,20 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
  * workspace's Google media credentials. SCRATCHBOX_STATION_IMAGE_GENERATOR=mock swaps in a
  * geometry-preserving recolour (for offline runs and CI).
  */
+/**
+ * Adapts the (fraction, message) progress callbacks of the survey services to the chat's progress report. Once the
+ * chat has stopped the call (Stop or its time limit), the next report throws, so the pipeline ends at its next
+ * checkpoint (the next station) instead of generating and billing the rest in the background.
+ */
+function chatProgress(ctx: ToolContext | undefined): (fraction: number, message?: string) => void {
+    return (fraction, message) => {
+        if (ctx?.signal?.aborted) {
+            throw Object.assign(new Error('Stopped by the chat before it finished'), { name: 'AbortError' });
+        }
+        ctx?.reportProgress?.(message || 'Working', fraction);
+    };
+}
+
 async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
     if (process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR === 'mock') {
         const { decodePng, encodePng } = await import('../../texture-processing');
@@ -2781,7 +2795,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const generator = await resolveStationImageGenerator(ctx);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
-        const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath) }, () => {});
+        const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath) }, chatProgress(ctx));
         const { imageBase64, ...rest } = res;
         return {
             resultPayload: { success: true, ...rest } as unknown as ToolResultPayload,
@@ -2795,7 +2809,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const generator = await resolveStationImageGenerator(ctx);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
-        const res = await deps.beautifyToSplats!({ ...args, stations: data.poses, anchor: data.anchor, glbPath: asString(args.glbPath) }, () => {});
+        const res = await deps.beautifyToSplats!({ ...args, stations: data.poses, anchor: data.anchor, glbPath: asString(args.glbPath) }, chatProgress(ctx));
         const accepted = res.stations.filter((s: any) => s.accepted).length;
         return {
             resultPayload: { success: true, tilesetPath: res.tilesetPath, tilesetUrl: res.tilesetUrl, metaPath: res.metaPath, fusedSplatCount: res.fusedSplatCount, acceptedStations: accepted, totalStations: res.stations.length, cropBox: res.cropBox, durationMs: res.durationMs } as unknown as ToolResultPayload,
@@ -2835,7 +2849,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                     isoDate: asString(args.isoDate) || new Date().toISOString()
                 },
                 outGlbPath
-            }
+            },
+            onProgress: (message, fraction) => ctx.reportProgress?.(message, fraction),
+            signal: ctx.signal
         });
 
         return {
@@ -2869,7 +2885,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             outDir: asString(args.outDir) || undefined,
             forceRebake: typeof args.forceRebake === 'boolean' ? args.forceRebake : undefined,
             draft: typeof args.draft === 'boolean' ? args.draft : undefined,
-            styleSuffix: typeof args.styleSuffix === 'string' ? args.styleSuffix : undefined
+            styleSuffix: typeof args.styleSuffix === 'string' ? args.styleSuffix : undefined,
+            onProgress: chatProgress(ctx)
         });
 
         return {

@@ -70,7 +70,14 @@ export interface ToolContext {
     lens: LensBridge;
     executeSubagent?: (request: SubagentRequest) => Promise<SubagentResponse>;
     /** Runs a read-only agent with its own context on `task` and returns its final report. */
-    runSubagent?: (task: string, parent: GeminiGenerateRequest) => Promise<SubagentRunResult>;
+    runSubagent?: (task: string, parent: GeminiGenerateRequest, signal?: AbortSignal) => Promise<SubagentRunResult>;
+    /** Aborted when the user stops the chat or the call runs out of time; long tools should stop when it fires. */
+    signal?: AbortSignal;
+    /**
+     * Reports progress on a long call: shown on the tool's card in the chat, and each report restarts the tool's
+     * idle limit (see tool-time-budgets.ts). `fraction` is 0..1 when known.
+     */
+    reportProgress?: (message: string, fraction?: number) => void;
 }
 
 export interface SubagentRunResult {

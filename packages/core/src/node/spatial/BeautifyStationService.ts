@@ -44,6 +44,8 @@ export interface BeautifyStationOptions {
     renderMode?: 'clay' | 'textured' | 'albedo';
     glbPath?: string;
     stoneType?: StoneAlbedoPreset;
+    /** Stops before the next generation attempt (the chat's Stop or time limit). */
+    signal?: AbortSignal;
 }
 
 export interface BeautifyQc {
@@ -200,6 +202,9 @@ export class BeautifyStationService {
         let attempts = 0;
         let best: { png: Buffer; qc: BeautifyQc; aligned: ColmapCameraPose; rgba: Buffer } | null = null;
         while (attempts <= maxRerolls) {
+            if (options.signal?.aborted) {
+                throw options.signal.reason instanceof Error ? options.signal.reason : Object.assign(new Error('Station beautify was stopped'), { name: 'AbortError' });
+            }
             attempts++;
             const png = await this.generator.generate({ prompt, blockoutPng: blockout.png, referencePng: warp?.warpedPng, maskPng: warp?.maskPng, aspectRatio: resolvedAspectRatio, width, height });
             const decoded = decodePng(png);

@@ -33,6 +33,23 @@ import {
 import { AttachedMcpToolContext, AttachedSkillContext } from '../../../common/gemini-protocol';
 import { ChatRequestError, GeminiClient, type ChatFailureKind } from '../gemini-client';
 import { describeChatFailure } from './chatFailureMessage';
+import {
+    buildFailedReply,
+    buildStoppedReply,
+    committedSessionCanvas,
+    mcpExecutionToStep,
+    recordExecution,
+    settleRunningExecution,
+    settleRunningSteps,
+    STREAM_CANCELLED,
+    STREAM_ENDED,
+    STREAM_FAILED,
+    upsertExecution,
+    upsertStep,
+    USER_STOP,
+    type PartialReply,
+    type StepCutoff
+} from './toolStepState';
 import { resolveModeForArtifact } from '../guardrails-service';
 import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
@@ -130,6 +147,23 @@ export interface SendMessageDeps {
     openSettingsToTab?: (tab: StudioSettingsTab) => void;
 }
 
+/**
+ * What the backend stream has shown so far: the record the saved reply is built from, whether the
+ * stream finishes, fails or is stopped. It is kept whichever session the user is viewing (the live
+ * React state only follows the visible session), and lets Stop build the reply at once (the abort
+ * handler cannot read state updates React has not rendered yet).
+ */
+interface StreamProgress {
+    text: string;
+    thinking: string;
+    steps: AgentExecutionStep[];
+    execs: McpExecutionState[];
+    artifact?: CanvasArtifact;
+    groundingMetadata?: GroundingMetadata;
+    questionCard?: InteractiveQuestionCardData;
+    executionPlanCard?: ExecutionPlanCardData;
+}
+
 interface GenerationContext {
     text: string;
     textToSend: string | undefined;
@@ -138,6 +172,7 @@ interface GenerationContext {
     updatedMessages: ChatMessage[];
     generationStartTime: number;
     thinkingTimer: ReturnType<typeof setInterval>;
+    progress: StreamProgress;
 }
 
 interface BackendStreamResult {
@@ -344,22 +379,29 @@ function beginGeneration(d: SendMessageDeps, text: string, textToSend: string | 
             setLiveThinkingSeconds(parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1)));
         }
     }, 100);
-    return { text, textToSend, targetPrimitiveType, targetSessionId, updatedMessages, generationStartTime, thinkingTimer };
+    const progress: StreamProgress = { text: '', thinking: '', steps: [], execs: [] };
+    return { text, textToSend, targetPrimitiveType, targetSessionId, updatedMessages, generationStartTime, thinkingTimer, progress };
 }
 
 /** Step 3 — stream from the Gemini backend, applying artifact/thought/tool events as they arrive. */
 async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext, signal: AbortSignal): Promise<BackendStreamResult> {
     const { skills, selectedSkillIds, mcpServers, selectedMcpIds, setSessions, setLiveThinkingText, setLiveSteps, setLiveStreamedText, setActiveStreamingSectionId, activeSessionRef, googleSearchGrounding, activeArtifact, setActiveArtifact, artifactHistory, setArtifactHistory, layoutMode, setLayoutMode, setMcpExecutions, setTokenBudget, setActiveTerminalError, setShowTerminalErrorToast } = d;
-    const { text, textToSend, targetSessionId, updatedMessages } = ctx;
+    const { text, textToSend, targetSessionId, updatedMessages, progress } = ctx;
     const attachedSkillObjects = d.skills.filter(s => d.selectedSkillIds.includes(s.id));
     const attachedMcpObjects = d.mcpServers.filter(s => d.selectedMcpIds.includes(s.id));
     let usedBackend = false;
-    let generatedArtifact: CanvasArtifact | undefined;
-    let finalResponseText = '';
-    let streamGroundingMetadata: GroundingMetadata | undefined;
-    const streamExecs: McpExecutionState[] = [];
-    let streamQuestionCard: InteractiveQuestionCardData | undefined;
-    let streamExecutionPlanCard: ExecutionPlanCardData | undefined;
+    // Session isolation: the live UI (steps, streamed text, thinking, toasts, the canvas) follows the
+    // session on screen, but `progress`, the Studio-wide tool list and the session record are kept
+    // whichever session the user is viewing, so a reply that finishes in the background is saved whole.
+    const targetVisible = () => !activeSessionRef.current || activeSessionRef.current === targetSessionId;
+    // Step-list changes go to the record first, then (when visible) to the live UI, which is always
+    // given the whole list so it catches up when the user comes back to this session.
+    const updateSteps = (change: (steps: AgentExecutionStep[]) => AgentExecutionStep[]) => {
+        progress.steps = change(progress.steps);
+        if (targetVisible()) {
+            setLiveSteps(progress.steps);
+        }
+    };
     let connectionError: string | undefined;
     let failureKind: ChatFailureKind | undefined;
     let failureStatus: number | undefined;
@@ -464,19 +506,21 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 if (signal.aborted) {
                     return;
                 }
-                if (event.artifact || event.mcpExecution || event.type === 'delta' || (event.text && event.type !== 'status' && event.type !== 'thought' && event.type !== 'subagent_start' && event.type !== 'subagent_done')) {
+                const visible = targetVisible();
+                const isReplyText = !!event.text && event.type !== 'status' && event.type !== 'thought' && event.type !== 'subagent_start' && event.type !== 'subagent_done';
+                if (event.artifact || event.mcpExecution || event.type === 'delta' || isReplyText) {
                     usedBackend = true;
                 }
                 if (event.questionCard || event.type === 'question_card') {
-                    streamQuestionCard = event.questionCard;
+                    progress.questionCard = event.questionCard;
                     usedBackend = true;
                 }
                 if (event.executionPlanCard || event.type === 'execution_plan_card') {
-                    streamExecutionPlanCard = event.executionPlanCard;
+                    progress.executionPlanCard = event.executionPlanCard;
                     usedBackend = true;
                 }
                 if (event.groundingMetadata) {
-                    streamGroundingMetadata = event.groundingMetadata;
+                    progress.groundingMetadata = event.groundingMetadata;
                 }
                 if (event.artifact) {
                     let art = event.artifact;
@@ -519,11 +563,18 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                             sceneData.animation = sceneData.animation || (textToSend?.toLowerCase().includes('orbit') ? 'orbit' : 'flight');
                         }
                     }
-                    generatedArtifact = art;
+                    progress.artifact = art;
                     const resolvedMode = resolveModeForArtifact(art.type);
-                    if (!activeSessionRef.current || activeSessionRef.current === targetSessionId) {
+                    if (visible) {
                         setActiveArtifact(art);
                         setLayoutMode(resolvedMode);
+                        if (art.type === 'markdown-document') {
+                            const docData = art.data as MarkdownDocumentData;
+                            if (docData?.sections && docData.sections.length > 0) {
+                                setActiveStreamingSectionId(docData.sections[docData.sections.length - 1].id);
+                            }
+                        }
+                        setArtifactHistory(prev => [art, ...prev.filter(a => a.id !== art.id)]);
                     }
                     setSessions(prev => prev.map(s => {
                         if (s.id !== targetSessionId) return s;
@@ -536,124 +587,87 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                         };
                     }));
                 }
-
-                // Session isolation guard: only update active UI if user is still on targetSessionId
-                if (activeSessionRef.current === targetSessionId) {
-                    if (event.thought) {
-                        setLiveThinkingText(prev => (prev ? `${prev}\n${event.thought}` : event.thought || ''));
+                if (event.thought) {
+                    progress.thinking = progress.thinking ? `${progress.thinking}\n${event.thought}` : event.thought;
+                    if (visible) {
+                        setLiveThinkingText(progress.thinking);
                     }
-                    if (event.type === 'plan_ready') {
-                        d.showToast?.('Implementation plan ready for review', 'clipboard');
-                    }
-                    if (event.type === 'verification_start') {
-                        setLiveSteps(prev => [
-                            ...prev,
-                            {
-                                id: `verify-${Date.now()}`,
-                                title: 'Automated verification & self-healing checks running...',
-                                status: 'running',
-                                kind: 'verify'
-                            }
-                        ]);
-                    }
-                    if (event.type === 'verification_result' && event.verification) {
-                        const v = event.verification;
-                        setLiveSteps(prev => {
-                            const lastVerifyIdx = prev.map(s => s.id).reverse().findIndex(id => id.startsWith('verify-'));
-                            const actualIdx = lastVerifyIdx >= 0 ? prev.length - 1 - lastVerifyIdx : -1;
-                            const step: AgentExecutionStep = {
-                                id: `verify-res-${Date.now()}`,
-                                title: v.passed ? '✓ Verification passed cleanly' : '⚠ Diagnostic issues found; self-healing...',
-                                status: v.passed ? 'completed' : 'failed',
-                                details: v.summary,
-                                kind: 'verify'
-                            };
-                            if (actualIdx >= 0) {
-                                const next = [...prev];
-                                next[actualIdx] = step;
-                                return next;
-                            }
-                            return [...prev, step];
-                        });
-                    }
-                    if (event.type === 'task_list' && event.taskList) {
-                        // The agent's checklist leads the step list and is replaced wholesale on each update.
-                        const taskSteps: AgentExecutionStep[] = event.taskList.map((t, i) => ({
-                            id: `task-${i}`,
-                            title: t.title,
-                            status: t.status === 'completed' ? 'completed' : t.status === 'in_progress' ? 'running' : 'pending',
-                            kind: 'task'
-                        }));
-                        setLiveSteps(prev => [...taskSteps, ...prev.filter(st => st.kind !== 'task')]);
-                    }
-                    if (event.mcpExecution && event.mcpExecution.toolName !== 'update_task_list') {
-                        const execId = event.mcpExecution.id;
-                        const existingIdx = streamExecs.findIndex(e => e.id === execId);
-                        if (existingIdx >= 0) {
-                            streamExecs[existingIdx] = event.mcpExecution;
-                        } else {
-                            streamExecs.push(event.mcpExecution);
+                }
+                if (event.type === 'plan_ready' && visible) {
+                    d.showToast?.('Implementation plan ready for review', 'clipboard');
+                }
+                if (event.type === 'verification_start') {
+                    updateSteps(prev => [
+                        ...prev,
+                        {
+                            id: `verify-${Date.now()}`,
+                            title: 'Automated verification & self-healing checks running...',
+                            status: 'running',
+                            kind: 'verify'
                         }
-                        setMcpExecutions(prev => [event.mcpExecution!, ...prev.filter(e => e.id !== event.mcpExecution!.id)]);
-                        const stepId = event.mcpExecution.id || `mcp-step-${Date.now()}`;
-                        const toolName = event.mcpExecution.toolName || 'MCP Tool';
-                        const status = event.mcpExecution.status === 'completed' ? 'completed'
-                            : event.mcpExecution.status === 'failed' ? 'failed'
-                            : 'running';
-                        setLiveSteps(prev => {
-                            const existingIdx = prev.findIndex(s => s.id === stepId);
-                            const step: AgentExecutionStep = {
-                                id: stepId,
-                                title: `Executed tool: ${toolName}`,
-                                status,
-                                durationMs: event.mcpExecution!.durationMs,
-                                durationFormatted: event.mcpExecution!.durationMs ? `${event.mcpExecution!.durationMs}ms` : undefined,
-                                details: event.mcpExecution!.args ? JSON.stringify(event.mcpExecution!.args, null, 2) : undefined,
-                                kind: 'tool'
-                            };
-                            if (existingIdx >= 0) {
-                                const next = [...prev];
-                                next[existingIdx] = step;
-                                return next;
-                            }
-                            return [...prev, step];
-                        });
-                    }
-                    if (event.text && event.type !== 'status' && event.type !== 'thought' && event.type !== 'subagent_start' && event.type !== 'subagent_done') {
-                        if (event.type === 'delta') {
-                            finalResponseText += event.text;
-                        } else {
-                            finalResponseText = event.text;
+                    ]);
+                }
+                if (event.type === 'verification_result' && event.verification) {
+                    const v = event.verification;
+                    updateSteps(prev => {
+                        const lastVerifyIdx = prev.map(s => s.id).reverse().findIndex(id => id.startsWith('verify-'));
+                        const actualIdx = lastVerifyIdx >= 0 ? prev.length - 1 - lastVerifyIdx : -1;
+                        const step: AgentExecutionStep = {
+                            id: `verify-res-${Date.now()}`,
+                            title: v.passed ? '✓ Verification passed cleanly' : '⚠ Diagnostic issues found; self-healing...',
+                            status: v.passed ? 'completed' : 'failed',
+                            details: v.summary,
+                            kind: 'verify'
+                        };
+                        if (actualIdx >= 0) {
+                            const next = [...prev];
+                            next[actualIdx] = step;
+                            return next;
                         }
-                        setLiveStreamedText(finalResponseText);
+                        return [...prev, step];
+                    });
+                }
+                if (event.type === 'task_list' && event.taskList) {
+                    // The agent's checklist leads the step list and is replaced wholesale on each update.
+                    const taskSteps: AgentExecutionStep[] = event.taskList.map((t, i) => ({
+                        id: `task-${i}`,
+                        title: t.title,
+                        status: t.status === 'completed' ? 'completed' : t.status === 'in_progress' ? 'running' : 'pending',
+                        kind: 'task'
+                    }));
+                    updateSteps(prev => [...taskSteps, ...prev.filter(st => st.kind !== 'task')]);
+                }
+                if (event.mcpExecution && event.mcpExecution.toolName !== 'update_task_list') {
+                    // A running tool reports again every few seconds with the same id; its finished
+                    // result (same id) replaces the running card, and a late report never undoes it.
+                    const exec = event.mcpExecution;
+                    progress.execs = upsertExecution(progress.execs, exec);
+                    setMcpExecutions(prev => recordExecution(prev, exec));
+                    updateSteps(prev => upsertStep(prev, mcpExecutionToStep(exec)));
+                }
+                if (isReplyText) {
+                    progress.text = event.type === 'delta' ? progress.text + event.text : event.text!;
+                    if (visible) {
+                        setLiveStreamedText(progress.text);
                     }
-                    if (event.artifact) {
-                        setActiveArtifact(event.artifact);
-                        setLayoutMode(resolveModeForArtifact(event.artifact.type));
-                        if (event.artifact.type === 'markdown-document') {
-                            const docData = event.artifact.data as MarkdownDocumentData;
-                            if (docData?.sections && docData.sections.length > 0) {
-                                setActiveStreamingSectionId(docData.sections[docData.sections.length - 1].id);
-                            }
-                        }
-                        setArtifactHistory(prev => [
-                            event.artifact!,
-                            ...prev.filter(a => a.id !== event.artifact!.id)
-                        ]);
-                    }
-                    if (event.usage) {
-                        setTokenBudget((prev: TokenBudgetMetrics) => ({
-                            ...prev,
-                            promptTokens: event.usage?.promptTokens || prev.promptTokens,
-                            candidateTokens: event.usage?.candidateTokens || prev.candidateTokens,
-                            totalTokens: event.usage?.totalTokens || prev.totalTokens
-                        }));
-                    }
+                }
+                if (event.usage && visible) {
+                    setTokenBudget((prev: TokenBudgetMetrics) => ({
+                        ...prev,
+                        promptTokens: event.usage?.promptTokens || prev.promptTokens,
+                        candidateTokens: event.usage?.candidateTokens || prev.candidateTokens,
+                        totalTokens: event.usage?.totalTokens || prev.totalTokens
+                    }));
                 }
             },
             signal
         );
     } catch (err: any) {
+        if (signal.aborted) {
+            // Stop, a newer message or closing the chat ended the stream; the abort handler already
+            // settled the UI, so this is not a failure to report.
+            return { ...streamResult(progress), usedBackend: false };
+        }
         console.warn('Gemini backend streaming error:', err?.message);
         connectionError = err?.message || 'Connection to backend failed';
         failureKind = err instanceof ChatRequestError ? err.kind : 'unreachable';
@@ -669,18 +683,52 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             setShowTerminalErrorToast(true);
         }
     }
-    const effectiveUsedBackend = !connectionError && usedBackend && (!!generatedArtifact || !!finalResponseText.trim() || !!streamQuestionCard || !!streamExecutionPlanCard);
-    return { usedBackend: effectiveUsedBackend, connectionError, failureKind, failureStatus, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs, streamQuestionCard, streamExecutionPlanCard };
+    const result = streamResult(progress);
+    const effectiveUsedBackend = !connectionError && usedBackend && (!!result.generatedArtifact || !!result.finalResponseText.trim() || !!result.streamQuestionCard || !!result.streamExecutionPlanCard);
+    return { ...result, usedBackend: effectiveUsedBackend, connectionError, failureKind, failureStatus };
+}
+
+/** The stream's outcome, read from its progress record. */
+function streamResult(progress: StreamProgress): Omit<BackendStreamResult, 'usedBackend' | 'connectionError' | 'failureKind' | 'failureStatus'> {
+    return {
+        generatedArtifact: progress.artifact,
+        finalResponseText: progress.text,
+        streamGroundingMetadata: progress.groundingMetadata,
+        streamExecs: progress.execs,
+        streamQuestionCard: progress.questionCard,
+        streamExecutionPlanCard: progress.executionPlanCard
+    };
+}
+
+/** What the stream had shown, as the input for a stopped or failed reply. */
+function partialReplyFrom(ctx: GenerationContext): PartialReply {
+    const { progress } = ctx;
+    return {
+        text: cleanMessageText(progress.text, progress.artifact),
+        thinkingText: progress.thinking,
+        thinkingDurationSeconds: parseFloat(((Date.now() - ctx.generationStartTime) / 1000).toFixed(1)),
+        steps: progress.steps,
+        execs: progress.execs,
+        artifact: progress.artifact,
+        groundingMetadata: progress.groundingMetadata,
+        questionCard: progress.questionCard,
+        executionPlanCard: progress.executionPlanCard
+    };
 }
 
 /** Step 4a — build the assistant message from a successful backend stream. */
 function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, backend: BackendStreamResult): ChatMessage {
-    const { liveThinkingText, liveThinkingSeconds, liveSteps, recordArtifactVersion } = d;
+    const { recordArtifactVersion } = d;
     const { generationStartTime } = ctx;
-    const { usedBackend, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs } = backend;
+    const { usedBackend, generatedArtifact, finalResponseText, streamGroundingMetadata } = backend;
     let finalAssistantMsg: ChatMessage;
-    const generationElapsedSeconds = parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1));
-    const backendThinkingDuration = liveThinkingSeconds > 0 ? liveThinkingSeconds : generationElapsedSeconds;
+    // Read from the stream's own record: the live thinking state belongs to whichever session is on
+    // screen, which may not be this reply's.
+    const liveThinkingText = ctx.progress.thinking;
+    const backendThinkingDuration = parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1));
+    // The stream is over, so a tool that never reported a result must not keep spinning in the saved message.
+    const streamExecs = backend.streamExecs.map(e => settleRunningExecution(e, STREAM_ENDED));
+    const liveSteps = settleRunningSteps(ctx.progress.steps, backend.streamExecs, STREAM_ENDED);
 
     if (usedBackend && generatedArtifact) {
         recordArtifactVersion(generatedArtifact);
@@ -944,13 +992,19 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
         ? (text.length > 36 ? text.slice(0, 34) + '...' : text)
         : (currentTitle || text.slice(0, 32));
 
+    // The Studio's artifact history and layout belong to the session on screen; when the user has moved
+    // to another one, the reply's session keeps its own and only gains the reply's artifact.
+    const targetVisible = !activeSessionRef.current || activeSessionRef.current === targetSessionId;
     setSessions(prev => {
-        const exists = prev.some(s => s.id === targetSessionId);
-        const existingSession = exists ? prev.find(s => s.id === targetSessionId) : undefined;
-        const currentActiveArtifact = finalArtifact || existingSession?.activeArtifact;
-        const currentLayoutMode = finalArtifact 
-            ? resolveModeForArtifact(finalArtifact.type) 
-            : (existingSession?.layoutMode || layoutMode || 'chat');
+        const existingSession = prev.find(s => s.id === targetSessionId);
+        const exists = !!existingSession;
+        const canvas = committedSessionCanvas({
+            targetVisible,
+            visible: { artifactHistory, layoutMode },
+            stored: existingSession,
+            finalArtifact,
+            finalArtifactMode: finalArtifact ? resolveModeForArtifact(finalArtifact.type) : undefined
+        });
         const sessionData: ChatSession = {
             id: targetSessionId,
             title: sessionTitle,
@@ -961,9 +1015,9 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
             dateCategory: 'Today',
             updatedAt: 'Just now',
             messages: nextFullMessages,
-            activeArtifact: currentActiveArtifact,
-            artifactHistory: finalArtifact ? [finalArtifact, ...artifactHistory.filter(a => a.id !== finalArtifact.id)] : artifactHistory,
-            layoutMode: currentLayoutMode
+            activeArtifact: canvas.activeArtifact,
+            artifactHistory: canvas.artifactHistory,
+            layoutMode: canvas.layoutMode
         };
         const updated = exists ? prev.map(s => s.id === targetSessionId ? sessionData : s) : [sessionData, ...prev];
         persistSessionsImmediately(updated);
@@ -973,7 +1027,7 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
     clearInterval(thinkingTimer);
 
     // Only update active UI if user is still on this target session
-    if (!activeSessionRef.current || activeSessionRef.current === targetSessionId) {
+    if (targetVisible) {
         setMessages(nextFullMessages);
         setIsGenerating(false);
         setLiveThinkingText('');
@@ -999,28 +1053,58 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
 export interface UseSendMessageResult {
     /** Send a chat message (defaults to the composer text). Stable identity across renders. */
     sendMessage: (textToSend?: string, targetPrimitiveType?: PrimitiveType) => Promise<void>;
-    /** Abort any in-flight generation and reset the live streaming UI. */
+    /**
+     * Stop the reply being generated (the composer's Stop button). The request is aborted, which tells
+     * the server to end the turn and stop the running tool; the text, thinking and tool steps that
+     * already streamed are kept as the reply, with running tools marked stopped. Does nothing when no
+     * reply is streaming.
+     */
     cancelInFlight: () => void;
+    /**
+     * A chat reply from this hook is streaming, so `cancelInFlight` has something to stop. Other work
+     * that sets `isGenerating` (the deep-write pipeline) cannot be stopped this way.
+     */
+    streamInFlight: boolean;
+}
+
+/** Marks the running tool cards of one stream as cut off in the Studio-wide tool-execution list. */
+function settleGlobalExecutions(d: SendMessageDeps, progress: StreamProgress, cutoff: StepCutoff): void {
+    const ids = new Set(progress.execs.map(e => e.id));
+    if (ids.size > 0) {
+        d.setMcpExecutions(prev => prev.map(e => (ids.has(e.id) ? settleRunningExecution(e, cutoff) : e)));
+    }
 }
 
 /**
  * The Studio's send pipeline: slash commands → user bubble → Gemini stream → (local fallback) → commit.
- * An `AbortController` per send lets the stream be cancelled on unmount or when a new send starts,
- * so no state updates land on an unmounted Studio.
+ * An `AbortController` per send lets the stream be stopped by the user, replaced by a newer send, or
+ * cancelled on unmount, so no state updates land on an unmounted Studio.
  */
 export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
     const depsRef = React.useRef<SendMessageDeps>(deps);
     depsRef.current = deps;
     const abortRef = React.useRef<AbortController | null>(null);
+    /** Mirrors `abortRef` for rendering: true while a chat stream can be stopped. */
+    const [streamInFlight, setStreamInFlight] = React.useState(false);
+    /** Streams ended by the user's Stop (their partial reply is kept) rather than by a newer send or unmount. */
+    const userStopsRef = React.useRef(new WeakSet<AbortSignal>());
 
-    const cancelInFlight = React.useCallback(() => {
-        if (abortRef.current) {
-            abortRef.current.abort();
-            abortRef.current = null;
+    const abortInFlight = React.useCallback((byUser: boolean) => {
+        const controller = abortRef.current;
+        if (!controller) {
+            return;
         }
+        abortRef.current = null;
+        setStreamInFlight(false);
+        if (byUser) {
+            userStopsRef.current.add(controller.signal);
+        }
+        controller.abort();
     }, []);
 
-    React.useEffect(() => () => cancelInFlight(), [cancelInFlight]);
+    const cancelInFlight = React.useCallback(() => abortInFlight(true), [abortInFlight]);
+
+    React.useEffect(() => () => abortInFlight(false), [abortInFlight]);
 
     const sendMessage = React.useCallback(async (textToSend?: string, targetPrimitiveType?: PrimitiveType) => {
         const d = depsRef.current;
@@ -1029,17 +1113,24 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             return;
         }
         if (d.isGenerating) {
-            cancelInFlight();
+            abortInFlight(false);
             await new Promise(r => setTimeout(r, 60));
         }
         if (await handleSlashCommands(d, text)) {
             return;
         }
 
-        cancelInFlight();
+        abortInFlight(false);
         const controller = new AbortController();
         abortRef.current = controller;
+        setStreamInFlight(true);
         const { signal } = controller;
+        const releaseController = () => {
+            if (abortRef.current === controller) {
+                abortRef.current = null;
+                setStreamInFlight(false);
+            }
+        };
 
         const ctx = beginGeneration(d, text, textToSend, targetPrimitiveType);
         const resetLiveState = () => {
@@ -1052,86 +1143,123 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             latest.setLiveStreamedText('');
             latest.setActiveStreamingSectionId(undefined);
         };
-        signal.addEventListener('abort', resetLiveState, { once: true });
-
-        const backend = await streamBackendResponse(depsRef.current, ctx, signal);
-        if (signal.aborted) {
-            return;
-        }
-
-        let finalAssistantMsg: ChatMessage;
-        let fallbackGen: CanvasArtifact | undefined;
-        if (backend.usedBackend) {
-            let promptText = ctx.text || '';
-            const isClarificationOrConfirmation =
-                promptText.startsWith('[Clarification Selection]') ||
-                promptText.startsWith('[Execution Plan') ||
-                promptText.startsWith('Confirmed. Proceed');
-
-            if (isClarificationOrConfirmation) {
-                const priorUserMsg = [...ctx.updatedMessages].reverse().find(m =>
-                    m.sender === 'user' &&
-                    !m.text.startsWith('[Clarification Selection]') &&
-                    !m.text.startsWith('[Execution Plan') &&
-                    !m.text.startsWith('Confirmed. Proceed')
-                );
-                if (priorUserMsg && priorUserMsg.text.trim()) {
-                    promptText = priorUserMsg.text.trim();
-                }
+        // Stop keeps what already streamed as the reply; no error or "server offline" notice is shown.
+        const commitStoppedReply = () => {
+            const latest = depsRef.current;
+            const stopped = buildStoppedReply(partialReplyFrom(ctx));
+            settleGlobalExecutions(latest, ctx.progress, USER_STOP);
+            commitAssistantMessage(latest, ctx, stopped, ctx.progress.artifact, undefined);
+        };
+        const onAbort = () => {
+            if (!userStopsRef.current.has(signal)) {
+                settleGlobalExecutions(depsRef.current, ctx.progress, STREAM_CANCELLED);
+                resetLiveState();
+                return;
             }
-            const lowerPromptText = promptText.toLowerCase();
-            const isVideoTimelinePrompt = promptText.trim().startsWith('/timeline') ||
-                promptText.trim().startsWith('/video') ||
-                /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|vfx\s+plate|anti[- ]drift|matchmove/i.test(promptText) ||
-                ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
-            if (isVideoTimelinePrompt && (!backend.generatedArtifact || backend.generatedArtifact.type !== 'video-timeline')) {
-                const fb = synthesizeVideoTimelineFallback(promptText, depsRef.current.activeArtifact);
+            try {
+                commitStoppedReply();
+            } catch (err) {
+                // Never leave the composer stuck in the generating state.
+                console.error('[useSendMessage] Could not keep the stopped reply:', err);
+                resetLiveState();
+            }
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+
+        try {
+            const backend = await streamBackendResponse(depsRef.current, ctx, signal);
+            if (signal.aborted) {
+                return;
+            }
+            const finalAssistantMsg = buildFinalReply(depsRef.current, ctx, backend);
+            signal.removeEventListener('abort', onAbort);
+            commitAssistantMessage(depsRef.current, ctx, finalAssistantMsg, backend.generatedArtifact, undefined);
+        } catch (err) {
+            // Never leave the composer stuck in the generating state.
+            console.error('[useSendMessage] Could not save the reply:', err);
+            if (!signal.aborted) {
+                signal.removeEventListener('abort', onAbort);
+                settleGlobalExecutions(depsRef.current, ctx.progress, STREAM_FAILED);
+                resetLiveState();
+            }
+        } finally {
+            releaseController();
+        }
+    }, [abortInFlight]);
+
+    return { sendMessage, cancelInFlight, streamInFlight };
+}
+
+/**
+ * Step 4 — the reply for a stream that ran to its end: the model's answer, or, when the stream failed
+ * or produced nothing usable, the failure notice below whatever had streamed. Either way the tool steps
+ * and results that already arrived are kept (so the next turn knows which tools ran), and any tool card
+ * still running is settled in the reply and in the Studio-wide list.
+ */
+function buildFinalReply(d: SendMessageDeps, ctx: GenerationContext, backend: BackendStreamResult): ChatMessage {
+    if (backend.usedBackend) {
+        let promptText = ctx.text || '';
+        const isClarificationOrConfirmation =
+            promptText.startsWith('[Clarification Selection]') ||
+            promptText.startsWith('[Execution Plan') ||
+            promptText.startsWith('Confirmed. Proceed');
+
+        if (isClarificationOrConfirmation) {
+            const priorUserMsg = [...ctx.updatedMessages].reverse().find(m =>
+                m.sender === 'user' &&
+                !m.text.startsWith('[Clarification Selection]') &&
+                !m.text.startsWith('[Execution Plan') &&
+                !m.text.startsWith('Confirmed. Proceed')
+            );
+            if (priorUserMsg && priorUserMsg.text.trim()) {
+                promptText = priorUserMsg.text.trim();
+            }
+        }
+        const lowerPromptText = promptText.toLowerCase();
+        const isVideoTimelinePrompt = promptText.trim().startsWith('/timeline') ||
+            promptText.trim().startsWith('/video') ||
+            /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|vfx\s+plate|anti[- ]drift|matchmove/i.test(promptText) ||
+            ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
+        if (isVideoTimelinePrompt && (!backend.generatedArtifact || backend.generatedArtifact.type !== 'video-timeline')) {
+            const fb = synthesizeVideoTimelineFallback(promptText, d.activeArtifact);
+            if (fb.artifact) {
+                backend.generatedArtifact = fb.artifact;
+                d.showToast(fb.toast?.text || `Synthesized Video NLE: ${fb.artifact.title}`, fb.toast?.icon || '🎬');
+            }
+        }
+        const isSandboxCreationPrompt = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(promptText) ||
+            /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(promptText);
+
+        if (isSandboxCreationPrompt && !isVideoTimelinePrompt) {
+            const currentArt = backend.generatedArtifact;
+            if (!currentArt || currentArt.type !== 'live-code-sandbox') {
+                const fb = synthesizeSandboxFallback(promptText, d.activeArtifact);
                 if (fb.artifact) {
                     backend.generatedArtifact = fb.artifact;
-                    depsRef.current.showToast(fb.toast?.text || `Synthesized Video NLE: ${fb.artifact.title}`, fb.toast?.icon || '🎬');
-                }
-            }
-            const isSandboxCreationPrompt = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(promptText) ||
-                /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(promptText);
-
-            if (isSandboxCreationPrompt && !isVideoTimelinePrompt) {
-                const currentArt = backend.generatedArtifact;
-                if (!currentArt || currentArt.type !== 'live-code-sandbox') {
-                    const fb = synthesizeSandboxFallback(promptText, depsRef.current.activeArtifact);
-                    if (fb.artifact) {
-                        backend.generatedArtifact = fb.artifact;
-                        depsRef.current.setActiveArtifact(fb.artifact);
-                        depsRef.current.setLayoutMode('code');
-                        depsRef.current.showToast(fb.toast?.text || `Synthesized Live Sandbox: ${fb.artifact.title}`, fb.toast?.icon || '💻');
+                    // The canvas on screen may belong to another session; the commit shows this
+                    // artifact when the reply's session is the visible one.
+                    if (!d.activeSessionRef.current || d.activeSessionRef.current === ctx.targetSessionId) {
+                        d.setActiveArtifact(fb.artifact);
+                        d.setLayoutMode('code');
                     }
+                    d.showToast(fb.toast?.text || `Synthesized Live Sandbox: ${fb.artifact.title}`, fb.toast?.icon || '💻');
                 }
             }
-            finalAssistantMsg = finalizeBackendMessage(depsRef.current, ctx, backend);
-        } else if (backend.connectionError) {
-            const failure = describeChatFailure(backend.failureKind || 'unreachable', backend.connectionError, backend.failureStatus);
-            finalAssistantMsg = {
-                id: `msg-${Date.now()}`,
-                sender: 'assistant',
-                text: failure.text,
-                timestamp: new Date().toLocaleTimeString()
-            };
-            depsRef.current.showToast(failure.toast, '⚠️');
-        } else {
-            finalAssistantMsg = {
-                id: `msg-${Date.now()}`,
-                sender: 'assistant',
-                text: `⚠️ **Unable to Reach AI Model or Data Sources**\n\nThe AI model or backend generative services could not be reached to process your request. Offline fallbacks have been retired in accordance with our online architecture.\n\nPlease verify that the backend dev server is active (\`npm run dev\`) and that your network connection and API credentials are configured.`,
-                timestamp: new Date().toLocaleTimeString()
-            };
-            depsRef.current.showToast(`Unable to reach AI model or data sources`, '⚠️');
         }
-
-        signal.removeEventListener('abort', resetLiveState);
-        commitAssistantMessage(depsRef.current, ctx, finalAssistantMsg, backend.generatedArtifact, fallbackGen);
-        if (abortRef.current === controller) {
-            abortRef.current = null;
-        }
-    }, [cancelInFlight]);
-
-    return { sendMessage, cancelInFlight };
+        settleGlobalExecutions(d, ctx.progress, STREAM_ENDED);
+        return finalizeBackendMessage(d, ctx, backend);
+    }
+    if (backend.connectionError) {
+        const failure = describeChatFailure(backend.failureKind || 'unreachable', backend.connectionError, backend.failureStatus);
+        settleGlobalExecutions(d, ctx.progress, STREAM_FAILED);
+        d.showToast(failure.toast, '⚠️');
+        return buildFailedReply(partialReplyFrom(ctx), failure.text, STREAM_FAILED);
+    }
+    settleGlobalExecutions(d, ctx.progress, STREAM_ENDED);
+    d.showToast(`Unable to reach AI model or data sources`, '⚠️');
+    return buildFailedReply(
+        partialReplyFrom(ctx),
+        `⚠️ **Unable to Reach AI Model or Data Sources**\n\nThe AI model or backend generative services could not be reached to process your request. Offline fallbacks have been retired in accordance with our online architecture.\n\nPlease verify that the backend dev server is active (\`npm run dev\`) and that your network connection and API credentials are configured.`,
+        STREAM_ENDED
+    );
 }

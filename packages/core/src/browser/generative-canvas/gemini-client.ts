@@ -354,6 +354,11 @@ export class GeminiClient {
                     }
                 }
             }
+        } catch (err) {
+            // Once the caller aborted (Stop, a newer message), whatever fails next — e.g. reading an
+            // error body — is that abort, not a server or AI failure to report.
+            if (signal?.aborted) return;
+            throw err;
         } finally {
             clearTimeout(timeoutId);
             if (signal) {

@@ -268,7 +268,7 @@ export class GeminiService {
             browserProxy: this.getBrowserProxy(),
             lens: this.lens,
             executeSubagent: req => this.executeSubagentTask(req),
-            runSubagent: (task, parent) => this.runSubagent(task, parent)
+            runSubagent: (task, parent, signal) => this.runSubagent(task, parent, signal)
         };
     }
 
@@ -276,7 +276,7 @@ export class GeminiService {
      * A subagent is a full agent run in Ask mode (read-only tools, enforced) with a fresh context: it
      * sees only the task, not the parent conversation, and only its final report returns to the parent.
      */
-    async runSubagent(task: string, parent: GeminiGenerateRequest): Promise<SubagentRunResult> {
+    async runSubagent(task: string, parent: GeminiGenerateRequest, signal?: AbortSignal): Promise<SubagentRunResult> {
         const toolsUsed: string[] = [];
         try {
             const response = await this.streaming.streamGenerate({
@@ -291,7 +291,7 @@ export class GeminiService {
                 maxTurns: 20
             }, event => {
                 if (event.type === 'tool_result' && event.mcpExecution?.toolName) toolsUsed.push(event.mcpExecution.toolName);
-            });
+            }, signal);
             if (!response.success) {
                 return { success: false, report: '', toolsUsed, modelUsed: response.modelUsed, error: response.error || 'Subagent run failed' };
             }

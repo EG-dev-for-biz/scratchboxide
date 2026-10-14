@@ -27,6 +27,7 @@ import {
 } from './gemini-client';
 import { compactChatHistory, HISTORY_SUMMARY_INSTRUCTION } from './history-compaction';
 import { toolBlockedReason } from './tool-permissions';
+import { resolveToolTimeBudget } from './tool-time-budgets';
 import {
     buildToolDeclarations,
     inferToolGroup,
@@ -145,13 +146,34 @@ function throwIfAborted(signal?: AbortSignal): void {
     }
 }
 
-// Some tools wait on their own long deadlines (a 3D Tiles render can allow ~38 min); the chat should not.
+// The default limit for one tool call; tools that legitimately run longer declare a budget in tool-time-budgets.ts.
 const DEFAULT_TOOL_TIMEOUT_MS = 5 * 60_000;
 const TOOL_HEARTBEAT_MS = 15_000;
 
 export function resolveToolTimeoutMs(): number {
     const fromEnv = Number(process.env.SCRATCHBOX_TOOL_TIMEOUT_MS);
     return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_TOOL_TIMEOUT_MS;
+}
+
+/** "45s" under two minutes, else "11 min". */
+function formatDuration(ms: number): string {
+    return ms < 120_000 ? `${Number((ms / 1000).toFixed(1))}s` : `${Math.round(ms / 60_000)} min`;
+}
+
+/** The card shown while a tool runs; the finished result replaces it (same id). */
+function runningExecution(id: string, toolName: string, args: Record<string, unknown> | undefined, progress: string): McpExecutionState {
+    return {
+        id,
+        mcpServerId: 'scratchbox-tool-progress',
+        mcpName: 'Scratchbox',
+        toolName,
+        humanTitle: toolName,
+        status: 'running',
+        timestamp: new Date().toLocaleTimeString(),
+        steps: [{ id: 's1', title: `Run ${toolName}`, status: 'running' }],
+        summaryResult: progress,
+        args: args as Record<string, any> | undefined
+    };
 }
 
 /** User-facing explanation for a model turn that ended with no text, tool result or artifact. */
@@ -268,13 +290,17 @@ export class StreamingEngine {
         }
 
         throwIfAborted(signal);
+        const attempt = { modelResponded: false };
         return this.client.withModelFallback(
             this.client.getModelCandidates(request.model),
-            targetModel => this.executeVertexGeneration(targetModel, streamAuth!, request, onEvent, signal),
+            targetModel => this.executeVertexGeneration(targetModel, streamAuth!, request, onEvent, signal, attempt),
             {
                 onSuccess: model => { this.client.preferredModel = model; },
                 // Partial output may already have been streamed; never replay a turn.
-                retryTransient: false
+                retryTransient: false,
+                // A missing model fails its first request. Once a model has answered, tools may have run (some for
+                // many minutes): a later "not found" must end the turn, not replay it on the next model.
+                canFallback: () => !attempt.modelResponded
             }
         );
     }
@@ -446,7 +472,8 @@ export class StreamingEngine {
         auth: StreamAuth,
         request: GeminiGenerateRequest,
         onEvent: StreamEventSink,
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        attempt: { modelResponded: boolean } = { modelResponded: false }
     ): Promise<GeminiGenerateResponse> {
         const url = auth.type === 'vertex'
             ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
@@ -532,6 +559,16 @@ export class StreamingEngine {
             const turnDetectedToolCalls: FunctionCall[] = [];
             let turnText = '';
 
+            if (auth.type === 'vertex' && currentTurn > 1) {
+                // The token was taken when the turn started and lasts about an hour; a long tool call can outlive it.
+                // getAccessToken returns the cached token, refreshing it when it is close to expiry.
+                try {
+                    headers['Authorization'] = `Bearer ${(await this.client.getAccessToken()).token}`;
+                } catch {
+                    // Keep the current token; if it has expired the request below reports the 401.
+                }
+            }
+
             const response = await fetchFn(url, {
                 method: 'POST',
                 headers,
@@ -543,6 +580,7 @@ export class StreamingEngine {
                 const errBody = await response.text();
                 throw new Error(`AI request failed (${response.status}): ${errBody}`);
             }
+            attempt.modelResponded = true;
 
             await this.consumeSseLines(response, line => {
                 const parsed = parseSseDataLine(line);
@@ -646,7 +684,7 @@ export class StreamingEngine {
                     }
                 }
 
-                const { exec, resultPayload } = await this.executeToolCallWithDeadline({ id: toolCall.id, name: toolName, args: toolCall.args }, request, onEvent, model);
+                const { exec, resultPayload } = await this.executeToolCallWithDeadline({ id: toolCall.id, name: toolName, args: toolCall.args }, request, onEvent, model, signal);
                 mcpExecutions.push(exec);
 
                 if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
@@ -771,59 +809,116 @@ export class StreamingEngine {
     }
 
     /**
-     * Runs a tool call with periodic progress events and a time limit. A call that overruns is reported to the
-     * model as failed so the turn can continue; the abandoned work may still finish in the background.
+     * Runs one tool call under its time budget (tool-time-budgets.ts) while the chat shows it as running: a card
+     * with the elapsed time and the tool's latest progress report, replaced in place by the result. The call ends
+     * when the tool finishes; when it reaches its budget or goes too long without reporting progress (reported to
+     * the model as failed, so the turn continues); or when the user stops the chat (the turn ends). In the last two
+     * cases the tool's ctx.signal is aborted so tools that watch it stop working.
      */
     private async executeToolCallWithDeadline(
         toolCall: GeminiFunctionCall,
         request: GeminiGenerateRequest,
         onEvent: StreamEventSink,
-        model: string
+        model: string,
+        signal?: AbortSignal
     ): Promise<ToolExecutionResult> {
+        throwIfAborted(signal);
         const toolName = toolCall.name || 'tool';
-        const limitMs = resolveToolTimeoutMs();
+        const budget = resolveToolTimeBudget(toolName, toolCall.args, resolveToolTimeoutMs());
         const startedAt = Date.now();
-        const work = this.executeToolCall(toolCall, request);
+        // The model often omits call ids, and one turn can call the same tool several times within a millisecond.
+        const execId = `exec-${toolCall.id || `${toolName}-${startedAt}-${Math.random().toString(36).slice(2, 8)}`}`;
+        const controller = new AbortController();
+
+        let progressText = '';
+        let lastProgressAt = startedAt;
+        let lastEmitAt = 0;
+        const elapsedS = () => Math.round((Date.now() - startedAt) / 1000);
+        const emitRunning = () => {
+            lastEmitAt = Date.now();
+            const text = `${progressText || 'Running'} (${elapsedS()}s)`;
+            onEvent({ type: 'status', text: `${toolName}: ${text}`, modelUsed: model, mcpExecution: runningExecution(execId, toolName, toolCall.args, text) });
+        };
+
+        // Once the call has ended (result, time limit or Stop), late progress reports from a tool that is still
+        // winding down must not reopen its card or restart the idle timer.
+        let settled = false;
+        let settle: (outcome: 'max' | 'idle' | 'aborted') => void = () => undefined;
+        const stopped = new Promise<'max' | 'idle' | 'aborted'>(resolve => { settle = resolve; });
+        const maxTimer = setTimeout(() => settle('max'), budget.maxMs);
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const armIdle = () => {
+            if (settled || budget.idleMs >= budget.maxMs) return;
+            clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => settle('idle'), budget.idleMs);
+        };
+        armIdle();
+        const onAbort = () => settle('aborted');
+        signal?.addEventListener('abort', onAbort, { once: true });
+        const heartbeat = setInterval(emitRunning, TOOL_HEARTBEAT_MS);
+
+        const reportProgress = (message: string, fraction?: number) => {
+            if (settled) return;
+            lastProgressAt = Date.now();
+            const pct = typeof fraction === 'number' && Number.isFinite(fraction) ? ` - ${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%` : '';
+            progressText = `${String(message).slice(0, 200)}${pct}`;
+            armIdle();
+            if (Date.now() - lastEmitAt >= 1000) emitRunning();
+        };
+
+        emitRunning();
+        const work = this.executeToolCall(toolCall, request, { signal: controller.signal, reportProgress });
         work.catch(() => undefined);
 
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const heartbeat = setInterval(() => {
-            onEvent({ type: 'status', text: `Still running ${toolName} (${Math.round((Date.now() - startedAt) / 1000)}s)...`, modelUsed: model });
-        }, TOOL_HEARTBEAT_MS);
-        const deadline = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), limitMs); });
-
         try {
-            const outcome = await Promise.race([work, deadline]);
-            if (outcome !== 'timeout') {
-                return outcome;
+            const outcome = await Promise.race([work, stopped]);
+            if (outcome === 'aborted') {
+                controller.abort(createAbortError());
+                throw createAbortError();
             }
-            const message = `${toolName} did not finish within ${Number((limitMs / 1000).toFixed(1))}s, so the chat continued without its result. It may still finish in the background.`;
-            const exec: McpExecutionState = {
-                id: `exec-timeout-${Date.now()}`,
-                mcpServerId: 'scratchbox-tool-deadline',
-                mcpName: 'Scratchbox',
-                toolName,
-                humanTitle: toolName,
-                status: 'failed',
-                timestamp: new Date().toLocaleTimeString(),
-                steps: [{ id: 's1', title: `Run ${toolName}`, status: 'failed', durationMs: limitMs }],
-                summaryResult: message
-            };
-            return { exec, resultPayload: { success: false, error: message, timedOut: true } };
+            if (outcome === 'max' || outcome === 'idle') {
+                const why = outcome === 'max'
+                    ? `did not finish within ${formatDuration(budget.maxMs)}, its time limit`
+                    : `did not finish: it reported no progress for ${formatDuration(Date.now() - lastProgressAt)} (after ${formatDuration(Date.now() - startedAt)} in all)`;
+                const message = `${toolName} ${why}, so the chat continued without its result and asked the tool to stop. It may still be finishing its current step; do not call it again unless the user asks.`;
+                controller.abort(new Error(message));
+                const exec: McpExecutionState = {
+                    id: execId,
+                    mcpServerId: 'scratchbox-tool-deadline',
+                    mcpName: 'Scratchbox',
+                    toolName,
+                    humanTitle: toolName,
+                    status: 'failed',
+                    timestamp: new Date().toLocaleTimeString(),
+                    steps: [{ id: 's1', title: `Run ${toolName}`, status: 'failed', durationMs: Date.now() - startedAt }],
+                    summaryResult: message,
+                    durationMs: Date.now() - startedAt
+                };
+                return { exec, resultPayload: { success: false, error: message, timedOut: true } };
+            }
+            // Same id as the running card, so the result replaces it; the real duration rather than a nominal one.
+            return { ...outcome, exec: { ...outcome.exec, id: execId, durationMs: Date.now() - startedAt } };
         } finally {
-            clearTimeout(timer);
+            settled = true;
+            clearTimeout(maxTimer);
+            clearTimeout(idleTimer);
             clearInterval(heartbeat);
+            signal?.removeEventListener('abort', onAbort);
         }
     }
 
     /** Route a model tool call to the registry. Calls that cannot run are reported as failures, never as success. */
-    async executeToolCall(toolCall: GeminiFunctionCall, request: GeminiGenerateRequest): Promise<ToolExecutionResult> {
+    async executeToolCall(
+        toolCall: GeminiFunctionCall,
+        request: GeminiGenerateRequest,
+        extras: Pick<ToolContext, 'signal' | 'reportProgress'> = {}
+    ): Promise<ToolExecutionResult> {
         const toolName = toolCall.name || '';
         const blocked = toolBlockedReason(request.mode, toolName);
         if (blocked) {
             return failedToolResult(toolName, blocked, 'scratchbox-permissions');
         }
-        const ctx = this.toolContext(request);
+        const ctx: ToolContext = { ...this.toolContext(request), ...extras };
         if (this.registry.has(toolName) || inferToolGroup(toolName) !== 'mcp') {
             return this.registry.dispatch(toolName, toolCall.args, ctx);
         }

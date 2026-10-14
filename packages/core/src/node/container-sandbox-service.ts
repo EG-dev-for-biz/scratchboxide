@@ -106,22 +106,40 @@ export class ContainerSandboxService {
             let isTimedOut = false;
             let processExited = false;
 
+            // Own process group (POSIX), so a timeout or Stop kills what the shell started (e.g. a dev server),
+            // not just the shell.
+            const ownGroup = process.platform !== 'win32';
             const child: ChildProcess = spawn(rawCommand, {
                 cwd,
                 env: mergedEnv,
-                shell: true
+                shell: true,
+                detached: ownGroup
             });
+            const killTree = () => {
+                try {
+                    if (ownGroup && child.pid) process.kill(-child.pid, 'SIGKILL');
+                    else child.kill('SIGKILL');
+                } catch {
+                    // Process might already be dead
+                }
+            };
 
             const timer = setTimeout(() => {
                 if (!processExited) {
                     isTimedOut = true;
-                    try {
-                        child.kill('SIGKILL');
-                    } catch (e) {
-                        // Process might already be dead
-                    }
+                    killTree();
                 }
             }, timeoutMs);
+
+            let stoppedByCaller = false;
+            const onAbort = () => {
+                if (!processExited) {
+                    stoppedByCaller = true;
+                    killTree();
+                }
+            };
+            if (options.signal?.aborted) onAbort();
+            else options.signal?.addEventListener('abort', onAbort, { once: true });
 
             if (child.stdout) {
                 child.stdout.on('data', (chunk) => {
@@ -143,6 +161,7 @@ export class ContainerSandboxService {
 
             child.on('error', (err) => {
                 clearTimeout(timer);
+                options.signal?.removeEventListener('abort', onAbort);
                 processExited = true;
                 const durationMs = Date.now() - startTime;
                 resolve({
@@ -157,13 +176,14 @@ export class ContainerSandboxService {
 
             child.on('close', (code, signal) => {
                 clearTimeout(timer);
+                options.signal?.removeEventListener('abort', onAbort);
                 processExited = true;
                 const durationMs = Date.now() - startTime;
 
                 resolve({
                     exitCode: isTimedOut ? 124 : (code !== null ? code : 1),
                     stdout: stdoutData,
-                    stderr: stderrData,
+                    stderr: stoppedByCaller ? `${stderrData}${stderrData ? '\n' : ''}[stopped before it finished]` : stderrData,
                     durationMs,
                     timedOut: isTimedOut,
                     killed: signal ? true : false

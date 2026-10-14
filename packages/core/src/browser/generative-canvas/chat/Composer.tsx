@@ -81,11 +81,19 @@ export interface ComposerProps {
     handleSelectAutocompleteSkill: (skill: SkillItem) => void;
     handleSelectAutocompleteContext: (item: ContextMentionItem) => void;
     sendMessage: () => void;
+    /** Stops the reply being generated; offered in place of the send button while `canStop`. */
+    stopGenerating: () => void;
+    /**
+     * A chat reply that `stopGenerating` can stop is streaming. Other generation (the deep-write
+     * pipeline) also sets `isGenerating` but cannot be stopped, so it keeps the busy send button.
+     */
+    canStop: boolean;
 }
 
 /**
  * The unified chat composer capsule: attachments/data-file pills, `/` skill and `@` context
- * autocomplete, voice dictation, mode selector, auto-growing textarea and send button.
+ * autocomplete, voice dictation, mode selector, auto-growing textarea and send button (a Stop
+ * button while a chat reply that can be stopped is generating).
  */
 export const Composer: React.FC<ComposerProps> = ({
     inSplitPane = false,
@@ -126,7 +134,9 @@ export const Composer: React.FC<ComposerProps> = ({
     handleToggleComposerMcp,
     handleSelectAutocompleteSkill,
     handleSelectAutocompleteContext,
-    sendMessage
+    sendMessage,
+    stopGenerating,
+    canStop
 }) => (
     <div
         className={`sb-unified-composer-capsule ${inSplitPane ? 'sb-split-pane-composer' : ''} ${isDraggingDataFile ? 'sb-composer-drag-over' : ''}`}
@@ -375,22 +385,37 @@ export const Composer: React.FC<ComposerProps> = ({
                     <IconMic size={15} strokeWidth={1.8} />
                 </button>
 
-                <button
-                    type="button"
-                    className={`sb-composer-send-circle ${inputValue.trim() || attachedDataFile ? 'sb-send-ready' : ''}`}
-                    disabled={(!inputValue.trim() && !attachedDataFile) || isGenerating}
-                    onClick={() => sendMessage()}
-                    title="Send message (Enter)"
-                >
-                    {isGenerating ? (
-                        <span className="sb-send-loading-dot" />
-                    ) : (
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="12" y1="19" x2="12" y2="5" />
-                            <polyline points="5 12 12 5 19 12" />
+                {isGenerating && canStop ? (
+                    <button
+                        type="button"
+                        className="sb-composer-send-circle sb-send-ready sb-composer-stop-btn"
+                        onClick={() => stopGenerating()}
+                        aria-label="Stop generating"
+                        title="Stop"
+                    >
+                        <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor" />
                         </svg>
-                    )}
-                </button>
+                    </button>
+                ) : (
+                    <button
+                        type="button"
+                        className={`sb-composer-send-circle ${inputValue.trim() || attachedDataFile ? 'sb-send-ready' : ''}`}
+                        disabled={(!inputValue.trim() && !attachedDataFile) || isGenerating}
+                        onClick={() => sendMessage()}
+                        aria-label="Send message"
+                        title="Send message (Enter)"
+                    >
+                        {isGenerating ? (
+                            <span className="sb-send-loading-dot" />
+                        ) : (
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <line x1="12" y1="19" x2="12" y2="5" />
+                                <polyline points="5 12 12 5 19 12" />
+                            </svg>
+                        )}
+                    </button>
+                )}
             </div>
         </div>
     </div>

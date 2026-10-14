@@ -310,7 +310,7 @@ export class Location3DGaussianSplatService {
             renderProvider: req.renderProvider,
             renderMode: req.renderMode,
             draft: isDraft
-        }, progressReporter);
+        }, (p, message) => progressReporter(0.1 + 0.85 * Math.max(0, Math.min(1, p)), message));
 
         const { scene3DData, splatMediaObject } = SurveySplatPipelineService.toScene3DData(
             pipelineResult,
@@ -321,7 +321,9 @@ export class Location3DGaussianSplatService {
         const splatUrl = splatMediaObject.content.durableUri || SurveySplatPipelineService.toWebUrl(pipelineResult.fusedSplatPath);
         const tilesetUrl = SurveySplatPipelineService.toWebUrl(pipelineResult.tilesetPath);
 
-        progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
+        if (pipelineResult.success) {
+            progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
+        }
 
         return {
             success: pipelineResult.success,

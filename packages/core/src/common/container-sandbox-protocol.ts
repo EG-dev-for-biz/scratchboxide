@@ -41,6 +41,8 @@ export interface LocalExecutionOptions {
      * outside the default allowlist; destructive commands stay blocked.
      */
     confirmedByUser?: boolean;
+    /** Kills the command (and everything it started) when aborted, e.g. by the chat's Stop. */
+    signal?: AbortSignal;
 }
 
 export interface ExecutionResult {
