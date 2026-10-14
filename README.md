@@ -177,7 +177,8 @@ or `.env` with a warning. Only keys on `SERVER_SECRET_ALLOWLIST`
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Gemini text, image, video and grounding calls |
 | `GOOGLE_MAPS_API_KEY` / `MAP_TILES_API_KEY` | Google Photorealistic 3D Tiles |
 | `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_SERVICE_ACCOUNT_PATH` | Service-account auth for Vertex / Drive |
-| `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` | Vertex AI project + region |
+| `GOOGLE_CLOUD_PROJECT` | Vertex AI project |
+| `SCRATCHBOX_VERTEX_LOCATION` | Vertex AI region for chat and image models (default `global`, where Gemini 3.x is served; regional endpoints such as `us-central1` serve only older models). `GOOGLE_CLOUD_LOCATION` is no longer used for this. |
 
 User-entered credentials (Settings modal) are stored encrypted in
 `~/.scratchbox/credentials.json` (mode 0600) by `packages/core/src/node/key-store.ts`;

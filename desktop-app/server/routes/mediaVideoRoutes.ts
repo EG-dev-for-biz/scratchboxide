@@ -75,7 +75,7 @@ export function createMediaRouter(services: MediaRouterServices, ctx: RouteConte
                 image: {
                     supported: true,
                     models: IMAGE_MODEL_PRIORITY,
-                    primaryModel: 'nano-banana-2'
+                    primaryModel: IMAGE_MODEL_PRIORITY[0]
                 },
                 video: {
                     supported: true,

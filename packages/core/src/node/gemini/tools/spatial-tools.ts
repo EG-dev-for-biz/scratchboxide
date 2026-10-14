@@ -1420,7 +1420,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 model: {
                     type: 'STRING',
-                    description: 'Generative image model to use for the 5 surrounding perspectives (default: "nano-banana-2").'
+                    description: 'Generative image model id to use for the 5 surrounding perspectives (default: "gemini-3.1-flash-image", i.e. Nano Banana 2).'
                 },
                 useNanoBanana: {
                     type: 'BOOLEAN',
@@ -1428,7 +1428,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 mockExecution: {
                     type: 'BOOLEAN',
-                    description: 'Run in offline mock mode using procedural Nano Banana 2 conditioning.'
+                    description: 'Run in offline mock mode: the 5 perspectives are procedural copies of the input, not model output.'
                 },
                 outputDir: {
                     type: 'STRING',

@@ -41,6 +41,7 @@ import {
 } from '../canvas-icons';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
+import { IMAGE_MODEL_PRIORITY, resolveImageModelId } from '../../../common/media-generation-protocol';
 
 export interface NodeGraphPrimitiveProps {
     data: NodeGraphData;
@@ -213,7 +214,7 @@ const LIBRARY_SECTIONS: { title: string; items: LibraryItem[] }[] = [
                 color: 'purple' as AccentColor,
                 description: 'Synthesize images using Google Nano Banana 2',
                 icon: <IconSparkles size={13} strokeWidth={1.8} />,
-                parameters: { generatorType: 'nano-banana-2', model: 'nano-banana-2', prompt: 'Cinematic masterwork composition' }
+                parameters: { generatorType: 'nano-banana-2', model: 'gemini-3.1-flash-image', prompt: 'Cinematic masterwork composition' }
             },
             {
                 id: 'image-editor',
@@ -223,7 +224,7 @@ const LIBRARY_SECTIONS: { title: string; items: LibraryItem[] }[] = [
                 color: 'purple' as AccentColor,
                 description: 'Edit, inpaint, or restyle images via Google Nano Banana 2 endpoint',
                 icon: <IconEdit size={13} strokeWidth={1.8} />,
-                parameters: { generatorType: 'nano-banana-2-edit', model: 'nano-banana-2', prompt: 'Restyle with dramatic cinematic lighting' }
+                parameters: { generatorType: 'nano-banana-2-edit', model: 'gemini-3.1-flash-image', prompt: 'Restyle with dramatic cinematic lighting' }
             },
             {
                 id: 'video-synthesizer',
@@ -981,12 +982,12 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
             image: {
                 label: 'Image Card (Nano Banana 2)',
                 sub: 'Google Nano Banana 2',
-                params: { prompt: 'A cinematic high-fidelity digital art rendering', aspectRatio: '16:9', model: 'nano-banana-2' }
+                params: { prompt: 'A cinematic high-fidelity digital art rendering', aspectRatio: '16:9', model: 'gemini-3.1-flash-image' }
             },
             'image-card': {
                 label: 'Image Card (Nano Banana 2)',
                 sub: 'Google Nano Banana 2',
-                params: { prompt: 'A cinematic high-fidelity digital art rendering', aspectRatio: '16:9', model: 'nano-banana-2' }
+                params: { prompt: 'A cinematic high-fidelity digital art rendering', aspectRatio: '16:9', model: 'gemini-3.1-flash-image' }
             },
             video: {
                 label: 'Video Card (Omni 1.1)',
@@ -1177,14 +1178,14 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
 
             let job: any;
             if (node.category === 'image' || node.category === 'image-card') {
-                const requestedModel = node.parameters?.model || 'nano-banana-2';
+                const requestedModel = node.parameters?.model || IMAGE_MODEL_PRIORITY[0];
                 job = await client.start({
                     kind: 'image',
                     prompt,
                     workspaceRoot: wsPath,
                     idempotencyKey,
                     aspectRatio: node.parameters?.aspectRatio || '16:9',
-                    modelPriority: [requestedModel, 'nano-banana-2', 'google/nano-banana-pro', 'gemini-3.1-flash-image'],
+                    modelPriority: [requestedModel, ...IMAGE_MODEL_PRIORITY],
                     sourceAsset: sourceAsset || (referenceAssets.length > 0 ? referenceAssets[0] : undefined),
                     referenceAssets: referenceAssets.length > 0 ? referenceAssets : undefined
                 });
@@ -2932,17 +2933,16 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                         <label className="sb-input-label">Model Endpoint</label>
                                                         <select
                                                             className="sb-select-input"
-                                                            value={editingNode.parameters?.model || 'nano-banana-2'}
+                                                            value={resolveImageModelId(editingNode.parameters?.model || IMAGE_MODEL_PRIORITY[0])}
                                                             onChange={e =>
                                                                 handleUpdateNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, model: e.target.value }
                                                                 })
                                                             }
                                                         >
-                                                            <option value="nano-banana-2">Nano Banana 2 (Google Endpoint - Default)</option>
-                                                            <option value="google/nano-banana-pro">Nano Banana Pro (Google)</option>
-                                                            <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image</option>
-                                                            <option value="imagen-3.0-generate-002">Imagen 3.0</option>
+                                                            <option value="gemini-3.1-flash-image">Nano Banana 2 (Google Endpoint - Default)</option>
+                                                            <option value="gemini-3-pro-image">Nano Banana Pro (Google)</option>
+                                                            <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image</option>
                                                         </select>
                                                     </div>
                                                     <div className="sb-form-col">

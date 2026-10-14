@@ -48,6 +48,20 @@ export function describeGoogleCredentialError(err: unknown): string {
     return `Could not verify credentials with Google: ${message}${hint ? ` ${hint}` : ''}`;
 }
 
+const warnedCloudLocations = new Set<string>();
+
+/**
+ * GOOGLE_CLOUD_LOCATION no longer picks the Vertex region for chat or media (Gemini 3.x is served from the global
+ * endpoint; us-central1 serves only gemini-2.5-flash-image). Say so once when it is set to something else, so a
+ * deployment that relied on it for data residency finds SCRATCHBOX_VERTEX_LOCATION instead of being moved silently.
+ */
+function warnIfIgnoredCloudLocation(location: string): void {
+    const legacy = process.env.GOOGLE_CLOUD_LOCATION?.trim();
+    if (!legacy || legacy === location || warnedCloudLocations.has(`${legacy}>${location}`)) return;
+    warnedCloudLocations.add(`${legacy}>${location}`);
+    console.warn(`[Scratchbox] Vertex AI requests use location "${location}", not GOOGLE_CLOUD_LOCATION="${legacy}". Set SCRATCHBOX_VERTEX_LOCATION to choose the region.`);
+}
+
 export class GoogleMediaCredentialsService {
     protected readonly keyStore: KeyStore;
 
@@ -63,8 +77,12 @@ export class GoogleMediaCredentialsService {
         return this.createVertexClient();
     }
 
-    /** Vertex AI client from service-account or project credentials; never uses an API key. */
-    async createVertexClient(location: string = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'): Promise<GoogleGenAI> {
+    /**
+     * Vertex AI client from service-account or project credentials; never uses an API key. Defaults to the
+     * same location as chat, since regional endpoints such as us-central1 serve only gemini-2.5-flash-image.
+     */
+    async createVertexClient(location: string = resolveVertexLocation()): Promise<GoogleGenAI> {
+        warnIfIgnoredCloudLocation(location);
         const auth = await this.getVertexAuth();
         return new GoogleGenAI({
             vertexai: true,

@@ -268,9 +268,9 @@ describe('Algorithmic UV PBR Pipeline: NOAA Solar De-Lighting, Toksvig AA & Mate
   // --------------------------------------------------------------------------
   // 6. Draft Fidelity Mode Routing Contract
   // --------------------------------------------------------------------------
-  it('prioritizes fast draft models including nano-banana-lite in draft fidelity mode', () => {
+  it('prioritizes the fast gemini-2.5-flash-image model in draft fidelity mode', () => {
     expect(IMAGE_MODEL_PRIORITY_DRAFT).toBeDefined();
-    expect(IMAGE_MODEL_PRIORITY_DRAFT[0]).toBe('nano-banana-lite');
+    expect(IMAGE_MODEL_PRIORITY_DRAFT[0]).toBe('gemini-2.5-flash-image');
     expect(IMAGE_MODEL_PRIORITY_DRAFT).toContain('gemini-2.5-flash-image');
   });
 });

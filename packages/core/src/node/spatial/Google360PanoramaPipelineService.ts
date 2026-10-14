@@ -3318,7 +3318,8 @@ export class Google360PanoramaPipelineService {
                 outputImagePath: options.outputImagePath,
                 outputBuffer,
                 coverageRatio: 1.0,
-                modelUsed: options.mockExecution ? 'around-user-panoramic-synthesizer' : (options.model || 'imagen-3.0-generate-002'),
+                // Purely procedural (projection + polar caps): no model is called, mock or not.
+                modelUsed: 'around-user-panoramic-synthesizer (procedural, no model call)',
                 summary: `360 panorama generated from perspective image successfully concavely around user (${panoWidth}x${panoHeight}, coverage: 100.0%, all perspectives infilled).`
             };
         }
@@ -3483,7 +3484,8 @@ export class Google360PanoramaPipelineService {
             outputImagePath: options.outputImagePath,
             outputBuffer,
             coverageRatio: proj.coverageRatio,
-            modelUsed: options.mockExecution ? 'inward-gnomonic-synthesizer' : (options.model || 'imagen-3.0-generate-002'),
+            // Purely procedural (inward gnomonic projection): no model is called, mock or not.
+            modelUsed: 'inward-gnomonic-synthesizer (procedural, no model call)',
             summary: `360 panorama generated from perspective image successfully (${panoWidth}x${panoHeight}, coverage: ${(proj.coverageRatio * 100).toFixed(1)}%).`
         };
     }

@@ -59,6 +59,7 @@ import { NANO_BANANA_STYLES, synthesizeContextualNanoBananaPrompt } from '../nan
 import { beautifyLocationSection } from '../services/location-beautify-service';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
+import { IMAGE_MODEL_PRIORITY } from '../../../common/media-generation-protocol';
 export { NANO_BANANA_STYLES };
 
 export interface MarkdownDocumentPrimitiveProps {
@@ -938,7 +939,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 aspectRatio: '16:9',
                 modelPriority: isVideo
                     ? ['google/omni-1.1', 'gemini-omni-flash-video', 'veo-3.1-generate-preview']
-                    : ['nano-banana-2', 'google/nano-banana-pro', 'gemini-3.1-flash-image']
+                    : IMAGE_MODEL_PRIORITY
             });
 
             if (job) {
