@@ -365,3 +365,31 @@ async function runTerrainGroundSnappingTests(): Promise<void> {
 test('terrain-ground-snapping.test', async () => {
     await runTerrainGroundSnappingTests();
 }, 180_000);
+
+test('snapObjectToGround lands on the ground, not on the translate gizmo or hidden meshes above it', () => {
+    const scene = new THREE.Scene();
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshBasicMaterial());
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    // Mirrors the viewport's translate gizmo: unnamed meshes under an `sb-gizmo-*` group, Y arrow tip at 1.98 m.
+    const gizmo = new THREE.Group();
+    gizmo.name = 'sb-gizmo-translate';
+    const yArrow = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.98), new THREE.MeshBasicMaterial());
+    yArrow.position.y = 0.99;
+    gizmo.add(yArrow);
+    scene.add(gizmo);
+
+    const hiddenCard = new THREE.Mesh(new THREE.BoxGeometry(4, 0.01, 4), new THREE.MeshBasicMaterial());
+    hiddenCard.position.y = 3;
+    hiddenCard.visible = false;
+    scene.add(hiddenCard);
+
+    const stool = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.45, 0.4), new THREE.MeshBasicMaterial());
+    stool.position.y = 10;
+    scene.add(stool);
+
+    new TerrainManager({ scene }).snapObjectToGround(stool, 0);
+    const bottom = new THREE.Box3().setFromObject(stool).min.y;
+    assert.ok(Math.abs(bottom) < 1e-3, `stool bottom should rest on the ground at y=0, got ${bottom}`);
+});

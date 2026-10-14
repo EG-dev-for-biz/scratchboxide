@@ -29,6 +29,23 @@ export const GROUND_SAMPLE_OFFSETS: Array<[number, number]> = [
     [-3, -3]
 ];
 
+/**
+ * True for meshes that are not ground: hidden, or part of an editor gizmo/helper. Gizmo parts are unnamed
+ * meshes under an `sb-gizmo-*` group, so only the ancestor chain identifies them; missing that let the
+ * translate gizmo's 1.98 m Y arrow act as "ground" and lifted generated models ~2 m into the air.
+ */
+export function isUtilityOrHidden(object: THREE.Object3D): boolean {
+    for (let cur: THREE.Object3D | null = object; cur; cur = cur.parent) {
+        if (!cur.visible) return true;
+        const name = cur.name || '';
+        const data = cur.userData || {};
+        if (data.isGizmo || data.isHelper || data.handleType) return true;
+        if (name.startsWith('sb-gizmo-') || name.startsWith('sb-selection-helper') || name.startsWith('sb-grid')) return true;
+        if (name.includes('Gizmo') || name.includes('Helper') || name.includes('SelectionBox') || name.includes('TransformControl')) return true;
+    }
+    return false;
+}
+
 export interface TerrainManagerOptions {
     scene?: THREE.Scene;
     tilesLayer?: any;
@@ -365,17 +382,7 @@ export class TerrainManager {
             this.scene.traverse((child: THREE.Object3D) => {
                 if ((child as THREE.Mesh).isMesh) {
                     const mesh = child as THREE.Mesh;
-                    if (ignoreSet.has(mesh)) return;
-                    if (
-                        mesh.name.includes('Gizmo') ||
-                        mesh.name.includes('Helper') ||
-                        mesh.name.includes('SelectionBox') ||
-                        mesh.name.includes('TransformControl') ||
-                        (mesh as any).userData?.isGizmo ||
-                        (mesh as any).userData?.isHelper
-                    ) {
-                        return;
-                    }
+                    if (ignoreSet.has(mesh) || isUtilityOrHidden(mesh)) return;
                     this.raycaster.intersectObject(mesh, false, hits);
                 }
             });
