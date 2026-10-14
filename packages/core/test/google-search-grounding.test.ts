@@ -155,3 +155,31 @@ async function runGoogleSearchGroundingTests() {
 test('google-search-grounding.test', async () => {
     await runGoogleSearchGroundingTests();
 }, 180_000);
+
+test('agent-mode requests keep googleSearch next to function tools on Gemini 3+, but not on Gemini 2.5', async () => {
+    const service = new GeminiService();
+    (service as any).auth = { getClient: async () => ({ getAccessToken: async () => ({ token: 'mock-token' }) }) };
+    (service as any).cachedProjectId = 'mock-project';
+
+    const firstBodyFor = async (model: string): Promise<any> => {
+        let firstBody: any;
+        (globalThis as any).fetch = async (_url: string, options: any) => {
+            firstBody ??= JSON.parse(options.body);
+            return { ok: true, text: async () => 'data: {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}\ndata: [DONE]', body: null };
+        };
+        // Mirrors the request useSendMessage.ts sends from the chat composer.
+        await service.streamGenerate({ prompt: 'Who won the most recent World Cup?', model, mode: 'agent', enableWorkspaceTools: true, enableGoogleSearch: true }, () => undefined);
+        return firstBody;
+    };
+
+    const hasSearch = (body: any) => (body.tools || []).some((t: any) => t.googleSearch !== undefined);
+    const hasFunctions = (body: any) => (body.tools || []).some((t: any) => t.functionDeclarations?.length > 0);
+
+    const gemini3 = await firstBodyFor('gemini-3.7-flash');
+    assert.ok(hasFunctions(gemini3), 'agent mode must send function declarations');
+    assert.ok(hasSearch(gemini3), 'Gemini 3 must keep googleSearch alongside function declarations');
+
+    const gemini25 = await firstBodyFor('gemini-2.5-flash');
+    assert.ok(hasFunctions(gemini25), 'agent mode must send function declarations');
+    assert.ok(!hasSearch(gemini25), 'Gemini 2.5 rejects googleSearch mixed with function declarations');
+}, 180_000);

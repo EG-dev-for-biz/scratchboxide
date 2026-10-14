@@ -436,14 +436,16 @@ export class StreamingEngine {
             },
             generationConfig: {
                 temperature: request.temperature !== undefined ? request.temperature : 0.7,
-                maxOutputTokens: 8192,
+                // Tool calls that carry a whole generated app run ~5k tokens; at 8192 they were cut off (MAX_TOKENS).
+                maxOutputTokens: 32768,
                 thinkingConfig: this.client.getThinkingConfig(request)
             }
         };
         if (tools && tools.length > 0) {
-            // Vertex AI constraint: Cannot combine googleSearch or other tools with functionDeclarations
+            // Gemini 3+ accepts googleSearch alongside functionDeclarations; earlier models reject the combination.
             const hasFunctionDeclarations = tools.some(t => 'functionDeclarations' in t && Array.isArray(t.functionDeclarations) && t.functionDeclarations.length > 0);
-            if (hasFunctionDeclarations) {
+            const supportsMixedTools = Number(/^gemini-(\d+)/.exec(model)?.[1] ?? 0) >= 3;
+            if (hasFunctionDeclarations && !supportsMixedTools) {
                 payload.tools = tools.filter(t => 'functionDeclarations' in t);
             } else {
                 payload.tools = tools;
