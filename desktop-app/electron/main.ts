@@ -76,7 +76,11 @@ process.env.SCRATCHBOX_LAUNCH_TOKEN = launchToken;
     process.env.SCRATCHBOX_ALLOWED_ORIGINS = existing.join(',');
 }
 
-app.commandLine.appendSwitch('remote-debugging-port', '9222');
+// The DevTools port lets any local process drive the app; dev tooling (scripts/cdp_helper.js) needs it,
+// shipped builds must opt in explicitly.
+if (!app.isPackaged || process.env.SCRATCHBOX_REMOTE_DEBUG === '1') {
+    app.commandLine.appendSwitch('remote-debugging-port', '9222');
+}
 
 process.on('unhandledRejection', (reason: unknown) => {
     console.error('[Electron] Unhandled promise rejection:', reason);
