@@ -7,14 +7,34 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import * as fs from 'fs';
 import * as path from 'path';
 import type { ToolDeclaration, ToolHandler, ToolHandlerOutcome } from './types';
 import {
+    findTileRefineRepoRoot,
     getTileRefineService,
     summarizeTileRefineStats,
     TileRefineError,
     type TileRefineRequest
 } from '../../3d-engine/tile-refine-service';
+import { PathTraversalError, resolveWithinRoot } from '../../security/path-guard';
+
+/**
+ * The root tile_refine reads `tilePath` from: the workspace when the file is there, else the checkout that holds the
+ * tile_refine sources, whose public/models is where the tile extraction tools write (the server runs from desktop-app/,
+ * so the two differ). Falls back to the workspace, which then reports the path as missing or outside it.
+ */
+export function tileRefineRootFor(tilePath: string, workspaceRoot: string): string {
+    if (typeof tilePath !== 'string' || !tilePath.trim()) return workspaceRoot;
+    for (const root of [workspaceRoot, findTileRefineRepoRoot()]) {
+        try {
+            if (fs.existsSync(resolveWithinRoot(root, tilePath.trim()))) return root;
+        } catch (err) {
+            if (!(err instanceof PathTraversalError)) throw err;
+        }
+    }
+    return workspaceRoot;
+}
 
 export const TILE_REFINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -23,7 +43,7 @@ export const TILE_REFINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
         parameters: {
             type: 'OBJECT',
             properties: {
-                tilePath: { type: 'STRING', description: 'Workspace-relative path of the raw tile .glb (e.g. public/tiles/<tile>.glb).' },
+                tilePath: { type: 'STRING', description: 'Path of the raw tile .glb: workspace-relative (e.g. public/tiles/<tile>.glb), or the glbPath returned by google_3d_tiles_get_full_texture / google_3d_tiles_get_clay (absolute is fine).' },
                 anchor: {
                     type: 'OBJECT',
                     description: 'Hero anchor in the tile frame, metres (x = east, z = south). Default: tile origin.',
@@ -45,7 +65,8 @@ export const TILE_REFINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
 export const tileRefineHandlers: Record<string, ToolHandler> = {
     tile_refine: async (args, ctx): Promise<ToolHandlerOutcome> => {
         try {
-            const svc = getTileRefineService(ctx.workspaceRoot);
+            const root = tileRefineRootFor(args.tilePath as string, ctx.workspaceRoot);
+            const svc = getTileRefineService(root);
             const r = await svc.refine({
                 tilePath: args.tilePath as string,
                 anchor: args.anchor as TileRefineRequest['anchor'],
@@ -55,17 +76,30 @@ export const tileRefineHandlers: Record<string, ToolHandler> = {
                 publishAs: typeof args.publishAs === 'string' && args.publishAs.trim() ? args.publishAs.trim() : undefined,
                 thumbnails: args.thumbnails === true
             });
-            const rel = (p: string) => path.relative(svc.workspaceRoot, p);
+            // Outside the workspace, paths are given absolute so later tools can open them. The /models URLs load from
+            // <repo>/public, which the server serves after desktop-app/public (a same-named file there would win).
+            const outside = root !== ctx.workspaceRoot;
+            const shown = (p: string) => (outside ? p : path.relative(svc.workspaceRoot, p));
+            const abs = (p: string | undefined) => (p === undefined ? undefined : path.join(svc.workspaceRoot, p));
+            const published = r.published && outside
+                ? {
+                    ...r.published,
+                    textured: abs(r.published.textured),
+                    clay: abs(r.published.clay),
+                    rawClay: abs(r.published.rawClay),
+                    backups: r.published.backups.map(b => path.join(svc.workspaceRoot, b))
+                }
+                : r.published;
             return {
                 status: 'completed',
                 summaryResult: `Refined tile in ${(r.ms / 1000).toFixed(1)} s${r.cached ? ' (cached)' : ''}: ${r.stats.outputs?.triangles ?? '?'} triangles`,
                 resultPayload: {
                     status: 'success',
-                    texturedGlb: rel(r.texturedGlb),
-                    clayGlb: rel(r.clayGlb),
-                    rawClayGlb: r.rawClayGlb ? rel(r.rawClayGlb) : undefined,
-                    thumbnailsDir: r.thumbnailsDir ? rel(r.thumbnailsDir) : undefined,
-                    published: r.published,
+                    texturedGlb: shown(r.texturedGlb),
+                    clayGlb: shown(r.clayGlb),
+                    rawClayGlb: r.rawClayGlb ? shown(r.rawClayGlb) : undefined,
+                    thumbnailsDir: r.thumbnailsDir ? shown(r.thumbnailsDir) : undefined,
+                    published,
                     cached: r.cached,
                     ms: r.ms,
                     stats: summarizeTileRefineStats(r.stats)

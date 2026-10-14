@@ -215,6 +215,8 @@ export interface Google3DTile3DObjectResult {
   manifest: Record<string, any>;
   /** True only when produced by the explicit `offlineMock` test mode (placeholder data, not real tiles). */
   mock?: boolean;
+  /** Ground radius around the anchor, in metres, that the leaf tiles were collected from (direct tile crawl only). */
+  radiusMeters?: number;
   error?: string;
   /**
    * The GLB's local frame (x east, y up, z south). Y = 0 is the street surface measured in the tiles, at
@@ -2526,6 +2528,7 @@ export class Google3DTileBlockoutPipelineService {
             glbBuffer: district.glb,
             glbPath: outputGlbPath,
             frame: { lat: anchor.lat, lng: anchor.lng, originEllipsoidalHeightM: district.originEllipsoidalHeightM, localToEcef: district.localToEcef },
+            radiusMeters,
             mesh,
             quality: {
               source: 'Google Maps Platform Photorealistic 3D Tiles API',

@@ -32,9 +32,12 @@ export interface PromptContextServices {
 export const WORKING_METHOD_SECTION = `
 
 ### HOW TO WORK
-1. Understand before acting. Read the relevant files, scene state or data first. When the request is ambiguous in a way that changes the outcome, ask with ask_user_question and stop; do not guess and do not keep working while waiting for the answer.
+1. Understand before acting. Read the relevant files, scene state or data first. When the request is ambiguous in a way that changes the outcome, ask with ask_user_question and stop; do not guess and do not keep working while waiting for the answer. Do only what was asked; offer optional extra steps (such as refining, restaging or retexturing) as follow-ups instead of doing them.
 2. Plan multi-step work. For anything with three or more steps, call update_task_list with the items, keep exactly one in_progress, and update it as items start and finish.
-3. Act in small, checkable steps. After each tool call, read its result before deciding the next step. If a tool fails, read the error, find the cause, and change your approach; do not repeat the identical call.
+3. Act in small, checkable steps. After each tool call, read its result before deciding the next step. When a tool fails:
+   - If a workspace_* tool fails while you are editing code, find the cause and fix it.
+   - If the failure is in code you wrote and passed to a tool (such as the Python script for execute_3d_python_script), fix that code and call the tool again.
+   - For any other tool failure, stop and tell the user which tool failed, quoting its error. Do not replace the tool with shell commands, scripts, file copies or moves, or a different pipeline unless the user asks. You may call the same tool once more only when the error names an argument you can correct from results you already have (such as a path).
 4. Check results against reality, not intent. After building or editing, inspect the actual output: re-read the file, run the check, or audit the rendered scene. Compare it with what the user asked for, including materials, colors, proportions and counts, and fix any mismatch before reporting.
 5. Report honestly. State what you did and what you verified. Report numbers only when a tool returned them. If something failed, could not be checked, or is only partly done, say so plainly. Never describe a result a tool did not produce.
 6. Before finishing, re-read the user's request and confirm every part of it is addressed.`;
@@ -473,7 +476,7 @@ You pair-program with the user to explore, plan, implement, and verify code chan
 1. Precision & Rigor: Read files before editing. Never guess file paths or symbol names. Use exact line ranges and syntax.
 2. Tool-Driven Investigation: Use workspace tools (workspace_read_file, workspace_view_file, workspace_search, workspace_grep_search, workspace_find_by_name, workspace_find_symbols) to thoroughly understand the codebase before making changes.
 3. Surgical Edits: Apply precise diffs using workspace_apply_diff with startLine, endLine, targetContent, and replacementContent, or workspace_write_file when creating new files.
-4. Test-Driven Verification & Self-Healing: After modifying code, run diagnostics or test suites using workspace_run_command or workspace_get_diagnostics. If any compiler error, linter failure, or test failure occurs, inspect the error output and iteratively repair the code until all checks pass.
+4. Test-Driven Verification & Self-Healing: After modifying code, run diagnostics or test suites using workspace_run_command or workspace_get_diagnostics. If any compiler error, linter failure, or test failure occurs, inspect the error output and iteratively repair the code until all checks pass. This applies to code you edit; when any other tool fails, report it as HOW TO WORK says instead of working around it.
 5. Clear Communication: Explain your architectural reasoning concisely. Format code blocks with appropriate languages. Use markdown links to reference workspace files.
 6. 3D Architecture & Implementation (Python First & Multi-Tier Hierarchy): When implementing 3D (scenes, models, procedural meshes, physical simulations, spatial engines), ALWAYS lean on Python first via execute_3d_python_script. Prioritize Python 3 using the Scratchbox 3D engine SDK (import scratchbox as sb). Construct an authentic 70-20-10 geometric hierarchy (70% primary hero massing, 20% secondary towers/wings/articulation, 10% tertiary micro-detail/solar arrays/instrumentation). Zero JavaScript Generative Primitives: Three.js is restricted strictly to pure rendering, camera choreography, post-processing passes, and UI gizmos. Geometry is generated exclusively in Python SDK streaming binary .glb. Never output floating green cylinders or unanchored toy boxes in mid-air. All objects must be grounded to foundations or terrain with biophysical PBR materials. If native generation fails, report the error; never substitute toy JavaScript primitives.
 7. Visual Canvas Creation & Artifact Mounting:
@@ -709,33 +712,28 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
 
     let userPrompt = request.prompt;
     const is3DActive = request.activeArtifact?.type === '3d-scene';
-    const isStagingPrompt = /stage|staging|place|ground|anchor|situate|relocate|location|at\s+[a-z]|on\s+[a-z]|beach|park|city|street|monaco|venice|cyclorama|plinth|pedestal|platform|cove|pavement|asphalt|boardwalk|vector|tiles/i.test(request.prompt || '');
     const isExplicitDocRequest = /document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article|research\s+paper/i.test(request.prompt || '');
 
     if (isVideoTimelinePrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a multi-track Video NLE Timeline operation (clip split, ripple delete, playhead navigation, or track manipulation). You MUST mount/switch to the "video-timeline" primitive via mount_canvas_primitive({ primitiveType: "video-timeline", ... }) or output JSON with type: "video-timeline". NEVER output "3d-scene", "markdown-document", or "live-code-sandbox" for this request, regardless of any previously active 3D scene!]`;
     } else if (isSplatPrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D Gaussian Splatting (3DGS) radiance field of a location. In Scratchbox IDE, the user NEVER has to invoke or mention "Nano Banana" explicitly — our closed-loop pipeline automatically assumes and employs Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout captures, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats). You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Location Name> — 3D Gaussian Splat", payload: { sceneType: "gaussian_splat", splatUrl: "/models/<location>_splat.splat", splatTilesetUrl: "/tilesets/<location>/tileset.json", splatOptions: { splatScale: 1.0, contactShadow: true, enableSoftZ: true }, ... } }) or dispatch the survey_beautify_to_splats tool. DO NOT ask the user to specify Nano Banana or mention Nano Banana as a requirement.]`;
-    } else if (is3DActive && !isExplicitDocRequest && (isStagingPrompt || !lowerReqPrompt.includes('code'))) {
-        userPrompt += `\n\n[CRITICAL DIRECTIVE: An active 3D scene is present on the canvas ("${request.activeArtifact?.title || '3D Scene'}"). The user is requesting to STAGE, GROUND, or ITERATE on the active 3D asset (e.g. "${request.prompt}").
-1. NEVER output a Markdown document, essay, outline, or text brief. The canvas mode is 3d-scene and MUST remain 3d-scene!
-2. If the user asks to stage at a real-world location (e.g. Venice Beach, Monaco GP, Shibuya Crossing, Central Park, etc.):
-   - Use AUTHENTIC GOOGLE 3D TILES IN CLAY MODE (groundTileMode: 'photoreal-clay')! DO NOT use synthetic stepped boxes or vector road fallbacks. Call google_3d_tiles_get_clay({ query: "<location>" }) OR execute_3d_python_script({ location: "<location>" }).
-   - PRESERVE the active hero asset so it sits directly on the authentic real-world terrain and massing!
-   - Mark any inferred occluded structures or back geometry with metadata: { inferred: true, confidence: 0.0 } per World-Scale Rule 5 (Uncertainty must be explicit).
-3. If staging on an environmental plinth (curved cyclorama cove, asphalt road plinth, oceanfront concrete pad, plaza pedestal):
-   - Call execute_3d_python_script to synthesize the plinth and contact-ground the hero asset using sb.layout.
-4. Auto-framing default camera heading MUST face the directional key/sun light vector so the illuminated facade is visible out-of-the-box.
-5. Conclude your response with the next progression step: PBR Materials & Textures (vibrant court acrylics, clearcoat, carbon fiber, etc.).]`;
+    } else if (is3DActive && !isExplicitDocRequest && !lowerReqPrompt.includes('code')) {
+        // Context about the active scene, not an assumed intent: the request decides whether to change it or start anew.
+        userPrompt += `\n\n[ACTIVE 3D SCENE: "${request.activeArtifact?.title || '3D Scene'}" is on the canvas.
+1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one.
+2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To model a hero object at a place, use execute_3d_python_script({ location: "<place>" }).
+3. To stage the active scene on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal), call execute_3d_python_script to build the plinth and set the hero asset on it with sb.layout.
+4. Answer on the 3D canvas rather than with a Markdown document unless the user asks for a document, and offer further steps (such as materials and textures) as follow-ups.]`;
     } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|circuit|track\b|cyber|flower|garden|plant|flora|botan|manta|island|steampunk|rocket|aircraft|dojo|temple|sculpture|structure|environment/i.test(request.prompt || '')) {
         const initialLocIntent = detectRealWorldLocationIntent(request.prompt || '');
         const hasIndependentHeroAsset = /\b(car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|cyber|flower|garden|plant|flora|botan|manta|steampunk|rocket|aircraft|plane|drone|copter|helicopter|rover|mech|robot|humanoid|character|avatar|creature|dragon|animal|bird|dinosaur|statue|sculpture|prop|furniture|chair|table|bench|kiosk|boat|ship|vessel|sub\w*|train|subway|tram)\b/i.test(request.prompt || '');
 
         if (initialLocIntent?.isRealWorld && !hasIndependentHeroAsset) {
             userPrompt += `\n\n[CRITICAL DIRECTIVE — PURE REAL-WORLD LOCATION QUERY (RULE 3 PURE LOCATION EXCEPTION):
-The user explicitly requested the real-world location "${initialLocIntent.landmarkName}" in 3D clay tiles ("${request.prompt}").
-1. MANDATORY DIRECT TOOL CALL: You MUST call google_3d_tiles_get_clay({ query: "${initialLocIntent.landmarkName}" }) directly!
-2. STRICT PROHIBITION ON PROCEDURAL STRUCTURES: DO NOT call execute_3d_python_script! DO NOT write Python or C++ code to generate procedural buildings, columns, arcades, spires, walls, or ground slabs! Real-world architectural massing and terrain are streamed directly from Google 3D Tiles in Studio Grey Clay mode. For this function, we do not build synthetic structures.
+The user requested the real-world location "${initialLocIntent.landmarkName}" ("${request.prompt}").
+1. Call google_3d_tiles_get_clay({ query: "${initialLocIntent.landmarkName}" }), or google_3d_tiles_get_full_texture({ query: "${initialLocIntent.landmarkName}" }) when the user asks for photo texture. Pass radiusMeters when the user gives an extent.
+2. STRICT PROHIBITION ON PROCEDURAL STRUCTURES: DO NOT call execute_3d_python_script! DO NOT write Python or C++ code to generate procedural buildings, columns, arcades, spires, walls, or ground slabs! Real-world architectural massing and terrain are streamed directly from Google 3D Tiles. For this function, we do not build synthetic structures.
 3. CONCLUDE WITH FOLLOW-UP SUGGESTIONS: In chat, present follow-up options: 1. Lighting & Solar Ephemeris for ${initialLocIntent.landmarkName}, 2. Textures & PBR Materials.]`;
         } else if (initialLocIntent?.isRealWorld && hasIndependentHeroAsset) {
             userPrompt += `\n\n[CRITICAL DIRECTIVE — HERO OBJECT STAGED AT REAL-WORLD LOCATION: The user explicitly specified the real-world location "${initialLocIntent.landmarkName}" with a hero asset in this initial request ("${request.prompt}").
@@ -1110,7 +1108,7 @@ FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stac
 - Detail budget: a hero object should land at roughly 10,000+ vertices; the tool reports fidelity alerts when it comes in under the floor, in which case refine the script and run it again.
 
 - REAL-WORLD LOCATION STAGING VS PURE LOCATIONS:
-  * PURE LOCATION QUERY (e.g. "Colosseum", "Eiffel Tower", "Venice Beach"): Call google_3d_tiles_get_clay({ query: "<query>" }) directly! DO NOT call execute_3d_python_script; for this function we do not build synthetic structures, the real-world architecture is streamed directly from Google 3D Tiles in Studio Grey Clay mode.
+  * PURE LOCATION QUERY (e.g. "Colosseum", "Eiffel Tower", "Venice Beach"): Call google_3d_tiles_get_clay({ query: "<query>" }) directly, or google_3d_tiles_get_full_texture when the user asks for photo texture! DO NOT call execute_3d_python_script; for this function we do not build synthetic structures, the real-world architecture is streamed directly from Google 3D Tiles in Studio Grey Clay mode.
   * HERO OBJECT STAGED AT LOCATION (e.g. "race car in Central Park", "F1 car in Monaco"): Pass location: "<query>" to execute_3d_python_script to model the hero asset and stage it on the real-world terrain. The backend exposes location terrain in sb.geospatial.load_location():
 \`\`\`python
 import scratchbox as sb
