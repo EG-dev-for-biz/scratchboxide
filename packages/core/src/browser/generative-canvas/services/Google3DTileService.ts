@@ -173,6 +173,14 @@ export function generatePhotorealProceduralCppSource(options: PhotorealReconstru
 /**
  * Detects whether a prompt or surrounding context asks to model/reconstruct a real-world location or landmark.
  */
+/**
+ * True when the intent carries real coordinates. A place the prompt names but nothing has geocoded yet
+ * comes back at (0, 0) marked 'online_geocoding_required'; staging a scene there would put it at Null Island.
+ */
+export function isResolvedLocation(intent: RealWorldLocationIntent | undefined): intent is RealWorldLocationIntent {
+  return !!intent?.isRealWorld && intent.elevationSource !== 'online_geocoding_required' && !(intent.lat === 0 && intent.lng === 0);
+}
+
 export function detectRealWorldLocationIntent(
   prompt: string,
   context?: { docTitle?: string; docContent?: string; location?: { lat: number; lng: number; elevation?: number } }

@@ -37,6 +37,7 @@ import {
 } from './services/direct-dispatch-operator-engine';
 import {
     detectRealWorldLocationIntent,
+    isResolvedLocation,
     Google3DTileService,
     type RealWorldLocationIntent,
     type ClayPresetId
@@ -67,6 +68,7 @@ export {
 };
 export {
     detectRealWorldLocationIntent,
+    isResolvedLocation,
     castCreativeLocation,
     CreativeLocationCastingService
 };
@@ -168,8 +170,7 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         }
 
         // -0.985. Real-World Geospatially Anchored 3D Map Tiles (Google Photorealistic 3D Tiles)
-        const realWorldLoc = detectRealWorldLocationIntent(prompt, context);
-        if (realWorldLoc && realWorldLoc.isRealWorld) {
+        if (isResolvedLocation(detectRealWorldLocationIntent(prompt, context))) {
             return 'geospatial';
         }
 
@@ -1946,7 +1947,7 @@ export function applyCreativeLocationCasting(
         return scene;
     }
 
-    const isExplicitRealWorld = Boolean(detectRealWorldLocationIntent(prompt, context)?.isRealWorld);
+    const isExplicitRealWorld = isResolvedLocation(detectRealWorldLocationIntent(prompt, context));
 
     if (!isExplicitRealWorld && !scene.geoAnchor) {
         // No real-world location named: stay in the grey clay void instead of casting the
@@ -2136,8 +2137,9 @@ function _synthesizeRawContextual3DSceneInner(
     const splatMatch = prompt.match(/(?:(?:\/splats\/|\/models\/|[a-zA-Z0-9_\-.]+\/)?([a-zA-Z0-9_\-]+\.sp(?:lat|z)))/i);
     const isSplatRequested = theme === 'gaussian_splat' || Boolean(splatMatch) || /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(prompt);
 
-    if (splatMatch || (isSplatRequested && !detectRealWorldLocationIntent(prompt, context)?.isRealWorld)) {
-        const splatFileName = splatMatch?.[1] || 'scene_2_photorealistic_final.splat';
+    // Only a splat file the prompt names is shown; there is no stand-in splat for other requests.
+    if (splatMatch) {
+        const splatFileName = splatMatch[1];
         const rawUrl = splatMatch?.[0];
         const splatUrl = rawUrl?.startsWith('/') ? rawUrl : `/splats/${splatFileName}`;
         const displayName = splatFileName.replace(/\.sp(?:lat|z)$/i, '').replace(/[_\-]+/g, ' ');
@@ -2186,7 +2188,9 @@ function _synthesizeRawContextual3DSceneInner(
     // (Lexington Green, Buckman Tavern, formations) and must not be shadowed by the generic
     // real-world tile path, which would otherwise relabel it as a 'worldbuilder' scene.
     // Only a location the prompt actually names stages the scene on Earth; otherwise it stays in the clay void.
-    const realWorldLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
+    const detectedLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
+    // Only coordinates stage a scene on Earth; an unresolved place name must not become an anchor at (0, 0).
+    const realWorldLoc = isResolvedLocation(detectedLoc) ? detectedLoc : undefined;
     // Determine procedural, object, and hero location classification
     const isExplicitProcedural = /\b(?:procedural|scratchbox\s*engine|create_building|create_tree|python|c\+\+|nanobind|customScript)\b/i.test(prompt);
     const isHeroObject = theme === 'vehicle' ||

@@ -328,8 +328,7 @@ describe('Comprehensive 3D Prompting & Synthesis Suite', () => {
             { prompt: 'Colosseum, Rome, Italy 3D model', expectedName: 'Colosseum' },
             { prompt: 'Eiffel Tower Paris 3D building', expectedName: 'Eiffel Tower' },
             { prompt: 'Empire State Building New York digital twin', expectedName: 'Empire State Building' },
-            { prompt: 'Sydney Opera House architectural 3D tiles', expectedName: 'Sydney Opera House' },
-            { prompt: 'Taj Mahal Agra 3D monument', expectedName: 'Taj Mahal' }
+            { prompt: 'Sydney Opera House architectural 3D tiles', expectedName: 'Sydney Opera House' }
         ];
 
         for (const { prompt, expectedName } of geospatialPrompts) {
@@ -346,8 +345,15 @@ describe('Comprehensive 3D Prompting & Synthesis Suite', () => {
                 expect(scene.geoAnchor?.landmarkName).toContain(expectedName);
                 expect(typeof scene.geoAnchor?.lat).toBe('number');
                 expect(typeof scene.geoAnchor?.lng).toBe('number');
+                expect(scene.geoAnchor?.lat === 0 && scene.geoAnchor?.lng === 0).toBe(false);
             });
         }
+
+        it('a named place with no offline coordinates is not anchored at (0, 0): "Taj Mahal Agra 3D monument"', () => {
+            const scene = synthesizeContextual3DScene('Taj Mahal Agra 3D monument');
+            expect(detect3DSceneTheme('Taj Mahal Agra 3D monument')).not.toBe('geospatial');
+            expect(scene.geoAnchor).toBeUndefined();
+        });
     });
 
     // =========================================================================

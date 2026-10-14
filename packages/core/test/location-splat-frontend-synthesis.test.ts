@@ -103,13 +103,14 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
             expect(data.geoAnchor?.lat).toBeCloseTo(40.7484, 2);
         });
 
-        it('synthesizes a 3D scene with splatUrl for Grand Army Plaza', () => {
+        it('a named place with no coordinates offline gets no invented anchor or stand-in splat', () => {
+            // Grand Army Plaza is not in the offline registry; it needs online geocoding to be placed.
             const scene = synthesizeContextual3DScene('Create a gaussian splat of Grand Army Plaza');
             const data = scene as Scene3DData;
 
             expect(data.title).toContain('Grand Army Plaza');
-            expect(data.splatUrl).toBeDefined();
-            expect(data.geoAnchor?.lat).toBeCloseTo(40.7648, 2);
+            expect(data.geoAnchor).toBeUndefined();
+            expect(data.splatUrl).toBeUndefined();
         });
     });
 
