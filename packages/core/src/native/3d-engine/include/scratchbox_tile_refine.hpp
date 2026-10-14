@@ -132,7 +132,28 @@ struct TileRefineParams {
     double isolateCoreGrow{2.0};       // triangles whose centroid lies within this of the footprint belong to it (m)
     double isolateReach{12.0};         // connectivity closure: raised triangles connected to the structure within this of the footprint (m)
     double isolateApron{4.0};          // ground kept around the footprint (m)
-    double isolateApronMaxHeight{2.5}; // apron triangles: centroid at most this above the terrain (m)
+    double isolateApronMaxHeight{2.5}; // apron triangles: centroid at most this above the terrain (m); only without ground rebuild
+    // Low attached structures (a sidewalk shed, a scaffold deck, a canopy): raised areas joined to the footprint whose top
+    // stays below the structure's core are not the structure. The core is the footprint standing at least
+    // min(isolateLowAttachmentMaxHeight, isolateLowAttachmentHeightFraction x the structure's height) above the terrain;
+    // footprint cells outside the core's connected component (and not enclosed by it) are dropped with their low surfaces.
+    // isolateLowAttachmentMaxHeight <= isolateMinHeight turns this off.
+    double isolateLowAttachmentMaxHeight{8.0};
+    double isolateLowAttachmentHeightFraction{0.5};
+    // Ground: rebuild the apron as a ground patch on the street surface instead of keeping scan triangles (which carry
+    // parked cars, poles and street furniture, and nothing where a dropped attachment hid the ground). The patch covers
+    // the open cells within isolateApron of the footprint and gets a neutral material of its own.
+    bool isolateRebuildGround{true};
+    double isolateGroundOpeningRadius{6.0};  // the patch follows the scan's street surface with objects narrower than twice this removed (m)
+    // The model ends at street level: surfaces more than this below the terrain are clipped off (straddling triangles are
+    // cut at that level, so no hole opens). Negative turns it off.
+    double isolateBelowGroundMargin{0.3};
+    // Interior floors: upward-facing horizontal surfaces at least isolateInteriorMinAbove above the terrain, at least
+    // isolateInteriorInset inside the footprint edge and isolateInteriorBelowTop below the top surface there, are scan
+    // leftovers inside the walls and are dropped. isolateInteriorInset < 0 turns it off.
+    double isolateInteriorInset{2.5};
+    double isolateInteriorBelowTop{2.0};
+    double isolateInteriorMinAbove{1.0};
     std::string rawClayPath;           // non-empty: also write the (isolated) raw scan, unmodified, as studio clay
     std::string thumbsDir;             // non-empty: write thumbnails there
     int thumbWidth{640}, thumbHeight{360};
@@ -914,6 +935,53 @@ private:
         std::vector<long> stack{seed};
         comp[static_cast<size_t>(seed)] = 1;
         flood(stack, comp, 1, [&](size_t n) { return raised[n] != 0; });
+        // 1b. low attached structures: the core is the footprint standing at least coreHeight above the terrain, taken as the
+        //     connected component nearest the seed; the rest of the footprint is a low attachment unless the core encloses it
+        std::vector<uint8_t> lowCell(N, 0);
+        double coreHeight = 0;  // 0: not applied
+        size_t lowCells = 0;
+        {
+            std::vector<float> above(N, 0.0f);
+            double maxAbove = 0;
+            for (int k = 0; k < nz; ++k)
+                for (int i = 0; i < nx; ++i) {
+                    const size_t n = static_cast<size_t>(k) * nx + i;
+                    if (comp[n] != 1) continue;
+                    above[n] = static_cast<float>(dsm.at(i, k) - dtm.sample(dsm.cx(i), dsm.cz(k)));
+                    maxAbove = std::max(maxAbove, static_cast<double>(above[n]));
+                }
+            const double hc = std::min(P.isolateLowAttachmentMaxHeight, P.isolateLowAttachmentHeightFraction * maxAbove);
+            if (hc > P.isolateMinHeight) {
+                // breadth-first through the footprint from the seed to the nearest cell of the core
+                long coreSeed = -1;
+                std::vector<uint8_t> seen(N, 0);
+                std::vector<long> q{seed};
+                seen[static_cast<size_t>(seed)] = 1;
+                for (size_t qi = 0; qi < q.size() && coreSeed < 0; ++qi) {
+                    const long c = q[qi];
+                    if (above[static_cast<size_t>(c)] >= hc) { coreSeed = c; break; }
+                    const int ci = static_cast<int>(c % nx), ck = static_cast<int>(c / nx);
+                    const int di[4] = {1, -1, 0, 0}, dk[4] = {0, 0, 1, -1};
+                    for (int d = 0; d < 4; ++d) {
+                        const int ni = ci + di[d], nk = ck + dk[d];
+                        if (!dsm.inside(ni, nk)) continue;
+                        const size_t n = static_cast<size_t>(nk) * nx + ni;
+                        if (seen[n] || comp[n] != 1) continue;
+                        seen[n] = 1;
+                        q.push_back(static_cast<long>(n));
+                    }
+                }
+                if (coreSeed >= 0) {
+                    std::vector<uint8_t> core(N, 0);
+                    core[static_cast<size_t>(coreSeed)] = 1;
+                    std::vector<long> cs{coreSeed};
+                    flood(cs, core, 1, [&](size_t n) { return comp[n] == 1 && above[n] >= hc; });
+                    for (size_t n = 0; n < N; ++n)
+                        if (comp[n] == 1 && !core[n]) { comp[n] = 0; lowCell[n] = 1; }
+                    coreHeight = hc;
+                }
+            }
+        }
         size_t footprintCells = 0;
         for (uint8_t c : comp) footprintCells += c == 1;
         // courtyards and light wells: open cells the grid border cannot reach without crossing the footprint
@@ -930,6 +998,10 @@ private:
         size_t enclosedCells = 0;
         for (size_t n = 0; n < N; ++n)
             if (!comp[n] && !outside[n]) { comp[n] = 2; ++enclosedCells; }
+        for (size_t n = 0; n < N; ++n) {
+            if (lowCell[n] && comp[n] == 2) lowCell[n] = 0;  // enclosed by the core: part of it (a courtyard wing, an atrium roof)
+            lowCells += lowCell[n];
+        }
         double fMinX = 1e300, fMaxX = -1e300, fMinZ = 1e300, fMaxZ = -1e300, fTop = -1e300;
         for (int k = 0; k < nz; ++k)
             for (int i = 0; i < nx; ++i) {
@@ -958,17 +1030,105 @@ private:
                 relax(i, k, i + 1, k, s1); relax(i, k, i + 1, k + 1, s2); relax(i, k, i, k + 1, s1); relax(i, k, i - 1, k + 1, s2);
             }
 
-        // 3. triangles: core (over the footprint), apron (low, near it), closure candidates (raised, within reach)
+        // distance (m) from the open cells into the footprint, for interior surfaces
+        std::vector<float> inside(N, inf);
+        for (size_t n = 0; n < N; ++n) if (comp[n] != 1) inside[n] = 0;
+        auto relaxIn = [&](int i, int k, int ni, int nk, float w) {
+            if (!dsm.inside(ni, nk)) return;
+            float& d = inside[static_cast<size_t>(k) * nx + i];
+            d = std::min(d, inside[static_cast<size_t>(nk) * nx + ni] + w);
+        };
+        for (int k = 0; k < nz; ++k)
+            for (int i = 0; i < nx; ++i) {
+                relaxIn(i, k, i - 1, k, s1); relaxIn(i, k, i - 1, k - 1, s2); relaxIn(i, k, i, k - 1, s1); relaxIn(i, k, i + 1, k - 1, s2);
+            }
+        for (int k = nz - 1; k >= 0; --k)
+            for (int i = nx - 1; i >= 0; --i) {
+                relaxIn(i, k, i + 1, k, s1); relaxIn(i, k, i + 1, k + 1, s2); relaxIn(i, k, i, k + 1, s1); relaxIn(i, k, i - 1, k + 1, s2);
+            }
+
+        // 3. triangles: core (over the footprint), apron (low, near it), closure candidates (raised, within reach); blocked
+        //    ones never join: the surfaces of a low attachment (its roof, and its walls beyond the core's reach) and
+        //    interior floors (upward-facing, well inside the footprint, with the top surface well above them)
         const MeshView m = rawView();
         std::vector<float> triDist(F, inf), triAbove(F, 0);
         std::vector<uint8_t> keep(F, 0);  // 1 core, 2 closure, 3 apron
+        std::vector<uint8_t> blocked(F, 0);
+        size_t lowDropped = 0, interiorDropped = 0;
+        std::vector<uint32_t> interiorCandidates;
         for (size_t t = 0; t < F; ++t) {
-            const V3 c = (m.P(m.idx[3 * t]) + m.P(m.idx[3 * t + 1]) + m.P(m.idx[3 * t + 2])) * (1.0 / 3.0);
+            const V3 a = m.P(m.idx[3 * t]), b = m.P(m.idx[3 * t + 1]), cc = m.P(m.idx[3 * t + 2]);
+            const V3 c = (a + b + cc) * (1.0 / 3.0);
+            const V3 nrm = (b - a).cross(cc - a);
+            const double nl = nrm.norm();
+            const double ny = nl > 0 ? nrm.y / nl : 0.0;
             const int i = dsm.ix(c.x), k = dsm.iz(c.z);
-            if (dsm.inside(i, k)) triDist[t] = dist[static_cast<size_t>(k) * nx + i];
+            const bool in = dsm.inside(i, k);
+            const size_t n = in ? static_cast<size_t>(k) * nx + i : 0;
+            if (in) triDist[t] = dist[n];
             triAbove[t] = static_cast<float>(c.y - dtm.sample(c.x, c.z));
+            // (a wall within the core's reach stays only if it rises above the attachment's top: the structure's own facade
+            //  continues upward, the attachment's sides and posts end at its roof)
+            const double topY = std::max({a.y, b.y, cc.y});
+            const bool belowAttachmentTop = in && !std::isnan(dsm.at(i, k)) && topY <= dsm.at(i, k) + 0.3;
+            if (in && coreHeight > 0 && lowCell[n] && triAbove[t] > groundTol && triAbove[t] < coreHeight + 0.5 &&
+                (std::abs(ny) >= 0.7 || triDist[t] > P.isolateCoreGrow || belowAttachmentTop)) {
+                blocked[t] = 1;
+                ++lowDropped;
+                continue;
+            }
+            if (in && P.isolateInteriorInset >= 0 && comp[n] == 1 && ny >= 0.9 && triAbove[t] >= P.isolateInteriorMinAbove && inside[n] >= P.isolateInteriorInset &&
+                !std::isnan(dsm.at(i, k)) && dsm.at(i, k) - c.y >= P.isolateInteriorBelowTop) {
+                interiorCandidates.push_back(static_cast<uint32_t>(t));  // confirmed below by rays straight up
+            }
             if (triDist[t] <= P.isolateCoreGrow) keep[t] = 1;
-            else if (triDist[t] <= P.isolateApron && triAbove[t] <= P.isolateApronMaxHeight) keep[t] = 3;
+            else if (!P.isolateRebuildGround && triDist[t] <= P.isolateApron && triAbove[t] <= P.isolateApronMaxHeight) keep[t] = 3;
+        }
+        // an interior floor candidate is dropped only when rays straight up from its centroid and six points toward its corners all hit
+        // a kept, flat slab at least isolateInteriorBelowTop above it that is not itself a candidate (a terrace beside a
+        // taller wall, a roof under a railing, mast or crown ornament, sees past them and stays)
+        if (!interiorCandidates.empty()) {
+            std::vector<uint8_t> isCandidate(F, 0);
+            for (uint32_t t : interiorCandidates) isCandidate[t] = 1;
+            const double bc = 2.0;  // bucket size (m) of the triangles' x/z bounds
+            const int bnx = std::max(1, static_cast<int>(std::ceil((bbMax.x - bbMin.x) / bc)) + 1);
+            const int bnz = std::max(1, static_cast<int>(std::ceil((bbMax.z - bbMin.z) / bc)) + 1);
+            std::vector<std::vector<uint32_t>> bucket(static_cast<size_t>(bnx) * bnz);
+            auto bix = [&](double x) { return std::clamp(static_cast<int>(std::floor((x - bbMin.x) / bc)), 0, bnx - 1); };
+            auto biz = [&](double z) { return std::clamp(static_cast<int>(std::floor((z - bbMin.z) / bc)), 0, bnz - 1); };
+            for (size_t t = 0; t < F; ++t) {
+                const V3 a = m.P(m.idx[3 * t]), b = m.P(m.idx[3 * t + 1]), cc = m.P(m.idx[3 * t + 2]);
+                for (int bk = biz(std::min({a.z, b.z, cc.z})); bk <= biz(std::max({a.z, b.z, cc.z})); ++bk)
+                    for (int bi = bix(std::min({a.x, b.x, cc.x})); bi <= bix(std::max({a.x, b.x, cc.x})); ++bi)
+                        bucket[static_cast<size_t>(bk) * bnx + bi].push_back(static_cast<uint32_t>(t));
+            }
+            auto covered = [&](const V3& p, uint32_t self) {
+                for (uint32_t u : bucket[static_cast<size_t>(biz(p.z)) * bnx + bix(p.x)]) {
+                    if (u == self || isCandidate[u] || blocked[u] || keep[u] != 1) continue;
+                    const V3 a = m.P(m.idx[3 * u]), b = m.P(m.idx[3 * u + 1]), cc = m.P(m.idx[3 * u + 2]);
+                    const V3 un = (b - a).cross(cc - a);
+                    const double unl = un.norm();
+                    if (!(unl > 0) || std::abs(un.y) < 0.9 * unl) continue;  // only a flat slab closes a floor in
+                    const double d = (b.x - a.x) * (cc.z - a.z) - (cc.x - a.x) * (b.z - a.z);
+                    if (std::abs(d) < 1e-12) continue;
+                    const double w1 = ((p.x - a.x) * (cc.z - a.z) - (cc.x - a.x) * (p.z - a.z)) / d;
+                    const double w2 = ((b.x - a.x) * (p.z - a.z) - (p.x - a.x) * (b.z - a.z)) / d;
+                    if (w1 < 0 || w2 < 0 || w1 + w2 > 1) continue;
+                    if (a.y + w1 * (b.y - a.y) + w2 * (cc.y - a.y) >= p.y + P.isolateInteriorBelowTop) return true;
+                }
+                return false;
+            };
+            for (uint32_t t : interiorCandidates) {
+                const V3 a = m.P(m.idx[3 * t]), b = m.P(m.idx[3 * t + 1]), cc = m.P(m.idx[3 * t + 2]);
+                const V3 c = (a + b + cc) * (1.0 / 3.0);
+                // centroid, mid-way and near each corner: a long sliver reaching out from under a cover is not closed in
+                bool all = covered(c, t);
+                for (const V3* v : {&a, &b, &cc}) all = all && covered(c * 0.6 + *v * 0.4, t) && covered(c * 0.1 + *v * 0.9, t);
+                if (!all) continue;
+                blocked[t] = 1;
+                keep[t] = 0;
+                ++interiorDropped;
+            }
         }
         // 4. closure over mesh connectivity (positions welded on a 1 cm lattice, so chunk seams connect): raised
         //    triangles reached from the structure join it while they stay within reach of the footprint; raised ones
@@ -999,7 +1159,7 @@ private:
                 const uint32_t w = wid[rawIdx[3 * t + k]];
                 for (uint32_t j = off[w]; j < off[w + 1]; ++j) {
                     const uint32_t u = inc[j];
-                    if (keep[u] == 1 || keep[u] == 2 || cut[u] || !(triAbove[u] > groundTol)) continue;
+                    if (keep[u] == 1 || keep[u] == 2 || cut[u] || blocked[u] || !(triAbove[u] > groundTol)) continue;
                     if (triDist[u] <= P.isolateReach) {
                         if (keep[u] == 0) ++closure;
                         keep[u] = 2;  // (an apron triangle that is raised joins the structure)
@@ -1039,6 +1199,207 @@ private:
         }
         if (idx.empty()) { res.error = "isolate: the structure under the anchor has no triangles"; return false; }
         for (auto& mi : triMat) if (mi == UINT32_MAX) mi = mats.empty() ? 0u : static_cast<uint32_t>(mats.size() - 1);
+
+        // 5a. the street around the structure, measured on the scan (the ground patch rests on it; the clip level comes from it)
+        std::vector<float> gnd;
+        {
+            // the street surface under the patch: a grey-scale opening of the scan's top surface over the open cells, so
+            // objects narrower than twice the radius (cars, kiosks, street trees) go while a sloped street keeps its slope
+            // (an opening reproduces a plane exactly; the coarse terrain model can be metres off on a hill or inside a large block)
+            const int rg = std::max(1, static_cast<int>(std::ceil(P.isolateGroundOpeningRadius / dsm.cell)));
+            const float nan = std::numeric_limits<float>::quiet_NaN();
+            const double reach = P.isolateApron + rg * dsm.cell;
+            std::vector<float> ero(N, nan);
+            gnd.assign(N, nan);
+            auto openCell = [&](size_t n) { return comp[n] == 0 && !std::isnan(dsm.h[n]) && dist[n] <= reach + rg * dsm.cell; };
+            for (int k = 0; k < nz; ++k)
+                for (int i = 0; i < nx; ++i) {
+                    const size_t n = static_cast<size_t>(k) * nx + i;
+                    if (!openCell(n) || dist[n] > reach) continue;
+                    float lo = std::numeric_limits<float>::infinity();
+                    for (int dk = -rg; dk <= rg; ++dk)
+                        for (int di = -rg; di <= rg; ++di) {
+                            if (!dsm.inside(i + di, k + dk)) continue;
+                            const size_t q = static_cast<size_t>(k + dk) * nx + i + di;
+                            if (openCell(q)) lo = std::min(lo, dsm.h[q]);
+                        }
+                    ero[n] = lo;
+                }
+            for (int k = 0; k < nz; ++k)
+                for (int i = 0; i < nx; ++i) {
+                    const size_t n = static_cast<size_t>(k) * nx + i;
+                    if (comp[n] != 0 || !(dist[n] <= P.isolateApron)) continue;
+                    float hi = -std::numeric_limits<float>::infinity();
+                    for (int dk = -rg; dk <= rg; ++dk)
+                        for (int di = -rg; di <= rg; ++di) {
+                            if (!dsm.inside(i + di, k + dk)) continue;
+                            const float e = ero[static_cast<size_t>(k + dk) * nx + i + di];
+                            if (!std::isnan(e)) hi = std::max(hi, e);
+                        }
+                    gnd[n] = std::isfinite(hi) ? hi : static_cast<float>(dtm.sample(dsm.cx(i), dsm.cz(k)));
+                }
+        }
+
+        // 5b. the model ends at street level: surfaces more than the margin below the lowest street around the structure
+        //     (10th percentile of the measured street) are clipped there (Sutherland-Hodgman, so a straddling wall is cut,
+        //     not dropped, and no hole opens). One level for the whole structure: the coarse terrain model can sit above
+        //     the ground inside a large block, and a single level below every surrounding street never cuts a real wall.
+        size_t clipDropped = 0, clipCut = 0;
+        double clipLevel = std::numeric_limits<double>::quiet_NaN();
+        const long trianglesBeforeClip = static_cast<long>(triMat.size());
+        if (P.isolateBelowGroundMargin >= 0) {
+            using Vtx = typename decltype(verts)::value_type;
+            std::vector<float> street;
+            for (float g : gnd) if (!std::isnan(g)) street.push_back(g);
+            if (street.empty()) for (size_t n = 0; n < N; ++n) if (comp[n] == 1) street.push_back(static_cast<float>(dtm.sample(dsm.cx(static_cast<int>(n % nx)), dsm.cz(static_cast<int>(n / nx)))));
+            std::nth_element(street.begin(), street.begin() + street.size() / 10, street.end());
+            clipLevel = static_cast<double>(street[street.size() / 10]) - P.isolateBelowGroundMargin;
+            auto level = [&](const Vtx& v) { return static_cast<double>(v.position.y) - clipLevel; };
+            auto mix = [](const Vtx& p, const Vtx& q, float s) {
+                Vtx r = p;
+                r.position = p.position + (q.position - p.position) * s;
+                r.normal = (p.normal + (q.normal - p.normal) * s).normalized();
+                r.uv = p.uv + (q.uv - p.uv) * s;
+                r.color = p.color + (q.color - p.color) * s;
+                r.tangent = p.tangent + (q.tangent - p.tangent) * s;
+                return r;
+            };
+            std::vector<uint32_t> cIdx, cMat;
+            cIdx.reserve(idx.size());
+            cMat.reserve(triMat.size());
+            for (size_t t = 0; t < triMat.size(); ++t) {
+                const uint32_t tv[3] = {idx[3 * t], idx[3 * t + 1], idx[3 * t + 2]};
+                double s[3];
+                int above = 0;
+                for (int k = 0; k < 3; ++k) { s[k] = level(verts[tv[k]]); above += s[k] >= 0; }
+                if (above == 3) { cIdx.insert(cIdx.end(), tv, tv + 3); cMat.push_back(triMat[t]); continue; }
+                if (above == 0) { ++clipDropped; continue; }
+                ++clipCut;
+                std::vector<uint32_t> poly;  // the part at or above the level, in the triangle's winding
+                for (int k = 0; k < 3; ++k) {
+                    const int j = (k + 1) % 3;
+                    if (s[k] >= 0) poly.push_back(tv[k]);
+                    if ((s[k] >= 0) != (s[j] >= 0)) {
+                        const float u = static_cast<float>(s[k] / (s[k] - s[j]));
+                        poly.push_back(static_cast<uint32_t>(verts.size()));
+                        verts.push_back(mix(verts[tv[k]], verts[tv[j]], u));
+                    }
+                }
+                for (size_t k = 1; k + 1 < poly.size(); ++k) {
+                    cIdx.insert(cIdx.end(), {poly[0], poly[k], poly[k + 1]});
+                    cMat.push_back(triMat[t]);
+                }
+            }
+            idx = std::move(cIdx);
+            triMat = std::move(cMat);
+        }
+        const long clipDelta = static_cast<long>(triMat.size()) - trianglesBeforeClip;
+
+        // 5c. ground: a patch on the street surface over the open cells within the apron of the footprint (corners shared,
+        //     two triangles per cell, facing up), with a neutral material of its own
+        size_t groundTris = 0;
+        double groundArea = 0;
+        if (P.isolateRebuildGround && P.isolateApron > 0) {
+            gltf::SceneMaterial ground;
+            ground.baseColorFactor = {0.42f, 0.42f, 0.42f, 1.0f};
+            ground.metallicFactor = 0.0f;
+            ground.roughnessFactor = 0.95f;
+            const uint32_t gm = static_cast<uint32_t>(mats.size());
+            auto groundAt = [&](int ci, int ck) {  // a patch corner: the mean of the patch cells around it
+                double sum = 0;
+                int cnt = 0;
+                for (int dk = -1; dk <= 0; ++dk)
+                    for (int di = -1; di <= 0; ++di) {
+                        if (!dsm.inside(ci + di, ck + dk)) continue;
+                        const float g = gnd[static_cast<size_t>(ck + dk) * nx + ci + di];
+                        if (!std::isnan(g)) { sum += g; ++cnt; }
+                    }
+                const double x = dsm.x0 + ci * dsm.cell, z = dsm.z0 + ck * dsm.cell;
+                return cnt ? sum / cnt : dtm.sample(x, z);
+            };
+            std::unordered_map<uint64_t, uint32_t> corner;
+            auto cornerVertex = [&](int ci, int ck) {
+                const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(ck)) << 32) | static_cast<uint32_t>(ci);
+                auto it = corner.find(key);
+                if (it != corner.end()) return it->second;
+                const double x = dsm.x0 + ci * dsm.cell, z = dsm.z0 + ck * dsm.cell;
+                typename decltype(verts)::value_type v;
+                v.position = {static_cast<float>(x), static_cast<float>(groundAt(ci, ck)), static_cast<float>(z)};
+                v.normal = {0.0f, 1.0f, 0.0f};
+                v.uv = {static_cast<float>(x * 0.25), static_cast<float>(z * 0.25)};
+                const uint32_t id = static_cast<uint32_t>(verts.size());
+                verts.push_back(v);
+                corner.emplace(key, id);
+                return id;
+            };
+            // the outer edge follows the apron's distance contour (marching squares on the corner distances) instead of
+            // whole cells, so it is smooth rather than saw-toothed; a crossing vertex is shared by the two cells of its edge
+            auto edgeOf = [&](int ci, int ck) {  // corner value: apron distance minus the apron width (inside: <= 0)
+                double sum = 0;
+                int cnt = 0;
+                for (int dk = -1; dk <= 0; ++dk)
+                    for (int di = -1; di <= 0; ++di) {
+                        if (!dsm.inside(ci + di, ck + dk)) continue;
+                        const size_t q = static_cast<size_t>(ck + dk) * nx + ci + di;
+                        sum += comp[q] != 0 ? 0.0 : static_cast<double>(dist[q]);
+                        ++cnt;
+                    }
+                return (cnt ? sum / cnt : 1e9) - P.isolateApron;
+            };
+            std::unordered_map<uint64_t, uint32_t> crossing;
+            auto crossVertex = [&](int ai, int ak, int bi, int bk, double fa, double fb) {
+                const uint64_t ka = (static_cast<uint64_t>(static_cast<uint32_t>(ak)) << 32) | static_cast<uint32_t>(ai);
+                const uint64_t kb = (static_cast<uint64_t>(static_cast<uint32_t>(bk)) << 32) | static_cast<uint32_t>(bi);
+                const uint64_t key = std::min(ka, kb) * 1000003ULL ^ std::max(ka, kb);
+                auto it = crossing.find(key);
+                if (it != crossing.end()) return it->second;
+                const double u = fa / (fa - fb);
+                const double x = dsm.x0 + (ai + u * (bi - ai)) * dsm.cell, z = dsm.z0 + (ak + u * (bk - ak)) * dsm.cell;
+                typename decltype(verts)::value_type v;
+                v.position = {static_cast<float>(x), static_cast<float>(groundAt(ai, ak) * (1 - u) + groundAt(bi, bk) * u), static_cast<float>(z)};
+                v.normal = {0.0f, 1.0f, 0.0f};
+                v.uv = {static_cast<float>(x * 0.25), static_cast<float>(z * 0.25)};
+                const uint32_t id = static_cast<uint32_t>(verts.size());
+                verts.push_back(v);
+                crossing.emplace(key, id);
+                return id;
+            };
+            for (int k = 0; k < nz; ++k)
+                for (int i = 0; i < nx; ++i) {
+                    const size_t n = static_cast<size_t>(k) * nx + i;
+                    if (comp[n] != 0 || !(dist[n] <= P.isolateApron + 2 * dsm.cell)) continue;
+                    // corners in the order that winds with the normal up (+x east, +z south, +y up)
+                    const int ci[4] = {i, i, i + 1, i + 1}, ck[4] = {k, k + 1, k + 1, k};
+                    double f[4];
+                    for (int q = 0; q < 4; ++q) f[q] = edgeOf(ci[q], ck[q]);
+                    std::vector<uint32_t> poly;
+                    for (int q = 0; q < 4; ++q) {
+                        const int r = (q + 1) % 4;
+                        if (f[q] <= 0) poly.push_back(cornerVertex(ci[q], ck[q]));
+                        if ((f[q] <= 0) != (f[r] <= 0)) poly.push_back(crossVertex(ci[q], ck[q], ci[r], ck[r], f[q], f[r]));
+                    }
+                    for (size_t q = 1; q + 1 < poly.size(); ++q) {
+                        idx.insert(idx.end(), {poly[0], poly[q], poly[q + 1]});
+                        triMat.push_back(gm);
+                        ++groundTris;
+                    }
+                }
+            if (groundTris) mats.push_back(ground);
+            for (size_t t = triMat.size() - groundTris; t < triMat.size(); ++t) {
+                const auto& pa = verts[idx[3 * t]].position, &pb = verts[idx[3 * t + 1]].position, &pc = verts[idx[3 * t + 2]].position;
+                groundArea += 0.5 * std::abs((pb.x - pa.x) * (pc.z - pa.z) - (pc.x - pa.x) * (pb.z - pa.z));
+            }
+        }
+        if (clipDropped || clipCut) {  // vertices only the clipped-away parts used
+            std::vector<uint32_t> remap(verts.size(), UINT32_MAX);
+            decltype(verts) used;
+            used.reserve(verts.size());
+            for (auto& v : idx) {
+                if (remap[v] == UINT32_MAX) { remap[v] = static_cast<uint32_t>(used.size()); used.push_back(verts[v]); }
+                v = remap[v];
+            }
+            verts = std::move(used);
+        }
         std::vector<int> imgMap(scene.images.size(), -1);
         std::vector<gltf::SceneImage> imgs;
         for (auto& sm : mats)
@@ -1066,7 +1427,12 @@ private:
            << ", \"enclosedCells\": " << enclosedCells << ", \"footprintArea_m2\": " << num(static_cast<double>(footprintCells) * dsm.cell * dsm.cell)
            << ", \"footprintBounds\": [" << num(fMinX) << "," << num(fMinZ) << "," << num(fMaxX) << "," << num(fMaxZ) << "], \"groundY\": " << num(isoGround)
            << ", \"topY\": " << num(fTop) << ", \"height_m\": " << num(fTop - isoGround) << ", \"triangles\": {\"input\": " << inputTris << ", \"core\": " << nCore
-           << ", \"closure\": " << closure << ", \"apron\": " << nApron << ", \"kept\": " << F << "}, \"cutContacts\": " << cutContacts
+           << ", \"closure\": " << closure << ", \"apron\": " << nApron << ", \"ground\": " << groundTris << ", \"belowGroundDelta\": " << clipDelta
+           << ", \"kept\": " << F << "}, \"cutContacts\": " << cutContacts
+           << ", \"lowAttachment\": {\"coreHeight_m\": " << num(coreHeight) << ", \"cells\": " << lowCells << ", \"area_m2\": " << num(static_cast<double>(lowCells) * dsm.cell * dsm.cell)
+           << ", \"trianglesDropped\": " << lowDropped << "}, \"interiorFloorsDropped\": " << interiorDropped
+           << ", \"belowGround\": {\"margin_m\": " << num(P.isolateBelowGroundMargin) << ", \"clipY\": " << num(clipLevel) << ", \"dropped\": " << clipDropped << ", \"cut\": " << clipCut << "}"
+           << ", \"groundPatch\": {\"triangles\": " << groundTris << ", \"area_m2\": " << num(groundArea) << "}"
            << ", \"vertices\": {\"input\": " << inputVerts << ", \"kept\": " << V << "}, \"materials\": {\"input\": " << inputMats << ", \"kept\": " << scene.materials.size()
            << "}, \"images\": {\"input\": " << inputImages << ", \"kept\": " << scene.images.size() << "}, \"boundsMin\": " << vec(bbMin) << ", \"boundsMax\": " << vec(bbMax)
            << ", \"ms\": " << num(std::chrono::duration<double, std::milli>(Clock::now() - t0).count()) << "},\n";
