@@ -19,6 +19,7 @@ import type {
     SandboxTemplate,
     Scene3DData
 } from '../../browser/generative-canvas/canvas-types';
+import { normalizePrimitiveType } from '../../browser/generative-canvas/canvas-types';
 import {
     synthesizeComprehensiveDocument as synthesizeDocumentFromEngine,
     ensureCompleteSections,
@@ -38,7 +39,7 @@ import {
 } from '../../browser/generative-canvas/services/adaptive-domain-engine';
 import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
 import { TaskCapabilityResolver } from '../agent/task-capability-resolver';
-import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from './scene3d-clay-baseline';
+import { applyClayFirstPassBaseline, lightingFeaturesOf, releaseClayOnMaterialRequest } from './scene3d-clay-baseline';
 export { synthesizeContextualVideoTimeline };
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
@@ -2447,16 +2448,28 @@ export function synthesizeComprehensiveDocument(prompt: string, customTitle?: st
     return synthesizeDocumentFromEngine(prompt, customTitle || extractDocumentTitle(prompt));
 }
 
+export interface ArtifactSynthesisOptions {
+    /**
+     * Build the artifact only from what the model wrote: a <scratchboxPrimitive> tag or a JSON {type, data}
+     * envelope. Nothing is synthesized from prompt keywords, so a prose reply yields no artifact. Agent, plan
+     * and ask turns use this; their canvas output otherwise arrives through mount_canvas_primitive.
+     */
+    modelAuthoredOnly?: boolean;
+}
+
 /**
  * Parse JSON from AI model output or wrap markdown into a structured canvas primitive.
+ * Returns undefined only under `modelAuthoredOnly`, when the model wrote no artifact.
  */
 export function parseOrSynthesizeArtifact(
     prompt: string,
     modelText: string,
     request: GeminiGenerateRequest,
     _mcpExecutions: McpExecutionState[],
-    groundingMetadata?: GroundingMetadata
-): CanvasArtifact {
+    groundingMetadata?: GroundingMetadata,
+    options: ArtifactSynthesisOptions = {}
+): CanvasArtifact | undefined {
+    const modelAuthoredOnly = options.modelAuthoredOnly === true;
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     const enrichGroundedCitations = (targetSections: MarkdownSection[]): MarkdownSection[] => {
@@ -2505,7 +2518,7 @@ export function parseOrSynthesizeArtifact(
     // 0. Unified Artifact Tag Architecture (<scratchboxPrimitive type="..." title="..." summary="..." version="...">)
     const primitiveTag = extractScratchboxPrimitiveTag(modelText);
     if (primitiveTag.matched && primitiveTag.type) {
-        let tagType = primitiveTag.type as PrimitiveType;
+        let tagType = (normalizePrimitiveType(primitiveTag.type) ?? primitiveTag.type) as PrimitiveType;
         const tagPayload = primitiveTag.rawPayload || '';
 
         // Attempt 1: Inner payload is a JSON code block or raw JSON object
@@ -2516,7 +2529,11 @@ export function parseOrSynthesizeArtifact(
                 const parsed = JSON.parse(jsonInTag[1]!);
                 if (parsed) {
                     parsedTagData = parsed.data !== undefined ? parsed.data : parsed;
-                    if (parsed.type) tagType = parsed.type;
+                    // An inner `type` re-types the tag when it names a primitive; under modelAuthoredOnly any other
+                    // `type` is just a field of the data.
+                    const innerType = normalizePrimitiveType(parsed.type);
+                    if (innerType) tagType = innerType;
+                    else if (parsed.type && !modelAuthoredOnly) tagType = parsed.type;
                 }
             } catch {
                 // Ignore JSON parse error, fall through to specialized tagType synthesizers
@@ -2524,7 +2541,8 @@ export function parseOrSynthesizeArtifact(
         }
 
         // Attempt 2: If live-code-sandbox and inner payload is raw code / component
-        if (tagType === 'live-code-sandbox') {
+        // (an empty tag body would be filled from a prompt-keyword template, which modelAuthoredOnly forbids)
+        if (tagType === 'live-code-sandbox' && !(modelAuthoredOnly && !tagPayload.trim())) {
             if (!parsedTagData || !parsedTagData.files) {
                 const codeMatch = tagPayload.match(/```(?:tsx|jsx|react|typescript|ts|javascript|js|html)?\s*\n([\s\S]*?)```/) || [null, tagPayload];
                 const rawCode = (codeMatch[1] || tagPayload).trim();
@@ -2594,9 +2612,9 @@ export function parseOrSynthesizeArtifact(
 
         // Attempt 3: If markdown-document and inner payload is markdown
         if (tagType === 'markdown-document') {
-            if (!parsedTagData || !parsedTagData.sections) {
+            const rawSections = markdownStringToSections(tagPayload);
+            if ((!parsedTagData || !parsedTagData.sections) && !(modelAuthoredOnly && rawSections.length === 0)) {
                 const docTitle = primitiveTag.title || extractDocumentTitle(prompt, 'Project Specification');
-                const rawSections = markdownStringToSections(tagPayload);
                 const completeSections = rawSections.length > 0 ? ensureCompleteSections(rawSections, docTitle) : synthesizeComprehensiveDocument(prompt, docTitle).sections;
                 parsedTagData = {
                     title: docTitle,
@@ -2609,7 +2627,8 @@ export function parseOrSynthesizeArtifact(
             }
         }
 
-        if (parsedTagData) {
+        // Under modelAuthoredOnly the tag must name a canvas primitive; an unknown type is not mounted.
+        if (parsedTagData && (!modelAuthoredOnly || normalizePrimitiveType(tagType))) {
             const isSameType = request.activeArtifact?.type === tagType;
             const effectiveVersion = (isSameType && request.activeArtifact) ? (request.activeArtifact.version || 1) + 1 : (primitiveTag.version || 1);
             const effectiveId = (isSameType && request.activeArtifact) ? request.activeArtifact.id : `art-${tagType}-${Date.now()}`;
@@ -2635,18 +2654,12 @@ export function parseOrSynthesizeArtifact(
     if (jsonMatch) {
         try {
             const parsed = JSON.parse(jsonMatch[1]);
-            if (parsed) {
-                let type = parsed.type as string;
-                if (type === 'action-checklist') type = 'checklist';
-                if (type === 'skills-manager') type = 'skills-hub';
-                if (type === 'rendered-document' || type === 'document') type = 'markdown-document';
-                if (type === 'flow-graph' || type === 'graph') type = 'node-graph';
-                if (type === 'metrics' || type === 'dashboard') type = 'metric-dashboard';
-                if (type === 'kanban') type = 'kanban-board';
-                if (type === 'form') type = 'interactive-form';
-                if (type === 'sandbox' || type === 'code-sandbox' || type === 'playground' || type === 'code-playground') type = 'live-code-sandbox';
-                if (type === '3d' || type === 'scene-3d' || type === 'spatial-scene' || type === '3d_scene' || type === '3d-world' || type === 'r3f-scene') type = '3d-scene';
-                if (type === 'video-timeline' || type === 'video' || type === 'timeline' || type === 'video-editor' || type === 'nle' || type === 'video_timeline') type = 'video-timeline';
+            const envelopeType = normalizePrimitiveType(parsed?.type);
+            // A model-authored artifact names a canvas primitive and carries its data. Any other JSON block, such
+            // as an API payload or a webhook event ({"type": "invoice.paid", "data": ...}), is just part of the reply.
+            const isEnvelope = !!parsed && typeof parsed === 'object' && !!envelopeType && parsed.data !== undefined && parsed.data !== null;
+            if (parsed && (!modelAuthoredOnly || isEnvelope)) {
+                let type = (envelopeType ?? parsed.type) as string;
 
                 let data = parsed.data;
                 const isVideoTimelineRequest = type === 'video-timeline' || request.activeArtifact?.type === 'video-timeline' ||
@@ -2681,7 +2694,9 @@ export function parseOrSynthesizeArtifact(
                     /planetary\s+orbit|cyberpunk\s+city|architectural\s+blueprint/i.test(prompt)
                 );
 
-                if (isVideoTimelineRequest && type !== 'video-timeline') {
+                if (modelAuthoredOnly) {
+                    // The model chose the primitive type; prompt keywords do not re-type it.
+                } else if (isVideoTimelineRequest && type !== 'video-timeline') {
                     type = 'video-timeline';
                 } else if (isExplicit3DIntent) {
                     type = '3d-scene';
@@ -2723,10 +2738,17 @@ export function parseOrSynthesizeArtifact(
                         docContent
                     });
 
-                    const effectiveTitle = parsed.title || data?.title || (isAnimateOnly && active3DData ? active3DData.title : contextualSynthesized.title);
-                    const effectiveSubtitle = isAnimateOnly && isExplicitFlight
-                        ? 'Animated 3D flight trajectory: dynamic bank, roll, and engine thrust active.'
-                        : (parsed.summary || data?.subtitle || (isAnimateOnly && active3DData ? active3DData.subtitle : contextualSynthesized.subtitle));
+                    // Under modelAuthoredOnly the synthesizer may still supply viewpoint and lighting defaults, but
+                    // never geometry, scripts or a title: its template drew objects the model never placed.
+                    const templateFallback = modelAuthoredOnly ? undefined : contextualSynthesized;
+                    const effectiveTitle = modelAuthoredOnly
+                        ? (parsed.title || data?.title || (is3DActive ? request.activeArtifact?.title : undefined) || '3D Scene')
+                        : (parsed.title || data?.title || (isAnimateOnly && active3DData ? active3DData.title : contextualSynthesized.title));
+                    const effectiveSubtitle = modelAuthoredOnly
+                        ? (parsed.summary || data?.subtitle || (isTopicChange ? undefined : active3DData?.subtitle))
+                        : isAnimateOnly && isExplicitFlight
+                            ? 'Animated 3D flight trajectory: dynamic bank, roll, and engine thrust active.'
+                            : (parsed.summary || data?.subtitle || (isAnimateOnly && active3DData ? active3DData.subtitle : contextualSynthesized.subtitle));
 
                     const defaultObjects = isExplicitFlight
                         ? [
@@ -2767,27 +2789,49 @@ export function parseOrSynthesizeArtifact(
                     const hasControlSurfaces = /control\s*surface|aileron|elevator|rudder|flap/i.test(prompt) || !!data?.features?.controlSurfaces || !!active3DData?.features?.controlSurfaces;
                     const hasTerrainBiomes = /biome|terrain|canyon|alpine|mountain|coastal|desert/i.test(prompt) || !!data?.features?.terrainBiomes || !!active3DData?.features?.terrainBiomes;
 
-                    const effectiveFeatures = {
-                        ...(contextualSynthesized.features || {}),
-                        ...(isTopicChange ? {} : (active3DData?.features || {})),
-                        ...(data?.features || {}),
-                        ...(hasGodRays && hasAtmosphere ? { godRays: true } : {}),
-                        ...(hasAtmosphere ? { atmosphericScattering: true } : {}),
-                        ...(hasContrails ? { contrails: true } : {}),
-                        ...(hasControlSurfaces ? { controlSurfaces: true } : {}),
-                        ...(hasTerrainBiomes ? { terrainBiomes: (data?.features?.terrainBiomes || active3DData?.features?.terrainBiomes || { biomeType: 'alpine' as const }) } : {})
-                    };
+                    const effectiveFeatures = modelAuthoredOnly
+                        ? (() => {
+                            // The model's features, else the open scene's. From the prompt only opt-in sky, sun and
+                            // atmosphere: words such as "mountain" must not switch on terrain biomes (which start
+                            // playback and draw biome terrain), contrails or control surfaces.
+                            const authored: NonNullable<Scene3DData['features']> = {
+                                ...lightingFeaturesOf(contextualSynthesized.features),
+                                ...(isTopicChange ? {} : (active3DData?.features || {})),
+                                ...(data?.features || {})
+                            };
+                            return {
+                                ...authored,
+                                ...(hasAtmosphere && !authored.atmosphericScattering ? { atmosphericScattering: true } : {}),
+                                ...(hasGodRays && hasAtmosphere && !authored.godRays ? { godRays: true } : {})
+                            };
+                        })()
+                        : {
+                            ...(contextualSynthesized.features || {}),
+                            ...(isTopicChange ? {} : (active3DData?.features || {})),
+                            ...(data?.features || {}),
+                            ...(hasGodRays && hasAtmosphere ? { godRays: true } : {}),
+                            ...(hasAtmosphere ? { atmosphericScattering: true } : {}),
+                            ...(hasContrails ? { contrails: true } : {}),
+                            ...(hasControlSurfaces ? { controlSurfaces: true } : {}),
+                            ...(hasTerrainBiomes ? { terrainBiomes: (data?.features?.terrainBiomes || active3DData?.features?.terrainBiomes || { biomeType: 'alpine' as const }) } : {})
+                        };
 
                     const isVehicleTheme = /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt) || /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(effectiveTitle);
 
                     const scene3DData: Scene3DData = {
                         title: effectiveTitle,
                         subtitle: effectiveSubtitle,
-                        worldBranch: isVehicleTheme ? (data?.worldBranch && !/city|urban|street/i.test(data.worldBranch) ? data.worldBranch : 'studio/showroom') : (data?.worldBranch || (isTopicChange ? undefined : active3DData?.worldBranch) || contextualSynthesized.worldBranch),
-                        sceneType: isVehicleTheme ? 'custom' : (data?.sceneType || (isTopicChange ? undefined : active3DData?.sceneType) || contextualSynthesized.sceneType),
+                        // worldBranch and sceneType select what the viewport draws (a splat world, a flight), so under
+                        // modelAuthoredOnly they are the model's or the open scene's, never a template's or a keyword's.
+                        worldBranch: modelAuthoredOnly
+                            ? (data?.worldBranch || (isTopicChange ? undefined : active3DData?.worldBranch))
+                            : isVehicleTheme ? (data?.worldBranch && !/city|urban|street/i.test(data.worldBranch) ? data.worldBranch : 'studio/showroom') : (data?.worldBranch || (isTopicChange ? undefined : active3DData?.worldBranch) || contextualSynthesized.worldBranch),
+                        sceneType: modelAuthoredOnly
+                            ? (data?.sceneType || (isTopicChange ? undefined : active3DData?.sceneType))
+                            : isVehicleTheme ? 'custom' : (data?.sceneType || (isTopicChange ? undefined : active3DData?.sceneType) || contextualSynthesized.sceneType),
                         renderMode: data?.renderMode || (isTopicChange ? undefined : active3DData?.renderMode) || contextualSynthesized.renderMode || 'pbr',
                         cameraMode: data?.cameraMode || (isTopicChange ? undefined : active3DData?.cameraMode) || contextualSynthesized.cameraMode || 'orbit',
-                        animation: sceneAnimation,
+                        animation: modelAuthoredOnly ? (data?.animation || (isTopicChange ? undefined : active3DData?.animation)) : sceneAnimation,
                         camera: data?.camera || (isTopicChange ? contextualSynthesized.camera : (active3DData?.camera || contextualSynthesized.camera)) || {
                             position: [15, 12, 20],
                             target: [0, 2, 0],
@@ -2806,10 +2850,11 @@ export function parseOrSynthesizeArtifact(
                             ...(data?.environment || {}),
                             skybox: data?.environment?.skybox || (hasAtmosphere ? 'realistic-sky' : (active3DData?.environment?.skybox || contextualSynthesized.environment?.skybox || 'studio')),
                         },
-                        timeline: sceneTimeline,
-                        customScript: data?.customScript || data?.code || (isTopicChange ? undefined : active3DData?.customScript) || contextualSynthesized.customScript,
-                        code: data?.code || data?.customScript || (isTopicChange ? undefined : active3DData?.code) || contextualSynthesized.code,
-                        shaders: data?.shaders || (isTopicChange ? undefined : active3DData?.shaders) || contextualSynthesized.shaders,
+                        // Playback too: without a timeline from the model or the open scene, nothing starts playing.
+                        timeline: modelAuthoredOnly ? (data?.timeline || (isTopicChange ? undefined : active3DData?.timeline)) : sceneTimeline,
+                        customScript: data?.customScript || data?.code || (isTopicChange ? undefined : active3DData?.customScript) || templateFallback?.customScript,
+                        code: data?.code || data?.customScript || (isTopicChange ? undefined : active3DData?.code) || templateFallback?.code,
+                        shaders: data?.shaders || (isTopicChange ? undefined : active3DData?.shaders) || templateFallback?.shaders,
                         features: effectiveFeatures,
                         customMeshes: (() => {
                             if (data?.customMeshes && Array.isArray(data.customMeshes) && data.customMeshes.length > 0) {
@@ -2838,9 +2883,11 @@ export function parseOrSynthesizeArtifact(
                                 }
                                 return data.customMeshes;
                             }
-                            return isExplicitDestruction ? contextualSynthesized.customMeshes : (active3DData?.customMeshes || contextualSynthesized.customMeshes);
+                            return isExplicitDestruction ? templateFallback?.customMeshes : (active3DData?.customMeshes || templateFallback?.customMeshes);
                         })(),
-                        objects: isTopicChange ? (contextualSynthesized.objects || []) : (isExplicitFlight ? defaultObjects : (active3DData?.objects && active3DData.objects.length > 0 ? active3DData.objects : defaultObjects)),
+                        objects: modelAuthoredOnly
+                            ? (Array.isArray(data?.objects) ? data.objects : (isTopicChange ? [] : active3DData?.objects ?? []))
+                            : isTopicChange ? (contextualSynthesized.objects || []) : (isExplicitFlight ? defaultObjects : (active3DData?.objects && active3DData.objects.length > 0 ? active3DData.objects : defaultObjects)),
                         operatorStack: isExplicitDestruction
                             ? []
                             : (data?.operatorStack && data.operatorStack.length > 0
@@ -2853,12 +2900,12 @@ export function parseOrSynthesizeArtifact(
                                 : (active3DData?.actionLog || [])),
                         sculptSettings: data?.sculptSettings || (isTopicChange ? undefined : active3DData?.sculptSettings),
                         selectedMeshId: data?.selectedMeshId || (isTopicChange ? undefined : active3DData?.selectedMeshId),
-                        wasmPhysics: data?.wasmPhysics || (isTopicChange ? undefined : active3DData?.wasmPhysics) || contextualSynthesized.wasmPhysics,
-                        geoAnchor: data?.geoAnchor || (isTopicChange ? undefined : active3DData?.geoAnchor) || contextualSynthesized.geoAnchor,
-                        droneRoute: data?.droneRoute || (isTopicChange ? undefined : active3DData?.droneRoute) || contextualSynthesized.droneRoute,
-                        cppGenerator: data?.cppGenerator || (data?.pythonGenerator ? undefined : (isTopicChange ? contextualSynthesized.cppGenerator : (active3DData?.cppGenerator || contextualSynthesized.cppGenerator))),
+                        wasmPhysics: data?.wasmPhysics || (isTopicChange ? undefined : active3DData?.wasmPhysics) || templateFallback?.wasmPhysics,
+                        geoAnchor: data?.geoAnchor || (isTopicChange ? undefined : active3DData?.geoAnchor) || templateFallback?.geoAnchor,
+                        droneRoute: data?.droneRoute || (isTopicChange ? undefined : active3DData?.droneRoute) || templateFallback?.droneRoute,
+                        cppGenerator: data?.cppGenerator || (data?.pythonGenerator ? undefined : (isTopicChange ? templateFallback?.cppGenerator : (active3DData?.cppGenerator || templateFallback?.cppGenerator))),
                         pythonGenerator: (() => {
-                            let pyGen = data?.pythonGenerator || (isTopicChange ? contextualSynthesized.pythonGenerator : (active3DData?.pythonGenerator || contextualSynthesized.pythonGenerator));
+                            let pyGen = data?.pythonGenerator || (isTopicChange ? templateFallback?.pythonGenerator : (active3DData?.pythonGenerator || templateFallback?.pythonGenerator));
                             if (pyGen?.sourceCode && !pyGen.glbBase64) {
                                 try {
                                     const runner = NativePythonRunnerService.getInstance();
@@ -3112,6 +3159,9 @@ export function parseOrSynthesizeArtifact(
         }
     }
 
+    // Everything below builds an artifact from prompt keywords, not from anything the model wrote.
+    if (modelAuthoredOnly) return undefined;
+
     const lower = prompt.toLowerCase();
     const isVideoTimelineFallback = request.activeArtifact?.type === 'video-timeline' ||
         /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|chroma\s*key|green\s*screen|blue\s*screen|despill|video\s+composite|composite\s+clip|light\s*wrap/i.test(prompt) ||
@@ -3237,7 +3287,8 @@ export function parseOrSynthesizeArtifact(
     }
 
     const is3DActive = request.activeArtifact?.type === '3d-scene';
-    const has3DToolExecution = _mcpExecutions.some(exec =>
+    // A failed tool produced nothing to show, so it is no evidence that the reply is about a 3D scene.
+    const has3DToolExecution = _mcpExecutions.some(exec => exec.status !== 'failed' &&
         /stage_3d_vector_world|google_3d_tiles|execute_3d_python_script|atmosphere_|geobox_|resect_|universal_3d_|utdra_|mesh_/i.test(exec.toolName)
     );
     const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust|stage|staging|place|ground|anchor|situate|relocate|location|beach|park|city|street|monaco|venice|cyclorama|plinth|pedestal|platform|cove|pavement|asphalt|boardwalk|vector|tiles|material|texture|color|paint|metallic|clearcoat|wireframe|clay|render/i.test(prompt) ||

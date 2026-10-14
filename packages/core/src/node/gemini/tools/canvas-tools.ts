@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { CanvasArtifact, PrimitiveType, ArtifactData, VideoTimelineData, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type VideoTimelineData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
 import { synthesizeContextualVideoTimeline } from '../../../browser/generative-canvas/services/video/videoTimelineSynthesizer';
 import { synthesizeContextual3DScene } from '../../../browser/generative-canvas/procedural-3d-synthesizer';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
@@ -18,7 +18,7 @@ import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
-import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
+import { applyClayFirstPassBaseline, lightingFeaturesOf, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -204,18 +204,26 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
 
 export const canvasHandlers: Record<string, ToolHandler> = {
     async mount_canvas_primitive(args, _ctx) {
-        let primitiveType = (asString(args.primitiveType) || '3d-scene') as PrimitiveType;
+        // The model names the primitive; an alias maps to its primitive, and prompt words never re-type it.
+        const requestedType = asString(args.primitiveType);
+        const primitiveType = normalizePrimitiveType(requestedType);
+        if (!primitiveType) {
+            const error = requestedType
+                ? `Unknown primitiveType "${requestedType}". Use one of: ${PRIMITIVE_TYPES.join(', ')}.`
+                : `primitiveType is required. Use one of: ${PRIMITIVE_TYPES.join(', ')}.`;
+            return {
+                status: 'failed',
+                resultPayload: { success: false, error },
+                summaryResult: `Failed: ${error}`
+            };
+        }
         let title = asString(args.title) || 'Visual Creation';
         let summary = asString(args.summary) || `Synthesized ${title} on visual canvas.`;
         let payload = (args.payload && typeof args.payload === 'object') ? args.payload as ArtifactData : ({} as any);
 
         const prompt = _ctx?.request?.prompt || '';
-        const lowerPrompt = prompt.toLowerCase();
-        const isVideoTimelinePrompt = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip/i.test(prompt) ||
-            ((lowerPrompt.includes('clip') || lowerPrompt.includes('timeline')) && (lowerPrompt.includes('split') || lowerPrompt.includes('cut') || lowerPrompt.includes('delete') || lowerPrompt.includes('playhead') || lowerPrompt.includes('ripple') || lowerPrompt.includes('track') || lowerPrompt.includes('video')));
 
-        if (isVideoTimelinePrompt || primitiveType === 'video-timeline' || (primitiveType as string) === 'video-editor' || (primitiveType as string) === 'timeline' || (primitiveType as string) === 'nle') {
-            primitiveType = 'video-timeline';
+        if (primitiveType === 'video-timeline') {
             const activeVideoData = _ctx?.request?.activeArtifact?.type === 'video-timeline' ? (_ctx.request.activeArtifact.data as VideoTimelineData) : undefined;
             const timelineData = synthesizeContextualVideoTimeline(prompt, title !== 'Visual Creation' ? title : undefined, activeVideoData);
             if (payload && typeof payload === 'object') {
@@ -229,8 +237,7 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             payload = timelineData as any;
             title = timelineData.title;
             summary = timelineData.subtitle || 'Multi-track non-linear video editing timeline with real-time WebGL compositor';
-        } else if (primitiveType === '3d-scene' || /3d|scene|mesh|pedestal|orbit|spatial|monolith/i.test(prompt) || /3d|scene/i.test(title)) {
-            primitiveType = '3d-scene';
+        } else if (primitiveType === '3d-scene') {
             const contextual3D = synthesizeContextual3DScene(prompt, {
                 activeArtifact: _ctx?.request?.activeArtifact,
                 chatHistory: _ctx?.request?.chatHistory,
@@ -239,67 +246,11 @@ export const canvasHandlers: Record<string, ToolHandler> = {
 
             const p = payload && typeof payload === 'object' ? (payload as any) : {};
 
-            let pythonScript = p.pythonGenerator?.sourceCode || p.script || p.pythonScript || p.python || contextual3D.pythonGenerator?.sourceCode;
-            let pythonGlbBase64 = p.pythonGenerator?.glbBase64 || p.glbBase64 || contextual3D.pythonGenerator?.glbBase64;
-            let pythonGlbPath = p.pythonGenerator?.glbPath || p.glbPath || contextual3D.pythonGenerator?.glbPath;
-
-            const isArchPrompt = /\b(?:procedural|building|architecture|palace|palais|hall|wings?|facade|fenestration|mansard|hip\s*roof|gable|plaza|promenade|pedestal|trees?|ivy|botanical|civic|citadel|castle|outpost)\b/i.test(prompt) || /\b(?:procedural|building|architecture|plaza|promenade|civic)\b/i.test(title);
-
-            if (!pythonScript && !pythonGlbBase64 && isArchPrompt) {
-                    pythonScript = `import scratchbox as sb
-
-scene = sb.geometry.Mesh("${(title || 'CivicPlaza').replace(/[^a-zA-Z0-9]/g, '')}")
-
-# 1. Elevated stone promenade pedestal
-promenade = sb.geometry.create_studio_pedestal(radius=30.0, height=0.7, bevel=0.08, segments=64)
-promenade.material = sb.geometry.PbrMaterial.stone_limestone()
-scene.merge(promenade)
-
-# 2. Central municipal hall with Mansard roof & rhythmic window reveals
-central_hall = sb.create_building(
-    width=22.0, depth=14.0, floors=4, floor_height=3.6,
-    ground_floor_height=4.4, plinth_height=0.7,
-    bay_width=3.2, window_width=1.8, window_height=2.2, window_recess_depth=0.26,
-    roof='mansard', roof_pitch_degrees=38.0, roof_overhang=0.8,
-    name='CentralMunicipalPalais'
-)
-central_hall.translate(0, 0.7, -5.0)
-scene.merge(central_hall)
-
-# 3. Flanking East & West wings with Hip roofs
-east_wing = sb.create_building(
-    width=12.0, depth=10.0, floors=3, floor_height=3.4,
-    ground_floor_height=4.0, plinth_height=0.5,
-    bay_width=3.0, window_width=1.6, window_height=2.0, window_recess_depth=0.22,
-    roof='hip', name='EastWing'
-)
-east_wing.translate(-16.0, 0.7, 0.0)
-scene.merge(east_wing)
-
-west_wing = sb.create_building(
-    width=12.0, depth=10.0, floors=3, floor_height=3.4,
-    ground_floor_height=4.0, plinth_height=0.5,
-    bay_width=3.0, window_width=1.6, window_height=2.0, window_recess_depth=0.22,
-    roof='hip', name='WestWing'
-)
-west_wing.translate(16.0, 0.7, 0.0)
-scene.merge(west_wing)
-
-# 4. Botanical Space-Colonization Shade Trees
-tree_coords = [(-8.0, 0.7, 9.0), (8.0, 0.7, 9.0), (-15.0, 0.7, 12.0), (15.0, 0.7, 12.0)]
-for tx, ty, tz in tree_coords:
-    tree = sb.create_tree(attractor_count=130, crown_center=(0, 5, 0), crown_extents=(2.6, 3.8, 2.6))
-    tree.translate(tx, ty, tz)
-    scene.merge(tree)
-
-# 5. Clinging Ivy on East wing foundation
-ivy = sb.create_ivy(root=(-10.0, 0.7, 3.0), obstacle_min=(-16, 0.7, -5), obstacle_max=(-10, 6, 5), max_steps=80)
-scene.merge(ivy)
-
-# 6. Stream binary glTF 2.0
-sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-`;
-            }
+            // Geometry comes only from the model's payload. The prompt synthesizer's template generators drew
+            // a domed tower and trees the model never asked for between the objects it placed.
+            const pythonScript = p.pythonGenerator?.sourceCode || p.script || p.pythonScript || p.python;
+            let pythonGlbBase64 = p.pythonGenerator?.glbBase64 || p.glbBase64;
+            let pythonGlbPath = p.pythonGenerator?.glbPath || p.glbPath;
 
             if (pythonScript && !pythonGlbBase64) {
                 try {
@@ -342,7 +293,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 glbBase64: pythonGlbBase64,
                 glbPath: pythonGlbPath,
                 lastCompiledTimeMs: Date.now()
-            } : (p.pythonGenerator || contextual3D.pythonGenerator);
+            } : p.pythonGenerator;
 
             const cppGen = (cppGlbBase64 || cppSource) ? {
                 enabled: true,
@@ -352,34 +303,37 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 glbPath: cppGlbPath,
                 vertexCount: p.cppGenerator?.vertexCount || 50000,
                 triangleCount: p.cppGenerator?.triangleCount || 30000
-            } : (p.cppGenerator || contextual3D.cppGenerator);
+            } : p.cppGenerator;
 
+            // The title is the model's too; the synthesizer's would name the tab after prompt keywords.
+            title = p.title && p.title !== '4D Scene Workspace' ? p.title : (asString(args.title) || '3D Scene');
+            summary = p.subtitle || summary;
+
+            // Only viewpoint, lighting and render settings may default from the synthesizer. Its meshes,
+            // scripts, operator stack (which replays its generator), geodetic anchor, splat files (picked from a
+            // landmark list), worldBranch and sceneType (which select viewport content) are not carried over;
+            // the payload's own are kept by the spread.
             payload = {
-                ...contextual3D,
                 ...p,
-                worldBranch: p.worldBranch || contextual3D.worldBranch,
-                sceneType: p.sceneType || contextual3D.sceneType,
-                splatUrl: p.splatUrl || contextual3D.splatUrl,
-                splatTilesetUrl: p.splatTilesetUrl || contextual3D.splatTilesetUrl,
-                splatOptions: p.splatOptions || contextual3D.splatOptions,
+                title,
+                subtitle: summary,
+                renderMode: p.renderMode || contextual3D.renderMode,
+                cameraMode: p.cameraMode || contextual3D.cameraMode,
                 customMeshes: [], // STRICT TIER-0 JS PRIMITIVE BAN: No fake mock arrays.
                 environment: p.environment || contextual3D.environment,
                 camera: p.camera || contextual3D.camera,
-                objects: (Array.isArray(p.objects) && p.objects.length > 0) ? p.objects : (contextual3D.objects || []),
+                objects: Array.isArray(p.objects) ? p.objects : [],
                 features: {
-                    ...(contextual3D.features || {}),
+                    ...lightingFeaturesOf(contextual3D.features),
                     ...(p.features || {})
                 },
                 cppGenerator: cppGen,
-                pythonGenerator: pyGenerator,
-                mesh: p.mesh || (contextual3D as any).mesh
+                pythonGenerator: pyGenerator
             };
             const active3D = _ctx?.request?.activeArtifact?.type === '3d-scene' ? _ctx.request.activeArtifact.data as any : undefined;
             payload = active3D
                 ? releaseClayOnMaterialRequest(payload as any, prompt, active3D.renderMode)
                 : applyClayFirstPassBaseline(payload as any, prompt);
-            title = p.title && p.title !== '4D Scene Workspace' ? p.title : (contextual3D.title || title);
-            summary = p.subtitle || contextual3D.subtitle || summary;
         }
 
         const artifactId = `art-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;

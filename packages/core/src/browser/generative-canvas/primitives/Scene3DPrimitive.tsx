@@ -89,8 +89,7 @@ import {
     generateProceduralThreeMeshFromPrompt,
     sculptBuildingFrom3DTiles,
     snapFootprintsToTerrain,
-    inspectSceneMeshTopology,
-    synthesizeContextual3DScene
+    inspectSceneMeshTopology
 } from '../procedural-3d-synthesizer';
 import {
     createAtmosphericSkyDome as createAtmosphericSkyDomeModule,
@@ -132,7 +131,7 @@ import { syncTilesLayer, snapGroupFiguresToGround } from './scene3d/syncTilesLay
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
 import { syncAtmosphere } from './scene3d/syncAtmosphere';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
-import { syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
+import { hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
 import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCustomMeshes';
@@ -623,6 +622,7 @@ export const executeDynamicThreeScript = (
 
 import { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import { NativeSpatialBridge } from '../../../common/spatial/NativeSpatialBridge';
+import { loadServedGeneratorGlb } from '../../../common/strip-embedded-glb';
 import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussianSplatMesh';
 
 // ==========================================
@@ -952,30 +952,6 @@ export class InHouseSplatViewer implements ISplatViewer {
         this.rawGaussians = [];
         this.sortedIndices = null;
     }
-}
-
-/**
- * Checks whether the incoming Scene3DData already possesses real geometry (meshes,
- * compiled/synthesized C++ or Python GLB buffers, source generators, splats, or 3D object URIs).
- * If false, the viewport universally auto-synthesizes rich contextual PBR meshes to guarantee
- * a fully populated, usable 3D scene artifact.
- */
-export function hasRealSceneGeometry(scene: Scene3DData | undefined): boolean {
-    if (!scene) return false;
-    if (scene.customMeshes && scene.customMeshes.length > 0) return true;
-    if (scene.cppGenerator?.glbBase64 || (scene.cppGenerator?.sourceCode && scene.cppGenerator.sourceCode.trim().length > 0)) return true;
-    if (scene.pythonGenerator?.glbBase64 || (scene.pythonGenerator?.sourceCode && scene.pythonGenerator.sourceCode.trim().length > 0)) return true;
-    if (scene.splatUrl) return true;
-    if (scene.customScript || scene.code) return true;
-    if (scene.objects && scene.objects.some(o => {
-        const uri = o.content?.durableUri;
-        if (!uri) return false;
-        if (uri.startsWith('internal:')) return false;
-        return o.content?.type === 'gaussian-splat' || /\.(glb|gltf|splat|spz)($|\?)/i.test(uri);
-    })) {
-        return true;
-    }
-    return false;
 }
 
 /** True when a scene object already loads the generator's output file (objects[].content.durableUri). */
@@ -1640,17 +1616,9 @@ int main(int argc, char** argv) {
                 /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data.worldBranch || '') ||
                 (data.objects && data.objects.some(o => /car|vehicle|automobile/i.test(o.id || '') || /car|vehicle|automobile/i.test(o.content?.durableUri || '') || /car|vehicle|automobile/i.test(o.content?.mimeType || '')));
 
-            let effectiveCustomMeshes = data.customMeshes;
-            let effectiveCamera = data.camera;
-            let effectiveEnvironment = data.environment;
+            // A scene shows only the geometry its data holds. Synthesizing meshes from the title rebuilt a
+            // keyword template (an "outpost" of towers, solar arrays and conifers) next to the real objects.
             let effectiveWorldBranch = data.worldBranch;
-
-            if (!hasRealSceneGeometry(data)) {
-                const synthesized = synthesizeContextual3DScene(data.title || 'Interactive 3D Scene');
-                effectiveCustomMeshes = synthesized.customMeshes;
-                if (!effectiveCamera) effectiveCamera = synthesized.camera;
-                if (!effectiveEnvironment) effectiveEnvironment = synthesized.environment;
-            }
 
             if (isVehicleTheme && effectiveWorldBranch && /city|urban|street/i.test(effectiveWorldBranch)) {
                 effectiveWorldBranch = 'studio/showroom';
@@ -1662,14 +1630,14 @@ int main(int argc, char** argv) {
                 objects: isVehicleTheme && (!data.objects || data.objects.some(o => o.content?.durableUri === 'internal:plane')) ? [] : (data.objects || []),
                 sceneType: isVehicleTheme ? 'custom' : data.sceneType,
                 worldBranch: effectiveWorldBranch,
-                camera: effectiveCamera || { position: [15, 12, 15], target: [0, 0, 0] },
-                environment: effectiveEnvironment || { skybox: 'studio', lighting: 'studio', ground: true },
+                camera: data.camera || { position: [15, 12, 15], target: [0, 0, 0] },
+                environment: data.environment || { skybox: 'studio', lighting: 'studio', ground: true },
                 features: data.features,
                 customScript: data.customScript || data.code,
                 pythonGenerator: data.pythonGenerator,
                 cppGenerator: data.cppGenerator,
                 shaders: data.shaders,
-                customMeshes: effectiveCustomMeshes,
+                customMeshes: data.customMeshes,
                 timeline: data.timeline,
                 animation: data.animation,
                 geoAnchor: data.geoAnchor,
@@ -1990,14 +1958,14 @@ int main(int argc, char** argv) {
         hasActiveScript,
         has3DTiles,
         hasCustomMeshes: Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0,
-        hasNonFallbackObjects: Array.isArray(sceneData.objects) && sceneData.objects.length > 0 && !sceneData.objects.some(o => o.content?.durableUri === 'internal:mesh'),
+        hasNonFallbackObjects: hasNonFallbackObjectContent(sceneData),
         hasCppGenerator: !!sceneData.cppGenerator?.glbBase64 || !!(sceneData.cppGenerator?.sourceCode && sceneData.cppGenerator.sourceCode.trim().length > 0),
         hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64 || !!(sceneData.pythonGenerator?.sourceCode && sceneData.pythonGenerator.sourceCode.trim().length > 0),
         selectedShape,
         sculptWireframe: !!sculptSettings.wireframeOverlay
     }), [
         sceneData.sceneType, sceneData.title, worldBranch, isAirplane, sceneData.features?.contrails, hasActiveScript,
-        has3DTiles, sceneData.customMeshes, sceneData.objects,
+        has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.splatUrl, sceneData.splatTilesetUrl,
         sceneData.cppGenerator?.glbBase64, sceneData.cppGenerator?.sourceCode,
         sceneData.pythonGenerator?.glbBase64, sceneData.pythonGenerator?.sourceCode,
         selectedShape, sculptSettings.wireframeOverlay
@@ -2628,31 +2596,33 @@ int main(int argc, char** argv) {
         };
     }, [wantsWasmMesh, renderMode]);
 
-    // ---- 5a-bis. Auto-compile Procedural Python Script if GLB missing ----
+    // ---- 5a-bis. Load or rebuild the Procedural Python Script's GLB if missing ----
     React.useEffect(() => {
         const pyGen = sceneData.pythonGenerator;
         if (!pyGen?.sourceCode || pyGen.glbBase64) return;
         // Saved scenes drop the base64 copy and keep the model as a file object; that object draws it.
         if (generatorFileIsObject(pyGen, sceneData.objects)) return;
         let isCancelled = false;
-        fetch('/3d/python/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ script: pyGen.sourceCode })
-        })
-            .then(res => res.json())
-            .then(resData => {
+        const adopt = (patch: { glbBase64: string; glbPath?: string; lastCompiledTimeMs?: number }) => setSceneData(prev => ({
+            ...prev,
+            pythonGenerator: { ...prev.pythonGenerator, ...pyGen, ...patch }
+        }));
+        // Or they keep it as the runner's output file, served by the app; rebuild from the source only when it is gone.
+        loadServedGeneratorGlb(pyGen.glbPath)
+            .then(async saved => {
+                if (isCancelled) return;
+                if (saved) {
+                    adopt({ glbBase64: saved });
+                    return;
+                }
+                const res = await fetch('/3d/python/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ script: pyGen.sourceCode })
+                });
+                const resData = await res.json();
                 if (isCancelled || !resData?.success || !resData?.glbBase64) return;
-                setSceneData(prev => ({
-                    ...prev,
-                    pythonGenerator: {
-                        ...prev.pythonGenerator,
-                        ...pyGen,
-                        glbBase64: resData.glbBase64,
-                        glbPath: resData.glbPath,
-                        lastCompiledTimeMs: Date.now()
-                    }
-                }));
+                adopt({ glbBase64: resData.glbBase64, glbPath: resData.glbPath, lastCompiledTimeMs: Date.now() });
             })
             .catch(err => {
                 console.warn('[Scene3DPrimitive] Background Python compile error:', err);

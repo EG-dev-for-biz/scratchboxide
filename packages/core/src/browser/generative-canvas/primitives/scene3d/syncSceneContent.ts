@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import type { BakedGaussian } from '../../../../common/geospatial-4d-protocol';
+import type { Scene3DData } from '../../canvas-types';
 import { createSculptableGeometry } from '../../services/mesh-sculpting-engine';
 import { createArticulatedAircraft } from '../../services/mesh/aircraft';
 import type { TerrainManager } from '../../services/TerrainManager';
@@ -30,7 +31,10 @@ export interface SceneContentInput {
     hasActiveScript: boolean;
     has3DTiles: boolean;
     hasCustomMeshes: boolean;
-    /** Objects exist and are not merely the `internal:mesh` fallback placeholder. */
+    /**
+     * The scene loads content of its own: objects other than the `internal:mesh` fallback placeholder, or a splat
+     * (splatUrl / splatTilesetUrl, which the viewport loads as an object). See hasNonFallbackObjectContent.
+     */
     hasNonFallbackObjects: boolean;
     hasCppGenerator?: boolean;
     hasPythonGenerator?: boolean;
@@ -48,6 +52,12 @@ export interface SceneContentFactories {
         dispose?: () => void;
         error?: string | null;
     } | null;
+}
+
+/** True when the scene loads content of its own, so no fallback content (sculpt mesh, aircraft) is drawn for it. */
+export function hasNonFallbackObjectContent(scene: Pick<Scene3DData, 'objects' | 'splatUrl' | 'splatTilesetUrl'>): boolean {
+    if (scene.splatUrl || scene.splatTilesetUrl) return true;
+    return Array.isArray(scene.objects) && scene.objects.length > 0 && !scene.objects.some(o => o.content?.durableUri === 'internal:mesh');
 }
 
 export function classifySceneContent(input: SceneContentInput): 'script' | 'tiles' | 'aircraft' | 'custom-meshes' | 'objects' | 'spatial' {
@@ -148,79 +158,10 @@ export function syncSceneContent(
         }
     }
 
-    // Splat viewer (procedural observation only for splat/gaussian branches)
+    // Splat viewer. A splat scene's file (splatUrl) is loaded as a scene object; a splat world with no file
+    // and no objects shows nothing rather than a made-up colonnade and dome of splats.
     const splatViewer = factories.createSplatViewer();
     scene.add(splatViewer.group);
-    if ((worldBranch.includes('splat') || worldBranch.includes('gaussian')) && !input.hasNonFallbackObjects) {
-        const proceduralSplats: BakedGaussian[] = [];
-        // Colonnade pillars (16 pillars around circle radius 4.5m)
-        const pillarCount = 16;
-        for (let p = 0; p < pillarCount; p++) {
-            const angle = (p / pillarCount) * Math.PI * 2;
-            const px = Math.cos(angle) * 4.5;
-            const pz = Math.sin(angle) * 4.5;
-            for (let y = 0; y <= 5.0; y += 0.08) {
-                for (let r = 0; r < 6; r++) {
-                    const ra = (r / 6) * Math.PI * 2;
-                    proceduralSplats.push({
-                        position: [px + Math.cos(ra) * 0.28, y, pz + Math.sin(ra) * 0.28],
-                        scale: [0.08, 0.08, 0.08],
-                        quaternion: [0, 0, 0, 1],
-                        colorRgb: [220 + Math.floor(Math.random() * 25), 210 + Math.floor(Math.random() * 25), 195 + Math.floor(Math.random() * 25)],
-                        opacity: 0.85
-                    });
-                }
-            }
-        }
-        // Entablature and dome arch ring
-        for (let a = 0; a < 250; a++) {
-            const angle = (a / 250) * Math.PI * 2;
-            for (let dy = 5.0; dy <= 5.6; dy += 0.1) {
-                proceduralSplats.push({
-                    position: [Math.cos(angle) * 4.5, dy, Math.sin(angle) * 4.5],
-                    scale: [0.12, 0.1, 0.12],
-                    quaternion: [0, 0, 0, 1],
-                    colorRgb: [230, 222, 205],
-                    opacity: 0.9
-                });
-            }
-        }
-        // Hemispherical dome
-        for (let i = 0; i < 3000; i++) {
-            const u = Math.random();
-            const v = Math.random();
-            const theta = u * 2.0 * Math.PI;
-            const phi = Math.acos(1.0 - v);
-            const rad = 4.5;
-            proceduralSplats.push({
-                position: [
-                    rad * Math.sin(phi) * Math.cos(theta),
-                    5.6 + rad * Math.cos(phi),
-                    rad * Math.sin(phi) * Math.sin(theta)
-                ],
-                scale: [0.12, 0.12, 0.12],
-                quaternion: [0, 0, 0, 1],
-                colorRgb: [210 + Math.floor(Math.random() * 30), 200 + Math.floor(Math.random() * 30), 180 + Math.floor(Math.random() * 30)],
-                opacity: 0.8
-            });
-        }
-        // Stepped stylobate base
-        for (let step = 0; step < 3; step++) {
-            const rStep = 4.8 + step * 0.4;
-            const yStep = -step * 0.18;
-            for (let a = 0; a < 200; a++) {
-                const angle = (a / 200) * Math.PI * 2;
-                proceduralSplats.push({
-                    position: [Math.cos(angle) * rStep, yStep, Math.sin(angle) * rStep],
-                    scale: [0.15, 0.08, 0.15],
-                    quaternion: [0, 0, 0, 1],
-                    colorRgb: [180 + Math.floor(Math.random() * 20), 175 + Math.floor(Math.random() * 20), 165 + Math.floor(Math.random() * 20)],
-                    opacity: 0.9
-                });
-            }
-        }
-        splatViewer.loadSplatObservation(proceduralSplats);
-    }
 
     // Sculptable focal mesh (only for unconfigured blank general scenes with no procedural content)
     const hasGenerators = input.hasCppGenerator || input.hasPythonGenerator;

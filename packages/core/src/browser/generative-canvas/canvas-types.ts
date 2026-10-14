@@ -31,21 +31,66 @@ import type { VideoTimelineData, TimelineTrack, KeyframeEasing } from './service
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
 
-export type PrimitiveType =
-    | 'metric-dashboard'
-    | 'kanban-board'
-    | 'interactive-form'
-    | 'mind-map'
-    | 'checklist'
-    | 'markdown-document'
-    | 'node-graph'
-    | 'skills-hub'
-    | 'mcp-hub'
-    | 'live-code-sandbox'
-    | '3d-scene'
-    | 'interactive-browser'
-    | 'browser'
-    | 'video-timeline';
+/** Every primitive the canvas can render: the contract for a canvas artifact's `type`. */
+export const PRIMITIVE_TYPES = [
+    'metric-dashboard',
+    'kanban-board',
+    'interactive-form',
+    'mind-map',
+    'checklist',
+    'markdown-document',
+    'node-graph',
+    'skills-hub',
+    'mcp-hub',
+    'live-code-sandbox',
+    '3d-scene',
+    'interactive-browser',
+    'browser',
+    'video-timeline'
+] as const;
+
+export type PrimitiveType = typeof PRIMITIVE_TYPES[number];
+
+/** Other names models and tool calls use for a primitive, each mapped to the primitive's own type. */
+const PRIMITIVE_TYPE_ALIASES: Readonly<Record<string, PrimitiveType>> = {
+    'action-checklist': 'checklist',
+    'skills-manager': 'skills-hub',
+    'rendered-document': 'markdown-document',
+    'document': 'markdown-document',
+    'flow-graph': 'node-graph',
+    'graph': 'node-graph',
+    'metrics': 'metric-dashboard',
+    'dashboard': 'metric-dashboard',
+    'kanban': 'kanban-board',
+    'form': 'interactive-form',
+    'sandbox': 'live-code-sandbox',
+    'code-sandbox': 'live-code-sandbox',
+    'playground': 'live-code-sandbox',
+    'code-playground': 'live-code-sandbox',
+    '3d': '3d-scene',
+    'scene-3d': '3d-scene',
+    'spatial-scene': '3d-scene',
+    '3d_scene': '3d-scene',
+    '3d-world': '3d-scene',
+    'r3f-scene': '3d-scene',
+    'video': 'video-timeline',
+    'timeline': 'video-timeline',
+    'video-editor': 'video-timeline',
+    'nle': 'video-timeline',
+    'video_timeline': 'video-timeline',
+    'web-browser': 'interactive-browser'
+};
+
+/**
+ * The primitive type a name refers to: the name itself when it is a primitive type, the primitive an alias
+ * names, else undefined. Only exact names match (after trimming and lower-casing); nothing is inferred.
+ */
+export function normalizePrimitiveType(name: unknown): PrimitiveType | undefined {
+    if (typeof name !== 'string') return undefined;
+    const key = name.trim().toLowerCase();
+    if ((PRIMITIVE_TYPES as readonly string[]).includes(key)) return key as PrimitiveType;
+    return Object.prototype.hasOwnProperty.call(PRIMITIVE_TYPE_ALIASES, key) ? PRIMITIVE_TYPE_ALIASES[key] : undefined;
+}
 
 export type AccentColor = 'blue' | 'indigo' | 'emerald' | 'amber' | 'purple' | 'rose' | 'cyan';
 

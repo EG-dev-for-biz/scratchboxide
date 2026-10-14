@@ -406,13 +406,15 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         }
     }
 
-    const build3dPython = path.resolve(process.cwd(), 'build', '3d-python');
-    const repoBuild3dPython = path.resolve(process.cwd(), '..', 'build', '3d-python');
-    if (fs.existsSync(build3dPython)) {
-        app.use('/build/3d-python', express.static(build3dPython));
-    }
-    if (fs.existsSync(repoBuild3dPython)) {
-        app.use('/build/3d-python', express.static(repoBuild3dPython));
+    // The Python runner's output files. Saved scenes load their generator's model from here, so these are
+    // served whether or not the directory exists yet: the runner creates it on its first run, after startup,
+    // and a cleaned build directory comes back the same way. express.static looks files up per request and
+    // passes a missing one on (the viewport then rebuilds the model from the generator's source).
+    for (const dir of [
+        path.resolve(process.cwd(), 'build', '3d-python'),
+        path.resolve(process.cwd(), '..', 'build', '3d-python')
+    ]) {
+        app.use('/build/3d-python', express.static(dir));
     }
 
     // Trigger asynchronous background asset hydration for showcase demos. Not under the test runner
