@@ -111,7 +111,7 @@ When initializing 3D viewports, canvas scenes, lighting, or atmosphere:
    - The 3D viewport, scene synthesizer, and rendering stack must **never** inject default atmospheric skyboxes, atmospheric domes, volumetric clouds, or terrain cloud shadows.
    - Unconfigured scenes default strictly to a clean, neutral studio environment (`skybox: 'studio'`, `lighting: 'studio'`).
 3. **Explicit Opt-In Gate**:
-   - Atmospheric scattering, diurnal solar ephemeris, depth fog, and volumetric clouds are only instantiated when the prompt or schema contract explicitly opts into them (`/sky|atmosphere|clouds?|sunset|dusk|dawn|weather/i`).
+   - Atmospheric scattering, diurnal solar ephemeris, depth fog, and volumetric clouds are only instantiated when the prompt or schema contract explicitly opts into them (`/sky|atmosphere|clouds?|sunset|dusk|dawn|weather|god\s*rays?/i`; god rays are atmospheric scattering, so asking for them opts in).
 
 ### Rule: Universal First-Request 3D Staging Invariant (Grey Clay Void, Explicit Location Grounding & Follow-up Suggestions)
 When the user requests a 3D scene, model, vehicle, structure, or object:

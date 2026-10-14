@@ -2094,7 +2094,8 @@ function _synthesizeRawContextual3DSceneInner(
     const docTitle = context?.docTitle || activeDoc?.title || '';
     const existingFeatures = (context?.activeArtifact?.data as Scene3DData)?.features;
 
-    const explicitAtmosphereRequested = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective|haze|cloud\s*shadow|volumetric\s*clouds?)\b/i.test(prompt);
+    // God rays are atmospheric scattering, so asking for them opts in (as in scene3d-clay-baseline).
+    const explicitAtmosphereRequested = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective|haze|cloud\s*shadow|volumetric\s*clouds?|god\s*rays?|crepuscular|light\s*shafts?)\b/i.test(prompt);
     const hasAtmosphere = explicitAtmosphereRequested || !!existingFeatures?.atmosphericScattering;
     const hasGodRays = hasAtmosphere && (/god\s*ray|crepuscular|light\s*shaft|volumetric/i.test(prompt) || !!existingFeatures?.godRays);
     const isSunset = hasAtmosphere && /sunset|golden\s*hour|dusk/i.test(prompt);
