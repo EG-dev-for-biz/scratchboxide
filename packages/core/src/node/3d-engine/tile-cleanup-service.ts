@@ -128,7 +128,8 @@ export class PhotorealTileCleanupService {
             fs.mkdirSync(outputDir, { recursive: true });
         }
 
-        const compileCmd = `clang++ -std=c++20 -O3 -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}"`;
+        // -lz: scratchbox_png.hpp (pulled in via the glTF scene writer) decodes PNG with zlib's uncompress().
+        const compileCmd = `clang++ -std=c++20 -O3 -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}" -lz`;
         await execAsync(compileCmd);
         return this.binaryPath;
     }
