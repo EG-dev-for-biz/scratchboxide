@@ -72,8 +72,6 @@ async function runCursorStylingComprehensiveTests() {
     // Test 3: Cursor-Grade Side Chat & Tool Step Disclosure
     // -------------------------------------------------------------
     assert.ok(sideChatSource.includes('sb-cursor-mode-pill'), 'Side chat renders Cursor-style mode selection pills');
-    assert.ok(sideChatSource.includes('sb-cursor-indexing-badge'), 'Side chat renders Codebase Indexing status badge');
-    assert.ok(sideChatSource.includes('sb-cursor-rules-badge'), 'Side chat renders Project Rules badge');
     assert.ok(sideChatSource.includes('sb-cursor-tool-step'), 'Side chat renders interactive tool execution steps');
     console.log('  ✓ Test 3 Passed: Cursor-grade AI Side Chat with interactive tool execution steps verified');
 

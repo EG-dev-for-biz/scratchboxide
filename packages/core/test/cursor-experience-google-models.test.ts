@@ -76,12 +76,6 @@ async function runCursorExperienceAndGoogleModelsTests() {
     assert.ok(sideChatSource.includes('sb-cursor-mode-pill'), 'Side chat must render Cursor-style mode selection pills');
     console.log('  ✓ Test 3 Passed: Cursor-style Interaction Mode Switcher (Agent, Ask, Plan) implemented in Side Chat');
 
-    // -------------------------------------------------------------
-    // Test 4: Cursor-style Codebase Indexing & Project Rules Indicator
-    // -------------------------------------------------------------
-    assert.ok(sideChatSource.includes('sb-cursor-indexing-badge'), 'Side chat must render Codebase Indexing status badge');
-    assert.ok(sideChatSource.includes('sb-cursor-rules-badge'), 'Side chat must render Project Rules active badge');
-    console.log('  ✓ Test 4 Passed: Cursor-style Codebase Indexing and Project Rules HUD badges integrated');
 
     // -------------------------------------------------------------
     // Test 5: Interactive Tool Execution Step Badges in Side Chat

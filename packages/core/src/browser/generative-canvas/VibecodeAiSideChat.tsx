@@ -494,10 +494,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                             {/* Studio Interactive Tool Execution Steps */}
                             {!isFirstInit && (
                                 <div className="sb-cursor-tool-steps-group">
-                                    {(msg.steps && msg.steps.length > 0 ? msg.steps : [
-                                        { id: `${msg.id || idx}-step-1`, title: 'Indexed workspace context & project directives', durationFormatted: '94ms', duration: '94ms', details: 'Ingested .scratchbox/rules/*.md, SCRATCHBOX.md, and active canvas state.', status: 'completed' as const },
-                                        { id: `${msg.id || idx}-step-2`, title: `Updated ${activeContextTitle} with verified changes`, durationFormatted: '248ms', duration: '248ms', details: `Synthesized additions and state transitions for ${activeContextTitle}.`, status: 'completed' as const }
-                                    ]).map(step => {
+                                    {(msg.steps || []).map(step => {
                                         const isRunning = step.status === 'running';
                                         const isCompleted = step.status === 'completed' || !step.status;
                                         const isFailed = step.status === 'failed';
@@ -715,8 +712,6 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                         >
                             1 Terminal
                         </button>
-                        <span className="sb-cursor-indexing-badge" title="Project codebase embedded & indexed">● Codebase Indexed</span>
-                        <span className="sb-cursor-rules-badge" title=".scratchbox/rules active">3 Rules Active</span>
                     </div>
                     <button
                         type="button"
