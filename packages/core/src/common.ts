@@ -108,3 +108,6 @@ export * from './common/spatial/UniversalGeographicBridge';
 // DCC Humanoid & FACS Action Units Protocol
 export * from './common/humanoid-dcc-protocol';
 
+
+// Typed pipeline failures (no substituted output)
+export * from './common/errors/pipeline-errors';
