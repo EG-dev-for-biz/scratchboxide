@@ -196,8 +196,12 @@ export function detectRealWorldLocationIntent(
   const isGenericNonGeo = /\b(?:outer space|solar system|planets?|galaxy|orbit(?:ing)?|molecule|molecular|atoms?|quantum|dna|particle simulation|mars|moon|lunar|asteroid|sci-fi|cyberpunk|spacecraft|rover)\b/i.test(prompt);
 
   // Check direct coordinate string pattern (e.g. "37.7955, -122.3937", "[40.7308, -73.9973]", or "lat: 40.7308, lng: -73.9973")
+  // Unlabeled pairs need decimals in both numbers and must not be part of a longer list, so counts like
+  // "10,000 vertices" or RGB triples like "0.55, 0.57, 0.60" are not read as coordinates.
   const cleanCoords = combined.replace(/[\[\]\(\)]/g, ' ');
-  const coordMatch = cleanCoords.match(/(?:lat|latitude)?:?\s*([-+]?[0-9]*\.?[0-9]+)[,\s]+(?:lng|lon|longitude)?:?\s*([-+]?[0-9]*\.?[0-9]+)/i);
+  const labeledMatch = cleanCoords.match(/\b(?:lat|latitude)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)\s*[,;\s]\s*(?:lng|lon|long|longitude)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)/i);
+  const pairMatch = cleanCoords.match(/(?<![\d.,]\s*)([-+]?\d{1,2}\.\d+)\s*,\s*([-+]?\d{1,3}\.\d+)(?![\d.])(?!\s*,\s*[-+]?\d)/);
+  const coordMatch = labeledMatch || pairMatch;
   if (coordMatch) {
     const lat = parseFloat(coordMatch[1]);
     const lng = parseFloat(coordMatch[2]);

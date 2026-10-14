@@ -293,3 +293,26 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
         });
     });
 });
+
+describe('coerceToolArguments unwraps arguments nested under a wrapper key', () => {
+    const decl: ToolDeclaration = {
+        name: 'execute_3d_python_script',
+        description: 'Runs a script',
+        parameters: { type: 'OBJECT', properties: { script: { type: 'STRING' }, description: { type: 'STRING' } }, required: ['script'] }
+    } as ToolDeclaration;
+
+    it('lifts { parameters: { script } } as Gemini sent it, letting nested values win', () => {
+        const args = coerceToolArguments(decl, {
+            description: 'Universal 3D scene execution bus...',
+            parameters: { description: 'A wooden stool', script: 'import scratchbox as sb' }
+        });
+        expect(args).toEqual({ description: 'A wooden stool', script: 'import scratchbox as sb' });
+    });
+
+    it('accepts a JSON-string wrapper and leaves ordinary or declared-wrapper calls alone', () => {
+        expect(coerceToolArguments(decl, { arguments: '{"script":"x"}' })).toEqual({ script: 'x' });
+        expect(coerceToolArguments(decl, { script: 'y' })).toEqual({ script: 'y' });
+        const withDeclaredWrapper = { ...decl, parameters: { type: 'OBJECT', properties: { parameters: { type: 'OBJECT' } } } } as ToolDeclaration;
+        expect(coerceToolArguments(withDeclaredWrapper, { parameters: { script: 'z' } })).toEqual({ parameters: { script: 'z' } });
+    });
+});

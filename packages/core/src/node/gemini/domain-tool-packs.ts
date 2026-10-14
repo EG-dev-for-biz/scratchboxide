@@ -296,6 +296,28 @@ export function resolveDomainToolPacks(options: ResolveToolPacksOptions): {
  * - Coerces string booleans ("true"/"false") to real booleans.
  * - Filters out unwanted null/undefined values.
  */
+/**
+ * Models sometimes nest the real arguments one level down, e.g. { parameters: { script } }, which
+ * reached handlers as a call with no script. Lift them when the wrapper is not a declared parameter.
+ */
+function unwrapNestedArguments(rawArgs: Record<string, unknown>, schemaProps: Record<string, unknown> | undefined): Record<string, unknown> {
+    if (!schemaProps) {
+        return { ...rawArgs };
+    }
+    for (const wrapper of ['parameters', 'arguments', 'args']) {
+        let nested = rawArgs[wrapper];
+        if (wrapper in schemaProps || nested === undefined) continue;
+        if (typeof nested === 'string') {
+            try { nested = JSON.parse(nested); } catch { continue; }
+        }
+        if (nested && typeof nested === 'object' && !Array.isArray(nested) && Object.keys(nested).some(k => k in schemaProps)) {
+            const { [wrapper]: _wrapper, ...rest } = rawArgs;
+            return { ...rest, ...(nested as Record<string, unknown>) };
+        }
+    }
+    return { ...rawArgs };
+}
+
 export function coerceToolArguments(
     declaration: ToolDeclaration | undefined,
     rawArgs: Record<string, unknown> | undefined
@@ -304,8 +326,8 @@ export function coerceToolArguments(
         return {};
     }
 
-    const coerced: Record<string, unknown> = { ...rawArgs };
     const schemaProps = (declaration?.parameters as any)?.properties;
+    const coerced: Record<string, unknown> = unwrapNestedArguments(rawArgs, schemaProps);
 
     for (const [key, val] of Object.entries(coerced)) {
         if (val === null || val === undefined) {

@@ -158,10 +158,22 @@ export function extractGlbAabb(glbBuffer: Buffer): GlbAabbBounds | null {
     return extractGlbAnalysis(glbBuffer).bounds;
 }
 
+/**
+ * Without a reference the model guesses common names (mesh.clone(), mesh.transform, a materials
+ * module) that do not exist, and every guess costs a failed tool call. Every name here is checked
+ * against the real package by python-3d-api-reference.test.ts.
+ */
+export const PYTHON_3D_API_REFERENCE = `Verified scratchbox API. Only use names listed here or in the system instructions; do not guess others.
+- Primitives (each returns a Mesh and accepts material=): sb.create_box(width=, height=, depth=) or sb.create_box(size=(w, h, d)); sb.create_beveled_box(size=(w, h, d), bevel=0.02); sb.create_cylinder(radius=, height=, segments=24); sb.create_sphere(radius=, rings=16, sectors=32); sb.create_cone(radius=, height=); sb.create_plane(width=, height=); sb.create_lathe(profile, segments=32); sb.create_loft(slices); sb.sweep_curve_profile(path, profile_dimensions=(w, h)); sb.revolve_harmonic_solid(profile_curve=, harmonic_lobe_count=0); sb.replicate_metric_array(guide_points=, pitch_meters=, seed_geometry=).
+- Mesh methods (modify the mesh in place): translate(x, y, z); rotate_x(deg); rotate_y(deg); rotate_z(deg); scale(s) or scale(x, y, z); append(other); merge(other); subtract(other); set_material(mat); subdivide(iterations); taper(factor, axis); bend(angle_deg, radius); twist(angle_deg, axis); bulge(); displace(frequency, amplitude); recompute_smooth_normals(). Properties, read without parentheses: vertex_count, triangle_count, bounds (with .min and .max).
+- Meshes have no clone(), copy() or transform. To duplicate: dup = sb.geometry.Mesh(); dup.append(mesh), then position it with translate, rotate_x/y/z and scale.
+- Materials: sb.PbrMaterial(base_color=(r, g, b, a), roughness=, metallic=) or presets such as sb.PbrMaterial.clay(), sb.PbrMaterial.wood_oak(), sb.PbrMaterial.chrome(), sb.PbrMaterial.glass_tinted(). There is no separate materials module.
+- Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.`;
+
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Universal 3D scene execution bus. Executes a procedural Python 3 script using the Scratchbox 3D Engine (import scratchbox as sb) for both procedural world synthesis and real-world locations. Generates architecture (mansard roofs, townhouses, facades), nature (space colonization trees, foliage), and procedural geometry. When a location is specified, passes Google 3D tile data through a shape extraction pipeline (separating terrain, architecture, and vegetation anchors like SB-Veggie) to allow procedural augmentation and populating.',
+        description: 'Universal 3D scene execution bus. Executes a procedural Python 3 script using the Scratchbox 3D Engine (import scratchbox as sb) for both procedural world synthesis and real-world locations. Generates architecture (mansard roofs, townhouses, facades), nature (space colonization trees, foliage), and procedural geometry. When a location is specified, passes Google 3D tile data through a shape extraction pipeline (separating terrain, architecture, and vegetation anchors like SB-Veggie) to allow procedural augmentation and populating.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
