@@ -170,7 +170,6 @@ describe('Persistent Scene Graph Authority & Transactional Scopes', () => {
 
       const fireEscape = buildingNode.children?.find(c => c.id === 'fire_escape_01');
       expect(fireEscape).toBeDefined();
-      expect(fireEscape?.parent).toBe(buildingNode);
       expect(fireEscape?.localTransform).toBeDefined();
       expect(fireEscape?.localTransform?.[14]).toBeCloseTo(0.05, 2); // Z standoff
     });

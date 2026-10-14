@@ -258,7 +258,7 @@ export class SceneGraphMutationService {
         }
 
         // Capture snapshot before mutation for rollback
-        const snapshotBefore = JSON.stringify(targetNode);
+        const snapshotBefore = serializeNodeSnapshot(targetNode);
 
         try {
             switch (delta.operation) {
@@ -439,11 +439,14 @@ export class SceneGraphMutationService {
         if (!root) return false;
 
         try {
-            const restoredNode: UniversalSpatialNode = JSON.parse(record.snapshotBefore);
+            const restoredNode = parseNodeSnapshot(record.snapshotBefore);
             const target = findSpatialNodeById(root, restoredNode.id);
             if (target) {
                 Object.assign(target, restoredNode);
+                // Flag the subtree for re-evaluation, but a rollback returns the node to its earlier version.
                 markNodeDirty(root, target.id);
+                target.version = restoredNode.version;
+                target.contentHash = restoredNode.contentHash;
             }
             this.commitLog.splice(recordIdx, 1);
             return true;
@@ -472,4 +475,14 @@ export class SceneGraphMutationService {
         clearDirtyFlags(root);
         return dirtyNodes.length;
     }
+}
+
+/** JSON snapshot that keeps typed arrays (localTransform is a Float32Array) intact through a rollback. */
+function serializeNodeSnapshot(node: UniversalSpatialNode): string {
+    return JSON.stringify(node, (_key, value) => (value instanceof Float32Array ? { __float32: Array.from(value) } : value));
+}
+
+function parseNodeSnapshot(snapshot: string): UniversalSpatialNode {
+    return JSON.parse(snapshot, (_key, value) =>
+        value && typeof value === 'object' && Array.isArray(value.__float32) ? Float32Array.from(value.__float32) : value);
 }
