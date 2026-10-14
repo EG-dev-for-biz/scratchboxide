@@ -10,27 +10,29 @@
  * 5. TaskCapabilityResolver routing for local organic props
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { LocalSf3DService } from '../src/node/3d-engine/local-sf3d-service';
 import { localSf3DHandlers } from '../src/node/gemini/tools/local-sf3d-tools';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 
 describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
-    const testOutputDir = path.resolve(__dirname, '../../build/test-sf3d');
+    // Outputs go to a temp dir (this used to resolve to packages/build/test-sf3d inside the repo).
+    const testOutputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-local-sf3d-'));
     const dummyImagePath = path.join(testOutputDir, 'test_chanterelle.png');
     const outputGlbPath = path.join(testOutputDir, 'test_chanterelle_prop.glb');
 
-    it('1. Executes LocalSf3DService with no_pbr and verifies binary glTF 2.0 output', async () => {
-        if (!fs.existsSync(testOutputDir)) {
-            fs.mkdirSync(testOutputDir, { recursive: true });
-        }
-        // Write a minimal dummy 1x1 PNG if not present
-        if (!fs.existsSync(dummyImagePath)) {
-            fs.writeFileSync(dummyImagePath, Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082', 'hex'));
-        }
+    beforeAll(() => {
+        // Minimal dummy 1x1 PNG input
+        fs.writeFileSync(dummyImagePath, Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082', 'hex'));
+    });
+    afterAll(() => {
+        fs.rmSync(testOutputDir, { recursive: true, force: true });
+    });
 
+    it('1. Executes LocalSf3DService with no_pbr and verifies binary glTF 2.0 output', async () => {
         const service = LocalSf3DService.getInstance();
         const result = await service.generateOrganicProp({
             imagePath: dummyImagePath,
@@ -70,6 +72,7 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
 
         const toolRes = await handler({
             imagePath: dummyImagePath,
+            outputGlbPath: path.join(testOutputDir, 'test_coral_prop.glb'),
             noPbr: true,
             targetScaleMeters: 0.25,
             groundCut: true,
@@ -81,12 +84,14 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         expect(toolRes.resultPayload.mode).toBe('no_pbr_clay');
         expect(toolRes.resultPayload.targetScaleMeters).toBe(0.25);
 
-        // Verify 3d-scene artifact contract
-        expect(toolRes.artifact).toBeDefined();
-        expect(toolRes.artifact?.type).toBe('3d-scene');
-        expect(toolRes.artifact?.data.renderMode).toBe('clay');
-        expect(toolRes.artifact?.data.environment.lighting).toBe('studio');
-        expect(toolRes.artifact?.data.camera).toBeDefined();
+        // Verify 3d-scene artifact contract. Since f05f9f2 the handler returns a ToolHandlerOutcome and the
+        // artifact lives in resultPayload, which is where streaming.ts mounts it from.
+        const artifact = (toolRes.resultPayload as any).artifact;
+        expect(artifact).toBeDefined();
+        expect(artifact?.type).toBe('3d-scene');
+        expect(artifact?.data.renderMode).toBe('clay');
+        expect(artifact?.data.environment.lighting).toBe('studio');
+        expect(artifact?.data.camera).toBeDefined();
     });
 
     it('3. Routes local organic prop requests to Tier 1 native LocalSf3DService in TaskCapabilityResolver', () => {
@@ -104,7 +109,10 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
     it('4. Rejects invalid inputs gracefully with structured error', async () => {
         const handler = localSf3DHandlers.generate_local_sf3d_organic_prop;
         const res = await handler({}, {} as any);
-        expect(res.status).toBe('error');
-        expect(res.summary).toContain('Missing required argument: imagePath');
+        // ToolHandlerOutcome contract (f05f9f2): outcome status 'failed', payload status 'error'.
+        expect(res.status).toBe('failed');
+        expect(res.summaryResult).toContain('Missing required argument: imagePath');
+        expect(res.resultPayload.status).toBe('error');
+        expect(res.resultPayload.summary).toContain('Missing required argument: imagePath');
     });
 });

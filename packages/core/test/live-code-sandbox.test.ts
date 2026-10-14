@@ -1,4 +1,4 @@
-import { test } from 'vitest';
+import { test, afterAll } from 'vitest';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
@@ -8,16 +8,31 @@ import { test } from 'vitest';
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-(global as any).window = global;
-(global as any).localStorage = {
+// Browser globals for the canvas modules. Node >= 21 defines globalThis.navigator as a getter-only
+// accessor (and Node has its own Event/CustomEvent), so plain assignment throws; define each one as a
+// configurable data property and put the original descriptors back after the suite.
+const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
+function setGlobal(name: string, value: unknown): void {
+    if (!savedGlobals.has(name)) savedGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { value, configurable: true, writable: true, enumerable: true });
+}
+afterAll(() => {
+    for (const [name, desc] of savedGlobals) {
+        if (desc) Object.defineProperty(globalThis, name, desc);
+        else delete (globalThis as any)[name];
+    }
+});
+
+setGlobal('window', global);
+setGlobal('localStorage', {
     getItem: () => null,
     setItem: () => {}
-};
-(global as any).navigator = {
+});
+setGlobal('navigator', {
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
     platform: 'MacIntel'
-};
-(global as any).document = {
+});
+setGlobal('document', {
     createElement: () => ({
         classList: {
             add: () => {},
@@ -31,15 +46,17 @@ import { test } from 'vitest';
     documentElement: {
         style: {}
     },
-    queryCommandSupported: () => false
-};
+    queryCommandSupported: () => false,
+    // getEffectiveCspNonce (e1eba0d) looks for a CSP nonce in the host document; this one has none.
+    querySelector: () => null
+});
 class MockElement {}
-(global as any).Element = MockElement;
-(global as any).HTMLElement = MockElement;
+setGlobal('Element', MockElement);
+setGlobal('HTMLElement', MockElement);
 class MockEvent {}
-(global as any).Event = MockEvent;
-(global as any).DragEvent = MockEvent;
-(global as any).CustomEvent = MockEvent;
+setGlobal('Event', MockEvent);
+setGlobal('DragEvent', MockEvent);
+setGlobal('CustomEvent', MockEvent);
 
 if (typeof require !== 'undefined' && require.extensions) {
     require.extensions['.css'] = () => {};

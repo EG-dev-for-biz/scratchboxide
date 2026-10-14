@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs-extra';
+import * as os from 'os';
 import * as path from 'path';
 import {
     TextureCompressionService,
@@ -16,13 +17,23 @@ import {
     type TextureMapType
 } from '../src/node/texture-compression-service';
 import { encodePng } from '../src/node/texture-processing';
+import { findBinary, HOW_TO, requireAll, requireAssets, withReason, type Requirement } from './helpers/requirements';
+
+/** The service spawns getCwebpPath() (SCRATCHBOX_CWEBP_PATH, Homebrew/usr paths, else `cwebp` on PATH). */
+const cwebp: Requirement = findBinary(TextureCompressionService.getCwebpPath()) !== null
+    ? { ok: true, reason: '' }
+    : { ok: false, reason: `\`cwebp\` not found (set SCRATCHBOX_CWEBP_PATH or ${HOW_TO.cwebp})` };
+
+const foliageAsset = requireAssets(['public/models/colosseum_foliage_texture_hero_1k_albedo.png'], 'scripts/apply_colosseum_1k_pbr_suite.cjs');
+const stoneMapsAsset = requireAssets(['public/models/colosseum_stone_texture_39_1k_normal.jpg', 'public/models/colosseum_stone_texture_39_1k_orm.jpg'], 'scripts/apply_colosseum_1k_pbr_suite.cjs');
+const colosseumGlbAsset = requireAssets(['public/models/colosseum_rome_1k_pbr.glb'], 'scripts/apply_colosseum_1k_pbr_suite.cjs');
 
 describe('Texture Compression Engine (WebP & EXT_texture_webp)', () => {
     const colosseumFoliageAlbedo = path.resolve(__dirname, '../../../public/models/colosseum_foliage_texture_hero_1k_albedo.png');
     const colosseumStoneNormal = path.resolve(__dirname, '../../../public/models/colosseum_stone_texture_39_1k_normal.jpg');
     const colosseumStoneOrm = path.resolve(__dirname, '../../../public/models/colosseum_stone_texture_39_1k_orm.jpg');
 
-    it('should locate cwebp executable on the system', () => {
+    it.skipIf(!cwebp.ok)(withReason('should locate cwebp executable on the system', cwebp), () => {
         const cwebpPath = TextureCompressionService.getCwebpPath();
         expect(cwebpPath).toBeDefined();
         expect(fs.existsSync(cwebpPath)).toBe(true);
@@ -38,7 +49,7 @@ describe('Texture Compression Engine (WebP & EXT_texture_webp)', () => {
         expect(TextureCompressionService.inferMapType('facade_diffuse.png')).toBe('albedo');
     });
 
-    it('should compress a synthetic RGBA texture with alpha transparency to WebP', async () => {
+    it.skipIf(!cwebp.ok)(withReason('should compress a synthetic RGBA texture with alpha transparency to WebP', cwebp), async () => {
         // Create 128x128 synthetic image with transparent gradient
         const width = 128;
         const height = 128;
@@ -73,12 +84,8 @@ describe('Texture Compression Engine (WebP & EXT_texture_webp)', () => {
         expect(webpMagic).toBe('WEBP');
     });
 
-    it('should compress hero foliage albedo texture with alpha, cutting size by > 80%', async () => {
-        if (!fs.existsSync(colosseumFoliageAlbedo)) {
-            console.warn('Skipping test: colosseumFoliageAlbedo not found.');
-            return;
-        }
-
+    const foliageReq = requireAll(cwebp, foliageAsset);
+    it.skipIf(!foliageReq.ok)(withReason('should compress hero foliage albedo texture with alpha, cutting size by > 80%', foliageReq), async () => {
         const inputBuf = await fs.readFile(colosseumFoliageAlbedo);
         const result = await TextureCompressionService.compressBuffer(inputBuf, {
             mapType: 'foliage',
@@ -93,30 +100,27 @@ describe('Texture Compression Engine (WebP & EXT_texture_webp)', () => {
         expect(result.spaceSavingsPercent).toBeGreaterThan(80.0);
     });
 
-    it('should compress normal and ORM maps with high vector precision', async () => {
-        if (fs.existsSync(colosseumStoneNormal)) {
-            const normalBuf = await fs.readFile(colosseumStoneNormal);
-            const normalResult = await TextureCompressionService.compressBuffer(normalBuf, {
-                mapType: 'normal',
-                quality: 95,
-                sharpYuv: true
-            });
-            expect(normalResult.mimeType).toBe('image/webp');
-            expect(normalResult.compressedSizeBytes).toBeLessThan(normalBuf.length);
-        }
+    const stoneMapsReq = requireAll(cwebp, stoneMapsAsset);
+    it.skipIf(!stoneMapsReq.ok)(withReason('should compress normal and ORM maps with high vector precision', stoneMapsReq), async () => {
+        const normalBuf = await fs.readFile(colosseumStoneNormal);
+        const normalResult = await TextureCompressionService.compressBuffer(normalBuf, {
+            mapType: 'normal',
+            quality: 95,
+            sharpYuv: true
+        });
+        expect(normalResult.mimeType).toBe('image/webp');
+        expect(normalResult.compressedSizeBytes).toBeLessThan(normalBuf.length);
 
-        if (fs.existsSync(colosseumStoneOrm)) {
-            const ormBuf = await fs.readFile(colosseumStoneOrm);
-            const ormResult = await TextureCompressionService.compressBuffer(ormBuf, {
-                mapType: 'orm',
-                lossless: true
-            });
-            expect(ormResult.mimeType).toBe('image/webp');
-            expect(ormResult.isLossless).toBe(true);
-        }
+        const ormBuf = await fs.readFile(colosseumStoneOrm);
+        const ormResult = await TextureCompressionService.compressBuffer(ormBuf, {
+            mapType: 'orm',
+            lossless: true
+        });
+        expect(ormResult.mimeType).toBe('image/webp');
+        expect(ormResult.isLossless).toBe(true);
     });
 
-    it('should re-encode textures inside a GLB and inject EXT_texture_webp', async () => {
+    it.skipIf(!cwebp.ok)(withReason('should re-encode textures inside a GLB and inject EXT_texture_webp', cwebp), async () => {
         // Construct a minimal valid binary glTF 2.0 (.glb) with 1 embedded PNG texture
         const width = 64;
         const height = 64;
@@ -199,9 +203,9 @@ describe('Texture Compression Engine (WebP & EXT_texture_webp)', () => {
         expect(outJson.textures[0].extensions.EXT_texture_webp.source).toBe(0);
     });
 
-    it('should recompress real Colosseum 1K PBR GLB and achieve massive space reduction', async () => {
+    const colosseumGlbReq = requireAll(cwebp, colosseumGlbAsset);
+    it.skipIf(!colosseumGlbReq.ok)(withReason('should recompress real Colosseum 1K PBR GLB and achieve massive space reduction', colosseumGlbReq), async () => {
         const colosseumGlbPath = path.resolve(__dirname, '../../../public/models/colosseum_rome_1k_pbr.glb');
-        if (!fs.existsSync(colosseumGlbPath)) return;
 
         const inputBuf = await fs.readFile(colosseumGlbPath);
         const { glb: compressedGlb, stats } = await TextureCompressionService.compressGlbTextures(inputBuf, {
@@ -236,8 +240,15 @@ describe('Texture Compression Engine (WebP & EXT_texture_webp)', () => {
         console.log(`Compressed Size: ${(stats.compressedGlbBytes / 1024 / 1024).toFixed(2)} MB`);
         console.log(`Space Saved: ${(stats.savedBytes / 1024 / 1024).toFixed(2)} MB (${stats.spaceSavingsPercent.toFixed(1)}%)`);
 
-        // Save the optimized GLB to replace the uncompressed 174MB file
-        await fs.outputFile(colosseumGlbPath, compressedGlb);
+        // Write the optimized GLB to a temp dir: a test must never overwrite the source asset in public/models.
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-texture-compression-'));
+        try {
+            const outPath = path.join(outDir, 'colosseum_rome_1k_pbr.webp.glb');
+            await fs.outputFile(outPath, compressedGlb);
+            expect(fs.statSync(outPath).size).toBe(compressedGlb.length);
+        } finally {
+            fs.rmSync(outDir, { recursive: true, force: true });
+        }
     }, 60000);
 });
 

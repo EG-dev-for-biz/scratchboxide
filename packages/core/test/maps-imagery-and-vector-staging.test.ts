@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs-extra';
+import * as os from 'os';
 import * as path from 'path';
 import {
     MapsImageryGroundingService,
@@ -87,9 +88,13 @@ describe('MapsImageryGroundingService (MIG via PanoID & 360 abilities)', () => {
             } as any;
         };
 
-        const tmpOutPath = path.resolve(process.cwd(), 'public/panoramas/test_mig_projection.png');
+        const tmpOutDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-mig-projection-'));
+        const tmpOutPath = path.join(tmpOutDir, 'test_mig_projection.png');
         const projResult = await MapsImageryGroundingService.groundAndProjectStreetViewPanorama({
             panoId: testPanoId,
+            // fetch is mocked, so any non-empty key works. Commit 319c3e1 removed the hard-coded default key, so
+            // without GOOGLE_MAPS_API_KEY / MAP_TILES_API_KEY the service would refuse before calling fetch.
+            apiKey: 'TEST_KEY_mocked_fetch',
             canvasWidth: 256,
             canvasHeight: 128,
             outputPath: tmpOutPath,
@@ -106,7 +111,7 @@ describe('MapsImageryGroundingService (MIG via PanoID & 360 abilities)', () => {
         expect(fs.existsSync(tmpOutPath)).toBe(true);
 
         // Cleanup
-        await fs.remove(tmpOutPath);
+        await fs.remove(tmpOutDir);
     });
 });
 
@@ -153,7 +158,8 @@ describe('GoogleVectorTileService (3D Vector Tiles Staging)', () => {
             } as any;
         };
 
-        const tmpGlb = path.resolve(process.cwd(), 'public/models/test_vector_staging.glb');
+        const tmpGlbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-vector-staging-'));
+        const tmpGlb = path.join(tmpGlbDir, 'test_vector_staging.glb');
 
         // Spy / override decodeTileBuffer on test run
         const origDecode = GoogleVectorTileService.decodeTileBuffer;
@@ -216,7 +222,7 @@ describe('GoogleVectorTileService (3D Vector Tiles Staging)', () => {
             expect(jsonChunk).toContain('0.85'); // roughness 0.85
         } finally {
             GoogleVectorTileService.decodeTileBuffer = origDecode;
-            await fs.remove(tmpGlb);
+            await fs.remove(tmpGlbDir);
         }
     });
 });

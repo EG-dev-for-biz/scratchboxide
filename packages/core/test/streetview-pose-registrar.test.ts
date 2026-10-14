@@ -44,7 +44,8 @@ import {
     StreetViewFeatureRegistrar, evaluateFeatureGates, featurePoseQuality, DEFAULT_FEATURE_GATES,
     type FeatureGateInput, type FeaturePanoInput
 } from '../src/node/spatial/StreetViewFeatureRegistrar';
-import { encodeRgbaToJpeg } from '../src/node/image-codec-ffmpeg';
+import { encodeRgbaToJpeg, resolveFfmpegPath } from '../src/node/image-codec-ffmpeg';
+import { findBinary, HOW_TO, requireAll, requireAsset, requireFile, withReason, type Requirement } from './helpers/requirements';
 import * as os from 'os';
 import { encodePng } from '../src/node/texture-processing';
 
@@ -56,9 +57,14 @@ const ANCHOR = { lat: 40.7484405, lng: -73.9856644, heightMeters: -30 };
 // (.scratchbox/streetview_fixtures/esb: sv_meta.json + sv_<id>.jpg) or STREETVIEW_FIXTURE_DIR. Without them the
 // real-data suite is reported as skipped (never silently passed).
 const SV_FIXTURES = process.env.STREETVIEW_FIXTURE_DIR || path.join(REPO, '.scratchbox/streetview_fixtures/esb');
-const hasTile = fs.existsSync(TILE);
-const hasFixtures = hasTile && fs.existsSync(path.join(SV_FIXTURES, 'sv_meta.json'));
-if (!hasFixtures) console.warn(`[streetview-pose-registrar.test] real Street View regression SKIPPED: no fixtures in ${SV_FIXTURES} (or no tile at ${TILE})`);
+const tileReq = requireAsset(TILE, 'scripts/extract_esb_tile.html (ESB Google 3D Tiles extraction)');
+const fixturesReq = requireAll(tileReq, requireFile(path.join(SV_FIXTURES, 'sv_meta.json'),
+    'cached real Street View frames; set STREETVIEW_FIXTURE_DIR or copy .scratchbox/streetview_fixtures/esb from a machine that has it'));
+const hasTile = tileReq.ok;
+/** encodeRgbaToJpeg spawns resolveFfmpegPath() (FFMPEG_PATH, else `ffmpeg` on PATH). */
+const ffmpeg: Requirement = findBinary(resolveFfmpegPath()) !== null
+    ? { ok: true, reason: '' }
+    : { ok: false, reason: `\`${resolveFfmpegPath()}\` not found (set FFMPEG_PATH or ${HOW_TO.ffmpeg})` };
 
 let scan: ScanMesh;
 let ground: GroundModel;
@@ -165,7 +171,7 @@ function syntheticPhoto(eye: [number, number, number], heading: number, pitch: n
     return { width: size, height: size, rgba: renderTexturedView(textured, cam, [110, 160, 232]).rgba };
 }
 
-describe.skipIf(!hasTile)('synthetic pose recovery on the real scan', () => {
+describe.skipIf(!tileReq.ok)(withReason('synthetic pose recovery on the real scan', tileReq), () => {
     it('recovers a 2 m / 1.5 deg perturbation within 0.2 m / 0.2 deg', () => {
         // Ground-truth camera: a street-level pano on W 34th St looking at the podium and shaft
         const truthEye: [number, number, number] = [22.74, 14.79, -40.02];
@@ -252,7 +258,7 @@ function foldedPhoto(eye: [number, number, number], heading: number, pitch: numb
     return { width: size, height: size, rgba };
 }
 
-describe.skipIf(!hasTile)('feature registration (textured render, local features, RANSAC-PnP, interior edges)', () => {
+describe.skipIf(!tileReq.ok)(withReason('feature registration (textured render, local features, RANSAC-PnP, interior edges)', tileReq), () => {
     it('recovers a 2 m / 0.8 m / 1.5 deg perturbation from a polarity-folded synthetic photo and passes the gates', () => {
         const truthEye: [number, number, number] = [22.74, 14.79, -40.02]; // street level on W 34th St, podium and shaft
         const shots = [{ heading: 209.6, pitch: 30 }, { heading: 165, pitch: 20 }];
@@ -365,7 +371,7 @@ describe('Street View billing safety', () => {
         expect(fs.existsSync(path.join(root, 'l.json'))).toBe(false);
     });
 
-    it('concurrent runs sharing the ledger cannot spend more than the cap', async () => {
+    it.skipIf(!ffmpeg.ok)(withReason('concurrent runs sharing the ledger cannot spend more than the cap', ffmpeg), async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-ledger-'));
         const ledgerPath = path.join(root, 'ledger.json');
         fs.writeFileSync(ledgerPath, JSON.stringify({ billedImageRequests: 78, keys: [] }));
@@ -379,7 +385,7 @@ describe('Street View billing safety', () => {
     });
 });
 
-describe.skipIf(!hasFixtures)('real Street View regression (cached frames, feature registration)', () => {
+describe.skipIf(!fixturesReq.ok)(withReason('real Street View regression (cached frames, feature registration)', fixturesReq), () => {
     it('W 34th St: registration lowers the interior-edge cost and raises the orientation NCC over the GPS pose', () => {
         const meta = JSON.parse(fs.readFileSync(path.join(SV_FIXTURES, 'sv_meta.json'), 'utf8'));
         const m = meta.find((q: any) => q.id === 'w34th');

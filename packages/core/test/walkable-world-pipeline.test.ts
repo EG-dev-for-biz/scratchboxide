@@ -13,11 +13,20 @@ import * as fs from 'fs-extra';
 import { PanoramaDepthService } from '../src/node/spatial/PanoramaDepthService';
 import { OffsetViewSynthesisService } from '../src/node/spatial/OffsetViewSynthesisService';
 import { SplatService } from '../src/node/3d-engine/splat-service';
+import { requirePythonModules, withReason, type Requirement } from './helpers/requirements';
+
+// PanoramaDepthService runs `python3 tools/depth/panorama_depth.py` (python3 from PATH); the sidecar imports
+// torch, numpy and PIL at module load, so even --mock mode needs them.
+const depthModules = requirePythonModules('python3', ['torch', 'numpy', 'PIL']);
+const depthPython: Requirement = depthModules.ok ? depthModules : {
+    ok: false,
+    reason: `python3 on PATH cannot import torch, numpy, PIL (\`python3 -m pip install -r tools/depth/requirements.txt\`)`
+};
 
 describe('Competitive 3DGS Walkable World Pipeline Integration Tests', () => {
     const testDir = path.resolve(process.cwd(), 'build/test_pipeline_output');
 
-    it('1. should run end-to-end walkable world synthesis on synthetic panorama', async () => {
+    it.skipIf(!depthPython.ok)(withReason('1. should run end-to-end walkable world synthesis on synthetic panorama', depthPython), async () => {
         // Setup synthetic panorama png
         const inputImg = path.resolve(process.cwd(), 'public/images/pantheon_atrium_360_4k.png');
         expect(await fs.pathExists(inputImg)).toBe(true);

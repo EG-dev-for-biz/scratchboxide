@@ -1,7 +1,30 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import { GeometricComplexityGate, GeometricSceneMetrics } from '../src/common/spatial/GeometricComplexityGate';
+import { findBinary, REPO_ROOT, withReason, type Requirement } from './helpers/requirements';
+
+/**
+ * Same interpreter order as NativePythonRunnerService.resolvePythonExecutable: SCRATCHBOX_PYTHON, the repo
+ * .venv (where the nanobind module in build_py is built), Homebrew/usr-local python3, then python3 on PATH.
+ */
+function resolveScratchboxPython(): string | null {
+    const candidates = [
+        process.env.SCRATCHBOX_PYTHON,
+        path.join(REPO_ROOT, '.venv/bin/python'),
+        path.join(REPO_ROOT, '.venv/bin/python3'),
+        '/opt/homebrew/bin/python3',
+        '/usr/local/bin/python3'
+    ];
+    for (const p of candidates) if (p && fs.existsSync(p)) return p;
+    return findBinary('python3');
+}
+
+const scratchboxPython = resolveScratchboxPython();
+const pythonReq: Requirement = scratchboxPython
+    ? { ok: true, reason: '' }
+    : { ok: false, reason: 'no python3 found (set SCRATCHBOX_PYTHON or create the repo .venv)' };
 
 describe('Geometric Fidelity & Kinematic Invariants Gate', () => {
     it('detects pancake flat wheels lying horizontally on the ground', () => {
@@ -118,7 +141,7 @@ describe('Geometric Fidelity & Kinematic Invariants Gate', () => {
 });
 
 describe('Python 3D Engine Universal Geometric Operators & Auto-Healing', () => {
-    it('executes python verification script for wheel, hull, foil, and auto-healing', () => {
+    it.skipIf(!pythonReq.ok)(withReason('executes python verification script for wheel, hull, foil, and auto-healing', pythonReq), () => {
         const pythonScript = `
 import sys
 import scratchbox as sb
@@ -169,7 +192,7 @@ assert len(report["autoHealed"]) > 0, "validate_scene should have auto-healed th
 print("PYTHON_TESTS_PASSED")
 `;
 
-        const pythonPath = '/opt/homebrew/bin/python3';
+        const pythonPath = scratchboxPython!;
         const projectRoot = path.resolve(__dirname, '..');
         const env = {
             ...process.env,
