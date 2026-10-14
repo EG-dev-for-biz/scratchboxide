@@ -22,11 +22,15 @@ const SKY_FEATURE_KEYS = [
  */
 export const ATMOSPHERE_FEATURE_KEYS: readonly string[] = [...SKY_FEATURE_KEYS, 'godRays', 'bloomPass'];
 
-/** What a visual audit may not add to a scene that never asked for a sky. */
-const FIX_FEATURE_CARRIERS = [...ATMOSPHERE_FEATURE_KEYS, 'terrainBiomes'];
-const FIX_ENVIRONMENT_CARRIERS = ['skybox', 'fog', 'aerialPerspective', 'cloudShadows'];
-/** `classifyAtmosphere` reads `atmosphere` beside `features.atmosphericScattering`; an `environment` or `features` patch can rewrite the whole block. */
-const FIX_SCENE_CARRIERS = ['atmosphere', 'atmosphericScattering', 'worldBranch', 'environment', 'features', 'renderMode'];
+/**
+ * A scene's chosen environment, which a visual audit and its operators never change in either
+ * direction (switching a sky on or off, swapping the skybox, leaving or entering clay, moving the
+ * world or the ground). Repairs keep to lighting and camera framing.
+ */
+const ENVIRONMENT_FEATURE_KEYS = [...ATMOSPHERE_FEATURE_KEYS, 'terrainBiomes'];
+const ENVIRONMENT_BLOCK_KEYS = ['skybox', 'fog', 'aerialPerspective', 'cloudShadows', 'timeOfDay', 'ground', 'groundTileMode'];
+/** `classifyAtmosphere` reads `atmosphere` beside `features.atmosphericScattering`. */
+const ENVIRONMENT_SCENE_KEYS = ['atmosphere', 'atmosphericScattering', 'worldBranch', 'renderMode', 'groundTileMode'];
 
 function isSwitchedOn(value: unknown): boolean {
     return value === true || (typeof value === 'object' && value !== null && (value as { enabled?: unknown }).enabled !== false);
@@ -48,6 +52,14 @@ export function sceneRendersClay(scene: Partial<Scene3DData> | undefined): boole
     return (scene?.renderMode ?? 'clay') === 'clay';
 }
 
+/**
+ * True when the renderer draws a sky for this scene: it opts into one and does not render clay
+ * (`classifyAtmosphere` suppresses the sky in clay, even when the scene keeps its atmosphere settings).
+ */
+export function sceneShowsSky(scene: Partial<Scene3DData> | undefined): boolean {
+    return sceneOptsIntoAtmosphere(scene) && !sceneRendersClay(scene);
+}
+
 function withoutKeys<T extends object>(block: T | undefined, keys: string[]): T | undefined {
     if (!block) return block;
     const out = { ...block } as Record<string, unknown>;
@@ -55,41 +67,54 @@ function withoutKeys<T extends object>(block: T | undefined, keys: string[]): T 
     return Object.keys(out).length > 0 ? out as T : undefined;
 }
 
+function withoutUndefined<T extends object>(block: T): T {
+    const out = { ...block } as Record<string, unknown>;
+    Object.keys(out).forEach(k => out[k] === undefined && delete out[k]);
+    return out as T;
+}
+
+/** Audit fixes minus everything that would change the scene's chosen environment, for any scene. */
+export function withoutEnvironmentChanges(fixes: VisualCorrectionFixes): VisualCorrectionFixes {
+    const out: VisualCorrectionFixes = {
+        ...fixes,
+        features: withoutKeys(fixes.features, ENVIRONMENT_FEATURE_KEYS),
+        environment: withoutKeys(fixes.environment, ENVIRONMENT_BLOCK_KEYS)
+    };
+    if (fixes.scenePatches) {
+        // Patched environment / features blocks keep their other keys (a lighting rig, PBR flags).
+        const patches = withoutUndefined({
+            ...fixes.scenePatches,
+            environment: withoutKeys(fixes.scenePatches.environment, ENVIRONMENT_BLOCK_KEYS),
+            features: withoutKeys(fixes.scenePatches.features, ENVIRONMENT_FEATURE_KEYS)
+        });
+        out.scenePatches = withoutKeys(patches, ENVIRONMENT_SCENE_KEYS);
+    }
+    return withoutUndefined(out);
+}
+
+function copyKeys(target: Record<string, unknown>, source: Record<string, unknown> | undefined, keys: string[]): void {
+    for (const k of keys) {
+        if (source?.[k] !== undefined) target[k] = JSON.parse(JSON.stringify(source[k]));
+        else delete target[k];
+    }
+}
+
+function restoreBlock(after: Record<string, unknown>, before: Record<string, unknown>, block: string, keys: string[]): void {
+    const source = before[block] as Record<string, unknown> | undefined;
+    const target = { ...((after[block] as Record<string, unknown> | undefined) || {}) };
+    copyKeys(target, source, keys);
+    if (source === undefined && Object.keys(target).length === 0) delete after[block];
+    else after[block] = target;
+}
+
 /**
- * Audit fixes minus every atmosphere carrier, unless the scene already opts into a sky (then the
- * audit may tune it). A clay scene keeps its render mode either way: clay is a choice too.
+ * Puts `before`'s chosen environment back onto `after` (the scene once an audit's operator ran),
+ * keeping the operator's other effects, such as a lighting preset, its rig and sun angles.
  */
-export function withoutUninvitedAtmosphere(fixes: VisualCorrectionFixes, scene: Partial<Scene3DData> | undefined): VisualCorrectionFixes {
-    const optedIn = sceneOptsIntoAtmosphere(scene);
-    const keepsClay = sceneRendersClay(scene);
-    if (optedIn && !keepsClay) return fixes;
-
-    const out: VisualCorrectionFixes = { ...fixes };
-    out.scenePatches = withoutKeys(fixes.scenePatches, optedIn ? ['renderMode'] : FIX_SCENE_CARRIERS);
-    if (!optedIn) {
-        out.features = withoutKeys(fixes.features, FIX_FEATURE_CARRIERS);
-        out.environment = withoutKeys(fixes.environment, FIX_ENVIRONMENT_CARRIERS);
-    }
-    for (const k of Object.keys(out) as Array<keyof VisualCorrectionFixes>) {
-        if (out[k] === undefined) delete out[k];
-    }
-    return out;
-}
-
-function atmosphereCarrierValues(scene: Partial<Scene3DData>): string {
-    const features: Record<string, unknown> = scene.features || {};
-    const environment: Record<string, unknown> = scene.environment || {};
-    const loose = scene as Record<string, unknown>;
-    return JSON.stringify([
-        FIX_FEATURE_CARRIERS.map(k => features[k] ?? null),
-        FIX_ENVIRONMENT_CARRIERS.map(k => environment[k] ?? null),
-        ['atmosphere', 'atmosphericScattering', 'worldBranch', 'renderMode'].map(k => loose[k] ?? null)
-    ]);
-}
-
-/** True when `after` (the scene once an audit's operator ran) changes what `withoutUninvitedAtmosphere` protects in `before`. */
-export function auditChangesChosenEnvironment(before: Partial<Scene3DData>, after: Partial<Scene3DData>): boolean {
-    if (sceneRendersClay(before) && !sceneRendersClay(after)) return true;
-    if (sceneOptsIntoAtmosphere(before)) return false;
-    return atmosphereCarrierValues(before) !== atmosphereCarrierValues(after);
+export function restoreChosenEnvironment(after: Scene3DData, before: Scene3DData): void {
+    const target = after as unknown as Record<string, unknown>;
+    const source = before as unknown as Record<string, unknown>;
+    copyKeys(target, source, ENVIRONMENT_SCENE_KEYS);
+    restoreBlock(target, source, 'features', ENVIRONMENT_FEATURE_KEYS);
+    restoreBlock(target, source, 'environment', ENVIRONMENT_BLOCK_KEYS);
 }

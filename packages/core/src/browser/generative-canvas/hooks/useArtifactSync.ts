@@ -15,7 +15,7 @@
  * Extracted verbatim from GenerativeCanvasStudio.tsx.
  */
 import * as React from 'react';
-import type { VisualCorrectionFixes } from '../../../common/visual-verification-protocol';
+import { auditCameraFraming, type VisualAuditResult } from '../../../common/visual-verification-protocol';
 import { ProjectItem } from '../ProjectsModal';
 import { CanvasArtifact, ChatSession, LiveCodeSandboxData, Scene3DData } from '../canvas-types';
 import { captureActiveCanvasScreenshot } from '../chat/streaming-utils';
@@ -53,40 +53,52 @@ export function shouldAuditArtifactInBackground(artifact: CanvasArtifact | null 
     return artifact.type === '3d-scene' || artifact.type === 'live-code-sandbox' || artifact.type === 'interactive-browser';
 }
 
-function isFiniteVec3(value: unknown): value is [number, number, number] {
-    return Array.isArray(value) && value.length === 3 && value.every(n => typeof n === 'number' && Number.isFinite(n));
+function artifactVersionKey(artifact: { id: string; version?: number }): string {
+    return `${artifact.id}-v${artifact.version || 1}`;
 }
 
 /**
  * The data a background audit may write back, or null when it may write nothing. A 3D scene's
  * sky, atmosphere, lighting, render mode, ground and world are its own choices, so the audit keeps
- * at most a well-formed camera framing that actually moves the camera; a sandbox takes CSS fixes.
+ * at most a camera framing, and only when it reported a framing defect (`defects3D`) on a scene whose
+ * geometry is all in customMeshes, the bounds that framing is computed from. A sandbox takes CSS fixes.
  */
-export function backgroundAuditRepairData(artifact: CanvasArtifact, fixes: VisualCorrectionFixes): CanvasArtifact['data'] | null {
+export function backgroundAuditRepairData(artifact: CanvasArtifact, audit: VisualAuditResult): CanvasArtifact['data'] | null {
     if (artifact.type === '3d-scene') {
         const scene = (artifact.data || {}) as Scene3DData;
-        const fix = fixes.camera;
-        const framing = {
-            ...(isFiniteVec3(fix?.position) ? { position: fix!.position } : {}),
-            ...(isFiniteVec3(fix?.target) ? { target: fix!.target } : {}),
-            ...(typeof fix?.fov === 'number' && fix.fov > 0 && fix.fov < 180 ? { fov: fix.fov } : {})
-        };
-        if (Object.keys(framing).length === 0) return null;
+        const framing = auditCameraFraming(audit, scene);
+        if (!framing) return null;
         const camera = { ...(scene.camera || { position: [15, 12, 15] as [number, number, number], target: [0, 0, 0] as [number, number, number] }), ...framing };
         if (JSON.stringify(camera) === JSON.stringify(scene.camera)) return null;
         return { ...scene, camera };
     }
     if (artifact.type === 'live-code-sandbox') {
+        const cssFixes = audit.visualFixes?.cssFixes;
         const sandbox = artifact.data as LiveCodeSandboxData;
         const files = Array.isArray(sandbox?.files) ? sandbox.files : [];
         const cssIndex = files.findIndex(f => f.name?.endsWith('.css') || f.path?.endsWith('.css'));
-        if (!fixes.cssFixes || cssIndex === -1) return null;
+        if (!cssFixes || cssIndex === -1) return null;
         return {
             ...sandbox,
-            files: files.map((f, i) => i === cssIndex ? { ...f, content: `${f.content}\n/* Visual Auto-Repair Fixes */\n${fixes.cssFixes}` } : f)
+            files: files.map((f, i) => i === cssIndex ? { ...f, content: `${f.content}\n/* Visual Auto-Repair Fixes */\n${cssFixes}` } : f)
         };
     }
     return null;
+}
+
+/**
+ * The version a failing background audit writes, or null. Each version is repaired at most once,
+ * and a version the repair wrote is never repaired again, so audits cannot chain new versions.
+ * `repairWritten` holds the keys of versions this loop wrote (the caller adds the registered one too).
+ */
+export function backgroundAuditRepair(artifact: CanvasArtifact, audit: VisualAuditResult, repairWritten: Set<string>): CanvasArtifact | null {
+    if (audit.fidelityScore >= 80 || !audit.visualFixes || repairWritten.has(artifactVersionKey(artifact))) return null;
+    const data = backgroundAuditRepairData(artifact, audit);
+    if (!data) return null;
+    const repaired: CanvasArtifact = { ...artifact, version: (artifact.version || 1) + 1, data };
+    if (repairWritten.has(artifactVersionKey(repaired))) return null;
+    repairWritten.add(artifactVersionKey(repaired));
+    return repaired;
 }
 
 export interface UseArtifactSyncDeps {
@@ -214,18 +226,21 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                 return next;
             });
         }
+        return canonicalArtifact;
     }, [currentSessionId, persistSessionsImmediately]);
 
     // Track verified artifact keys (id + version) to avoid redundant loops
     const verifiedArtifactKeysRef = React.useRef<Set<string>>(new Set());
+    // Versions the background repair wrote: never audited or repaired again, so repairs cannot chain
+    const repairWrittenKeysRef = React.useRef<Set<string>>(new Set());
     const isVerifyingVisualRef = React.useRef<boolean>(false);
 
     // Automated Background Visual Verification & Self-Correction Loop
     React.useEffect(() => {
         if (!shouldAuditArtifactInBackground(activeArtifact, isGenerating)) return;
 
-        const artifactKey = `${activeArtifact.id}-v${activeArtifact.version || 1}`;
-        if (verifiedArtifactKeysRef.current.has(artifactKey)) {
+        const artifactKey = artifactVersionKey(activeArtifact);
+        if (verifiedArtifactKeysRef.current.has(artifactKey) || repairWrittenKeysRef.current.has(artifactKey)) {
             return;
         }
 
@@ -278,15 +293,10 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                 });
 
                 // If fidelity score is low (< 80), apply what the audit may change; no new version when that is nothing
-                const repairedData = audit.visualFixes && audit.fidelityScore < 80
-                    ? backgroundAuditRepairData(activeArtifact, audit.visualFixes)
-                    : null;
-                if (repairedData) {
-                    handleUpdateArtifact({
-                        ...activeArtifact,
-                        version: (activeArtifact.version || 1) + 1,
-                        data: repairedData
-                    });
+                const repaired = backgroundAuditRepair(activeArtifact, audit, repairWrittenKeysRef.current);
+                if (repaired) {
+                    // Registration can rename a timestamped id, so remember the version as it lands too.
+                    repairWrittenKeysRef.current.add(artifactVersionKey(handleUpdateArtifact(repaired)));
                 }
             } catch (err) {
                 console.warn('[GenerativeCanvasStudio] Background visual verification completed with fallback:', err);

@@ -24,6 +24,10 @@ export interface ViewportSnapshotOptions {
     /** Meshes under this object are drawn in the selection colour. */
     highlight?: THREE.Object3D | null;
     markers?: ViewportSnapshotMarker[];
+    /** Background colour (hex), e.g. the renderer's own `classifyAtmosphere(...).backgroundHex`. */
+    background?: number;
+    /** Shade each mesh with its material's own colour instead of the neutral mesh grey. */
+    materialColors?: boolean;
 }
 
 export interface ViewportSnapshotResult {
@@ -36,11 +40,23 @@ export interface ViewportSnapshotResult {
     markerPixels: Array<{ x: number; y: number } | null>;
     /** Screen bounds of the highlighted pixels, or null when none were drawn. */
     highlightBounds: { minX: number; minY: number; maxX: number; maxY: number } | null;
+    /** The saved frame's RGBA pixels, row-major. */
+    rgba: Buffer;
 }
 
 const BACKGROUND: Rgb = [24, 26, 31];
 const MESH: Rgb = [150, 156, 166];
 const HIGHLIGHT: Rgb = [34, 211, 238];
+
+function hexToRgb(hex: number): Rgb {
+    return [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
+}
+
+function materialRgb(mesh: THREE.Mesh): Rgb | undefined {
+    const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    const color = (material as { color?: THREE.Color } | undefined)?.color;
+    return color ? hexToRgb(color.getHex()) : undefined;
+}
 
 function isUnder(obj: THREE.Object3D, root: THREE.Object3D | null | undefined): boolean {
     for (let cur: THREE.Object3D | null = obj; cur; cur = cur.parent) if (cur === root) return true;
@@ -63,10 +79,11 @@ export function saveViewportSnapshot(
     const height = options.height ?? 300;
     const rgba = Buffer.alloc(width * height * 4);
     const depth = new Float32Array(width * height).fill(Infinity);
+    const background = options.background !== undefined ? hexToRgb(options.background) : BACKGROUND;
     for (let i = 0; i < width * height; i++) {
-        rgba[i * 4] = BACKGROUND[0];
-        rgba[i * 4 + 1] = BACKGROUND[1];
-        rgba[i * 4 + 2] = BACKGROUND[2];
+        rgba[i * 4] = background[0];
+        rgba[i * 4 + 1] = background[1];
+        rgba[i * 4 + 2] = background[2];
         rgba[i * 4 + 3] = 255;
     }
 
@@ -92,6 +109,7 @@ export function saveViewportSnapshot(
         const index = mesh.geometry.index;
         const triCount = Math.floor((index ? index.count : position.count) / 3);
         const highlighted = !!options.highlight && isUnder(mesh, options.highlight);
+        const base = highlighted ? HIGHLIGHT : (options.materialColors && materialRgb(mesh)) || MESH;
         const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
         const normal = new THREE.Vector3();
         const toCamera = new THREE.Vector3();
@@ -104,7 +122,6 @@ export function saveViewportSnapshot(
             normal.subVectors(v[1], v[0]).cross(toCamera.subVectors(v[2], v[0])).normalize();
             toCamera.subVectors(camera.position, v[0]).normalize();
             const shade = 0.45 + 0.55 * Math.abs(normal.dot(toCamera));
-            const base = highlighted ? HIGHLIGHT : MESH;
             const color: Rgb = [base[0] * shade, base[1] * shade, base[2] * shade];
 
             const [a, b, c] = v.map(toScreen);
@@ -170,6 +187,7 @@ export function saveViewportSnapshot(
         drawnPixels,
         highlightPixels,
         markerPixels,
-        highlightBounds: highlightPixels > 0 ? { minX, minY, maxX, maxY } : null
+        highlightBounds: highlightPixels > 0 ? { minX, minY, maxX, maxY } : null,
+        rgba
     };
 }

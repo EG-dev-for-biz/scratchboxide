@@ -176,7 +176,9 @@ async function runVisualVerificationTests() {
     assert.ok(failingAudit.visualFixes, 'Failing audit must supply visualFixes directives');
     assert.ok(failingAudit.visualFixes?.lighting, 'Must supply lighting fixes');
     assert.ok(failingAudit.visualFixes?.environment, 'Must supply environment fixes');
-    assert.ok(failingAudit.visualFixes?.camera, 'Must supply camera fixes');
+    assert.strictEqual(failingAudit.visualFixes?.environment?.skybox, undefined, 'Never proposes a skybox: the sky is the scene\'s own choice');
+    // A camera fix answers a framing defect only; this scene's failure is its lighting.
+    assert.strictEqual(failingAudit.visualFixes?.camera, undefined, 'A lighting failure proposes no camera');
     console.log('  ✓ Test 4 Passed: Visual bug detector flags monochromatic void, unlit models, and missing shaders.');
 
     // -------------------------------------------------------------
@@ -202,8 +204,8 @@ async function runVisualVerificationTests() {
     assert.strictEqual(repairedArtifact.version, 2, 'Artifact version must increment after auto-repair');
     const repairedSceneData = repairedArtifact.data as Scene3DData;
     assert.strictEqual(repairedSceneData.environment?.lighting, 'shaded', 'Auto-repair must restore shaded lighting');
-    assert.ok(repairedSceneData.environment?.ground, 'Auto-repair must enable terrain ground');
-    assert.ok(repairedSceneData.camera?.position, 'Auto-repair must configure camera position');
+    assert.strictEqual(repairedSceneData.environment?.ground, false, 'Auto-repair keeps the scene\'s own ground choice');
+    assert.strictEqual(repairedSceneData.camera, undefined, 'Auto-repair adds no camera without a framing defect');
 
     // Test Sandbox CSS auto-repair
     const brokenSandboxArtifact: CanvasArtifact = {

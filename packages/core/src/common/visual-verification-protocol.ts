@@ -199,13 +199,65 @@ export interface VisualSelfCorrection3DLoopResult {
 export const VISUAL_VERIFICATION_CRITERIA = [
     'Absence of monochromatic black/blank void frames',
     'Proper illumination and directional/ambient lighting balance',
-    'Background true to the scene\'s own environment: a neutral studio or grey clay void is intended, and an atmospheric sky is expected only when the scene\'s environment or features opt into one',
+    'Background true to the scene\'s own environment: a neutral studio or grey clay void is intended, and an atmospheric sky is expected only when the scene\'s environment or features opt into one and it does not render clay',
     'Correct camera framing, target orientation, and field of view',
     'Complete geometry rendering without unhandled clipping or culling',
     'Physically-based rendering (PBR) materials with realistic roughness and metalness',
     'Sufficient mesh polygon resolution without jagged low-poly faceted distortion',
     'Semantic alignment with user prompt requirements'
 ];
+
+/** Defect types that report a camera framing problem; an audit moves the camera only with one of these. */
+const CAMERA_FRAMING_DEFECT_TYPES: readonly VisualAudit3DDefectType[] = ['off_center_camera', 'framing_offset'];
+
+function auditFlagsCameraFraming(audit: Pick<VisualAuditResult, 'defects3D'>): boolean {
+    return (audit.defects3D || []).some(d => CAMERA_FRAMING_DEFECT_TYPES.includes(d.defectType));
+}
+
+/** Scene fields holding geometry whose extent the customMeshes bounds do not measure. */
+const UNMEASURED_GEOMETRY_KEYS = [
+    'objects', 'cppGenerator', 'pythonGenerator', 'geoAnchor', 'splatUrl', 'splatTilesetUrl',
+    'vectorRoadmap', 'customScript', 'code', 'hairGroom'
+];
+
+function isAbsent(value: unknown): boolean {
+    return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+}
+
+/**
+ * True when all of a scene's geometry is in `customMeshes`, the only bounds `computeCameraForViewportAngle`
+ * and `sb_frame_bounds` read. GLB objects, C++/Python generators, 3D tiles, splats and scripts carry
+ * geometry of unknown extent, so a framing computed from customMeshes (or a 10 m default) would reset them.
+ */
+export function sceneBoundsAreMeasurable(scene: Partial<Scene3DData> | undefined): boolean {
+    if (!scene?.customMeshes || scene.customMeshes.length === 0) return false;
+    const loose = scene as Record<string, unknown>;
+    return UNMEASURED_GEOMETRY_KEYS.every(k => isAbsent(loose[k]));
+}
+
+/** Whether an audit may move this scene's camera: it reported a framing defect and the scene's bounds are measurable. */
+export function auditMayMoveCamera(audit: Pick<VisualAuditResult, 'defects3D'>, scene: Partial<Scene3DData> | undefined): boolean {
+    return auditFlagsCameraFraming(audit) && sceneBoundsAreMeasurable(scene);
+}
+
+function isFiniteVec3(value: unknown): value is [number, number, number] {
+    return Array.isArray(value) && value.length === 3 && value.every(n => typeof n === 'number' && Number.isFinite(n));
+}
+
+/** The well-formed part of an audit's camera fix when the audit may move this scene's camera, else undefined. */
+export function auditCameraFraming(
+    audit: Pick<VisualAuditResult, 'defects3D' | 'visualFixes'>,
+    scene: Partial<Scene3DData> | undefined
+): VisualCorrectionFixes['camera'] | undefined {
+    if (!auditMayMoveCamera(audit, scene)) return undefined;
+    const fix = audit.visualFixes?.camera;
+    const framing = {
+        ...(isFiniteVec3(fix?.position) ? { position: fix!.position } : {}),
+        ...(isFiniteVec3(fix?.target) ? { target: fix!.target } : {}),
+        ...(typeof fix?.fov === 'number' && fix.fov > 0 && fix.fov < 180 ? { fov: fix.fov } : {})
+    };
+    return Object.keys(framing).length > 0 ? framing : undefined;
+}
 
 /**
  * Computes canonical camera position, target, and field of view for a given viewport angle.
