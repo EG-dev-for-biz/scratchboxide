@@ -221,10 +221,11 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(reportDetailed).toContain('Colosseo Metro Station Entrance Pavilion');
   });
 
-  it('separates 1,670 Total Identifiable Objects across 4 tiers of arcade arches, hoists, 1,260 trees, and ruins', () => {
+  it('separates 410 Total Identifiable Objects across 4 tiers of arcade arches, hoists, monuments and ruins, with no generated tree list', () => {
     const scene = Colosseum3DMeshSeparatorService.separate3DMesh(modelPath, { mode: 'total' });
 
-    expect(scene.objects.length).toBe(1670);
+    // the 1,260 "identified" trees came from a seeded random generator, not the mesh, and were removed
+    expect(scene.objects.length).toBe(410);
     expect(scene.granularityMode).toBe('total');
 
     // 1. Check Colosseum Arcade Arches across 4 tiers (320 items: 80 per tier)
@@ -241,35 +242,9 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     const hoists = scene.objects.filter(o => o.id.startsWith('tot-hypogeum-hoist-'));
     expect(hoists.length).toBe(28);
 
-    // 3. Check Botanical Trees (1,260 items across 13 zones)
-    const trees = scene.objects.filter(o => o.category === 'foliage_trees');
-    expect(trees.length).toBe(1260);
-    const oppianTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-oppian-crest-'));
-    expect(oppianTrees.length).toBe(125);
-    const slopeTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-oppio-slope-'));
-    expect(slopeTrees.length).toBe(105);
-    const cypresses = scene.objects.filter(o => o.id.startsWith('fol-tree-san-gregorio-'));
-    expect(cypresses.length).toBe(60);
-    const palatineTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-palatine-'));
-    expect(palatineTrees.length).toBe(75);
-    const celianTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-celian-') && !o.id.startsWith('fol-tree-celian-south-'));
-    expect(celianTrees.length).toBe(55);
-    const trajanTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-trajan-'));
-    expect(trajanTrees.length).toBe(160);
-    const farneseTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-farnese-'));
-    expect(farneseTrees.length).toBe(135);
-    const celimontanaTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-celimontana-'));
-    expect(celimontanaTrees.length).toBe(110);
-    const foriTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-fori-'));
-    expect(foriTrees.length).toBe(65);
-    const plazaTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-plaza-apron-'));
-    expect(plazaTrees.length).toBe(30);
-    const celianSouthTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-celian-south-'));
-    expect(celianSouthTrees.length).toBe(130);
-    const labicanaTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-labicana-east-'));
-    expect(labicanaTrees.length).toBe(110);
-    const oppianNETrees = scene.objects.filter(o => o.id.startsWith('fol-tree-oppian-ne-'));
-    expect(oppianNETrees.length).toBe(100);
+    // 3. No generated trees
+    expect(scene.objects.filter(o => o.id.startsWith('fol-tree-'))).toHaveLength(0);
+    expect(() => Colosseum3DMeshSeparatorService.separate3DMesh(modelPath, { mode: 'trees' as any })).toThrow("mode 'trees' has been removed");
 
     // 4. Check Palazzi & Buildings (20 items)
     const salviPalazzi = scene.objects.filter(o => o.id.startsWith('tot-palazzo-salvi-'));
@@ -281,7 +256,7 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     const lanterns = scene.objects.filter(o => o.id.startsWith('tot-street-lantern-'));
     expect(lanterns.length).toBe(8);
 
-    // 6. Verify all 1,670 entities have valid OBB geometry and Trellis prompts
+    // 6. Verify all 410 entities have valid OBB geometry and Trellis prompts
     for (const obj of scene.objects) {
       expect(obj.orientedBoundingBox.dimensions[0]).toBeGreaterThan(0);
       expect(obj.orientedBoundingBox.dimensions[1]).toBeGreaterThan(0);

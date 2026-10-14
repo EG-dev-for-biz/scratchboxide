@@ -216,9 +216,18 @@ static int runPlant(const Args& a) {
       << ", \"shellDepth\": " << json::num(P.shellDepth) << "},\n  \"perTree\": [";
     for (size_t i = 0; i < r.trees.size(); ++i) {
         const auto& t = r.trees[i];
+        // bounds of what was grown (measured from the meshes, not echoed from the crown)
+        Vec3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+        for (const geometry::Mesh* m : {&t.wood, &t.foliage}) {
+            for (const auto& v : m->vertices) {
+                lo.x = std::min(lo.x, v.x); lo.y = std::min(lo.y, v.y); lo.z = std::min(lo.z, v.z);
+                hi.x = std::max(hi.x, v.x); hi.y = std::max(hi.y, v.y); hi.z = std::max(hi.z, v.z);
+            }
+        }
         s << (i ? ",\n    " : "\n    ") << "{\"crownId\": " << t.crownId << ", \"heightAboveSupportM\": " << json::num(t.heightAboveSupport)
           << ", \"budget\": " << t.budget << ", \"triangles\": " << (t.wood.indices.size() + t.foliage.indices.size()) / 3
           << ", \"wood\": " << t.report.woodTriangles << ", \"foliage\": " << t.report.foliageTriangles << ", \"clumps\": " << t.report.foliageClumps
+          << ", \"bounds\": [[" << json::num(lo.x) << "," << json::num(lo.y) << "," << json::num(lo.z) << "],[" << json::num(hi.x) << "," << json::num(hi.y) << "," << json::num(hi.z) << "]]"
           << ", \"seed\": " << t.seed << "}";
     }
     s << "\n  ],\n  \"totalMs\": " << json::num(r.ms) << "\n}\n";

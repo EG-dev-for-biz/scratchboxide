@@ -12,16 +12,6 @@ import path from 'path';
 import { ColosseumObjectSeparationService } from '../../../packages/core/src/node/spatial/ColosseumObjectSeparationService.js';
 import { GoogleTileAlignmentOptimizer } from '../../../packages/core/src/node/spatial/GoogleTileAlignmentOptimizer.js';
 import { Colosseum3DMeshSeparatorService } from '../../../packages/core/src/node/spatial/Colosseum3DMeshSeparatorService.js';
-import {
-  ColosseumTreeIdentificationEngine,
-  BotanicalSpecies,
-  BotanicalZone
-} from '../../../packages/core/src/node/spatial/ColosseumTreeIdentificationEngine.js';
-import {
-  UniversalBotanicalBridgeService,
-  SPECIES_ADAPTERS,
-  type SpatialTreeEntity
-} from '../../../packages/core/src/node/spatial/UniversalBotanicalBridgeService.js';
 import { GeminiMultimodalObjectDetectorService } from '../../../packages/core/src/node/spatial/GeminiMultimodalObjectDetectorService.js';
 import { SbArchiService } from '../../../packages/core/src/node/3d-engine/sb-archi-service.js';
 
@@ -220,7 +210,7 @@ function resolveAssetPath(...relativePaths: string[]): string {
         return sendJson(res, 404, { error: 'Colosseum 3D model (colosseum_clay.glb) not found on server' });
       }
 
-      const mode = (parsedUrl.searchParams.get('mode') as 'macro' | 'detailed' | 'total' | 'trees' | 'all') || 'total';
+      const mode = (parsedUrl.searchParams.get('mode') as 'macro' | 'detailed' | 'total' | 'all') || 'total';
       const scene = Colosseum3DMeshSeparatorService.separate3DMesh(modelCandidate, { mode });
       const durationMs = Date.now() - startTime;
 
@@ -253,7 +243,7 @@ function resolveAssetPath(...relativePaths: string[]): string {
   if (pathname === '/api/spatial/3d-mesh/objects') {
     try {
       const modelCandidate = resolveAssetPath('colosseum_clay.glb');
-      const mode = (parsedUrl.searchParams.get('mode') as 'macro' | 'detailed' | 'total' | 'trees' | 'all') || 'total';
+      const mode = (parsedUrl.searchParams.get('mode') as 'macro' | 'detailed' | 'total' | 'all') || 'total';
       const scene = Colosseum3DMeshSeparatorService.separate3DMesh(modelCandidate, { mode });
       return sendJson(res, 200, {
         success: true,
@@ -261,180 +251,6 @@ function resolveAssetPath(...relativePaths: string[]): string {
         objectCounts: scene.objectCounts,
         totalObjects: scene.objects.length,
         objects: scene.objects
-      });
-    } catch (err: any) {
-      return sendJson(res, 500, { success: false, error: err.message });
-    }
-  }
-
-  // 2c. Botanical Tree Identification & Telemetry Endpoints (420 Trees Across 5 Zones)
-  if (pathname === '/api/spatial/trees/summary') {
-    try {
-      const summary = ColosseumTreeIdentificationEngine.getBotanicalSummary();
-      return sendJson(res, 200, {
-        success: true,
-        summary
-      });
-    } catch (err: any) {
-      return sendJson(res, 500, { success: false, error: err.message });
-    }
-  }
-
-  if (pathname === '/api/spatial/trees') {
-    try {
-      const zone = parsedUrl.searchParams.get('zone') as BotanicalZone | undefined;
-      const species = parsedUrl.searchParams.get('species') as BotanicalSpecies | undefined;
-      const minHeight = parsedUrl.searchParams.has('minHeight') ? parseFloat(parsedUrl.searchParams.get('minHeight')!) : undefined;
-      const maxHeight = parsedUrl.searchParams.has('maxHeight') ? parseFloat(parsedUrl.searchParams.get('maxHeight')!) : undefined;
-
-      const trees = ColosseumTreeIdentificationEngine.filterTrees({
-        zone: zone || undefined,
-        species: species || undefined,
-        minHeight,
-        maxHeight
-      });
-
-      return sendJson(res, 200, {
-        success: true,
-        totalIdentifiedTrees: trees.length,
-        filters: { zone, species, minHeight, maxHeight },
-        trees
-      });
-    } catch (err: any) {
-      return sendJson(res, 500, { success: false, error: err.message });
-    }
-  }
-
-  // 2d. Botanical Species Knowledge & Telemetry Endpoint
-  if (pathname === '/api/spatial/botanical/species') {
-    try {
-      const speciesList = Object.keys(SPECIES_ADAPTERS).map(k => {
-        const a = SPECIES_ADAPTERS[k as keyof typeof SPECIES_ADAPTERS];
-        return {
-          id: a.species,
-          scientificName: a.scientificName,
-          commonName: a.commonName,
-          archetype: a.archetype,
-          leafMorphology: a.leafMorphology,
-          barkTextureProfile: a.barkTextureProfile,
-          typicalCrownRatio: a.typicalCrownRatio,
-          typicalAspectSpread: a.typicalAspectSpread
-        };
-      });
-      return sendJson(res, 200, {
-        success: true,
-        totalSpecies: speciesList.length,
-        species: speciesList
-      });
-    } catch (err: any) {
-      return sendJson(res, 500, { success: false, error: err.message });
-    }
-  }
-
-  // 2e. Botanical Tree 1:1 Metric Replacement Synthesis Endpoint (GET by ID or POST custom entity)
-  if (pathname.startsWith('/api/spatial/botanical/tree/') || pathname === '/api/spatial/botanical/synthesize') {
-    try {
-      let entity: SpatialTreeEntity = {
-        id: `tree_${Date.now()}`
-      };
-      let season = 1.0;
-      let leafDensity: number | undefined;
-      let saturationScale = 0.78;
-      let format = 'json';
-
-      if (req.method === 'POST') {
-        const body = await parseJsonBody(req);
-        entity = {
-          id: body.id || body.treeId || `tree_${Date.now()}`,
-          name: body.name,
-          species: body.species,
-          category: body.category,
-          boundingBox: body.boundingBox,
-          orientedBoundingBox: body.orientedBoundingBox,
-          nominalDimensions: body.nominalDimensions || body.dimensions,
-          nominalCentroid: body.nominalCentroid || body.centroid,
-          canopyHeightMeters: body.canopyHeightMeters,
-          crownDiameterMeters: body.crownDiameterMeters,
-          trellisPrompt: body.trellisPrompt
-        };
-        season = body.season !== undefined ? Number(body.season) : 1.0;
-        leafDensity = body.leafDensity !== undefined ? Number(body.leafDensity) : undefined;
-        saturationScale = body.saturationScale !== undefined ? Number(body.saturationScale) : 0.78;
-        format = body.format || (parsedUrl.searchParams.get('format') || 'json');
-      } else {
-        // GET request - either path is /api/spatial/botanical/tree/:id(.glb) or query param ?id=...
-        let treeId = '';
-        if (pathname.startsWith('/api/spatial/botanical/tree/')) {
-          treeId = pathname.replace('/api/spatial/botanical/tree/', '');
-          if (treeId.endsWith('.glb')) {
-            treeId = treeId.replace('.glb', '');
-            format = 'glb';
-          }
-        } else {
-          treeId = parsedUrl.searchParams.get('id') || '';
-        }
-
-        if (parsedUrl.searchParams.has('format')) {
-          format = parsedUrl.searchParams.get('format')!;
-        }
-        if (parsedUrl.searchParams.has('season')) {
-          season = parseFloat(parsedUrl.searchParams.get('season')!);
-        }
-        if (parsedUrl.searchParams.has('leafDensity')) {
-          leafDensity = parseFloat(parsedUrl.searchParams.get('leafDensity')!);
-        }
-
-        // Look up tree from dataset
-        const identified = ColosseumTreeIdentificationEngine.getIdentifiedTrees().find(t => t.id === treeId);
-        if (identified) {
-          entity = {
-            id: identified.id,
-            name: identified.name,
-            species: identified.species,
-            nominalDimensions: identified.nominalDimensions,
-            nominalCentroid: identified.nominalCentroid,
-            canopyHeightMeters: identified.canopyHeightMeters,
-            crownDiameterMeters: identified.crownDiameterMeters,
-            trellisPrompt: identified.trellisPrompt
-          };
-        } else {
-          entity.id = treeId || entity.id;
-          if (parsedUrl.searchParams.has('species')) {
-            entity.species = parsedUrl.searchParams.get('species')!;
-          }
-          if (parsedUrl.searchParams.has('height')) {
-            entity.canopyHeightMeters = parseFloat(parsedUrl.searchParams.get('height')!);
-          }
-          if (parsedUrl.searchParams.has('crownDiameter')) {
-            entity.crownDiameterMeters = parseFloat(parsedUrl.searchParams.get('crownDiameter')!);
-          }
-        }
-      }
-
-      const bridge = new UniversalBotanicalBridgeService();
-      const result = await bridge.synthesizeTreeFromEntity(entity, {
-        season,
-        leafDensity,
-        saturationScale
-      });
-
-      if (format === 'glb' && result.glbBuffer) {
-        return sendBinary(res, 200, result.glbBuffer, 'model/gltf-binary');
-      }
-
-      return sendJson(res, 200, {
-        success: true,
-        treeId: result.treeId,
-        species: result.species,
-        archetype: result.archetype,
-        worldPosition: result.worldPosition,
-        worldRotationYawRad: result.worldRotationYawRad,
-        fittedHeightMeters: result.fittedHeightMeters,
-        fittedSpreadMeters: result.fittedSpreadMeters,
-        outputGlbPath: result.outputGlbPath,
-        glbDownloadUrl: `/api/spatial/botanical/tree/${result.treeId}.glb`,
-        telemetry: result.telemetry,
-        appliedBeta: result.appliedBeta
       });
     } catch (err: any) {
       return sendJson(res, 500, { success: false, error: err.message });

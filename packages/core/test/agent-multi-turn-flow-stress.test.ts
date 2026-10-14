@@ -261,25 +261,22 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
     // =========================================================================
     // Journey 4: Environmental Botanical Ecosystem & Architectural Clearances
     // =========================================================================
-    it('Journey 4: Queries botanical separation and synthesizes anatomically accurate trees', async () => {
-        // Step 1: Query separator trees for Oppian Hill Zone
-        const botQueryRes = await registry.dispatch('botanical_query_separator_trees', {
-            zone: 'oppian_hill_crest'
-        }, mockContext);
-        expect(botQueryRes.exec.status).toBe('completed');
-        const trees = (botQueryRes.resultPayload as any).trees;
-        expect(trees.length).toBeGreaterThan(0);
+    it('Journey 4: Grows a tree to given measurements, and refuses one without them', async () => {
+        // Step 1: a tree without its measurements is refused, not guessed
+        const missing = await registry.dispatch('botanical_synthesize_tree', { label: 'stone pine' }, mockContext);
+        expect(missing.exec.status).toBe('failed');
 
-        // Step 2: Synthesize Pinus Pinea (Italian Stone Pine) with anatomical crown
+        // Step 2: a 16 m tree with a 13 m crown, grown by SB-Veggie (space colonisation) in clay
         const botSynthRes = await registry.dispatch('botanical_synthesize_tree', {
-            species: 'pinus_pinea',
-            canopyHeightMeters: 16.0,
-            crownDiameterMeters: 13.0
+            heightMeters: 16.0,
+            crownDiameterMeters: 13.0,
+            label: 'stone pine',
+            triangleBudget: 4000
         }, mockContext);
         expect(botSynthRes.exec.status).toBe('completed');
-        expect((botSynthRes.resultPayload as any).success).toBe(true);
-        expect((botSynthRes.resultPayload as any).species).toBe('pinus_pinea');
-    });
+        expect(Math.abs((botSynthRes.resultPayload as any).grown.heightMeters - 16)).toBeLessThan(1.5);
+        expect((botSynthRes.resultPayload as any).label).toBe('stone pine');
+    }, 600_000);
 
     // =========================================================================
     // Journey 6: Generative UI, Multi-Phase Plan Cards & User Interaction

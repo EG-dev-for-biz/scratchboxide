@@ -272,15 +272,6 @@ export type {
 } from './common/spatial/sb-archi-protocol';
 
 export type {
-    UniversalBotanicalBridgeService,
-    SupportedTreeSpecies,
-    BotanicalSpeciesAdapter,
-    SpatialTreeEntity,
-    TreeSynthesisBridgeOptions,
-    TreeSynthesisBridgeResult
-} from './node/spatial/UniversalBotanicalBridgeService';
-
-export type {
     UniversalArchiBridgeService,
     SupportedArchiTypology,
     ArchiTypologyAdapter,

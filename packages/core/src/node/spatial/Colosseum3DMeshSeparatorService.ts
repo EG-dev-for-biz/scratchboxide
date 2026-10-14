@@ -14,11 +14,6 @@ import {
   OrientedBoundingBox3D,
   DualBoundingBoxResult
 } from './OrientedBoundingBoxSolver';
-import {
-  ColosseumTreeIdentificationEngine,
-  BotanicalTreeRecord,
-  BotanicalSummary
-} from './ColosseumTreeIdentificationEngine';
 import { Universal3DObjectSeparationService } from './Universal3DObjectSeparationService';
 
 export type SpatialCategory =
@@ -67,7 +62,7 @@ export interface Separated3DScene {
   overallBoundingBox: BoundingBox3DMetric;
   overallOrientedBoundingBox?: OrientedBoundingBox3D;
   objects: Separated3DObject[];
-  granularityMode: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
+  granularityMode: 'macro' | 'detailed' | 'total' | 'all';
   timestamp: string;
   sourceAssetPath?: string;
   objectCounts?: {
@@ -961,11 +956,8 @@ export function generateTotalIdentifiableEntities(): SpatialEntityDefinition[] {
     });
   }
 
-  // 3. Urban Forestry & Trees (920 discrete botanical trees across 10 zones)
-  const identifiedTrees = ColosseumTreeIdentificationEngine.getIdentifiedTrees();
-  for (const tree of identifiedTrees) {
-    entities.push(tree);
-  }
+  // 3. Trees are not listed here: the stands that used to be pushed here were generated from a seeded random number
+  // generator, not identified in the mesh. Trees are measured from photo tiles by tile_vegetation (google_3d_tiles_get_clay).
 
   // 4. Monuments & Ancient Ruins (24 items)
   // 4A: Arch of Constantine (8 components) - Rotated and centered on real monument
@@ -1197,7 +1189,7 @@ export function generateTotalIdentifiableEntities(): SpatialEntityDefinition[] {
 export const COLOSSEUM_TOTAL_IDENTIFIABLE_ENTITIES: SpatialEntityDefinition[] = generateTotalIdentifiableEntities();
 
 export interface Separate3DMeshOptions {
-  mode?: 'macro' | 'detailed' | 'total' | 'trees' | 'all' | 'universal';
+  mode?: 'macro' | 'detailed' | 'total' | 'all' | 'universal';
   clusterDistance?: number;
 }
 
@@ -1207,19 +1199,6 @@ export interface Separate3DMeshOptions {
  */
 export class Colosseum3DMeshSeparatorService {
   /**
-   * Retrieves all identified botanical trees (~920 trees) across 10 zones.
-   */
-  public static getBotanicalTrees(): BotanicalTreeRecord[] {
-    return ColosseumTreeIdentificationEngine.getIdentifiedTrees();
-  }
-
-  /**
-   * Generates quantitative botanical summary and telemetry across identified trees.
-   */
-  public static getBotanicalSummary(): BotanicalSummary {
-    return ColosseumTreeIdentificationEngine.getBotanicalSummary();
-  }
-  /**
    * Ingests a binary glTF 2.0 (.glb) buffer or disk path and separates it into
    * discrete 3D spatial entities with accurate metric bounding boxes.
    */
@@ -1228,7 +1207,10 @@ export class Colosseum3DMeshSeparatorService {
     options?: Separate3DMeshOptions
   ): Separated3DScene {
     // If requesting universal mode or non-colosseum mode, delegate directly to Universal3DObjectSeparationService
-    if (options?.mode === 'universal' || (options?.mode && !['macro', 'detailed', 'total', 'trees', 'all'].includes(options.mode))) {
+    if ((options?.mode as string | undefined) === 'trees') {
+      throw new Error("Colosseum3DMeshSeparatorService: mode 'trees' has been removed (its trees came from a seeded random generator, not the mesh); google_3d_tiles_get_clay measures and rebuilds a location's trees from its photo tiles.");
+    }
+    if (options?.mode === 'universal' || (options?.mode && !['macro', 'detailed', 'total', 'all'].includes(options.mode))) {
       const universal = Universal3DObjectSeparationService.separate3DMesh(glbInput, {
         clusterDistance: options?.clusterDistance,
         glbPath: typeof glbInput === 'string' ? glbInput : undefined
@@ -1382,8 +1364,6 @@ export class Colosseum3DMeshSeparatorService {
       entityDefs = COLOSSEUM_3D_ENTITIES;
     } else if (mode === 'detailed') {
       entityDefs = COLOSSEUM_GRANULAR_3D_ENTITIES;
-    } else if (mode === 'trees') {
-      entityDefs = ColosseumTreeIdentificationEngine.getIdentifiedTrees();
     } else if (mode === 'total' || mode === 'all') {
       entityDefs = COLOSSEUM_TOTAL_IDENTIFIABLE_ENTITIES;
     } else {

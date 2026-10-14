@@ -144,56 +144,21 @@ describe('Cloud Run Spatial Separator Microservice', () => {
     expect(data.result.separatedObjects.length).toBeGreaterThan(0);
   });
 
-  it('6. should return botanical species knowledge on /api/spatial/botanical/species', async () => {
-    const res = await simulateRequest('GET', '/api/spatial/botanical/species');
-    expect(res.statusCode).toBe(200);
-    const data = res.json();
-    expect(data.success).toBe(true);
-    expect(data.totalSpecies).toBeGreaterThanOrEqual(10);
-    const pine = data.species.find((s: any) => s.id === 'pinus_pinea');
-    expect(pine).toBeDefined();
-    expect(pine.archetype).toBe('conifer');
-    expect(pine.leafMorphology).toBe(2);
-  });
-
-  it('7. should synthesize a 1:1 metric replacement tree for an identified tree via GET /api/spatial/botanical/tree/:id', async () => {
-    const treesRes = await simulateRequest('GET', '/api/spatial/trees?species=pinus_pinea');
-    expect(treesRes.statusCode).toBe(200);
-    const sampleTree = treesRes.json().trees[0];
-    expect(sampleTree).toBeDefined();
-
-    const synthRes = await simulateRequest('GET', `/api/spatial/botanical/tree/${sampleTree.id}?season=1.0`);
-    expect(synthRes.statusCode).toBe(200);
-    const synthData = synthRes.json();
-    expect(synthData.success).toBe(true);
-    expect(synthData.treeId).toBe(sampleTree.id);
-    expect(synthData.species).toBe('pinus_pinea');
-    expect(synthData.fittedHeightMeters).toBe(sampleTree.canopyHeightMeters);
-    expect(synthData.glbDownloadUrl).toContain('.glb');
-    expect(synthData.appliedBeta.length).toBe(16);
-  });
-
-  it('8. should synthesize an arbitrary tree from any geographic area 3D tile via POST /api/spatial/botanical/synthesize', async () => {
-    // Custom tree from Central Park, New York or anywhere globally
-    const customTreePayload = {
-      treeId: 'tree-central-park-ny-042',
-      species: 'quercus_robur',
-      nominalDimensions: [14.0, 18.5, 13.5],
-      nominalCentroid: [120.5, 25.0, -84.2],
-      canopyHeightMeters: 18.5,
-      crownDiameterMeters: 13.8,
-      season: 0.45 // Autumn golden amber
-    };
-
-    const res = await simulateRequest('POST', '/api/spatial/botanical/synthesize', customTreePayload);
-    expect(res.statusCode).toBe(200);
-    const data = res.json();
-    expect(data.success).toBe(true);
-    expect(data.treeId).toBe('tree-central-park-ny-042');
-    expect(data.species).toBe('quercus_robur');
-    expect(data.archetype).toBe('decurrent');
-    expect(data.fittedHeightMeters).toBe(18.5);
-    expect(data.worldPosition[0]).toBeCloseTo(120.5, 0.1);
-    expect(data.telemetry.outputVertices).toBeGreaterThan(100);
+  it('6. no longer serves the generated Colosseum tree list or species-catalogue tree synthesis', async () => {
+    // Those endpoints returned trees from a seeded random generator and echoed the requested height as "fitted";
+    // trees are now measured from photo tiles by tile_vegetation (google_3d_tiles_get_clay).
+    for (const [method, url] of [
+      ['GET', '/api/spatial/trees'],
+      ['GET', '/api/spatial/trees/summary'],
+      ['GET', '/api/spatial/botanical/species'],
+      ['GET', '/api/spatial/botanical/tree/fol-tree-oppian-crest-001'],
+      ['POST', '/api/spatial/botanical/synthesize']
+    ] as const) {
+      const res = await simulateRequest(method, url, method === 'POST' ? { canopyHeightMeters: 18.5 } : undefined);
+      expect(res.statusCode).toBe(404);
+    }
+    const trees = await simulateRequest('GET', '/api/spatial/3d-mesh/objects?mode=trees');
+    expect(trees.statusCode).toBe(500);
+    expect(trees.json().error).toContain("mode 'trees' has been removed");
   });
 });
