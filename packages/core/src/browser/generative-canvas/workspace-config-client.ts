@@ -94,6 +94,63 @@ export class WorkspaceConfigClient {
         };
     }
 
+    /** Chat sessions saved on disk for a workspace (newest first); empty if the server is unreachable. */
+    async fetchSessions<T = any>(workspaceRoot?: string): Promise<T[]> {
+        try {
+            const url = workspaceRoot ? `${this.endpoint()}/sessions?root=${encodeURIComponent(workspaceRoot)}` : `${this.endpoint()}/sessions`;
+            const res = await fetch(url, { headers: { Accept: 'application/json' } });
+            if (res.ok) return (await res.json()).sessions || [];
+        } catch (e) {
+            console.warn('Failed to load chat sessions from disk', e);
+        }
+        return [];
+    }
+
+    async saveSession(workspaceRoot: string | undefined, session: { id: string; [key: string]: unknown }): Promise<boolean> {
+        try {
+            const res = await fetch(`${this.endpoint()}/sessions/${encodeURIComponent(session.id)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ workspaceRoot: workspaceRoot || '', session })
+            });
+            return res.ok;
+        } catch (e) {
+            console.warn('Failed to save chat session to disk', e);
+            return false;
+        }
+    }
+
+    async deleteSession(workspaceRoot: string | undefined, id: string): Promise<void> {
+        try {
+            const root = workspaceRoot ? `?root=${encodeURIComponent(workspaceRoot)}` : '';
+            await fetch(`${this.endpoint()}/sessions/${encodeURIComponent(id)}${root}`, { method: 'DELETE' });
+        } catch (e) {
+            console.warn('Failed to delete chat session from disk', e);
+        }
+    }
+
+    async fetchProjects<T = any>(): Promise<T[]> {
+        try {
+            const res = await fetch(`${this.endpoint()}/projects`, { headers: { Accept: 'application/json' } });
+            if (res.ok) return (await res.json()).projects || [];
+        } catch (e) {
+            console.warn('Failed to load recent projects', e);
+        }
+        return [];
+    }
+
+    async saveProjects(projects: unknown[]): Promise<void> {
+        try {
+            await fetch(`${this.endpoint()}/projects`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ projects })
+            });
+        } catch (e) {
+            console.warn('Failed to save recent projects', e);
+        }
+    }
+
     /**
      * Persist workspace configuration to .scratchbox/config.json.
      */

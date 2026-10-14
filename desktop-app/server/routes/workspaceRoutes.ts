@@ -23,6 +23,7 @@ import {
 import { createEmptyProjectGraph } from '../../../packages/core/src/common';
 import {
     WorkspaceConfigService,
+    ChatSessionStore,
     ProjectArtifactStore,
     WorkspaceFileWatcherService,
     CodebaseLensSyncService
@@ -49,6 +50,58 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
             const root = requireWorkspaceRoot(req.query.root);
             const config = await workspaceService.loadFullWorkspaceConfig(root);
             res.json(config);
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    // Chat sessions on disk (<workspace>/.scratchbox/sessions) and the recent-project list.
+    const sessionStore = new ChatSessionStore();
+
+    router.get('/sessions', async (req: Request, res: Response) => {
+        try {
+            res.json({ sessions: await sessionStore.list(requireWorkspaceRoot(req.query.root)) });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.put('/sessions/:id', async (req: Request, res: Response) => {
+        try {
+            const { workspaceRoot, session } = req.body || {};
+            if (!session || session.id !== req.params.id) {
+                res.status(400).json({ success: false, error: 'body.session.id must match the URL' });
+                return;
+            }
+            const stored = await sessionStore.save(requireWorkspaceRoot(workspaceRoot), session);
+            res.json({ success: true, savedAt: stored.savedAt });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.delete('/sessions/:id', async (req: Request, res: Response) => {
+        try {
+            await sessionStore.remove(requireWorkspaceRoot(req.query.root), req.params.id);
+            res.json({ success: true });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.get('/projects', async (_req: Request, res: Response) => {
+        try {
+            res.json({ projects: await sessionStore.listProjects() });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.put('/projects', async (req: Request, res: Response) => {
+        try {
+            const projects = Array.isArray(req.body?.projects) ? req.body.projects : [];
+            await sessionStore.saveProjects(projects);
+            res.json({ success: true });
         } catch (err: any) {
             sendError(res, err);
         }

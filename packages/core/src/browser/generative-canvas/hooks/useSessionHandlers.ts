@@ -14,6 +14,7 @@
  *
  * Extracted verbatim from GenerativeCanvasStudio.tsx.
  */
+import { WorkspaceConfigClient } from '../workspace-config-client';
 import * as React from 'react';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { ProjectItem } from '../ProjectsModal';
@@ -119,6 +120,7 @@ export function useSessionHandlers(deps: UseSessionHandlersDeps) {
         e.stopPropagation();
         const remaining = sessions.filter(s => s.id !== sessionId);
         setSessions(remaining);
+        void WorkspaceConfigClient.getInstance().deleteSession(activeWorkspace.path, sessionId);
         if (currentSessionId === sessionId) {
             const nextSession = remaining.find(s => s.workspaceId === activeWorkspace.id) || remaining[0];
             if (nextSession) {

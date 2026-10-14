@@ -11,6 +11,8 @@ import * as React from 'react';
 import { CanvasArtifact, ChatSession, StudioAppearanceConfig } from '../canvas-types';
 import { DEFAULT_APPEARANCE_CONFIG, DEFAULT_SESSIONS } from '../state/studio-defaults';
 import { ChatState, Updater } from '../state/chatStore';
+import { WorkspaceConfigClient } from '../workspace-config-client';
+import { mergeChatSessions } from '../../../common/chat-session-merge';
 
 
 const LS_SESSIONS_KEY = 'scratchbox_studio_sessions_v18';
@@ -181,9 +183,32 @@ export { loadSavedSessions, loadInitialSessionId, loadSavedVersions, loadSavedAp
 export function usePersistedChatState(
     chatState: ChatState,
     setSessions: (payload: Updater<ChatSession[]>) => void,
-    appearanceConfig: StudioAppearanceConfig
+    appearanceConfig: StudioAppearanceConfig,
+    workspaceRoot?: string
 ): { persistSessionsImmediately: (updatedSessions: ChatSession[]) => void } {
     const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, layoutMode, artifactVersions } = chatState;
+
+    // Disk is the durable copy (<workspace>/.scratchbox/sessions); localStorage only gives an instant first paint.
+    React.useEffect(() => {
+        let cancelled = false;
+        WorkspaceConfigClient.getInstance().fetchSessions<ChatSession>(workspaceRoot).then(disk => {
+            if (!cancelled && disk.length > 0) setSessions(prev => mergeChatSessions(disk, prev));
+        });
+        return () => { cancelled = true; };
+    }, [workspaceRoot]);
+
+    // Only messages carry history worth keeping; an untouched default session is not written.
+    React.useEffect(() => {
+        if (!currentSessionId || messages.length === 0) return;
+        const timer = setTimeout(() => {
+            const current = sessions.find(s => s.id === currentSessionId);
+            if (!current) return;
+            void WorkspaceConfigClient.getInstance().saveSession(workspaceRoot, {
+                ...current, messages, activeArtifact, artifactHistory, layoutMode
+            });
+        }, 1500);
+        return () => clearTimeout(timer);
+    }, [messages, activeArtifact, artifactHistory, layoutMode, currentSessionId, workspaceRoot]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
     React.useEffect(() => {

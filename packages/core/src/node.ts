@@ -13,6 +13,7 @@ export { GeminiService } from './node/gemini-service';
 // Project Artifact & Config Persistence
 export { ProjectArtifactStore } from './node/project-artifact-store';
 export { WorkspaceConfigService } from './node/workspace-config-service';
+export { ChatSessionStore, mergeChatSessions } from './node/chat-session-store';
 export { WorkspaceFileWatcherService } from './node/workspace-file-watcher-service';
 export { ProjectContextGraphService } from './node/project-context-graph-service';
 

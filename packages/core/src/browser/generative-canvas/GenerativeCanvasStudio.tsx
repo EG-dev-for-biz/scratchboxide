@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { usePersistedProjects } from './hooks/usePersistedProjects';
 import * as React from 'react';
 import {
     CanvasArtifact,
@@ -378,6 +379,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const { activeContextCategory, attachedContextMentions, autocompleteQuery, autocompleteType, handleInputChange, handleSelectAutocompleteContext, handleSelectAutocompleteSkill, handleToggleComposerMcp, handleToggleComposerSkill, selectedAutocompleteIndex, selectedMcpIds, selectedSkillIds, setActiveContextCategory, setAttachedContextMentions, setAutocompleteQuery, setAutocompleteType, setSelectedAutocompleteIndex, setSelectedSkillIds, setTokenBudget } = useComposerAutocomplete({ inputRef, inputValue, setInputValue, setSkills, showToast });
 
     const [workspaces, setWorkspaces] = React.useState<ProjectItem[]>(DEFAULT_RECENT_PROJECTS);
+    usePersistedProjects(workspaces, setWorkspaces);
     const [activeWorkspace, setActiveWorkspace] = React.useState<ProjectItem>(DEFAULT_RECENT_PROJECTS[0]);
     const [workspaceMenuOpen, setWorkspaceMenuOpen] = React.useState<{ newWs: boolean; composerWs: boolean }>({ newWs: false, composerWs: false });
     const showNewWorkspaceMenu = workspaceMenuOpen.newWs;
@@ -548,7 +550,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [isConversationMenuOpen]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
-    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, appearanceConfig);
+    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, appearanceConfig, activeWorkspace.path);
 
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 

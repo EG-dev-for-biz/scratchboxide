@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { usePersistedProjects } from './hooks/usePersistedProjects';
 import * as React from 'react';
 import {
     IconArrowRight,
@@ -131,6 +132,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
     onExecuteCommand
 }) => {
     const [projects, setProjects] = React.useState<ProjectItem[]>(DEFAULT_RECENT_PROJECTS);
+    usePersistedProjects(projects, setProjects);
     const [searchQuery, setSearchQuery] = React.useState<string>('');
     const [selectedProjectIndex, setSelectedProjectIndex] = React.useState<number>(0);
     const [showNewProjectDrawer, setShowNewProjectDrawer] = React.useState<boolean>(false);
