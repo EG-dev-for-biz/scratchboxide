@@ -7,18 +7,29 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
+import { requireFile, withReason } from './helpers/requirements';
+
+// The reference still lives in one developer's Cursor project assets folder; it is not part of the repo.
+const USER_IMAGE_PATH = '/Users/eligreen/.cursor/projects/Users-eligreen-dev-scratchbox-ide-master/assets/Sequence_02.00_00_05_19.Still002-a2b96764-a348-4544-b3e9-f6754c634a4c.jpg';
+const userImage = requireFile(USER_IMAGE_PATH, 'machine-specific reference still from a local Cursor project; only present on the machine it was captured on');
 
 describe('Plaza Hotel Procedural 3D Reconstruction from Image', () => {
     const compiler = new NativeCppCompilerService();
     const sourcePath = path.resolve(process.cwd(), 'scripts/generate_plaza_procedural_3d.cpp');
-    const outGlbPath = path.resolve(process.cwd(), 'public/models/plaza_hotel_procedural.glb');
-    const userImagePath = '/Users/eligreen/.cursor/projects/Users-eligreen-dev-scratchbox-ide-master/assets/Sequence_02.00_00_05_19.Still002-a2b96764-a348-4544-b3e9-f6754c634a4c.jpg';
+    // Generated GLB goes to a private temp dir instead of public/models.
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-plaza-procedural-'));
+    const outGlbPath = path.join(outDir, 'plaza_hotel_procedural.glb');
+    const userImagePath = USER_IMAGE_PATH;
+    afterAll(() => {
+        fs.rmSync(outDir, { recursive: true, force: true });
+    });
 
-    it('should locate the user reference photograph of The Plaza Hotel', () => {
+    it.skipIf(!userImage.ok)(withReason('should locate the user reference photograph of The Plaza Hotel', userImage), () => {
         expect(fs.existsSync(userImagePath)).toBe(true);
         const stats = fs.statSync(userImagePath);
         expect(stats.size).toBeGreaterThan(50000);

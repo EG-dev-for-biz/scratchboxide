@@ -1,10 +1,32 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { requireAssets, withReason } from './helpers/requirements';
+
+const VIDEO_KEYS = ['synthesis', 'blockout', 'comparison'] as const;
+
+/**
+ * Repo-relative paths of the (gitignored) gallery videos a district references, read from the tracked
+ * gallery HTML at collection time so the skip reason names exactly the missing files.
+ */
+function districtVideos(galleryPath: string, ids: string[]): string[] {
+  try {
+    const html = fs.readFileSync(galleryPath, 'utf8');
+    const data = JSON.parse(html.match(/const evaluationsData = (\[.*?\]);/s)![1]);
+    return ids.flatMap(id => {
+      const dist = data.find((d: any) => d.id === id);
+      return dist ? VIDEO_KEYS.map(k => `public/${dist.videoSources[k].local}`) : [];
+    });
+  } catch {
+    return []; // the parse itself is asserted by the first test
+  }
+}
 
 describe('Gallery Pipeline Asset Integrity & Isolation', () => {
   const publicDir = path.resolve(__dirname, '../../../public');
   const galleryPath = path.join(publicDir, 's4d_multi_gallery.html');
+  const tilesVideos = requireAssets(districtVideos(galleryPath, ['s4d_google_tiles_textured_01', 's4d_google_tiles_clay_01']));
+  const plazaVideos = requireAssets(districtVideos(galleryPath, ['s4d_plaza_hotel_01']));
 
   it('gallery HTML exists and contains parseable evaluationsData', () => {
     expect(fs.existsSync(galleryPath)).toBe(true);
@@ -48,10 +70,19 @@ describe('Gallery Pipeline Asset Integrity & Isolation', () => {
       expect(beat).not.toContain('textured');
       expect(fs.existsSync(path.join(publicDir, beat))).toBe(true);
     });
+  });
+
+  it.skipIf(!tilesVideos.ok)(withReason('3D Tiles districts reference existing, non-empty textured and clay videos', tilesVideos), () => {
+    const html = fs.readFileSync(galleryPath, 'utf8');
+    const match = html.match(/const evaluationsData = (\[.*?\]);/s);
+    const data = JSON.parse(match![1]);
+
+    const texturedDist = data.find((d: any) => d.id === 's4d_google_tiles_textured_01');
+    const clayDist = data.find((d: any) => d.id === 's4d_google_tiles_clay_01');
 
     // All referenced videos must exist and be > 0 bytes
     for (const dist of [texturedDist, clayDist]) {
-      for (const key of ['synthesis', 'blockout', 'comparison']) {
+      for (const key of VIDEO_KEYS) {
         const localRel = dist.videoSources[key].local;
         const fullPath = path.join(publicDir, localRel);
         expect(fs.existsSync(fullPath)).toBe(true);
@@ -78,17 +109,24 @@ describe('Gallery Pipeline Asset Integrity & Isolation', () => {
       expect(fs.existsSync(path.join(publicDir, beat))).toBe(true);
     });
 
-    for (const key of ['synthesis', 'blockout', 'comparison']) {
+    expect(plazaDist.qaKeyframes.length).toBe(6);
+    plazaDist.qaKeyframes.forEach((kf: any) => {
+      expect(fs.existsSync(path.join(publicDir, kf.src))).toBe(true);
+    });
+  });
+
+  it.skipIf(!plazaVideos.ok)(withReason('Plaza Hotel NYC district references existing, non-empty videos', plazaVideos), () => {
+    const html = fs.readFileSync(galleryPath, 'utf8');
+    const match = html.match(/const evaluationsData = (\[.*?\]);/s);
+    const data = JSON.parse(match![1]);
+    const plazaDist = data.find((d: any) => d.id === 's4d_plaza_hotel_01');
+
+    for (const key of VIDEO_KEYS) {
       const localRel = plazaDist.videoSources[key].local;
       const fullPath = path.join(publicDir, localRel);
       expect(fs.existsSync(fullPath)).toBe(true);
       expect(fs.statSync(fullPath).size).toBeGreaterThan(0); // non-zero valid video file
     }
-
-    expect(plazaDist.qaKeyframes.length).toBe(6);
-    plazaDist.qaKeyframes.forEach((kf: any) => {
-      expect(fs.existsSync(path.join(publicDir, kf.src))).toBe(true);
-    });
   });
 });
 

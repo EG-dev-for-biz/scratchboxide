@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs-extra';
+import * as os from 'os';
 import * as path from 'path';
 import {
   FoliageClass,
@@ -243,11 +244,17 @@ describe('Google Solar API dataLayers Multi-Class Foliage Proof', () => {
     });
 
     const finalPng = encodePng(compW, compH, compRgba);
-    const outPath = '/Users/eligreen/.gemini/antigravity/brain/a4b13200-846d-4dd5-a3b8-35762daf824b/google_solar_foliage_segmentation_proof.png';
-    fs.writeFileSync(outPath, finalPng);
+    // Write the proof into a private temp dir (it used to go to a machine-specific ~/.gemini path).
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-solar-foliage-proof-'));
+    const outPath = path.join(outDir, 'google_solar_foliage_segmentation_proof.png');
+    try {
+      fs.writeFileSync(outPath, finalPng);
 
-    expect(fs.existsSync(outPath)).toBe(true);
-    expect(finalPng.length).toBeGreaterThan(1000);
-    console.log(`Saved visual proof artifact: ${outPath} (${(finalPng.length / 1024).toFixed(1)} KB)`);
+      expect(fs.existsSync(outPath)).toBe(true);
+      expect(finalPng.length).toBeGreaterThan(1000);
+      console.log(`Saved visual proof artifact: ${outPath} (${(finalPng.length / 1024).toFixed(1)} KB)`);
+    } finally {
+      fs.removeSync(outDir);
+    }
   });
 });

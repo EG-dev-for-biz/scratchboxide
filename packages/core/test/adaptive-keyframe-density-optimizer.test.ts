@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
+import { requireAsset, withReason } from './helpers/requirements';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -191,7 +192,11 @@ describe('AdaptiveKeyframeDensityOptimizer', () => {
   });
 
   describe('4. Integration with Real Plaza Hotel 361-Frame Sequence', () => {
-    it('optimizes keyframe density on actual Plaza Hotel camera trajectory', () => {
+    const plazaCameraPath = requireAsset(
+      'public/models/plaza_hotel_camera_path.json',
+      'GeoCameraMatchmovePipelineService.execute on the Plaza Hotel reference plate (writes public/models/<name>_camera_path.json)'
+    );
+    it.skipIf(!plazaCameraPath.ok)(withReason('optimizes keyframe density on actual Plaza Hotel camera trajectory', plazaCameraPath), () => {
       const plazaPath = path.resolve(process.cwd(), 'public/models/plaza_hotel_camera_path.json');
       expect(fs.existsSync(plazaPath)).toBe(true);
 
