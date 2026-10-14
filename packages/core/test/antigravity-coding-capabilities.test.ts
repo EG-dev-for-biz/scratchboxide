@@ -189,17 +189,13 @@ test('Phase 3 & 4: Subagent delegation and AgentVerificationService self-healing
         assert.strictEqual(subagentRes.resultPayload.status, 'success');
         assert.ok(String(subagentRes.resultPayload.result).includes('Audit calculator.ts for bugs'));
 
-        // 2. Test AgentVerificationService on clean workspace
+        // 2. Verification typechecks the owning project; with no tsconfig it must not claim a typecheck ran
         const verifier = new AgentVerificationService(ctx.lsp, ctx.sandbox);
-        const cleanOutcome = await verifier.verify({
-            workspaceRoot: tempDir,
-            modifiedFiles: [filePath],
-            runTests: false
-        });
-        assert.strictEqual(cleanOutcome.passed, true);
-        assert.ok(cleanOutcome.summary?.includes('0 errors detected'));
+        const outcome = await verifier.verify({ workspaceRoot: tempDir, modifiedFiles: [filePath], runTests: false });
+        assert.strictEqual(outcome.passed, true);
+        assert.ok(outcome.summary?.includes('nothing was typechecked'));
 
-        // 3. Inject compiler diagnostic error into LSP
+        // 3. Diagnostics ingested from a compiler run feed the self-healing prompt
         const normalized = path.resolve(filePath).replace(/\\/g, '/');
         ctx.lsp.ingestDiagnostics(normalized, [
             {
@@ -210,15 +206,6 @@ test('Phase 3 & 4: Subagent delegation and AgentVerificationService self-healing
                 code: 'TS2322'
             }
         ]);
-
-        const failedOutcome = await verifier.verify({
-            workspaceRoot: tempDir,
-            modifiedFiles: [normalized],
-            runTests: false
-        });
-        assert.strictEqual(failedOutcome.passed, false);
-        assert.ok(failedOutcome.summary?.includes('Verification failed with 1 compiler error'));
-        assert.strictEqual(failedOutcome.diagnostics?.length, 1);
 
         // 4. Test self-healing prompt synthesis
         const fixPrompt = ctx.lsp.synthesizeDiagnosticFixPrompt([normalized]);

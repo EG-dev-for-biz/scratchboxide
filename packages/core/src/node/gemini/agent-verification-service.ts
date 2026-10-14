@@ -7,12 +7,14 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { execFile } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { LspDiagnosticFeedbackService } from '../lsp-diagnostic-feedback-service';
 import { ContainerSandboxService } from '../container-sandbox-service';
 import {
     VerificationOutcome,
     VerificationDiagnostic,
-    VisualVerificationResult,
     GeometryVerificationResult
 } from '../../common/gemini-protocol';
 
@@ -21,24 +23,6 @@ export interface VerifyOptions {
     modifiedFiles?: string[];
     runTests?: boolean;
     timeoutMs?: number;
-}
-
-export interface VisualVerificationOptions {
-    screenshotPath?: string;
-    screenshotBase64?: string;
-    promptContext?: string;
-    minPassingScore?: number; // default 8.5
-    mockEvaluation?: Partial<Record<
-        | 'geometricDefinition'
-        | 'pixelSplatDensity'
-        | 'materialMicroSurface'
-        | 'environmentalGrounding'
-        | 'radiometricLighting'
-        | 'colorTemperature'
-        | 'volumetricDepth'
-        | 'photographicRealism',
-        number
-    >>;
 }
 
 export interface GeometryVerificationOptions {
@@ -59,59 +43,46 @@ export class AgentVerificationService {
     ) {}
 
     /**
-     * Run full verification suite against modified files and workspace:
-     * 1. Query LSP diagnostics for compiler errors.
-     * 2. If configured and no compiler errors, execute sandboxed verification commands.
+     * Verify the files the agent changed:
+     * 1. Typecheck the TypeScript project(s) that own the modified .ts/.tsx files (fresh `tsc --noEmit`,
+     *    not a cached result) and fail on errors located in those files.
+     * 2. If requested, run the workspace's tests in the sandbox.
      */
     async verify(options: VerifyOptions): Promise<VerificationOutcome> {
-        const { workspaceRoot, modifiedFiles = [], runTests = false, timeoutMs = 30000 } = options;
+        const { workspaceRoot, modifiedFiles = [], runTests = false, timeoutMs = 120000 } = options;
+        const started = Date.now();
         const diagnostics: VerificationDiagnostic[] = [];
+        const modified = new Set(modifiedFiles.map(f => path.resolve(workspaceRoot, f)));
 
-        // 1. LSP Diagnostics inspection
-        let errorCount = 0;
-        if (modifiedFiles.length > 0) {
-            for (const f of modifiedFiles) {
-                const fileDiags = this.lsp.getDiagnosticsForFile(f);
-                for (const d of fileDiags) {
-                    if (d.severity === 'error') {
-                        errorCount++;
-                        diagnostics.push({
-                            file: d.filePath,
-                            filePath: d.filePath,
-                            line: d.range?.startLine,
-                            message: d.message,
-                            severity: 'error',
-                            source: d.source || 'lsp'
-                        });
-                    }
-                }
+        // 1. Fresh typecheck of each TypeScript project touched by the edit
+        const projects = new Set<string>();
+        for (const file of modified) {
+            if (!/\.(ts|tsx|mts|cts)$/i.test(file)) continue;
+            const project = findTsconfigDir(path.dirname(file), workspaceRoot);
+            if (project) projects.add(project);
+        }
+        let otherErrors = 0;
+        const checked: string[] = [];
+        for (const project of projects) {
+            const output = await runTypecheck(project, timeoutMs);
+            checked.push(path.relative(workspaceRoot, project) || '.');
+            if (output.timedOut) {
+                return { passed: false, summary: `Typecheck of ${project} did not finish within ${Math.round(timeoutMs / 1000)}s.`, durationMs: Date.now() - started };
             }
-        } else {
-            const summary = this.lsp.getSummary();
-            errorCount = summary.errorCount;
-            if (summary.diagnosticsByFile) {
-                for (const [filePath, diags] of Object.entries(summary.diagnosticsByFile)) {
-                    for (const d of diags) {
-                        if (d.severity === 'error') {
-                            diagnostics.push({
-                                file: filePath,
-                                filePath,
-                                line: d.range?.startLine,
-                                message: d.message,
-                                severity: 'error',
-                                source: d.source || 'lsp'
-                            });
-                        }
-                    }
-                }
+            this.lsp.ingestCompilerOutput(output.text, 'typescript', output.exitCode);
+            for (const d of parseTscErrors(output.text, project)) {
+                if (modified.has(d.filePath!)) diagnostics.push(d);
+                else otherErrors++;
             }
         }
 
-        if (errorCount > 0) {
+        if (diagnostics.length > 0) {
             return {
                 passed: false,
-                summary: `Verification failed with ${errorCount} compiler error(s) across modified files.`,
-                diagnostics
+                summary: `Typecheck found ${diagnostics.length} error(s) in the files you changed:\n` +
+                    diagnostics.slice(0, 20).map(d => `${path.relative(workspaceRoot, d.filePath!)}:${d.line}: ${d.message}`).join('\n'),
+                diagnostics,
+                durationMs: Date.now() - started
             };
         }
 
@@ -150,104 +121,11 @@ export class AgentVerificationService {
             }
         }
 
+        const scope = checked.length > 0 ? `Typecheck passed for ${checked.join(', ')}` : 'No TypeScript files changed, so nothing was typechecked';
         return {
             passed: true,
-            summary: `Automated verification passed cleanly (0 errors detected).`
-        };
-    }
-
-    /**
-     * Run visual fidelity and photorealism audit against the 8-Dimension Visual Fidelity Rubric.
-     */
-    async verifyVisual(options: VisualVerificationOptions): Promise<VerificationOutcome> {
-        const minPassing = options.minPassingScore ?? 8.5;
-        const mock = options.mockEvaluation || {};
-
-        const dimensionAudits: Record<string, { score: number; passed: boolean; notes?: string }> = {
-            geometricDefinition: {
-                score: mock.geometricDefinition ?? 8.8,
-                passed: (mock.geometricDefinition ?? 8.8) >= minPassing,
-                notes: (mock.geometricDefinition ?? 8.8) >= minPassing
-                    ? 'Crisp silhouette with authentic geometrical structural hierarchy.'
-                    : 'Amorphous or melting silhouette with insufficient edge definition.'
-            },
-            pixelSplatDensity: {
-                score: mock.pixelSplatDensity ?? 8.7,
-                passed: (mock.pixelSplatDensity ?? 8.7) >= minPassing,
-                notes: (mock.pixelSplatDensity ?? 8.7) >= minPassing
-                    ? 'Dense spatial coverage with minimal aliasing.'
-                    : 'Sparse splats or point-sprite billboard discretization.'
-            },
-            materialMicroSurface: {
-                score: mock.materialMicroSurface ?? 8.6,
-                passed: (mock.materialMicroSurface ?? 8.6) >= minPassing,
-                notes: (mock.materialMicroSurface ?? 8.6) >= minPassing
-                    ? 'Physically grounded PBR albedo, roughness, and micro-surface.'
-                    : 'Flat untextured shading or plastic sheen.'
-            },
-            environmentalGrounding: {
-                score: mock.environmentalGrounding ?? 8.8,
-                passed: (mock.environmentalGrounding ?? 8.8) >= minPassing,
-                notes: (mock.environmentalGrounding ?? 8.8) >= minPassing
-                    ? 'Coherent ground contact with tight contact ambient occlusion.'
-                    : 'Void background violation or artificial sticker drop shadows.'
-            },
-            radiometricLighting: {
-                score: mock.radiometricLighting ?? 8.7,
-                passed: (mock.radiometricLighting ?? 8.7) >= minPassing,
-                notes: (mock.radiometricLighting ?? 8.7) >= minPassing
-                    ? 'Consistent key, rim, and atmospheric scattering illumination.'
-                    : 'Unnatural ambient lighting without directional shadows.'
-            },
-            colorTemperature: {
-                score: mock.colorTemperature ?? 8.8,
-                passed: (mock.colorTemperature ?? 8.8) >= minPassing,
-                notes: (mock.colorTemperature ?? 8.8) >= minPassing
-                    ? 'Harmonized Planckian Kelvin color temperature across geometry.'
-                    : 'Spectral mismatch or jarring color casts.'
-            },
-            volumetricDepth: {
-                score: mock.volumetricDepth ?? 8.9,
-                passed: (mock.volumetricDepth ?? 8.9) >= minPassing,
-                notes: (mock.volumetricDepth ?? 8.9) >= minPassing
-                    ? 'Smooth volumetric depth penetration without hard clipping seams.'
-                    : 'Planar slicing or z-fighting depth artifacts.'
-            },
-            photographicRealism: {
-                score: mock.photographicRealism ?? 8.8,
-                passed: (mock.photographicRealism ?? 8.8) >= minPassing,
-                notes: (mock.photographicRealism ?? 8.8) >= minPassing
-                    ? 'Passes squint test with optical realism.'
-                    : 'Obvious synthetic artifacts or CGI plastic appearance.'
-            }
-        };
-
-        const scores = Object.values(dimensionAudits).map(d => d.score);
-        const overallScore = Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
-        const allDimensionsPassed = Object.values(dimensionAudits).every(d => d.passed);
-        const passed = overallScore >= minPassing && allDimensionsPassed;
-
-        const remediationDirectives: string[] = [];
-        for (const [dim, audit] of Object.entries(dimensionAudits)) {
-            if (!audit.passed) {
-                remediationDirectives.push(`Remediate ${dim}: score ${audit.score} < ${minPassing}. ${audit.notes}`);
-            }
-        }
-
-        return {
-            passed,
-            summary: passed
-                ? `Visual fidelity audit passed cleanly (${overallScore.toFixed(1)}/10 across all 8 dimensions).`
-                : `Visual fidelity audit failed (${overallScore.toFixed(1)}/10, minimum threshold >= ${minPassing}).`,
-            visualVerification: {
-                overallScore,
-                passed,
-                screenshotPath: options.screenshotPath,
-                dimensionAudits,
-                remediationRecipe: !passed ? {
-                    actionDirectives: remediationDirectives
-                } : undefined
-            }
+            summary: `${scope}${otherErrors > 0 ? ` (${otherErrors} pre-existing error(s) in other files)` : ''}${runTests ? '; tests passed' : ''}.`,
+            durationMs: Date.now() - started
         };
     }
 
@@ -292,4 +170,35 @@ export class AgentVerificationService {
             }
         };
     }
+}
+
+/** Nearest directory at or above `dir` (not above `root`) that holds a tsconfig.json. */
+function findTsconfigDir(dir: string, root: string): string | undefined {
+    const stop = path.resolve(root);
+    for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+        if (fs.existsSync(path.join(d, 'tsconfig.json'))) return d;
+        if (d === stop || path.dirname(d) === d) return undefined;
+    }
+}
+
+function runTypecheck(project: string, timeoutMs: number): Promise<{ text: string; exitCode: number; timedOut: boolean }> {
+    return new Promise(resolve => {
+        execFile('npx', ['--no-install', 'tsc', '--noEmit', '--pretty', 'false', '-p', project], { cwd: project, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
+            (err: any, stdout, stderr) => {
+                const timedOut = !!err && (err.killed || err.signal === 'SIGTERM');
+                resolve({ text: `${stdout || ''}${stderr || ''}`, exitCode: err ? (typeof err.code === 'number' ? err.code : 1) : 0, timedOut });
+            });
+    });
+}
+
+/** `file(line,col): error TSxxxx: message` lines, with paths made absolute against the project dir. */
+export function parseTscErrors(output: string, project: string): VerificationDiagnostic[] {
+    const out: VerificationDiagnostic[] = [];
+    for (const line of output.split('\n')) {
+        const m = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/.exec(line.trim());
+        if (!m) continue;
+        const filePath = path.resolve(project, m[1]);
+        out.push({ file: filePath, filePath, line: Number(m[2]), message: `${m[4]}: ${m[5]}`, severity: 'error', source: 'tsc' });
+    }
+    return out;
 }

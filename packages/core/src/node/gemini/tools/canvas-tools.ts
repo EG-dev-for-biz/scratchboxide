@@ -13,7 +13,10 @@ import { synthesizeContextual3DScene } from '../../../browser/generative-canvas/
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { NativeCppCompilerService } from '../../3d-engine/native-compiler-service';
 import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
-import { VisualVerificationService } from '../../visual-verification-service';
+import * as fs from 'fs';
+import * as path from 'path';
+import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
+import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
 
@@ -186,21 +189,13 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'audit_3d_scene_viewport',
-        description: 'Audits the active 3D canvas viewport across multi-angle camera perspectives (cinematic 3/4, top-down, eye-level, detail) using the 8-Dimension Visual Fidelity Rubric. Detects geometry clipping, floating objects, under-exposed lighting, and scale mismatches, and returns actionable direct-dispatch repair operators.',
+        description: 'Check the finished 3D model against the user\'s request by rendering the actual model file from four angles in its real material colors and having a vision model inspect the images. Returns the requirements it confirmed, the problems it saw, and the paths of the renders. Use it before telling the user a 3D model is done, and fix any problems it reports.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 targetPrompt: {
                     type: 'STRING',
-                    description: 'The target scene prompt or artistic intention to evaluate against.'
-                },
-                minPassingScore: {
-                    type: 'NUMBER',
-                    description: 'Minimum passing fidelity score 0-100 (default 80).'
-                },
-                autoRepair: {
-                    type: 'BOOLEAN',
-                    description: 'If true, automatically applies corrective operators to repair defects (default true).'
+                    description: 'Every requirement the model must meet, in the user\'s words: parts, counts, materials, colors, proportions. Include requirements from earlier messages, not just the latest one.'
                 }
             }
         }
@@ -534,67 +529,63 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
     },
 
     async audit_3d_scene_viewport(args, _ctx) {
-        const targetPrompt = asString(args.targetPrompt) || _ctx?.request?.prompt || 'Verify photorealistic 3D scene';
-        const minPassingScore = typeof args.minPassingScore === 'number' ? args.minPassingScore : 80;
-        const autoRepair = args.autoRepair !== false;
-
+        const request = asString(args.targetPrompt) || _ctx?.request?.prompt || '';
         const activeArtifact = _ctx?.request?.activeArtifact;
-        const currentData: Scene3DData = (activeArtifact && activeArtifact.type === '3d-scene' && activeArtifact.data)
-            ? (activeArtifact.data as Scene3DData)
-            : {
-                title: '3D Scene',
-                renderMode: 'pbr',
-                customMeshes: [],
-                objects: []
-            };
-
-        const verifier = new VisualVerificationService();
-        const audit = await verifier.audit3DSceneMultiAngle({
-            prompt: targetPrompt,
-            sceneData: currentData
-        });
-
-        let repairResult: any = undefined;
-        let updatedArtifact: CanvasArtifact | undefined = undefined;
-
-        if (autoRepair && audit.combinedOperatorDispatches.length > 0 && audit.averageFidelityScore < minPassingScore) {
-            const engine = new DirectDispatchOperatorEngine(currentData);
-            const batchCommands: BatchCommand[] = audit.combinedOperatorDispatches.map(d => ({
-                operator: d.operator,
-                params: d.params || {}
-            }));
-            const batchResult = engine.executeBatch(batchCommands, { atomic: false });
-            const updatedData = engine.getSceneData();
-            const repairedCount = batchResult.results.filter(r => r.success).length;
-
-            updatedArtifact = {
-                id: activeArtifact?.id || `artifact-3d-${Date.now()}`,
-                type: '3d-scene',
-                title: updatedData.title || '3D Scene (Repaired)',
-                summary: `Auto-repaired ${repairedCount} defect(s) via 3D visual audit.`,
-                data: updatedData,
-                version: ((activeArtifact as any)?.version || 1) + 1,
-                createdAt: activeArtifact?.createdAt || new Date().toISOString()
-            };
-
-            repairResult = {
-                appliedCount: repairedCount,
-                executionTimeMs: batchResult.totalExecutionTimeMs || 0.1
-            };
+        const modelPath = activeArtifact?.type === '3d-scene' ? resolveSceneModelPath(activeArtifact.data as Scene3DData) : undefined;
+        if (!modelPath) {
+            const error = 'No generated model file was found for the active 3D scene, so nothing could be rendered or checked.';
+            return { status: 'failed', resultPayload: { success: false, error }, summaryResult: error };
         }
 
+        const soup = glbToTriangleSoup(fs.readFileSync(modelPath));
+        if (!soup || soup.indices.length === 0) {
+            const error = `The model file ${modelPath} has no triangles to render.`;
+            return { status: 'failed', resultPayload: { success: false, error }, summaryResult: error };
+        }
+
+        const { result, views } = await auditModelAgainstRequest(soup, request, (prompt, images) => callVisionModel(prompt, images, _ctx?.request?.model));
+        const renderPaths = views.map((v, i) => {
+            const p = modelPath.replace(/\.glb$/i, `_audit_${i}.png`);
+            try { fs.writeFileSync(p, v.png); } catch { return undefined; }
+            return p;
+        }).filter(Boolean);
+
+        const summary = result.verdict === 'ok'
+            ? `Rendered ${views.length} views of the model; the vision check found no problems against the request.`
+            : result.verdict === 'problems'
+                ? `Rendered ${views.length} views; found ${result.problems.length} problem(s): ${result.problems.map(p => p.problem).join('; ')}`
+                : `Rendered ${views.length} views, but the check could not complete: ${result.reason}`;
         return {
+            status: result.verdict === 'skipped' ? 'failed' : 'completed',
             resultPayload: {
-                overallPass: audit.overallPass,
-                averageFidelityScore: audit.averageFidelityScore,
-                summaryCritique: audit.summaryCritique,
-                detectedDefects: audit.detectedDefects,
-                repairOperators: audit.combinedOperatorDispatches,
-                autoRepaired: !!repairResult,
-                repairResult,
-                artifact: updatedArtifact
+                success: result.verdict !== 'skipped',
+                verdict: result.verdict,
+                confirmed: result.checked,
+                problems: result.problems,
+                reason: result.reason,
+                modelPath,
+                renderPaths,
+                note: 'Renders show real geometry and material base colors with simple lighting; textures are not shown.'
             },
-            summaryResult: `Visual audit complete: Score ${audit.averageFidelityScore}/100 (${audit.overallPass ? 'PASSED' : 'NEEDS_REPAIR'}). Detected ${audit.detectedDefects.length} defect(s).${repairResult ? ` Auto-applied ${repairResult.appliedCount} repair operators.` : ''}`
+            summaryResult: summary
         };
     }
 };
+
+/** The hero model file behind a 3D scene, resolved to a path on disk. */
+export function resolveSceneModelPath(data: Scene3DData | undefined): string | undefined {
+    if (!data) return undefined;
+    const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
+    const candidates: string[] = [];
+    const objects: any[] = Array.isArray((data as any).objects) ? (data as any).objects : [];
+    const ordered = [...objects.filter(o => o?.content?.metadata?.role === 'hero'), ...objects.filter(o => o?.content?.metadata?.role !== 'environment')];
+    for (const o of ordered) {
+        const meta = o?.content?.metadata || {};
+        if (typeof meta.originalPath === 'string') candidates.push(meta.originalPath);
+        const uri = o?.content?.durableUri;
+        if (typeof uri === 'string' && uri.startsWith('/models/')) candidates.push(path.join(repoRoot, 'public', uri));
+    }
+    const cpp = (data as any).cppGenerator;
+    if (typeof cpp?.glbPath === 'string') candidates.push(cpp.glbPath);
+    return candidates.find(p => p.toLowerCase().endsWith('.glb') && fs.existsSync(p));
+}

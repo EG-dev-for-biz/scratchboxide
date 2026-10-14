@@ -17,7 +17,7 @@ import { SubagentPoolService, SubagentBlackboard } from '../src/node/subagent-po
 import type { AgentStreamEvent } from '../src/common/agent-checkpoint-protocol';
 
 describe('Unified Long-Running Agent & Multi-Domain Verification Suite', () => {
-    it('should verify code, visual fidelity, and geometric topology through AgentVerificationService', async () => {
+    it('should verify code and geometric topology through AgentVerificationService', async () => {
         const lsp = new LspDiagnosticFeedbackService();
         const sandbox = new ContainerSandboxService();
         const verifier = new AgentVerificationService(lsp, sandbox);
@@ -29,51 +29,9 @@ describe('Unified Long-Running Agent & Multi-Domain Verification Suite', () => {
             runTests: false
         });
         expect(codeResult.passed).toBe(true);
-        expect(codeResult.summary).toContain('passed cleanly');
+        expect(codeResult.summary).toContain('nothing was typechecked');
 
-        // 2. Visual verification domain pass with 8-dimension rubric
-        const visualResult = await verifier.verifyVisual({
-            screenshotPath: 'public/test_viewport.png',
-            promptContext: 'Photorealistic cyberpunk neon skyscraper scene',
-            minPassingScore: 8.5,
-            mockEvaluation: {
-                geometricDefinition: 9.0,
-                pixelSplatDensity: 8.8,
-                materialMicroSurface: 8.6,
-                environmentalGrounding: 8.9,
-                radiometricLighting: 8.7,
-                colorTemperature: 8.8,
-                volumetricDepth: 8.9,
-                photographicRealism: 9.0
-            }
-        });
-
-        expect(visualResult.passed).toBe(true);
-        expect(visualResult.visualVerification?.overallScore).toBeGreaterThanOrEqual(8.5);
-        expect(visualResult.visualVerification?.dimensionAudits.geometricDefinition.score).toBe(9.0);
-
-        // 3. Visual verification fail when score is below threshold
-        const visualFailResult = await verifier.verifyVisual({
-            screenshotPath: 'public/test_blurry.png',
-            promptContext: 'Melting deformed mesh with void background',
-            minPassingScore: 8.5,
-            mockEvaluation: {
-                geometricDefinition: 5.0, // Failed silhouette
-                pixelSplatDensity: 4.0,
-                materialMicroSurface: 6.0,
-                environmentalGrounding: 3.0, // Void background violation
-                radiometricLighting: 5.0,
-                colorTemperature: 5.0,
-                volumetricDepth: 4.0,
-                photographicRealism: 4.5
-            }
-        });
-
-        expect(visualFailResult.passed).toBe(false);
-        expect(visualFailResult.visualVerification?.overallScore).toBeLessThan(8.5);
-        expect(visualFailResult.visualVerification?.remediationRecipe?.actionDirectives.length).toBeGreaterThan(0);
-
-        // 4. Geometry verification for 3D meshes
+        // 2. Geometry verification for 3D meshes
         const geomPass = verifier.verifyGeometry({
             vertexCount: 15000,
             triangleCount: 8000,

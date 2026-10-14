@@ -17,22 +17,7 @@ import { detectRealWorldLocationIntent } from '../../../browser/generative-canva
 import { synthesizeAdaptiveHeroObjectContract, generateAdaptiveHeroPythonSource } from '../../../common/spatial/adaptive-hero-synthesizer';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
 import { analyzePartConnectivity, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
-import { describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
-import { GeminiClient } from '../gemini-client';
-
-let visionClient: GeminiClient | undefined;
-/** Sends the review prompt and clay renders to Gemini; uses the chat's model so the review runs on known credentials. */
-async function callVisionModel(prompt: string, images: Buffer[], model?: string): Promise<string> {
-    visionClient ??= new GeminiClient();
-    const { text } = await visionClient.generateContent({
-        model: model || 'gemini-3.7-flash',
-        prompt,
-        inlineData: images.map(png => ({ mimeType: 'image/png', data: png.toString('base64') })),
-        temperature: 0,
-        maxOutputTokens: 4096
-    });
-    return text;
-}
+import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
 
 export interface GlbAabbBounds {
     min: [number, number, number];

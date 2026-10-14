@@ -14,6 +14,8 @@ export interface TriangleSoup {
     positions: Float32Array;
     /** Vertex indices, three per triangle. */
     indices: Uint32Array;
+    /** Linear RGB per vertex in 0..1: material base color times COLOR_0 when present. */
+    colors?: Float32Array;
 }
 
 /** A group of parts joined to each other but not to the model's main structure. */
@@ -107,6 +109,7 @@ export function glbToTriangleSoup(glb: Buffer): TriangleSoup | null {
     const bin = glb.subarray(binStart);
     const positions: number[] = [];
     const indices: number[] = [];
+    const colors: number[] = [];
 
     const emitMesh = (meshIndex: number, world: Mat4) => {
         for (const prim of gltf.meshes[meshIndex]?.primitives || []) {
@@ -114,6 +117,15 @@ export function glbToTriangleSoup(glb: Buffer): TriangleSoup | null {
             if (typeof prim.attributes?.POSITION !== 'number') continue;
             const pos = readAccessor(gltf, bin, prim.attributes.POSITION).values;
             const offset = positions.length / 3;
+            const base: number[] = gltf.materials?.[prim.material]?.pbrMetallicRoughness?.baseColorFactor || [0.8, 0.8, 0.8, 1];
+            const colorAcc = typeof prim.attributes?.COLOR_0 === 'number' ? prim.attributes.COLOR_0 : undefined;
+            const vc = colorAcc !== undefined ? readAccessor(gltf, bin, colorAcc) : undefined;
+            const vcScale = colorAcc !== undefined ? ({ 5121: 255, 5123: 65535 } as Record<number, number>)[gltf.accessors[colorAcc].componentType] || 1 : 1;
+            for (let v = 0; v < pos.length / 3; v++) {
+                for (let c = 0; c < 3; c++) {
+                    colors.push(base[c] * (vc ? vc.values[v * vc.components + c] / vcScale : 1));
+                }
+            }
             for (let i = 0; i < pos.length; i += 3) {
                 const [x, y, z] = [pos[i], pos[i + 1], pos[i + 2]];
                 positions.push(
@@ -144,7 +156,7 @@ export function glbToTriangleSoup(glb: Buffer): TriangleSoup | null {
     } else {
         (gltf.meshes || []).forEach((_: any, i: number) => emitMesh(i, IDENTITY));
     }
-    return { positions: Float32Array.from(positions), indices: Uint32Array.from(indices) };
+    return { positions: Float32Array.from(positions), indices: Uint32Array.from(indices), colors: Float32Array.from(colors) };
 }
 
 // ---------------------------------------------------------------------------

@@ -599,6 +599,8 @@ export class HeadlessMeshSilhouetteRenderer {
             lightDir?: [number, number, number];
             /** Clip triangles at the near plane instead of dropping them (see forEachClippedScreenTriangle). */
             clipNearPlane?: boolean;
+            /** Linear RGB per vertex (0..1). When given, each triangle is shaded in its own color instead of clayColor. */
+            vertexColors?: Float32Array | number[];
         }
     ): { width: number; height: number; rgba: Buffer; depthBuffer: Float32Array; silhouetteBuffer: Uint8Array } {
         const baseColor = options?.clayColor || [190, 205, 220]; // Studio grey-blue clay
@@ -704,9 +706,16 @@ export class HeadlessMeshSilhouetteRenderer {
             const ambient = 0.35;
             const intensity = Math.min(1.0, ambient + 0.65 * diffuse);
 
-            const rCol = Math.min(255, Math.max(0, Math.round(baseColor[0] * intensity)));
-            const gCol = Math.min(255, Math.max(0, Math.round(baseColor[1] * intensity)));
-            const bCol = Math.min(255, Math.max(0, Math.round(baseColor[2] * intensity)));
+            let triColor = baseColor;
+            const vcol = options?.vertexColors;
+            if (vcol && vcol.length >= (Math.max(i0, i1, i2) + 1) * 3) {
+                // Average the corners in linear space, then encode to sRGB for display.
+                const toSrgb = (c: number) => 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+                triColor = [0, 1, 2].map(k => toSrgb(Math.max(0, Math.min(1, (vcol[i0 * 3 + k] + vcol[i1 * 3 + k] + vcol[i2 * 3 + k]) / 3)))) as [number, number, number];
+            }
+            const rCol = Math.min(255, Math.max(0, Math.round(triColor[0] * intensity)));
+            const gCol = Math.min(255, Math.max(0, Math.round(triColor[1] * intensity)));
+            const bCol = Math.min(255, Math.max(0, Math.round(triColor[2] * intensity)));
 
             const minX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
             const maxX = Math.min(width - 1, Math.ceil(Math.max(x0, x1, x2)));

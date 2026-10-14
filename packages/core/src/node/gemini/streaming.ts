@@ -591,7 +591,8 @@ export class StreamingEngine {
                     const outcome = await verifier.verify({
                         workspaceRoot: toolCtx.workspaceRoot,
                         modifiedFiles: Array.from(modifiedFiles),
-                        runTests: !!request.autoVerify
+                        // A full test run per edit is too slow for chat; the typecheck runs every time.
+                        runTests: false
                     });
 
                     onEvent({
@@ -602,12 +603,11 @@ export class StreamingEngine {
 
                     if (!outcome.passed) {
                         // Diagnostic errors detected: initiate self-healing turn
-                        const diagSummary = toolCtx.lsp.synthesizeDiagnosticFixPrompt(Array.from(modifiedFiles));
                         payload.contents.push({ role: 'model', parts: [{ text: turnText || accumulatedText }] });
                         payload.contents.push({
                             role: 'user',
                             parts: [{
-                                text: `[AUTOMATED COMPILER & VERIFICATION FEEDBACK]\n${outcome.summary || ''}\n${diagSummary.promptContext}\n\nPlease autonomously investigate and fix these errors using workspace tools.`
+                                text: `[AUTOMATED VERIFICATION FEEDBACK]\n${outcome.summary || ''}\n\nRead the failing lines, find the cause, and fix it with workspace tools.`
                             }]
                         });
                         continue;
