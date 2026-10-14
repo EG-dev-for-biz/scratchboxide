@@ -17,6 +17,7 @@ import * as path from 'path';
 import { LocalSf3DService } from '../src/node/3d-engine/local-sf3d-service';
 import { localSf3DHandlers } from '../src/node/gemini/tools/local-sf3d-tools';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
+import { buildToolDeclarations, createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 
 describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
     // Outputs go to a temp dir (this used to resolve to packages/build/test-sf3d inside the repo).
@@ -94,16 +95,28 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         expect(artifact?.data.camera).toBeDefined();
     });
 
-    it('3. Routes local organic prop requests to Tier 1 native LocalSf3DService in TaskCapabilityResolver', () => {
-        const resolution = TaskCapabilityResolver.resolveTaskCapability(
-            'generate a small organic mushroom prop from photo locally without pbr'
+    it('3. Routes to LocalSf3DService only when the request names SF3D', () => {
+        const named = TaskCapabilityResolver.resolveTaskCapability(
+            'run SF3D on my photo of a mushroom to get a 3d mesh without pbr'
         );
+        expect(named.canSolveNatively).toBe(true);
+        expect(named.primaryNativeEngine).toBe('python-3d-engine');
+        expect(named.suggestedNativeAction?.targetTool).toBe('generate_local_sf3d_organic_prop');
+        expect(named.suggestedNativeAction?.targetService).toBe('LocalSf3DService');
 
-        expect(resolution.canSolveNatively).toBe(true);
-        expect(resolution.canSolveNatively).toBe(true);
-        expect(resolution.primaryNativeEngine).toBe('python-3d-engine');
-        expect(resolution.suggestedNativeAction?.targetTool).toBe('generate_local_sf3d_organic_prop');
-        expect(resolution.suggestedNativeAction?.targetService).toBe('LocalSf3DService');
+        // Neural reconstruction is never picked for an object asked for in words (AGENTS.md).
+        const unnamed = TaskCapabilityResolver.resolveTaskCapability('generate a small organic mushroom prop in 3d');
+        expect(unnamed.suggestedNativeAction?.targetTool).not.toBe('generate_local_sf3d_organic_prop');
+    });
+
+    it('3b. Is registered but not offered by default; a request naming SF3D gets it', () => {
+        const registry = createDefaultToolRegistry();
+        expect(registry.has('generate_local_sf3d_organic_prop')).toBe(true);
+        const offered = (prompt: string) => (buildToolDeclarations({ prompt, mode: 'agent' } as any, registry) || [])
+            .flatMap((t: any) => (t.functionDeclarations || []).map((d: any) => d.name));
+        expect(offered('build a 3d model of a small mushroom')).not.toContain('generate_local_sf3d_organic_prop');
+        expect(offered('build a 3d model of a small mushroom')).toContain('build_3d_object_from_reference');
+        expect(offered('run SF3D on photo.png to make a 3d mesh')).toContain('generate_local_sf3d_organic_prop');
     });
 
     it('4. Rejects invalid inputs gracefully with structured error', async () => {

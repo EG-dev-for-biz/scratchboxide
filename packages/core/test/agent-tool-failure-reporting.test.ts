@@ -21,7 +21,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { GeminiService } from '../src/node/gemini-service';
 import { TOOL_FAILURE_INSTRUCTION, toolResultForModel } from '../src/node/gemini/streaming';
-import { buildContents, WORKING_METHOD_SECTION } from '../src/node/gemini/prompt-builder';
+import { buildContents, buildSystemInstruction, WORKING_METHOD_SECTION } from '../src/node/gemini/prompt-builder';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
 import type { ToolContext } from '../src/node/gemini/tools/types';
 
@@ -165,11 +165,12 @@ describe('scene directives do not assume intent', () => {
         expect(text).toContain('stageIntoActiveScene: true only when staging the active scene');
     });
 
-    it('for a pure location request, offers full texture instead of a mandatory clay call', () => {
+    it('for a pure location request, adds no keyword directive; the system policy offers full texture', async () => {
         const text = userText('3d tiles of 40.7411, -73.9897 in full photo texture');
-        expect(text).toContain('PURE REAL-WORLD LOCATION QUERY');
-        expect(text).not.toContain('MANDATORY DIRECT TOOL CALL');
-        expect(text).toContain('google_3d_tiles_get_full_texture({ query:');
+        expect(text).toBe('3d tiles of 40.7411, -73.9897 in full photo texture');
+        const system = await buildSystemInstruction({ prompt: '3d tiles of 40.7411, -73.9897 in full photo texture', mode: 'agent' } as GeminiGenerateRequest);
+        expect(system).not.toContain('MANDATORY DIRECT TOOL CALL');
+        expect(system).toContain('Use google_3d_tiles_get_full_texture only when they ask for photo texture');
     });
 
     it('adds the active-scene note whatever words the prompt uses', () => {

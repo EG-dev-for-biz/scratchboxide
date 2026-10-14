@@ -9,7 +9,6 @@
 import type { Content } from '@google/genai';
 import type { GeminiGenerateRequest } from '../../common/gemini-protocol';
 import type { MarkdownDocumentData, Scene3DData, VideoTimelineData } from '../../browser/generative-canvas/canvas-types';
-import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 import type { ProjectContextGraphService } from '../project-context-graph-service';
 import type { CodebasePatternEngine } from '../codebase-pattern-engine';
 import type { CodebasePatternAnalysis } from '../../common/pattern-matching-protocol';
@@ -231,7 +230,7 @@ export const CANVAS_PRIMITIVES_SPECIFICATION = `
      }
 11. "3d-scene" (or "scene-3d", "spatial-scene"):
    - Dedicated 3D Spatial Canvas & Three.js WebGL viewport (layoutMode = '3d' with Scene3DPrimitive).
-   - PYTHON FIRST DIRECTIVE FOR 3D: When implementing 3D scenes, ALWAYS LEAN ON PYTHON FIRST. Use the native Scratchbox 3D Python Engine via the execute_3d_python_script tool (import scratchbox as sb). The engine executes SIMD math and Marching Cubes SDFs, and streams binary glTF 2.0 (.glb) with PBR materials and baked curvature AO directly into the Three.js viewport. Three.js is restricted strictly to a pure rendering viewport, camera choreography, post-processing shaders, and UI gizmos. Procedural geometry generation belongs exclusively to the Python procedural SDK (import scratchbox as sb), streaming binary .glb chunks. NEVER generate procedural geometry using Three.js client-side primitives (BoxGeometry, CylinderGeometry, ConeGeometry, SphereGeometry). If Python generation fails, report the error rather than substituting toy JavaScript primitives.
+   - NATIVE GEOMETRY FOR 3D: 3D geometry comes from the native engine through the tools named in "3D REQUESTS" below (google_3d_tiles_get_clay for places, build_3d_object_from_reference for objects and abstract forms, execute_3d_python_script for scripts), which stream binary glTF 2.0 (.glb) into the Three.js viewport. Three.js is restricted to rendering, camera choreography, post-processing shaders and UI gizmos. NEVER generate geometry with Three.js client-side primitives (BoxGeometry, CylinderGeometry, ConeGeometry, SphereGeometry). If native generation fails, report the error rather than substituting toy JavaScript primitives.
    - Use this whenever the user asks to build, create, or render ANY 3D scene, 3D model, 3D car / vehicle / automobile / truck, 3D world, 3D plane / airplane, flight simulation, spatial environment, or Three.js / R3F scene. Do NOT output live-code-sandbox or video for 3D entity or 3D scene requests. Even if the user asks for a "3d car simulator" or "3d simulation", you MUST output type: "3d-scene" (NEVER live-code-sandbox).
    - When the active artifact is a 3d-scene ('3d-scene') and the user prompts to animate it, make it fly, start flight, play simulation, or orbit camera, stay with type: "3d-scene" and set data.timeline = { isPlaying: true, currentTimeMs: 0, speed: 1.0, isLooping: true }, data.animation = "flight" (or "orbit"), and update dynamic transform/flight tracks.
    - CRITICAL MEDIA OVERRIDE (PICTURES, VIDEOS & TIMELINES):
@@ -442,6 +441,226 @@ Output complete, high-quality, fully runnable React 19 code with Tailwind CSS, L
 \`\`\`
 `;
 
+
+/**
+ * One policy for every prompt: the model decides from the request's meaning which 3D tool fits. Nothing here is
+ * keyed on words in the prompt.
+ */
+export const SPATIAL_INTENT_POLICY = `
+
+### 3D REQUESTS: CHOOSE THE TOOL BY WHAT IS ASKED FOR
+Decide from the meaning of the request, not from particular words, which case applies, then call that tool:
+- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place and returns Google 3D Tiles remeshed in studio grey clay, with trees. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
+- A specific object, prop, vehicle, creature, character, piece of furniture, artifact or an abstract form, with no place: call build_3d_object_from_reference with the request in the user's words plus any details from the conversation (and dimensionsHintMeters when they give a size). It draws an internal reference, reads it into a build spec and builds the object natively in clay.
+- An object at a real-world place: call build_3d_object_from_reference with location set to the place.
+Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. Use execute_3d_python_script when the user asks for a script or procedural code, to build supporting geometry such as a plinth, or to change a scene a script built; an object from build_3d_object_from_reference is changed by editing SPEC in its pythonGenerator.sourceCode and running that script with execute_3d_python_script. Do not build real places with scripts.
+New objects and places start in studio grey clay with studio lighting and no ground. After building one, offer follow-ups in two groups instead of doing them: staging and environments (a real-world place, a plinth or cyclorama, atmosphere and sun position, or the studio void), then textures and materials (PBR, 2DGS surfels, 3DGS splats, algorithmic micro-texture).
+When one of these tools fails, report its error; do not substitute another tool's output.`;
+
+/**
+ * How to write an sb Python script. Offered to every mode that can run execute_3d_python_script: the agent
+ * writes scripts when the user asks for one or edits a scene a script built, and decides that itself.
+ */
+export const SB_PYTHON_SCRIPT_GUIDE = `
+
+### WRITING SB PYTHON SCRIPTS (execute_3d_python_script)
+When you write a procedural script yourself (import scratchbox as sb, ending with sb.io.write_glb(OUTPUT_GLB_PATH, scene)), follow these rules. The engine reads the GLB's bounding box and frames the camera itself, so do not guess camera coordinates.
+
+1. **DENSE STRUCTURAL ARTICULATION (90%+ Code Budget on Form)**:
+   - Never output sparse scenes with only 2 or 3 basic boxes or spheres. Every creation must possess rich, tangible massing and multi-part anatomical hierarchies.
+   - Use iterative loops for anatomical ribbing, multi-segment spines, gear trains, trusses, colonnades, brackets, flanges, catenary linkages, and environmental groundings.
+   - **70-20-10 Multi-Part Rule**:
+     - 70% Primary Hull / Edifice: Sculpted massing with non-linear deformers (mesh.taper(), mesh.twist(), mesh.bend(), mesh.bulge(), mesh.displace()).
+     - 20% Secondary Articulated Limbs / Chambers / Wings / Towers: Multi-segment appendages with progressive scaling and joint sockets.
+     - 10% Tertiary Micro-Mechanisms: Concentric gears, catenary cables, stinger spines, pistons, hydraulic actuators, antennae, and railings.
+2. **RELATIVE ANCHORING, SOCKETS & CONTACT-CERTIFIED LAYOUT**:
+   - Place components relative to parent bounding envelopes, surface normals, or sockets (sb.layout.BoundingVolume(extents=(...), center=(...)).get_socket("left"|"right"|"bow"|"stern"|"ground"|"crown")).
+   - Never hand-guess Y offsets for parts that rest on or attach to other parts. Build each part as its own Mesh, then let the native constraint solver seat it: \`part.snap_to(support, face="top")\` / \`part.ground_on(terrain)\`, or declare the whole relational graph with \`sb.layout.resolve_constraints({...named meshes...}, [{"subject": ..., "predicate": "attached_to_surface" | "supported_by" | "adjacent_to", "target": ..., "face": "top"|"bottom"|"left"|"right"|"front"|"back"}])\`. It returns contact violations (\`v.subject\`, \`v.target\`, \`v.type\` = "floating_gap" | "penetration", \`v.metric_distance\`); an empty list means every part is seated with zero air gaps and zero overlaps. Merge parts into the scene only after resolving.
+   - \`snap_to\` computes the contact height itself: \`offset\` is an extra shift applied AFTER seating, measured from the target face center, so keep its Y at 0 and use only X/Z to slide the part across the face (any non-zero Y creates a floating gap). \`ground_on\` raycasts straight down and keeps the part's current X/Z, so position X/Z first, then ground. Neither call stretches geometry: a column spanning deck to terrain must be created with height = deck.bounds.min.y - ground height.
+3. **GOVERNING PHYSICAL & BIOLOGICAL LAWS**:
+   - Branching obeys Leonardo da Vinci area conservation: sum(r_child^d) = r_parent^d (d ≈ 2.2).
+   - Cables, ropes, and suspension linkages use catenary splines (sb.geometry.create_catenary_cable(start, end, sag, radius)).
+   - Surfaces use multi-octave domain displacement (mesh.displace(freq=..., amp=...)).
+4. **KINEMATIC ROLLING AXIS & COMPOUND CURVATURE INVARIANT**:
+   - **Cylinders Default to Vertical +Y**: In 3D engines, revolving primitives (cylinders, lathes) have their symmetry axis along +Y. For rolling wheels, rollers, drums, and axles, NEVER leave them vertical (which causes wheels to lie flat horizontally on the ground like pancakes). ALWAYS orient them into the transverse/lateral rolling axis with \`mesh.rotate_z(90.0)\` (or \`mesh.rotate_x(90.0)\` for longitudinal thrust) or use \`sb.geometry.create_wheel()\` / \`sb.geometry.create_wheel_assembly()\`.
+   - **Zero Planar Box-Stacking on Vehicle Bodies & Hulls**: Aerodynamic vehicles, ground rovers, aircraft, and streamlined bodies must NEVER be constructed by stacking flat rectangular boxes (\`sb.create_box\`). ALWAYS synthesize continuous compound curvature using \`sb.geometry.create_lofted_hull()\` with super-ellipses or non-linear deformers (\`mesh.taper()\`, \`mesh.bulge()\`, \`mesh.bend()\`).
+   - **Closed-Loop Verification**: Call \`sb.validation.validate_scene(scene, auto_heal=True)\` before exporting to audit principal inertia variance and normal entropy, auto-healing any flat pancake wheels into upright grounded stance.
+
+Exemplar Patterns (Dense, Multi-Part Geometry):
+
+Pattern 1: Intricate Bio-Mechanical / Kinetic Organism (e.g. Cybernetic Manta Ray / Dragonfly / Vehicle):
+\`\`\`python
+import scratchbox as sb
+import math
+
+scene = sb.geometry.Mesh("KineticOrganism")
+
+# 1. Primary Hull: Hydrodynamic sculpted torso with dorsal crest
+body = sb.create_sphere(radius=3.5, segments=32)
+body.scale(1.3, 0.4, 2.2)
+body.taper(factor=0.3, axis=2)  # Taper toward tail
+body.displace(freq=1.8, amp=0.06)
+scene.merge(body)
+
+# Cephalic lobes / mandibles at the front
+for side in [-1.0, 1.0]:
+    horn = sb.create_cone(radius=0.5, height=2.4, segments=16)
+    horn.bend(angle_deg=35.0 * side, radius=2.0)
+    horn.translate(side * 1.6, -0.2, 4.0)
+    scene.merge(horn)
+
+# 2. Articulated Wing Armature: Progressive structural ribs
+for side in [-1.0, 1.0]:
+    for i in range(8):
+        t = i / 7.0
+        span = 3.0 + (1.0 - t) * 7.5
+        chord = 1.8 * (1.0 - t * 0.6)
+        rib = sb.create_box(width=span, height=0.12, depth=chord)
+        # Native rotation methods take DEGREES!
+        rib.rotate_z(-12.0 * side * (1.0 + t))
+        rib.rotate_y(18.0 * (1.0 - t))
+        rib.translate(side * (2.2 + span * 0.45), 0.1 - t * 0.3, 2.0 - i * 1.1)
+        scene.merge(rib)
+
+# 3. Kinetic Clockwork Gear Train & Axle Core
+for g in range(5):
+    gear_rad = 1.2 - g * 0.18
+    gear = sb.create_cylinder(radius=gear_rad, height=0.22, segments=24)
+    gear.translate((g % 2 - 0.5) * 1.4, 0.55 + g * 0.05, 1.8 - g * 0.9)
+    scene.merge(gear)
+    # Concentric inner ring
+    axle = sb.create_cylinder(radius=0.25, height=0.45, segments=16)
+    axle.translate((g % 2 - 0.5) * 1.4, 0.55 + g * 0.05, 1.8 - g * 0.9)
+    scene.merge(axle)
+
+# 4. Articulated Vertebrae Spine & Catenary Stinger Tail
+for v in range(12):
+    t_v = v / 11.0
+    vert = sb.create_box(width=1.2 * (1.0 - t_v * 0.7), height=0.35, depth=0.6)
+    vert.translate(0.0, 0.2 - t_v * 0.8, -2.5 - v * 0.8)
+    scene.merge(vert)
+    # Dorsal stinger spines
+    spine = sb.create_cone(radius=0.12, height=0.8 * (1.0 - t_v * 0.5), segments=12)
+    spine.translate(0.0, 0.5 - t_v * 0.8, -2.5 - v * 0.8)
+    scene.merge(spine)
+
+# Catenary trailing suspension whip
+whip = sb.geometry.create_catenary_cable(start=(0.0, -0.6, -11.5), end=(0.0, -3.5, -20.0), sag=1.8, radius=0.06)
+scene.merge(whip)
+
+# Grounding plinth
+plinth = sb.geometry.create_studio_pedestal(radius=12.0, height=0.4, bevel=0.06, segments=48)
+plinth.translate(0.0, -4.0, 0.0)
+scene.merge(plinth)
+
+scene.compute_curvature_ao(intensity=0.7)
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+\`\`\`
+
+Pattern 2: Dense Architectural Complex (e.g. Observatory / Outpost / Temple):
+\`\`\`python
+import scratchbox as sb
+import math
+
+scene = sb.geometry.Mesh("ObservatoryComplex")
+
+# 1. Foundation Podium & Stepped Plinth
+podium = sb.geometry.create_studio_pedestal(radius=18.0, height=1.2, bevel=0.12, segments=64)
+scene.merge(podium)
+
+# 2. Concentric Colonnade (16 Fluted Columns)
+for c in range(16):
+    angle = (c / 16.0) * math.pi * 2.0
+    col = sb.create_cylinder(radius=0.4, height=6.0, segments=20)
+    col.translate(math.cos(angle) * 12.0, 4.2, math.sin(angle) * 12.0)
+    scene.merge(col)
+
+# 3. Central Observation Rotunda with Recessed Louver Bays
+rotunda = sb.create_cylinder(radius=8.0, height=8.5, segments=32)
+rotunda.translate(0.0, 5.45, 0.0)
+rotunda.displace(freq=2.0, amp=0.04)
+scene.merge(rotunda)
+
+# 4. Geodesic Dome Cupola & Slit Aperture
+dome = sb.create_sphere(radius=6.5, segments=32)
+dome.scale(1.0, 0.85, 1.0)
+dome.translate(0.0, 11.5, 0.0)
+scene.merge(dome)
+
+# 5. Radial Kinetic Wind Sails (8 Curved Blades)
+for b in range(8):
+    b_angle = (b / 8.0) * math.pi * 2.0
+    blade = sb.create_box(width=1.2, height=10.0, depth=0.15)
+    blade.bend(angle_deg=30.0, radius=8.0)
+    blade.rotate_y(b_angle)
+    blade.translate(math.cos(b_angle) * 9.5, 12.0, math.sin(b_angle) * 9.5)
+    scene.merge(blade)
+
+# 6. Catenary Rigging Lines
+for r in range(8):
+    r_ang = (r / 8.0) * math.pi * 2.0
+    cable = sb.geometry.create_catenary_cable(
+        start=(math.cos(r_ang) * 9.5, 17.0, math.sin(r_ang) * 9.5),
+        end=(math.cos(r_ang) * 15.0, 1.2, math.sin(r_ang) * 15.0),
+        sag=1.2, radius=0.04
+    )
+    scene.merge(cable)
+
+scene.compute_curvature_ao(intensity=0.7)
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+\`\`\`
+
+- OPEN ARCHITECTURAL INVARIANT: For indoor and pavilion scenes (dojos, shrines, arenas, workshops, laboratories), NEVER enclose the scene in an opaque closed 6-sided solid cube where interior props are hidden. Model open-air or cutaway structures (open entrance/colonnades/timber posts) so that interior training floors, equipment, and structural trusses remain 100% visible to the orbit camera.
+
+Direct Primitive & Procedural Helpers on \`sb\`:
+- \`sb.layout.BoundingVolume(extents=(w, h, d), center=(x, y, z))\` -> \`.get_socket("ground" | "crown" | "left" | "right" | "bow" | "stern")\`
+- \`sb.geometry.create_wheel(radius=0.35, width=0.30, rim_radius=..., ground=True, axis="lateral")\` -> authentic tire, recessed alloy rim, brake rotor, hub nut, grounded upright
+- \`sb.geometry.create_wheel_assembly(track_width=1.6, wheelbase=3.2, wheel_radius=0.35, tire_width=0.30, suspension="double_wishbone")\` -> spawns upright grounded wheel pairs with wishbone linkages
+- \`sb.geometry.create_lofted_hull(stations=[{"z":..., "width":..., "height":..., "y":..., "m":2.8}], profile="superellipse", close_ends=True)\` -> continuous compound curvature monocoque / fuselage / hull
+- \`sb.geometry.create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, endplates=True)\` -> aerodynamic wings & downforce elements
+- \`sb.geometry.create_revolving_component(radius, length, axis="lateral"|"vertical"|"longitudinal", profile="cylinder"|"beveled"|"fluted")\` -> functional revolving solids aligned to motion axes
+- \`sb.validation.validate_scene(scene, auto_heal=True)\` -> audits rolling orientations and compound curvature, auto-healing flat pancake wheels
+- \`sb.create_cylinder(radius=..., height=..., segments=...)\`
+- \`sb.create_cone(radius=..., height=..., segments=...)\`
+- \`sb.create_box(width=..., height=..., depth=...)\`
+- \`sb.create_sphere(radius=..., rings=..., sectors=...)\`
+- \`sb.create_plane(width=..., height=..., seg_x=..., seg_y=...)\`
+- \`sb.geometry.create_catenary_cable(start=(x,y,z), end=(x,y,z), sag=..., radius=...)\`
+- \`sb.create_building(width=..., depth=..., floors=..., curvature=0.0..1.0, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='flat'|'hip'|'mansard'|'gable'|'dome'|'vault', bake_curvature_ao=True)\`
+- \`sb.create_curved_building(width=..., depth=..., floors=..., curvature=0.85, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='dome')\`
+- \`sb.create_tower(width=..., depth=..., floors=12, twist_degrees=45.0, taper=0.7, bulge=0.08, roof='flat')\`
+- \`sb.create_tree(attractor_count=..., crown_center=(x, y, z), crown_extents=(ex, ey, ez))\`
+- \`mesh.taper(factor=..., axis=0|1|2)\`, \`mesh.twist(angle_deg=..., axis=0|1|2)\`, \`mesh.bend(angle_deg=..., radius=...)\`, \`mesh.bulge(center=..., radius=..., strength=...)\`, \`mesh.displace(freq=..., amp=...)\`
+- \`mesh.translate(x, y, z)\`, \`mesh.rotate_x(deg)\`, \`mesh.rotate_y(deg)\`, \`mesh.rotate_z(deg)\` (Note: Native rotations take **DEGREES**, e.g. \`mesh.rotate_z(90.0)\`), \`mesh.scale(s)\`
+- \`mesh.compute_curvature_ao(intensity=0.7)\`
+- \`mesh.snap_to(target, face="top", clearance=0.0, offset=(0, 0, 0))\`, \`mesh.ground_on(target, clearance=0.0)\`, \`sb.layout.resolve_constraints(meshes, relations, terrain=None)\`
+- \`mesh.bounds.min\` / \`mesh.bounds.max\` / \`mesh.bounds.center\` / \`mesh.bounds.size\` (each has .x .y .z)
+- \`mesh.taubin_smooth(iterations=10)\`, \`mesh.isotropic_remesh(target_edge_length=0.25)\`, \`mesh.decimate(ratio=0.5)\`, \`mesh.fill_holes()\`, \`mesh.clean()\`
+- \`sb.pbr.PbrMaterial(base_color="#hex", roughness=0.3, metalness=0.8, emissive="#hex", emissive_intensity=1.0)\`
+
+FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stacking primitives):
+- Surfaces of revolution (towers, columns, vessels, domes, nozzles, turned parts): describe the WHOLE silhouette as one profile of (radius, height) pairs and revolve it once, so plinth, taper, flares and cap stay one continuous surface:
+  \`sb.create_lathe([(0.0, 0.0), (4.2, 0.0), (3.4, 1.4), (2.1, 14.0), (2.9, 14.6), (0.0, 15.0)], segments=96)\`
+  (\`sb.revolve_harmonic_solid(profile_curve=[(r, y), ...], harmonic_lobe_count=K)\` adds K radial lobes / fluting.)
+- Organic masses (rock, outcrops, boulders, terrain lumps, flesh): displace a UNIT high-resolution sphere first, smooth it, THEN scale to size. Displacing after a non-uniform scale shreds the surface. \`amp\` is peak relief in metres relative to the unit form:
+  \`rock = sb.create_sphere(radius=1.0, rings=64, sectors=128); rock.displace(freq=1.1, amp=0.22); rock.displace(freq=3.2, amp=0.06); rock.taubin_smooth(iterations=4); rock.scale(11.0, 4.6, 9.0)\`
+- Rails, pipes, cables, trim and handrails: sweep a profile along a path of points rather than chaining cylinders:
+  \`sb.sweep_curve_profile(path=[(x, y, z), ...], profile_dimensions=(0.04, 0.04))\`
+- Hulls and blended cross-sections: \`sb.create_loft(slices=[[(x, y, z), ...], ...], close_ends=True)\` or \`sb.geometry.create_lofted_hull(...)\`.
+- Smoother curvature on any mesh: \`mesh.subdivide()\` (about 4x the vertices per call).
+- Reserve \`create_box\` / \`create_cylinder\` for genuinely prismatic or cylindrical parts (posts, beams, glazing bars, fasteners), and repeat them with loops at a metric pitch.
+- Detail budget: a hero object should land at roughly 10,000+ vertices; the tool reports fidelity alerts when it comes in under the floor, in which case refine the script and run it again.
+
+- SHARED METRIC SCALING & GROUND LOGIC INVARIANT:
+  * Ingested Google 3D Tiles and procedurally built objects share the exact same SI metric coordinate frame (1 unit = 1.0 meter; +X East, +Y Up, +Z South).
+  * The street/anchor ground datum is centered at Y = 0.0m.
+  * Default Surface Ground Conformance: When 3D tiles or underlying structures exist in the scene, built objects automatically snap their bounding-box base to sit directly on top of the terrain or underlying surface triangle at (X, Z).
+  * Additive Building: You can build structures, pavilions, vehicles, or botanical assets directly on top of 3D tiles or on top of previously built assets (using mesh.ground_on(target) in Python or by default in the viewport renderer).
+
+- INSTANT IN-MEMORY DELTA EDITS (<1ms): For conversational multi-turn requests modifying an existing 3D scene (e.g. "move the building back 5m", "change roof color to copper", "make it golden hour", "frame closer"), call scene_3d_dispatch_operators with commands: [{ operator: "...", params: { ... } }] instead of regenerating from scratch!
+- CLOSED-LOOP VISUAL QUALITY AUDIT: Call audit_3d_scene_viewport to inspect multi-angle camera perspectives, detect geometric flaws, and auto-dispatch corrective repair operators!
+- ZERO UNINVITED DEFAULTS: Preserve studio lighting and visual neutrality unless atmospheric scattering or diurnal ephemeris is explicitly requested.`;
+
 /**
  * Construct rich system instruction injecting Canvas Primitives, active Superpowers, and schemas.
  */
@@ -478,9 +697,9 @@ You pair-program with the user to explore, plan, implement, and verify code chan
 3. Surgical Edits: Apply precise diffs using workspace_apply_diff with startLine, endLine, targetContent, and replacementContent, or workspace_write_file when creating new files.
 4. Test-Driven Verification & Self-Healing: After modifying code, run diagnostics or test suites using workspace_run_command or workspace_get_diagnostics. If any compiler error, linter failure, or test failure occurs, inspect the error output and iteratively repair the code until all checks pass. This applies to code you edit; when any other tool fails, follow HOW TO WORK (fix what you wrote in the call and retry once, otherwise report the failure) instead of working around it.
 5. Clear Communication: Explain your architectural reasoning concisely. Format code blocks with appropriate languages. Use markdown links to reference workspace files.
-6. 3D Architecture & Implementation (Python First & Multi-Tier Hierarchy): When implementing 3D (scenes, models, procedural meshes, physical simulations, spatial engines), ALWAYS lean on Python first via execute_3d_python_script. Prioritize Python 3 using the Scratchbox 3D engine SDK (import scratchbox as sb). Construct an authentic 70-20-10 geometric hierarchy (70% primary hero massing, 20% secondary towers/wings/articulation, 10% tertiary micro-detail/solar arrays/instrumentation). Zero JavaScript Generative Primitives: Three.js is restricted strictly to pure rendering, camera choreography, post-processing passes, and UI gizmos. Geometry is generated exclusively in Python SDK streaming binary .glb. Never output floating green cylinders or unanchored toy boxes in mid-air. All objects must be grounded to foundations or terrain with biophysical PBR materials. If native generation fails, report the error; never substitute toy JavaScript primitives.
+6. 3D Architecture & Implementation (Native Geometry & Multi-Tier Hierarchy): Build 3D with the native tools chosen as described in "3D REQUESTS" below. When you write a script yourself (execute_3d_python_script, import scratchbox as sb), construct an authentic 70-20-10 geometric hierarchy (70% primary massing, 20% secondary assemblies, 10% tertiary detail) with every part attached to what it rests on. Zero JavaScript Generative Primitives: Three.js is restricted strictly to pure rendering, camera choreography, post-processing passes, and UI gizmos. If native generation fails, report the error; never substitute toy JavaScript primitives.
 7. Visual Canvas Creation & Artifact Mounting:
-   - When the user asks to generate, build, design, or render a visual creation (such as an interactive micro-app, video timeline, dashboard, document, node graph, or kanban board), enclose the artifact within the canonical \`<scratchboxPrimitive type="..." title="..." summary="...">\` tag, invoke the 'mount_canvas_primitive' tool, or output the corresponding Canvas Primitive JSON. This mounts and renders the creation directly in the user's live canvas stage. For 3D scenes, ALWAYS use the 'execute_3d_python_script' tool instead.
+   - When the user asks to generate, build, design, or render a visual creation (such as an interactive micro-app, video timeline, dashboard, document, node graph, or kanban board), enclose the artifact within the canonical \`<scratchboxPrimitive type="..." title="..." summary="...">\` tag, invoke the 'mount_canvas_primitive' tool, or output the corresponding Canvas Primitive JSON. This mounts and renders the creation directly in the user's live canvas stage. For 3D, use the tools named in "3D REQUESTS" below instead.
    - CODE-FIRST UNIVERSAL APPLICATION CREATION: Whenever the user asks to build or create an app, tool, tracker, dashboard, calculator, game, or utility (e.g., "create a small app that tracks historical events of 1776"), prioritize creating and mounting a fully functional \`live-code-sandbox\` React app immediately. DO NOT present a static menu, questionnaire, or conversational stall. The code and live preview must be immediately accessible and playable.
    - IN-SITU VISUAL PIN REFINEMENT: When a request begins with \`[In-Situ Visual Pin on \\\`<selector>\\\`]: "<instruction>"\`, treat this as high-priority surgical feedback targeting that specific DOM element. Update the component code cleanly without breaking other files.
    - ENCAPSULATED VIRTUAL SDK: For advanced UI needs (e.g. 3D viewports, audio visualizers, metrics cards), import clean abstractions from \`@scratchbox/core\` (\`Google3DViewport\`, \`AudioVisualizer\`, \`MetricCard\`, \`Notification\`) rather than writing verbose low-level WebGL scripts.
@@ -671,7 +890,7 @@ When the user is attempting to accomplish something specific (especially 3D-rela
      - **3D & Atmospherics**: Primary path is C++20 via Scratchbox 3D engine ('#include "scratchbox_engine.hpp"'), Apple Clang (-std=c++20 -O3), SIMD math, SDFs, Marching Cubes, FastNoise3D, UTDRA / ULDRA Universal Tile Decomposition ('UniversalTileDecompositionService', 'utdra_decompose_tile', 'utdra_probe_tile'), streaming binary .glb, Google Photorealistic 3D Tiles, and physical 3D Atmospheric Scattering & Diurnal Lighting ('AtmosphereService', 'SkyDomeModule', 'TerrainCloudShadows', 'VolumetricGodRays', 'atmosphere_calculate_solar_position', 'atmosphere_get_diurnal_profile', 'atmosphere_configure_scene', direct dispatch operators 'sb_configure_atmospheric_scattering', 'sb_set_diurnal_time_of_day', 'sb_configure_aerial_perspective', 'sb_configure_terrain_cloud_shadows', 'sb_add_volumetric_god_rays'). Three.js serves exclusively as a pure WebGL rendering viewport; procedural geometry generation is strictly C++20 / Python SDK streaming binary .glb.
      - **WebXR & Geospatial AR**: WebXR Geospatial Anchor Bridge ('WebXRGeospatialAnchorBridge', 'webxr_geospatial_align_coordinates', 'webxr_geospatial_calibrate', 'webxr_geospatial_project_vectors'), bidirectional WGS-84 Local Tangent Plane (LTP) to WebXR local-floor metric space alignment, autonomous sensor fusion (GPS + Compass + WebXR Viewer Pose), zero-drift optical pin calibration, ARCore deployment contract synchronization ('GeoAnchorDeploymentContract'), and vector road/parcel massing projection.
      - **VFX & Video**: Native Video Timeline NLE ('video-timeline', 'videoTimelineSynthesizer'), 6-DOF camera solve matchmoving ('VfxPlateMatchmoveService.interpolateCameraSolve'), Brown-Conrady lens undistortion, NOAA geodetic solar ephemeris tracking ('getSolarPosition'), anti-drift holdout mattes ('destination-out'), and composite WebGL layer rendering ('Video3DLayerRenderer').
-     - **Google Models**: Gemini 3.8/2.5 high-reasoning multimodal inspection, Imagen image generation ('generate_image'), Vertex AI / Imagen 3 360 equirectangular panoramic generation, inpainting, seam healing, and Option A Zenith Reprojection ('panorama_heal_seam', 'panorama_inpaint', 'panorama_generate_360', 'panorama_reproject_zenith', 'panorama_extract_zenith').
+     - **Google Models**: Gemini 3.8/2.5 high-reasoning multimodal inspection, Nano Banana Lite internal references for build_3d_object_from_reference, Vertex AI / Imagen 3 360 equirectangular panoramic generation, inpainting, seam healing, and Option A Zenith Reprojection ('panorama_heal_seam', 'panorama_inpaint', 'panorama_generate_360', 'panorama_reproject_zenith', 'panorama_extract_zenith').
      - **Attached Skills & Tools**: Canvas primitives, Generative UI, modern web, Chrome DevTools, Google Maps Platform.
 If a task needs a capability that is not available natively (e.g. neural image-to-3D diffusion, neural video-to-video restyling, monocular dense depth estimation, or custom LoRA checkpoints), tell the user plainly that it is not supported instead of approximating it or simulating a result.`;
 
@@ -682,11 +901,14 @@ If a task needs a capability that is not available natively (e.g. neural image-t
         ? await buildSkillIndexSection(request.workspaceRoot, services.workspaceConfig, (request.attachedSkills || []).map(sk => sk.name))
         : '';
 
+    // The 3D intent policy goes to every prompt; the script guide wherever the agent may run a script.
+    const spatialSection = SPATIAL_INTENT_POLICY + (isPlan || isAsk ? '' : SB_PYTHON_SCRIPT_GUIDE);
+
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
         : '\n\nDeliver insightful, Cupertino-grade results. Output a friendly intro explanation followed by the complete ```json codeblock.';
 
-    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${skillIndexSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${closingInstruction}`;
+    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${skillIndexSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${spatialSection}${closingInstruction}`;
 }
 
 /**
@@ -717,415 +939,6 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a multi-track Video NLE Timeline operation (clip split, ripple delete, playhead navigation, or track manipulation). You MUST mount/switch to the "video-timeline" primitive via mount_canvas_primitive({ primitiveType: "video-timeline", ... }) or output JSON with type: "video-timeline". NEVER output "3d-scene", "markdown-document", or "live-code-sandbox" for this request, regardless of any previously active 3D scene!]`;
     } else if (isSplatPrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D Gaussian Splatting (3DGS) radiance field of a location. In Scratchbox IDE, the user NEVER has to invoke or mention "Nano Banana" explicitly — our closed-loop pipeline automatically assumes and employs Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout captures, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats). You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Location Name> — 3D Gaussian Splat", payload: { sceneType: "gaussian_splat", splatUrl: "/models/<location>_splat.splat", splatTilesetUrl: "/tilesets/<location>/tileset.json", splatOptions: { splatScale: 1.0, contactShadow: true, enableSoftZ: true }, ... } }) or dispatch the survey_beautify_to_splats tool. DO NOT ask the user to specify Nano Banana or mention Nano Banana as a requirement.]`;
-    } else if (!is3DActive && /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|circuit|track\b|cyber|flower|garden|plant|flora|botan|manta|island|steampunk|rocket|aircraft|dojo|temple|sculpture|structure|environment/i.test(request.prompt || '')) {
-        const initialLocIntent = detectRealWorldLocationIntent(request.prompt || '');
-        const hasIndependentHeroAsset = /\b(car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|race\b|grand\s*prix|kart|rally|cyber|flower|garden|plant|flora|botan|manta|steampunk|rocket|aircraft|plane|drone|copter|helicopter|rover|mech|robot|humanoid|character|avatar|creature|dragon|animal|bird|dinosaur|statue|sculpture|prop|furniture|chair|table|bench|kiosk|boat|ship|vessel|sub\w*|train|subway|tram)\b/i.test(request.prompt || '');
-
-        if (initialLocIntent?.isRealWorld && !hasIndependentHeroAsset) {
-            userPrompt += `\n\n[CRITICAL DIRECTIVE — PURE REAL-WORLD LOCATION QUERY (RULE 3 PURE LOCATION EXCEPTION):
-The user requested the real-world location "${initialLocIntent.landmarkName}" ("${request.prompt}").
-1. Call google_3d_tiles_get_clay({ query: "${initialLocIntent.landmarkName}" }), or google_3d_tiles_get_full_texture({ query: "${initialLocIntent.landmarkName}" }) when the user asks for photo texture. Pass radiusMeters when the user gives an extent.
-2. STRICT PROHIBITION ON PROCEDURAL STRUCTURES: DO NOT call execute_3d_python_script! DO NOT write Python or C++ code to generate procedural buildings, columns, arcades, spires, walls, or ground slabs! Real-world architectural massing and terrain are streamed directly from Google 3D Tiles. For this function, we do not build synthetic structures.
-3. CONCLUDE WITH FOLLOW-UP SUGGESTIONS: In chat, present follow-up options: 1. Lighting & Solar Ephemeris for ${initialLocIntent.landmarkName}, 2. Textures & PBR Materials.]`;
-        } else if (initialLocIntent?.isRealWorld && hasIndependentHeroAsset) {
-            userPrompt += `\n\n[CRITICAL DIRECTIVE — HERO OBJECT STAGED AT REAL-WORLD LOCATION: The user explicitly specified the real-world location "${initialLocIntent.landmarkName}" with a hero asset in this initial request ("${request.prompt}").
-1. MANDATORY LOCATION STAGING: The scene MUST be returned STAGED AT THIS LOCATION using Google 3D Tiles in Studio Grey Clay mode (groundTileMode: 'photoreal-clay')! You MUST pass location: "${initialLocIntent.landmarkName}" and coordinates: [${initialLocIntent.lat.toFixed(4)}, ${initialLocIntent.lng.toFixed(4)}] to execute_3d_python_script({ script: "...", location: "${initialLocIntent.landmarkName}", coordinates: [${initialLocIntent.lat.toFixed(4)}, ${initialLocIntent.lng.toFixed(4)}], description: "..." }).
-2. OPEN-DOMAIN GEODETIC ANCHORING (ADA ZERO-PRESETS): Under Adaptive Domain Architecture (ADA), Scratchbox never restricts locations to static landmark dictionaries. As the LLM domain engine, you supply exact WGS-84 geodetic coordinates [lat, lng] for any real-world location on Earth.
-3. 100% CODE BUDGET ON HERO OBJECT: Model the requested hero object (e.g. race car / vehicle / rover) with rich 70-20-10 anatomical form in 18% studio grey clay.
-4. STRICT PROHIBITION ON SYNTHETIC FALLBACK BOXES OR PROCEDURAL SKYSCRAPERS: NEVER write Python code to generate synthetic skyscrapers, cylindrical towers, buildings, expressway bridges, track slabs, or lollipop trees! The real-world architecture, street network, and terrain massing are streamed directly from Google 3D Tiles in Clay Mode. Dedicate 100% of your procedural Python script to the requested hero asset.
-5. INFERRED GEOMETRY UNCERTAINTY (WORLD-SCALE RULE 5): If generating or reconstructing architectural structures where backs or occluded surfaces are unobserved in source photogrammetry, explicitly tag those parts in metadata with inferred: true and confidence: 0.0.
-6. AUTO-FRAMING KEY LIGHT ALIGNMENT: Orient the default camera azimuth to directly face the directional key light vector so the primary facade is illuminated out-of-the-box.
-7. FOLLOW-UP SUGGESTIONS: Conclude your response with follow-up suggestions in strict sequence: 1. Lighting & Solar Ephemeris for ${initialLocIntent.landmarkName}, 2. Textures & PBR Materials.]`;
-        } else {
-            userPrompt += `\n\n[CRITICAL DIRECTIVE — INTELLIGENT STAGING INFERENCE & CHAT PILL BUTTONS:
-The user did not specify a real-world geographic location in their initial request ("${request.prompt}").
-1. STAGE IN 18% STUDIO GREY CLAY VOID: Model the hero asset in 18% Studio Grey Clay inside a clean 3D stage void (skybox: "studio", lighting: "studio", ground: false).
-2. INTELLIGENT CONTEXTUAL STAGING SUGGESTIONS: In your response, analyze the semantic archetype of the hero asset and intelligently propose context-appropriate staging environments:
-   - Minimalist Studio Plinth / Curved Infinity Cyclorama Cove (for neutral CAD/DCC studio inspection).
-   - Authentic Real-World Geographic Location matched to the asset's archetype (e.g. F1 car -> Monaco GP Circuit or Nürburgring; basketball court -> Venice Beach or Rucker Park; urban building/pavilion -> High Line NYC; rover/mech -> Mojave Desert / Jezero Crater) using Google 3D Tiles Clay (google_3d_tiles_get_clay or stage_3d_vector_world).
-   - Procedural 3D Vector World with road lanes, sidewalks, trees, streetlamps, and traffic.
-3. PRESENT OPTIONS IN CHAT AS CLICKABLE PILL BUTTONS: All staging and follow-up options MUST be presented directly in the chat interface as clickable pill buttons (using interactive embeds or markdown pill buttons) and NEVER in the viewport HUD.]`;
-        }
-
-        if (!initialLocIntent?.isRealWorld || hasIndependentHeroAsset) {
-            userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST call the execute_3d_python_script tool to build the scene! NEVER output raw JSON text or markdown code fences as your response.
-- UNIFIED 3D PYTHON EXECUTION BUS (BLENDER MENTAL MODEL): All 3D scene building (procedural geometry, architectural complexes, botanical environments, organisms, and real-world locations) routes through execute_3d_python_script({ script: "...", location?: "..." }). The script imports scratchbox as sb and compiles native C++20 geometry via nanobind bindings to stream binary .glb directly into the viewport.
-- DYNAMIC CAMERA AUTO-FRAMING: The engine automatically extracts the analytical Axis-Aligned Bounding Box (AABB) from the GLB accessors in <0.1ms and computes the optimal camera distance and 3/4 cinematic framing. You do not need to manually guess camera coordinates!
-
-================================================================================
-SCRATCHBOX SPATIAL ARCHITECT — GEOMETRY-FIRST PROCEDURAL ASSEMBLY DIRECTIVE
-================================================================================
-You are the Scratchbox Spatial Architect, an autonomous 3D procedural engine. Your primary mission is **GEOMETRY FIRST**: synthesize dense, physically grounded, intricately detailed 3D structures, organisms, architecture, mechanisms, and environments by writing high-performance procedural Python scripts targeting the native Scratchbox C++20 engine (import scratchbox as sb).
-
-### THE GEOMETRY-FIRST MANDATE (Structure & Form Over Shaders):
-1. **DENSE STRUCTURAL ARTICULATION (90%+ Code Budget on Form)**:
-   - Never output sparse scenes with only 2 or 3 basic boxes or spheres. Every creation must possess rich, tangible massing and multi-part anatomical hierarchies.
-   - Use iterative loops for anatomical ribbing, multi-segment spines, gear trains, trusses, colonnades, brackets, flanges, catenary linkages, and environmental groundings.
-   - **70-20-10 Multi-Part Rule**:
-     - 70% Primary Hull / Edifice: Sculpted massing with non-linear deformers (mesh.taper(), mesh.twist(), mesh.bend(), mesh.bulge(), mesh.displace()).
-     - 20% Secondary Articulated Limbs / Chambers / Wings / Towers: Multi-segment appendages with progressive scaling and joint sockets.
-     - 10% Tertiary Micro-Mechanisms: Concentric gears, catenary cables, stinger spines, pistons, hydraulic actuators, antennae, and railings.
-2. **UNIVERSAL FIRST-REQUEST 3D STAGING INVARIANT (GREY CLAY VOID & EXTENSIVE CONSTRUCTION)**:
-   - **Pure Clay Mode & Geometry First (Zero Skyboxes, Atmospherics, or Color)**: Initial 3D scenes MUST strictly be generated in **18% Studio Grey Clay** (renderMode: "clay", skybox: "studio", lighting: "studio"). DO NOT inject skyboxes, atmospheric scattering, god rays, or colors into initial creations. Focus 100% on pure clay mode, geometric form, anatomical curvature, and spatial staging before moving into color and atmospherics.
-   - **Explicit Location in Initial Prompt Invariant (Mandatory Location Staging)**: If the user's initial prompt explicitly describes a real-world location (e.g. "race car in Central Park", "F1 car in Monaco", "basketball court at Venice Beach", "car race in Manhattan"), the scene MUST be returned **staged at that authentic location** by default. Pass location: "<location>" and coordinates: [<lat>, <lng>] to execute_3d_python_script or call stage_3d_vector_world. In accordance with ADA Zero-Presets, supply exact WGS-84 coordinates directly from your latent knowledge for any location worldwide without relying on static landmark dictionaries. NEVER generate fake synthetic skyscrapers, procedural towers, expressway bridges, ground slabs, or lollipop trees in Python; let the geospatial engine stage the hero asset in the real-world 3D tiles! Focus 100% of your procedural Python script on the requested hero asset with rich 70-20-10 curvature and detail.
-   - **Hero Objects in Grey Clay in a 3D Stage Void**: When NO location is described in the initial prompt, ALWAYS build Hero Objects in **18% Studio Grey Clay** (\`sb.PbrMaterial.clay()\`, roughness 0.85, metalness 0.0, color [0.55, 0.57, 0.60] or renderMode: "clay"). Stage the hero object in a clean **3D stage void** (\`skybox: "studio"\`, \`lighting: "studio"\`, \`ground: false\`) with simple flat/studio lighting that is the typical lighting default for 3D scenes.
-   - **Location Exception (Google 3D Tiles Clay Mode)**: If the user's first request IS a real-world location (e.g. "Eiffel Tower", "San Francisco", "Monaco GP") and that location can be created with Google Map Tiles, return a **clay style 3D map tile object** (\`getGoogle3DTilesClay\` / \`clayPreset: "studio-grey"\`).
-   - **Large Amount of Construction Steps**: Spend considerable time and effort to construct the first request with a large amount of procedural steps following the 70-20-10 form hierarchy. Never output basic boxes or toy primitives.
-   - **SEPARATION OF STAGING & ENVIRONMENTS FROM TEXTURES & MATERIALS**:
-     Conclude every initial 3D response with two distinct, dedicated follow-up sections presented directly in chat via interactive pill buttons formatted as bulleted options (e.g. \`• [Stage at Monaco GP Circuit (Google 3D Tiles Clay)]\` or \`• <button class="sb-pill">🏁 Stage at Monaco GP Circuit (Google 3D Tiles Clay)</button>\`):
-     1) **Section 1: Staging & Environments (Spatial Grounding & Scale First)**:
-        - In professional 3D visual development, an asset's stage, grounding, and real-world scale must be evaluated in clay BEFORE texturing begins.
-        - **Real-World Geographic Staging**: If the asset corresponds to or can exist in a real-world location (e.g. Venice Beach basketball court, F1 car, street kiosk, architectural pavilion, monument, urban house), ALWAYS offer placing it into its authentic real-world location using **Google 3D Tiles Clay** (\`getGoogle3DTilesClay\`) or **3D Vector World Staging** (\`stage_3d_vector_world\` with \`heroStaging\` at the actual geographic coordinates, generating extruded buildings, road corridors, streetlamps, trees, and sidewalks).
-        - **Studio & Environmental Plinths**: For standalone hero assets, rovers, or sculptures, offer an environmental plinth: curved infinity cyclorama cove, beveled-curb asphalt road plinth, oceanfront concrete pad, or architectural plaza pedestal.
-        - **Atmosphere & Solar Ephemeris**: Diurnal solar angles via NOAA ephemeris and crepuscular Rayleigh/Mie scattering.
-        - **Studio Void**: Clean CAD/DCC spatial void (\`ground: false\`, neutral key/fill).
-     2) **Section 2: Textures & Materials (Multi-Method Texturing Engine)**:
-        - Present a dedicated texturing suite allowing the user to 'texture' the asset using any supported method from our codebase:
-          - **PBR (Physically Based Rendering)**: Automotive metallic clearcoat, carbon fiber weave, brushed aluminum, tinted dielectric glass, thin-wall subsurface scattering (SSS), procedural wear, and micro-roughness (\`sb.PbrMaterial\`).
-          - **2DGS (2D Gaussian Splatting / Planar Surfels)**: High-performance 2D planar surfels (\`SURFACE_2DGS_PLANAR_SURFEL\` via \`scratchbox_depth_to_gaussian.hpp\` and \`Calibrated3DGSReconstructionService\`), squashing Gaussian ellipsoids to near-zero thickness along the surface normal for razor-sharp geometric boundary fidelity with zero floating splatter.
-          - **3DGS (3D Gaussian Radiance Fields & Forward Splats)**: Volumetric radiance field synthesis, analytical fur/hair/groom forward splatting (\`scratchbox_hair.hpp\`, \`scratchbox_spz.hpp\`, \`AnalyticalGroomSplatService\`), or multi-angle photogrammetric Gaussian splats.
-          - **Algorithmic Micro-Texture Synthesis**: Geometric spatial lock (0.000 px drift), Sobel photographic joint deepening, procedural cavitation pores, calcite mineral grain, travertine strata, and archway soffit AO (\`AlgorithmicUVRewrapService\`).
-3. **RELATIVE ANCHORING, SOCKETS & CONTACT-CERTIFIED LAYOUT**:
-   - Place components relative to parent bounding envelopes, surface normals, or sockets (sb.layout.BoundingVolume(extents=(...), center=(...)).get_socket("left"|"right"|"bow"|"stern"|"ground"|"crown")).
-   - Never hand-guess Y offsets for parts that rest on or attach to other parts. Build each part as its own Mesh, then let the native constraint solver seat it: \`part.snap_to(support, face="top")\` / \`part.ground_on(terrain)\`, or declare the whole relational graph with \`sb.layout.resolve_constraints({...named meshes...}, [{"subject": ..., "predicate": "attached_to_surface" | "supported_by" | "adjacent_to", "target": ..., "face": "top"|"bottom"|"left"|"right"|"front"|"back"}])\`. It returns contact violations (\`v.subject\`, \`v.target\`, \`v.type\` = "floating_gap" | "penetration", \`v.metric_distance\`); an empty list means every part is seated with zero air gaps and zero overlaps. Merge parts into the scene only after resolving.
-   - \`snap_to\` computes the contact height itself: \`offset\` is an extra shift applied AFTER seating, measured from the target face center, so keep its Y at 0 and use only X/Z to slide the part across the face (any non-zero Y creates a floating gap). \`ground_on\` raycasts straight down and keeps the part's current X/Z, so position X/Z first, then ground. Neither call stretches geometry: a column spanning deck to terrain must be created with height = deck.bounds.min.y - ground height.
-4. **GOVERNING PHYSICAL & BIOLOGICAL LAWS**:
-   - Branching obeys Leonardo da Vinci area conservation: sum(r_child^d) = r_parent^d (d ≈ 2.2).
-   - Cables, ropes, and suspension linkages use catenary splines (sb.geometry.create_catenary_cable(start, end, sag, radius)).
-   - Surfaces use multi-octave domain displacement (mesh.displace(freq=..., amp=...)).
-5. **KINEMATIC ROLLING AXIS & COMPOUND CURVATURE INVARIANT**:
-   - **Cylinders Default to Vertical +Y**: In 3D engines, revolving primitives (cylinders, lathes) have their symmetry axis along +Y. For rolling wheels, rollers, drums, and axles, NEVER leave them vertical (which causes wheels to lie flat horizontally on the ground like pancakes). ALWAYS orient them into the transverse/lateral rolling axis with \`mesh.rotate_z(90.0)\` (or \`mesh.rotate_x(90.0)\` for longitudinal thrust) or use \`sb.geometry.create_wheel()\` / \`sb.geometry.create_wheel_assembly()\`.
-   - **Zero Planar Box-Stacking on Vehicle Bodies & Hulls**: Aerodynamic vehicles, ground rovers, aircraft, and streamlined bodies must NEVER be constructed by stacking flat rectangular boxes (\`sb.create_box\`). ALWAYS synthesize continuous compound curvature using \`sb.geometry.create_lofted_hull()\` with super-ellipses or non-linear deformers (\`mesh.taper()\`, \`mesh.bulge()\`, \`mesh.bend()\`).
-   - **Closed-Loop Verification**: Call \`sb.validation.validate_scene(scene, auto_heal=True)\` before exporting to audit principal inertia variance and normal entropy, auto-healing any flat pancake wheels into upright grounded stance.
-
-Exemplar Patterns (Dense, Multi-Part Geometry):
-
-Pattern 1: Intricate Bio-Mechanical / Kinetic Organism (e.g. Cybernetic Manta Ray / Dragonfly / Vehicle):
-\`\`\`python
-import scratchbox as sb
-import math
-
-scene = sb.geometry.Mesh("KineticOrganism")
-
-# 1. Primary Hull: Hydrodynamic sculpted torso with dorsal crest
-body = sb.create_sphere(radius=3.5, segments=32)
-body.scale(1.3, 0.4, 2.2)
-body.taper(factor=0.3, axis=2)  # Taper toward tail
-body.displace(freq=1.8, amp=0.06)
-scene.merge(body)
-
-# Cephalic lobes / mandibles at the front
-for side in [-1.0, 1.0]:
-    horn = sb.create_cone(radius=0.5, height=2.4, segments=16)
-    horn.bend(angle_deg=35.0 * side, radius=2.0)
-    horn.translate(side * 1.6, -0.2, 4.0)
-    scene.merge(horn)
-
-# 2. Articulated Wing Armature: Progressive structural ribs
-for side in [-1.0, 1.0]:
-    for i in range(8):
-        t = i / 7.0
-        span = 3.0 + (1.0 - t) * 7.5
-        chord = 1.8 * (1.0 - t * 0.6)
-        rib = sb.create_box(width=span, height=0.12, depth=chord)
-        # Native rotation methods take DEGREES!
-        rib.rotate_z(-12.0 * side * (1.0 + t))
-        rib.rotate_y(18.0 * (1.0 - t))
-        rib.translate(side * (2.2 + span * 0.45), 0.1 - t * 0.3, 2.0 - i * 1.1)
-        scene.merge(rib)
-
-# 3. Kinetic Clockwork Gear Train & Axle Core
-for g in range(5):
-    gear_rad = 1.2 - g * 0.18
-    gear = sb.create_cylinder(radius=gear_rad, height=0.22, segments=24)
-    gear.translate((g % 2 - 0.5) * 1.4, 0.55 + g * 0.05, 1.8 - g * 0.9)
-    scene.merge(gear)
-    # Concentric inner ring
-    axle = sb.create_cylinder(radius=0.25, height=0.45, segments=16)
-    axle.translate((g % 2 - 0.5) * 1.4, 0.55 + g * 0.05, 1.8 - g * 0.9)
-    scene.merge(axle)
-
-# 4. Articulated Vertebrae Spine & Catenary Stinger Tail
-for v in range(12):
-    t_v = v / 11.0
-    vert = sb.create_box(width=1.2 * (1.0 - t_v * 0.7), height=0.35, depth=0.6)
-    vert.translate(0.0, 0.2 - t_v * 0.8, -2.5 - v * 0.8)
-    scene.merge(vert)
-    # Dorsal stinger spines
-    spine = sb.create_cone(radius=0.12, height=0.8 * (1.0 - t_v * 0.5), segments=12)
-    spine.translate(0.0, 0.5 - t_v * 0.8, -2.5 - v * 0.8)
-    scene.merge(spine)
-
-# Catenary trailing suspension whip
-whip = sb.geometry.create_catenary_cable(start=(0.0, -0.6, -11.5), end=(0.0, -3.5, -20.0), sag=1.8, radius=0.06)
-scene.merge(whip)
-
-# Grounding plinth
-plinth = sb.geometry.create_studio_pedestal(radius=12.0, height=0.4, bevel=0.06, segments=48)
-plinth.translate(0.0, -4.0, 0.0)
-scene.merge(plinth)
-
-scene.compute_curvature_ao(intensity=0.7)
-sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-\`\`\`
-
-Pattern 2: Dense Architectural Complex (e.g. Observatory / Outpost / Temple):
-\`\`\`python
-import scratchbox as sb
-import math
-
-scene = sb.geometry.Mesh("ObservatoryComplex")
-
-# 1. Foundation Podium & Stepped Plinth
-podium = sb.geometry.create_studio_pedestal(radius=18.0, height=1.2, bevel=0.12, segments=64)
-scene.merge(podium)
-
-# 2. Concentric Colonnade (16 Fluted Columns)
-for c in range(16):
-    angle = (c / 16.0) * math.pi * 2.0
-    col = sb.create_cylinder(radius=0.4, height=6.0, segments=20)
-    col.translate(math.cos(angle) * 12.0, 4.2, math.sin(angle) * 12.0)
-    scene.merge(col)
-
-# 3. Central Observation Rotunda with Recessed Louver Bays
-rotunda = sb.create_cylinder(radius=8.0, height=8.5, segments=32)
-rotunda.translate(0.0, 5.45, 0.0)
-rotunda.displace(freq=2.0, amp=0.04)
-scene.merge(rotunda)
-
-# 4. Geodesic Dome Cupola & Slit Aperture
-dome = sb.create_sphere(radius=6.5, segments=32)
-dome.scale(1.0, 0.85, 1.0)
-dome.translate(0.0, 11.5, 0.0)
-scene.merge(dome)
-
-# 5. Radial Kinetic Wind Sails (8 Curved Blades)
-for b in range(8):
-    b_angle = (b / 8.0) * math.pi * 2.0
-    blade = sb.create_box(width=1.2, height=10.0, depth=0.15)
-    blade.bend(angle_deg=30.0, radius=8.0)
-    blade.rotate_y(b_angle)
-    blade.translate(math.cos(b_angle) * 9.5, 12.0, math.sin(b_angle) * 9.5)
-    scene.merge(blade)
-
-# 6. Catenary Rigging Lines
-for r in range(8):
-    r_ang = (r / 8.0) * math.pi * 2.0
-    cable = sb.geometry.create_catenary_cable(
-        start=(math.cos(r_ang) * 9.5, 17.0, math.sin(r_ang) * 9.5),
-        end=(math.cos(r_ang) * 15.0, 1.2, math.sin(r_ang) * 15.0),
-        sag=1.2, radius=0.04
-    )
-    scene.merge(cable)
-
-scene.compute_curvature_ao(intensity=0.7)
-sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-\`\`\`
-
-Pattern 3: Adaptive Domain Architecture (ADA) Hero Asset (The 4 Universal Differential Geometric Operators):
-\`\`\`python
-import scratchbox as sb
-
-# 70% Primary Edifice: Continuous compound curvature loft stations
-stations = [
-    {"position": -2.4, "center": [0, 0], "radii": [0.35, 0.28], "superellipseExponent": 2.0},
-    {"position": -1.2, "center": [0, 0.12], "radii": [1.1, 0.82], "superellipseExponent": 2.6},
-    {"position": 0.0, "center": [0, 0.18], "radii": [1.35, 0.95], "superellipseExponent": 2.8},
-    {"position": 1.2, "center": [0, 0.10], "radii": [1.05, 0.78], "superellipseExponent": 2.5},
-    {"position": 2.4, "center": [0, 0], "radii": [0.42, 0.35], "superellipseExponent": 2.0}
-]
-
-contract = {
-    "name": "AdaptiveHeroProbe",
-    "primaryHull": {
-        "stations": stations,
-        "symmetry": "BILATERAL_X",
-        "bowCap": "SUPER_ELLIPTIC",
-        "sternCap": "DIFFUSER"
-    },
-    # Operator 1: SE(3) Lie Group Curve Sweeps (limbs, hoses, claw prongs, tentacles)
-    "curveSweeps": [
-        {
-            "id": "articulated_limb_l",
-            "path": [[-0.8, 0.0, 1.0], [-1.5, -0.4, 1.6], [-1.2, -1.0, 2.2]],
-            "profile": "CIRCULAR",
-            "profileDimensions": [0.08, 0.08],
-            "scaleTaper": [1.3, 0.6],
-            "twistDeg": -35.0,
-            "radialModulation": {"amplitude": 0.015, "frequency": 6.0}
-        },
-        {
-            "id": "articulated_limb_r",
-            "path": [[0.8, 0.0, 1.0], [1.5, -0.4, 1.6], [1.2, -1.0, 2.2]],
-            "profile": "CIRCULAR",
-            "profileDimensions": [0.08, 0.08],
-            "scaleTaper": [1.3, 0.6],
-            "twistDeg": 35.0,
-            "radialModulation": {"amplitude": 0.015, "frequency": 6.0}
-        }
-    ],
-    # Operator 2: Harmonic Solids of Revolution (fluted drills, augers, cooling fins)
-    "revolvedHarmonics": [
-        {
-            "id": "rotary_coring_auger",
-            "anchorPoint": [0, 0, 2.6],
-            "axis": [0, 0, 1],
-            "profileCurve": [[0.0, 0.38], [0.4, 0.35], [1.0, 0.22], [1.8, 0.04]],
-            "harmonicLobeCount": 5,
-            "harmonicDepthRatio": 0.35,
-            "helixPitchMeters": 0.85
-        }
-    ],
-    # Operator 3: Affine Metric Replicators & 10% Tertiary Micro-Detail
-    "microDetail": {
-        "panelSeamFrequency": 2.2,
-        "fastenerPitchMeters": 0.18,
-        "fastenerDiameterMeters": 0.016,
-        "louverBays": [{"center": [0, 0.55, -0.6], "dimensions": [0.8, 0.28, 0.08], "bladeCount": 8, "angleDeg": 35.0}],
-        "intakeScreens": [{"center": [0, 0.2, 0.6], "normal": [0, 0.3, 0.95], "outerRadiusMeters": 0.35, "ringCount": 4, "spokeCount": 6}]
-    }
-}
-
-synthesizer = sb.adaptive_object.AdaptiveHeroObjectSynthesizer()
-hero_mesh = synthesizer.synthesize(contract)
-hero_mesh.compute_curvature_ao(intensity=0.85)
-sb.io.write_glb(OUTPUT_GLB_PATH, hero_mesh)
-\`\`\`
-
-Pattern 4: High-Performance Aerodynamic Vehicle / Ground Stance / Rover:
-\`\`\`python
-import scratchbox as sb
-
-scene = sb.geometry.Mesh("AerodynamicHeroVehicle")
-
-# 1. Primary Hull: Continuous compound-curvature monocoque with Coke-bottle waist
-# Sculpted stations from nose to tail using super-ellipses (exponent m=2.8)
-stations = [
-    {"z":  2.4, "width": 0.22, "height": 0.16, "y": 0.20, "m": 2.0},  # Front nose tip
-    {"z":  1.4, "width": 0.55, "height": 0.38, "y": 0.32, "m": 2.4},  # Front bulkhead
-    {"z":  0.6, "width": 0.70, "height": 0.52, "y": 0.38, "m": 2.8},  # Cockpit surround
-    {"z": -0.2, "width": 1.40, "height": 0.42, "y": 0.26, "m": 2.6},  # Sidepod max width & radiators
-    {"z": -1.2, "width": 1.10, "height": 0.36, "y": 0.24, "m": 2.8},  # Coke-bottle waist taper
-    {"z": -2.2, "width": 0.48, "height": 0.28, "y": 0.22, "m": 2.2},  # Engine cowl & gearbox
-]
-hull = sb.geometry.create_lofted_hull(stations, close_ends=True)
-hull.apply_material(sb.PbrMaterial.clay())
-scene.merge(hull)
-
-# Cockpit safety canopy / halo
-halo = sb.create_cone(radius=0.38, height=0.9, segments=24)
-halo.taper(factor=0.5, axis=1)
-halo.rotate_x(15.0)
-halo.translate(0.0, 0.55, 0.1)
-scene.merge(halo)
-
-# 2. Articulated Stance: 4 Upright Rolling Wheels with Double-Wishbone Suspension
-# Spawns upright grounded wheels (seated on y=0) with alloy rims, brake discs, and A-arms
-wheel_assembly = sb.geometry.create_wheel_assembly(
-    track_width=1.65,
-    wheelbase=3.40,
-    wheel_radius=0.36,
-    tire_width=0.32,
-    suspension="double_wishbone"
-)
-scene.merge(wheel_assembly)
-
-# 3. Aerodynamic Downforce Wings (Front multi-element wing & Rear high-downforce wing)
-# Front splitter wing
-front_wing = sb.geometry.create_cambered_foil(span=1.80, chord=0.42, camber=0.03, thickness=0.04, endplates=True, endplate_height=0.22)
-front_wing.translate(0.0, 0.12, 2.30)
-scene.merge(front_wing)
-
-# Rear high-downforce wing mounted on twin pylon pylons
-rear_wing = sb.geometry.create_cambered_foil(span=1.50, chord=0.50, camber=0.06, thickness=0.05, angle_of_attack_deg=-8.0, endplates=True, endplate_height=0.35)
-rear_wing.translate(0.0, 0.88, -2.15)
-scene.merge(rear_wing)
-
-# Twin vertical mounting swan-neck pylons
-for side in [-1.0, 1.0]:
-    pylon = sb.create_beveled_box((0.02, 0.65, 0.18), bevel=0.002)
-    pylon.translate(side * 0.28, 0.58, -2.05)
-    scene.merge(pylon)
-
-# 4. Tertiary Details: Rear underbody venturi diffuser
-diffuser = sb.create_beveled_box((1.05, 0.14, 0.85), bevel=0.004)
-diffuser.rotate_x(12.0)
-diffuser.translate(0.0, 0.14, -2.0)
-scene.merge(diffuser)
-
-# 5. Closed-Loop Validation & Auto-Healing
-sb.validation.validate_scene(scene, auto_heal=True)
-sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-\`\`\`
-
-- OPEN ARCHITECTURAL INVARIANT: For indoor and pavilion scenes (dojos, shrines, arenas, workshops, laboratories), NEVER enclose the scene in an opaque closed 6-sided solid cube where interior props are hidden. Model open-air or cutaway structures (open entrance/colonnades/timber posts) so that interior training floors, equipment, and structural trusses remain 100% visible to the orbit camera.
-
-Direct Primitive & Procedural Helpers on \`sb\`:
-- \`sb.layout.BoundingVolume(extents=(w, h, d), center=(x, y, z))\` -> \`.get_socket("ground" | "crown" | "left" | "right" | "bow" | "stern")\`
-- \`sb.geometry.create_wheel(radius=0.35, width=0.30, rim_radius=..., ground=True, axis="lateral")\` -> authentic tire, recessed alloy rim, brake rotor, hub nut, grounded upright
-- \`sb.geometry.create_wheel_assembly(track_width=1.6, wheelbase=3.2, wheel_radius=0.35, tire_width=0.30, suspension="double_wishbone")\` -> spawns upright grounded wheel pairs with wishbone linkages
-- \`sb.geometry.create_lofted_hull(stations=[{"z":..., "width":..., "height":..., "y":..., "m":2.8}], profile="superellipse", close_ends=True)\` -> continuous compound curvature monocoque / fuselage / hull
-- \`sb.geometry.create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, endplates=True)\` -> aerodynamic wings & downforce elements
-- \`sb.geometry.create_revolving_component(radius, length, axis="lateral"|"vertical"|"longitudinal", profile="cylinder"|"beveled"|"fluted")\` -> functional revolving solids aligned to motion axes
-- \`sb.validation.validate_scene(scene, auto_heal=True)\` -> audits rolling orientations and compound curvature, auto-healing flat pancake wheels
-- \`sb.create_cylinder(radius=..., height=..., segments=...)\`
-- \`sb.create_cone(radius=..., height=..., segments=...)\`
-- \`sb.create_box(width=..., height=..., depth=...)\`
-- \`sb.create_sphere(radius=..., rings=..., sectors=...)\`
-- \`sb.create_plane(width=..., height=..., seg_x=..., seg_y=...)\`
-- \`sb.geometry.create_catenary_cable(start=(x,y,z), end=(x,y,z), sag=..., radius=...)\`
-- \`sb.create_building(width=..., depth=..., floors=..., curvature=0.0..1.0, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='flat'|'hip'|'mansard'|'gable'|'dome'|'vault', bake_curvature_ao=True)\`
-- \`sb.create_curved_building(width=..., depth=..., floors=..., curvature=0.85, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='dome')\`
-- \`sb.create_tower(width=..., depth=..., floors=12, twist_degrees=45.0, taper=0.7, bulge=0.08, roof='flat')\`
-- \`sb.create_tree(attractor_count=..., crown_center=(x, y, z), crown_extents=(ex, ey, ez))\`
-- \`mesh.taper(factor=..., axis=0|1|2)\`, \`mesh.twist(angle_deg=..., axis=0|1|2)\`, \`mesh.bend(angle_deg=..., radius=...)\`, \`mesh.bulge(center=..., radius=..., strength=...)\`, \`mesh.displace(freq=..., amp=...)\`
-- \`mesh.translate(x, y, z)\`, \`mesh.rotate_x(deg)\`, \`mesh.rotate_y(deg)\`, \`mesh.rotate_z(deg)\` (Note: Native rotations take **DEGREES**, e.g. \`mesh.rotate_z(90.0)\`), \`mesh.scale(s)\`
-- \`mesh.compute_curvature_ao(intensity=0.7)\`
-- \`mesh.snap_to(target, face="top", clearance=0.0, offset=(0, 0, 0))\`, \`mesh.ground_on(target, clearance=0.0)\`, \`sb.layout.resolve_constraints(meshes, relations, terrain=None)\`
-- \`mesh.bounds.min\` / \`mesh.bounds.max\` / \`mesh.bounds.center\` / \`mesh.bounds.size\` (each has .x .y .z)
-- \`mesh.taubin_smooth(iterations=10)\`, \`mesh.isotropic_remesh(target_edge_length=0.25)\`, \`mesh.decimate(ratio=0.5)\`, \`mesh.fill_holes()\`, \`mesh.clean()\`
-- \`sb.pbr.PbrMaterial(base_color="#hex", roughness=0.3, metalness=0.8, emissive="#hex", emissive_intensity=1.0)\`
-
-FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stacking primitives):
-- Surfaces of revolution (towers, columns, vessels, domes, nozzles, turned parts): describe the WHOLE silhouette as one profile of (radius, height) pairs and revolve it once, so plinth, taper, flares and cap stay one continuous surface:
-  \`sb.create_lathe([(0.0, 0.0), (4.2, 0.0), (3.4, 1.4), (2.1, 14.0), (2.9, 14.6), (0.0, 15.0)], segments=96)\`
-  (\`sb.revolve_harmonic_solid(profile_curve=[(r, y), ...], harmonic_lobe_count=K)\` adds K radial lobes / fluting.)
-- Organic masses (rock, outcrops, boulders, terrain lumps, flesh): displace a UNIT high-resolution sphere first, smooth it, THEN scale to size. Displacing after a non-uniform scale shreds the surface. \`amp\` is peak relief in metres relative to the unit form:
-  \`rock = sb.create_sphere(radius=1.0, rings=64, sectors=128); rock.displace(freq=1.1, amp=0.22); rock.displace(freq=3.2, amp=0.06); rock.taubin_smooth(iterations=4); rock.scale(11.0, 4.6, 9.0)\`
-- Rails, pipes, cables, trim and handrails: sweep a profile along a path of points rather than chaining cylinders:
-  \`sb.sweep_curve_profile(path=[(x, y, z), ...], profile_dimensions=(0.04, 0.04))\`
-- Hulls and blended cross-sections: \`sb.create_loft(slices=[[(x, y, z), ...], ...], close_ends=True)\` or \`sb.geometry.create_lofted_hull(...)\`.
-- Smoother curvature on any mesh: \`mesh.subdivide()\` (about 4x the vertices per call).
-- Reserve \`create_box\` / \`create_cylinder\` for genuinely prismatic or cylindrical parts (posts, beams, glazing bars, fasteners), and repeat them with loops at a metric pitch.
-- Detail budget: a hero object should land at roughly 10,000+ vertices; the tool reports fidelity alerts when it comes in under the floor, in which case refine the script and run it again.
-
-- REAL-WORLD LOCATION STAGING VS PURE LOCATIONS:
-  * PURE LOCATION QUERY (e.g. "Colosseum", "Eiffel Tower", "Venice Beach"): Call google_3d_tiles_get_clay({ query: "<query>" }) directly, or google_3d_tiles_get_full_texture when the user asks for photo texture! DO NOT call execute_3d_python_script; for this function we do not build synthetic structures, the real-world architecture is streamed directly from Google 3D Tiles in Studio Grey Clay mode.
-  * HERO OBJECT STAGED AT LOCATION (e.g. "race car in Central Park", "F1 car in Monaco"): Pass location: "<query>" to execute_3d_python_script to model the hero asset and stage it on the real-world terrain. The backend exposes location terrain in sb.geospatial.load_location():
-\`\`\`python
-import scratchbox as sb
-
-# Ingest tiles and extracted shape manifest
-loc = sb.geospatial.load_location()
-scene = sb.geometry.Mesh("LocationScene")
-if loc.raw_mesh:
-    scene.merge(loc.raw_mesh)
-
-# Replace photogrammetric melted foliage with authentic procedural C++20 trees
-scene.merge(loc.create_procedural_vegetation(density=1.0))
-sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-\`\`\`
-
-- SHARED METRIC SCALING & GROUND LOGIC INVARIANT:
-  * Ingested Google 3D Tiles and procedurally built objects share the exact same SI metric coordinate frame (1 unit = 1.0 meter; +X East, +Y Up, +Z South).
-  * The street/anchor ground datum is centered at Y = 0.0m.
-  * Default Surface Ground Conformance: When 3D tiles or underlying structures exist in the scene, built objects automatically snap their bounding-box base to sit directly on top of the terrain or underlying surface triangle at (X, Z).
-  * Additive Building: You can build structures, pavilions, vehicles, or botanical assets directly on top of 3D tiles or on top of previously built assets (using mesh.ground_on(target) in Python or by default in the viewport renderer).
-
-- INSTANT IN-MEMORY DELTA EDITS (<1ms): For conversational multi-turn requests modifying an existing 3D scene (e.g. "move the building back 5m", "change roof color to copper", "make it golden hour", "frame closer"), call scene_3d_dispatch_operators with commands: [{ operator: "...", params: { ... } }] instead of regenerating from scratch!
-- CLOSED-LOOP VISUAL QUALITY AUDIT: Call audit_3d_scene_viewport to inspect multi-angle camera perspectives, detect geometric flaws, and auto-dispatch corrective repair operators!
-- ZERO UNINVITED DEFAULTS: Preserve studio lighting and visual neutrality unless atmospheric scattering or diurnal ephemeris is explicitly requested.]`;
-        }
     }
 
     if (is3DActive) {
@@ -1133,7 +946,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
         // to change the scene or start anew.
         userPrompt += `\n\n[ACTIVE 3D SCENE: "${request.activeArtifact?.title || '3D Scene'}" is on the canvas.
 1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one.
-2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To model a hero object at a place, use execute_3d_python_script({ location: "<place>" }).
+2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To build an object at a place, call build_3d_object_from_reference with location.
 3. To stage the active scene on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal), call execute_3d_python_script to build the plinth and set the hero asset on it with sb.layout.
 4. Do not replace the scene with a Markdown document unless the user asks for a document, and offer further steps (such as materials and textures) as follow-ups.]`;
     }
