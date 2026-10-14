@@ -148,6 +148,14 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'BOOLEAN',
                     description: 'Merge the tiles into the active 3D scene as its environment, keeping its objects and settings. Set it only when the user asks to stage the current scene at this place. Default false: the tiles open as a new studio scene.'
                 },
+                remesh: {
+                    type: 'BOOLEAN',
+                    description: 'Remesh the extracted photogrammetry before returning it (default true): hidden shells culled, facades snapped to planes, cracks closed, facade relief added, in one native pass of about 10-60 s. Set false only when the user asks for the raw tiles.'
+                },
+                isolate: {
+                    type: 'BOOLEAN',
+                    description: 'Return only the structure at the anchor (its whole connected footprint and everything above it, never cut, with a small ground apron) instead of the whole district. Use it when the user asks for one building or object rather than an area.'
+                },
                 mockExecution: {
                     type: 'BOOLEAN',
                     description: 'Run in offline emulation mode using synthetic geodetic tiles'
@@ -189,6 +197,14 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 stageIntoActiveScene: {
                     type: 'BOOLEAN',
                     description: 'Merge the tiles into the active 3D scene as its environment, keeping its objects and settings. Set it only when the user asks to stage the current scene at this place. Default false: the tiles open as a new studio scene.'
+                },
+                remesh: {
+                    type: 'BOOLEAN',
+                    description: 'Remesh the extracted photogrammetry before returning it (default true): hidden shells culled, facades snapped to planes, cracks closed, facade relief added, in one native pass of about 10-60 s. Set false only when the user asks for the raw tiles.'
+                },
+                isolate: {
+                    type: 'BOOLEAN',
+                    description: 'Return only the structure at the anchor (its whole connected footprint and everything above it, never cut, with a small ground apron) instead of the whole district. Use it when the user asks for one building or object rather than an area.'
                 },
                 mockExecution: {
                     type: 'BOOLEAN',
@@ -486,6 +502,45 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
+
+type ExtractionRemesh =
+    | { ok: true; url: string; isolate: boolean; triangles?: number; inputTriangles?: number; ms: number; cached: boolean; stats: Record<string, unknown> }
+    | { ok: false; isolate: boolean; error: string };
+
+/**
+ * A location request returns remeshed geometry: the raw photogrammetry from the extraction goes through tile_refine
+ * (hidden shells culled, facades snapped to planes, cracks closed, facade relief) before it is mounted; `isolate`
+ * keeps only the structure at the anchor. A failure is reported, never hidden: the raw tiles are mounted and the
+ * result says they were not remeshed and why.
+ */
+async function remeshExtractedTile(glbPath: string, args: Record<string, unknown>, ctx: ToolContext | undefined, flavour: 'clay' | 'textured'): Promise<ExtractionRemesh | undefined> {
+    if (args.remesh === false || args.mockExecution === true) return undefined;
+    const isolate = args.isolate === true;
+    ctx?.reportProgress?.(isolate ? 'Remeshing the structure at the anchor' : 'Remeshing the district geometry');
+    try {
+        const { getTileRefineService, findTileRefineRepoRoot, summarizeTileRefineStats } = await import('../../3d-engine/tile-refine-service');
+        const base = path.basename(glbPath).replace(/\.glb$/i, '');
+        const r = await getTileRefineService(findTileRefineRepoRoot()).refine({
+            tilePath: glbPath,
+            isolate: isolate || undefined,
+            publishAs: isolate ? `${base}_isolated` : base
+        });
+        const url = flavour === 'clay' ? r.published?.urls.clay : r.published?.urls.textured;
+        if (!url) throw new Error('tile_refine did not publish a model');
+        return { ok: true, url, isolate, triangles: r.stats?.outputs?.triangles, inputTriangles: r.stats?.triangles, ms: r.ms, cached: r.cached, stats: summarizeTileRefineStats(r.stats) };
+    } catch (err) {
+        return { ok: false, isolate, error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
+/** One sentence for the tool summary, so the model tells the user exactly what it got. */
+function describeRemesh(remesh: ExtractionRemesh | undefined): string {
+    if (!remesh) return ' Returned as raw tiles (not remeshed).';
+    if (!remesh.ok) return ` Remeshing failed, so the raw tiles are shown: ${remesh.error}`;
+    const tris = remesh.triangles !== undefined ? ` (${remesh.inputTriangles?.toLocaleString() ?? '?'} -> ${remesh.triangles.toLocaleString()} triangles)` : '';
+    return ` Remeshed${remesh.isolate ? ' the structure at the anchor' : ''}${tris} in ${(remesh.ms / 1000).toFixed(1)} s${remesh.cached ? ' (cached)' : ''}; the mounted model is ${remesh.url}.`;
+}
+
 export const google3DTilesHandlers: Record<string, ToolHandler> = {
     sb_assert_scene_contacts: async (args, _ctx) => {
         const glbPath = asString(args.glbPath);
@@ -532,6 +587,9 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
             radiusMeters
         });
 
+        const remesh = await remeshExtractedTile(result.glbPath, args, _ctx, 'textured');
+        const mountPath = remesh?.ok ? remesh.url : result.glbPath;
+
         // The tiles join the active scene only when asked to; otherwise they open as a new studio scene, so an
         // unrelated scene's objects and sky never carry over.
         let mountedArtifact: any = undefined;
@@ -544,9 +602,9 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 const role = (o.content?.metadata?.role || '').toLowerCase();
                 return s !== 'google3dtilesclay' && s !== 'google_3d_tiles_clay' && s !== 'google3dtilesfulltexture' && s !== 'google_3d_tiles_full_texture' && s !== 'googlevectortileservice' && s !== 'google_vector_tile_service' && role !== 'environment';
             });
-            const glbUri = result.glbPath.includes('/public/models/')
-                ? `/models/${path.basename(result.glbPath)}`
-                : (result.glbPath.startsWith('/') && !result.glbPath.startsWith('/models/') ? `/models/${path.basename(result.glbPath)}` : result.glbPath);
+            const glbUri = mountPath.includes('/public/models/')
+                ? `/models/${path.basename(mountPath)}`
+                : (mountPath.startsWith('/') && !mountPath.startsWith('/models/') ? `/models/${path.basename(mountPath)}` : mountPath);
             const tileObject = {
                 id: `tile-texture-${Date.now()}`,
                 content: {
@@ -557,6 +615,8 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         source: 'Google3DTilesFullTexture',
                         role: 'environment',
                         resolvedAddress: result.resolvedAddress || query,
+                        rawGlbPath: result.glbPath,
+                        remeshed: remesh?.ok === true,
                         vertexCount: result.mesh?.vertexCount,
                         triangleCount: result.mesh?.triangleCount
                     }
@@ -573,14 +633,14 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 data: {
                     ...prevData,
                     groundTileMode: 'photoreal-textured',
-                    geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
+                    geoAnchor: result.geoAnchor,
                     objects: [...cleanPrevObjects, tileObject]
                 }
             };
         } else {
-            const glbUri = result.glbPath.includes('/public/models/')
-                ? `/models/${path.basename(result.glbPath)}`
-                : (result.glbPath.startsWith('/') && !result.glbPath.startsWith('/models/') ? `/models/${path.basename(result.glbPath)}` : result.glbPath);
+            const glbUri = mountPath.includes('/public/models/')
+                ? `/models/${path.basename(mountPath)}`
+                : (mountPath.startsWith('/') && !mountPath.startsWith('/models/') ? `/models/${path.basename(mountPath)}` : mountPath);
             const tileObject = {
                 id: `tile-texture-${Date.now()}`,
                 content: {
@@ -594,6 +654,8 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         metricScale: 1.0,
                         groundDatumMeters: 0.0,
                         resolvedAddress: result.resolvedAddress || query,
+                        rawGlbPath: result.glbPath,
+                        remeshed: remesh?.ok === true,
                         vertexCount: result.mesh?.vertexCount,
                         triangleCount: result.mesh?.triangleCount,
                         boundingBox: result.mesh?.boundingBox
@@ -627,7 +689,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         groundLogic: 'shared-metric-ground'
                     },
                     groundTileMode: 'photoreal-textured',
-                    geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
+                    geoAnchor: result.geoAnchor,
                     objects: [tileObject]
                 }
             };
@@ -640,6 +702,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 geoAnchor: result.geoAnchor,
                 resolvedAddress: result.resolvedAddress,
                 glbPath: result.glbPath,
+                remesh,
                 requestedRadiusMeters: result.requestedRadiusMeters,
                 coveredRadiusMeters: result.coveredRadiusMeters,
                 truncated: result.truncated,
@@ -661,7 +724,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 render: result.render,
                 ...(mountedArtifact ? { artifact: mountedArtifact } : {})
             },
-            summaryResult: `Google 3D Tiles ingested in full texture for ${result.resolvedAddress || query}${describeTileExtent(result)}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles). Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
+            summaryResult: `Google 3D Tiles ingested in full texture for ${result.resolvedAddress || query}${describeTileExtent(result)}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).${describeRemesh(remesh)} Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
         };
     },
 
@@ -684,6 +747,9 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
             radiusMeters
         });
 
+        const remesh = await remeshExtractedTile(result.glbPath, args, _ctx, 'clay');
+        const mountPath = remesh?.ok ? remesh.url : result.glbPath;
+
         // The tiles join the active scene only when asked to; otherwise they open as a new studio scene, so an
         // unrelated scene's objects and sky never carry over.
         let mountedArtifact: any = undefined;
@@ -696,9 +762,9 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 const role = (o.content?.metadata?.role || '').toLowerCase();
                 return s !== 'google3dtilesclay' && s !== 'google_3d_tiles_clay' && s !== 'google3dtilesfulltexture' && s !== 'google_3d_tiles_full_texture' && s !== 'googlevectortileservice' && s !== 'google_vector_tile_service' && role !== 'environment';
             });
-            const glbUri = result.glbPath.includes('/public/models/')
-                ? `/models/${path.basename(result.glbPath)}`
-                : (result.glbPath.startsWith('/') && !result.glbPath.startsWith('/models/') ? `/models/${path.basename(result.glbPath)}` : result.glbPath);
+            const glbUri = mountPath.includes('/public/models/')
+                ? `/models/${path.basename(mountPath)}`
+                : (mountPath.startsWith('/') && !mountPath.startsWith('/models/') ? `/models/${path.basename(mountPath)}` : mountPath);
             const tileObject = {
                 id: `tile-clay-${Date.now()}`,
                 content: {
@@ -712,6 +778,8 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         metricScale: 1.0,
                         groundDatumMeters: 0.0,
                         resolvedAddress: result.resolvedAddress || query,
+                        rawGlbPath: result.glbPath,
+                        remeshed: remesh?.ok === true,
                         vertexCount: result.mesh?.vertexCount,
                         triangleCount: result.mesh?.triangleCount,
                         boundingBox: result.mesh?.boundingBox
@@ -737,14 +805,14 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         groundLogic: 'shared-metric-ground'
                     },
                     groundTileMode: 'photoreal-clay',
-                    geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
+                    geoAnchor: result.geoAnchor,
                     objects: [...cleanPrevObjects, tileObject]
                 }
             };
         } else {
-            const glbUri = result.glbPath.includes('/public/models/')
-                ? `/models/${path.basename(result.glbPath)}`
-                : (result.glbPath.startsWith('/') && !result.glbPath.startsWith('/models/') ? `/models/${path.basename(result.glbPath)}` : result.glbPath);
+            const glbUri = mountPath.includes('/public/models/')
+                ? `/models/${path.basename(mountPath)}`
+                : (mountPath.startsWith('/') && !mountPath.startsWith('/models/') ? `/models/${path.basename(mountPath)}` : mountPath);
             const tileObject = {
                 id: `tile-clay-${Date.now()}`,
                 content: {
@@ -758,6 +826,8 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         metricScale: 1.0,
                         groundDatumMeters: 0.0,
                         resolvedAddress: result.resolvedAddress || query,
+                        rawGlbPath: result.glbPath,
+                        remeshed: remesh?.ok === true,
                         vertexCount: result.mesh?.vertexCount,
                         triangleCount: result.mesh?.triangleCount,
                         boundingBox: result.mesh?.boundingBox
@@ -792,7 +862,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                         groundLogic: 'shared-metric-ground'
                     },
                     groundTileMode: 'photoreal-clay',
-                    geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
+                    geoAnchor: result.geoAnchor,
                     objects: [tileObject]
                 }
             };
@@ -805,6 +875,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 geoAnchor: result.geoAnchor,
                 resolvedAddress: result.resolvedAddress,
                 glbPath: result.glbPath,
+                remesh,
                 requestedRadiusMeters: result.requestedRadiusMeters,
                 coveredRadiusMeters: result.coveredRadiusMeters,
                 truncated: result.truncated,
@@ -826,7 +897,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 render: result.render,
                 ...(mountedArtifact ? { artifact: mountedArtifact } : {})
             },
-            summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}${describeTileExtent(result)}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles). Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m [elevation: ${result.mesh?.boundingBox?.min[1]?.toFixed(1) ?? '0.0'}m to ${result.mesh?.boundingBox?.max[1]?.toFixed(1) ?? '0.0'}m]. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
+            summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}${describeTileExtent(result)}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).${describeRemesh(remesh)} Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m [elevation: ${result.mesh?.boundingBox?.min[1]?.toFixed(1) ?? '0.0'}m to ${result.mesh?.boundingBox?.max[1]?.toFixed(1) ?? '0.0'}m]. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
         };
     },
 

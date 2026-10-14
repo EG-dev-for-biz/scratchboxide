@@ -433,3 +433,71 @@ describe('tile_refine reads the tiles the extraction tools write', () => {
         for (const f of published) expect(fs.existsSync(f)).toBe(true);
     });
 });
+
+describe('a location request returns remeshed geometry', () => {
+    const fakeRefine = (fail?: string) => vi.spyOn(TileRefineService.prototype, 'refine').mockImplementation(async (req: any) => {
+        if (fail) throw new Error(fail);
+        const base = String(req.publishAs);
+        return {
+            texturedGlb: '/tmp/x/textured.glb', clayGlb: '/tmp/x/clay.glb', cached: false, ms: 12_300, cacheKey: 'k',
+            stats: { triangles: 403_385, outputs: { triangles: 46_220 } },
+            published: { urls: { textured: `/models/${base}_refined.glb`, clay: `/models/${base}_refined_clay.glb` }, backups: [] },
+            binary: { path: '/tmp/x/tile_refine', built: false }
+        } as any;
+    });
+
+    for (const name of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay']) {
+        const wantSuffix = name.endsWith('_clay') ? '_refined_clay.glb' : '_refined.glb';
+
+        it(`${name} remeshes the extracted tiles by default and mounts the remeshed model`, async () => {
+            serveTiles();
+            const refine = fakeRefine();
+            const out = outGlb(`${name}_remesh.glb`);
+            const outcome = await createDefaultToolRegistry().dispatch(name, { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 120, outputGlbPath: out }, { request: { prompt: 'Show me the Flatiron Building' } } as any);
+            const payload: any = outcome.resultPayload;
+            expect(refine).toHaveBeenCalledTimes(1);
+            expect(refine.mock.calls[0][0]).toMatchObject({ tilePath: payload.glbPath, isolate: undefined });
+            const obj = payload.artifact.data.objects[0];
+            expect(obj.content.durableUri.endsWith(wantSuffix)).toBe(true);
+            expect(obj.content.metadata).toMatchObject({ remeshed: true, rawGlbPath: payload.glbPath });
+            expect(payload.remesh).toMatchObject({ ok: true, triangles: 46_220, inputTriangles: 403_385 });
+            expect(outcome.exec.summaryResult).toContain('Remeshed (403,385 -> 46,220 triangles) in 12.3 s');
+        });
+
+        it(`${name} isolates the structure at the anchor when asked`, async () => {
+            serveTiles();
+            const refine = fakeRefine();
+            await createDefaultToolRegistry().dispatch(name, { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 120, isolate: true, outputGlbPath: outGlb(`${name}_iso.glb`) }, { request: { prompt: 'Just the Flatiron Building' } } as any);
+            expect(refine.mock.calls[0][0]).toMatchObject({ isolate: true });
+            expect(String(refine.mock.calls[0][0].publishAs)).toMatch(/_isolated$/);
+        });
+
+        it(`${name} returns the raw tiles when remesh is false`, async () => {
+            serveTiles();
+            const refine = fakeRefine();
+            const outcome = await createDefaultToolRegistry().dispatch(name, { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 120, remesh: false, outputGlbPath: outGlb(`${name}_raw.glb`) }, { request: { prompt: 'raw tiles please' } } as any);
+            expect(refine).not.toHaveBeenCalled();
+            expect((outcome.resultPayload as any).artifact.data.objects[0].content.metadata.remeshed).toBe(false);
+            expect(outcome.exec.summaryResult).toContain('Returned as raw tiles (not remeshed).');
+        });
+
+        it(`${name} says so when remeshing fails, and shows the raw tiles`, async () => {
+            serveTiles();
+            fakeRefine('tile_refine binary could not be built');
+            const outcome = await createDefaultToolRegistry().dispatch(name, { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 120, outputGlbPath: outGlb(`${name}_fail.glb`) }, { request: { prompt: 'Show me the Flatiron Building' } } as any);
+            const payload: any = outcome.resultPayload;
+            expect(payload.remesh).toMatchObject({ ok: false, error: 'tile_refine binary could not be built' });
+            expect(payload.artifact.data.objects[0].content.metadata.remeshed).toBe(false);
+            expect(outcome.exec.summaryResult).toContain('Remeshing failed, so the raw tiles are shown: tile_refine binary could not be built');
+        });
+    }
+
+    it('declares remesh and isolate on both extraction tools', () => {
+        const registry = createDefaultToolRegistry();
+        for (const name of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay']) {
+            const props = (registry.get(name)!.declaration.parameters as any).properties;
+            expect(props.remesh.type).toBe('BOOLEAN');
+            expect(props.isolate.type).toBe('BOOLEAN');
+        }
+    });
+});

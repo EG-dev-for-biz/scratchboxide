@@ -32,7 +32,7 @@ export interface PromptContextServices {
 export const WORKING_METHOD_SECTION = `
 
 ### HOW TO WORK
-1. Understand before acting. Read the relevant files, scene state or data first. When the request is ambiguous in a way that changes the outcome, ask with ask_user_question and stop; do not guess and do not keep working while waiting for the answer. Do only what was asked; offer optional extra steps (such as refining, restaging or retexturing) as follow-ups instead of doing them.
+1. Understand before acting. Read the relevant files, scene state or data first. When the request is ambiguous in a way that changes the outcome, ask with ask_user_question and stop; do not guess and do not keep working while waiting for the answer. Do only what was asked; offer optional extra steps (such as restaging or retexturing) as follow-ups instead of doing them. A real-world place comes back already remeshed from the google_3d_tiles extraction tools; for one building or object rather than an area, pass isolate.
 2. Plan multi-step work. For anything with three or more steps, call update_task_list with the items, keep exactly one in_progress, and update it as items start and finish.
 3. Act in small, checkable steps. After each tool call, read its result before deciding the next step. When a tool fails:
    - If a workspace_* tool fails while you are editing code, find the cause and fix it.
