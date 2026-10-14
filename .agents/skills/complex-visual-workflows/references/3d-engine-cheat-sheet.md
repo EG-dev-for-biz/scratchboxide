@@ -31,7 +31,10 @@ import scratchbox as sb
 scene = sb.Scene()
 clay_mat = sb.PbrMaterial.clay()          # 18% studio grey clay
 
-def add(mesh, name):
+def add(mesh, name, x):
+    """Stand each showcase part on y = 0 at x so every part rests on the ground."""
+    b = mesh.bounds
+    mesh.translate(x - (b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2)
     mesh.name = name
     mesh.set_material(clay_mat)
     scene.add_mesh(mesh)
@@ -39,27 +42,28 @@ def add(mesh, name):
 spine_path = [(0.0, 0.0, -2.0), (0.2, 0.8, -0.5), (-0.1, 1.2, 1.0), (0.0, 1.5, 2.5)]
 
 # 2. Operator 1: SE(3) Lie Group Curve Sweep (Truss, Hoses, Ribs)
-add(sb.sweep_curve_profile(path=spine_path, profile_dimensions=(0.12, 0.12),
-                           scale_taper=(0.9, 0.6), twist_deg=90.0), "chassis_spine")
+spine = sb.sweep_curve_profile(path=spine_path, profile_dimensions=(0.12, 0.12),
+                               scale_taper=(0.9, 0.6), twist_deg=90.0)
 
-# 3. Operator 2: Harmonic Solid of Revolution (Rims, Flanges, Thrusters)
+# 3. Operator 3: Affine Metric Replicator (Fasteners, Louvers, Vanes) along the same path.
+# The fasteners are centred on the spine's own path, so they sit inside it by construction.
+spine.append(sb.replicate_metric_array(distribution_mode="CURVE_1D", guide_points=spine_path, pitch_meters=0.18,
+                                       seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.015, 0.04)}))
+add(spine, "chassis_spine", 0.0)
+
+# 4. Operator 2: Harmonic Solid of Revolution (Rims, Flanges, Thrusters)
 # profile_curve is (height, radius) pairs; K lobes make cog teeth or flutes, K=0 a smooth turning.
 # The default axis is Y; wheels revolve around the axle (X), or the complexity gate rejects them as flat discs.
 add(sb.revolve_harmonic_solid(axis=(1.0, 0.0, 0.0),
                               profile_curve=[(0.0, 0.45), (0.1, 0.52), (0.2, 0.47), (0.35, 0.52)],
                               harmonic_lobe_count=5, harmonic_depth_ratio=0.1,
-                              helix_pitch_meters=3.5), "wheel_rim_fl")
-
-# 4. Operator 3: Affine Metric Replicator (Fasteners, Louvers, Vanes) along the same path
-add(sb.replicate_metric_array(distribution_mode="CURVE_1D", guide_points=spine_path, pitch_meters=0.18,
-                              seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.015, 0.04)}),
-    "structural_fasteners")
+                              helix_pitch_meters=3.5), "wheel_rim_fl", 1.5)
 
 # 5. Operator 4: Normal Relief. Only noise-style displacement exists today
 # (Mesh.displace_along_normals, Mesh.tessellate_and_displace); there is no curve-guided groove operator.
 panel = sb.create_plane(width=1.2, height=0.8, seg_x=128, seg_y=96)
 panel.displace_along_normals(frequency=20.0, amplitude=0.006)
-add(panel, "relief_panel")
+add(panel, "relief_panel", 3.0)
 
 # 6. Write binary .glb (the runner defines OUTPUT_GLB_PATH)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)

@@ -93,6 +93,11 @@ Every example in this file runs as-is in `execute_3d_python_script` (checked by 
 ```python
 import scratchbox as sb
 
+def place_on_ground(mesh, x):
+    """Stand a part on y = 0 at x, so separate showcase parts each rest on the ground."""
+    b = mesh.bounds
+    mesh.translate(x - (b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2)
+
 # 1. SE(3) Lie Group Curve Sweep (e.g. Suspension Arm / Hose / Tentacle)
 arm = sb.sweep_curve_profile(
     path=[(0.0, 0.2, 1.2), (0.4, 0.8, 0.4), (0.6, 1.1, -0.6), (0.5, 0.9, -1.8)],
@@ -110,14 +115,16 @@ rotor = sb.revolve_harmonic_solid(
     helix_pitch_meters=0.5       # 0 = straight flutes
 )
 
-# 3. Affine Metric Replicator (e.g. Wheel Bolt Circle)
+# 3. Affine Metric Replicator (e.g. Bolt Circle on a Flange)
 # POLAR_RING guide_points = [center, ring normal, a point on the ring]; CURVE_1D = a polyline
+flange = sb.create_cylinder(radius=0.2, height=0.02, segments=64)
 bolts = sb.replicate_metric_array(
     distribution_mode="POLAR_RING",
-    guide_points=[(0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.15, 0.0, 0.0)],
+    guide_points=[(0.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.15, 0.0, 0.0)],
     pitch_meters=0.157,          # about 6 bolts on a 0.15 m radius
-    seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.012, 0.02, 0.02)}
+    seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.012, 0.03)}
 )
+flange.append(bolts)             # the 3 cm bolts pass through the 2 cm flange
 
 # 4. Normal Relief (surface micro-detail): displace a densely tessellated surface along its normals.
 # There is no curve-guided groove operator yet; shut lines need their own geometry (e.g. thin sweeps).
@@ -125,7 +132,8 @@ panel = sb.create_plane(width=1.0, height=0.6, seg_x=128, seg_y=80)
 panel.displace_along_normals(frequency=24.0, amplitude=0.004)
 
 scene = sb.Scene()
-for part in (arm, rotor, bolts, panel):
+for x, part in zip((0.0, 1.4, 2.6, 3.8), (arm, rotor, flange, panel)):
+    place_on_ground(part, x)
     part.set_material(sb.PbrMaterial.clay())
     scene.add_mesh(part)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
@@ -143,6 +151,60 @@ Every asset generated through `execute_3d_python_script` must respect the 70-20-
 - **Complexity Gate Threshold**:
   - Generative scenes / vehicles: $\ge 25,000$ vertices, $\ge 15,000$ triangles, $\ge 3$ distinct submeshes.
   - Isolated props: $\ge 5,000$ vertices, $\ge 3,000$ triangles.
+
+### Assemblies: Build Between Joints, Never by Rotating Guesswork
+
+Parts that must meet (legs, rungs, frames, struts, rails, brackets) go wrong when each one is built at the origin and then rotated and offset by hand-computed amounts: legs lean the wrong way and rungs float a few centimetres from the legs. Build them from the joints instead:
+
+1. Compute every joint point once (seat sockets, feet, rail ends).
+2. Build each member between two joints with `sb.sweep_curve_profile(path=[start, end], profile_dimensions=(r, r))`.
+3. Take a connecting member's ends from points on the members it joins (`lerp(top, foot, t)`), and run ends slightly into what they meet, so they attach by construction.
+
+`execute_3d_python_script` checks every result: parts that touch nothing are returned in `structuralIssues` and must be fixed before finishing.
+
+```python
+import scratchbox as sb
+
+# Joint-first assembly: compute the points where members meet once, then build every member between them.
+SEAT_Y, SEAT_T = 0.46, 0.04
+TOP_R, FOOT_R = 0.11, 0.17            # feet sit farther out than the sockets, so the legs splay outward
+DIAG = 0.7071
+CORNERS = [(1, 1), (1, -1), (-1, -1), (-1, 1)]
+
+def lerp(a, b, t):
+    return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
+
+tops = [(sx * TOP_R * DIAG, SEAT_Y + 0.015, sz * TOP_R * DIAG) for sx, sz in CORNERS]   # 1.5 cm into the seat
+feet = [(sx * FOOT_R * DIAG, 0.0, sz * FOOT_R * DIAG) for sx, sz in CORNERS]
+
+scene = sb.Scene()
+clay = sb.PbrMaterial.clay()
+
+def add(mesh, name):
+    mesh.name = name
+    mesh.set_material(clay)
+    scene.add_mesh(mesh)
+
+seat = sb.create_cylinder(radius=0.17, height=SEAT_T, segments=96)
+seat.translate(0.0, SEAT_Y + SEAT_T / 2, 0.0)
+seat.subdivide(2)
+add(seat, "seat")
+
+for i, (top, foot) in enumerate(zip(tops, feet)):
+    leg = sb.sweep_curve_profile(path=[top, foot], profile_dimensions=(0.018, 0.018), scale_taper=(1.0, 0.8))
+    leg.subdivide(3)
+    add(leg, f"leg_{i}")
+
+# Rungs run between points ON the leg centrelines, so their ends sit inside the legs by construction.
+for i in range(4):
+    j = (i + 1) % 4
+    t = 0.62 if i % 2 == 0 else 0.72      # stagger heights so rungs do not collide at the legs
+    rung = sb.sweep_curve_profile(path=[lerp(tops[i], feet[i], t), lerp(tops[j], feet[j], t)], profile_dimensions=(0.011, 0.011))
+    rung.subdivide(3)
+    add(rung, f"rung_{i}")
+
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+```
 
 ---
 
@@ -177,8 +239,8 @@ When the user explicitly provides a real-world location (e.g., *"F1 car in Monac
 ## 5. Complete Production Python Script Example
 
 ```python
+import array
 import scratchbox as sb
-import math
 
 scene = sb.Scene()
 clay_material = sb.PbrMaterial.clay()
@@ -188,43 +250,67 @@ def add(mesh, name):
     mesh.set_material(clay_material)
     scene.add_mesh(mesh)
 
+# Joint points shared by the parts that meet there.
+AXLES_Z = (1.4, -1.3)
+TRACK_HALF = 0.86                      # wheel centres sit at x = +/-TRACK_HALF on each axle
+
 # =========================================================================
 # 70% PRIMARY EDIFICE: Sculpted Monocoque Chassis
 # =========================================================================
 chassis = sb.create_box(width=1.6, height=0.55, depth=4.2)
-chassis.subdivide(6)                               # deformers need vertices to bend
+chassis.weld_vertices()                # box faces arrive unwelded; subdividing them separately opens cracks
+chassis.subdivide(6)                   # deformers need vertices to bend
 # Non-linear deformers take integer axes: 0 = X, 1 = Y, 2 = Z
 sb.shaper.taper(chassis, axis=2, factor=0.45)
 sb.shaper.bulge(chassis, center=sb.math.Vec3(0.0, 0.0, 0.2), radius=1.2, strength=0.25)
 add(chassis, "Primary_Chassis")
 
 # =========================================================================
-# 20% SECONDARY ASSEMBLIES: Aerodynamic Wings & Wheel Assemblies
+# 20% SECONDARY ASSEMBLIES: Axles, Wheels and a Strut-Hung Front Wing
 # =========================================================================
-front_wing = sb.create_box(width=1.8, height=0.08, depth=0.6)
+for z in AXLES_Z:
+    # The axle passes through the chassis; the wheels are centred on its ends, so all three are joined.
+    add(sb.sweep_curve_profile(path=[(-TRACK_HALF, 0.0, z), (TRACK_HALF, 0.0, z)], profile_dimensions=(0.05, 0.05)), f"Axle_{z}")
+    for x in (-TRACK_HALF, TRACK_HALF):
+        wheel = sb.revolve_harmonic_solid(
+            axis=(1.0, 0.0, 0.0),
+            # (height, radius) pairs; the 0-radius ends close the wheel into a solid with a hub
+            profile_curve=[(-0.16, 0.0), (-0.16, 0.38), (-0.08, 0.40), (0.08, 0.40), (0.16, 0.38), (0.16, 0.0)],
+            harmonic_lobe_count=5,
+            harmonic_depth_ratio=0.08
+        )
+        wheel.translate(x, 0.0, z)
+        add(wheel, f"Wheel_{x}_{z}")
+
+# Subdivision rounds and shrinks the box, and the taper narrows the nose, so read the deformed
+# chassis back instead of assuming its original size.
+pos = array.array("f", chassis.get_positions_flat())   # float32 xyz triples, returned as bytes
+
+def surface_y(x_half, z_lo, z_hi, top=True):
+    ys = [pos[i + 1] for i in range(0, len(pos), 3) if abs(pos[i]) < x_half and z_lo <= pos[i + 2] <= z_hi]
+    return max(ys) if top else min(ys)
+
+WING_Z = 1.5
+nose_bottom = surface_y(0.1, WING_Z - 0.05, WING_Z + 0.05, top=False)
+wing_y = nose_bottom - 0.12
+front_wing = sb.create_box(width=1.0, height=0.06, depth=0.4)
+front_wing.weld_vertices()
 front_wing.subdivide(4)
-sb.shaper.bend(front_wing, main_axis=0, bend_axis=1, angle_deg=12.0, radius=2.0)
-front_wing.translate(0.0, -0.15, 1.9)
+front_wing.translate(0.0, wing_y, WING_Z)
 add(front_wing, "Front_Wing")
-
-# 4 five-lobe rims via Harmonic Solids of Revolution, revolved around the X (axle) axis
-for x_side, z_pos in [(-0.85, 1.4), (0.85, 1.4), (-0.88, -1.3), (0.88, -1.3)]:
-    wheel = sb.revolve_harmonic_solid(
-        axis=(1.0, 0.0, 0.0),
-        profile_curve=[(-0.16, 0.38), (-0.08, 0.40), (0.08, 0.40), (0.16, 0.38)],
-        harmonic_lobe_count=5,
-        harmonic_depth_ratio=0.08
-    )
-    wheel.translate(x_side, 0.0, z_pos)
-    add(wheel, f"Wheel_{x_side}_{z_pos}")
+for x in (-0.1, 0.1):
+    # Struts run from inside the wing up into the chassis nose.
+    add(sb.sweep_curve_profile(path=[(x, wing_y, WING_Z), (x, nose_bottom + 0.03, WING_Z)], profile_dimensions=(0.02, 0.02)), f"Wing_Strut_{x}")
 
 # =========================================================================
-# 10% TERTIARY MICRO-DETAILS: Hood Louvers
+# 10% TERTIARY MICRO-DETAILS: Hood Louvers on the Real Hood Surface
 # =========================================================================
-# Affine Replicator: tilted louver vanes every 6 cm along a line over the hood
+# Sit the vanes on the lowest point of the hood they span, so every vane meets the surface.
+vane_z = [0.1 + 0.06 * i for i in range(9)]
+hood_y = min(surface_y(0.2, z - 0.03, z + 0.03) for z in vane_z) - 0.005
 louvers = sb.replicate_metric_array(
     distribution_mode="CURVE_1D",
-    guide_points=[(0.0, 0.32, 0.1), (0.0, 0.32, 0.6)],
+    guide_points=[(0.0, hood_y, vane_z[0]), (0.0, hood_y, vane_z[-1] + 0.06)],
     pitch_meters=0.06,
     seed_geometry={"shape": "ANGLED_LOUVER_VANE", "dimensions": (0.4, 0.015, 0.04), "tiltAngleDeg": 20.0}
 )

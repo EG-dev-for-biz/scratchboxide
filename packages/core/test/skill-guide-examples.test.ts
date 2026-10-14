@@ -27,12 +27,14 @@ describe('3D skill guide examples', () => {
     });
 
     // Run through the real tool: a failed GeometricComplexityGate sends the model back for a second, denser attempt.
-    it.each(examples.map(e => [`${e.guide} example ${e.index}`, e] as const))('%s runs in execute_3d_python_script and passes the complexity gate', async (_label, example) => {
+    it.each(examples.map(e => [`${e.guide} example ${e.index}`, e] as const))('%s runs in execute_3d_python_script and passes the complexity and structure checks', async (_label, example) => {
         const outcome = await python3DHandlers.execute_3d_python_script({ script: example.code, description: 'skill guide example' });
         const payload = outcome.resultPayload as any;
         expect(outcome.status, payload.stderr || payload.errorDetails).toBe('completed');
         expect(payload.glbGenerated).toBe(true);
         expect(payload.gateReport?.passed, JSON.stringify(payload.gateReport)).toBe(true);
+        // Examples teach assembly; every part must touch another part or the ground.
+        expect(payload.structureReport?.passed, payload.structuralIssues).toBe(true);
     }, 180_000);
 
     it('references only sb.* names that exist', async () => {
