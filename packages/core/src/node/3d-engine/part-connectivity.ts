@@ -103,29 +103,40 @@ function readAccessor(gltf: any, bin: Buffer, index: number): { values: number[]
     return { values, components };
 }
 
-export function glbToTriangleSoup(glb: Buffer): TriangleSoup | null {
-    if (glb.length < 28 || glb.toString('utf8', 0, 4) !== 'glTF') return null;
+interface SoupSink {
+    positions: number[];
+    indices: number[];
+    /** Left out when only geometry is wanted. */
+    colors?: number[];
+}
+
+/**
+ * Walks the GLB's default scene and appends each mesh primitive, in world space, to the sink `sinkFor` picks
+ * for its node (named by the node, else its mesh). Returns false when the buffer is not a GLB.
+ */
+function walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink): boolean {
+    if (glb.length < 28 || glb.toString('utf8', 0, 4) !== 'glTF') return false;
     const jsonLength = glb.readUInt32LE(12);
     const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
     const binStart = 20 + jsonLength + 8;
     const bin = glb.subarray(binStart);
-    const positions: number[] = [];
-    const indices: number[] = [];
-    const colors: number[] = [];
 
-    const emitMesh = (meshIndex: number, world: Mat4) => {
+    const emitMesh = (meshIndex: number, world: Mat4, sink: SoupSink) => {
+        const { positions, indices, colors } = sink;
         for (const prim of gltf.meshes[meshIndex]?.primitives || []) {
             if (prim.mode !== undefined && prim.mode !== 4) continue; // triangles only
             if (typeof prim.attributes?.POSITION !== 'number') continue;
             const pos = readAccessor(gltf, bin, prim.attributes.POSITION).values;
             const offset = positions.length / 3;
-            const base: number[] = gltf.materials?.[prim.material]?.pbrMetallicRoughness?.baseColorFactor || [0.8, 0.8, 0.8, 1];
-            const colorAcc = typeof prim.attributes?.COLOR_0 === 'number' ? prim.attributes.COLOR_0 : undefined;
-            const vc = colorAcc !== undefined ? readAccessor(gltf, bin, colorAcc) : undefined;
-            const vcScale = colorAcc !== undefined ? ({ 5121: 255, 5123: 65535 } as Record<number, number>)[gltf.accessors[colorAcc].componentType] || 1 : 1;
-            for (let v = 0; v < pos.length / 3; v++) {
-                for (let c = 0; c < 3; c++) {
-                    colors.push(base[c] * (vc ? vc.values[v * vc.components + c] / vcScale : 1));
+            if (colors) {
+                const base: number[] = gltf.materials?.[prim.material]?.pbrMetallicRoughness?.baseColorFactor || [0.8, 0.8, 0.8, 1];
+                const colorAcc = typeof prim.attributes?.COLOR_0 === 'number' ? prim.attributes.COLOR_0 : undefined;
+                const vc = colorAcc !== undefined ? readAccessor(gltf, bin, colorAcc) : undefined;
+                const vcScale = colorAcc !== undefined ? ({ 5121: 255, 5123: 65535 } as Record<number, number>)[gltf.accessors[colorAcc].componentType] || 1 : 1;
+                for (let v = 0; v < pos.length / 3; v++) {
+                    for (let c = 0; c < 3; c++) {
+                        colors.push(base[c] * (vc ? vc.values[v * vc.components + c] / vcScale : 1));
+                    }
                 }
             }
             for (let i = 0; i < pos.length; i += 3) {
@@ -142,11 +153,12 @@ export function glbToTriangleSoup(glb: Buffer): TriangleSoup | null {
             for (const v of idx) indices.push(v + offset);
         }
     };
+    const meshName = (meshIndex: number) => String(gltf.meshes?.[meshIndex]?.name ?? `mesh_${meshIndex}`);
     const visit = (nodeIndex: number, parent: Mat4) => {
         const node = gltf.nodes?.[nodeIndex];
         if (!node) return;
         const world = multiply(parent, nodeMatrix(node));
-        if (typeof node.mesh === 'number') emitMesh(node.mesh, world);
+        if (typeof node.mesh === 'number') emitMesh(node.mesh, world, sinkFor(typeof node.name === 'string' && node.name ? node.name : meshName(node.mesh)));
         for (const child of node.children || []) visit(child, world);
     };
 
@@ -156,9 +168,54 @@ export function glbToTriangleSoup(glb: Buffer): TriangleSoup | null {
     if (roots.length) {
         roots.forEach(r => visit(r, IDENTITY));
     } else {
-        (gltf.meshes || []).forEach((_: any, i: number) => emitMesh(i, IDENTITY));
+        (gltf.meshes || []).forEach((_: any, i: number) => emitMesh(i, IDENTITY, sinkFor(meshName(i))));
     }
-    return { positions: Float32Array.from(positions), indices: Uint32Array.from(indices), colors: Float32Array.from(colors) };
+    return true;
+}
+
+function toSoup(sink: SoupSink): TriangleSoup {
+    const soup: TriangleSoup = { positions: Float32Array.from(sink.positions), indices: Uint32Array.from(sink.indices) };
+    if (sink.colors) soup.colors = Float32Array.from(sink.colors);
+    return soup;
+}
+
+/** The GLB as one world-space soup; `colors: false` skips reading vertex colours when only geometry is needed. */
+export function glbToTriangleSoup(glb: Buffer, options: { colors?: boolean } = {}): TriangleSoup | null {
+    const sink: SoupSink = { positions: [], indices: [], ...(options.colors === false ? {} : { colors: [] }) };
+    return walkGlbTriangles(glb, () => sink) ? toSoup(sink) : null;
+}
+
+/**
+ * One world-space soup per node name (the node's name, else its mesh's), in the order first seen; nodes that share
+ * a name are merged. Null when the buffer is not a GLB.
+ */
+export function glbToNamedTriangleSoups(glb: Buffer): Map<string, TriangleSoup> | null {
+    const sinks = new Map<string, SoupSink>();
+    const ok = walkGlbTriangles(glb, name => {
+        let sink = sinks.get(name);
+        if (!sink) sinks.set(name, sink = { positions: [], indices: [], colors: [] });
+        return sink;
+    });
+    if (!ok) return null;
+    return new Map([...sinks].map(([name, sink]) => [name, toSoup(sink)]));
+}
+
+/** Several soups as one (indices offset, colors kept when every soup has them). */
+export function mergeTriangleSoups(soups: TriangleSoup[]): TriangleSoup {
+    const vertexTotal = soups.reduce((n, s) => n + s.positions.length / 3, 0);
+    const positions = new Float32Array(vertexTotal * 3);
+    const indices = new Uint32Array(soups.reduce((n, s) => n + s.indices.length, 0));
+    const withColors = soups.every(s => s.colors && s.colors.length === s.positions.length);
+    const colors = withColors ? new Float32Array(vertexTotal * 3) : undefined;
+    let v = 0, t = 0;
+    for (const s of soups) {
+        positions.set(s.positions, v * 3);
+        if (colors && s.colors) colors.set(s.colors, v * 3);
+        for (let i = 0; i < s.indices.length; i++) indices[t + i] = s.indices[i] + v;
+        v += s.positions.length / 3;
+        t += s.indices.length;
+    }
+    return colors ? { positions, indices, colors } : { positions, indices };
 }
 
 // ---------------------------------------------------------------------------

@@ -36,7 +36,17 @@ _OPERATORS = ("sweep", "revolve", "replicate", "relief")
 
 
 class SpecError(ValueError):
-    """The spec cannot be built as written; the message names the part and field."""
+    """
+    The spec cannot be built as written. `problems` lists every problem found, one line each, naming the part and
+    field, so whoever wrote the spec can correct them all at once. The message is those lines under one heading;
+    the builder reads them back from the traceback (scratchbox.object_spec.SpecError: ...).
+    """
+
+    def __init__(self, problems):
+        if isinstance(problems, str):
+            problems = [problems]
+        self.problems = [" ".join(str(p).split()) for p in problems]
+        ValueError.__init__(self, "The spec cannot be built as written:\n" + "\n".join("- " + p for p in self.problems))
 
 
 # ---------------------------------------------------------------------------
@@ -634,7 +644,7 @@ def _build_sweep(part, origin, edge, relief_ops):
     acc = _arc_lengths(dense)
     total = acc[-1]
     if total < 1e-6:
-        raise SpecError('part "%s": sweep carrier has no length' % part["id"])
+        raise SpecError('part "%s" sweep.controlPoints: the carrier has no length; spread the control points apart' % part["id"])
     keys = sorted(sw["profile"], key=lambda k: k["t"])
     max_perimeter = max(_ellipse_perimeter(k["widthMeters"] / 2, k["heightMeters"] / 2) for k in keys)
 
@@ -739,7 +749,9 @@ def _build_revolve(part, origin, edge, relief_ops):
     meridian = [(float(p[0]), float(p[1])) for p in rv["meridian"]]
     sign = _meridian_orientation(meridian)
     if sign == 0:
-        raise SpecError('part "%s": revolve.meridian encloses no area with the axis; give the part thickness' % pid)
+        raise SpecError('part "%s" revolve.meridian: the outline encloses no area with the axis, so it revolves into nothing; '
+                        'trace the full outline from the axis and back, e.g. [[0, 0], [0, r], [h, r], [h, 0]] for a disc of radius r '
+                        'and thickness h' % pid)
     dense, knots = _dense_curve(meridian, False, float(rv["smoothing"]))
     dense = [(z, max(0.0, r)) for z, r in dense]
     acc = _arc_lengths(dense)
@@ -795,7 +807,9 @@ def _build_revolve(part, origin, edge, relief_ops):
         if r >= 1e-7:
             neighbour_z = next((p[0] for p in (dense[1:] if end_index == 0 else reversed(dense[:-1])) if abs(p[0] - z) > 1e-9), None)
             if neighbour_z is None:
-                raise SpecError('part "%s": revolve.meridian is flat at its end, so the end cannot be capped' % pid)
+                raise SpecError('part "%s" revolve.meridian: the %s end has radius %.4g m but every point shares its axial distance, '
+                                'so the end cannot be capped; close it at the axis (radius 0) or give the points different axial distances'
+                                % (pid, "first" if end_index == 0 else "last", r))
             outward = _mul(axis, 1.0 if z > neighbour_z else -1.0)
             surface.caps.append((row_index, _add(base, _mul(axis, z)), outward))
     return surface
@@ -847,7 +861,8 @@ def _surface_point(surface, u, angle_deg):
 
 def _check_grid_budget(pid, rows, cols):
     if rows * cols > PART_VERTEX_CAP:
-        raise SpecError('part "%s" needs %d x %d samples, over the %d-vertex part budget; widen its relief or split the part'
+        raise SpecError('part "%s": needs %d x %d surface samples, over the %d-vertex budget for one part; '
+                        'widen its relief (narrow grooves force dense sampling) or split it into shorter parts'
                         % (pid, rows, cols, PART_VERTEX_CAP))
 
 
@@ -1115,11 +1130,16 @@ def _multiplicities(spec, by_id, children, seeds):
     return counts
 
 
+def _naming_part(pid, err):
+    """The same problems, each naming the part it belongs to."""
+    return SpecError([p if p.startswith("part ") else 'part "%s": %s' % (pid, p) for p in err.problems])
+
+
 def build_meshes(spec):
     """Validates and builds the spec; returns [(part id, positions, normals, triangles)] in spec order."""
     problems = validate(spec)
     if problems:
-        raise SpecError("Invalid object spec:\n- " + "\n- ".join(problems))
+        raise SpecError(problems)
     parts = spec["parts"]
     by_id = dict((p["id"], p) for p in parts)
     children = {}
@@ -1128,9 +1148,11 @@ def build_meshes(spec):
             children.setdefault(p["parentId"], []).append(p["id"])
     seeds = set(p["replicate"]["seedPartId"] for p in parts if p.get("replicate"))
     reliefs = {}
+    relief_owner = {}
     for p in parts:
         if p.get("relief"):
             reliefs.setdefault(p["relief"]["targetPartId"], []).append(p["relief"])
+            relief_owner[id(p["relief"])] = p["id"]
 
     # One edge length for the whole object, from its estimated surface area and instance counts.
     counts = _multiplicities(spec, by_id, children, seeds)
@@ -1147,16 +1169,19 @@ def build_meshes(spec):
             return surfaces[pid]
         part = by_id[pid]
         origin = (0.0, 0.0, 0.0)
-        if part.get("parentId"):
-            parent = build_surface(part["parentId"])
-            att = part["attach"]
-            point, normal = _surface_point(parent, float(att["u"]), float(att["angleDeg"]))
-            origin = _add(point, _mul(normal, float(att["normalOffsetMeters"])))
-        ops = reliefs.get(pid, [])
-        if part.get("sweep"):
-            surface = _build_sweep(part, origin, edge, ops)
-        else:
-            surface = _build_revolve(part, origin, edge, ops)
+        parent = build_surface(part["parentId"]) if part.get("parentId") else None
+        try:
+            if parent is not None:
+                att = part["attach"]
+                point, normal = _surface_point(parent, float(att["u"]), float(att["angleDeg"]))
+                origin = _add(point, _mul(normal, float(att["normalOffsetMeters"])))
+            ops = reliefs.get(pid, [])
+            if part.get("sweep"):
+                surface = _build_sweep(part, origin, edge, ops)
+            else:
+                surface = _build_revolve(part, origin, edge, ops)
+        except SpecError as err:
+            raise _naming_part(pid, err)
         surfaces[pid] = surface
         return surface
 
@@ -1168,15 +1193,46 @@ def build_meshes(spec):
             offsets = None
             ops = reliefs.get(pid, [])
             mod = by_id[pid].get("sweep", {}).get("modulation") if by_id[pid].get("sweep") else None
-            if ops or mod:
+            fields = []
+            missed = []
+            for op in ops:
+                # Each relief must actually cut or raise the surface it names; one that lands on no sample was not built.
+                field = _relief_offsets(surface, [op])
+                reached = max(abs(x) for row in field for x in row)
+                if reached < 0.5 * abs(float(op["depthMeters"])):
+                    missed.append('part "%s" relief.curves: displaced "%s" by at most %.3g m of the %.3g m asked for, so the relief '
+                                  'is not built; put its curves on that part\'s surface (u along it, v around it) and make widthMeters '
+                                  'wider than its sample spacing' % (relief_owner[id(op)], pid, reached, abs(float(op["depthMeters"]))))
+                fields.append(field)
+            if missed:
+                raise SpecError(missed)
+            if mod:
+                fields.append(_modulation_offsets(surface, mod))
+            if fields:
                 offsets = [[0.0] * len(surface.vs) for _ in surface.us]
-                for field in ([_relief_offsets(surface, ops)] if ops else []) + ([_modulation_offsets(surface, mod)] if mod else []):
+                for field in fields:
                     for i in range(len(offsets)):
                         row, add = offsets[i], field[i]
                         for j in range(len(row)):
                             row[j] += add[j]
-            meshes[pid] = _mesh_surface(surface, offsets)
+            try:
+                meshes[pid] = _mesh_surface(surface, offsets)
+            except SpecError as err:
+                raise _naming_part(pid, err)
         return meshes[pid]
+
+    # Build every surface and mesh up front so the error lists every problem at once, not the first one found.
+    # A part whose parent failed fails with its parent's problem; each problem is listed once.
+    build_problems = []
+    for part in parts:
+        if not (part.get("sweep") or part.get("revolve")):
+            continue
+        try:
+            part_mesh(part["id"])
+        except SpecError as err:
+            build_problems.extend(p for p in err.problems if p not in build_problems)
+    if build_problems:
+        raise SpecError(build_problems)
 
     def emit(pid):
         """[(owner id, _MeshData)] for a part and everything attached to it, after replicate and mirror."""
@@ -1222,7 +1278,7 @@ def build_meshes(spec):
         by_owner.setdefault(owner, []).append(mesh)
     total_tris = sum(len(m.triangles) for ms in by_owner.values() for m in ms)
     if total_tris > MAX_TRIANGLES:
-        raise SpecError("The spec builds %d triangles (limit %d); use fewer copies or fewer parts" % (total_tris, MAX_TRIANGLES))
+        raise SpecError("the spec builds %d triangles (limit %d); use fewer copies or fewer parts" % (total_tris, MAX_TRIANGLES))
     for owner in order:
         if owner not in by_owner:
             continue
