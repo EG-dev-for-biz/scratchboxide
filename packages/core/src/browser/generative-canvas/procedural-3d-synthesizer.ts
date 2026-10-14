@@ -1799,19 +1799,8 @@ export function initializeSceneOperatorStack(scene: Scene3DData): Scene3DData {
 
     const engine = createOperatorEngine(scene);
 
-    // 0. Import 3D tile if present
-    const mapTileObj = scene.objects?.find(o => o.content?.type === 'map-3d');
-    if (mapTileObj && scene.geoAnchor) {
-        engine.dispatch('sb_import_3d_tile', {
-            query: mapTileObj.lineage?.generation?.prompt || scene.geoAnchor.landmarkName || '3D Map Tile',
-            lat: scene.geoAnchor.lat,
-            lng: scene.geoAnchor.lng,
-            elevation: scene.geoAnchor.elevation,
-            elevationSource: scene.geoAnchor.elevationSource,
-            datum: scene.geoAnchor.datum,
-            clayPreset: mapTileObj.lineage?.generation?.params?.clayPreset || 'warm-clay'
-        });
-    }
+    // 0. No tile import here: a scene that has a map-3d object already streams the real Google tiles, and
+    // re-importing added a second map-3d object plus synthetic geometry.
 
     // 1. Setup lighting
     if (scene.environment?.lighting) {

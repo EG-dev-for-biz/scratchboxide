@@ -1128,9 +1128,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             if (result.customMeshDefinition) {
                 scene.customMeshes.push(result.customMeshDefinition);
             }
-            if (result.buildingMeshes && result.buildingMeshes.length > 0) {
-                scene.customMeshes.push(...result.buildingMeshes);
-            }
+            // result.buildingMeshes are procedural boxes, not Google buildings; the tile stream already shows the real ones.
             scene.objects.push(result.media4DObject);
 
             const castingRationale = `Direct 3D photorealistic map tile ingestion: ${result.geoAnchor.landmarkName}`;
