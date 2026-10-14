@@ -167,10 +167,11 @@ describe('tile_vegetation strip on a synthetic photo-textured tile', () => {
         expect(strip.stats.openEdges.after).toBeLessThanOrEqual(strip.stats.openEdges.before);
         for (const t of INTERIOR) {
             expect(trianglesNear(raw, t.x, t.z, 0.75 * t.radius, 1)).toBeGreaterThan(20);
-            // nothing is left standing in the cleared footprint, and the cap sits on the terrain (y = 0 here)
+            // nothing is left standing in the cleared footprint or its hem (the scanned crown drapes down to the ground
+            // around it), and the cap sits on the terrain (y = 0 here)
             let maxY = -Infinity, minY = Infinity, n = 0;
             for (let v = 0; v < out.positions.length; v += 3) {
-                if (Math.hypot(out.positions[v] - t.x, out.positions[v + 2] - t.z) > 0.75 * t.radius) continue;
+                if (Math.hypot(out.positions[v] - t.x, out.positions[v + 2] - t.z) > 1.5 * t.radius) continue;
                 maxY = Math.max(maxY, out.positions[v + 1]);
                 minY = Math.min(minY, out.positions[v + 1]);
                 n++;

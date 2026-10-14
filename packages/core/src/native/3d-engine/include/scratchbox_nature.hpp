@@ -1806,15 +1806,32 @@ private:
         rep.clumpSpacing = v;
         rep.trianglesPerClump = static_cast<int>(tpc);
         const float clumpRadius = 0.62f * v;
+        // Leaf masses stay inside the crown (an elliptic cylinder of radii crownExtents.x/z around crownCenter, between
+        // crownCenter.y -+ crownExtents.y): a clump is never larger than the crown and is moved in from its edge, so a
+        // coarse budget does not grow the tree past the crown it was fitted to.
+        const float jitterMax = 1.24f, squash = 0.82f;
+        const Vec3 envLo = cfg.crownCenter - cfg.crownExtents, envHi = cfg.crownCenter + cfg.crownExtents;
+        const float sizeCap = std::max(1e-3f, std::min({cfg.crownExtents.x, cfg.crownExtents.y / squash, cfg.crownExtents.z}) / jitterMax);
         for (size_t ci = 0; ci < cells.size(); ++ci) {
-            const Vec3 center = cells[ci].sum / static_cast<float>(cells[ci].n);
-            const float size = clumpRadius * (0.85f + 0.3f * hashUnit(cfg.seed ^ 0xA5A5A5A5u, static_cast<uint32_t>(ci), 0u));
+            Vec3 center = cells[ci].sum / static_cast<float>(cells[ci].n);
+            const float size = std::min(sizeCap, clumpRadius * (0.85f + 0.3f * hashUnit(cfg.seed ^ 0xA5A5A5A5u, static_cast<uint32_t>(ci), 0u)));
+            const Vec3 reach(size * jitterMax, size * squash * jitterMax, size * jitterMax);
+            center.y = std::clamp(center.y, envLo.y + reach.y, std::max(envLo.y + reach.y, envHi.y - reach.y));
+            {
+                const float ax = std::max(1e-3f, cfg.crownExtents.x - reach.x), az = std::max(1e-3f, cfg.crownExtents.z - reach.z);
+                const float dx = center.x - cfg.crownCenter.x, dz = center.z - cfg.crownCenter.z;
+                const float q = std::sqrt((dx * dx) / (ax * ax) + (dz * dz) / (az * az));
+                if (q > 1.0f) {
+                    center.x = cfg.crownCenter.x + dx / q;
+                    center.z = cfg.crownCenter.z + dz / q;
+                }
+            }
             const uint32_t base = static_cast<uint32_t>(foliage.vertices.size());
             for (size_t k = 0; k < sphere.size(); ++k) {
                 const float jitter = 1.0f + 0.48f * (hashUnit(cfg.seed, static_cast<uint32_t>(ci), static_cast<uint32_t>(k)) - 0.5f);
                 const Vec3 d = sphere[k];
-                foliage.vertices.push_back(center + Vec3(d.x, d.y * 0.82f, d.z) * (size * jitter));
-                foliage.normals.push_back(Vec3(d.x, d.y / 0.82f, d.z).normalized());
+                foliage.vertices.push_back(center + Vec3(d.x, d.y * squash, d.z) * (size * jitter));
+                foliage.normals.push_back(Vec3(d.x, d.y / squash, d.z).normalized());
                 foliage.uvs.push_back(Vec2(0.5f + 0.5f * d.x, 0.5f + 0.5f * d.z));
                 foliage.vertexColors.push_back(cfg.leafColor);
             }

@@ -1193,6 +1193,11 @@ private:
             const int i = g.ix(p.x), k = g.iz(p.z);
             return g.in(i, k) ? static_cast<long>(g.id(i, k)) : -1;
         };
+        // the highest corner of a triangle: growth takes every non-surface triangle that reaches above the clearance, so
+        // the hem where a scanned crown drapes down to the ground goes with the tree instead of standing as a sliver
+        auto topY = [&](uint32_t t) {
+            return std::max({weldPos[wtri[3 * static_cast<size_t>(t)]].y, weldPos[wtri[3 * static_cast<size_t>(t) + 1]].y, weldPos[wtri[3 * static_cast<size_t>(t) + 2]].y});
+        };
         std::queue<uint32_t> q;
         for (size_t t = 0; t < T; ++t) {
             if (!veg[t]) continue;
@@ -1212,7 +1217,7 @@ private:
                 if (removedBy[u] >= 0) continue;
                 const long c = cellOf(centroid[u]);
                 if (c < 0 || (growMask[static_cast<size_t>(c)] != m && !freeCanopy[static_cast<size_t>(c)])) continue;
-                if (centroid[u].y <= work[static_cast<size_t>(m)].support + P.clearance) continue;
+                if (topY(u) <= work[static_cast<size_t>(m)].support + P.clearance) continue;
                 if (surface[u] && !chromaVeg[u]) continue;  // walls, roofs and ground stop it; green planar patches are canopy
                 removedBy[u] = m;
                 q.push(u);
