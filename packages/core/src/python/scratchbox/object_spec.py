@@ -1025,13 +1025,6 @@ def _mesh_surface(surface, offsets):
     return mesh
 
 
-def _signed_volume(positions, triangles):
-    vol = 0.0
-    for a, b, c in triangles:
-        vol += _dot(positions[a], _cross(positions[b], positions[c]))
-    return vol / 6.0
-
-
 def _orient(mesh, surface, body_count, samples):
     """
     Makes every triangle face outward: the body by agreement with the analytic outward normals at sampled grid
