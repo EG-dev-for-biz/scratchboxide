@@ -2094,10 +2094,10 @@ function _synthesizeRawContextual3DSceneInner(
     const docTitle = context?.docTitle || activeDoc?.title || '';
     const existingFeatures = (context?.activeArtifact?.data as Scene3DData)?.features;
 
-    // God rays are atmospheric scattering, so asking for them opts in (as in scene3d-clay-baseline).
-    const explicitAtmosphereRequested = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective|haze|cloud\s*shadow|volumetric\s*clouds?|god\s*rays?|crepuscular|light\s*shafts?)\b/i.test(prompt);
+    const explicitAtmosphereRequested = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective|haze|cloud\s*shadow|volumetric\s*clouds?)\b/i.test(prompt);
     const hasAtmosphere = explicitAtmosphereRequested || !!existingFeatures?.atmosphericScattering;
-    const hasGodRays = hasAtmosphere && (/god\s*ray|crepuscular|light\s*shaft|volumetric/i.test(prompt) || !!existingFeatures?.godRays);
+    // God rays place a light emitter in the scene; they do not opt the scene into atmosphere.
+    const hasGodRays = /\b(?:god\s*rays?|crepuscular|light\s*shafts?)\b/i.test(prompt) || !!existingFeatures?.godRays;
     const isSunset = hasAtmosphere && /sunset|golden\s*hour|dusk/i.test(prompt);
     const hasContrails = /contrail|vapor|vortex/i.test(prompt) || !!existingFeatures?.contrails;
     const hasControlSurfaces = /control\s*surface|aileron|elevator|rudder/i.test(prompt) || !!existingFeatures?.controlSurfaces;
@@ -2117,7 +2117,7 @@ function _synthesizeRawContextual3DSceneInner(
 
     const baseFeatures = {
         ...(existingFeatures || {}),
-        ...(hasGodRays && hasAtmosphere ? { godRays: true } : {}),
+        ...(hasGodRays ? { godRays: true } : {}),
         ...(atmosphericConfig ? { atmosphericScattering: atmosphericConfig } : {}),
         ...(hasContrails ? { contrails: true } : {}),
         ...(hasControlSurfaces ? { controlSurfaces: true } : {})
@@ -2273,7 +2273,7 @@ function _synthesizeRawContextual3DSceneInner(
                     fov: 45
                 },
                 environment: {
-                    skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'golden_hour',
+                    skybox: hasAtmosphere ? 'realistic-sky' : 'golden_hour',
                     lighting: 'golden_hour',
                     ground: false
                 },
@@ -2942,7 +2942,7 @@ onFrame((time, delta) => {
                 fov: 48
             },
             environment: {
-                skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : (spec.atmosphere?.skybox || 'daylight'),
+                skybox: hasAtmosphere ? 'realistic-sky' : (spec.atmosphere?.skybox || 'daylight'),
                 lighting: hasAtmosphere ? (isSunset ? 'sunset' : 'daylight') : (spec.atmosphere?.lighting || 'daylight'),
                 ground: true
             },
@@ -3124,7 +3124,7 @@ onFrame((time, delta) => {
                 fov: 48
             },
             environment: {
-                skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'dawn-mist',
+                skybox: hasAtmosphere ? 'realistic-sky' : 'dawn-mist',
                 lighting: 'dawn',
                 ground: true
             },
@@ -4075,7 +4075,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 fov: 50
             },
             environment: {
-                skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'studio',
+                skybox: hasAtmosphere ? 'realistic-sky' : 'studio',
                 lighting: 'studio',
                 ground: true
             },
@@ -4136,8 +4136,8 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
             features: {
                 controlSurfaces: true,
                 contrails: true,
+                ...(hasGodRays ? { godRays: true } : {}),
                 ...(hasAtmosphere ? {
-                    godRays: hasGodRays,
                     atmosphericScattering: buildHeadlessAtmosphere({
                         aerialPerspectiveEnabled: hasHazeOrFogRequested,
                         inscatteringIntensity: hasHazeOrFogRequested ? 1.0 : 0.0

@@ -210,4 +210,42 @@ describe('Headless Scene Atmosphere Architecture', () => {
         expect((mockScene.fog as any).density).toBe(0.012);
         handle3.dispose();
     });
+
+    it('god rays place a light emitter in a studio scene without turning on atmosphere', async () => {
+        const THREE = await import('three');
+        const { syncAtmosphere } = await import('../src/browser/generative-canvas/primitives/scene3d/syncAtmosphere');
+
+        const scene = new THREE.Scene();
+        const stack = {
+            scene,
+            gridHelper: new THREE.GridHelper(20, 20),
+            container: { clientWidth: 800, clientHeight: 600 } as any,
+            renderer: {} as any,
+            camera: new THREE.PerspectiveCamera(),
+            controls: {} as any
+        };
+        const rayOrigins: number[][] = [];
+        const factories = {
+            createVolumetricGodRays: (_s: any, origin: any) => { rayOrigins.push(origin.toArray()); return { dispose: () => {} }; },
+            createProceduralBiomeTerrain: () => ({ mesh: new THREE.Mesh(), dispose: () => {} })
+        };
+        const base = { skybox: 'studio', lighting: 'studio', worldBranch: 'studio', hasGeoCoordinates: false, has3DTiles: false };
+
+        const handle = syncAtmosphere(stack as any, { ...base, renderMode: 'pbr', godRays: { emitterPosition: [3, 12, -2] } }, factories);
+        const emitter = scene.getObjectByName('god-rays-emitter') as any;
+        expect(emitter?.isSpotLight).toBe(true);
+        expect(emitter.position.toArray()).toEqual([3, 12, -2]);
+        expect(rayOrigins).toEqual([[3, 12, -2]]);
+        expect(scene.fog).toBeNull();
+        expect(classifyAtmosphere({ ...base, renderMode: 'pbr', godRays: true } as any).hasAtmosphere).toBe(false);
+        handle.dispose();
+        expect(scene.getObjectByName('god-rays-emitter')).toBeUndefined();
+
+        // Clay mode keeps the emitter but leaves the shafts out.
+        rayOrigins.length = 0;
+        const clayHandle = syncAtmosphere(stack as any, { ...base, renderMode: 'clay', godRays: true }, factories);
+        expect(scene.getObjectByName('god-rays-emitter')).toBeDefined();
+        expect(rayOrigins).toEqual([]);
+        clayHandle.dispose();
+    });
 });

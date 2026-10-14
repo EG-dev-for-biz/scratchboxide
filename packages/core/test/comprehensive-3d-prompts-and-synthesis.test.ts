@@ -184,8 +184,14 @@ describe('Comprehensive 3D Prompting & Synthesis Suite', () => {
                 expect(scene.title).toBeTruthy();
                 expect(scene.environment).toBeDefined();
 
-                // Must have atmospheric scattering or fog enabled
-                expect(scene.features?.atmosphericScattering || scene.environment?.fog || scene.environment?.aerialPerspective).toBeTruthy();
+                if (/god\s*rays?/i.test(prompt)) {
+                    // God rays place a light emitter in the scene; they are not an atmosphere opt-in.
+                    expect(scene.features?.godRays).toBeTruthy();
+                    expect(scene.features?.atmosphericScattering).toBeFalsy();
+                } else {
+                    // Must have atmospheric scattering or fog enabled
+                    expect(scene.features?.atmosphericScattering || scene.environment?.fog || scene.environment?.aerialPerspective).toBeTruthy();
+                }
                 expect(scene.customMeshes && scene.customMeshes.length).toBeGreaterThan(0);
             });
         }

@@ -941,6 +941,8 @@ export interface Scene3DData {
     features?: {
         godRays?: boolean | {
             enabled?: boolean;
+            /** Light emitter the rays stream from, in scene metres; defaults to high above the content. */
+            emitterPosition?: [number, number, number];
             intensity?: number;
             decay?: number;
             density?: number;

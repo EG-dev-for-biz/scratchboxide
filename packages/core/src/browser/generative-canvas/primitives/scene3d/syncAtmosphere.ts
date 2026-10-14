@@ -71,6 +71,22 @@ export interface AtmosphereClassification {
 
 export const CLAY_GREY_HEX = 0xb0b8c4;
 
+export function isGodRaysRequested(godRays: unknown): boolean {
+    if (!godRays) return false;
+    return typeof godRays !== 'object' || (godRays as { enabled?: boolean }).enabled !== false;
+}
+
+/** Where the god-ray emitter sits: the configured position, or high and off to one side of the content. */
+export function resolveGodRaysEmitterPosition(godRays: unknown, rigScale: number): [number, number, number] {
+    const configured = (typeof godRays === 'object' && godRays !== null)
+        ? (godRays as { emitterPosition?: unknown }).emitterPosition
+        : undefined;
+    if (Array.isArray(configured) && configured.length === 3 && configured.every(v => typeof v === 'number' && Number.isFinite(v))) {
+        return configured as [number, number, number];
+    }
+    return [6 * rigScale, 14 * rigScale, 4 * rigScale];
+}
+
 export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassification {
     const worldBranch = (input.worldBranch || '').toLowerCase();
     const skybox = (input.skybox || '').toLowerCase();
@@ -94,7 +110,9 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
             (atmoConfig.sunElevation !== undefined && atmoConfig.sunElevation <= 15)
         ))
     );
-    const hasGodRays = hasAtmosphere && !!input.godRays;
+    // God rays are a light emitter placed in the scene, not an atmosphere opt-in: they render in a
+    // studio scene too. Clay mode still keeps the shafts out (geometry first), but the emitter stays.
+    const hasGodRays = !isClayMode && isGodRaysRequested(input.godRays);
     const hasBiomes = !isClayMode && !!input.terrainBiomes;
     const biomeType = (typeof input.terrainBiomes === 'object' && input.terrainBiomes && input.terrainBiomes.biomeType)
         ? input.terrainBiomes.biomeType
@@ -365,6 +383,28 @@ export function syncAtmosphere(
                 scene.add(light);
                 owned.push(light);
             }
+        }
+    }
+
+    // God rays without an atmosphere: a spot emitter above the content, with the shafts streaming from it.
+    if (!isSkySkybox && isGodRaysRequested(input.godRays)) {
+        const cfg = (typeof input.godRays === 'object' && input.godRays !== null) ? input.godRays : {};
+        const rigScale = resolveStudioRigScale({ isLargeScale, contentRadiusMeters: input.contentRadiusMeters });
+        const [ex, ey, ez] = resolveGodRaysEmitterPosition(input.godRays, rigScale);
+        const emitterColor = cfg.color !== undefined ? new THREE.Color(cfg.color) : new THREE.Color(0xfffae0);
+        const distance = Math.hypot(ex, ey, ez);
+        // Same irradiance at the content as the studio key light (18 cd at ~5 m), whatever the emitter distance.
+        const emitter = new THREE.SpotLight(emitterColor, 18 * (distance / 5) ** 2 * (cfg.intensity ?? 1), 0, 0.55, 0.6, 2);
+        emitter.name = 'god-rays-emitter';
+        emitter.position.set(ex, ey, ez);
+        emitter.target.position.set(0, 0, 0);
+        emitter.castShadow = true;
+        scene.add(emitter);
+        scene.add(emitter.target);
+        owned.push(emitter, emitter.target);
+        sunPosition = new THREE.Vector3(ex, ey, ez);
+        if (hasGodRays) {
+            godRays = factories.createVolumetricGodRays(scene, sunPosition, false, cfg);
         }
     }
 
