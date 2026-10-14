@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { LocationUnresolvedError } from '../../../common/errors/pipeline-errors';
+import { LocationUnresolvedError, MissingInputError } from '../../../common/errors/pipeline-errors';
 import { assertUsableCoordinates, formatCoordinates, parseCoordinateText } from '../../../common/coordinate/parse-coordinates';
 
 export type GoogleMapType = 'roadmap' | 'satellite' | 'terrain' | 'hybrid';
@@ -15,6 +15,35 @@ export type GoogleMapType = 'roadmap' | 'satellite' | 'terrain' | 'hybrid';
 /** Google Places API (New) Text Search: the one geocoder for place names and addresses. */
 export const PLACES_TEXT_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
 export const PLACES_TEXT_SEARCH_FIELD_MASK = 'places.displayName,places.formattedAddress,places.location,places.viewport,places.types';
+
+/**
+ * The Maps Platform key for a call, from the same sources the rest of the app reads, in this order: a key
+ * passed by the caller, the key saved in Settings (GoogleMapsService, which also reads the build-time
+ * GOOGLE_MAPS_API_KEY / MAP_TILES_API_KEY), then the process environment at call time (on the server the
+ * secrets file is loaded into GOOGLE_MAPS_API_KEY / MAP_TILES_API_KEY after this module may have loaded).
+ * Returns '' when there is none.
+ */
+export function resolveMapsApiKey(explicit?: string): string {
+    const fromEnv = typeof process !== 'undefined' && process.env
+        ? process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || ''
+        : '';
+    return (explicit || GoogleMapsService.getInstance().getApiKey() || fromEnv || '').trim();
+}
+
+/**
+ * Why a Places API (New) request was refused, for the error the user sees. A 403 / PERMISSION_DENIED means the
+ * key cannot call Places API (New) (the API is not enabled in the key's project, or the key's API restrictions
+ * leave it out), which only the key's owner can fix, so the message says exactly that.
+ */
+function describePlacesRefusal(operation: string, status: number, body: any): string {
+    const apiStatus = typeof body?.error?.status === 'string' ? body.error.status : '';
+    const message = typeof body?.error?.message === 'string' ? body.error.message : '';
+    const base = `${operation} returned HTTP ${status}${apiStatus ? ` ${apiStatus}` : ''}${message ? `: ${message}` : ''}`;
+    if (status === 403 || apiStatus === 'PERMISSION_DENIED') {
+        return `${base}. This Maps key cannot call "Places API (New)" (places.googleapis.com): enable "Places API (New)" for the key's Google Cloud project, and if the key has API restrictions, add "Places API (New)" to them.`;
+    }
+    return base;
+}
 
 export interface GeocodeOptions {
     /** Maps Platform key; defaults to the configured key. */
@@ -353,15 +382,9 @@ export class GoogleMapsService {
         });
     }
 
-    /**
-     * The key for Maps Platform calls: an explicit one, else the configured key, else the process
-     * environment (on the server the key saved in Settings lands there after this service was created).
-     */
+    /** The key for a Maps Platform call; see resolveMapsApiKey. */
     private resolveKey(explicit?: string): string {
-        const fromEnv = typeof process !== 'undefined' && process.env
-            ? process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || ''
-            : '';
-        return (explicit || this.state.apiKey || fromEnv || '').trim();
+        return resolveMapsApiKey(explicit);
     }
 
     /**
@@ -419,8 +442,7 @@ export class GoogleMapsService {
 
         const body: any = await response.json().catch(() => undefined);
         if (!response.ok) {
-            const detail = typeof body?.error?.message === 'string' ? `: ${body.error.message}` : '';
-            throw new LocationUnresolvedError(cleanQuery, `Google Places Text Search returned HTTP ${response.status}${detail}`);
+            throw new LocationUnresolvedError(cleanQuery, describePlacesRefusal('Google Places Text Search', response.status, body));
         }
         const place = Array.isArray(body?.places) ? body.places[0] : undefined;
         const lat = place?.location?.latitude;
@@ -519,8 +541,7 @@ export class GoogleMapsService {
         });
         const data: any = await response.json().catch(() => undefined);
         if (!response.ok) {
-            const detail = typeof data?.error?.message === 'string' ? `: ${data.error.message}` : '';
-            throw new Error(`Google Places Nearby Search returned HTTP ${response.status}${detail}`);
+            throw new Error(describePlacesRefusal('Google Places Nearby Search', response.status, data));
         }
         const places: any[] = Array.isArray(data?.places) ? data.places : [];
         return places
@@ -541,7 +562,7 @@ export class GoogleMapsService {
      * Generate Google Static Maps URL with markers, paths, and styles
      */
     public getStaticMapUrl(options: StaticMapOptions): string {
-        const key = options.apiKey || this.state.apiKey;
+        const key = this.resolveKey(options.apiKey);
         const width = options.size?.width || 600;
         const height = options.size?.height || 400;
         const zoom = options.zoom !== undefined ? options.zoom : 15;
@@ -556,13 +577,11 @@ export class GoogleMapsService {
         } else if (options.markers && options.markers.length > 0) {
             centerParam = `${options.markers[0].lat},${options.markers[0].lng}`;
         } else {
-            centerParam = '37.7749,-122.4194';
+            throw new MissingInputError('getStaticMapUrl', 'center or markers', 'there is no default map location');
         }
 
-        // If no API key is provided and running without key, return rich procedural SVG data URL
-        if (!key) {
-            return this.generateProceduralSvgMap(centerParam, zoom, maptype, options.markers, width, height);
-        }
+        // Without a key the URL carries none and Google answers with its own "missing key" error image; a drawn
+        // stand-in map is never returned in its place.
 
         const params: string[] = [];
         params.push(`center=${centerParam}`);
@@ -610,7 +629,9 @@ export class GoogleMapsService {
             params.push(`map_id=${encodeURIComponent(options.mapId)}`);
         }
 
-        params.push(`key=${encodeURIComponent(key)}`);
+        if (key) {
+            params.push(`key=${encodeURIComponent(key)}`);
+        }
 
         this.state.staticMapCount++;
         return `https://maps.googleapis.com/maps/api/staticmap?${params.join('&')}`;
@@ -658,23 +679,28 @@ export class GoogleMapsService {
      * Generate Google Maps Interactive Embed iframe URL
      */
     public getEmbedMapUrl(options: EmbedMapOptions): string {
-        const key = options.apiKey || this.state.apiKey;
+        const key = this.resolveKey(options.apiKey);
         const mode = options.mode || 'place';
         const params: string[] = [];
+        const point = (value: string | { lat: number; lng: number } | undefined, arg: string): string => {
+            if (typeof value === 'string' && value.trim()) return value;
+            if (value && typeof value === 'object') return `${value.lat},${value.lng}`;
+            throw new MissingInputError('getEmbedMapUrl', arg, `the ${mode} embed has no default location`);
+        };
 
         if (mode === 'place') {
-            const query = options.q || (options.center ? `${options.center.lat},${options.center.lng}` : 'San Francisco, CA');
+            const query = point(options.q || options.center, 'q or center');
             params.push(`q=${encodeURIComponent(query)}`);
             if (options.zoom) params.push(`zoom=${options.zoom}`);
             if (options.maptype) params.push(`maptype=${options.maptype}`);
         } else if (mode === 'view') {
-            const center = options.center ? `${options.center.lat},${options.center.lng}` : '37.7749,-122.4194';
+            const center = point(options.center, 'center');
             params.push(`center=${encodeURIComponent(center)}`);
             if (options.zoom) params.push(`zoom=${options.zoom || 14}`);
             if (options.maptype) params.push(`maptype=${options.maptype || 'roadmap'}`);
         } else if (mode === 'directions') {
-            const originStr = typeof options.origin === 'string' ? options.origin : options.origin ? `${options.origin.lat},${options.origin.lng}` : '37.7920,-122.4050';
-            const destStr = typeof options.destination === 'string' ? options.destination : options.destination ? `${options.destination.lat},${options.destination.lng}` : '37.7980,-122.3950';
+            const originStr = point(options.origin, 'origin');
+            const destStr = point(options.destination, 'destination');
             params.push(`origin=${encodeURIComponent(originStr)}`);
             params.push(`destination=${encodeURIComponent(destStr)}`);
             if (options.waypoints && options.waypoints.length > 0) {
@@ -682,7 +708,7 @@ export class GoogleMapsService {
                 params.push(`waypoints=${encodeURIComponent(wpStr)}`);
             }
         } else if (mode === 'streetview') {
-            const loc = options.center ? `${options.center.lat},${options.center.lng}` : '37.7955,-122.3937';
+            const loc = point(options.center, 'center');
             params.push(`location=${encodeURIComponent(loc)}`);
             if (options.heading !== undefined) params.push(`heading=${options.heading}`);
             if (options.pitch !== undefined) params.push(`pitch=${options.pitch}`);
@@ -830,59 +856,5 @@ export class GoogleMapsService {
             throw new Error(`Google Solar API gave no building insights at ${formatCoordinates(coords.lat, coords.lng)} (HTTP ${response.status}${detail}).`);
         }
         return data;
-    }
-
-    /**
-     * Fallback high-fidelity procedural SVG map preview
-     */
-    private generateProceduralSvgMap(
-        center: string,
-        zoom: number,
-        maptype: GoogleMapType,
-        markers?: StaticMapMarker[],
-        width = 600,
-        height = 400
-    ): string {
-        const isDark = maptype === 'satellite' || maptype === 'hybrid';
-        const bgFill = isDark ? '#0b1120' : '#0f172a';
-        const gridStroke = isDark ? '#1e293b' : '#334155';
-        const accentColor = '#3b82f6';
-
-        const markerElements = (markers || []).map((m, idx) => {
-            const x = width / 2 + (idx === 0 ? -40 : 40);
-            const y = height / 2 + (idx === 0 ? 20 : -20);
-            const pinColor = m.color === 'green' ? '#10b981' : m.color === 'red' ? '#ef4444' : '#3b82f6';
-            return `
-                <g transform="translate(${x}, ${y})">
-                    <circle r="12" fill="${pinColor}" filter="drop-shadow(0 4px 6px rgba(0,0,0,0.4))" />
-                    <text text-anchor="middle" y="4" font-family="system-ui, sans-serif" font-size="11" font-weight="bold" fill="#ffffff">${m.label || idx + 1}</text>
-                    <path d="M 0 12 L 0 20" stroke="${pinColor}" stroke-width="2.5" stroke-linecap="round" />
-                </g>
-            `;
-        }).join('');
-
-        const svg = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-                <rect width="100%" height="100%" fill="${bgFill}"/>
-                <defs>
-                    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="${gridStroke}" stroke-width="1" stroke-opacity="0.4"/>
-                    </pattern>
-                    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="${accentColor}" stop-opacity="0.2"/>
-                        <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.05"/>
-                    </linearGradient>
-                </defs>
-                <rect width="100%" height="100%" fill="url(#grid)" />
-                <circle cx="${width / 2}" cy="${height / 2}" r="${Math.min(width, height) / 3}" fill="url(#glow)" />
-                <path d="M 50 ${height - 60} Q ${width / 3} ${height / 2}, ${width / 2} ${height / 2} T ${width - 50} 80" fill="none" stroke="${accentColor}" stroke-width="3" stroke-dasharray="6,6" opacity="0.8"/>
-                ${markerElements}
-                <rect x="16" y="16" width="160" height="48" rx="8" fill="#18181b" fill-opacity="0.85" stroke="#27272a" stroke-width="1"/>
-                <text x="28" y="36" font-family="system-ui, sans-serif" font-size="11" font-weight="bold" fill="#f4f4f5">Google Maps Grounding</text>
-                <text x="28" y="52" font-family="monospace" font-size="9" fill="#9ca3af">${center} • ${zoom}x</text>
-            </svg>
-        `.trim();
-
-        return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
     }
 }

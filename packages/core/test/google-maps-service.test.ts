@@ -15,7 +15,7 @@ import {
     GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE,
     STATIC_MAPS_NO_LABELS_STYLES
 } from '../src/browser/generative-canvas/services/google-maps-service';
-import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
+import { LocationUnresolvedError, MissingInputError } from '../src/common/errors/pipeline-errors';
 
 async function runGoogleMapsServiceTests() {
     console.log('🧪 Running Google Maps Client & Geospatial Intelligence Test Suite...\n');
@@ -151,11 +151,21 @@ async function runGoogleMapsServiceTests() {
     assert.ok(staticUrl.includes('path='), 'URL must contain flight path spline parameter');
     assert.ok(staticUrl.includes(`key=${testKey}`), 'URL must include API key');
 
-    // Test fallback when no API key is provided
+    // Without a key there is no drawn stand-in map, and there is no default map location
+    const savedMapsEnv = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    delete process.env.MAP_TILES_API_KEY;
     service.setApiKey('');
-    const fallbackStaticUrl = service.getStaticMapUrl({ center: { lat: 37.77, lng: -122.41 }, zoom: 14 });
-    assert.ok(fallbackStaticUrl.startsWith('data:image/svg+xml') || fallbackStaticUrl.includes('staticmap'), 'Fallback static map returns valid SVG data URI or static map structure');
-    service.setApiKey(testKey);
+    try {
+        const keylessUrl = service.getStaticMapUrl({ center: { lat: 37.77, lng: -122.41 }, zoom: 14 });
+        assert.ok(keylessUrl.startsWith('https://maps.googleapis.com/maps/api/staticmap?'), 'a keyless request still targets the Static Maps API (no drawn stand-in map)');
+        assert.ok(!keylessUrl.startsWith('data:') && !keylessUrl.includes('key='), 'no SVG placeholder and no key parameter');
+    } finally {
+        service.setApiKey(testKey);
+        if (savedMapsEnv.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = savedMapsEnv.g;
+        if (savedMapsEnv.m !== undefined) process.env.MAP_TILES_API_KEY = savedMapsEnv.m;
+    }
+    assert.throws(() => service.getStaticMapUrl({ zoom: 14 }), MissingInputError);
 
     console.log('  ✓ Test 3 Passed: Google Static Maps URL generator encodes pins, splines, zooms, and map types.');
 
@@ -193,6 +203,12 @@ async function runGoogleMapsServiceTests() {
     assert.ok(directionsEmbedUrl.startsWith('https://www.google.com/maps/embed/v1/directions?'), 'Directions Embed must use directions endpoint');
     assert.ok(directionsEmbedUrl.includes('origin=37.792'), 'Directions Embed includes origin coords');
     assert.ok(directionsEmbedUrl.includes('destination=37.798'), 'Directions Embed includes destination coords');
+
+    // No embed mode has a default location
+    assert.throws(() => service.getEmbedMapUrl({ mode: 'view', zoom: 15 }), MissingInputError);
+    assert.throws(() => service.getEmbedMapUrl({ mode: 'place' }), MissingInputError);
+    assert.throws(() => service.getEmbedMapUrl({ mode: 'streetview' }), MissingInputError);
+    assert.throws(() => service.getEmbedMapUrl({ mode: 'directions', origin: 'Ferry Building, San Francisco' }), MissingInputError);
 
     console.log('  ✓ Test 4 Passed: Google Maps Embed URL generator supports place, view, and directions modes.');
 

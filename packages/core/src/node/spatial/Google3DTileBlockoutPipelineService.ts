@@ -17,7 +17,7 @@ import { promisify } from 'util';
 import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
 import { DistrictTooLargeError, GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler';
 import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel';
-import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
+import { GoogleMapsService, resolveMapsApiKey } from '../../browser/generative-canvas/services/google-maps-service';
 import type {
   PhysicalCameraConfig,
   SensorFormatPreset
@@ -26,11 +26,6 @@ import { LocationUnresolvedError, MissingInputError, TileExtractionError } from 
 import { assertUsableCoordinates, formatCoordinates, parseCoordinateText } from '../../common/coordinate/parse-coordinates';
 
 const execFileAsync = promisify(execFile);
-
-/** The Maps Platform key at call time (the server hydrates it from Settings after this module loads). */
-function configuredMapsApiKey(): string {
-  return (process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || '').trim();
-}
 
 /** "Flatiron Building, 175 5th Ave, New York, NY 10010, USA": Google's name for the place plus its address. */
 function describePlace(name: string | undefined, formattedAddress: string): string {
@@ -434,7 +429,7 @@ export class Google3DTileBlockoutPipelineService {
       return this.resolveAddress({ lat: coords.lat, lng: coords.lng, elevation: coords.elevation });
     }
 
-    const key = apiKey || configuredMapsApiKey();
+    const key = resolveMapsApiKey(apiKey);
     if (!key) {
       throw new LocationUnresolvedError(
         rawQuery,
@@ -455,7 +450,7 @@ export class Google3DTileBlockoutPipelineService {
    * cannot be measured; callers that need one never substitute a default.
    */
   public async fetchGroundElevation(lat: number, lng: number, apiKey?: string, fetchImpl?: typeof fetch): Promise<number> {
-    const key = apiKey || configuredMapsApiKey();
+    const key = resolveMapsApiKey(apiKey);
     if (!key) {
       throw new MissingInputError('google_3d_tiles_clay_blockout_runner', 'geoAnchor.elevation', 'no Google Maps API key is configured, so the ground elevation cannot be looked up');
     }
@@ -975,7 +970,7 @@ export class Google3DTileBlockoutPipelineService {
     const geoidHeight = request.geoidHeight ?? geoidUndulation(geo.lat, geo.lng);
     const { matrixValues } = this.buildLocalTransformMatrix(geo, geoidHeight);
 
-    const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || DEFAULT_GOOGLE_MAPS_TILES_API_KEY;
+    const apiKey = resolveMapsApiKey(request.apiKey);
 
     const atmo = request.atmosphere || {};
     const renderMode = atmo.renderMode || 'clay';
@@ -2444,7 +2439,7 @@ export class Google3DTileBlockoutPipelineService {
       return this.fetchOfflineMock(geoAnchor, resolvedAddress, mode, outputGlbPath, options);
     }
 
-    const apiKey = options?.apiKey || configuredMapsApiKey();
+    const apiKey = resolveMapsApiKey(options?.apiKey);
     if (!apiKey) {
       throw new TileExtractionError('crawl', 'no Google Maps API key is configured, so Photorealistic 3D Tiles cannot be downloaded (add the key in Settings)');
     }
