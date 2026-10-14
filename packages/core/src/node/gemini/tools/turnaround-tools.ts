@@ -70,10 +70,6 @@ export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 heightMeters: {
                     type: 'NUMBER',
                     description: 'Optional real-world physical height in meters for downstream .glb scaling.'
-                },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in offline emulation mode if no live GPU or network is available.'
                 }
             },
             required: ['subject']

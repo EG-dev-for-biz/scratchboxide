@@ -256,10 +256,6 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional path on disk to write Frame 0 PNG for AI Beautify'
                 },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in offline emulation mode using synthetic geodetic tiles'
-                },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',
                     description: 'Enforce Atomic Building Integrity rule: guarantees zero horizontal roof slicing, zero bisected building envelopes, and multi-tier zenith camera settle (defaults to true)'
@@ -321,10 +317,6 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 shadowLift: {
                     type: 'NUMBER',
                     description: 'Shadow de-lighting lift intensity from 0.0 to 1.0 (default 0.7)'
-                },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in fast offline emulation mode for testing'
                 }
             },
             required: ['inputGlbPath']
@@ -1271,10 +1263,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputImagePath: {
                     type: 'STRING',
                     description: 'Optional output file path to write the healed seamless panorama.'
-                },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in offline mock mode using procedural smoothstep inpainting.'
                 }
             },
             required: ['inputImagePath']
@@ -1321,10 +1309,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputImagePath: {
                     type: 'STRING',
                     description: 'Optional output file path to write the inpainted panorama.'
-                },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in offline mock mode.'
                 }
             },
             required: ['inputImagePath']
@@ -1367,10 +1351,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputImagePath: {
                     type: 'STRING',
                     description: 'Optional output file path to write the generated panorama.'
-                },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in offline mock mode generating synthetic equirectangular landscape.'
                 },
                 invertSphericalCurvature: {
                     type: 'BOOLEAN',
@@ -1421,10 +1401,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputImagePath: {
                     type: 'STRING',
                     description: 'Optional output file path to write the generated 4K PNG panorama.'
-                },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in offline mock mode generating high-detail synthetic monumental architecture.'
                 }
             },
             required: ['prompt']
@@ -1536,10 +1512,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'BOOLEAN',
                     description: 'Whether to use Nano Banana 2 conditioning to generate the 5 perspectives matching the initial image (default: true).'
                 },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in offline mock mode: the 5 perspectives are procedural copies of the input, not model output.'
-                },
                 outputDir: {
                     type: 'STRING',
                     description: 'Optional output directory to write all 6 perspective camera plates and stitched panorama.'
@@ -1607,10 +1579,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 skipOffsets: {
                     type: 'BOOLEAN',
                     description: 'Fast path skipping multi-perspective offset synthesis (default: false).'
-                },
-                mockExecution: {
-                    type: 'BOOLEAN',
-                    description: 'Run in offline mock mode using procedural geometric fallback depth (default: false).'
                 },
                 prompt: {
                     type: 'STRING',
