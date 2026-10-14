@@ -19,6 +19,10 @@ import type { TileMeshRaycaster } from './tile-mesh-raycast';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 
+/** The only variables this service reads; loading anything else from .env at import time would leak other
+ *  credentials (e.g. a stale GEMINI_API_KEY) into the environment ahead of the server's own secrets handling. */
+const LOCAL_ENV_KEYS = new Set(['MAP_TILES_API_KEY', 'GOOGLE_MAPS_API_KEY']);
+
 function tryLoadLocalEnv(): void {
     if (typeof process === 'undefined' || !process.env) return;
     if (process.env.MAP_TILES_API_KEY || process.env.GOOGLE_MAPS_API_KEY) return;
@@ -37,6 +41,7 @@ function tryLoadLocalEnv(): void {
                     const eq = trimmed.indexOf('=');
                     if (eq > 0) {
                         const k = trimmed.slice(0, eq).trim();
+                        if (!LOCAL_ENV_KEYS.has(k)) continue;
                         let v = trimmed.slice(eq + 1).trim();
                         if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
                             v = v.slice(1, -1);

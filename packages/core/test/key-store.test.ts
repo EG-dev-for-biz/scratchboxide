@@ -24,6 +24,9 @@ async function runKeyStoreTests(): Promise<void> {
 
         const reopened = new FileKeyStore({ filePath: file });
         assert.strictEqual(await reopened.getPassword('svc', 'acct'), 'secret-1', 'value survives reload');
+        assert.strictEqual(reopened.getPasswordSync('svc', 'acct'), 'secret-1', 'synchronous read decrypts the same value');
+        assert.strictEqual(reopened.getPasswordSync('svc', 'other'), undefined);
+        assert.strictEqual(new FileKeyStore({ filePath: path.join(dir, 'missing.json') }).getPasswordSync('svc', 'acct'), undefined);
 
         await store.deletePassword('svc', 'acct');
         assert.strictEqual(await store.getPassword('svc', 'acct'), undefined);

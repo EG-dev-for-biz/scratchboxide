@@ -93,6 +93,26 @@ export class FileKeyStore implements KeyStore {
         }
     }
 
+    /** Synchronous getPassword, for startup code that cannot await (the cipher is synchronous). */
+    getPasswordSync(service: string, account: string): string | undefined {
+        let data: Record<string, string> = {};
+        try {
+            const json = fs.readJSONSync(this.filePath);
+            data = json && typeof json === 'object' ? json : {};
+        } catch {
+            return undefined;
+        }
+        const stored = data[this.slot(service, account)];
+        if (!stored) {
+            return undefined;
+        }
+        try {
+            return this.cipher.decrypt(stored);
+        } catch {
+            return undefined;
+        }
+    }
+
     async setPassword(service: string, account: string, password: string): Promise<void> {
         const data = await this.read();
         data[this.slot(service, account)] = this.cipher.encrypt(password);

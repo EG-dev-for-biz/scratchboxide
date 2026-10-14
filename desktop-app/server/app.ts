@@ -14,6 +14,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { assertWorkspaceRoot, PathTraversalError } from '../../packages/core/src/node/security/path-guard';
+import { FileKeyStore } from '../../packages/core/src/node/key-store';
+import { KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT } from '../../packages/core/src/node/gemini/gemini-client';
 import {
     WorkspaceConfigService,
     ProjectArtifactStore,
@@ -129,7 +131,24 @@ export function resolveAllowedWorkspaceRoots(): string[] {
     return roots;
 }
 
+/**
+ * A Gemini key saved in Settings (the encrypted key store) outranks one copied in from a secrets file: the order the
+ * key resolvers document is environment, key store, secrets file, but copying the file into the environment at
+ * startup put the file first, so every restart replaced the saved key with the file's. Call only when
+ * GEMINI_API_KEY was not set in the real environment (that still wins). Returns whether the saved key was applied.
+ */
+export function preferSavedGeminiKey(keyStore: Pick<FileKeyStore, 'getPasswordSync'> = new FileKeyStore()): boolean {
+    const saved = keyStore.getPasswordSync(KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT)?.trim();
+    if (!saved) return false;
+    if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== saved) {
+        console.warn('[Scratchbox] Using the Gemini API key saved in Settings instead of the one in the secrets file.');
+    }
+    process.env.GEMINI_API_KEY = saved;
+    return true;
+}
+
 function loadEnvironmentSecrets(): void {
+    const geminiKeyFromRealEnv = !!process.env.GEMINI_API_KEY?.trim();
     const homeSecrets = path.join(os.homedir(), '.scratchbox', 'secrets.json');
     const repoSecrets = [
         path.resolve(process.cwd(), 'secrets.json'),
@@ -198,6 +217,10 @@ function loadEnvironmentSecrets(): void {
         } catch {
             // Ignore parse errors
         }
+    }
+
+    if (!geminiKeyFromRealEnv) {
+        preferSavedGeminiKey();
     }
 
     // Default to the service-account file at ~/.scratchbox/service-account.json or repo-root
