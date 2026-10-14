@@ -199,7 +199,14 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
         !/\b(build|make|create|generate|render|model|sculpt|extrude|carve|construct|synthesize|assemble|fabricate|shape|switch\s+to|change\s+to|apply|enable|turn\s+on|set|rotate|orbit|animate|export)\b/i.test(text) &&
         !/\b(?:in\s+3d|3d\s+model|3d\s+scene|3d\s+simulation|as\s+a\s+3d)\b/i.test(text);
 
-    const isExplicit3D = !isExplicitMedia && !isVideoTimelineRequest && !isPureQuestion && (targetPrimitiveType === '3d-scene' ||
+    // What is being made decides the canvas, not what it is about: "a calculator for orbital delta-v" is software.
+    // Software wins unless the prompt itself asks for 3D (or a 3D canvas was targeted).
+    const createsSoftware = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype|synthesizer|synth|sequencer|instrument|visualizer|editor|explorer)\b/i.test(text) ||
+        /\b(?:code\s+sandbox|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(text);
+    const asksFor3D = /\b3d\b|three\.js|threejs|webgl|\bin\s+3d\b/i.test(text);
+    const softwareNot3D = createsSoftware && !asksFor3D && targetPrimitiveType !== '3d-scene' && !text.trim().startsWith('/3d');
+
+    const isExplicit3D = !softwareNot3D && !isExplicitMedia && !isVideoTimelineRequest && !isPureQuestion && (targetPrimitiveType === '3d-scene' ||
         text.trim().startsWith('/3d') ||
         hasExplicit3DDirective(text) ||
         (!isExplicitDoc && (
@@ -238,7 +245,7 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
         /(?:create|generate|build|make)\s+(?:a\s+)?(?:new\s+)?(?:metric\s+dashboard|kpi\s+dashboard|telemetry\s+dashboard|analytics\s+dashboard)\b/i.test(text) ||
         /summarize\s+into\s+metrics|summarize\s+into\s+kpi/i.test(text));
 
-    const hasAppCreationIntent = !isVideoTimelineRequest && !hasExplicit3DDirective(text) && !isExplicit3D && (
+    const hasAppCreationIntent = !isVideoTimelineRequest && (softwareNot3D || !hasExplicit3DDirective(text)) && !isExplicit3D && (
         targetPrimitiveType === 'live-code-sandbox' ||
         text.trim().startsWith('/code') ||
         text.trim().startsWith('/sandbox') ||
