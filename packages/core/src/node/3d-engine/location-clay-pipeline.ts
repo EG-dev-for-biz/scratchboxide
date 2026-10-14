@@ -19,11 +19,12 @@
  *      isolated structure.
  * The remeshed tile and the trees share the extraction's frame, so both mount at the same origin.
  *
- * Any stage that fails fails the whole request with a TileExtractionError naming the stage; nothing is mounted and
- * nothing is substituted. A tile with no measurable canopy is a valid result with zero trees, and says so.
+ * Any stage that fails fails the whole request with a TileExtractionError (common/errors/pipeline-errors) naming the
+ * stage ('vegetation', 'remesh' or 'planting'); nothing is mounted and nothing is substituted. A tile with no measurable canopy is a valid result with zero trees, and says so.
  */
 
 import * as fs from 'fs';
+import { TileExtractionError, type TileExtractionStage } from '../../common/errors/pipeline-errors';
 import { getTileRefineService, summarizeTileRefineStats, type TileRefineRequest, type TileRefineResult } from './tile-refine-service';
 import {
     getTileVegetationService,
@@ -32,16 +33,6 @@ import {
     type TileVegetationStripRequest,
     type TileVegetationStripResult
 } from './tile-vegetation-service';
-
-export type TileExtractionStage = 'crawl' | 'download' | 'parse' | 'remesh' | 'vegetation' | 'planting';
-
-/** A location request that could not be completed, with the stage that failed. */
-export class TileExtractionError extends Error {
-    constructor(readonly stage: TileExtractionStage, message: string, readonly cause?: unknown) {
-        super(message);
-        this.name = 'TileExtractionError';
-    }
-}
 
 export interface LocationClayDeps {
     vegetation: { strip(req: TileVegetationStripRequest): Promise<TileVegetationStripResult>; plant(req: TileVegetationPlantRequest): Promise<TileVegetationPlantResult> };
@@ -99,10 +90,6 @@ export interface LocationClayResult {
     timingsMs: { vegetation?: number; remesh: number; planting?: number; total: number };
 }
 
-function message(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
-}
-
 function checkAborted(signal: AbortSignal | undefined): void {
     if (signal?.aborted) throw Object.assign(new Error('Stopped by the chat before it finished'), { name: 'AbortError' });
 }
@@ -113,7 +100,7 @@ async function stage<T>(name: TileExtractionStage, signal: AbortSignal | undefin
         return await run();
     } catch (err) {
         if ((err as Error)?.name === 'AbortError') throw err;
-        throw new TileExtractionError(name, `${name} failed: ${message(err)}`, err);
+        throw new TileExtractionError(name, err);
     }
 }
 
@@ -121,7 +108,7 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
     const t0 = Date.now();
     const d: LocationClayDeps = deps ?? { vegetation: getTileVegetationService(req.workspaceRoot), refine: getTileRefineService(req.workspaceRoot) };
     const share = req.treeTriangleShare ?? 0.5;
-    if (!(share > 0 && share <= 1)) throw new TileExtractionError('planting', 'planting failed: treeTriangleShare must be in (0, 1]');
+    if (!(share > 0 && share <= 1)) throw new TileExtractionError('planting', new Error('treeTriangleShare must be in (0, 1]'));
     const timings: LocationClayResult['timingsMs'] = { remesh: 0, total: 0 };
 
     let strip: TileVegetationStripResult | undefined;
@@ -191,7 +178,7 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
             trees.notOnStructure = Array.isArray(planted.stats.skipped) ? planted.stats.skipped.length : 0;
             trees.inferred = planted.stats.inferred ?? {};
             if (trees.count > 0) {
-                if (!planted.published?.url) throw new TileExtractionError('planting', 'planting failed: the trees model was not published');
+                if (!planted.published?.url) throw new TileExtractionError('planting', new Error('the trees model was not published'));
                 trees.url = planted.published.url;
                 trees.glbPath = planted.treesGlb;
             }
@@ -228,8 +215,8 @@ export function describeLocationClay(result: LocationClayResult | undefined, fla
         const kept: string[] = [];
         if (t.cutAtBoundary) kept.push(`${t.cutAtBoundary} crown${t.cutAtBoundary === 1 ? '' : 's'} cut by the extraction boundary`);
         if (t.belowMinHeight) kept.push(`${t.belowMinHeight} low planting${t.belowMinHeight === 1 ? '' : 's'} (under the minimum tree height)`);
-        if (t.notOnStructure) kept.push(`${t.notOnStructure} tree${t.notOnStructure === 1 ? '' : 's'} not standing on the isolated structure (left out)`);
-        const keptText = kept.length ? ` Kept as scanned: ${kept.join(', ')}.` : '';
+        let keptText = kept.length ? ` Kept as scanned: ${kept.join(', ')}.` : '';
+        if (t.notOnStructure) keptText += ` Left out: ${t.notOnStructure} measured tree${t.notOnStructure === 1 ? '' : 's'} not standing on the isolated structure.`;
         if (t.count > 0) {
             s += ` Rebuilt ${t.count} measured tree${t.count === 1 ? '' : 's'} as SB-Veggie trees (space colonisation, studio clay) from ${Math.round(t.treeCanopyAreaM2)} m² of measured crown, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}; the trees model is ${t.url}.${keptText}`;
         } else if (t.canopyAreaM2 > 0) {

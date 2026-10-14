@@ -17,7 +17,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runLocationClayPipeline, describeLocationClay, TileExtractionError, type LocationClayDeps } from '../src/node/3d-engine/location-clay-pipeline';
+import { runLocationClayPipeline, describeLocationClay, type LocationClayDeps } from '../src/node/3d-engine/location-clay-pipeline';
+import { TileExtractionError } from '../src/common/errors/pipeline-errors';
 import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../src/node/3d-engine/tile-refine-service';
 import { buildSyntheticTile, type SyntheticTileSpec } from './helpers/synthetic-textured-tile';
@@ -120,7 +121,7 @@ describe('runLocationClayPipeline', () => {
         const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'remesh_fail' }, deps(stub)).catch(e => e);
         expect(err).toBeInstanceOf(TileExtractionError);
         expect(err.stage).toBe('remesh');
-        expect(err.message).toBe('remesh failed: tile_refine did not converge');
+        expect(err.message).toBe('Tile extraction failed at remesh: tile_refine did not converge');
         expect(publishedTrees()).toEqual(before);
     });
 
@@ -129,7 +130,7 @@ describe('runLocationClayPipeline', () => {
         const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'corrupt.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'corrupt' }, deps(stub)).catch(e => e);
         expect(err).toBeInstanceOf(TileExtractionError);
         expect(err.stage).toBe('vegetation');
-        expect(err.message).toContain('vegetation failed: photo texture');
+        expect(err.message).toContain('Tile extraction failed at vegetation: photo texture');
         expect(stub.calls).toHaveLength(0);
     });
 
@@ -161,6 +162,6 @@ describe('runLocationClayPipeline', () => {
             deps(refineStub({ clayGlb: patch })));
         expect(r.isolate).toBe(true);
         expect(r.trees).toMatchObject({ count: 1, notOnStructure: 2 });
-        expect(describeLocationClay(r, 'clay')).toContain('2 trees not standing on the isolated structure (left out)');
+        expect(describeLocationClay(r, 'clay')).toContain('Left out: 2 measured trees not standing on the isolated structure.');
     });
 });

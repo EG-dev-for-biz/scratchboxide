@@ -12,14 +12,16 @@
  * Flatiron Building and Madison Square Park (40.7411, -73.9897; 120 m), checked against the NYC Parks Forestry tree
  * inventory (vendored trimmed subset: fixtures/nyc-forestry-trees-flatiron.json, provenance inside).
  *
- * The extraction is not in the repository (Google Maps Platform content): the suite runs when
- * public/models/flatiron_building_40.7411_-73.9897_120m.glb exists (or SCRATCHBOX_FLATIRON_PHOTO_TILE names one) and
- * is skipped otherwise. It runs the whole location pipeline for real (tile_vegetation strip, tile_refine, plant) and
- * writes top-down and aerial clay screenshots to test-results/screenshots/tile_vegetation/ plus a measurement report
- * to test-results/tile_vegetation/flatiron_report.json.
+ * The extraction is not in the repository (Google Maps Platform content). The suite reads it, without modifying it,
+ * from SCRATCHBOX_FLATIRON_PHOTO_TILE, else public/models/flatiron_building_40.7411_-73.9897_120m.glb in this checkout
+ * or in the main checkout this worktree belongs to, and is skipped when none exists. It copies the tile into a
+ * temporary workspace, runs the whole location pipeline for real (tile_vegetation strip, tile_refine, plant) and writes
+ * top-down and aerial clay screenshots to test-results/screenshots/tile_vegetation/ plus a measurement report to
+ * test-results/tile_vegetation/flatiron_report.json.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -30,7 +32,20 @@ import { decodePng, encodePng } from '../src/node/texture-processing';
 import { readGlbTriangles, renderClayPng } from './helpers/clay-glb-render';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
-const TILE = process.env.SCRATCHBOX_FLATIRON_PHOTO_TILE ?? path.join(REPO, 'public/models/flatiron_building_40.7411_-73.9897_120m.glb');
+const TILE_NAME = 'public/models/flatiron_building_40.7411_-73.9897_120m.glb';
+
+/** The main checkout of this repository (a worktree's shared git directory's parent), when git can say. */
+function mainCheckout(): string | undefined {
+    try {
+        const common = execFileSync('git', ['-C', REPO, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
+        return common ? path.dirname(common) : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+const TILE = [process.env.SCRATCHBOX_FLATIRON_PHOTO_TILE, path.join(REPO, TILE_NAME), ...[mainCheckout()].filter(Boolean).map(m => path.join(m!, TILE_NAME))]
+    .find((p): p is string => !!p && fs.existsSync(p)) ?? path.join(REPO, TILE_NAME);
 const INVENTORY = path.join(__dirname, 'fixtures/nyc-forestry-trees-flatiron.json');
 const SHOTS = path.join(REPO, 'test-results/screenshots/tile_vegetation');
 const REPORT = path.join(REPO, 'test-results/tile_vegetation/flatiron_report.json');

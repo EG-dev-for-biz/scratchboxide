@@ -82,6 +82,14 @@ function trianglesNear(t: GlbTriangles, x: number, z: number, r: number, minY: n
     return n;
 }
 
+/** Binary glTF 2.0 header: magic "glTF", version 2, declared length equal to the file, JSON chunk first. */
+function expectValidGlb(buf: Buffer): void {
+    expect(buf.subarray(0, 4).toString('latin1')).toBe('glTF');
+    expect(buf.readUInt32LE(4)).toBe(2);
+    expect(buf.readUInt32LE(8)).toBe(buf.length);
+    expect(buf.readUInt32LE(16)).toBe(0x4e4f534a);
+}
+
 function sha(file: string): string {
     return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
@@ -160,14 +168,16 @@ describe('tile_vegetation strip on a synthetic photo-textured tile', () => {
         for (const t of INTERIOR) {
             expect(trianglesNear(raw, t.x, t.z, 0.75 * t.radius, 1)).toBeGreaterThan(20);
             // nothing is left standing in the cleared footprint, and the cap sits on the terrain (y = 0 here)
-            let maxY = -Infinity, n = 0;
+            let maxY = -Infinity, minY = Infinity, n = 0;
             for (let v = 0; v < out.positions.length; v += 3) {
                 if (Math.hypot(out.positions[v] - t.x, out.positions[v + 2] - t.z) > 0.75 * t.radius) continue;
                 maxY = Math.max(maxY, out.positions[v + 1]);
+                minY = Math.min(minY, out.positions[v + 1]);
                 n++;
             }
             expect(n).toBeGreaterThan(3);
             expect(maxY).toBeLessThan(0.05);
+            expect(minY).toBeGreaterThan(-0.05);
         }
         // the building is untouched: walls and roof keep every triangle
         const b = SPEC.building!;
@@ -181,6 +191,7 @@ describe('tile_vegetation strip on a synthetic photo-textured tile', () => {
             return n;
         };
         expect(inBuilding(out)).toBe(inBuilding(raw));
+        expectValidGlb(fs.readFileSync(strip.devegetatedGlb));
         // the photographs ride along unchanged
         const rawGlb = parseGlb(fs.readFileSync(path.join(work, 'tile.glb')));
         const outGlb = parseGlb(fs.readFileSync(strip.devegetatedGlb));
@@ -219,6 +230,7 @@ describe('tile_vegetation plant (SB-Veggie, space colonisation)', () => {
         expect(planted.stats.trees).toBe(INTERIOR.length);
         expect(planted.stats.triangles).toBeLessThanOrEqual(6000);
         expect(planted.published?.url).toBe('/models/synthetic_trees.glb');
+        expectValidGlb(fs.readFileSync(planted.treesGlb));
         const glb = parseGlb(fs.readFileSync(planted.treesGlb));
         expect(glb.json.materials).toHaveLength(1);
         expect(glb.json.materials[0].pbrMetallicRoughness).toMatchObject({ baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 });

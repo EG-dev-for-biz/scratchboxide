@@ -579,7 +579,7 @@ describe('a location request returns remeshed geometry', () => {
             const outcome = await ask(name, {}, `${name}_fail.glb`);
             const payload: any = outcome.resultPayload;
             expect(outcome.exec.status).toBe('failed');
-            expect(payload.error).toContain('remesh failed: tile_refine binary could not be built');
+            expect(payload.error).toContain('Tile extraction failed at remesh: tile_refine binary could not be built');
             expect(payload.artifact).toBeUndefined();
         });
 
@@ -602,7 +602,7 @@ describe('a location request returns remeshed geometry', () => {
         const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_strip_fail.glb');
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('failed');
-        expect(payload.error).toContain('vegetation failed: photo texture 3 could not be decoded: bad Huffman code');
+        expect(payload.error).toContain('Tile extraction failed at vegetation: photo texture 3 could not be decoded: bad Huffman code');
         expect(payload.artifact).toBeUndefined();
         expect(refine).not.toHaveBeenCalled();
     });
@@ -614,7 +614,7 @@ describe('a location request returns remeshed geometry', () => {
         const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_plant_fail.glb');
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('failed');
-        expect(payload.error).toContain('planting failed: a triangle budget of 10 cannot hold 3 trees');
+        expect(payload.error).toContain('Tile extraction failed at planting: a triangle budget of 10 cannot hold 3 trees');
         expect(payload.artifact).toBeUndefined();
     });
 
