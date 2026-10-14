@@ -150,22 +150,24 @@ describe('validateObjectBuildSpec', () => {
 });
 
 describe('OBJECT_BUILD_SPEC_JSON_SCHEMA', () => {
-    it('uses only keywords Gemini structured output accepts', () => {
-        const allowed = new Set(['type', 'format', 'title', 'description', 'enum', 'items', 'prefixItems', 'minItems', 'maxItems',
+    it('uses only keywords Gemini structured output accepts on Vertex', () => {
+        // prefixItems is documented for the Gemini API but Vertex refused a schema using it (400 INVALID_ARGUMENT).
+        const allowed = new Set(['type', 'format', 'title', 'description', 'enum', 'items', 'minItems', 'maxItems',
             'minimum', 'maximum', 'anyOf', 'oneOf', 'properties', 'additionalProperties', 'required', 'propertyOrdering']);
         const walk = (node: any): void => {
             if (!node || typeof node !== 'object' || Array.isArray(node)) return;
             for (const [key, value] of Object.entries(node)) {
                 expect(allowed.has(key), `unsupported schema keyword ${key}`).toBe(true);
                 if (key === 'properties') Object.values(value as object).forEach(walk);
-                else if (key === 'prefixItems') (value as any[]).forEach(walk);
                 else if (key === 'items') walk(value);
             }
+            // Every array names its items.
+            if (node.type === 'array') expect(node.items, JSON.stringify(node).slice(0, 120)).toBeDefined();
         };
         walk(OBJECT_BUILD_SPEC_JSON_SCHEMA);
         const part = (OBJECT_BUILD_SPEC_JSON_SCHEMA as any).properties.parts.items;
         expect(Object.keys(part.properties)).toEqual(expect.arrayContaining(['sweep', 'revolve', 'replicate', 'relief', 'attach', 'parentId']));
-        expect((OBJECT_BUILD_SPEC_JSON_SCHEMA as any).properties.boundingMeters.prefixItems).toHaveLength(3);
+        expect((OBJECT_BUILD_SPEC_JSON_SCHEMA as any).properties.boundingMeters).toMatchObject({ type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 });
     });
 });
 

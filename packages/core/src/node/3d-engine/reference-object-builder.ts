@@ -11,7 +11,7 @@
  * Object or abstract-form request -> native clay geometry, in four stages:
  *   1. Reference: Nano Banana Lite (gemini-3.1-flash-lite-image, exactly that model) draws one isolated grey object.
  *      The image stays a Buffer in this process: it is never written to disk, the media store, public/ or the chat.
- *   2. Build spec: the chat's model reads the reference into an ObjectBuildSpec (structured JSON output), validated,
+ *   2. Build spec: the chat's model reads the reference into an ObjectBuildSpec (JSON mode, schema in the request), validated,
  *      with one corrective re-ask that quotes the validator's errors.
  *   3. Build: sb.object_spec.build(spec) runs in the native Python engine and writes a GLB.
  *   4. Checks: the prop complexity floor, part connectivity against the spec's expectedBodies, and a comparison of a
@@ -314,7 +314,16 @@ async function generateReferenceImage(
         { model: REFERENCE_IMAGE_MODEL, code: 'empty_image' });
 }
 
-/** A JSON answer from the vision model, parsed. */
+/** The schema the reply must follow, as an instruction appended to the last user turn. */
+export function schemaInstruction(schema: Record<string, unknown>): string {
+    return `Reply with one JSON object only, no prose or code fences, that follows this JSON Schema exactly:\n${JSON.stringify(schema)}`;
+}
+
+/**
+ * A JSON answer from the vision model, parsed. JSON mode with the schema in the prompt: Vertex refused
+ * responseJsonSchema with this schema on the chat model (400 INVALID_ARGUMENT, verified live), so the schema is
+ * stated in the request and every reply is checked by the validator instead.
+ */
 async function callJson(
     client: GenerateContentClient,
     model: string,
@@ -324,12 +333,13 @@ async function callJson(
     deps: ReferenceObjectBuilderDeps,
     signal?: AbortSignal
 ): Promise<{ text: string; value: unknown; parseError?: string; answered: string }> {
+    const last = contents[contents.length - 1];
+    const withSchema: Content[] = [...contents.slice(0, -1), { ...last, parts: [...(last.parts || []), { text: schemaInstruction(schema) }] }];
     const response = await callModel(client, {
         model,
-        contents,
+        contents: withSchema,
         config: {
             responseMimeType: 'application/json',
-            responseJsonSchema: schema,
             temperature: 0.2,
             abortSignal: signal
         }

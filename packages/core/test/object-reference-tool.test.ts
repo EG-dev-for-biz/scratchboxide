@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { createObjectReferenceHandlers, OBJECT_REFERENCE_TOOL_DECLARATIONS } from '../src/node/gemini/tools/object-reference-tools';
-import { REFERENCE_IMAGE_MODEL, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
+import { REFERENCE_IMAGE_MODEL, schemaInstruction, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, type ObjectBuildSpec } from '../src/common/spatial/object-build-spec';
 import { NativePythonRunnerService, type PythonExecutionResult } from '../src/node/3d-engine/native-python-runner-service';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
@@ -85,7 +85,9 @@ function fakeClient(opts: {
                     const next = images.length > 1 ? images.shift()! : images[0];
                     return next(call);
                 }
-                const isSpec = params.config?.responseJsonSchema === OBJECT_BUILD_SPEC_JSON_SCHEMA;
+                // Spec requests carry the spec schema; comparisons carry the differences schema.
+                const asked = (params.contents as any[]).flatMap(c => c.parts || []).map((p: any) => p.text || '').join('\n');
+                const isSpec = asked.includes(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
                 const queue = isSpec ? specs : diffs;
                 const text = queue.length > 1 ? queue.shift()! : (queue[0] ?? (isSpec ? '' : '{"differences": []}'));
                 return { candidates: [{ content: { parts: [{ text }] } }], modelVersion: params.model } as any;
@@ -197,9 +199,12 @@ describe('build_3d_object_from_reference', () => {
         expect(JSON.stringify(client.calls[2].contents)).toContain('not valid JSON');
         expect(String(out.resultPayload.error)).toContain('must have exactly one of sweep, revolve, replicate, relief');
         expect(pythonRuns).toHaveLength(0);
-        // The vision call is structured output against the spec schema.
+        // The vision call is JSON mode with the spec schema stated in the request (Vertex refused responseJsonSchema).
         expect(client.calls[1].config.responseMimeType).toBe('application/json');
-        expect(client.calls[1].config.responseJsonSchema).toBe(OBJECT_BUILD_SPEC_JSON_SCHEMA);
+        expect(client.calls[1].config.responseJsonSchema).toBeUndefined();
+        const visionParts = client.calls[1].contents[0].parts;
+        expect(visionParts[0].inlineData.mimeType).toBe('image/png');
+        expect(visionParts[visionParts.length - 1].text).toBe(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
     });
 
     it('fails with the Python error when the native build fails', async () => {

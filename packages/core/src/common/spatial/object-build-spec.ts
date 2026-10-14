@@ -138,7 +138,7 @@ export const OBJECT_SPEC_LIMITS = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// JSON Schema for Gemini structured output (responseJsonSchema)
+// JSON Schema of the spec, stated in the vision request (JSON mode); every reply is validated below
 // ---------------------------------------------------------------------------
 
 const num = (description?: string, minimum?: number, maximum?: number): Record<string, unknown> => ({
@@ -147,18 +147,20 @@ const num = (description?: string, minimum?: number, maximum?: number): Record<s
     ...(minimum !== undefined ? { minimum } : {}),
     ...(maximum !== undefined ? { maximum } : {})
 });
+// Fixed-length number tuples as items + minItems + maxItems. A schema using prefixItems was refused by Vertex
+// (gemini-4-argon, 400 "Request contains an invalid argument"); the validator still checks every length.
 const tuple = (size: number, description: string): Record<string, unknown> => ({
     type: 'array',
     description,
-    prefixItems: Array.from({ length: size }, () => ({ type: 'number' })),
+    items: { type: 'number' },
     minItems: size,
     maxItems: size
 });
 const vec3 = (description: string) => tuple(3, description);
 
 /**
- * Structured-output schema for the vision model. `oneOf` is read as `anyOf` by the API, so "exactly one operator
- * block per part" is enforced by `validateObjectBuildSpec`, not here.
+ * The spec's schema as given to the vision model (kept to the JSON Schema subset Gemini understands). Rules a
+ * schema cannot state, such as "exactly one operator block per part", are enforced by `validateObjectBuildSpec`.
  */
 export const OBJECT_BUILD_SPEC_JSON_SCHEMA: Record<string, unknown> = {
     type: 'object',
