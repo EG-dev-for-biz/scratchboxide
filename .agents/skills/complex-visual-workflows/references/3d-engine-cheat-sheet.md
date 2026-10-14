@@ -32,12 +32,18 @@ scene = sb.Scene()
 clay_mat = sb.PbrMaterial.clay()          # 18% studio grey clay
 
 def add(mesh, name, x):
-    """Stand each showcase part on y = 0 at x so every part rests on the ground."""
+    """Stand each showcase part on the plinth top (y = 0) at x, so the display is one structure."""
     b = mesh.bounds
     mesh.translate(x - (b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2)
     mesh.name = name
     mesh.set_material(clay_mat)
     scene.add_mesh(mesh)
+
+# A display plinth under the samples; its top is y = 0.
+plinth = sb.create_box(width=4.6, height=0.05, depth=5.2)
+plinth.translate(1.5, -0.025, 0.0)
+plinth.set_material(clay_mat)
+scene.add_mesh(plinth)
 
 spine_path = [(0.0, 0.0, -2.0), (0.2, 0.8, -0.5), (-0.1, 1.2, 1.0), (0.0, 1.5, 2.5)]
 

@@ -16,15 +16,17 @@ export interface TriangleSoup {
     indices: Uint32Array;
 }
 
-/** A group of parts that touch each other but nothing attached to the ground. */
+/** A group of parts joined to each other but not to the model's main structure. */
 export interface FloatingPart {
     /** Index of the group's first part. */
     part: number;
     partCount: number;
     triangleCount: number;
+    /** True when the group stands on the ground by itself (e.g. a leg that never reaches the seat). */
+    touchesGround: boolean;
     center: Vec3;
     size: Vec3;
-    /** Distance from the group's surface to the nearest other surface or the ground (capped at 0.5 m). */
+    /** Distance from the group's surface to the main structure's surface (capped at 0.5 m). */
     gapMeters: number;
 }
 
@@ -341,32 +343,30 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
         });
     });
 
-    // 5. Everything reachable from a ground-touching part is attached.
+    // 5. Structures are groups of parts joined by contact. The ground does not join them: a leg that
+    // stands on the floor but never reaches the seat is a separate structure, not an attached part.
     const groundY = gMin[1];
-    const attached = new Set<number>();
-    const queue: number[] = [];
-    parts.forEach((part, pi) => { if (part.min[1] <= groundY + tolerance) { attached.add(pi); queue.push(pi); } });
-    while (queue.length) {
-        const pi = queue.shift()!;
-        for (const qi of adjacency[pi]) if (!attached.has(qi)) { attached.add(qi); queue.push(qi); }
-    }
-
-    // 6. Report detached groups (parts touching each other but nothing grounded) with their real gap.
-    const groupOf = new Map<number, number>();
-    const groups: number[][] = [];
+    const structureOf = new Int32Array(parts.length).fill(-1);
+    const structures: number[][] = [];
     parts.forEach((_, pi) => {
-        if (attached.has(pi) || groupOf.has(pi)) return;
+        if (structureOf[pi] >= 0) return;
         const members: number[] = [];
         const stack = [pi];
-        groupOf.set(pi, groups.length);
+        structureOf[pi] = structures.length;
         while (stack.length) {
             const cur = stack.pop()!;
             members.push(cur);
-            for (const qi of adjacency[cur]) if (!attached.has(qi) && !groupOf.has(qi)) { groupOf.set(qi, groups.length); stack.push(qi); }
+            for (const qi of adjacency[cur]) if (structureOf[qi] < 0) { structureOf[qi] = structures.length; stack.push(qi); }
         }
-        groups.push(members);
+        structures.push(members);
     });
+    const trianglesIn = (members: number[]) => members.reduce((n, pi) => n + parts[pi].triangles.length, 0);
+    const mainIndex = structures.reduce((best, members, i) => (trianglesIn(members) > trianglesIn(structures[best]) ? i : best), 0);
+    const attached = new Set<number>(structures[mainIndex]);
+    const mainTriangles = structures[mainIndex].flatMap(pi => parts[pi].triangles);
+    const groups = structures.filter((_, i) => i !== mainIndex);
 
+    // 6. Report every other structure with its real gap to the main structure.
     const SEARCH_RADIUS = 0.5;
     const floatingParts: FloatingPart[] = groups.map(members => {
         const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
@@ -379,32 +379,24 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
             const step = Math.max(1, Math.floor(part.vertices.length / 64));
             for (let i = 0; i < part.vertices.length; i += step) samples.push(point(part.vertices[i]));
         }
-        // Nearest surface of anything outside the group, searched within SEARCH_RADIUS.
-        const memberSet = new Set(members);
-        const nearby = parts.flatMap((other, qi) => {
-            if (memberSet.has(qi)) return [];
-            const gap = Math.hypot(...[0, 1, 2].map(k => Math.max(0, min[k] - other.max[k], other.min[k] - max[k])) as [number, number, number]);
-            return gap <= SEARCH_RADIUS ? other.triangles : [];
-        });
         let best = Infinity;
-        const sampleStep = Math.max(1, Math.ceil((samples.length * nearby.length) / 4_000_000));
+        const sampleStep = Math.max(1, Math.ceil((samples.length * mainTriangles.length) / 4_000_000));
         for (let s = 0; s < samples.length; s += sampleStep) {
-            for (const t of nearby) {
+            for (const t of mainTriangles) {
                 const [a, b, c] = triangle(t);
                 const d = closestPointDistanceSq(samples[s], a, b, c);
                 if (d < best) best = d; // degenerate triangles yield NaN; skip them
-
             }
         }
-        // Distance to the ground plane counts too.
-        best = Math.min(best, Math.max(0, min[1] - groundY) ** 2);
+        const gap = Math.sqrt(best);
         return {
             part: members[0],
             partCount: members.length,
             triangleCount,
+            touchesGround: min[1] <= groundY + tolerance,
             center: [0, 1, 2].map(k => +((min[k] + max[k]) / 2).toFixed(3)) as Vec3,
             size: [0, 1, 2].map(k => +(max[k] - min[k]).toFixed(3)) as Vec3,
-            gapMeters: Number.isFinite(best) ? +Math.sqrt(best).toFixed(3) : SEARCH_RADIUS
+            gapMeters: Number.isFinite(gap) ? +Math.min(gap, SEARCH_RADIUS).toFixed(3) : SEARCH_RADIUS
         };
     }).sort((a, b) => b.triangleCount - a.triangleCount);
 
@@ -421,11 +413,12 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
 export function describeFloatingParts(report: PartConnectivityReport): string | undefined {
     if (report.passed || report.skippedReason) return undefined;
     const list = report.floatingParts.slice(0, 6)
-        .map(f => `a ${f.partCount > 1 ? `group of ${f.partCount} pieces` : 'piece'} centred at [${f.center.join(', ')}] sized [${f.size.join(', ')}] m, ` +
-            (f.gapMeters >= 0.5 ? 'more than 50 cm from anything' : `${(f.gapMeters * 100).toFixed(1)} cm from the nearest surface`))
+        .map(f => `a ${f.partCount > 1 ? `group of ${f.partCount} pieces` : 'piece'} centred at [${f.center.join(', ')}] sized [${f.size.join(', ')}] m ` +
+            (f.touchesGround ? 'stands on the ground by itself, ' : 'floats, ') +
+            (f.gapMeters >= 0.5 ? 'more than 50 cm from the main structure' : `${(f.gapMeters * 100).toFixed(1)} cm from the main structure`))
         .join('; ');
     const groupCount = report.floatingParts.length;
-    return `Structural check failed: ${groupCount} ${groupCount === 1 ? 'group of parts does' : 'groups of parts do'} not touch the rest of the model or the ground: ${list}. ` +
+    return `Structural check failed: the model is ${groupCount + 1} separate structures instead of one; ${groupCount === 1 ? 'this group is' : 'these groups are'} not joined to the main structure: ${list}. ` +
         'Unless these parts are meant to be separate objects, fix the script so every member meets what it should attach to: ' +
         'compute joint points once and build members between them (sb.sweep_curve_profile(path=[start, end])), instead of rotating parts about the origin.';
 }

@@ -94,7 +94,7 @@ Every example in this file runs as-is in `execute_3d_python_script` (checked by 
 import scratchbox as sb
 
 def place_on_ground(mesh, x):
-    """Stand a part on y = 0 at x, so separate showcase parts each rest on the ground."""
+    """Stand a showcase part on the plinth top (y = 0) at x, so the whole display is one structure."""
     b = mesh.bounds
     mesh.translate(x - (b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2)
 
@@ -132,6 +132,11 @@ panel = sb.create_plane(width=1.0, height=0.6, seg_x=128, seg_y=80)
 panel.displace_along_normals(frequency=24.0, amplitude=0.004)
 
 scene = sb.Scene()
+# A display plinth under all four samples; its top is y = 0, where place_on_ground stands each part.
+plinth = sb.create_box(width=5.2, height=0.05, depth=4.0)
+plinth.translate(1.9, -0.025, 0.0)
+plinth.set_material(sb.PbrMaterial.clay())
+scene.add_mesh(plinth)
 for x, part in zip((0.0, 1.4, 2.6, 3.8), (arm, rotor, flange, panel)):
     place_on_ground(part, x)
     part.set_material(sb.PbrMaterial.clay())

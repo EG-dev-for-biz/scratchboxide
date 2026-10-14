@@ -17,11 +17,13 @@ async function buildGlb(body: string): Promise<Buffer> {
     }
 }
 
-const stool = (rungOffset: number) => `
+const stool = (rungOffset: number, legTopOffset = 0) => `
 TOP_R, FOOT_R, SEAT_Y = 0.11, 0.17, 0.46
 corners = [(1, 1), (1, -1), (-1, -1), (-1, 1)]
 lerp = lambda a, b, t: tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
 tops = [(sx * TOP_R * 0.7071, SEAT_Y + 0.015, sz * TOP_R * 0.7071) for sx, sz in corners]
+# Lean leg 2 (no rung touches it) outward by legTopOffset so it stands on the floor without reaching the seat.
+tops[2] = (tops[2][0] - ${legTopOffset}, tops[2][1] - 0.03 * (${legTopOffset} > 0), tops[2][2] - ${legTopOffset})
 feet = [(sx * FOOT_R * 0.7071, 0.0, sz * FOOT_R * 0.7071) for sx, sz in corners]
 scene = sb.Scene()
 seat = sb.create_cylinder(radius=0.17, height=0.04, segments=48)
@@ -50,7 +52,17 @@ describe('part connectivity check', () => {
         expect(rung.size[2]).toBeGreaterThan(0.1);                 // the long, rung-shaped piece
         expect(rung.gapMeters).toBeGreaterThan(0.01);
         expect(rung.gapMeters).toBeLessThan(0.06);
-        expect(describeFloatingParts(report)).toMatch(/1 group of parts does not touch/);
+        expect(rung.touchesGround).toBe(false);
+        expect(describeFloatingParts(report)).toMatch(/2 separate structures instead of one/);
+    }, 180_000);
+
+    it('reports a leg that stands on the floor but never reaches the seat', async () => {
+        // The generated stool's failure: grounded legs passed when "touches the ground" counted as attached.
+        const report = analyzePartConnectivity(glbToTriangleSoup(await buildGlb(stool(0, 0.2)))!);
+        expect(report.passed).toBe(false);
+        const leg = report.floatingParts.find(f => f.touchesGround);
+        expect(leg, describeFloatingParts(report)).toBeDefined();
+        expect(describeFloatingParts(report)).toMatch(/stands on the ground by itself/);
     }, 180_000);
 
     it('keeps a subdivided welded box as one part instead of six faces', async () => {
