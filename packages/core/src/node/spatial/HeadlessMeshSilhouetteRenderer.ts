@@ -367,21 +367,25 @@ export class HeadlessMeshSilhouetteRenderer {
             );
 
             for (const prim of mesh.primitives || []) {
+                // Only triangle lists render as surfaces (mode 4 is the glTF default)
+                if (prim.mode !== undefined && prim.mode !== 4) continue;
                 if (prim.attributes && prim.attributes.POSITION !== undefined) {
                     const posAcc = gltf.accessors[prim.attributes.POSITION];
+                    if (posAcc.componentType !== 5126) {
+                        throw new Error(`loadMeshFromGlb: POSITION componentType ${posAcc.componentType} is not FLOAT (5126)`);
+                    }
                     const posView = gltf.bufferViews[posAcc.bufferView];
                     const byteOffset = (posView.byteOffset || 0) + (posAcc.byteOffset || 0);
+                    const posStride = posView.byteStride || 12;
                     const count = posAcc.count;
-                    const positions = new Float32Array(
-                        binBuffer.buffer,
-                        binBuffer.byteOffset + byteOffset,
-                        count * 3
-                    );
+                    // DataView: accessors may be interleaved (byteStride) or not 4-byte aligned within the BIN chunk
+                    const bin = new DataView(binBuffer.buffer, binBuffer.byteOffset, binBuffer.byteLength);
 
-                    for (let i = 0; i < positions.length; i += 3) {
-                        const px = positions[i];
-                        const py = positions[i + 1];
-                        const pz = positions[i + 2];
+                    for (let v = 0; v < count; v++) {
+                        const o = byteOffset + v * posStride;
+                        const px = bin.getFloat32(o, true);
+                        const py = bin.getFloat32(o + 4, true);
+                        const pz = bin.getFloat32(o + 8, true);
                         if (isIdentity) {
                             allVertices.push(px, py, pz);
                         } else {
@@ -398,24 +402,19 @@ export class HeadlessMeshSilhouetteRenderer {
                         const indByteOffset = (indView.byteOffset || 0) + (indAcc.byteOffset || 0);
                         const indCount = indAcc.count;
 
-                        if (indAcc.componentType === 5123) { // UNSIGNED_SHORT
-                            const indices = new Uint16Array(
-                                binBuffer.buffer,
-                                binBuffer.byteOffset + indByteOffset,
-                                indCount
-                            );
-                            for (let i = 0; i < indices.length; i++) {
-                                allIndices.push(indices[i] + vertexOffset);
-                            }
-                        } else if (indAcc.componentType === 5125) { // UNSIGNED_INT
-                            const indices = new Uint32Array(
-                                binBuffer.buffer,
-                                binBuffer.byteOffset + indByteOffset,
-                                indCount
-                            );
-                            for (let i = 0; i < indices.length; i++) {
-                                allIndices.push(indices[i] + vertexOffset);
-                            }
+                        // UNSIGNED_BYTE, UNSIGNED_SHORT and UNSIGNED_INT are all valid glTF index types (Google 3D
+                        // Tiles use all three); skipping one silently drops that primitive's triangles
+                        const read = indAcc.componentType === 5121 ? (o: number) => bin.getUint8(o)
+                            : indAcc.componentType === 5123 ? (o: number) => bin.getUint16(o, true)
+                            : indAcc.componentType === 5125 ? (o: number) => bin.getUint32(o, true)
+                            : undefined;
+                        if (!read) {
+                            throw new Error(`loadMeshFromGlb: unsupported index componentType ${indAcc.componentType}`);
+                        }
+                        const size = indAcc.componentType === 5121 ? 1 : indAcc.componentType === 5123 ? 2 : 4;
+                        const indStride = indView.byteStride || size;
+                        for (let i = 0; i < indCount; i++) {
+                            allIndices.push(read(indByteOffset + i * indStride) + vertexOffset);
                         }
                     } else {
                         // Non-indexed primitive: sequential triangles (glTF mode 4 TRIANGLES default)
