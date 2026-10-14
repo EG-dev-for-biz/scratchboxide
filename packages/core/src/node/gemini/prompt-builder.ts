@@ -641,7 +641,7 @@ Direct Primitive & Procedural Helpers on \`sb\`:
 FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stacking primitives):
 - Surfaces of revolution (towers, columns, vessels, domes, nozzles, turned parts): describe the WHOLE silhouette as one profile of (radius, height) pairs and revolve it once, so plinth, taper, flares and cap stay one continuous surface:
   \`sb.create_lathe([(0.0, 0.0), (4.2, 0.0), (3.4, 1.4), (2.1, 14.0), (2.9, 14.6), (0.0, 15.0)], segments=96)\`
-  (\`sb.revolve_harmonic_solid(profile_curve=[(r, y), ...], harmonic_lobe_count=K)\` adds K radial lobes / fluting.)
+  (\`sb.revolve_harmonic_solid(profile_curve=[(axial, radius), ...], harmonic_lobe_count=K)\` adds K radial lobes / fluting; it needs at least two profile points.)
 - Organic masses (rock, outcrops, boulders, terrain lumps, flesh): displace a UNIT high-resolution sphere first, smooth it, THEN scale to size. Displacing after a non-uniform scale shreds the surface. \`amp\` is peak relief in metres relative to the unit form:
   \`rock = sb.create_sphere(radius=1.0, rings=64, sectors=128); rock.displace(freq=1.1, amp=0.22); rock.displace(freq=3.2, amp=0.06); rock.taubin_smooth(iterations=4); rock.scale(11.0, 4.6, 9.0)\`
 - Rails, pipes, cables, trim and handrails: sweep a profile along a path of points rather than chaining cylinders:
