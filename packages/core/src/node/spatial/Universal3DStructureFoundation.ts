@@ -9,6 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import {
   MetricBoundingBox,
   UniversalSurfaceMesh,
@@ -2095,10 +2096,8 @@ export class Universal3DStructureFoundation {
     const dimensions: [number, number, number] = [width, height, depth];
 
     const bridge = new UniversalArchiBridgeService();
-    const tempDir = path.resolve(process.cwd(), 'temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
+    // Intermediate GLB lives in the OS temp dir (not <cwd>/temp) and is removed right after it is read.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-archi-structure-'));
     const tempGlb = path.join(tempDir, `archi_${typology}_${Date.now()}.glb`);
 
     const result = await bridge.synthesizeStructureFromEntity({
@@ -2113,9 +2112,7 @@ export class Universal3DStructureFoundation {
     });
 
     const glbBuffer = result.glbBuffer || (fs.existsSync(tempGlb) ? fs.readFileSync(tempGlb) : undefined);
-    if (fs.existsSync(tempGlb)) {
-      try { fs.unlinkSync(tempGlb); } catch {}
-    }
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
 
     if (glbBuffer) {
       return Universal3DStructureFoundation.createFromGlb(glbBuffer, {

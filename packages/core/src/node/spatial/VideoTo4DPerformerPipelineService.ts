@@ -135,6 +135,11 @@ export interface VideoTo4DPerformerOptions {
      */
     exportRiggedGlb?: boolean;
     /**
+     * Directory that receives the viewport copy of the rigged GLB (`humanoid_<characterId>.glb`).
+     * Defaults to `<cwd>/public/models` when that directory exists.
+     */
+    viewportModelsDir?: string;
+    /**
      * Optional frame-motivated ingestion configuration.
      * When provided, the video ingestion pipeline validates and conditions motion on the reference A-pose hero frame.
      */
@@ -633,8 +638,8 @@ export class VideoTo4DPerformerPipelineService {
                     };
                     modalitiesEmitted.push('pbr-standard', 'pbr-melanin', 'hybrid-pbr-hair-groom');
 
-                    // If public/models exists, save a copy there for client-side viewport loading
-                    const publicModelsGlb = path.join(process.cwd(), 'public', 'models', `humanoid_${characterId}.glb`);
+                    // If public/models (or the requested viewport directory) exists, save a copy there for client-side viewport loading
+                    const publicModelsGlb = path.join(options.viewportModelsDir ?? path.join(process.cwd(), 'public', 'models'), `humanoid_${characterId}.glb`);
                     const publicModelsDir = path.dirname(publicModelsGlb);
                     if (await fs.pathExists(publicModelsDir)) {
                         await fs.writeFile(publicModelsGlb, glbBuf);

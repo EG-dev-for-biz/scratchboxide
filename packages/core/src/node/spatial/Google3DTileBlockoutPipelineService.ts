@@ -1693,6 +1693,10 @@ export class Google3DTileBlockoutPipelineService {
 
     const isTexturedMode = atmo.renderMode === 'textured' || atmo.renderMode === 'photoreal' || atmo.renderMode === 'full-texture';
     const output = request.output || {};
+    // Offline mock writes 1x1 placeholder frames/beats, a placeholder MP4 and a mock manifest. Its default
+    // (non-explicit) outputs go to a temp dir so a mock run never overwrites the real committed blockout
+    // assets under public/ (videos/frames_clay, storyboards_clay, images/blockout_frame_00.png, *_manifest.json).
+    const defaultOutputRoot = request.offlineMock ? offlineMockOutputRoot() : process.cwd();
 
     const defaultGlbName = isTexturedMode ? 'google_tiles_textured_area.glb' : 'google_tiles_clay_area.glb';
     const outputGlbPath = output.outputGlbPath
@@ -1701,27 +1705,27 @@ export class Google3DTileBlockoutPipelineService {
 
     const outputVideoPath = output.outputVideoPath
       ? (path.isAbsolute(output.outputVideoPath) ? output.outputVideoPath : path.join(process.cwd(), output.outputVideoPath))
-      : path.join(process.cwd(), isTexturedMode ? 'public/videos/google_tiles_textured_blockout_camera.mp4' : 'public/videos/google_tiles_clay_blockout_camera.mp4');
+      : path.join(defaultOutputRoot, isTexturedMode ? 'public/videos/google_tiles_textured_blockout_camera.mp4' : 'public/videos/google_tiles_clay_blockout_camera.mp4');
 
     const framesDir = output.framesDir
       ? (path.isAbsolute(output.framesDir) ? output.framesDir : path.join(process.cwd(), output.framesDir))
-      : path.join(process.cwd(), isTexturedMode ? 'public/videos/frames_textured' : 'public/videos/frames_clay');
+      : path.join(defaultOutputRoot, isTexturedMode ? 'public/videos/frames_textured' : 'public/videos/frames_clay');
 
     const firstFramePath = output.firstFramePath
       ? (path.isAbsolute(output.firstFramePath) ? output.firstFramePath : path.join(process.cwd(), output.firstFramePath))
-      : path.join(process.cwd(), isTexturedMode ? 'public/models/blockout_textured_first_frame.jpg' : 'public/models/blockout_first_frame.jpg');
+      : path.join(defaultOutputRoot, isTexturedMode ? 'public/models/blockout_textured_first_frame.jpg' : 'public/models/blockout_first_frame.jpg');
 
     const firstFramePngPath = output.firstFramePngPath
       ? (path.isAbsolute(output.firstFramePngPath) ? output.firstFramePngPath : path.join(process.cwd(), output.firstFramePngPath))
-      : path.join(process.cwd(), isTexturedMode ? 'public/images/blockout_textured_frame_00.png' : 'public/images/blockout_frame_00.png');
+      : path.join(defaultOutputRoot, isTexturedMode ? 'public/images/blockout_textured_frame_00.png' : 'public/images/blockout_frame_00.png');
 
     const storyboardsDir = output.storyboardsDir
       ? (path.isAbsolute(output.storyboardsDir) ? output.storyboardsDir : path.join(process.cwd(), output.storyboardsDir))
-      : path.join(process.cwd(), isTexturedMode ? 'public/storyboards_textured' : 'public/storyboards_clay');
+      : path.join(defaultOutputRoot, isTexturedMode ? 'public/storyboards_textured' : 'public/storyboards_clay');
 
     const manifestPath = output.manifestPath
       ? (path.isAbsolute(output.manifestPath) ? output.manifestPath : path.join(process.cwd(), output.manifestPath))
-      : path.join(process.cwd(), isTexturedMode ? 'public/videos/google_tiles_textured_manifest.json' : 'public/videos/google_tiles_blockout_manifest.json');
+      : path.join(defaultOutputRoot, isTexturedMode ? 'public/videos/google_tiles_textured_manifest.json' : 'public/videos/google_tiles_blockout_manifest.json');
 
     const fps = output.fps || cameraPathData.fps || 24;
     const storyboardBeats = output.storyboardBeats || 8;
@@ -2448,7 +2452,7 @@ export class Google3DTileBlockoutPipelineService {
 
     const outputVideoPath = options?.outputVideoPath
       ? (path.isAbsolute(options.outputVideoPath) ? options.outputVideoPath : path.join(process.cwd(), options.outputVideoPath))
-      : path.join(process.cwd(), 'public/videos', defaultVideoName);
+      : path.join(options?.offlineMock ? offlineMockOutputRoot() : process.cwd(), 'public/videos', defaultVideoName);
 
     const manifestPath = path.join(path.dirname(outputVideoPath), defaultManifestName);
 
@@ -2653,6 +2657,11 @@ export async function runGoogle3DTilesPipeline(
   return service.run(request);
 }
 
+/** Per-call temp root for offline-mock placeholder outputs that were not given an explicit path. */
+function offlineMockOutputRoot(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tile-blockout-mock-'));
+}
+
 /**
  * Dedicated API to query any address or coordinates and return the area as a high-fidelity full-texture 3D object (.glb).
  * Zero presets, no procedural fallback. Demands leaf LOD geometric quality (errorTarget <= 0.5).
@@ -2763,9 +2772,11 @@ export async function runTileClayBlockoutRunner(
   }
 
   const defaultDir = request.outputDir || 'public';
+  // Offline mock placeholders (video, Frame 0 PNG) never default into the repo's public/ assets.
+  const placeholderRoot = request.offlineMock && !request.outputDir ? offlineMockOutputRoot() : process.cwd();
   const outputVideoPath = request.outputVideoPath
     ? (path.isAbsolute(request.outputVideoPath) ? request.outputVideoPath : path.join(process.cwd(), request.outputVideoPath))
-    : path.join(process.cwd(), defaultDir, 'videos/google_tiles_clay_blockout_camera.mp4');
+    : path.join(placeholderRoot, defaultDir, 'videos/google_tiles_clay_blockout_camera.mp4');
 
   const outputGlbPath = request.outputGlbPath
     ? (path.isAbsolute(request.outputGlbPath) ? request.outputGlbPath : path.join(process.cwd(), request.outputGlbPath))
@@ -2773,7 +2784,7 @@ export async function runTileClayBlockoutRunner(
 
   const firstFramePngPath = request.firstFramePngPath
     ? (path.isAbsolute(request.firstFramePngPath) ? request.firstFramePngPath : path.join(process.cwd(), request.firstFramePngPath))
-    : path.join(process.cwd(), defaultDir, 'images/blockout_frame_00.png');
+    : path.join(placeholderRoot, defaultDir, 'images/blockout_frame_00.png');
 
   const result = await service.run({
     address: typeof request.query === 'string' ? request.query : undefined,
