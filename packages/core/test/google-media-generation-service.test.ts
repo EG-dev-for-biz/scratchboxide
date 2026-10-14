@@ -14,7 +14,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { GoogleMediaGenerationService } from '../src/node/google-media-generation-service';
 import { MediaAssetStore } from '../src/node/media-asset-store';
-import { IMAGE_MODEL_PRIORITY, IMAGE_MODEL_PRIORITY_DRAFT } from '../src/common/media-generation-protocol';
+import { IMAGE_MODEL_PRIORITY } from '../src/common/media-generation-protocol';
+import { MediaModelUnavailableError } from '../src/common/errors/pipeline-errors';
 
 // Image model ids the Gemini API and Vertex AI answer to; the fake clients 404 anything else, as both backends do.
 const SERVED_IMAGE_MODEL_IDS = ['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-2.5-flash-image', 'gemini-3.1-flash-lite-image'];
@@ -109,6 +110,8 @@ async function runGoogleMediaGenerationServiceTests(): Promise<void> {
         });
         assert.strictEqual(image.modelUsed, 'gemini-3.1-flash-image');
         assert.deepStrictEqual(attemptedModels, ['missing-image', 'gemini-3.1-flash-image']);
+        assert.deepStrictEqual(image.skippedModels?.map(s => [s.model, s.code]), [['missing-image', 'unsupported']]);
+        assert.ok(image.modelNote?.includes('not the requested missing-image'), image.modelNote);
         assert.ok(await fs.pathExists(path.join(workspaceRoot, image.asset.relativePath)));
 
         const video = await service.generateVideo({
@@ -195,18 +198,16 @@ test('an image model that answers without an image is asked again before the req
     }
 });
 
-test('image product names are sent as their API model ids, followed by the defaults without repeats', async () => {
+test('a named model is the only model tried, sent under its API id; no default is appended', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'scratchbox-google-media-alias-'));
     const attempted: string[] = [];
-    const rejected: string[] = [];
-    let serving = true;
+    let served = SERVED_IMAGE_MODEL_IDS;
     const png = Buffer.from('89504e470d0a1a0a', 'hex');
     const client: any = {
         models: {
             generateContent: async ({ model }: { model: string }) => {
                 attempted.push(model);
-                if (!serving || !SERVED_IMAGE_MODEL_IDS.includes(model)) {
-                    rejected.push(model);
+                if (!served.includes(model)) {
                     throw notFound(model);
                 }
                 return { modelVersion: model, candidates: [{ content: { parts: [{ inlineData: { data: png.toString('base64'), mimeType: 'image/png' } }] } }] };
@@ -214,28 +215,75 @@ test('image product names are sent as their API model ids, followed by the defau
         }
     };
     const service = new GoogleMediaGenerationService(new MediaAssetStore(), async () => client);
-    const priority = (requested: string[], defaults: string[]): string[] => (service as any).modelPriority(requested, defaults);
+    const generate = (key: string, modelPriority?: string[], fidelity?: 'draft') => service.generateImage({
+        kind: 'image', prompt: 'station', workspaceRoot, idempotencyKey: key, modelPriority, fidelity
+    });
     try {
-        assert.deepStrictEqual(priority(['nano-banana-2'], IMAGE_MODEL_PRIORITY), ['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-2.5-flash-image']);
-        assert.deepStrictEqual(priority(['google/nano-banana-pro'], IMAGE_MODEL_PRIORITY), ['gemini-3-pro-image', 'gemini-3.1-flash-image', 'gemini-2.5-flash-image']);
-        assert.deepStrictEqual(priority(['nano-banana-lite'], IMAGE_MODEL_PRIORITY_DRAFT), ['gemini-3.1-flash-lite-image', 'gemini-2.5-flash-image', 'gemini-3.1-flash-image']);
-        assert.deepStrictEqual(priority(['imagen-3.0-generate-002', 'nano-banana-2'], IMAGE_MODEL_PRIORITY), ['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-2.5-flash-image']);
-
-        const image = await service.generateImage({
-            kind: 'image', prompt: 'station', workspaceRoot, idempotencyKey: 'alias-image', modelPriority: ['nano-banana-2']
-        });
+        const image = await generate('alias-image', ['nano-banana-2']);
         assert.strictEqual(image.modelUsed, 'gemini-3.1-flash-image');
-        assert.deepStrictEqual(attempted, ['gemini-3.1-flash-image']);
-        assert.deepStrictEqual(rejected, [], 'no request is spent on a product name');
+        assert.deepStrictEqual(attempted, ['gemini-3.1-flash-image'], 'no request is spent on a product name');
+        assert.deepStrictEqual(image.skippedModels, []);
+        assert.strictEqual(image.modelNote, 'Generated with gemini-3.1-flash-image.');
 
-        // When no model serves, each id is tried once, in priority order, and the failure is reported.
-        serving = false;
+        // Nano Banana Lite named and not served: the request fails naming it, and no other model is tried.
+        served = SERVED_IMAGE_MODEL_IDS.filter(m => m !== 'gemini-3.1-flash-lite-image');
         attempted.length = 0;
-        const failed = await service.generateImage({
-            kind: 'image', prompt: 'station', workspaceRoot, idempotencyKey: 'alias-none', modelPriority: ['nano-banana-2', 'gemini-3.1-flash-image']
+        const lite = await generate('lite-unserved', ['nano-banana-lite'], 'draft').catch((e: Error) => e);
+        assert.ok(lite instanceof MediaModelUnavailableError, String(lite));
+        assert.strictEqual((lite as MediaModelUnavailableError).model, 'gemini-3.1-flash-lite-image');
+        assert.strictEqual((lite as any).mediaError?.code, 'unsupported');
+        assert.deepStrictEqual(attempted, ['gemini-3.1-flash-lite-image'], 'the draft defaults are not appended to a named model');
+
+        // An Imagen id is sent as given (not swapped for a Gemini model) and fails as not served.
+        attempted.length = 0;
+        const imagen = await generate('imagen', ['imagen-3.0-generate-002']).catch((e: Error) => e);
+        assert.ok(imagen instanceof MediaModelUnavailableError, String(imagen));
+        assert.deepStrictEqual(attempted, ['imagen-3.0-generate-002']);
+
+        // With no model named, the default list is walked past unserved models, and the result says which answered and why.
+        served = ['gemini-3-pro-image'];
+        attempted.length = 0;
+        const fallback = await generate('default-list');
+        assert.deepStrictEqual(attempted, ['gemini-3.1-flash-image', 'gemini-3-pro-image']);
+        assert.strictEqual(fallback.modelUsed, 'gemini-3-pro-image');
+        assert.deepStrictEqual(fallback.requestedModels, IMAGE_MODEL_PRIORITY);
+        assert.deepStrictEqual(fallback.skippedModels?.map(s => s.model), ['gemini-3.1-flash-image']);
+        assert.ok(fallback.skippedModels?.[0].reason.startsWith('not served:'), fallback.skippedModels?.[0].reason);
+        assert.ok(fallback.modelNote?.startsWith('Generated with gemini-3-pro-image, not the requested gemini-3.1-flash-image'), fallback.modelNote);
+
+        // When no model in the list is served, each is tried once and the error names every one with its reason.
+        served = [];
+        attempted.length = 0;
+        const failed = await generate('none-served').catch((e: Error) => e);
+        assert.ok(failed instanceof MediaModelUnavailableError && (failed as any).mediaError?.code === 'unsupported', String(failed));
+        assert.deepStrictEqual(attempted, IMAGE_MODEL_PRIORITY);
+        for (const model of IMAGE_MODEL_PRIORITY) {
+            assert.ok(failed.message.includes(`${model} (not served:`), failed.message);
+        }
+    } finally {
+        await fs.remove(workspaceRoot);
+    }
+});
+
+test('a named video model is the only one tried: an Omni request is not widened to Veo', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'scratchbox-google-media-video-'));
+    const attempted: string[] = [];
+    const client: any = {
+        models: {
+            generateVideos: async ({ model }: { model: string }) => {
+                attempted.push(model);
+                throw notFound(model);
+            }
+        },
+        operations: { getVideosOperation: async () => { throw new Error('not reached'); } }
+    };
+    const service = new GoogleMediaGenerationService(new MediaAssetStore(), async () => client, { pollIntervalMs: 1 });
+    try {
+        const failed = await service.generateVideo({
+            kind: 'video', prompt: 'waves', workspaceRoot, idempotencyKey: 'omni-only', modelPriority: ['google/omni-1.1']
         }).catch((e: Error) => e);
-        assert.ok(failed instanceof Error && (failed as any).mediaError?.code === 'unsupported', String(failed));
-        assert.deepStrictEqual(attempted, ['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-2.5-flash-image']);
+        assert.ok(failed instanceof MediaModelUnavailableError, String(failed));
+        assert.deepStrictEqual(attempted, ['google/omni-1.1']);
     } finally {
         await fs.remove(workspaceRoot);
     }

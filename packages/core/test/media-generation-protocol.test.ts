@@ -14,7 +14,10 @@ import {
     IMAGE_MODEL_PRIORITY,
     IMAGE_MODEL_PRIORITY_DRAFT,
     VIDEO_MODEL_PRIORITY,
+    describeModelUsed,
+    describeNoModelAnswered,
     resolveImageModelId,
+    resolveRequestedModels,
     MediaGenerationRequest,
     classifyMediaGenerationError,
     validateMediaGenerationRequest
@@ -83,8 +86,35 @@ test('image model lists hold API model ids, and product names resolve to them', 
     assert.strictEqual(resolveImageModelId('Nano-Banana-2'), 'gemini-3.1-flash-image');
     assert.strictEqual(resolveImageModelId('google/nano-banana-pro'), 'gemini-3-pro-image');
     assert.strictEqual(resolveImageModelId('nano-banana-lite'), 'gemini-3.1-flash-lite-image');
-    assert.strictEqual(resolveImageModelId('imagen-3.0-generate-002'), 'gemini-3.1-flash-image');
+    // An Imagen id names another model family: it is sent as given, never swapped for a Gemini image model.
+    assert.strictEqual(resolveImageModelId('imagen-3.0-generate-002'), 'imagen-3.0-generate-002');
     assert.strictEqual(resolveImageModelId('gemini-2.5-flash-image'), 'gemini-2.5-flash-image');
     assert.strictEqual(resolveImageModelId('veo-3.1-generate-preview'), 'veo-3.1-generate-preview');
     assert.strictEqual(resolveImageModelId('constructor'), 'constructor', 'object prototype keys are not aliases');
+});
+
+test('a caller that names models gets exactly those models; the defaults are only for callers that name none', () => {
+    assert.deepStrictEqual(resolveRequestedModels(['nano-banana-lite'], IMAGE_MODEL_PRIORITY), ['gemini-3.1-flash-lite-image']);
+    assert.deepStrictEqual(resolveRequestedModels('gemini-3-pro-image', IMAGE_MODEL_PRIORITY), ['gemini-3-pro-image']);
+    assert.deepStrictEqual(resolveRequestedModels(['nano-banana-2', 'gemini-3.1-flash-image', 'gemini-2.5-flash-image'], IMAGE_MODEL_PRIORITY),
+        ['gemini-3.1-flash-image', 'gemini-2.5-flash-image'], 'product names resolve, repeats collapse, nothing is appended');
+    assert.deepStrictEqual(resolveRequestedModels(undefined, IMAGE_MODEL_PRIORITY), IMAGE_MODEL_PRIORITY);
+    assert.deepStrictEqual(resolveRequestedModels(['', '  '], IMAGE_MODEL_PRIORITY), IMAGE_MODEL_PRIORITY, 'blank names are not names');
+    assert.deepStrictEqual(resolveRequestedModels(['google/omni-1.1'], VIDEO_MODEL_PRIORITY), ['google/omni-1.1'], 'an Omni request is not widened to Veo');
+});
+
+test('the model note names the model that answered and why each earlier one was skipped', () => {
+    assert.strictEqual(describeModelUsed('gemini-3.1-flash-image'), 'Generated with gemini-3.1-flash-image.');
+    const note = describeModelUsed('gemini-3-pro-image', [
+        { model: 'gemini-3.1-flash-lite-image', code: 'unsupported', reason: 'not served: models/gemini-3.1-flash-lite-image is not found' }
+    ]);
+    assert.ok(note.startsWith('Generated with gemini-3-pro-image, not the requested gemini-3.1-flash-lite-image'), note);
+    assert.ok(note.includes('not served: models/gemini-3.1-flash-lite-image is not found'), note);
+    assert.ok(describeNoModelAnswered('image', [{ model: 'a', code: 'unsupported', reason: 'not served: 404' }]).includes('a (not served: 404)'));
+});
+
+test('only "model not served" moves on to another model; an option a model rejects is an invalid request', () => {
+    assert.strictEqual(classifyMediaGenerationError({ status: 400, message: 'imageSize 4K is not supported' }).code, 'invalid_request');
+    assert.strictEqual(classifyMediaGenerationError({ status: 400, message: 'Model gemini-x is not supported for generateContent' }).code, 'unsupported');
+    assert.strictEqual(classifyMediaGenerationError({ status: 404, message: 'Not Found' }).code, 'unsupported');
 });

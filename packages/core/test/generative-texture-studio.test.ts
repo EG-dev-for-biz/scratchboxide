@@ -138,3 +138,30 @@ test('GoogleMediaGenerationService.generateTextureMatrix - 4-up candidate genera
 
     await fs.remove(workspaceRoot);
 });
+
+test('GoogleMediaGenerationService.generateTextureMatrix fails when a candidate cannot be generated (no procedural texture instead)', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'scratchbox-texture-matrix-fail-'));
+    let calls = 0;
+    const fakeClient: any = {
+        models: {
+            generateContent: async () => {
+                calls++;
+                throw Object.assign(new Error('Resource exhausted'), { status: 429 });
+            }
+        }
+    };
+    const service = new GoogleMediaGenerationService(new MediaAssetStore(), async () => fakeClient);
+    try {
+        const failed = await service.generateTextureMatrix({
+            basePrompt: 'Weathered volcanic basalt',
+            workspaceRoot,
+            idempotencyKey: 'matrix-fail'
+        }).catch((e: Error) => e);
+        assert.ok(failed instanceof Error, 'the matrix must reject');
+        assert.strictEqual((failed as any).mediaError?.code, 'quota');
+        assert.strictEqual(calls, 1, 'the first failed candidate ends the matrix');
+        assert.ok(!(await fs.pathExists(path.join(workspaceRoot, '.scratchbox', 'media'))), 'no texture maps are written');
+    } finally {
+        await fs.remove(workspaceRoot);
+    }
+});

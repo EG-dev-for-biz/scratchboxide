@@ -20,21 +20,61 @@ export const IMAGE_MODEL_PRIORITY_DRAFT = [
 ];
 
 /**
- * Product names (and an Imagen id neither backend serves) that callers and saved documents still send, mapped
- * to the API model id that serves them. Sending one of these names as-is costs a 404 round trip.
+ * Product names that callers and saved documents still send, mapped to the API model id of the same model.
+ * Sending one of these names as-is costs a 404 round trip. An alias only ever names the same model under its
+ * API id: a name for another model family (an Imagen id, say) is not an alias and is sent as given.
  */
 export const IMAGE_MODEL_ALIASES: Record<string, string> = {
     'nano-banana-2': 'gemini-3.1-flash-image',
     'google/nano-banana-pro': 'gemini-3-pro-image',
     'nano-banana-pro': 'gemini-3-pro-image',
-    'nano-banana-lite': 'gemini-3.1-flash-lite-image',
-    'imagen-3.0-generate-002': 'gemini-3.1-flash-image'
+    'nano-banana-lite': 'gemini-3.1-flash-lite-image'
 };
 
 /** The API model id for an image model name; a name that is not an alias passes through unchanged. */
 export function resolveImageModelId(model: string): string {
     const key = model.toLowerCase();
     return Object.prototype.hasOwnProperty.call(IMAGE_MODEL_ALIASES, key) ? IMAGE_MODEL_ALIASES[key] : model;
+}
+
+/**
+ * The models to try for a request, in order: exactly the caller's models (product names resolved to API ids)
+ * when it names any, otherwise the defaults. The defaults are never appended to a caller's list, so a caller
+ * that names one model gets that model or an error.
+ */
+export function resolveRequestedModels(requested: readonly string[] | string | undefined, defaults: readonly string[]): string[] {
+    const named = (typeof requested === 'string' ? [requested] : (requested || []))
+        .map(model => (typeof model === 'string' ? model.trim() : ''))
+        .filter(Boolean);
+    const list = named.length ? named : defaults;
+    return Array.from(new Set(list.map(resolveImageModelId)));
+}
+
+/** A model that was tried before the one that answered, and why it did not answer. */
+export interface SkippedMediaModel {
+    model: string;
+    code: MediaGenerationErrorCode;
+    reason: string;
+}
+
+/**
+ * One sentence naming the model that answered. When it is not the first model asked for, the sentence says
+ * so and gives the reason each earlier model was skipped.
+ */
+export function describeModelUsed(modelUsed: string, skipped: readonly SkippedMediaModel[] = []): string {
+    if (!skipped.length) {
+        return `Generated with ${modelUsed}.`;
+    }
+    const reasons = skipped.map(s => `${s.model} (${s.reason})`).join('; ');
+    return `Generated with ${modelUsed}, not the requested ${skipped[0].model}: skipped ${reasons}.`;
+}
+
+/** The failure message when no model in a list produced output: every model tried, with its reason. */
+export function describeNoModelAnswered(kind: string, skipped: readonly SkippedMediaModel[]): string {
+    if (!skipped.length) {
+        return `No ${kind} model was tried`;
+    }
+    return `No ${kind} model produced output: ${skipped.map(s => `${s.model} (${s.reason})`).join('; ')}`;
 }
 
 export const VIDEO_MODEL_PRIORITY = [
@@ -129,7 +169,14 @@ export type MediaGenerationRequest = ImageGenerationRequest | VideoGenerationReq
 
 export interface MediaGenerationResult {
     asset: MediaAssetRef;
+    /** The model that produced the asset. */
     modelUsed: string;
+    /** The models the request asked for, in order; the first is the requested model. */
+    requestedModels?: string[];
+    /** Models tried before modelUsed that produced nothing, with the reason; empty when the first model answered. */
+    skippedModels?: SkippedMediaModel[];
+    /** Plain statement of which model answered and, when it was not the requested one, why (describeModelUsed). */
+    modelNote?: string;
     operationName?: string;
     responseText?: string;
     createdAt?: string;
@@ -265,7 +312,9 @@ export function classifyMediaGenerationError(error: unknown, model?: string): Me
     if (/safety|blocked|rai|responsible ai|prohibited content/.test(lower)) {
         return { code: 'safety_filtered', message, retryable: false, model, status };
     }
-    if (status === 404 || /model.+not found|unsupported model|not supported/.test(lower)) {
+    // Only "this model is not served" moves on to the next model; a request option a model does not support is
+    // an invalid request, not a reason to substitute another model.
+    if (status === 404 || /model.+not (found|supported)|unsupported model/.test(lower)) {
         return { code: 'unsupported', message, retryable: false, model, status };
     }
     if (status === 400 || /invalid argument|bad request/.test(lower)) {

@@ -41,7 +41,7 @@ import {
 } from '../canvas-icons';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
-import { IMAGE_MODEL_PRIORITY, resolveImageModelId } from '../../../common/media-generation-protocol';
+import { IMAGE_MODEL_PRIORITY, VIDEO_MODEL_PRIORITY, resolveImageModelId } from '../../../common/media-generation-protocol';
 
 export interface NodeGraphPrimitiveProps {
     data: NodeGraphData;
@@ -1198,7 +1198,8 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                     idempotencyKey,
                     aspectRatio: '16:9',
                     durationSeconds: node.parameters?.durationSeconds || 6,
-                    modelPriority: [requestedModel, 'google/omni-1.1', 'gemini-omni-flash-video', 'omni-1.1-video'],
+                    // The node's model first, then the default video list (Omni, then Veo); the job says which one answered.
+                    modelPriority: [requestedModel, ...VIDEO_MODEL_PRIORITY],
                     sourceAsset: sourceAsset || (referenceAssets.length > 0 ? referenceAssets[0] : undefined)
                 });
             } else if (node.category === 'audio' || node.category === 'audio-card') {
