@@ -282,21 +282,13 @@ function composedFallbackContent(data: Scene3DData): { madeUpSplats: number; mes
     const scene = new THREE.Scene();
     let madeUpSplats = 0;
     const handle = syncSceneContent({ scene } as any, {
-        sceneType: data.sceneType,
-        title: data.title,
-        worldBranch: data.worldBranch || '',
-        isAirplane: false,
-        hasContrails: false,
         hasActiveScript: false,
         has3DTiles: false,
         hasCustomMeshes: (data.customMeshes?.length ?? 0) > 0,
         hasNonFallbackObjects: hasNonFallbackObjectContent(data),
         hasCppGenerator: false,
-        hasPythonGenerator: false,
-        selectedShape: 'sphere',
-        sculptWireframe: false
-    }, null, {
-        createDynamicContrails: () => null,
+        hasPythonGenerator: false
+    }, {
         createSplatViewer: () => ({ group: new THREE.Group(), loadSplatObservation: g => { madeUpSplats += g.length; }, dispose: () => {} })
     });
     const meshes: string[] = [];
@@ -366,7 +358,7 @@ describe('a splat scene holds only the splat the model sent', () => {
         expect(hasNonFallbackObjectContent({ splatTilesetUrl: '/tilesets/x/tileset.json' })).toBe(true);
         expect(hasNonFallbackObjectContent({ objects: [] })).toBe(false);
         expect(hasNonFallbackObjectContent({ objects: [{ id: 'm', content: { type: '3d-scene', durableUri: 'internal:mesh' } }] as any })).toBe(false);
-        // Without a sceneType the viewport would otherwise add its blue sculpt sphere next to the splat.
+        // The viewport adds no mesh of its own (it once drew a blue sculpt sphere) next to the splat.
         expect(composedFallbackContent({ title: 'Capture', splatUrl: '/models/x.splat' } as Scene3DData).meshes).toEqual([]);
     });
 });

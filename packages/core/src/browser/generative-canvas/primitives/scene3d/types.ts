@@ -46,11 +46,11 @@ export interface TilesLayerHandle extends SliceHandle {
     terrainManager: TerrainManager | null;
 }
 
+/** Which slice draws the scene's focal content; 'empty' when the scene data declares nothing to draw. */
+export type SceneContentKind = 'script' | 'tiles' | 'custom-meshes' | 'objects' | 'empty';
+
 export interface SceneContentHandle extends SliceHandle {
-    proceduralSceneGroup: THREE.Group | null;
-    airplane: THREE.Group | null;
-    contrails: any | null;
-    sculptTarget: THREE.Mesh | null;
+    kind: SceneContentKind;
     splatViewer: any | null;
     scriptHooks: { update?: (time: number, delta: number) => void; dispose?: () => void } | null;
     scriptError: string | null;

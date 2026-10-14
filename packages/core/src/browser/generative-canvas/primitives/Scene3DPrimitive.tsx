@@ -127,11 +127,13 @@ import {
 import type { ArticulatedAircraftComponents } from '../services/mesh/aircraft';
 import { useLatest } from '../hooks/useLatest';
 import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize } from './scene3d/createRendererStack';
-import { syncTilesLayer, snapGroupFiguresToGround } from './scene3d/syncTilesLayer';
+import { syncTilesLayer } from './scene3d/syncTilesLayer';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
 import { syncAtmosphere } from './scene3d/syncAtmosphere';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
-import { hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
+import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
+import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
+import { generatorRequestFailure, generatorRunFailure } from './scene3d/generatorRun';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
 import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCustomMeshes';
@@ -250,18 +252,19 @@ export interface Scene3DPrimitiveProps {
     onUpdate?: (updatedData: Scene3DData) => void;
     onPromptAction?: (promptText: string) => void;
     onMorphArtifact?: (artifact: CanvasArtifact, targetType: string) => void;
-    onCaptureReady?: (captureFn: () => string) => void;
+    onCaptureReady?: (captureFn: () => string | null) => void;
     onVisualVerification?: (screenshotDataUrl: string) => void;
 }
 
 /**
- * Captures a visual screenshot of the current Three.js WebGL frame as a PNG data URL.
+ * Captures a visual screenshot of the current Three.js WebGL frame as a PNG data URL, or null when no frame can be
+ * read (no renderer, or the canvas refuses toDataURL). Callers must not substitute an image for null.
  */
 export function captureSceneScreenshot(
     renderer?: THREE.WebGLRenderer | null,
     scene?: THREE.Scene | null,
     camera?: THREE.Camera | null
-): string {
+): string | null {
     if (renderer && renderer.domElement) {
         if (scene && camera && typeof renderer.render === 'function') {
             try {
@@ -277,27 +280,11 @@ export function captureSceneScreenshot(
                     return dataUrl;
                 }
             } catch (e) {
-                // fall through to fallback
+                // A tainted or lost canvas cannot be read; report no frame.
             }
         }
     }
-
-    if (typeof document !== 'undefined') {
-        const activeCanvas = document.querySelector('.sb-3d-stage-wrapper canvas, canvas') as HTMLCanvasElement;
-        if (activeCanvas && typeof activeCanvas.toDataURL === 'function') {
-            try {
-                const dataUrl = activeCanvas.toDataURL('image/png');
-                if (dataUrl && dataUrl.length > 22) {
-                    return dataUrl;
-                }
-            } catch (e) {
-                // fall through
-            }
-        }
-    }
-
-    // High-resolution deterministic PNG fallback for headless/test environments
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    return null;
 }
 
 export interface DynamicScriptContext {
@@ -1066,6 +1053,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // 1. Core State
     // ---------------------------------------------------------
     const [sceneData, setSceneData] = React.useState<Scene3DData>(() => ({
+        // Every field the data holds (geoAnchor, splatUrl, vectorRoadmap, ...), so the first frame and the
+        // "No geometry" notice reflect the scene as sent; the fields below only normalise.
+        ...data,
         title: data?.title || '4D Scene Workspace',
         subtitle: data?.subtitle || 'Interactive 4D spatial viewport with temporal simulation solver',
         objects: data?.objects || [],
@@ -1076,37 +1066,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         renderMode: data?.renderMode,
         customScript: data?.customScript || data?.code,
         pythonGenerator: data?.pythonGenerator,
-        cppGenerator: data?.cppGenerator || (data?.pythonGenerator ? undefined : {
-            enabled: true,
-            filename: 'world_generator.cpp',
-            sourceCode: `#include "scratchbox_engine.hpp"
-#include "scratchbox_math.hpp"
-
-int main(int argc, char** argv) {
-    scratchbox::Engine engine;
-    auto scene = engine.create_scene("Procedural Biosphere");
-
-    // Signed Distance Field (SDF) + SIMD Vector Math
-    auto terrain = engine.generate_sdf_terrain({
-        .bounds_min = {-50.0f, -10.0f, -50.0f},
-        .bounds_max = {50.0f, 25.0f, 50.0f},
-        .voxel_resolution = 0.5f,
-        .noise_scale = 0.035f,
-        .octaves = 5,
-        .persistence = 0.5f
-    });
-
-    terrain->set_material({
-        .base_color = {0.18f, 0.45f, 0.28f, 1.0f},
-        .roughness = 0.85f,
-        .metallic = 0.1f
-    });
-
-    scene->add_node(terrain);
-    engine.export_glb_stdout(scene);
-    return 0;
-}`
-        }),
+        // Only the generator the scene data holds; the viewport never supplies one of its own.
+        cppGenerator: data?.cppGenerator,
         shaders: data?.shaders,
         customMeshes: (() => {
             if (data?.customMeshes && data.customMeshes.length > 0) return data.customMeshes;
@@ -1118,15 +1079,15 @@ int main(int argc, char** argv) {
     const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>(data?.renderMode || 'clay');
     const renderModeRef = useLatest(renderMode);
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
-    const initialWorldBranch = (data?.worldBranch && /car|vehicle|automobile/i.test(data?.title || '') && /city|urban|street/i.test(data.worldBranch))
-        ? 'studio/showroom'
-        : (data?.worldBranch || 'earth/main');
-    const [worldBranch, setWorldBranch] = React.useState<string>(initialWorldBranch);
+    const [worldBranch, setWorldBranch] = React.useState<string>(data?.worldBranch || 'earth/main');
     const [hasGeoCoordinates, setHasGeoCoordinates] = React.useState<boolean>(false);
     const [lat, setLat] = React.useState<string>('37.7900');
     const [lng, setLng] = React.useState<string>('-122.4000');
     const [elevation, setElevation] = React.useState<string>('15.2');
     const [scriptError, setScriptError] = React.useState<string | null>(null);
+    // Failures of the scene's own content sources, shown in the viewport (never swapped for other geometry).
+    const [generatorError, setGeneratorError] = React.useState<{ engine: 'python' | 'cpp'; message: string } | null>(null);
+    const [tilesError, setTilesError] = React.useState<string | null>(null);
     const [sceneBudget, setSceneBudget] = React.useState<SceneBudgetTelemetry | null>(null);
 
     // ---------------------------------------------------------
@@ -1217,7 +1178,7 @@ int main(int argc, char** argv) {
     const durationMsRef = useLatest(durationMs);
     const lastStateUpdateRef = React.useRef<number>(0);
 
-    // WebGL fallbacks
+    // WebGL unavailable: the viewport shows this error and draws nothing.
     const [webglError, setWebglError] = React.useState<string | null>(null);
     const [generatedContentRadius, setGeneratedContentRadius] = React.useState<number | null>(null);
     const [isWasmActive, setIsWasmActive] = React.useState<boolean>(false);
@@ -1245,7 +1206,6 @@ int main(int argc, char** argv) {
 
     // Viewport & Three.js Refs
     const viewportRef = React.useRef<HTMLDivElement>(null);
-    const fallbackCanvasRef = React.useRef<HTMLCanvasElement>(null);
     const threeRendererRef = React.useRef<THREE.WebGLRenderer | null>(null);
     const threeSceneRef = React.useRef<THREE.Scene | null>(null);
     const threeCameraRef = React.useRef<THREE.PerspectiveCamera | null>(null);
@@ -1263,15 +1223,11 @@ int main(int argc, char** argv) {
     const pinBMeshRef = React.useRef<THREE.Group | null>(null);
     const routePathMeshRef = React.useRef<THREE.Line | null>(null);
 
-        // Aircraft & Scene Object Refs
-        const airplaneMeshRef = React.useRef<THREE.Group | null>(null);
-
     // Dynamic Engine Hook Refs
     const skyDomeModuleRef = React.useRef<any | null>(null);
     const aerialPerspectiveRef = React.useRef<any | null>(null);
     const terrainCloudShadowsRef = React.useRef<any | null>(null);
     const godRaysRef = React.useRef<any | null>(null);
-    const contrailsRef = React.useRef<any | null>(null);
     const terrainBiomeRef = React.useRef<any | null>(null);
     const dynamicScriptHooksRef = React.useRef<{ update?: (time: number, delta: number) => void; dispose?: () => void } | null>(null);
     const customShaderMaterialsRef = React.useRef<THREE.ShaderMaterial[]>([]);
@@ -1505,7 +1461,7 @@ int main(int argc, char** argv) {
     // ---------------------------------------------------------
     // Automated Capture Frame & Visual Verification Hooks
     // ---------------------------------------------------------
-    const captureFrame = React.useCallback((): string => {
+    const captureFrame = React.useCallback((): string | null => {
         return captureSceneScreenshot(threeRendererRef.current, threeSceneRef.current, threeCameraRef.current);
     }, []);
 
@@ -1532,33 +1488,6 @@ int main(int argc, char** argv) {
         }, 600);
         return () => clearTimeout(settleTimer);
     }, [sceneData, captureFrame, onVisualVerification]);
-
-    const isAirplane = React.useMemo(() => {
-        if (!data) return false;
-        const combinedText = `${data.sceneType || ''} ${data.title || ''} ${data.subtitle || ''} ${data.worldBranch || ''}`.toLowerCase();
-        
-        // If the scene is explicitly a non-flight theme (historical, battlefield, city, celestial, molecular, architectural), never treat as airplane
-        const isNonFlightTopic = /battlefield|lexington|concord|1776|1775|revolution|redcoat|minuteman|city|metropolis|urban|solar|planet|celestial|orbit|molecular|physics|atom|dna|chemistry|room|blueprint|interior|house|pavilion/i.test(combinedText);
-        const hasExplicitFlightTerm = /plane|airplane|jet\s+aircraft|jet\s+transit|flight\s+corridor|aviation/i.test(data.title || '');
-
-        if (isNonFlightTopic && !hasExplicitFlightTerm) {
-            return false;
-        }
-
-        if (data.sceneType === 'flight' && (hasExplicitFlightTerm || data.objects?.some(o => o.content?.durableUri === 'internal:plane'))) {
-            return true;
-        }
-
-        const titleMatch = (/plane|airplane|jet|aircraft|flight|aviation/i.test(data.title || '') || /plane|airplane|jet|aircraft|flight|aviation/i.test(data.subtitle || '')) && !isNonFlightTopic;
-        const branchMatch = /flight|aviation/i.test(data.worldBranch || '') && !isNonFlightTopic;
-        const objMatch = data.objects?.some(o => 
-            o.content?.durableUri === 'internal:plane' ||
-            o.content?.mimeType?.includes('aircraft') ||
-            o.content?.mimeType?.includes('plane')
-        );
-        const featureMatch = (!!data.features?.controlSurfaces || !!data.features?.contrails) && (titleMatch || branchMatch || !!objMatch);
-        return (titleMatch || branchMatch || !!objMatch || featureMatch) && !isNonFlightTopic;
-    }, [data]);
 
     const splatViewerRef = React.useRef<InHouseSplatViewer | null>(null);
     const tilesRendererRef = React.useRef<any | null>(null);
@@ -1612,23 +1541,18 @@ int main(int argc, char** argv) {
     // Sync Props to State
     React.useEffect(() => {
         if (data) {
-            const isVehicleTheme = /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data.title || '') ||
-                /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data.worldBranch || '') ||
-                (data.objects && data.objects.some(o => /car|vehicle|automobile/i.test(o.id || '') || /car|vehicle|automobile/i.test(o.content?.durableUri || '') || /car|vehicle|automobile/i.test(o.content?.mimeType || '')));
-
-            // A scene shows only the geometry its data holds. Synthesizing meshes from the title rebuilt a
-            // keyword template (an "outpost" of towers, solar arrays and conifers) next to the real objects.
-            let effectiveWorldBranch = data.worldBranch;
-
-            if (isVehicleTheme && effectiveWorldBranch && /city|urban|street/i.test(effectiveWorldBranch)) {
-                effectiveWorldBranch = 'studio/showroom';
-            }
+            // A scene shows only the geometry and settings its data holds. Nothing is added, dropped or re-themed
+            // from words in the title (that rebuilt keyword templates next to, or instead of, the real objects).
+            const effectiveWorldBranch = data.worldBranch;
 
             setSceneData({
+                // Carry every field the data holds (splatUrl, vectorRoadmap, groundTileMode, ...); dropping them
+                // left splat scenes without their splat and made a populated scene look empty.
+                ...data,
                 title: data.title || '4D Scene Workspace',
                 subtitle: data.subtitle || 'Interactive 4D spatial viewport with temporal simulation solver',
-                objects: isVehicleTheme && (!data.objects || data.objects.some(o => o.content?.durableUri === 'internal:plane')) ? [] : (data.objects || []),
-                sceneType: isVehicleTheme ? 'custom' : data.sceneType,
+                objects: data.objects || [],
+                sceneType: data.sceneType,
                 worldBranch: effectiveWorldBranch,
                 camera: data.camera || { position: [15, 12, 15], target: [0, 0, 0] },
                 environment: data.environment || { skybox: 'studio', lighting: 'studio', ground: true },
@@ -1865,7 +1789,6 @@ int main(int argc, char** argv) {
     const mutateSceneDataRef = useLatest(mutateSceneData);
     const dataRef = useLatest(data);
     // sceneDataRef is declared next to mutateSceneData above.
-    const selectedShapeRef = useLatest(selectedShape);
 
     // ---- Slice fingerprints -------------------------------------------------------
     const has3DTiles = React.useMemo(() => !!(
@@ -1950,31 +1873,20 @@ int main(int argc, char** argv) {
     const activeScript = sceneData.customScript || sceneData.code;
     const hasActiveScript = !!(activeScript && activeScript.trim().length > 0);
     const contentInput = React.useMemo<SceneContentInput>(() => ({
-        sceneType: sceneData.sceneType,
-        title: sceneData.title,
-        worldBranch,
-        isAirplane,
-        hasContrails: !!sceneData.features?.contrails || isAirplane,
         hasActiveScript,
         has3DTiles,
         hasCustomMeshes: Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0,
         hasNonFallbackObjects: hasNonFallbackObjectContent(sceneData),
         hasCppGenerator: !!sceneData.cppGenerator?.glbBase64 || !!(sceneData.cppGenerator?.sourceCode && sceneData.cppGenerator.sourceCode.trim().length > 0),
-        hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64 || !!(sceneData.pythonGenerator?.sourceCode && sceneData.pythonGenerator.sourceCode.trim().length > 0),
-        selectedShape,
-        sculptWireframe: !!sculptSettings.wireframeOverlay
+        hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64 || !!(sceneData.pythonGenerator?.sourceCode && sceneData.pythonGenerator.sourceCode.trim().length > 0)
     }), [
-        sceneData.sceneType, sceneData.title, worldBranch, isAirplane, sceneData.features?.contrails, hasActiveScript,
-        has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.splatUrl, sceneData.splatTilesetUrl,
+        hasActiveScript, has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.splatUrl, sceneData.splatTilesetUrl,
         sceneData.cppGenerator?.glbBase64, sceneData.cppGenerator?.sourceCode,
-        sceneData.pythonGenerator?.glbBase64, sceneData.pythonGenerator?.sourceCode,
-        selectedShape, sculptSettings.wireframeOverlay
+        sceneData.pythonGenerator?.glbBase64, sceneData.pythonGenerator?.sourceCode
     ]);
-    // Shape / wireframe changes are applied in place by their own handlers, so they are excluded here.
+    const sceneContentKind = React.useMemo(() => classifySceneContent(contentInput), [contentInput]);
     const contentFingerprint = React.useMemo(() => JSON.stringify({
         ...contentInput,
-        selectedShape: undefined,
-        sculptWireframe: undefined,
         activeScript,
         tilesFingerprint,
         // A live script closes over the atmosphere objects; re-run it when they are rebuilt.
@@ -2022,7 +1934,7 @@ int main(int argc, char** argv) {
             stack = createRendererStack({ container, cameraPosition: sceneDataRef.current.camera?.position });
         } catch (err: any) {
             console.error('WebGL Renderer Creation Failed:', err);
-            setWebglError('WebGL is unsupported or disabled in this window/environment. Gracefully falling back to 2D canvas.');
+            setWebglError(`The 3D viewport could not start WebGL: ${err?.message || String(err)}`);
             return;
         }
         stackRef.current = stack;
@@ -2100,10 +2012,9 @@ int main(int argc, char** argv) {
         const detachResize = attachViewportResize(stack, (w, h) => aerialPerspectiveRef.current?.setSize(w, h));
 
         // ---------------------------------------------------------
-        // Core Animation Loop with Aerodynamics & Articulation
+        // Core Animation Loop
         // ---------------------------------------------------------
         let lastTickTime = performance.now();
-        let lastTerrainSnapTime = 0;
         let lastHeadingUpdateTime = 0;
         const gizmoWorldPos = new THREE.Vector3();
         const gizmoWorldQuat = new THREE.Quaternion();
@@ -2129,27 +2040,15 @@ int main(int argc, char** argv) {
                 }
 
                 const t = currentTimeMsRef.current / 1000;
-                const content = contentRef.current;
                 const atmosphere = atmosphereRef.current;
 
-                // 1. Aircraft aerodynamics, articulation, exhaust & contrails
-                const airplane = content?.airplane ?? null;
-                if (airplane) {
-                    animateAircraftFrame(airplane, t, deltaMs, playbackSpeedRef.current);
-                    contrailsRef.current?.update?.(airplane, t, deltaSec);
-                }
-
-                // 1.5–2. Sky dome, cloud shadows, aerial perspective, god rays
+                // 1–2. Sky dome, cloud shadows, aerial perspective, god rays
                 skyDomeModuleRef.current?.update?.(t, deltaSec);
                 terrainCloudShadowsRef.current?.update(t, skyDomeModuleRef.current?.sunDirection);
                 aerialPerspectiveRef.current?.update(t, deltaSec);
                 godRaysRef.current?.update?.(t, deltaSec);
 
-                // Procedural scene + biome terrain dynamics
-                const proceduralGroup = content?.proceduralSceneGroup ?? null;
-                if (proceduralGroup && typeof proceduralGroup.userData?.update === 'function') {
-                    proceduralGroup.userData.update(t, deltaSec);
-                }
+                // Biome terrain dynamics
                 terrainBiomeRef.current?.update?.(t, deltaSec);
 
                 // 4. Custom shader uniforms
@@ -2163,16 +2062,9 @@ int main(int argc, char** argv) {
                     atmosphere.starsMesh.rotation.y = t * 0.05;
                 }
 
-                // 7. 3D tiles streaming + continuous ground convergence for floating figures
+                // 7. 3D tiles streaming
                 if (tilesRendererRef.current) {
                     tilesRendererRef.current.update(camera, renderer);
-                    if (terrainManagerRef.current && now - lastTerrainSnapTime > 600) {
-                        lastTerrainSnapTime = now;
-                        const sampledGround = terrainManagerRef.current.sampleGroundHeight(0, 0);
-                        if (sampledGround !== null && Math.abs(sampledGround) > 0.05) {
-                            snapGroupFiguresToGround(proceduralGroup, terrainManagerRef.current);
-                        }
-                    }
                 }
 
                 // 8. Drone flight telemetry
@@ -2322,9 +2214,14 @@ int main(int argc, char** argv) {
     React.useEffect(() => {
         const stack = stackRef.current;
         if (!stack) return;
+        setTilesError(null);
         const handle = syncTilesLayer(stack, tilesInputRef.current, {
+            onLayerReady: (tilesLayer, terrainManager) => {
+                tilesRendererRef.current = tilesLayer;
+                terrainManagerRef.current = terrainManager;
+            },
+            onError: message => setTilesError(message),
             onTileLoaded: (terrainManager) => {
-                snapGroupFiguresToGround(contentRef.current?.proceduralSceneGroup ?? null, terrainManager);
                 const cppRoot = stack.scene?.getObjectByName('scratchbox-cpp-generated-root');
                 if (cppRoot) {
                     terrainManager.snapObjectToGround(cppRoot, 0);
@@ -2447,12 +2344,12 @@ int main(int argc, char** argv) {
         }
     }, [cameraFingerprint, tilesFingerprint]);
 
-    // ---- 5. Focal content: procedural theme / aircraft / sculpt mesh / splats / dynamic script ----
+    // ---- 5. Focal content: splats / dynamic script ----
     React.useEffect(() => {
         const stack = stackRef.current;
         if (!stack) return;
 
-        const executeScript: SceneContentFactories['executeScript'] = ({ aircraft, contrails }) => {
+        const executeScript: SceneContentFactories['executeScript'] = () => {
             const script = activeScriptRef.current;
             if (!script || !script.trim()) return null;
             const scriptCleanupFns: Array<() => void> = [];
@@ -2465,13 +2362,13 @@ int main(int argc, char** argv) {
                 container: stack.container,
                 THREE,
                 sceneData: sceneDataRef.current,
-                aircraft,
+                aircraft: null,
                 terrain: atmosphere?.terrainBiome?.terrainMesh,
                 skyDome: atmosphere?.skyDomeObject ?? null,
                 aerialPerspective: atmosphere?.aerialPerspective,
                 cloudShadows: atmosphere?.terrainCloudShadows,
                 godRays: atmosphere?.godRays?.group,
-                contrails,
+                contrails: null,
                 addCleanup: (fn) => scriptCleanupFns.push(fn),
                 onFrame: (fn) => scriptFrameFns.push(fn),
                 registerUpdate: (fn) => scriptFrameFns.push(fn),
@@ -2525,22 +2422,18 @@ int main(int argc, char** argv) {
 
         const handle = syncSceneContent(
             stack,
-            { ...contentInputRef.current, selectedShape: selectedShapeRef.current, sculptWireframe: !!sculptSettingsRef.current.wireframeOverlay },
-            terrainManagerRef.current,
-            { createDynamicContrails, createSplatViewer: () => new InHouseSplatViewer(), executeScript }
+            contentInputRef.current,
+            { createSplatViewer: () => new InHouseSplatViewer(), executeScript }
         );
         contentRef.current = handle;
-        airplaneMeshRef.current = handle.airplane;
-        contrailsRef.current = handle.contrails;
         splatViewerRef.current = handle.splatViewer as InHouseSplatViewer;
         dynamicScriptHooksRef.current = handle.scriptHooks;
         setScriptError(handle.scriptError);
 
-        // Sculpt target + history reset
-        sculptMeshRef.current = handle.sculptTarget;
-        selectedObjectRef.current = handle.sculptTarget;
+        // Rebuilt content: no sculpt target or selection carries over, and the sculpt history starts empty.
+        sculptMeshRef.current = null;
+        selectedObjectRef.current = null;
         historyStackRef.current.clear();
-        if (handle.sculptTarget?.geometry) historyStackRef.current.pushState(handle.sculptTarget.geometry);
         setCanUndo(false);
         setCanRedo(false);
 
@@ -2569,12 +2462,8 @@ int main(int argc, char** argv) {
             if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
             handle.dispose();
             contentRef.current = null;
-            airplaneMeshRef.current = null;
-            contrailsRef.current = null;
             splatViewerRef.current = null;
             dynamicScriptHooksRef.current = null;
-            if (sculptMeshRef.current === handle.sculptTarget) sculptMeshRef.current = null;
-            if (selectedObjectRef.current === handle.sculptTarget) selectedObjectRef.current = null;
         };
     }, [contentFingerprint]);
 
@@ -2607,6 +2496,7 @@ int main(int argc, char** argv) {
             ...prev,
             pythonGenerator: { ...prev.pythonGenerator, ...pyGen, ...patch }
         }));
+        setGeneratorError(null);
         // Or they keep it as the runner's output file, served by the app; rebuild from the source only when it is gone.
         loadServedGeneratorGlb(pyGen.glbPath)
             .then(async saved => {
@@ -2621,11 +2511,16 @@ int main(int argc, char** argv) {
                     body: JSON.stringify({ script: pyGen.sourceCode })
                 });
                 const resData = await res.json();
-                if (isCancelled || !resData?.success || !resData?.glbBase64) return;
+                if (isCancelled) return;
+                const failure = generatorRunFailure('python', res.status, resData);
+                if (failure) {
+                    setGeneratorError(failure);
+                    return;
+                }
                 adopt({ glbBase64: resData.glbBase64, glbPath: resData.glbPath, lastCompiledTimeMs: Date.now() });
             })
             .catch(err => {
-                console.warn('[Scene3DPrimitive] Background Python compile error:', err);
+                if (!isCancelled) setGeneratorError(generatorRequestFailure('python', err));
             });
         return () => { isCancelled = true; };
     }, [sceneData.pythonGenerator?.sourceCode]);
@@ -2636,14 +2531,20 @@ int main(int argc, char** argv) {
         if (!cppGen?.sourceCode || cppGen.glbBase64) return;
         if (generatorFileIsObject(cppGen, sceneData.objects)) return;
         let isCancelled = false;
+        setGeneratorError(null);
         fetch('/3d/compile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sourceCode: cppGen.sourceCode })
         })
-            .then(res => res.json())
-            .then(resData => {
-                if (isCancelled || !resData?.success || !resData?.glbBase64) return;
+            .then(async res => ({ status: res.status, resData: await res.json() }))
+            .then(({ status, resData }) => {
+                if (isCancelled) return;
+                const failure = generatorRunFailure('cpp', status, resData);
+                if (failure) {
+                    setGeneratorError(failure);
+                    return;
+                }
                 setSceneData(prev => ({
                     ...prev,
                     cppGenerator: {
@@ -2658,7 +2559,7 @@ int main(int argc, char** argv) {
                 }));
             })
             .catch(err => {
-                console.warn('[Scene3DPrimitive] Background C++ compile error:', err);
+                if (!isCancelled) setGeneratorError(generatorRequestFailure('cpp', err));
             });
         return () => { isCancelled = true; };
     }, [sceneData.cppGenerator?.sourceCode]);
@@ -2668,6 +2569,11 @@ int main(int argc, char** argv) {
         const stack = stackRef.current;
         const glbBase64 = sceneData.pythonGenerator?.glbBase64 || sceneData.cppGenerator?.glbBase64;
         if (!stack || !glbBase64) return;
+        const engine = sceneData.pythonGenerator?.glbBase64 ? 'python' : 'cpp';
+        const reportUnreadable = (err: unknown) => setGeneratorError({
+            engine,
+            message: `The generated model (GLB) could not be read: ${err instanceof Error ? err.message : String(err)}`
+        });
         try {
             const b64 = glbBase64;
             const binaryStr = typeof atob === 'function' ? atob(b64) : Buffer.from(b64, 'base64').toString('binary');
@@ -2731,10 +2637,10 @@ int main(int argc, char** argv) {
                 refreshEntities();
             }, (err) => {
                 pendingGeneratedGlbParsesRef.current--;
-                console.warn('[3D Engine GLB Loader Error]:', err);
+                reportUnreadable(err);
             });
         } catch (e) {
-            console.warn('[3D Engine GLB Ingestion Error]:', e);
+            reportUnreadable(e);
         }
     }, [sceneData.pythonGenerator?.glbBase64, sceneData.cppGenerator?.glbBase64]);
 
@@ -3123,97 +3029,6 @@ int main(int argc, char** argv) {
             customShaderMaterialsRef.current = [];
         };
     }, [shadersFingerprint]);
-
-    // ---------------------------------------------------------
-    // Fallback Canvas Render (2D Orthographic Mode)
-    // ---------------------------------------------------------
-    React.useEffect(() => {
-        if (!webglError || !fallbackCanvasRef.current) return;
-
-        const canvas = fallbackCanvasRef.current;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        let frameId: number;
-        let angle = 0;
-
-        const draw = () => {
-            angle += 0.008;
-            const w = canvas.width = canvas.parentElement?.clientWidth || 500;
-            const h = canvas.height = canvas.parentElement?.clientHeight || 450;
-
-            ctx.fillStyle = '#0a0a0f';
-            ctx.fillRect(0, 0, w, h);
-            ctx.strokeStyle = 'rgba(63, 63, 90, 0.4)';
-            ctx.lineWidth = 1;
-
-            const cx = w / 2;
-            const cy = h / 2 + 30;
-
-            for (let i = -10; i <= 10; i++) {
-                ctx.beginPath();
-                ctx.moveTo(cx + i * 25, cy + 120);
-                ctx.lineTo(cx + i * 8, cy - 80);
-                ctx.stroke();
-
-                const offset = cy - 80 + (i + 10) * 10;
-                ctx.beginPath();
-                ctx.moveTo(cx - 200 * ((offset - cy + 100) / 100), offset);
-                ctx.lineTo(cx + 200 * ((offset - cy + 100) / 100), offset);
-                ctx.stroke();
-            }
-
-            const size = 60;
-            const vertices = [
-                { x: -1, y: -1, z: -1 },
-                { x: 1, y: -1, z: -1 },
-                { x: 1, y: 1, z: -1 },
-                { x: -1, y: 1, z: -1 },
-                { x: -1, y: -1, z: 1 },
-                { x: 1, y: -1, z: 1 },
-                { x: 1, y: 1, z: 1 },
-                { x: -1, y: 1, z: 1 }
-            ];
-
-            const projected = vertices.map(v => {
-                const x = v.x * Math.cos(angle) - v.z * Math.sin(angle);
-                const z = v.x * Math.sin(angle) + v.z * Math.cos(angle);
-                const y = v.y * Math.cos(angle * 0.6) - z * Math.sin(angle * 0.6);
-                const d = 3.5 - z * 0.4;
-                return {
-                    x: cx + (x * size) / d,
-                    y: cy - 60 - (y * size) / d
-                };
-            });
-
-            ctx.strokeStyle = renderMode === 'wireframe' ? 'rgba(0, 255, 170, 0.8)' : 'rgba(255, 0, 150, 0.95)';
-            ctx.lineWidth = 1.8;
-            const connect = (a: number, b: number) => {
-                ctx.beginPath();
-                ctx.moveTo(projected[a].x, projected[a].y);
-                ctx.lineTo(projected[b].x, projected[b].y);
-                ctx.stroke();
-            };
-
-            connect(0, 1); connect(1, 2); connect(2, 3); connect(3, 0);
-            connect(4, 5); connect(5, 6); connect(6, 7); connect(7, 4);
-            connect(0, 4); connect(1, 5); connect(2, 6); connect(3, 7);
-
-            ctx.fillStyle = '#00f6ff';
-            ctx.beginPath();
-            ctx.arc(cx, cy - 60 + Math.sin(angle * 2) * 10, 8, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '11px monospace';
-            ctx.fillText(`2D Fallback Orthographic Camera Pitch: 32° Yaw: ${(angle * 57.3).toFixed(0)}°`, 15, h - 15);
-
-            frameId = requestAnimationFrame(draw);
-        };
-
-        draw();
-        return () => cancelAnimationFrame(frameId);
-    }, [webglError, renderMode]);
 
     const handleScrubChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = parseFloat(e.target.value);
@@ -3694,13 +3509,21 @@ int main(int argc, char** argv) {
     const activeFeatureBadges = React.useMemo(() => {
         const badges: string[] = [];
         if (sceneData.features?.godRays) badges.push('God Rays');
-        if (sceneData.features?.controlSurfaces || isAirplane) badges.push('Articulated');
-        if (sceneData.features?.contrails || isAirplane) badges.push('Contrails');
+        if (sceneData.features?.controlSurfaces) badges.push('Articulated');
+        if (sceneData.features?.contrails) badges.push('Contrails');
         if (sceneData.features?.terrainBiomes) badges.push('Biomes');
         if (sceneData.features?.atmosphericScattering) badges.push('Atmosphere');
         if (sceneData.customScript || sceneData.code) badges.push('Dynamic Script');
         return badges;
-    }, [sceneData.features, sceneData.customScript, sceneData.code, isAirplane]);
+    }, [sceneData.features, sceneData.customScript, sceneData.code]);
+
+    const viewportNotices = React.useMemo(() => resolveViewportNotice({
+        webglError,
+        generatorError,
+        tilesError,
+        contentKind: sceneContentKind,
+        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh
+    }), [webglError, generatorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;
@@ -3746,20 +3569,14 @@ int main(int argc, char** argv) {
         <div className="sb-scene3d-primitive-container relative w-full h-full bg-[#b0b8c4] text-zinc-100 overflow-hidden select-none">
             {/* CONTAINERIZED 3D VIEWPORT CANVAS - Full-Bleed 100% */}
             <div className="sb-3d-viewport-frame absolute inset-0 w-full h-full bg-[#b0b8c4] overflow-hidden">
-                {webglError ? (
-                    <div className="absolute inset-0 w-full h-full">
-                        <canvas ref={fallbackCanvasRef} className="w-full h-full block" />
-                        <div className="absolute top-4 left-4 right-4 p-3.5 bg-red-950/40 border border-red-900/40 backdrop-blur-md rounded-2xl">
-                            <p className="text-xs text-red-300 font-semibold">{webglError}</p>
-                        </div>
-                    </div>
-                ) : (
+                {!webglError && (
                     <div
                         ref={viewportRef}
                         className="sb-3d-viewport-canvas-container absolute inset-0 w-full h-full block cursor-grab active:cursor-grabbing"
                         style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' }}
                     />
                 )}
+                <ViewportNotice notices={viewportNotices} />
             </div>
 
             {/* Precision Creative Vertical Tool Strip (Left Docked - 50% Compact Scale) */}

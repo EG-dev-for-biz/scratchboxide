@@ -27,16 +27,18 @@ function sliceBalanced(source: string, openIdx: number): string {
 describe('Scene3DPrimitive props -> state projection keeps Python-generated GLBs', () => {
     const source = fs.readFileSync(SCENE3D_PATH, 'utf-8');
 
-    it('initial useState projection carries pythonGenerator and skips the C++ template when Python geometry exists', () => {
+    it('initial useState projection carries pythonGenerator and only the C++ generator the data holds', () => {
         const start = source.indexOf('React.useState<Scene3DData>(() => ({');
         expect(start).toBeGreaterThan(0);
         const init = sliceBalanced(source, source.indexOf('(', source.indexOf('=>', start)));
         expect(init).toMatch(/pythonGenerator:\s*data\?\.pythonGenerator/);
-        expect(init).toMatch(/cppGenerator:\s*data\?\.cppGenerator\s*\|\|\s*\(data\?\.pythonGenerator\s*\?\s*undefined/);
+        // No template generator of the viewport's own (it used to inject a "Procedural Biosphere" C++ source).
+        expect(init).toMatch(/cppGenerator:\s*data\?\.cppGenerator,/);
+        expect(init).not.toContain('sourceCode');
     });
 
     it('every whole-object setSceneData({...}) projection from props carries pythonGenerator', () => {
-        const re = /setSceneData\(\{\s*\n\s*title:\s*data\.title/g;
+        const re = /setSceneData\(\{(?:\s*\/\/[^\n]*\n)*\s*\.\.\.data,\s*\n\s*title:\s*data\.title/g;
         let m: RegExpExecArray | null;
         let count = 0;
         while ((m = re.exec(source)) !== null) {
