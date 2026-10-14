@@ -31,21 +31,31 @@ describe('Studio lighting rig scales continuously with loaded content size', () 
         expect(resolveStudioRigScale({ isLargeScale: true })).toBe(100);
     });
 
-    it('a 50 m outpost gets lights whose range covers its whole bounding sphere', () => {
+    it('a 50 m outpost under the three-point rig gets point lights whose range covers its whole bounding sphere', () => {
         const radius = 50;
         const scale = resolveStudioRigScale({ isLargeScale: false, contentRadiusMeters: radius });
         expect(scale).toBeGreaterThan(5);
 
-        const lights = buildThreeJsLightingRig('studio', { scale });
+        const lights = buildThreeJsLightingRig('three_point_studio', { scale });
         const points = lights.filter(l => (l as THREE.PointLight).isPointLight) as THREE.PointLight[];
         expect(points.length).toBeGreaterThan(0);
         for (const p of points) {
             expect(p.distance).toBeGreaterThan(radius + p.position.length() * 0.5);
         }
 
-        const authored = irradianceAtOrigin(buildThreeJsLightingRig('studio', { scale: 1 }));
+        const authored = irradianceAtOrigin(buildThreeJsLightingRig('three_point_studio', { scale: 1 }));
         const scaled = irradianceAtOrigin(lights);
         expect(scaled / authored).toBeGreaterThan(0.9);
         expect(scaled / authored).toBeLessThan(1.1);
+    });
+
+    it('the default studio rig is neutral white directional light, the same for a 0.4 m stool or a 50 m outpost', () => {
+        for (const scale of [1, resolveStudioRigScale({ isLargeScale: false, contentRadiusMeters: 50 })]) {
+            const lights = buildThreeJsLightingRig('studio', { scale });
+            const lit = lights.filter(l => (l as THREE.Light).isLight) as THREE.Light[];
+            expect(lit.every(l => (l as any).isDirectionalLight || (l as any).isAmbientLight)).toBe(true);
+            expect(lit.every(l => l.color.r === l.color.g && l.color.g === l.color.b)).toBe(true);
+            expect(lit.map(l => l.intensity)).toEqual([0.3, 1.5, 0.45, 0.35]);
+        }
     });
 });

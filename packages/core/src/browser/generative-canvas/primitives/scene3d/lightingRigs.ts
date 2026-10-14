@@ -80,6 +80,20 @@ export function kelvinToRgb(kelvin: number): THREE.Color {
  * Calibrated Cinematic & Studio Lighting Rigs
  */
 export const CINEMATIC_RIGS: Record<string, CinematicRigDefinition> = {
+    // The default for `lighting: 'studio'`: a neutral CAD/DCC viewport light. White directional key, fill and
+    // top light plus neutral ambient, so surfaces show their true color at any model size.
+    studio: {
+        name: 'studio',
+        label: 'Neutral Studio',
+        description: 'Neutral white key, fill and top light with soft ambient; true-color, size-independent.',
+        ambientColor: 0xffffff,
+        ambientIntensity: 0.3,
+        lights: [
+            { name: 'Studio_Key', type: 'directional', position: [4, 6, 5], color: 0xffffff, intensity: 1.5 },
+            { name: 'Studio_Fill', type: 'directional', position: [-5, 2.5, 3], color: 0xffffff, intensity: 0.45 },
+            { name: 'Studio_Top', type: 'directional', position: [0, 6, -4], color: 0xffffff, intensity: 0.35 }
+        ]
+    },
     three_point_studio: {
         name: 'three_point_studio',
         label: '3-Point Studio Rig',
