@@ -16,6 +16,7 @@ import { GeospatialTileExtractionBridge, ExtractedLocationManifest } from '../..
 import { detectRealWorldLocationIntent } from '../../../browser/generative-canvas/services/Google3DTileService';
 import { synthesizeAdaptiveHeroObjectContract, generateAdaptiveHeroPythonSource } from '../../../common/spatial/adaptive-hero-synthesizer';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
+import { analyzePartConnectivity, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport } from '../../3d-engine/part-connectivity';
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -165,7 +166,9 @@ export function extractGlbAabb(glbBuffer: Buffer): GlbAabbBounds | null {
  */
 export const PYTHON_3D_API_REFERENCE = `Verified scratchbox API. Only use names listed here or in the system instructions; do not guess others.
 - Primitives (each returns a Mesh and accepts material=): sb.create_box(width=, height=, depth=) or sb.create_box(size=(w, h, d)); sb.create_beveled_box(size=(w, h, d), bevel=0.02); sb.create_cylinder(radius=, height=, segments=24); sb.create_sphere(radius=, rings=16, sectors=32); sb.create_cone(radius=, height=); sb.create_plane(width=, height=); sb.create_lathe(profile, segments=32); sb.create_loft(slices); sb.sweep_curve_profile(path, profile_dimensions=(w, h)); sb.revolve_harmonic_solid(profile_curve=, harmonic_lobe_count=0); sb.replicate_metric_array(guide_points=, pitch_meters=, seed_geometry=).
-- Mesh methods (modify the mesh in place): translate(x, y, z); rotate_x(deg); rotate_y(deg); rotate_z(deg); scale(s) or scale(x, y, z); append(other); merge(other); subtract(other); set_material(mat); subdivide(iterations); taper(factor, axis); bend(angle_deg, radius); twist(angle_deg, axis); bulge(); displace(frequency, amplitude); recompute_smooth_normals(). Properties, read without parentheses: vertex_count, triangle_count, bounds (with .min and .max).
+- Mesh methods (modify the mesh in place): translate(x, y, z); rotate_x(deg); rotate_y(deg); rotate_z(deg); scale(s) or scale(x, y, z); append(other); merge(other); subtract(other); set_material(mat); subdivide(iterations); taper(factor, axis); bend(angle_deg, radius); twist(angle_deg, axis); bulge(); displace(frequency, amplitude); recompute_smooth_normals(); weld_vertices() (call before subdividing boxes, whose faces arrive unwelded and crack apart otherwise); get_positions_flat(). Properties, read without parentheses: vertex_count, triangle_count, bounds (with .min and .max).
+- Reading geometry back: get_positions_flat returns float32 xyz as bytes; wrap it with Python's array module, typecode "f". Subdivision rounds and shrinks shapes and deformers move vertices, so measure positions after deforming instead of assuming the original sizes.
+- Assemblies (legs, rungs, frames, struts, rails): compute the joint points first, then build each member between two joints with sb.sweep_curve_profile(path=[start, end], profile_dimensions=(r, r)). Take a connecting member's ends from points on the members it joins (a rung from lerp(top_a, foot_a, t) to lerp(top_b, foot_b, t)) so it attaches by construction; run member ends slightly into what they join. Do not place parts by rotating them about the origin and guessing offsets. Every result is checked: parts that touch nothing are listed in structuralIssues, and you must fix them.
 - Meshes have no clone(), copy() or transform. To duplicate: dup = sb.geometry.Mesh(); dup.append(mesh), then position it with translate, rotate_x/y/z and scale.
 - Materials: sb.PbrMaterial(base_color=(r, g, b, a), roughness=, metallic=) or presets such as sb.PbrMaterial.clay(), sb.PbrMaterial.wood_oak(), sb.PbrMaterial.chrome(), sb.PbrMaterial.glass_tinted(). There is no separate materials module.
 - Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.`;
@@ -332,7 +335,14 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             glbBuf = fs.readFileSync(result.glbPath);
         }
 
+        let structureReport: PartConnectivityReport | null = null;
         if (glbBuf) {
+            try {
+                const soup = glbToTriangleSoup(glbBuf);
+                if (soup) structureReport = analyzePartConnectivity(soup);
+            } catch (err: any) {
+                console.warn('[execute_3d_python_script] Structural check skipped:', err?.message || err);
+            }
             const analysis = extractGlbAnalysis(glbBuf);
             bounds = analysis.bounds;
             if (analysis.metrics) {
@@ -467,6 +477,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 description: desc,
                 overallBoundingBox: bounds,
                 gateReport: gateReport,
+                structureReport,
+                structuralIssues: structureReport ? describeFloatingParts(structureReport) : undefined,
                 locationManifest: extractedManifest,
                 locationGlbPath: extractedGlbPath,
                 geoAnchor: effectiveGeoAnchor,
@@ -522,7 +534,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     }
                 }
             },
-            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built object automatically grounded on top of scene terrain/tiles.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}`
+            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m. Built object automatically grounded on top of scene terrain/tiles.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}`
         };
     }
 };
