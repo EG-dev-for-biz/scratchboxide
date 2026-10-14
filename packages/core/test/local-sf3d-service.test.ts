@@ -105,7 +105,7 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         expect(named.suggestedNativeAction?.targetService).toBe('LocalSf3DService');
 
         // Neural reconstruction is never picked for an object asked for in words (AGENTS.md).
-        const unnamed = TaskCapabilityResolver.resolveTaskCapability('generate a small organic mushroom prop in 3d');
+        const unnamed = TaskCapabilityResolver.resolveTaskCapability('generate a small organic prop of a mushroom in 3d');
         expect(unnamed.suggestedNativeAction?.targetTool).not.toBe('generate_local_sf3d_organic_prop');
     });
 
