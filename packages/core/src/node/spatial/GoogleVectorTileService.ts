@@ -11,6 +11,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import Pbf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
+import { decodeFeatureTile, type DecodedModeledVolume } from './google-feature-tile-decoder';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 
@@ -90,6 +91,10 @@ export interface DecodedVectorTileData {
     water: VectorFeaturePolygon[];
     roads: VectorFeatureLine[];
     pois?: VectorFeaturePoint[];
+    /** True 3D building meshes (enableModeledVolumes); vertices are [lng, lat, height above the building base]. */
+    modeledVolumes?: DecodedModeledVolume[];
+    /** Flat 2D building shapes without height (plan view of 3D buildings); for footprint tests, not extrusion. */
+    buildingFootprints2D?: VectorFeaturePolygon[];
 }
 
 export interface VectorWorldStagingOptions {
@@ -118,6 +123,10 @@ export interface VectorWorldStagingOptions {
 
 export interface VectorWorldStagingStats {
     buildingCount: number;
+    /** Buildings drawn from Google's true 3D modeled volumes (part of buildingCount). */
+    modeledVolumeCount?: number;
+    /** Footprints with no height data, drawn flat rather than given an invented height. */
+    flatFootprintCount?: number;
     roadSegmentCount: number;
     waterPolygonCount: number;
     vertexCount: number;
@@ -340,54 +349,66 @@ export class GoogleVectorTileService {
     }
 
     /**
-     * Fetches and decodes MVT protobuf data for tile (x, y, z).
+     * Fetches and decodes Google Vector Tiles (vectortiles.featuretiles JSON) for tile (x, y, z).
      */
     public static async fetchVectorTile(
         x: number,
         y: number,
         z: number,
-        apiKey: string,
+        /** Unused: vector tiles authenticate with the service account (API keys are refused). Kept for callers. */
+        _apiKey: string,
         fetchImpl: typeof fetch = fetch
     ): Promise<DecodedVectorTileData> {
-        const emptyResult: DecodedVectorTileData = {
-            buildings: [],
-            landuse: [],
-            water: [],
-            roads: []
-        };
-
         const cacheKey = `${z}/${x}/${y}`;
         if (this.tileCache.has(cacheKey)) {
             return this.tileCache.get(cacheKey)!;
         }
 
-        try {
-            const session = await this.getSessionToken(apiKey, fetchImpl);
-            const url = session
-                ? `https://tile.googleapis.com/v1/2d/tiles/${z}/${x}/${y}?session=${session}&key=${apiKey}`
-                : `https://tile.googleapis.com/v1/2d/vectortiles/${z}/${x}/${y}?key=${apiKey}`;
-
-            const res = await fetchImpl(url);
-            // Google's Map Tiles API serves 2D tiles as PNG images and has no vector-tile endpoint
-            // (/v1/2d/vectortiles returns 404). Say so instead of staging an empty world as if it had loaded.
-            const contentType = res.headers?.get?.('content-type') || '';
-            if (!res.ok || contentType.startsWith('image/')) {
-                throw new VectorTileUnavailableError(
-                    `Google vector tile ${z}/${x}/${y} unavailable (HTTP ${res.status}${contentType ? `, ${contentType}` : ''}): ` +
-                    'the Map Tiles API serves 2D tiles as raster images, not vector data, so no building, road or water geometry was loaded.'
-                );
-            }
-
-            const arrayBuffer = await res.arrayBuffer();
-            const decoded = this.decodeTileBuffer(arrayBuffer, x, y, z);
-            this.tileCache.set(cacheKey, decoded);
-            return decoded;
-        } catch (err: any) {
-            if (err instanceof VectorTileUnavailableError) throw err;
-            console.warn(`[GoogleVectorTileService] Error fetching tile ${z}/${x}/${y}: ${err?.message}`);
-            return emptyResult;
+        // Google Vector Tiles (vectortiles.featuretiles): JSON, OAuth through an allowlisted project (API keys get
+        // "Method not found"); languageCode and regionCode are required.
+        const auth = await this.authProvider();
+        const params = new URLSearchParams({
+            enableModeledVolumes: 'true',
+            alwaysIncludeBuildingFootprints: 'false',
+            languageCode: 'en-US',
+            regionCode: 'US'
+        });
+        const res = await fetchImpl(`https://tile.googleapis.com/v1/vectortiles/featuretiles/${z}/${x}/${y}?${params}`, {
+            headers: { Authorization: `Bearer ${auth.token}`, 'X-Goog-User-Project': auth.project }
+        });
+        const contentType = res.headers?.get?.('content-type') || '';
+        if (!res.ok || !contentType.includes('json')) {
+            const detail = await res.text().catch(() => '');
+            throw new VectorTileUnavailableError(
+                `Google vector tile ${z}/${x}/${y} unavailable (HTTP ${res.status}${contentType ? `, ${contentType}` : ''}): ${detail.slice(0, 200)}`
+            );
         }
+        const decoded = decodeFeatureTile(await res.json());
+        const result: DecodedVectorTileData = {
+            buildings: decoded.buildings,
+            landuse: decoded.landuse,
+            water: decoded.water,
+            roads: decoded.roads,
+            pois: decoded.pois,
+            modeledVolumes: decoded.modeledVolumes,
+            buildingFootprints2D: decoded.buildingFootprints2D
+        };
+        this.tileCache.set(cacheKey, result);
+        return result;
     }
+
+    /**
+     * Credentials for vector tiles: the app's service account token and project. Tests replace this.
+     */
+    public static authProvider: () => Promise<{ token: string; project: string }> = async () => {
+        const { GeminiClient } = await import('../gemini/gemini-client');
+        const client = new GeminiClient();
+        if (!client.ensureAuth()) throw new VectorTileUnavailableError('Google vector tiles need the Google Cloud service account (none is configured).');
+        const t = (await client.getAccessToken()) as { token?: string | null };
+        const project = (client as any).cachedProjectId as string | undefined;
+        if (!t?.token || !project) throw new VectorTileUnavailableError('Could not get a service-account token for Google vector tiles.');
+        return { token: t.token, project };
+    };
 
     /**
      * Decodes Mapbox Vector Tile (.mvt / .pbf) buffer into structured building, road, and water features.
@@ -515,6 +536,7 @@ export class GoogleVectorTileService {
         const allBuildings: VectorFeaturePolygon[] = [];
         const allRoads: VectorFeatureLine[] = [];
         const allWater: VectorFeaturePolygon[] = [];
+        const allModeled = new Map<string, DecodedModeledVolume>();
 
         let tilesCount = 0;
         for (let dx = -radius; dx <= radius; dx++) {
@@ -524,6 +546,7 @@ export class GoogleVectorTileService {
                 tilesCount++;
                 const tileData = await this.fetchVectorTile(tx, ty, zoom, apiKey, fetchImpl);
                 allBuildings.push(...tileData.buildings);
+                for (const mv of tileData.modeledVolumes || []) allModeled.set(mv.id, mv);
                 if (options.includeRoads !== false) {
                     allRoads.push(...tileData.roads);
                 }
@@ -595,6 +618,7 @@ export class GoogleVectorTileService {
 
         // 1. Extrude Buildings (70-20-10 Geometric Form Hierarchy)
         let buildingCount = 0;
+        let flatFootprintCount = 0;
         for (const b of allBuildings) {
             if (b.ring.length < 3) continue;
 
@@ -602,20 +626,19 @@ export class GoogleVectorTileService {
                 wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude, anchorElevation, undefined, ltp)
             );
 
-            // Compute height from properties or default
-            let height = 15.0;
-            if (b.properties?.height) {
+            // Height from the data only: Google's maxZ (heightMeters), else tagged height/levels. A footprint
+            // with no height is drawn flat rather than given an invented one.
+            let height = 0.2;
+            if (typeof b.properties?.heightMeters === 'number' && b.properties.heightMeters > 0) {
+                height = b.properties.heightMeters - (b.properties.minHeightMeters || 0);
+            } else if (b.properties?.height) {
                 height = parseFloat(b.properties.height);
             } else if (b.properties?.['building:levels']) {
                 height = parseFloat(b.properties['building:levels']) * 3.5;
             } else if (b.properties?.levels) {
                 height = parseFloat(b.properties.levels) * 3.5;
             } else {
-                // Procedural variation based on area
-                const area = Math.abs(EarClippingTriangulator.signedArea(localRing));
-                if (area > 1500) height = 45.0;
-                else if (area > 600) height = 28.0;
-                else height = 12.0;
+                flatFootprintCount++;
             }
             height *= heightScale;
 
@@ -675,6 +698,35 @@ export class GoogleVectorTileService {
                 indices.push(roofStartIdx + triIdx);
             }
 
+            buildingCount++;
+        }
+
+        // 1b. Google's true 3D modeled volumes (buildings such as the Empire State Building that have no 2.5D
+        // footprint in this request), seated on the ground sampled at their centroid. Flat-shaded triangles.
+        let modeledVolumeCount = 0;
+        for (const mv of allModeled.values()) {
+            if (mv.vertices.length < 3 || mv.indices.length < 3) continue;
+            const local = mv.vertices.map(([lng, lat]) =>
+                wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude, anchorElevation, undefined, ltp));
+            const cx = local.reduce((a, p) => a + p.x, 0) / local.length;
+            const cz = local.reduce((a, p) => a + p.z, 0) / local.length;
+            const groundY = sampleElevation(cx, cz);
+            const pos = local.map((p, k) => [p.x, groundY + mv.vertices[k][2] * heightScale, p.z] as [number, number, number]);
+            for (let t = 0; t + 2 < mv.indices.length; t += 3) {
+                const a = pos[mv.indices[t]], b2 = pos[mv.indices[t + 1]], c = pos[mv.indices[t + 2]];
+                if (!a || !b2 || !c) continue;
+                const ux = b2[0] - a[0], uy = b2[1] - a[1], uz = b2[2] - a[2];
+                const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+                let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                const len = Math.hypot(nx, ny, nz);
+                if (len < 1e-9) continue;
+                nx /= len; ny /= len; nz /= len;
+                for (const p of [a, b2, c]) {
+                    indices.push(addVertex(p[0], p[1], p[2], nx, ny, nz, p[0] * 0.1, p[2] * 0.1));
+                    expandBounds(p[0], p[1], p[2]);
+                }
+            }
+            modeledVolumeCount++;
             buildingCount++;
         }
 
@@ -877,6 +929,8 @@ export class GoogleVectorTileService {
             glbUrl,
             stats: {
                 buildingCount,
+                modeledVolumeCount,
+                flatFootprintCount,
                 roadSegmentCount,
                 waterPolygonCount,
                 vertexCount: currentVertexCount,

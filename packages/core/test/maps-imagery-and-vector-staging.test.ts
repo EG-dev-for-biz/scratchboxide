@@ -149,48 +149,30 @@ describe('GoogleVectorTileService (3D Vector Tiles Staging)', () => {
         const lat = 40.7484;
         const lng = -73.9857;
 
-        // Mock fetchVectorTile to return sample buildings and road features
-        const mockTileFetch: typeof fetch = async (url: any) => {
-            return {
-                ok: true,
-                status: 200,
-                arrayBuffer: async () => new ArrayBuffer(0) // empty pbf
-            } as any;
+        // A synthetic FeatureTile (vectortiles.featuretiles JSON): one 2.5D building and one road, in the tile's 4096 grid.
+        const featureTile = {
+            x: 0, y: 0, zoom: 16,
+            features: [
+                {
+                    types: ['FEATURE_TYPE_BUILDING'],
+                    geometry: { extrudedAreas: [{ maxZ: 400, area: { type: 'TRIANGLE_FAN', vertexOffsets: { xOffsets: [2048, -100, 200, 0, -200], yOffsets: [2048, -100, 0, 200, 0] } } }] }
+                },
+                {
+                    types: ['FEATURE_TYPE_INFRASTRUCTURE', 'FEATURE_TYPE_ROAD'],
+                    geometry: { lines: [{ vertexOffsets: { xOffsets: [0, 4096], yOffsets: [1000, 0] } }] }
+                }
+            ]
         };
+        const mockTileFetch: typeof fetch = async (url: any) => {
+            const [, z, x, y] = /featuretiles\/(\d+)\/(\d+)\/(\d+)/.exec(String(url))!;
+            const body = { ...featureTile, zoom: Number(z), x: Number(x), y: Number(y) };
+            return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => body, text: async () => JSON.stringify(body) } as any;
+        };
+        const origAuth = GoogleVectorTileService.authProvider;
+        GoogleVectorTileService.authProvider = async () => ({ token: 'test-token', project: 'test-project' });
 
         const tmpGlbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-vector-staging-'));
         const tmpGlb = path.join(tmpGlbDir, 'test_vector_staging.glb');
-
-        // Spy / override decodeTileBuffer on test run
-        const origDecode = GoogleVectorTileService.decodeTileBuffer;
-        GoogleVectorTileService.decodeTileBuffer = () => ({
-            buildings: [
-                {
-                    id: 'bldg-1',
-                    type: 'Polygon',
-                    ring: [
-                        [lng - 0.0005, lat - 0.0005],
-                        [lng + 0.0005, lat - 0.0005],
-                        [lng + 0.0005, lat + 0.0005],
-                        [lng - 0.0005, lat + 0.0005]
-                    ],
-                    properties: { height: '35.0' }
-                }
-            ],
-            roads: [
-                {
-                    id: 'road-1',
-                    type: 'LineString',
-                    points: [
-                        [lng - 0.001, lat],
-                        [lng + 0.001, lat]
-                    ],
-                    properties: { class: 'road' }
-                }
-            ],
-            water: [],
-            landuse: []
-        });
 
         try {
             const stagingResult = await GoogleVectorTileService.stage3DVectorWorld({
@@ -221,7 +203,7 @@ describe('GoogleVectorTileService (3D Vector Tiles Staging)', () => {
             expect(jsonChunk).toContain('0.55'); // baseColorFactor 0.55
             expect(jsonChunk).toContain('0.85'); // roughness 0.85
         } finally {
-            GoogleVectorTileService.decodeTileBuffer = origDecode;
+            GoogleVectorTileService.authProvider = origAuth;
             await fs.remove(tmpGlbDir);
         }
     });
