@@ -220,7 +220,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `survey_render_station`: Headless renders station blockouts.
 - `survey_beautify_station`: AI-beautifies station render.
 - `survey_beautify_to_splats`: Directly reconstructs beautified stations into splats.
-- `survey_beautify_to_texture`: Inverse projects beautified views to texture atlas.
+- `survey_beautify_to_texture`: Inverse projects beautified views to texture atlas (NOAA de-lighting only with the stations' anchor coordinates and a given isoDate; the result says whether it ran).
 
 ### 4. Panoramas & Zenith Reconstruction (`spatial-tools.ts`)
 - `panorama_heal_seam`: Heals the 360 wrap-around seam with an image model (fails when no model answers; refuses an answer that would be enlarged more than `maxModelUpscale`, default 2x).
@@ -231,7 +231,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `panorama_extract_zenith`: Extracts rectilinear top-down patch.
 - `panorama_generate_perspectives`: Extracts multiple rectilinear cameras.
 - `panorama_audit_quality`: Evaluates seams, resolution, and dynamic range.
-- `location_generate_3dgs`: End-to-end location 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tiles synthesis with implicit Nano Banana restyling.
+- `location_generate_3dgs`: End-to-end location 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tiles synthesis with implicit Nano Banana restyling, rendered from the caller's clay GLB or a fresh Google 3D Tiles clay extraction (a failed extraction fails the call).
 - `panorama_to_3dgs`: Projects an equirectangular panorama into Gaussian splats using Depth Anything V2 Metric depth (the depth sidecar fails rather than invent depth or an eye height).
 - `single_image_to_3dgs`: Lifts a photo into Gaussian splats along pinhole rays at the depth the Depth Anything V2 Metric sidecar measures; fails when the model cannot run, and says when the field of view was assumed.
 - `splat_to_3dtiles`: Converts Gaussian splat cloud (.splat or .spz) into OGC 3D Tiles 1.1 tileset.
@@ -633,7 +633,7 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
 
 ### Stage 3: Real-World Set Extension & Volumetric Massing
 1. **Leaf LOD 3D Tiles**: `Google3DTileBlockoutPipelineService` downloads high-fidelity geometry without preset boundaries.
-2. **UTDRA edits**: `UniversalTileDecompositionService` measures the tile, slices below-ground geometry at a given elevation, and removes curtain-wall triangles inside a span box taken from the vector bridge layer.
+2. **UTDRA edits**: `UniversalTileDecompositionService` measures the tile, slices below-ground geometry at a given elevation, and removes curtain-wall triangles inside a span box the caller gives (deck footprint and heights in the tile's coordinates); it does not find bridges itself.
 3. **Procedural Set Dressing**: `UniversalBotanicalBridgeService` (SB-Veggie) scatters biologically accurate trees, while `UniversalArchiBridgeService` (SB-Archi) snaps classical architectural colonnades and entablatures to real-world ground datum planes.
 
 ### Stage 4: 4D Dynamic Performer & Character Integration
