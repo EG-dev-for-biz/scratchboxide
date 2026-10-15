@@ -9,17 +9,46 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { GoogleGenAI, Type, type Schema } from '@google/genai';
+import { Type, type Schema } from '@google/genai';
 import { GeminiClient } from '../gemini/gemini-client';
-import {
-  AdaptiveWorldStyleContract,
-  DEFAULT_ADAPTIVE_STYLE_CONTRACT
-} from '../../common/spatial/adaptive-style-contract';
+import { AdaptiveWorldStyleContract } from '../../common/spatial/adaptive-style-contract';
+import { MissingInputError, VisionUnavailableError } from '../../common/errors/pipeline-errors';
 
 export interface DeconstructionOptions {
   client?: any; // Explicit GenAI client override
-  fidelity?: 'fast-analytical' | 'balanced' | 'deep-multimodal';
+  /** 'balanced' (default) reads the image with gemini-2.5-flash, 'deep-multimodal' with gemini-2.5-pro. */
+  fidelity?: 'balanced' | 'deep-multimodal';
   promptHint?: string;
+}
+
+/** The contract a vision model read from the reference image, and which model read it. */
+export interface StyleDeconstructionResult {
+  contract: AdaptiveWorldStyleContract;
+  modelUsed: string;
+}
+
+/** Every field the response schema requires, as dotted paths; a model answer missing any of them is refused. */
+const REQUIRED_CONTRACT_FIELDS: Array<[string, 'number' | 'boolean' | 'rgb']> = [
+  ['photometric.shadowLift', 'number'], ['photometric.highlightCompress', 'number'], ['photometric.contrastPivot', 'number'],
+  ['photometric.colorTemperatureK', 'number'], ['photometric.lutStrength', 'number'],
+  ...(['lift', 'gamma', 'gain'] as const).flatMap(w => (['r', 'g', 'b', 'master'] as const)
+    .map(c => [`photometric.colorGradingWheel.${w}.${c}`, 'number'] as [string, 'number'])),
+  ['microSurface.detailFrequency', 'number'], ['microSurface.normalPerturbationScale', 'number'], ['microSurface.cavitationDepth', 'number'],
+  ['microSurface.roughnessBias', 'number'], ['microSurface.specularGlintIntensity', 'number'],
+  ['geometricContours.enabled', 'boolean'], ['geometricContours.depthThreshold', 'number'], ['geometricContours.normalThreshold', 'number'],
+  ['geometricContours.lineWidth', 'number'], ['geometricContours.inkColor', 'rgb'], ['geometricContours.jitter', 'number'],
+  ['stylizationFilter.quantizationBands', 'number'], ['stylizationFilter.quantizationSoftness', 'number'], ['stylizationFilter.kuwaharaRadius', 'number'],
+  ['stylizationFilter.halftoneDensity', 'number'], ['stylizationFilter.ditherMatrixSize', 'number']
+];
+
+/** The dotted paths of REQUIRED_CONTRACT_FIELDS that `value` lacks or has with the wrong type. */
+export function invalidStyleContractFields(value: unknown): string[] {
+  return REQUIRED_CONTRACT_FIELDS.filter(([field, kind]) => {
+    const v = field.split('.').reduce<any>((o, k) => (o && typeof o === 'object' ? o[k] : undefined), value);
+    if (kind === 'boolean') return typeof v !== 'boolean';
+    if (kind === 'rgb') return !Array.isArray(v) || v.length !== 3 || !v.every(n => typeof n === 'number' && Number.isFinite(n));
+    return typeof v !== 'number' || !Number.isFinite(v);
+  }).map(([field]) => field);
 }
 
 const adaptiveStyleSchema: Schema = {
@@ -129,76 +158,49 @@ export class AdaptiveStyleDeconstructionService {
   }
 
   /**
-   * Main entry point: Projects any visual image reference into a continuous AdaptiveWorldStyleContract.
+   * Has a Gemini vision model read the reference image into an AdaptiveWorldStyleContract. Every value comes from
+   * the model's answer; when no model can read the image (no credentials, a failed call, or an incomplete answer)
+   * this throws VisionUnavailableError. There is no offline or keyword-based stand-in.
    */
   public async deconstructStyle(
     imageInput: string | Buffer,
     cameraPose?: { position: [number, number, number]; target: [number, number, number]; fov: number },
     options: DeconstructionOptions = {}
-  ): Promise<AdaptiveWorldStyleContract> {
+  ): Promise<StyleDeconstructionResult> {
     const fidelity = options.fidelity || 'balanced';
+    if (fidelity !== 'balanced' && fidelity !== 'deep-multimodal') {
+      throw new MissingInputError('adaptive style deconstruction', 'fidelity', `"${fidelity}" is not one of "balanced" or "deep-multimodal"`);
+    }
+    const modelName = fidelity === 'deep-multimodal' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+    const { data: imageBase64, mimeType } = await this.readImage(imageInput);
 
-    // Fast-analytical mode bypasses AI models entirely, matching our instant offline guidelines
-    if (fidelity === 'fast-analytical') {
-      return this.deconstructHeuristic(imageInput, cameraPose, options.promptHint);
+    let genai: any;
+    try {
+      genai = options.client || await this.getGenAIClient();
+    } catch (err: any) {
+      throw new VisionUnavailableError(modelName, 'no-credentials', err?.message || String(err));
+    }
+    if (!genai?.models?.generateContent) {
+      throw new VisionUnavailableError(modelName, 'no-credentials', 'no Gemini client is configured');
     }
 
-    try {
-      const genai = await this.getGenAIClient();
-      if (!genai) {
-        console.warn('[AdaptiveStyleDeconstructionService] GenAI Client not authenticated. Falling back to analytical deconstruction.');
-        return this.deconstructHeuristic(imageInput, cameraPose, options.promptHint);
-      }
-
-      let imageBase64 = '';
-      let mimeType = 'image/png';
-
-      if (Buffer.isBuffer(imageInput)) {
-        imageBase64 = imageInput.toString('base64');
-      } else if (typeof imageInput === 'string') {
-        if (imageInput.startsWith('data:')) {
-          const match = imageInput.match(/^data:([^;]+);base64,(.+)$/);
-          if (match) {
-            mimeType = match[1];
-            imageBase64 = match[2];
-          } else {
-            throw new Error('AdaptiveStyleDeconstructionService: Invalid data URI schema.');
-          }
-        } else {
-          if (await fs.pathExists(imageInput)) {
-            const ext = path.extname(imageInput).toLowerCase();
-            if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
-            else if (ext === '.webp') mimeType = 'image/webp';
-            const buffer = await fs.readFile(imageInput);
-            imageBase64 = buffer.toString('base64');
-          } else {
-            throw new Error(`AdaptiveStyleDeconstructionService: File not found at path ${imageInput}`);
-          }
-        }
-      }
-
-      const contents: any[] = [
-        {
-          inlineData: {
-            mimeType,
-            data: imageBase64
-          }
-        },
-        `Analyze the attached style reference image or design plate. Deconstruct its entire artistic, physical, and lighting DNA into a continuous WebGL shader parameter structure.
+    const contents: any[] = [
+      { inlineData: { mimeType, data: imageBase64 } },
+      `Analyze the attached style reference image or design plate. Deconstruct its entire artistic, physical, and lighting DNA into a continuous WebGL shader parameter structure.
 
 CRITICAL DIRECTIVES:
 1. Examine lighting (noon, sunset, twilight, high-contrast, or soft overcast) to calibrate shadowLift (crevice lifting), highlightCompress (glare protection), contrastPivot, and colorTemperatureK.
 2. Characterize color wheels: lift (shadow tinting), gamma (midtones), gain (highlights). Format each with rgb and master components.
 3. Detect PBR micro-surface texture: is the image smooth/glossy (low roughnessBias, high glint), or is it heavily textured stone, brick, paper grain, canvas, or rough aggregate (high normalPerturbationScale, high detailFrequency)?
 4. Inspect contour details: are there crisp hand-drawn or cartoon outlines, ink creases, or technical lines? Set enabled, lineWidth, inkColor, and jitter.
-5. Identify non-photorealistic filters: cel shading (quantizationBands, quantizationSoftness), paint strokes / painterly effects (kuwaharaRadius), halftone screens (halftoneDensity), or retro retro dither matrices (ditherMatrixSize).
+5. Identify non-photorealistic filters: cel shading (quantizationBands, quantizationSoftness), paint strokes / painterly effects (kuwaharaRadius), halftone screens (halftoneDensity), or retro dither matrices (ditherMatrixSize).
 
 ${options.promptHint ? `Additional Style Intent / Hint: "${options.promptHint}"` : ''}
 ${cameraPose ? `The target 3D world camera pose will be: Position: [${cameraPose.position}], Target: [${cameraPose.target}], FOV: ${cameraPose.fov}°` : ''}`
-      ];
+    ];
 
-      const modelName = fidelity === 'deep-multimodal' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
-
+    let text: string;
+    try {
       const response = await genai.models.generateContent({
         model: modelName,
         contents,
@@ -209,104 +211,23 @@ ${cameraPose ? `The target 3D world camera pose will be: Position: [${cameraPose
           temperature: 0.15
         }
       });
-
-      const text = response.text || '{}';
-      const contract = JSON.parse(text) as AdaptiveWorldStyleContract;
-
-      // Add camera projection anchor if cameraPose is provided
-      if (cameraPose && typeof imageInput === 'string' && !imageInput.startsWith('data:')) {
-        contract.cameraProjection = {
-          enabled: true,
-          position: cameraPose.position,
-          target: cameraPose.target,
-          fovDeg: cameraPose.fov,
-          grazingAngleCutoff: 0.5,
-          referenceImageUri: imageInput
-        };
-      }
-
-      return contract;
-    } catch (err) {
-      console.warn('[AdaptiveStyleDeconstructionService] Multimodal styling extraction failed. Falling back to analytical deconstruction:', err);
-      return this.deconstructHeuristic(imageInput, cameraPose, options.promptHint);
-    }
-  }
-
-  /**
-   * Fast, zero-dependency, robust offline heuristic to infer style profiles from images.
-   */
-  public deconstructHeuristic(
-    imageInput: string | Buffer,
-    cameraPose?: { position: [number, number, number]; target: [number, number, number]; fov: number },
-    promptHint?: string
-  ): AdaptiveWorldStyleContract {
-    const contract = JSON.parse(JSON.stringify(DEFAULT_ADAPTIVE_STYLE_CONTRACT)) as AdaptiveWorldStyleContract;
-    const promptLower = (promptHint || '').toLowerCase();
-
-    // 1. Detect Non-Photorealistic Presets from prompts/hints
-    if (promptLower.includes('comic') || promptLower.includes('spider-verse') || promptLower.includes('anime') || promptLower.includes('cartoon') || promptLower.includes('cel')) {
-      contract.stylizationFilter.quantizationBands = 4;
-      contract.stylizationFilter.quantizationSoftness = 0.08;
-      contract.geometricContours.enabled = true;
-      contract.geometricContours.lineWidth = 2.0;
-      contract.geometricContours.depthThreshold = 0.15;
-      contract.geometricContours.normalThreshold = 0.12;
-      contract.geometricContours.inkColor = [0.02, 0.02, 0.05];
-      contract.photometric.shadowLift = 0.6;
-      contract.photometric.highlightCompress = 0.5;
-
-      if (promptLower.includes('halftone')) {
-        contract.stylizationFilter.halftoneDensity = 14.0;
-      }
-    } else if (promptLower.includes('oil') || promptLower.includes('painterly') || promptLower.includes('watercolor') || promptLower.includes('arcane') || promptLower.includes('brush')) {
-      contract.stylizationFilter.kuwaharaRadius = 4;
-      contract.microSurface.normalPerturbationScale = 0.25;
-      contract.microSurface.roughnessBias = 0.15;
-      contract.geometricContours.enabled = promptLower.includes('watercolor') || promptLower.includes('ink');
-      contract.geometricContours.lineWidth = 1.0;
-      contract.geometricContours.depthThreshold = 0.2;
-      contract.geometricContours.inkColor = [0.1, 0.1, 0.12];
-    } else if (promptLower.includes('psx') || promptLower.includes('retro') || promptLower.includes('low-fi') || promptLower.includes('dither') || promptLower.includes('console')) {
-      contract.stylizationFilter.ditherMatrixSize = 4;
-      contract.photometric.shadowLift = 0.3;
-      contract.photometric.highlightCompress = 0.2;
-      contract.microSurface.detailFrequency = 4.0;
-      contract.microSurface.normalPerturbationScale = 0.05;
-    } else if (promptLower.includes('blueprint') || promptLower.includes('drawing') || promptLower.includes('sketch') || promptLower.includes('contour')) {
-      contract.geometricContours.enabled = true;
-      contract.geometricContours.lineWidth = 1.5;
-      contract.geometricContours.depthThreshold = 0.08;
-      contract.geometricContours.normalThreshold = 0.05;
-      contract.geometricContours.jitter = 0.15;
-      contract.photometric.shadowLift = 0.8;
-      contract.photometric.highlightCompress = 0.7;
-      if (promptLower.includes('blueprint')) {
-        contract.geometricContours.inkColor = [0.0, 0.85, 1.0];
-        contract.photometric.colorGradingWheel.lift = { r: 0.0, g: 0.2, b: 0.8, master: 1.0 };
-      }
+      text = response?.text || '';
+    } catch (err: any) {
+      throw new VisionUnavailableError(modelName, err?.status || err?.code || 'request-failed', err?.message || String(err));
     }
 
-    // 2. Adjust color temperatures based on diurnal lighting descriptors
-    if (promptLower.includes('sunset') || promptLower.includes('dusk') || promptLower.includes('twilight')) {
-      contract.photometric.colorTemperatureK = 3200;
-      contract.photometric.shadowLift = 0.7;
-      contract.photometric.colorGradingWheel.lift = { r: 0.1, g: 0.12, b: 0.25, master: 0.95 };
-      contract.photometric.colorGradingWheel.gamma = { r: 0.95, g: 0.65, b: 0.55, master: 1.0 };
-      contract.photometric.colorGradingWheel.gain = { r: 1.05, g: 0.78, b: 0.45, master: 1.05 };
-    } else if (promptLower.includes('golden hour') || promptLower.includes('sunset golden') || promptLower.includes('warm')) {
-      contract.photometric.colorTemperatureK = 2800;
-      contract.photometric.shadowLift = 0.55;
-      contract.photometric.colorGradingWheel.gamma = { r: 1.05, g: 0.85, b: 0.65, master: 1.0 };
-      contract.photometric.colorGradingWheel.gain = { r: 1.15, g: 0.95, b: 0.55, master: 1.1 };
-    } else if (promptLower.includes('cyberpunk') || promptLower.includes('neon') || promptLower.includes('night')) {
-      contract.photometric.colorTemperatureK = 18000;
-      contract.photometric.shadowLift = 0.85;
-      contract.photometric.colorGradingWheel.lift = { r: 0.05, g: 0.02, b: 0.12, master: 1.0 };
-      contract.photometric.colorGradingWheel.gamma = { r: 0.85, g: 0.15, b: 0.95, master: 1.0 };
-      contract.photometric.colorGradingWheel.gain = { r: 0.15, g: 0.95, b: 0.85, master: 1.15 };
+    let contract: AdaptiveWorldStyleContract;
+    try {
+      contract = JSON.parse(text) as AdaptiveWorldStyleContract;
+    } catch {
+      throw new VisionUnavailableError(modelName, 'invalid-response', `the answer is not JSON: ${text.slice(0, 200) || '(empty)'}`);
+    }
+    const invalid = invalidStyleContractFields(contract);
+    if (invalid.length) {
+      throw new VisionUnavailableError(modelName, 'invalid-response', `the answer lacks ${invalid.join(', ')}`);
     }
 
-    // 3. Setup camera projection if requested and inputs allow
+    // Add camera projection anchor if cameraPose is provided
     if (cameraPose && typeof imageInput === 'string' && !imageInput.startsWith('data:')) {
       contract.cameraProjection = {
         enabled: true,
@@ -318,6 +239,24 @@ ${cameraPose ? `The target 3D world camera pose will be: Position: [${cameraPose
       };
     }
 
-    return contract;
+    return { contract, modelUsed: modelName };
+  }
+
+  /** The reference image as base64 and its MIME type; a missing file or malformed data URI is a MissingInputError. */
+  private async readImage(imageInput: string | Buffer): Promise<{ data: string; mimeType: string }> {
+    if (Buffer.isBuffer(imageInput)) {
+      return { data: imageInput.toString('base64'), mimeType: 'image/png' };
+    }
+    if (imageInput.startsWith('data:')) {
+      const match = imageInput.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) throw new MissingInputError('adaptive style deconstruction', 'referenceImage', 'the data URI is not base64 image data');
+      return { mimeType: match[1], data: match[2] };
+    }
+    if (!(await fs.pathExists(imageInput))) {
+      throw new MissingInputError('adaptive style deconstruction', 'referenceImage', `${imageInput} does not exist`);
+    }
+    const ext = path.extname(imageInput).toLowerCase();
+    const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : 'image/png';
+    return { mimeType, data: (await fs.readFile(imageInput)).toString('base64') };
   }
 }

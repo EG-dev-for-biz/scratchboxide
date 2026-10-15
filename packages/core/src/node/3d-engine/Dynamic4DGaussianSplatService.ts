@@ -457,6 +457,7 @@ export class Dynamic4DGaussianSplatService {
      * Converts a performer avatar sequence into a Decomposed4DSplatScene compatible with GaussianSplat4DService.
      */
     public exportDecomposed4DScene(avatarId: string, maxFrames: number = 30): Decomposed4DSplatScene {
+        const startTime = Date.now();
         const { motion } = this.loadAvatar(avatarId);
         const T = Math.min(motion.frames.length, maxFrames);
         const trajectories: DynamicGaussianTrajectory[] = [];
@@ -530,13 +531,15 @@ export class Dynamic4DGaussianSplatService {
                 min: globalMin,
                 max: globalMax
             },
+            // The motion is the avatar's recorded skeletal track (LBS), not point tracking: no tracker ran and no
+            // photometric error was measured.
             telemetry: {
-                trackerUsed: 'tapir',
+                trackerUsed: 'none',
                 numDynamicGaussians: heroFrame.splats.length,
                 numStaticGaussians: 0,
                 prunedGaussians: 0,
-                meanPhotometricError: 0.012,
-                processingTimeMs: 45
+                meanPhotometricError: null,
+                processingTimeMs: Date.now() - startTime
             }
         };
     }

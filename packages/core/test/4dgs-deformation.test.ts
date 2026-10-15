@@ -173,6 +173,25 @@ describe('GaussianSplat4DService.build4DSceneFromCanonical', () => {
     });
 });
 
+describe('4DGS telemetry reports only what ran', () => {
+    it('a static-only scene reports no tracker, no photometric error, and the background\'s own bounds', async () => {
+        const background: BakedGaussian[] = [
+            { position: [-3, 0, 2], scale: [0.1, 0.1, 0.1], colorRgb: [0.5, 0.5, 0.5], opacity: 1, quaternion: [0, 0, 0, 1] },
+            { position: [4, 2.5, -1], scale: [0.1, 0.1, 0.1], colorRgb: [0.5, 0.5, 0.5], opacity: 1, quaternion: [0, 0, 0, 1] }
+        ];
+        const scene = await new GaussianSplat4DService().build4DSceneFromCanonical({
+            canonicalSubject: [],
+            staticBackground: background,
+            videoFrames: createDummyFrames(2, 32, 24)
+        });
+        expect(scene.telemetry.trackerUsed).toBe('none');
+        expect(scene.telemetry.meanPhotometricError).toBeNull();
+        expect(scene.bounds).toEqual({ min: [-3, 0, -1], max: [4, 2.5, 2] });
+        await expect(new GaussianSplat4DService().build4DSceneFromCanonical({ canonicalSubject: [], videoFrames: createDummyFrames(2, 32, 24) }))
+            .rejects.toThrow(/No canonical subject or static background/);
+    });
+});
+
 describe('Gemini Agent Tool: build_4dgs_from_video', () => {
     it('is not offered: it took no video and "tracked" flat grey frames it made itself', () => {
         expect(tapir4dgsHandlers.build_4dgs_from_video).toBeUndefined();

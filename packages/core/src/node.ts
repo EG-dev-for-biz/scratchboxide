@@ -1058,7 +1058,8 @@ export {
     AdaptiveStyleDeconstructionService
 } from './node/spatial/AdaptiveStyleDeconstructionService';
 export type {
-    DeconstructionOptions
+    DeconstructionOptions,
+    StyleDeconstructionResult
 } from './node/spatial/AdaptiveStyleDeconstructionService';
 
 // Adaptive Domain Particle Architecture (Zero-Preset & Schema-Guided)

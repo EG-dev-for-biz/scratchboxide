@@ -1054,21 +1054,72 @@ const PANORAMA_IMAGE_MODEL_PARAMETER: ToolParameterSchema = {
 export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'synthesize_adaptive_particle_system',
-        description: 'Synthesizes an AdaptiveParticleContract continuous physical specification for any particulate substance (fluids, dust, plasma, steam, sparks, sand, rain, cinders) using zero closed taxonomy presets in accordance with Scratchbox IDE Adaptive Domain Architecture.',
+        description: 'Assemble an AdaptiveParticleContract (the continuous physical description the particle renderer runs) for any particulate substance: fluids, dust, plasma, steam, sparks, spores, anything. You choose every value from the substance the user described, in physical units; the tool keeps no vocabulary of substances and fills in nothing, and a missing or out-of-range value fails the call with the list of fields to fix. manifoldWeights blend six flow shapes [buoyant plume, cyclone funnel, fountain jet, spherical shockwave, accretion disk, lateral gale] and are normalised to sum to 1.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                prompt: {
-                    type: 'STRING',
-                    description: 'Natural language description of the particle substance, dynamics, medium, or visual style (e.g. "bioluminescent marine plankton in ocean wake", "oxy-acetylene welding sparks ricocheting off steel", "Bagnold desert sandstorm with wind shear").'
+                subject: { type: 'STRING', description: 'Short name of the substance and its situation, e.g. "methane geyser spray with bioluminescent spores".' },
+                narrativeContext: { type: 'STRING', description: 'Optional one-line description of the scene the particles are in.' },
+                kinematics: {
+                    type: 'OBJECT',
+                    properties: {
+                        linearVelocity: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Bulk ejection velocity [x, y, z] in m/s.' },
+                        vorticityTensor: { type: 'NUMBER', description: 'Rotation shear in rad/s.' },
+                        radialDivergence: { type: 'NUMBER', description: 'Outward expansion (+) or sink (-).' },
+                        ambientWind: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Wind [x, y, z] in m/s.' },
+                        windGustiness: { type: 'NUMBER', description: 'Turbulent eddy amplitude (>= 0).' },
+                        gravity: { type: 'NUMBER', description: 'Vertical acceleration in m/s^2 (negative pulls down).' },
+                        substanceMass: { type: 'NUMBER', description: 'Normalised particle inertia (> 0): ~0.05 smoke or dust to ~4.5 molten metal.' },
+                        dragCoefficient: { type: 'NUMBER', description: 'Aerodynamic drag (>= 0).' },
+                        restitution: { type: 'NUMBER', description: 'Bounce on contact, 0..1.' },
+                        friction: { type: 'NUMBER', description: 'Contact friction (>= 0).' }
+                    },
+                    required: ['linearVelocity', 'vorticityTensor', 'radialDivergence', 'ambientWind', 'windGustiness', 'gravity', 'substanceMass', 'dragCoefficient', 'restitution', 'friction']
+                },
+                manifoldWeights: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Six non-negative weights [plume, cyclone, fountain, shockwave, disk, gale] with a positive sum.' },
+                manifoldScale: { type: 'NUMBER', description: 'Spatial scale of the flow shape (> 0).' },
+                advectionCurlScale: { type: 'NUMBER', description: 'Curl-noise frequency (>= 0).' },
+                material: {
+                    type: 'OBJECT',
+                    properties: {
+                        emissionModel: { type: 'STRING', description: 'Free-text label for how the particles make or carry light (shown in diagnostics; the renderer reads the numbers).' },
+                        coreRadiance: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Hottest/brightest colour [r, g, b] (>= 0).' },
+                        midRadiance: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Body colour [r, g, b] (>= 0).' },
+                        outerRadiance: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Edge / dissipation colour [r, g, b] (>= 0).' },
+                        opticalExtinction: { type: 'NUMBER', description: 'Beer-Lambert extinction (>= 0).' },
+                        specularGloss: { type: 'NUMBER', description: 'Highlight sharpness, 0..1.' },
+                        colorTemperatureK: { type: 'NUMBER', description: 'Blackbody temperature, 1000..40000 K.' },
+                        particleSizePx: { type: 'NUMBER', description: 'Sprite diameter in pixels (> 0).' },
+                        particleCount: { type: 'NUMBER', description: 'Particle budget (>= 1).' }
+                    },
+                    required: ['emissionModel', 'coreRadiance', 'midRadiance', 'outerRadiance', 'opticalExtinction', 'specularGloss', 'colorTemperatureK', 'particleSizePx', 'particleCount']
+                },
+                optics: {
+                    type: 'OBJECT',
+                    properties: {
+                        bloomMultiplier: { type: 'NUMBER', description: 'HDR glare (>= 0).' },
+                        diffusionBlurRadius: { type: 'NUMBER', description: 'Atmospheric blur (>= 0).' },
+                        thermalMirageHaze: { type: 'NUMBER', description: 'Heat shimmer (>= 0).' },
+                        chromaticDispersion: { type: 'NUMBER', description: 'Wavelength splitting (>= 0).' }
+                    },
+                    required: ['bloomMultiplier', 'diffusionBlurRadius', 'thermalMirageHaze', 'chromaticDispersion']
+                },
+                acoustics: {
+                    type: 'OBJECT',
+                    properties: {
+                        subBassHertz: { type: 'NUMBER', description: 'Fundamental rumble in Hz.' },
+                        resonantCenterHertz: { type: 'NUMBER', description: 'Resonance peak in Hz.' },
+                        impulseRate: { type: 'NUMBER', description: 'Crackle / impact events per second.' }
+                    },
+                    required: ['subBassHertz', 'resonantCenterHertz', 'impulseRate']
                 }
             },
-            required: ['prompt']
+            required: ['subject', 'kinematics', 'manifoldWeights', 'manifoldScale', 'advectionCurlScale', 'material', 'optics', 'acoustics']
         }
     },
     {
         name: 'adaptive_world_style_deconstruct',
-        description: 'Deconstruct any reference image into an adaptive continuous contract of styling, lighting, grading, detail, and NPR parameters using the zero-preset Adaptive Style Deconstruction Engine.',
+        description: 'Have a Gemini vision model read a reference image into an adaptive continuous contract of styling, lighting, grading, detail and NPR parameters. Fails when no vision model can read the image; nothing is guessed from the hint text.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1087,7 +1138,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 fidelity: {
                     type: 'STRING',
-                    description: 'Analysis fidelity: "fast-analytical" (offline, default), "balanced" (Gemini 2.5 flash), or "deep-multimodal" (Gemini 2.5 pro).'
+                    description: 'Which vision model reads the image: "balanced" (Gemini 2.5 Flash, default) or "deep-multimodal" (Gemini 2.5 Pro).'
                 },
                 promptHint: {
                     type: 'STRING',
@@ -1099,7 +1150,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'adaptive_world_style_apply',
-        description: 'Analyze an image style and apply it directly to a 3D Tile GLB mesh. Automatically deconstructs the styling parameters, maps them to a CIELAB palette, and runs the offline PBR texture re-grading engine with 100% geometric vertex lock.',
+        description: 'Read an image\'s style with a Gemini vision model and apply it to a 3D Tile GLB: the contract the model reads is mapped to a CIELAB palette and the GLB\'s textures are re-graded offline (vertex data is not modified). Fails when no vision model can read the image.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1117,7 +1168,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 fidelity: {
                     type: 'STRING',
-                    description: 'Deconstruction quality: "fast-analytical", "balanced", or "deep-multimodal"'
+                    description: 'Which vision model reads the image: "balanced" (Gemini 2.5 Flash, default) or "deep-multimodal" (Gemini 2.5 Pro).'
                 },
                 promptHint: {
                     type: 'STRING',
@@ -1948,20 +1999,19 @@ async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Pro
 
 export const panoramaHandlers: Record<string, ToolHandler> = {
     synthesize_adaptive_particle_system: async (args, _ctx) => {
-        const prompt = asString(args.prompt);
-        if (!prompt) throw new Error('synthesize_adaptive_particle_system: "prompt" argument is required.');
         const { AdaptiveDomainParticleService } = await import('../../../browser/generative-canvas/services/spatial/AdaptiveDomainParticleService');
-        const contract = AdaptiveDomainParticleService.synthesizeFromPrompt(prompt);
+        // Every value is the model's own choice; a missing or out-of-range one fails the call (MissingInputError).
+        const contract = AdaptiveDomainParticleService.buildContract(args as any);
         return {
             resultPayload: contract as any,
-            summaryResult: `Synthesized Adaptive Particle Contract for "${contract.subject}": emission=${contract.material.emissionModel}, mass=${contract.kinematics.substanceMass}, restitution=${contract.kinematics.restitution}, gravity=${contract.kinematics.gravity}m/s², wind=[${contract.kinematics.ambientWind.join(', ')}]m/s.`
+            summaryResult: `Assembled the particle contract for "${contract.subject}" from the values given: emission ${contract.material.emissionModel}, mass ${contract.kinematics.substanceMass}, restitution ${contract.kinematics.restitution}, gravity ${contract.kinematics.gravity} m/s², wind [${contract.kinematics.ambientWind.join(', ')}] m/s, ${contract.material.particleCount} particles.`
         };
     },
 
     adaptive_world_style_deconstruct: async (args, ctx) => {
         const referenceImagePath = asString(args.referenceImagePath);
         if (!referenceImagePath) throw new Error('adaptive_world_style_deconstruct: "referenceImagePath" argument is required.');
-        const fidelity = (asString(args.fidelity) || 'fast-analytical') as any;
+        const fidelity = (asString(args.fidelity) || 'balanced') as any;
         const promptHint = asString(args.promptHint) || undefined;
         
         let cameraPoseObj: any = undefined;
@@ -1978,14 +2028,14 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
 
         const { AdaptiveStyleDeconstructionService } = await import('../../spatial/AdaptiveStyleDeconstructionService');
         const service = new AdaptiveStyleDeconstructionService();
-        const contract = await service.deconstructStyle(referenceImagePath, cameraPoseObj, {
+        const { contract, modelUsed } = await service.deconstructStyle(referenceImagePath, cameraPoseObj, {
             fidelity,
             promptHint
         });
 
         return {
-            resultPayload: contract as any,
-            summaryResult: `Deconstructed style from ${referenceImagePath} using ${fidelity} fidelity. Extracted color temp: ${contract.photometric.colorTemperatureK}K, shadow lift: ${contract.photometric.shadowLift}, micro detail scale: ${contract.microSurface.normalPerturbationScale}.`
+            resultPayload: { ...contract, modelUsed } as any,
+            summaryResult: `${modelUsed} read the style of ${referenceImagePath}: color temperature ${contract.photometric.colorTemperatureK} K, shadow lift ${contract.photometric.shadowLift}, micro-detail scale ${contract.microSurface.normalPerturbationScale}.`
         };
     },
 
@@ -1996,7 +2046,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         if (!inputGlbPath) throw new Error('adaptive_world_style_apply: "inputGlbPath" argument is required.');
         
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
-        const fidelity = (asString(args.fidelity) || 'fast-analytical') as any;
+        const fidelity = (asString(args.fidelity) || 'balanced') as any;
         const promptHint = asString(args.promptHint) || undefined;
         const protectFoliage = typeof args.protectFoliage === 'boolean' ? args.protectFoliage : true;
         const protectAsphalt = typeof args.protectAsphalt === 'boolean' ? args.protectAsphalt : true;
@@ -2004,7 +2054,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         // 1. Deconstruct style
         const { AdaptiveStyleDeconstructionService } = await import('../../spatial/AdaptiveStyleDeconstructionService');
         const deconstruction = new AdaptiveStyleDeconstructionService();
-        const contract = await deconstruction.deconstructStyle(referenceImagePath, undefined, {
+        const { contract, modelUsed } = await deconstruction.deconstructStyle(referenceImagePath, undefined, {
             fidelity,
             promptHint
         });
@@ -2036,6 +2086,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             resultPayload: {
                 success: result.success,
                 contract,
+                modelUsed,
                 palette,
                 inputGlbPath: result.inputGlbPath,
                 outputGlbPath: result.outputGlbPath,
@@ -2043,7 +2094,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 originalByteLength: result.originalByteLength,
                 recoloredByteLength: result.recoloredByteLength
             } as any,
-            summaryResult: `Successfully styled 3D model ${inputGlbPath} using reference ${referenceImagePath}. Output path: ${result.outputGlbPath}. Processed ${result.textureCount} textures with 0.000 mm geometric drift.`
+            summaryResult: `Re-graded ${result.textureCount} texture(s) of ${inputGlbPath} to the style ${modelUsed} read from ${referenceImagePath} (vertex data is not modified). Output: ${result.outputGlbPath}.`
         };
     },
 
@@ -4766,13 +4817,21 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'avatar_4dgs_retarget',
-        description: 'Retargets MediaPipe 33 pose motion track or custom pose angles onto a 22-joint SB-Human skeletal avatar with terrain ground-contact altitude clamping.',
+        description: 'Retargets a recorded motion track onto a 22-joint SB-Human skeletal avatar with ground-contact altitude clamping. The track is the JSON that vfx_mediapipe_track_video_motion writes to its outputJsonPath (per-frame MediaPipe world landmarks or joint angles); the call fails without one, and a dry-run track is refused.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 avatarId: {
                     type: 'STRING',
                     description: 'Target avatar identifier'
+                },
+                motionTrackPath: {
+                    type: 'STRING',
+                    description: 'Path to the motion track JSON written by vfx_mediapipe_track_video_motion (outputJsonPath).'
+                },
+                outputMotionPath: {
+                    type: 'STRING',
+                    description: 'Where to write the retargeted avatar motion JSON (default: next to the track, <track>_retargeted_<avatarId>.json).'
                 },
                 groundAltitudeMeters: {
                     type: 'NUMBER',
@@ -4787,7 +4846,7 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     description: 'Temporal moving average window size for joint smoothing (default: 3)'
                 }
             },
-            required: ['avatarId']
+            required: ['avatarId', 'motionTrackPath']
         }
     },
     {
@@ -4913,6 +4972,31 @@ export const HUMANOID_AVATAR_TOOL_DECLARATIONS: ToolDeclaration[] = [
 
 export const tapir4dgsHandlers: Record<string, ToolHandler> = {};
 
+/**
+ * Reads a motion track JSON (VideoMotionTrackResult, as vfx_mediapipe_track_video_motion writes it). Fails when the
+ * file is missing, is a dry run, or has a frame with neither world landmarks nor joint angles.
+ */
+async function readMotionTrack(tool: string, value: unknown): Promise<import('../../video/MediaPipeVideoDirectorService').VideoMotionTrackResult> {
+    const trackPath = asString(value);
+    if (!trackPath) throw new MissingInputError(tool, 'motionTrackPath', 'give the motion track JSON from vfx_mediapipe_track_video_motion (outputJsonPath); no motion is assumed');
+    const fsMod = await import('fs-extra');
+    if (!(await fsMod.pathExists(trackPath))) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} does not exist`);
+    let track: any;
+    try {
+        track = await fsMod.readJson(trackPath);
+    } catch (err: any) {
+        throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} is not JSON (${err?.message || err})`);
+    }
+    if (track?.dryRun) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} is a dry-run plan, not a tracked motion`);
+    if (track?.success === false) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} records a failed tracking run${track.error ? `: ${track.error}` : ''}`);
+    const frames = Array.isArray(track?.frames) ? track.frames : [];
+    if (!frames.length) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} has no frames`);
+    const unusable = frames.findIndex((f: any) => !((f?.worldLandmarks?.length ?? 0) >= 33 || (f?.angles && typeof f.angles === 'object')));
+    if (unusable >= 0) throw new MissingInputError(tool, 'motionTrackPath', `frame ${unusable} of ${trackPath} has neither 33 world landmarks nor joint angles`);
+    if (!(Number(track.sampleFps) > 0)) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} does not record its sampleFps`);
+    return track;
+}
+
 export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     async avatar_4dgs_list(_args) {
         const service = new Dynamic4DGaussianSplatService();
@@ -4977,7 +5061,9 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     },
 
     async avatar_4dgs_retarget(args) {
-        const avatarId = asString(args.avatarId, '2785536');
+        const avatarId = asString(args.avatarId);
+        if (!avatarId) throw new MissingInputError('avatar_4dgs_retarget', 'avatarId', 'name the avatar to retarget onto (avatar_4dgs_list lists them)');
+        const track = await readMotionTrack('avatar_4dgs_retarget', args.motionTrackPath);
         const groundAlt = Number(args.groundAltitudeMeters ?? 0.0);
         const pinFeet = args.pinFeetToGround !== undefined ? Boolean(args.pinFeetToGround) : true;
         const smoothingWindow = Number(args.smoothingWindow ?? 3);
@@ -4986,55 +5072,37 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
         const { motion } = splatService.loadAvatar(avatarId);
 
         const bridgeService = new HumanoidMotionBridgeService();
-        const canonical = motion.canonical_joints;
-        const simulatedTrack = {
-            success: true,
-            durationSec: motion.num_frames / motion.fps,
-            totalFramesAnalyzed: motion.num_frames,
-            sampleFps: motion.fps,
-            averageConfidence: 0.95,
-            maxDisplacementMeters: 1.2,
-            groundedYReferenceMeters: groundAlt,
-            frames: motion.frames.map(f => ({
-                frameIndex: f.frame_index,
-                timestampSec: f.timestamp,
-                angles: {
-                    leftUpperArm: [0, 0, 0] as [number, number, number],
-                    rightUpperArm: [0, 0, 0] as [number, number, number],
-                    leftLowerArm: [0, 0, 0] as [number, number, number],
-                    rightLowerArm: [0, 0, 0] as [number, number, number],
-                    leftUpperLeg: [0, 0, 0] as [number, number, number],
-                    rightUpperLeg: [0, 0, 0] as [number, number, number],
-                    leftLowerLeg: [0, 0, 0] as [number, number, number],
-                    rightLowerLeg: [0, 0, 0] as [number, number, number],
-                    spine: [0, 0, 0] as [number, number, number],
-                    head: [0, 0, 0] as [number, number, number]
-                },
-                hipPositionMeters: f.root_translation,
-                groundedYOffsetMeters: groundAlt,
-                confidence: f.confidence ?? 0.95
-            }))
-        };
-
-        const retargeted = bridgeService.retargetVideoMotionTrack(simulatedTrack, canonical, {
+        const retargeted = bridgeService.retargetVideoMotionTrack(track, motion.canonical_joints, {
             groundAltitudeMeters: groundAlt,
             pinFeetToGround: pinFeet,
             smoothingWindow
         });
+        const landmarkFrames = track.frames.filter(f => (f.worldLandmarks?.length ?? 0) >= 33).length;
+        const trackPath = asString(args.motionTrackPath);
+        const outputMotionPath = asString(args.outputMotionPath)
+            || path.join(path.dirname(trackPath), `${path.basename(trackPath, path.extname(trackPath))}_retargeted_${avatarId}.json`);
+        const fsMod = await import('fs-extra');
+        await fsMod.outputJson(outputMotionPath, retargeted);
 
         return {
             resultPayload: {
                 avatarId,
+                motionTrackPath: trackPath,
                 numFramesRetargeted: retargeted.num_frames,
+                sampleFps: track.sampleFps,
+                framesFromWorldLandmarks: landmarkFrames,
+                framesFromJointAngles: track.frames.length - landmarkFrames,
+                trackAverageConfidence: track.averageConfidence,
                 groundAltitudeMeters: groundAlt,
                 feetPinned: pinFeet,
                 firstFrameJoint0: retargeted.frames[0]?.joint_positions_3d[0],
                 firstFrameFootY: Math.min(
                     retargeted.frames[0]?.joint_positions_3d[10][1] ?? 0,
                     retargeted.frames[0]?.joint_positions_3d[11][1] ?? 0
-                )
+                ),
+                outputMotionPath
             } as unknown as ToolResultPayload,
-            summaryResult: `Retargeted motion to avatar ${avatarId}: ${retargeted.num_frames} frames processed, feet pinned to ground altitude ${groundAlt}m.`
+            summaryResult: `Retargeted ${retargeted.num_frames} frame(s) of ${trackPath} onto avatar ${avatarId} (${landmarkFrames} from world landmarks, ${track.frames.length - landmarkFrames} from joint angles)${pinFeet ? `, feet pinned to ${groundAlt} m` : ''}. Wrote the avatar motion (SB-Human 22-joint) to ${outputMotionPath}.`
         };
     },
 

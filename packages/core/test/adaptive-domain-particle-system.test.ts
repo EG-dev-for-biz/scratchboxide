@@ -16,8 +16,31 @@ import {
     interpolateAdaptiveParticleContracts
 } from '../src/common/spatial/adaptive-particle-contract';
 import {
-    AdaptiveDomainParticleService
+    AdaptiveDomainParticleService,
+    type AdaptiveParticleSpec
 } from '../src/browser/generative-canvas/services/spatial/AdaptiveDomainParticleService';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
+
+/** A complete spec as the model would supply it (values chosen for the test, not by any code under test). */
+function specFor(subject: string, kinematics: Partial<AdaptiveParticleContract['kinematics']>): AdaptiveParticleSpec {
+    return {
+        subject,
+        kinematics: {
+            linearVelocity: [0.2, 3.1, -0.4], vorticityTensor: 0.7, radialDivergence: 1.3, ambientWind: [1.1, 0, 0.3],
+            windGustiness: 0.4, gravity: -2.5, substanceMass: 0.5, dragCoefficient: 1.1, restitution: 0.25, friction: 0.6,
+            ...kinematics
+        },
+        manifoldWeights: [2, 0.5, 1, 0, 0, 0.5],
+        manifoldScale: 1.2,
+        advectionCurlScale: 0.5,
+        material: {
+            emissionModel: 'chemiluminescent spray', coreRadiance: [0.8, 1, 0.9], midRadiance: [0.2, 0.8, 0.6], outerRadiance: [0.05, 0.2, 0.15],
+            opticalExtinction: 1.4, specularGloss: 0.5, colorTemperatureK: 9000, particleSizePx: 1.2, particleCount: 4000
+        },
+        optics: { bloomMultiplier: 1.4, diffusionBlurRadius: 1, thermalMirageHaze: 0.1, chromaticDispersion: 0.02 },
+        acoustics: { subBassHertz: 40, resonantCenterHertz: 300, impulseRate: 12 }
+    };
+}
 
 describe('Adaptive Domain Particle System Suite (Zero-Preset & Schema-Guided)', () => {
 
@@ -41,56 +64,42 @@ describe('Adaptive Domain Particle System Suite (Zero-Preset & Schema-Guided)', 
         expect(contract.material.emissionModel).toMatch(/incandescent|diffuse|transmissive|luminescent/);
     });
 
-    it('synthesizes an adaptive particle contract for an arbitrary biomedical prompt via entity extraction', () => {
-        // High-specificity domain prompt: zero presets exist for this in the codebase
-        const prompt = 'Bioluminescent dinoflagellate marine plankton swirling in nocturnal seawater wake';
-        const contract = AdaptiveDomainParticleService.synthesizeFromPrompt(prompt);
-
-        expect(contract.subject.toLowerCase()).toContain('plankton');
-        expect(contract.material.emissionModel).toBe('luminescent');
-        // Cyan / electric blue ocean bioluminescence
-        expect(contract.material.midRadiance[2]).toBeGreaterThan(contract.material.midRadiance[0]); // Blue > Red
-        // Water viscosity and slight buoyancy for floating plankton
-        expect(contract.kinematics.substanceMass).toBeGreaterThan(0.5); // Liquid medium
-        expect(contract.kinematics.dragCoefficient).toBeGreaterThan(1.0); // Fluid drag
+    it('assembles the contract from the values the model chose, for a substance no code knows about', () => {
+        const spec = specFor('bioluminescent methane geyser spray inside a hollow asteroid', { gravity: -0.4, substanceMass: 0.9 });
+        const contract = AdaptiveDomainParticleService.buildContract(spec);
+        expect(contract.subject).toBe('bioluminescent methane geyser spray inside a hollow asteroid');
+        expect(contract.kinematics.gravity).toBe(-0.4);
+        expect(contract.kinematics.substanceMass).toBe(0.9);
+        expect(contract.material.emissionModel).toBe(spec.material.emissionModel);
+        expect(contract.material.coreRadiance).toEqual(spec.material.coreRadiance);
+        expect(contract.acoustics).toEqual(spec.acoustics);
+        // Weights are normalised; their proportions are the model's.
+        expect(contract.manifoldWeights.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 9);
+        expect(contract.manifoldWeights[2] / contract.manifoldWeights[0]).toBeCloseTo(spec.manifoldWeights[2] / spec.manifoldWeights[0], 9);
     });
 
-    it('synthesizes an adaptive particle contract for an extreme astrophysics prompt', () => {
-        const prompt = 'Relativistic astrophysical plasma jet erupting from supermassive black hole accretion disk';
-        const contract = AdaptiveDomainParticleService.synthesizeFromPrompt(prompt);
-
-        expect(contract.subject.toLowerCase()).toContain('plasma');
-        expect(contract.kinematics.linearVelocity[1]).toBeGreaterThan(3.0); // Relativistic upward jet
-        expect(contract.kinematics.vorticityTensor).toBeGreaterThan(1.5); // High accretion spin
-        expect(contract.optics.bloomMultiplier).toBeGreaterThan(1.3); // High energy emission
-        expect(contract.acoustics.subBassHertz).toBeLessThan(45); // Infrasonic rumble
+    it('the same words give no values: there is no prompt parser to fall back to', () => {
+        expect((AdaptiveDomainParticleService as any).synthesizeFromPrompt).toBeUndefined();
+        expect(() => AdaptiveDomainParticleService.buildContract({ subject: 'desert sandstorm' } as any)).toThrow(MissingInputError);
     });
 
-    it('synthesizes an adaptive particle contract for a practical metallurgy prompt', () => {
-        const prompt = 'Oxy-acetylene cutting torch slag and incandescent molten steel sparks bouncing on floor';
-        const contract = AdaptiveDomainParticleService.synthesizeFromPrompt(prompt);
-
-        expect(contract.subject.toLowerCase()).toContain('torch');
-        expect(contract.material.emissionModel).toBe('incandescent');
-        expect(contract.kinematics.restitution).toBeGreaterThan(0.5); // Elastic bounce of molten droplets
-        expect(contract.kinematics.substanceMass).toBeGreaterThan(2.5); // Dense metal
-        expect(contract.kinematics.gravity).toBeLessThan(-8.0); // Earth gravity
-    });
-
-    it('synthesizes an adaptive particle contract for a geological desert prompt', () => {
-        const prompt = 'Bagnold saltating desert sand and airborne mineral dust motes carried by arid wind';
-        const contract = AdaptiveDomainParticleService.synthesizeFromPrompt(prompt);
-
-        expect(contract.subject.toLowerCase()).toContain('sand');
-        expect(contract.material.emissionModel).toBe('diffuse'); // Diffuse non-glowing mineral motes
-        expect(contract.material.specularGloss).toBeLessThan(0.3); // Dry earth
-        expect(contract.kinematics.substanceMass).toBeLessThan(0.15); // Ultra-light wind-carried motes
-        expect(Math.hypot(contract.kinematics.ambientWind[0], contract.kinematics.ambientWind[2])).toBeGreaterThan(1.5);
+    it('names every missing or out-of-range field instead of filling it in', () => {
+        const spec = specFor('rain', {}) as any;
+        delete spec.kinematics.gravity;
+        spec.kinematics.restitution = 1.7;
+        spec.material.colorTemperatureK = 200;
+        spec.manifoldWeights = [0, 0, 0, 0, 0, 0];
+        let message = '';
+        try { AdaptiveDomainParticleService.buildContract(spec); } catch (e: any) { message = e.message; }
+        expect(message).toContain('kinematics.gravity must be a finite number');
+        expect(message).toContain('kinematics.restitution must be a number in [0, 1]');
+        expect(message).toContain('material.colorTemperatureK must be a number in [1000, 40000]');
+        expect(message).toContain('manifoldWeights must have a positive sum');
     });
 
     it('smoothly interpolates between two completely disparate contracts without algebraic discontinuities', () => {
-        const c1 = AdaptiveDomainParticleService.synthesizeFromPrompt('desert sandstorm');
-        const c2 = AdaptiveDomainParticleService.synthesizeFromPrompt('bioluminescent sea plankton');
+        const c1 = AdaptiveDomainParticleService.buildContract(specFor('desert sandstorm', { substanceMass: 0.08 }));
+        const c2 = AdaptiveDomainParticleService.buildContract(specFor('bioluminescent sea plankton', { substanceMass: 0.95 }));
 
         const mid = interpolateAdaptiveParticleContracts(c1, c2, 0.5);
 
@@ -126,13 +135,15 @@ describe('Adaptive Domain Particle System Suite (Zero-Preset & Schema-Guided)', 
         const decl = SPATIAL_TOOL_DECLARATIONS.find(t => t.name === 'synthesize_adaptive_particle_system');
         expect(decl).toBeDefined();
         expect(decl?.description).toContain('AdaptiveParticleContract');
+        expect(decl?.parameters.required).toEqual(expect.arrayContaining(['subject', 'kinematics', 'material', 'manifoldWeights']));
+        expect((decl?.parameters.properties as any).prompt).toBeUndefined();
 
         const handler = spatialHandlers['synthesize_adaptive_particle_system'];
         expect(handler).toBeDefined();
 
-        const res = await handler({ prompt: 'ferrofluid magnetic spikes in mineral oil' }, {} as any);
-        expect(res.resultPayload).toBeDefined();
-        expect((res.resultPayload as any).subject.toLowerCase()).toContain('ferrofluid');
-        expect((res.resultPayload as any).kinematics.gravity).toBeDefined();
+        const res = await handler(specFor('ferrofluid magnetic spikes in mineral oil', { gravity: -9.8 }) as any, {} as any);
+        expect((res.resultPayload as any).subject).toBe('ferrofluid magnetic spikes in mineral oil');
+        expect((res.resultPayload as any).kinematics.gravity).toBe(-9.8);
+        await expect(handler({ prompt: 'ferrofluid magnetic spikes in mineral oil' }, {} as any)).rejects.toThrow(MissingInputError);
     });
 });

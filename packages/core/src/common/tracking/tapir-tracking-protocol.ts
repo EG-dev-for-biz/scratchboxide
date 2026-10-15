@@ -165,11 +165,13 @@ export interface Decomposed4DSplatScene {
      * Pipeline processing telemetry.
      */
     telemetry: {
-        trackerUsed: TrackerBackend;
+        /** The point tracker that produced the trajectories; 'none' when the motion did not come from tracking. */
+        trackerUsed: TrackerBackend | 'none';
         numDynamicGaussians: number;
         numStaticGaussians: number;
         prunedGaussians: number;
-        meanPhotometricError: number;
+        /** Mean photometric error of the tracked Gaussians; null when no photometric comparison ran. */
+        meanPhotometricError: number | null;
         processingTimeMs: number;
     };
 }

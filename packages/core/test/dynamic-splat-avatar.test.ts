@@ -22,6 +22,7 @@ import {
 } from '../src/node/gemini/tools/spatial-tools';
 import { VideoMotionTrackResult } from '../src/node/video/MediaPipeVideoDirectorService';
 import { requireAssets, withReason } from './helpers/requirements';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
 
 const DEMO_DIR = 'models/performer_4dgs/demos/2785536';
 const demoAvatar = requireAssets(
@@ -312,15 +313,58 @@ int main() {
         expect(animPayload.numSplats).toBe(35000);
         expect(animPayload.splatByteLength).toBe(35000 * 32);
 
-        // Test avatar_4dgs_retarget
+        // Test avatar_4dgs_retarget with a recorded motion track
+        const trackPath = writeMotionTrack(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-retarget-')), 4);
         const retargetRes = await avatar4dgsHandlers.avatar_4dgs_retarget({
             avatarId: '2785536',
+            motionTrackPath: trackPath,
             groundAltitudeMeters: 5.0,
             pinFeetToGround: true
         });
-        expect(retargetRes.summaryResult).toContain('Retargeted motion to avatar 2785536');
+        expect(retargetRes.summaryResult).toContain('Retargeted 4 frame(s)');
         const retargetPayload = retargetRes.resultPayload as any;
         expect(retargetPayload.feetPinned).toBe(true);
+        expect(retargetPayload.framesFromWorldLandmarks).toBe(4);
         expect(retargetPayload.firstFrameFootY).toBeCloseTo(5.0, 3);
+        expect(JSON.parse(fs.readFileSync(retargetPayload.outputMotionPath, 'utf8')).num_frames).toBe(4);
+    });
+});
+
+/** A motion track as vfx_mediapipe_track_video_motion writes it: per-frame 33 MediaPipe world landmarks. */
+function writeMotionTrack(dir: string, frames: number, extra: Record<string, unknown> = {}): string {
+    const track = {
+        success: true, durationSec: frames / 15, totalFramesAnalyzed: frames, sampleFps: 15, averageConfidence: 0.8,
+        maxDisplacementMeters: 0.2, groundedYReferenceMeters: 0.9,
+        frames: Array.from({ length: frames }, (_, f) => ({
+            frameIndex: f, timestampSec: f / 15, angles: {}, hipPositionMeters: [0, 0.9, 0], groundedYOffsetMeters: 0, confidence: 0.8,
+            worldLandmarks: Array.from({ length: 33 }, (_, i) => ({ x: (i % 5) * 0.1 - 0.2 + f * 0.01, y: (i % 6) * 0.2 - 0.5, z: (i % 4) * 0.05, visibility: 0.9 }))
+        })),
+        ...extra
+    };
+    const file = path.join(dir, 'track.json');
+    fs.writeFileSync(file, JSON.stringify(track));
+    return file;
+}
+
+describe('avatar_4dgs_retarget needs a recorded motion track', () => {
+    it('declares motionTrackPath as required', () => {
+        const decl = AVATAR_4DGS_TOOL_DECLARATIONS.find(d => d.name === 'avatar_4dgs_retarget');
+        expect(decl?.parameters.required).toEqual(['avatarId', 'motionTrackPath']);
+    });
+
+    it('fails without a track, with a dry-run track, or with frames that carry no pose; no zero-angle stand-in track is used', async () => {
+        await expect(avatar4dgsHandlers.avatar_4dgs_retarget({ avatarId: '2785536' })).rejects.toThrow(MissingInputError);
+        await expect(avatar4dgsHandlers.avatar_4dgs_retarget({ motionTrackPath: '/x.json' })).rejects.toThrow(/needs avatarId/);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-retarget-bad-'));
+        await expect(avatar4dgsHandlers.avatar_4dgs_retarget({ avatarId: '2785536', motionTrackPath: path.join(dir, 'missing.json') }))
+            .rejects.toThrow(/does not exist/);
+        await expect(avatar4dgsHandlers.avatar_4dgs_retarget({ avatarId: '2785536', motionTrackPath: writeMotionTrack(dir, 2, { dryRun: true }) }))
+            .rejects.toThrow(/dry-run/);
+        const noPose = writeMotionTrack(dir, 2);
+        const parsed = JSON.parse(fs.readFileSync(noPose, 'utf8'));
+        parsed.frames[1] = { frameIndex: 1, timestampSec: 0.1 };
+        fs.writeFileSync(noPose, JSON.stringify(parsed));
+        await expect(avatar4dgsHandlers.avatar_4dgs_retarget({ avatarId: '2785536', motionTrackPath: noPose }))
+            .rejects.toThrow(/frame 1 .* neither 33 world landmarks nor joint angles/);
     });
 });
