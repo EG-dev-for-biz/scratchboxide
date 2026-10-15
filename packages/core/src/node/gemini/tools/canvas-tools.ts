@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
-import { normalizeModelVideoTimeline } from '../artifact-synthesis';
+import { UNTITLED_DOCUMENT_TITLE, modelDocumentSections, normalizeModelVideoTimeline } from '../artifact-synthesis';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { NativeCppCompilerService } from '../../3d-engine/native-compiler-service';
 import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
@@ -17,7 +17,7 @@ import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
-import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
+import { applyClayFirstPassBaseline, keepOpenSceneRenderMode } from '../scene3d-clay-baseline';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -44,7 +44,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 payload: {
                     type: 'OBJECT',
-                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted.'
+                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted.'
                 }
             },
             required: ['primitiveType', 'title', 'payload']
@@ -218,7 +218,13 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         }
         let title = asString(args.title) || 'Visual Creation';
         let summary = asString(args.summary) || `Synthesized ${title} on visual canvas.`;
-        let payload = (args.payload && typeof args.payload === 'object') ? args.payload as ArtifactData : ({} as any);
+        // The payload is the primitive's data as the model wrote it; anything else fails the call so the model can resend it.
+        if (!args.payload || typeof args.payload !== 'object' || Array.isArray(args.payload)) {
+            const got = args.payload === undefined ? 'nothing' : Array.isArray(args.payload) ? 'an array' : `a ${typeof args.payload}`;
+            const error = `payload must be a JSON object holding the ${primitiveType} data; got ${got}. Nothing was mounted.`;
+            return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+        }
+        let payload = args.payload as ArtifactData;
 
         const prompt = _ctx?.request?.prompt || '';
 
@@ -228,8 +234,21 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             payload = timelineData as any;
             title = timelineData.title;
             summary = asString(args.summary) || timelineData.subtitle || summary;
+        } else if (primitiveType === 'markdown-document') {
+            // The document's own sections or markdown; an empty document is not mounted (nothing fills it in).
+            const p = payload as Record<string, any>;
+            const sections = modelDocumentSections(p);
+            if (sections.length === 0) {
+                const error = 'The markdown-document payload has no content: send payload.sections (heading, paragraph, ... sections) or the document as markdown in payload.markdown. Nothing was mounted.';
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            const named = (t: unknown) => (typeof t === 'string' && t.trim() && t !== 'Markdown Document' ? t.trim() : undefined);
+            const firstHeading = sections.find(s => s?.type === 'heading')?.content;
+            const docTitle = named(p.title) || named(args.title) || named(firstHeading) || UNTITLED_DOCUMENT_TITLE;
+            payload = { ...p, title: docTitle, sections } as any;
+            title = docTitle;
         } else if (primitiveType === '3d-scene') {
-            const p = payload && typeof payload === 'object' ? (payload as any) : {};
+            const p = payload as any;
 
             // Geometry comes only from the model's payload. The prompt synthesizer's template generators drew
             // a domed tower and trees the model never asked for between the objects it placed.
@@ -310,8 +329,9 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 pythonGenerator: pyGenerator
             };
             const active3D = _ctx?.request?.activeArtifact?.type === '3d-scene' ? _ctx.request.activeArtifact.data as any : undefined;
+            // A first scene is clay; with a scene open, the open render mode carries unless the payload sets one.
             payload = active3D
-                ? releaseClayOnMaterialRequest(payload as any, prompt, active3D.renderMode)
+                ? keepOpenSceneRenderMode(payload as any, active3D.renderMode)
                 : applyClayFirstPassBaseline(payload as any, prompt);
         }
 

@@ -17,7 +17,6 @@
 import * as React from 'react';
 import { ProjectItem } from '../ProjectsModal';
 import { CanvasArtifact, ChatSession, CodeFileTab, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, NodeGraphData, PrimitiveType, Scene3DData, StudioLayoutMode, VideoTimelineData, WorkspaceFileType, getActiveUserName } from '../canvas-types';
-import { synthesizeComprehensiveDocument } from '../document-synthesis-engine';
 import { KanbanBoardPrimitive } from '../primitives/KanbanBoardPrimitive';
 import { MarkdownDocumentPrimitive } from '../primitives/MarkdownDocumentPrimitive';
 import { NodeGraphPrimitive } from '../primitives/NodeGraphPrimitive';
@@ -427,19 +426,20 @@ export function useWorkspaceFileCreation(deps: UseWorkspaceFilesDeps) {
                 artifactHistory: [codeArtifact]
             };
         } else if (type === 'document') {
-            const defaultDoc = synthesizeComprehensiveDocument('write a document about 1776');
+            // A new document is empty: the user (or the model) writes it. No sample document is filled in.
+            const emptyDoc: MarkdownDocumentData = { title: 'Untitled document', lastUpdated: 'Just now', sections: [] };
             const docArtifact: CanvasArtifact = {
                 id: `art-doc-${Date.now()}`,
                 type: 'markdown-document',
-                title: defaultDoc.title,
-                summary: defaultDoc.subtitle || 'Specification Document',
-                data: defaultDoc,
+                title: emptyDoc.title,
+                summary: '',
+                data: emptyDoc,
                 version: 1,
                 createdAt: 'Just now'
             };
             newSession = {
                 id: newSessionId,
-                title: 'The Enduring Significance of 1776',
+                title: emptyDoc.title,
                 fileType: 'document',
                 layoutMode: 'document',
                 activeArtifact: docArtifact,

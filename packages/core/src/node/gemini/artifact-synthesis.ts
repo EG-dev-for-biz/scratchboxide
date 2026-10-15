@@ -23,7 +23,7 @@ import { normalizePrimitiveType } from '../../browser/generative-canvas/canvas-t
 import { synthesizeComprehensiveDocument as synthesizeDocumentFromEngine } from '../../browser/generative-canvas/document-synthesis-engine';
 import type { VideoTimelineData } from '../../browser/generative-canvas/services/video/videoTypes';
 import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
-import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from './scene3d-clay-baseline';
+import { applyClayFirstPassBaseline } from './scene3d-clay-baseline';
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
 
@@ -498,11 +498,15 @@ export function extractCodeSandboxArtifact(
     };
 }
 
+/** The title of a document nobody named: a neutral label, never a made-up subject. */
+export const UNTITLED_DOCUMENT_TITLE = 'Untitled document';
+
 /**
  * A document title taken from the request's own words (the subject after "write a document about ..."), for a
- * document the model sent without one. No canned title is picked by keyword.
+ * document the model sent without one. When no subject is left, the fallback (by default "Untitled document");
+ * no canned title is picked by keyword.
  */
-export function extractDocumentTitle(prompt: string, fallback: string = 'Strategic Specification & Notes'): string {
+export function extractDocumentTitle(prompt: string, fallback: string = UNTITLED_DOCUMENT_TITLE): string {
     const cleanPrompt = prompt
         .replace(/^[\s\W]*(write|create|generate|draft|build|make)?\s*(a|an|the)?\s*(document|spec|specification|overview|notes|guide|report|proposal)?\s*(about|for|on|of)?\s*/i, '')
         .replace(/for section ["'].*?["']/i, '')
@@ -513,7 +517,7 @@ export function extractDocumentTitle(prompt: string, fallback: string = 'Strateg
     if (cleanPrompt.length > 2 && cleanPrompt !== 'selected content') {
         return cleanPrompt.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').slice(0, 75);
     }
-    return fallback && fallback !== 'Markdown Document' ? fallback : 'Project Specification & Strategic Notes';
+    return fallback && fallback !== 'Markdown Document' ? fallback : UNTITLED_DOCUMENT_TITLE;
 }
 
 /**
@@ -547,56 +551,27 @@ export function normalizeModelVideoTimeline(raw: Record<string, any> | undefined
     } as VideoTimelineData;
 }
 
-const EXPLICIT_SCENE_DESTRUCTION = /\b(?:clear\s*scene|reset\s*scene|start\s*over|rebuild\s*from\s*scratch|wipe\s*(?:all|scene)|delete\s*all)\b/i;
-
 /**
- * Whether a 3d-scene envelope continues the open scene (keeps what the model left out of its data) or starts a new
- * one. This is the agent-mode rule unchanged: it reads the request's wording only to decide what to carry over.
- */
-function continuesOpenScene(prompt: string, active3DData: Scene3DData | undefined): boolean {
-    if (!active3DData) return false;
-    const lower = prompt.toLowerCase();
-    const isVideoTimelineRequest = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|chroma\s*key|green\s*screen|blue\s*screen|despill|video\s+composite|composite\s+clip|light\s*wrap/i.test(prompt) ||
-        ((lower.includes('clip') || lower.includes('timeline')) && (lower.includes('split') || lower.includes('cut') || lower.includes('delete') || lower.includes('playhead') || lower.includes('ripple') || lower.includes('track') || lower.includes('video') || lower.includes('composite') || lower.includes('key')));
-    const isImageRequest = /create\s+(?:a\s+)?picture|generate\s+(?:a\s+)?picture|picture\s+of|draw\s+(?:a\s+)?picture|image\s+of|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|photo\s+of|photograph\s+of|illustration\s+of|painting\s+of|artwork\s+of|draw\s+(?:an?\s+)?image|make\s+(?:a\s+)?picture|make\s+(?:an?\s+)?image|\bpicture\b|\bphoto\b|\billustration\b|\bpainting\b/i.test(prompt);
-    const isVideoRequest = !isVideoTimelineRequest && /create\s+(?:a\s+)?video|generate\s+(?:a\s+)?video|video\s+of|make\s+(?:a\s+)?video|film\s+of|motion\s+clip|video\s+clip|record\s+(?:a\s+)?video|\bvideo\s+file\b|\bvideo\b/i.test(prompt);
-    const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust|god\s*ray|crepuscular|light\s*shaft|contrail|control\s*surface|aileron|elevator|rudder|biome|terrain|atmosphere|scattering|shader|mesh|geometry|object|material|color|texture|roughness|metalness|preset|scale|rotate|translate|position|move|taller|wider|bigger|smaller|add|remove|clear|reset|sculpt|subdivide|bevel|extrude|torus|cylinder|box|sphere|emitter|chassis/i.test(prompt);
-    const isDocExplicitRequest = /document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article|research\s+paper/i.test(prompt);
-    const is3DFollowUp = !isImageRequest && !isVideoRequest && !isDocExplicitRequest && !isVideoTimelineRequest && is3DFollowUpKeywords;
-
-    const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(prompt);
-    const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization|citadel|ziggurat|colosseum|matterhorn|planet|asteroid|geyser)\b/i.test(prompt);
-    const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow|mycelium)\b/i.test(prompt);
-    const isOpenDomainSpatialSynthesis = (hasSpatialVerb && (hasSpatialEntity || hasPhysicalMaterial)) || (hasSpatialEntity && hasPhysicalMaterial);
-
-    const isExplicitNewScene = /\b(?:new\s*scene|different\s*scene|from\s*scratch|completely\s*new)\b/i.test(prompt);
-    const isVehicleSwitch = !/car|vehicle|automobile|truck|sports\s*car|sedan/i.test(active3DData.title || '') && /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt);
-    const isExplicitFabricationNewScene = isOpenDomainSpatialSynthesis && /\b(model|sculpt|extrude|carve|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*)\b/i.test(prompt);
-    return is3DFollowUp && !EXPLICIT_SCENE_DESTRUCTION.test(prompt) && !isExplicitNewScene && !isVehicleSwitch && !isExplicitFabricationNewScene;
-}
-
-/**
- * The 3D scene the model sent, completed only from the scene that is open when this continues it. No template
- * supplies geometry, scripts, generators, a title, a camera or lighting.
+ * The 3D scene the model sent. A 3d-scene envelope sent while a 3d-scene is open is the next version of that scene
+ * (same artifact id), so it is read as an update: every field the model's data contains is taken as sent (an
+ * explicit `null` or `[]` clears it) and every field it leaves out keeps the open scene's value. Whether the prompt
+ * starts something new is the model's call, expressed by what it sends (a new generator, `objects: []`); no prompt
+ * wording is read. No template supplies geometry, scripts, generators, a title, a camera or lighting.
  */
 function modelAuthoredScene(prompt: string, request: GeminiGenerateRequest, title: string, summary: string | undefined, raw: unknown): Scene3DData {
     const data = reclassifyMisfiledPythonGenerator((raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Scene3DData)!;
-    const active3DData = request.activeArtifact?.type === '3d-scene' ? (request.activeArtifact.data as Scene3DData) : undefined;
-    const isTopicChange = !continuesOpenScene(prompt, active3DData);
-    const open = isTopicChange ? undefined : active3DData;
-    const isExplicitDestruction = EXPLICIT_SCENE_DESTRUCTION.test(prompt);
+    const open = request.activeArtifact?.type === '3d-scene' ? (request.activeArtifact.data as Scene3DData | undefined) : undefined;
+    const sent = (key: keyof Scene3DData) => Object.prototype.hasOwnProperty.call(data, key);
+    const pick = <K extends keyof Scene3DData>(key: K): Scene3DData[K] | undefined => (sent(key) ? data[key] : open?.[key]) ?? undefined;
 
-    // AGENTS.md opt-in gate: sky and atmosphere when the words or the scene ask for them.
-    const hasGodRays = /god\s*ray|crepuscular|light\s*shaft|volumetric\s*light/i.test(prompt) || !!data.features?.godRays || !!active3DData?.features?.godRays;
-    const hasAtmosphere = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective)\b/i.test(prompt) || !!data.features?.atmosphericScattering || !!active3DData?.features?.atmosphericScattering;
-    const authoredFeatures: NonNullable<Scene3DData['features']> = { ...(open?.features || {}), ...(data.features || {}) };
-    const features = {
-        ...authoredFeatures,
-        ...(hasAtmosphere && !authoredFeatures.atmosphericScattering ? { atmosphericScattering: true } : {}),
-        ...(hasGodRays && hasAtmosphere && !authoredFeatures.godRays ? { godRays: true } : {})
-    };
+    // Features merge key by key: the model's keys over the open scene's. Sky and atmosphere come only from these
+    // (and, on a first pass, the AGENTS.md opt-in gate in applyClayFirstPassBaseline strips any the prompt did not ask for).
+    const features: NonNullable<Scene3DData['features']> = { ...(open?.features || {}), ...(data.features || {}) };
 
-    let pythonGenerator = data.pythonGenerator || open?.pythonGenerator;
+    // A generator the model sends replaces the open scene's generators, of either engine.
+    const sentGenerator = sent('pythonGenerator') || sent('cppGenerator');
+    let pythonGenerator = sentGenerator ? data.pythonGenerator ?? undefined : open?.pythonGenerator;
+    const cppGenerator = sentGenerator ? data.cppGenerator ?? undefined : open?.cppGenerator;
     if (pythonGenerator?.sourceCode && !pythonGenerator.glbBase64) {
         // Built now when the engine can; otherwise the viewport builds it and shows any error.
         try {
@@ -609,77 +584,82 @@ function modelAuthoredScene(prompt: string, request: GeminiGenerateRequest, titl
         }
     }
 
+    // Custom meshes the model sends are merged by id over the open scene's (keeping the user's gizmo transforms).
     const customMeshes = (() => {
-        if (Array.isArray(data.customMeshes) && data.customMeshes.length > 0) {
-            if (!isExplicitDestruction && active3DData?.customMeshes && active3DData.customMeshes.length > 0) {
-                const map = new Map<string, CustomMesh>();
-                // Existing meshes first (keeping the user's gizmo transforms and edits), then the model's delta.
-                active3DData.customMeshes.forEach(m => map.set(m.id, { ...m }));
-                (data.customMeshes as CustomMesh[]).forEach(m => {
-                    const existing = map.get(m.id);
-                    map.set(m.id, existing ? {
-                        ...existing,
-                        ...m,
-                        position: m.position || existing.position,
-                        rotation: m.rotation || existing.rotation,
-                        scale: m.scale || existing.scale,
-                        parentId: m.parentId ?? existing.parentId,
-                        material: { ...(existing.material || {}), ...(m.material || {}) }
-                    } : m);
-                });
-                return Array.from(map.values());
-            }
-            return data.customMeshes;
-        }
-        return isExplicitDestruction ? undefined : active3DData?.customMeshes;
+        if (!Array.isArray(data.customMeshes)) return sent('customMeshes') ? undefined : open?.customMeshes;
+        if (data.customMeshes.length === 0 || !open?.customMeshes?.length) return data.customMeshes;
+        const map = new Map<string, CustomMesh>();
+        open.customMeshes.forEach(m => map.set(m.id, { ...m }));
+        (data.customMeshes as CustomMesh[]).forEach(m => {
+            const existing = map.get(m.id);
+            map.set(m.id, existing ? {
+                ...existing,
+                ...m,
+                position: m.position || existing.position,
+                rotation: m.rotation || existing.rotation,
+                scale: m.scale || existing.scale,
+                parentId: m.parentId ?? existing.parentId,
+                material: { ...(existing.material || {}), ...(m.material || {}) }
+            } : m);
+        });
+        return Array.from(map.values());
     })();
+
+    const environment = {
+        // AGENTS.md neutral baseline: an unconfigured scene is a studio.
+        lighting: 'studio',
+        ...(open?.environment || {}),
+        ...(data.environment || {})
+    };
+    if (!environment.skybox) environment.skybox = features.atmosphericScattering ? 'realistic-sky' : 'studio';
 
     const scene: Scene3DData = {
         ...data,
         title,
         subtitle: summary || data.subtitle || open?.subtitle,
-        worldBranch: data.worldBranch || open?.worldBranch,
-        sceneType: data.sceneType || open?.sceneType,
-        renderMode: data.renderMode || open?.renderMode || 'pbr',
-        cameraMode: data.cameraMode || open?.cameraMode || 'orbit',
-        animation: data.animation || open?.animation,
-        camera: data.camera || open?.camera,
-        environment: {
-            lighting: 'daylight',
-            ground: true,
-            ...(open?.environment || {}),
-            ...(data.environment || {}),
-            skybox: data.environment?.skybox || (hasAtmosphere ? 'realistic-sky' : (open?.environment?.skybox || 'studio'))
-        },
+        worldBranch: pick('worldBranch'),
+        sceneType: pick('sceneType'),
+        renderMode: pick('renderMode'),
+        cameraMode: pick('cameraMode'),
+        animation: pick('animation'),
+        camera: pick('camera'),
+        environment,
         // Playback too: without a timeline from the model or the open scene, nothing starts playing.
-        timeline: data.timeline || open?.timeline,
-        customScript: data.customScript || data.code || open?.customScript,
-        code: data.code || data.customScript || open?.code,
-        shaders: data.shaders || open?.shaders,
+        timeline: pick('timeline'),
+        customScript: sent('customScript') || sent('code') ? (data.customScript ?? data.code) : open?.customScript,
+        code: sent('code') || sent('customScript') ? (data.code ?? data.customScript) : open?.code,
+        shaders: pick('shaders'),
         features,
         customMeshes,
-        objects: Array.isArray(data.objects) ? data.objects : (isTopicChange ? [] : active3DData?.objects ?? []),
-        operatorStack: isExplicitDestruction
-            ? []
-            : (data.operatorStack && data.operatorStack.length > 0
-                ? [...(active3DData?.operatorStack || []), ...data.operatorStack]
-                : (active3DData?.operatorStack || [])),
-        actionLog: isExplicitDestruction
-            ? []
-            : (data.actionLog && data.actionLog.length > 0
-                ? [...(active3DData?.actionLog || []), ...data.actionLog]
-                : (active3DData?.actionLog || [])),
-        sculptSettings: data.sculptSettings || open?.sculptSettings,
-        selectedMeshId: data.selectedMeshId || open?.selectedMeshId,
-        wasmPhysics: data.wasmPhysics || open?.wasmPhysics,
-        geoAnchor: data.geoAnchor || open?.geoAnchor,
-        droneRoute: data.droneRoute || open?.droneRoute,
-        cppGenerator: data.cppGenerator || (data.pythonGenerator ? undefined : open?.cppGenerator),
+        objects: Array.isArray(data.objects) ? data.objects : (sent('objects') ? [] : open?.objects ?? []),
+        // Logs of what was done to the scene: the model's entries are appended.
+        operatorStack: [...(open?.operatorStack || []), ...(Array.isArray(data.operatorStack) ? data.operatorStack : [])],
+        actionLog: [...(open?.actionLog || []), ...(Array.isArray(data.actionLog) ? data.actionLog : [])],
+        sculptSettings: pick('sculptSettings'),
+        selectedMeshId: pick('selectedMeshId'),
+        wasmPhysics: pick('wasmPhysics'),
+        geoAnchor: pick('geoAnchor'),
+        droneRoute: pick('droneRoute'),
+        cppGenerator,
         pythonGenerator
     };
-    return isTopicChange
-        ? applyClayFirstPassBaseline(scene, prompt)
-        : releaseClayOnMaterialRequest(scene, prompt, active3DData?.renderMode);
+    // A first pass is grey clay in a studio (user decision; AGENTS.md). A follow-up keeps the open scene's render
+    // mode unless the model's data sets one: leaving clay is the model's call, not a colour word in the prompt.
+    return open ? scene : applyClayFirstPassBaseline(scene, prompt);
+}
+
+/**
+ * The sections of a document the model sent: its `sections` array, or its markdown when it sent the document as a
+ * markdown string (the whole payload, or a `markdown` / `content` / `body` field). Empty when it sent neither; no
+ * section is written for it.
+ */
+export function modelDocumentSections(raw: unknown): MarkdownSection[] {
+    if (typeof raw === 'string') return raw.trim() ? markdownStringToSections(raw) : [];
+    if (!raw || typeof raw !== 'object') return [];
+    const doc = raw as Record<string, any>;
+    if (Array.isArray(doc.sections) && doc.sections.length > 0) return doc.sections;
+    const markdown = [doc.markdown, doc.content, doc.body].find(v => typeof v === 'string' && v.trim().length > 0);
+    return markdown ? markdownStringToSections(markdown) : [];
 }
 
 /**
@@ -697,14 +677,13 @@ function modelAuthoredDocument(
 ): MarkdownDocumentData {
     const named = (t: unknown) => (typeof t === 'string' && t.trim() && t !== 'Markdown Document' ? t : undefined);
     const rawObject = raw && typeof raw === 'object' ? raw as Record<string, any> : undefined;
-    let docTitle = named(parsedTitle) || named(rawObject?.title) || named(request.activeArtifact?.title) || extractDocumentTitle(prompt);
 
-    let sections: any[] = typeof raw === 'string'
-        ? markdownStringToSections(raw)
-        : (Array.isArray(rawObject?.sections) ? rawObject!.sections : []);
+    let sections: any[] = modelDocumentSections(raw);
     if (sections.length === 0 && typeof raw !== 'string' && replyMarkdown) {
         sections = markdownStringToSections(replyMarkdown);
     }
+    const firstHeading = sections.find((s: any) => s?.type === 'heading' && typeof s.content === 'string' && s.content.trim())?.content;
+    let docTitle = named(parsedTitle) || named(rawObject?.title) || named(request.activeArtifact?.title) || named(firstHeading) || extractDocumentTitle(prompt);
 
     // A follow-up that names a section of the open document replaces just that section with the model's sections.
     if (request.activeArtifact?.type === 'markdown-document' && request.activeArtifact.data) {

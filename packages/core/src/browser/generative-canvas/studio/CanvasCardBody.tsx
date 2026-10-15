@@ -9,7 +9,7 @@
 
 import * as React from 'react';
 import { BentoStageLayout } from '../BentoStageLayout';
-import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, Scene3DData, VideoTimelineData, getActiveUserName } from '../canvas-types';
+import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, Scene3DData, VideoTimelineData } from '../canvas-types';
 import { CanvasErrorBoundary } from '../CanvasErrorBoundary';
 import { InteractiveBrowserPrimitive } from '../primitives/InteractiveBrowserPrimitive';
 import { KanbanBoardPrimitive } from '../primitives/KanbanBoardPrimitive';
@@ -20,8 +20,10 @@ import { NodeGraphPrimitive } from '../primitives/NodeGraphPrimitive';
 import { Scene3DPrimitive } from '../primitives/Scene3DPrimitive';
 import { VideoTimelinePrimitive } from '../primitives/VideoTimelinePrimitive';
 import { morphArtifact } from '../primitive-transformer-engine';
-import { generateMotivatedEditorialImageSection, synthesizeComprehensiveDocument } from '../document-synthesis-engine';
 import { ArtifactStageProps } from './artifact-stage-props';
+
+/** The title of a document nobody named. */
+const UNTITLED_DOCUMENT = 'Untitled document';
 
 /** Document and live-code sandbox surfaces. */
 export const DocumentCodeSurfaces: React.FC<ArtifactStageProps> = props => {
@@ -38,40 +40,21 @@ export const DocumentCodeSurfaces: React.FC<ArtifactStageProps> = props => {
                     streamingSectionId={activeStreamingSectionId}
                     streamingBadgeText="✨ Synthesizing Document in Real-time..."
                     data={(() => {
+                        // Only the document's own sections: a document with none renders empty (with its add-section
+                        // controls), never a template document written from its title.
                         if (activeArtifact?.type === 'markdown-document') {
                             const doc = activeArtifact.data as MarkdownDocumentData;
-                            const effectiveTitle = doc?.title && doc.title !== 'Markdown Document' ? doc.title : activeArtifact.title || 'Project Specification & Notes';
-                            const sections = Array.isArray(doc?.sections) && doc.sections.length > 0
-                                ? doc.sections
-                                : synthesizeComprehensiveDocument(effectiveTitle, effectiveTitle).sections;
+                            const effectiveTitle = doc?.title && doc.title !== 'Markdown Document' ? doc.title : activeArtifact.title || UNTITLED_DOCUMENT;
                             return {
                                 ...doc,
                                 title: effectiveTitle,
-                                sections
+                                sections: Array.isArray(doc?.sections) ? doc.sections : []
                             };
                         }
-                        return {
-                            title: 'Project Specification & Notes',
-                            subtitle: 'Rich block document for architecture, roadmap, and specs',
-                            author: getActiveUserName(),
-                            lastUpdated: 'Just now',
-                            tags: ['Specification', 'Architecture', 'DocumentSpec', 'Reasoning'],
-                            sections: [
-                                { id: 'sec-1', type: 'heading', level: 1, content: '1. Overview & Vision' },
-                                { id: 'sec-2', type: 'paragraph', content: 'Scratchbox IDE empowers developers with an AI-native workspace featuring N8N workflow canvases, rich document specs, and Kanban sprint boards.' },
-                                generateMotivatedEditorialImageSection('1776-revolution'),
-                                { id: 'sec-3', type: 'callout', calloutType: 'info', calloutTitle: 'Key Architecture Insight', content: 'Subagents running on Gemini Flash Lite handle ultra-fast data preprocessing while Gemini 3.8 Flash powers high-reasoning synthesis.' },
-                                { id: 'sec-4', type: 'heading', level: 2, content: '2. Next Action Items' },
-                                { id: 'sec-5', type: 'checklist', checklistItems: [
-                                    { id: 'c1', text: 'Verify N8N canvas node routing & simulation', done: true },
-                                    { id: 'c2', text: 'Validate Nano Banana editorial image generation & art styles', done: true },
-                                    { id: 'c3', text: 'Confirm elimination of fake player controls & scrubber artifacts', done: true }
-                                ]}
-                            ]
-                        };
+                        return { title: UNTITLED_DOCUMENT, sections: [] };
                     })()}
                     onUpdate={(updatedData: MarkdownDocumentData) => {
-                        const nextTitle = updatedData.title && updatedData.title !== 'Markdown Document' ? updatedData.title : (activeArtifact?.title || 'Project Specification & Notes');
+                        const nextTitle = updatedData.title && updatedData.title !== 'Markdown Document' ? updatedData.title : (activeArtifact?.title || UNTITLED_DOCUMENT);
                         const updatedArtifact: CanvasArtifact = {
                             id: activeArtifact?.id || `art-doc-${Date.now()}`,
                             type: 'markdown-document',

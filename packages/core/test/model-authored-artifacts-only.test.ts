@@ -23,6 +23,7 @@ import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { parseOrSynthesizeArtifact, extractCodeSandboxArtifact, extractDocumentTitle } from '../src/node/gemini/artifact-synthesis';
 import { MarkdownDocumentPrimitive } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
+import { DocumentCodeSurfaces } from '../src/browser/generative-canvas/studio/CanvasCardBody';
 import { canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 import { useSendMessage, type SendMessageDeps, type UseSendMessageResult } from '../src/browser/generative-canvas/hooks/useSendMessage';
@@ -123,6 +124,90 @@ describe('the document view writes nothing into the model\'s document', () => {
     it('a document without a title gets one from the request\'s words, never a canned title', () => {
         expect(extractDocumentTitle('write a document about 1776')).toBe('1776');
         expect(extractDocumentTitle('Draft an OAuth security spec')).not.toContain('Zero-Trust Identity Infrastructure');
+        // Nothing left after the request words: a neutral label, not "Strategic Specification & Notes".
+        for (const prompt of ['write a document', 'hi', 'a report']) {
+            expect(extractDocumentTitle(prompt)).toBe('Untitled document');
+        }
+        const art = parseOrSynthesizeArtifact('write a document', json({ type: 'markdown-document', data: { sections: [{ id: 'p', type: 'paragraph', content: 'Body.' }] } }), { prompt: 'write a document' } as any, [])!;
+        expect(art.title).toBe('Untitled document');
+    });
+
+    it('the open document view renders the model\'s sections only, and an empty document empty', () => {
+        const surface = (data: MarkdownDocumentData) => renderToStaticMarkup(React.createElement(DocumentCodeSurfaces, {
+            layoutMode: 'document', docReadOnly: true, isGenerating: false, activeWorkspace: { path: '/tmp/ws', name: 'ws' },
+            activeArtifact: { id: 'd', type: 'markdown-document', title: data.title, summary: '', version: 1, createdAt: 'now', data }
+        } as any));
+        const empty = surface({ title: 'Quarterly Revenue Review', sections: [] });
+        expect(empty).toContain('Quarterly Revenue Review');
+        expect(empty).not.toMatch(/Strategic Overview|Market Pillars|KPI Scorecard|Delivery Milestones/);
+        expect(empty.match(/<h[1-6][\s>]/g)).toHaveLength(1);
+        const one = surface({ title: 'Notes', sections: [{ id: 'p', type: 'paragraph', content: 'Only this paragraph.' }] });
+        expect(one).toContain('Only this paragraph.');
+        expect(one).not.toMatch(/Strategic Overview|Market Pillars/);
+    });
+
+    it('a document sent as markdown keeps its markdown (content / markdown field), never a template', () => {
+        for (const field of ['content', 'markdown']) {
+            const art = parseOrSynthesizeArtifact('write it', json({ type: 'markdown-document', title: 'Quarterly Revenue Review', data: { title: 'Quarterly Revenue Review', [field]: '# Revenue\n\nUp 4% on Q2.' } }), { prompt: 'write it' } as any, [])!;
+            const doc = art.data as MarkdownDocumentData;
+            expect(doc.sections.map(sec => sec.content)).toEqual(['Revenue', 'Up 4% on Q2.']);
+        }
+    });
+});
+
+describe('a 3d-scene envelope with a scene open updates that scene; no prompt wording decides what is kept', () => {
+    const GEN = { enabled: true, filename: 'cottage.py', sourceCode: 'import scratchbox as sb\n# cottage', glbBase64: 'Z2xURg==' };
+    const HERO = { id: 'hero', content: { type: '3d-model', durableUri: '/models/hero.glb', mimeType: 'model/gltf-binary' }, space: { spatial3d: { x: 0, y: 0, z: 0 } } };
+    const SITE = { id: 'site', content: { type: '3d-model', durableUri: '/models/site_clay.glb', mimeType: 'model/gltf-binary', metadata: { isGround: true } }, space: { spatial3d: { x: 0, y: 0, z: 0 } } };
+    const open = (data: Partial<Scene3DData> = {}): CanvasArtifact => ({
+        id: 'art-cottage', type: '3d-scene', title: 'Cottage', summary: '', version: 2, createdAt: 'now',
+        data: { title: 'Cottage', renderMode: 'clay', pythonGenerator: GEN, objects: [HERO, SITE], ...data } as Scene3DData
+    });
+    const reply = (data: Record<string, unknown>) => json({ type: '3d-scene', title: 'Cottage', data });
+
+    it('keeps the generator and objects the model left out, whatever the wording', () => {
+        for (const prompt of ['make the roof red', 'make the roof color red', 'raise the chimney', 'move the chimney',
+            'build a stone chimney on the cottage', 'put a timber roof on it', 'construct a timber roof on it', 'make it a sedan', 'add a colosseum arch next to it']) {
+            const art = parseOrSynthesizeArtifact(prompt, reply({ features: {} }), { prompt, activeArtifact: open() } as any, [])!;
+            const scene = art.data as Scene3DData;
+            expect(art.id, prompt).toBe('art-cottage');
+            expect(scene.pythonGenerator?.sourceCode, prompt).toBe(GEN.sourceCode);
+            expect(scene.objects?.map(o => o.id), prompt).toEqual(['hero', 'site']);
+            expect(scene.renderMode, prompt).toBe('clay');
+        }
+    });
+
+    it('takes what the model sends: a new generator replaces the old one, objects: [] clears them', () => {
+        const newGen = { sourceCode: 'import scratchbox as sb\n# sedan', glbBase64: 'AAAA' };
+        const art = parseOrSynthesizeArtifact('now a sedan', reply({ pythonGenerator: newGen, objects: [] }), { prompt: 'now a sedan', activeArtifact: open({ cppGenerator: { sourceCode: '// old', glbBase64: 'BBBB' } as any }) } as any, [])!;
+        const scene = art.data as Scene3DData;
+        expect(scene.pythonGenerator?.sourceCode).toBe(newGen.sourceCode);
+        expect(scene.cppGenerator).toBeUndefined();
+        expect(scene.objects).toEqual([]);
+    });
+
+    it('a follow-up leaves clay only when the model sets renderMode', () => {
+        const kept = parseOrSynthesizeArtifact('make the roof red', reply({}), { prompt: 'make the roof red', activeArtifact: open() } as any, [])!;
+        expect((kept.data as Scene3DData).renderMode).toBe('clay');
+        const changed = parseOrSynthesizeArtifact('make it look real', reply({ renderMode: 'pbr' }), { prompt: 'make it look real', activeArtifact: open() } as any, [])!;
+        expect((changed.data as Scene3DData).renderMode).toBe('pbr');
+    });
+
+    it('a first scene is clay in a studio whatever colour words the prompt has', () => {
+        for (const prompt of ['build the Blue Mosque in Istanbul', 'build the Hagia Sophia in Istanbul', 'build a red double-decker bus', 'build a double-decker bus']) {
+            const art = parseOrSynthesizeArtifact(prompt, reply({ renderMode: 'pbr', objects: [HERO] }), { prompt } as any, [])!;
+            const scene = art.data as Scene3DData;
+            expect(scene.renderMode, prompt).toBe('clay');
+            expect(scene.environment, prompt).toMatchObject({ lighting: 'studio', skybox: 'studio' });
+        }
+    });
+
+    it('adds no atmosphere the model did not send, even when the prompt names one', () => {
+        const art = parseOrSynthesizeArtifact('add god rays and atmospheric scattering', reply({}), { prompt: 'add god rays and atmospheric scattering', activeArtifact: open() } as any, [])!;
+        const scene = art.data as Scene3DData;
+        expect(scene.features?.atmosphericScattering).toBeUndefined();
+        expect(scene.features?.godRays).toBeUndefined();
+        expect(scene.environment?.skybox).toBe('studio');
     });
 });
 
@@ -160,6 +245,37 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
         expect(scene.environment).toMatchObject({ skybox: 'studio', lighting: 'studio' });
     });
 
+    it('mounts the first scene in clay whatever colour words the prompt has, and keeps an open scene\'s mode', async () => {
+        for (const prompt of ['build the Blue Mosque in Istanbul', 'build the Hagia Sophia in Istanbul', 'build a red double-decker bus', 'build a double-decker bus']) {
+            const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { renderMode: 'pbr', cppGenerator: { glbBase64: 'Z2xURg==' } } }, { request: { prompt, chatHistory: [] } } as any);
+            expect(res.resultPayload.artifact.data.renderMode, prompt).toBe('clay');
+        }
+        const openClay = { id: 'o', type: '3d-scene', data: { renderMode: 'clay' } };
+        const kept: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { cppGenerator: { glbBase64: 'Z2xURg==' } } }, { request: { prompt: 'make the bus red', activeArtifact: openClay, chatHistory: [] } } as any);
+        expect(kept.resultPayload.artifact.data.renderMode).toBe('clay');
+        const pbr: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { renderMode: 'pbr', cppGenerator: { glbBase64: 'Z2xURg==' } } }, { request: { prompt: 'make the bus red', activeArtifact: openClay, chatHistory: [] } } as any);
+        expect(pbr.resultPayload.artifact.data.renderMode).toBe('pbr');
+    });
+
+    it('a payload that is not an object fails the mount instead of mounting {}', async () => {
+        for (const payload of ['# Heading\n\nBody', undefined, [1, 2]]) {
+            const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: 'markdown-document', title: 'Notes', payload }, ctx);
+            expect(res.status).toBe('failed');
+            expect(res.resultPayload.error).toContain('payload must be a JSON object');
+            expect(res.resultPayload.artifact).toBeUndefined();
+        }
+    });
+
+    it('a document mount holds the model\'s sections or markdown, and an empty one fails', async () => {
+        const empty: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: 'markdown-document', title: 'Quarterly Revenue Review', payload: { title: 'Quarterly Revenue Review', sections: [] } }, ctx);
+        expect(empty.status).toBe('failed');
+        expect(empty.resultPayload.error).toContain('has no content');
+        const md: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: 'markdown-document', title: 'Q3', payload: { markdown: '# Revenue\n\nUp 4% on Q2.' } }, ctx);
+        expect(md.resultPayload.status).toBe('success');
+        expect(md.resultPayload.artifact.data.sections.map((sec: any) => sec.content)).toEqual(['Revenue', 'Up 4% on Q2.']);
+        expect(md.resultPayload.artifact.title).toBe('Q3');
+    });
+
     it('a video timeline mount holds only the model\'s tracks', async () => {
         const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: 'video-timeline', title: 'Edit', payload: { tracks: [] } },
             { request: { prompt: 'Split active clip at playhead and ripple delete the gap', chatHistory: [] } } as any);
@@ -186,6 +302,14 @@ describe('the chat client keeps the model\'s artifact', () => {
         const doc: CanvasArtifact = { id: 'art-doc', type: 'markdown-document', title: 'Edit notes', summary: '', version: 1, createdAt: 'now', data: { title: 'Edit notes', sections: [] } };
         const { reply } = await sendWithArtifact('Split the active clip at the playhead and ripple delete', doc);
         expect(reply.artifacts?.[0]?.type).toBe('markdown-document');
+    });
+
+    it('a file name typed in the prompt attaches no bundled test image to the user\'s message', async () => {
+        for (const prompt of ['model this from matterhorn.jpg', 'rebuild civil_highway_overpass.png in clay', 'use photo.webp as reference']) {
+            const { user } = await sendWithArtifact(prompt, SCENE);
+            expect(user?.text, prompt).toBe(prompt);
+            expect(user?.imageContent, prompt).toBeUndefined();
+        }
     });
 
     it('an "animate" follow-up does not switch on playback the model did not set', async () => {
@@ -231,5 +355,6 @@ async function sendWithArtifact(text: string, artifact: CanvasArtifact) {
     renderToStaticMarkup(React.createElement(Harness));
     await hook!.sendMessage(text);
     const reply = sessions[0].messages.find(m => m.sender === 'assistant')!;
-    return { reply, active };
+    const user = sessions[0].messages.find(m => m.sender === 'user');
+    return { reply, active, user };
 }

@@ -170,7 +170,7 @@ describe('mount_canvas_primitive: the scene holds only what the model sent', () 
     });
 });
 
-describe('parseOrSynthesizeArtifact with modelAuthoredOnly', () => {
+describe('parseOrSynthesizeArtifact builds only what the model wrote (every mode)', () => {
     const ACTIVE_SCENE: CanvasArtifact = {
         id: 'art-pair', type: '3d-scene', title: 'Two Object Comparison', summary: 'pair', version: 3, createdAt: 'now',
         data: { title: 'Two Object Comparison', objects: TWO_OBJECTS, environment: { skybox: 'studio', lighting: 'studio', ground: true } } as any
@@ -178,14 +178,14 @@ describe('parseOrSynthesizeArtifact with modelAuthoredOnly', () => {
 
     it('builds nothing from a prose reply, even with a scene open', () => {
         const request = { prompt: 'Show the two buildings side by side', mode: 'agent', activeArtifact: ACTIVE_SCENE } as any;
-        const art = parseOrSynthesizeArtifact(request.prompt, 'Both buildings are now side by side.', request, [], undefined, { modelAuthoredOnly: true });
+        const art = parseOrSynthesizeArtifact(request.prompt, 'Both buildings are now side by side.', request, []);
         expect(art).toBeUndefined();
     });
 
     it('builds a scene from a {type, data} envelope with only the model\'s objects and title', () => {
         const prompt = 'Compare the hall interior based on the earlier export';
         const reply = '```json\n' + JSON.stringify({ type: '3d-scene', title: 'Hall Comparison', data: { objects: TWO_OBJECTS } }) + '\n```';
-        const art = parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [], undefined, { modelAuthoredOnly: true })!;
+        const art = parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [])!;
         const data = art.data as Scene3DData;
         expect(art.type).toBe('3d-scene');
         expect(art.title).toBe('Hall Comparison');
@@ -201,10 +201,10 @@ describe('parseOrSynthesizeArtifact with modelAuthoredOnly', () => {
     it('ignores a JSON block that is not an artifact envelope', () => {
         const prompt = 'Show the two buildings side by side';
         const reply = 'The objects I placed:\n```json\n' + JSON.stringify({ objects: TWO_OBJECTS }) + '\n```';
-        expect(parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [], undefined, { modelAuthoredOnly: true })).toBeUndefined();
+        expect(parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [])).toBeUndefined();
     });
 
-    it('without modelAuthoredOnly, a failed 3D tool no longer turns a prose reply into a 3D scene', () => {
+    it('in chat mode too, a failed 3D tool does not turn a prose reply into a 3D scene', () => {
         const prompt = 'Why did that not work?';
         const failed = [{ id: 'e1', toolName: 'execute_3d_python_script', status: 'failed' } as any];
         const art = parseOrSynthesizeArtifact(prompt, 'The tool failed, sorry.', { prompt, mode: 'chat' } as any, failed);
@@ -363,12 +363,12 @@ describe('a splat scene holds only the splat the model sent', () => {
     });
 });
 
-describe('a {type, data} envelope under modelAuthoredOnly takes scene state only from the model or the open scene', () => {
+describe('a {type, data} envelope takes scene state only from the model or the open scene', () => {
     const envelope = (data: Record<string, unknown>) => '```json\n' + JSON.stringify({ type: '3d-scene', title: 'Chalets', data }) + '\n```';
 
     it('"Make the two mountain chalets red" switches on no biomes or playback and takes no template worldBranch', () => {
         const prompt = 'Make the two mountain chalets red';
-        const art = parseOrSynthesizeArtifact(prompt, envelope({ objects: TWO_OBJECTS }), { prompt, mode: 'agent' } as any, [], undefined, { modelAuthoredOnly: true })!;
+        const art = parseOrSynthesizeArtifact(prompt, envelope({ objects: TWO_OBJECTS }), { prompt, mode: 'agent' } as any, [])!;
         const data = art.data as Scene3DData;
         expect(art.type).toBe('3d-scene');
         expect(data.features?.terrainBiomes).toBeUndefined();
@@ -391,7 +391,7 @@ describe('a {type, data} envelope under modelAuthoredOnly takes scene state only
                 features: { godRays: false }
             } as any
         };
-        const art = parseOrSynthesizeArtifact(prompt, envelope({ objects: TWO_OBJECTS }), { prompt, mode: 'agent', activeArtifact: active } as any, [], undefined, { modelAuthoredOnly: true })!;
+        const art = parseOrSynthesizeArtifact(prompt, envelope({ objects: TWO_OBJECTS }), { prompt, mode: 'agent', activeArtifact: active } as any, [])!;
         const data = art.data as Scene3DData;
         expect(data.worldBranch).toBe('studio/void');
         expect(data.sceneType).toBe('adaptive');
@@ -404,7 +404,7 @@ describe('a {type, data} envelope under modelAuthoredOnly takes scene state only
         const prompt = 'Make the two mountain chalets red';
         const timeline = { currentTimeMs: 0, durationMs: 4000, isPlaying: true, speed: 1, isLooping: true };
         const terrainBiomes = { enabled: true, biomeType: 'alpine' };
-        const art = parseOrSynthesizeArtifact(prompt, envelope({ objects: TWO_OBJECTS, worldBranch: 'earth/alps', sceneType: 'adaptive', timeline, features: { terrainBiomes } }), { prompt, mode: 'agent' } as any, [], undefined, { modelAuthoredOnly: true })!;
+        const art = parseOrSynthesizeArtifact(prompt, envelope({ objects: TWO_OBJECTS, worldBranch: 'earth/alps', sceneType: 'adaptive', timeline, features: { terrainBiomes } }), { prompt, mode: 'agent' } as any, [])!;
         const data = art.data as Scene3DData;
         expect(data.worldBranch).toBe('earth/alps');
         expect(data.sceneType).toBe('adaptive');
@@ -417,20 +417,20 @@ describe('only a registered primitive type becomes an artifact', () => {
     it('webhook-shaped JSON in an agent reply is not an artifact', () => {
         const prompt = 'What does the Stripe invoice.paid event look like?';
         const reply = 'A paid invoice arrives like this:\n```json\n' + JSON.stringify({ id: 'evt_1', type: 'invoice.paid', data: { object: { id: 'in_1', amount_paid: 2000 } } }, null, 2) + '\n```';
-        expect(parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [], undefined, { modelAuthoredOnly: true })).toBeUndefined();
+        expect(parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [])).toBeUndefined();
     });
 
-    it('a primitive tag of an unknown type is not an artifact under modelAuthoredOnly', () => {
+    it('a primitive tag of an unknown type is not an artifact', () => {
         const prompt = 'Show the payload';
         const reply = '<scratchboxPrimitive type="invoice.paid" title="Invoice">\n```json\n{"data": {"amount_paid": 2000}}\n```\n</scratchboxPrimitive>';
-        expect(parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [], undefined, { modelAuthoredOnly: true })).toBeUndefined();
+        expect(parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [])).toBeUndefined();
     });
 
     it('an alias in the envelope names its primitive', () => {
         const prompt = 'Show the two buildings side by side';
         for (const alias of ['scene-3d', '3d', '3d_scene', '3d-world']) {
             const reply = '```json\n' + JSON.stringify({ type: alias, title: 'Pair', data: { objects: TWO_OBJECTS } }) + '\n```';
-            const art = parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, [], undefined, { modelAuthoredOnly: true });
+            const art = parseOrSynthesizeArtifact(prompt, reply, { prompt, mode: 'agent' } as any, []);
             expect(art?.type).toBe('3d-scene');
         }
     });

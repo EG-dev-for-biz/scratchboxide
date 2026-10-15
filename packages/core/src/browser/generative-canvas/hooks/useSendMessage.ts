@@ -310,29 +310,10 @@ function beginGeneration(d: SendMessageDeps, text: string, textToSend: string | 
         setCurrentSessionId(targetSessionId);
     }
 
-    const imageMatch = text.match(/(?:[a-zA-Z0-9_\-\.\/]+\.(?:png|jpe?g|webp|gif))/i);
-    let detectedImage: string | undefined = undefined;
-    if (imageMatch) {
-        let p = imageMatch[0];
-        if (!p.startsWith('http') && !p.startsWith('data:') && !p.startsWith('/')) {
-            if (p.includes('test_images/')) {
-                p = '/' + p;
-            } else if (p.includes('civil_highway_overpass')) {
-                p = '/test_images/random_samples/' + p;
-            } else if (p.includes('matterhorn')) {
-                p = '/test_images/' + p;
-            } else {
-                p = '/test_images/' + p;
-            }
-        }
-        detectedImage = p;
-    }
-
     const userMsg: ChatMessage = {
         id: `msg-user-${Date.now()}`,
         sender: 'user',
         text: text.trim(),
-        imageContent: detectedImage,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         attachedSkills: attachedSkillObjects.map(s => s.name),
         attachedMcpTools: attachedMcpObjects.map(m => m.name),

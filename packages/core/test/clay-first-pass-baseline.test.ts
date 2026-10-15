@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from '../src/node/gemini/scene3d-clay-baseline';
+import { applyClayFirstPassBaseline, keepOpenSceneRenderMode } from '../src/node/gemini/scene3d-clay-baseline';
 
 /** Shape of what Gemini actually mounted for the prompt "ferarri on road". */
 const modelAuthoredScene = () => ({
@@ -54,30 +54,34 @@ describe('applyClayFirstPassBaseline', () => {
         expect(out.atmosphere).toEqual({ enabled: true, timeOfDay: 19 });
     });
 
-    it('honours an explicit material request but keeps the neutral studio', () => {
-        const out = applyClayFirstPassBaseline(modelAuthoredScene(), 'a sports car with glossy PBR materials');
-        expect(out.renderMode).toBe('pbr');
-        expect(out.features.pbrMaterials).toBe(true);
-        expect(out.environment.skybox).toBe('studio');
-        expect(out.features).not.toHaveProperty('atmosphericScattering');
+    it('builds every first pass in clay, whatever colour or material words the prompt has', () => {
+        // Colour words decide nothing: "Blue Mosque" and "Hagia Sophia", "red bus" and "bus" are all clay.
+        for (const prompt of [
+            'build the Blue Mosque in Istanbul', 'build the Hagia Sophia in Istanbul',
+            'build a red double-decker bus', 'build a double-decker bus',
+            'a sports car with glossy PBR materials', 'Green Park, London'
+        ]) {
+            const out = applyClayFirstPassBaseline(modelAuthoredScene(), prompt);
+            expect(out.renderMode, prompt).toBe('clay');
+            expect(out.features, prompt).not.toHaveProperty('pbrMaterials');
+            expect(out.environment.skybox, prompt).toBe('studio');
+        }
     });
 });
 
-describe('releaseClayOnMaterialRequest', () => {
-    it('leaves clay for pbr when a follow-up asks for materials', () => {
-        expect(releaseClayOnMaterialRequest({ renderMode: 'clay' }, 'now paint it rosso corsa', 'clay').renderMode).toBe('pbr');
-        expect(releaseClayOnMaterialRequest({ renderMode: 'clay' }, 'make the car red with blue stripes', 'clay').renderMode).toBe('pbr');
-        expect(releaseClayOnMaterialRequest({ renderMode: 'clay' }, 'give it a metallic chrome look', 'clay').renderMode).toBe('pbr');
-        expect(releaseClayOnMaterialRequest({}, 'apply textures', 'clay').renderMode).toBe('pbr');
-        expect(releaseClayOnMaterialRequest({ renderMode: 'shaded' }, 'apply textures', 'clay').renderMode).toBe('shaded');
+describe('keepOpenSceneRenderMode', () => {
+    it('keeps the open scene\'s render mode when the model sends none', () => {
+        expect(keepOpenSceneRenderMode({}, 'clay').renderMode).toBe('clay');
+        expect(keepOpenSceneRenderMode({ title: 'x' }, 'pbr').renderMode).toBe('pbr');
     });
 
-    it('keeps clay on geometry-only follow-ups even if the model picks another mode', () => {
-        expect(releaseClayOnMaterialRequest({ renderMode: 'pbr' }, 'make the spoiler taller', 'clay').renderMode).toBe('clay');
+    it('takes the model\'s render mode when it sends one: leaving clay is the model\'s call', () => {
+        expect(keepOpenSceneRenderMode({ renderMode: 'pbr' }, 'clay').renderMode).toBe('pbr');
+        expect(keepOpenSceneRenderMode({ renderMode: 'clay' }, 'pbr').renderMode).toBe('clay');
     });
 
-    it('does nothing once the scene has left clay', () => {
-        const data = { renderMode: 'pbr' };
-        expect(releaseClayOnMaterialRequest(data, 'make the spoiler taller', 'pbr')).toBe(data);
+    it('does nothing when there is no open render mode', () => {
+        const data = { renderMode: undefined };
+        expect(keepOpenSceneRenderMode(data, undefined)).toBe(data);
     });
 });
