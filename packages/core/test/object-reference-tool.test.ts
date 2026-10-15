@@ -311,11 +311,14 @@ function writeLargeTile(name: string, n: number): string {
     return `/models/${name}`;
 }
 
-/** The longest gap between 5 ms ticks while it runs: how long the event loop was held up. */
+/**
+ * The longest gap between 5 ms ticks while it runs: how long the event loop was held up. Stopping counts the gap since
+ * the last tick too, since work that runs straight through to the awaited result ends before any tick can report it.
+ */
 function lagMonitor(): { stop: () => number } {
     let max = 0, last = Date.now();
     const timer = setInterval(() => { const now = Date.now(); max = Math.max(max, now - last - 5); last = now; }, 5);
-    return { stop: () => { clearInterval(timer); return max; } };
+    return { stop: () => { clearInterval(timer); return Math.max(max, Date.now() - last - 5); } };
 }
 
 function stagedScene(tileUri: string, treesUri?: string): (args: Record<string, unknown>, c: ToolContext) => Promise<ToolHandlerOutcome> {
@@ -1394,9 +1397,12 @@ describe('build_3d_object_from_reference', () => {
     it('reads a large staged tile in slices without holding up the event loop, once while it is unchanged, and stops while reading it', async () => {
         const tileUri = writeLargeTile('large_tile_test.glb', 900);
         const tileFile = path.join(MODELS_DIR, 'large_tile_test.glb');
-        // What reading and binning this tile costs in one go (the sampler built straight through).
+        // What reading and binning this tile costs in one go (the sampler built straight through), once the code is
+        // warm, as it is for the tool's read below.
+        const tileBytes = fs.readFileSync(tileFile);
+        expect(SurfaceSampler.fromGlb(tileBytes)!.heightAt(0, 0)).toBeCloseTo(1.5, 5);
         const started = Date.now();
-        expect(SurfaceSampler.fromGlb(fs.readFileSync(tileFile))!.heightAt(0, 0)).toBeCloseTo(1.5, 5);
+        SurfaceSampler.fromGlb(tileBytes);
         const syncMs = Date.now() - started;
         expect(syncMs).toBeGreaterThan(150);
 
@@ -1408,10 +1414,13 @@ describe('build_3d_object_from_reference', () => {
             const lag = lagMonitor();
             const first = await run({ request: 'the vase', specJson: JSON.stringify(VASE), location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } });
             const maxLagMs = lag.stop();
+            // Kept with the test results (gitignored) to compare runs.
+            fs.mkdirSync(path.join(REPO_ROOT, 'test-results'), { recursive: true });
+            fs.writeFileSync(path.join(REPO_ROOT, 'test-results/object_reference_event_loop.json'), JSON.stringify({ syncReadMs: syncMs, longestStallMs: maxLagMs }, null, 1));
             expect(first.status, String(first.resultPayload.error)).toBe('completed');
-            expect(tileReads()).toBe(1);
             // Read in one go, the loop would wait the whole syncMs; in slices it waits a small part of it.
             expect(maxLagMs, `longest stall ${maxLagMs} ms against ${syncMs} ms for the whole read`).toBeLessThan(syncMs / 2);
+            expect(tileReads()).toBe(1);
 
             // Another object at the place: the unchanged tile is not read again.
             const onScene: ToolContext = { ...ctx(), request: { ...ctx().request, activeArtifact: first.resultPayload.artifact } as any };
