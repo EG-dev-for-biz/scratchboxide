@@ -41,6 +41,15 @@ export interface PartConnectivityReport {
     toleranceMeters: number;
     floatingParts: FloatingPart[];
     skippedReason?: string;
+    /** With `withGraph`: the welded piece each triangle belongs to, and which pieces touch or are embedded in which. */
+    graph?: ContactGraph;
+}
+
+export interface ContactGraph {
+    /** Piece index of each triangle (a piece is a set of triangles joined by shared, welded vertices). */
+    trianglePiece: Int32Array;
+    /** For each piece, the pieces it touches (within the tolerance) or is embedded in, or that are embedded in it. */
+    touching: number[][];
 }
 
 const MAX_TRIANGLES = 600_000;
@@ -282,6 +291,18 @@ function normalize(a: Vec3): Vec3 { const l = Math.hypot(a[0], a[1], a[2]); retu
 // Analysis
 // ---------------------------------------------------------------------------
 
+/**
+ * Cells of size `step` over the box [min, max] with one spare cell on every side, keyed by integers (string keys
+ * made the analysis several times slower). Cell indices are clamped to the padded box.
+ */
+function cellGrid(min: Vec3, max: Vec3, step: number): { cell: (value: number, axis: number) => number; key: (x: number, y: number, z: number) => number } {
+    const n = [0, 1, 2].map(k => Math.floor((max[k] - min[k]) / step) + 3);
+    return {
+        cell: (value, axis) => Math.min(n[axis] - 1, Math.max(0, Math.floor((value - min[axis]) / step) + 1)),
+        key: (x, y, z) => x + n[0] * (y + n[1] * z)
+    };
+}
+
 interface Part {
     triangles: number[];
     vertices: number[];
@@ -289,7 +310,7 @@ interface Part {
     max: Vec3;
 }
 
-export function analyzePartConnectivity(soup: TriangleSoup, options: { toleranceMeters?: number } = {}): PartConnectivityReport {
+export function analyzePartConnectivity(soup: TriangleSoup, options: { toleranceMeters?: number; withGraph?: boolean } = {}): PartConnectivityReport {
     const triCount = soup.indices.length / 3;
     const vertexCount = soup.positions.length / 3;
     if (triCount === 0) {
@@ -310,23 +331,27 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
 
     // 1. Weld coincident vertices, then union triangles into parts. Neighbouring cells are searched too:
     // rounding alone splits coincident points that straddle a cell boundary (e.g. box faces).
-    const weldStep = Math.max(1e-6, tolerance * 0.05);
-    const weldCells = new Map<string, number[]>();
+    // At most 1e5 weld cells along any axis keeps the integer cell keys exact.
+    const weldStep = Math.max(1e-6, tolerance * 0.05, Math.max(gMax[0] - gMin[0], gMax[1] - gMin[1], gMax[2] - gMin[2]) / 1e5);
+    const weldGrid = cellGrid(gMin, gMax, weldStep);
+    const weldCells = new Map<number, number[]>();
     const weldPositions: Vec3[] = [];
     const welded = new Int32Array(vertexCount);
     for (let i = 0; i < vertexCount; i++) {
         const p = point(i);
-        const c = [0, 1, 2].map(k => Math.floor(p[k] / weldStep));
+        const cx = weldGrid.cell(p[0], 0), cy = weldGrid.cell(p[1], 1), cz = weldGrid.cell(p[2], 2);
         let id = -1;
         for (let dx = -1; dx <= 1 && id < 0; dx++) for (let dy = -1; dy <= 1 && id < 0; dy++) for (let dz = -1; dz <= 1 && id < 0; dz++) {
-            for (const candidate of weldCells.get(`${c[0] + dx},${c[1] + dy},${c[2] + dz}`) || []) {
+            const list = weldCells.get(weldGrid.key(cx + dx, cy + dy, cz + dz));
+            if (!list) continue;
+            for (const candidate of list) {
                 if (distSq(weldPositions[candidate], p) <= weldStep * weldStep) { id = candidate; break; }
             }
         }
         if (id < 0) {
             id = weldPositions.length;
             weldPositions.push(p);
-            const key = `${c[0]},${c[1]},${c[2]}`;
+            const key = weldGrid.key(cx, cy, cz);
             const list = weldCells.get(key);
             if (list) list.push(id); else weldCells.set(key, [id]);
         }
@@ -365,14 +390,14 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
 
     // 2. Spatial grid of triangles for proximity queries.
     const cell = Math.max(tolerance * 4, diagonal / 96);
-    const grid = new Map<string, number[]>();
-    const cellKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
+    const triGrid = cellGrid(gMin, gMax, cell);
+    const grid = new Map<number, number[]>();
     for (let t = 0; t < triCount; t++) {
         const [a, b, c] = [point(soup.indices[t * 3]), point(soup.indices[t * 3 + 1]), point(soup.indices[t * 3 + 2])];
-        const lo = [0, 1, 2].map(k => Math.floor((Math.min(a[k], b[k], c[k]) - tolerance) / cell));
-        const hi = [0, 1, 2].map(k => Math.floor((Math.max(a[k], b[k], c[k]) + tolerance) / cell));
+        const lo = [0, 1, 2].map(k => triGrid.cell(Math.min(a[k], b[k], c[k]) - tolerance, k));
+        const hi = [0, 1, 2].map(k => triGrid.cell(Math.max(a[k], b[k], c[k]) + tolerance, k));
         for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) {
-            const key = cellKey(x, y, z);
+            const key = triGrid.key(x, y, z);
             const list = grid.get(key);
             if (list) list.push(t); else grid.set(key, [t]);
         }
@@ -386,7 +411,7 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
     parts.forEach((part, pi) => {
         for (const v of part.vertices) {
             const p = point(v);
-            const list = grid.get(cellKey(Math.floor(p[0] / cell), Math.floor(p[1] / cell), Math.floor(p[2] / cell)));
+            const list = grid.get(triGrid.key(triGrid.cell(p[0], 0), triGrid.cell(p[1], 1), triGrid.cell(p[2], 2)));
             if (!list) continue;
             for (const t of list) {
                 const qi = triPart[t];
@@ -477,7 +502,8 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
         attachedPartCount: attached.size,
         structureCount: structures.length,
         toleranceMeters: +tolerance.toFixed(4),
-        floatingParts: floatingParts.slice(0, 12)
+        floatingParts: floatingParts.slice(0, 12),
+        ...(options.withGraph ? { graph: { trianglePiece: triPart, touching: adjacency.map(s => [...s]) } } : {})
     };
 }
 
