@@ -81,7 +81,7 @@ Scratchbox IDE contains production-grade Python nanobind, native C++20, and Type
 | Discipline | Python Nanobind & Gemini Tools | Native C++20 Engine | TypeScript / Viewport |
 | :--- | :--- | :--- | :--- |
 | **Hero 3D Assets** | `execute_3d_python_script` (`import scratchbox as sb`, `sb.PbrMaterial.clay()`) | `#include "scratchbox_engine.hpp"` | Pure WebGL rendering, camera CAD controls |
-| **Botanical Growth** | `botanical_grow_tree` (`species`, `ageYears`, `trunkTwist`, `branchingIterations`) | `#include "scratchbox_smpl_tree.hpp"`, `"scratchbox_nature.hpp"` | `SbVeggieService`, `UniversalBotanicalBridgeService` |
+| **Botanical Growth** | `botanical_synthesize_tree` (`heightMeters`, `crownDiameterMeters` required; `crownBaseHeightMeters`, `trunkRadiusMeters`, `triangleBudget`); a place's own trees come from `google_3d_tiles_get_clay` | `#include "scratchbox_nature.hpp"` (space colonisation), `"scratchbox_tile_vegetation.hpp"` | `TileVegetationService` (strip / plant), `SbVeggieService` |
 | **Volumetric Lighting** | `atmosphere_configure_scene`, `atmosphere_harmonize_location_3d` | `#include "scratchbox_volumetrics.hpp"` (`marchVolumetrics`, `henyeyGreensteinPhase`) | `VolumetricGodRays.ts`, `volumetric-participating-media.ts` |
 | **Thin-Wall SSS** | Subsurface transmission parameters in material shaders | `#include "scratchbox_sss.hpp"` (`evaluateThinWallTransmission`) | Custom GLSL shader chunks injecting backface transmission |
 | **Procedural Textures** | `sb.pbr` continuous material procedural generators | `#include "scratchbox_pbr_texture_expert.hpp"` | Multi-layer Worley F1/F2 rhytidome, packed ORM textures |

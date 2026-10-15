@@ -63,7 +63,10 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
 
     expect(scene).toBeDefined();
     expect(scene.totalVertices).toBeGreaterThan(100000);
-    expect(scene.objects.length).toBeGreaterThanOrEqual(5);
+    expect(scene.objects.length).toBeGreaterThanOrEqual(3);
+    // every submesh is reported once, in the category its own geometry put it in (none moved to fill a category)
+    const all = scene.objects.flatMap(o => o.submeshIndices);
+    expect(new Set(all).size).toBe(all.length);
 
     // Verify overall bounding box in meters
     const { dimensions, centroid } = scene.overallBoundingBox;
@@ -97,17 +100,15 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       autoDetectSemanticCategories: true
     });
 
+    // Only categories the geometry supports are reported; nothing is moved into a category so that it exists. This
+    // model's submeshes measure as monument, architecture and ruin; none is broad and low enough for terrain. Nothing
+    // is called vegetation: a bounding box cannot tell a crown from a kiosk.
     const categories = new Set(scene.objects.map(o => o.category));
     expect(categories.has('monument') || categories.has('colosseum_architecture')).toBe(true);
-    expect(categories.has('foliage') || categories.has('foliage_trees')).toBe(true);
-    expect(categories.has('terrain')).toBe(true);
-
-    // Verify foliage routing metadata
-    const foliageObjs = scene.objects.filter(o => o.category === 'foliage' || o.category === 'foliage_trees');
-    expect(foliageObjs.length).toBeGreaterThan(0);
-    for (const fol of foliageObjs) {
-      expect(fol.routingRecommendation).toBe('sb-veggie');
-    }
+    expect(categories.has('terrain')).toBe(false);
+    expect(categories.has('foliage')).toBe(false);
+    expect(categories.has('foliage_trees')).toBe(false);
+    for (const obj of scene.objects) expect(obj.submeshIndices.length).toBeGreaterThan(0);
 
     // Verify monument routing metadata
     const monumentObjs = scene.objects.filter(o => o.category === 'monument' || o.category === 'colosseum_architecture');
@@ -116,12 +117,64 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       expect(['sb-archi', 'archie-building'].includes(mon.routingRecommendation!)).toBe(true);
     }
 
-    // Verify terrain routing metadata
+    // Verify terrain routing metadata (when terrain is detected)
     const terrainObjs = scene.objects.filter(o => o.category === 'terrain');
-    expect(terrainObjs.length).toBeGreaterThan(0);
     for (const ter of terrainObjs) {
       expect(ter.routingRecommendation).toBe('sb-terrain');
     }
+  });
+
+  it('names no trees from geometry alone: no tree stage, no species, and granularity "trees" fails with the reason', async () => {
+    // vertex-level clustering on a real mesh: local height peaks with scattered normals are facade relief, cornices and
+    // rooftop units as often as crowns, so none of them is called a tree or given a species
+    const scene = Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'detailed', autoDetectSemanticCategories: true });
+    expect(scene.objects.length).toBeGreaterThan(0);
+    for (const obj of scene.objects) {
+      expect(['foliage', 'foliage_trees']).not.toContain(obj.category);
+      expect(obj.routingRecommendation).not.toBe('sb-veggie');
+      expect((obj as any).treeMetadata).toBeUndefined();
+      expect(`${obj.name} ${obj.trellisPrompt}`).not.toMatch(/oak|pine|cypress|botanical/i);
+    }
+    expect(() => Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'trees' as any }))
+      .toThrow("granularity 'trees' has been removed");
+
+    // through the agent tool the model sees the same: the call fails with the reason, and the declaration no longer
+    // offers the mode
+    const { createDefaultToolRegistry } = await import('../src/node/gemini/tool-registry');
+    const registry = createDefaultToolRegistry();
+    const decl = registry.declarations().find((d: any) => d.name === 'spatial_separate_3d_objects') as any;
+    expect(decl.parameters.properties.granularity.enum).not.toContain('trees');
+    const out: any = await registry.dispatch('spatial_separate_3d_objects', { glbPath: colosseumModelPath, granularity: 'trees' }, {} as any);
+    expect(out.exec.status).toBe('failed');
+    expect(JSON.stringify(out)).toContain('google_3d_tiles_get_clay measures');
+  });
+
+  it('names no vehicles, and no building use, style or landmark identity, from geometry alone', async () => {
+    // a car-sized box near the ground is as often a kiosk, a planter or a lump of the scan's drape as a car; a tall
+    // envelope is not "Art Deco residential"; and the structure at the anchor is whatever the caller says it is
+    const scene = Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'detailed', autoDetectSemanticCategories: true });
+    expect(scene.objects.length).toBeGreaterThan(0);
+    for (const obj of scene.objects) {
+      expect(obj.category).not.toBe('vehicle');
+      expect(obj.routingRecommendation).not.toBe('sb-vehicle');
+      expect((obj as any).vehicleMetadata).toBeUndefined();
+      expect(`${obj.name} ${obj.trellisPrompt}`).not.toMatch(/sedan|suv|van\b|car\b|parked|art deco|residential|townhouse|washington|monument|neoclassical/i);
+    }
+    const buildings = scene.objects.filter(o => o.category === 'architecture');
+    expect(buildings.length).toBeGreaterThan(0);
+    for (const b of buildings) expect(b.trellisPrompt).toMatch(/^Building envelope, [\d.]+ m x [\d.]+ m footprint, [\d.]+ m tall$/);
+    // no structure is cut out at the origin and called the landmark unless the caller says where it stands
+    expect(scene.objects.filter(o => o.category === 'landmark')).toEqual([]);
+    // given where it stands, it is named only as the caller names it (or not at all), with its measured size
+    const bounds = { minX: -60, maxX: 60, minZ: -60, maxZ: 60 };
+    const unnamed = Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'detailed', autoDetectSemanticCategories: true, focalInterestBounds: bounds });
+    const anchorStructure = unnamed.objects.find(o => o.category === 'landmark');
+    expect(anchorStructure?.name).toBe('Structure at the anchor');
+    expect(anchorStructure?.trellisPrompt).toMatch(/^Structure at the anchor \([\d.]+ m x [\d.]+ m, [\d.]+ m tall\)$/);
+    const named = Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'detailed', autoDetectSemanticCategories: true, focalInterestBounds: bounds, landmarkName: 'Colosseum', architecturalStyle: 'Roman amphitheatre' });
+    const landmark = named.objects.find(o => o.category === 'landmark');
+    expect(landmark?.name).toBe('Colosseum');
+    expect(landmark?.trellisPrompt).toMatch(/^Colosseum, Roman amphitheatre \(/);
   });
 
   it('synthesizes canonical Scene3DData with Media4DObject contracts', async () => {
@@ -144,7 +197,7 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     }
   });
 
-  it.skipIf(!archRaw.ok)(withReason('performs vertex-level Tree Apex & Facade clustering on raw Google 3D Tile (Washington Square Arch)', archRaw), async () => {
+  it.skipIf(!archRaw.ok)(withReason('performs vertex-level facade and terrain clustering on raw Google 3D Tile (Washington Square Arch), naming no trees', archRaw), async () => {
     const archPath = path.join(REPO_ROOT, ARCH_RAW);
 
     const scene = Universal3DObjectSeparationService.separate3DMesh(archPath, {
@@ -154,32 +207,13 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
 
     expect(scene).toBeDefined();
     expect(scene.totalVertices).toBe(4277);
-    expect(scene.objects.length).toBeGreaterThanOrEqual(25);
+    expect(scene.objects.length).toBeGreaterThan(0);
 
-    // Verify categories breakdown
+    // Verify categories breakdown: geometry alone names no trees (they are measured from the photo tiles elsewhere)
     const categories = new Set(scene.objects.map(o => o.category));
     expect(categories.has('terrain')).toBe(true);
-    expect(categories.has('foliage_trees')).toBe(true);
+    expect(categories.has('foliage_trees')).toBe(false);
     expect(categories.has('monument') || categories.has('architecture')).toBe(true);
-
-    // Verify individual trees
-    const treeEntities = scene.objects.filter(o => o.category === 'foliage_trees');
-    expect(treeEntities.length).toBeGreaterThanOrEqual(15);
-
-    for (const tree of treeEntities) {
-      expect(tree.orientedBoundingBox).toBeDefined();
-      expect(tree.orientedBoundingBox.dimensions[0]).toBeGreaterThan(0);
-      expect(tree.orientedBoundingBox.dimensions[1]).toBeGreaterThan(0);
-      expect(tree.orientedBoundingBox.dimensions[2]).toBeGreaterThan(0);
-      expect(tree.routingRecommendation).toBe('sb-veggie');
-
-      // Verify botanical metadata
-      expect(tree.treeMetadata).toBeDefined();
-      expect(['quercus_ilex', 'pinus_pinea', 'cupressus_sempervirens', 'olea_europaea', 'laurus_nobilis']).toContain(tree.treeMetadata.species);
-      expect(tree.treeMetadata.canopyHeightMeters).toBeGreaterThan(0);
-      expect(tree.treeMetadata.crownDiameterMeters).toBeGreaterThan(0);
-      expect(tree.treeMetadata.crownVolumeM3).toBeGreaterThan(0);
-    }
 
     // Verify terrain ground apron
     const terrainEntity = scene.objects.find(o => o.category === 'terrain');
@@ -196,20 +230,23 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     }
   });
 
-  it.skipIf(!archHq.ok)(withReason('performs high-resolution semantic separation on HQ Leaf 3D Tile (Landmarks, Vehicles, Trees, Architecture)', archHq), async () => {
+  it.skipIf(!archHq.ok)(withReason('performs high-resolution separation on HQ Leaf 3D Tile: the landmark named as the caller names it, architecture, and no trees or vehicles named from geometry', archHq), async () => {
     const hqPath = path.join(REPO_ROOT, ARCH_HQ);
 
     const scene = Universal3DObjectSeparationService.separate3DMesh(hqPath, {
       granularity: 'detailed',
       autoDetectSemanticCategories: true,
       landmarkName: 'Washington Square Arch',
-      landmarkType: 'triumphal_arch'
+      landmarkType: 'triumphal_arch',
+      architecturalStyle: 'Neoclassical triumphal arch',
+      // where the caller says the arch stands (the separation guesses no landmark box of its own)
+      focalInterestBounds: { minX: -16.5, maxX: 16.5, minZ: -8.5, maxZ: 8.5 }
     });
 
     expect(scene).toBeDefined();
     expect(scene.totalVertices).toBe(295217);
     expect(scene.totalSubmeshes).toBe(94);
-    expect(scene.objects.length).toBeGreaterThanOrEqual(180);
+    expect(scene.objects.length).toBeGreaterThan(0);
 
     // 1. Primary Landmark Verification
     const landmarks = scene.objects.filter(o => o.category === 'landmark');
@@ -222,23 +259,11 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     expect(arch.routingRecommendation).toBe('sb-archi');
     expect(arch.vertexCount).toBeGreaterThan(1500);
 
-    // 2. Ground-Level Vehicle Verification
-    const vehicles = scene.objects.filter(o => o.category === 'vehicle');
-    expect(vehicles.length).toBeGreaterThanOrEqual(12);
-    for (const v of vehicles) {
-      expect(v.vehicleMetadata).toBeDefined();
-      expect(['sedan', 'suv', 'van_truck', 'compact']).toContain(v.vehicleMetadata?.vehicleType);
-      expect(v.vehicleMetadata?.lengthMeters).toBeGreaterThanOrEqual(2.5);
-      expect(v.vehicleMetadata?.lengthMeters).toBeLessThanOrEqual(8.5);
-      expect(v.vehicleMetadata?.headingDeg).toBeDefined();
-      expect(v.routingRecommendation).toBe('sb-vehicle');
-    }
+    // 2. No vehicles from geometry alone: a car-sized box near the ground is as often a kiosk or a lump of drape
+    expect(scene.objects.filter(o => o.category === 'vehicle')).toHaveLength(0);
 
-    // 3. Botanical Trees Verification
-    const trees = scene.objects.filter(o => o.category === 'foliage_trees');
-    expect(trees.length).toBeGreaterThanOrEqual(150);
-    const oaks = trees.filter(t => t.treeMetadata?.species === 'quercus_ilex');
-    expect(oaks.length).toBeGreaterThan(50);
+    // 3. No trees from geometry alone (no species either)
+    expect(scene.objects.filter(o => o.category === 'foliage_trees')).toHaveLength(0);
   });
 
   it.skipIf(!archHq.ok)(withReason('verifies BoundingBoxComparisonService metrology and GoogleTileAlignmentOptimizer asset docking contracts on separated entities', archHq), async () => {
@@ -251,11 +276,11 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
 
     expect(scene).toBeDefined();
 
-    // 1. Verify BoundingBoxComparisonService metrology on Vehicles
-    const vehicles = scene.objects.filter(o => o.category === 'vehicle');
-    expect(vehicles.length).toBeGreaterThanOrEqual(12);
+    // 1. Verify BoundingBoxComparisonService metrology on the separated building envelopes
+    const buildings = scene.objects.filter(o => o.category === 'architecture');
+    expect(buildings.length).toBeGreaterThanOrEqual(2);
 
-    for (const v of vehicles) {
+    for (const v of buildings) {
       const obb = v.orientedBoundingBox;
       expect(obb).toBeDefined();
 
@@ -285,8 +310,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       expect(metrology.tightnessGainPercent).toBeGreaterThanOrEqual(0);
     }
 
-    // 2. Verify GoogleTileAlignmentOptimizer docking contracts on Vehicle #1
-    const targetCar = vehicles[0]!;
+    // 2. Verify GoogleTileAlignmentOptimizer docking contracts on the first building envelope
+    const targetCar = buildings[0]!;
     const generativeVanBounds = {
       min: [-1.05, 0, -2.5] as [number, number, number],
       max: [1.05, 2.4, 2.5] as [number, number, number],
@@ -315,7 +340,7 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       {
         preserveAspectRatio: true,
         groundSnap: true,
-        initialYawDeg: targetCar.vehicleMetadata?.headingDeg || 0
+        initialYawDeg: targetCar.orientedBoundingBox.yawDeg || 0
       }
     );
 
@@ -366,7 +391,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     // Verify materials have dedicated part categories in extras
     const categories = parsed.json.materials.map((m: any) => m.extras?.category);
     expect(categories).toContain('landmark');
-    expect(categories.some((c: string) => c === 'foliage_trees' || c === 'architecture' || c === 'terrain')).toBe(true);
+    expect(categories.some((c: string) => c === 'architecture' || c === 'terrain')).toBe(true);
+    expect(categories).not.toContain('foliage_trees');
 
     // Verify each primitive has local OBB-conformal UV coordinates (TEXCOORD_0)
     for (const prim of parsed.json.meshes[0].primitives) {

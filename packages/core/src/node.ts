@@ -979,26 +979,6 @@ export {
     type TectonicAnalysisReport
 } from './node/3d-engine/sb-archi-service';
 
-// SB-Veggie Universal Botanical Bridge Service
-export {
-    UniversalBotanicalBridgeService,
-    type SupportedTreeSpecies,
-    type BotanicalSpeciesAdapter,
-    SPECIES_ADAPTERS,
-    type SpatialTreeEntity,
-    type TreeSynthesisBridgeOptions,
-    type TreeSynthesisBridgeResult
-} from './node/spatial/UniversalBotanicalBridgeService';
-
-// Photogrammetric Terrain Harmonizer Service
-export {
-    PhotogrammetricTerrainHarmonizerService,
-    type BotanicalStandDescriptor,
-    type CadastralMonumentPolygon,
-    type TerrainHarmonizeOptions,
-    type TerrainHarmonizeResult
-} from './node/spatial/PhotogrammetricTerrainHarmonizerService';
-
 // SB-Archi Universal Architectural Bridge Service
 export {
     UniversalArchiBridgeService,

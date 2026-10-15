@@ -1,11 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import {
   Google3DTileBlockoutPipelineService
 } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
-import { GOOGLE_3D_TILES_TOOL_DECLARATIONS, google3DTilesHandlers } from '../src/node/gemini/tools/spatial-tools';
+import { GOOGLE_3D_TILES_TOOL_DECLARATIONS } from '../src/node/gemini/tools/spatial-tools';
 
 describe('Zero Building Clipping & Atomic Building Integrity', () => {
   const service = new Google3DTileBlockoutPipelineService();
@@ -176,20 +175,13 @@ describe('Zero Building Clipping & Atomic Building Integrity', () => {
       expect(runnerTool?.parameters.properties.zenithAltitudeMeters).toBeDefined();
     });
 
-    it('should execute offline mock with atomic building integrity flags enabled', async () => {
-      const result = await google3DTilesHandlers.google_3d_tiles_get_clay({
-        query: '40.748400, -73.985700',
-        mockExecution: true,
-        atomicBuildingIntegrity: true,
-        zenithAltitudeMeters: 2000,
-        // Keep the mock tile GLB out of public/models
-        outputGlbPath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tile-integrity-')), 'midtown_clay.glb')
-      }, {} as any);
-
-      expect(result.resultPayload.success).toBe(true);
-      expect(result.resultPayload.mode).toBe('clay');
-      expect(result.resultPayload.mesh.vertexCount).toBeGreaterThan(0);
-      expect(result.summaryResult).toContain('Google 3D Tiles ingested in studio grey clay');
+    it('offers no offline mock mode: the extraction tools return real Google 3D Tiles or fail', () => {
+      // Mock mode mounted synthetic placeholder tiles as if they were Google 3D Tiles; the handlers also refuse a mock
+      // extraction result (tile-tools-do-what-was-asked.test.ts covers that with a stubbed extraction).
+      for (const name of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay']) {
+        const tool = GOOGLE_3D_TILES_TOOL_DECLARATIONS.find(t => t.name === name);
+        expect((tool?.parameters as any).properties.mockExecution).toBeUndefined();
+      }
     });
   });
 });

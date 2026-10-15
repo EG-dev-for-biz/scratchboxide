@@ -9,16 +9,19 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { buildNativeIfStale } from './native-build';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export type BotanicalMode = 'tree' | 'shrub' | 'auto' | 'streetscape';
 export type LeafMorphologyType = 'ovate' | 'serrated' | 'lobed';
 
 export interface BotanicalPipelineOptions {
+    /** The scan (.glb) to rebuild, or 'benchmark' for the built-in synthetic benchmark scan; required by the CLI. */
     inputGlbPath?: string;
     outputGlbPath?: string;
     mode?: BotanicalMode;
@@ -88,25 +91,17 @@ export class BotanicalVegetationService {
      * Ensures the native C++20 botanical synthesis binary is compiled and available.
      */
     async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) {
-            return this.binaryPath;
-        }
-
-        const sourcePath = path.resolve(process.cwd(), 'scripts/run_botanical_pipeline.cpp');
-        const includePath = this.compiler.getSdkIncludePath();
-        const outputDir = path.dirname(this.binaryPath);
-
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        const compileCmd = `clang++ -std=c++20 -O3 -march=native -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}"`;
-        await execAsync(compileCmd);
-        return this.binaryPath;
+        const sourcePath = [path.resolve(process.cwd(), 'scripts/run_botanical_pipeline.cpp'), path.resolve(__dirname, '../../../../scripts/run_botanical_pipeline.cpp')]
+            .find(p => fs.existsSync(p));
+        if (!sourcePath) throw new Error('scripts/run_botanical_pipeline.cpp not found');
+        // rebuilt when missing or older than a file it was compiled from, one build at a time across processes, so an
+        // old binary never runs
+        return buildNativeIfStale({ source: sourcePath, binary: this.binaryPath, includeDir: this.compiler.getSdkIncludePath() });
     }
 
     /**
-     * Synthesizes botanical geometry from an input scan or benchmark.
+     * Synthesizes botanical geometry from an input scan (or the built-in benchmark scan, asked for by name). The CLI
+     * runs without a shell; a failed run, or one that does not report its telemetry, throws GeneratorFailedError.
      */
     async synthesizeVegetation(options: BotanicalPipelineOptions = {}): Promise<BotanicalPipelineResult> {
         const bin = await this.ensureBinary();
@@ -122,69 +117,51 @@ export class BotanicalVegetationService {
         const ivy = (options.enableIvy ?? false) ? 1 : 0;
         const ghost = (options.includeGhostOverlay ?? false) ? 1 : 0;
 
-        const args = [
-            `--output "${tmpOutput}"`,
-            `--mode ${mode}`,
-            `--leaf ${leaf}`,
-            `--leaf-size ${leafSize}`,
-            `--density ${density}`,
-            `--ivy ${ivy}`,
-            `--ghost ${ghost}`
-        ];
+        // an argument list (no shell): paths may hold any character
+        const args = ['--output', tmpOutput, '--mode', mode, '--leaf', leaf, '--leaf-size', String(leafSize), '--density', String(density), '--ivy', String(ivy), '--ghost', String(ghost)];
+        if (options.inputGlbPath) args.push('--input', options.inputGlbPath);
 
-        if (options.inputGlbPath) {
-            args.push(`--input "${options.inputGlbPath}"`);
+        let stdout: string, stderr: string;
+        try {
+            ({ stdout, stderr } = await execFileAsync(bin, args, { maxBuffer: 1024 * 1024 * 64, windowsHide: true }));
+        } catch (err) {
+            const e = err as { stderr?: string; stdout?: string; message?: string };
+            throw new GeneratorFailedError('cpp', `${path.basename(bin)}: ${String(e.stderr || e.stdout || e.message || err)}`);
+        }
+        if (!stdout.includes('STATUS: SUCCESS') || !fs.existsSync(tmpOutput)) {
+            throw new GeneratorFailedError('cpp', `${path.basename(bin)} did not report success or write ${tmpOutput}: ${stderr || stdout.slice(-2000)}`);
         }
 
-        const cmd = `"${bin}" ${args.join(' ')}`;
-        const { stdout, stderr } = await execAsync(cmd, { maxBuffer: 1024 * 1024 * 64 });
-
-        // Parse structured telemetry lines
-        const getNum = (pattern: RegExp, defaultVal = 0): number => {
+        // Telemetry is read from what the pipeline printed; a value it did not print fails the call (none is assumed)
+        const read = (label: string, pattern: RegExp): number => {
             const m = stdout.match(pattern);
-            return m ? parseFloat(m[1]) : defaultVal;
+            const v = m ? parseFloat(m[1]) : NaN;
+            if (!Number.isFinite(v)) throw new GeneratorFailedError('cpp', `${path.basename(bin)} printed no ${label}`);
+            return v;
         };
-
-        const totalHeightMeters = getNum(/Total Height:\s*([0-9.]+)\s*m/, 0);
-        const clearTrunkHeightMeters = getNum(/Clear Trunk Height:\s*([0-9.]+)\s*m/, 0);
-        const crownBaseHeightMeters = getNum(/Crown Base Height:\s*([0-9.]+)\s*m/, 0);
-        const crownHeightMeters = getNum(/Crown Height:\s*([0-9.]+)\s*m/, 0);
-        const volumetricDensity = getNum(/Volumetric Density:\s*([0-9.]+)/, 0);
-        const baseCaliperCm = getNum(/Base Caliper:\s*([0-9.]+)\s*cm/, 0);
-        const leavesPerTip = Math.round(getNum(/Leaves Per Tip:\s*([0-9]+)/, 12));
-        const outputVertices = Math.round(getNum(/Output Vertices:\s*([0-9]+)/, 0));
-        const outputTriangles = Math.round(getNum(/Output Triangles:\s*([0-9]+)/, 0));
-        const processingTimeMs = getNum(/Processing Runtime:\s*([0-9.]+)\s*ms/, 0);
-
-        const isShrubMatch = stdout.match(/Vegetation Type:\s*(.+)/);
-        const vegetationType = isShrubMatch ? isShrubMatch[1].trim() : (mode === 'shrub' ? 'Multi-Stem Shrub / Hedge' : 'Arborescent Street/Park Tree');
-
+        const typeMatch = stdout.match(/Vegetation Type:\s*(.+)/);
+        if (!typeMatch) throw new GeneratorFailedError('cpp', `${path.basename(bin)} printed no vegetation type`);
         const telemetry: BotanicalPipelineTelemetry = {
-            vegetationType,
+            vegetationType: typeMatch[1].trim(),
             mode,
             leafMorphology: leaf,
-            totalHeightMeters,
-            clearTrunkHeightMeters,
-            crownBaseHeightMeters,
-            crownHeightMeters,
-            volumetricDensity,
-            baseCaliperCm,
-            leavesPerTip,
-            outputVertices,
-            outputTriangles,
-            processingTimeMs
+            totalHeightMeters: read('total height', /Total Height:\s*([0-9.]+)\s*m/),
+            clearTrunkHeightMeters: read('clear trunk height', /Clear Trunk Height:\s*([0-9.]+)\s*m/),
+            crownBaseHeightMeters: read('crown base height', /Crown Base Height:\s*([0-9.]+)\s*m/),
+            crownHeightMeters: read('crown height', /Crown Height:\s*([0-9.]+)\s*m/),
+            volumetricDensity: read('volumetric density', /Volumetric Density:\s*([0-9.]+)/),
+            baseCaliperCm: read('base caliper', /Base Caliper:\s*([0-9.]+)\s*cm/),
+            leavesPerTip: Math.round(read('leaves per tip', /Leaves Per Tip:\s*([0-9]+)/)),
+            outputVertices: Math.round(read('output vertex count', /Output Vertices:\s*([0-9]+)/)),
+            outputTriangles: Math.round(read('output triangle count', /Output Triangles:\s*([0-9]+)/)),
+            processingTimeMs: read('processing time', /Processing Runtime:\s*([0-9.]+)\s*ms/)
         };
 
-        let glbBuffer: Buffer | undefined;
-        let glbBase64: string | undefined;
-
-        if (fs.existsSync(tmpOutput)) {
-            glbBuffer = fs.readFileSync(tmpOutput);
-            glbBase64 = glbBuffer.toString('base64');
-        }
+        const glbBuffer = fs.readFileSync(tmpOutput);
+        const glbBase64 = glbBuffer.toString('base64');
 
         return {
-            success: stdout.includes('STATUS: SUCCESS') || outputTriangles > 0,
+            success: true,
             glbBuffer,
             glbBase64,
             outputGlbPath: tmpOutput,

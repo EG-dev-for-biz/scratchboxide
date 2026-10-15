@@ -1,234 +1,143 @@
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * Botanical Tree Gemini / Antigravity Agent Tools
- * Exposes the SB-Veggie (formerly SMPL-Tree) Botanical Synthesis & Inversion Engine
- * as high-level agent tools that ingest entities from the 3D Tile Spatial Separator,
- * adjust dynamically to any tree species, and output 1:1 metric watertight GLBs.
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { ToolDeclaration, ToolHandler } from './types';
-import {
-    UniversalBotanicalBridgeService,
-    SPECIES_ADAPTERS,
-    type SpatialTreeEntity,
-    type SupportedTreeSpecies
-} from '../../spatial/UniversalBotanicalBridgeService';
-import {
-    ColosseumTreeIdentificationEngine,
-    type BotanicalZone,
-    type BotanicalSpecies
-} from '../../spatial/ColosseumTreeIdentificationEngine';
+/**
+ * Botanical agent tool: one SB-Veggie tree (space colonisation, studio clay) grown to the measurements the request
+ * gives. Nothing is assumed: a missing height or crown spread fails the call, and what the measurements cannot say
+ * (crown base, trunk radius) comes from explicit ratios that the result reports as inferred. Real-world locations get
+ * their trees measured from the photo tiles by google_3d_tiles_get_clay instead.
+ */
+
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
+import { findTileVegetationRepoRoot, getTileVegetationService } from '../../3d-engine/tile-vegetation-service';
+import { resolveWithinRoot } from '../../security/path-guard';
 
 export const BOTANICAL_TREE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'botanical_synthesize_tree',
-        description: 'Synthesizes a 1:1 metric, watertight, biologically accurate 3D tree asset (.glb) using the native C++20 SB-Veggie botanical engine. Ingests tree data from the 3D tile Spatial Separator (e.g. from GET /api/spatial/3d-mesh/objects?mode=trees or /api/spatial/trees), automatically adapts species archetypes (Parasol Stone Pine, Columnar Cypress, Decurrent Holm Oak, Gnarled Olive, Laurel, Birch, Maple, etc.), solves Da Vinci branch taper & 16-mode morphological shape basis, and fits the exact oriented bounding box in real-world metric ENU coordinates.',
+        description: 'Grow one standalone SB-Veggie tree (space colonisation inside an ellipsoidal crown of the given size, studio clay GLB) to the measurements given: total height and crown spread in metres are required; crown base height, trunk radius, position and a triangle budget are optional. Returns the GLB path and the height and spread actually grown. Not for real-world places: google_3d_tiles_get_clay measures and rebuilds the trees of a location itself.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                treeId: {
-                    type: 'STRING',
-                    description: 'Unique identifier for the tree (e.g., "fol-tree-oppian-crest-001" or "tree-central-park-042").'
-                },
-                species: {
-                    type: 'STRING',
-                    description: 'Botanical species or common tree type (e.g., "pinus_pinea", "quercus_ilex", "cupressus_sempervirens", "olea_europaea", "laurus_nobilis", "oak", "pine", "cypress", "olive", "birch").'
-                },
-                name: {
-                    type: 'STRING',
-                    description: 'Optional human-readable name or descriptive label for the tree.'
-                },
-                canopyHeightMeters: {
-                    type: 'NUMBER',
-                    description: 'Total vertical height of the tree in meters (from ground datum to apex).'
-                },
-                crownDiameterMeters: {
-                    type: 'NUMBER',
-                    description: 'Diameter of the foliage crown spread in meters.'
-                },
-                boundingBox: {
-                    type: 'OBJECT',
-                    description: 'Axis-aligned 3D bounding box { min: [x,y,z], max: [x,y,z], dimensions: [w,h,d], centroid: [cx,cy,cz] } in metric ENU space.'
-                },
-                orientedBoundingBox: {
-                    type: 'OBJECT',
-                    description: 'Oriented 3D bounding box { center: [x,y,z], dimensions: [w,h,d], halfExtents: [hx,hy,hz], yawRad: number }.'
-                },
-                season: {
-                    type: 'NUMBER',
-                    description: 'Phenological season: 1.0 = Summer lush green, 0.45 = Autumn golden amber, 0.0 = Winter bare wood manifold.'
-                },
-                leafDensity: {
-                    type: 'NUMBER',
-                    description: 'Foliage density multiplier (default 1.0, 0.0 for bare winter manifold).'
-                },
-                saturationScale: {
-                    type: 'NUMBER',
-                    description: 'Foliage color saturation scaling (default 0.78 for authentic photorealistic tile harmony).'
-                },
-                outputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional destination file path for the resulting binary glTF 2.0 (.glb) asset.'
-                },
-                rawScanGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path to raw photogrammetry 3D tile submesh blob to run SMPLify-Tree scan inversion.'
-                }
+                heightMeters: { type: 'NUMBER', description: 'Total tree height from the ground to the top of the crown, metres (required).' },
+                crownDiameterMeters: { type: 'NUMBER', description: 'Crown spread (diameter), metres (required).' },
+                crownBaseHeightMeters: { type: 'NUMBER', description: 'Height of the lowest crown branches above the ground, metres. When omitted it is 0.35 of the height and reported as inferred.' },
+                trunkRadiusMeters: { type: 'NUMBER', description: 'Trunk radius above the root flare, metres. When omitted it is 0.016 of the height and reported as inferred.' },
+                position: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Trunk base [x, y, z] in metres (default: the origin).' },
+                triangleBudget: { type: 'NUMBER', description: 'Maximum triangles for the tree (default 8000).' },
+                label: { type: 'STRING', description: 'Optional free-text label for the tree (e.g. what kind of tree it is); stored in the GLB, it does not change the geometry.' },
+                seed: { type: 'STRING', description: 'Optional hex seed (1-16 digits) for a different but reproducible branching.' },
+                outputGlbPath: { type: 'STRING', description: 'Optional workspace path to copy the resulting .glb to.' }
             },
-            required: []
-        }
-    },
-    {
-        name: 'botanical_query_separator_trees',
-        description: 'Queries identified 3D tree entities from the Spatial Separator service across any geographic zone, returning bounding boxes, botanical species classifications, and metric dimensions.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                zone: {
-                    type: 'STRING',
-                    description: 'Geographic zone name (e.g. "oppian_hill_crest", "colle_oppio_slopes", "palatine_hill_slopes", "via_san_gregorio", etc.).'
-                },
-                species: {
-                    type: 'STRING',
-                    description: 'Filter by species: "pinus_pinea", "quercus_ilex", "cupressus_sempervirens", "olea_europaea", or "laurus_nobilis".'
-                },
-                minHeight: {
-                    type: 'NUMBER',
-                    description: 'Minimum canopy height in meters.'
-                },
-                maxHeight: {
-                    type: 'NUMBER',
-                    description: 'Maximum canopy height in meters.'
-                },
-                limit: {
-                    type: 'NUMBER',
-                    description: 'Maximum number of trees to return (default 20).'
-                }
-            },
-            required: []
+            required: ['heightMeters', 'crownDiameterMeters']
         }
     }
 ];
 
+function positiveNumber(args: Record<string, unknown>, key: string, required: boolean): number | undefined {
+    const v = args[key];
+    if (v === undefined || v === null) {
+        if (required) throw new Error(`botanical_synthesize_tree: "${key}" is required (metres); nothing is assumed.`);
+        return undefined;
+    }
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`botanical_synthesize_tree: "${key}" must be a number greater than 0.`);
+    return n;
+}
+
+/** The surface of an ellipsoidal crown (upper half) on a 0.5 m grid, as the crown samples tile_vegetation plants into. */
+function crownSurface(x: number, y: number, z: number, height: number, radius: number, crownBase: number): number[][] {
+    const samples: number[][] = [];
+    const step = Math.max(0.35, radius / 12);
+    const depth = height - crownBase;
+    for (let dx = -radius; dx <= radius + 1e-9; dx += step) {
+        for (let dz = -radius; dz <= radius + 1e-9; dz += step) {
+            const u = 1 - (dx * dx + dz * dz) / (radius * radius);
+            if (u < 0) continue;
+            samples.push([x + dx, y + crownBase + depth * (0.5 + 0.5 * Math.sqrt(u)), z + dz]);
+        }
+    }
+    return samples;
+}
+
 export const botanicalTreeHandlers: Record<string, ToolHandler> = {
-    botanical_synthesize_tree: async (args: Record<string, any>) => {
-        const bridge = new UniversalBotanicalBridgeService();
-        const adapter = UniversalBotanicalBridgeService.resolveSpecies(args.species, args.name);
+    botanical_synthesize_tree: async (args, ctx) => {
+        const height = positiveNumber(args, 'heightMeters', true)!;
+        const diameter = positiveNumber(args, 'crownDiameterMeters', true)!;
+        const crownBaseArg = positiveNumber(args, 'crownBaseHeightMeters', false);
+        const trunkRadius = positiveNumber(args, 'trunkRadiusMeters', false);
+        const budget = positiveNumber(args, 'triangleBudget', false) ?? 8000;
+        if (crownBaseArg !== undefined && crownBaseArg >= height) throw new Error('botanical_synthesize_tree: "crownBaseHeightMeters" must be lower than "heightMeters".');
+        const pos = Array.isArray(args.position) ? (args.position as unknown[]).map(Number) : [0, 0, 0];
+        if (pos.length !== 3 || pos.some(v => !Number.isFinite(v))) throw new Error('botanical_synthesize_tree: "position" must be [x, y, z] in metres.');
+        const [x, y, z] = pos;
+        const radius = diameter / 2;
+        const crownBaseRatio = crownBaseArg !== undefined ? crownBaseArg / height : 0.35;
+        const label = typeof args.label === 'string' ? args.label.slice(0, 200) : undefined;
+        const seed = typeof args.seed === 'string' && args.seed ? args.seed : crypto.createHash('sha256').update(JSON.stringify([height, diameter, crownBaseRatio, x, y, z])).digest('hex').slice(0, 16);
 
-        const defaultHeight = 12.0;
-        const defaultSpread = defaultHeight * adapter.typicalAspectSpread;
-
-        let entity: SpatialTreeEntity = {
-            id: args.treeId || `tree_${Date.now()}`,
-            name: args.name || adapter.commonName,
-            species: (args.species as SupportedTreeSpecies) || adapter.species,
-            canopyHeightMeters: args.canopyHeightMeters || defaultHeight,
-            crownDiameterMeters: args.crownDiameterMeters || defaultSpread,
-            boundingBox: args.boundingBox,
-            orientedBoundingBox: args.orientedBoundingBox,
-            rawScanGlbPath: args.rawScanGlbPath
-        };
-
-        if (args.treeId && (!args.canopyHeightMeters || !args.crownDiameterMeters)) {
-            const allTrees = ColosseumTreeIdentificationEngine.getIdentifiedTrees();
-            const matched = allTrees.find(t => t.id === args.treeId);
-            if (matched) {
-                entity = {
-                    name: matched.name,
-                    species: matched.species,
-                    nominalDimensions: matched.nominalDimensions,
-                    nominalCentroid: matched.nominalCentroid,
-                    canopyHeightMeters: matched.canopyHeightMeters,
-                    crownDiameterMeters: matched.crownDiameterMeters,
-                    trellisPrompt: matched.trellisPrompt,
-                    ...entity,
-                    id: matched.id
-                };
-            }
-        }
-
-        const result = await bridge.synthesizeTreeFromEntity(entity, {
-            season: args.season !== undefined ? Number(args.season) : 1.0,
-            leafDensity: args.leafDensity !== undefined ? Number(args.leafDensity) : undefined,
-            saturationScale: args.saturationScale !== undefined ? Number(args.saturationScale) : 0.78,
-            outputGlbPath: args.outputGlbPath,
-            runInversionIfScanAvailable: !!args.rawScanGlbPath
+        const root = findTileVegetationRepoRoot();
+        const id = crypto.createHash('sha256').update(JSON.stringify({ height, diameter, crownBaseRatio, trunkRadius, x, y, z, seed, label: label ?? null })).digest('hex').slice(0, 16);
+        const requestDir = resolveWithinRoot(root, path.join('.scratchbox', 'cache', 'botanical_requests'));
+        fs.mkdirSync(requestDir, { recursive: true });
+        const crownsPath = path.join(requestDir, `${id}.json`);
+        const area = Math.PI * radius * radius;
+        fs.writeFileSync(crownsPath, JSON.stringify({
+            version: 1,
+            frame: null,
+            // a free-text name for the tree: written to the GLB's root extras, it never changes the geometry
+            ...(label ? { label } : {}),
+            crowns: [{
+                id: 0, status: 'tree', apex: [x, y + height, z], stem: [x, z], supportY: y, supportSource: 'given', terrainY: y,
+                apexAboveSupport: height, areaM2: area, sectorRadii: new Array(16).fill(radius),
+                samples: crownSurface(x, y, z, height, radius, crownBaseRatio * height)
+            }]
+        }));
+        ctx?.reportProgress?.('Growing the SB-Veggie tree');
+        const planted = await getTileVegetationService(root).plant({
+            crownsPath,
+            triangleBudget: budget,
+            seed,
+            params: { crownBaseRatio, ...(trunkRadius !== undefined ? { trunkRadiusPerHeight: trunkRadius / height } : {}) }
         });
-
+        const tree = planted.stats.perTree?.[0];
+        if (!tree?.bounds) throw new Error('botanical_synthesize_tree: the tree model reports no geometry');
+        const [lo, hi] = tree.bounds as number[][];
+        let outputGlbPath = planted.treesGlb;
+        if (typeof args.outputGlbPath === 'string' && args.outputGlbPath.trim()) {
+            outputGlbPath = resolveWithinRoot(ctx?.workspaceRoot || root, args.outputGlbPath.trim());
+            fs.mkdirSync(path.dirname(outputGlbPath), { recursive: true });
+            fs.copyFileSync(planted.treesGlb, outputGlbPath);
+        }
+        const grownHeight = hi[1] - y;
+        const grownSpread = Math.max(hi[0] - lo[0], hi[2] - lo[2]);
+        const inferred: Record<string, number> = {};
+        if (crownBaseArg === undefined) inferred.crownBaseRatio = crownBaseRatio;
+        if (trunkRadius === undefined) inferred.trunkRadiusPerHeight = Number(planted.stats.inferred?.trunkRadiusPerHeight);
         return {
             resultPayload: {
-                success: true,
-                treeId: result.treeId,
-                species: result.species,
-                archetype: result.archetype,
-                worldPosition: result.worldPosition,
-                worldRotationYawRad: result.worldRotationYawRad,
-                fittedHeightMeters: result.fittedHeightMeters,
-                fittedSpreadMeters: result.fittedSpreadMeters,
-                outputGlbPath: result.outputGlbPath,
-                telemetry: result.telemetry,
-                appliedBeta: result.appliedBeta
-            }
-        };
-    },
-
-    botanical_query_separator_trees: async (args: Record<string, any>) => {
-        let trees = ColosseumTreeIdentificationEngine.filterTrees({
-            zone: args.zone as BotanicalZone,
-            species: args.species as BotanicalSpecies,
-            minHeight: args.minHeight ? Number(args.minHeight) : undefined,
-            maxHeight: args.maxHeight ? Number(args.maxHeight) : undefined
-        });
-
-        // If no local trees match or query is generic, provide available species catalog from UniversalBotanicalBridgeService
-        if (trees.length === 0) {
-            const adapters = Object.values(SPECIES_ADAPTERS);
-            const filteredAdapters = args.species 
-                ? adapters.filter(a => a.species === args.species || a.commonName.toLowerCase().includes(String(args.species).toLowerCase()))
-                : adapters;
-
-            return {
-                resultPayload: {
-                    success: true,
-                    totalFound: filteredAdapters.length,
-                    returnedCount: filteredAdapters.length,
-                    mode: 'universal_archetypes',
-                    trees: filteredAdapters.map(a => ({
-                        id: `archetype-${a.species}`,
-                        name: a.commonName,
-                        species: a.species,
-                        commonName: a.commonName,
-                        zone: 'global',
-                        canopyHeightMeters: 12.0,
-                        crownDiameterMeters: 12.0 * a.typicalAspectSpread,
-                        centroid: [0, 6.0, 0],
-                        dimensions: [12.0 * a.typicalAspectSpread, 12.0, 12.0 * a.typicalAspectSpread]
-                    }))
-                }
-            };
-        }
-
-        const limit = args.limit ? Number(args.limit) : 20;
-        const sliced = trees.slice(0, limit);
-
-        return {
-            resultPayload: {
-                success: true,
-                totalFound: trees.length,
-                returnedCount: sliced.length,
-                trees: sliced.map(t => ({
-                    id: t.id,
-                    name: t.name,
-                    species: t.species,
-                    commonName: t.commonName,
-                    zone: t.zone,
-                    canopyHeightMeters: t.canopyHeightMeters,
-                    crownDiameterMeters: t.crownDiameterMeters,
-                    centroid: t.nominalCentroid,
-                    dimensions: t.nominalDimensions
-                }))
-            }
+                treeId: id,
+                label,
+                generator: 'SB-Veggie (space colonisation)',
+                outputGlbPath,
+                position: [x, y, z],
+                requested: { heightMeters: height, crownDiameterMeters: diameter },
+                grown: { heightMeters: grownHeight, crownSpreadMeters: grownSpread, bounds: tree.bounds },
+                triangles: tree.triangles,
+                triangleBudget: budget,
+                inferred,
+                seed
+            } as unknown as ToolResultPayload,
+            summaryResult: `Grew one SB-Veggie tree (space colonisation, studio clay): ${grownHeight.toFixed(1)} m tall and ${grownSpread.toFixed(1)} m across (asked for ${height} m and ${diameter} m), ${tree.triangles} triangles. ${Object.keys(inferred).length ? `Inferred, not given: ${Object.entries(inferred).map(([k, v]) => `${k} ${v}`).join(', ')}. ` : ''}GLB: ${outputGlbPath}.`
         };
     }
 };

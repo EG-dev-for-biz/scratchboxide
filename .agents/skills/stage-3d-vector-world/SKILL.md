@@ -3,8 +3,9 @@ name: stage-3d-vector-world
 description: >-
   Stage authentic 3D urban and road environments from Google 2D roadmap vector tiles (MVT/PBF at zoom 16)
   around hero assets using stage_3d_vector_world. Generates 5-tier road cross-sections with beveled granite curbs,
-  sidewalks, parcel massing prisms, lane-aligned traffic, streetlamps, and street trees rendered in 18% Studio Grey Clay
-  with continuous elevation profiles.
+  sidewalks, parcel massing prisms, lane-aligned traffic and streetlamps rendered in 18% Studio Grey Clay
+  with continuous elevation profiles. It places no trees (their positions would be invented); a location's trees are
+  measured from its photo tiles and rebuilt by google_3d_tiles_get_clay.
 ---
 
 # Stage 3D Vector World Skill
@@ -28,7 +29,7 @@ The **Stage 3D Vector World Skill** enables AI agents to generate structured, CA
   ▼                 ▼                 ▼
 [Parcel Massing] [Road Corridors]  [Urban Furnishing]
 (Extruded         (5-Tier Cross-   (Streetlamps,
- Building Prisms)  Sections, Curbs) Trees, Vehicles)
+ Building Prisms)  Sections, Curbs)  Vehicles)
   └─────────────────┬─────────────────┘
                     │
                     ▼
@@ -61,7 +62,6 @@ Agents invoke `stage_3d_vector_world` to construct an instant real-world staging
     "style": "studio_clay",
     "populate": true,
     "includeTraffic": true,
-    "includeTrees": true,
     "includeStreetlamps": true,
     "includeSidewalks": true,
     "heroStaging": {
@@ -80,7 +80,7 @@ Agents invoke `stage_3d_vector_world` to construct an instant real-world staging
 - `zoom`: Vector tile level (default `16` for high-definition urban street geometry).
 - `radiusTiles`: Surrounding tile radius (default `1` yields a complete $3 \times 3$ district grid).
 - `style`: Material mode (default `"studio_clay"` for 18% Studio Grey Clay CAD look).
-- `populate`: Automatically populates streetlamps, curbside trees, and background traffic.
+- `populate`: Automatically populates streetlamps and background traffic. No trees are placed: use google_3d_tiles_get_clay, which measures a place's trees in its photo tiles and rebuilds them.
 - `heroStaging`: Solves exact placement transforms for a hero object (`lane` or `sidewalk`).
 
 ---
@@ -102,9 +102,9 @@ The native staging engine builds multi-lane highway and street cross-sections wi
 | Road Tier | Default Lanes | Lane Width | Curb Reveal | Sidewalk Width | Urban Elements |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Freeway / Motorway** | 4–6 | $3.75\text{m}$ | Barrier ($0.8\text{m}$) | None | Overhead gantries, guide barriers |
-| **Arterial Boulevard** | 2–3 each way | $3.50\text{m}$ | $15\text{cm}$ bevel | $3.0\text{m}$ | Trees, dual streetlamps, traffic |
+| **Arterial Boulevard** | 2–3 each way | $3.50\text{m}$ | $15\text{cm}$ bevel | $3.0\text{m}$ | Dual streetlamps, traffic |
 | **Secondary Collector**| 1–2 each way | $3.25\text{m}$ | $15\text{cm}$ bevel | $2.2\text{m}$ | Streetlamps, parked cars |
-| **Local Residential**  | 1 each way   | $2.85\text{m}$ | $12\text{cm}$ bevel | $1.8\text{m}$ | Tree planting strips |
+| **Local Residential**  | 1 each way   | $2.85\text{m}$ | $12\text{cm}$ bevel | $1.8\text{m}$ | Planting strips |
 | **Alleyway / Service** | 1 shared     | $3.50\text{m}$ | Flush ($0\text{cm}$) | None | Service bollards |
 
 ---

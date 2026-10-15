@@ -21,7 +21,6 @@ async function main() {
     let populate = false;
     let graphOnly = false;
     let traffic = true;
-    let trees = true;
     let streetlamps = true;
     let sidewalks = true;
     let heroLane: number | undefined;
@@ -38,7 +37,6 @@ async function main() {
         if (args[i] === '--populate') populate = true;
         if (args[i] === '--graph-only') graphOnly = true;
         if (args[i] === '--no-traffic') traffic = false;
-        if (args[i] === '--no-trees') trees = false;
         if (args[i] === '--no-streetlamps') streetlamps = false;
         if (args[i] === '--no-sidewalks') sidewalks = false;
         if (args[i] === '--hero-lane' && args[i + 1]) {
@@ -75,7 +73,6 @@ async function main() {
             style,
             outputGlbPath: outputGlbPath || undefined,
             includeTraffic: traffic,
-            includeTrees: trees,
             includeStreetlamps: streetlamps,
             includeSidewalks: sidewalks,
             heroStaging: heroLane !== undefined || heroDist !== undefined ? {

@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <vector>
 #include <random>
+#include <cstdint>
+#include <unordered_map>
 
 namespace scratchbox {
 namespace nature {
@@ -1039,6 +1041,13 @@ struct SpaceColonizationConfig {
     float cantileverDroop{0.12f};        // Gravitational downward droop for distal cantilevered branches
     int scaffoldBranchCount{3};          // Number of primary scaffold limbs sprouted at crown break
 
+    // Triangle budget (continuous). 0 = unbounded (the meshing above). When > 0 the grown skeleton is meshed so wood
+    // plus foliage stay at or below this many triangles: branch tubes get a side count that scales with radius,
+    // twigs thinner than a radius found by bisection are pruned into foliage, and foliage becomes clumped leaf masses
+    // spread over the pruned twigs. baseRadius then sets the trunk radius above the root flare.
+    float triangleBudget{0.0f};
+    float woodBudgetShare{0.4f};         // share of the budget the wood may use; foliage takes the rest
+
     static SpaceColonizationConfig fromBlobTelemetry(const BotanicalBlobTelemetry& tel) {
         SpaceColonizationConfig cfg;
         cfg.customAttractors = tel.conformalAttractors;
@@ -1078,23 +1087,25 @@ struct ColonizationNode {
     std::vector<int> children;
 };
 
+/** What the budgeted meshing produced for one tree (triangleBudget > 0). */
+struct TreeBudgetReport {
+    size_t woodTriangles{0};
+    size_t foliageTriangles{0};
+    size_t skeletonNodes{0};
+    size_t woodSegments{0};
+    float prunedBelowRadius{0.0f};  // twigs thinner than this became foliage
+    size_t foliageClumps{0};
+    float clumpSpacing{0.0f};       // voxel size the foliage clumps were gathered at (m)
+    int trianglesPerClump{0};
+};
+
 class SpaceColonizationTreeGenerator {
 public:
-    static std::pair<geometry::Mesh, geometry::Mesh> generateTreeComponents(const SpaceColonizationConfig& cfg) {
-        geometry::Mesh woodMesh("Tree_Wood");
-        woodMesh.material = geometry::PbrMaterial::roughWood();
-        woodMesh.material.name = "PBR_Redwood_Bark";
-        woodMesh.material.roughnessFactor = 0.92f;
-        woodMesh.material.metallicFactor = 0.02f;
-
-        geometry::Mesh foliageMesh("Tree_Foliage");
-        foliageMesh.material.name = "PBR_Canopy_Foliage";
-        foliageMesh.material.roughnessFactor = 0.58f;
-        foliageMesh.material.metallicFactor = 0.01f;
-        foliageMesh.material.doubleSided = true;
-        foliageMesh.material.alphaMode = "MASK";
-        foliageMesh.material.alphaCutoff = 0.45f;
-        std::mt19937 rng(cfg.seed);
+    /**
+     * Grows the branch skeleton (attractors, trunk, scaffold limbs, colonisation, da Vinci radii, root flare).
+     * `rng` is seeded by the caller and keeps its state for the meshing that follows.
+     */
+    static std::vector<ColonizationNode> growSkeleton(const SpaceColonizationConfig& cfg, std::mt19937& rng) {
         std::uniform_real_distribution<float> distMinus1To1(-1.0f, 1.0f);
         std::uniform_real_distribution<float> dist0To1(0.0f, 1.0f);
 
@@ -1339,6 +1350,35 @@ public:
                 }
             }
         }
+        return nodes;
+    }
+
+    static std::pair<geometry::Mesh, geometry::Mesh> generateTreeComponents(const SpaceColonizationConfig& cfg, TreeBudgetReport* report = nullptr) {
+        geometry::Mesh woodMesh("Tree_Wood");
+        woodMesh.material = geometry::PbrMaterial::roughWood();
+        woodMesh.material.name = "PBR_Redwood_Bark";
+        woodMesh.material.roughnessFactor = 0.92f;
+        woodMesh.material.metallicFactor = 0.02f;
+
+        geometry::Mesh foliageMesh("Tree_Foliage");
+        foliageMesh.material.name = "PBR_Canopy_Foliage";
+        foliageMesh.material.roughnessFactor = 0.58f;
+        foliageMesh.material.metallicFactor = 0.01f;
+        foliageMesh.material.doubleSided = true;
+        foliageMesh.material.alphaMode = "MASK";
+        foliageMesh.material.alphaCutoff = 0.45f;
+        std::mt19937 rng(cfg.seed);
+        std::uniform_real_distribution<float> dist0To1(0.0f, 1.0f);
+
+        const std::vector<ColonizationNode> nodes = growSkeleton(cfg, rng);
+
+        if (cfg.triangleBudget > 0.0f) {
+            TreeBudgetReport local;
+            meshWithinBudget(cfg, nodes, woodMesh, foliageMesh, report ? *report : local);
+            for (const auto& v : woodMesh.vertices) woodMesh.bounds.expand(v);
+            for (const auto& v : foliageMesh.vertices) foliageMesh.bounds.expand(v);
+            return {woodMesh, foliageMesh};
+        }
 
         // 5. Build Branch Cylinder Meshes
         for (const auto& node : nodes) {
@@ -1553,6 +1593,252 @@ public:
             combined.bounds.expand(foliageMesh.bounds.max);
         }
         return combined;
+    }
+
+private:
+    /** Deterministic value in [0, 1) from a seed and two indices (no shared RNG state, so meshing order is free). */
+    static float hashUnit(uint32_t seed, uint32_t a, uint32_t b) {
+        uint64_t h = (static_cast<uint64_t>(seed) << 32) ^ (static_cast<uint64_t>(a) * 0x9E3779B97F4A7C15ull) ^ (static_cast<uint64_t>(b) * 0xC2B2AE3D27D4EB4Full);
+        h ^= h >> 33; h *= 0xff51afd7ed558ccdull; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull; h ^= h >> 33;
+        return static_cast<float>((h >> 40) & 0xFFFFFF) / 16777216.0f;
+    }
+
+    /** Unit icosphere: level 0 = 12 vertices / 20 triangles, level 1 = 42 / 80 (outward winding). */
+    static void unitIcosphere(int level, std::vector<Vec3>& verts, std::vector<uint32_t>& tris) {
+        const float t = (1.0f + std::sqrt(5.0f)) * 0.5f;
+        verts = {Vec3(-1, t, 0), Vec3(1, t, 0), Vec3(-1, -t, 0), Vec3(1, -t, 0), Vec3(0, -1, t), Vec3(0, 1, t),
+                 Vec3(0, -1, -t), Vec3(0, 1, -t), Vec3(t, 0, -1), Vec3(t, 0, 1), Vec3(-t, 0, -1), Vec3(-t, 0, 1)};
+        for (auto& v : verts) v = v.normalized();
+        tris = {0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11, 1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
+                3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1};
+        for (int l = 0; l < level; ++l) {
+            std::unordered_map<uint64_t, uint32_t> mid;
+            auto midpoint = [&](uint32_t a, uint32_t b) {
+                const uint64_t key = a < b ? (static_cast<uint64_t>(a) << 32 | b) : (static_cast<uint64_t>(b) << 32 | a);
+                auto it = mid.find(key);
+                if (it != mid.end()) return it->second;
+                verts.push_back(((verts[a] + verts[b]) * 0.5f).normalized());
+                const uint32_t id = static_cast<uint32_t>(verts.size() - 1);
+                mid.emplace(key, id);
+                return id;
+            };
+            std::vector<uint32_t> next;
+            for (size_t i = 0; i < tris.size(); i += 3) {
+                const uint32_t a = tris[i], b = tris[i + 1], c = tris[i + 2];
+                const uint32_t ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
+                next.insert(next.end(), {a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca});
+            }
+            tris = std::move(next);
+        }
+    }
+
+    /**
+     * Meshes a grown skeleton within cfg.triangleBudget. Wood: chains of single-child nodes are simplified
+     * (Douglas-Peucker, tolerance a fraction of the local radius), each kept segment is a tube whose side count grows
+     * with sqrt(radius), and segments that start thinner than a bisected radius are pruned; the trunk chain is always
+     * kept. Foliage: the pruned twigs (and the remaining tips) are gathered into voxels whose size is the smallest
+     * that fits the remaining budget, and each voxel becomes one irregular leaf mass that overlaps its neighbours.
+     */
+    static void meshWithinBudget(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g,
+                                 geometry::Mesh& wood, geometry::Mesh& foliage, TreeBudgetReport& rep) {
+        const size_t N = g.size();
+        rep = TreeBudgetReport{};
+        rep.skeletonNodes = N;
+        if (N < 2) return;
+        const size_t budget = static_cast<size_t>(std::max(0.0f, cfg.triangleBudget));
+        auto node = [&](int i) -> const ColonizationNode& { return g[static_cast<size_t>(i)]; };
+
+        // Trunk radius reference: the first trunk node above the root flare (or the last one before the crown break).
+        float trunkRef = g[0].radius;
+        {
+            int n = 0;
+            while (node(n).children.size() == 1) {
+                n = node(n).children[0];
+                trunkRef = node(n).radius;
+                if (node(n).position.y >= cfg.rootAnchor.y + cfg.rootFlareHeight) break;
+            }
+        }
+        const float scale = (cfg.baseRadius > 0.0f && trunkRef > 1e-6f) ? cfg.baseRadius / trunkRef : 1.0f;
+        std::vector<float> radius(N);
+        for (size_t i = 0; i < N; ++i) radius[i] = g[i].radius * scale;
+        auto rad = [&](int i) { return radius[static_cast<size_t>(i)]; };
+        const float rRef = std::max(1e-4f, trunkRef * scale);
+        const float treeHeight = std::max(0.5f, cfg.crownCenter.y + cfg.crownExtents.y - cfg.rootAnchor.y);
+
+        // Chains: from the root and from every branching node, following single-child links.
+        std::vector<std::vector<int>> chains;
+        std::vector<int> starts{0};
+        for (size_t i = 1; i < N; ++i) {
+            if (g[i].children.size() >= 2) starts.push_back(static_cast<int>(i));
+        }
+        for (int s : starts) {
+            const auto& kids = node(s).children;
+            if (s == 0 && kids.size() == 1) {
+                std::vector<int> c{0};
+                int n = 0;
+                while (node(n).children.size() == 1) { n = node(n).children[0]; c.push_back(n); }
+                chains.push_back(std::move(c));
+                continue;
+            }
+            for (int k : kids) {
+                std::vector<int> c{s, k};
+                int n = k;
+                while (node(n).children.size() == 1) { n = node(n).children[0]; c.push_back(n); }
+                chains.push_back(std::move(c));
+            }
+        }
+        // Douglas-Peucker on each chain; the first chain from a single-child root is the trunk.
+        struct Seg { int a, b; bool trunk; };
+        std::vector<Seg> segs;
+        for (size_t ci = 0; ci < chains.size(); ++ci) {
+            const auto& c = chains[ci];
+            std::vector<uint8_t> keep(c.size(), 0);
+            keep.front() = 1;
+            keep.back() = 1;
+            std::vector<std::pair<size_t, size_t>> stack{{0, c.size() - 1}};
+            while (!stack.empty()) {
+                const auto [lo, hi] = stack.back();
+                stack.pop_back();
+                if (hi <= lo + 1) continue;
+                const Vec3 A = node(c[lo]).position, B = node(c[hi]).position;
+                const Vec3 AB = B - A;
+                const float len2 = std::max(1e-12f, AB.lengthSquared());
+                float worst = -1.0f;
+                size_t at = lo;
+                for (size_t m = lo + 1; m < hi; ++m) {
+                    const Vec3 P = node(c[m]).position;
+                    const float tt = std::clamp((P - A).dot(AB) / len2, 0.0f, 1.0f);
+                    const float d = (P - (A + AB * tt)).length();
+                    if (d > worst) { worst = d; at = m; }
+                }
+                const float tol = std::max(0.02f, 0.35f * rad(c[lo]));
+                if (worst > tol) {
+                    keep[at] = 1;
+                    stack.push_back({lo, at});
+                    stack.push_back({at, hi});
+                }
+            }
+            const bool trunk = ci == 0 && g[0].children.size() == 1;
+            int prev = -1;
+            for (size_t m = 0; m < c.size(); ++m) {
+                if (!keep[m]) continue;
+                if (prev >= 0) segs.push_back({prev, c[m], trunk});
+                prev = c[m];
+            }
+        }
+
+        auto sides = [&](float r, int sidesMax) {
+            return std::clamp(static_cast<int>(std::lround(sidesMax * std::sqrt(std::max(0.0f, r) / rRef))), 3, sidesMax);
+        };
+        auto woodTris = [&](float rMin, int sidesMax) {
+            size_t t = 0;
+            for (const auto& s : segs) {
+                if (s.trunk || rad(s.a) >= rMin) t += 2 * static_cast<size_t>(sides(rad(s.a), sidesMax));
+            }
+            return t;
+        };
+        const size_t woodBudget = static_cast<size_t>(std::floor(static_cast<double>(budget) * std::clamp(cfg.woodBudgetShare, 0.0f, 1.0f)));
+        float rMax = 0.0f;
+        for (float r : radius) rMax = std::max(rMax, r);
+        const float beyond = rMax * 2.0f + 1.0f;
+        int sidesMax = 8;
+        while (sidesMax > 3 && woodTris(beyond, sidesMax) > woodBudget) --sidesMax;
+        float rMin = 0.0f;
+        if (woodTris(0.0f, sidesMax) > woodBudget) {
+            float lo = 0.0f, hi = beyond;
+            for (int it = 0; it < 48; ++it) {
+                const float m = 0.5f * (lo + hi);
+                if (woodTris(m, sidesMax) > woodBudget) lo = m; else hi = m;
+            }
+            rMin = hi;
+        }
+        for (const auto& s : segs) {
+            if (!s.trunk && rad(s.a) < rMin) continue;
+            appendBranchCylinder(wood, node(s.a).position, node(s.b).position, rad(s.a), rad(s.b), cfg.woodColor, sides(rad(s.a), sidesMax));
+            ++rep.woodSegments;
+        }
+        rep.woodTriangles = wood.indices.size() / 3;
+        rep.prunedBelowRadius = rMin;
+
+        // Foliage: twigs thinner than the pruning radius (or than a small share of the trunk) and every tip.
+        const float crownBottom = cfg.rootAnchor.y + cfg.clearTrunkHeight * 0.85f;
+        const float twigRadius = std::max(rMin, 0.12f * rRef);
+        std::vector<Vec3> pts;
+        for (size_t i = 0; i < N; ++i) {
+            if (g[i].position.y < crownBottom) continue;
+            if (g[i].children.empty() || radius[i] < twigRadius) pts.push_back(g[i].position);
+        }
+        const size_t foliageBudget = budget > rep.woodTriangles ? budget - rep.woodTriangles : 0;
+        if (pts.empty() || foliageBudget < 20) return;
+        const int level = foliageBudget / 80 >= 24 ? 1 : 0;
+        std::vector<Vec3> sphere;
+        std::vector<uint32_t> sphereTris;
+        unitIcosphere(level, sphere, sphereTris);
+        const size_t tpc = sphereTris.size() / 3;
+
+        struct Cell { Vec3 sum{0, 0, 0}; uint32_t n{0}; };
+        auto gather = [&](float v, std::vector<Cell>& out) {
+            std::unordered_map<uint64_t, size_t> index;
+            out.clear();
+            for (const auto& p : pts) {
+                const int64_t a = static_cast<int64_t>(std::floor(p.x / v));
+                const int64_t b = static_cast<int64_t>(std::floor(p.y / v));
+                const int64_t c = static_cast<int64_t>(std::floor(p.z / v));
+                const uint64_t key = (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
+                auto it = index.find(key);
+                if (it == index.end()) {
+                    index.emplace(key, out.size());
+                    out.push_back({p, 1});
+                } else {
+                    out[it->second].sum += p;
+                    out[it->second].n++;
+                }
+            }
+        };
+        std::vector<Cell> cells;
+        float v = std::max(0.15f, 0.012f * treeHeight);
+        gather(v, cells);
+        for (int it = 0; it < 400 && cells.size() * tpc > foliageBudget; ++it) {
+            v *= 1.08f;
+            gather(v, cells);
+        }
+        if (cells.size() * tpc > foliageBudget) return;
+        rep.clumpSpacing = v;
+        rep.trianglesPerClump = static_cast<int>(tpc);
+        const float clumpRadius = 0.62f * v;
+        // Leaf masses stay inside the crown (an elliptic cylinder of radii crownExtents.x/z around crownCenter, between
+        // crownCenter.y -+ crownExtents.y): a clump is never larger than the crown and is moved in from its edge, so a
+        // coarse budget does not grow the tree past the crown it was fitted to.
+        const float jitterMax = 1.24f, squash = 0.82f;
+        const Vec3 envLo = cfg.crownCenter - cfg.crownExtents, envHi = cfg.crownCenter + cfg.crownExtents;
+        const float sizeCap = std::max(1e-3f, std::min({cfg.crownExtents.x, cfg.crownExtents.y / squash, cfg.crownExtents.z}) / jitterMax);
+        for (size_t ci = 0; ci < cells.size(); ++ci) {
+            Vec3 center = cells[ci].sum / static_cast<float>(cells[ci].n);
+            const float size = std::min(sizeCap, clumpRadius * (0.85f + 0.3f * hashUnit(cfg.seed ^ 0xA5A5A5A5u, static_cast<uint32_t>(ci), 0u)));
+            const Vec3 reach(size * jitterMax, size * squash * jitterMax, size * jitterMax);
+            center.y = std::clamp(center.y, envLo.y + reach.y, std::max(envLo.y + reach.y, envHi.y - reach.y));
+            {
+                const float ax = std::max(1e-3f, cfg.crownExtents.x - reach.x), az = std::max(1e-3f, cfg.crownExtents.z - reach.z);
+                const float dx = center.x - cfg.crownCenter.x, dz = center.z - cfg.crownCenter.z;
+                const float q = std::sqrt((dx * dx) / (ax * ax) + (dz * dz) / (az * az));
+                if (q > 1.0f) {
+                    center.x = cfg.crownCenter.x + dx / q;
+                    center.z = cfg.crownCenter.z + dz / q;
+                }
+            }
+            const uint32_t base = static_cast<uint32_t>(foliage.vertices.size());
+            for (size_t k = 0; k < sphere.size(); ++k) {
+                const float jitter = 1.0f + 0.48f * (hashUnit(cfg.seed, static_cast<uint32_t>(ci), static_cast<uint32_t>(k)) - 0.5f);
+                const Vec3 d = sphere[k];
+                foliage.vertices.push_back(center + Vec3(d.x, d.y * squash, d.z) * (size * jitter));
+                foliage.normals.push_back(Vec3(d.x, d.y / squash, d.z).normalized());
+                foliage.uvs.push_back(Vec2(0.5f + 0.5f * d.x, 0.5f + 0.5f * d.z));
+                foliage.vertexColors.push_back(cfg.leafColor);
+            }
+            for (uint32_t idx : sphereTris) foliage.indices.push_back(base + idx);
+        }
+        rep.foliageClumps = cells.size();
+        rep.foliageTriangles = foliage.indices.size() / 3;
     }
 };
 

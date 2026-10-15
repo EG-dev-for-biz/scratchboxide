@@ -5,15 +5,14 @@
  * Decomposes continuous real-world 3D triangle soups (Google 3D Tiles, photogrammetry)
  * at the vertex and surface-normal level into discrete semantic entities:
  * 1. Terrain Ground Apron & Plaza Datum
- * 2. Individual Botanical Trees (Crown Apex & Radial Watershed Clustering)
- * 3. Discrete Architectural Buildings & Facade Envelopes
- * 4. Urban Infrastructure & Ground-level Props
+ * 2. Discrete Architectural Buildings & Facade Envelopes
+ * 3. Urban Infrastructure & Ground-level Props
+ * It does not separate trees: from geometry alone a crown cannot be told from facade relief or a rooftop unit. Trees
+ * are measured from the photo tiles (tile_vegetation, through google_3d_tiles_get_clay). Nor vehicles (a car-sized box
+ * near the ground is as often a kiosk or a lump of drape), nor what a structure is: the structure at the anchor is
+ * named only from what the caller says stands there, and buildings are described by their measured size.
  ********************************************************************************/
 
-import {
-  OrientedBoundingBoxSolver,
-  type DualBoundingBoxResult
-} from './OrientedBoundingBoxSolver';
 import type {
   UniversalSpatialCategory,
   DownstreamGeneratorRouting
@@ -31,10 +30,8 @@ export interface SubmeshGeometryInput {
 }
 
 export interface VertexClusteringOptions {
-  granularity?: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
+  granularity?: 'macro' | 'detailed' | 'total' | 'all';
   minVerticesPerEntity?: number;
-  treeApexMinHeightMeters?: number;
-  treeApexMaxHeightMeters?: number;
   buildingMinHeightMeters?: number;
   gridCellSizeMeters?: number;
   focalInterestBounds?: {
@@ -72,14 +69,6 @@ export interface DecomposedCluster {
   roughness: number;
   metalness: number;
   routingRecommendation?: DownstreamGeneratorRouting;
-  treeMetadata?: {
-    species: 'pinus_pinea' | 'quercus_ilex' | 'cupressus_sempervirens' | 'olea_europaea' | 'laurus_nobilis';
-    scientificName: string;
-    canopyHeightMeters: number;
-    crownDiameterMeters: number;
-    crownVolumeM3: number;
-    groundElevationMeters: number;
-  };
   buildingMetadata?: {
     heightMeters: number;
     footprintM2: number;
@@ -113,13 +102,13 @@ interface VertexRecord {
   v?: number;
   vertexIndex: number;
   submeshIndex: number;
-  tag: 'unassigned' | 'terrain' | 'tree' | 'landmark' | 'building' | 'vehicle' | 'prop';
+  tag: 'unassigned' | 'terrain' | 'landmark' | 'building' | 'prop';
 }
 
 export class UniversalVertexSpatialClusteringEngine {
   /**
-   * Decomposes arbitrary 3D submesh geometry at vertex resolution into discrete
-   * individual structures, trees, ground aprons, and urban objects.
+   * Decomposes arbitrary 3D submesh geometry at vertex resolution into the ground, the structure at the anchor,
+   * building envelopes and the remainder. It names nothing geometry cannot show: no trees, no vehicles, no styles.
    */
   public static decompose(
     submeshes: SubmeshGeometryInput[],
@@ -130,7 +119,10 @@ export class UniversalVertexSpatialClusteringEngine {
     const totalHeight = Math.max(1.0, overallMax[1] - overallMin[1]);
     const totalWidth = Math.max(1.0, overallMax[0] - overallMin[0]);
     const totalDepth = Math.max(1.0, overallMax[2] - overallMin[2]);
-    const granularity = options?.granularity || 'detailed';
+    const granularity: string = options?.granularity || 'detailed';
+    if (granularity === 'trees') {
+      throw new Error("UniversalVertexSpatialClusteringEngine: granularity 'trees' has been removed. Geometry alone cannot tell a tree crown from facade relief or a rooftop unit, so this engine names no trees; google_3d_tiles_get_clay measures a location's trees from its photo tiles (colour, roughness and height above the ground) and rebuilds them as SB-Veggie trees.");
+    }
 
     // 1. Gather all vertices with computed/extracted surface normals
     const allVertices: VertexRecord[] = [];
@@ -250,7 +242,7 @@ export class UniversalVertexSpatialClusteringEngine {
       }
     }
 
-    if (terrainVerts.length > 0 && granularity !== 'trees') {
+    if (terrainVerts.length > 0) {
       const submeshSet = new Set(terrainVerts.map(v => v.submeshIndex));
       clusters.push({
         id: 'sep-terrain-ground-datum',
@@ -268,17 +260,19 @@ export class UniversalVertexSpatialClusteringEngine {
       });
     }
 
-    // 4. Stage 1.5: Primary Landmark / Focal Architecture Isolation
-    // Detects iconic architectural landmarks or focal monuments centered around
-    // the capture interest origin or focal coordinates
-    const focalMinX = options?.focalInterestBounds?.minX ?? -16.5;
-    const focalMaxX = options?.focalInterestBounds?.maxX ?? 16.5;
-    const focalMinZ = options?.focalInterestBounds?.minZ ?? -8.5;
-    const focalMaxZ = options?.focalInterestBounds?.maxZ ?? 8.5;
-    const focalMinH = options?.focalInterestBounds?.minH ?? 0.5;
-    const focalMaxH = options?.focalInterestBounds?.maxH ?? 25.5;
+    // 4. Stage 1.5: The structure at the anchor, only where the caller says it stands (focalInterestBounds). Without
+    // bounds there is no such stage: a fixed box at the origin (it used to be the Washington Square Arch's footprint
+    // and height) cuts whatever stands there, of whatever size, and calls it the landmark. Missing horizontal limits
+    // are unbounded, and so is the height (never cut through a building's top).
+    const focal = options?.focalInterestBounds;
+    const focalMinX = focal?.minX ?? -Infinity;
+    const focalMaxX = focal?.maxX ?? Infinity;
+    const focalMinZ = focal?.minZ ?? -Infinity;
+    const focalMaxZ = focal?.maxZ ?? Infinity;
+    const focalMinH = focal?.minH ?? 0.5;
+    const focalMaxH = focal?.maxH ?? Infinity;
 
-    const landmarkCandidates = allVertices.filter(v => {
+    const landmarkCandidates = !focal ? [] : allVertices.filter(v => {
       if (v.tag !== 'unassigned') return false;
       const h = v.y - groundDatumY;
       return v.x >= focalMinX && v.x <= focalMaxX &&
@@ -286,32 +280,27 @@ export class UniversalVertexSpatialClusteringEngine {
              h >= focalMinH && h <= focalMaxH;
     });
 
-    if (landmarkCandidates.length >= 25 && granularity !== 'trees') {
+    if (landmarkCandidates.length >= 25) {
       for (const v of landmarkCandidates) v.tag = 'landmark';
       const submeshSet = new Set(landmarkCandidates.map(v => v.submeshIndex));
 
-      // Resolve landmark naming and metadata adaptively
-      const isWashington =
-        (options?.landmarkName && /washington/i.test(options.landmarkName)) ||
-        (options?.modelName && /washington/i.test(options.modelName)) ||
-        (options?.geoAnchor?.name && /washington/i.test(options.geoAnchor.name));
-
+      // Named only from what the caller says stands at the anchor (landmarkName, landmarkType, architecturalStyle):
+      // geometry alone does not say what a structure is, and no name or description is guessed from a model name.
+      let lMinX = Infinity, lMaxX = -Infinity, lMinY = Infinity, lMaxY = -Infinity, lMinZ = Infinity, lMaxZ = -Infinity;
+      for (const v of landmarkCandidates) {
+        lMinX = Math.min(lMinX, v.x); lMaxX = Math.max(lMaxX, v.x);
+        lMinY = Math.min(lMinY, v.y); lMaxY = Math.max(lMaxY, v.y);
+        lMinZ = Math.min(lMinZ, v.z); lMaxZ = Math.max(lMaxZ, v.z);
+      }
+      const measured = `${(lMaxX - lMinX).toFixed(1)} m x ${(lMaxZ - lMinZ).toFixed(1)} m, ${(lMaxY - lMinY).toFixed(1)} m tall`;
       const landmarkId = options?.landmarkName
         ? `landmark-${options.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
-        : (isWashington ? 'landmark-washington-arch' : 'landmark-primary-monument');
-
-      const landmarkName = options?.landmarkName ||
-        (isWashington ? 'Washington Square Arch (Primary Landmark)' : 'Central Monument (Primary Landmark)');
-
-      const landmarkType = options?.landmarkType ||
-        (isWashington ? 'triumphal_arch' : 'historic_monument');
-
-      const architecturalStyle = options?.architecturalStyle ||
-        (isWashington ? 'Neoclassical Roman Triumphal Arch' : 'Classical Monolithic Architecture');
-
-      const landmarkPrompt = isWashington
-        ? 'Neoclassical white Tuckahoe marble triumphal arch designed by Stanford White with triumphal friezes, spandrel allegorical figures, attic inscriptions, and central vaulted portal passage'
-        : `Monumental ${architecturalStyle} structure with sculpted relief, monolithic massing, and architectural friezes`;
+        : 'landmark-anchor-structure';
+      const landmarkName = options?.landmarkName || 'Structure at the anchor';
+      const landmarkType = options?.landmarkType || 'structure';
+      const architecturalStyle = options?.architecturalStyle || '';
+      const described = [options?.landmarkName, options?.architecturalStyle].filter(Boolean).join(', ');
+      const landmarkPrompt = `${described || 'Structure at the anchor'} (${measured})`;
 
       clusters.push({
         id: landmarkId,
@@ -330,283 +319,19 @@ export class UniversalVertexSpatialClusteringEngine {
           landmarkType,
           historicName: landmarkName,
           architecturalStyle,
-          prominenceRatio: 1.0,
-          portalPassageDimensions: [focalMaxX - focalMinX, focalMaxH - focalMinH, focalMaxZ - focalMinZ]
+          prominenceRatio: 1.0
         }
       });
     }
 
-    // 5. Stage 2: Tree Apex Detection & Radial Canopy Extraction
-    const treeApexMinH = options?.treeApexMinHeightMeters ?? 2.8;
-    const treeApexMaxH = options?.treeApexMaxHeightMeters ?? 36.0;
-    const cellSize = options?.gridCellSizeMeters ?? 2.8;
+    // 5. No tree stage. Local height peaks with scattered normals are as often facade relief, cornices or rooftop
+    //    units as crowns (on the Flatiron extraction such a stage named 359 peaks trees, among them 30 m facades, and
+    //    gave each a species from its aspect ratio); nothing here can tell them apart, so nothing is called a tree.
 
-    // Build 2D spatial elevation grid for remaining candidate vertices
-    const grid = new Map<string, {
-      maxElevation: number;
-      apexVertex: VertexRecord;
-      points: VertexRecord[];
-      gx: number;
-      gz: number;
-    }>();
-
-    for (const v of allVertices) {
-      if (v.tag !== 'unassigned') continue;
-      const h = v.y - groundDatumY;
-      if (h >= treeApexMinH && h <= treeApexMaxH) {
-        const gx = Math.floor(v.x / cellSize);
-        const gz = Math.floor(v.z / cellSize);
-        const key = `${gx}_${gz}`;
-
-        let cell = grid.get(key);
-        if (!cell) {
-          cell = { maxElevation: v.y, apexVertex: v, points: [], gx, gz };
-          grid.set(key, cell);
-        } else if (v.y > cell.maxElevation) {
-          cell.maxElevation = v.y;
-          cell.apexVertex = v;
-        }
-        cell.points.push(v);
-      }
-    }
-
-    // Identify local maxima (Tree Apex Candidates)
-    const apexCells: {
-      apexVertex: VertexRecord;
-      points: VertexRecord[];
-      gx: number;
-      gz: number;
-      elevation: number;
-    }[] = [];
-
-    grid.forEach((cell, key) => {
-      let isPeak = true;
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dz = -1; dz <= 1; dz++) {
-          if (dx === 0 && dz === 0) continue;
-          const neighborKey = `${cell.gx + dx}_${cell.gz + dz}`;
-          const neighbor = grid.get(neighborKey);
-          if (neighbor && neighbor.maxElevation > cell.maxElevation) {
-            isPeak = false;
-            break;
-          }
-        }
-        if (!isPeak) break;
-      }
-
-      // Check that cell points have organic normal variance (not a flat horizontal rooftop)
-      if (isPeak && cell.points.length >= 4) {
-        const meanNy = cell.points.reduce((acc, p) => acc + p.ny, 0) / cell.points.length;
-        // Flat roofs have meanNy close to 1.0; foliage has organic scattered normals
-        const hasOrganicVariance = meanNy < 0.92;
-        if (hasOrganicVariance) {
-          apexCells.push({
-            apexVertex: cell.apexVertex,
-            points: cell.points,
-            gx: cell.gx,
-            gz: cell.gz,
-            elevation: cell.maxElevation
-          });
-        }
-      }
-    });
-
-    // Radial canopy watershed clustering from each apex
-    let treeCounter = 1;
-    for (const apex of apexCells) {
-      const hApex = apex.elevation - groundDatumY;
-      const crownRadius = Math.min(10.0, Math.max(2.2, hApex * 0.55));
-      const crownBaseY = Math.max(groundDatumY + 1.2, apex.elevation - hApex * 0.85);
-      const treePoints: VertexRecord[] = [];
-      const submeshSet = new Set<number>();
-
-      const radiusCells = Math.ceil(crownRadius / cellSize);
-      for (let dx = -radiusCells; dx <= radiusCells; dx++) {
-        for (let dz = -radiusCells; dz <= radiusCells; dz++) {
-          const cellKey = `${apex.gx + dx}_${apex.gz + dz}`;
-          const c = grid.get(cellKey);
-          if (!c) continue;
-          for (const v of c.points) {
-            if (v.tag !== 'unassigned') continue;
-            const dist2D = Math.hypot(v.x - apex.apexVertex.x, v.z - apex.apexVertex.z);
-            if (dist2D <= crownRadius && v.y >= crownBaseY && v.y <= apex.elevation + 0.5) {
-              v.tag = 'tree';
-              treePoints.push(v);
-              submeshSet.add(v.submeshIndex);
-            }
-          }
-        }
-      }
-
-      if (treePoints.length >= 8) {
-        let minX = Infinity, maxX = -Infinity;
-        let minZ = Infinity, maxZ = -Infinity;
-        for (const p of treePoints) {
-          if (p.x < minX) minX = p.x;
-          if (p.x > maxX) maxX = p.x;
-          if (p.z < minZ) minZ = p.z;
-          if (p.z > maxZ) maxZ = p.z;
-        }
-
-        const crownDiam = Math.max(2.0, Math.max(maxX - minX, maxZ - minZ));
-        const canopyH = Math.max(3.0, apex.elevation - crownBaseY);
-        const crownVol = (Math.PI / 6) * Math.pow(crownDiam, 2) * canopyH;
-        const aspectRatio = canopyH / crownDiam;
-
-        let species: 'pinus_pinea' | 'quercus_ilex' | 'cupressus_sempervirens' = 'quercus_ilex';
-        let scientificName = 'Quercus ilex';
-        let commonName = 'Mediterranean Holm Oak';
-
-        if (aspectRatio > 2.0) {
-          species = 'cupressus_sempervirens';
-          scientificName = 'Cupressus sempervirens';
-          commonName = 'Italian Columnar Cypress';
-        } else if (aspectRatio < 0.90 && crownDiam >= 7.0) {
-          species = 'pinus_pinea';
-          scientificName = 'Pinus pinea';
-          commonName = 'Italian Stone Pine';
-        }
-
-        clusters.push({
-          id: `fol-tree-${String(treeCounter).padStart(3, '0')}`,
-          name: `${commonName} #${treeCounter}`,
-          category: 'foliage_trees',
-          submeshIndices: Array.from(submeshSet),
-          extractedVertices: treePoints.map(v => [v.x, v.y, v.z]),
-          vertexIndices: treePoints.map(v => v.vertexIndex),
-          vertexSubmeshIndices: treePoints.map(v => v.submeshIndex),
-          colorHex: '#22c55e',
-          prompt: `Photorealistic mature ${scientificName} (${commonName}) botanical tree with detailed canopy, crown diameter ${crownDiam.toFixed(1)}m, height ${canopyH.toFixed(1)}m`,
-          roughness: 0.74,
-          metalness: 0.0,
-          routingRecommendation: 'sb-veggie',
-          treeMetadata: {
-            species,
-            scientificName,
-            canopyHeightMeters: canopyH,
-            crownDiameterMeters: crownDiam,
-            crownVolumeM3: crownVol,
-            groundElevationMeters: groundDatumY
-          }
-        });
-
-        treeCounter++;
-      }
-    }
-
-    if (granularity === 'trees') {
-      return clusters;
-    }
-
-    // 6. Stage 2.5: Ground-Level Vehicle & Car Extraction
-    // Detects parked cars, delivery vans, SUVs, and passenger vehicles along street corridors
-    const vehicleCandidates = allVertices.filter(v => {
-      if (v.tag !== 'unassigned') return false;
-      const h = v.y - groundDatumY;
-      const inStreetCorridor = v.z <= -10.0 || v.z >= 40.0 || Math.abs(v.x) >= 40.0;
-      return inStreetCorridor && h >= 0.25 && h <= 2.9;
-    });
-
-    const vGrid = new Map<string, VertexRecord[]>();
-    const vCellSize = 1.35;
-
-    for (const v of vehicleCandidates) {
-      const gx = Math.floor(v.x / vCellSize);
-      const gz = Math.floor(v.z / vCellSize);
-      const key = `${gx}_${gz}`;
-      let list = vGrid.get(key);
-      if (!list) {
-        list = [];
-        vGrid.set(key, list);
-      }
-      list.push(v);
-    }
-
-    const vVisited = new Set<string>();
-    let vehCounter = 1;
-
-    vGrid.forEach((_pts, startKey) => {
-      if (vVisited.has(startKey)) return;
-
-      const comp: VertexRecord[] = [];
-      const queue = [startKey];
-      vVisited.add(startKey);
-
-      while (queue.length > 0) {
-        const curKey = queue.pop()!;
-        const pts = vGrid.get(curKey);
-        if (pts) {
-          for (const p of pts) comp.push(p);
-        }
-        const [cxStr, czStr] = curKey.split('_');
-        const cx = parseInt(cxStr!, 10);
-        const cz = parseInt(czStr!, 10);
-
-        for (let dx = -1; dx <= 1; dx++) {
-          for (let dz = -1; dz <= 1; dz++) {
-            if (dx === 0 && dz === 0) continue;
-            const nKey = `${cx + dx}_${cz + dz}`;
-            if (vGrid.has(nKey) && !vVisited.has(nKey)) {
-              vVisited.add(nKey);
-              queue.push(nKey);
-            }
-          }
-        }
-      }
-
-      if (comp.length >= 10 && comp.length <= 450) {
-        const dual = OrientedBoundingBoxSolver.compute(comp.map(v => [v.x, v.y, v.z]));
-        const [dim0, dim1, dim2] = dual.obb.dimensions;
-        const length = Math.max(dim0, dim2);
-        const width = Math.min(dim0, dim2);
-        const height = dim1;
-        const aspect = length / Math.max(0.5, width);
-
-        if (length >= 2.6 && length <= 8.5 && width >= 1.3 && width <= 3.4 && height >= 0.75 && height <= 3.2 && aspect >= 1.30) {
-          for (const p of comp) p.tag = 'vehicle';
-
-          let vType: 'sedan' | 'suv' | 'van_truck' | 'compact' = 'sedan';
-          let vName = 'Passenger Sedan';
-          if (height > 1.85 || length > 5.5) {
-            vType = 'van_truck';
-            vName = 'Commercial Delivery Van';
-          } else if (height > 1.55) {
-            vType = 'suv';
-            vName = 'Urban SUV';
-          } else if (length < 3.9) {
-            vType = 'compact';
-            vName = 'Compact City Car';
-          }
-
-          const submeshSet = new Set(comp.map(v => v.submeshIndex));
-          clusters.push({
-            id: `veh-car-${String(vehCounter).padStart(3, '0')}`,
-            name: `${vName} #${vehCounter}`,
-            category: 'vehicle',
-            submeshIndices: Array.from(submeshSet),
-            extractedVertices: comp.map(v => [v.x, v.y, v.z]),
-            vertexIndices: comp.map(v => v.vertexIndex),
-            vertexSubmeshIndices: comp.map(v => v.submeshIndex),
-            colorHex: '#f43f5e',
-            prompt: `Photorealistic parked ${vName} with ground yaw heading ${dual.obb.yawDeg.toFixed(1)}°, length ${length.toFixed(1)}m, width ${width.toFixed(1)}m`,
-            roughness: 0.32,
-            metalness: 0.85,
-            routingRecommendation: 'sb-vehicle',
-            vehicleMetadata: {
-              vehicleType: vType,
-              lengthMeters: length,
-              widthMeters: width,
-              heightMeters: height,
-              headingDeg: dual.obb.yawDeg,
-              groundElevationMeters: groundDatumY,
-              estimatedWheelbaseMeters: length * 0.62
-            }
-          });
-
-          vehCounter++;
-        }
-      }
-    });
+    // 6. No vehicle stage. A box of the right size near the ground is as often a kiosk, a planter, a parked trailer or
+    //    a lump of the scan's drape as a car (on the Flatiron extraction such a stage, with a street corridor fixed in
+    //    the Colosseum's frame, named 35 "Commercial Delivery Van" / "Urban SUV" / "Passenger Sedan" clusters by their
+    //    box sizes); nothing here can tell them apart, so nothing is called a vehicle.
 
     // 7. Stage 3: Building Structures & Architectural Facades
     // Vertices that are vertical (|ny| <= 0.40) or elevated roof surfaces (h > 4.0m)
@@ -693,11 +418,9 @@ export class UniversalVertexSpatialClusteringEngine {
         const bDepth = bMaxZ - bMinZ;
         const footprintM2 = bWidth * bDepth;
 
-        const isHighRise = bHeight >= 40.0;
-        const bName = isHighRise
-          ? `Residential High-Rise Tower Envelope #${bldCounter}`
-          : `Perimeter Architectural Building Envelope #${bldCounter}`;
         const category: UniversalSpatialCategory = 'architecture';
+        // named and described by what was measured: its use and style are not in the geometry
+        const bName = `Building Envelope #${bldCounter}`;
 
         clusters.push({
           id: `arch-building-${String(bldCounter).padStart(3, '0')}`,
@@ -707,10 +430,8 @@ export class UniversalVertexSpatialClusteringEngine {
           extractedVertices: clusterVerts.map(v => [v.x, v.y, v.z]),
           vertexIndices: clusterVerts.map(v => v.vertexIndex),
           vertexSubmeshIndices: clusterVerts.map(v => v.submeshIndex),
-          colorHex: isHighRise ? '#0284c7' : '#38bdf8',
-          prompt: isHighRise
-            ? `Art Deco residential high-rise tower envelope with stepped setbacks, vertical piers, and fenestration grid, height ${bHeight.toFixed(1)}m`
-            : `Urban residential townhouse architectural envelope with masonry facade planes and cornice moldings, height ${bHeight.toFixed(1)}m`,
+          colorHex: '#38bdf8',
+          prompt: `Building envelope, ${bWidth.toFixed(1)} m x ${bDepth.toFixed(1)} m footprint, ${bHeight.toFixed(1)} m tall`,
           roughness: 0.85,
           metalness: 0.02,
           routingRecommendation: 'archie-building',

@@ -28,10 +28,6 @@ import {
     TerrainManager,
     GROUND_SAMPLE_OFFSETS
 } from '../src/browser/generative-canvas/services/TerrainManager';
-import {
-    SPECIES_ADAPTERS,
-    type SupportedTreeSpecies
-} from '../src/node/spatial/UniversalBotanicalBridgeService';
 
 describe('SB-Veggie Botanical Engine Core', () => {
     let veggieService: SbVeggieService;
@@ -43,7 +39,7 @@ describe('SB-Veggie Botanical Engine Core', () => {
     it('1. should verify native C++ runner binary exists or compiles cleanly', async () => {
         const binPath = await veggieService.ensureBinary();
         expect(fs.existsSync(binPath)).toBe(true);
-    }, 45000);
+    }, 300000); // clang -O3 over the engine headers; longer when another suite compiles at the same time
 
     it('2. should synthesize canonical Decurrent Oak with glTF 2.0 binary and valid foliage', async () => {
         const result = await veggieService.synthesizeTree({
@@ -112,24 +108,6 @@ describe('SB-Veggie Botanical Engine Core', () => {
         }
     }, 30000);
 
-    it('5. should expose valid botanical species adapters for Mediterranean & temperate trees', () => {
-        const speciesKeys: SupportedTreeSpecies[] = [
-            'pinus_pinea',
-            'quercus_ilex',
-            'quercus_robur',
-            'cupressus_sempervirens',
-            'olea_europaea'
-        ];
-
-        for (const sp of speciesKeys) {
-            const adapter = SPECIES_ADAPTERS[sp];
-            expect(adapter).toBeDefined();
-            expect(adapter.scientificName).toBeTruthy();
-            expect(adapter.typicalCrownHeightRatio).toBeGreaterThan(0);
-            expect(adapter.typicalAspectSpread).toBeGreaterThan(0);
-            expect(adapter.foliageBaseHex).toMatch(/^#[0-9a-fA-F]{6}$/);
-        }
-    });
 });
 
 describe('SB-Terrain Multi-Material Ground Engine Core', () => {
@@ -338,7 +316,7 @@ describe('SB-Veggie on SB-Terrain: Grounding, Biome Snapping & Phototropism', ()
     it('5. should distribute a grove of trees with minimum collision spacing and 100% terrain grounding', () => {
         interface PlantedTree {
             id: string;
-            species: SupportedTreeSpecies;
+            label: string;
             x: number;
             z: number;
             groundY: number;
@@ -346,7 +324,7 @@ describe('SB-Veggie on SB-Terrain: Grounding, Biome Snapping & Phototropism', ()
         }
 
         const grove: PlantedTree[] = [];
-        const speciesList: SupportedTreeSpecies[] = ['pinus_pinea', 'quercus_robur', 'cupressus_sempervirens'];
+        const labels = ['tree a', 'tree b', 'tree c'];
         const minDistanceM = 6.0; // Trees must be at least 6m apart
 
         const candidateCoords: Array<[number, number]> = [
@@ -372,7 +350,7 @@ describe('SB-Veggie on SB-Terrain: Grounding, Biome Snapping & Phototropism', ()
             if (groundY !== null) {
                 grove.push({
                     id: `tree_${grove.length}`,
-                    species: speciesList[grove.length % speciesList.length]!,
+                    label: labels[grove.length % labels.length]!,
                     x: cx,
                     z: cz,
                     groundY,

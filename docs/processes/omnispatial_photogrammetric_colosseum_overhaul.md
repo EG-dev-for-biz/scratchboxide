@@ -1,5 +1,14 @@
 # Omnispatial Photogrammetric Colosseum Overhaul & Ground-Truth Invariants Pipeline
 
+> **Superseded (2026-10-15): do not follow the steps below.** `PhotogrammetricTerrainHarmonizerService` (`harmonizeGlb`,
+> `fitOrientedBoundingEnvelope`), the `harmonize_photogrammetric_district` tool and `scripts/integrate_colosseum_botanical_trees*`
+> are deleted: they flattened canopy and placed trees from hand-written or seeded-random stands (species, positions,
+> heights) instead of measuring them. A location's trees are now measured in its photo tiles and rebuilt as SB-Veggie
+> trees by `TileVegetationService` (`packages/core/src/node/3d-engine/tile-vegetation-service.ts`, native
+> `scratchbox_tile_vegetation.hpp` / `scripts/tile_vegetation.cpp`) through `google_3d_tiles_get_clay`
+> (`location-clay-pipeline.ts`); a single tree of given measurements comes from `botanical_synthesize_tree`. This record
+> is kept as history only.
+
 **Status**: Verified  
 **Date**: 2026-10-11  
 **Target Domain**: 3D Photogrammetry, Architectural Heritage Reconstruction, Biophysical Dendrology, Native C++20 Processing  
@@ -118,7 +127,7 @@ Compensate for oblique aerial scan cluster broadening to isolate slender columna
 
 ## 6. Automation & Maintenance Pointers
 
-- **Re-run Pipeline**: `node scripts/integrate_colosseum_botanical_trees_v4.cjs && node scripts/apply_omnispatial_complete_overhaul.cjs`
+- **Re-run Pipeline**: (deleted, see the note at the top) `node scripts/integrate_colosseum_botanical_trees_v4.cjs && node scripts/apply_omnispatial_complete_overhaul.cjs`
 - **Capture Proofs**: `node scripts/capture_master_verified_plates.cjs`
 - **Generate Verification Crops**: `clang++ -std=c++20 -O3 -framework CoreGraphics -framework CoreFoundation -framework ImageIO scripts/crop_plates.cpp -o scripts/crop_plates && ./scripts/crop_plates`
 - **Inspect Web Demo**: Serve on port 8080 and open `http://localhost:8080/omnispatial_synthesis_demo.html`.

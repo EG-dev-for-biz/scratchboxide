@@ -1,0 +1,376 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
+ ********************************************************************************/
+
+/**
+ * The location clay pipeline (measure trees -> remesh -> plant) with the real native tile_vegetation stages on a
+ * synthetic photo-textured tile and tile_refine stubbed (another suite owns it; its stats keep their real shape, and
+ * the real TileRefineService checks the publish names). A stage that fails fails the whole request with that stage's
+ * name, and nothing is published after it; a stopped request kills the native stage that is running.
+ */
+
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { runLocationClayPipeline, describeLocationClay, locationPublishBase, glbMeshCounts, type LocationClayDeps } from '../src/node/3d-engine/location-clay-pipeline';
+import { TileExtractionError } from '../src/common/errors/pipeline-errors';
+import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
+import { TileRefineService, type TileRefineRequest, type TileRefineResult } from '../src/node/3d-engine/tile-refine-service';
+import { buildSyntheticTile, type SyntheticTileSpec } from './helpers/synthetic-textured-tile';
+import { readGlbTriangles } from './helpers/clay-glb-render';
+
+const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
+const SPEC: SyntheticTileSpec = {
+    halfSize: 30,
+    spacing: 0.75,
+    trees: [
+        { x: -12, z: -10, height: 11, radius: 4.5 },
+        { x: 10, z: 12, height: 8, radius: 3.5 },
+        { x: -14, z: 14, height: 14, radius: 5.5 }
+    ],
+    building: { x0: 4, z0: -16, x1: 16, z1: -4, height: 15 }
+};
+
+let root: string;
+let vegetation: TileVegetationService;
+
+/** tile_refine stand-in: "remeshes" by returning the tile it was given, with the stats the pipeline reads. */
+function refineStub(opts: { outputTriangles?: number; fail?: string; clayGlb?: string } = {}) {
+    const calls: TileRefineRequest[] = [];
+    const refine = async (req: TileRefineRequest): Promise<TileRefineResult> => {
+        calls.push(req);
+        if (opts.fail) throw new Error(opts.fail);
+        const tile = path.resolve(root, String(req.tilePath));
+        return {
+            texturedGlb: tile,
+            clayGlb: opts.clayGlb ?? tile,
+            stats: { triangles: { input: 14_000, hidden: 0, droppedDegenerate: 0, kept: 14_000 }, outputs: { triangles: opts.outputTriangles ?? 20_000 } },
+            cached: false,
+            ms: 1_500,
+            cacheKey: 'stub',
+            published: { urls: { clay: `/models/${req.publishAs}_refined_clay.glb`, textured: `/models/${req.publishAs}_refined.glb` }, backups: [] },
+            binary: { path: 'stub', built: false }
+        } as TileRefineResult;
+    };
+    return { refine: { refine }, calls };
+}
+
+function deps(stub: ReturnType<typeof refineStub>): LocationClayDeps {
+    return { vegetation, refine: stub.refine };
+}
+
+function publishedTrees(): string[] {
+    const dir = path.join(root, 'public', 'models');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('_trees.glb')) : [];
+}
+
+beforeAll(async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'location-clay-')));
+    fs.writeFileSync(path.join(root, 'district.glb'), buildSyntheticTile(SPEC));
+    fs.writeFileSync(path.join(root, 'bare.glb'), buildSyntheticTile({ ...SPEC, trees: [] }));
+    fs.writeFileSync(path.join(root, 'corrupt.glb'), buildSyntheticTile({ ...SPEC, corruptTexture: true }));
+    vegetation = new TileVegetationService({ workspaceRoot: root, repoRoot: REPO });
+    // the native build (or the wait for another worker's) is not part of any one test's time
+    await vegetation.ensureBinary();
+}, 900_000);
+
+afterAll(() => {
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe('runLocationClayPipeline', () => {
+    it('measures the trees, remeshes what is left and plants SB-Veggie trees in the same frame', async () => {
+        const stub = refineStub();
+        const progress: string[] = [];
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'district', reportProgress: m => progress.push(m) }, deps(stub));
+        // tile_refine ran on the devegetated tile, not the raw one
+        expect(stub.calls).toHaveLength(1);
+        expect(String(stub.calls[0].tilePath)).toMatch(/devegetated\.glb$/);
+        expect(stub.calls[0].publishAs).toBe('district_sbveggie');
+        expect(r.url).toBe('/models/district_sbveggie_refined_clay.glb');
+        expect(r.trees).toMatchObject({ count: 3, triangleBudget: 10_000, cutAtBoundary: 0, belowMinHeight: 0, notOnStructure: 0, url: '/models/district_sbveggie_trees.glb' });
+        expect(r.trees!.triangles).toBeLessThanOrEqual(10_000);
+        expect(r.trees!.canopyAreaM2).toBeGreaterThan(150);
+        expect(r.trees!.inferred).toMatchObject({ crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016 });
+        const published = path.join(root, 'public', 'models', 'district_sbveggie_trees.glb');
+        const trees = readGlbTriangles(fs.readFileSync(published));
+        expect(trees.indices.length / 3).toBe(r.trees!.triangles);
+        expect(trees.nodeRanges).toHaveLength(3);
+        expect(r.timingsMs.vegetation).toBeGreaterThanOrEqual(0);
+        expect(r.timingsMs.planting).toBeGreaterThanOrEqual(0);
+        expect(progress.join(' | ')).toContain('Measuring the trees');
+        expect(progress.join(' | ')).toContain('Growing 3 SB-Veggie trees');
+        expect(describeLocationClay(r, 'clay')).toContain('Rebuilt 3 measured trees as SB-Veggie trees');
+        // tile_refine reports its input as an object; the count, and the mounted model's own counts, are numbers
+        expect(r.remesh.inputTriangles).toBe(14_000);
+        expect(r.mounted).toEqual(glbMeshCounts(String(stub.calls[0].tilePath)));
+        expect(describeLocationClay(r, 'clay')).toContain(`(14,000 -> ${r.mounted.triangles.toLocaleString()} triangles)`);
+        expect(describeLocationClay(r, 'clay')).not.toContain('[object Object]');
+    });
+
+    it('reports a tile without canopy as zero trees and publishes no trees model', async () => {
+        const before = publishedTrees();
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'bare.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'bare' }, deps(refineStub()));
+        expect(r.trees).toMatchObject({ count: 0, canopyAreaM2: 0 });
+        expect(r.trees!.url).toBeUndefined();
+        expect(publishedTrees()).toEqual(before);
+        expect(describeLocationClay(r, 'clay')).toContain('No tree canopy was measured in the photo tiles, so no trees were added.');
+    });
+
+    it('fails at the remesh stage, and plants nothing, when tile_refine fails', async () => {
+        const before = publishedTrees();
+        const stub = refineStub({ fail: 'tile_refine did not converge' });
+        const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'remesh_fail' }, deps(stub)).catch(e => e);
+        expect(err).toBeInstanceOf(TileExtractionError);
+        expect(err.stage).toBe('remesh');
+        expect(err.message).toBe('Tile extraction failed at remesh: tile_refine did not converge');
+        expect(publishedTrees()).toEqual(before);
+    });
+
+    it('fails at the vegetation stage, and never remeshes, when a photo texture is corrupt', async () => {
+        const stub = refineStub();
+        const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'corrupt.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'corrupt' }, deps(stub)).catch(e => e);
+        expect(err).toBeInstanceOf(TileExtractionError);
+        expect(err.stage).toBe('vegetation');
+        expect(err.message).toContain('Tile extraction failed at vegetation: photo texture');
+        // and says how to get the location without its trees
+        expect(err.message).toContain('ask again with trees false for the remeshed tiles without rebuilt trees');
+        expect(stub.calls).toHaveLength(0);
+    });
+
+    it('rebuilds the trees of a hillside with no level surface, and returns a treeless hillside with zero trees', async () => {
+        const slope = 0.36; // 20 degrees: every surface tilted, so the tile has no level ground or roof anywhere
+        fs.writeFileSync(path.join(root, 'hillside.glb'), buildSyntheticTile({ ...SPEC, trees: SPEC.trees.slice(0, 2), slope }));
+        fs.writeFileSync(path.join(root, 'hillside_bare.glb'), buildSyntheticTile({ ...SPEC, trees: [], slope }));
+        const stub = refineStub();
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'hillside.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'hillside' }, deps(stub));
+        expect(stub.calls).toHaveLength(1);
+        expect(r.trees).toMatchObject({ measured: 2, count: 2, url: '/models/hillside_sbveggie_trees.glb' });
+        // each tree stands on the slope where it was measured
+        const crowns = JSON.parse(fs.readFileSync(r.trees!.crownsJson, 'utf8')).crowns;
+        for (const c of crowns) expect(Math.abs(c.supportY - slope * c.stem[0])).toBeLessThan(0.1);
+        expect(describeLocationClay(r, 'clay')).toContain('Rebuilt 2 measured trees as SB-Veggie trees');
+        const bare = await runLocationClayPipeline({ rawTilePath: path.join(root, 'hillside_bare.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'hillside_bare' }, deps(refineStub()));
+        expect(bare.trees).toMatchObject({ measured: 0, count: 0, canopyAreaM2: 0 });
+        expect(describeLocationClay(bare, 'clay')).toContain('No tree canopy was measured in the photo tiles, so no trees were added.');
+    });
+
+    it('fails at the planting stage when the remeshed tile leaves too small a budget for the trees, and says how to ask for more', async () => {
+        const before = publishedTrees();
+        const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'tiny_budget' }, deps(refineStub({ outputTriangles: 300 }))).catch(e => e);
+        expect(err).toBeInstanceOf(TileExtractionError);
+        expect(err.stage).toBe('planting');
+        expect(err.message).toContain('cannot hold 3 trees at 120 triangles each (they need at least 360)');
+        expect(err.message).toContain("the budget was half the remeshed tile's 300 triangles. Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.");
+        expect(publishedTrees()).toEqual(before);
+    });
+
+    it('plants within the budget the request gives (treeTriangleBudget) instead of the share of the remeshed tile', async () => {
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'own_budget', treeTriangleBudget: 2_400 },
+            deps(refineStub({ outputTriangles: 300 })));
+        expect(r.trees).toMatchObject({ count: 3, triangleBudget: 2_400 });
+        expect(r.trees!.triangles).toBeLessThanOrEqual(2_400);
+        const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'own_budget_small', treeTriangleBudget: 200 },
+            deps(refineStub())).catch(e => e);
+        expect(err).toBeInstanceOf(TileExtractionError);
+        expect(err.message).toContain('the budget was the treeTriangleBudget asked for');
+    });
+
+    it('skips the trees entirely when they are not asked for', async () => {
+        const stub = refineStub();
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: false, flavour: 'textured', publishBase: 'textured_only' }, deps(stub));
+        expect(String(stub.calls[0].tilePath)).toBe(path.join(root, 'district.glb'));
+        expect(r.trees).toBeUndefined();
+        expect(r.url).toBe('/models/textured_only_refined.glb');
+    });
+
+    it('isolate: plants only the measured trees that stand on the isolated structure', async () => {
+        // the "isolated" remesh is a 12 m ground patch at the origin; the district is moved so that only the first
+        // tree (-12, -10) stands on it
+        const patch = path.join(root, 'isolated_patch.glb');
+        fs.writeFileSync(patch, buildSyntheticTile({ halfSize: 6, spacing: 1, trees: [] }));
+        const shifted = path.join(root, 'shifted_district.glb');
+        fs.writeFileSync(shifted, buildSyntheticTile({ ...SPEC, trees: SPEC.trees.map(t => ({ ...t, x: t.x + 12, z: t.z + 10 })), building: undefined }));
+        const r = await runLocationClayPipeline({ rawTilePath: shifted, workspaceRoot: root, isolate: true, trees: true, flavour: 'clay', publishBase: 'iso' },
+            deps(refineStub({ clayGlb: patch })));
+        expect(r.isolate).toBe(true);
+        expect(r.trees).toMatchObject({ measured: 3, count: 1, notOnStructure: 2 });
+        expect(describeLocationClay(r, 'clay')).toContain('Left out: 2 measured trees not standing on the isolated structure.');
+        // the canopy reported for the trees is the planted tree's own measured crown, not the district's
+        const measured = JSON.parse(fs.readFileSync(r.trees!.crownsJson, 'utf8')).crowns.filter((c: any) => c.status === 'tree');
+        const plantedCrown = measured.reduce((best: any, c: any) => (Math.hypot(c.stem[0], c.stem[1]) < Math.hypot(best.stem[0], best.stem[1]) ? c : best));
+        expect(r.trees!.treeCanopyAreaM2).toBeCloseTo(plantedCrown.areaM2, 6);
+        expect(r.trees!.measuredTreeCanopyAreaM2).toBeCloseTo(measured.reduce((a: number, c: any) => a + c.areaM2, 0), 6);
+        expect(r.trees!.treeCanopyAreaM2).toBeLessThan(0.6 * r.trees!.measuredTreeCanopyAreaM2);
+        expect(describeLocationClay(r, 'clay')).toContain(`from ${Math.round(plantedCrown.areaM2)} m² of measured crown`);
+        // what was measured and closed over the whole extraction is said to be about the district, not the structure
+        expect(describeLocationClay(r, 'clay')).toContain('In the extracted district around it: Where trees were taken out, the ground was rebuilt');
+
+        // a structure with no measured tree on it: the summary says so, and does not claim no crown measures as a tree
+        const away = path.join(root, 'isolated_away.glb');
+        fs.writeFileSync(away, buildSyntheticTile({ halfSize: 3, spacing: 1, trees: [] }));
+        const none = await runLocationClayPipeline({ rawTilePath: shifted, workspaceRoot: root, isolate: true, trees: true, flavour: 'clay', publishBase: 'iso_none' },
+            deps(refineStub({ clayGlb: shiftPatch(away, 40, 40) })));
+        expect(none.trees).toMatchObject({ measured: 3, count: 0, notOnStructure: 3 });
+        const text = describeLocationClay(none, 'clay');
+        expect(text).toContain('The photo tiles show 3 measured trees, none standing on the isolated structure, so no trees were added to it.');
+        expect(text).not.toContain('no crown that measures as a tree');
+        expect(text).not.toContain('Left out');
+    });
+
+    it('publishes under names tile_refine accepts, whatever the extraction was called', async () => {
+        const refineRule = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+        const names = [
+            'district',
+            'flatiron_building_40.74110_-73.98970_r250_textured',             // W1's default (lat/lng key)
+            'flatiron_building_175_5th_ave_new_york_ny_10010_usa_textured',   // a long address
+            '..__weird name__..'
+        ];
+        const seen = new Set<string>();
+        for (const n of names) {
+            for (const [isolate, trees] of [[false, false], [false, true], [true, true]] as const) {
+                const base = locationPublishBase(n, isolate, trees);
+                expect(base).toMatch(refineRule);
+                seen.add(base);
+            }
+        }
+        expect(seen.size).toBe(names.length * 3);
+        expect(locationPublishBase('district', false, true)).toBe('district_sbveggie');
+
+        // the real TileRefineService validates the name before anything runs; a run that gets past it stops at an
+        // impossible timeout instead, so no binary is built and nothing is remeshed here
+        const real = new TileRefineService({ workspaceRoot: root, repoRoot: REPO });
+        const probe: LocationClayDeps = { vegetation, refine: { refine: req => real.refine({ ...req, timeoutMs: 0 }) } };
+        for (const n of names.slice(1)) {
+            const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: true, trees: true, flavour: 'clay', publishBase: n }, probe).catch(e => e);
+            expect(err).toBeInstanceOf(TileExtractionError);
+            expect(err.stage).toBe('remesh');
+            expect(err.message).toContain('timeoutMs must be > 0');
+            expect(err.message).not.toContain('publishAs');
+        }
+    });
+
+    it('reports what happens at the extraction edge and how the ground was closed', async () => {
+        const edgeSpec: SyntheticTileSpec = {
+            halfSize: 30, spacing: 0.75,
+            trees: [
+                { x: -24, z: -18, height: 12, radius: 6.5 },   // runs past the edge, top inside: rebuilt up to the edge
+                { x: 20, z: 12, height: 12, radius: 5.5 },     // joined at height to the next one
+                { x: 29.5, z: 12, height: 12, radius: 6 },     // top on the edge: cut, joined to a removed tree: taken
+                { x: 2, z: 28.5, height: 9, radius: 4 }        // top on the edge, alone: kept as scanned
+            ]
+        };
+        fs.writeFileSync(path.join(root, 'edge.glb'), buildSyntheticTile(edgeSpec));
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'edge.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'edge' }, deps(refineStub()));
+        expect(r.trees).toMatchObject({ measured: 2, count: 2, reachingBoundary: 1, cutAtBoundary: 1, cutRemoved: 1 });
+        expect(r.trees!.cutCanopyRemovedM2).toBeGreaterThan(20);
+        const text = describeLocationClay(r, 'clay');
+        expect(text).toContain("Rebuilt 2 measured trees as SB-Veggie trees (space colonisation, studio clay) from");
+        expect(text).toContain("(1 of them runs to the extraction's edge and was rebuilt up to it)");
+        expect(text).toContain('Kept as scanned: 1 crown cut by the extraction boundary (its top lies outside it)');
+        expect(text).toContain('Taken out with the trees it was joined to, and not rebuilt (its trunk lies outside the extraction): 1 cut crown');
+        // nothing stood over the rebuilt ground here, so nothing was continued down to it
+        expect(text).toContain('Where trees were taken out, the ground was rebuilt on the surface they stood on.');
+        expect(text).not.toContain('continued straight down');
+    });
+
+    it('says when it continued walls the trees hid down to the rebuilt ground, and how much', () => {
+        const base = { url: '/models/x_refined_clay.glb', glbPath: 'x', isolate: false, mounted: { vertices: 4, triangles: 2 }, remesh: { publishAs: 'x', ms: 1000, cached: false, stats: {} }, timingsMs: { remesh: 1, total: 1 } };
+        const trees = {
+            measured: 1, count: 1, triangles: 500, triangleBudget: 1000, canopyAreaM2: 40, measuredTreeCanopyAreaM2: 30, treeCanopyAreaM2: 30, reachingBoundary: 0,
+            cutAtBoundary: 0, cutRemoved: 0, cutCanopyRemovedM2: 0, belowMinHeight: 1, notOnStructure: 0, smallCanopyPatches: 0, canopyTakenWithTreesM2: 0, crownsJson: 'c', inferred: {},
+            strip: { removedTriangles: 900, skirtAreaM2: { onWalls: 120.4, onLevelSurfaces: 0, onKeptCanopy: 3.2, onOther: 400 }, skirtMaxHeightM: { onWalls: 18.04, onLevelSurfaces: 0, onKeptCanopy: 2.5, onOther: 26.3 } },
+            ms: { strip: 1, plant: 1 }, url: '/models/x_trees.glb'
+        };
+        const text = describeLocationClay({ ...base, trees } as any, 'clay');
+        expect(text).toContain('walls and building sides the trees hid were continued straight down to that ground (520 m², up to 26.3 m tall; not in the scan)');
+        expect(text).toContain('the sides of plantings kept as scanned were closed down to it (3 m², up to 2.5 m)');
+    });
+
+    it('a stopped request stops only itself: another request sharing the same native run still gets its result', async () => {
+        const shared = new TileVegetationService({ workspaceRoot: root, repoRoot: REPO, cacheDir: 'cache_shared' });
+        await shared.ensureBinary();
+        fs.writeFileSync(path.join(root, 'shared.glb'), buildSyntheticTile({ ...SPEC, halfSize: 100, spacing: 0.5 }));
+        const stopA = new AbortController();
+        const a = shared.strip({ tilePath: 'shared.glb', signal: stopA.signal }).catch(e => e);
+        const b = shared.strip({ tilePath: 'shared.glb' });
+        setTimeout(() => stopA.abort(), 250);
+        const [ra, rb] = await Promise.all([a, b]);
+        expect(ra?.name).toBe('AbortError');
+        expect(rb.cached).toBe(false);
+        expect(fs.existsSync(rb.devegetatedGlb)).toBe(true);
+        expect(rb.stats.ok).toBe(true);
+
+        // when every request on a run stops, the run is killed, and the next identical request starts its own
+        const solo = new TileVegetationService({ workspaceRoot: root, repoRoot: REPO, cacheDir: 'cache_shared_all' });
+        const c1 = new AbortController(), c2 = new AbortController();
+        const p1 = solo.strip({ tilePath: 'shared.glb', signal: c1.signal }).catch(e => e);
+        const p2 = solo.strip({ tilePath: 'shared.glb', signal: c2.signal }).catch(e => e);
+        setTimeout(() => { c1.abort(); c2.abort(); }, 250);
+        expect((await p1)?.name).toBe('AbortError');
+        expect((await p2)?.name).toBe('AbortError');
+        const again = await solo.strip({ tilePath: 'shared.glb' });
+        expect(again.cached).toBe(false);
+        expect(again.stats.ok).toBe(true);
+    }, 300_000);
+
+    it('a stopped request kills the running native stage and publishes nothing', async () => {
+        const fresh = new TileVegetationService({ workspaceRoot: root, repoRoot: REPO, cacheDir: 'cache_abort' });
+        await fresh.ensureBinary();
+        // a large tile (about 320,000 triangles), so the native strip is still running when the request stops
+        fs.writeFileSync(path.join(root, 'abort.glb'), buildSyntheticTile({ ...SPEC, halfSize: 100, spacing: 0.5 }));
+        const controller = new AbortController();
+        const stub = refineStub();
+        const started = Date.now();
+        setTimeout(() => controller.abort(), 250);
+        const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'abort.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'abort', signal: controller.signal },
+            { vegetation: fresh, refine: stub.refine }).catch(e => e);
+        expect(err?.name).toBe('AbortError');
+        expect(stub.calls).toHaveLength(0);
+        // the strip was killed, not run to the end: no finished cache entry
+        const cacheDir = path.join(root, 'cache_abort');
+        const finished = fs.existsSync(cacheDir) ? fs.readdirSync(cacheDir).filter(d => fs.existsSync(path.join(cacheDir, d, 'done.json'))) : [];
+        expect(finished).toEqual([]);
+        expect(Date.now() - started).toBeLessThan(5_000);
+    });
+});
+
+/** A copy of a GLB moved by (dx, dz) through its root node, so a support patch can be placed away from the trees. */
+function shiftPatch(file: string, dx: number, dz: number): string {
+    const buf = fs.readFileSync(file);
+    const jsonLength = buf.readUInt32LE(12);
+    const json = JSON.parse(buf.toString('utf8', 20, 20 + jsonLength));
+    const binStart = 20 + jsonLength;
+    // move the positions themselves (the native reader takes positions as written)
+    const bin = Buffer.from(buf.subarray(binStart + 8));
+    for (const mesh of json.meshes) {
+        for (const prim of mesh.primitives) {
+            const acc = json.accessors[prim.attributes.POSITION];
+            const view = json.bufferViews[acc.bufferView];
+            const off = (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+            for (let v = 0; v < acc.count; v++) {
+                bin.writeFloatLE(bin.readFloatLE(off + v * 12) + dx, off + v * 12);
+                bin.writeFloatLE(bin.readFloatLE(off + v * 12 + 8) + dz, off + v * 12 + 8);
+            }
+            acc.min = [acc.min[0] + dx, acc.min[1], acc.min[2] + dz];
+            acc.max = [acc.max[0] + dx, acc.max[1], acc.max[2] + dz];
+        }
+    }
+    let jsonBuf = Buffer.from(JSON.stringify(json), 'utf8');
+    jsonBuf = Buffer.concat([jsonBuf, Buffer.alloc((4 - (jsonBuf.length % 4)) % 4, 0x20)]);
+    const header = Buffer.alloc(12);
+    header.write('glTF', 0, 'latin1');
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + jsonBuf.length + 8 + bin.length, 8);
+    const jh = Buffer.alloc(8); jh.writeUInt32LE(jsonBuf.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
+    const bh = Buffer.alloc(8); bh.writeUInt32LE(bin.length, 0); bh.writeUInt32LE(0x004e4942, 4);
+    const out = file.replace(/\.glb$/, `_shifted_${dx}_${dz}.glb`);
+    fs.writeFileSync(out, Buffer.concat([header, jh, jsonBuf, bh, bin]));
+    return out;
+}

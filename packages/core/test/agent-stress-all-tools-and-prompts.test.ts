@@ -667,25 +667,21 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
     // Category 12: Botanical Trees & Stand Generation
     // =========================================================================
     describe('12. Botanical Trees & Biological Stand Tools', () => {
-        it('executes botanical_query_separator_trees with architectural clearances', async () => {
-            const res = await registry.dispatch('botanical_query_separator_trees', {
-                zone: 'oppian_hill_crest'
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).success).toBe(true);
-            expect(Array.isArray((res.resultPayload as any).trees)).toBe(true);
+        it('no longer offers botanical_query_separator_trees (its trees came from a seeded random generator)', async () => {
+            const res = await registry.dispatch('botanical_query_separator_trees', { zone: 'oppian_hill_crest' }, mockContext);
+            expect(res.exec.status).toBe('failed');
         });
 
-        it('executes botanical_synthesize_tree with 70-20-10 anatomical branching', async () => {
+        it('executes botanical_synthesize_tree to the requested measurements', async () => {
             const res = await registry.dispatch('botanical_synthesize_tree', {
-                species: 'pinus_pinea',
-                canopyHeightMeters: 14.2,
-                crownDiameterMeters: 11.5
+                heightMeters: 14.2,
+                crownDiameterMeters: 11.5,
+                triangleBudget: 4000
             }, mockContext);
             expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).success).toBe(true);
-            expect((res.resultPayload as any).fittedHeightMeters).toBeGreaterThan(10);
-        });
+            expect(Math.abs((res.resultPayload as any).grown.heightMeters - 14.2)).toBeLessThan(1.5);
+            expect((res.resultPayload as any).triangles).toBeLessThanOrEqual(4000);
+        }, 600_000);
     });
 
     // =========================================================================

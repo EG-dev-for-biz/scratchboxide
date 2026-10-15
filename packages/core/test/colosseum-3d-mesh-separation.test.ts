@@ -64,16 +64,18 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(centroid[2]).toBeCloseTo(0.0, 1);
   });
 
-  it('separates 11 discrete 3D spatial entities in macro mode', () => {
+  it('separates 8 discrete 3D spatial entities in macro mode, none of them a named tree', () => {
     const scene = Colosseum3DMeshSeparatorService.separate3DMesh(modelPath, { mode: 'macro' });
-    expect(scene.objects.length).toBe(11);
+    expect(scene.objects.length).toBe(8);
     expect(scene.granularityMode).toBe('macro');
 
     const categories = new Set(scene.objects.map(o => o.category));
     expect(categories.has('monument')).toBe(true);
     expect(categories.has('ruin')).toBe(true);
-    expect(categories.has('foliage')).toBe(true);
     expect(categories.has('terrain')).toBe(true);
+    // the stone pines and cypress were a hand-written list (species, places, sizes), not identified in the mesh
+    expect(categories.has('foliage')).toBe(false);
+    expect(COLOSSEUM_3D_ENTITIES.filter(e => /pine|cypress|pinus|cupressus/i.test(`${e.name} ${e.trellisPrompt}`))).toEqual([]);
 
     fs.writeFileSync(path.join(outDir, 'macro_entities.json'), JSON.stringify(scene.objects, null, 2), 'utf8');
   });
@@ -104,32 +106,26 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(metaSudans).toBeDefined();
     expect(metaSudans!.category).toBe('ruin');
 
-    // 4. Stone Pine Trees (Foliage)
-    const tree1 = scene.objects.find(o => o.id === 'det-tree-stone-pine-1');
-    expect(tree1).toBeDefined();
-    expect(tree1!.category).toBe('foliage');
-    expect(tree1!.material.baseColor).toBe('#2d5a27');
-
-    // 5. Cobblestone Apron (Terrain)
+    // 4. Cobblestone Apron (Terrain)
     const apron = scene.objects.find(o => o.id === 'det-cobblestone-apron');
     expect(apron).toBeDefined();
     expect(apron!.category).toBe('terrain');
     expect(apron!.submeshIndices.length).toBeGreaterThan(15);
   });
 
-  it('separates 52 granular 3D spatial entities in detailed mode with tight 3D Oriented Bounding Boxes (OBBs)', () => {
+  it('separates 34 granular 3D spatial entities in detailed mode with tight 3D Oriented Bounding Boxes (OBBs)', () => {
     const scene = Colosseum3DMeshSeparatorService.separate3DMesh(modelPath, { mode: 'detailed' });
 
-    expect(scene.objects.length).toBe(52);
+    expect(scene.objects.length).toBe(34);
     expect(scene.granularityMode).toBe('detailed');
     expect(scene.objectCounts).toBeDefined();
     expect(scene.objectCounts!.colosseum_architecture).toBe(12);
     expect(scene.objectCounts!.monuments_temples).toBe(8);
-    expect(scene.objectCounts!.foliage_trees).toBe(18);
+    expect(scene.objectCounts!.foliage_trees).toBe(0);
     expect(scene.objectCounts!.archaeology_ruins).toBe(8);
     expect(scene.objectCounts!.urban_infrastructure).toBe(6);
 
-    // Verify all 52 entities have valid OBB, dimensions, and non-empty vertex counts
+    // Verify all 34 entities have valid OBB, dimensions, and non-empty vertex counts
     for (const obj of scene.objects) {
       expect(obj.orientedBoundingBox).toBeDefined();
       expect(obj.orientedBoundingBox.dimensions[0]).toBeGreaterThan(0);
@@ -158,11 +154,9 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(titusBaths).toBeDefined();
     expect(titusBaths!.tightnessGainPercent).toBeGreaterThan(50);
 
-    // 4. Foliage: 12 Stone Pines and 6 Cypresses
-    const pines = scene.objects.filter(o => o.id.startsWith('fol-stone-pine'));
-    expect(pines.length).toBe(12);
-    const cypresses = scene.objects.filter(o => o.id.startsWith('fol-cypress'));
-    expect(cypresses.length).toBe(6);
+    // 4. No trees: the 12 stone pines and 6 cypresses were placed by formula (positions, sizes, species), not found
+    expect(scene.objects.filter(o => o.id.startsWith('fol-'))).toEqual([]);
+    expect(COLOSSEUM_GRANULAR_3D_ENTITIES.filter(e => e.category === 'foliage_trees' || /pine|cypress|pinus|cupressus/i.test(e.name))).toEqual([]);
 
     // 5. Urban Infrastructure: Metro Colosseo and Via Nicola Salvi townhouses
     const metro = scene.objects.find(o => o.id === 'urb-metro-colosseo-pavilion');
@@ -217,14 +211,15 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(reportDetailed).toContain('Granularity Mode: DETAILED');
     expect(reportDetailed).toContain('Colosseum North Outer Arcade Facade');
     expect(reportDetailed).toContain('Arch of Constantine: Attic Inscription Block');
-    expect(reportDetailed).toContain('Oppian Hill Crest Stone Pine #1');
+    expect(reportDetailed).not.toContain('Stone Pine');
     expect(reportDetailed).toContain('Colosseo Metro Station Entrance Pavilion');
   });
 
-  it('separates 1,670 Total Identifiable Objects across 4 tiers of arcade arches, hoists, 1,260 trees, and ruins', () => {
+  it('separates 410 Total Identifiable Objects across 4 tiers of arcade arches, hoists, monuments and ruins, with no generated tree list', () => {
     const scene = Colosseum3DMeshSeparatorService.separate3DMesh(modelPath, { mode: 'total' });
 
-    expect(scene.objects.length).toBe(1670);
+    // the 1,260 "identified" trees came from a seeded random generator, not the mesh, and were removed
+    expect(scene.objects.length).toBe(410);
     expect(scene.granularityMode).toBe('total');
 
     // 1. Check Colosseum Arcade Arches across 4 tiers (320 items: 80 per tier)
@@ -241,35 +236,9 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     const hoists = scene.objects.filter(o => o.id.startsWith('tot-hypogeum-hoist-'));
     expect(hoists.length).toBe(28);
 
-    // 3. Check Botanical Trees (1,260 items across 13 zones)
-    const trees = scene.objects.filter(o => o.category === 'foliage_trees');
-    expect(trees.length).toBe(1260);
-    const oppianTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-oppian-crest-'));
-    expect(oppianTrees.length).toBe(125);
-    const slopeTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-oppio-slope-'));
-    expect(slopeTrees.length).toBe(105);
-    const cypresses = scene.objects.filter(o => o.id.startsWith('fol-tree-san-gregorio-'));
-    expect(cypresses.length).toBe(60);
-    const palatineTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-palatine-'));
-    expect(palatineTrees.length).toBe(75);
-    const celianTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-celian-') && !o.id.startsWith('fol-tree-celian-south-'));
-    expect(celianTrees.length).toBe(55);
-    const trajanTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-trajan-'));
-    expect(trajanTrees.length).toBe(160);
-    const farneseTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-farnese-'));
-    expect(farneseTrees.length).toBe(135);
-    const celimontanaTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-celimontana-'));
-    expect(celimontanaTrees.length).toBe(110);
-    const foriTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-fori-'));
-    expect(foriTrees.length).toBe(65);
-    const plazaTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-plaza-apron-'));
-    expect(plazaTrees.length).toBe(30);
-    const celianSouthTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-celian-south-'));
-    expect(celianSouthTrees.length).toBe(130);
-    const labicanaTrees = scene.objects.filter(o => o.id.startsWith('fol-tree-labicana-east-'));
-    expect(labicanaTrees.length).toBe(110);
-    const oppianNETrees = scene.objects.filter(o => o.id.startsWith('fol-tree-oppian-ne-'));
-    expect(oppianNETrees.length).toBe(100);
+    // 3. No generated trees
+    expect(scene.objects.filter(o => o.id.startsWith('fol-tree-'))).toHaveLength(0);
+    expect(() => Colosseum3DMeshSeparatorService.separate3DMesh(modelPath, { mode: 'trees' as any })).toThrow("mode 'trees' has been removed");
 
     // 4. Check Palazzi & Buildings (20 items)
     const salviPalazzi = scene.objects.filter(o => o.id.startsWith('tot-palazzo-salvi-'));
@@ -281,7 +250,7 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     const lanterns = scene.objects.filter(o => o.id.startsWith('tot-street-lantern-'));
     expect(lanterns.length).toBe(8);
 
-    // 6. Verify all 1,670 entities have valid OBB geometry and Trellis prompts
+    // 6. Verify all 410 entities have valid OBB geometry and Trellis prompts
     for (const obj of scene.objects) {
       expect(obj.orientedBoundingBox.dimensions[0]).toBeGreaterThan(0);
       expect(obj.orientedBoundingBox.dimensions[1]).toBeGreaterThan(0);

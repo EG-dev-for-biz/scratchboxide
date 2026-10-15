@@ -1,5 +1,14 @@
 # Process: Photogrammetric Monument Boundary Fitting, Zero-Drift Dirichlet Locking, and Wall-Tree Excision
 
+> **Superseded (2026-10-15): do not follow the steps below.** `PhotogrammetricTerrainHarmonizerService` (`harmonizeGlb`,
+> `fitOrientedBoundingEnvelope`), the `harmonize_photogrammetric_district` tool and `scripts/integrate_colosseum_botanical_trees*`
+> are deleted: they flattened canopy and placed trees from hand-written or seeded-random stands (species, positions,
+> heights) instead of measuring them. A location's trees are now measured in its photo tiles and rebuilt as SB-Veggie
+> trees by `TileVegetationService` (`packages/core/src/node/3d-engine/tile-vegetation-service.ts`, native
+> `scratchbox_tile_vegetation.hpp` / `scripts/tile_vegetation.cpp`) through `google_3d_tiles_get_clay`
+> (`location-clay-pipeline.ts`); a single tree of given measurements comes from `botanical_synthesize_tree`. This record
+> is kept as history only.
+
 ## Problem Statement
 
 When processing photogrammetric 3D tiles (such as Google Photorealistic 3D Tiles) to resect flattened vegetation and instantiate realistic 3D botanical trees, automated canopy detection engines analyze elevated geometry outside protected zones. If the bounding boundary for a historic monument or architectural edifice is specified using idealized theoretical dimensions (e.g. textbook architectural plans or rectangular cadastral lot boundaries), subtle spatial offsets, yaw misalignments, or asymmetric structural extensions (such as preserved outer Roman arcade walls, buttresses, or stairs) will fall outside the protected zone.
@@ -114,6 +123,7 @@ console.log(`✅ Mathematical Invariant Satisfied: 0 structure vertices outside 
 Invoke `PhotogrammetricTerrainHarmonizerService.harmonizeGlb()` with strict Dirichlet locking and curtain-wall pruning:
 
 ```javascript
+// (deleted; see the note at the top)
 const result = await PhotogrammetricTerrainHarmonizerService.harmonizeGlb(baseBuf, {
     autoResectStands: true,
     renderMode: 'pbr',

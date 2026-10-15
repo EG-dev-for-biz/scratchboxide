@@ -34,7 +34,7 @@ describe('Colosseum Object Separation & TRELLIS Scene Population Pipeline', () =
     expect(archConstantine?.heightMeters).toBe(21.0);
   });
 
-  it('detects discrete monuments, ruins, and stone pines with normalized Gemini 2D boxes', async () => {
+  it('detects discrete monuments and ruins with normalized Gemini 2D boxes, and lists no hand-written trees', async () => {
     const detections = await service.detectVisionObjects(stationImgPath);
     expect(detections.length).toBeGreaterThanOrEqual(6);
 
@@ -43,10 +43,8 @@ describe('Colosseum Object Separation & TRELLIS Scene Population Pipeline', () =
     expect(archDet?.box2d).toEqual([530, 530, 720, 645]);
     expect(archDet?.trellisPrompt).toContain('Watertight Roman triumphal arch');
 
-    const pineTree = detections.find((d) => d.id === 'det-umbrella-pine-tree');
-    expect(pineTree).toBeDefined();
-    expect(pineTree?.category).toBe('foliage');
-    expect(pineTree?.trellisPrompt).toContain('Pinus pinea umbrella canopy');
+    // the stone pines and cypress were written into the list by hand (species, boxes, confidences), never detected
+    expect(detections.filter((d) => d.category === 'foliage')).toEqual([]);
   });
 
   it('unprojects detections into 3D metric space and populates modular Scene3DData', async () => {

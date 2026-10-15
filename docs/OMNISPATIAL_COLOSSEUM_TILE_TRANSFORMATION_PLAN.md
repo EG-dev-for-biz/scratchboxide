@@ -1,4 +1,13 @@
 # Omnispatial 3D Tile Transformation Plan: Colosseum & Imperial Rome District
+
+> **Superseded (2026-10-15): do not follow the steps below.** `PhotogrammetricTerrainHarmonizerService` (`harmonizeGlb`,
+> `fitOrientedBoundingEnvelope`), the `harmonize_photogrammetric_district` tool and `scripts/integrate_colosseum_botanical_trees*`
+> are deleted: they flattened canopy and placed trees from hand-written or seeded-random stands (species, positions,
+> heights) instead of measuring them. A location's trees are now measured in its photo tiles and rebuilt as SB-Veggie
+> trees by `TileVegetationService` (`packages/core/src/node/3d-engine/tile-vegetation-service.ts`, native
+> `scratchbox_tile_vegetation.hpp` / `scripts/tile_vegetation.cpp`) through `google_3d_tiles_get_clay`
+> (`location-clay-pipeline.ts`); a single tree of given measurements comes from `botanical_synthesize_tree`. This record
+> is kept as history only.
 ## Adaptive Domain Architecture (ADA) Compliance, Critical Thinking Audit, 3D Artistry & Visual Criticism
 
 ---

@@ -1,5 +1,14 @@
 # Process: Photogrammetric Canopy Resection, Topological Curtain Wall Excision, and Cadastral Dirichlet Preservation
 
+> **Superseded (2026-10-15): do not follow the steps below.** `PhotogrammetricTerrainHarmonizerService` (`harmonizeGlb`,
+> `fitOrientedBoundingEnvelope`), the `harmonize_photogrammetric_district` tool and `scripts/integrate_colosseum_botanical_trees*`
+> are deleted: they flattened canopy and placed trees from hand-written or seeded-random stands (species, positions,
+> heights) instead of measuring them. A location's trees are now measured in its photo tiles and rebuilt as SB-Veggie
+> trees by `TileVegetationService` (`packages/core/src/node/3d-engine/tile-vegetation-service.ts`, native
+> `scratchbox_tile_vegetation.hpp` / `scripts/tile_vegetation.cpp`) through `google_3d_tiles_get_clay`
+> (`location-clay-pipeline.ts`); a single tree of given measurements comes from `botanical_synthesize_tree`. This record
+> is kept as history only.
+
 > **Domain**: Geospatial, 3D Photogrammetry, Computational Topology, Botanical Integration, C++20 PBR  
 > **Status**: Verified & Production-Ready  
 > **Date**: 2026-10-10  
@@ -111,7 +120,7 @@ flowchart TD
 npm --prefix packages/core run build
 
 # 2. Execute Botanical Integration & Reshaping
-node scripts/integrate_colosseum_botanical_trees_v4.cjs
+# (deleted; see the note at the top) node scripts/integrate_colosseum_botanical_trees_v4.cjs
 
 # Expected Output Metrics:
 # [Botanical Integration v4] Processed 537,940 vertices.
@@ -148,7 +157,7 @@ node scripts/apply_master_pbr_pipeline.cjs
 ### Rollback Procedure
 If cadastral boundaries require adjustment:
 1. Modify polygon coordinates in `scripts/integrate_colosseum_botanical_trees_v4.cjs`.
-2. Re-run `node scripts/integrate_colosseum_botanical_trees_v4.cjs`.
+2. Re-run `node scripts/integrate_colosseum_botanical_trees_v4.cjs` (deleted, see the note at the top).
 3. Ingest raw backup tile from `public/models/colosseum_rome_pristine_leaf_raw.glb`.
 
 ---

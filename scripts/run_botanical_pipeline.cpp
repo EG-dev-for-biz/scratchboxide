@@ -18,6 +18,10 @@
  *             and Basal Flare Fluting Isolation
  *
  * Streams binary glTF 2.0 (.glb) chunks over stdout or writes to disk.
+ *
+ * --input <scan.glb> is required. The built-in synthetic benchmark scan runs only when asked for by name
+ * (--input benchmark); a missing or unreadable scan, or one without vegetation, is an error (non-zero exit, ERROR: on
+ * stderr), never a benchmark or a guessed canopy.
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"
@@ -236,34 +240,54 @@ int main(int argc, char* argv[]) {
     }
 
     ScratchboxMesh inputMesh;
-    if (!inputPath.empty() && inputPath != "benchmark" && fs::exists(inputPath)) {
+    if (inputPath.empty()) {
+        std::cerr << "ERROR: --input <scan.glb> is required (or --input benchmark for the built-in synthetic benchmark scan)\n";
+        return 2;
+    }
+    if (inputPath == "benchmark") {
+        if (!streamStdout) std::cout << "Input: built-in synthetic benchmark scan (asked for by name)\n";
+        inputMesh = (options.mode == BotanicalPipelineMode::IntegratedStreetscape) ?
+                    createBenchmarkStreetscapeScan() : createBenchmarkTreeBlobScan();
+    } else {
+        if (!fs::exists(inputPath)) {
+            std::cerr << "ERROR: scan not found: " << inputPath << "\n";
+            return 2;
+        }
         if (!streamStdout) std::cout << "Loading input mesh from: " << inputPath << "...\n";
         inputMesh = GlbReader::readGlb(inputPath);
         if (inputMesh.vertices.empty()) {
-            std::cerr << "ERROR: Failed to read GLB from " << inputPath << ", falling back to benchmark scan.\n";
-            inputMesh = (options.mode == BotanicalPipelineMode::IntegratedStreetscape) ?
-                        createBenchmarkStreetscapeScan() : createBenchmarkTreeBlobScan();
+            std::cerr << "ERROR: could not read any geometry from " << inputPath << "\n";
+            return 3;
         }
-    } else {
-        if (!streamStdout) std::cout << "No input GLB provided; synthesizing photogrammetric benchmark scan...\n";
-        inputMesh = (options.mode == BotanicalPipelineMode::IntegratedStreetscape) ?
-                    createBenchmarkStreetscapeScan() : createBenchmarkTreeBlobScan();
     }
 
     BotanicalPipelineResult result;
-    if (options.mode == BotanicalPipelineMode::IntegratedStreetscape) {
-        result = BotanicalSynthesisPipeline::synthesizeStreetscape(inputMesh, options);
-    } else {
-        result = BotanicalSynthesisPipeline::runPipeline(inputMesh, options);
+    try {
+        if (options.mode == BotanicalPipelineMode::IntegratedStreetscape) {
+            result = BotanicalSynthesisPipeline::synthesizeStreetscape(inputMesh, options);
+        } else {
+            result = BotanicalSynthesisPipeline::runPipeline(inputMesh, options);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        return 4;
     }
 
-    fs::create_directories(fs::path(outputPath).parent_path());
+    if (!fs::path(outputPath).parent_path().empty()) fs::create_directories(fs::path(outputPath).parent_path());
     std::vector<uint8_t> glbBytes = GlbWriter::writeGlb(result.combinedMesh);
 
-    std::ofstream outFile(outputPath, std::ios::binary);
-    if (outFile.is_open()) {
+    {
+        std::ofstream outFile(outputPath, std::ios::binary);
+        if (!outFile.is_open()) {
+            std::cerr << "ERROR: could not write " << outputPath << "\n";
+            return 5;
+        }
         outFile.write(reinterpret_cast<const char*>(glbBytes.data()), static_cast<std::streamsize>(glbBytes.size()));
         outFile.close();
+        if (!outFile) {
+            std::cerr << "ERROR: could not write " << outputPath << "\n";
+            return 5;
+        }
     }
 
     if (!streamStdout) {

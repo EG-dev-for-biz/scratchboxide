@@ -104,7 +104,7 @@ export interface UniversalSeparatedScene {
   overallBoundingBox: BoundingBox3DMetric;
   overallOrientedBoundingBox?: OrientedBoundingBox3D;
   objects: UniversalSeparatedObject[];
-  granularityMode: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
+  granularityMode: 'macro' | 'detailed' | 'total' | 'all';
   timestamp: string;
   sourceAssetPath?: string;
   geoAnchor?: {
@@ -122,7 +122,7 @@ export interface UniversalSeparatedScene {
 export interface UniversalSeparationOptions {
   glbPath?: string;
   glbBuffer?: Buffer;
-  granularity?: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
+  granularity?: 'macro' | 'detailed' | 'total' | 'all';
   autoDetectSemanticCategories?: boolean;
   enableVertexClustering?: boolean;
   minVerticesPerEntity?: number;
@@ -496,7 +496,6 @@ export class Universal3DObjectSeparationService {
 
     // Groups
     const terrainIndices: number[] = [];
-    const foliageIndices: number[] = [];
     const monumentIndices: number[] = [];
     const architectureIndices: number[] = [];
     const ruinIndices: number[] = [];
@@ -512,10 +511,8 @@ export class Universal3DObjectSeparationService {
       if (h < 6.0 && horizontalFootprint > overallBox.dimensions[0] * 0.25) {
         terrainIndices.push(idx);
       }
-      // Heuristic 2: Foliage - elevated, moderate height (4-25m), localized crown aspect ratio
-      else if (h >= 4.0 && h <= 25.0 && w / (h || 1) < 1.8 && relativeElevation > 0.15 && sm.count < 3000) {
-        foliageIndices.push(idx);
-      }
+      // (No vegetation heuristic: a bounding box cannot tell a crown from a kiosk or a rooftop unit. Trees are measured
+      // from the photo tiles by tile_vegetation, through google_3d_tiles_get_clay.)
       // Heuristic 3: Ruin - low crumbling structure
       else if (h >= 1.0 && h <= 8.0 && relativeElevation < 0.25) {
         ruinIndices.push(idx);
@@ -530,17 +527,8 @@ export class Universal3DObjectSeparationService {
       }
     }
 
-    // Ensure at least one entity in main categories if submeshes exist
-    if (terrainIndices.length === 0 && submeshes.length > 0) {
-      terrainIndices.push(submeshes[0]!.submeshIndex);
-    }
-    if (monumentIndices.length === 0 && architectureIndices.length > 0) {
-      monumentIndices.push(architectureIndices.shift()!);
-    }
-    if (foliageIndices.length === 0 && architectureIndices.length > 1) {
-      foliageIndices.push(architectureIndices.pop()!);
-    }
-
+    // Only categories the heuristics actually found are reported: a submesh is never moved into a category (terrain,
+    // monument) just so that category exists, and an empty category is not given the whole model's box.
     const clustersConfig = [
       {
         id: 'sep-monument-core',
@@ -551,16 +539,6 @@ export class Universal3DObjectSeparationService {
         prompt: 'Watertight architectural monument facade with classical masonry and relief details',
         roughness: 0.85,
         metalness: 0.02
-      },
-      {
-        id: 'sep-foliage-canopy',
-        name: 'Vegetation Canopy & Botanical Trees',
-        category: 'foliage' as UniversalSpatialCategory,
-        indices: foliageIndices,
-        colorHex: '#22c55e',
-        prompt: 'Photorealistic botanical canopy with organic branching and needle/leaf foliage',
-        roughness: 0.72,
-        metalness: 0.0
       },
       {
         id: 'sep-terrain-ground',
@@ -600,7 +578,7 @@ export class Universal3DObjectSeparationService {
       });
     }
 
-    return clustersConfig.map(cfg => {
+    return clustersConfig.filter(cfg => cfg.indices.length > 0).map(cfg => {
       const extractedVertices: [number, number, number][] = [];
       for (const smIdx of cfg.indices) {
         const sm = submeshes.find(s => s.submeshIndex === smIdx);
@@ -616,11 +594,6 @@ export class Universal3DObjectSeparationService {
           extractedVertices.push(sm.min);
           extractedVertices.push(sm.max);
         }
-      }
-
-      if (extractedVertices.length === 0) {
-        extractedVertices.push(overallBox.min);
-        extractedVertices.push(overallBox.max);
       }
 
       return {
