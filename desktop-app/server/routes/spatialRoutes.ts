@@ -21,6 +21,7 @@ import {
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
 import { getGoogle3DTilesClay } from '../../../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService';
 import { LocationUnresolvedError } from '../../../packages/core/src/common/errors/pipeline-errors';
+import { saveMapsKeySetting } from '../../../packages/core/src/node/spatial/maps-key-settings';
 import { geoidUndulation } from '../../../packages/core/src/node/spatial/egm96-geoid';
 
 export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService): Router {
@@ -516,6 +517,23 @@ export function createGeoRouter(): Router {
             res.json({ lat, lng, undulationMeters: geoidUndulation(lat, lng), model: 'EGM96 15-minute grid' });
         } catch (err: any) {
             res.status(500).json({ error: err?.message || String(err) });
+        }
+    });
+    /**
+     * The Google Maps key saved in Settings: the chat tools (Places lookups, 3D Tiles) run here, so the key the user
+     * saves must reach this process. Body { apiKey }; an empty key clears it. The key is never echoed back.
+     */
+    router.post('/maps-key', async (req: Request, res: Response) => {
+        const apiKey = req.body?.apiKey;
+        if (typeof apiKey !== 'string') {
+            res.status(400).json({ success: false, error: 'apiKey must be a string (empty to clear the saved key)' });
+            return;
+        }
+        try {
+            const { configured } = await saveMapsKeySetting(apiKey);
+            res.json({ success: true, configured });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
         }
     });
     return router;

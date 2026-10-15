@@ -16,6 +16,7 @@ import * as fs from 'fs-extra';
 import { assertWorkspaceRoot, PathTraversalError } from '../../packages/core/src/node/security/path-guard';
 import { FileKeyStore } from '../../packages/core/src/node/key-store';
 import { KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT } from '../../packages/core/src/node/gemini/gemini-client';
+import { preferSavedMapsKey } from '../../packages/core/src/node/spatial/maps-key-settings';
 import {
     WorkspaceConfigService,
     ProjectArtifactStore,
@@ -150,6 +151,7 @@ export function preferSavedGeminiKey(keyStore: Pick<FileKeyStore, 'getPasswordSy
 
 function loadEnvironmentSecrets(): void {
     const geminiKeyFromRealEnv = !!process.env.GEMINI_API_KEY?.trim();
+    const mapsKeyFromRealEnv = !!process.env.GOOGLE_MAPS_API_KEY?.trim();
     const homeSecrets = path.join(os.homedir(), '.scratchbox', 'secrets.json');
     const repoSecrets = [
         path.resolve(process.cwd(), 'secrets.json'),
@@ -222,6 +224,9 @@ function loadEnvironmentSecrets(): void {
 
     if (!geminiKeyFromRealEnv) {
         preferSavedGeminiKey();
+    }
+    if (!mapsKeyFromRealEnv) {
+        preferSavedMapsKey();
     }
 
     // Default to the service-account file at ~/.scratchbox/service-account.json or repo-root
