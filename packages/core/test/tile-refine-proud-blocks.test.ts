@@ -13,7 +13,8 @@
  * keystone as Google's tiles have it: a 1.4 x 2.2 m block whose front is tilted 6 degrees, flush with the wall at one
  * side and 16 cm proud at the other, its sides reaching 0.9 m back through a wall crinkled +-4 cm. The block keeps its
  * shape while the crinkle around it is still flattened, and the proud-feature audit (independent of both passes)
- * reports nothing removed. With --no-proud-blocks the same block is pressed into the wall and the audit reports it.
+ * reports nothing removed; the clay marks the block's vertices _PROUD_BLOCK 1 with no _RECTIFY_DISPLACEMENT. With
+ * --no-proud-blocks the same block is pressed into the wall and the audit reports it.
  * Clay renders go to test-results/screenshots/tile_refine_proud_blocks/ (gitignored).
  */
 
@@ -22,7 +23,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
-import { type Chunk, quad, flat, writeGlb, buildTileRefine } from './helpers/synthetic-scan-glb';
+import { type Chunk, type Glb, quad, flat, writeGlb, readGlb, buildTileRefine } from './helpers/synthetic-scan-glb';
 
 const REPO = path.resolve(__dirname, '../../..');
 const WORK = path.join(REPO, 'test-results/tile-refine-proud-blocks');
@@ -59,7 +60,7 @@ function wedgeBlock(): Chunk {
 
 interface Mesh { vertices: Float32Array; indices: Uint32Array }
 
-function run(name: string, extra: string[]): { stats: any; clay: Mesh } {
+function run(name: string, extra: string[]): { stats: any; clay: Mesh; glb: Glb } {
     const chunks: Chunk[] = [
         flat(-70, 70, -70, 70, 0, 20), crinkledWall(), wedgeBlock(),
         quad([-10, 0, -10], [0, 0, 20], [0, 40, 0], 6, 6), quad([-10, 0, 10], [20, 0, 0], [0, 40, 0], 6, 6),
@@ -74,7 +75,7 @@ function run(name: string, extra: string[]): { stats: any; clay: Mesh } {
     const pose = { x: 22, y: 27, z: 9, targetX: 10, targetY: 25, targetZ: 1.5, fov: 40 };
     const img = HeadlessMeshSilhouetteRenderer.renderShadedMesh(mesh, pose, 800, 600, { clipNearPlane: true, clayColor: [200, 200, 196], bgColor: [40, 44, 52, 255], lightDir: [0.35, 0.25, -0.9] });
     HeadlessMeshSilhouetteRenderer.exportPngToFile(path.join(SHOTS, `${name}_clay.png`), 800, 600, img.rgba);
-    return { stats: JSON.parse(fs.readFileSync(statsPath, 'utf8')), clay: mesh };
+    return { stats: JSON.parse(fs.readFileSync(statsPath, 'utf8')), clay: mesh, glb: readGlb(clay) };
 }
 
 /** The largest x of the output vertices on the block's front (the proud edge sits at x 10.16 as scanned). */
@@ -127,9 +128,27 @@ describe('tile_refine proud blocks', () => {
         expect(audit.retainedVolumeShare).toBeGreaterThan(0.95);
         // the wall around it is still one plane
         expect(wallResidual(kept.clay)).toBeLessThan(0.003);
+        // per-vertex provenance in the clay (one primitive, vertices in the order loadMeshFromGlb returns them)
+        const [flag] = kept.glb.attribute('_PROUD_BLOCK'), [moved] = kept.glb.attribute('_RECTIFY_DISPLACEMENT');
+        expect(flag.length).toBe(kept.clay.vertices.length / 3);
+        expect(moved.length).toBe(flag.length);
+        let front = 0, wallMoved = 0;
+        for (let i = 0; i < flag.length; i++) {
+            const [x, y, z] = [kept.clay.vertices[3 * i], kept.clay.vertices[3 * i + 1], kept.clay.vertices[3 * i + 2]];
+            if (x > 10.05 && y > BLOCK.y0 - 0.01 && y < BLOCK.y1 + 0.01 && z > BLOCK.z0 - 0.01 && z < BLOCK.z1 + 0.01) {
+                ++front;
+                expect(flag[i]).toBe(1);
+                expect(moved[i]).toBe(0);
+            } else if (Math.abs(x - 10) < 0.06 && y > 2 && y < 20 && Math.abs(z) < 8) {
+                wallMoved = Math.max(wallMoved, moved[i]);
+            }
+        }
+        expect(front).toBeGreaterThanOrEqual(2);
+        expect(wallMoved).toBeGreaterThan(0.01);
 
         // without the protection the block is pressed into the wall, and the audit says so
         expect(pressed.stats.rectify.proudBlocks.blocks).toBe(0);
+        expect(pressed.glb.attribute('_PROUD_BLOCK')).toHaveLength(0);
         expect(blockFront(pressed.clay)).toBeLessThan(10.05);
         const lost = pressed.stats.proudFeatures;
         expect(lost.removed).toBeGreaterThanOrEqual(1);

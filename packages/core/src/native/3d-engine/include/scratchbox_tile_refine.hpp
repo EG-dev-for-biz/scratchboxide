@@ -817,6 +817,7 @@ private:
         } else {
             outMesh = passThroughMesh();
         }
+        annotateProvenance(outMesh);
         lap("relief");
 
         // 5. write
@@ -2880,6 +2881,60 @@ private:
               << num(rows[i].before) << ", \"rmsAfter_m\": " << num(rows[i].after) << "}";
         o << "]}";
         return o.str();
+    }
+
+    /**
+     * Per-vertex provenance for the written GLBs: _RECTIFY_DISPLACEMENT, how far rectify / flatten moved the scan surface
+     * under each output vertex (m; 0 = as scanned), and _PROUD_BLOCK, 1 on a block kept as scanned and 2 on one snapped
+     * at its own level. A vertex the relief inserted takes the displacement interpolated over its parent triangle and the
+     * block flag of the parent's nearest corner; relief displacement itself is _RELIEF_HEIGHT.
+     */
+    void annotateProvenance(photometric_relief::ReliefMesh& m) const {
+        const auto& verts = scene.mesh.vertices;
+        const auto& idx = scene.mesh.indices;
+        std::unordered_map<int, V3> regionNormal;
+        for (const auto& f : relief.facades) regionNormal[f.id] = V3{f.normal.x, f.normal.y, f.normal.z};
+        const bool blocks = rect.groupOfVertex.size() == V && !rect.groupProudBlock.empty();
+        auto pos = [&](uint32_t v) { const auto& p = verts[v].position; return V3{p.x, p.y, p.z}; };
+        auto moved = [&](uint32_t v) { return pos(v) - V3{rawPos[3 * v], rawPos[3 * v + 1], rawPos[3 * v + 2]}; };
+        auto blockOf = [&](uint32_t v) -> float {
+            if (!blocks) return 0.0f;
+            const uint32_t g = rect.groupOfVertex[v];
+            return g < rect.groupProudBlock.size() ? static_cast<float>(rect.groupProudBlock[g]) : 0.0f;
+        };
+        std::vector<float> disp(m.positions.size(), 0.0f), block(m.positions.size(), 0.0f);
+        std::vector<uint8_t> done(m.positions.size(), 0);
+        for (const auto& t : m.triangles) {
+            if (t.parent >= idx.size() / 3) continue;
+            const uint32_t pv[3] = {idx[3 * t.parent], idx[3 * t.parent + 1], idx[3 * t.parent + 2]};
+            const V3 A = pos(pv[0]), e1 = pos(pv[1]) - A, e2 = pos(pv[2]) - A;
+            const double d00 = e1.dot(e1), d01 = e1.dot(e2), d11 = e2.dot(e2), den = d00 * d11 - d01 * d01;
+            for (uint32_t i : t.p) {
+                if (i >= done.size() || done[i]) continue;
+                done[i] = 1;
+                V3 q{m.positions[i].x, m.positions[i].y, m.positions[i].z};
+                if (i < m.heights.size() && m.heights[i] != 0 && m.positionRegion[i] >= 0) {
+                    auto it = regionNormal.find(m.positionRegion[i]);
+                    if (it != regionNormal.end()) q = q - it->second * static_cast<double>(m.heights[i]);
+                }
+                double w[3] = {1, 0, 0};
+                if (std::abs(den) > 1e-18) {
+                    const V3 e = q - A;
+                    const double d20 = e.dot(e1), d21 = e.dot(e2);
+                    w[1] = std::max(0.0, (d11 * d20 - d01 * d21) / den);
+                    w[2] = std::max(0.0, (d00 * d21 - d01 * d20) / den);
+                    w[0] = std::max(0.0, 1.0 - w[1] - w[2]);
+                    const double sum = w[0] + w[1] + w[2];
+                    for (double& x : w) x /= sum;
+                }
+                const V3 D = moved(pv[0]) * w[0] + moved(pv[1]) * w[1] + moved(pv[2]) * w[2];
+                disp[i] = static_cast<float>(D.norm());
+                const int near = w[0] >= w[1] && w[0] >= w[2] ? 0 : (w[1] >= w[2] ? 1 : 2);
+                block[i] = blockOf(pv[near]);
+            }
+        }
+        m.attributes.push_back({"_RECTIFY_DISPLACEMENT", "m the scan surface was moved by rectify and facade flatten (0 = as scanned)", std::move(disp)});
+        m.attributes.push_back({"_PROUD_BLOCK", "1 = block kept as scanned, 2 = block snapped at its own level, 0 = not a block", std::move(block)});
     }
 
     /** Without relief: the rectified, culled scan as a welded output mesh (no re-tessellation). */
