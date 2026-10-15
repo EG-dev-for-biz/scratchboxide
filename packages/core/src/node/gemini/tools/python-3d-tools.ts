@@ -237,7 +237,9 @@ function readLocationRequest(args: Record<string, unknown>): PythonLocationReque
     if (isBlankArgument(raw)) {
         coords = undefined;
     } else if (Array.isArray(raw)) {
-        const numbers = raw.map(v => typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+        // An explicitly empty optional elevation ([lat, lng, null] or [lat, lng, '']) is the same as leaving it out.
+        const values = raw.length === 3 && isBlankArgument(raw[2]) ? raw.slice(0, 2) : raw;
+        const numbers = values.map(v => typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
         if ((numbers.length !== 2 && numbers.length !== 3) || numbers.some(n => !Number.isFinite(n))) {
             throw shapeError(JSON.stringify(raw));
         }
@@ -311,7 +313,11 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 }
             }
         } catch (err) {
-            return failedOutcome(err, `Location "${locationRequest?.label ?? String(args.location ?? args.coordinates)}" could not be staged; the script was not run`);
+            // What was asked for, as given: the place text, else the coordinates as JSON (not Array#toString).
+            const asked = locationRequest?.label
+                ?? (typeof args.location === 'string' && args.location.trim() ? args.location.trim()
+                    : typeof args.coordinates === 'string' ? args.coordinates : JSON.stringify(args.coordinates));
+            return failedOutcome(err, `Location "${asked}" could not be staged; the script was not run`);
         }
         const extractedManifest: ExtractedLocationManifest | undefined = extraction?.manifest;
         const extractedGlbPath: string | undefined = extraction?.glbPath;

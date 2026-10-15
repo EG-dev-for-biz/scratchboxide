@@ -26,7 +26,7 @@ import * as path from 'path';
 import { Google3DTileBlockoutPipelineService, getGoogle3DTilesClay } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import { GoogleTileDistrictCrawler } from '../src/node/spatial/GoogleTileDistrictCrawler';
 import { GeospatialTileExtractionBridge } from '../src/node/spatial/GeospatialTileExtractionBridge';
-import { NativePythonRunnerService, findWrittenGlb } from '../src/node/3d-engine/native-python-runner-service';
+import { NativePythonRunnerService, expectedGlbFile, findWrittenGlb, stampGlbFile } from '../src/node/3d-engine/native-python-runner-service';
 import { python3DHandlers, PYTHON_3D_TOOL_DECLARATIONS } from '../src/node/gemini/tools/python-3d-tools';
 import { LocationUnresolvedError, TileExtractionError } from '../src/common/errors/pipeline-errors';
 import { GoogleMapsService, PLACES_TEXT_SEARCH_FIELD_MASK, PLACES_TEXT_SEARCH_URL } from '../src/browser/generative-canvas/services/google-maps-service';
@@ -387,6 +387,21 @@ describe('execute_3d_python_script: reports only the model the script actually w
         expect(extractSpy).not.toHaveBeenCalled();
     });
 
+    it('an explicitly empty elevation ([lat, lng, null] or [lat, lng, \'\']) is the same as leaving it out', async () => {
+        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
+        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract').mockRejectedValue(new TileExtractionError('crawl', 'stop here'));
+        for (const coordinates of [[40.7411, -73.9897, null], [40.7411, -73.9897, ''], { lat: 40.7411, lng: -73.9897, elevation: null }]) {
+            const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates, description: 'Kiosk' });
+            expect(outcome.summaryResult, JSON.stringify(coordinates)).not.toMatch(/coordinates must be/);
+            expect(outcome.summaryResult).toContain('Location "40.7411, -73.9897" could not be staged');
+        }
+        expect(extractSpy).toHaveBeenCalledTimes(3);
+        for (const [target] of extractSpy.mock.calls) {
+            expect(target).toEqual({ lat: 40.7411, lng: -73.9897 });
+        }
+        expect(runSpy).not.toHaveBeenCalled();
+    });
+
     it('partial or malformed coordinates fail with a precise error and the script is not run', async () => {
         const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
         for (const coordinates of [[40.7], ['a', 'b'], [1, 2, 3, 4], { lat: 40.7 }, 'not coordinates']) {
@@ -394,6 +409,8 @@ describe('execute_3d_python_script: reports only the model the script actually w
             expect(outcome.status, JSON.stringify(coordinates)).toBe('failed');
             expect(outcome.summaryResult).toMatch(/coordinates must be \[latitude, longitude\]/);
             expect(outcome.summaryResult).not.toMatch(/NaN/);
+            // The label is what was sent, as JSON: [40.7] used to read "40.7" and [40.7411,-73.9897,null] "40.7411,-73.9897,"
+            expect(outcome.summaryResult).toContain(`Location "${typeof coordinates === 'string' ? coordinates : JSON.stringify(coordinates)}"`);
         }
         expect(runSpy).not.toHaveBeenCalled();
     });
@@ -404,21 +421,53 @@ describe('execute_3d_python_script: reports only the model the script actually w
         expect(decl.description).not.toMatch(/reads the real geometry of a place/);
     });
 
-    it('the runner never reports a previous run\'s output.glb as this run\'s model', () => {
+    it('the runner reports only a GLB this run wrote at its expected path, never a shared output.glb', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-stale-glb-'));
         try {
-            const stale = path.join(dir, 'output.glb');
-            fs.writeFileSync(stale, triangleGlb());
-            const old = new Date(Date.now() - 60_000);
-            fs.utimesSync(stale, old, old);
-            const startTime = Date.now();
-            expect(findWrittenGlb(path.join(dir, 'scene_1.glb'), path.join(dir, 'scene_1.py'), dir, startTime)).toBeUndefined();
-            fs.writeFileSync(stale, triangleGlb()); // rewritten by this run
-            expect(findWrittenGlb(path.join(dir, 'scene_1.glb'), path.join(dir, 'scene_1.py'), dir, startTime)).toBe(stale);
+            const script = path.join(dir, 'scene_1.py');
+            const expected = expectedGlbFile(undefined, script);
+            expect(expected).toBe(path.join(dir, 'scene_1.glb'));
+            // output.glb written moments ago (same second) by another run in the shared directory is not this run's.
+            fs.writeFileSync(path.join(dir, 'output.glb'), triangleGlb());
+            expect(findWrittenGlb(expected, stampGlbFile(expected))).toBeUndefined();
+            // A file already at the expected path before the run, unchanged, is not this run's model either.
+            fs.writeFileSync(expected, triangleGlb());
+            const before = stampGlbFile(expected);
+            expect(findWrittenGlb(expected, before)).toBeUndefined();
+            fs.writeFileSync(expected, triangleGlb(true)); // rewritten during the run
+            expect(findWrittenGlb(expected, before)).toBe(expected);
+            // A file that did not exist before the run and does now was written by it.
+            const fresh = path.join(dir, 'scene_2.glb');
+            const none = stampGlbFile(fresh);
+            fs.writeFileSync(fresh, triangleGlb());
+            expect(findWrittenGlb(fresh, none)).toBe(fresh);
+            expect(expectedGlbFile(fresh, script)).toBe(fresh);
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });
+
+    it('a script that writes nothing gets no model, even with a fresh output.glb in its working directory', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-runner-shared-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'output.glb'), triangleGlb());
+            const runner = NativePythonRunnerService.getInstance();
+            const silent = await runner.runScript('print("nothing written")', { outputDir: dir, timeoutMs: 60000 });
+            expect(silent.success, silent.stderr).toBe(true);
+            expect(silent.glbPath).toBeUndefined();
+            expect(silent.glbBase64).toBeUndefined();
+            // A script that names no path writes where OUTPUT_GLB_PATH (set in its environment) points.
+            const viaEnv = await runner.runScript(
+                `import os\nwith open(os.environ["OUTPUT_GLB_PATH"], "wb") as f:\n    f.write(bytes.fromhex("${triangleGlb().toString('hex')}"))\n`,
+                { outputDir: dir, timeoutMs: 60000 }
+            );
+            expect(viaEnv.success, viaEnv.stderr).toBe(true);
+            expect(viaEnv.glbPath).toMatch(/scene_[^/\\]+\.glb$/);
+            expect(path.dirname(viaEnv.glbPath!)).toBe(dir);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }, 120000);
 });
 
 describe('GeospatialTileExtractionBridge: every call extracts fresh tiles', () => {
