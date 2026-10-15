@@ -139,6 +139,12 @@ export function writeFixtureGlb(file: string, mesh: FixtureMesh): string {
     return file;
 }
 
+/** The JSON chunk of a GLB file. */
+export function readGlbJson(file: string): any {
+    const buf = fs.readFileSync(file);
+    return JSON.parse(buf.toString('utf8', 20, 20 + buf.readUInt32LE(12)));
+}
+
 /** Reads POSITION min/max of the first primitive (as written by writeFixtureGlb or the native GLB writer). */
 export function readGlbPositions(file: string): { positions: Float32Array; min: V3; max: V3 } {
     const buf = fs.readFileSync(file);

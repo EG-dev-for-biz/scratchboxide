@@ -12,7 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from './native-compiler-service';
-import { ensurePipelineBinary, parseTelemetryLine, rawMeshReadIssues, runPipelineBinary } from './native-pipeline-binary';
+import { carryOverInputMaterial, ensurePipelineBinary, parseTelemetryLine, rawMeshReadIssues, runPipelineBinary } from './native-pipeline-binary';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 
 export type GeographicDomain =
@@ -126,11 +126,12 @@ export class UniversalTileDecompositionService {
         const mode = options.mode ?? 'full';
         // The native reader ignores node transforms (so measurements and output would be misplaced) and the writer
         // drops textures (so a written tile would come back untextured): refuse such a tile instead.
-        const issues = rawMeshReadIssues(fs.readFileSync(inputGlbPath));
+        const inputGlb = fs.readFileSync(inputGlbPath);
+        const issues = rawMeshReadIssues(inputGlb);
         const blocking = [...issues.geometry, ...(mode === 'probe' ? [] : issues.content)];
         if (blocking.length) {
             throw new MissingInputError('UTDRA', 'inputGlbPath',
-                `${inputGlbPath} cannot be processed faithfully: ${blocking.join('; ')}. Use a tile with baked transforms and no textures (the clay extraction).`);
+                `${inputGlbPath} cannot be processed faithfully: ${blocking.join('; ')}. Use a tile with baked transforms, one material and no textures (the clay extraction).`);
         }
         if (mode === 'slicer' && (typeof options.sliceElevationCutoff !== 'number' || !Number.isFinite(options.sliceElevationCutoff))) {
             throw new MissingInputError('UTDRA', 'sliceElevationCutoff', 'the elevation to slice at is required');
@@ -182,7 +183,8 @@ export class UniversalTileDecompositionService {
         if (!fs.existsSync(outputGlbPath)) {
             throw new GeneratorFailedError('cpp', `the UTDRA pipeline wrote no GLB to ${outputGlbPath}`);
         }
-        const glbBuffer = fs.readFileSync(outputGlbPath);
+        // The writer's stock material is replaced with the input's own (clay stays clay).
+        const glbBuffer = mode === 'probe' ? fs.readFileSync(outputGlbPath) : carryOverInputMaterial(inputGlb, outputGlbPath);
         return {
             success: true,
             mode,

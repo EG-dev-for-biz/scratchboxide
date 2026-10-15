@@ -27,7 +27,7 @@ import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { resolveTaskCapability } from '../src/node/agent/task-capability-resolver';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
-import { cylinderMesh, readGlbPositions, rewriteGlbJson, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
+import { cylinderMesh, readGlbJson, readGlbPositions, rewriteGlbJson, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
 import { rawMeshReadIssues } from '../src/node/3d-engine/native-pipeline-binary';
 
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-mesh-reshape-'));
@@ -191,6 +191,54 @@ describe('Agent tools and routing', () => {
         // A plain GLB, and an explicit identity transform, read faithfully.
         const identity = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'identity.glb'), cylinderMesh(1, 4)), g => { g.nodes[0].translation = [0, 0, 0]; });
         expect(rawMeshReadIssues(fs.readFileSync(identity))).toEqual({ geometry: [], content: [] });
+    });
+
+    it('keeps the input\'s own clay material on the output instead of the native writer\'s stock material', async () => {
+        const clay = { name: 'studio_clay', pbrMetallicRoughness: { baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 } };
+        const inputGlbPath = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'clay_in.glb'), cylinderMesh(1, 4)), g => {
+            g.materials = [clay];
+            g.meshes[0].primitives[0].material = 0;
+        });
+        const outputGlbPath = path.join(WORK, 'clay_out.glb');
+        const outcome = await meshShapingHandlers.mesh_apply_deformers({
+            inputGlbPath, outputGlbPath, operations: [{ type: 'taper', axis: 'Y', factor: 0.5, range: [0, 1] }]
+        }, {} as any);
+        expect(outcome.status).toBe('completed');
+        const out = readGlbJson(outputGlbPath);
+        expect(out.materials).toEqual([clay]);
+        expect(out.meshes[0].primitives.every((p: any) => p.material === 0)).toBe(true);
+
+        // An input with no material keeps none (the viewer's default), rather than gaining the writer's bluish one.
+        const bare = writeFixtureGlb(path.join(WORK, 'bare_in.glb'), cylinderMesh(1, 4));
+        await meshShapingHandlers.mesh_apply_deformers({ inputGlbPath: bare, outputGlbPath: path.join(WORK, 'bare_out.glb'), operations: [{ type: 'repair' }] }, {} as any);
+        const bareOut = readGlbJson(path.join(WORK, 'bare_out.glb'));
+        expect(bareOut.materials).toBeUndefined();
+        expect(bareOut.meshes[0].primitives[0].material).toBeUndefined();
+    });
+
+    it('refuses several materials, non-triangle primitives and an unreadable GLB with an error that names the file', async () => {
+        const twoMaterials = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'two_mat.glb'), cylinderMesh(1, 4)), g => {
+            g.materials = [{ name: 'studio_clay' }, { name: 'clay_accent' }];
+            g.meshes[0].primitives = [{ ...g.meshes[0].primitives[0], material: 0 }, { ...g.meshes[0].primitives[0], material: 1 }];
+        });
+        await expect(meshShapingHandlers.mesh_apply_deformers({ inputGlbPath: twoMaterials, operations: [{ type: 'repair' }] }, {} as any))
+            .rejects.toThrow(/use 2 different materials \(0, 1\), and the native writer writes one/);
+
+        const lines = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'lines.glb'), cylinderMesh(1, 4)), g => { g.meshes[0].primitives[0].mode = 1; });
+        expect(rawMeshReadIssues(fs.readFileSync(lines)).geometry[0]).toContain('primitive mode 1 (not a triangle list)');
+
+        const truncated = path.join(WORK, 'truncated.glb');
+        const whole = fs.readFileSync(writeFixtureGlb(path.join(WORK, 'whole.glb'), cylinderMesh(1, 4)));
+        fs.writeFileSync(truncated, Buffer.concat([whole.subarray(0, 20), Buffer.from('{"asset":{"vers', 'utf8')]));
+        let error: any;
+        try {
+            await meshShapingHandlers.mesh_apply_deformers({ inputGlbPath: truncated, operations: [{ type: 'repair' }] }, {} as any);
+        } catch (err) {
+            error = err;
+        }
+        expect(error?.name).toBe('MissingInputError');
+        expect(error.message).toContain(truncated);
+        expect(error.message).toMatch(/truncated|not valid JSON/);
     });
 
     it('routes mesh deformation requests to mesh_apply_deformers', () => {
