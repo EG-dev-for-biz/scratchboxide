@@ -10,12 +10,6 @@ import { Google3DTileBlockoutPipelineService } from '../src/node/spatial/Google3
 import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
 import { python3DHandlers } from '../src/node/gemini/tools/python-3d-tools';
 import type { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
-import { requireAnyEnv, withReason } from './helpers/requirements';
-
-// execute_3d_python_script with a location ingests live Google 3D Tiles (GeospatialTileExtractionBridge ->
-// getGoogle3DTilesClay). Without a Maps key the leaf crawler is skipped and the headless-Chrome blockout
-// runner waits on tiles that never stream (watchdogs >= 60s, overall >= 5 min), so the test can only run online.
-const mapsTilesKey = requireAnyEnv(['GOOGLE_MAPS_API_KEY', 'MAP_TILES_API_KEY'], 'live Google Photorealistic 3D Tiles ingestion for location staging');
 
 describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () => {
     const mockBasketballCourtArtifact: CanvasArtifact = {
@@ -279,8 +273,8 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(result.elevation).toBeUndefined();
         });
 
-        it.skipIf(!mapsTilesKey.ok)(withReason('supports direct geodetic coordinates [lat, lng] in execute_3d_python_script without static dictionaries', mapsTilesKey), async () => {
-            // Passing explicit coordinates directly in tool arguments
+        it('execute_3d_python_script does not stage scripts on places: coordinates fail the call instead of mounting raw tiles', async () => {
+            // Places come from google_3d_tiles_get_clay (remeshed clay with trees); a script run never mounts raw tiles.
             const outcome = await python3DHandlers.execute_3d_python_script({
                 script: 'import scratchbox as sb\nscene = sb.Scene()\nsb.io.write_glb(OUTPUT_GLB_PATH, scene)',
                 location: 'Circuit de Monaco Waterfront',
@@ -288,14 +282,12 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
                 description: 'F1 race car staged in Monaco'
             });
 
-            expect(outcome.status).toBe('completed');
+            expect(outcome.status).toBe('failed');
             const payload = outcome.resultPayload as any;
-            expect(payload.success).toBe(true);
-            expect(payload.geoAnchor).toBeDefined();
-            expect(payload.geoAnchor.lat).toBeCloseTo(43.7384, 4);
-            expect(payload.geoAnchor.lng).toBeCloseTo(7.4246, 4);
-            expect(payload.resolvedAddress).toContain('43.738400');
-            expect(payload.artifact.data.subtitle).toContain('43.7384');
+            expect(payload.success).toBe(false);
+            expect(payload.artifact).toBeUndefined();
+            expect(payload.geoAnchor).toBeUndefined();
+            expect(payload.error).toContain('google_3d_tiles_get_clay');
         });
 
         it('respects ContinuousPhysicalParameters overrides in synthesizeAdaptiveHeroObjectContract (Alien Planet Test)', () => {

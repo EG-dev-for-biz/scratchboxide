@@ -5,17 +5,14 @@
  * Exposes NativePythonRunnerService to Gemini agents, allowing Blender-style
  * procedural Python scripting (import scratchbox as sb) backed by native C++20
  * Astro engine nanobind bindings to stream binary .glb directly into the viewport.
- * Supports analytical AABB dynamic camera auto-framing and geospatial shape extraction.
+ * Supports analytical AABB dynamic camera auto-framing.
  ********************************************************************************/
 
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
-import { GeospatialTileExtractionBridge, ExtractedLocationManifest, type LocationExtractionResult } from '../../spatial/GeospatialTileExtractionBridge';
-import type { GeoAnchor } from '../../spatial/Google3DTileBlockoutPipelineService';
-import { LocationUnresolvedError, PipelineError, TileExtractionError } from '../../../common/errors/pipeline-errors';
-import { assertUsableCoordinates, parseCoordinateText } from '../../../common/coordinate/parse-coordinates';
+import { PipelineError } from '../../../common/errors/pipeline-errors';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
 import { analyzePartConnectivity, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
 import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
@@ -178,22 +175,13 @@ export const PYTHON_3D_API_REFERENCE = `Verified scratchbox API. Only use names 
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new studio-clay 3D scene. Choose the tool by what the user asked for: a real-world place on its own goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference; an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. location/coordinates stage the script\'s model on a real place: the place is resolved with Google Places, its Google 3D Tiles are extracted (raw tiles shown in studio clay, not remeshed, no trees) and mounted under the model as their own object, in metres around the place\'s centre. The script does not get the tiles\' geometry: sb.geospatial.load_location() returns only the extracted file\'s path (glb_path), its manifest path (manifest_path, JSON with the resolved address, coordinates and the tiles\' bounding box) and the query, so build only what stands on the place. If the place cannot be resolved or extracted, the call fails and the script is not run. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
+        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new studio-clay 3D scene in a studio void. Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
                 script: {
                     type: 'STRING',
                     description: 'The procedural Python 3 script. Must import scratchbox as sb and write the resulting scene to OUTPUT_GLB_PATH via sb.io.write_glb(OUTPUT_GLB_PATH, scene).'
-                },
-                location: {
-                    type: 'STRING',
-                    description: 'Optional place name or address, exactly as the user wrote it, to stage the model on. It is resolved with Google Places (the result reports the address it resolved) and its Google 3D Tiles are extracted and mounted under the model.'
-                },
-                coordinates: {
-                    type: 'ARRAY',
-                    items: { type: 'NUMBER' },
-                    description: 'Optional [latitude, longitude] or [latitude, longitude, elevation in metres], only when the user gave coordinates. Never supply coordinates from memory: pass the place as location instead.'
                 },
                 description: {
                     type: 'STRING',
@@ -209,12 +197,6 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
-interface PythonLocationRequest {
-    /** What the model passed: the place text, or the coordinate pair as typed. */
-    label: string;
-    target: string | GeoAnchor;
-}
-
 /** True for an argument value that carries nothing: null/undefined, blank text, an empty array or object, or only nulls. */
 function isBlankArgument(value: unknown): boolean {
     if (value === undefined || value === null) return true;
@@ -225,47 +207,16 @@ function isBlankArgument(value: unknown): boolean {
 }
 
 /**
- * The place this call asks for, from `coordinates` (validated, never (0, 0)) or `location`; undefined when neither
- * is given. A blank `coordinates` value (null, [], {}, "", [null, null]) counts as not given: models send those for
- * an optional argument, and the script then runs unstaged. A partial or malformed value is an error.
+ * Why this call cannot run, when it asks to stage the script on a real place. The tool used to mount the place's
+ * raw Google 3D Tiles under the model; a place is now delivered only as remeshed clay with trees, by
+ * google_3d_tiles_get_clay (the place) and build_3d_object_from_reference (an object standing there). Blank values
+ * count as not given: models send those for arguments they leave empty.
  */
-function readLocationRequest(args: Record<string, unknown>): PythonLocationRequest | undefined {
-    const location = typeof args.location === 'string' ? args.location.trim() : '';
-    const raw = args.coordinates;
-    const shapeError = (got: string) => new LocationUnresolvedError(got, 'coordinates must be [latitude, longitude], [latitude, longitude, elevation in metres] or { lat, lng }');
-    let coords: GeoAnchor | undefined;
-    if (isBlankArgument(raw)) {
-        coords = undefined;
-    } else if (Array.isArray(raw)) {
-        // An explicitly empty optional elevation ([lat, lng, null] or [lat, lng, '']) is the same as leaving it out.
-        const values = raw.length === 3 && isBlankArgument(raw[2]) ? raw.slice(0, 2) : raw;
-        const numbers = values.map(v => typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
-        if ((numbers.length !== 2 && numbers.length !== 3) || numbers.some(n => !Number.isFinite(n))) {
-            throw shapeError(JSON.stringify(raw));
-        }
-        coords = { lat: numbers[0], lng: numbers[1], ...(numbers.length === 3 ? { elevation: numbers[2] } : {}) };
-    } else if (typeof raw === 'string') {
-        const parsed = parseCoordinateText(raw);
-        if (!parsed) throw shapeError(raw);
-        coords = parsed;
-    } else if (raw && typeof raw === 'object') {
-        const rc = raw as Record<string, unknown>;
-        if (typeof rc.lat !== 'number' || typeof rc.lng !== 'number' || (rc.elevation !== undefined && rc.elevation !== null && typeof rc.elevation !== 'number')) {
-            throw shapeError(JSON.stringify(raw));
-        }
-        coords = { lat: rc.lat, lng: rc.lng, ...(typeof rc.elevation === 'number' ? { elevation: rc.elevation } : {}) };
-    } else {
-        throw shapeError(String(raw));
-    }
-    if (coords) {
-        const label = `${coords.lat}, ${coords.lng}`;
-        assertUsableCoordinates(coords.lat, coords.lng, label);
-        if (coords.elevation !== undefined && !Number.isFinite(coords.elevation)) {
-            throw new LocationUnresolvedError(label, 'the elevation must be a number of metres');
-        }
-        return { label: location || label, target: { ...coords, ...(location ? { landmarkName: location } : {}) } };
-    }
-    return location ? { label: location, target: location } : undefined;
+function placeArgumentError(args: Record<string, unknown>): string | undefined {
+    const given = (['location', 'coordinates'] as const).filter(name => !isBlankArgument(args[name]));
+    if (given.length === 0) return undefined;
+    const asked = given.map(name => `${name} ${typeof args[name] === 'string' ? `"${String(args[name]).trim()}"` : JSON.stringify(args[name])}`).join(' and ');
+    return `execute_3d_python_script does not stage scripts on real places (got ${asked}). For the place itself call google_3d_tiles_get_clay; for one object standing at the place call build_3d_object_from_reference with that location and a placement. Run this tool without location or coordinates for a scene in a studio void.`;
 }
 
 function failedOutcome(error: unknown, summary: string): ToolHandlerOutcome {
@@ -275,8 +226,7 @@ function failedOutcome(error: unknown, summary: string): ToolHandlerOutcome {
         resultPayload: {
             success: false,
             error: err.message,
-            ...(err instanceof PipelineError ? { errorCode: err.code } : {}),
-            ...(err instanceof TileExtractionError ? { stage: err.stage } : {})
+            ...(err instanceof PipelineError ? { errorCode: err.code } : {})
         },
         summaryResult: `${summary}: ${err.message}`
     };
@@ -297,41 +247,22 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             };
         }
 
-        const runner = NativePythonRunnerService.getInstance();
-        const customEnv: NodeJS.ProcessEnv = { ...process.env };
-
-        // 1. A requested place is resolved and extracted before the script runs. If that fails the call fails:
-        // the script is not run and nothing is mounted in place of the location.
-        let locationRequest: PythonLocationRequest | undefined;
-        let extraction: LocationExtractionResult | undefined;
-        try {
-            locationRequest = readLocationRequest(args);
-            if (locationRequest) {
-                extraction = await GeospatialTileExtractionBridge.getInstance().ingestAndExtract(locationRequest.target, { mode: 'clay', ...(_ctx?.signal ? { signal: _ctx.signal } : {}) });
-                if (!extraction.success || extraction.mock) {
-                    throw new TileExtractionError('crawl', extraction.error || `no Google 3D Tiles were extracted for "${locationRequest.label}"`);
-                }
-            }
-        } catch (err) {
-            // What was asked for, as given: the place text, else the coordinates as JSON (not Array#toString).
-            const asked = locationRequest?.label
-                ?? (typeof args.location === 'string' && args.location.trim() ? args.location.trim()
-                    : typeof args.coordinates === 'string' ? args.coordinates : JSON.stringify(args.coordinates));
-            return failedOutcome(err, `Location "${asked}" could not be staged; the script was not run`);
-        }
-        const extractedManifest: ExtractedLocationManifest | undefined = extraction?.manifest;
-        const extractedGlbPath: string | undefined = extraction?.glbPath;
-        if (extraction && locationRequest) {
-            customEnv.SCRATCHBOX_LOCATION_QUERY = extraction.manifest.resolvedAddress;
-            customEnv.SCRATCHBOX_LOCATION_GLB = extraction.glbPath;
-            customEnv.SCRATCHBOX_LOCATION_MANIFEST = extraction.manifestPath;
+        // 1. Scripts are not staged on real places: a place argument fails the call before anything runs.
+        const placeError = placeArgumentError(args);
+        if (placeError) {
+            return {
+                status: 'failed',
+                resultPayload: { success: false, error: placeError },
+                summaryResult: `Failed: ${placeError}`
+            };
         }
 
         // 2. Execute Python script
-        let effectiveScript = script;
-        let result = await runner.runScript(effectiveScript, {
+        const runner = NativePythonRunnerService.getInstance();
+        const effectiveScript = script;
+        const result = await runner.runScript(effectiveScript, {
             timeoutMs,
-            env: customEnv
+            env: { ...process.env }
         });
 
         // Per User Directive: No silent fallbacks or synthetic substitutes.
@@ -439,41 +370,19 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             ];
         }
 
-        // The scene is staged only on tiles extracted for this call; nothing comes from the scene on the canvas.
-        const resolvedLocName = extractedManifest?.resolvedAddress;
-        const geoAnchor = extractedManifest
-            ? {
-                lat: extractedManifest.lat,
-                lng: extractedManifest.lng,
-                ...(extractedManifest.altitudeMeters !== undefined ? { elevation: extractedManifest.altitudeMeters } : {}),
-                datum: 'MSL_EGM96',
-                active: true,
-                landmarkName: extractedManifest.resolvedAddress
-            }
-            : undefined;
-        const isStaged = !!extractedManifest;
-
-        const stagedTitle = extractedManifest && !desc.toLowerCase().includes('staged')
-            ? `${desc} — Staged in ${resolvedLocName}`
-            : desc;
-        const stagedSubtitle = extractedManifest
-            ? `Real-World Geospatial Staging | ${resolvedLocName} [${extractedManifest.lat.toFixed(4)}°, ${extractedManifest.lng.toFixed(4)}°] | Studio Grey Clay Grounding`
-            : `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`;
+        // Nothing comes from the scene on the canvas: the new scene holds only the model this script wrote.
+        const sceneSubtitle = `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`;
 
         let durableHeroUri: string | undefined = undefined;
-        let locationUri: string | undefined = undefined;
         try {
             if (result.glbPath && fs.existsSync(result.glbPath) && fs.statSync(result.glbPath).size > 100) {
                 durableHeroUri = publishToModels(result.glbPath);
-            }
-            if (extractedGlbPath) {
-                locationUri = publishToModels(extractedGlbPath);
             }
         } catch (err) {
             return failedOutcome(err, 'The generated model could not be published to public/models');
         }
 
-        const stagedObjects = [
+        const sceneObjects = [
             ...(durableHeroUri ? [{
                 id: `hero-${Date.now()}`,
                 content: {
@@ -486,26 +395,6 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                         originalPath: result.glbPath,
                         metricScale: 1.0,
                         groundSnapped: true
-                    }
-                },
-                space: { spatial3d: { x: 0, y: 0, z: 0 } },
-                time: { startMs: 0, durationMs: 20000 },
-                lineage: { version: 1 }
-            }] : []),
-            ...(locationUri ? [{
-                id: `staged-location-${Date.now()}`,
-                content: {
-                    type: '3d-model',
-                    durableUri: locationUri,
-                    mimeType: 'model/gltf-binary',
-                    metadata: {
-                        role: 'environment',
-                        source: 'google_3d_tiles_clay',
-                        isGround: true,
-                        remeshed: false,
-                        metricScale: 1.0,
-                        groundDatumMeters: 0.0,
-                        location: resolvedLocName
                     }
                 },
                 space: { spatial3d: { x: 0, y: 0, z: 0 } },
@@ -531,11 +420,6 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 structuralIssues: structureReport ? describeFloatingParts(structureReport) : undefined,
                 visualReview,
                 visualIssues: visualReview ? describeVisualProblems(visualReview) : undefined,
-                locationManifest: extractedManifest,
-                locationGlbPath: extractedGlbPath,
-                geoAnchor,
-                locationQuery: locationRequest?.label,
-                resolvedAddress: resolvedLocName,
                 groundDatum: {
                     coordinateSystem: 'metric-enu',
                     units: 'meters',
@@ -546,13 +430,13 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 artifact: {
                     id: `artifact-3d-${Date.now()}`,
                     type: '3d-scene',
-                    title: stagedTitle,
-                    summary: stagedSubtitle,
+                    title: desc,
+                    summary: sceneSubtitle,
                     data: {
-                        title: stagedTitle,
-                        subtitle: stagedSubtitle,
-                        worldBranch: resolvedLocName ? `geospatial/${resolvedLocName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : 'procedural/python-scene',
-                        sceneType: extractedManifest ? 'real_world_landmark' : 'custom',
+                        title: desc,
+                        subtitle: sceneSubtitle,
+                        worldBranch: 'procedural/python-scene',
+                        sceneType: 'custom',
                         renderMode: 'clay',
                         cameraMode: 'orbit',
                         animation: 'orbit',
@@ -564,7 +448,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                         environment: {
                             skybox: 'studio',
                             lighting: 'studio',
-                            ground: isStaged
+                            ground: false
                         },
                         groundDatum: {
                             coordinateSystem: 'metric-enu',
@@ -573,8 +457,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                             groundDatumMeters: 0.0,
                             groundLogic: 'shared-metric-ground'
                         },
-                        ...(isStaged ? { groundTileMode: 'photoreal-clay', geoAnchor } : {}),
-                        objects: stagedObjects,
+                        objects: sceneObjects,
                         pythonGenerator: {
                             enabled: true,
                             filename: 'procedural_scene.py',
@@ -586,7 +469,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     }
                 }
             },
-            summaryResult: `Generated a 3D GLB via Python (${result.executionTimeMs}ms; ${writtenGeometry.totalVertices} vertices, ${writtenGeometry.totalTriangles} triangles). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.${extractedManifest ? ` Staged at ${resolvedLocName} (${extractedManifest.lat.toFixed(6)}, ${extractedManifest.lng.toFixed(6)}) on raw Google 3D Tiles in studio clay (not remeshed).` : ''}${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
+            summaryResult: `Generated a 3D GLB via Python (${result.executionTimeMs}ms; ${writtenGeometry.totalVertices} vertices, ${writtenGeometry.totalTriangles} triangles). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
         };
     }
 };

@@ -351,79 +351,104 @@ describe('fetch3DObject: the leaf crawler or a typed failure, never the headless
     });
 });
 
-describe('execute_3d_python_script: a requested place is extracted or the call fails', () => {
+describe('execute_3d_python_script: scripts are never staged on a real place', () => {
     const script = 'import scratchbox as sb\nscene = sb.Scene()\nsb.io.write_glb(OUTPUT_GLB_PATH, scene)';
+    const completedRun = () => vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 1, glbBase64: triangleGlb().toString('base64') } as any);
 
     it('routes places to google_3d_tiles_get_clay and single objects to build_3d_object_from_reference', () => {
         const decl = PYTHON_3D_TOOL_DECLARATIONS.find(d => d.name === 'execute_3d_python_script')!;
-        expect(decl.description).toContain('a real-world place on its own goes to google_3d_tiles_get_clay');
-        expect(decl.description).toContain('one specific object, or an abstract form, goes to build_3d_object_from_reference');
+        expect(decl.description).toContain('a real-world place goes to google_3d_tiles_get_clay');
+        expect(decl.description).toContain('one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place)');
         expect(decl.description).toContain('an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here');
         expect(decl.description).toContain('nothing is carried over from the scene already on the canvas');
+        expect(decl.description).toContain('a call with a location or coordinates fails without running the script');
         expect(decl.description).not.toMatch(/for both procedural world synthesis and real-world locations/);
-        expect(decl.description).not.toMatch(/mansard|townhouses|space colonization/);
-        expect(String((decl.parameters.properties as any).coordinates.description)).toMatch(/Never supply coordinates from memory/);
-        expect((decl.parameters.properties as any).stageIntoActiveScene).toBeUndefined();
+        expect(decl.description).not.toMatch(/mansard|townhouses|space colonization|load_location|raw tiles/);
+        const props = decl.parameters.properties as any;
+        expect(props.location).toBeUndefined();
+        expect(props.coordinates).toBeUndefined();
+        expect(props.stageIntoActiveScene).toBeUndefined();
     });
 
-    it('a failing extraction returns failed with no artifact, and the script is not run', async () => {
+    it('a location fails the call before anything runs: no extraction, no script, no artifact, and the place tools are named', async () => {
         const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
-        vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract').mockRejectedValue(new TileExtractionError('crawl', 'Google 3D Tiles request failed (HTTP 403)'));
-        const outcome = await python3DHandlers.execute_3d_python_script({ script, location: 'Flatiron Building, New York', description: 'Kiosk' });
+        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
+        const outcome = await python3DHandlers.execute_3d_python_script({ script, location: 'Central Park, New York', description: 'Race car' });
         expect(outcome.status).toBe('failed');
         const payload = outcome.resultPayload as any;
         expect(payload.success).toBe(false);
         expect(payload.artifact).toBeUndefined();
-        expect(payload.errorCode).toBe('tile_extraction_failed');
-        expect(payload.stage).toBe('crawl');
-        expect(outcome.summaryResult).toMatch(/could not be staged; the script was not run/);
-        expect(outcome.summaryResult).not.toMatch(/Staged in/);
-        expect(runSpy).not.toHaveBeenCalled();
-    });
-
-    it('a stopped chat stops the place extraction: the call\'s abort signal reaches the tile extraction', async () => {
-        const controller = new AbortController();
-        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract').mockRejectedValue(Object.assign(new Error('stopped'), { name: 'AbortError' }));
-        const outcome = await python3DHandlers.execute_3d_python_script({ script, location: 'Flatiron Building, New York' }, { signal: controller.signal });
-        expect(outcome.status).toBe('failed');
-        expect((extractSpy.mock.calls[0][1] as any).signal).toBe(controller.signal);
-    });
-
-    it('an unsuccessful or mock extraction result also fails the call', async () => {
-        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
-        vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract').mockResolvedValue({ success: true, mock: true, manifest: {} as any, manifestPath: '/tmp/x.json', glbPath: '/tmp/x.glb' });
-        const outcome = await python3DHandlers.execute_3d_python_script({ script, location: 'Flatiron Building, New York' });
-        expect(outcome.status).toBe('failed');
-        expect((outcome.resultPayload as any).artifact).toBeUndefined();
-        expect(runSpy).not.toHaveBeenCalled();
-    });
-
-    it('rejects [0, 0] coordinates without extracting or running anything', async () => {
-        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
-        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
-        const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates: [0, 0], description: 'Car' });
-        expect(outcome.status).toBe('failed');
-        expect((outcome.resultPayload as any).errorCode).toBe('location_unresolved');
+        expect(payload.error).toContain('location "Central Park, New York"');
+        expect(payload.error).toContain('google_3d_tiles_get_clay');
+        expect(payload.error).toContain('build_3d_object_from_reference');
+        expect(outcome.summaryResult).not.toMatch(/Staged|raw Google 3D Tiles/);
         expect(extractSpy).not.toHaveBeenCalled();
         expect(runSpy).not.toHaveBeenCalled();
     });
 
-    it('never detects a location from the description', async () => {
+    it('coordinates fail the same way, (0, 0) included, and are reported as sent', async () => {
+        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
         const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
-        vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 1, glbBase64: triangleGlb().toString('base64') } as any);
+        for (const coordinates of [[40.7829, -73.9654], [0, 0], { lat: 40.7411, lng: -73.9897 }, '40.7411, -73.9897']) {
+            const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates, description: 'Kiosk' });
+            expect(outcome.status, JSON.stringify(coordinates)).toBe('failed');
+            expect((outcome.resultPayload as any).artifact).toBeUndefined();
+            const sent = typeof coordinates === 'string' ? `"${coordinates}"` : JSON.stringify(coordinates);
+            expect(outcome.summaryResult).toContain(`coordinates ${sent}`);
+        }
+        expect(extractSpy).not.toHaveBeenCalled();
+        expect(runSpy).not.toHaveBeenCalled();
+    });
+
+    it('blank location or coordinates ([], {}, "", [null, null], null) run the script in a studio void', async () => {
+        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
+        const runSpy = completedRun();
+        const blanks: unknown[] = [[], {}, '', '   ', [null, null], null, { lat: null, lng: null }];
+        for (const value of blanks) {
+            const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates: value, location: typeof value === 'string' ? value : undefined, description: 'Car' });
+            expect(outcome.status, JSON.stringify(value)).toBe('completed');
+            const data = (outcome.resultPayload as any).artifact.data;
+            expect(data.environment.ground).toBe(false);
+            expect(data.geoAnchor).toBeUndefined();
+        }
+        expect(runSpy).toHaveBeenCalledTimes(blanks.length);
+        expect(extractSpy).not.toHaveBeenCalled();
+    });
+
+    it('sb.geospatial.load_location() raises instead of handing a script empty place paths', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-load-location-'));
+        try {
+            const run = await NativePythonRunnerService.getInstance().runScript(
+                'import scratchbox as sb\nloc = sb.geospatial.load_location("Central Park, New York")\nprint("got", loc)\n',
+                { outputDir: dir, timeoutMs: 60000 }
+            );
+            expect(run.success).toBe(false);
+            expect(`${run.stderr}\n${run.errorDetails || ''}`).toContain('scripts are not staged on real places');
+            expect(run.stdout).not.toContain('got');
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }, 120000);
+
+    it('never detects a location from the description, and carries nothing over from the active scene', async () => {
+        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
+        completedRun();
         const outcome = await python3DHandlers.execute_3d_python_script(
             { script, description: 'Race car staged in Central Park, New York at 40.7829, -73.9654', stageIntoActiveScene: true },
             { request: { canvasState: { activeArtifact: { type: '3d-scene', data: { geoAnchor: { lat: 41.89, lng: 12.49 }, objects: [{ id: 'old-tiles', content: { metadata: { role: 'environment', source: 'google_3d_tiles_clay' } } }] } } } } }
         );
         expect(outcome.status).toBe('completed');
         expect(extractSpy).not.toHaveBeenCalled();
-        const data = (outcome.resultPayload as any).artifact.data;
-        // Not staged: no "Staged in", no ground, and nothing carried over from the previous scene
+        const payload = outcome.resultPayload as any;
+        const data = payload.artifact.data;
         expect(data.title).not.toMatch(/Staged in/);
         expect(data.environment.ground).toBe(false);
         expect(data.geoAnchor).toBeUndefined();
         expect(data.groundTileMode).toBeUndefined();
         expect(data.objects.some((o: any) => o.id === 'old-tiles')).toBe(false);
+        expect(data.objects.some((o: any) => o.content?.metadata?.role === 'environment')).toBe(false);
+        expect(payload.locationGlbPath).toBeUndefined();
+        expect(payload.geoAnchor).toBeUndefined();
     });
 });
 
@@ -454,51 +479,6 @@ describe('execute_3d_python_script: reports only the model the script actually w
         expect(outcome.status).toBe('completed');
         expect((outcome.resultPayload as any).vertexCount).toBe(3);
         expect(outcome.summaryResult).toMatch(/3 vertices/);
-    });
-
-    it('blank optional coordinates ([], {}, "", [null, null], null) run the script unstaged', async () => {
-        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
-        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 1, glbBase64: triangleGlb().toString('base64') } as any);
-        for (const coordinates of [[], {}, '', '   ', [null, null], null, { lat: null, lng: null }]) {
-            const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates, description: 'Car' });
-            expect(outcome.status, JSON.stringify(coordinates)).toBe('completed');
-        }
-        expect(runSpy).toHaveBeenCalledTimes(7);
-        expect(extractSpy).not.toHaveBeenCalled();
-    });
-
-    it('an explicitly empty elevation ([lat, lng, null] or [lat, lng, \'\']) is the same as leaving it out', async () => {
-        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
-        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract').mockRejectedValue(new TileExtractionError('crawl', 'stop here'));
-        for (const coordinates of [[40.7411, -73.9897, null], [40.7411, -73.9897, ''], { lat: 40.7411, lng: -73.9897, elevation: null }]) {
-            const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates, description: 'Kiosk' });
-            expect(outcome.summaryResult, JSON.stringify(coordinates)).not.toMatch(/coordinates must be/);
-            expect(outcome.summaryResult).toContain('Location "40.7411, -73.9897" could not be staged');
-        }
-        expect(extractSpy).toHaveBeenCalledTimes(3);
-        for (const [target] of extractSpy.mock.calls) {
-            expect(target).toEqual({ lat: 40.7411, lng: -73.9897 });
-        }
-        expect(runSpy).not.toHaveBeenCalled();
-    });
-
-    it('partial or malformed coordinates fail with a precise error and the script is not run', async () => {
-        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
-        for (const coordinates of [[40.7], ['a', 'b'], [1, 2, 3, 4], { lat: 40.7 }, 'not coordinates']) {
-            const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates, description: 'Car' });
-            expect(outcome.status, JSON.stringify(coordinates)).toBe('failed');
-            expect(outcome.summaryResult).toMatch(/coordinates must be \[latitude, longitude\]/);
-            expect(outcome.summaryResult).not.toMatch(/NaN/);
-            // The label is what was sent, as JSON: [40.7] used to read "40.7" and [40.7411,-73.9897,null] "40.7411,-73.9897,"
-            expect(outcome.summaryResult).toContain(`Location "${typeof coordinates === 'string' ? coordinates : JSON.stringify(coordinates)}"`);
-        }
-        expect(runSpy).not.toHaveBeenCalled();
-    });
-
-    it('describes sb.geospatial.load_location() as paths only, not as the place\'s geometry', () => {
-        const decl = PYTHON_3D_TOOL_DECLARATIONS.find(d => d.name === 'execute_3d_python_script')!;
-        expect(decl.description).toMatch(/does not get the tiles' geometry: sb\.geospatial\.load_location\(\) returns only/);
-        expect(decl.description).not.toMatch(/reads the real geometry of a place/);
     });
 
     it('the runner reports only a GLB this run wrote at its expected path, never a shared output.glb', () => {

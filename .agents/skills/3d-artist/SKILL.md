@@ -97,7 +97,7 @@ When creating or sculpting any 3D asset or scene:
    - Always build initial hero models in **18% Studio Grey Clay** (`sb.PbrMaterial.clay()`, roughness 0.85, albedo 0.55–0.60) in a clean studio void.
    - Enforce the **70-20-10 geometric form hierarchy** across all sub-assemblies.
 2. **Explicit Location Staging Invariant (When Real Location Given)**:
-   - If the user specifies a real-world location (e.g., *"monument in Central Park"*, *"car in Monaco"*), stage immediately using **Google 3D Tiles Studio Grey Clay** (`google_3d_tiles_get_clay` or `execute_3d_python_script({ location: "..." })`) or **Vector World Staging** (`stage_3d_vector_world`).
+   - If the user specifies a real-world location (e.g., *"monument in Central Park"*, *"car in Monaco"*), stage immediately using **Google 3D Tiles Studio Grey Clay** (`google_3d_tiles_get_clay` for the place, `build_3d_object_from_reference` with `location` and `placement` for one object standing there) or **Vector World Staging** (`stage_3d_vector_world`). `execute_3d_python_script` does not stage scripts on real places.
    - Zero synthetic ground slabs or lollipop trees in a void!
 3. **Follow-Up Suggestions Sequence (Strictly Staging BEFORE Textures)**:
    - For standalone hero assets in a void, follow-up suggestions MUST proceed chronologically:
