@@ -1487,7 +1487,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'single_image_to_3dgs',
-        description: 'Convert any single 2D image or AI concept render into photorealistic 3D Gaussian Splats (.splat and Niantic .spz). Uses Depth Anything / metric pinhole depth reconstruction to project pixels into 3D Gaussians with authentic view-dependent color, normal vectors, and covariance scales. Directly loadable into Scene3DPrimitive via splatUrl.',
+        description: 'Convert a single 2D photo or render into 3D Gaussian Splats (.splat and Niantic .spz). Per-pixel metric depth comes from the Depth Anything V2 Metric model (local sidecar); each pixel is lifted along its pinhole ray at that depth, with normals from neighbouring depths. Fails when the depth model cannot run (nothing is guessed from colour or image rows). Directly loadable into Scene3DPrimitive via splatUrl.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1497,7 +1497,11 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 fovDegrees: {
                     type: 'NUMBER',
-                    description: 'Camera field of view in degrees (default: 65.0).'
+                    description: 'Vertical field of view of the photo in degrees. Give the real lens when known; when omitted 65 is assumed and the result says so.'
+                },
+                sceneType: {
+                    type: 'STRING',
+                    description: '"indoor" or "outdoor" (default): which Depth Anything V2 Metric model reads the depth.'
                 },
                 stride: {
                     type: 'NUMBER',
@@ -2564,7 +2568,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             throw new Error(`single_image_to_3dgs: input image does not exist: ${inputImagePath}`);
         }
 
-        const fovDegrees = typeof args.fovDegrees === 'number' ? args.fovDegrees : 65.0;
+        const fovGiven = typeof args.fovDegrees === 'number' && args.fovDegrees > 1 && args.fovDegrees < 179;
+        const fovDegrees = fovGiven ? (args.fovDegrees as number) : 65.0;
+        const sceneType = args.sceneType === 'indoor' ? 'indoor' : 'outdoor';
         const stride = typeof args.stride === 'number' ? Math.max(1, Math.round(args.stride)) : 2;
         const minDepth = typeof args.minDepth === 'number' ? args.minDepth : 0.2;
         const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : 150.0;
@@ -2591,16 +2597,29 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         }
 
         const decoded = decodePng(pngBuf);
+        // Depth from the depth model, or the call fails (GeneratorFailedError); no depth is guessed from the pixels.
+        const depth = await new PanoramaDepthService().generateImageDepth(inputImagePath, {
+            sceneType,
+            outDir: pathMod.join(osMod.tmpdir(), 'sbx-image-depth')
+        });
+        if (depth.width !== decoded.width || depth.height !== decoded.height) {
+            throw new GeneratorFailedError('python', `the depth map is ${depth.width}x${depth.height}, but ${inputImagePath} decodes to ${decoded.width}x${decoded.height}`);
+        }
+        const metricDepths = ImageToSplatService.planarToRayDepths(depth.depths, decoded.width, decoded.height, fovDegrees);
         const splats = ImageToSplatService.convertSingleImageToSplat({
             rgbPixels: new Uint8Array(decoded.rgba),
             width: decoded.width,
             height: decoded.height,
             channels: 4,
+            metricDepths,
             fovDegrees,
             stride,
             minDepth,
             maxDepth
         });
+        if (splats.length === 0) {
+            throw new GeneratorFailedError('python', `no pixel of ${inputImagePath} has a depth between ${minDepth} and ${maxDepth} m (the model measured ${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} m)`);
+        }
 
         const splatBuffer = SplatService.serializeSplatBuffer(splats);
         const spzBuffer = SplatService.serializeSpzBuffer(splats);
@@ -2628,6 +2647,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 width: decoded.width,
                 height: decoded.height,
                 fovDegrees,
+                fovAssumed: !fovGiven,
+                depthModel: depth.modelUsed,
+                depthRangeMeters: [depth.minDepth, depth.maxDepth],
+                depthPath: depth.depthPath,
                 suggestedScene3DData: {
                     splatUrl,
                     camera: {
@@ -2636,7 +2659,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                     }
                 }
             } as unknown as ToolResultPayload,
-            summaryResult: `Synthesized photorealistic 3D Gaussian Splats from image (${splats.length.toLocaleString()} splats). Saved standard binary .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and compressed .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
+            summaryResult: `Built ${splats.length.toLocaleString()} 3D Gaussian splats from ${inputImagePath} with depth from ${depth.modelUsed} (${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} m), ${fovGiven ? `vertical FOV ${fovDegrees} deg` : 'an assumed vertical FOV of 65 deg (pass fovDegrees for the real lens)'}. Saved .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
         };
     },
 

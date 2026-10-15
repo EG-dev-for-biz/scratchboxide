@@ -15,6 +15,7 @@ import { inpaintPanorama } from './Google360PanoramaPipelineService';
 import { PanoramaDepthService } from './PanoramaDepthService';
 import { SplatService } from '../3d-engine/splat-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
+import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
 
 const execAsync = promisify(exec);
 
@@ -155,7 +156,11 @@ export class OffsetViewSynthesisService {
             const warpCmd = `"${this.offsetRendererBin}" --input "${sourceRgbPath}" --depth "${sourceDepthPath}" --offset-x ${pose.x} --offset-y ${pose.y} --offset-z ${pose.z} --out-rgb "${offsetRgb}" --out-mask "${offsetMask}" --out-depth "${offsetDepth}" --eye-height ${eyeHeight} --json`;
             const { stdout } = await execAsync(warpCmd);
             const warpStats = JSON.parse(stdout.trim());
-            const disocclusionPercent = warpStats.disocclusionPercent ?? 0;
+            const disocclusionPercent = warpStats.disocclusionPercent;
+            if (typeof disocclusionPercent !== 'number' || !Number.isFinite(disocclusionPercent)) {
+                // Without the measured hole fraction the pose cannot be judged; no "no holes" is assumed.
+                throw new GeneratorFailedError('cpp', `the offset warper reported no disocclusionPercent for pose ${i}: ${stdout.trim().slice(0, 500)}`);
+            }
 
             activePosesReport.push({ ...pose, disocclusionPercent });
 
@@ -200,7 +205,11 @@ export class OffsetViewSynthesisService {
             const compileCmd = `"${this.splatCompilerBin}" --input "${inpaintedRgb}" --depth "${inpaintedDepthRes.depthPath}" --mask "${offsetMask}" --out-splat "${offsetSplat}" --out-spz "${offsetSpz}" --eye-height ${eyeHeight} --stride 4`;
             await execAsync(compileCmd);
 
-            if (await fs.pathExists(offsetSplat)) {
+            if (!(await fs.pathExists(offsetSplat))) {
+                // The inpainted view must reach the fused world; a pose is never dropped silently.
+                throw new GeneratorFailedError('cpp', `the splat compiler wrote no ${offsetSplat} for pose ${i}`);
+            }
+            {
                 const splatBuf = await fs.readFile(offsetSplat);
                 const poseSplats = SplatService.parseSplatBuffer(splatBuf);
                 

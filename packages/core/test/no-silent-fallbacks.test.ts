@@ -50,7 +50,7 @@ describe('Pipelines refuse to substitute invented output', () => {
         fs.writeFileSync(img, Buffer.from('not a real image'));
         const service = new PanoramaDepthService('/nonexistent/panorama_depth.py');
         await expect(service.generatePanoramaDepth(img, { outDir })).rejects.toBeInstanceOf(GeneratorFailedError);
-        await expect(service.generatePanoramaDepth(img, { outDir, allowHeuristicFallback: true } as any)).rejects.toThrow(/Panorama depth model failed/);
+        await expect(service.generatePanoramaDepth(img, { outDir, allowHeuristicFallback: true } as any)).rejects.toThrow(/Depth model failed/);
         expect(fs.readdirSync(outDir).filter(f => f.endsWith('.depth.f32'))).toEqual([]);
     });
 
