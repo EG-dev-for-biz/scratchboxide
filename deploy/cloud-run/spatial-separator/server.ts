@@ -293,60 +293,19 @@ function resolveAssetPath(...relativePaths: string[]): string {
     }
   }
 
-  // 2b-3. Universal Scene Inversion Manifest Endpoint (1,670 Entities)
+  // 2b-3. The Colosseum model's identifiable entities (total_entities.json, as Colosseum3DMeshSeparatorService
+  // separates them in 'total' mode), counted by category from the list itself. No trees are listed: the 1,260 that
+  // used to be came from a seeded random generator; a location's trees are measured from its photo tiles instead.
   if (pathname === '/api/spatial/scene/colosseum/populated' || pathname === '/api/spatial/scene/colosseum/universal-inversion') {
     try {
-      const totalEntities = JSON.parse(fs.readFileSync(resolveAssetPath('total_entities.json'), 'utf8'));
+      const totalEntities: Array<{ category: string }> = JSON.parse(fs.readFileSync(resolveAssetPath('total_entities.json'), 'utf8'));
+      const categoryCounts: Record<string, number> = {};
+      for (const e of totalEntities) categoryCounts[e.category] = (categoryCounts[e.category] || 0) + 1;
       return sendJson(res, 200, {
         success: true,
-        sceneName: 'Colosseum Universal Multi-Modal Inversion',
+        sceneName: 'Colosseum identifiable entities',
         totalEntitiesCount: totalEntities.length,
-        domains: {
-          colosseum_architecture: {
-            count: 348,
-            engine: 'SB-Archi (C++20)',
-            assetUrl: '/colosseum_sb_archi_full.glb',
-            manifoldVertices: 196568,
-            manifoldTriangles: 98260,
-            status: '100% Watertight Manifold'
-          },
-          foliage_trees: {
-            count: 1260,
-            engine: 'SB-Veggie Instanced Mesh',
-            speciesDistribution: {
-              pinus_pinea: 553,
-              quercus_ilex: 385,
-              cupressus_sempervirens: 162,
-              olea_europaea: 65,
-              laurus_nobilis: 95
-            },
-            status: 'Instanced WebGL 60 FPS'
-          },
-          monuments_temples: {
-            count: 16,
-            engine: 'SB-Monument Prior Engine',
-            prominent: ['Arch of Constantine (3 Fornices)', 'Temple of Venus & Roma Stylobate'],
-            status: 'Parametric Classical Architecture'
-          },
-          archaeology_ruins: {
-            count: 12,
-            engine: 'SB-Archaeology Engine',
-            prominent: ['Ludus Magnus Arena & 14 Cells', 'Sacred Travertine Cippi Arcs'],
-            status: 'Curved Brickwork & Travertine Posts'
-          },
-          urban_infrastructure: {
-            count: 34,
-            engine: 'SB-Urban Engine',
-            prominent: ['10 Via Nicola Salvi Palazzi', '10 Via Fori Imperiali Palazzi', '8 Cast-Iron Street Lanterns', 'Metro Colosseo Pavilion'],
-            status: 'Rusticated Palazzi & Infrastructure'
-          }
-        },
-        telemetry: {
-          totalObjectsInverted: 1670,
-          voidRestorationRatioPct: 41.5,
-          webglDrawCalls: 18,
-          targetFramerateFps: 60
-        }
+        categoryCounts
       });
     } catch (err: any) {
       return sendJson(res, 500, { success: false, error: err.message });

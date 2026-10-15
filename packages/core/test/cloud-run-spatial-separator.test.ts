@@ -160,5 +160,13 @@ describe('Cloud Run Spatial Separator Microservice', () => {
     const trees = await simulateRequest('GET', '/api/spatial/3d-mesh/objects?mode=trees');
     expect(trees.statusCode).toBe(500);
     expect(trees.json().error).toContain("mode 'trees' has been removed");
+    // the populated-scene manifest counts what its entity list holds: no trees, no species split, no invented engines
+    const populated = await simulateRequest('GET', '/api/spatial/scene/colosseum/populated');
+    expect(populated.statusCode).toBe(200);
+    const manifest = populated.json();
+    expect(manifest.totalEntitiesCount).toBe(410);
+    expect(manifest.categoryCounts.foliage_trees).toBeUndefined();
+    expect(Object.values(manifest.categoryCounts as Record<string, number>).reduce((a, b) => a + b, 0)).toBe(410);
+    expect(populated.body).not.toMatch(/speciesDistribution|pinus|SB-Veggie|1260|1,260/);
   });
 });

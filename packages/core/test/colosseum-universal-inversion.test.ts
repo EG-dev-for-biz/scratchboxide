@@ -2,15 +2,14 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
-describe('Colosseum Universal Multi-Modal Object Inversion (1,670 Objects)', () => {
+describe('Colosseum Universal Multi-Modal Object Inversion (410 Objects)', () => {
   const assetsDir = path.resolve(__dirname, '../../../deploy/cloud-run/spatial-separator/assets');
   const totalEntitiesPath = path.join(assetsDir, 'total_entities.json');
-  const treesDatasetPath = path.join(assetsDir, 'trees_dataset.json');
 
-  it('should load all 1,670 entities from total_entities.json', () => {
+  it('should load all 410 entities from total_entities.json, with no generated trees', () => {
     expect(fs.existsSync(totalEntitiesPath)).toBe(true);
     const entities = JSON.parse(fs.readFileSync(totalEntitiesPath, 'utf8'));
-    expect(entities.length).toBe(1670);
+    expect(entities.length).toBe(410);
 
     const categories: Record<string, number> = {};
     for (const e of entities) {
@@ -21,60 +20,20 @@ describe('Colosseum Universal Multi-Modal Object Inversion (1,670 Objects)', () 
     }
 
     expect(categories['colosseum_architecture']).toBe(348);
-    expect(categories['foliage_trees']).toBe(1260);
+    // the 1,260 "identified" trees came from a seeded random generator, not the mesh, and are gone (as are the
+    // canned tree and grove datasets beside this file)
+    expect(categories['foliage_trees']).toBeUndefined();
+    expect(fs.existsSync(path.join(assetsDir, 'trees_dataset.json'))).toBe(false);
+    expect(fs.existsSync(path.join(assetsDir, 'groves_dataset.json'))).toBe(false);
     expect(categories['monuments_temples']).toBe(16);
     expect(categories['archaeology_ruins']).toBe(12);
     expect(categories['urban_infrastructure']).toBe(34);
     expect(
       categories['colosseum_architecture'] +
-      categories['foliage_trees'] +
       categories['monuments_temples'] +
       categories['archaeology_ruins'] +
       categories['urban_infrastructure']
-    ).toBe(1670);
-  });
-
-  it('should partition 1,260 botanical trees into 5 canonical Mediterranean species', () => {
-    const entities = JSON.parse(fs.readFileSync(totalEntitiesPath, 'utf8'));
-    const trees = entities.filter((e: any) => e.category === 'foliage_trees');
-    expect(trees.length).toBe(1260);
-
-    const speciesCounts = {
-      pine: 0,
-      oak: 0,
-      cypress: 0,
-      olive: 0,
-      laurel: 0,
-      other: 0,
-    };
-
-    for (const t of trees) {
-      const name = t.name.toLowerCase();
-      if (name.includes('pine')) speciesCounts.pine++;
-      else if (name.includes('oak')) speciesCounts.oak++;
-      else if (name.includes('cypress')) speciesCounts.cypress++;
-      else if (name.includes('olive')) speciesCounts.olive++;
-      else if (name.includes('laurel')) speciesCounts.laurel++;
-      else speciesCounts.other++;
-
-      // Verify every tree has valid 3D coordinates and dimensions
-      const obb = t.orientedBoundingBox;
-      expect(obb).toBeDefined();
-      expect(obb.center.length).toBe(3);
-      expect(obb.dimensions[0]).toBeGreaterThan(0); // crown width
-      expect(obb.dimensions[1]).toBeGreaterThan(0); // height
-      expect(obb.dimensions[2]).toBeGreaterThan(0); // crown depth
-    }
-
-    expect(speciesCounts.pine).toBe(553);
-    expect(speciesCounts.oak).toBe(385);
-    expect(speciesCounts.cypress).toBe(162);
-    expect(speciesCounts.olive).toBe(65);
-    expect(speciesCounts.laurel).toBe(95);
-    expect(speciesCounts.other).toBe(0);
-    expect(
-      speciesCounts.pine + speciesCounts.oak + speciesCounts.cypress + speciesCounts.olive + speciesCounts.laurel
-    ).toBe(1260);
+    ).toBe(410);
   });
 
   it('should verify the 360° Colosseum amphitheater glB model contains 196,568 vertices across ambulatories, hypogeum and 320 bays', () => {
