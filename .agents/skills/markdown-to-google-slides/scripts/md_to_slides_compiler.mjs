@@ -16,7 +16,8 @@
  *   --brand <name>       Brand name (e.g., Chase, Knicks, Apple, Nike, Patagonia)
  *   --theme <dark|light> Force dark or light brand variant (default: dark)
  *   --ratio <16:9|4:3>   Slide aspect ratio (default: 16:9 widescreen LAYOUT_WIDE)
- *   --upload-drive       Directly upload and convert to live Google Slides deck with public write access
+ *   --upload-drive       Directly upload and convert to live Google Slides deck (private to the uploading account)
+ *   --share-anyone-writer  With --upload-drive, also let anyone with the link edit the deck (off by default)
  */
 
 import fs from 'node:fs';
@@ -27,6 +28,8 @@ import { generateHtmlDeck } from './html_slides_engine.mjs';
 
 const scriptDir = path.dirname(new URL(import.meta.url).pathname);
 const rootDir = path.resolve(scriptDir, '..');
+// Gitignored secrets.json at the repo root (.agents/skills/<skill>/ -> repo root).
+const WORKSPACE_SECRETS_PATH = path.resolve(rootDir, '../../..', 'secrets.json');
 const requireModule = createRequire(path.join(rootDir, 'package.json'));
 const PptxGenJS = requireModule('pptxgenjs');
 let sizeOf;
@@ -230,25 +233,17 @@ export async function generateScratchboxImage(prompt, aspectRatio = '21:9', work
   const baseUrl = process.env.SCRATCHBOX_BASE_URL || 'https://scratchbox.ai/api/mcp/canvas';
   let secret = process.env.SCRATCHBOX_INTERNAL_SECRET;
   if (!secret) {
-    const candidatePaths = [
-      '/Users/eligreen/dev/scratchbox-ide-master/secrets.json',
-      '/dev/secrets.json',
-      `${process.env.HOME}/dev/secrets.json`
-    ];
-    for (const p of candidatePaths) {
-      if (fs.existsSync(p)) {
-        try {
-          const d = JSON.parse(fs.readFileSync(p, 'utf8'));
-          if (d.SESSION_SECRET) {
-            secret = d.SESSION_SECRET;
-            break;
-          }
-        } catch (_) {}
-      }
+    if (fs.existsSync(WORKSPACE_SECRETS_PATH)) {
+      try {
+        secret = JSON.parse(fs.readFileSync(WORKSPACE_SECRETS_PATH, 'utf8')).SESSION_SECRET;
+      } catch (_) {}
     }
   }
   if (!secret) {
-    secret = 'LeMzrOSJU35Y3itLva3+kIJz/udHkKYGePE1rw6SzmEVYPg0qTnu1YEJmLlZeM0oOWAEoYNsEQ7ReVPVU+865A==';
+    throw new Error(
+      'Scratchbox image generation needs an internal secret: set SCRATCHBOX_INTERNAL_SECRET ' +
+      `or add SESSION_SECRET to ${WORKSPACE_SECRETS_PATH} (gitignored).`
+    );
   }
 
   const idempotencyKey = `sb-slides-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -2592,10 +2587,12 @@ export async function compileMarkdownToPptx(markdownPath, options = {}) {
 }
 
 // ============================================================================
-// 6. GOOGLE DRIVE API & PUBLIC WRITE PERMISSIONS
+// 6. GOOGLE DRIVE API & OPT-IN LINK SHARING
 // ============================================================================
 
-export async function uploadPptxToGoogleSlides(pptxPath, title) {
+// Decks stay private to the uploading account unless shareAnyoneWithLinkAsWriter
+// is set, which lets anyone holding the link edit the deck.
+export async function uploadPptxToGoogleSlides(pptxPath, title, { shareAnyoneWithLinkAsWriter = false } = {}) {
   const { JWT } = await import('google-auth-library');
 
   const saCandidates = [
@@ -2662,17 +2659,22 @@ export async function uploadPptxToGoogleSlides(pptxPath, title) {
   const json = await res.json();
   const presentationId = json.id;
 
-  try {
-    await fetch(`https://www.googleapis.com/drive/v3/files/${presentationId}/permissions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ role: 'writer', type: 'anyone' }),
-    });
-  } catch (err) {
-    console.warn('[WARN] Could not set public permission:', err.message);
+  if (shareAnyoneWithLinkAsWriter) {
+    try {
+      const permRes = await fetch(`https://www.googleapis.com/drive/v3/files/${presentationId}/permissions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ role: 'writer', type: 'anyone' }),
+      });
+      if (!permRes.ok) {
+        console.warn(`[WARN] Could not share deck with anyone-with-link: ${permRes.status} ${await permRes.text()}`);
+      }
+    } catch (err) {
+      console.warn('[WARN] Could not share deck with anyone-with-link:', err.message);
+    }
   }
 
   // Export rendered PDF directly from Drive for verification
@@ -2722,6 +2724,7 @@ Options:
   --out <path>          Output file path
   --html                Generate standalone 1920x1080 HTML presentation
   --upload-drive        Directly upload and convert to live Google Slides deck
+  --share-anyone-writer With --upload-drive, let anyone with the link edit the deck (off by default)
 `);
     process.exit(args.length === 0 ? 1 : 0);
   }
@@ -2729,6 +2732,7 @@ Options:
   const inputFile = args[0];
   const options = {};
   let shouldUploadDrive = false;
+  let shareAnyoneWithLinkAsWriter = false;
 
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--brand') options.brand = args[++i];
@@ -2744,6 +2748,7 @@ Options:
     if (args[i] === '--workspace') options.workspaceId = args[++i];
     if (args[i] === '--html') options.html = true;
     if (args[i] === '--upload-drive') shouldUploadDrive = true;
+    if (args[i] === '--share-anyone-writer') shareAnyoneWithLinkAsWriter = true;
   }
 
   compileMarkdownToPptx(inputFile, options)
@@ -2753,9 +2758,11 @@ Options:
         console.log(`[SUCCESS] Generated Interactive 1920x1080 HTML deck -> ${res.htmlPath}`);
       }
       if (shouldUploadDrive) {
-        console.log(`[DRIVE] Uploading and converting to Google Slides with public writer permissions...`);
+        console.log(shareAnyoneWithLinkAsWriter
+          ? '[DRIVE] Uploading to Google Slides; anyone with the link will be able to edit...'
+          : '[DRIVE] Uploading to Google Slides (private to the uploading account)...');
         const title = options.title || `${res.brand} Presentation | Scratchbox Studio Engine`;
-        const driveRes = await uploadPptxToGoogleSlides(res.outPath, title);
+        const driveRes = await uploadPptxToGoogleSlides(res.outPath, title, { shareAnyoneWithLinkAsWriter });
         console.log(`[SUCCESS] Live Google Slides URL: ${driveRes.editUrl}`);
       }
     })

@@ -1,7 +1,7 @@
 ---
 name: markdown-to-google-slides
 description: >-
-  Master Presentation Architect and Presentation Producer converting any Markdown (.md) document, director's treatment, project pitch, or creative brief into visually stunning, brand-native presentations. ACTIVATE this skill whenever the user wants to convert, export, transform, or output a Markdown file, treatment, brief, or proposal to Google Slides, PPTX, or an interactive web presentation deck. Incorporates core architectural invariants from Anthropic's PPTX skill, frontend-slides (fixed 1920x1080 stage), and presentation-creator (active assertion headlines, card container chunking, anti-prose rules). Supports dual-engine output: (1) pixel-perfect standalone 16:9 HTML presentations with keyboard navigation, and (2) native widescreen Google Slides / PPTX decks with public write access.
+  Master Presentation Architect and Presentation Producer converting any Markdown (.md) document, director's treatment, project pitch, or creative brief into visually stunning, brand-native presentations. ACTIVATE this skill whenever the user wants to convert, export, transform, or output a Markdown file, treatment, brief, or proposal to Google Slides, PPTX, or an interactive web presentation deck. Incorporates core architectural invariants from Anthropic's PPTX skill, frontend-slides (fixed 1920x1080 stage), and presentation-creator (active assertion headlines, card container chunking, anti-prose rules). Supports dual-engine output: (1) pixel-perfect standalone 16:9 HTML presentations with keyboard navigation, and (2) native widescreen Google Slides / PPTX decks uploaded to Google Drive (private by default; anyone-with-link editing only via the explicit --share-anyone-writer flag).
 ---
 
 # Presentation Architecture & Google Slides Skill
@@ -33,7 +33,7 @@ This skill translates raw Markdown content into high-end, pitch-winning presenta
    - Always set `margin: 0` on text frames aligning with shapes or cards to prevent accidental coordinate drift.
 7. **Dual-Engine Output**:
    - **Engine 1: Native Fixed Web Presentation** (`.html`): 16:9 (`1920×1080`) or 21:9 (`2560×1080`) zero-dependency, responsive, keyboard-navigable (`←`/`→`/Space/F).
-   - **Engine 2: Native Google Slides / PPTX Deck** (`.pptx`): Editable shapes, tables, and typography uploaded to Google Drive with automated public edit permissions.
+   - **Engine 2: Native Google Slides / PPTX Deck** (`.pptx`): Editable shapes, tables, and typography uploaded to Google Drive. Decks stay private to the uploading account; anyone-with-link edit access is granted only when `--share-anyone-writer` is passed.
 
 ---
 
@@ -320,9 +320,10 @@ node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_
 * `--palette <slug|hex>`: Select from the 12 material palettes or pass a custom 6-digit hex code.
 * `--theme <dark|light>`: Color theme mode. Defaults to `dark`.
 * `--chrome`: Injects Signature Editorial Chrome (top-left category eyebrow and bottom-right spelled-out page numbers).
-* `--scratchbox-images`: Automatically synthesizes missing or prompt-based imagery via Scratchbox MCP (`scratchbox.ai`) using Nano Banana Pro in 21:9 4K anamorphic format.
+* `--scratchbox-images`: Automatically synthesizes missing or prompt-based imagery via Scratchbox MCP (`scratchbox.ai`) using Nano Banana Pro in 21:9 4K anamorphic format. Needs `SCRATCHBOX_INTERNAL_SECRET` in the environment or `SESSION_SECRET` in the repo-root `secrets.json` (gitignored); the compiler throws if neither is set.
 * `--workspace-id <id>`: Scratchbox MCP workspace ID (defaults to `'126'`).
-* `--upload-drive`: Uploads directly to Google Drive via multipart API, sets public write permissions, and outputs the live editable Google Slides URL.
+* `--upload-drive`: Uploads directly to Google Drive via multipart API and outputs the Google Slides URL. The deck is private to the uploading account.
+* `--share-anyone-writer`: With `--upload-drive`, additionally lets anyone with the link edit the deck. Off by default; only pass it when the user explicitly asks for a publicly editable deck.
 * `--html <path.html>`: Generates a self-contained, zero-dependency interactive 21:9 HTML web deck with keyboard navigation and fullscreen support.
 * `--pdf <path.pdf>`: Compiles vector PDF via headless Chromium or LibreOffice.
 
