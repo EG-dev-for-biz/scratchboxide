@@ -494,6 +494,7 @@ struct StripStats {
     size_t images{0};
     size_t openEdgesBefore{0}, openEdgesAfter{0};
     size_t loops{0}, openChains{0}, linkedChains{0}, holesBridged{0}, forcedEars{0}, capInteriorPoints{0}, capFacingDown{0}, capDegenerate{0}, capsReversed{0};
+    size_t capFillCells{0};          // footprint cells no loop cap covered (seen from above), filled on the cap surface
     double canopyAreaM2{0}, treeCanopyAreaM2{0};
     size_t crownsTree{0}, crownsLow{0}, crownsCut{0}, crownsTooSmall{0};
     std::array<double, 3> greenDispersionQuartiles{}, otherDispersionQuartiles{};
@@ -1462,6 +1463,7 @@ private:
                 }
             }
         }
+        fillUncoveredCells(growMask);
         R.stats.capTriangles = capIsSkirt.size() - R.stats.skirtTriangles;
         for (size_t k = 0; k < capIsSkirt.size(); ++k) {
             if (capIsSkirt[k]) continue;
@@ -1488,6 +1490,85 @@ private:
         for (uint32_t v : capTris) after.push_back(capToWeld[v]);
         R.stats.openEdgesAfter = detail::countOpenEdges(after);
         R.stats.outputTriangles = after.size() / 3;
+    }
+
+    /**
+     * Seen from above, every cell of a removed tree's footprint that the scan covered must still be covered. Hole loops
+     * broken by tile seams, or folded over themselves, can leave part of a hole uncapped; those cells get a grid patch on
+     * the cap surface (one welded patch per run of cells), so the ground under a removed tree is never left open.
+     */
+    void fillUncoveredCells(const std::vector<int>& growMask) {
+        const auto& g = surf.top;
+        auto raster = [&](const Vec3& a, const Vec3& b, const Vec3& c, std::vector<uint8_t>& cov) {
+            const double d = (static_cast<double>(b.x) - a.x) * (static_cast<double>(c.z) - a.z) - (static_cast<double>(c.x) - a.x) * (static_cast<double>(b.z) - a.z);
+            if (std::abs(d) < 1e-12) return;
+            const int i0 = std::max(0, g.ix(std::min({a.x, b.x, c.x}))), i1 = std::min(g.nx - 1, g.ix(std::max({a.x, b.x, c.x})));
+            const int k0 = std::max(0, g.iz(std::min({a.z, b.z, c.z}))), k1 = std::min(g.nz - 1, g.iz(std::max({a.z, b.z, c.z})));
+            for (int k = k0; k <= k1; ++k) {
+                for (int i = i0; i <= i1; ++i) {
+                    const double x = g.cx(i), z = g.cz(k);
+                    const double w1 = ((x - a.x) * (c.z - a.z) - (c.x - a.x) * (z - a.z)) / d;
+                    const double w2 = ((b.x - a.x) * (z - a.z) - (x - a.x) * (b.z - a.z)) / d;
+                    if (w1 >= -1e-9 && w2 >= -1e-9 && 1 - w1 - w2 >= -1e-9) cov[g.id(i, k)] = 1;
+                }
+            }
+        };
+        std::vector<uint8_t> before(g.size(), 0), after(g.size(), 0);
+        std::vector<int> cellCrown(g.size(), -1);
+        for (size_t t = 0; t < T; ++t) {
+            const Vec3 &a = weldPos[wtri[3 * t]], &b = weldPos[wtri[3 * t + 1]], &c = weldPos[wtri[3 * t + 2]];
+            raster(a, b, c, before);
+            if (removedBy[t] < 0) { raster(a, b, c, after); continue; }
+            const int i = g.ix(centroid[t].x), k = g.iz(centroid[t].z);
+            if (g.in(i, k)) cellCrown[g.id(i, k)] = removedBy[t];
+        }
+        for (size_t k = 0; 3 * k + 2 < capTris.size(); ++k) raster(capPos[capTris[3 * k]], capPos[capTris[3 * k + 1]], capPos[capTris[3 * k + 2]], after);
+        std::unordered_map<uint64_t, uint32_t> corner;  // grid corner -> cap vertex, so neighbouring fill cells share edges
+        auto cornerVertex = [&](int i, int k, int crown) {
+            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(i)) << 32) | static_cast<uint32_t>(k);
+            auto it = corner.find(key);
+            if (it != corner.end()) return it->second;
+            const double x = g.x0 + i * g.cell, z = g.z0 + k * g.cell;
+            capPos.push_back(Vec3(static_cast<float>(x), static_cast<float>(capHeight(crown, x, z)), static_cast<float>(z)));
+            const uint32_t id = static_cast<uint32_t>(capPos.size() - 1);
+            corner.emplace(key, id);
+            return id;
+        };
+        // each uncovered cell takes the crown (cap surface) of the removal it lies in; cells only spanned by large removed
+        // triangles take it from the nearest uncovered cell that has one
+        std::vector<int> fillCrown(g.size(), -1);
+        std::queue<size_t> q;
+        for (size_t c = 0; c < g.size(); ++c) {
+            if (!before[c] || after[c]) continue;
+            fillCrown[c] = growMask[c] >= 0 ? growMask[c] : cellCrown[c];
+            if (fillCrown[c] >= 0) q.push(c);
+        }
+        while (!q.empty()) {
+            const size_t c = q.front();
+            q.pop();
+            const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
+            for (const auto& [di, dk] : {std::pair{1, 0}, std::pair{-1, 0}, std::pair{0, 1}, std::pair{0, -1}}) {
+                if (!g.in(i + di, k + dk)) continue;
+                const size_t n = g.id(i + di, k + dk);
+                if (!before[n] || after[n] || fillCrown[n] >= 0) continue;
+                fillCrown[n] = fillCrown[c];
+                q.push(n);
+            }
+        }
+        for (int k = 0; k < g.nz; ++k) {
+            for (int i = 0; i < g.nx; ++i) {
+                const size_t c = g.id(i, k);
+                if (!before[c] || after[c]) continue;
+                const int crown = fillCrown[c];
+                if (crown < 0) continue;
+                const uint32_t v00 = cornerVertex(i, k, crown), v10 = cornerVertex(i + 1, k, crown), v01 = cornerVertex(i, k + 1, crown), v11 = cornerVertex(i + 1, k + 1, crown);
+                // x = east, z = south: (i, k) -> (i, k + 1) -> (i + 1, k) faces up
+                capTris.insert(capTris.end(), {v00, v01, v10, v10, v01, v11});
+                capIsSkirt.push_back(0);
+                capIsSkirt.push_back(0);
+                ++R.stats.capFillCells;
+            }
+        }
     }
 
     // ---------------------------------------------------------------- output
@@ -1666,7 +1747,7 @@ inline std::string stripStatsJson(const StripResult& r) {
       << ", \"chromaVegetation\": " << st.chromaVegetationTriangles << ", \"vegetation\": " << st.vegetationTriangles << ", \"planarSurface\": " << st.surfaceTriangles << "},\n";
     s << "  \"images\": " << st.images << ",\n";
     s << "  \"openEdges\": {\"before\": " << st.openEdgesBefore << ", \"after\": " << st.openEdgesAfter << "},\n";
-    s << "  \"holes\": {\"loops\": " << st.loops << ", \"openChains\": " << st.openChains << ", \"linkedChains\": " << st.linkedChains << ", \"holesBridged\": " << st.holesBridged << ", \"forcedEars\": " << st.forcedEars << ", \"capInteriorPoints\": " << st.capInteriorPoints << ", \"capFacingDown\": " << st.capFacingDown << ", \"capDegenerate\": " << st.capDegenerate << ", \"capsReversed\": " << st.capsReversed << "},\n";
+    s << "  \"holes\": {\"loops\": " << st.loops << ", \"openChains\": " << st.openChains << ", \"linkedChains\": " << st.linkedChains << ", \"holesBridged\": " << st.holesBridged << ", \"forcedEars\": " << st.forcedEars << ", \"capInteriorPoints\": " << st.capInteriorPoints << ", \"capFacingDown\": " << st.capFacingDown << ", \"capDegenerate\": " << st.capDegenerate << ", \"capsReversed\": " << st.capsReversed << ", \"capFillCells\": " << st.capFillCells << "},\n";
     s << "  \"canopyAreaM2\": " << json::num(st.canopyAreaM2) << ",\n  \"treeCanopyAreaM2\": " << json::num(st.treeCanopyAreaM2) << ",\n";
     s << "  \"crowns\": {\"tree\": " << st.crownsTree << ", \"belowMinHeight\": " << st.crownsLow << ", \"cutAtBoundary\": " << st.crownsCut << ", \"tooSmall\": " << st.crownsTooSmall << "},\n";
     auto q3 = [](const std::array<double, 3>& q) { return "[" + json::num(q[0]) + ", " + json::num(q[1]) + ", " + json::num(q[2]) + "]"; };

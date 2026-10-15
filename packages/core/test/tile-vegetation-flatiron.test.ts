@@ -29,7 +29,7 @@ import { TileVegetationService, type TileVegetationStripResult } from '../src/no
 import { TileRefineService } from '../src/node/3d-engine/tile-refine-service';
 import { runLocationClayPipeline, type LocationClayResult } from '../src/node/3d-engine/location-clay-pipeline';
 import { decodePng, encodePng } from '../src/node/texture-processing';
-import { readGlbTriangles, renderClayPng } from './helpers/clay-glb-render';
+import { readGlbTriangles, renderClayPng, type GlbTriangles } from './helpers/clay-glb-render';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
 const TILE_NAME = 'public/models/flatiron_building_40.7411_-73.9897_120m.glb';
@@ -66,6 +66,30 @@ function trunksInTileFrame(frame: any): Trunk[] {
         const d = [E[0] - M[12], E[1] - M[13], E[2] - M[14]];
         return { x: d[0] * M[0] + d[1] * M[1] + d[2] * M[2], z: d[0] * M[8] + d[1] * M[9] + d[2] * M[10], dbhIn: t.dbhIn };
     });
+}
+
+/** 0.5 m cells, inside the given cells, whose centre a triangle covers seen from above. */
+function coveredCells(t: GlbTriangles, cells: Set<string>): Set<string> {
+    const out = new Set<string>();
+    const P = t.positions;
+    for (let i = 0; i < t.indices.length; i += 3) {
+        const a = t.indices[i] * 3, b = t.indices[i + 1] * 3, c = t.indices[i + 2] * 3;
+        const d = (P[b] - P[a]) * (P[c + 2] - P[a + 2]) - (P[c] - P[a]) * (P[b + 2] - P[a + 2]);
+        if (Math.abs(d) < 1e-12) continue;
+        const i0 = Math.floor(Math.min(P[a], P[b], P[c]) / 0.5), i1 = Math.floor(Math.max(P[a], P[b], P[c]) / 0.5);
+        const k0 = Math.floor(Math.min(P[a + 2], P[b + 2], P[c + 2]) / 0.5), k1 = Math.floor(Math.max(P[a + 2], P[b + 2], P[c + 2]) / 0.5);
+        for (let k = k0; k <= k1; k++) {
+            for (let j = i0; j <= i1; j++) {
+                const key = `${j},${k}`;
+                if (!cells.has(key) || out.has(key)) continue;
+                const x = (j + 0.5) * 0.5, z = (k + 0.5) * 0.5;
+                const w1 = ((x - P[a]) * (P[c + 2] - P[a + 2]) - (P[c] - P[a]) * (z - P[a + 2])) / d;
+                const w2 = ((P[b] - P[a]) * (z - P[a + 2]) - (x - P[a]) * (P[b + 2] - P[a + 2])) / d;
+                if (w1 >= -1e-9 && w2 >= -1e-9 && 1 - w1 - w2 >= -1e-9) out.add(key);
+            }
+        }
+    }
+    return out;
 }
 
 function insideFootprint(c: any, x: number, z: number): boolean {
@@ -167,6 +191,23 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         for (const c of onRoofs) expect(c.apexAboveSupport).toBeGreaterThanOrEqual(3);
         expect(strip.stats.openEdges.after).toBeLessThanOrEqual(strip.stats.openEdges.before);
         expect(strip.stats.triangles.removed).toBeGreaterThan(1000);
+
+        // seen from above, the ground under every removed tree is closed: no footprint cell the scan covered is open
+        // (open-edge counts alone miss a hole whose removal also took old tile seams with it)
+        const cells = new Set<string>();
+        for (const c of trees) {
+            const r = Math.max(...c.sectorRadii) + 1;
+            for (let k = Math.floor((c.stem[1] - r) / 0.5); k <= Math.floor((c.stem[1] + r) / 0.5); k++) {
+                for (let j = Math.floor((c.stem[0] - r) / 0.5); j <= Math.floor((c.stem[0] + r) / 0.5); j++) {
+                    if (insideFootprint(c, (j + 0.5) * 0.5, (k + 0.5) * 0.5)) cells.add(`${j},${k}`);
+                }
+            }
+        }
+        const before = coveredCells(readGlbTriangles(fs.readFileSync(path.join(root, 'flatiron.glb'))), cells);
+        const after = coveredCells(readGlbTriangles(fs.readFileSync(strip.devegetatedGlb)), cells);
+        const opened = [...before].filter(k => !after.has(k)).length;
+        expect(before.size).toBeGreaterThan(5000);
+        expect(opened / before.size).toBeLessThan(0.002);
     });
 
     it('runs the whole location pipeline: remeshed clay plus SB-Veggie trees within budget, with screenshots', () => {
