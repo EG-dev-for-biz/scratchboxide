@@ -22,7 +22,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as THREE from 'three';
-import { createObjectReferenceHandlers, OBJECT_REFERENCE_TOOL_DECLARATIONS, yawForHeading } from '../src/node/gemini/tools/object-reference-tools';
+import { createObjectReferenceHandlers, OBJECT_REFERENCE_TOOL_DECLARATIONS, SurfaceSampler, yawForHeading } from '../src/node/gemini/tools/object-reference-tools';
 import { generatorFileIsObject } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
@@ -96,6 +96,18 @@ const ROULETTE: ObjectBuildSpec = {
         { id: 'wheel', label: 'wheel', revolve: revolve([[0, 0], [0, 0.4], [0.05, 0.4], [0.08, 0.3], [0.08, 0]]) },
         { id: 'spindle', label: 'spindle', parentId: 'wheel', attach: { u: 1, angleDeg: 0, normalOffsetMeters: -0.005 }, revolve: revolve([[-0.01, 0], [-0.01, 0.02], [0.06, 0.015], [0.08, 0]]) }
     ]
+};
+
+/** A drum 2 m across and 0.45 m tall: its rim is a metre from its base centre. */
+const DRUM: ObjectBuildSpec = {
+    subject: 'wide low drum', observations: ['low round drum'], boundingMeters: [2, 0.45, 2], expectedBodies: 1,
+    parts: [{ id: 'drum', label: 'drum', revolve: revolve([[0, 0], [0, 1.0], [0.45, 1.0], [0.45, 0]]) }]
+};
+
+/** A pillar 1.6 m across and 10 m tall. */
+const PILLAR: ObjectBuildSpec = {
+    subject: 'tall pillar', observations: ['plain round pillar'], boundingMeters: [1.6, 10, 1.6], expectedBodies: 1,
+    parts: [{ id: 'pillar', label: 'pillar', revolve: revolve([[0, 0], [0, 0.8], [10, 0.8], [10, 0]]) }]
 };
 
 const NO_DIFFERENCES = '{"differences": []}';
@@ -259,6 +271,51 @@ function writeStagedTrees(): string {
     fs.mkdirSync(MODELS_DIR, { recursive: true });
     fs.writeFileSync(path.join(MODELS_DIR, 'staged_trees_test.glb'), makeGlb([...crown.p, ...trunk.p], [...crown.i, ...trunk.i]));
     return '/models/staged_trees_test.glb';
+}
+
+/** Flat ground at y = 1.5 over 400 m x 400 m as an n x n grid of quads (2 n^2 triangles), written with typed arrays. */
+function writeLargeTile(name: string, n: number): string {
+    const positions = new Float32Array((n + 1) * (n + 1) * 3);
+    for (let j = 0, k = 0; j <= n; j++) for (let i = 0; i <= n; i++, k += 3) {
+        positions[k] = -200 + (400 * i) / n; positions[k + 1] = 1.5; positions[k + 2] = -200 + (400 * j) / n;
+    }
+    const indices = new Uint32Array(n * n * 6);
+    for (let j = 0, k = 0; j < n; j++) for (let i = 0; i < n; i++, k += 6) {
+        const a = j * (n + 1) + i, b = a + 1, c = a + n + 1, d = c + 1;
+        indices.set([a, c, b, b, c, d], k);
+    }
+    const pos = Buffer.from(positions.buffer), idx = Buffer.from(indices.buffer);
+    const json = Buffer.from(JSON.stringify({
+        asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0, name: 'tile' }],
+        meshes: [{ name: 'tile', primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+        buffers: [{ byteLength: pos.length + idx.length }],
+        bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: pos.length }, { buffer: 0, byteOffset: pos.length, byteLength: idx.length }],
+        accessors: [
+            { bufferView: 0, componentType: 5126, count: positions.length / 3, type: 'VEC3', min: [-200, 1.5, -200], max: [200, 1.5, 200] },
+            { bufferView: 1, componentType: 5125, count: indices.length, type: 'SCALAR' }
+        ]
+    }));
+    const jsonChunk = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+    const header = Buffer.alloc(12);
+    header.write('glTF', 0, 'ascii');
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + jsonChunk.length + 8 + pos.length + idx.length, 8);
+    const chunkHeader = (length: number, type: string) => {
+        const h = Buffer.alloc(8);
+        h.writeUInt32LE(length, 0);
+        h.write(type, 4, 'ascii');
+        return h;
+    };
+    fs.mkdirSync(MODELS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(MODELS_DIR, name), Buffer.concat([header, chunkHeader(jsonChunk.length, 'JSON'), jsonChunk, chunkHeader(pos.length + idx.length, 'BIN\0'), pos, idx]));
+    return `/models/${name}`;
+}
+
+/** The longest gap between 5 ms ticks while it runs: how long the event loop was held up. */
+function lagMonitor(): { stop: () => number } {
+    let max = 0, last = Date.now();
+    const timer = setInterval(() => { const now = Date.now(); max = Math.max(max, now - last - 5); last = now; }, 5);
+    return { stop: () => { clearInterval(timer); return max; } };
 }
 
 function stagedScene(tileUri: string, treesUri?: string): (args: Record<string, unknown>, c: ToolContext) => Promise<ToolHandlerOutcome> {
@@ -729,10 +786,12 @@ describe('build_3d_object_from_reference', () => {
         await runner.ensureNativeModule();
         const real = runner.ensureNativeModule.bind(runner);
         const progress: string[] = [];
-        const fresh = vi.spyOn(runner, 'isNativeModuleFresh').mockReturnValue(false);
+        // Only the builder's first look finds the module stale (so it says a rebuild is under way); every later look,
+        // including the runner's own check before it starts Python, finds it built, as it is once a rebuild has
+        // finished. No CMake run happens in this test.
+        const fresh = vi.spyOn(runner, 'isNativeModuleFresh').mockReturnValueOnce(false);
         // The rebuild a merged engine change sets off: 8 s here, against a 6 s build limit that the build itself
-        // (a couple of seconds) stays well inside. Armed before the wait, the limit would stop it. Later calls (the
-        // runner's own, before it starts Python) find the module built, as they do once a rebuild has finished.
+        // (a couple of seconds) stays well inside. Armed before the wait, the limit would stop it.
         const slow = vi.spyOn(runner, 'ensureNativeModule')
             .mockImplementationOnce(async () => { await new Promise(resolve => setTimeout(resolve, 8000)); return real(); })
             .mockImplementation(real);
@@ -1055,7 +1114,7 @@ describe('build_3d_object_from_reference', () => {
         const data = (out.resultPayload.artifact as any).data;
         expect(data.objects.map((o: any) => o.content.metadata.source)).toEqual(['Google3DTilesClay', 'SB-Veggie', 'build_3d_object_from_reference']);
         expect(data.objectBuild.placement).toMatchObject({ surfaceYMeters: 1.5, restsOn: { id: 'tile-clay-1', source: 'Google3DTilesClay' } });
-        expect(out.summaryResult).toContain('resting on the ground surface of the tiles there, 1.5 m above the anchor\'s street level; nothing else staged there rises above that spot.');
+        expect(out.summaryResult).toMatch(/resting on the ground surface of the tiles there, 1\.5 m above the anchor's street level; nothing else staged there rises above that spot, and nothing staged there passes through the object \(checked every 0\.0\d+ m across its footprint\)\./);
         const heroId = String(out.resultPayload.objectId);
         for (const order of loadOrders(data.objects.map((o: any) => o.id))) {
             const box = seatLikeViewport(data.objects, order).get(heroId)!;
@@ -1194,6 +1253,186 @@ describe('build_3d_object_from_reference', () => {
         expect(replacing.resultPayload.stage).toBe('placement');
         expect(String(replacing.resultPayload.error)).toContain('the staged model /models/100%_plaza.glb can no longer be read, so there is nothing there to replace');
     }, 180_000);
+
+    it('fails, with its spec and spots where it fits whole, an object that would pass through another object, a tree or a wall', async () => {
+        const stageArgs: unknown[] = [];
+        const staging = stagedScene(writeStagedTiles(), writeStagedTrees());
+        const { run } = handlerWith(fakeClient({}), { stageAtLocation: async (args, c) => { stageArgs.push(args); return staging(args, c); } });
+        const location = 'Union Square, San Francisco';
+        const onScene = (artifact: any): ToolContext => ({ ...ctx(), request: { ...ctx().request, activeArtifact: artifact } as any });
+        const first = await run({ request: 'a wide low drum', specJson: JSON.stringify(DRUM), location, placement: { eastMeters: 20, northMeters: 0, headingDeg: 0 } });
+        expect(first.status, String(first.resultPayload.error)).toBe('completed');
+        const drumId = String(first.resultPayload.objectId);
+
+        // A second drum 1.2 m east: neither covers the other's base centre, but their rims overlap by 0.8 m.
+        const second = await run({ request: 'another drum next to it', specJson: JSON.stringify(DRUM), location, placement: { eastMeters: 21.2, northMeters: 0, headingDeg: 0 } }, onScene(first.resultPayload.artifact));
+        expect(second.status).toBe('failed');
+        expect(second.resultPayload.stage).toBe('placement');
+        expect(second.resultPayload.coversBasesOf).toBeUndefined();
+        const hits = second.resultPayload.intersects as Array<{ id: string; ground: boolean; depthMeters: number }>;
+        expect(hits).toHaveLength(1);
+        expect(hits[0]).toMatchObject({ id: drumId, ground: false });
+        expect(hits[0].depthMeters).toBeCloseTo(0.45, 2);
+        expect(String(second.resultPayload.error)).toContain(`"wide low drum" as built (2 x 0.45 x 2 m) would pass through "wide low drum" (${drumId}), an object built there earlier, overlapping it by up to 0.45 m`);
+        expect(second.resultPayload.spec).toEqual(DRUM);
+        const spots = second.resultPayload.clearSpots as Array<{ eastMeters: number; northMeters: number }>;
+        expect(spots.length).toBeGreaterThan(0);
+        for (const spot of spots) expect(Math.hypot(spot.eastMeters - 20, spot.northMeters), JSON.stringify(spot)).toBeGreaterThanOrEqual(1.95);
+        expect(stageArgs).toHaveLength(1);
+
+        // Rebuilt from that spec at the first spot it names, it fits, and the viewport draws the two drums apart.
+        const moved = await run({ request: 'another drum next to it', specJson: JSON.stringify(second.resultPayload.spec), location, placement: { eastMeters: spots[0].eastMeters, northMeters: spots[0].northMeters, headingDeg: 0 } }, onScene(first.resultPayload.artifact));
+        expect(moved.status, String(moved.resultPayload.error)).toBe('completed');
+        const scene = (moved.resultPayload.artifact as any).data;
+        const movedId = String(moved.resultPayload.objectId);
+        for (const order of loadOrders(scene.objects.map((o: any) => o.id))) {
+            const boxes = seatLikeViewport(scene.objects, order);
+            const a = boxes.get(drumId)!, b = boxes.get(movedId)!;
+            const apart = Math.hypot((a.min.x + a.max.x) / 2 - (b.min.x + b.max.x) / 2, (a.min.z + a.max.z) / 2 - (b.min.z + b.max.z) / 2);
+            expect(apart, order.join(' > ')).toBeGreaterThanOrEqual(1.95);
+            expect(a.min.y).toBeCloseTo(1.5, 3);
+            expect(b.min.y).toBeCloseTo(1.5, 3);
+        }
+        const seated = seatModelsLikeViewport(scene.objects, ['tile-clay-1', 'tile-trees-1', drumId, movedId]);
+        screenshotSeated(seated.models.values(), (20 + spots[0].eastMeters) / 2, -spots[0].northMeters / 2, 3, 'object_reference_drums_side_by_side.png');
+
+        // A pillar whose base centre is clear of the crown, but whose 10 m body rises through it.
+        const pillar = await run({ request: 'a tall pillar by the tree', specJson: JSON.stringify(PILLAR), location, placement: { eastMeters: 9.5, northMeters: 4, headingDeg: 0 } }, onScene(moved.resultPayload.artifact));
+        expect(pillar.status).toBe('failed');
+        expect((pillar.resultPayload.intersects as any[]).map(h => h.id)).toEqual(['tile-trees-1']);
+        expect(String(pillar.resultPayload.error)).toContain('"tall pillar" as built (1.6 x 10 x 1.6 m) would pass through the vegetation layer tile-trees-1 (SB-Veggie), overlapping it by up to');
+        for (const spot of pillar.resultPayload.clearSpots as Array<{ eastMeters: number; northMeters: number }>) {
+            // Clear of the crown (east 3..9, north 1..7) by the pillar's radius.
+            const clearOfCrown = spot.eastMeters < 3 - 0.75 || spot.eastMeters > 9 + 0.75 || spot.northMeters < 1 - 0.75 || spot.northMeters > 7 + 0.75;
+            expect(clearOfCrown, JSON.stringify(spot)).toBe(true);
+        }
+
+        // A drum whose centre is on the street west of the building block (east and north -5..5, 20 m up) but whose rim
+        // reaches into it.
+        const wall = await run({ request: 'a drum against the building', specJson: JSON.stringify(DRUM), location, placement: { eastMeters: -5.6, northMeters: 0, headingDeg: 0 } }, onScene(moved.resultPayload.artifact));
+        expect(wall.status).toBe('failed');
+        const wallHits = wall.resultPayload.intersects as Array<{ id: string; ground: boolean; depthMeters: number }>;
+        expect(wallHits.map(h => [h.id, h.ground])).toEqual([['tile-clay-1', true]]);
+        expect(wallHits[0].depthMeters).toBeCloseTo(18.5, 2);
+        expect(String(wall.resultPayload.error)).toContain('would pass through the environment layer tile-clay-1 (Google3DTilesClay), whose surface rises 18.5 m above the object\'s underside there');
+        for (const spot of wall.resultPayload.clearSpots as Array<{ eastMeters: number; northMeters: number }>) {
+            const clearOfBlock = Math.abs(spot.eastMeters) >= 5.95 || Math.abs(spot.northMeters) >= 5.95;
+            expect(clearOfBlock, JSON.stringify(spot)).toBe(true);
+        }
+        expect(stageArgs).toHaveLength(1);
+    }, 300_000);
+
+    it('adds to a scene google_3d_tiles_get_clay staged when asked to, without staging the place again', async () => {
+        const stageArgs: unknown[] = [];
+        const staging = stagedScene(writeStagedTiles(), writeStagedTrees());
+        const tilesOnly = JSON.parse(JSON.stringify((await staging({}, ctx())).resultPayload.artifact));
+        tilesOnly.title = 'Washington Square (Studio Grey Clay 3D Tiles)';
+        Object.assign(tilesOnly.data.objects[0].content.metadata, { resolvedAddress: 'Washington Square, New York, NY 10012, USA', remeshed: true });
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const { run, pythonRuns } = handlerWith(client, { stageAtLocation: async (args, c) => { stageArgs.push(args); return staging(args, c); } });
+        const onScene = (artifact: any): ToolContext => ({ ...ctx(), request: { ...ctx().request, activeArtifact: artifact } as any });
+        const location = 'Washington Square Park';
+        const placement = { eastMeters: 12, northMeters: 8, headingDeg: 90 };
+
+        // Unasked, a scene no object build staged is not taken to be this place: the place is staged afresh.
+        const fresh = await run({ request: 'the vase', specJson: JSON.stringify(VASE), location, placement }, onScene(tilesOnly));
+        expect(fresh.status, String(fresh.resultPayload.error)).toBe('completed');
+        expect(stageArgs).toEqual([{ query: location }]);
+        expect(fresh.summaryResult).toContain('Staged at Union Square, San Francisco, CA on remeshed Google 3D Tiles in clay');
+
+        // Asked, the active scene's tiles and trees are used as they are.
+        const added = await run({ request: 'the vase', specJson: JSON.stringify(VASE), location, placement, addToActiveScene: true }, onScene(tilesOnly));
+        expect(added.status, String(added.resultPayload.error)).toBe('completed');
+        expect(stageArgs).toHaveLength(1);
+        const data = (added.resultPayload.artifact as any).data;
+        expect(data.objects.map((o: any) => o.id)).toEqual(['tile-clay-1', 'tile-trees-1', added.resultPayload.objectId]);
+        expect(data.geoAnchor).toEqual(tilesOnly.data.geoAnchor);
+        expect(data.objectBuild.location).toEqual({ query: location, resolvedAddress: 'Washington Square, New York, NY 10012, USA', geoAnchor: tilesOnly.data.geoAnchor, staging: 'reused from the active scene' });
+        expect(added.summaryResult).toContain('Reused the remeshed Google 3D Tiles in clay already staged at Washington Square, New York, NY 10012, USA in the active scene (no new geocode or extraction)');
+        expect((added.resultPayload.artifact as any).title).toBe('fluted vase with a knob at Washington Square, New York, NY 10012, USA');
+
+        // Asked to add to a scene with nothing staged to stand on, it fails before anything is built, billed or staged.
+        const runs = pythonRuns.length;
+        const studio = { id: 'studio', type: '3d-scene', title: 'Vase', data: { objects: [] } };
+        const refused = await run({ request: 'a vase', location, placement, addToActiveScene: true }, onScene(studio));
+        expect(refused.status).toBe('failed');
+        expect(refused.resultPayload.stage).toBe('staging');
+        expect(String(refused.resultPayload.error)).toContain('addToActiveScene: the object cannot be added to the active scene, because the active scene has no staged ground layer');
+        const onDoc = await run({ request: 'a vase', specJson: JSON.stringify(VASE), location, placement, addToActiveScene: true }, onScene({ id: 'd', type: 'markdown-document', title: 'Notes', data: {} }));
+        expect(String(onDoc.resultPayload.error)).toContain('because the active canvas artifact is not a 3D scene');
+        expect(client.calls).toHaveLength(0);
+        expect(pythonRuns).toHaveLength(runs);
+        expect(stageArgs).toHaveLength(1);
+        const noPlace = await run({ request: 'a vase', addToActiveScene: true }, onScene(tilesOnly));
+        expect(String(noPlace.resultPayload.error)).toContain('addToActiveScene adds the object to the place the active scene shows');
+    }, 180_000);
+
+    it('reports a stop while staging or placing as a stop', async () => {
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const placement = { eastMeters: 12, northMeters: 8, headingDeg: 90 };
+        const during = new AbortController();
+        const aborting = handlerWith(client, {
+            stageAtLocation: async () => {
+                during.abort();
+                throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+            }
+        });
+        const out = await aborting.run({ request: 'a vase', location: 'Somewhere else', placement }, { ...ctx(), signal: during.signal });
+        expect(out.status).toBe('failed');
+        expect(out.resultPayload).toMatchObject({ stage: 'staging', aborted: true, error: 'Stopped by the user.', location: 'Somewhere else' });
+        expect(out.summaryResult).toBe('Failed: Stopped by the user.');
+
+        // Staging that finishes after the stop is not placed or built on.
+        const after = new AbortController();
+        const staging = stagedScene(writeStagedTiles());
+        const late = await handlerWith(client, { stageAtLocation: async (args, c) => { after.abort(); return staging(args, c); } })
+            .run({ request: 'a vase', location: 'Union Square, San Francisco', placement }, { ...ctx(), signal: after.signal });
+        expect(late.resultPayload).toMatchObject({ stage: 'staging', aborted: true, error: 'Stopped by the user.' });
+        expect(client.calls).toHaveLength(0);
+    });
+
+    it('reads a large staged tile in slices without holding up the event loop, once while it is unchanged, and stops while reading it', async () => {
+        const tileUri = writeLargeTile('large_tile_test.glb', 900);
+        const tileFile = path.join(MODELS_DIR, 'large_tile_test.glb');
+        // What reading and binning this tile costs in one go (the sampler built straight through).
+        const started = Date.now();
+        expect(SurfaceSampler.fromGlb(fs.readFileSync(tileFile))!.heightAt(0, 0)).toBeCloseTo(1.5, 5);
+        const syncMs = Date.now() - started;
+        expect(syncMs).toBeGreaterThan(150);
+
+        const location = 'Union Square, San Francisco';
+        const { run } = handlerWith(fakeClient({}), { stageAtLocation: stagedScene(tileUri) });
+        const reads = vi.spyOn(fs.promises, 'readFile');
+        const tileReads = () => reads.mock.calls.filter(call => path.resolve(String(call[0])) === path.resolve(tileFile)).length;
+        try {
+            const lag = lagMonitor();
+            const first = await run({ request: 'the vase', specJson: JSON.stringify(VASE), location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } });
+            const maxLagMs = lag.stop();
+            expect(first.status, String(first.resultPayload.error)).toBe('completed');
+            expect(tileReads()).toBe(1);
+            // Read in one go, the loop would wait the whole syncMs; in slices it waits a small part of it.
+            expect(maxLagMs, `longest stall ${maxLagMs} ms against ${syncMs} ms for the whole read`).toBeLessThan(syncMs / 2);
+
+            // Another object at the place: the unchanged tile is not read again.
+            const onScene: ToolContext = { ...ctx(), request: { ...ctx().request, activeArtifact: first.resultPayload.artifact } as any };
+            const second = await run({ request: 'a roulette wheel', specJson: JSON.stringify(ROULETTE), location, placement: { eastMeters: 20, northMeters: 8, headingDeg: 0 } }, onScene);
+            expect(second.status, String(second.resultPayload.error)).toBe('completed');
+            expect(tileReads()).toBe(1);
+        } finally {
+            reads.mockRestore();
+        }
+
+        // A stop while another large tile is being read ends the call as a stop, before the read would have finished.
+        const otherUri = writeLargeTile('large_tile_test_2.glb', 900);
+        const controller = new AbortController();
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const stop = handlerWith(client, { stageAtLocation: async (args, c) => { setTimeout(() => controller.abort(), 20); return stagedScene(otherUri)(args, c); } });
+        const stopStarted = Date.now();
+        const stopped = await stop.run({ request: 'a vase', location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } }, { ...ctx(), signal: controller.signal });
+        expect(stopped.resultPayload).toMatchObject({ stage: 'placement', aborted: true, error: 'Stopped by the user.' });
+        expect(Date.now() - stopStarted).toBeLessThan(syncMs);
+        expect(client.calls).toHaveLength(0);
+    }, 300_000);
 
     it('the Python runner kills the script when its signal aborts', async () => {
         const controller = new AbortController();
