@@ -16,6 +16,7 @@ import type { LspDiagnosticFeedbackService } from '../lsp-diagnostic-feedback-se
 import type { ConversationDiffMemoryService } from '../conversation-diff-memory-service';
 import type { UserMemoriesService } from '../user-memories-service';
 import type { WorkspaceConfigService } from '../workspace-config-service';
+import { isReadOnlyMode } from './tool-permissions';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -443,8 +444,9 @@ Output complete, high-quality, fully runnable React 19 code with Tailwind CSS, L
 
 
 /**
- * One policy for every prompt: the model decides from the request's meaning which 3D tool fits. Nothing here is
- * keyed on words in the prompt.
+ * One policy for every prompt in the modes that offer the 3D tools (not Plan or Ask, which offer only read-only
+ * tools): the model decides from the request's meaning which 3D tool fits. Nothing here is keyed on words in the
+ * prompt.
  */
 export const SPATIAL_INTENT_POLICY = `
 
@@ -454,7 +456,8 @@ Decide from the meaning of the request, not from particular words, which case ap
 - An imagined environment, a landscape, or a scene of several objects (anything that is neither one object nor a real place): write an sb Python script and run it with execute_3d_python_script. Call read_sb_script_guide before writing the script unless its rules ("WRITING SB PYTHON SCRIPTS") are already in these instructions.
 - A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place and returns its Google 3D Tiles remeshed in studio grey clay; tell the user what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
 - One object at a real-world place: call build_3d_object_from_reference with location set to the place and placement set to where the object stands relative to the place's geocoded anchor (metres east and north of it, and the compass heading its front faces), worked out from what the user said, such as in front of an entrance or across a square. The anchor is often the middle of a building, so an object meant to stand beside it needs an offset.
-Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. execute_3d_python_script also builds supporting geometry such as a plinth and changes scenes a script built; an object from build_3d_object_from_reference is changed by editing SPEC in its pythonGenerator.sourceCode and running that script with execute_3d_python_script. Do not build real places with scripts.
+Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. Do not build real places with scripts.
+To change an object that build_3d_object_from_reference built (its shape or size, or a base or plinth under it, added as parts), call build_3d_object_from_reference again with specJson set to its spec (data.objectBuild.spec) with the change made, and with the same location and placement when it stands at a place; that rebuilds the spec as given, keeps it where it stood, and draws no new reference. execute_3d_python_script changes scenes a script built.
 New objects and places start in studio grey clay with studio lighting and no ground. After building one, offer follow-ups in two groups instead of doing them: staging and environments (a real-world place, a plinth or cyclorama, atmosphere and sun position, or the studio void), then textures and materials (PBR, 2DGS surfels, 3DGS splats, algorithmic micro-texture).
 When one of these tools fails, report its error; do not substitute another tool's output.`;
 
@@ -911,14 +914,31 @@ If a task needs a capability that is not available natively (e.g. neural image-t
         ? await buildSkillIndexSection(request.workspaceRoot, services.workspaceConfig, (request.attachedSkills || []).map(sk => sk.name))
         : '';
 
-    // The 3D intent policy goes to every prompt; the script guide only while a script-built scene is being worked on.
-    const spatialSection = SPATIAL_INTENT_POLICY + (!isPlan && !isAsk && scriptingInPlay(request) ? SB_PYTHON_SCRIPT_GUIDE : '');
+    // The 3D intent policy goes to every prompt in a mode that offers the 3D tools (Plan and Ask offer only read-only
+    // tools, the same test the tool registry applies); the script guide only while a script-built scene is worked on.
+    const spatialSection = isReadOnlyMode(request.mode) ? '' : SPATIAL_INTENT_POLICY + (scriptingInPlay(request) ? SB_PYTHON_SCRIPT_GUIDE : '');
 
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
         : '\n\nDeliver insightful, Cupertino-grade results. Output a friendly intro explanation followed by the complete ```json codeblock.';
 
     return `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${skillIndexSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${spatialSection}${closingInstruction}`;
+}
+
+/**
+ * The spec of the object in the active scene, when build_3d_object_from_reference built it, so a follow-up turn can
+ * change that object: earlier tool results are not in the chat history. Decided from the scene's state, never from
+ * words in the prompt. The spec is given whole, since a cut-off spec cannot be edited and rebuilt.
+ */
+export function activeObjectBuildContext(sceneData: Scene3DData | undefined): string {
+    const build = (sceneData as { objectBuild?: { spec?: unknown; location?: { query?: unknown }; placement?: Record<string, unknown> } } | undefined)?.objectBuild;
+    if (!build?.spec || typeof build.spec !== 'object') return '';
+    const query = typeof build.location?.query === 'string' ? build.location.query : undefined;
+    const p = build.placement;
+    const where = query && p
+        ? ` at location "${query}" with placement ${JSON.stringify({ eastMeters: p.eastMeters, northMeters: p.northMeters, headingDeg: p.headingDeg })}`
+        : ' in a studio void';
+    return `\n[Active object build: build_3d_object_from_reference built this scene's object${where}. To change the object, make the change in this spec and pass the whole spec as specJson to build_3d_object_from_reference${query ? ', with the same location and placement unless the user moves it' : ''}. Spec: ${JSON.stringify(build.spec)}]`;
 }
 
 /**
@@ -947,7 +967,7 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
         userPrompt += `\n\n[ACTIVE 3D SCENE: "${request.activeArtifact?.title || '3D Scene'}" is on the canvas.
 1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one.
 2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To build an object at a place, call build_3d_object_from_reference with location and placement.
-3. To stage the active scene on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal), call execute_3d_python_script to build the plinth and set the hero asset on it with sb.layout.
+3. To stage the active scene on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal): when its object was built by build_3d_object_from_reference, add the plinth as parts of that object's spec and rebuild it with build_3d_object_from_reference (specJson); otherwise call execute_3d_python_script to build the plinth and set the hero asset on it with sb.layout.
 4. Do not replace the scene with a Markdown document unless the user asks for a document, and offer further steps (such as materials and textures) as follow-ups.]`;
     }
 
@@ -1001,6 +1021,7 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
                 recentOperators: (sceneData.operatorStack || []).slice(-10)
             };
             userPrompt += `\n[Active 3D Scene In-Memory State: ${JSON.stringify(sceneSummary).slice(0, 5000)}]`;
+            userPrompt += activeObjectBuildContext(sceneData);
         }
     }
 

@@ -9,17 +9,18 @@
 
 /**
  * Routing is the model's decision: no regex on the prompt adds a directive to it (3D, location, video timeline or
- * Gaussian splat), one 3D intent policy reaches every prompt through the system instruction, and the long sb script
- * guide is read on demand instead of riding along in every instruction.
+ * Gaussian splat), one 3D intent policy reaches every prompt through the system instruction in the modes that offer
+ * the 3D tools, an object build on the canvas is changed by rebuilding its spec where it stands, and the long sb
+ * script guide is read on demand instead of riding along in every instruction.
  */
 
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { buildContents, buildSystemInstruction, scriptingInPlay, SB_PYTHON_SCRIPT_GUIDE, SPATIAL_INTENT_POLICY } from '../src/node/gemini/prompt-builder';
+import { activeObjectBuildContext, buildContents, buildSystemInstruction, scriptingInPlay, SB_PYTHON_SCRIPT_GUIDE, SPATIAL_INTENT_POLICY } from '../src/node/gemini/prompt-builder';
 import { OBJECT_REFERENCE_TOOL_DECLARATIONS } from '../src/node/gemini/tools/object-reference-tools';
 import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers } from '../src/node/gemini/tools/sb-script-guide-tools';
-import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
+import { buildToolDeclarations, createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { CORE_WORKSPACE_PACK } from '../src/node/gemini/domain-tool-packs';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
 
@@ -89,13 +90,47 @@ describe('routing: no prompt-word directives', () => {
 });
 
 describe('3D intent policy', () => {
-    it('reaches every prompt in every mode', async () => {
+    it('reaches every prompt in the modes that offer its tools, and no prompt in Plan or Ask, which do not', async () => {
+        const registry = createDefaultToolRegistry();
         for (const mode of ['agent', 'plan', 'ask', 'studio', undefined]) {
             for (const prompt of PROMPTS) {
-                const system = await buildSystemInstruction({ prompt, mode } as GeminiGenerateRequest);
-                expect(system, `${mode}: ${prompt}`).toContain(SPATIAL_INTENT_POLICY);
+                const request = { prompt, mode } as GeminiGenerateRequest;
+                const system = await buildSystemInstruction(request);
+                const offered = (buildToolDeclarations(request, registry) || []).flatMap(t => t.functionDeclarations || []).map(d => d.name);
+                const offersTools = ['build_3d_object_from_reference', 'execute_3d_python_script', 'google_3d_tiles_get_clay'].every(n => offered.includes(n));
+                if (mode === 'plan' || mode === 'ask') {
+                    expect(offered, `${mode}: ${prompt}`).not.toContain('build_3d_object_from_reference');
+                    expect(system, `${mode}: ${prompt}`).not.toContain(SPATIAL_INTENT_POLICY);
+                    expect(system, `${mode}: ${prompt}`).not.toMatch(/call (build_3d_object_from_reference|execute_3d_python_script|google_3d_tiles_get_clay)/);
+                } else {
+                    expect(system, `${mode}: ${prompt}`).toContain(SPATIAL_INTENT_POLICY);
+                    expect(offersTools, `${mode}: ${prompt}`).toBe(true);
+                }
             }
         }
+    });
+
+    it('changes a built object by rebuilding its edited spec where it stands, not with a script', () => {
+        expect(SPATIAL_INTENT_POLICY).toMatch(/To change an object that build_3d_object_from_reference built[^\n]*specJson[^\n]*same location and placement/);
+        expect(SPATIAL_INTENT_POLICY).not.toContain('editing SPEC');
+        expect(SPATIAL_INTENT_POLICY).not.toContain('supporting geometry such as a plinth');
+        const params = OBJECT_REFERENCE_TOOL_DECLARATIONS[0].parameters!.properties!;
+        expect(params.specJson.type).toBe('STRING');
+        expect(OBJECT_REFERENCE_TOOL_DECLARATIONS[0].description).toContain('pass the same location and placement to keep it where it stood');
+    });
+
+    it('gives a follow-up turn the active object build\'s whole spec, decided from the scene, not the words', () => {
+        const spec = { subject: 'vase', observations: [], boundingMeters: [0.3, 0.6, 0.3], expectedBodies: 1, parts: [{ id: 'body', label: 'body', revolve: { meridian: Array.from({ length: 400 }, (_, i) => [i / 400, 0.1]) } }] };
+        const staged = { id: 'o', type: '3d-scene', title: 'Vase at Union Square', data: { title: 'Vase', objects: [], objectBuild: { spec, location: { query: 'Union Square, San Francisco' }, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90, sceneX: 12, sceneZ: -8, yawDeg: 90, surfaceYMeters: 1.5 } } } };
+        const forTaller = userText({ prompt: 'make it taller', activeArtifact: staged as any });
+        const forOther = userText({ prompt: 'what is this?', activeArtifact: staged as any });
+        expect(forTaller.replace('make it taller', '')).toBe(forOther.replace('what is this?', ''));
+        expect(forTaller).toContain(`Spec: ${JSON.stringify(spec)}]`);
+        expect(forTaller).toContain('at location "Union Square, San Francisco" with placement {"eastMeters":12,"northMeters":8,"headingDeg":90}');
+        expect(forTaller).toContain('pass the whole spec as specJson to build_3d_object_from_reference, with the same location and placement');
+        expect(forTaller).toContain('add the plinth as parts of that object\'s spec and rebuild it with build_3d_object_from_reference (specJson)');
+        expect(activeObjectBuildContext({ ...staged.data, objectBuild: { spec } } as any)).toContain('in a studio void');
+        expect(userText({ prompt: 'make it taller', activeArtifact: PLAIN_SCENE as any })).not.toContain('Active object build');
     });
 
     it('names one tool for each kind of request and leaves geocoding to the tools', () => {
