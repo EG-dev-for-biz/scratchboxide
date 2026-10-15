@@ -14,6 +14,7 @@ import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngin
 import {
     createDefaultStationImageGenerator,
     createArchitecturalStationGenerator,
+    hasStationImageCredentials,
     type StationImageGenerator
 } from './BeautifyStationService';
 import { resolveSurveyPreset } from './survey-router';
@@ -214,7 +215,11 @@ export class Location3DGaussianSplatService {
                         return encodePng(b.width, b.height, out);
                     }
                 };
-            } else {
+            } else if (req.forceRebake !== false || hasStationImageCredentials()) {
+                // Every plate is painted unless cached plates may be reused, so then the image model (and its
+                // credentials) is required up front and a missing key fails here, before any station is rendered.
+                // With forceRebake: false and no credentials no generator is built: cached plates are reused, and a
+                // station without one fails in SurveySplatPipelineService, naming the station and the missing plate.
                 const isDraft = req.draft === true || req.fidelity === 'draft';
                 generator = createDefaultStationImageGenerator({
                     workspaceRoot: root,

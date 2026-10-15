@@ -14,6 +14,7 @@ import { buildStationBeautifyPrompt, type StationBeautifyContext } from '../../b
 import { cameraBasis, yawPitchFromForward, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose } from '../../common/spatial/colmap-vector-reference-types';
 import { decodePng, encodePng, type StoneAlbedoPreset } from '../texture-processing';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 
 /** Pluggable image model. The default implementation (createGoogleStationImageGenerator) uses Nano Banana / Gemini image. */
 export interface StationImageGenerator {
@@ -658,6 +659,6 @@ export function createDefaultStationImageGenerator(deps: {
         });
     }
     if (deps.allowProceduralGenerator) return createArchitecturalStationGenerator();
-    throw new Error('Station image generation needs GEMINI_API_KEY or GOOGLE_API_KEY; pass allowProceduralGenerator: true to use the offline procedural painter instead.');
+    throw new MissingInputError('station image generation', 'GEMINI_API_KEY or GOOGLE_API_KEY', 'neither is set; pass allowProceduralGenerator: true to use the offline procedural painter instead');
 }
 

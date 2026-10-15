@@ -50,6 +50,20 @@ afterAll(() => {
   for (const dir of tempDirs) fs.removeSync(dir);
 });
 
+/** Runs `fn` with the station image model's credentials unset, so no billed image call can be made. */
+async function withoutStationImageCredentials<T>(fn: () => Promise<T>): Promise<T> {
+  const saved = { GEMINI_API_KEY: process.env.GEMINI_API_KEY, GOOGLE_API_KEY: process.env.GOOGLE_API_KEY, SCRATCHBOX_STATION_IMAGE_GENERATOR: process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR };
+  for (const key of Object.keys(saved)) delete process.env[key];
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 function decodeRgba(pngBuffer: Buffer): { width: number; height: number; data: Buffer } {
   // Simple PNG chunk reader or luminance inspector
   // Fallback to basic dimension/byte verification
@@ -221,7 +235,9 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     const extraction = redRocksGlb.ok ? undefined : injectTileExtraction();
     const service = new Location3DGaussianSplatService({ workspaceRoot });
 
-    const result = await service.generate({
+    // No generator and no image-model credentials: with forceRebake: false the service builds no image generator,
+    // so every station must bake from its cached plate. A station without one fails the run (success: false).
+    const result = await withoutStationImageCredentials(() => service.generate({
       location: 'Red Rocks Amphitheatre',
       ...(redRocksGlb.ok ? { glbPath: path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb') } : {}),
       lat: 39.66555,
@@ -233,9 +249,14 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
       bakeStride: 2,
       outDir,
       forceRebake: false // reuse cached station plates instead of regenerating them
-    });
+    }));
 
+    expect(result.error).toBeUndefined();
     expect(result.success).toBe(true);
+    const meta = await fs.readJson(result.metaPath);
+    expect(meta.generator).toBe('cached-beautified-plates');
+    expect(meta.stations.length).toBe(result.stationCount);
+    for (const st of meta.stations) expect(st.qc.reason).toBe('cached plate reused; QC not re-run');
     expect(result.locationName).toContain('Red Rocks');
     expect(result.geoAnchor.lat).toBeCloseTo(39.66555, 3);
     expect(result.geoAnchor.lng).toBeCloseTo(-105.20525, 3);
@@ -249,5 +270,31 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
       expect(extraction).toHaveBeenCalledTimes(1);
       extraction.mockRestore();
     }
+  });
+
+  it('8. Fails up front with a typed error when every plate must be painted and no image model is configured', async () => {
+    const { Location3DGaussianSplatService } = await import('../src/node/spatial/Location3DGaussianSplatService');
+    const { MissingInputError } = await import('../src/common/errors/pipeline-errors');
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-red-rocks-nokey-'));
+    tempDirs.push(workspaceRoot);
+    // The GLB is only checked for existence before the generator is resolved; nothing is rendered.
+    const glbPath = path.join(workspaceRoot, 'unrendered.glb');
+    await fs.writeFile(glbPath, Buffer.from('glTF'));
+    const service = new Location3DGaussianSplatService({ workspaceRoot });
+
+    const run = withoutStationImageCredentials(() => service.generate({
+      location: 'Red Rocks Amphitheatre',
+      glbPath,
+      lat: 39.66555,
+      lng: -105.20525,
+      elevation: 1932.0,
+      cameraCount: 4,
+      outDir: path.join(workspaceRoot, 'out')
+    }));
+
+    await expect(run).rejects.toBeInstanceOf(MissingInputError);
+    await expect(run).rejects.toThrow(/GEMINI_API_KEY or GOOGLE_API_KEY/);
+    // No station was rendered or written.
+    expect(await fs.pathExists(path.join(workspaceRoot, 'out/stations'))).toBe(false);
   });
 });
