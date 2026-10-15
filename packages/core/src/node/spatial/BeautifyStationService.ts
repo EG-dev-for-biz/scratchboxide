@@ -265,6 +265,18 @@ export class BeautifyStationService {
         };
     }
 
+    /**
+     * Geometry QC of an image made earlier for `station` (for example a plate cached on disk), against `renderer`'s
+     * mesh: the same edge-alignment check a freshly generated image gets. Nothing is generated.
+     */
+    static verifyStationImage(renderer: SurveyStationRenderService, station: ColmapCameraPose, blockout: StationBlockoutRender, rgba: Buffer, width: number, height: number, thresholds?: BeautifyStationOptions['qc']): { qc: BeautifyQc; aligned: ColmapCameraPose } {
+        const verifier = new BeautifyStationService(renderer, {
+            name: 'geometry-qc',
+            generate: async () => { throw new Error('verifyStationImage checks an existing image and generates none'); }
+        });
+        return verifier.runQc(station, blockout, rgba, width, height, thresholds);
+    }
+
     /** Edge-align the generated image against mesh silhouettes rendered from perturbed poses; report the pose delta. */
     private runQc(station: ColmapCameraPose, blockout: StationBlockoutRender, rgba: Buffer, width: number, height: number, thresholds: BeautifyStationOptions['qc'] = {}): { qc: BeautifyQc; aligned: ColmapCameraPose } {
         const maxYaw = thresholds.maxYawDeg ?? 0.5, maxPitch = thresholds.maxPitchDeg ?? 0.5, maxPos = thresholds.maxPositionM ?? 0.8;
@@ -329,6 +341,14 @@ export class BeautifyStationService {
         const initialEdges = renderFunc(initial);
         const initMetrics = evaluateEdgeOverlap(queryField, initialEdges);
         const minOverlap = thresholds.minOverlapPercent ?? 85.0;
+        // With no edges in the image (blank or flat) or in the mesh's view, the alignment has nothing to move against,
+        // so a pose that "did not move" proves nothing: it fails instead of passing by default.
+        if (initMetrics.edgeCount === 0) {
+            return {
+                qc: { overlapPercent: initMetrics.overlapScorePercent, residualPx: initMetrics.residualPx, deltaYawDeg: Number.NaN, deltaPitchDeg: Number.NaN, deltaPositionM: Number.NaN, passed: false, reason: 'there are no edges to check the image against the mesh (the image or the mesh view has none)' },
+                aligned: station
+            };
+        }
         if (initMetrics.overlapScorePercent >= 90.0 || thresholds.maxIterations === 0) {
             // Draft mode skips optimization, not QC: a poor initial overlap still fails and triggers a reroll.
             const passed = initMetrics.overlapScorePercent >= minOverlap;
@@ -366,6 +386,7 @@ export class BeautifyStationService {
         const dPitch = Math.abs(a1.pitchDegrees - a0.pitchDegrees);
         const dPos = Math.hypot(fp.x - initial.x, fp.y - initial.y, fp.z - initial.z);
         const reasons: string[] = [];
+        if (!(metrics.overlapScorePercent > 0)) reasons.push('no edge of the image lines up with the mesh at any pose tried');
         if (dYaw > maxYaw) reasons.push(`yaw moved ${dYaw.toFixed(2)} deg (> ${maxYaw})`);
         if (dPitch > maxPitch) reasons.push(`pitch moved ${dPitch.toFixed(2)} deg (> ${maxPitch})`);
         if (dPos > maxPos) reasons.push(`position moved ${dPos.toFixed(2)} m (> ${maxPos})`);

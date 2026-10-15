@@ -53,12 +53,4 @@ describe('Pipelines refuse to substitute invented output', () => {
         await expect(service.generatePanoramaDepth(img, { outDir, allowHeuristicFallback: true } as any)).rejects.toThrow(/Depth model failed/);
         expect(fs.readdirSync(outDir).filter(f => f.endsWith('.depth.f32'))).toEqual([]);
     });
-
-    it('a cached station plate is reported as not re-checked rather than given typed-in QC scores', () => {
-        const qc = SurveySplatPipelineService.cachedPlateQc();
-        expect(qc.passed).toBe(false);
-        expect(Number.isNaN(qc.overlapPercent)).toBe(true);
-        expect(Number.isNaN(qc.residualPx)).toBe(true);
-        expect(qc.reason).toMatch(/not re-run|not re-checked/i);
-    });
 });

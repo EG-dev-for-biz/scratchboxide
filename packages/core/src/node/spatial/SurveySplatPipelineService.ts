@@ -158,19 +158,6 @@ export class SurveySplatPipelineService {
         }
     }
 
-    /** QC for a station whose plate was reused from disk: nothing was re-measured. */
-    static cachedPlateQc(): BeautifyStationResult['qc'] {
-        return {
-            passed: false,
-            overlapPercent: Number.NaN,
-            residualPx: Number.NaN,
-            deltaYawDeg: Number.NaN,
-            deltaPitchDeg: Number.NaN,
-            deltaPositionM: Number.NaN,
-            reason: 'cached plate reused; QC not re-run'
-        };
-    }
-
     async ensureBaker(): Promise<string> {
         const src = path.resolve(process.cwd(), 'scripts/station_to_splats.cpp');
         if (fs.existsSync(this.bakerPath)) {
@@ -216,53 +203,72 @@ export class SurveySplatPipelineService {
                 const beautifiedPath = `${base}_beautified.png`;
                 const blockoutPath = `${base}_blockout.png`;
 
-                if (!req.forceRebake) {
-                    const stStat = await fs.stat(splatPath).catch(() => null);
-                    const bStat = await fs.stat(beautifiedPath).catch(() => null);
-                    if (stStat && stStat.size > 100000 && fs.existsSync(posePath) && (!bStat || stStat.mtimeMs >= bStat.mtimeMs)) {
-                        report(0.05 + 0.7 * (i / stations.length), `Reusing cached station ${st.id} (${i + 1}/${stations.length})`);
-                        const pose = await fs.readJson(posePath).catch(() => null);
-                        const splatCount = Math.floor(stStat.size / 32);
-                        const posENU: [number, number, number] = (pose?.eye || st.positionLocalENU) as [number, number, number];
-                        const fwdVec: [number, number, number] = (pose?.forward || st.forwardVector) as [number, number, number];
-                        const rep: SurveySplatStationReport = {
-                            stationId: st.id, accepted: true, attempts: 1, usedReference: false, splatCount, splatPath,
-                            imagePath: beautifiedPath, blockoutPath,
-                            qc: SurveySplatPipelineService.cachedPlateQc(),
+                const rejectedPath = `${base}_rejected.png`;
+                const pctOf = (qc: BeautifyStationResult['qc']) => `overlap ${qc.overlapPercent.toFixed(1)}%${qc.reason ? `; ${qc.reason}` : ''}`;
+
+                // A plate (or the splat baked from it) found on disk is reused only after it passes the same geometry
+                // QC against this mesh that a fresh image gets; one that fails is moved aside, never baked.
+                let res: BeautifyStationResult | undefined;
+                let reuseNote: string | undefined;
+                if (!req.forceRebake && (await fs.pathExists(beautifiedPath))) {
+                    report(0.05 + 0.7 * (i / stations.length), `Checking the beautified image already on disk for station ${st.id} (${i + 1}/${stations.length})`);
+                    const imagePng = await fs.readFile(beautifiedPath);
+                    const dec = decodePng(imagePng);
+                    const blockout = renderer.renderStationBlockout(st, { width: dec.width, height: dec.height });
+                    await fs.outputFile(blockoutPath, blockout.png);
+                    const verified = BeautifyStationService.verifyStationImage(renderer, st, blockout, dec.rgba, dec.width, dec.height, req.draft ? { maxIterations: 0 } : undefined);
+                    if (verified.qc.passed) {
+                        const stStat = await fs.stat(splatPath).catch(() => null);
+                        const bStat = await fs.stat(beautifiedPath);
+                        if (stStat && stStat.size > 100000 && fs.existsSync(posePath) && stStat.mtimeMs >= bStat.mtimeMs) {
+                            report(0.05 + 0.7 * (i / stations.length), `Reusing cached station ${st.id} (${i + 1}/${stations.length})`);
+                            const pose = await fs.readJson(posePath).catch(() => null);
+                            const posENU: [number, number, number] = (pose?.eye || verified.aligned.positionLocalENU || st.positionLocalENU) as [number, number, number];
+                            const fwdVec: [number, number, number] = (pose?.forward || verified.aligned.forwardVector || st.forwardVector) as [number, number, number];
+                            reports.push({
+                                stationId: st.id, accepted: true, attempts: 0, usedReference: false, splatCount: Math.floor(stStat.size / 32), splatPath,
+                                imagePath: beautifiedPath, blockoutPath,
+                                qc: verified.qc,
+                                prompt: `Photorealistic view of station ${st.id}`,
+                                positionLocalENU: posENU,
+                                forwardVector: fwdVec,
+                                name: st.name,
+                                imageSource: `Reused the station splat already on disk at ${splatPath}, after its beautified plate passed geometry QC again (${pctOf(verified.qc)}); no image was generated.`
+                            });
+                            bakedStations.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
+                            continue;
+                        }
+                        res = {
+                            station: st,
+                            alignedStation: verified.aligned,
                             prompt: `Photorealistic view of station ${st.id}`,
-                            positionLocalENU: posENU,
-                            forwardVector: fwdVec,
-                            name: st.name,
-                            imageSource: `Reused the station splat already on disk at ${splatPath}; no image was generated.`
+                            blockout,
+                            imagePng,
+                            image: { width: dec.width, height: dec.height, rgba: dec.rgba },
+                            qc: verified.qc,
+                            accepted: true,
+                            attempts: 0,
+                            // The plate was made earlier, by whatever model was used then; this run did not generate it.
+                            generator: 'cached-beautified-plate'
                         };
-                        bakedStations.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
-                        reports.push(rep);
-                        continue;
+                        reuseNote = `Reused the beautified plate already on disk at ${beautifiedPath} after it passed geometry QC again (${pctOf(verified.qc)}); no image was generated.`;
+                    } else {
+                        // Moved aside with the splat baked from it, so no later run takes it for an accepted plate.
+                        await fs.move(beautifiedPath, rejectedPath, { overwrite: true });
+                        await Promise.all([fs.remove(splatPath), fs.remove(posePath)]);
+                        if (!beautifier) {
+                            reports.push({
+                                stationId: st.id, accepted: false, attempts: 0, usedReference: false, splatCount: 0,
+                                imagePath: rejectedPath, blockoutPath, qc: verified.qc, prompt: `Photorealistic view of station ${st.id}`,
+                                positionLocalENU: st.positionLocalENU, forwardVector: st.forwardVector, name: st.name,
+                                imageSource: `The beautified plate on disk failed geometry QC (${pctOf(verified.qc)}) and was moved to ${rejectedPath}; no image generator was supplied to make a new one.`
+                            });
+                            continue;
+                        }
                     }
                 }
 
-                let res: BeautifyStationResult;
-                if (!req.forceRebake && (await fs.pathExists(beautifiedPath))) {
-                    report(0.05 + 0.7 * (i / stations.length), `Baking from existing beautified image for station ${st.id} (${i + 1}/${stations.length})`);
-                    const imagePng = await fs.readFile(beautifiedPath);
-                    const dec = decodePng(imagePng);
-                    const height = Math.round(width * 9 / 16);
-                    const blockout = renderer.renderStationBlockout(st, { width, height });
-                    await fs.outputFile(blockoutPath, blockout.png);
-                    res = {
-                        station: st,
-                        alignedStation: st,
-                        prompt: `Photorealistic view of station ${st.id}`,
-                        blockout,
-                        imagePng,
-                        image: { width: dec.width, height: dec.height, rgba: dec.rgba },
-                        qc: SurveySplatPipelineService.cachedPlateQc(),
-                        accepted: true,
-                        attempts: 1,
-                        // The plate was made earlier, by whatever model was used then; this run did not generate it.
-                        generator: 'cached-beautified-plate'
-                    };
-                } else {
+                if (!res) {
                     if (!beautifier) {
                         throw new Error(`Cannot beautify station ${st.id}: no StationImageGenerator was supplied and no cached plate exists on disk at ${beautifiedPath}`);
                     }
@@ -278,20 +284,25 @@ export class SurveySplatPipelineService {
                         stoneType: req.stoneType
                     });
                     await fs.outputFile(blockoutPath, res.blockout.png);
-                    await fs.outputFile(beautifiedPath, res.imagePng);
+                    if (res.accepted) {
+                        await fs.outputFile(beautifiedPath, res.imagePng);
+                        await fs.remove(rejectedPath);
+                    } else {
+                        // A rejected image is kept for inspection under its own name, never as the station's plate.
+                        await fs.outputFile(rejectedPath, res.imagePng);
+                        await Promise.all([fs.remove(beautifiedPath), fs.remove(splatPath), fs.remove(posePath)]);
+                    }
                     if (res.warp) await fs.outputFile(`${base}_warp.png`, res.warp.warpedPng);
                 }
 
                 const rep: SurveySplatStationReport = {
                     stationId: st.id, accepted: res.accepted, attempts: res.attempts, usedReference: !!res.warp, splatCount: 0,
-                    imagePath: beautifiedPath, blockoutPath: blockoutPath, qc: res.qc, prompt: res.prompt,
+                    imagePath: res.accepted ? beautifiedPath : rejectedPath, blockoutPath: blockoutPath, qc: res.qc, prompt: res.prompt,
                     positionLocalENU: res.alignedStation.positionLocalENU || st.positionLocalENU,
                     forwardVector: res.alignedStation.forwardVector || st.forwardVector,
                     name: st.name,
                     modelUsed: res.modelUsed,
-                    imageSource: res.generator === 'cached-beautified-plate'
-                        ? `Reused the beautified plate already on disk at ${beautifiedPath}; no image was generated.`
-                        : describeStationImageSource(res)
+                    imageSource: reuseNote ?? describeStationImageSource(res)
                 };
                 if (res.accepted) {
                     const baked = await this.bakeStation(baker, res, `${base}.splat`, req);

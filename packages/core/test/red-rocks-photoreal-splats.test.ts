@@ -199,12 +199,14 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(droneStat.size).toBeGreaterThan(500 * 1024);
   });
 
-  it('7. Synthesizes Red Rocks venue through Location3DGaussianSplatService facade', async () => {
+  // The committed station plates were made from the real capture: reused plates must pass geometry QC against the
+  // mesh they are baked onto, so this runs only where that capture exists (never against a stand-in tile).
+  it.skipIf(!redRocksGlb.ok)(withReason('7. Synthesizes Red Rocks venue through Location3DGaussianSplatService facade', redRocksGlb), async () => {
     const { Location3DGaussianSplatService } = await import('../src/node/spatial/Location3DGaussianSplatService');
     // Run against a temp workspace so the pipeline never rewrites the tracked tileset in
     // public/tilesets/red_rocks (pose JSONs, tileset.json, tree.json) or drops synthesized
     // GLBs into public/models. Seed it with the tracked cached station plates so the run
-    // still bakes from the committed beautified images instead of regenerating them.
+    // still bakes from the committed beautified images (each re-checked against the mesh) instead of regenerating them.
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-red-rocks-3dgs-'));
     tempDirs.push(workspaceRoot);
     const outDir = path.join(workspaceRoot, 'public/tilesets/red_rocks');
@@ -215,15 +217,12 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
         await fs.copy(path.join(srcStations, name), path.join(outDir, 'stations', name));
       }
     }
-    if (redRocksGlb.ok) {
-      // Use the real Google 3D Tiles capture when this machine has it.
-      await fs.ensureDir(path.join(workspaceRoot, 'public/models'));
-      await fs.symlink(path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb'), path.join(workspaceRoot, 'public/models/red_rocks_amphitheatre.glb'));
-    }
+    // The real Google 3D Tiles capture, passed explicitly: the service never picks a GLB by name.
     const service = new Location3DGaussianSplatService({ workspaceRoot });
 
     const result = await service.generate({
       location: 'Red Rocks Amphitheatre',
+      glbPath: path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb'),
       lat: 39.66555,
       lng: -105.20525,
       elevation: 1932.0,
