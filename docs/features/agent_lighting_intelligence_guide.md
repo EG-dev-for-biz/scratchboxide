@@ -16,7 +16,6 @@ The **Agent Lighting Intelligence Subsystem** equips Scratchbox IDE AI agents wi
 │  1. Planetary Daylight & Ephemeris (NOAA & Scattering) │
 │  2. Cinematic Gaffer Engine (Stop Ratios & Modifiers)  │
 │  3. Inverse Photometric Estimator (Shadows & SH9)      │
-│  4. Closed-Loop Photometric Matchmove Optimizer        │
 └────────────────────────────────────────────────────────┘
                    │
                    ▼
@@ -26,7 +25,6 @@ The **Agent Lighting Intelligence Subsystem** equips Scratchbox IDE AI agents wi
 │  • sb_configure_gaffer_rig                             │
 │  • lighting_estimate_from_photo                        │
 │  • lighting_configure_gaffer_rig                       │
-│  • lighting_optimize_closed_loop                       │
 └────────────────────────────────────────────────────────┘
                    │
                    ▼
@@ -94,14 +92,11 @@ const gafferRig = await agent.call('lighting_configure_gaffer_rig', {
     goboCookie: 'venetian_blinds',
     penumbraSoftness: 0.6
 });
-
-// 3. Iteratively match synthetic lighting to target plate
-const optimization = await agent.call('lighting_optimize_closed_loop', {
-    targetImagePath: 'public/plates/plaza_hero_dusk.jpg',
-    initialRigStyle: 'three_point',
-    targetCorrelationScore: 0.95
-});
 ```
+
+There is no closed-loop lighting optimizer tool: `lighting_optimize_closed_loop` optimized against a synthetic plate
+instead of the photograph it was given and is removed. Compare a render with the plate yourself (for example with
+`vfx_visual_critic_audit`) and adjust the rig.
 
 ---
 

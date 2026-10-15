@@ -251,10 +251,10 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `geobox_resect_image_location`: Full autonomous 6-DOF photograph-to-tile resection.
 - `geobox_resect_camera_pose`: Resects camera position and attitude.
 - `geobox_harmonize_location_lighting`: De-lights photogrammetry and matches photograph atmosphere.
-- `geobox_optimize_edge_alignment`: Closed-loop iterative edge alignment.
+- `geobox_optimize_edge_alignment`: Same as `spatial_closed_loop_edge_align`.
 - `spatial_solve_pnp`: Analytical DLT + Levenberg-Marquardt pose solver.
 - `spatial_match_features_2d_3d`: 2D-to-3D keypoint matcher.
-- `spatial_closed_loop_edge_align`: Offscreen software silhouette edge matcher.
+- `spatial_closed_loop_edge_align` / `geobox_closed_loop_edge_align`: Refines a camera pose so a given model (`glbPath`) lines up with a given photograph (`imagePath`), from a required `initialPose`; reports edge correlation before/after and the mean edge distance in pixels.
 - `spatial_resect_image_location`: High-level resection alias.
 - `optics_configure_lens_distortion`: Configures Brown-Conrady coefficients.
 - `optics_export_lens_distortion`: Exports lens profiles to OpenCV/Nuke format.
@@ -264,8 +264,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `gemini_estimate_scene_depth`: Monocular relative metric depth estimation.
 - `configure_physical_camera`: Configures sensor gate, aperture, and focal length.
 - `camera_track_focus_target`: Tracks dynamic focal distance on moving subjects.
-- `tapir_track_video_points`: Tracks 2D/3D feature trajectories across video.
-- `build_4dgs_from_video`: Reconstructs dynamic 4D Gaussian splats.
+- (No point-tracking or 4DGS-build tools: `tapir_track_video_points` and `build_4dgs_from_video` took no video and are removed. `TapirTrackingService` and `GaussianSplat4DService` remain for code that has real frames.)
 - `avatar_4dgs_list`: Catalogs registered 4D avatars.
 - `avatar_4dgs_get`: Fetches avatar manifest and skeleton.
 - `avatar_4dgs_animate`: Drives avatar with novel motion frames.
@@ -280,8 +279,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `atmosphere_harmonize_location_3d`: Harmonizes 3D objects with physical skies.
 
 ### 10. Native C++20 Mesh Reshaping (`mesh-shaping-tools.ts`)
-- `mesh_reshape_via_prompt`: Deforms 3D meshes using natural language instructions.
-- `mesh_apply_deformers`: Applies parametric taper, twist, bend, bulge, and FFD lattices.
+- `mesh_apply_deformers`: Applies explicit taper, twist, bend, shear, bulge, sculpt, FFD lattice, subdivide, repair and weathering operations to a given GLB; positions and sizes are fractions of the mesh's measured bounding box. (`mesh_reshape_via_prompt` and its keyword parser, and the tile restructure tools with their closed style/primitive taxonomy, are removed.)
 
 ### 11. VFX, Video & Prompt Formatting (`vfx-video-tools.ts`)
 - `build_beautify_prompt`: Verbatim AI Beautify prompt template.
@@ -308,9 +306,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `uv_analyze_texel_density`: Analyzes texel density across submeshes.
 - `pbr_material_decompose`: Decomposes albedo into roughness, normal, and AO.
 - `atlas_maxrects_pack`: Packs textures into unified atlas.
-- `nano_banana_extract_color_palette`: Two-step palette extraction.
-- `nano_banana_apply_color_palette`: Two-step palette application.
-- `nano_banana_transfer_color`: End-to-end photographic color transfer.
+- `nano_banana_apply_color_palette`: Builds the palette application prompt from a complete palette the caller read from the reference (temperatures and contrast in the caller's own words). The extract and transfer tools, which returned a stock palette for any image, are removed.
 
 ### 13. Botany & Tree Synthesis (`botanical-tree-tools.ts`)
 - `botanical_synthesize_tree`: Synthesizes 1:1 metric parametric botanical trees.
