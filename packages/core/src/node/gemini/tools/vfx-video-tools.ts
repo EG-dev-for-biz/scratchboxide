@@ -18,6 +18,7 @@ import { HeadlessVideoCompositorService } from '../../video/HeadlessVideoComposi
 import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirectorService';
 import { buildContactSheet, normalizePlates } from '../../video/ConditioningPlateService';
 import { checkVideo } from '../../video/GenerativeVideoQAService';
+import { GeneratorFailedError } from '../../../common/errors/pipeline-errors';
 import type { VideoTimelineData } from '../../../browser/generative-canvas/services/video/videoTypes';
 import type { ToolDeclaration, ToolHandler } from './types';
 
@@ -1266,7 +1267,7 @@ export const COMPOSITOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 duration: {
                     type: 'NUMBER',
-                    description: 'Optional total composite duration in seconds'
+                    description: 'Composite duration in seconds (default: the background plate\'s measured length; the call fails if it cannot be measured)'
                 },
                 prompt: {
                     type: 'STRING',
@@ -1352,14 +1353,19 @@ export const compositorHandlers: Record<string, ToolHandler> = {
         const crf = asNumber(args.crf) || 18;
         const dryRun = asBoolean(args.dryRun);
 
+        // The patch spans the background plate: its length is the caller's or the plate's measured one, never assumed.
         let durationSec = asNumber(args.duration);
         if (!durationSec) {
+            let probe;
             try {
-                const probe = await editorService.probeMedia(backgroundVideo);
-                durationSec = probe.durationSec || 10;
-            } catch {
-                durationSec = 10;
+                probe = await editorService.probeMedia(backgroundVideo);
+            } catch (err: any) {
+                throw new GeneratorFailedError('ffprobe', `vfx_composite_patch could not measure the length of the background plate ${backgroundVideo} (pass "duration" to set it): ${err?.stderr || err?.message || String(err)}`);
             }
+            if (!(Number.isFinite(probe.durationSec) && probe.durationSec > 0)) {
+                throw new GeneratorFailedError('ffprobe', `vfx_composite_patch could not measure the length of the background plate ${backgroundVideo}: ffprobe reported ${probe.durationSec} s (pass "duration" to set it)`);
+            }
+            durationSec = probe.durationSec;
         }
 
         const timeline: VideoTimelineData = {
@@ -1417,11 +1423,18 @@ export const compositorHandlers: Record<string, ToolHandler> = {
             dryRun
         });
 
+        if (!result.success) {
+            return {
+                resultPayload: result,
+                status: 'failed',
+                summaryResult: `The generative patch composite into ${outputPath} failed, so no video was written: ${result.error || 'FFmpeg reported no error'}`
+            };
+        }
         return {
             resultPayload: result,
             summaryResult: dryRun
-                ? `Planned localized inpaint patch composite for ${outputPath} (dry run).`
-                : `Successfully composited generative patch into ${outputPath}.`
+                ? `Planned localized inpaint patch composite for ${outputPath} (dry run, nothing rendered).`
+                : `Composited the generative patch into ${outputPath} (${durationSec} s).`
         };
     },
 
@@ -1449,11 +1462,18 @@ export const compositorHandlers: Record<string, ToolHandler> = {
             dryRun
         });
 
+        if (!result.success) {
+            return {
+                resultPayload: result,
+                status: 'failed',
+                summaryResult: `The timeline composite to ${outputPath} failed, so no video was written: ${result.error || 'FFmpeg reported no error'}`
+            };
+        }
         return {
             resultPayload: result,
             summaryResult: dryRun
-                ? `Planned multi-track timeline composite for ${outputPath} (dry run).`
-                : `Successfully rendered timeline composite to ${outputPath}.`
+                ? `Planned multi-track timeline composite for ${outputPath} (dry run, nothing rendered).`
+                : `Rendered timeline composite to ${outputPath}.`
         };
     }
 };

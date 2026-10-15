@@ -87,12 +87,14 @@ Composite localized generative video patches or 3D overlays onto a master video 
 - Downscales patch to target bounding box using **Lanczos-8** resampling.
 - Generates an analytical soft-feathered alpha edge mask via `geq`.
 - Injects matching temporal film grain (`noise=alls=...:allf=t+u`) to eliminate AI plastic smoothness.
+- Spans `duration`, or the background plate's measured length; fails when the plate cannot be measured. Fails with FFmpeg's error when FFmpeg is missing or the render fails (no video is reported that was not written).
 
 ### 12. `vfx_composite_timeline`
 Renders a complete multi-track `VideoTimelineData` structure:
 - Multi-track layering (V1 background to top overlays).
 - Chroma keying with Euclidean YCbCr tolerance and green/blue despill suppression.
 - Layer affine transforms, picture-in-picture, and audio mixing.
+- Fails with FFmpeg's error when FFmpeg is missing or the render fails.
 
 ### 13. `vfx_mediapipe_track_video_motion`
 Coordinated motion analysis extracting articulated 3D kinematic telemetry:
