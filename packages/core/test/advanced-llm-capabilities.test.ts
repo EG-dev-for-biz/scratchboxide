@@ -20,26 +20,37 @@ import { ProjectContextGraphService } from '../src/node/project-context-graph-se
 describe('Advanced LLM Capabilities (Cursor / Antigravity / Claude Parity)', () => {
 
     describe('Track 1: Fill-In-The-Middle (FIM) Completion Engine', () => {
-        it('synthesizes high-quality heuristic autocomplete when offline or low latency needed', async () => {
-            const service = new FimCompletionService();
-            const prefix = 'function calculateTotal(items: CartItem[]) {\n    let total = 0;\n    for (const item of items) {\n        ';
-            const suffix = '\n    }\n    return total;\n}';
+        const prefix = 'function calculateTotal(items: CartItem[]) {\n    let total = 0;\n    for (const item of items) {\n        ';
+        const suffix = '\n    }\n    return total;\n}';
 
-            const result = await service.completeFim({
-                prefix,
-                suffix,
-                language: 'typescript',
-                fileName: 'cart.ts'
-            });
+        it('without model credentials there is no completion and the reason is given (no made-up snippet)', async () => {
+            const offline = { getStatus: async () => ({ connected: false, authMethod: 'unauthenticated' }) } as any;
+            const result = await new FimCompletionService(offline).completeFim({ prefix, suffix, language: 'typescript', fileName: 'cart.ts' });
+            expect(result.success).toBe(false);
+            expect(result.completion).toBe('');
+            expect(result.error).toContain('No Google Cloud service account or Gemini API key');
+        });
 
-            expect(result.success).toBe(true);
-            expect(result.completion).toBeDefined();
-            expect(typeof result.completion).toBe('string');
-            expect(result.completion.length).toBeGreaterThan(0);
+        it('returns the model\'s completion and which credential answered; a failed request is a failure', async () => {
+            const calls: string[] = [];
+            const client = {
+                getStatus: async () => ({ connected: true, authMethod: 'api-key', subagentModel: 'gemini-3.1-flash-lite' }),
+                requestGenerateContent: async (model: string) => {
+                    calls.push(model);
+                    return { json: { candidates: [{ content: { parts: [{ text: 'total += item.price * item.quantity;' }] } }] }, credential: 'api-key', credentialNote: 'the Vertex AI service account could not get an access token (expired)' };
+                }
+            } as any;
+            const result = await new FimCompletionService(client).completeFim({ prefix, suffix, language: 'typescript', fileName: 'cart.ts' });
+            expect(calls).toEqual(['gemini-3.1-flash-lite']);
+            expect(result).toMatchObject({ success: true, completion: 'total += item.price * item.quantity;', modelUsed: 'gemini-3.1-flash-lite', credential: 'api-key', credentialNote: expect.stringContaining('expired') });
+
+            const failing = { ...client, requestGenerateContent: async () => { throw new Error('Vertex AI error (400): INVALID_ARGUMENT'); } };
+            const failed = await new FimCompletionService(failing).completeFim({ prefix, suffix, language: 'typescript', fileName: 'cart.ts' });
+            expect(failed).toMatchObject({ success: false, completion: '', error: 'Vertex AI error (400): INVALID_ARGUMENT' });
         });
 
         it('cleans redundant prefix/suffix markdown block artifacts from model completions', () => {
-            const service = new FimCompletionService();
+            const service = new FimCompletionService({} as any);
             const raw = '```typescript\n        total += item.price * item.quantity;\n```';
             const cleaned = (service as any).cleanCompletion(raw, '        ', '\n    }');
             expect(cleaned).toContain('total += item.price * item.quantity;');
@@ -48,21 +59,40 @@ describe('Advanced LLM Capabilities (Cursor / Antigravity / Claude Parity)', () 
     });
 
     describe('Track 2: Prompt-to-Code ⌘K Inline Edit Engine', () => {
-        it('synthesizes instructions into unified diffs when offline / heuristic', async () => {
-            const service = new QuickEditService();
-            const originalCode = 'function greet(name: string) {\n    console.log("Hello " + name);\n}';
-            const instruction = 'Add TypeScript return type and use template literal';
+        const originalCode = 'function greet(name: string) {\n    console.log("Hello " + name);\n}';
+        const instruction = 'Add TypeScript return type and use template literal';
 
-            const result = await service.quickEdit({
-                originalCode,
-                instruction,
-                language: 'typescript',
-                fileName: 'greeter.ts'
-            });
+        it('a Vertex error fails the edit with that error (no locally made-up edit as success)', async () => {
+            const client = {
+                getStatus: async () => ({ connected: true, authMethod: 'service-account', activeModel: 'gemini-3.8-flash' }),
+                requestGenerateContent: async () => { throw new Error('Vertex AI error (400): INVALID_ARGUMENT'); }
+            } as any;
+            const result = await new QuickEditService(client).quickEdit({ originalCode, instruction, language: 'typescript', fileName: 'greeter.ts' });
+            expect(result.success).toBe(false);
+            expect(result.proposedCode).toBe(originalCode);
+            expect(result.error).toContain('Vertex AI error (400): INVALID_ARGUMENT');
+            expect(result.modelUsed).toBe('gemini-3.8-flash');
+            expect(result.proposedCode).not.toContain('Auto-documented');
+        });
 
-            expect(result.success).toBe(true);
-            expect(result.proposedCode).toBeDefined();
-            expect(result.diffSummary).toBeDefined();
+        it('without model credentials the edit fails with the reason', async () => {
+            const offline = { getStatus: async () => ({ connected: false, authMethod: 'unauthenticated' }) } as any;
+            const result = await new QuickEditService(offline).quickEdit({ originalCode, instruction, language: 'typescript', fileName: 'greeter.ts' });
+            expect(result).toMatchObject({ success: false, proposedCode: originalCode, error: expect.stringContaining('No Google Cloud service account or Gemini API key') });
+        });
+
+        it('returns the model\'s edit as a diff, with the model and credential that answered', async () => {
+            const edited = 'function greet(name: string): void {\n    console.log(`Hello ${name}`);\n}';
+            const client = {
+                getStatus: async () => ({ connected: true, authMethod: 'service-account', activeModel: 'gemini-3.8-flash' }),
+                requestGenerateContent: async () => ({ json: { candidates: [{ content: { parts: [{ text: '```ts\n' + edited + '\n```' }] } }] }, credential: 'vertex' })
+            } as any;
+            const result = await new QuickEditService(client).quickEdit({ originalCode, instruction, language: 'typescript', fileName: 'greeter.ts' });
+            expect(result).toMatchObject({ success: true, proposedCode: edited, modelUsed: 'gemini-3.8-flash', credential: 'vertex' });
+            expect(result.diffSummary).toContain('greeter.ts');
+            const empty = await new QuickEditService({ ...client, requestGenerateContent: async () => ({ json: { candidates: [] }, credential: 'vertex' }) } as any)
+                .quickEdit({ originalCode, instruction, language: 'typescript', fileName: 'greeter.ts' });
+            expect(empty).toMatchObject({ success: false, error: 'gemini-3.8-flash returned no code for this edit.' });
         });
     });
 

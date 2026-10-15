@@ -7,9 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type VideoTimelineData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
-import { synthesizeContextualVideoTimeline } from '../../../browser/generative-canvas/services/video/videoTimelineSynthesizer';
-import { synthesizeContextual3DScene } from '../../../browser/generative-canvas/procedural-3d-synthesizer';
+import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { UNTITLED_DOCUMENT_TITLE, modelDocumentSections, modelSandboxFiles, normalizeModelVideoTimeline } from '../artifact-synthesis';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { NativeCppCompilerService } from '../../3d-engine/native-compiler-service';
 import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
@@ -18,10 +17,33 @@ import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
-import { applyClayFirstPassBaseline, lightingFeaturesOf, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
+import { applyClayFirstPassBaseline, keepOpenSceneRenderMode } from '../scene3d-clay-baseline';
+import { isDrawableSceneObject, undrawableSceneObjects } from '../../../browser/generative-canvas/primitives/scene3d/syncSceneContent';
+import { liveTilesAnchorProblem, sceneAsksForLiveTiles } from '../../../browser/generative-canvas/primitives/scene3d/liveTilesAnchor';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
+}
+
+/**
+ * Whether a 3d-scene declares anything the viewport draws, judged as the viewport judges it: an object it loads
+ * (a .glb / .gltf model or a .splat / .spz splat; see isDrawableSceneObject), a splat file (splatUrl), a generator
+ * with its model inline (glbBase64) or its source, a live three.js script, or live tiles (a geoAnchor or a map-3d
+ * object) at an anchor the tiles layer accepts (see liveTilesAnchorProblem). A generator known only by a server file
+ * path (glbPath) is not loaded by the viewport. A scene with none of these would mount as an empty "No geometry"
+ * viewport.
+ */
+export function sceneDeclaresContent(scene: Partial<Scene3DData>): boolean {
+    const objects = Array.isArray(scene.objects) ? scene.objects : [];
+    const tiles = { geoAnchor: scene.geoAnchor, objects };
+    return !!(
+        objects.some(isDrawableSceneObject)
+        || scene.splatUrl
+        || scene.pythonGenerator?.glbBase64 || scene.pythonGenerator?.sourceCode?.trim()
+        || scene.cppGenerator?.glbBase64 || scene.cppGenerator?.sourceCode?.trim()
+        || (scene.customScript || scene.code || '').trim()
+        || (sceneAsksForLiveTiles(tiles) && liveTilesAnchorProblem(tiles) === null)
+    );
 }
 
 export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -45,7 +67,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 payload: {
                     type: 'OBJECT',
-                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport.'
+                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A mount starts a new canvas artifact, so the scene must declare something the viewport draws (objects whose content.durableUri is a .glb / .gltf model or a .splat / .spz splat, a script, a generator GLB as glbBase64, a splatUrl, a customScript or a geoAnchor {lat, lng} for live tiles); an object the viewport cannot draw, or a geoAnchor that is 0, 0, out of range or not numbers, fails the mount, and payload.customMeshes (client-side primitive meshes) are refused. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted. For "live-code-sandbox", send payload.files as [{name, language, content}] holding the code of the app (one file isEntry: true); a sandbox with no file content is not mounted.'
                 }
             },
             required: ['primitiveType', 'title', 'payload']
@@ -219,32 +241,54 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         }
         let title = asString(args.title) || 'Visual Creation';
         let summary = asString(args.summary) || `Synthesized ${title} on visual canvas.`;
-        let payload = (args.payload && typeof args.payload === 'object') ? args.payload as ArtifactData : ({} as any);
+        // The payload is the primitive's data as the model wrote it; anything else fails the call so the model can resend it.
+        if (!args.payload || typeof args.payload !== 'object' || Array.isArray(args.payload)) {
+            const got = args.payload === undefined ? 'nothing' : Array.isArray(args.payload) ? 'an array' : `a ${typeof args.payload}`;
+            const error = `payload must be a JSON object holding the ${primitiveType} data; got ${got}. Nothing was mounted.`;
+            return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+        }
+        let payload = args.payload as ArtifactData;
 
         const prompt = _ctx?.request?.prompt || '';
 
         if (primitiveType === 'video-timeline') {
-            const activeVideoData = _ctx?.request?.activeArtifact?.type === 'video-timeline' ? (_ctx.request.activeArtifact.data as VideoTimelineData) : undefined;
-            const timelineData = synthesizeContextualVideoTimeline(prompt, title !== 'Visual Creation' ? title : undefined, activeVideoData);
-            if (payload && typeof payload === 'object') {
-                const p = payload as any;
-                if (p.tracks && Array.isArray(p.tracks) && p.tracks.length > 0) timelineData.tracks = p.tracks;
-                if (p.aspectRatio) timelineData.aspectRatio = p.aspectRatio;
-                if (p.fps) timelineData.fps = p.fps;
-                if (p.duration) timelineData.duration = p.duration;
-                if (p.currentTime !== undefined) timelineData.currentTime = p.currentTime;
-            }
+            // The model's tracks, clips and media as sent; only editor state (fps, playhead, zoom) is defaulted.
+            const timelineData = normalizeModelVideoTimeline(payload as Record<string, any>, title !== 'Visual Creation' ? title : undefined);
             payload = timelineData as any;
             title = timelineData.title;
-            summary = timelineData.subtitle || 'Multi-track non-linear video editing timeline with real-time WebGL compositor';
+            summary = asString(args.summary) || timelineData.subtitle || summary;
+        } else if (primitiveType === 'markdown-document') {
+            // The document's own sections or markdown; an empty document is not mounted (nothing fills it in).
+            const p = payload as Record<string, any>;
+            const sections = modelDocumentSections(p);
+            if (sections.length === 0) {
+                const error = 'The markdown-document payload has no content: send payload.sections (heading, paragraph, ... sections) or the document as markdown in payload.markdown. Nothing was mounted.';
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            const named = (t: unknown) => (typeof t === 'string' && t.trim() && t !== 'Markdown Document' ? t.trim() : undefined);
+            const firstHeading = sections.find(s => s?.type === 'heading')?.content;
+            const docTitle = named(p.title) || named(args.title) || named(firstHeading) || UNTITLED_DOCUMENT_TITLE;
+            payload = { ...p, title: docTitle, sections } as any;
+            title = docTitle;
+        } else if (primitiveType === 'live-code-sandbox') {
+            // The app's own files or nothing: an empty sandbox is not mounted (the sandbox has no app of its own).
+            const files = modelSandboxFiles(payload);
+            if (files.length === 0) {
+                const error = 'The live-code-sandbox payload has no code: send payload.files as [{name, language, content}] with the files of the app (one marked isEntry: true). Nothing was mounted.';
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            const p = payload as Record<string, any>;
+            const activeFileId = typeof p.activeFileId === 'string' && files.some(f => f.id === p.activeFileId) ? p.activeFileId : undefined;
+            payload = { ...p, title: (typeof p.title === 'string' && p.title.trim()) || title, files, activeFileId } as any;
         } else if (primitiveType === '3d-scene') {
-            const contextual3D = synthesizeContextual3DScene(prompt, {
-                activeArtifact: _ctx?.request?.activeArtifact,
-                chatHistory: _ctx?.request?.chatHistory,
-                docTitle: title !== 'Visual Creation' ? title : undefined
-            });
+            const p = payload as any;
 
-            const p = payload && typeof payload === 'object' ? (payload as any) : {};
+            // Client-side primitive meshes (box, sphere, cylinder ...) are not scene geometry (AGENTS.md Tier-0 ban).
+            // They used to be dropped without a word while the mount reported success.
+            if (Array.isArray(p.customMeshes) && p.customMeshes.length > 0) {
+                const error = `payload.customMeshes (${p.customMeshes.length}) cannot be mounted: client-side primitive meshes are not used for scene geometry. Build the geometry with a Python script (payload.script, import scratchbox as sb) or execute_3d_python_script and mount the model it writes. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
 
             // Geometry comes only from the model's payload. The prompt synthesizer's template generators drew
             // a domed tower and trees the model never asked for between the objects it placed.
@@ -253,25 +297,26 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             let pythonGlbPath = p.pythonGenerator?.glbPath || p.glbPath;
 
             if (pythonScript && !pythonGlbBase64) {
+                // The script is the scene's geometry: if it does not produce a model, nothing is mounted.
+                let res: Awaited<ReturnType<NativePythonRunnerService['runScript']>>;
                 try {
-                    console.log('[mount_canvas_primitive] Executing procedural Python script, source length:', pythonScript.length);
-                    const runner = NativePythonRunnerService.getInstance();
-                    const res = await runner.runScript(pythonScript);
-                    console.log('[mount_canvas_primitive] Python runner result:', {
-                        success: res.success,
-                        executionTimeMs: res.executionTimeMs,
-                        glbBase64Length: res.glbBase64?.length,
-                        glbPath: res.glbPath,
-                        errorDetails: res.errorDetails,
-                        stderr: res.stderr ? res.stderr.slice(0, 300) : undefined
-                    });
-                    if (res.success && res.glbBase64) {
-                        pythonGlbBase64 = res.glbBase64;
-                        pythonGlbPath = res.glbPath;
-                    }
-                } catch (e) {
-                    console.warn('[mount_canvas_primitive] Error executing python script:', e);
+                    res = await NativePythonRunnerService.getInstance().runScript(pythonScript);
+                } catch (e: any) {
+                    const error = `The scene's Python script could not be run: ${e?.message || String(e)}`;
+                    return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
                 }
+                if (!res.success || !res.glbBase64) {
+                    const stderr = (res.errorDetails || res.stderr || '').trim();
+                    const detail = stderr ? stderr.slice(-4000) : (res.success ? 'it ran but wrote no model (GLB)' : `exit code ${res.exitCode}`);
+                    const error = `The scene's Python script failed: ${detail}`;
+                    return {
+                        status: 'failed',
+                        resultPayload: { success: false, error, exitCode: res.exitCode, stderr: res.stderr },
+                        summaryResult: `Failed: the scene's Python script did not produce a model. ${detail.split('\n').filter(Boolean).pop() || ''}`.trim()
+                    };
+                }
+                pythonGlbBase64 = res.glbBase64;
+                pythonGlbPath = res.glbPath;
             }
 
             let cppSource = p.cppGenerator?.sourceCode || p.cppSource;
@@ -301,39 +346,60 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 sourceCode: cppSource || p.cppGenerator?.sourceCode || '',
                 glbBase64: cppGlbBase64,
                 glbPath: cppGlbPath,
-                vertexCount: p.cppGenerator?.vertexCount || 50000,
-                triangleCount: p.cppGenerator?.triangleCount || 30000
+                // Counts only when the payload states them; none are made up for a GLB nobody measured.
+                vertexCount: p.cppGenerator?.vertexCount,
+                triangleCount: p.cppGenerator?.triangleCount
             } : p.cppGenerator;
 
             // The title is the model's too; the synthesizer's would name the tab after prompt keywords.
             title = p.title && p.title !== '4D Scene Workspace' ? p.title : (asString(args.title) || '3D Scene');
             summary = p.subtitle || summary;
 
-            // Only viewpoint, lighting and render settings may default from the synthesizer. Its meshes,
-            // scripts, operator stack (which replays its generator), geodetic anchor, splat files (picked from a
-            // landmark list), worldBranch and sceneType (which select viewport content) are not carried over;
-            // the payload's own are kept by the spread.
+            // Everything comes from the payload: no prompt synthesizer supplies a camera, lighting, render
+            // settings, meshes, scripts, an anchor or splat files. Unset fields take the viewport's neutral studio
+            // defaults and the clay baseline below.
             payload = {
                 ...p,
                 title,
                 subtitle: summary,
-                renderMode: p.renderMode || contextual3D.renderMode,
-                cameraMode: p.cameraMode || contextual3D.cameraMode,
-                customMeshes: [], // STRICT TIER-0 JS PRIMITIVE BAN: No fake mock arrays.
-                environment: p.environment || contextual3D.environment,
-                camera: p.camera || contextual3D.camera,
+                customMeshes: [],
                 objects: Array.isArray(p.objects) ? p.objects : [],
-                features: {
-                    ...lightingFeaturesOf(contextual3D.features),
-                    ...(p.features || {})
-                },
+                features: { ...(p.features || {}) },
                 cppGenerator: cppGen,
                 pythonGenerator: pyGenerator
             };
             const active3D = _ctx?.request?.activeArtifact?.type === '3d-scene' ? _ctx.request.activeArtifact.data as any : undefined;
+            // A first scene is clay; with a scene open, the open render mode carries unless the payload sets one.
             payload = active3D
-                ? releaseClayOnMaterialRequest(payload as any, prompt, active3D.renderMode)
+                ? keepOpenSceneRenderMode(payload as any, active3D.renderMode)
                 : applyClayFirstPassBaseline(payload as any, prompt);
+
+            // Objects the viewport would skip (internal:plane, an image, an .obj) would be reported as mounted while
+            // nothing of them is drawn.
+            const undrawable = undrawableSceneObjects(payload as Scene3DData);
+            if (undrawable.length > 0) {
+                const error = `${undrawable.length === 1 ? 'An object' : `${undrawable.length} objects`} in payload.objects cannot be drawn: ${undrawable.map(o => `${o.id} (${o.reason})`).join('; ')}. Each object's content.durableUri must be a .glb / .gltf model or a .splat / .spz splat the app serves; build geometry with a Python script (payload.script) or execute_3d_python_script. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            // Live tiles the scene asks for (geoAnchor or a map-3d object) at an anchor the tiles layer refuses would
+            // mount as an error panel in the viewport.
+            const anchorProblem = liveTilesAnchorProblem(payload as Scene3DData);
+            if (anchorProblem) {
+                const error = `The scene asks for live 3D tiles, but ${anchorProblem}, so the viewport cannot place them. Send the place's real latitude and longitude in payload.geoAnchor (resolve a place with google_3d_tiles_get_clay), or leave geoAnchor and map-3d objects out. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            // A generator known only by a server file path is not loaded by the viewport.
+            const gen = (payload as Scene3DData).pythonGenerator;
+            if (gen?.glbPath && !gen.glbBase64 && !gen.sourceCode?.trim() && !sceneDeclaresContent(payload as Scene3DData)) {
+                const error = `pythonGenerator.glbPath (${gen.glbPath}) is a file on the server that the viewport does not load. Send the script (payload.script) so it runs here, or reference a served model in payload.objects. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            // A mount replaces the canvas: a scene that declares nothing to draw would be an empty viewport
+            // reported as mounted.
+            if (!sceneDeclaresContent(payload as Scene3DData)) {
+                const error = 'The 3d-scene payload has no content to draw: send objects, a Python script (payload.script), a generator GLB, a splat (splatUrl), a customScript, or a geoAnchor {lat, lng} for live 3D tiles. To change the open scene (camera, lighting, materials), use scene_3d_dispatch_operators. Nothing was mounted.';
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
         }
 
         const artifactId = `art-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -437,9 +503,11 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         const activeArtifact = _ctx?.request?.activeArtifact;
         const currentData: Scene3DData = (activeArtifact && activeArtifact.type === '3d-scene' && activeArtifact.data)
             ? (activeArtifact.data as Scene3DData)
+            // With no scene open, operators start from an empty first pass: grey clay in a studio, like every first scene.
             : {
                 title: '3D Scene',
-                renderMode: 'pbr',
+                renderMode: 'clay',
+                environment: { skybox: 'studio', lighting: 'studio' },
                 customMeshes: [],
                 objects: []
             };

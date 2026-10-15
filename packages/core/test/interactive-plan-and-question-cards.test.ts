@@ -9,10 +9,6 @@
 
 import { describe, it, expect } from 'vitest';
 import { CANVAS_TOOL_DECLARATIONS, canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
-import {
-    synthesizeQuestionCardFallback,
-    synthesizeExecutionPlanFallback
-} from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import type { ChatMessage, InteractiveQuestionCardData, ExecutionPlanCardData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('Cursor-Grade Interactive Confirmation & Clarification Card Architecture', () => {
@@ -78,33 +74,6 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
             expect(plan.steps.length).toBe(2);
             expect(plan.confirmed).toBe(false);
             expect(plan.deliverables[0].canvasType).toBe('3d-scene');
-        });
-    });
-
-    describe('3. Local Fallback Synthesizers for Ambiguity & Planning Mode', () => {
-        it('synthesizes question card fallback when user asks for a 3D asset from an image without specifying format', () => {
-            const prompt = 'Make a 3d plate of this object from the supplied image';
-            const fallback = synthesizeQuestionCardFallback(prompt);
-
-            expect(fallback.questionCard).toBeDefined();
-            expect(fallback.questionCard?.title).toContain('3D');
-            const q = fallback.questionCard?.questions[0];
-            expect(q).toBeDefined();
-            expect(q?.options.some(o => o.label.includes('C++20 Astro'))).toBe(true);
-            expect(q?.options.some(o => o.label.includes('Gaussian Splat'))).toBe(true);
-            expect(q?.options.some(o => o.label.includes('Cloud Run'))).toBe(false);
-        });
-
-        it('synthesizes execution plan fallback when user enters Planning Mode', () => {
-            const prompt = 'Build a multi-track cyberpunk video sequence with green screen chroma keying and audio mix';
-            const fallback = synthesizeExecutionPlanFallback(prompt);
-
-            expect(fallback.executionPlanCard).toBeDefined();
-            const plan = fallback.executionPlanCard!;
-            expect(plan.goal).toBe(prompt);
-            expect(plan.steps.length).toBeGreaterThanOrEqual(3);
-            expect(plan.deliverables.length).toBeGreaterThanOrEqual(1);
-            expect(plan.confirmed).toBe(false);
         });
     });
 

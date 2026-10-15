@@ -29,6 +29,20 @@ export interface VectorRoadmapHUDProps {
     onToggleOpen: () => void;
 }
 
+/** Writes text to the clipboard and says whether it worked (and why not), so the button never claims a failed copy. */
+export async function copyTextToClipboard(
+    text: string,
+    clipboard: Pick<Clipboard, 'writeText'> | undefined = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (!clipboard) return { ok: false, error: 'the clipboard is not available here' };
+    try {
+        await clipboard.writeText(text);
+        return { ok: true };
+    } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
 export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
     config,
     geoAnchor,
@@ -39,7 +53,7 @@ export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
     onToggleOpen
 }) => {
     const mapsService = useMemo(() => GoogleMapsService.getInstance(), []);
-    const [copiedJson, setCopiedJson] = useState(false);
+    const [copyState, setCopyState] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
     const [showStyleModal, setShowStyleModal] = useState(false);
     const [inputMapId, setInputMapId] = useState(config?.mapId || mapsService.getVectorRoadmapMapId() || '');
     const [zoomLevel, setZoomLevel] = useState(config?.minimapZoom ?? 17);
@@ -56,31 +70,28 @@ export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
     const blueprintSize = config?.groundBlueprintSize ?? 500;
     const elevationOffset = config?.groundElevationOffset ?? -0.05;
 
-    const lat = geoAnchor?.lat ?? 37.7955;
-    const lng = geoAnchor?.lng ?? -122.3937;
-    const elevation = geoAnchor?.elevation;
+    // The scene's own anchor or none: no default place is shown as the anchor.
+    const anchor = geoAnchor && Number.isFinite(geoAnchor.lat) && Number.isFinite(geoAnchor.lng)
+        ? { lat: geoAnchor.lat, lng: geoAnchor.lng }
+        : null;
+    const elevation = anchor ? geoAnchor?.elevation : undefined;
 
-    // Generate static preview image for the minimap
+    // Static preview image for the minimap, at the anchor only.
     const previewUrl = useMemo(() => {
+        if (!anchor) return null;
         return mapsService.getVectorRoadmapStaticBlueprintUrl({
-            center: { lat, lng },
+            center: anchor,
             zoom: zoomLevel,
             size: { width: 320, height: 220 },
             scale: 2,
             mapId: config?.mapId || mapsService.getVectorRoadmapMapId()
         });
-    }, [mapsService, lat, lng, zoomLevel, config?.mapId]);
+    }, [mapsService, anchor?.lat, anchor?.lng, zoomLevel, config?.mapId]);
 
     const handleCopyStyleJson = async () => {
-        try {
-            await navigator.clipboard.writeText(JSON.stringify(GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE, null, 2));
-            setCopiedJson(true);
-            setTimeout(() => setCopiedJson(false), 2500);
-        } catch {
-            // fallback
-            setCopiedJson(true);
-            setTimeout(() => setCopiedJson(false), 2500);
-        }
+        const result = await copyTextToClipboard(JSON.stringify(GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE, null, 2));
+        setCopyState(result);
+        setTimeout(() => setCopyState(null), result.ok ? 2500 : 6000);
     };
 
     const handleApplyMapId = () => {
@@ -119,11 +130,17 @@ export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
 
             {/* Minimap Viewport */}
             <div className="relative mt-3 w-full h-44 rounded-xl overflow-hidden border border-cyan-500/30 bg-zinc-950 shadow-inner group">
-                <img
-                    src={previewUrl}
-                    alt="Vector Roadmap Blueprint Reference"
-                    className="w-full h-full object-cover select-none pointer-events-none transition-transform duration-300"
-                />
+                {previewUrl ? (
+                    <img
+                        src={previewUrl}
+                        alt="Vector Roadmap Blueprint Reference"
+                        className="w-full h-full object-cover select-none pointer-events-none transition-transform duration-300"
+                    />
+                ) : (
+                    <div data-testid="sb-roadmap-no-anchor" className="w-full h-full flex items-center justify-center p-4 text-center text-[11px] text-zinc-400">
+                        This scene has no geoAnchor, so there is no place to show a map of.
+                    </div>
+                )}
 
                 {/* Compass & Camera Reticle */}
                 <div
@@ -176,14 +193,16 @@ export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
                 </div>
 
                 {/* Coordinate & Ground Elevation Badge */}
-                <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/75 backdrop-blur-md border border-white/10 text-[9px] font-mono text-zinc-300 flex items-center gap-1.5">
-                    <span>{lat.toFixed(4)}°, {lng.toFixed(4)}°</span>
-                    {elevation !== undefined && (
-                        <span className="text-cyan-400 font-semibold border-l border-white/20 pl-1.5" title="Authoritative Google Ground Surface Elevation (MSL EGM96)">
-                            {elevation.toFixed(1)}m MSL
-                        </span>
-                    )}
-                </div>
+                {anchor && (
+                    <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/75 backdrop-blur-md border border-white/10 text-[9px] font-mono text-zinc-300 flex items-center gap-1.5">
+                        <span>{anchor.lat.toFixed(4)}°, {anchor.lng.toFixed(4)}°</span>
+                        {elevation !== undefined && (
+                            <span className="text-cyan-400 font-semibold border-l border-white/20 pl-1.5" title={`Anchor elevation (${geoAnchor?.elevationSource || 'source not recorded'})`}>
+                                {elevation.toFixed(1)}m MSL
+                            </span>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Quick Actions */}
@@ -317,9 +336,12 @@ export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
                             onClick={handleCopyStyleJson}
                             className="sb-btn sb-btn-xs px-2 py-0.5 rounded bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-[10px] font-medium transition-all"
                         >
-                            {copiedJson ? '✓ Copied!' : 'Copy JSON'}
+                            {copyState?.ok ? '✓ Copied!' : 'Copy JSON'}
                         </button>
                     </div>
+                    {copyState && !copyState.ok && (
+                        <div role="alert" className="text-[10px] text-red-300">Copy failed: {copyState.error}</div>
+                    )}
                     <pre className="text-[9px] font-mono text-zinc-300 bg-black/60 p-2 rounded-lg border border-white/5 overflow-x-auto max-h-36">
                         {JSON.stringify(GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE, null, 2)}
                     </pre>

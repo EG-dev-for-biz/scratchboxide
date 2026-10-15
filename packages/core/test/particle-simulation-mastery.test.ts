@@ -13,7 +13,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
-import { DynamicDagPlanner } from '../src/node/deep-write/dynamic-dag-planner';
 import { detect3DSceneTheme, generateDefaultCpp3DSource } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 import { VisualVerificationService } from '../src/node/visual-verification-service';
 import { captureSceneScreenshot } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
@@ -214,36 +213,6 @@ int main() {
         expect(cppSource).toContain('ParticleRenderMode::BillboardQuads');
     });
 
-    it('generates and executes autonomous DAG with Phase 3c (particles_and_fx stage and particlesSimulated check)', async () => {
-        const planner = new DynamicDagPlanner();
-        const prompt = 'Synthesize a high-fidelity dynamic particle vortex system with fluid turbulence and ground collision';
-
-        const dagPlan = planner.generate3DPlanDAG(prompt);
-        expect(dagPlan.theme).toBe('particles');
-
-        const particleStage = dagPlan.stages.find(s => s.id === 'stage_03c_particles_and_fx');
-        expect(particleStage).toBeDefined();
-        expect(particleStage?.type).toBe('particles_fx');
-        expect(particleStage?.operators.some(op => op.operator === 'sb_spawn_particle_emitter')).toBe(true);
-        expect(particleStage?.operators.some(op => op.operator === 'sb_simulate_particles')).toBe(true);
-        expect(particleStage?.operators.some(op => op.operator === 'sb_add_force_field')).toBe(true);
-        expect(particleStage?.operators.some(op => op.operator === 'sb_add_particle_collider')).toBe(true);
-        expect(particleStage?.expectedStateChecks?.particlesSimulated).toBe(true);
-
-        // Execute autonomous 3D workflow
-        const executionResult = await planner.executeAutonomous3DWorkflow(prompt);
-        expect(executionResult.success).toBe(true);
-        expect(executionResult.finalScene).toBeDefined();
-        expect(executionResult.executedStages.length).toBe(dagPlan.stages.length);
-
-        // Check particle state in final scene
-        const particleSystems = (executionResult.finalScene as any).particleSystems;
-        expect(particleSystems).toBeDefined();
-        expect(particleSystems.length).toBeGreaterThan(0);
-        expect(particleSystems[0].simulationTime).toBeGreaterThan(0);
-        expect(particleSystems[0].particleCount).toBeGreaterThan(0);
-    });
-
     it('performs visual verification with screenshot artifact generation adhering to visual progress directive', async () => {
         // Build particle visualization scene with Three.js
         const scene = new THREE.Scene();
@@ -308,15 +277,16 @@ int main() {
         fs.writeFileSync(screenshotPath, Buffer.from(base64Data, 'base64'));
         expect(fs.existsSync(screenshotPath)).toBe(true);
 
-        // Vision QA Evaluation
-        const visualService = new VisualVerificationService();
+        // Vision QA: the score comes only from the vision model. With no credentials (the client here has none, so no
+        // live call is made) the check reports itself unavailable instead of scoring the frame from scene metadata.
+        const visualService = new VisualVerificationService({ getGenAIClient: async () => undefined });
         const auditResult = await visualService.verifyVisual({
             image: screenshotDataUrl,
             prompt: 'Dynamic 3D particle vortex simulation with blackbody thermal radiance and curl noise turbulence',
             artifactType: '3d-scene'
         });
 
-        expect(auditResult).toBeDefined();
-        expect(auditResult.fidelityScore).toBeGreaterThanOrEqual(70);
+        expect(auditResult.status).toBe('unavailable');
+        expect(auditResult).not.toHaveProperty('fidelityScore');
     });
 });

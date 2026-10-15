@@ -12,9 +12,7 @@ import * as THREE from 'three';
 import { VisualVerificationService } from '../src/node/visual-verification-service';
 import {
     computeCameraForViewportAngle,
-    parseImagePayload,
-    VisualAuditResult,
-    VisualVerificationRequest
+    VisualAuditResult
 } from '../src/common/visual-verification-protocol';
 import { sceneOptsIntoAtmosphere, sceneShowsSky, withoutEnvironmentChanges } from '../src/common/scene-atmosphere-opt-in';
 import { backgroundAuditRepair, backgroundAuditRepairData, shouldAuditArtifactInBackground } from '../src/browser/generative-canvas/hooks/useArtifactSync';
@@ -27,23 +25,38 @@ import { saveViewportSnapshot } from './helpers/scene3d-viewport-snapshot';
 
 const FRAME = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mNk+M9Qz8DAwMTAwAAAEAEDAT4qV4QAAAAASUVORK5CYII=';
 
-/** Runs the offline heuristic directly, so no test reaches a live Gemini endpoint. */
-class HeuristicVerifier extends VisualVerificationService {
-    inspect(request: VisualVerificationRequest): VisualAuditResult {
-        const { base64Data, dataUrl } = parseImagePayload(request.image);
-        return this.heuristicVisualInspection(request, base64Data, dataUrl);
-    }
-}
-
-const verifier = new HeuristicVerifier();
+/** The repair guards are tested on audits shaped like the vision model's; no test reaches a live endpoint. */
+const verifier = new VisualVerificationService({ getGenAIClient: async () => undefined });
 
 function sceneArtifact(data: Scene3DData, version = 1): CanvasArtifact {
     return { id: 'scene-under-audit', type: '3d-scene', title: data.title, summary: '', createdAt: 'now', version, data };
 }
 
-function heuristicAudit(scene: Scene3DData, prompt = 'a bioluminescent mycelium forest inside a hollow asteroid'): VisualAuditResult {
-    return verifier.inspect({ image: FRAME, prompt, artifactType: '3d-scene', context: { sceneData: scene } });
+/** A vision audit that fails the framing of `scene` and proposes the framed camera for it. */
+function farCameraAudit(scene: Scene3DData): VisualAuditResult {
+    return {
+        pass: false,
+        fidelityScore: 62,
+        critique: 'The subject is small and off centre.',
+        issues: ['camera too far from the subject'],
+        strengths: [],
+        defects3D: [{ defectType: 'off_center_camera', severity: 'warning', description: 'Subject occupies a small part of the frame' }],
+        visualFixes: { camera: computeCameraForViewportAngle('perspective', scene) }
+    };
 }
+
+/** A vision audit that finds the scene unlit and suggests the three-point lighting operator. */
+const unlitAudit = (): VisualAuditResult => ({
+    pass: false,
+    fidelityScore: 48,
+    critique: 'The model is unlit.',
+    issues: ['no key light'],
+    strengths: [],
+    defects3D: [{ defectType: 'unlit', severity: 'critical', description: 'No key light', suggestedOperator: 'sb_setup_lighting', suggestedParams: { preset: 'three-point', ambientIntensity: 0.5 } }],
+    operatorDispatches: [{ operator: 'sb_setup_lighting', params: { preset: 'three-point', ambientIntensity: 0.5 } }]
+});
+
+const passingAudit = (): VisualAuditResult => ({ pass: true, fidelityScore: 91, critique: 'Clean clay massing.', issues: [], strengths: ['clear silhouette'] });
 
 function serverRepair(scene: Scene3DData, audit: VisualAuditResult): Scene3DData {
     return verifier.applyVisualAutoRepair(sceneArtifact(scene), audit).data as Scene3DData;
@@ -97,7 +110,7 @@ const clayStudioScene = (): Scene3DData => ({
     ]
 });
 
-/** The clay hero framed where the heuristic itself would frame it. */
+/** The clay hero framed where a framing fix would put the camera. */
 const framedClayScene = (): Scene3DData => {
     const scene = clayStudioScene();
     scene.camera = computeCameraForViewportAngle('perspective', scene);
@@ -159,20 +172,9 @@ const framingAudit = (camera = { position: [13.5, 10.5, 13.5] as [number, number
 });
 
 describe('a clay studio scene after a failing audit', () => {
-    it('the heuristic fails the far camera and proposes only a camera framing', () => {
-        const audit = heuristicAudit(clayStudioScene());
-        expect(audit.fidelityScore).toBeLessThan(80);
-        expect(audit.defects3D?.map(d => d.defectType)).toEqual(['off_center_camera']);
-        expect(audit.visualFixes?.camera).toBeDefined();
-        expect(audit.visualFixes?.environment).toBeUndefined();
-        expect(audit.visualFixes?.features).toBeUndefined();
-        expect(audit.visualFixes?.scenePatches).toBeUndefined();
-        expect(audit.issues.join(' ')).not.toMatch(/sky|atmospher/i);
-    });
-
     it('the in-app loop writes only a camera change', () => {
         const scene = clayStudioScene();
-        const data = backgroundAuditRepairData(sceneArtifact(scene), heuristicAudit(scene)) as Scene3DData;
+        const data = backgroundAuditRepairData(sceneArtifact(scene), farCameraAudit(scene)) as Scene3DData;
         expect(data).not.toBeNull();
         expect(data.camera).not.toEqual(scene.camera);
         expect({ ...data, camera: scene.camera }).toEqual(scene);
@@ -181,7 +183,7 @@ describe('a clay studio scene after a failing audit', () => {
 
     it('the server repair keeps the studio, the clay, the void and the empty sky', () => {
         const scene = clayStudioScene();
-        const repaired = serverRepair(scene, heuristicAudit(scene));
+        const repaired = serverRepair(scene, farCameraAudit(scene));
         expect(chosenEnvironment(repaired)).toEqual(chosenEnvironment(scene));
         expect(repaired.camera).not.toEqual(scene.camera);
         expect(rendersSkyDome(repaired)).toBe(false);
@@ -189,7 +191,7 @@ describe('a clay studio scene after a failing audit', () => {
 
     it('is saved as a rendered frame that stays clay grey in a clay grey studio', () => {
         const scene = clayStudioScene();
-        const failing = heuristicAudit(scene);
+        const failing = farCameraAudit(scene);
         expect(failing.fidelityScore).toBeLessThan(80);
         const everything: VisualAuditResult = {
             ...failing,
@@ -251,13 +253,9 @@ describe('item 1: a clay scene that keeps atmosphere settings never draws a sky'
         expect(rendersSkyDome(clayKeepingSky())).toBe(false);
     });
 
-    it('gets no sky critique from the heuristic, passes, and is not repaired', () => {
+    it('a passing audit repairs nothing', () => {
         const scene = clayKeepingSky();
-        const audit = heuristicAudit(scene, 'a hollow asteroid at sunset');
-        expect(audit.issues.join(' ')).not.toMatch(/sky/i);
-        expect(audit.defects3D?.some(d => d.defectType === 'missing_skybox')).toBeFalsy();
-        expect(audit.pass).toBe(true);
-        expect(audit.visualFixes).toBeUndefined();
+        const audit = passingAudit();
         expect(backgroundAuditRepair(sceneArtifact(scene), audit, new Set())).toBeNull();
         const artifact = sceneArtifact(scene);
         expect(verifier.applyVisualAutoRepair(artifact, audit)).toBe(artifact);
@@ -393,9 +391,7 @@ describe('a live-Gemini-shaped atmosphere fix on a scene that never asked for a 
 describe('item 3: an audit moves the camera only for a framing defect, on bounds it can measure, once per version', () => {
     it('a lighting failure writes no camera, though the old fix carried the computed default', () => {
         const scene: Scene3DData = { ...clayStudioScene(), environment: { skybox: 'studio', ground: false }, camera: { position: [20, 15, 20], target: [0, 10, 0], fov: 45 } };
-        const audit = heuristicAudit(scene);
-        expect(audit.fidelityScore).toBeLessThan(80);
-        expect(audit.defects3D?.map(d => d.defectType)).toEqual(['unlit']);
+        const audit = unlitAudit();
         expect(audit.visualFixes?.camera).toBeUndefined();
         expect(backgroundAuditRepairData(sceneArtifact(scene), audit)).toBeNull();
         expect(serverRepair(scene, audit).camera).toEqual(scene.camera);
@@ -421,10 +417,6 @@ describe('item 3: an audit moves the camera only for a framing defect, on bounds
 
     for (const [label, scene] of unmeasuredScenes()) {
         it(`never resets the camera of a ${label} scene to the customMeshes default`, () => {
-            const audit = heuristicAudit(scene);
-            expect(audit.defects3D?.some(d => d.defectType === 'off_center_camera')).toBeFalsy();
-            expect(audit.visualFixes?.camera).toBeUndefined();
-
             // Even a live audit that flags framing and proposes a 10 m camera leaves it alone.
             expect(backgroundAuditRepairData(sceneArtifact(scene), framingAudit())).toBeNull();
             const repaired = serverRepair(scene, {
@@ -439,7 +431,7 @@ describe('item 3: an audit moves the camera only for a framing defect, on bounds
     it('repairs a version at most once, and never repairs the version a repair wrote', () => {
         const repairWritten = new Set<string>();
         const v1 = sceneArtifact(clayStudioScene());
-        const audit = heuristicAudit(clayStudioScene());
+        const audit = farCameraAudit(clayStudioScene());
 
         const v2 = backgroundAuditRepair(v1, audit, repairWritten);
         expect(v2?.version).toBe(2);
@@ -450,9 +442,9 @@ describe('item 3: an audit moves the camera only for a framing defect, on bounds
 
         // A version someone else writes later gets its own single repair.
         const v3 = sceneArtifact({ ...(v2!.data as Scene3DData), camera: { position: [200, 80, 200], target: [0, 0, 0], fov: 45 } }, 3);
-        const v4 = backgroundAuditRepair(v3, heuristicAudit(v3.data as Scene3DData), repairWritten);
+        const v4 = backgroundAuditRepair(v3, farCameraAudit(v3.data as Scene3DData), repairWritten);
         expect(v4?.version).toBe(4);
-        expect(backgroundAuditRepair(v3, heuristicAudit(v3.data as Scene3DData), repairWritten)).toBeNull();
+        expect(backgroundAuditRepair(v3, farCameraAudit(v3.data as Scene3DData), repairWritten)).toBeNull();
     });
 
     it('a passing audit or one without fixes writes nothing', () => {
@@ -462,22 +454,25 @@ describe('item 3: an audit moves the camera only for a framing defect, on bounds
     });
 });
 
-describe('item 4: the heuristic never proposes a skybox', () => {
+describe('item 4: no skybox is proposed for an audit', () => {
     const unlitSkyWithoutSkybox = (): Scene3DData => ({ ...skyScene(), environment: { ground: true } });
+    const missingSkyAudit = (): VisualAuditResult => ({
+        pass: false,
+        fidelityScore: 45,
+        critique: 'Dim, and the sky is missing.',
+        issues: ['missing sky dome'],
+        strengths: [],
+        defects3D: [{ defectType: 'missing_skybox', severity: 'critical', description: 'No sky' }],
+        visualFixes: { environment: { skybox: 'realistic-sky', lighting: 'shaded' } }
+    });
 
-    it('reports the missing skybox of a scene that draws a sky, with no skybox fix or operator', () => {
-        const audit = heuristicAudit(unlitSkyWithoutSkybox(), 'methane geysers at dusk');
-        expect(audit.fidelityScore).toBeLessThan(80);
-        const skyDefect = audit.defects3D?.find(d => d.defectType === 'missing_skybox');
-        expect(skyDefect).toBeDefined();
-        expect(skyDefect?.suggestedOperator).toBeUndefined();
-        expect(audit.visualFixes?.environment?.skybox).toBeUndefined();
+    it('a missing-skybox defect maps to no operator', () => {
         expect(verifier.mapDefectsToOperators([{ defectType: 'missing_skybox', severity: 'info', description: 'no sky' }])).toEqual([]);
     });
 
     it('and the server repair leaves that scene without a skybox', () => {
         const scene = unlitSkyWithoutSkybox();
-        const repaired = serverRepair(scene, heuristicAudit(scene, 'methane geysers at dusk'));
+        const repaired = serverRepair(scene, missingSkyAudit());
         expect(repaired.environment?.skybox).toBeUndefined();
         expect(chosenEnvironment(repaired)).toEqual(chosenEnvironment(scene));
         expect(repaired.environment?.lighting).toBe('shaded');
@@ -501,9 +496,9 @@ describe('item 5: the lighting operator relights without touching the environmen
         expect((repaired.operatorStack || []).map(op => op.operator)).toEqual(['sb_setup_lighting']);
     });
 
-    it('the heuristic\'s own unlit repair of a clay void relights it and stays a clay void', () => {
+    it('an unlit audit\'s lighting repair of a clay void relights it and stays a clay void', () => {
         const scene: Scene3DData = { ...framedClayScene(), environment: { lighting: 'none', ground: false } };
-        const repaired = serverRepair(scene, heuristicAudit(scene));
+        const repaired = serverRepair(scene, unlitAudit());
         expect(repaired.environment?.lightingPreset).toBe('three-point');
         expect(repaired.environment?.skybox).toBeUndefined();
         expect(chosenEnvironment(repaired)).toEqual(chosenEnvironment(scene));

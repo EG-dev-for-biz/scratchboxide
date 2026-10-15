@@ -27,7 +27,6 @@ const PUBLIC_METHODS_BEFORE_SPLIT = [
     'extractCodeSandboxArtifact',
     'extractDocumentTitle',
     'formatContents',
-    'generate3DPlanDAG',
     'generateArtifact',
     'getCodebaseLensController',
     'getCodebaseLensRegistry',
@@ -44,13 +43,11 @@ const PUBLIC_METHODS_BEFORE_SPLIT = [
     'getVisualVerificationService',
     'markdownStringToSections',
     'pingMcpServer',
-    'plan3DAutonomousWorkflow',
     'queryMapsGrounding',
     'run3DVisualSelfCorrectionLoop',
     'saveCredentialsDirectly',
     'startDeepResearchSession',
     'streamGenerate',
-    'synthesizeComprehensiveDocument',
     'synthesizeSpeech',
     'verifyVisual'
 ];

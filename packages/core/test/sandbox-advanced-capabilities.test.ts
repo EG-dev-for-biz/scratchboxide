@@ -1,12 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-    is3DStudioIntent,
-    generateNativeCppGenerator,
-    generate3DControls,
-    generate3DStudioApp,
-    extractCodeSandboxArtifact
-} from "../src/node/gemini/artifact-synthesis";
-import {
     morphSandboxToScene3D,
     morphSandboxToDoc,
     morphSandboxToKanban,
@@ -19,67 +12,6 @@ import {
 } from "../src/browser/generative-canvas/canvas-types";
 
 describe("Advanced Live Code Sandbox Features (1 - 4)", () => {
-    describe("Feature 1: Interactive Native C++20 3D Mesh Studio Micro-App", () => {
-        it("should accurately detect 3D studio intent from prompt or title", () => {
-            expect(is3DStudioIntent("generate a procedural terrain with marching cubes", "Studio")).toBe(true);
-            expect(is3DStudioIntent("create an interactive 3D mesh studio", "Mesh View")).toBe(true);
-            expect(is3DStudioIntent("build a calculator app", "3D Terrain Generator")).toBe(true);
-            expect(is3DStudioIntent("todo list app with react", "Task Manager")).toBe(false);
-        });
-
-        it("should generate compliant modern C++20 source code according to AGENTS.md directives", () => {
-            const cppSource = generateNativeCppGenerator("Alpine Mountain Range");
-            expect(cppSource).toContain("#include \"scratchbox_engine.hpp\"");
-            // ef946fa ("integrate python 3d scene synthesis pipeline") replaced the marching-cubes SDF
-            // generator (scratchbox_math.hpp, ProceduralTerrainSDF, MarchingCubesVolume, GLBOutputStream)
-            // with a grounded heightfield terrain built on the unified scratchbox_engine.hpp API.
-            expect(cppSource).toContain("-std=c++20");
-            expect(cppSource).toContain("using namespace scratchbox;");
-            expect(cppSource).toContain("ScratchboxMesh terrain(");
-            expect(cppSource).toContain("FastNoise3D noise(");
-            expect(cppSource).toContain("noise.fBm(");
-            expect(cppSource).toContain("terrain.addVertex(");
-            expect(cppSource).toContain("terrain.addTriangle(");
-            expect(cppSource).toContain("terrain.recomputeSmoothNormals()");
-            expect(cppSource).toContain("Vec4 vertexColor(");
-            expect(cppSource).toContain("scratchbox::io::GlbWriter::streamChunk(terrain");
-            expect(cppSource).toContain("Alpine Mountain Range");
-        });
-
-        it("should generate interactive 3D controls and Three.js App.tsx with native C++ bridge call", () => {
-            const controls = generate3DControls();
-            expect(controls).toContain("SDF Noise Octaves");
-            expect(controls).toContain("Spatial Frequency");
-            expect(controls).toContain("Material Roughness");
-            expect(controls).toContain("window.scratchbox.storage.exportState");
-            expect(controls).toContain("window.scratchbox.ai.refine");
-
-            const app = generate3DStudioApp("Procedural Asteroid Field");
-            expect(app).toContain("window.scratchbox.native3d.generateGlb");
-            expect(app).toContain("THREE.PerspectiveCamera");
-            expect(app).toContain("THREE.Scene");
-            expect(app).toContain("THREE.DirectionalLight");
-            expect(app).toContain("scratchbox_engine.hpp");
-        });
-
-        it("should synthesize a multi-file 3D studio sandbox artifact with world_generator.cpp", () => {
-            const result = extractCodeSandboxArtifact(
-                "Generate an interactive 3D terrain mesh studio with C++20 marching cubes",
-                ""
-            );
-            expect(result).not.toBeNull();
-            expect(result?.artifact.type).toBe("live-code-sandbox");
-            const data = result?.artifact.data as LiveCodeSandboxData;
-            expect(data.files.some(f => f.name === "world_generator.cpp")).toBe(true);
-            const cppFile = data.files.find(f => f.name === "world_generator.cpp");
-            expect(cppFile?.language).toBe("cpp");
-            expect(cppFile?.content).toContain("#include \"scratchbox_engine.hpp\"");
-            expect(data.files.some(f => f.name === "Controls.tsx")).toBe(true);
-            expect(data.files.some(f => f.name === "App.tsx")).toBe(true);
-            expect(data.dependencies?.three).toBeDefined();
-        });
-    });
-
     describe("Feature 2: 1-Click \"Scaffold to Workspace\" File Sync", () => {
         it("should generate valid turnkey manifest files (package.json, vite.config.ts, tsconfig.json)", () => {
             const slug = "alpine-valley";

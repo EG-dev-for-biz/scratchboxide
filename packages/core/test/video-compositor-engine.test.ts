@@ -9,8 +9,6 @@
 
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
-import { classifyFallbackPrompt } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { synthesizeContextualVideoTimeline } from '../src/browser/generative-canvas/services/video/videoTimelineSynthesizer';
 import { COMPOSITOR_VERT, COMPOSITOR_FRAG } from '../src/browser/generative-canvas/services/video/compositorShaders';
 import { VideoCompositor } from '../src/browser/generative-canvas/services/video/VideoCompositor';
@@ -22,53 +20,10 @@ import { HOW_TO, requireBinary, withReason } from './helpers/requirements';
 const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
 
 describe('Video Compositing Engine - Full Stack Compositor & Headless Service', () => {
-    const defaultRequest = {
-        prompt: '',
-        activeArtifact: undefined,
-        chatHistory: [],
-        sessionContext: {
-            workspacePath: '/mock/workspace',
-            activeFilePath: '/mock/workspace/project.sb',
-            openFiles: [],
-            projectType: 'generative'
-        }
-    };
-
     // ==========================================
     // 1. Classification & Routing Verification
     // ==========================================
     describe('Compositing Prompt Dispatch and Routing', () => {
-        it('classifies green screen and chroma key prompts to video-timeline', () => {
-            const result1 = classifyFallbackPrompt('Chroma key green screen background and place actor over cyber city', undefined, 'video', undefined);
-            expect(result1.isVideoTimelineRequest).toBe(true);
-
-            const result2 = classifyFallbackPrompt('Apply despill suppression and key out green backdrop', undefined, 'canvas', undefined);
-            expect(result2.isVideoTimelineRequest).toBe(true);
-
-            const result3 = classifyFallbackPrompt('Composite video with optical light wrap around edges', undefined, 'canvas', undefined);
-            expect(result3.isVideoTimelineRequest).toBe(true);
-
-            const result4 = classifyFallbackPrompt('Picture in picture PIP composite overlay in corner', undefined, 'video', undefined);
-            expect(result4.isVideoTimelineRequest).toBe(true);
-        });
-
-        it('synthesizes artifact with video-timeline primitive for chroma key prompts', () => {
-            const prompt = 'Chroma key green screen background and despill foreground subject';
-            const prose = 'Configured green screen chroma keying and despill suppression on the foreground track.';
-            const artifact = parseOrSynthesizeArtifact(prompt, prose, { ...defaultRequest, prompt }, []);
-
-            expect(artifact.type).toBe('video-timeline');
-            const data = artifact.data as VideoTimelineData;
-            expect(data.tracks).toBeDefined();
-            
-            // Check that at least one element has keying enabled
-            const allElements = data.tracks.flatMap(t => t.elements);
-            const keyedElement = allElements.find(el => el.keying?.enabled);
-            expect(keyedElement).toBeDefined();
-            expect(keyedElement?.keying?.keyColor).toBe('#00ff00');
-            expect(keyedElement?.keying?.despill).toBeGreaterThan(0);
-        });
-
         it('synthesizes picture-in-picture affine transforms for PiP prompt', () => {
             const prompt = 'Add picture in picture PiP video composite overlay';
             const timeline = synthesizeContextualVideoTimeline(prompt, undefined, '/mock/workspace');

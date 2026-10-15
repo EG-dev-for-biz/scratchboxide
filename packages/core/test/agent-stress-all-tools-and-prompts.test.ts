@@ -261,7 +261,9 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 title: 'Urban Colosseum Metrology Stage',
                 payload: {
                     camera: { position: [10, 15, 20], target: [0, 0, 0] },
-                    environment: { ephemeris: { solarElevationDeg: 42.5 } }
+                    environment: { ephemeris: { solarElevationDeg: 42.5 } },
+                    // Live 3D tiles at the Colosseum: a mount needs something to draw.
+                    geoAnchor: { lat: 41.8902, lng: 12.4922 }
                 }
             }, mockContext);
             expect(res.exec.status).toBe('completed');

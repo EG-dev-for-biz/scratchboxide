@@ -17,7 +17,6 @@
 import * as React from 'react';
 import { ProjectItem } from '../ProjectsModal';
 import { CanvasArtifact, ChatSession, CodeFileTab, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, NodeGraphData, PrimitiveType, Scene3DData, StudioLayoutMode, VideoTimelineData, WorkspaceFileType, getActiveUserName } from '../canvas-types';
-import { synthesizeComprehensiveDocument } from '../document-synthesis-engine';
 import { KanbanBoardPrimitive } from '../primitives/KanbanBoardPrimitive';
 import { MarkdownDocumentPrimitive } from '../primitives/MarkdownDocumentPrimitive';
 import { NodeGraphPrimitive } from '../primitives/NodeGraphPrimitive';
@@ -366,6 +365,28 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
 }
 
 /** Creates a new workspace file of the given type as a fresh canvas + chat session. */
+/**
+ * The scene a new "4D Scene" workspace opens with: empty, in the neutral studio, so the viewport says "No geometry"
+ * until the user or the model adds something. It used to hold `internal:grid` and `internal:sunlight` objects that
+ * draw nothing, a cyberpunk sky and a summary describing wave solvers and a WASM heap the scene does not have.
+ */
+export function newEmptySceneArtifact(now: number = Date.now()): CanvasArtifact {
+    const title = '4D Scene';
+    return {
+        id: `art-3d-${now}`,
+        type: '3d-scene',
+        title,
+        summary: '',
+        data: {
+            title,
+            objects: [],
+            environment: { skybox: 'studio', lighting: 'studio', ground: false }
+        } as Scene3DData,
+        createdAt: new Date(now).toLocaleTimeString(),
+        version: 1
+    };
+}
+
 export function useWorkspaceFileCreation(deps: UseWorkspaceFilesDeps) {
     const { activeArtifact, activeWorkspace, artifactHistory, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, showToast } = deps;
 
@@ -427,19 +448,20 @@ export function useWorkspaceFileCreation(deps: UseWorkspaceFilesDeps) {
                 artifactHistory: [codeArtifact]
             };
         } else if (type === 'document') {
-            const defaultDoc = synthesizeComprehensiveDocument('write a document about 1776');
+            // A new document is empty: the user (or the model) writes it. No sample document is filled in.
+            const emptyDoc: MarkdownDocumentData = { title: 'Untitled document', lastUpdated: 'Just now', sections: [] };
             const docArtifact: CanvasArtifact = {
                 id: `art-doc-${Date.now()}`,
                 type: 'markdown-document',
-                title: defaultDoc.title,
-                summary: defaultDoc.subtitle || 'Specification Document',
-                data: defaultDoc,
+                title: emptyDoc.title,
+                summary: '',
+                data: emptyDoc,
                 version: 1,
                 createdAt: 'Just now'
             };
             newSession = {
                 id: newSessionId,
-                title: 'The Enduring Significance of 1776',
+                title: emptyDoc.title,
                 fileType: 'document',
                 layoutMode: 'document',
                 activeArtifact: docArtifact,
@@ -466,57 +488,7 @@ export function useWorkspaceFileCreation(deps: UseWorkspaceFilesDeps) {
                 artifactHistory: []
             };
         } else if (type === '3d') {
-            const activeArt: CanvasArtifact = {
-                id: `art-3d-${Date.now()}`,
-                type: '3d-scene',
-                title: 'Interactive 4D Scene Workspace',
-                summary: 'WebGL viewport with procedural topography, real-time wave solvers, and simulated WASM linear memory heap.',
-                data: {
-                    title: 'Interactive 4D Scene Workspace',
-                    subtitle: 'WebGL viewport with procedural topography, real-time wave solvers, and simulated WASM linear memory heap.',
-                    objects: [
-                        {
-                            id: 'obj-grid-1',
-                            content: {
-                                type: '3d-scene',
-                                durableUri: 'internal:grid',
-                                mimeType: 'model/gltf-binary',
-                                metadata: { dims: { width: 30, height: 0, depth: 30 } }
-                            },
-                            space: {
-                                spatial3d: { x: 0, y: -1, z: 0, pitch: 0, yaw: 0, roll: 0 }
-                            },
-                            time: { startMs: 0, durationMs: 0 },
-                            lineage: { version: 1 }
-                        },
-                        {
-                            id: 'obj-light-1',
-                            content: {
-                                type: '3d-scene',
-                                durableUri: 'internal:sunlight',
-                                mimeType: 'model/gltf-binary',
-                                metadata: {}
-                            },
-                            space: {
-                                spatial3d: { x: 15, y: 30, z: 10, pitch: 0, yaw: 0, roll: 0 }
-                            },
-                            time: { startMs: 0, durationMs: 0 },
-                            lineage: { version: 1 }
-                        }
-                    ],
-                    camera: {
-                        position: [15, 12, 15],
-                        target: [0, 0, 0]
-                    },
-                    environment: {
-                        skybox: 'cyberpunk',
-                        lighting: 'shaded',
-                        ground: true
-                    }
-                },
-                createdAt: new Date().toLocaleTimeString(),
-                version: 1
-            };
+            const activeArt = newEmptySceneArtifact();
             newSession = {
                 id: newSessionId,
                 title: 'Workspace 4D Scene',

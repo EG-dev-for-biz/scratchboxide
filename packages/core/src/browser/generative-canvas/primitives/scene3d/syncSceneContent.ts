@@ -9,186 +9,149 @@
 
 import * as THREE from 'three';
 import type { BakedGaussian } from '../../../../common/geospatial-4d-protocol';
-import type { Scene3DData } from '../../canvas-types';
-import { createSculptableGeometry } from '../../services/mesh-sculpting-engine';
-import { createArticulatedAircraft } from '../../services/mesh/aircraft';
-import type { TerrainManager } from '../../services/TerrainManager';
-import type { RendererStack, Scene3DRenderMode, SceneContentHandle, WasmMeshHandle } from './types';
+import type { Media4DObject, Scene3DData } from '../../canvas-types';
+import type { RendererStack, Scene3DRenderMode, SceneContentHandle, SceneContentKind, WasmMeshHandle } from './types';
 import { removeAndDispose } from './types';
-import { isGroundSnapTarget } from './syncTilesLayer';
-import { createHistoricalBattlefieldScene } from '../../procedural-3d-synthesizer';
 
-const BATTLEFIELD_KEYWORDS = /battlefield|redcoat|minutemen|historic|revolutionary/i;
-
-export type SculptableShape = 'sphere' | 'plane' | 'box' | 'cylinder' | 'torus';
-
+/**
+ * Which content sources the scene data declares. The viewport draws only these; it never adds geometry of its own
+ * (no placeholder sculpt mesh, no aircraft or figures picked from the title).
+ */
 export interface SceneContentInput {
-    sceneType?: string;
-    title?: string;
-    worldBranch: string;
-    isAirplane: boolean;
-    hasContrails: boolean;
     hasActiveScript: boolean;
     has3DTiles: boolean;
     hasCustomMeshes: boolean;
     /**
-     * The scene loads content of its own: objects other than the `internal:mesh` fallback placeholder, or a splat
-     * (splatUrl / splatTilesetUrl, which the viewport loads as an object). See hasNonFallbackObjectContent.
+     * The scene loads content of its own: objects the viewport's loader draws (a .glb / .gltf model or a splat), or
+     * a splat file (splatUrl, which the viewport loads as an object). See hasNonFallbackObjectContent.
      */
     hasNonFallbackObjects: boolean;
     hasCppGenerator?: boolean;
     hasPythonGenerator?: boolean;
-    selectedShape: SculptableShape;
-    sculptWireframe: boolean;
 }
 
 /** Everything the primitive supplies so this module never imports from the primitive. */
 export interface SceneContentFactories {
-    createDynamicContrails: (scene: THREE.Scene, maxPoints?: number) => any;
     createSplatViewer: () => { group: THREE.Object3D; loadSplatObservation: (g: BakedGaussian[]) => void; dispose: () => void };
-    /** Runs the user's dynamic three.js script against the freshly built content. */
-    executeScript?: (env: { aircraft: THREE.Group | null; proceduralGroup: THREE.Group | null; contrails: any | null }) => {
+    /** Runs the user's dynamic three.js script. */
+    executeScript?: () => {
         update?: (time: number, delta: number) => void;
         dispose?: () => void;
         error?: string | null;
     } | null;
 }
 
-/** True when the scene loads content of its own, so no fallback content (sculpt mesh, aircraft) is drawn for it. */
-export function hasNonFallbackObjectContent(scene: Pick<Scene3DData, 'objects' | 'splatUrl' | 'splatTilesetUrl'>): boolean {
-    if (scene.splatUrl || scene.splatTilesetUrl) return true;
-    return Array.isArray(scene.objects) && scene.objects.length > 0 && !scene.objects.some(o => o.content?.durableUri === 'internal:mesh');
-}
+/** glTF models the viewport's object loader draws (objects[].content.durableUri), with any query or fragment. */
+const GLTF_MODEL_URI = /\.(glb|gltf)($|[?#])/i;
+/** Gaussian splat files the loader draws. */
+const SPLAT_URI = /\.(splat|spz)($|[?#])/i;
 
-export function classifySceneContent(input: SceneContentInput): 'script' | 'tiles' | 'aircraft' | 'custom-meshes' | 'objects' | 'spatial' {
-    // 1. Structured Types First (Always honor explicit typed geometry and engines)
-    const hasActiveScript = input.hasActiveScript ?? !!(input as any).customScript;
-    const has3DTiles = input.has3DTiles ?? !!(input as any).geoAnchor?.active;
-    const hasCppGenerator = input.hasCppGenerator ?? !!(input as any).cppGenerator;
-    const hasPythonGenerator = input.hasPythonGenerator ?? !!(input as any).pythonGenerator;
-    const hasCustomMeshes = input.hasCustomMeshes ?? ((input as any).customMeshes && (input as any).customMeshes.length > 0);
-    const hasNonFallbackObjects = input.hasNonFallbackObjects ?? ((input as any).objects && (input as any).objects.length > 0);
-
-    if (hasActiveScript) return 'script';
-    if (has3DTiles) return 'tiles';
-    if (hasCppGenerator || hasPythonGenerator) return 'objects';
-    if (hasCustomMeshes) return 'custom-meshes';
-    if (hasNonFallbackObjects) return 'objects';
-    if (input.isAirplane) return 'aircraft';
-
-    // 2. Adaptive Domain Architecture Default (Zero closed taxonomies / zero keyword regexes)
-    return 'spatial';
+/**
+ * How the viewport's object loader reads a durableUri: as a splat (typed gaussian-splat, or a .splat / .spz file),
+ * as a glTF model (.glb / .gltf), or not at all (null). The loader and the drawability checks (the viewport notices
+ * and the mount) share this, so a URI counted as drawable is one the loader loads.
+ */
+export function drawableModelKind(uri: string | undefined, contentType?: string): 'splat' | 'gltf' | null {
+    if (!uri) return null;
+    if (contentType === 'gaussian-splat' || SPLAT_URI.test(uri)) return 'splat';
+    if (GLTF_MODEL_URI.test(uri)) return 'gltf';
+    return null;
 }
 
 /**
- * Builds the focal content of the scene: procedural theme group, articulated aircraft +
- * contrails, splat viewer, sculptable mesh, terrain grounding and the dynamic script hooks.
+ * Placeholders the app itself seeds into scenes it opens or creates (the file opener's `internal:mesh`, and the
+ * `internal:grid` / `internal:sunlight` older "New 4D Scene" workspaces were saved with). They draw nothing and were
+ * never asked for, so they are neither content nor an error; any other URI the loader cannot read is reported.
+ */
+const APP_SEEDED_PLACEHOLDER_URIS = new Set(['internal:mesh', 'internal:grid', 'internal:sunlight']);
+
+/** A placeholder the app seeded next to (or instead of) real objects; it draws nothing. */
+export function isPlaceholderObject(o: Media4DObject | undefined): boolean {
+    const uri = o?.content?.durableUri;
+    return typeof uri === 'string' && APP_SEEDED_PLACEHOLDER_URIS.has(uri);
+}
+
+/** A `map-3d` object asks for live 3D tiles at its own anchor; the tiles layer draws it (and reports its errors). */
+export function isTilesObject(o: Media4DObject | undefined): boolean {
+    return o?.content?.type === 'map-3d';
+}
+
+/**
+ * True when the viewport's object loader draws this object: its durableUri is a .glb / .gltf model or a .splat /
+ * .spz splat (or it is typed gaussian-splat with a file). Other URIs (internal:plane, images, .obj) are skipped.
+ */
+export function isDrawableSceneObject(o: Media4DObject | undefined): boolean {
+    const uri = o?.content?.durableUri;
+    if (!uri || isPlaceholderObject(o) || isTilesObject(o)) return false;
+    return drawableModelKind(uri, o?.content?.type) !== null;
+}
+
+/** A declared object the viewport cannot draw, and why. */
+export interface UndrawableSceneObject {
+    id: string;
+    reason: string;
+}
+
+/**
+ * The declared objects the viewport would skip without a word: neither a model or splat file the loader draws,
+ * nor a placeholder or a tiles object. A scene that holds them says so instead of looking empty or complete.
+ */
+export function undrawableSceneObjects(scene: Pick<Scene3DData, 'objects'>): UndrawableSceneObject[] {
+    if (!Array.isArray(scene.objects)) return [];
+    return scene.objects
+        .filter(o => !isPlaceholderObject(o) && !isTilesObject(o) && !isDrawableSceneObject(o))
+        .map((o, i) => {
+            const uri = o?.content?.durableUri;
+            return {
+                id: o?.id || `objects[${i}]`,
+                reason: uri ? `${uri} is not a .glb, .gltf, .splat or .spz file` : 'it has no content.durableUri'
+            };
+        });
+}
+
+/**
+ * True when the scene loads content of its own: an object the loader draws (see isDrawableSceneObject), or a splat
+ * file (splatUrl). A placeholder never hides the real objects beside it, and an object the loader skips (an image,
+ * internal:plane) is not content.
+ */
+export function hasNonFallbackObjectContent(scene: Pick<Scene3DData, 'objects' | 'splatUrl'>): boolean {
+    if (scene.splatUrl) return true;
+    return Array.isArray(scene.objects) && scene.objects.some(isDrawableSceneObject);
+}
+
+/**
+ * Which slice draws the scene's focal content. 'empty' means the data declares nothing to draw; the viewport then
+ * says "No geometry" instead of drawing a placeholder.
+ */
+export function classifySceneContent(input: SceneContentInput): SceneContentKind {
+    if (input.hasActiveScript) return 'script';
+    if (input.has3DTiles) return 'tiles';
+    if (input.hasCppGenerator || input.hasPythonGenerator) return 'objects';
+    if (input.hasCustomMeshes) return 'custom-meshes';
+    if (input.hasNonFallbackObjects) return 'objects';
+    return 'empty';
+}
+
+/**
+ * Builds the focal content that has no slice of its own: the splat viewer and the dynamic script hooks.
  * Runs whenever the content fingerprint changes; never touches the renderer stack.
  */
 export function syncSceneContent(
     stack: RendererStack,
     input: SceneContentInput,
-    terrainManager: TerrainManager | null,
     factories: SceneContentFactories
 ): SceneContentHandle {
     const { scene } = stack;
-    const worldBranch = (input.worldBranch || '').toLowerCase();
-    const sceneTitle = (input.title || '').toLowerCase();
-    const haystack = `${worldBranch} ${sceneTitle}`;
-
-    let proceduralSceneGroup: THREE.Group | null = null;
-    let airplane: THREE.Group | null = null;
-    let contrails: any | null = null;
-    let sculptTarget: THREE.Mesh | null = null;
-    let ownedSculptMesh: THREE.Mesh | null = null;
-
-    const kind = classifySceneContent(input);
-    switch (kind) {
-        case 'script':
-            // The dynamic script synthesises and animates the scene itself.
-            break;
-        case 'tiles':
-            // Real-world tiles are the foundation; only add grounded thematic figures.
-            if (input.sceneType === 'battlefield' || BATTLEFIELD_KEYWORDS.test(haystack)) {
-                proceduralSceneGroup = createHistoricalBattlefieldScene(scene, THREE, {
-                    ground: false,
-                    tavern: false,
-                    meetinghouse: false,
-                    stoneWalls: false,
-                    trees: false,
-                    minutemenCount: 16,
-                    redcoatCount: 20,
-                    smokeParticles: true
-                });
-            }
-            break;
-        case 'aircraft': {
-            const articulated = createArticulatedAircraft();
-            airplane = articulated.group;
-            airplane.position.set(0, 3.5, 0);
-            scene.add(airplane);
-            if (input.hasContrails) {
-                contrails = factories.createDynamicContrails(scene, 350);
-            }
-            break;
-        }
-        case 'custom-meshes':
-        case 'objects':
-            // Custom meshes / objects are synchronised by their own slices.
-            break;
-        case 'spatial':
-        default:
-            // Neutral studio baseline. Zero client-side Three.js primitives.
-            // Procedural geometry is authored in C++20 / Python SDK and streamed as GLB.
-            proceduralSceneGroup = null;
-            break;
-    }
-
-    // Ground procedural figures onto the terrain (tiles or procedural).
-    if (proceduralSceneGroup && terrainManager) {
-        proceduralSceneGroup.updateMatrixWorld(true);
-        const groundTargets: THREE.Object3D[] = [];
-        proceduralSceneGroup.traverse(child => {
-            if (isGroundSnapTarget(child)) groundTargets.push(child);
-        });
-        if (groundTargets.length > 0) {
-            for (const target of groundTargets) terrainManager.snapObjectToGround(target, 0);
-        } else if (input.has3DTiles) {
-            terrainManager.snapObjectToGround(proceduralSceneGroup, 0);
-        }
-    }
 
     // Splat viewer. A splat scene's file (splatUrl) is loaded as a scene object; a splat world with no file
     // and no objects shows nothing rather than a made-up colonnade and dome of splats.
     const splatViewer = factories.createSplatViewer();
     scene.add(splatViewer.group);
 
-    // Sculptable focal mesh (only for unconfigured blank general scenes with no procedural content)
-    const hasGenerators = input.hasCppGenerator || input.hasPythonGenerator;
-    if (!hasGenerators && !input.isAirplane && !input.has3DTiles && !input.hasCustomMeshes && !input.hasActiveScript && !input.hasNonFallbackObjects && input.sceneType !== 'glass_shatter' && (!proceduralSceneGroup && (input.sceneType === 'general' || !input.sceneType))) {
-        const sGeo = createSculptableGeometry(input.selectedShape, { radius: 3.5, width: 12, height: 12, segments: 64 });
-        const sMat = new THREE.MeshStandardMaterial({
-            color: 0x60a5fa,
-            roughness: 0.35,
-            metalness: 0.2,
-            side: THREE.DoubleSide,
-            wireframe: input.sculptWireframe
-        });
-        ownedSculptMesh = new THREE.Mesh(sGeo, sMat);
-        ownedSculptMesh.position.set(0, 0, 0);
-        ownedSculptMesh.name = 'sb-sculptable-mesh';
-        scene.add(ownedSculptMesh);
-        sculptTarget = ownedSculptMesh;
-    } else if (proceduralSceneGroup) {
-        const candidate = proceduralSceneGroup.getObjectByProperty('type', 'Mesh') as THREE.Mesh | undefined;
-        if (candidate && candidate.geometry) sculptTarget = candidate;
-    }
-
-    // Dynamic script execution (after content exists so the script can reference it)
     let scriptHooks: SceneContentHandle['scriptHooks'] = null;
     let scriptError: string | null = null;
     if (input.hasActiveScript && factories.executeScript) {
-        const result = factories.executeScript({ aircraft: airplane, proceduralGroup: proceduralSceneGroup, contrails });
+        const result = factories.executeScript();
         if (result) {
             if (result.error) {
                 scriptError = result.error;
@@ -199,21 +162,14 @@ export function syncSceneContent(
     }
 
     return {
-        proceduralSceneGroup,
-        airplane,
-        contrails,
-        sculptTarget,
+        kind: classifySceneContent(input),
         splatViewer,
         scriptHooks,
         scriptError,
         dispose: () => {
             scriptHooks?.dispose?.();
-            contrails?.dispose?.();
             splatViewer.dispose();
             if (splatViewer.group.parent) splatViewer.group.parent.remove(splatViewer.group);
-            if (airplane) removeAndDispose(scene, airplane);
-            if (proceduralSceneGroup) removeAndDispose(scene, proceduralSceneGroup);
-            if (ownedSculptMesh) removeAndDispose(scene, ownedSculptMesh);
         }
     };
 }

@@ -2,6 +2,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import { GeminiService } from '../src/node/gemini-service';
 import { GeminiGenerateRequest, GeminiStreamEvent } from '../src/common/gemini-protocol';
+import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
 
 async function runGoogleSearchGroundingTests() {
     console.log('🧪 Running Gemini Google Search Grounding & Citations Test Suite...');
@@ -89,10 +90,19 @@ async function runGoogleSearchGroundingTests() {
 
     console.log('  ✓ Test 2 Passed: Grounding metadata (webSearchQueries, chunks, entry points) captured and streamed');
 
-    // Test 3: Verify document artifact synthesis enriches citation section with grounded web chunks
-    assert.ok(responseDefault.artifact, 'Artifact must be generated');
-    if (responseDefault.artifact && responseDefault.artifact.type === 'markdown-document') {
-        const docData = responseDefault.artifact.data as any;
+    // Test 3: A prose reply yields no artifact (no document is synthesized from the prompt); a document the model
+    // writes gets the grounded web chunks in its citation section.
+    assert.strictEqual(responseDefault.artifact, undefined, 'A prose reply must not produce a synthesized artifact');
+    const modelDoc = parseOrSynthesizeArtifact(
+        requestDefault.prompt,
+        '```json\n' + JSON.stringify({ type: 'markdown-document', title: 'Scratchbox IDE', data: { sections: [{ type: 'paragraph', content: 'Scratchbox IDE is powered by Gemini 3.8 Flash.' }] } }) + '\n```',
+        requestDefault,
+        [],
+        responseDefault.groundingMetadata
+    );
+    assert.ok(modelDoc && modelDoc.type === 'markdown-document', 'The model\'s document envelope must be mounted');
+    {
+        const docData = modelDoc!.data as any;
         const citationSec = docData.sections?.find((s: any) => s.type === 'citation');
         assert.ok(citationSec, 'Document artifact must contain a citation section');
         assert.ok(citationSec.citationItems?.length >= 2, 'Citation section must include grounded web items');

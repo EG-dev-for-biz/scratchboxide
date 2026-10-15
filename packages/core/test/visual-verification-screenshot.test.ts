@@ -28,7 +28,9 @@ import {
 import {
     parseImagePayload,
     VisualVerificationRequest,
-    VISUAL_VERIFICATION_CRITERIA
+    VISUAL_VERIFICATION_CRITERIA,
+    VisualAuditResult,
+    isVisualAuditUnavailable
 } from '../src/common/visual-verification-protocol';
 import {
     CanvasArtifact,
@@ -93,27 +95,34 @@ async function runVisualVerificationTests() {
     const sceneScreenshot = captureSceneScreenshot(mockRenderer, scene, camera);
     assert.strictEqual(sceneScreenshot, samplePngDataUrl, 'Must capture PNG data URL from Three.js WebGL renderer');
 
-    const sceneFallback = captureSceneScreenshot(null, null, null);
-    assert.ok(sceneFallback.startsWith('data:image/png;base64,'), 'Must return valid fallback PNG when renderer unavailable');
+    // Without a renderer or canvas there is no frame: null, never a placeholder image for the audit to inspect.
+    assert.strictEqual(captureSceneScreenshot(null, null, null), null, 'No renderer means no frame');
 
-    // 2b. LiveCodeSandbox screenshot capture
-    const sandboxScreenshot = captureSandboxScreenshot(null);
-    assert.ok(sandboxScreenshot.startsWith('data:image/png;base64,'), 'LiveCodeSandbox must generate PNG data URL');
-
-    // 2c. InteractiveBrowser screenshot capture
-    const browserScreenshot = captureBrowserScreenshot(null);
-    assert.ok(browserScreenshot.startsWith('data:image/png;base64,'), 'InteractiveBrowser must generate PNG data URL');
-
-    // 2d. GenerativeCanvasStudio active canvas capture
-    const activeCapture = captureActiveCanvasScreenshot('3d');
-    assert.ok(activeCapture.startsWith('data:image/png;base64,'), 'Active canvas screenshot capture must generate PNG data URL');
-    console.log('  ✓ Test 2 Passed: Screenshot engine captures WebGL, sandbox, browser, and active studio viewports.');
+    // 2b-2d. Sandbox, browser and active-canvas capture report no frame the same way
+    assert.strictEqual(captureSandboxScreenshot(null), null, 'LiveCodeSandbox without a canvas has no frame');
+    assert.strictEqual(captureBrowserScreenshot(null), null, 'InteractiveBrowser without a canvas has no frame');
+    assert.strictEqual(captureActiveCanvasScreenshot('3d'), null, 'No mounted primitive means no frame');
+    console.log('  ✓ Test 2 Passed: Screenshot engine captures the WebGL frame and reports a missing frame as null.');
 
     // -------------------------------------------------------------
     // Test 3: Multimodal Prompt Construction for Gemini 3.8 Flash
     // -------------------------------------------------------------
     console.log('  Testing 3: Multimodal Vision QA Prompt & Instruction Construction...');
-    const visualService = new VisualVerificationService();
+    // The vision model answers through an injected client: each call returns the next scripted audit JSON.
+    const scriptedAudits: Array<Record<string, unknown>> = [];
+    const visionCalls: any[] = [];
+    const visualService = new VisualVerificationService({
+        getGenAIClient: async () => ({
+            models: {
+                generateContent: async (req: any) => {
+                    visionCalls.push(req);
+                    const next = scriptedAudits.shift();
+                    if (!next) throw new Error('no scripted vision reply left');
+                    return { text: JSON.stringify(next) };
+                }
+            }
+        } as any)
+    });
 
     const testRequest: VisualVerificationRequest = {
         image: samplePngDataUrl,
@@ -147,12 +156,16 @@ async function runVisualVerificationTests() {
     // -------------------------------------------------------------
     console.log('  Testing 4: Visual Bug Detection & Fidelity Scoring...');
 
-    // 4a. Passing High-Fidelity Scene
-    const highFidelityAudit = await visualService.verifyVisual(testRequest);
+    // 4a. Passing High-Fidelity Scene: the vision model's score and findings, as it returned them
+    scriptedAudits.push({ pass: true, fidelityScore: 92, critique: 'Crisp silhouette, lit from the god rays.', issues: [], strengths: ['volumetric god rays read clearly'] });
+    const highFidelityOutcome = await visualService.verifyVisual(testRequest);
+    assert.ok(!isVisualAuditUnavailable(highFidelityOutcome), 'The vision model answered');
+    const highFidelityAudit = highFidelityOutcome as VisualAuditResult;
     assert.strictEqual(highFidelityAudit.pass, true, 'High fidelity scene must pass QA');
-    assert.ok(highFidelityAudit.fidelityScore >= 80, `Score must be >= 80, got ${highFidelityAudit.fidelityScore}`);
-    assert.ok(highFidelityAudit.strengths.length > 0, 'Must identify positive visual strengths');
+    assert.strictEqual(highFidelityAudit.fidelityScore, 92, 'The score is the model\'s own');
+    assert.deepStrictEqual(highFidelityAudit.strengths, ['volumetric god rays read clearly']);
     assert.ok(highFidelityAudit.thumbnail?.startsWith('data:image/png;base64,'), 'Must attach thumbnail data URL');
+    assert.strictEqual(visionCalls[0].contents[0].parts[0].inlineData.data, parsedDataUrl.base64Data, 'The frame is sent inline to the model');
 
     // 4b. Failing Void / Unlit Scene
     const failingRequest: VisualVerificationRequest = {
@@ -169,17 +182,28 @@ async function runVisualVerificationTests() {
         }
     };
 
-    const failingAudit = await visualService.verifyVisual(failingRequest);
+    scriptedAudits.push({
+        pass: false,
+        fidelityScore: 34,
+        critique: 'Black void: the model is unlit.',
+        issues: ['monochromatic void', 'missing scene lighting'],
+        strengths: [],
+        visualFixes: { lighting: { ambientIntensity: 0.6, directionalIntensity: 1.2 }, environment: { lighting: 'shaded' } }
+    });
+    const failingOutcome = await visualService.verifyVisual(failingRequest);
+    assert.ok(!isVisualAuditUnavailable(failingOutcome), 'The vision model answered');
+    const failingAudit = failingOutcome as VisualAuditResult;
     assert.strictEqual(failingAudit.pass, false, 'Void/unlit scene must fail visual QA');
-    assert.ok(failingAudit.fidelityScore < 80, `Fidelity score must be < 80 for void, got ${failingAudit.fidelityScore}`);
-    assert.ok(failingAudit.issues.some(i => i.toLowerCase().includes('void') || i.toLowerCase().includes('lighting')), 'Must identify void/lighting bugs');
-    assert.ok(failingAudit.visualFixes, 'Failing audit must supply visualFixes directives');
-    assert.ok(failingAudit.visualFixes?.lighting, 'Must supply lighting fixes');
-    assert.ok(failingAudit.visualFixes?.environment, 'Must supply environment fixes');
-    assert.strictEqual(failingAudit.visualFixes?.environment?.skybox, undefined, 'Never proposes a skybox: the sky is the scene\'s own choice');
-    // A camera fix answers a framing defect only; this scene's failure is its lighting.
-    assert.strictEqual(failingAudit.visualFixes?.camera, undefined, 'A lighting failure proposes no camera');
-    console.log('  ✓ Test 4 Passed: Visual bug detector flags monochromatic void, unlit models, and missing shaders.');
+    assert.strictEqual(failingAudit.fidelityScore, 34);
+    assert.ok(failingAudit.visualFixes?.lighting, 'The model\'s lighting fixes are kept');
+
+    // 4c. No reply, or a reply without a score, is "unavailable": nothing is scored or repaired.
+    scriptedAudits.push({ critique: 'Looks fine' });
+    const unscored = await visualService.verifyVisual(failingRequest);
+    assert.ok(isVisualAuditUnavailable(unscored), 'An audit without fidelityScore is unavailable (no default score)');
+    const offline = await new VisualVerificationService({ getGenAIClient: async () => undefined }).verifyVisual(testRequest);
+    assert.ok(isVisualAuditUnavailable(offline), 'Without credentials the check is unavailable, not a heuristic pass');
+    console.log('  ✓ Test 4 Passed: The vision model\'s audits are returned as they are, and a missing audit is unavailable.');
 
     // -------------------------------------------------------------
     // Test 5: Visual Auto-Repair & Artifact Patching
@@ -248,6 +272,10 @@ async function runVisualVerificationTests() {
         'data:image/png;base64,AAAAABJRU5ErkJggg==', // Iteration 1: Void frame (score < 80)
         samplePngDataUrl // Iteration 2: High fidelity repaired frame (score >= 80)
     ];
+    scriptedAudits.push(
+        { pass: false, fidelityScore: 41, critique: 'Unlit.', issues: ['missing scene lighting'], strengths: [], visualFixes: { lighting: { ambientIntensity: 0.6 }, environment: { lighting: 'shaded' } } },
+        { pass: true, fidelityScore: 86, critique: 'Lit and framed.', issues: [], strengths: ['even key light'] }
+    );
 
     const loopResult = await visualService.runVisualSelfCorrectionLoop({
         artifact: broken3DArtifact,
@@ -266,8 +294,17 @@ async function runVisualVerificationTests() {
     assert.strictEqual(loopResult.history.length, 2, 'Must record audit history for each iteration');
     assert.ok(loopResult.history[0].fidelityScore < 80, 'First iteration score must be < 80');
     assert.ok(loopResult.history[1].fidelityScore >= 80, 'Second iteration score must be >= 80 (passing)');
-    assert.strictEqual(loopResult.audit.pass, true, 'Final audit must be marked as passed');
-    console.log('  ✓ Test 6 Passed: Visual self-correction loop automatically iterates until high fidelity is reached.');
+    assert.strictEqual((loopResult.audit as VisualAuditResult).pass, true, 'Final audit must be marked as passed');
+
+    // 6b. An unavailable check stops the loop at once and repairs nothing.
+    const stopped = await new VisualVerificationService({ getGenAIClient: async () => undefined }).runVisualSelfCorrectionLoop({
+        artifact: broken3DArtifact, targetPrompt: 'aircraft', captureFrame: () => samplePngDataUrl, maxIterations: 3
+    });
+    assert.strictEqual(stopped.iterations, 1);
+    assert.strictEqual(stopped.repaired, false);
+    assert.ok(isVisualAuditUnavailable(stopped.audit));
+    assert.strictEqual(stopped.artifact.data, broken3DArtifact.data);
+    console.log('  ✓ Test 6 Passed: Visual self-correction loop iterates on the model\'s audits and stops when none is available.');
 
     // -------------------------------------------------------------
     // Test 7: GeminiService & DeepWriteService Integration
@@ -275,10 +312,8 @@ async function runVisualVerificationTests() {
     console.log('  Testing 7: GeminiService & DeepWriteService Visual QA Integration...');
 
     const geminiService = new GeminiService();
-    assert.ok(geminiService.getVisualVerificationService(), 'GeminiService must expose VisualVerificationService');
-
-    const serviceAudit = await geminiService.verifyVisual(testRequest);
-    assert.strictEqual(serviceAudit.pass, true, 'GeminiService verifyVisual must return valid audit result');
+    // (No live verifyVisual call here: it would reach the vision model with this machine's credentials.)
+    assert.ok(geminiService.getVisualVerificationService() instanceof VisualVerificationService, 'GeminiService must expose VisualVerificationService');
 
     // Test DeepWriteService integration
     const memoriesService = new UserMemoriesService();
@@ -299,11 +334,10 @@ async function runVisualVerificationTests() {
         executionBridge,
         lensSync,
         synthesizer,
-        learningService,
-        visualService
+        learningService
     );
 
-    assert.ok(deepWriteService, 'DeepWriteService initialized with VisualVerificationService');
+    assert.ok(deepWriteService, 'DeepWriteService initialized');
     console.log('  ✓ Test 7 Passed: Node services and pipelines fully wired with visual verification.');
 
     console.log('\n✨ All Multimodal Vision QA & Automated Visual Self-Correction tests passed successfully!');

@@ -14,12 +14,7 @@ import {
     extractPromptEntities,
     synthesizeAdaptiveResearchBrief
 } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
-import {
-    classifyFallbackPrompt,
-    synthesizeChatFallback
-} from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { cleanMessageTextSmart } from '../src/browser/generative-canvas/ChatMarkdownRenderer';
-import { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { rasterizeChatMarkdownToScreenshot } from './helpers/test-screenshot-helper';
 
 describe('Adaptive Domain Architecture (ADA) - Conversational Chat Synthesis', () => {
@@ -71,79 +66,6 @@ describe('Adaptive Domain Architecture (ADA) - Conversational Chat Synthesis', (
 
             const shot = rasterizeChatMarkdownToScreenshot('adaptive_chat_alien_planet_mycelium_brief', brief);
             expect(fs.existsSync(shot)).toBe(true);
-        });
-    });
-
-    describe('2. synthesizeChatFallback ADA Integration', () => {
-        it('returns structured research markdown for general inquiries without collapsing to 4-line boilerplate', () => {
-            const prompt = 'Analyze the thermodynamic efficiency of molten salt nuclear reactors';
-            const result = synthesizeChatFallback(prompt);
-
-            expect(result.chatResponse).toBeDefined();
-            expect(result.chatResponse!.length).toBeGreaterThan(300);
-            expect(result.chatResponse).toMatch(/Molten Salt Nuclear Reactors|Thermodynamic Efficiency/i);
-            expect(result.chatResponse).toMatch(/Foundations|Mechanics/i);
-            expect(result.chatResponse).not.toContain("I'm here to help! Whether you're exploring scientific research, writing code");
-
-            const shot = rasterizeChatMarkdownToScreenshot('adaptive_chat_molten_salt_fallback', result.chatResponse!);
-            expect(fs.existsSync(shot)).toBe(true);
-        });
-
-        it('delegates explicit 3D vehicle or spatial fabrication directives to 3D synthesis', () => {
-            const prompt = 'Build a 3D model of a cyber sports car';
-            const result = synthesizeChatFallback(prompt);
-
-            expect(result.artifact).toBeDefined();
-            expect(result.artifact?.type).toBe('3d-scene');
-        });
-    });
-
-    describe('3. Conversational vs Spatial Intent Gating (No False Hijacking)', () => {
-        it('treats pure landmark historical questions as chat, not 3D scene replacement', () => {
-            const active3DScene: CanvasArtifact = {
-                id: 'art-3d-test',
-                type: '3d-scene',
-                title: 'Urban Viewport',
-                summary: 'Active 3D scene',
-                data: { title: 'Urban Viewport' } as Scene3DData
-            };
-
-            const conversationalPrompt = 'What is the architectural history and construction timeline of the Colosseum?';
-            const classification = classifyFallbackPrompt(conversationalPrompt, undefined, '3d', active3DScene);
-
-            expect(classification.isChatIntent).toBe(true);
-            expect(classification.is3DRequest).toBe(false);
-        });
-
-        it('treats geological/material questions as chat, not 3D scene replacement', () => {
-            const active3DScene: CanvasArtifact = {
-                id: 'art-3d-test',
-                type: '3d-scene',
-                title: 'Landscape Viewport',
-                summary: 'Active 3D scene',
-                data: { title: 'Landscape Viewport' } as Scene3DData
-            };
-
-            const conversationalPrompt = 'Why is travertine stone porous and where does it naturally form?';
-            const classification = classifyFallbackPrompt(conversationalPrompt, undefined, '3d', active3DScene);
-
-            expect(classification.isChatIntent).toBe(true);
-            expect(classification.is3DRequest).toBe(false);
-        });
-
-        it('correctly classifies explicit 3D mutation directives as 3D request', () => {
-            const active3DScene: CanvasArtifact = {
-                id: 'art-3d-test',
-                type: '3d-scene',
-                title: 'Colosseum Viewport',
-                summary: 'Active 3D scene',
-                data: { title: 'Colosseum Viewport' } as Scene3DData
-            };
-
-            const mutationPrompt = 'Switch the lighting to golden hour and enable volumetric god rays';
-            const classification = classifyFallbackPrompt(mutationPrompt, undefined, '3d', active3DScene);
-
-            expect(classification.is3DRequest).toBe(true);
         });
     });
 

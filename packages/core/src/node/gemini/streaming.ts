@@ -12,6 +12,7 @@ import type {
     GeminiGenerateResponse,
     GeminiStreamEvent,
     GroundingMetadata,
+    ModelAnswerProvenance,
     SubagentRequest,
     SubagentResponse
 } from '../../common/gemini-protocol';
@@ -21,6 +22,7 @@ import {
     GeminiClient,
     isModelNotFoundError,
     resolveFetch,
+    summarizeModelError,
     type FetchLike,
     type GeminiThinkingConfig,
     type VertexGenerateContentJson
@@ -40,18 +42,18 @@ import {
 import type { McpBridge } from './mcp-bridge';
 import type { LensBridge } from './lens-bridge';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './prompt-builder';
-import { parseOrSynthesizeArtifact, type ArtifactSynthesisOptions } from './artifact-synthesis';
+import { parseOrSynthesizeArtifact, withOpenArtifactRule } from './artifact-synthesis';
 import { AgentVerificationService } from './agent-verification-service';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
 
+/** The artifact the model wrote in its reply (tag or JSON envelope), or undefined; never built from the prompt. */
 export type ArtifactSynthesizer = (
     prompt: string,
     modelText: string,
     request: GeminiGenerateRequest,
     mcpExecutions: McpExecutionState[],
-    groundingMetadata?: GroundingMetadata,
-    options?: ArtifactSynthesisOptions
+    groundingMetadata?: GroundingMetadata
 ) => CanvasArtifact | undefined;
 
 export interface StreamingEngineOptions {
@@ -177,14 +179,6 @@ function runningExecution(id: string, toolName: string, args: Record<string, unk
     };
 }
 
-/**
- * Agent, plan and ask turns put things on the canvas through tools (mount_canvas_primitive). Any artifact taken
- * from their reply text must be one the model wrote, never one synthesized from the prompt's keywords.
- */
-export function isCodingMode(request: Pick<GeminiGenerateRequest, 'mode'>): boolean {
-    return request.mode === 'agent' || request.mode === 'plan' || request.mode === 'ask';
-}
-
 /** User-facing explanation for a model turn that ended with no text, tool result or artifact. */
 export function describeEmptyModelReply(finishReason?: string): string {
     const reason = finishReason ? ` (finish reason: ${finishReason})` : '';
@@ -203,6 +197,44 @@ export function describeEmptyModelReply(finishReason?: string): string {
 export type StreamAuth =
     | { type: 'vertex'; token: string; projectId: string }
     | { type: 'api-key'; apiKey: string };
+
+/**
+ * One line for a helper call (e.g. skill preprocessing) that was not answered by its requested model or by the
+ * service account, naming what answered instead and why; undefined when it ran as requested.
+ */
+export function describeHelperProvenance(role: string, p: ModelAnswerProvenance | undefined): string | undefined {
+    if (!p) return undefined;
+    const parts: string[] = [];
+    if (p.modelUsed !== p.requestedModel) parts.push(`answered by ${p.modelUsed} — ${p.fallbackReason || `${p.requestedModel} unavailable`}`);
+    if (p.credentialNote) parts.push(`answered with the Gemini API key — ${p.credentialNote}`);
+    return parts.length > 0 ? `${role} ${parts.join('; ')}` : undefined;
+}
+
+/**
+ * Adds which model and credential answered to the turn's closing events (`done`, `error`). Read when the event is
+ * sent, so helper notes added during the turn (history summary) are on it.
+ */
+function withProvenance(onEvent: StreamEventSink, provenance: () => ModelAnswerProvenance): StreamEventSink {
+    return event => onEvent(event.type === 'done' || event.type === 'error' ? { ...event, modelProvenance: provenance() } : event);
+}
+
+/** A turn's error that says which model and credential it came from (forwarded on the stream's error event). */
+export type ErrorWithProvenance = Error & { modelProvenance?: ModelAnswerProvenance };
+
+/** The provenance attached to a turn's thrown error, if any. */
+export function provenanceOfError(err: unknown): ModelAnswerProvenance | undefined {
+    return err && typeof err === 'object' ? (err as ErrorWithProvenance).modelProvenance : undefined;
+}
+
+/** State shared by the attempts of one turn (one attempt per model in the fallback list). */
+interface TurnAttemptState {
+    /** Set once a model streamed anything: a later "not found" ends the turn instead of replaying it. */
+    modelResponded: boolean;
+    /** The model of the attempt running now (or that failed last). */
+    currentModel?: string;
+    /** Helper calls of the turn that fell back or failed (shown on the reply). */
+    helperNotes: string[];
+}
 
 /**
  * The `streamGenerate` core: Vertex SSE consumption, event shaping, the multi-turn tool-call
@@ -245,16 +277,22 @@ export class StreamingEngine {
     ): Promise<GeminiGenerateResponse> {
         throwIfAborted(signal);
 
+        // Vertex (service account) is preferred; the Gemini API key answers when there is no service account, or when
+        // one is configured but cannot issue a token. The second case is a credential fallback, so it is recorded
+        // and shown on the reply (credentialNote) rather than taken silently.
         let streamAuth: StreamAuth | undefined;
+        let credentialNote: string | undefined;
+        // ensureAuth re-runs discovery, as getAccessToken does: a service account added since startup is found here
+        // too, so a token failure on it is reported rather than the API key answering silently.
+        const serviceAccountConfigured = this.client.ensureAuth();
         try {
             const { token, projectId } = await this.client.getAccessToken();
             if (token && projectId) {
                 streamAuth = { type: 'vertex', token, projectId };
             }
-        } catch {
-            const apiKey = await this.client.resolveApiKey();
-            if (apiKey) {
-                streamAuth = { type: 'api-key', apiKey };
+        } catch (err) {
+            if (serviceAccountConfigured) {
+                credentialNote = `the Vertex AI service account could not get an access token (${summarizeModelError(err)})`;
             }
         }
 
@@ -263,7 +301,9 @@ export class StreamingEngine {
             if (apiKey) {
                 streamAuth = { type: 'api-key', apiKey };
             } else {
-                throw new Error('No Google Cloud service account or Gemini API key configured.');
+                throw new Error(credentialNote
+                    ? `No Gemini API key is configured, and ${credentialNote}.`
+                    : 'No Google Cloud service account or Gemini API key configured.');
             }
         }
 
@@ -274,6 +314,9 @@ export class StreamingEngine {
             }
             return this.executeVertexAgentInteraction(request.agent, streamAuth.projectId, streamAuth.token, request, onEvent, signal);
         }
+
+        // Helper calls of this turn that did not run on their requested model or on the service account (shown on the reply).
+        const helperNotes: string[] = [];
 
         // Run subagent preprocessing if requested and there are complex multi-skills attached
         if (request.enableSubagentPreprocess && request.attachedSkills && request.attachedSkills.length > 1) {
@@ -293,25 +336,73 @@ export class StreamingEngine {
                     text: subagentRes.result,
                     subagentResult: subagentRes
                 });
-            } catch {
-                // If subagent preprocessing fails, seamlessly proceed with primary model
+                const note = describeHelperProvenance('Skill preprocessing', subagentRes.modelProvenance);
+                if (note) {
+                    helperNotes.push(note);
+                    onEvent({ type: 'status', text: note });
+                }
+            } catch (err) {
+                // Preprocessing is advisory; the turn goes on without it, and the reply says so.
+                const note = `Skill preprocessing failed (${summarizeModelError(err)}); answered without it`;
+                helperNotes.push(note);
+                onEvent({ type: 'subagent_done', text: `${note}.` });
+                onEvent({ type: 'status', text: `${note}.` });
             }
         }
 
         throwIfAborted(signal);
-        const attempt = { modelResponded: false };
-        return this.client.withModelFallback(
-            this.client.getModelCandidates(request.model),
-            targetModel => this.executeVertexGeneration(targetModel, streamAuth!, request, onEvent, signal, attempt),
-            {
-                onSuccess: model => { this.client.preferredModel = model; },
-                // Partial output may already have been streamed; never replay a turn.
-                retryTransient: false,
-                // A missing model fails its first request. Once a model has answered, tools may have run (some for
-                // many minutes): a later "not found" must end the turn, not replay it on the next model.
-                canFallback: () => !attempt.modelResponded
+        const attempt: TurnAttemptState = { modelResponded: false, helperNotes };
+        // The fallback list stays, but every turn starts from the requested (or configured) model again: a model that
+        // answered once is not made the default for later turns. Each skipped model is reported with its reason.
+        const candidates = this.client.getModelCandidates(request.model);
+        const skipped: Array<{ model: string; reason: string }> = [];
+        const auth = streamAuth;
+        const provenanceFor = (modelUsed: string): ModelAnswerProvenance => ({
+            requestedModel: candidates[0],
+            modelUsed,
+            ...(modelUsed !== candidates[0] && skipped.length > 0
+                ? { fallbackReason: skipped.map(s => `${s.model} unavailable: ${s.reason}`).join('; ') }
+                : {}),
+            credential: auth.type,
+            ...(credentialNote ? { credentialNote } : {}),
+            ...(helperNotes.length > 0 ? { helperNotes } : {})
+        });
+        let response: GeminiGenerateResponse;
+        try {
+            response = await this.client.withModelFallback(
+                candidates,
+                targetModel => {
+                    attempt.currentModel = targetModel;
+                    return this.executeVertexGeneration(targetModel, auth, request, withProvenance(onEvent, () => provenanceFor(targetModel)), signal, attempt);
+                },
+                {
+                    onFallback: (model, reason, nextModel) => {
+                        skipped.push({ model, reason });
+                        // The status carries the provenance of the model now asked, so a reply stopped or cut short
+                        // from here on still says that another model is answering, and why.
+                        onEvent({ type: 'status', text: `${model} is not available (${reason}); trying ${nextModel}.`, modelProvenance: provenanceFor(nextModel) });
+                    },
+                    // Partial output may already have been streamed; never replay a turn.
+                    retryTransient: false,
+                    // A missing model fails its first request. Once a model has answered, tools may have run (some for
+                    // many minutes): a later "not found" must end the turn, not replay it on the next model.
+                    canFallback: () => !attempt.modelResponded
+                }
+            );
+        } catch (err) {
+            // A turn that fails (an HTTP error from a fallback model, a dropped stream, the API key refusing after a
+            // token failure) still says which model and credential it was on; the route forwards this on its error event.
+            if (err instanceof Error && !provenanceOfError(err)) {
+                const everyModelUnavailable = !attempt.modelResponded && skipped.length === candidates.length - 1 && isModelNotFoundError((err as Error & { cause?: unknown }).cause ?? err);
+                const last = attempt.currentModel || candidates[0];
+                (err as ErrorWithProvenance).modelProvenance = {
+                    ...provenanceFor(last),
+                    ...(everyModelUnavailable ? { noModelAnswered: true } : {})
+                };
             }
-        );
+            throw err;
+        }
+        return { ...response, modelProvenance: provenanceFor(response.modelUsed) };
     }
 
     // ------------------------------------------------------------------
@@ -382,7 +473,7 @@ export class StreamingEngine {
             }
         });
 
-        const artifact = this.synthesizeArtifact(request.prompt, state.accumulatedText, request, [], undefined, { modelAuthoredOnly: isCodingMode(request) });
+        const artifact = this.synthesizeArtifact(request.prompt, state.accumulatedText, request, []);
 
         const summary = {
             text: state.accumulatedText,
@@ -391,16 +482,18 @@ export class StreamingEngine {
             environmentId: state.environmentId,
             modelUsed: agent
         };
-        // Agent, plan and ask replies in prose yield no artifact; there is nothing to announce as complete.
+        // A reply in prose yields no artifact; there is nothing to announce as complete.
         if (artifact) {
             onEvent({ type: 'artifact_complete', ...summary });
         }
-        onEvent({ type: 'done', ...summary });
+        const modelProvenance: ModelAnswerProvenance = { requestedModel: agent, modelUsed: agent, credential: 'vertex' };
+        onEvent({ type: 'done', ...summary, modelProvenance });
 
         return {
             success: true,
             thoughts: state.accumulatedThoughts,
-            ...summary
+            ...summary,
+            modelProvenance
         };
     }
 
@@ -485,13 +578,21 @@ export class StreamingEngine {
         request: GeminiGenerateRequest,
         onEvent: StreamEventSink,
         signal?: AbortSignal,
-        attempt: { modelResponded: boolean } = { modelResponded: false }
+        attempt: TurnAttemptState = { modelResponded: false, helperNotes: [] }
     ): Promise<GeminiGenerateResponse> {
         const url = auth.type === 'vertex'
             ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
             : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
 
-        const systemInstructionText = await buildSystemInstruction(request, this.promptServices());
+        // While an artifact is open, the model is told how to continue it or start a new one (the reply's tag or
+        // envelope is read that way by artifact synthesis).
+        const systemInstructionText = withOpenArtifactRule(await buildSystemInstruction(request, this.promptServices()), request.activeArtifact);
+        // The summary of older turns is a helper call: when the API key answered it, or it failed and the older
+        // turns were dropped, the reply says so (helperNotes), not only a passing status line.
+        const addHelperNote = (note: string) => {
+            if (!attempt.helperNotes.includes(note)) attempt.helperNotes.push(note);
+            onEvent({ type: 'status', text: `${note}.` });
+        };
         request.chatHistory = await compactChatHistory(request.chatHistory, transcript =>
             this.client.generateContent({
                 model: DEFAULT_SUBAGENT_MODEL,
@@ -499,7 +600,15 @@ export class StreamingEngine {
                 prompt: transcript,
                 temperature: 0.2,
                 maxOutputTokens: 8192
-            }).then(r => r.text)
+            }).then(r => {
+                if (r.credentialNote) {
+                    addHelperNote(`Earlier messages were summarized by ${DEFAULT_SUBAGENT_MODEL} with the Gemini API key — ${r.credentialNote}`);
+                }
+                return r.text;
+            }),
+            undefined,
+            undefined,
+            (dropped, error) => addHelperNote(`${dropped} earlier message${dropped === 1 ? ' was' : 's were'} left out of the context: summarizing them with ${DEFAULT_SUBAGENT_MODEL} failed (${summarizeModelError(error)})`)
         );
         const contents = buildContents(request);
         const tools = this.buildToolDeclarations(request);
@@ -782,18 +891,11 @@ export class StreamingEngine {
             return { success: false, error, text: '', thoughts: accumulatedThoughts, mcpExecutions, modelUsed: model, usage: finalUsage };
         }
 
-        const codingMode = isCodingMode(request);
-        const hasJsonBlock = /```json\s*\{[\s\S]*\}\s*```/.test(accumulatedText);
-        const hasArtifactTag = /<scratchboxPrimitive[\s\S]*?>/i.test(accumulatedText);
-
-        // Agent modes create canvas artifacts through mount_canvas_primitive. If the model answered in prose
-        // only, synthesizing from prompt keywords (e.g. "World Cup" -> "world") invents a document it never wrote,
-        // and with a scene open it merged a template's geometry into that scene. So in these modes only a tag or
-        // JSON block the model wrote becomes an artifact; a prose reply leaves the canvas as it is.
-        const shouldSynthesize = !codingMode || hasJsonBlock || hasArtifactTag || !!request.activeArtifact;
-        const artifact = streamMountedArtifact || (shouldSynthesize
-            ? this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata, { modelAuthoredOnly: codingMode })
-            : undefined);
+        // Canvas artifacts come from mount_canvas_primitive or from a tag / JSON envelope the model wrote, in every
+        // mode. Synthesizing from prompt keywords (e.g. "World Cup" -> "world") invented documents and scenes the model
+        // never wrote, so a prose reply leaves the canvas as it is.
+        const artifact = streamMountedArtifact
+            || this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata);
 
         const summary = {
             text: accumulatedText,

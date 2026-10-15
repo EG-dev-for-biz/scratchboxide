@@ -18,6 +18,7 @@ import type {
     McpExecutionState,
     StudioLayoutMode
 } from '../canvas-types';
+import type { ModelAnswerProvenance } from '../../../common/gemini-protocol';
 
 /**
  * How a chat reply's tool steps look while a tool runs, and what becomes of the ones still running
@@ -173,6 +174,8 @@ export interface PartialReply {
     groundingMetadata?: GroundingMetadata;
     questionCard?: InteractiveQuestionCardData;
     executionPlanCard?: ExecutionPlanCardData;
+    /** Which model and credential had answered (when the stream said so): kept so a cut-short reply still shows it. */
+    modelProvenance?: ModelAnswerProvenance;
 }
 
 /**
@@ -209,7 +212,8 @@ function buildCutShortReply(partial: PartialReply, cutoff: StepCutoff, text: str
         thinkingDurationSeconds: partial.thinkingText ? partial.thinkingDurationSeconds : undefined,
         steps: steps.length > 0 ? steps : undefined,
         questionCard: partial.questionCard,
-        executionPlanCard: partial.executionPlanCard
+        executionPlanCard: partial.executionPlanCard,
+        modelProvenance: partial.modelProvenance
     };
 }
 

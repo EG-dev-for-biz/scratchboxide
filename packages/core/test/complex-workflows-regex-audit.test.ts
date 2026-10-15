@@ -9,15 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-    classifyFallbackPrompt,
-    synthesizeSandboxFallback,
-    synthesize3DFallback,
-    synthesizeVideoTimelineFallback,
-    synthesizeDefaultDocument
-} from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
-import {
-    extractScratchboxPrimitiveTag,
-    is3DStudioIntent
+    extractScratchboxPrimitiveTag
 } from '../src/node/gemini/artifact-synthesis';
 import {
     resolveTaskCapability
@@ -34,31 +26,6 @@ import {
 } from '../src/browser/generative-canvas/vibe-tool-synthesizer';
 
 describe('Complex Workflows Prompt & Regex Audit', () => {
-
-    describe('1. 3D Spatial & Procedural World Prompt Triggers', () => {
-        const testCases = [
-            'Create a 3D futuristic megacity hub with flying transit vehicles and neon skyscrapers',
-            'Build me a 3D scene of a medieval castle fortress under siege',
-            'Render a Mars rover habitat with red terrain and solar collectors in 3D',
-            'Generate a procedural mountain terrain with alpine snow peaks and pine forests',
-            'Simulate an asteroid belt orbiting a gas giant in 3D space',
-            'Show me a sports car model with metallic PBR materials',
-            'Build a 3D cyberpunk street canyon with wet asphalt and volumetric god rays'
-        ];
-
-        testCases.forEach(prompt => {
-            it(`correctly classifies 3D intent for: "${prompt.slice(0, 50)}..."`, () => {
-                const classification = classifyFallbackPrompt(prompt, undefined, 'chat', undefined);
-                expect(classification.is3DRequest).toBe(true);
-            });
-        });
-
-        it('detects 3D studio intent via is3DStudioIntent helper', () => {
-            expect(is3DStudioIntent('procedural marching cubes terrain', 'Terrain Generator')).toBe(true);
-            expect(is3DStudioIntent('build glb mesh using cpp engine', 'C++ World')).toBe(true);
-            expect(is3DStudioIntent('sdf signed distance field simulation', 'SDF Raymarcher')).toBe(true);
-        });
-    });
 
     describe('2. Real-World Geodetic Coordinates & Landmarks Prompt Triggers', () => {
         it('extracts explicit latitude and longitude coordinates', () => {
@@ -86,89 +53,7 @@ describe('Complex Workflows Prompt & Regex Audit', () => {
         });
     });
 
-    describe('3. Multi-Track Video Timeline NLE Prompt Triggers', () => {
-        const videoPrompts = [
-            '/timeline assemble multi-track intro sequence',
-            '/video compose teaser trailer',
-            'Create a video timeline with green screen chroma keying and despill',
-            'Assemble a multi-track video editor with ripple delete and playhead scrubbing',
-            'Cut active clip at 5 seconds and add picture in picture pip overlay',
-            'Build a video timeline with audio mixer track and color grade clip'
-        ];
-
-        videoPrompts.forEach(prompt => {
-            it(`correctly identifies video timeline NLE intent for: "${prompt.slice(0, 50)}..."`, () => {
-                const classification = classifyFallbackPrompt(prompt, undefined, 'chat', undefined);
-                expect(classification.isVideoTimelineRequest).toBe(true);
-            });
-        });
-    });
-
-    describe('4. Visual Node Graph Automation Prompt Triggers', () => {
-        const graphPrompts = [
-            'Create a node graph pipeline for automated data ingestion',
-            'Generate a workflow pipeline connecting webhook to AI classifier',
-            'Build a system diagram with event triggers and transform nodes',
-            'Make an architecture map showing microservices routing'
-        ];
-
-        graphPrompts.forEach(prompt => {
-            it(`correctly identifies node graph intent for: "${prompt.slice(0, 50)}..."`, () => {
-                const classification = classifyFallbackPrompt(prompt, undefined, 'chat', undefined);
-                expect(classification.isGraphRequest).toBe(true);
-            });
-        });
-    });
-
-    describe('5. Sprint Roadmap Kanban Prompt Triggers', () => {
-        const kanbanPrompts = [
-            'Create a kanban board for our sprint tasks',
-            'Generate a sprint board with backlog, in-progress, review, and done',
-            'Build a task board to manage the 3D engine migration roadmap',
-            'Make a todo board for release milestones'
-        ];
-
-        kanbanPrompts.forEach(prompt => {
-            it(`correctly identifies kanban board intent for: "${prompt.slice(0, 50)}..."`, () => {
-                const classification = classifyFallbackPrompt(prompt, undefined, 'chat', undefined);
-                expect(classification.isKanbanRequest).toBe(true);
-            });
-        });
-    });
-
-    describe('6. Quantitative KPI Telemetry Dashboard Prompt Triggers', () => {
-        const metricsPrompts = [
-            'Create a KPI dashboard tracking API throughput, latency, and error rate',
-            'Generate a metric dashboard with sparkline charts and trend indicators',
-            'Build a telemetry dashboard for distributed cluster memory usage',
-            'Summarize into metrics the quarterly performance indicators'
-        ];
-
-        metricsPrompts.forEach(prompt => {
-            it(`correctly identifies KPI metrics dashboard intent for: "${prompt.slice(0, 50)}..."`, () => {
-                const classification = classifyFallbackPrompt(prompt, undefined, 'chat', undefined);
-                expect(classification.isMetricsRequest).toBe(true);
-            });
-        });
-    });
-
     describe('7. Interactive Full-Stack Code Sandbox & Vibe-Tooling Prompt Triggers', () => {
-        const sandboxPrompts = [
-            'Build an interactive 8-bit synthesizer app with virtual keyboard and frequency spectrum',
-            'Create a runnable prototype calculator for orbital delta-v transfer',
-            'Code a React sorting visualizer with audio feedback and speed slider',
-            'Generate an interactive physics playground with bouncing rigid bodies',
-            'Prototype a web app dashboard for weather telemetry'
-        ];
-
-        sandboxPrompts.forEach(prompt => {
-            it(`correctly identifies live code sandbox intent for: "${prompt.slice(0, 50)}..."`, () => {
-                const c = classifyFallbackPrompt(prompt, undefined, 'chat', undefined);
-                expect({ prompt, isSandbox: c.isSandboxRequest, is3D: c.is3DRequest, isDoc: c.isDocumentRequest, isChat: c.isChatIntent })
-                    .toEqual({ prompt, isSandbox: true, is3D: false, isDoc: false, isChat: false });
-            });
-        });
-
         it('detects vibe-coding micro-studio requests via isVibeToolRequest', () => {
             expect(isVibeToolRequest('vibe code a custom 3D blocking tool for camera layout')).toBe(true);
             expect(isVibeToolRequest('build a micro-studio editor app for procedural materials')).toBe(true);
@@ -178,24 +63,6 @@ describe('Complex Workflows Prompt & Regex Audit', () => {
         it('does not falsely classify generic non-geo words like transfer as SF real-world locations', () => {
             const loc = detectRealWorldLocationIntent('Create a runnable prototype calculator for orbital delta-v transfer');
             expect(loc).toBeUndefined();
-        });
-    });
-
-    describe('8. Deep Architectural Spec Markdown Document Prompt Triggers', () => {
-        const docPrompts = [
-            '/doc write complete distributed system RFC',
-            '/document draft architecture guidelines',
-            '/deepwrite comprehensive security audit report',
-            'Draft a specification for high-throughput zero-trust authentication',
-            'Write a technical report on quantum annealing algorithms',
-            'Draft an architectural proposal for native C++20 SIMD rendering'
-        ];
-
-        docPrompts.forEach(prompt => {
-            it(`correctly identifies document spec intent for: "${prompt.slice(0, 50)}..."`, () => {
-                const classification = classifyFallbackPrompt(prompt, undefined, 'chat', undefined);
-                expect(classification.isDocumentRequest).toBe(true);
-            });
         });
     });
 

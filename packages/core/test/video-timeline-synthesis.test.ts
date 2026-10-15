@@ -9,10 +9,6 @@
 
 import { describe, it, expect } from 'vitest';
 import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
-import {
-    classifyFallbackPrompt,
-    synthesizeVideoTimelineFallback
-} from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { synthesizeContextualVideoTimeline } from '../src/browser/generative-canvas/services/video/videoTimelineSynthesizer';
 import { resolveModeForArtifact } from '../src/browser/generative-canvas/guardrails-service';
 import type { VideoTimelineData } from '../src/browser/generative-canvas/services/video/videoTypes';
@@ -29,26 +25,6 @@ describe('Video NLE Multi-Track Timeline Synthesis and Dispatch', () => {
             projectType: 'generative'
         }
     };
-
-    it('synthesizes a video-timeline primitive for "Split active clip at playhead and ripple delete downstream gap"', () => {
-        const prompt = 'Split active clip at playhead and ripple delete downstream gap';
-        const modelProse = 'I have adjusted the timeline and split the active clip at the playhead, ripple deleting the downstream gap.';
-        
-        const artifact = parseOrSynthesizeArtifact(
-            prompt,
-            modelProse,
-            { ...defaultRequest, prompt },
-            []
-        );
-
-        expect(artifact.type).toBe('video-timeline');
-        expect(artifact.title).toContain('Video NLE');
-        const data = artifact.data as VideoTimelineData;
-        expect(data.tracks).toBeDefined();
-        expect(data.tracks.length).toBeGreaterThanOrEqual(3);
-        expect(data.currentTime).toBeDefined();
-        expect(data.fps).toBe(30);
-    });
 
     it('normalizes model JSON outputs with type "timeline", "video-editor", or "video_timeline" to "video-timeline"', () => {
         const jsonOutput = `\`\`\`json
@@ -125,43 +101,6 @@ describe('Video NLE Multi-Track Timeline Synthesis and Dispatch', () => {
         expect(result.tracks[0].elements.length).toBe(1);
         expect(result.tracks[0].elements[0].duration).toBe(2.0);
         expect(result.activeTool).toBe('cut');
-    });
-
-    it('accurately classifies fallback prompts for video timeline vs documents', () => {
-        const timelineClassification = classifyFallbackPrompt(
-            'Split active clip at playhead and ripple delete downstream gap',
-            undefined,
-            'chat',
-            undefined
-        );
-
-        expect(timelineClassification.isVideoTimelineRequest).toBe(true);
-        expect(timelineClassification.isSandboxRequest).toBe(false);
-        expect(timelineClassification.isExplicitMedia).toBe(false);
-
-        // Document request should not be flagged as video timeline
-        const docClassification = classifyFallbackPrompt(
-            'Write a research document on the evolution of non-linear editing systems',
-            undefined,
-            'chat',
-            undefined
-        );
-
-        expect(docClassification.isVideoTimelineRequest).toBe(false);
-        expect(docClassification.isDocumentRequest).toBe(true);
-    });
-
-    it('generates a valid Video NLE artifact via synthesizeVideoTimelineFallback', () => {
-        const { artifact, toast } = synthesizeVideoTimelineFallback(
-            'Cut clip at playhead and ripple delete gap',
-            undefined
-        );
-
-        expect(artifact.type).toBe('video-timeline');
-        expect(artifact.title).toContain('Video NLE');
-        expect(toast?.text).toContain('Synthesized Video NLE');
-        const data = artifact.data as VideoTimelineData;
-        expect(data.tracks.length).toBeGreaterThanOrEqual(3);
     });
 
     it('resolves video-timeline to video layout mode', () => {

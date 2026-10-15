@@ -198,11 +198,11 @@ async function runDeepWriteIntelligentPlanningTests() {
     // Verify primitive formatting
     const finalBundle = synthesizer.synthesizeBundle('AeroJet', mockGoalPlan, {}, resultFiles);
     assert.strictEqual(finalBundle.title, 'AeroJet');
-    assert.strictEqual(finalBundle.artifacts.length, 3, 'Coordinated deliverable bundle must contain 3 primitives (3D, Sandbox, Spec)');
-    assert.strictEqual(finalBundle.artifacts[0].type, 'markdown-document');
-    assert.strictEqual(finalBundle.artifacts[1].type, '3d-scene');
-    assert.strictEqual(finalBundle.artifacts[2].type, 'live-code-sandbox');
-    console.log('  ✓ Test 5 Passed: CodebaseLens synchronized files to disk, and formatted 5 coordinated primitives');
+    // The spec and the pipeline's files; the 3D scene it asked for is named as not made (no template scene).
+    assert.deepStrictEqual(finalBundle.artifacts.map(a => a.type), ['markdown-document', 'live-code-sandbox']);
+    assert.ok(finalBundle.summary.includes('Not made: a 3D scene (the pipeline produced no scene geometry)'));
+    assert.deepStrictEqual(finalBundle.artifacts[1].data.files.map((f: any) => f.path), ['CMakeLists.txt', 'src/main.cpp']);
+    console.log('  ✓ Test 5 Passed: CodebaseLens synchronized files to disk, and the bundle holds what the pipeline produced');
 
     // 9. Cleanup Staging Folder
     await fs.remove(tempWorkspace);

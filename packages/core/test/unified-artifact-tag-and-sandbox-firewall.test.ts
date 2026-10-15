@@ -4,8 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
     extractScratchboxPrimitiveTag,
-    parseOrSynthesizeArtifact,
-    generateContextualReactApp
+    parseOrSynthesizeArtifact
 } from '../src/node/gemini/artifact-synthesis';
 import { cleanMessageTextSmart } from '../src/browser/generative-canvas/ChatMarkdownRenderer';
 import { buildSandboxSrcDoc } from '../src/browser/generative-canvas/primitives/LiveCodeSandboxPrimitive';
@@ -134,7 +133,11 @@ This document defines the agent graph and orchestration protocol.
     const synthJsonArtifact = parseOrSynthesizeArtifact('Render deep space nebula', jsonModelOutput, { prompt: 'Render deep space nebula' } as any, []);
     assert.strictEqual(synthJsonArtifact.type, '3d-scene');
     assert.strictEqual(synthJsonArtifact.title, 'Deep Space Nebula');
-    assert.strictEqual(synthJsonArtifact.data.environment.skybox, 'space-nebula');
+    assert.deepStrictEqual(synthJsonArtifact.data.camera, { fov: 55, position: [0, 10, 30] });
+    // A first scene sent in the tag is a clay first pass like one sent as an envelope: the model's sky is dropped
+    // unless the prompt asks for one.
+    assert.strictEqual(synthJsonArtifact.data.renderMode, 'clay');
+    assert.strictEqual(synthJsonArtifact.data.environment.skybox, 'studio');
     console.log('  ✓ 2.3 JSON payload inside <scratchboxPrimitive> parsed and synthesized correctly');
 
     // =========================================================================
@@ -170,54 +173,19 @@ const audioCtx = new AudioContext();`;
     console.log('  ✓ 3.2 Unclosed streaming <scratchboxPrimitive> stripped completely from user chat bubble');
 
     // =========================================================================
-    // SECTION 4: Unbounded Micro-Apps Rich Synthesis
+    // SECTION 4: A prose reply mounts nothing (no micro-app template is written from prompt keywords)
     // =========================================================================
-    console.log('\n--- SECTION 4: Unbounded Micro-Apps Synthesis ---');
-
-    // 4.1 Orbital Gravity Simulator
-    const gravityApp = generateContextualReactApp('build an orbital gravity simulation with planets', 'Gravity Orbit Sim');
-    assert.ok(gravityApp.includes('Orbital Gravity Simulator'), 'Must contain Orbital Gravity header');
-    assert.ok(gravityApp.includes('gravityG'), 'Must contain gravitational state');
-    assert.ok(gravityApp.includes('requestAnimationFrame'), 'Must contain 60FPS animation loop');
-    assert.ok(gravityApp.includes('canvasRef'), 'Must contain HTML5 canvas reference');
-    console.log('  ✓ 4.1 Orbital Gravity Simulator micro-app generated with Newtonian physics');
-
-    // 4.2 Web Audio Synthesizer
-    const synthApp = generateContextualReactApp('create a web audio synthesizer with piano keyboard and oscilloscope', 'Web Audio Synth');
-    assert.ok(synthApp.includes('Web Audio Synthesizer'), 'Must contain Web Audio Synthesizer header');
-    assert.ok(synthApp.includes('AudioContext'), 'Must instantiate Web Audio API context');
-    assert.ok(synthApp.includes('createBiquadFilter'), 'Must create low-pass filter');
-    assert.ok(synthApp.includes('createAnalyser'), 'Must support oscilloscope analyser');
-    console.log('  ✓ 4.2 Web Audio Synthesizer micro-app generated with oscillator, filter, and ADSR');
-
-    // 4.3 Retro Space Breakout Arcade Game
-    const breakoutApp = generateContextualReactApp('retro space breakout arcade game', 'Space Breakout');
-    assert.ok(breakoutApp.includes('Retro Space Breakout'), 'Must contain Breakout Arcade header');
-    assert.ok(breakoutApp.includes('paddleX'), 'Must contain interactive paddle');
-    assert.ok(breakoutApp.includes('ballX') && breakoutApp.includes('ballY'), 'Must contain dynamic ball physics');
-    assert.ok(breakoutApp.includes('bricks'), 'Must contain destructible brick grid');
-    console.log('  ✓ 4.3 Retro Space Breakout Arcade Game micro-app generated with collision physics');
-
-    // 4.4 Algorithmic Sorting Visualizer
-    const sortApp = generateContextualReactApp('interactive bubble sort algorithmic visualizer', 'Sorting Visualizer');
-    assert.ok(sortApp.includes('Sorting Visualizer'), 'Must contain Sorting Visualizer header');
-    assert.ok(sortApp.includes('runBubbleSort') || sortApp.includes('comparisons'), 'Must contain sorting logic');
-    assert.ok(sortApp.includes('comparisons'), 'Must track comparison operations');
-    assert.ok(sortApp.includes('array.map'), 'Must render dynamic bar graph');
-    console.log('  ✓ 4.4 Algorithmic Sorting Visualizer micro-app generated with animated comparisons');
-
-    // 4.5 Fallback keyword routing to live-code-sandbox
-    const routingTests = [
+    console.log('\n--- SECTION 4: Prose replies mount no template app ---');
+    for (const userPrompt of [
         'build an orbital gravity simulator',
         'create a modular web audio synthesizer',
         'retro space breakout arcade game',
         'sorting algorithm visualizer'
-    ];
-    for (const userPrompt of routingTests) {
+    ]) {
         const artifact = parseOrSynthesizeArtifact(userPrompt, 'Sure! Let me set that up for you.', { prompt: userPrompt } as any, []);
-        assert.strictEqual(artifact.type, 'live-code-sandbox', `Prompt "${userPrompt}" must route to live-code-sandbox`);
+        assert.strictEqual(artifact, undefined, `Prompt "${userPrompt}" must not get a template live-code-sandbox`);
     }
-    console.log('  ✓ 4.5 All micro-app domain prompts route directly to live-code-sandbox');
+    console.log('  ✓ 4.1 Micro-app prompts answered in prose leave the canvas as it is');
 
     // =========================================================================
     // SECTION 5: Iframe Firewall & Content Security Policy Isolation

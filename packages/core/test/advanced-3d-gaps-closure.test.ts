@@ -11,7 +11,6 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
-import { DynamicDagPlanner } from '../src/node/deep-write/dynamic-dag-planner';
 import { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('3D Engine Gaps 2, 3, 4 Closure: Half-Edge/QEM, MikkTSpace/Harmonic UVs, IBL/ACES', () => {
@@ -317,27 +316,5 @@ int main() {
         const scene6 = engine.getSceneData();
         expect(scene6.environment?.tonemapping?.curve).toBe('aces');
         expect(scene6.environment?.tonemapping?.vignette).toBe(0.28);
-    });
-
-    it('should generate DAG stages embedding MikkTSpace tangents, IBL, and ACES Tonemapping', () => {
-        const planner = new DynamicDagPlanner();
-        const dag = planner.generate3DPlanDAG('Create a high-fidelity nature mountain landscape with atmospheric lighting');
-
-        // Verify stage sequence
-        expect(dag.stages.length).toBeGreaterThan(4);
-
-        // Stage 4 (Materials & Shading) should contain MikkTSpace tangent operators
-        const matStage = dag.stages.find(s => s.id === 'stage_04_materials_and_shading');
-        expect(matStage).toBeDefined();
-        const hasTangents = matStage!.operators.some(op => op.operator === 'sb_generate_mikktspace_tangents');
-        expect(hasTangents).toBe(true);
-
-        // Stage 5 (Lighting & Atmosphere) should contain IBL and ACES tonemapping
-        const lightStage = dag.stages.find(s => s.id === 'stage_05_lighting_and_atmosphere');
-        expect(lightStage).toBeDefined();
-        const hasIBL = lightStage!.operators.some(op => op.operator === 'sb_setup_image_based_lighting');
-        const hasACES = lightStage!.operators.some(op => op.operator === 'sb_apply_aces_tonemapping');
-        expect(hasIBL).toBe(true);
-        expect(hasACES).toBe(true);
     });
 });

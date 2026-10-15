@@ -146,7 +146,9 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
                 safeEndSse(res);
                 return;
             }
-            safeWriteSse(res, `data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`, controller.signal);
+            // A failed turn still says which model and credential it was on (a fallback model, the API key).
+            const failure = { type: 'error', error: err.message || 'Streaming failed', ...(err?.modelProvenance ? { modelProvenance: err.modelProvenance } : {}) };
+            safeWriteSse(res, `data: ${JSON.stringify(failure)}\n\n`, controller.signal);
             safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);
             safeEndSse(res);
         }
@@ -264,7 +266,8 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
                 return;
             }
             const audit = await geminiService.verifyVisual(request);
-            res.json({ success: true, ...audit });
+            // An unavailable check ({status: 'unavailable', error}) is reported as such, never as a passed audit.
+            res.json({ success: audit.status !== 'unavailable', ...audit });
         } catch (err: any) {
             res.status(500).json({ success: false, error: err.message || 'Visual verification failed' });
         }
@@ -280,10 +283,11 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
             const verifier = geminiService.getVisualVerificationService();
             const audit = await verifier.verifyVisual(request);
             let repairedArtifact = artifact;
-            if (artifact && audit.visualFixes && audit.fidelityScore < 80) {
+            // Repairs only on the vision model's own failing audit; an unavailable check repairs nothing.
+            if (artifact && audit.status !== 'unavailable' && audit.visualFixes && audit.fidelityScore < 80) {
                 repairedArtifact = verifier.applyVisualAutoRepair(artifact, audit);
             }
-            res.json({ success: true, audit, repairedArtifact });
+            res.json({ success: audit.status !== 'unavailable', audit, repairedArtifact });
         } catch (err: any) {
             res.status(500).json({ success: false, error: err.message || 'Visual verify and repair failed' });
         }

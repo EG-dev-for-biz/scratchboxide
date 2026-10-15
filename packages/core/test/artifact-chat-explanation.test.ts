@@ -12,12 +12,8 @@ import {
     extractPromptEntities,
     synthesizeAdaptive3DScene
 } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
-import {
-    buildFallbackAssistantText,
-    buildArtifactExplanationMarkdown
-} from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { cleanMessageTextSmart } from '../src/browser/generative-canvas/ChatMarkdownRenderer';
-import { CanvasArtifact, Scene3DData, LiveCodeSandboxData } from '../src/browser/generative-canvas/canvas-types';
+import { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('Cursor-Grade Chat Explanations & Viewport Cleanliness', () => {
     describe('1. Prompt Sanitization & Entity Extraction', () => {
@@ -50,110 +46,6 @@ describe('Cursor-Grade Chat Explanations & Viewport Cleanliness', () => {
     });
 
     describe('2. Cursor-Grade Markdown Chat Explanation Generation', () => {
-        it('generates rich, structured explanation for 3D scenes with specs and controls', () => {
-            const sceneData: Scene3DData = {
-                title: 'Mars Rover Exploration Site',
-                subtitle: 'Grounded planetary terrain with autonomous navigation rover',
-                worldBranch: 'space/mars-rover',
-                renderMode: 'pbr',
-                cameraMode: 'orbit',
-                geoAnchor: {
-                    lat: 18.38,
-                    lng: 77.58,
-                    alt: 120,
-                    heading: 45,
-                    pitch: -15
-                },
-                environment: {
-                    skybox: 'mars',
-                    lighting: 'golden_hour',
-                    lightingKelvin: 4200,
-                    ground: true
-                },
-                cppGenerator: {
-                    sourceCode: '#include "scratchbox_engine.hpp"\nvoid generate() {}',
-                    glbPath: '/models/mars_rover.glb'
-                },
-                customMeshes: [
-                    { id: 'chassis', name: 'Rover Chassis', type: 'box', position: [0, 0.5, 0], scale: [2, 1, 3] },
-                    { id: 'mast', name: 'Sensor Mast', type: 'cylinder', position: [0, 1.5, 1], scale: [0.2, 1, 0.2] }
-                ]
-            };
-
-            const artifact: CanvasArtifact = {
-                id: 'art-3d-1',
-                type: '3d-scene',
-                title: 'Mars Rover Exploration Site',
-                summary: 'Grounded planetary terrain with autonomous navigation rover',
-                data: sceneData
-            };
-
-            const explanation = buildArtifactExplanationMarkdown(artifact);
-
-            // Must include title / icon
-            expect(explanation).toContain('Mars Rover Exploration Site');
-            // Must include architectural specs
-            expect(explanation).toMatch(/C\+\+20|Astro/i);
-            expect(explanation).toMatch(/PBR/i);
-            expect(explanation).toMatch(/18\.38°N.*77\.58°/);
-            expect(explanation).toMatch(/4200K/);
-            expect(explanation).toContain('Rover Chassis');
-            // Must include clear interaction controls guide
-            expect(explanation).toMatch(/Orbit|Pan|Zoom|Controls/i);
-            expect(explanation).toMatch(/Space|Playhead|Export/i);
-        });
-
-        it('generates rich, structured explanation for Python 3D scene artifacts', () => {
-            const pythonSceneData: Scene3DData = {
-                title: 'Procedural Cyberpunk City',
-                subtitle: 'Generated via Python 3D engine',
-                renderMode: 'pbr',
-                cameraMode: 'orbit',
-                pythonGenerator: {
-                    sourceCode: 'import scratchbox as sb\nscene = sb.Scene()',
-                    glbPath: '/models/cyberpunk_city.glb'
-                }
-            };
-
-            const artifact: CanvasArtifact = {
-                id: 'art-3d-py',
-                type: '3d-scene',
-                title: 'Procedural Cyberpunk City',
-                data: pythonSceneData
-            };
-
-            const explanation = buildArtifactExplanationMarkdown(artifact);
-            expect(explanation).toContain('Procedural Cyberpunk City');
-            expect(explanation).toMatch(/Native Python 3D Engine/i);
-        });
-
-        it('generates rich, structured explanation for Live Code Sandbox artifacts', () => {
-            const sandboxData: LiveCodeSandboxData = {
-                title: 'Interactive Audio Synthesizer',
-                subtitle: 'Web Audio API oscillator with virtual keys',
-                viewMode: 'preview',
-                files: [
-                    { name: 'App.tsx', content: 'export default function App() { return <div>Synth</div>; }' },
-                    { name: 'synth.ts', content: 'export class SynthEngine {}' }
-                ]
-            };
-
-            const artifact: CanvasArtifact = {
-                id: 'art-sandbox-1',
-                type: 'live-code-sandbox',
-                title: 'Interactive Audio Synthesizer',
-                summary: 'Web Audio API oscillator with virtual keys',
-                data: sandboxData
-            };
-
-            const explanation = buildArtifactExplanationMarkdown(artifact);
-
-            expect(explanation).toContain('Interactive Audio Synthesizer');
-            expect(explanation).toMatch(/React 18|TypeScript|Tailwind/i);
-            expect(explanation).toMatch(/App\.tsx|synth\.ts/);
-            expect(explanation).toMatch(/Split|Code|Preview/i);
-        });
-
         it('enriches sparse assistant chat messages with structured explanation', () => {
             const artifact: CanvasArtifact = {
                 id: 'art-3d-2',

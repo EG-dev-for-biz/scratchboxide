@@ -77,6 +77,8 @@ export interface SubagentResponse {
     data?: Record<string, any>;
     groundingMetadata?: GroundingMetadata;
     modelUsed: string;
+    /** Which model and credential answered, and why when not the requested model or the service account. */
+    modelProvenance?: ModelAnswerProvenance;
     error?: string;
 }
 
@@ -217,12 +219,42 @@ export interface GeminiStreamEvent {
         totalTokens?: number;
     };
     modelUsed?: string;
+    /** On `done` and `error`: which model and credential answered, and why not the requested ones. */
+    modelProvenance?: ModelAnswerProvenance;
     error?: string;
     verification?: VerificationOutcome;
     planApprovalRequired?: boolean;
     questionCard?: import('../browser/generative-canvas/canvas-types').InteractiveQuestionCardData;
     executionPlanCard?: import('../browser/generative-canvas/canvas-types').ExecutionPlanCardData;
     taskList?: AgentTaskListItem[];
+}
+
+/**
+ * Which model and credential answered a chat turn. The model fallback list is kept, but never silent: when the
+ * model that answered is not the one requested (or configured), `fallbackReason` says why, and when the Vertex
+ * service account is configured but the Gemini API key answered, `credentialNote` says why.
+ */
+export interface ModelAnswerProvenance {
+    /** The model the request asked for (Settings > Models), or the server default when it named none. */
+    requestedModel: string;
+    /** The model that answered. */
+    modelUsed: string;
+    /** Set when modelUsed differs from requestedModel: each model that was skipped and why. */
+    fallbackReason?: string;
+    /** 'vertex' (Google Cloud service account, Vertex AI) or 'api-key' (Gemini API key, AI Studio). */
+    credential: 'vertex' | 'api-key';
+    /** Set when a service account is configured but the API key answered: why Vertex was not used. */
+    credentialNote?: string;
+    /**
+     * Calls made for this turn by other models (skill preprocessing) that did not run on the requested model or the
+     * service account, each saying which model and credential answered instead and why.
+     */
+    helperNotes?: string[];
+    /**
+     * Set on a failed turn when no model in the list was available (each answered "not found"); modelUsed is then
+     * the last model tried, not one that answered.
+     */
+    noModelAnswered?: boolean;
 }
 
 /** One item of the agent's visible checklist (`update_task_list`). */
@@ -242,6 +274,7 @@ export interface GeminiGenerateResponse {
     mcpExecutions?: McpExecutionState[];
     groundingMetadata?: GroundingMetadata;
     modelUsed: string;
+    modelProvenance?: ModelAnswerProvenance;
     questionCard?: import('../browser/generative-canvas/canvas-types').InteractiveQuestionCardData;
     executionPlanCard?: import('../browser/generative-canvas/canvas-types').ExecutionPlanCardData;
     usage?: {
@@ -337,6 +370,10 @@ export interface FimCompletionResponse {
     success: boolean;
     completion: string;
     modelUsed: string;
+    /** The credential that answered: 'vertex' (service account) or 'api-key' (Gemini API key). */
+    credential?: 'vertex' | 'api-key';
+    /** Set when a service account is configured but the API key answered: why. */
+    credentialNote?: string;
     latencyMs?: number;
     error?: string;
 }
@@ -361,6 +398,10 @@ export interface QuickEditResponse {
     additions?: number;
     deletions?: number;
     modelUsed?: string;
+    /** The credential that answered: 'vertex' (service account) or 'api-key' (Gemini API key). */
+    credential?: 'vertex' | 'api-key';
+    /** Set when a service account is configured but the API key answered: why. */
+    credentialNote?: string;
     error?: string;
 }
 

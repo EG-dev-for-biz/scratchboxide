@@ -11,6 +11,11 @@ import { QuickEditRequest, QuickEditResponse } from '../common/gemini-protocol';
 import { GeminiClient } from './gemini/gemini-client';
 import { computeLineDiff } from '../browser/generative-canvas/multi-file-diff-engine';
 
+/** Output tokens for a whole-file quick edit: room for the rewritten file twice over, within 8k..64k. */
+export function quickEditOutputBudget(originalCode: string): number {
+    return Math.min(65536, Math.max(8192, Math.ceil(originalCode.length / 4) * 2 + 4096));
+}
+
 export class QuickEditService {
     constructor(private readonly client: GeminiClient) {}
 
@@ -53,40 +58,52 @@ export class QuickEditService {
             `Instruction: ${instruction}\n\n` +
             `Current Code:\n${originalCode}\n`;
 
+        let status: Awaited<ReturnType<GeminiClient['getStatus']>>;
         try {
-            const status = await this.client.getStatus();
-            if (!status.connected && status.authMethod === 'unauthenticated') {
-                const fallbackCode = this.synthesizeHeuristicEdit(originalCode, instruction, language);
-                const diff = computeLineDiff(originalCode, fallbackCode);
-                return {
-                    success: true,
-                    proposedCode: fallbackCode,
-                    additions: diff.additions,
-                    deletions: diff.deletions,
-                    diffSummary: `Applied local edit: ${diff.additions} added, ${diff.deletions} deleted`,
-                    modelUsed: 'heuristic-local'
-                };
-            }
+            status = await this.client.getStatus();
+        } catch (err: any) {
+            return { success: false, proposedCode: originalCode, additions: 0, deletions: 0, error: `The model connection could not be checked: ${err?.message || String(err)}` };
+        }
+        if (!status.connected && status.authMethod === 'unauthenticated') {
+            return {
+                success: false,
+                proposedCode: originalCode,
+                additions: 0,
+                deletions: 0,
+                error: 'No Google Cloud service account or Gemini API key is configured, so no model can make this edit.'
+            };
+        }
 
-            const model = status.activeModel || 'gemini-3.8-flash';
-            const rawResponse = await this.client.fetchVertexOrAistudio(
+        // The edit is the model's or nothing: a failure is reported, never replaced by a locally made-up edit.
+        const model = status.activeModel || 'gemini-3.8-flash';
+        try {
+            const { json, credential, credentialNote } = await this.client.requestGenerateContent(
                 model,
                 [{ role: 'user', parts: [{ text: userPrompt }] }],
                 systemInstruction,
                 {
                     temperature: 0.2,
-                    maxOutputTokens: 4096
+                    // The reply is the whole file, so the budget scales with it (about 4 characters a token, doubled
+                    // for the edit and any thinking) up to the models' output limit.
+                    maxOutputTokens: quickEditOutputBudget(originalCode)
                 }
             );
+            const answeredWith = { modelUsed: model, credential, ...(credentialNote ? { credentialNote } : {}) };
 
-            let candidateText = '';
-            if (rawResponse && rawResponse.candidates && rawResponse.candidates[0]?.content?.parts) {
-                candidateText = rawResponse.candidates[0].content.parts.map((p: any) => p.text || '').join('');
+            // A reply the model did not finish (cut off at the token limit, blocked, ...) is not an edit: written into
+            // the file it would replace the rest of the file with nothing.
+            const finishReason = json?.candidates?.[0]?.finishReason;
+            if (finishReason && finishReason !== 'STOP') {
+                const why = finishReason === 'MAX_TOKENS'
+                    ? `${model} stopped at its output limit before finishing ${fileName}`
+                    : `${model} stopped before finishing the edit (finish reason: ${finishReason})`;
+                return { success: false, proposedCode: originalCode, additions: 0, deletions: 0, error: `${why}, so the file was not changed.`, ...answeredWith };
             }
 
-            let proposedCode = this.cleanGeneratedCode(candidateText, originalCode);
+            const candidateText = (json?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || '').join('');
+            const proposedCode = this.cleanGeneratedCode(candidateText);
             if (!proposedCode.trim()) {
-                proposedCode = this.synthesizeHeuristicEdit(originalCode, instruction, language);
+                return { success: false, proposedCode: originalCode, additions: 0, deletions: 0, error: `${model} returned no code for this edit.`, ...answeredWith };
             }
 
             const diff = computeLineDiff(originalCode, proposedCode);
@@ -96,74 +113,26 @@ export class QuickEditService {
                 additions: diff.additions,
                 deletions: diff.deletions,
                 diffSummary: `Modified ${fileName}: +${diff.additions}/-${diff.deletions} lines`,
-                modelUsed: model
+                ...answeredWith
             };
         } catch (err: any) {
-            const fallbackCode = this.synthesizeHeuristicEdit(originalCode, instruction, language);
-            const diff = computeLineDiff(originalCode, fallbackCode);
             return {
-                success: true,
-                proposedCode: fallbackCode,
-                additions: diff.additions,
-                deletions: diff.deletions,
-                diffSummary: `Applied offline fallback edit (+${diff.additions}/-${diff.deletions})`,
-                modelUsed: 'heuristic-local-fallback',
-                error: err.message
+                success: false,
+                proposedCode: originalCode,
+                additions: 0,
+                deletions: 0,
+                modelUsed: model,
+                error: `The edit failed: ${err?.message || String(err)}`
             };
         }
     }
 
-    private cleanGeneratedCode(text: string, originalCode: string): string {
+    private cleanGeneratedCode(text: string): string {
         let cleaned = text.trim();
         // Remove markdown backticks if present
         if (cleaned.startsWith('```')) {
             cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/\n?```$/, '');
         }
-        return cleaned || originalCode;
-    }
-
-    /**
-     * Local deterministic code transformations for testing and offline execution.
-     */
-    private synthesizeHeuristicEdit(original: string, instruction: string, _language: string): string {
-        const lower = instruction.toLowerCase();
-
-        if (lower.includes('typescript') || lower.includes('types') || lower.includes('interface')) {
-            return (
-                `// Strongly typed with strict TypeScript contracts\n` +
-                `export interface ComponentProps {\n` +
-                `  title?: string;\n` +
-                `  onAction?: () => void;\n` +
-                `}\n\n` +
-                original
-            );
-        }
-
-        if (lower.includes('comment') || lower.includes('doc') || lower.includes('jsdoc')) {
-            return (
-                `/**\n` +
-                ` * Auto-documented by AI Inline Edit (⌘K)\n` +
-                ` * Intent: ${instruction.trim()}\n` +
-                ` */\n` +
-                original
-            );
-        }
-
-        if (lower.includes('optimize') || lower.includes('memo') || lower.includes('perf')) {
-            if (original.includes('function ')) {
-                return original.replace(/function\s+(\w+)/g, 'const $1 = React.memo(function $1');
-            }
-            return `// Optimized for performance\n` + original;
-        }
-
-        if (lower.includes('try') || lower.includes('catch') || lower.includes('error')) {
-            return (
-                `try {\n` +
-                original.split('\n').map(l => `  ${l}`).join('\n') +
-                `\n} catch (error) {\n  console.error('[Error caught in ⌘K edit]:', error);\n  throw error;\n}`
-            );
-        }
-
-        return `// AI ⌘K Edit: ${instruction.trim()}\n` + original;
+        return cleaned;
     }
 }

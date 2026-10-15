@@ -69,6 +69,7 @@ import { WorkspaceConfigClient } from '../workspace-config-client';
 import { tokenizeCode } from '../ChatMarkdownRenderer';
 import { DirtyStateManager } from '../dirty-state-manager';
 import { GeminiClient, AudioPlayer } from '../gemini-client';
+import type { QuickEditRequest, QuickEditResponse } from '../../../common/gemini-protocol';
 import Editor from '@monaco-editor/react';
 
 export const getMonacoLanguage = (lang?: string, fileName?: string): string => {
@@ -110,7 +111,7 @@ export interface LiveCodeSandboxPrimitiveProps {
     onForkArtifact?: (forkedArtifact: CanvasArtifact) => void;
     onPromptAction?: (promptText: string) => void;
     onDebugWithAi?: (errorPrompt: string) => void;
-    onCaptureReady?: (captureFn: () => string) => void;
+    onCaptureReady?: (captureFn: () => string | null) => void;
     onVisualVerification?: (screenshotDataUrl: string) => void;
     hideTopbar?: boolean;
     hideInternalChat?: boolean;
@@ -119,7 +120,7 @@ export interface LiveCodeSandboxPrimitiveProps {
 /**
  * Captures a screenshot data URL of the active sandbox preview or canvas.
  */
-export function captureSandboxScreenshot(containerOrIframe?: HTMLElement | null): string {
+export function captureSandboxScreenshot(containerOrIframe?: HTMLElement | null): string | null {
     if (containerOrIframe) {
         if (containerOrIframe instanceof HTMLIFrameElement) {
             try {
@@ -156,8 +157,8 @@ export function captureSandboxScreenshot(containerOrIframe?: HTMLElement | null)
         }
     }
 
-    // High-resolution deterministic PNG fallback
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    // No readable canvas: report no frame (never a placeholder image for the visual check to inspect).
+    return null;
 }
 
 export interface FileTreeNode {
@@ -1217,68 +1218,108 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData, cspNonce?: string)
 </html>`;
 }
 
-export const generateLocalComments = (code: string): string => {
-    const lines = code.split('\n');
-    const result: string[] = [];
-    
-    // Add file header if not already present
-    if (!code.includes('/**') && !code.startsWith('//')) {
-        result.push(`/**`);
-        result.push(` * @file Scratchbox Sandbox Module`);
-        result.push(` * @description Auto-generated JSDoc annotations and inline helper comments.`);
-        result.push(` */`);
-        result.push(``);
+/** The quick-edit instruction behind the editor's "Add JSDoc / Comments" button. */
+export const JSDOC_INSTRUCTION =
+    'Add accurate JSDoc headers to the exported functions, components and classes, and short inline comments where the logic is not obvious. Do not change any code.';
+
+export type SandboxQuickEditCall = (request: QuickEditRequest) => Promise<QuickEditResponse>;
+
+const defaultQuickEditCall: SandboxQuickEditCall = request => GeminiClient.getInstance().quickEdit(request);
+
+/** What one model edit of a file produced: a diff to review, or why there is none (and which credential answered). */
+export type SandboxQuickEditProposal =
+    | { kind: 'diff'; originalCode: string; proposedCode: string; note?: string }
+    | { kind: 'error'; error: string };
+
+/**
+ * Asks the model to edit one file (⌘K quick edit and the JSDoc button). The result is the model's code as a diff to
+ * review, or the error; a failed call never turns into a locally made-up edit.
+ */
+export async function proposeSandboxQuickEdit(
+    file: Pick<CodeFileTab, 'content' | 'language' | 'name'>,
+    instruction: string,
+    quickEdit: SandboxQuickEditCall = defaultQuickEditCall
+): Promise<SandboxQuickEditProposal> {
+    const originalCode = file.content;
+    let res: QuickEditResponse;
+    try {
+        res = await quickEdit({ originalCode, instruction, language: file.language || 'typescript', fileName: file.name || 'source.tsx' });
+    } catch (err) {
+        return { kind: 'error', error: `The edit failed: ${err instanceof Error ? err.message : String(err)}` };
     }
-
-    let i = 0;
-    while (i < lines.length) {
-        const line = lines[i];
-        
-        // Match standard function declarations: export default function App() / function hello(name)
-        const funcDeclMatch = line.match(/(?:export\s+(?:default\s+)?)?function\s+(\w+)\s*\(([^)]*)\)/);
-        // Match arrow function definitions: const hello = (name) => / export const hello = (name) =>
-        const arrowFuncMatch = line.match(/(?:export\s+)?const\s+(\w+)\s*=\s*\(([^)]*)\)\s*=>/);
-        // Match class declarations: export class Widget / class MyComponent
-        const classDeclMatch = line.match(/(?:export\s+)?class\s+(\w+)/);
-
-        if (funcDeclMatch && (!lines[i-1] || !lines[i-1].includes('*/'))) {
-            const name = funcDeclMatch[1];
-            const params = funcDeclMatch[2].split(',').map(p => p.trim().split(':')[0].trim()).filter(p => p);
-            
-            result.push(`/**`);
-            result.push(` * ${name} component or handler function.`);
-            params.forEach(p => {
-                result.push(` * @param {any} ${p} - React props or functional parameters.`);
-            });
-            result.push(` * @returns {JSX.Element | any} Rendered output or computed value.`);
-            result.push(` */`);
-        } else if (arrowFuncMatch && (!lines[i-1] || !lines[i-1].includes('*/'))) {
-            const name = arrowFuncMatch[1];
-            const params = arrowFuncMatch[2].split(',').map(p => p.trim().split(':')[0].trim()).filter(p => p);
-            
-            result.push(`/**`);
-            result.push(` * ${name} arrow utility function.`);
-            params.forEach(p => {
-                result.push(` * @param {any} ${p} - Functional parameters.`);
-            });
-            result.push(` * @returns {any} Returns the evaluation result.`);
-            result.push(` */`);
-        } else if (classDeclMatch && (!lines[i-1] || !lines[i-1].includes('*/'))) {
-            const name = classDeclMatch[1];
-            result.push(`/**`);
-            result.push(` * ${name} custom controller class.`);
-            result.push(` * @class`);
-            result.push(` */`);
-        }
-
-        result.push(line);
-        i++;
+    if (!res?.success || !res.proposedCode) {
+        return { kind: 'error', error: res?.error || 'The edit returned no code.' };
     }
+    return {
+        kind: 'diff',
+        originalCode,
+        proposedCode: res.proposedCode,
+        ...(res.credentialNote ? { note: `Answered with the Gemini API key — ${res.credentialNote}` } : {})
+    };
+}
 
-    return result.join('\n');
-};
+/** The sandbox chat's answer to one prompt: the edited file and a reply naming who edited it, or only the error reply. */
+export type SandboxChatEdit = { ok: true; content: string; reply: string } | { ok: false; reply: string };
 
-export const LiveCodeSandboxPrimitive: React.FC<LiveCodeSandboxPrimitiveProps> = ({
+/**
+ * The sandbox chat (and its Auto-Fix button when no host chat is wired) edits the open file with the model. The reply
+ * names the model and credential that made the edit, or carries the error; the file is never replaced by a template.
+ */
+export async function runSandboxChatEdit(
+    file: Pick<CodeFileTab, 'content' | 'language' | 'name'> | undefined,
+    instruction: string,
+    quickEdit: SandboxQuickEditCall = defaultQuickEditCall
+): Promise<SandboxChatEdit> {
+    if (!file) return { ok: false, reply: 'No file is open, so there is nothing to edit.' };
+    let res: QuickEditResponse;
+    try {
+        res = await quickEdit({ originalCode: file.content, instruction, language: file.language || 'typescript', fileName: file.name || 'source.tsx' });
+    } catch (err) {
+        return { ok: false, reply: `No change made to ${file.name}: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (!res?.success || !res.proposedCode) {
+        return { ok: false, reply: `No change made to ${file.name}: ${res?.error || 'the model returned no code.'}` };
+    }
+    const answeredBy = res.modelUsed ? ` with ${res.modelUsed}` : '';
+    const counts = typeof res.additions === 'number' && typeof res.deletions === 'number' ? ` (+${res.additions}/-${res.deletions} lines)` : '';
+    const credential = res.credentialNote ? ` Answered with the Gemini API key — ${res.credentialNote}` : '';
+    return { ok: true, content: res.proposedCode, reply: `Edited ${file.name}${answeredBy}${counts}.${credential}` };
+}
+
+/** The sandbox's files after a model edit of one of them, or why the edit was not applied. */
+export type SandboxFileEditResult = { ok: true; files: CodeFileTab[] } | { ok: false; reason: string };
+
+/**
+ * Applies a model's edit of one file to the sandbox's files as they are now. The model edited the text the file had
+ * when the edit was asked for (baseContent): if the file has changed or gone since, the edit is not applied, rather
+ * than overwrite what the user typed meanwhile. Every other file keeps its current content.
+ */
+export function applyModelFileEdit(currentFiles: CodeFileTab[], fileId: string, baseContent: string, newContent: string): SandboxFileEditResult {
+    const target = currentFiles.find(f => f.id === fileId);
+    if (!target) return { ok: false, reason: 'the file was removed while the edit was running' };
+    if (target.content !== baseContent) {
+        return { ok: false, reason: `${target.name} changed after the edit was asked for, and the edit was made from the earlier text` };
+    }
+    return { ok: true, files: currentFiles.map(f => (f.id === fileId ? { ...f, content: newContent, isDirty: true } : f)) };
+}
+
+/**
+ * Where a sandbox chat edit lands once the model answers: the edited file in the sandbox's current files (other
+ * files keep what the user typed while the model worked), and the reply. An edit that can no longer be applied
+ * changes nothing and the reply says why.
+ */
+export function settleSandboxChatEdit(
+    currentFiles: CodeFileTab[],
+    target: Pick<CodeFileTab, 'id' | 'name' | 'content'> | undefined,
+    edit: SandboxChatEdit
+): { files: CodeFileTab[] | null; reply: string } {
+    if (!edit.ok || !target) return { files: null, reply: edit.reply };
+    const applied = applyModelFileEdit(currentFiles, target.id, target.content, edit.content);
+    if (!applied.ok) return { files: null, reply: `No change made to ${target.name}: ${applied.reason}. Ask again to edit the current text.` };
+    return { files: applied.files, reply: edit.reply };
+}
+
+const LiveCodeSandboxWorkspace: React.FC<LiveCodeSandboxPrimitiveProps> = ({
     data,
     onUpdate,
     onSave,
@@ -1290,67 +1331,8 @@ export const LiveCodeSandboxPrimitive: React.FC<LiveCodeSandboxPrimitiveProps> =
     hideTopbar = true,
     hideInternalChat = false
 }) => {
-    const rawFiles = Array.isArray(data?.files) ? data.files : [];
-    const defaultFiles: CodeFileTab[] = rawFiles.length > 0 ? rawFiles : [
-        {
-            id: 'file-app',
-            name: 'App.tsx',
-            path: 'src/App.tsx',
-            language: 'react',
-            content: `import React, { useState } from 'react';
-import { Sparkles, Play, CheckCircle2 } from 'lucide-react';
-import confetti from 'canvas-confetti';
-
-export default function App() {
-  const [count, setCount] = useState(0);
-
-  const handleCelebrate = () => {
-    setCount(prev => prev + 1);
-    confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
-    console.log('Celebration action triggered! Count:', count + 1);
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-zinc-950 text-zinc-100 selection:bg-blue-500 selection:text-white">
-      <div className="w-full max-w-md p-8 bg-zinc-900/80 backdrop-blur-xl border border-zinc-800/80 rounded-3xl shadow-2xl space-y-6 text-center">
-        <div className="inline-flex p-3 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 shadow-inner">
-          <Sparkles className="w-8 h-8 animate-pulse" />
-        </div>
-        <div className="space-y-2">
-          <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-zinc-100 via-zinc-200 to-zinc-400 bg-clip-text text-transparent">Scratchbox Live UI Sandbox</h1>
-          <p className="text-sm text-zinc-400">Interactive React 19 + Tailwind CSS playground with hot reload and live console streams.</p>
-        </div>
-        <div className="p-4 bg-zinc-950/60 rounded-2xl border border-zinc-800/50 flex items-center justify-around">
-          <div><div className="text-xs text-zinc-500 font-medium">Interactions</div><div className="text-3xl font-extrabold text-blue-400">{count}</div></div>
-          <div className="h-8 w-px bg-zinc-800"></div>
-          <div><div className="text-xs text-zinc-500 font-medium">Status</div><div className="text-sm font-semibold text-emerald-400 flex items-center gap-1 mt-1"><CheckCircle2 className="w-4 h-4" /> Live</div></div>
-        </div>
-        <button className="sb-btn sb-btn-primary w-full py-3.5 px-6 rounded-xl font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group" onClick={handleCelebrate}>
-          <Play className="w-4 h-4 fill-current transition-transform group-hover:translate-x-0.5" />
-          <span>Trigger Interactive Action</span>
-        </button>
-      </div>
-    </div>
-  );
-}`,
-            isEntry: true
-        },
-        {
-            id: 'file-css',
-            name: 'styles.css',
-            path: 'src/styles.css',
-            language: 'css',
-            content: `/* Custom Sandbox Styles */\nbody {\n  margin: 0;\n  padding: 0;\n}`
-        },
-        {
-            id: 'file-pkg',
-            name: 'package.json',
-            path: 'package.json',
-            language: 'json',
-            content: `{\n  "name": "scratchbox-ide-master",\n  "version": "1.67.100",\n  "private": true,\n  "dependencies": {\n    "react": "^18.3.1",\n    "react-dom": "^18.3.1",\n    "lucide-react": "^0.468.0",\n    "canvas-confetti": "^1.9.3"\n  }\n}`
-        }
-    ];
-
+    // The wrapper below mounts this only with the sandbox's own files; there is no app of its own to show instead.
+    const defaultFiles: CodeFileTab[] = Array.isArray(data?.files) ? data.files : [];
     const [files, setFiles] = React.useState<CodeFileTab[]>(defaultFiles);
     const [activeFileId, setActiveFileId] = React.useState<string>(data.activeFileId || files.find(f => f.isEntry)?.id || files[0]?.id || 'file-app');
     const activeFile = files.find(f => f.id === activeFileId) || files[0];
@@ -1382,7 +1364,6 @@ export default function App() {
     const [isFullScreen, setIsFullScreen] = React.useState<boolean>(false);
     const [isSavingWorkspace, setIsSavingWorkspace] = React.useState<boolean>(false);
     const [saveFeedback, setSaveFeedback] = React.useState<string | undefined>(undefined);
-    const [isGeneratingComments, setIsGeneratingComments] = React.useState<boolean>(false);
     const [msgReactions, setMsgReactions] = React.useState<Record<string, 'up' | 'down'>>({});
     const [isVoiceRecording, setIsVoiceRecording] = React.useState<boolean>(false);
 
@@ -1434,19 +1415,26 @@ export default function App() {
     const [isQuickEditOpen, setIsQuickEditOpen] = React.useState<boolean>(false);
     const [quickEditPrompt, setQuickEditPrompt] = React.useState<string>('');
     const [isQuickEditing, setIsQuickEditing] = React.useState<boolean>(false);
-    const [quickEditDiff, setQuickEditDiff] = React.useState<{ originalCode: string; proposedCode: string } | null>(null);
+    // Why a quick edit produced no diff, or which credential answered when it was not the service account.
+    const [quickEditStatus, setQuickEditStatus] = React.useState<{ tone: 'error' | 'note'; text: string } | null>(null);
+    // The file a proposed edit is for travels with it, so accepting it edits that file even after a tab switch.
+    const [quickEditDiff, setQuickEditDiff] = React.useState<{ fileId: string; fileName: string; originalCode: string; proposedCode: string } | null>(null);
     const [fileAudioState, setFileAudioState] = React.useState<'idle' | 'loading' | 'playing' | 'error'>('idle');
 
     const iframeRef = React.useRef<HTMLIFrameElement>(null);
     const dataRef = React.useRef(data);
     dataRef.current = data;
+    // Latest-value mirrors for handlers that finish after an await (a model edit), so they merge into the files and
+    // chat as they are then, not as they were when the request was sent.
+    const latestRef = React.useRef({ files, activeFileId, isAiChatOpen, chatMessages });
+    latestRef.current = { files, activeFileId, isAiChatOpen, chatMessages };
     const onPromptActionRef = React.useRef(onPromptAction);
     onPromptActionRef.current = onPromptAction;
     const onDebugWithAiRef = React.useRef(onDebugWithAi);
     onDebugWithAiRef.current = onDebugWithAi;
     const handleSendVibecodeRef = React.useRef<((promptText: string) => void) | null>(null);
 
-    const captureFrame = React.useCallback((): string => {
+    const captureFrame = React.useCallback((): string | null => {
         return captureSandboxScreenshot(iframeRef.current);
     }, []);
 
@@ -2078,238 +2066,53 @@ export default defineConfig({
         }
     });
 
-    const handleAddJsdocComments = async () => {
-        if (!activeFile) return;
-        setIsGeneratingComments(true);
-        try {
-            const originalCode = activeFile.content;
-            const prompt = `You are a strict JSDoc/TS commentator. Add beautiful, highly accurate, Markdown-compliant JSDoc headers, type annotations, or inline explanations to this code file. Return ONLY the modified code containing JSDoc/comments. Do NOT wrap the code in markdown blocks. Just return the pure code with JSDoc/comments added:\n\n${originalCode}`;
-            
-            const client = GeminiClient.getInstance();
-            const res = await client.generate({ prompt });
-            if (res && res.success && res.text) {
-                let cleaned = res.text.trim();
-                if (cleaned.startsWith('```')) {
-                    const lines = cleaned.split('\n');
-                    if (lines[0].startsWith('```')) {
-                        lines.shift();
-                    }
-                    if (lines[lines.length - 1].startsWith('```')) {
-                        lines.pop();
-                    }
-                    cleaned = lines.join('\n');
-                }
-                handleCodeChange(cleaned);
-            } else {
-                // local parsing fallback
-                const fallbackCode = generateLocalComments(originalCode);
-                handleCodeChange(fallbackCode);
-            }
-        } catch (err) {
-            console.warn('Gemini comment generation failed, falling back to local JSDoc generator:', err);
-            const fallbackCode = generateLocalComments(activeFile.content);
-            handleCodeChange(fallbackCode);
-        } finally {
-            setIsGeneratingComments(false);
-        }
+    // Comments come from the model as a reviewable quick-edit diff, or the quick-edit panel says why there are none.
+    const handleAddJsdocComments = () => {
+        if (!activeFile || isQuickEditing) return;
+        setIsQuickEditOpen(true);
+        setQuickEditPrompt(JSDOC_INSTRUCTION);
+        void handleExecuteQuickEdit(JSDOC_INSTRUCTION);
     };
 
-    const handleSendVibecode = (promptText: string) => {
+    // The sandbox chat edits the open file with the model (runSandboxChatEdit); never a prompt-picked template.
+    const handleSendVibecode = async (promptText: string) => {
         if (!promptText || !promptText.trim()) return;
         const userText = promptText.trim();
         setVibecodePrompt('');
 
-        const userMsg: ChatMessage = {
-            id: `vc-user-${Date.now()}`,
-            sender: 'user',
-            text: userText,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
+        const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const userMsg: ChatMessage = { id: `vc-user-${Date.now()}`, sender: 'user', text: userText, timestamp: now() };
+        setChatMessages(prev => [...prev, userMsg]);
 
-        const updatedMessages = [...chatMessages, userMsg];
-        setChatMessages(updatedMessages);
+        const target = activeFile;
         setIsVibecoding(true);
+        const edit = await runSandboxChatEdit(target, userText);
+        setIsVibecoding(false);
 
-        setTimeout(() => {
-            let explanation = '';
-            let newAppCode = activeFile?.content || '';
-            const lower = userText.toLowerCase();
+        // The model may take a while: the edit lands in the files as they are now, and other files keep what the
+        // user typed meanwhile (see settleSandboxChatEdit).
+        const latest = latestRef.current;
+        const settled = settleSandboxChatEdit(latest.files, target, edit);
+        const assistantMsg: ChatMessage = { id: `vc-asst-${Date.now()}`, sender: 'assistant', text: settled.reply, timestamp: now() };
+        const shown = latest.chatMessages.some(m => m.id === userMsg.id) ? latest.chatMessages : [...latest.chatMessages, userMsg];
+        const messages = [...shown, assistantMsg];
+        setChatMessages(messages);
+        if (!settled.files || !target) return;
 
-            if (lower.includes('spring') || lower.includes('motion') || lower.includes('bouncy')) {
-                explanation = "Added Framer Motion spring physics with responsive spring scale transforms on click and active drag gestures.";
-                newAppCode = `import React, { useState } from 'react';
-import { Sparkles, Play, CheckCircle2, Zap } from 'lucide-react';
-import confetti from 'canvas-confetti';
-
-export default function App() {
-  const [count, setCount] = useState(0);
-
-  const handleCelebrate = () => {
-    setCount(prev => prev + 1);
-    confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 } });
-    console.log('Spring physics celebration! Count:', count + 1);
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-zinc-950 text-zinc-100">
-      <div className="w-full max-w-md p-8 bg-zinc-900/90 backdrop-blur-2xl border border-zinc-800 rounded-3xl shadow-2xl space-y-6 text-center">
-        <div className="inline-flex p-3 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
-          <Zap className="w-8 h-8 animate-bounce" />
-        </div>
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight text-white">Spring Motion UI</h1>
-          <p className="text-sm text-zinc-400">Tactile Apple-grade spring physics with real-time reactive counts.</p>
-        </div>
-        <div className="p-4 bg-zinc-950/70 rounded-2xl border border-zinc-800 flex items-center justify-around">
-          <div><div className="text-xs text-zinc-500 font-medium">Interactions</div><div className="text-3xl font-extrabold text-blue-400">{count}</div></div>
-          <div className="h-8 w-px bg-zinc-800"></div>
-          <div><div className="text-xs text-zinc-500 font-medium">Spring State</div><div className="text-sm font-semibold text-emerald-400 flex items-center gap-1 mt-1"><CheckCircle2 className="w-4 h-4" /> Active</div></div>
-        </div>
-        <button
-          className="sb-btn sb-btn-primary w-full py-3.5 px-6 rounded-xl font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2"
-          onClick={handleCelebrate}
-        >
-          <Play className="w-4 h-4 fill-current" />
-          <span>Trigger Spring Action ({count})</span>
-        </button>
-      </div>
-    </div>
-  );
-}`;
-            } else if (lower.includes('glass') || lower.includes('liquid') || lower.includes('cupertino')) {
-                explanation = "Applied Apple Liquid Glass materials with specular highlight borders, continuous squircle corners, and frosted backdrop blur.";
-                newAppCode = `import React, { useState } from 'react';
-import { Sparkles, Play, Activity } from 'lucide-react';
-import confetti from 'canvas-confetti';
-
-export default function App() {
-  const [count, setCount] = useState(0);
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-gradient-to-br from-zinc-950 via-zinc-900 to-black text-zinc-100">
-      <div className="w-full max-w-md p-8 bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl space-y-6 text-center relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-white/10 to-transparent pointer-events-none" />
-        <div className="inline-flex p-3 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 shadow-inner">
-          <Sparkles className="w-8 h-8" />
-        </div>
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight text-white">Liquid Glass Card</h1>
-          <p className="text-sm text-zinc-400">Cupertino-grade translucent glass material with smooth specular highlights.</p>
-        </div>
-        <button
-          className="sb-btn sb-btn-primary w-full py-3.5 px-6 rounded-xl font-semibold bg-white text-black hover:bg-zinc-100 shadow-xl active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-          onClick={() => { setCount(c => c + 1); confetti(); }}
-        >
-          <Play className="w-4 h-4 fill-current" />
-          <span>Vibe Action ({count})</span>
-        </button>
-      </div>
-    </div>
-  );
-}`;
-            } else if (lower.includes('bento') || lower.includes('grid')) {
-                explanation = "Structured component into a 3-column responsive Bento Grid with KPI stat cards, metric pills, and animated action triggers.";
-                newAppCode = `import React, { useState } from 'react';
-import { Sparkles, Play, Activity, Zap, CheckCircle2 } from 'lucide-react';
-import confetti from 'canvas-confetti';
-
-export default function App() {
-  const [count, setCount] = useState(0);
-
-  return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 p-8 flex items-center justify-center">
-      <div className="w-full max-w-2xl grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="p-6 bg-zinc-900/80 border border-zinc-800 rounded-3xl space-y-3">
-          <div className="inline-flex p-2.5 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
-            <Zap className="w-6 h-6" />
-          </div>
-          <h3 className="text-lg font-bold text-white">Performance Velocity</h3>
-          <p className="text-xs text-zinc-400">Real-time telemetry streams from high-reasoning Gemini models.</p>
-          <div className="text-2xl font-extrabold text-blue-400">1,420 req/s</div>
-        </div>
-        <div className="p-6 bg-zinc-900/80 border border-zinc-800 rounded-3xl space-y-3">
-          <div className="inline-flex p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <CheckCircle2 className="w-6 h-6" />
-          </div>
-          <h3 className="text-lg font-bold text-white">Vibecode Sandbox</h3>
-          <p className="text-xs text-zinc-400">Interactive hot-reloading code sandbox environment.</p>
-          <button
-            className="sb-btn sb-btn-primary w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2"
-            onClick={() => { setCount(c => c + 1); confetti(); }}
-          >
-            <Play className="w-4 h-4 fill-current" />
-            <span>Trigger Action ({count})</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}`;
-            } else {
-                explanation = `Updated component code based on: "${userText}". App.tsx re-compiled with instant hot reload.`;
-                newAppCode = `import React, { useState } from 'react';
-import { Sparkles, Play, CheckCircle2 } from 'lucide-react';
-import confetti from 'canvas-confetti';
-
-export default function App() {
-  const [count, setCount] = useState(0);
-
-  const handleAction = () => {
-    setCount(c => c + 1);
-    confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-zinc-950 text-zinc-100">
-      <div className="w-full max-w-md p-8 bg-zinc-900/90 border border-zinc-800 rounded-3xl shadow-2xl space-y-6 text-center">
-        <div className="inline-flex p-3 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
-          <Sparkles className="w-8 h-8 animate-pulse" />
-        </div>
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight text-white">Vibecoding Active</h1>
-          <p className="text-sm text-zinc-400">${userText}</p>
-        </div>
-        <div className="p-4 bg-zinc-950/60 rounded-2xl border border-zinc-800 flex items-center justify-around">
-          <div><div className="text-xs text-zinc-500 font-medium">Interactions</div><div className="text-3xl font-extrabold text-blue-400">{count}</div></div>
-          <div className="h-8 w-px bg-zinc-800"></div>
-          <div><div className="text-xs text-zinc-500 font-medium">Live Status</div><div className="text-sm font-semibold text-emerald-400 flex items-center gap-1 mt-1"><CheckCircle2 className="w-4 h-4" /> Ready</div></div>
-        </div>
-        <button
-          className="sb-btn sb-btn-primary w-full py-3.5 rounded-xl font-semibold flex items-center justify-center gap-2"
-          onClick={handleAction}
-        >
-          <Play className="w-4 h-4 fill-current" />
-          <span>Execute Action ({count})</span>
-        </button>
-      </div>
-    </div>
-  );
-}`;
-            }
-
-            const assistantMsg: ChatMessage = {
-                id: `vc-asst-${Date.now()}`,
-                sender: 'assistant',
-                text: explanation,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            };
-
-            const updatedFiles = files.map(f => f.name.endsWith('.tsx') || f.name.endsWith('.jsx') || f.isEntry ? { ...f, content: newAppCode } : f);
-            setFiles(updatedFiles);
-            setRefreshKey(k => k + 1);
-            setChatMessages(prev => [...prev, assistantMsg]);
-            setIsVibecoding(false);
-
-            if (onUpdate) {
-                onUpdate({
-                    ...data,
-                    files: updatedFiles,
-                    activeFileId,
-                    isAiChatOpen,
-                    chatMessages: [...updatedMessages, assistantMsg]
-                });
-            }
-        }, 600);
+        const edited = settled.files.find(f => f.id === target.id);
+        if (edited) dirtyManagerRef.current.updateBuffer(target.id, edited.content);
+        setDirtyTabIds(dirtyManagerRef.current.getDirtyIds());
+        setFiles(settled.files);
+        setRefreshKey(k => k + 1);
+        if (onUpdate) {
+            onUpdate({
+                ...dataRef.current,
+                files: settled.files,
+                activeFileId: latest.activeFileId,
+                isAiChatOpen: latest.isAiChatOpen,
+                chatMessages: messages
+            });
+        }
     };
     handleSendVibecodeRef.current = handleSendVibecode;
 
@@ -2328,40 +2131,50 @@ export default function App() {
 
     const handleExecuteQuickEdit = async (promptText: string) => {
         if (!promptText.trim() || isQuickEditing || !activeFile) return;
+        const target = activeFile;
         setIsQuickEditing(true);
-        const originalCode = activeFile.content;
-
         try {
-            const res = await GeminiClient.getInstance().quickEdit({
-                originalCode,
-                instruction: promptText.trim(),
-                language: activeFile.language || 'typescript',
-                fileName: activeFile.name || 'source.tsx'
-            });
-
-            if (res && res.proposedCode) {
-                setQuickEditDiff({ originalCode, proposedCode: res.proposedCode });
+            const proposal = await proposeSandboxQuickEdit(target, promptText.trim());
+            if (proposal.kind === 'diff') {
+                setQuickEditDiff({ fileId: target.id, fileName: target.name, originalCode: proposal.originalCode, proposedCode: proposal.proposedCode });
+                setQuickEditStatus(proposal.note ? { tone: 'note', text: proposal.note } : null);
             } else {
-                setQuickEditDiff({ originalCode, proposedCode: originalCode });
+                // No diff to review: say why instead of showing the unchanged file as a proposal.
+                setQuickEditDiff(null);
+                setQuickEditStatus({ tone: 'error', text: proposal.error });
             }
-        } catch (err) {
-            console.error('Quick edit failed:', err);
-            setQuickEditDiff({ originalCode, proposedCode: originalCode });
         } finally {
             setIsQuickEditing(false);
         }
     };
 
+    // Accepting writes the proposal into the file it was made for (not whichever tab is open now), and only while that
+    // file still holds the text the model edited.
     const handleAcceptQuickEdit = () => {
-        if (!quickEditDiff || !activeFile) return;
-        handleCodeChange(quickEditDiff.proposedCode);
+        if (!quickEditDiff) return;
+        const latest = latestRef.current;
+        const applied = applyModelFileEdit(latest.files, quickEditDiff.fileId, quickEditDiff.originalCode, quickEditDiff.proposedCode);
         setQuickEditDiff(null);
+        if (!applied.ok) {
+            setQuickEditStatus({ tone: 'error', text: `The proposed edit of ${quickEditDiff.fileName} was not applied: ${applied.reason}.` });
+            return;
+        }
+        dirtyManagerRef.current.updateBuffer(quickEditDiff.fileId, quickEditDiff.proposedCode);
+        setDirtyTabIds(dirtyManagerRef.current.getDirtyIds());
+        const updatedFiles = applied.files.map(f => (f.id === quickEditDiff.fileId ? { ...f, isDirty: dirtyManagerRef.current.isDirty(f.id, f.content) } : f));
+        setFiles(updatedFiles);
+        if (autoRun) setRefreshKey(k => k + 1);
+        if (onUpdate) {
+            onUpdate({ ...dataRef.current, files: updatedFiles, activeFileId: latest.activeFileId, isAiChatOpen: latest.isAiChatOpen, chatMessages: latest.chatMessages });
+        }
+        setQuickEditStatus(null);
         setIsQuickEditOpen(false);
         setQuickEditPrompt('');
     };
 
     const handleRejectQuickEdit = () => {
         setQuickEditDiff(null);
+        setQuickEditStatus(null);
         setIsQuickEditOpen(false);
         setQuickEditPrompt('');
     };
@@ -3142,7 +2955,12 @@ export default function App() {
                                     </div>
                                     {quickEditDiff && (
                                         <div className="sb-quick-edit-diff-summary animate-fadeIn">
-                                            <span className="text-[11px] text-emerald-400 font-mono font-medium">● 1 proposed code patch ready for review (⌘Y to Accept, ⌘N to Reject)</span>
+                                            <span className="text-[11px] text-emerald-400 font-mono font-medium">● Proposed edit of {quickEditDiff.fileName} ready for review (⌘Y to Accept, ⌘N to Reject)</span>
+                                        </div>
+                                    )}
+                                    {quickEditStatus && (
+                                        <div className="sb-quick-edit-diff-summary animate-fadeIn" role={quickEditStatus.tone === 'error' ? 'alert' : 'note'} data-testid="sb-quick-edit-status">
+                                            <span className={`text-[11px] font-mono font-medium ${quickEditStatus.tone === 'error' ? 'text-red-400' : 'text-amber-300'}`}>{quickEditStatus.text}</span>
                                         </div>
                                     )}
                                 </div>
@@ -3208,7 +3026,7 @@ export default function App() {
                                                     type="button"
                                                     className="sb-btn sb-btn-secondary sb-btn-xs"
                                                     onClick={handleAddJsdocComments}
-                                                    disabled={isGeneratingComments}
+                                                    disabled={isQuickEditing}
                                                     title="Auto-draft and insert JSDoc headers & code comments (AI powered)"
                                                     style={{
                                                         boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
@@ -3227,8 +3045,8 @@ export default function App() {
                                                         transition: 'all 0.15s ease'
                                                     }}
                                                 >
-                                                    <IconSparkles size={11} className={isGeneratingComments ? 'animate-pulse' : ''} />
-                                                    <span>{isGeneratingComments ? 'Generating JSDoc...' : 'Add JSDoc / Comments'}</span>
+                                                    <IconSparkles size={11} className={isQuickEditing ? 'animate-pulse' : ''} />
+                                                    <span>{isQuickEditing ? 'Editing...' : 'Add JSDoc / Comments'}</span>
                                                 </button>
                                             </div>
                                         )}
@@ -3410,8 +3228,16 @@ export default function App() {
                                                     <button
                                                         type="button"
                                                         onClick={() => {
-                                                            setIsAiChatOpen(true);
-                                                            handleSendVibecode(`Auto-fix the following runtime error in file ${activeFile?.name || 'App.tsx'}:\n\n${log.message}`);
+                                                            // The host chat (studio) gets the error when it is wired; otherwise the sandbox chat asks the model.
+                                                            const fixPrompt = `Auto-fix the following runtime error in file ${activeFile?.name || 'App.tsx'}:\n\n${log.message}`;
+                                                            if (onDebugWithAi) {
+                                                                onDebugWithAi(fixPrompt);
+                                                            } else if (onPromptAction) {
+                                                                onPromptAction(fixPrompt);
+                                                            } else {
+                                                                setIsAiChatOpen(true);
+                                                                void handleSendVibecode(fixPrompt);
+                                                            }
                                                         }}
                                                         className="sb-btn sb-btn-ai-autofix"
                                                         style={{
@@ -3952,3 +3778,40 @@ export default function App() {
         </div>
     );
 };
+
+/** Whether the sandbox's data holds any file. The sandbox has no app of its own to show when it holds none. */
+export function sandboxHasFiles(data: Partial<LiveCodeSandboxData> | undefined): boolean {
+    return Array.isArray(data?.files) && data!.files.length > 0;
+}
+
+/** A sandbox opened without any file says so; it used to show a built-in demo app as if the model had written it. */
+const SandboxEmptyState: React.FC<Pick<LiveCodeSandboxPrimitiveProps, 'data' | 'onUpdate'>> = ({ data, onUpdate }) => {
+    const title = typeof data?.title === 'string' && data.title.trim() ? data.title.trim() : '';
+    const startEmptyFile = () => onUpdate?.({
+        ...(data || { title: '' }),
+        files: [{ id: 'file-app', name: 'App.tsx', path: 'src/App.tsx', language: 'react', content: '', isEntry: true }],
+        activeFileId: 'file-app'
+    } as LiveCodeSandboxData);
+    return (
+        <div
+            className="sb-live-sandbox-empty"
+            role="status"
+            data-testid="sb-sandbox-empty"
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, width: '100%', height: '100%', minHeight: 240, padding: 32, textAlign: 'center', background: '#09090b', color: '#e4e4e7' }}
+        >
+            <div style={{ fontSize: 14, fontWeight: 600 }}>This sandbox has no files</div>
+            <div style={{ fontSize: 12, color: '#a1a1aa', maxWidth: 440, lineHeight: 1.5 }}>
+                {title ? `"${title}" was opened without any code, so there is nothing to run.` : 'It was opened without any code, so there is nothing to run.'} Ask for the app again, or start an empty file.
+            </div>
+            {onUpdate && (
+                <button type="button" className="sb-btn sb-btn-secondary sb-btn-xs" onClick={startEmptyFile}>
+                    New empty App.tsx
+                </button>
+            )}
+        </div>
+    );
+};
+
+export const LiveCodeSandboxPrimitive: React.FC<LiveCodeSandboxPrimitiveProps> = props => (
+    sandboxHasFiles(props.data) ? <LiveCodeSandboxWorkspace {...props} /> : <SandboxEmptyState data={props.data} onUpdate={props.onUpdate} />
+);

@@ -252,12 +252,6 @@ async function runInMemory3DSceneEditPersistenceTests() {
     assert.ok(lastUserPrompt.includes('golden_hour') || lastUserPrompt.includes('lightingPreset') || lastUserPrompt.includes('environment'), 'Prompt must retain environment lighting');
     console.log('    ✓ AI Prompt Compiler retained in-memory 3D scene mutations.');
 
-    // Test follow-up incremental reasoning
-    const followUpPlan = geminiService.generate3DPlanDAG('now add another building next to it', activeEditedScene);
-    assert.ok(followUpPlan, 'DAG planner must produce a plan from active scene');
-    assert.ok(followUpPlan.stages.length >= 1);
-    console.log('    ✓ Follow-up AI planning over in-memory scene verified.');
-
     // =========================================================================
     // Test 7: Lossless In-Memory Undo/Redo & Version History
     // =========================================================================
@@ -374,14 +368,16 @@ Here is the updated 3D scene with the gold material and torus ring:
     // Verify operatorStack was preserved
     assert.ok(deltaSceneData.operatorStack?.some(op => op.operator === 'sb_translate'), 'Operator stack must be preserved during delta edit');
 
-    // 8b. User gives explicit destruction command: "clear scene and start over from scratch"
+    // 8b. "Clear scene and start over": the model clears the scene by sending empty lists. The prompt's wording
+    // decides nothing (the "clear scene" keyword regex is gone); what the model sends does.
     const destructionResponse = `
 \`\`\`json
 {
   "type": "3d-scene",
   "data": {
     "title": "Fresh Blank Scene",
-    "customMeshes": []
+    "customMeshes": [],
+    "operatorStack": []
   }
 }
 \`\`\`
@@ -396,7 +392,18 @@ Here is the updated 3D scene with the gold material and torus ring:
         []
     );
     const destructionData = destructionResult.data as Scene3DData;
-    assert.strictEqual(destructionData.operatorStack?.length, 0, 'Operator stack must be cleared upon explicit destruction');
+    assert.strictEqual(destructionData.operatorStack?.length, 0, 'Operator stack must be cleared when the model sends an empty one');
+    assert.strictEqual(destructionData.customMeshes?.length, 0, 'Meshes must be cleared when the model sends an empty list');
+    // The same words with an envelope that clears nothing keep the scene: wording alone wipes nothing.
+    const wordsOnly = parseOrSynthesizeArtifact(
+        'clear scene and start over from scratch',
+        '```json\n{"type": "3d-scene", "data": {"title": "Fresh Blank Scene"}}\n```',
+        { prompt: 'clear scene and start over from scratch', activeArtifact: deltaResult } as any,
+        []
+    );
+    const wordsOnlyData = wordsOnly!.data as Scene3DData;
+    assert.ok(wordsOnlyData.customMeshes?.some(m => m.id === 'building-beta'), 'Prompt wording alone must not wipe the meshes');
+    assert.ok(wordsOnlyData.operatorStack?.some(op => op.operator === 'sb_translate'), 'Prompt wording alone must not wipe the operator stack');
     console.log('    ✓ Guarded conversational delta-editing verified (anti-wipe scene protection).');
 
     console.log('\n🎉 ALL IN-MEMORY 3D SCENE EDIT PERSISTENCE TESTS PASSED SUCCESSFULLY!');

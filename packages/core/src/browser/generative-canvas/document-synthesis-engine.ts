@@ -1430,13 +1430,11 @@ export function generateMotivatedEditorialImageSection(theme: DocumentTheme, con
     return {
         id,
         type: 'editorial-image',
-        imageTitle: synth.imageTitle || (theme === '1776-revolution' ? "Washington's Crossing of the Delaware (1776)" : `Architecture & System Execution: ${title || 'Specification'}`),
-        caption: synth.caption || 'High-fidelity visual synthesis illustrating key domain principles and architectural workflows.',
-        description: synth.caption || 'High-fidelity visual synthesis illustrating key domain principles and architectural workflows.',
-        imageUrl: synth.curatedImageUrl,
-        thumbnailUrl: synth.curatedImageUrl,
-        attribution: synth.attribution,
-        dateTag: synth.dateTag || 'Nano Banana Visual Synthesis',
+        imageTitle: theme === '1776-revolution' ? "Washington's Crossing of the Delaware (1776)" : `Architecture & System Execution: ${title || 'Specification'}`,
+        caption: 'High-fidelity visual synthesis illustrating key domain principles and architectural workflows.',
+        description: 'High-fidelity visual synthesis illustrating key domain principles and architectural workflows.',
+        // No image until the section's prompt is generated: no catalog image credited to a model.
+        dateTag: 'Nano Banana Visual Synthesis',
         stylePreset: synth.styleLabel,
         aspectRatio: '16:9',
         visualPrompt: synth.prompt
@@ -1463,13 +1461,11 @@ export function generateMotivatedVideoSection(theme: DocumentTheme, contextText?
     return {
         id,
         type: 'video',
-        videoTitle: synth.imageTitle || (theme === '1776-revolution' ? 'Reenactment of the Declaration of Independence Signing' : `System Walkthrough: ${title || 'Specification'}`),
-        caption: synth.caption || 'Historical visual reconstruction simulating key foundational moments and debates.',
-        description: synth.caption || 'Historical visual reconstruction simulating key foundational moments and debates.',
-        imageUrl: synth.curatedImageUrl,
-        thumbnailUrl: synth.curatedImageUrl,
-        attribution: synth.attribution,
-        dateTag: synth.dateTag || 'Temporal Visual Reconstruction',
+        videoTitle: theme === '1776-revolution' ? 'Reenactment of the Declaration of Independence Signing' : `System Walkthrough: ${title || 'Specification'}`,
+        caption: 'Historical visual reconstruction simulating key foundational moments and debates.',
+        description: 'Historical visual reconstruction simulating key foundational moments and debates.',
+        // No frame until the section's prompt is generated: no catalog image credited to a model.
+        dateTag: 'Temporal Visual Reconstruction',
         stylePreset: synth.styleLabel,
         aspectRatio: '16:9',
         visualPrompt: synth.prompt,

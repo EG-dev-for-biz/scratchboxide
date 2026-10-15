@@ -18,9 +18,6 @@ import {
     createOperatorEngine
 } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
 import {
-    DynamicDagPlanner
-} from '../src/node/deep-write/dynamic-dag-planner';
-import {
     NativeCppCompilerService
 } from '../src/node/3d-engine/native-compiler-service';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
@@ -107,26 +104,6 @@ int main() {
         expect(updated.cppGenerator?.filename).toBe('custom_procedural.cpp');
         expect(updated.cppGenerator?.vertexCount).toBe(1024);
         expect(updated.cppGenerator?.triangleCount).toBe(2048);
-    });
-
-    it('4. should include sb_set_cpp_generator in Phase 1 DAG planning and verify cppGeneratorConfigured invariant', async () => {
-        const planner = new DynamicDagPlanner();
-        const dag = planner.generate3DPlanDAG('Create a high-detail procedural alien landscape');
-
-        expect(dag.stages.length).toBeGreaterThanOrEqual(1);
-        const stage1 = dag.stages.find(s => s.id === 'stage_01_scaffolding');
-        expect(stage1).toBeDefined();
-        expect(stage1?.expectedStateChecks?.cppGeneratorConfigured).toBe(true);
-
-        const cppOp = stage1?.operators.find(op => op.operator === 'sb_set_cpp_generator');
-        expect(cppOp).toBeDefined();
-        expect(cppOp?.params?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
-
-        // Execute autonomous workflow and verify stage invariants pass
-        const execution = await planner.executeAutonomous3DWorkflow('Create a high-detail procedural alien landscape');
-        expect(execution.success).toBe(true);
-        expect(execution.finalScene.cppGenerator).toBeDefined();
-        expect(execution.finalScene.cppGenerator?.sourceCode).toContain('scratchbox_engine.hpp');
     });
 
     it('5. should compile and stream glTF 2.0 binary using NativeCppCompilerService for synthesized flight C++ source', async () => {

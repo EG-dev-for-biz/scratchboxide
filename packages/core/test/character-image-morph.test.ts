@@ -112,44 +112,50 @@ describe('CharacterSilhouetteSolver & CharacterImageMorphEstimator', () => {
     });
 
     describe('CharacterImageMorphEstimator', () => {
-        it('should return valid baseline drawing figure when empty request provided', async () => {
-            const estimator = new CharacterImageMorphEstimator();
-            const res = await estimator.estimateMorphFromImages({ images: [] });
+        const IMAGE = [{ imageData: 'iVBORw0KGgo=', viewType: 'front' as const, mimeType: 'image/png' }];
+        const answering = (text: string, calls: any[] = []) => ({
+            requestGenerateContent: async (model: string, contents: any[]) => {
+                calls.push({ model, contents });
+                return { json: { candidates: [{ content: { parts: [{ text }] } }] }, credential: 'vertex' as const };
+            }
+        }) as any;
 
-            expect(res.success).toBe(true);
-            expect(res.betas.length).toBe(8);
-            expect(res.ratios.headsTall).toBe(7.5);
+        it('with no images there is nothing to measure, and no baseline figure is returned', async () => {
+            const res = await new CharacterImageMorphEstimator(answering('{}')).estimateMorphFromImages({ images: [] });
+            expect(res).toEqual({ success: false, error: expect.stringContaining('No character images') });
         });
 
-        it('should return feminine standard drawing figure proportions on female hint fallback', async () => {
-            const estimator = new CharacterImageMorphEstimator();
-            const req: CharacterMorphRequest = {
-                images: [{ imageData: 'fake_base64_data', viewType: 'front' }],
-                genderHint: 'female'
-            };
+        it('a failed vision request is a failure with its error, not a "drawing figure prior"', async () => {
+            const failing = { requestGenerateContent: async () => { throw new Error('Vertex AI error (400): INVALID_ARGUMENT'); } } as any;
+            for (const genderHint of ['female', 'male'] as const) {
+                const res = await new CharacterImageMorphEstimator(failing).estimateMorphFromImages({ images: IMAGE, genderHint });
+                expect(res.success).toBe(false);
+                if (res.success) return;
+                expect(res.error).toContain('Vertex AI error (400): INVALID_ARGUMENT');
+                expect(res).not.toHaveProperty('ratios');
+                expect(res).not.toHaveProperty('betas');
+            }
+        });
 
-            const res = await estimator.estimateMorphFromImages(req);
+        it('returns the proportions the model measured, solved into betas, with the model and credential', async () => {
+            const calls: any[] = [];
+            const measured = { headsTall: 7.3, shoulderToHipRatio: 0.94, waistCinchRatio: 0.65, bustVolumeScore: 0.62, legToTorsoRatio: 1.05, muscularityScore: -0.2, genderDimorphism: -0.85, confidence: 0.81, matchedArchetype: 'Stylized heroine' };
+            const res = await new CharacterImageMorphEstimator(answering('```json\n' + JSON.stringify(measured) + '\n```', calls)).estimateMorphFromImages({ images: IMAGE });
             expect(res.success).toBe(true);
-            expect(res.ratios.bustVolumeScore).toBeGreaterThan(0.5);
-            expect(res.ratios.waistCinchRatio).toBeLessThan(0.70);
+            if (!res.success) return;
+            expect(res.ratios).toEqual({ headsTall: 7.3, shoulderToHipRatio: 0.94, waistCinchRatio: 0.65, bustVolumeScore: 0.62, legToTorsoRatio: 1.05, muscularityScore: -0.2, genderDimorphism: -0.85 });
+            expect(res.betas).toHaveLength(8);
             expect(res.betas[3]).toBeLessThan(-1.0);
-            expect(res.matchedArchetype).toContain('Feminine');
+            expect(res).toMatchObject({ confidence: 0.81, matchedArchetype: 'Stylized heroine', credential: 'vertex' });
+            expect(calls[0].contents[0].parts[1].inlineData).toEqual({ mimeType: 'image/png', data: 'iVBORw0KGgo=' });
         });
 
-        it('should return masculine standard drawing figure proportions on male hint fallback', async () => {
-            const estimator = new CharacterImageMorphEstimator();
-            const req: CharacterMorphRequest = {
-                images: [{ imageData: 'fake_base64_data', viewType: 'front' }],
-                genderHint: 'male'
-            };
-
-            const res = await estimator.estimateMorphFromImages(req);
-            expect(res.success).toBe(true);
-            expect(res.ratios.shoulderToHipRatio).toBeGreaterThan(1.20);
-            expect(res.ratios.waistCinchRatio).toBeGreaterThan(0.80);
-            expect(res.betas[1]).toBeGreaterThan(0.5);
-            expect(res.betas[3]).toBeGreaterThan(1.0);
-            expect(res.matchedArchetype).toContain('Masculine');
+        it('a reply missing proportions fails and names them (none are filled in)', async () => {
+            const res = await new CharacterImageMorphEstimator(answering(JSON.stringify({ headsTall: 7.5, explanation: 'partial' }))).estimateMorphFromImages({ images: IMAGE });
+            expect(res.success).toBe(false);
+            if (res.success) return;
+            expect(res.error).toContain('shoulderToHipRatio');
+            expect(res.error).toContain('genderDimorphism');
         });
     });
 });

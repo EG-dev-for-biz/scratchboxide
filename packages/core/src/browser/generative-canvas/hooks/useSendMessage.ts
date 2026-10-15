@@ -21,7 +21,6 @@ import {
     McpServerItem,
     MetricItem,
     PrimitiveType,
-    Scene3DData,
     SkillItem,
     StudioLayoutMode,
     StudioSettingsTab,
@@ -30,7 +29,7 @@ import {
     InteractiveQuestionCardData,
     ExecutionPlanCardData
 } from '../canvas-types';
-import { AttachedMcpToolContext, AttachedSkillContext } from '../../../common/gemini-protocol';
+import { AttachedMcpToolContext, AttachedSkillContext, type ModelAnswerProvenance } from '../../../common/gemini-protocol';
 import { ChatRequestError, GeminiClient, type ChatFailureKind } from '../gemini-client';
 import { describeChatFailure } from './chatFailureMessage';
 import {
@@ -55,27 +54,6 @@ import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 import { ProjectItem } from '../ProjectsModal';
-import { streamTokensAsync } from '../chat/streaming-utils';
-import {
-    buildFallbackAssistantText,
-    buildSimulatedSteps,
-    classifyFallbackPrompt,
-    FallbackResult,
-    hasExplicit3DDirective,
-    synthesize3DFallback,
-    synthesizeChatFallback,
-    synthesizeDataFileDashboard,
-    synthesizeDefaultDocument,
-    synthesizeDocumentFallback,
-    synthesizeGraphFallback,
-    synthesizeKanbanFallback,
-    synthesizeMediaFallback,
-    synthesizeMetricsFallback,
-    synthesizeSandboxFallback,
-    synthesizeVideoTimelineFallback,
-    synthesizeQuestionCardFallback,
-    synthesizeExecutionPlanFallback
-} from './sendMessageFallbacks';
 
 type Setter<T> = (value: T | ((prev: T) => T)) => void;
 
@@ -162,6 +140,8 @@ interface StreamProgress {
     groundingMetadata?: GroundingMetadata;
     questionCard?: InteractiveQuestionCardData;
     executionPlanCard?: ExecutionPlanCardData;
+    /** Which model and credential answered (from the stream's `done` event). */
+    modelProvenance?: ModelAnswerProvenance;
 }
 
 interface GenerationContext {
@@ -208,16 +188,9 @@ async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<bo
         return true;
     }
 
-    // 2. Deep planning / spec pipeline
-    const isDeepWrite = 
-        text.trim().startsWith('/plan') ||
-        text.trim().startsWith('/deepwrite') ||
-        text.trim().startsWith('/codebase') ||
-        text.trim().startsWith('/spec') ||
-        lowerText.includes('deep-write') ||
-        lowerText.includes('deep write') ||
-        lowerText.includes('intensive planning') ||
-        lowerText.includes('plan a codebase');
+    // 2. Deep planning / spec pipeline: only its slash commands start it. Words in an ordinary message ("deep
+    // write", "plan a codebase") are the model's to read, never a route.
+    const isDeepWrite = /^\/(plan|deepwrite|codebase|spec)(\s|$)/i.test(text.trim());
 
     if (isDeepWrite) {
         setInputValue('');
@@ -330,29 +303,10 @@ function beginGeneration(d: SendMessageDeps, text: string, textToSend: string | 
         setCurrentSessionId(targetSessionId);
     }
 
-    const imageMatch = text.match(/(?:[a-zA-Z0-9_\-\.\/]+\.(?:png|jpe?g|webp|gif))/i);
-    let detectedImage: string | undefined = undefined;
-    if (imageMatch) {
-        let p = imageMatch[0];
-        if (!p.startsWith('http') && !p.startsWith('data:') && !p.startsWith('/')) {
-            if (p.includes('test_images/')) {
-                p = '/' + p;
-            } else if (p.includes('civil_highway_overpass')) {
-                p = '/test_images/random_samples/' + p;
-            } else if (p.includes('matterhorn')) {
-                p = '/test_images/' + p;
-            } else {
-                p = '/test_images/' + p;
-            }
-        }
-        detectedImage = p;
-    }
-
     const userMsg: ChatMessage = {
         id: `msg-user-${Date.now()}`,
         sender: 'user',
         text: text.trim(),
-        imageContent: detectedImage,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         attachedSkills: attachedSkillObjects.map(s => s.name),
         attachedMcpTools: attachedMcpObjects.map(m => m.name),
@@ -522,47 +476,19 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 if (event.groundingMetadata) {
                     progress.groundingMetadata = event.groundingMetadata;
                 }
+                if (event.modelProvenance) {
+                    progress.modelProvenance = event.modelProvenance;
+                }
+                if (event.type === 'status' && event.modelProvenance && event.text) {
+                    // The fallback list moved on mid-turn ("X is not available (…); trying Y"): shown as it happens,
+                    // not only on the finished reply.
+                    const text = event.text;
+                    updateSteps(prev => [...prev, { id: `model-${Date.now()}-${prev.length}`, title: text, status: 'completed', kind: 'context' }]);
+                }
                 if (event.artifact) {
-                    let art = event.artifact;
-                    const promptText = textToSend || '';
-                    const lowerPromptText = promptText.toLowerCase();
-                    const isVideoTimelinePrompt = promptText.trim().startsWith('/timeline') ||
-                        promptText.trim().startsWith('/video') ||
-                        /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|vfx\s+plate|anti[- ]drift|matchmove/i.test(promptText) ||
-                        ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
-
-                    if (isVideoTimelinePrompt && art.type !== 'video-timeline') {
-                        const fallbackResult = synthesizeVideoTimelineFallback(promptText, activeArtifact);
-                        if (fallbackResult.artifact) {
-                            art = fallbackResult.artifact;
-                        }
-                    }
-
-
-                    const isSandboxPrompt = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(promptText) ||
-                        /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(promptText);
-                    if (isSandboxPrompt && !isVideoTimelinePrompt && art.type !== '3d-scene' && art.type !== 'live-code-sandbox') {
-                        const fallbackResult = synthesizeSandboxFallback(promptText, activeArtifact);
-                        if (fallbackResult.artifact) {
-                            art = fallbackResult.artifact;
-                        }
-                    }
-
-                    const is3DActive = (layoutMode === '3d' || activeArtifact?.type === '3d-scene');
-                    const isAnimPrompt = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff/i.test(textToSend || '');
-                    if (is3DActive && isAnimPrompt && art.type === '3d-scene') {
-                        const sceneData = art.data as Scene3DData;
-                        if (sceneData) {
-                            sceneData.timeline = {
-                                ...(sceneData.timeline || {}),
-                                isPlaying: true,
-                                isLooping: true,
-                                speed: 1.0,
-                                playbackSpeed: 1.0
-                            };
-                            sceneData.animation = sceneData.animation || (textToSend?.toLowerCase().includes('orbit') ? 'orbit' : 'flight');
-                        }
-                    }
+                    // Mounted exactly as the backend sent it: words in the prompt never swap in a template
+                    // artifact or switch on playback the model did not set.
+                    const art = event.artifact;
                     progress.artifact = art;
                     const resolvedMode = resolveModeForArtifact(art.type);
                     if (visible) {
@@ -672,6 +598,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
         connectionError = err?.message || 'Connection to backend failed';
         failureKind = err instanceof ChatRequestError ? err.kind : 'unreachable';
         failureStatus = err instanceof ChatRequestError ? err.status : undefined;
+        // The failed reply still says which model (or credential) answered before it failed.
+        if (err instanceof ChatRequestError && err.modelProvenance) progress.modelProvenance = err.modelProvenance;
         if (err?.message && (err.message.includes('Command failed') || err.message.includes('Error:') || err.message.includes('TS'))) {
             setActiveTerminalError({
                 command: 'Gemini AI Execution',
@@ -712,7 +640,9 @@ function partialReplyFrom(ctx: GenerationContext): PartialReply {
         artifact: progress.artifact,
         groundingMetadata: progress.groundingMetadata,
         questionCard: progress.questionCard,
-        executionPlanCard: progress.executionPlanCard
+        executionPlanCard: progress.executionPlanCard,
+        // A fallback model or the API key may have answered before the stream failed: the notice says so.
+        modelProvenance: progress.modelProvenance
     };
 }
 
@@ -744,7 +674,8 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
             steps: liveSteps.length > 0 ? liveSteps : undefined,
             questionCard: backend.streamQuestionCard,
-            executionPlanCard: backend.streamExecutionPlanCard
+            executionPlanCard: backend.streamExecutionPlanCard,
+            modelProvenance: ctx.progress.modelProvenance
         };
     } else if (usedBackend) {
         finalAssistantMsg = {
@@ -758,7 +689,8 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
             steps: liveSteps.length > 0 ? liveSteps : undefined,
             questionCard: backend.streamQuestionCard,
-            executionPlanCard: backend.streamExecutionPlanCard
+            executionPlanCard: backend.streamExecutionPlanCard,
+            modelProvenance: ctx.progress.modelProvenance
         };
     } else {
         throw new Error('finalizeBackendMessage called without a backend response');
@@ -766,209 +698,14 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
     return finalAssistantMsg;
 }
 
-/** Step 4b — pick a local synthesizer when the backend was unavailable. */
-function selectLocalFallback(d: SendMessageDeps, ctx: GenerationContext): FallbackResult {
-    const { text, targetPrimitiveType } = ctx;
-    const { activeArtifact, layoutMode, messages, attachedDataFile } = d;
-
-    const isClarificationOrConfirmation =
-        text.startsWith('[Clarification Selection]') ||
-        text.startsWith('[Execution Plan') ||
-        text.startsWith('Confirmed. Proceed');
-
-    let effectiveFallbackText = text;
-    if (isClarificationOrConfirmation) {
-        const priorUserMsg = [...messages].reverse().find(m =>
-            m.sender === 'user' &&
-            !m.text.startsWith('[Clarification Selection]') &&
-            !m.text.startsWith('[Execution Plan') &&
-            !m.text.startsWith('Confirmed. Proceed')
-        );
-        if (priorUserMsg && priorUserMsg.text.trim()) {
-            effectiveFallbackText = priorUserMsg.text.trim();
-        }
-    }
-
-    const c = classifyFallbackPrompt(effectiveFallbackText, targetPrimitiveType, layoutMode, activeArtifact);
-
-    if (attachedDataFile && attachedDataFile.rowsCount > 0) {
-        return synthesizeDataFileDashboard(attachedDataFile);
-    }
-    if (d.aiInteractionMode === 'plan') {
-        return synthesizeExecutionPlanFallback(effectiveFallbackText, activeArtifact);
-    }
-    const isAmbiguousSpatialQuery = /(?:3d\s*(?:plate|model|asset|object|reconstruct|mesh)|make.*3d|build.*3d)/i.test(effectiveFallbackText) &&
-        !/three\.js|react|kanban|doc|video|nle|spec/i.test(effectiveFallbackText) &&
-        (effectiveFallbackText.length < 55 || /(?:from\s+(?:this\s+)?image|supplied\s+image|from\s+photo|image\s+to\s+3d)/i.test(effectiveFallbackText));
-    if (isAmbiguousSpatialQuery && !isClarificationOrConfirmation) {
-        return synthesizeQuestionCardFallback(effectiveFallbackText, activeArtifact);
-    }
-    if (c.isVideoTimelineRequest) {
-        return synthesizeVideoTimelineFallback(effectiveFallbackText, activeArtifact);
-    }
-    if (c.isExplicitMedia) {
-        return synthesizeMediaFallback(effectiveFallbackText, c.isExplicitVideo);
-    }
-    if (c.isDocumentRequest) {
-        return synthesizeDocumentFallback(effectiveFallbackText, activeArtifact);
-    }
-    if (c.is3DRequest) {
-        return synthesize3DFallback(effectiveFallbackText, c.lower, activeArtifact, messages, c.docContentExtract);
-    }
-    if (c.isKanbanRequest) {
-        return synthesizeKanbanFallback(effectiveFallbackText, c.lower, activeArtifact);
-    }
-    if (c.isGraphRequest) {
-        return synthesizeGraphFallback(effectiveFallbackText, c.lower, activeArtifact);
-    }
-    if (c.isMetricsRequest) {
-        return synthesizeMetricsFallback(activeArtifact);
-    }
-    if (c.isSandboxRequest) {
-        return synthesizeSandboxFallback(effectiveFallbackText, activeArtifact);
-    }
-    return synthesizeChatFallback(effectiveFallbackText, activeArtifact);
-}
-
-/** Step 4c — play the simulated agent steps and progressively stream the local response. */
-async function streamLocalFallback(d: SendMessageDeps, ctx: GenerationContext, fallbackResult: FallbackResult, signal: AbortSignal): Promise<ChatMessage | undefined> {
-    const { setLiveThinkingText, setLiveSteps, setLiveStreamedText, setActiveStreamingSectionId, activeSessionRef, setActiveArtifact, setArtifactHistory, setLayoutMode, recordArtifactVersion, attachedDataFile } = d;
-    const { targetSessionId, generationStartTime } = ctx;
-    const fallbackGen = fallbackResult.artifact;
-    const isPureChat = !fallbackGen;
-    const targetAssistantText = isPureChat
-        ? (fallbackResult.chatResponse || 'Here is the analysis and information you requested:')
-        : (fallbackResult.explanation || buildFallbackAssistantText(attachedDataFile, fallbackGen));
-    const simulatedSteps = buildSimulatedSteps(fallbackGen);
-    let finalAssistantMsg: ChatMessage;
-
-    const localThinkingText = isPureChat
-        ? 'Synthesizing conversational research and formulating structured response...'
-        : `Analyzing workspace directives and formulating ${fallbackGen?.title || 'canvas artifact'} architecture...`;
-
-    if (activeSessionRef.current === targetSessionId) {
-        setLiveThinkingText(localThinkingText);
-        setLiveSteps([...simulatedSteps]);
-    }
-
-    simulatedSteps.forEach(s => {
-        s.status = 'completed';
-        s.durationMs = 0;
-        s.durationFormatted = '0ms';
-    });
-    if (activeSessionRef.current === targetSessionId) {
-        setLiveSteps([...simulatedSteps]);
-    }
-
-    // Progressive Live Streaming Ticker for Instant Local Responsiveness
-    if (activeSessionRef.current === targetSessionId) {
-        if (isPureChat) {
-            await streamTokensAsync(
-                targetAssistantText,
-                streamed => {
-                    if (activeSessionRef.current === targetSessionId) {
-                        setLiveStreamedText(streamed);
-                    }
-                },
-                undefined,
-                12
-            );
-        } else if (fallbackGen) {
-            const targetLayoutMode = resolveModeForArtifact(fallbackGen.type);
-            setLayoutMode(targetLayoutMode);
-            if (fallbackGen.type === 'markdown-document' && fallbackGen.data) {
-                const fullDoc = fallbackGen.data as MarkdownDocumentData;
-                const allSections = fullDoc.sections || [];
-                if (allSections.length > 1) {
-                    const initialCount = Math.max(1, Math.floor(allSections.length / 3));
-                    const initialSections = allSections.slice(0, initialCount);
-                    const partialDoc: MarkdownDocumentData = { ...fullDoc, sections: initialSections };
-                    const partialArtifact: CanvasArtifact = { ...fallbackGen, data: partialDoc };
-                    setActiveArtifact(partialArtifact);
-                    if (initialSections.length > 0) {
-                        setActiveStreamingSectionId(initialSections[initialSections.length - 1].id);
-                    }
-
-                    await streamTokensAsync(
-                        targetAssistantText,
-                        streamed => {
-                            if (activeSessionRef.current === targetSessionId) {
-                                setLiveStreamedText(streamed);
-                            }
-                        },
-                        progress => {
-                            if (activeSessionRef.current === targetSessionId) {
-                                const targetCount = Math.max(1, Math.ceil(allSections.length * progress));
-                                const currentShown = allSections.slice(0, targetCount);
-                                const activeSec = currentShown[currentShown.length - 1];
-                                setActiveStreamingSectionId(activeSec?.id);
-                                setActiveArtifact({
-                                    ...fallbackGen!,
-                                    data: { ...fullDoc, sections: currentShown }
-                                });
-                            }
-                        },
-                        18
-                    );
-                } else {
-                    setActiveArtifact(fallbackGen);
-                    if (allSections.length > 0) {
-                        setActiveStreamingSectionId(allSections[0].id);
-                    }
-                    await streamTokensAsync(
-                        targetAssistantText,
-                        streamed => {
-                            if (activeSessionRef.current === targetSessionId) {
-                                setLiveStreamedText(streamed);
-                            }
-                        },
-                        undefined,
-                        18
-                    );
-                }
-            } else {
-                setActiveArtifact(fallbackGen);
-                await streamTokensAsync(
-                    targetAssistantText,
-                    streamed => {
-                        if (activeSessionRef.current === targetSessionId) {
-                            setLiveStreamedText(streamed);
-                        }
-                    },
-                    undefined,
-                    18
-                );
-            }
-
-            recordArtifactVersion(fallbackGen);
-            setArtifactHistory(prev => [fallbackGen!, ...prev.filter(a => a.id !== fallbackGen!.id)]);
-        }
-    }
-
-    const localElapsedSeconds = parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1));
-    finalAssistantMsg = {
-        id: `msg-assistant-${Date.now()}`,
-        sender: 'assistant',
-        text: targetAssistantText,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        artifacts: fallbackGen ? [fallbackGen] : undefined,
-        thinkingText: localThinkingText,
-        thinkingDurationSeconds: localElapsedSeconds,
-        steps: simulatedSteps,
-        questionCard: fallbackResult.questionCard,
-        executionPlanCard: fallbackResult.executionPlanCard
-    };
-    return finalAssistantMsg;
-}
-
 /** Step 5 — register the artifact in the project graph, update the session list and reset live UI. */
-function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, finalAssistantMsg: ChatMessage, generatedArtifact: CanvasArtifact | undefined, fallbackGen: CanvasArtifact | undefined): void {
+function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, finalAssistantMsg: ChatMessage, generatedArtifact: CanvasArtifact | undefined): void {
     const { sessions, setSessions, messages, setMessages, setIsGenerating, setLiveThinkingText, setLiveThinkingSeconds, setLiveSteps, setLiveStreamedText, setActiveStreamingSectionId, activeSessionRef, activeArtifact, setActiveArtifact, artifactHistory, layoutMode, setLayoutMode, recordArtifactVersion, setAttachedDataFile, graphControllerRef, setGraphEpoch, activeWorkspace, persistSessionsImmediately } = d;
     const { text, targetSessionId, updatedMessages, thinkingTimer } = ctx;
     // Clear attached data file after generation
     setAttachedDataFile(undefined);
 
-    const newlyGeneratedArtifact = generatedArtifact || fallbackGen;
+    const newlyGeneratedArtifact = generatedArtifact;
     const finalArtifact = newlyGeneratedArtifact
         ? graphControllerRef.current.registerArtifact(
             newlyGeneratedArtifact,
@@ -1148,7 +885,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             const latest = depsRef.current;
             const stopped = buildStoppedReply(partialReplyFrom(ctx));
             settleGlobalExecutions(latest, ctx.progress, USER_STOP);
-            commitAssistantMessage(latest, ctx, stopped, ctx.progress.artifact, undefined);
+            commitAssistantMessage(latest, ctx, stopped, ctx.progress.artifact);
         };
         const onAbort = () => {
             if (!userStopsRef.current.has(signal)) {
@@ -1173,7 +910,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             }
             const finalAssistantMsg = buildFinalReply(depsRef.current, ctx, backend);
             signal.removeEventListener('abort', onAbort);
-            commitAssistantMessage(depsRef.current, ctx, finalAssistantMsg, backend.generatedArtifact, undefined);
+            commitAssistantMessage(depsRef.current, ctx, finalAssistantMsg, backend.generatedArtifact);
         } catch (err) {
             // Never leave the composer stuck in the generating state.
             console.error('[useSendMessage] Could not save the reply:', err);
@@ -1198,54 +935,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
  */
 function buildFinalReply(d: SendMessageDeps, ctx: GenerationContext, backend: BackendStreamResult): ChatMessage {
     if (backend.usedBackend) {
-        let promptText = ctx.text || '';
-        const isClarificationOrConfirmation =
-            promptText.startsWith('[Clarification Selection]') ||
-            promptText.startsWith('[Execution Plan') ||
-            promptText.startsWith('Confirmed. Proceed');
-
-        if (isClarificationOrConfirmation) {
-            const priorUserMsg = [...ctx.updatedMessages].reverse().find(m =>
-                m.sender === 'user' &&
-                !m.text.startsWith('[Clarification Selection]') &&
-                !m.text.startsWith('[Execution Plan') &&
-                !m.text.startsWith('Confirmed. Proceed')
-            );
-            if (priorUserMsg && priorUserMsg.text.trim()) {
-                promptText = priorUserMsg.text.trim();
-            }
-        }
-        const lowerPromptText = promptText.toLowerCase();
-        const isVideoTimelinePrompt = promptText.trim().startsWith('/timeline') ||
-            promptText.trim().startsWith('/video') ||
-            /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|vfx\s+plate|anti[- ]drift|matchmove/i.test(promptText) ||
-            ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
-        if (isVideoTimelinePrompt && (!backend.generatedArtifact || backend.generatedArtifact.type !== 'video-timeline')) {
-            const fb = synthesizeVideoTimelineFallback(promptText, d.activeArtifact);
-            if (fb.artifact) {
-                backend.generatedArtifact = fb.artifact;
-                d.showToast(fb.toast?.text || `Synthesized Video NLE: ${fb.artifact.title}`, fb.toast?.icon || '🎬');
-            }
-        }
-        const isSandboxCreationPrompt = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(promptText) ||
-            /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(promptText);
-
-        if (isSandboxCreationPrompt && !isVideoTimelinePrompt) {
-            const currentArt = backend.generatedArtifact;
-            if (!currentArt || currentArt.type !== 'live-code-sandbox') {
-                const fb = synthesizeSandboxFallback(promptText, d.activeArtifact);
-                if (fb.artifact) {
-                    backend.generatedArtifact = fb.artifact;
-                    // The canvas on screen may belong to another session; the commit shows this
-                    // artifact when the reply's session is the visible one.
-                    if (!d.activeSessionRef.current || d.activeSessionRef.current === ctx.targetSessionId) {
-                        d.setActiveArtifact(fb.artifact);
-                        d.setLayoutMode('code');
-                    }
-                    d.showToast(fb.toast?.text || `Synthesized Live Sandbox: ${fb.artifact.title}`, fb.toast?.icon || '💻');
-                }
-            }
-        }
+        // The model's artifact (or none) is final: no template is swapped in because of words in the prompt.
         settleGlobalExecutions(d, ctx.progress, STREAM_ENDED);
         return finalizeBackendMessage(d, ctx, backend);
     }

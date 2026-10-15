@@ -231,21 +231,28 @@ async function runScene3DDynamicExecutionTests() {
     console.log('  Testing 8: GeminiService Feature Flag Detection & Custom Script Support...');
     const geminiService = new GeminiService();
 
-    // Query asking for realistic features
+    // A prose reply turns on no features from the prompt's words; the features the model sends are kept.
     const complexPrompt = 'Add god rays, contrails, articulated control surfaces, and alpine terrain biomes';
-    const synthesizedArtifact = (geminiService as any).parseOrSynthesizeArtifact(
+    const proseArtifact = (geminiService as any).parseOrSynthesizeArtifact(
         complexPrompt,
         'Configured realistic atmospheric features',
+        { prompt: complexPrompt },
+        []
+    );
+    assert.strictEqual(proseArtifact, undefined, 'A prose reply must not synthesize a scene from prompt keywords');
+    const synthesizedArtifact = (geminiService as any).parseOrSynthesizeArtifact(
+        complexPrompt,
+        '```json\n' + JSON.stringify({ type: '3d-scene', title: 'Alpine flight', data: { features: { godRays: true, contrails: true, controlSurfaces: true, terrainBiomes: true, atmosphericScattering: true } } }) + '\n```',
         { prompt: complexPrompt },
         []
     );
 
     assert.strictEqual(synthesizedArtifact.type, '3d-scene');
     const synthesizedData = synthesizedArtifact.data as Scene3DData;
-    assert.ok(synthesizedData.features?.godRays, 'Must enable godRays feature');
-    assert.ok(synthesizedData.features?.contrails, 'Must enable contrails feature');
-    assert.ok(synthesizedData.features?.controlSurfaces, 'Must enable controlSurfaces feature');
-    assert.ok(synthesizedData.features?.terrainBiomes, 'Must enable terrainBiomes feature');
+    assert.ok(synthesizedData.features?.godRays, 'Must keep godRays feature');
+    assert.ok(synthesizedData.features?.contrails, 'Must keep contrails feature');
+    assert.ok(synthesizedData.features?.controlSurfaces, 'Must keep controlSurfaces feature');
+    assert.ok(synthesizedData.features?.terrainBiomes, 'Must keep terrainBiomes feature');
     assert.strictEqual(synthesizedData.environment?.skybox, 'realistic-sky');
     console.log('  ✓ Test 8 Passed: GeminiService detects and synthesizes dynamic 3D features and scene data.');
 

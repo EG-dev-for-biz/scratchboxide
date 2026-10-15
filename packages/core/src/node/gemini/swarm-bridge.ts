@@ -7,23 +7,14 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 import type { Content, Part } from '@google/genai';
-import type { SubagentRequest, SubagentResponse } from '../../common/gemini-protocol';
-import type { Scene3DData } from '../../browser/generative-canvas/canvas-types';
+import type { ModelAnswerProvenance, SubagentRequest, SubagentResponse } from '../../common/gemini-protocol';
 import {
     SubagentPoolService,
     type SubagentDAGPlan,
     type SubagentDAGResult,
     type SubagentPoolMetrics
 } from '../subagent-pool-service';
-import {
-    DynamicDagPlanner,
-    type Autonomous3DPlanResult,
-    type Autonomous3DStageDAG
-} from '../deep-write/dynamic-dag-planner';
-import { GeminiClient, resolveFetch, type VertexGenerateContentJson } from './gemini-client';
-
-/** The host object `DynamicDagPlanner` expects (structurally the GeminiService facade). */
-export type DynamicDagPlannerHost = NonNullable<ConstructorParameters<typeof DynamicDagPlanner>[0]>;
+import { GeminiClient, resolveFetch, summarizeModelError, type VertexGenerateContentJson } from './gemini-client';
 
 /** Anything that can run a subagent task; the pool calls back into it for worker execution. */
 export interface SubagentExecutor {
@@ -34,8 +25,6 @@ export interface SwarmBridgeOptions {
     client: GeminiClient;
     /** Executor handed to the subagent pool (normally the facade, so subclass overrides are honoured). */
     subagentExecutor: SubagentExecutor;
-    /** Host handed to `DynamicDagPlanner` for autonomous 3D planning. */
-    plannerHost: DynamicDagPlannerHost;
     maxConcurrentWorkers?: number;
 }
 
@@ -48,16 +37,14 @@ interface SubagentGeneratePayload {
 
 /**
  * Subagent swarm orchestration: lightweight background model calls, the subagent pool/DAG
- * executor, subagent model routing, and the autonomous 3D planning entry points.
+ * executor and subagent model routing.
  */
 export class SwarmBridge {
     private readonly client: GeminiClient;
-    private readonly plannerHost: DynamicDagPlannerHost;
     private readonly pool: SubagentPoolService;
 
     constructor(options: SwarmBridgeOptions) {
         this.client = options.client;
-        this.plannerHost = options.plannerHost;
         this.pool = new SubagentPoolService({
             maxConcurrentWorkers: options.maxConcurrentWorkers ?? 64,
             orchestratorModel: this.client.defaultModel,
@@ -92,23 +79,35 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
 
     /** Execute a subagent background task against the lite model tier with fallbacks. */
     async executeSubagentTask(request: SubagentRequest): Promise<SubagentResponse> {
+        // The chat credential rule: Vertex when a service account is configured; the Gemini API key when there is
+        // none, or when one is configured but cannot issue a token. The second case is recorded (credentialNote).
         let auth: { type: 'vertex'; token: string; projectId: string } | { type: 'api-key'; apiKey: string };
+        let credentialNote: string | undefined;
+        // ensureAuth re-runs discovery, as getAccessToken does: a service account added since startup is found here
+        // too, so a token failure on it is reported rather than the API key answering silently.
+        const serviceAccountConfigured = this.client.ensureAuth();
         try {
             const { token, projectId } = await this.client.getAccessToken();
             auth = { type: 'vertex', token, projectId };
-        } catch {
+        } catch (err) {
+            if (serviceAccountConfigured) {
+                credentialNote = `the Vertex AI service account could not get an access token (${summarizeModelError(err)})`;
+            }
             const apiKey = await this.client.resolveApiKey();
             if (apiKey) {
                 auth = { type: 'api-key', apiKey };
             } else {
-                throw new Error('No Google Cloud service account or Gemini API key configured.');
+                throw new Error(credentialNote
+                    ? `No Gemini API key is configured, and ${credentialNote}.`
+                    : 'No Google Cloud service account or Gemini API key configured.');
             }
         }
 
         const candidates = this.getSubagentModelCandidates(request.model);
         const fetchFn = resolveFetch();
+        const skipped: string[] = [];
 
-        return this.client.withModelFallback(
+        const response = await this.client.withModelFallback(
             candidates,
             async targetModel => {
                 const url = auth.type === 'vertex'
@@ -154,21 +153,18 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
                 } satisfies SubagentResponse;
             },
             {
-                onSuccess: model => { this.client.preferredSubagentModel = model; },
+                // The answering model is reported (modelUsed, modelProvenance); it is not made the default for later calls.
+                onFallback: (model, reason) => { skipped.push(`${model} unavailable: ${reason}`); },
                 exhaustedMessage: 'Failed to execute subagent with available models'
             }
         );
-    }
-
-    /** Autonomous multi-step 3D planning agent workflow (PocoLibre/blender-mcp paradigm). */
-    async plan3DAutonomousWorkflow(prompt: string, currentScene?: Scene3DData): Promise<Autonomous3DPlanResult> {
-        const planner = new DynamicDagPlanner(this.plannerHost);
-        return planner.executeAutonomous3DWorkflow(prompt, currentScene);
-    }
-
-    /** Dependency-resolved 3D planning DAG for a prompt and scene. */
-    generate3DPlanDAG(prompt: string, currentScene?: Scene3DData): Autonomous3DStageDAG {
-        const planner = new DynamicDagPlanner(this.plannerHost);
-        return planner.generate3DPlanDAG(prompt, currentScene);
+        const modelProvenance: ModelAnswerProvenance = {
+            requestedModel: candidates[0],
+            modelUsed: response.modelUsed,
+            ...(response.modelUsed !== candidates[0] && skipped.length > 0 ? { fallbackReason: skipped.join('; ') } : {}),
+            credential: auth.type,
+            ...(credentialNote ? { credentialNote } : {})
+        };
+        return { ...response, modelProvenance };
     }
 }

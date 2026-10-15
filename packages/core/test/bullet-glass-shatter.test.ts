@@ -9,10 +9,6 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-    classifyFallbackPrompt,
-    generateAdaptiveSandboxCode
-} from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
-import {
     detect3DSceneTheme,
     generateDefaultCpp3DSource,
     synthesizeContextual3DScene
@@ -20,25 +16,6 @@ import {
 import { DEMO_SESSIONS } from '../src/browser/generative-canvas/state/studio-defaults';
 
 describe('Bullet Glass Shatter & Ballistic Fracture System', () => {
-
-    it('1. should classify user prompt as 3D request and prevent blank sandbox routing', () => {
-        // Test verbatim user prompt from screenshot
-        const prompt1 = 'build me a scene of a bully going through a plate of glass';
-        const classification1 = classifyFallbackPrompt(prompt1);
-        expect(classification1.is3DRequest).toBe(true);
-        expect(classification1.isSandboxRequest).toBe(false);
-
-        // Test variations
-        const prompt2 = 'three.js bullet impact through plate of glass';
-        const classification2 = classifyFallbackPrompt(prompt2);
-        expect(classification2.is3DRequest).toBe(true);
-        expect(classification2.isSandboxRequest).toBe(false);
-
-        const prompt3 = 'supersonic projectile shattering glass window';
-        const classification3 = classifyFallbackPrompt(prompt3);
-        expect(classification3.is3DRequest).toBe(true);
-        expect(classification3.isSandboxRequest).toBe(false);
-    });
 
     it('2. should detect glass_shatter theme for ballistics and glass fracture prompts', () => {
         const theme = detect3DSceneTheme('build me a scene of a bully going through a plate of glass');
@@ -90,15 +67,6 @@ describe('Bullet Glass Shatter & Ballistic Fracture System', () => {
         expect(scene.customScript).toContain('Spitzer_Bullet_9mm');
         expect(scene.customScript).toContain('Voronoi_Shard_');
         expect(scene.customScript).toContain('onFrame');
-    });
-
-    it('5. should provide adaptive sandbox code with ballistic canvas simulation if sandbox is triggered', () => {
-        const code = generateAdaptiveSandboxCode('bullet going through plate of glass');
-        expect(code).toContain('Ballistic Glass Impact Simulation');
-        expect(code).toContain('canvas');
-        expect(code).toContain('requestAnimationFrame');
-        expect(code).toContain('shards');
-        expect(code).toContain('projectile');
     });
 
     it('6. should initialize sess-active-threejs with 3D scene artifact and user prompt', () => {

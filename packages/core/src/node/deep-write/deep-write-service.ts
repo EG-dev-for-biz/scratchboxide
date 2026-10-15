@@ -13,7 +13,6 @@ import { DeepWriteExecutionBridge } from './deep-write-execution-bridge';
 import { CodebaseLensSyncService } from './codebase-lens-sync-service';
 import { PrimitiveSynthesizer } from './primitive-synthesizer';
 import { UserLearningService } from './user-learning-service';
-import { VisualVerificationService } from '../visual-verification-service';
 import { 
     DeepWriteGoalRequest, 
     DeepWriteStreamEvent, 
@@ -38,8 +37,7 @@ export class DeepWriteService {
         protected readonly executionBridge: DeepWriteExecutionBridge,
         protected readonly lensSync: CodebaseLensSyncService,
         protected readonly synthesizer: PrimitiveSynthesizer,
-        protected readonly learningService: UserLearningService,
-        protected readonly visualVerifier?: VisualVerificationService
+        protected readonly learningService: UserLearningService
     ) {}
 
     /**
@@ -360,33 +358,8 @@ export class DeepWriteService {
             filesContext
         );
 
-        // Visual Verification & Auto-Repair on generated visual artifacts
-        const verifier = this.visualVerifier || new VisualVerificationService();
-        if (finalBundle.artifacts && finalBundle.artifacts.length > 0) {
-            for (let aIdx = 0; aIdx < finalBundle.artifacts.length; aIdx++) {
-                const art = finalBundle.artifacts[aIdx];
-                if (art.type === '3d-scene' || art.type === 'live-code-sandbox') {
-                    try {
-                        const audit = await verifier.verifyVisual({
-                            image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-                            prompt: plan.goal,
-                            artifactType: art.type,
-                            context: {
-                                title: art.title,
-                                sceneData: art.type === '3d-scene' ? (art.data as any) : undefined
-                            }
-                        });
-
-                        if (audit.visualFixes && audit.fidelityScore < 80) {
-                            finalBundle.artifacts[aIdx] = verifier.applyVisualAutoRepair(art as any, audit) as any;
-                        }
-                    } catch (e) {
-                        // ignore
-                    }
-                }
-            }
-        }
-
+        // No visual check here: the bundle's artifacts have not been rendered, so there is no frame to inspect (a
+        // placeholder image used to be "audited" and could trigger repairs). The canvas audits what it renders.
         onEvent({
             type: 'pipeline_complete',
             sessionId,

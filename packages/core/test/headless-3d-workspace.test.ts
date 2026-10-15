@@ -115,11 +115,9 @@ async function runHeadless3DWorkspaceTests() {
 
     assert.ok(studioSource.includes("layoutMode === '3d'"), 'Studio must support 3d layout mode in chat dispatch');
     assert.ok(studioSource.includes("activeArtifact?.type === '3d-scene'"), 'Studio must support 3d-scene artifact mutations');
-    assert.ok(studioSource.includes("earth/cyberpunk"), 'Studio must synthesize cyberpunk multiverse branch mutations');
-    assert.ok(studioSource.includes("earth/mars-colony-2150"), 'Studio must synthesize mars colony branch mutations');
-    assert.ok(studioSource.includes("earth/post-apocalypse"), 'Studio must synthesize post-apocalypse branch mutations');
-    assert.ok(studioSource.includes("wasmPhysics"), 'Studio must synthesize WASM physics wave collider triggers');
-    assert.ok(studioSource.includes("droneRoute"), 'Studio must synthesize drone flight routes from chat');
+    // The chat client no longer rewrites scenes from prompt keywords (world branches, WASM wave colliders, drone
+    // routes): a scene changes only through what the model sends.
+    assert.ok(!studioSource.includes("earth/post-apocalypse"), 'Studio must not template world-branch mutations from prompt words');
     console.log('  ✓ Test 3 Passed: Chat prompt dock fully drives 3D workspace mutations headlessly.');
 
     // -------------------------------------------------------------
@@ -146,17 +144,15 @@ async function runHeadless3DWorkspaceTests() {
     assert.ok(systemPrompt.includes('Scene3DData'), 'System prompt must document Scene3DData schema');
     assert.ok(systemPrompt.includes('earth/flight-corridor'), 'System prompt must include flight corridor branch');
 
-    // Test parseOrSynthesizeArtifact for 3D plane request
+    // A prose reply builds no scene from the prompt's words (no keyword-picked aircraft).
     const planeArtifact = (geminiService as any).parseOrSynthesizeArtifact(
         'build a 3d scene of a plane',
         'Here is the 3D plane scene',
         { prompt: 'build a 3d scene of a plane' },
         []
     );
-    assert.strictEqual(planeArtifact.type, '3d-scene', 'Prompt "build a 3d scene of a plane" must produce a 3d-scene artifact');
-    assert.ok(planeArtifact.data.objects && planeArtifact.data.objects.length > 0, 'Artifact data must include 3D objects');
-    assert.strictEqual(planeArtifact.data.objects[0].content.durableUri, 'internal:plane', 'Aircraft object must have internal:plane durableUri');
-    assert.strictEqual(resolveModeForArtifact(planeArtifact.type), '3d', '3d-scene artifact must resolve to layoutMode "3d"');
+    assert.strictEqual(planeArtifact, undefined, 'A prose reply must not produce a template aircraft scene');
+    assert.strictEqual(resolveModeForArtifact('3d-scene'), '3d', '3d-scene artifact must resolve to layoutMode "3d"');
 
     // Test JSON codeblock parsing with type: "3d-scene"
     const parsed3DArtifact = (geminiService as any).parseOrSynthesizeArtifact(
@@ -226,67 +222,34 @@ async function runHeadless3DWorkspaceTests() {
         }
     };
 
-    // Test "animate it"
+    // Follow-ups answered in prose change nothing; playback starts only when the model sends a timeline.
+    for (const followUp of ['animate it', 'make it fly', 'start flight', 'orbit camera']) {
+        const proseArtifact = (geminiService as any).parseOrSynthesizeArtifact(
+            followUp,
+            'Starting the flight sequence',
+            { prompt: followUp, activeArtifact: active3DPlaneArtifact },
+            []
+        );
+        assert.strictEqual(proseArtifact, undefined, `"${followUp}" answered in prose must leave the scene as it is`);
+    }
     const animatedArtifact = (geminiService as any).parseOrSynthesizeArtifact(
         'animate it',
-        'Here is the animated flight trajectory',
+        '```json\n' + JSON.stringify({ type: '3d-scene', data: { animation: 'flight', timeline: { isPlaying: true, isLooping: true } } }) + '\n```',
         { prompt: 'animate it', activeArtifact: active3DPlaneArtifact },
         []
     );
     assert.strictEqual(animatedArtifact.type, '3d-scene', 'Prompt "animate it" with active 3d-scene must preserve type "3d-scene"');
-    assert.strictEqual(animatedArtifact.data.timeline?.isPlaying, true, 'Timeline must be playing on "animate it"');
-    assert.strictEqual(animatedArtifact.data.timeline?.isLooping, true, 'Timeline must be looping on "animate it"');
-    assert.strictEqual(animatedArtifact.data.animation, 'flight', 'Animation mode must be set to "flight"');
-
-    // Test "make it fly"
-    const makeFlyArtifact = (geminiService as any).parseOrSynthesizeArtifact(
-        'make it fly',
-        'Starting flight simulation',
-        { prompt: 'make it fly', activeArtifact: active3DPlaneArtifact },
-        []
-    );
-    assert.strictEqual(makeFlyArtifact.type, '3d-scene', 'Prompt "make it fly" must produce 3d-scene');
-    assert.strictEqual(makeFlyArtifact.data.timeline?.isPlaying, true, 'Timeline must be playing on "make it fly"');
-    assert.strictEqual(makeFlyArtifact.data.animation, 'flight');
-
-    // Test "start flight"
-    const startFlightArtifact = (geminiService as any).parseOrSynthesizeArtifact(
-        'start flight',
-        'Initiating flight sequence',
-        { prompt: 'start flight', activeArtifact: active3DPlaneArtifact },
-        []
-    );
-    assert.strictEqual(startFlightArtifact.type, '3d-scene');
-    assert.strictEqual(startFlightArtifact.data.timeline?.isPlaying, true);
-
-    // Test "orbit camera"
-    const orbitArtifact = (geminiService as any).parseOrSynthesizeArtifact(
-        'orbit camera',
-        'Orbiting camera around 3D aircraft',
-        { prompt: 'orbit camera', activeArtifact: active3DPlaneArtifact },
-        []
-    );
-    assert.strictEqual(orbitArtifact.type, '3d-scene');
-    assert.strictEqual(orbitArtifact.data.timeline?.isPlaying, true);
-    assert.strictEqual(orbitArtifact.data.animation, 'orbit');
-    console.log('  ✓ Test 8 Passed: GeminiService correctly preserves 3d-scene and sets animated timeline state.');
+    assert.strictEqual(animatedArtifact.data.timeline?.isPlaying, true, 'The model\'s timeline must be kept');
+    assert.strictEqual(animatedArtifact.data.timeline?.isLooping, true);
+    assert.strictEqual(animatedArtifact.data.animation, 'flight', 'The model\'s animation mode must be kept');
+    console.log('  ✓ Test 8 Passed: GeminiService keeps the scene and the model\'s own timeline state.');
 
     // -------------------------------------------------------------
-    // Test 9: Verify GenerativeCanvasStudio 3D Animation State Handling
+    // Test 9: The chat client does not rewrite a scene's animation from prompt words
     // -------------------------------------------------------------
-    console.log('  Testing GenerativeCanvasStudio Animation Follow-Up State Handling...');
-    assert.ok(studioSource.includes("updated3D.animation = 'flight'"), 'Studio must support setting animation to flight');
-    assert.ok(studioSource.includes("isPlaying: true"), 'Studio must set isPlaying to true on animation follow-ups');
-    assert.ok(studioSource.includes("Animated 3D flight trajectory: dynamic bank, roll, and engine thrust active."), 'Studio must set flight animation explanation');
-    console.log('  ✓ Test 9 Passed: GenerativeCanvasStudio mutates 3D scene state for animation requests.');
-
-    // -------------------------------------------------------------
-    // Test 10: Verify Scene3DPrimitive Real-Time Animation Kinematics
-    // -------------------------------------------------------------
-    console.log('  Testing Scene3DPrimitive Real-Time Flight Kinematics & Jet Exhaust...');
-    assert.ok(sceneSource.includes('bankAngle') || sceneSource.includes('roll') || sceneSource.includes('Math.sin'), 'Scene3DPrimitive must compute dynamic flight banking and roll');
-    assert.ok(sceneSource.includes('thruster') || sceneSource.includes('thrusterGlowMat') || sceneSource.includes('exhaust'), 'Scene3DPrimitive must render thrusters and exhaust');
-    console.log('  ✓ Test 10 Passed: Scene3DPrimitive includes real-time flight kinematics and thrusters.');
+    console.log('  Testing GenerativeCanvasStudio leaves animation to the model...');
+    assert.ok(!studioSource.includes("updated3D.animation = 'flight'"), 'Studio must not set a flight animation from prompt keywords');
+    console.log('  ✓ Test 9 Passed: Animation state comes only from the model.');
 
     console.log('\n🎉 ALL HEADLESS 3D WORKSPACE TESTS PASSED SUCCESSFULLY!');
 }

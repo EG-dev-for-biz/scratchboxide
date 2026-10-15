@@ -116,54 +116,26 @@ export function streamTokensAsync(
 }
 
 /**
- * Global utility to capture a visual screenshot snapshot frame of the currently active studio canvas.
+ * A frame of the active studio canvas (3D viewport, code sandbox or browser stage) as a PNG data URL, taken by the
+ * capture function the mounted primitive registered. Null when none is mounted or it cannot read its canvas: no
+ * other canvas on the page and no placeholder image stands in for it.
  */
-export function captureActiveCanvasScreenshot(targetLayoutMode?: StudioLayoutMode): string {
-    if (typeof window !== 'undefined') {
-        if (targetLayoutMode === '3d' || !targetLayoutMode) {
-            const capture3D = (window as any).__scratchbox_capture_active_3d_scene;
-            if (typeof capture3D === 'function') {
-                try {
-                    const res = capture3D();
-                    if (res && res.length > 22) return res;
-                } catch (e) {
-                    // ignore
-                }
-            }
-        }
-        if (targetLayoutMode === 'code' || !targetLayoutMode) {
-            const captureSandbox = (window as any).__scratchbox_capture_active_sandbox;
-            if (typeof captureSandbox === 'function') {
-                try {
-                    const res = captureSandbox();
-                    if (res && res.length > 22) return res;
-                } catch (e) {
-                    // ignore
-                }
-            }
-        }
-        if (targetLayoutMode === 'browser' || !targetLayoutMode) {
-            const captureBrowser = (window as any).__scratchbox_capture_active_browser;
-            if (typeof captureBrowser === 'function') {
-                try {
-                    const res = captureBrowser();
-                    if (res && res.length > 22) return res;
-                } catch (e) {
-                    // ignore
-                }
-            }
-        }
-
-        const canvas = document.querySelector('.sb-3d-stage-wrapper canvas, .sb-ide-iframe-wrapper canvas, .sb-browser-stage-wrapper canvas, canvas') as HTMLCanvasElement;
-        if (canvas && typeof canvas.toDataURL === 'function') {
-            try {
-                const res = canvas.toDataURL('image/png');
-                if (res && res.length > 22) return res;
-            } catch (e) {
-                // ignore
-            }
+export function captureActiveCanvasScreenshot(targetLayoutMode?: StudioLayoutMode): string | null {
+    if (typeof window === 'undefined') return null;
+    const registered: Array<[boolean, string]> = [
+        [targetLayoutMode === '3d' || !targetLayoutMode, '__scratchbox_capture_active_3d_scene'],
+        [targetLayoutMode === 'code' || !targetLayoutMode, '__scratchbox_capture_active_sandbox'],
+        [targetLayoutMode === 'browser' || !targetLayoutMode, '__scratchbox_capture_active_browser']
+    ];
+    for (const [applies, key] of registered) {
+        const capture = (window as any)[key];
+        if (!applies || typeof capture !== 'function') continue;
+        try {
+            const frame = capture();
+            if (typeof frame === 'string' && frame.startsWith('data:image/')) return frame;
+        } catch {
+            // That primitive could not read its canvas (lost context, cross-origin); try the next registered one.
         }
     }
-
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    return null;
 }

@@ -57,8 +57,8 @@ test('Declarative Canvas Primitive Mounting Tool', async () => {
                 title: 'Deep Space Nebula Asteroid Field',
                 sceneType: 'space',
                 lighting: { ambientColor: '#101428', ambientIntensity: 0.8 },
-                meshes: [
-                    { name: 'CoreAsteroid', type: 'sphere', position: [0, 0, 0] }
+                objects: [
+                    { id: 'core-asteroid', content: { type: '3d-model', durableUri: '/models/core_asteroid.glb', mimeType: 'model/gltf-binary' } }
                 ]
             }
         },

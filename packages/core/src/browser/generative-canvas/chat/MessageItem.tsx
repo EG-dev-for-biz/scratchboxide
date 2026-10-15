@@ -23,6 +23,7 @@ import { getPrimitiveIcon, getPrimitiveLabel } from '../studio/canvas-labels';
 import { AudioNarratedCard, CinematicVideoCard, GoogleMapsCard, ImageGeneratedCard, TextureMatrixCard } from './MediaCards';
 import { QuestionCard } from './QuestionCard';
 import { ExecutionPlanCard } from './ExecutionPlanCard';
+import { MessageNotices } from './MessageNotices';
 
 export interface MessageItemProps {
     message: ChatMessage;
@@ -694,6 +695,9 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                         )}
                     </div>
                 )}
+
+                {/* Which model answered (and why, when not the requested one) and the background visual check */}
+                {!isUser && <MessageNotices message={msg} />}
 
                 {/* High-Fidelity Multimedia & Maps Grounding Cards */}
                 {!isUser && (msg.imageContent || (msg.imagesContent && msg.imagesContent.length > 0)) && (

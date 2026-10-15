@@ -31,10 +31,8 @@ import { FimCompletionService } from './fim-completion-service';
 import { QuickEditService } from './quick-edit-service';
 import {
     CanvasArtifact,
-    MarkdownDocumentData,
     MarkdownSection,
-    McpExecutionState,
-    Scene3DData
+    McpExecutionState
 } from '../browser/generative-canvas/canvas-types';
 import { ProjectContextGraphService } from './project-context-graph-service';
 import { UserMemoriesService } from './user-memories-service';
@@ -62,14 +60,14 @@ import {
 } from '../browser/generative-canvas/lenses';
 import {
     VisualVerificationRequest,
-    VisualAuditResult,
+    VisualVerificationOutcome,
+    VisualAuditUnavailable,
     MultiAngleAuditOptions,
     MultiAngleVisualAuditResult,
     VisualSelfCorrection3DOptions,
     VisualSelfCorrection3DLoopResult
 } from '../common/visual-verification-protocol';
 import { VisualVerificationService } from './visual-verification-service';
-import type { Autonomous3DPlanResult, Autonomous3DStageDAG } from './deep-write/dynamic-dag-planner';
 import {
     GeminiClient,
     DEFAULT_GEMINI_MODEL,
@@ -92,15 +90,14 @@ import {
     type ToolRegistry
 } from './gemini/tool-registry';
 import { SwarmBridge } from './gemini/swarm-bridge';
-import { StreamingEngine, isCodingMode } from './gemini/streaming';
+import { StreamingEngine } from './gemini/streaming';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './gemini/prompt-builder';
 import {
     extractCodeSandboxArtifact,
     extractDocumentTitle,
     markdownStringToSections,
     parseOrSynthesizeArtifact,
-    synthesizeComprehensiveDocument,
-    type ArtifactSynthesisOptions
+    withOpenArtifactRule
 } from './gemini/artifact-synthesis';
 
 export { DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS, DEFAULT_SUBAGENT_MODEL, FALLBACK_SUBAGENT_MODELS };
@@ -119,8 +116,7 @@ export class GeminiService {
     private readonly quickEditService: QuickEditService = new QuickEditService(this.client);
     private readonly swarm: SwarmBridge = new SwarmBridge({
         client: this.client,
-        subagentExecutor: this,
-        plannerHost: this
+        subagentExecutor: this
     });
     private readonly streaming: StreamingEngine = new StreamingEngine({
         client: this.client,
@@ -235,7 +231,7 @@ export class GeminiService {
     }
 
     protected readonly visualVerificationService?: VisualVerificationService;
-    private fallbackVisualVerificationService = new VisualVerificationService();
+    private fallbackVisualVerificationService = new VisualVerificationService(this.client);
 
     public getVisualVerificationService(): VisualVerificationService {
         return this.visualVerificationService || this.fallbackVisualVerificationService;
@@ -306,13 +302,13 @@ export class GeminiService {
     // Visual verification
     // ------------------------------------------------------------------
 
-    /** Multimodal Vision QA verification across Scratchbox visual surfaces. */
-    async verifyVisual(request: VisualVerificationRequest): Promise<VisualAuditResult> {
+    /** Multimodal Vision QA verification across Scratchbox visual surfaces ({status: 'unavailable'} when it cannot run). */
+    async verifyVisual(request: VisualVerificationRequest): Promise<VisualVerificationOutcome> {
         return this.getVisualVerificationService().verifyVisual(request);
     }
 
     /** Multi-angle visual audit across canonical viewport camera angles. */
-    async audit3DSceneMultiAngle(options: MultiAngleAuditOptions): Promise<MultiAngleVisualAuditResult> {
+    async audit3DSceneMultiAngle(options: MultiAngleAuditOptions): Promise<MultiAngleVisualAuditResult | VisualAuditUnavailable> {
         return this.getVisualVerificationService().audit3DSceneMultiAngle(options);
     }
 
@@ -470,6 +466,7 @@ export class GeminiService {
                         artifact: event.artifact,
                         mcpExecutions: event.mcpExecution ? [event.mcpExecution] : undefined,
                         modelUsed: event.modelUsed || this.preferredModel,
+                        modelProvenance: event.modelProvenance,
                         usage: event.usage
                     };
                 }
@@ -480,9 +477,9 @@ export class GeminiService {
             return finalResponse;
         }
 
-        // Agent, plan and ask turns change the canvas only through what the model wrote. A reply in prose leaves
-        // the open artifact as it is, so that is the artifact this turn produced (nothing is merged into it).
-        if (result.success && request.activeArtifact && isCodingMode(request)) {
+        // A turn changes the canvas only through what the model wrote, in every mode. A reply in prose leaves the
+        // open artifact as it is, so that is the artifact this turn produced (nothing is merged into it).
+        if (result.success && request.activeArtifact) {
             return {
                 ...result,
                 text: result.text || '',
@@ -529,7 +526,8 @@ export class GeminiService {
 
     /** Rich system instruction injecting canvas primitives, superpowers, workspace context and schemas. */
     private async buildSystemInstruction(request: GeminiGenerateRequest): Promise<string> {
-        return buildSystemInstruction(request, this.getPromptContextServices());
+        // As streamed turns get it: with the open-artifact rule while an artifact is open.
+        return withOpenArtifactRule(await buildSystemInstruction(request, this.getPromptContextServices()), request.activeArtifact);
     }
 
     public async buildSystemInstructionPrompt(request: GeminiGenerateRequest): Promise<string> {
@@ -571,7 +569,7 @@ export class GeminiService {
         return markdownStringToSections(md);
     }
 
-    /** Extract runnable code blocks into a live sandbox artifact, or synthesize one for app-like prompts. */
+    /** Turn the runnable code blocks in a reply into a live sandbox artifact; null when it has none. */
     public extractCodeSandboxArtifact(
         prompt: string,
         cleanContent: string,
@@ -585,35 +583,15 @@ export class GeminiService {
         return extractDocumentTitle(prompt, fallback);
     }
 
-    /** Synthesize a comprehensive, executive document hierarchy for any topic. */
-    public synthesizeComprehensiveDocument(prompt: string, customTitle?: string): MarkdownDocumentData {
-        return synthesizeComprehensiveDocument(prompt, customTitle);
-    }
-
-    /** Parse JSON from model output or wrap markdown into a structured canvas primitive. */
+    /** The canvas artifact the model wrote in its reply (primitive tag or JSON envelope), or undefined. */
     private parseOrSynthesizeArtifact(
         prompt: string,
         modelText: string,
         request: GeminiGenerateRequest,
         mcpExecutions: McpExecutionState[],
-        groundingMetadata?: GroundingMetadata,
-        options?: ArtifactSynthesisOptions
+        groundingMetadata?: GroundingMetadata
     ): CanvasArtifact | undefined {
-        return parseOrSynthesizeArtifact(prompt, modelText, request, mcpExecutions, groundingMetadata, options);
-    }
-
-    // ------------------------------------------------------------------
-    // Autonomous 3D planning
-    // ------------------------------------------------------------------
-
-    /** Autonomous multi-step 3D planning agent workflow (PocoLibre/blender-mcp paradigm). */
-    public async plan3DAutonomousWorkflow(prompt: string, currentScene?: Scene3DData): Promise<Autonomous3DPlanResult> {
-        return this.swarm.plan3DAutonomousWorkflow(prompt, currentScene);
-    }
-
-    /** Dependency-resolved 3D planning DAG for a prompt and scene. */
-    public generate3DPlanDAG(prompt: string, currentScene?: Scene3DData): Autonomous3DStageDAG {
-        return this.swarm.generate3DPlanDAG(prompt, currentScene);
+        return parseOrSynthesizeArtifact(prompt, modelText, request, mcpExecutions, groundingMetadata);
     }
 
     // ------------------------------------------------------------------
