@@ -709,6 +709,37 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         expect(receivedReferenceInSecondCall).toBe(true);
     });
 
+    it('survey_beautify_to_texture de-lights only for the date it is given, says whether it did, and writes into the workspace', async () => {
+        const os = await import('os');
+        const { vi } = await import('vitest');
+        const { spatialHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+        const { GoogleMediaCredentialsService } = await import('../src/node/google-media-credentials-service');
+        const { fakeImageModelClient } = await import('./helpers/fake-image-model');
+        const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-survey-texture-tool-'));
+        const stationsJsonPath = path.join(ws, 'stations.json');
+        // The anchor as survey_synthesize_stations writes it ({ lat, lng }); de-lighting used to read latitude/longitude.
+        await fs.outputJson(stationsJsonPath, { anchor: ANCHOR, poses: [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], { focalLengthMm: 35, sensorWidthMm: 36 }, ANCHOR)] });
+        const spy = vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(fakeImageModelClient([], { modelVersion: 'gemini-3.1-flash-image' }) as any);
+        try {
+            const args = { glbPath: cubeGlbPath, stationsJsonPath, locationName: 'Test Cube', resolution: 64 };
+            const undated = await spatialHandlers.survey_beautify_to_texture(args, { workspaceRoot: ws } as any);
+            const p1 = undated.resultPayload as any;
+            expect(p1.solarDelightingApplied).toBe(false);
+            expect(undated.summaryResult).toContain('without solar de-lighting (it needs the isoDate the images depict)');
+            expect(p1.outGlbPath.startsWith(path.join(ws, 'public', 'models'))).toBe(true);
+
+            const dated = await spatialHandlers.survey_beautify_to_texture({ ...args, isoDate: '2026-06-21T02:00:00Z' }, { workspaceRoot: ws } as any);
+            expect((dated.resultPayload as any).solarDelightingApplied).toBe(true);
+            expect(dated.summaryResult).toContain(`with NOAA solar de-lighting for 2026-06-21T02:00:00Z at ${ANCHOR.lat}, ${ANCHOR.lng}`);
+
+            await expect(spatialHandlers.survey_beautify_to_texture({ ...args, stationsJsonPath: path.join(ws, 'missing.json') }, { workspaceRoot: ws } as any))
+                .rejects.toThrow(/survey_beautify_to_texture needs stationsJsonPath: .*missing\.json does not exist/);
+        } finally {
+            spy.mockRestore();
+            fs.removeSync(ws);
+        }
+    });
+
     it('processes multi-submesh GLB into per-submesh original-UV atlases without repacking or UV write-backs', async () => {
         const multiGlbPath = path.join(TEST_DIR, 'multi_submesh.glb');
         createSyntheticMultiSubmeshGlb(multiGlbPath);

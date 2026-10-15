@@ -169,7 +169,7 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 solarCoordinates: {
                     type: 'OBJECT',
-                    description: 'Geodetic coordinates for real-world solar inverse de-lighting: { latitude: number, longitude: number, timestampIso?: string }.'
+                    description: 'For solar inverse de-lighting: { latitude: number, longitude: number, timestampIso: string }, the place and UTC time whose sun lit the source imagery (all three are required; the current time is not assumed).'
                 },
                 carrierSpinePoints: {
                     type: 'ARRAY',

@@ -64,7 +64,8 @@ export interface TopologyProbeResult {
 export interface AdaptiveSolarDelightingConfig {
   latitude: number;
   longitude: number;
-  timestampIso?: string;
+  /** The UTC time whose sun lit the source imagery (required: the run's own clock is not that time). */
+  timestampIso: string;
   regularizationEpsilon?: number;
   ambientWeight?: number;
   directWeight?: number;
@@ -322,11 +323,15 @@ export class AdaptiveUvOrchestrator {
       };
 
       if (request.solarDelighting) {
+        const { latitude, longitude, timestampIso } = request.solarDelighting;
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !timestampIso || Number.isNaN(Date.parse(timestampIso))) {
+          throw new Error(`Solar de-lighting needs the latitude, longitude and UTC timestampIso of the sun that lit the imagery (got ${latitude}, ${longitude}, ${JSON.stringify(timestampIso)}); none is assumed`);
+        }
         pbrOptions.pbrDecomposition.enableSolarInverseDelighting = true;
         pbrOptions.pbrDecomposition.solarDelighting = {
-          latitude: request.solarDelighting.latitude,
-          longitude: request.solarDelighting.longitude,
-          timestampIso: request.solarDelighting.timestampIso || new Date().toISOString(),
+          latitude,
+          longitude,
+          timestampIso,
           regularizationEpsilon: request.solarDelighting.regularizationEpsilon ?? 0.18,
           ambientWeight: request.solarDelighting.ambientWeight ?? 0.35,
           directWeight: request.solarDelighting.directWeight ?? 0.65

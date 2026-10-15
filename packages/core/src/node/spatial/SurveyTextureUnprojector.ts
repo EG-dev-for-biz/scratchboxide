@@ -209,6 +209,8 @@ export interface SubmeshTextureResult {
     metallicPng: Buffer;
     metrics: UnprojectionMetrics;
     pbrResult?: PbrDecompositionResult;
+    /** True when the albedo was de-lit for the sun position given in options.solarDelighting. */
+    solarDelightingApplied?: boolean;
 }
 
 export interface SurveyTextureResult {
@@ -843,6 +845,7 @@ export class SurveyTextureUnprojector {
 
         const encodeTextures = options.encodeTextures !== false;
         let pbrResult: PbrDecompositionResult | undefined;
+        let solarDelightingApplied = false;
         let albedoPng: Buffer;
         let normalPng: Buffer;
         let ormPng: Buffer;
@@ -888,11 +891,12 @@ export class SurveyTextureUnprojector {
             };
 
             if ((!isDraft || options.pbrDecomposition?.enableSolarInverseDelighting === true) &&
-                options.solarDelighting?.lat && options.solarDelighting?.lng && options.solarDelighting?.isoDate) {
+                Number.isFinite(options.solarDelighting?.lat) && Number.isFinite(options.solarDelighting?.lng) && options.solarDelighting?.isoDate) {
                 pbrOpts.enableSolarInverseDelighting = true;
+                solarDelightingApplied = true;
                 pbrOpts.solarDelighting = {
-                    latitude: options.solarDelighting.lat,
-                    longitude: options.solarDelighting.lng,
+                    latitude: options.solarDelighting.lat!,
+                    longitude: options.solarDelighting.lng!,
                     timestampIso: options.solarDelighting.isoDate,
                     ...options.pbrDecomposition?.solarDelighting
                 };
@@ -1002,7 +1006,8 @@ export class SurveyTextureUnprojector {
             aoPng,
             metallicPng,
             metrics: submeshMetrics,
-            pbrResult
+            pbrResult,
+            solarDelightingApplied
         };
     }
 

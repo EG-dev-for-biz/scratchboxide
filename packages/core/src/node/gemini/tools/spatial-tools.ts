@@ -1769,7 +1769,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_to_texture',
-        description: 'Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and full PBR decomposition (NOAA solar de-lighting, Scharr normals, Toksvig AA roughness, HBAO, and dielectric glass classification).',
+        description: 'Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and PBR decomposition (Scharr normals, Toksvig AA roughness, HBAO, dielectric glass classification, and NOAA solar de-lighting when isoDate is given and the stations file has anchor coordinates). The result says whether de-lighting was applied.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1781,8 +1781,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 resolution: { type: 'NUMBER', description: 'Atlas texture resolution (default 4096).' },
                 depthTolerance: { type: 'NUMBER', description: 'Occlusion test depth tolerance in meters (default 0.20).' },
                 minCosIncidence: { type: 'NUMBER', description: 'Drop glancing incidence angles below this cos theta (default 0.08).' },
-                isoDate: { type: 'STRING', description: 'Acquisition UTC timestamp for NOAA solar ephemeris de-lighting.' },
-                outGlbPath: { type: 'STRING', description: 'Target output path for enhanced GLB (default public/models/survey_pbr_<ts>.glb).' }
+                isoDate: { type: 'STRING', description: 'UTC time whose sun lit the station images (the time of day their mood describes), for NOAA solar de-lighting. Without it nothing is de-lit.' },
+                outGlbPath: { type: 'STRING', description: 'Target output path for enhanced GLB (default <workspace>/public/models/survey_pbr_<ts>.glb).' }
             },
             required: ['glbPath', 'stationsJsonPath', 'locationName']
         }
@@ -2987,20 +2987,34 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
     survey_beautify_to_texture: async (args, ctx) => {
         const fsMod = await import('fs-extra');
         const pathMod = await import('path');
-        const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        const tool = 'survey_beautify_to_texture';
+        const stationsJsonPath = asString(args.stationsJsonPath);
+        const glbPath = asString(args.glbPath);
+        const locationName = asString(args.locationName);
+        if (!glbPath) throw new MissingInputError(tool, 'glbPath');
+        if (!(await fsMod.pathExists(glbPath))) throw new MissingInputError(tool, 'glbPath', `${glbPath} does not exist`);
+        if (!stationsJsonPath) throw new MissingInputError(tool, 'stationsJsonPath', 'the stations JSON written by survey_synthesize_stations');
+        if (!(await fsMod.pathExists(stationsJsonPath))) throw new MissingInputError(tool, 'stationsJsonPath', `${stationsJsonPath} does not exist`);
+        if (!locationName) throw new MissingInputError(tool, 'locationName', 'the stations are generated for a named place; no placeholder name is used');
+        const data = await fsMod.readJson(stationsJsonPath);
+        const stations = data.poses || data.stations;
+        if (!Array.isArray(stations) || stations.length === 0) throw new MissingInputError(tool, 'stationsJsonPath', `${stationsJsonPath} lists no stations`);
         const generator = await resolveStationImageGenerator(ctx);
         const { SurveyTextureUnprojector } = await import('../../spatial/SurveyTextureUnprojector');
 
-        const glbPath = asString(args.glbPath);
-        const locationName = asString(args.locationName);
-        if (!locationName) throw new MissingInputError('survey_beautify_to_texture', 'locationName', 'the stations are generated for a named place; no placeholder name is used');
         const resolution = typeof args.resolution === 'number' ? args.resolution : 4096;
-        const outGlbPath = asString(args.outGlbPath) || pathMod.join(process.cwd(), `public/models/survey_pbr_${Date.now()}.glb`);
+        const outGlbPath = asString(args.outGlbPath) || pathMod.join(ctx.workspaceRoot || process.cwd(), 'public', 'models', `survey_pbr_${Date.now()}.glb`);
+        // De-lighting needs the sun the images were lit by: the stations' anchor and the date the caller gives. The
+        // run's own clock is not that date, so without one (or without anchor coordinates) nothing is de-lit.
+        const lat = typeof data.anchor?.lat === 'number' ? data.anchor.lat : undefined;
+        const lng = typeof data.anchor?.lng === 'number' ? data.anchor.lng : undefined;
+        const isoDate = asString(args.isoDate) || undefined;
+        const delightRequested = lat !== undefined && lng !== undefined && isoDate !== undefined;
 
         const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
             glbPath,
             anchor: data.anchor,
-            stations: data.poses || data.stations,
+            stations,
             generator,
             beautifyContext: {
                 locationName,
@@ -3011,16 +3025,16 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 resolution,
                 depthTolerance: typeof args.depthTolerance === 'number' ? args.depthTolerance : 0.20,
                 minCosIncidence: typeof args.minCosIncidence === 'number' ? args.minCosIncidence : 0.08,
-                solarDelighting: {
-                    lat: data.anchor?.latitude,
-                    lng: data.anchor?.longitude,
-                    isoDate: asString(args.isoDate) || new Date().toISOString()
-                },
+                solarDelighting: delightRequested ? { lat, lng, isoDate } : undefined,
                 outGlbPath
             },
             onProgress: (message, fraction) => ctx.reportProgress?.(message, fraction),
             signal: ctx.signal
         });
+        const delit = (result.submeshes || []).some(sub => sub.solarDelightingApplied === true);
+        const delightNote = delit
+            ? `with NOAA solar de-lighting for ${isoDate} at ${lat}, ${lng}`
+            : `without solar de-lighting (${delightRequested ? 'the PBR decomposition did not apply it' : `it needs ${isoDate === undefined ? 'the isoDate the images depict' : 'anchor coordinates in the stations file'}`})`;
 
         return {
             resultPayload: {
@@ -3032,12 +3046,13 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 directlyPaintedTexels: result.metrics.directlyPaintedTexels,
                 stationContributions: result.metrics.stationContributions,
                 durationMs: result.metrics.durationMs,
+                solarDelightingApplied: delit,
                 modelsUsed: result.modelsUsed,
                 imageSources: result.imageSources,
                 rejectedStations: result.rejectedStations,
                 unobservedTexels: result.unobservedTexels
             } as unknown as ToolResultPayload,
-            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) with NOAA solar de-lighting and PBR maps -> ${result.outGlbPath}.`
+            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) ${delightNote}, with PBR maps -> ${result.outGlbPath}.`
                 + (result.rejectedStations.length ? ` Left out ${result.rejectedStations.length} station(s) whose image failed geometry QC (${result.rejectedStations.map(r => `${r.stationId}: ${r.reason}`).join('; ')}).` : '')
                 + (result.unobservedTexels > 0 && result.metrics.coveredMeshTexels > 0 ? ` ${((result.unobservedTexels / result.metrics.coveredMeshTexels) * 100).toFixed(1)}% of the mesh's texels were seen by no station and keep the mesh's own colour.` : '')
                 + ` ${result.imageSources.join(' ')}`

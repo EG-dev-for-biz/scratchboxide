@@ -750,7 +750,8 @@ export class AlgorithmicUvEngine {
       microDetailTilingInjected: !!(options.enableMicroDetailTiling || (options.autoInducePeriodicity && inducedSpatialProfile?.isPeriodic)),
       khrExtensionsInjected: rebuildResult.injectedExtensions,
       solarDelightingApplied: !!pbrOpts.enableSolarInverseDelighting,
-      solarSunVector: pbrOpts.enableSolarInverseDelighting ? (pbrOpts.solarDelighting?.sunVector ?? [0.45, 0.75, -0.48]) : undefined,
+      // The sun vector when the caller gave one (a NOAA-derived one is not echoed here, and none is made up).
+      solarSunVector: pbrOpts.enableSolarInverseDelighting ? pbrOpts.solarDelighting?.sunVector : undefined,
       boundaryWeldingResult: boundaryResult,
       toksvigMipLevelsGenerated: pbrOpts.enableToksvigMipPyramid ? (pbrOpts.toksvigMipLevels ?? 4) : undefined,
       backend: 'node-pure'
@@ -1674,14 +1675,15 @@ export class AlgorithmicUvEngine {
     // 1b. Solar Inverse De-Lighting via NOAA Ephemeris & Ramamoorthi SH9 Irradiance
     if (options.enableSolarInverseDelighting) {
       const cfg = options.solarDelighting || {};
-      let sunVec: [number, number, number] = [0.45, 0.75, -0.48];
+      // The sun is the one given (a vector, or a place and time for the NOAA ephemeris); no place or date is assumed.
+      let sunVec: [number, number, number];
       if (cfg.sunVector) {
         sunVec = cfg.sunVector;
       } else {
-        const lat = cfg.latitude ?? 40.74844;
-        const lng = cfg.longitude ?? -73.98566;
-        const date = cfg.timestampIso ? new Date(cfg.timestampIso) : new Date('2024-06-21T14:30:00Z');
-        const pos = calculateNOAASolarPosition(date, lat, lng);
+        if (!Number.isFinite(cfg.latitude) || !Number.isFinite(cfg.longitude) || !cfg.timestampIso || Number.isNaN(Date.parse(cfg.timestampIso))) {
+          throw new Error(`Solar de-lighting needs solarDelighting.sunVector, or latitude, longitude and a UTC timestampIso (got ${cfg.latitude}, ${cfg.longitude}, ${JSON.stringify(cfg.timestampIso)})`);
+        }
+        const pos = calculateNOAASolarPosition(new Date(cfg.timestampIso), cfg.latitude!, cfg.longitude!);
         const sun = calculateENUSunVector(pos.altitudeRad, pos.azimuthRad);
         sunVec = [sun.x, sun.y, sun.z];
       }
