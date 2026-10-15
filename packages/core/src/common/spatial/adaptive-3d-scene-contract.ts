@@ -64,6 +64,7 @@ export interface AdaptiveArchitecturalStructure {
 export interface AdaptiveBotanyField {
     species: string;
     archetype?: string;
+    /** Trees per 1000 m² */
     density: number;
     elevationMin: number;
     elevationMax: number;

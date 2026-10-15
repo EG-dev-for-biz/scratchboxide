@@ -26,6 +26,12 @@ const timestampNow = (): string => new Date().toLocaleTimeString([], { hour: '2-
 /**
  * MCP plumbing: server health pings, converting attached MCP tools into Gemini function
  * declarations, and synthesising execution telemetry for tool calls that have no native handler.
+ *
+ * @deprecated pingMcpServer() and buildFunctionDeclarations() are cosmetic stubs used only
+ * for UI telemetry cards.  The real MCP server (JSON-RPC 2.0 over stdio or SSE) is implemented
+ * in packages/core/src/node/mcp/ScratchboxMcpServer.ts.  To add an entry in the MCP Hub UI
+ * that actually routes to the real server, configure Claude Desktop with SCRATCHBOX_MCP_CONFIG_EXAMPLE
+ * exported from that module.
  */
 export class McpBridge {
     /** Test roundtrip latency and connectivity to an MCP server. */

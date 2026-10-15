@@ -92,16 +92,16 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         tags: ['PBR Pipeline', 'Rome Colosseum', 'CIELAB', 'Toksvig Roughness', 'Dual Viewport'],
         badge: 'PBR PIPELINE'
     },
-    // 2. 3D Testing Workbench · Modular Layers (High-Fidelity 3DGS Engine)
+    // 2. Walkable 3DGS Viewer (the app's own splat renderer)
     {
-        id: 'spatial-photoreal-3dgs',
-        title: '3D Testing Workbench (Modular Layers) · High-Fidelity 3DGS Engine',
-        subtitle: 'Rome Colosseum 1K PBR & 3DGS Hybrid with 15 Modular Inspection Layers',
+        id: 'walkable-3dgs-viewer',
+        title: 'Walkable 3DGS Viewer',
+        subtitle: 'Fused Gaussian splat captures in the app\'s own splat renderer',
         category: '3DGS & Splats',
-        path: '/spatial_photoreal_3dgs_demo.html',
-        description: 'Complete 3D Testing Workbench featuring Compositing, Assets Hub, 1K PBR Suite, Micro-Depth, UTDRA Mesh, Matchmove, Atmosphere, VFX Lens & Optics, Pro GI & Bounces, Cinematic Shadows, Diagnostics, Clearance, Reshaper, and AI Beautify.',
-        tags: ['3D Testing Workbench', 'Modular Layers', 'Rome Colosseum', 'Compositing', '1K PBR Suite', '3DGS Engine', 'VFX Optics', 'GI Bounces', '1.3M Splats'],
-        badge: 'MODULAR WORKBENCH'
+        path: '/walkable_3dgs_viewer.html',
+        description: 'Walk through a fused splat capture: start at any capture station, look around, walk with WASD and crop to a bounding box. Survey tilesets from the COLMAP reference viewer open here with their clay ground.',
+        tags: ['3DGS', 'Walkable', 'Capture Stations', 'Crop Box', 'Survey Tilesets'],
+        badge: '3DGS'
     },
     // 3. Agent 3D Scene Lighting Intelligence & Photographic Matching
     {

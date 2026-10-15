@@ -121,24 +121,39 @@ export class SceneCriticRefinementService {
     /**
      * Sets a value at a dot-path (with bracket notation for arrays).
      * e.g. "architecture.structures[0].dimensions.floorCount" → 5
-     * Throws if any intermediate key is undefined/null.
+     *
+     * Paths and values come from model output, so this only replaces an existing own leaf with a
+     * value of the same type (finite numbers for numbers). It never walks the prototype chain and
+     * never adds keys. Throws on anything else.
      */
     private setByPath(obj: unknown, path: string, value: unknown): void {
         // normalise "a[0].b" → "a.0.b"
         const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.');
         let curr: Record<string, unknown> = obj as Record<string, unknown>;
 
-        for (let i = 0; i < parts.length - 1; i++) {
+        for (let i = 0; i < parts.length; i++) {
             const key = parts[i];
-            if (curr[key] === undefined || curr[key] === null) {
+            if (key === '__proto__' || key === 'constructor' || key === 'prototype' || !Object.hasOwn(curr, key)) {
                 throw new Error(`Invalid path at "${parts.slice(0, i + 1).join('.')}" in "${path}"`);
             }
-            curr = curr[key] as Record<string, unknown>;
+            if (i === parts.length - 1) break;
+            const next = curr[key];
+            if (next === null || typeof next !== 'object') {
+                throw new Error(`Invalid path at "${parts.slice(0, i + 1).join('.')}" in "${path}"`);
+            }
+            curr = next as Record<string, unknown>;
         }
 
         const lastKey = parts[parts.length - 1];
-        if (curr[lastKey] === undefined) {
-            throw new Error(`Unknown final key "${lastKey}" in path "${path}"`);
+        const existing = curr[lastKey];
+        if (typeof existing === 'number') {
+            if (typeof value !== 'number' || !Number.isFinite(value)) {
+                throw new Error(`"${path}" must be a finite number`);
+            }
+        } else if (typeof existing === 'string' || typeof existing === 'boolean') {
+            if (typeof value !== typeof existing) throw new Error(`"${path}" must be a ${typeof existing}`);
+        } else {
+            throw new Error(`"${path}" is not a scalar field`);
         }
         curr[lastKey] = value;
     }

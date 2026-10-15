@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "scratchbox": {
+      "command": "npx",
+      "args": [
+        "tsx",
+        "packages/core/src/node/mcp/scratchbox-mcp-server.ts"
+      ],
+      "env": {
+        "SCRATCHBOX_WORKSPACE": "/Users/eligreen/Dev/scratchbox-ide-master"
+      }
+    }
+  }
+}

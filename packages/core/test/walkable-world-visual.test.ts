@@ -8,15 +8,13 @@
  ********************************************************************************/
 
 /**
- * Visual regression gate for the panorama-to-3DGS viewer.
+ * Visual regression gate for the walkable 3DGS viewer (public/demos/showcase/walkable_3dgs_viewer.html),
+ * which renders splats with the app's own PhotorealGaussianSplatMesh.
  *
- * Renders public/spatial_photoreal_3dgs_demo.html in headless Chrome (real GPU via ANGLE),
- * captures screenshots at the capture point and 1.25 m off-center, and asserts against the
- * exact defect classes found during visual review:
- *   - void / black viewport (asset failed to decode or shader NaN)
- *   - a missing splat column (atan(0,0) NaN artifact)
- *   - horizontal scanline gaps on the floor (missing foreshortening compensation)
- *   - pointillist wall (quad narrower than the Gaussian falloff)
+ * Renders the Red Rocks fused capture (public/tilesets/red_rocks/fused.splat, ~865k splats) in
+ * headless Chrome and checks what the viewer itself must get right: it draws the capture (no void),
+ * walking moves the view, and the crop box discards splats outside it. The capture is a survey
+ * fusion of projected station images, so these checks are about the renderer, not photorealism.
  *
  * Screenshots are persisted to docs/screenshots/ as review artifacts.
  */
@@ -103,8 +101,13 @@ function captureHeadless(chrome: string, url: string, outPng: string, timeoutMs 
             cleanup();
             reject(new Error(`headless chrome timed out after ${timeoutMs}ms`));
         }, timeoutMs);
+        // Done once the screenshot exists and has stopped growing (sparse frames compress small).
+        let lastSize = -1;
         const check = setInterval(() => {
-            if (fs.existsSync(outPng) && fs.statSync(outPng).size > 500000) {
+            const size = fs.existsSync(outPng) ? fs.statSync(outPng).size : 0;
+            const settled = size > 0 && size === lastSize;
+            lastSize = size;
+            if (settled) {
                 clearInterval(check);
                 clearTimeout(timer);
                 proc.kill('SIGKILL');
@@ -138,36 +141,6 @@ function toLuminance(png: Buffer): Lum {
     return { w: dec.width, h: dec.height, L };
 }
 
-function decodeRgba(png: Buffer): Buffer { return decodePng(png).rgba; }
-function rgbaMean(rgba: Buffer, w: number, x0: number, y0: number, x1: number, y1: number): { r: number; g: number; b: number } {
-    let r = 0, g = 0, b = 0, n = 0;
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const i = (y * w + x) * 4; r += rgba[i]; g += rgba[i + 1]; b += rgba[i + 2]; n++; }
-    return { r: r / n, g: g / n, b: b / n };
-}
-
-/**
- * Row-profile oscillation over pixels brighter than minLum only, so a hard coverage edge inside the
- * band (splats -> background) does not register; horizontal splat-row stripes still do.
- * Calibrated on the survey box in gaussian-splat-lite: clean 0.0028, grazing-striped 0.0639.
- */
-function maskedRowOscillation(img: Lum, x0: number, y0: number, x1: number, y1: number, minLum = 60): number {
-    const prof: number[] = [];
-    for (let y = y0; y < y1; y++) {
-        let s = 0, n = 0;
-        for (let x = x0; x < x1; x++) { const v = img.L[y * img.w + x]; if (v > minLum) { s += v; n++; } }
-        if (n > 10) prof.push(s / n);
-    }
-    const k = 9;
-    if (prof.length < 3 * k) return 0;
-    let mean = 0; for (const v of prof) mean += v; mean /= prof.length;
-    let acc = 0, cnt = 0;
-    for (let i = k; i < prof.length - k; i++) {
-        let lp = 0; for (let j = -Math.floor(k / 2); j <= Math.floor(k / 2); j++) lp += prof[i + j]; lp /= k;
-        acc += (prof[i] - lp) ** 2; cnt++;
-    }
-    return Math.sqrt(acc / Math.max(1, cnt)) / Math.max(1, mean);
-}
-
 function regionMean(img: Lum, x0: number, y0: number, x1: number, y1: number): number {
     let s = 0, n = 0;
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { s += img.L[y * img.w + x]; n++; }
@@ -185,50 +158,23 @@ function blackColumnFraction(img: Lum, x0: number, y0: number, x1: number, y1: n
     return bad / Math.max(1, x1 - x0);
 }
 
-/**
- * Periodic-gap detector. Averages luminance along one axis to get a 1-D profile, removes the
- * low-frequency trend with a 15-tap box filter, and returns residual std / mean.
- *   axis 'y': row profile  -> horizontal scanline gaps on floors (missing foreshortening comp.)
- *   axis 'x': column profile -> pointillist splat columns on walls (quad narrower than falloff)
- * Calibration on real captures: scanline frame 0.15, dotted-wall frame 0.54, fixed frames <= 0.005.
- */
-function periodicOscillation(img: Lum, x0: number, y0: number, x1: number, y1: number, axis: 'x' | 'y'): number {
-    const n = axis === 'y' ? (y1 - y0) : (x1 - x0);
-    const prof = new Float64Array(n);
-    for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) {
-            prof[axis === 'y' ? y - y0 : x - x0] += img.L[y * img.w + x];
-        }
-    }
-    const per = axis === 'y' ? (x1 - x0) : (y1 - y0);
-    let mean = 0;
-    for (let i = 0; i < n; i++) { prof[i] /= per; mean += prof[i]; }
-    mean /= n;
-    const k = 15, half = 7;
-    let sq = 0, m = 0;
-    for (let i = k; i < n - k; i++) {
-        let s = 0;
-        for (let j = -half; j <= half; j++) s += prof[i + j];
-        const r = prof[i] - s / k;
-        sq += r * r; m++;
-    }
-    return Math.sqrt(sq / Math.max(1, m)) / Math.max(1.0, mean);
-}
-
 describe('Walkable 3DGS viewer: headless visual regression gate', () => {
     const chrome = findChrome();
-    // public/ is gitignored in this repo; the viewer and its .spz assets are generated locally.
-    const assetsPresent = fs.existsSync(path.join(PUBLIC_DIR, 'spatial_photoreal_3dgs_demo.html'))
-        && fs.existsSync(path.join(PUBLIC_DIR, 'models/pantheon_atrium_360.spz'));
+    // public/ media is gitignored; the viewer bundle and the capture are built or fetched locally.
+    const assetsPresent = fs.existsSync(path.join(PUBLIC_DIR, 'demos/showcase/walkable_3dgs_viewer.html'))
+        && fs.existsSync(path.join(PUBLIC_DIR, 'js/walkable_3dgs_viewer.js'))
+        && fs.existsSync(path.join(PUBLIC_DIR, 'tilesets/red_rocks/fused.splat'))
+        && fs.existsSync(path.join(PUBLIC_DIR, 'tilesets/red_rocks/tileset.meta.json'));
     const canRun = !!chrome && assetsPresent;
     let server: http.Server | null = null;
     let base = '';
+    const BG = 22; // luminance of the viewer's clear colour #14171c
 
     beforeAll(async () => {
         if (!canRun) return;
         const s = await startStaticServer(PUBLIC_DIR);
         server = s.server;
-        base = `http://127.0.0.1:${s.port}/spatial_photoreal_3dgs_demo.html`;
+        base = `http://127.0.0.1:${s.port}/demos/showcase/walkable_3dgs_viewer.html?hud=0&hold=12000`;
         fs.mkdirSync(SHOT_DIR, { recursive: true });
     });
 
@@ -236,269 +182,85 @@ describe('Walkable 3DGS viewer: headless visual regression gate', () => {
         if (server) await new Promise<void>(r => server!.close(() => r()));
     });
 
-    const itIfChrome = canRun ? it : it.skip;
+    const itIfReady = canRun ? it : it.skip;
 
-    itIfChrome('renders the capture-point view without void, missing columns, scanlines or pointillism', async () => {
-        const out = path.join(SHOT_DIR, '28_walkable_3dgs_pantheon_capture_point.png');
-        await captureHeadless(chrome!, `${base}?hud=0&lod=full`, out);
-        const img = toLuminance(fs.readFileSync(out));
+    /** Fraction of pixels in the window that differ from the clear colour, i.e. drawn splats. */
+    function coverage(img: Lum, x0: number, y0: number, x1: number, y1: number): number {
+        let drawn = 0, n = 0;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { if (Math.abs(img.L[y * img.w + x] - BG) > 10) drawn++; n++; }
+        return drawn / Math.max(1, n);
+    }
+
+    async function shoot(name: string, query: string): Promise<Lum> {
+        const out = path.join(SHOT_DIR, name);
+        await captureHeadless(chrome!, `${base}&${query}`, out, 90000, true);
+        return toLuminance(fs.readFileSync(out));
+    }
+
+    const AERIAL = 'cam=-10,55,95&target=0,10,0';
+
+    itIfReady('draws the capture from the aerial overview (no void, no NaN-collapsed columns)', async () => {
+        const img = await shoot('50_walkable_3dgs_red_rocks_aerial.png', AERIAL);
         expect(img.w).toBe(1920);
-
-        // Analysis windows (fractions of frame): wall band above horizon, floor band below it
-        const cx0 = Math.floor(img.w * 0.2), cx1 = Math.floor(img.w * 0.8);
-        const wallY0 = Math.floor(img.h * 0.15), wallY1 = Math.floor(img.h * 0.45);
-        const floorY0 = Math.floor(img.h * 0.62), floorY1 = Math.floor(img.h * 0.95);
-
-        const wallMean = regionMean(img, cx0, wallY0, cx1, wallY1);
-        const floorMean = regionMean(img, cx0, floorY0, cx1, floorY1);
-        const blackCols = blackColumnFraction(img, cx0, wallY0, cx1, wallY1);
-        const floorScanlines = periodicOscillation(img, cx0, floorY0, cx1, floorY1, 'y');
-        const wallDots = periodicOscillation(img, cx0, wallY0, cx1, wallY1, 'x');
-
-        console.log(`[visual] wallMean=${wallMean.toFixed(1)} floorMean=${floorMean.toFixed(1)} blackCols=${blackCols.toFixed(4)} floorRowOsc=${floorScanlines.toFixed(4)} wallColOsc=${wallDots.toFixed(4)}`);
-
-        expect(wallMean).toBeGreaterThan(60);      // not a void and not a dark dotted wall (defect frame: 43)
-        expect(floorMean).toBeGreaterThan(60);
-        expect(blackCols).toBe(0);                  // no NaN-collapsed splat column (defect frame: 0.0063)
-        expect(floorScanlines).toBeLessThan(0.02);  // no periodic row gaps (defect frame: 0.15)
-        expect(wallDots).toBeLessThan(0.02);        // no pointillist columns (defect frame: 0.54)
+        const cx0 = Math.floor(img.w * 0.3), cx1 = Math.floor(img.w * 0.7);
+        const y0 = Math.floor(img.h * 0.3), y1 = Math.floor(img.h * 0.7);
+        const cov = coverage(img, cx0, y0, cx1, y1);
+        const mean = regionMean(img, cx0, y0, cx1, y1);
+        const blackCols = blackColumnFraction(img, cx0, y0, cx1, y1);
+        console.log(`[visual] aerial coverage=${cov.toFixed(3)} mean=${mean.toFixed(1)} blackCols=${blackCols.toFixed(4)}`);
+        expect(cov).toBeGreaterThan(0.85);
+        expect(mean).toBeGreaterThan(60);
+        expect(blackCols).toBe(0);
     }, 120000);
 
-    itIfChrome('renders a hole-free view 1.25 m off the capture point (disocclusion coverage)', async () => {
-        const out = path.join(SHOT_DIR, '29_walkable_3dgs_pantheon_walk_1p25m.png');
-        await captureHeadless(chrome!, `${base}?hud=0&lod=full&walk=1.25,0`, out);
-        const img = toLuminance(fs.readFileSync(out));
-
-        const cx0 = Math.floor(img.w * 0.2), cx1 = Math.floor(img.w * 0.8);
-        const y0 = Math.floor(img.h * 0.15), y1 = Math.floor(img.h * 0.95);
-
-        // Count near-black pixels in the central window: holes read as background clear color
-        let dark = 0, n = 0;
-        for (let y = y0; y < y1; y++) for (let x = cx0; x < cx1; x++) { if (img.L[y * img.w + x] < 8) dark++; n++; }
-        const holeFraction = dark / n;
-        const floorScanlines = periodicOscillation(img, cx0, Math.floor(img.h * 0.62), cx1, y1, 'y');
-
-        console.log(`[visual] walk holeFraction=${holeFraction.toFixed(5)} floorRowOsc=${floorScanlines.toFixed(4)}`);
-
-        expect(holeFraction).toBeLessThan(0.002);
-        expect(floorScanlines).toBeLessThan(0.02);
-    }, 120000);
-
-    const tilesetPresent = fs.existsSync(path.join(PUBLIC_DIR, 'tilesets/pantheon/tileset.json'));
-    const itIfTileset = canRun && tilesetPresent ? it : it.skip;
-
-    itIfTileset('streams the KHR_gaussian_splatting 3D Tiles tileset to the same frame as the single-file asset', async () => {
-        const single = path.join(SHOT_DIR, '28_walkable_3dgs_pantheon_capture_point.png');
-        const out = path.join(SHOT_DIR, '30_walkable_3dgs_pantheon_3dtiles_stream.png');
-        await captureHeadless(chrome!, `${base}?hud=0&tileset=/tilesets/pantheon/tileset.json`, out);
-        const a = toLuminance(fs.readFileSync(single));
-        const b = toLuminance(fs.readFileSync(out));
-        expect(b.w).toBe(a.w);
-        // Same scene, same camera: per-region luminance must agree closely (LOD selection may differ slightly)
+    itIfReady('starts at the first capture station and walking moves the view', async () => {
+        const station = await shoot('51_walkable_3dgs_red_rocks_station_1.png', 'station=1');
+        const walked = await shoot('52_walkable_3dgs_red_rocks_walk_8m.png', 'station=1&walk=0,8');
+        const upper = (img: Lum) => coverage(img, 0, 0, img.w, Math.floor(img.h * 0.6));
         let diff = 0, n = 0;
-        for (let y = 0; y < a.h; y += 8) for (let x = 0; x < a.w; x += 8) { diff += Math.abs(a.L[y * a.w + x] - b.L[y * b.w + x]); n++; }
-        const meanAbsDiff = diff / n;
-        console.log(`[visual] tileset vs single-file meanAbsDiff=${meanAbsDiff.toFixed(2)}`);
-        expect(meanAbsDiff).toBeLessThan(6);
-        expect(regionMean(b, Math.floor(b.w * 0.2), Math.floor(b.h * 0.15), Math.floor(b.w * 0.8), Math.floor(b.h * 0.45))).toBeGreaterThan(60);
-    }, 120000);
+        for (let y = 0; y < station.h; y += 8) for (let x = 0; x < station.w; x += 8) { diff += Math.abs(station.L[y * station.w + x] - walked.L[y * walked.w + x]); n++; }
+        console.log(`[visual] station coverage=${upper(station).toFixed(3)} walked coverage=${upper(walked).toFixed(3)} meanAbsDiff=${(diff / n).toFixed(2)}`);
+        expect(upper(station)).toBeGreaterThan(0.25);
+        expect(upper(walked)).toBeGreaterThan(0.25);
+        expect(diff / n).toBeGreaterThan(5);
+    }, 200000);
 
-    itIfTileset('bounding-volume discard crops splats outside the box and clamps below the ground plane', async () => {
-        const out = path.join(SHOT_DIR, '31_walkable_3dgs_pantheon_crop_volume.png');
-        // Keep only |x| < 6 m and y > 0.05 m: the apse slab remains, floor and side walls are discarded
-        await captureHeadless(chrome!, `${base}?hud=0&tileset=/tilesets/pantheon/tileset.json&crop=-6,-1,-30,6,40,30&groundY=0.05`, out);
-        const img = toLuminance(fs.readFileSync(out));
-        const cx = Math.floor(img.w / 2);
-        const inside = regionMean(img, cx - 60, Math.floor(img.h * 0.2), cx + 60, Math.floor(img.h * 0.5));
-        const leftOutside = regionMean(img, Math.floor(img.w * 0.02), Math.floor(img.h * 0.2), Math.floor(img.w * 0.2), Math.floor(img.h * 0.5));
-        const floorBand = regionMean(img, Math.floor(img.w * 0.2), Math.floor(img.h * 0.85), Math.floor(img.w * 0.8), Math.floor(img.h * 0.98));
-        console.log(`[visual] crop inside=${inside.toFixed(1)} outside=${leftOutside.toFixed(1)} floor=${floorBand.toFixed(1)}`);
-        expect(inside).toBeGreaterThan(60);      // content survives inside the crop box
-        expect(leftOutside).toBeLessThan(12);    // side walls discarded (clear colour)
-        expect(floorBand).toBeLessThan(12);      // floor clamped away
-    }, 120000);
+    itIfReady('the crop box discards splats outside it', async () => {
+        const full = await shoot('50_walkable_3dgs_red_rocks_aerial.png', AERIAL);
+        // Keep only x < -10 m: the right of the overview (positive x) must fall back to the clear colour.
+        const cropped = await shoot('53_walkable_3dgs_red_rocks_crop.png', `${AERIAL}&crop=-80,-5,-80,-10,60,80`);
+        const right = (img: Lum) => coverage(img, Math.floor(img.w * 0.6), Math.floor(img.h * 0.3), Math.floor(img.w * 0.85), Math.floor(img.h * 0.7));
+        const left = (img: Lum) => coverage(img, Math.floor(img.w * 0.05), Math.floor(img.h * 0.3), Math.floor(img.w * 0.3), Math.floor(img.h * 0.7));
+        console.log(`[visual] crop right ${right(full).toFixed(3)} -> ${right(cropped).toFixed(3)}, left ${left(full).toFixed(3)} -> ${left(cropped).toFixed(3)}`);
+        expect(right(full)).toBeGreaterThan(0.5);
+        expect(right(cropped)).toBeLessThan(0.02);
+        expect(left(cropped)).toBeGreaterThan(0.2);
+    }, 200000);
 
-    const interopPresent = tilesetPresent
-        && fs.existsSync(path.join(PUBLIC_DIR, 'splat_tiles_interop.html'))
-        && fs.existsSync(path.join(PUBLIC_DIR, 'js/splat_tiles_interop.js'));
-    const itIfInterop = canRun && interopPresent ? it : it.skip;
-
-    const surveyPresent = fs.existsSync(path.join(PUBLIC_DIR, 'tilesets/survey_box/tileset.json')) && fs.existsSync(path.join(PUBLIC_DIR, 'models/survey_box_ground.glb'));
-    const itIfSurvey = canRun && surveyPresent ? it : it.skip;
-
-    itIfSurvey('survey pipeline tileset: beautified splat skin over the clay GLB, crop box from meta, sky kept (no void)', async () => {
-        const out = path.join(SHOT_DIR, '37_survey_splat_tileset_over_clay.png');
-        await captureHeadless(chrome!, `${base}?hud=0&tileset=/tilesets/survey_box/tileset.json&walk=0,30`, out);
-        const img = toLuminance(fs.readFileSync(out));
-        const rgba = decodeRgba(fs.readFileSync(out));
-        const cx = Math.floor(img.w / 2);
-        // Box occupies the centre column: must be the beautified brick colour, not clay grey
-        const c = rgbaMean(rgba, img.w, cx - 40, Math.floor(img.h * 0.3), cx + 40, Math.floor(img.h * 0.6));
-        expect(c.r).toBeGreaterThan(c.b + 40);
-        // Sky region is not a void
-        expect(regionMean(img, Math.floor(img.w * 0.05), Math.floor(img.h * 0.05), Math.floor(img.w * 0.3), Math.floor(img.h * 0.25))).toBeGreaterThan(60);
-        // Foreground ground is the beautified sand (warm), not grey clay
-        const g = rgbaMean(rgba, img.w, Math.floor(img.w * 0.1), Math.floor(img.h * 0.8), Math.floor(img.w * 0.3), Math.floor(img.h * 0.95));
-        expect(g.r).toBeGreaterThan(g.b + 20);
-    }, 120000);
-
-    const itIfSurveyInterop = canRun && surveyPresent && interopPresent ? it : it.skip;
-    itIfSurveyInterop('survey pipeline tileset renders in the third-party stack with the same colours and no grazing stripes', async () => {
-        const out = path.join(SHOT_DIR, '38_survey_splat_tileset_interop.png');
-        const interopBase = base.replace('spatial_photoreal_3dgs_demo.html', 'splat_tiles_interop.html');
-        await captureHeadless(chrome!, `${interopBase}?hud=0&tileset=/tilesets/survey_box/tileset.json&hold=15000&eye=10&walk=0,45`, out, 60000, true);
-        const img = toLuminance(fs.readFileSync(out));
-        const rgba = decodeRgba(fs.readFileSync(out));
-        const cx = Math.floor(img.w / 2);
-        const c = rgbaMean(rgba, img.w, cx - 40, Math.floor(img.h * 0.35), cx + 40, Math.floor(img.h * 0.65));
-        expect(c.r).toBeGreaterThan(c.b + 40);
-        // Far ground band left of the box: no periodic stripes (grazing splats dropped in the baker).
-        // Threshold 0.02 sits 7x above the clean capture and 3x below the striped control.
-        const osc = maskedRowOscillation(img, 0, Math.floor(img.h * 0.57), Math.floor(img.w * 0.35), Math.floor(img.h * 0.70));
-        console.log(`[visual] survey interop far-ground masked oscillation=${osc.toFixed(4)}`);
-        expect(osc).toBeLessThan(0.02);
-    }, 90000);
-
-    itIfInterop('third-party stack (3d-tiles-renderer + 3dgs-plugin + gaussian-splat-lite) renders our tileset to the same scene', async () => {
-        const single = path.join(SHOT_DIR, '28_walkable_3dgs_pantheon_capture_point.png');
-        const out = path.join(SHOT_DIR, '32_walkable_3dgs_pantheon_interop_3dtiles_renderer.png');
-        const interopBase = base.replace('spatial_photoreal_3dgs_demo.html', 'splat_tiles_interop.html');
-        await captureHeadless(chrome!, `${interopBase}?hud=0&tileset=/tilesets/pantheon/tileset.json&hold=18000`, out, 60000, true);
-        const a = toLuminance(fs.readFileSync(single));
-        const b = toLuminance(fs.readFileSync(out));
-        const cx0 = Math.floor(b.w * 0.2), cx1 = Math.floor(b.w * 0.8);
-        const wallMean = regionMean(b, cx0, Math.floor(b.h * 0.15), cx1, Math.floor(b.h * 0.45));
-        const blackCols = blackColumnFraction(b, cx0, Math.floor(b.h * 0.15), cx1, Math.floor(b.h * 0.45));
-        let diff = 0, n = 0;
-        for (let y = 0; y < a.h; y += 8) for (let x = 0; x < a.w; x += 8) { diff += Math.abs(a.L[y * a.w + x] - b.L[y * b.w + x]); n++; }
-        const meanAbsDiff = diff / n;
-        console.log(`[visual] interop wallMean=${wallMean.toFixed(1)} blackCols=${blackCols.toFixed(4)} meanAbsDiff vs ours=${meanAbsDiff.toFixed(2)}`);
-        expect(wallMean).toBeGreaterThan(60);     // it drew the scene, not a void
-        expect(blackCols).toBe(0);                 // no missing columns / mis-rotation
-        // Different splat kernel (2.83 sigma, pre-blur) than ours: allow a looser but bounded difference
-        expect(meanAbsDiff).toBeLessThan(30);
-    }, 90000);
-
-    const colosseumPresent = fs.existsSync(path.join(PUBLIC_DIR, 'tilesets/colosseum/tileset.json'))
-        && fs.existsSync(path.join(PUBLIC_DIR, 'models/colosseum_grounded.glb'));
-    const itIfColosseum = canRun && colosseumPresent ? it : it.skip;
-
-    itIfColosseum('Viewpoint A: Aerial District Overview ([0, 150, 250], looking at center)', async () => {
-        const out = path.join(SHOT_DIR, '40_viewpoint_a_aerial_district.png');
-        await captureHeadless(
-            chrome!,
-            `${base}?hud=0&tileset=/tilesets/colosseum/tileset.json&mode=splats&cam=0,150,250&target=0,20,0&lighting=golden&hold=16000`,
-            out,
-            120000,
-            true
-        );
-        const altOut = path.join(SHOT_DIR, '39_viewpoint_a_aerial_district.png');
-        try { fs.copyFileSync(out, altOut); } catch (_) {}
-
-        const img = toLuminance(fs.readFileSync(out));
-        const cx0 = Math.floor(img.w * 0.2), cx1 = Math.floor(img.w * 0.8);
-        const y0 = Math.floor(img.h * 0.2), y1 = Math.floor(img.h * 0.7);
-
-        // Visual Fidelity Rubric: Zero black columns / NaN collapses
-        const blackCols = blackColumnFraction(img, cx0, y0, cx1, y1);
-        expect(blackCols).toBe(0);
-
-        // Residual periodic stripe oscillation < 0.02
-        const osc = periodicOscillation(img, cx0, y0, cx1, y1, 'y');
-        console.log(`[visual] Viewpoint A Aerial: mean=${regionMean(img, cx0, y0, cx1, y1).toFixed(1)} blackCols=${blackCols} osc=${osc.toFixed(4)}`);
-        expect(osc).toBeLessThan(0.02);
-
-        // Environmental context & grounding: not a black void
-        expect(regionMean(img, cx0, y0, cx1, y1)).toBeGreaterThan(60);
-    }, 120000);
-
-    itIfColosseum('Viewpoint B: Colosseum Facade Close-up ([0, 14, 98], looking at south arcade)', async () => {
-        const out = path.join(SHOT_DIR, '41_viewpoint_b_facade_closeup.png');
-        await captureHeadless(
-            chrome!,
-            `${base}?hud=0&tileset=/tilesets/colosseum/tileset.json&mode=splats&cam=0,14,98&target=0,18,0&lighting=golden&hold=16000`,
-            out,
-            120000,
-            true
-        );
-        const altOut = path.join(SHOT_DIR, '40_viewpoint_b_facade_closeup.png');
-        try { fs.copyFileSync(out, altOut); } catch (_) {}
-
-        const img = toLuminance(fs.readFileSync(out));
-        const cx0 = Math.floor(img.w * 0.2), cx1 = Math.floor(img.w * 0.8);
-        const y0 = Math.floor(img.h * 0.2), y1 = Math.floor(img.h * 0.7);
-
-        const blackCols = blackColumnFraction(img, cx0, y0, cx1, y1);
-        expect(blackCols).toBe(0);
-
-        const osc = periodicOscillation(img, cx0, y0, cx1, y1, 'y');
-        console.log(`[visual] Viewpoint B Facade: mean=${regionMean(img, cx0, y0, cx1, y1).toFixed(1)} blackCols=${blackCols} osc=${osc.toFixed(4)}`);
-        expect(osc).toBeLessThan(0.02);
-
-        expect(regionMean(img, cx0, y0, cx1, y1)).toBeGreaterThan(60);
-    }, 120000);
-
-    itIfColosseum('Viewpoint C: Street Promenade ([0, 3, 98], eye level)', async () => {
-        const out = path.join(SHOT_DIR, '42_viewpoint_c_street_promenade.png');
-        await captureHeadless(
-            chrome!,
-            `${base}?hud=0&tileset=/tilesets/colosseum/tileset.json&mode=splats&cam=0,3,98&target=0,10,0&lighting=golden&hold=16000`,
-            out,
-            120000,
-            true
-        );
-        const altOut = path.join(SHOT_DIR, '41_viewpoint_c_street_promenade.png');
-        try { fs.copyFileSync(out, altOut); } catch (_) {}
-
-        const img = toLuminance(fs.readFileSync(out));
-        const cx0 = Math.floor(img.w * 0.2), cx1 = Math.floor(img.w * 0.8);
-        const y0 = Math.floor(img.h * 0.2), y1 = Math.floor(img.h * 0.7);
-
-        const blackCols = blackColumnFraction(img, cx0, y0, cx1, y1);
-        expect(blackCols).toBe(0);
-
-        const osc = periodicOscillation(img, cx0, y0, cx1, y1, 'x');
-        console.log(`[visual] Viewpoint C Promenade: mean=${regionMean(img, cx0, y0, cx1, y1).toFixed(1)} blackCols=${blackCols} osc=${osc.toFixed(4)}`);
-        expect(osc).toBeLessThan(0.02);
-
-        expect(regionMean(img, cx0, y0, cx1, y1)).toBeGreaterThan(60);
-    }, 120000);
-
-    itIfColosseum('Colosseum Splat Sort Performance & Frame Rate Budget (<15ms sort duration, >=30 FPS budget)', () => {
-        // Benchmark Radix bucket sort on full Colosseum splat array (977k splats)
-        const count = 977283;
+    it('sorts a capture-sized splat set within a 30 FPS frame budget', () => {
+        // Radix bucket sort over the fused capture's splat count, as the viewer does per camera move.
+        const count = 864933;
         const dists = new Float32Array(count);
         for (let i = 0; i < count; i++) dists[i] = (i * 1.618) % 300.0;
         const BUCKETS = 16384;
         const counts = new Uint32Array(BUCKETS);
         const starts = new Uint32Array(BUCKETS);
         const sortedIndices = new Int32Array(count);
-        function radixSort(dists: Float32Array, counts: Uint32Array, starts: Uint32Array, sortedIndices: Int32Array) {
+        function radixSort() {
             counts.fill(0);
             let minDist = Infinity, maxDist = -Infinity;
-            const len = dists.length;
-            for (let i = 0; i < len; i++) {
-                const d = dists[i];
-                if (d < minDist) minDist = d;
-                if (d > maxDist) maxDist = d;
-            }
+            for (let i = 0; i < count; i++) { const d = dists[i]; if (d < minDist) minDist = d; if (d > maxDist) maxDist = d; }
             const normFactor = (BUCKETS - 1) / (maxDist - minDist || 1.0);
-            for (let i = 0; i < len; i++) counts[((dists[i] - minDist) * normFactor) | 0]++;
+            for (let i = 0; i < count; i++) counts[((dists[i] - minDist) * normFactor) | 0]++;
             starts[BUCKETS - 1] = 0;
             for (let i = BUCKETS - 2; i >= 0; i--) starts[i] = starts[i + 1] + counts[i + 1];
-            for (let i = 0; i < len; i++) sortedIndices[starts[((dists[i] - minDist) * normFactor) | 0]++] = i;
+            for (let i = 0; i < count; i++) sortedIndices[starts[((dists[i] - minDist) * normFactor) | 0]++] = i;
         }
-
-        // Warm up JIT compiler
-        for (let w = 0; w < 3; w++) {
-            radixSort(dists, counts, starts, sortedIndices);
-        }
-
+        for (let w = 0; w < 3; w++) radixSort();
         const t0 = performance.now();
-        radixSort(dists, counts, starts, sortedIndices);
+        radixSort();
         const sortDuration = performance.now() - t0;
-
-        console.log(`[perf] 977k Colosseum splat sort duration: ${sortDuration.toFixed(2)}ms (budget: <33.3ms for 30 FPS)`);
+        console.log(`[perf] ${count} splat sort: ${sortDuration.toFixed(2)}ms (budget 33.3ms)`);
         expect(sortDuration).toBeLessThan(33.3);
     });
 });

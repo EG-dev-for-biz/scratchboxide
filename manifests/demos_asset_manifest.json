@@ -283,9 +283,7 @@
       "extension": ".spz",
       "sizeBytes": 551226,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/alpine_ridge_360.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/alpine_ridge_360.spz"
@@ -297,9 +295,7 @@
       "extension": ".spz",
       "sizeBytes": 9443842,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/art_deco_concourse_360.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/art_deco_concourse_360.spz"
@@ -396,7 +392,6 @@
       "sizeBytes": 2716098,
       "hydrationStrategy": "procedural_texture",
       "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html",
         "nano_banana_texture_upscale_experiment.html"
       ],
       "mirrors": [
@@ -411,7 +406,6 @@
       "sizeBytes": 105078,
       "hydrationStrategy": "procedural_texture",
       "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html",
         "nano_banana_texture_upscale_experiment.html"
       ],
       "mirrors": [
@@ -440,7 +434,6 @@
       "sizeBytes": 561623,
       "hydrationStrategy": "procedural_texture",
       "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html",
         "nano_banana_texture_upscale_experiment.html"
       ],
       "mirrors": [
@@ -455,7 +448,6 @@
       "sizeBytes": 545551,
       "hydrationStrategy": "procedural_texture",
       "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html",
         "nano_banana_texture_upscale_experiment.html"
       ],
       "mirrors": [
@@ -470,7 +462,6 @@
       "sizeBytes": 407308,
       "hydrationStrategy": "procedural_texture",
       "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html",
         "nano_banana_texture_upscale_experiment.html"
       ],
       "mirrors": [
@@ -485,7 +476,6 @@
       "sizeBytes": 1001607,
       "hydrationStrategy": "procedural_texture",
       "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html",
         "nano_banana_texture_upscale_experiment.html"
       ],
       "mirrors": [
@@ -500,7 +490,6 @@
       "sizeBytes": 448185,
       "hydrationStrategy": "procedural_texture",
       "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html",
         "nano_banana_texture_upscale_experiment.html"
       ],
       "mirrors": [
@@ -570,9 +559,7 @@
       "extension": ".spz",
       "sizeBytes": 9716237,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/cyberpunk_megacity_360.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/cyberpunk_megacity_360.spz"
@@ -584,9 +571,7 @@
       "extension": ".splat",
       "sizeBytes": 3276800,
       "hydrationStrategy": "procedural_splat",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/esb_100k.splat",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/esb_100k.splat"
@@ -598,9 +583,7 @@
       "extension": ".spz",
       "sizeBytes": 9499796,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/kyoto_bamboo_360.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/kyoto_bamboo_360.spz"
@@ -682,9 +665,7 @@
       "extension": ".splat",
       "sizeBytes": 9344064,
       "hydrationStrategy": "procedural_splat",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/manhattan_skyline.splat",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/manhattan_skyline.splat"
@@ -696,9 +677,7 @@
       "extension": ".spz",
       "sizeBytes": 4147939,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/manhattan_sunset_360.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/manhattan_sunset_360.spz"
@@ -710,9 +689,7 @@
       "extension": ".spz",
       "sizeBytes": 16237012,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/pantheon_atrium_360.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/pantheon_atrium_360.spz"
@@ -738,9 +715,7 @@
       "extension": ".splat",
       "sizeBytes": 34490496,
       "hydrationStrategy": "procedural_splat",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/plaza_colonnade_group.splat",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_colonnade_group.splat"
@@ -752,9 +727,7 @@
       "extension": ".spz",
       "sizeBytes": 11681753,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/plaza_colonnade_group.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_colonnade_group.spz"
@@ -780,9 +753,7 @@
       "extension": ".spz",
       "sizeBytes": 3106850,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/san_marco_360.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/san_marco_360.spz"
@@ -794,9 +765,7 @@
       "extension": ".splat",
       "sizeBytes": 8082336,
       "hydrationStrategy": "procedural_splat",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/shibuya_cyber.splat",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/shibuya_cyber.splat"
@@ -808,9 +777,7 @@
       "extension": ".spz",
       "sizeBytes": 4193392,
       "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/shibuya_neon_360.spz",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/shibuya_neon_360.spz"
@@ -1018,9 +985,7 @@
       "extension": ".json",
       "sizeBytes": 115498,
       "hydrationStrategy": "json_spec",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/tilesets/colosseum/colosseum_survey_112_stations.json",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_survey_112_stations.json"
@@ -1032,9 +997,7 @@
       "extension": ".json",
       "sizeBytes": 47447,
       "hydrationStrategy": "json_spec",
-      "usedByDemos": [
-        "spatial_photoreal_3dgs_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/tilesets/colosseum/colosseum_survey_40_stations.json",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_survey_40_stations.json"

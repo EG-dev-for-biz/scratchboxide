@@ -18,6 +18,7 @@ import { HeadlessVideoCompositorService } from '../../video/HeadlessVideoComposi
 import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirectorService';
 import { buildContactSheet, normalizePlates } from '../../video/ConditioningPlateService';
 import { checkVideo } from '../../video/GenerativeVideoQAService';
+import { VfxSubjectSegmenterService } from '../../video/VfxSubjectSegmenterService';
 import type { VideoTimelineData } from '../../../browser/generative-canvas/services/video/videoTypes';
 import type { ToolDeclaration, ToolHandler } from './types';
 
@@ -1798,7 +1799,81 @@ export const videoQAHandlers: Record<string, ToolHandler> = {
 };
 
 // ============================================================================
-// 7. Aggregated Tool Declarations & Handlers
+// 7. Subject Segmentation / Holdout Matte Tools
+// ============================================================================
+
+const segmenterService = new VfxSubjectSegmenterService();
+
+export const SEGMENTATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'vfx_segment_subject',
+        description: 'Generate per-frame holdout matte masks for a subject in a video using MediaPipe Image Segmenter. Produces a PNG sequence (mask_0000.png, mask_0001.png, …) in the output directory where white pixels (255) mark the foreground subject and black pixels (0) mark background. Masks are directly usable as FFmpeg alphamerge inputs or as holdout mattes in the Video Timeline compositor.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                videoPath: {
+                    type: 'STRING',
+                    description: 'Absolute path to the source video file (MP4, MOV, WebM, etc.)'
+                },
+                outputDir: {
+                    type: 'STRING',
+                    description: 'Absolute path to the directory where mask PNGs will be written. Created automatically if absent.'
+                },
+                fps: {
+                    type: 'NUMBER',
+                    description: 'Frame sampling rate in frames-per-second (default 5). Lower values run faster with fewer masks.'
+                },
+                subjectHint: {
+                    type: 'STRING',
+                    description: 'Optional natural-language description of the subject to segment (e.g. "person", "car"). Used for model routing in future versions.'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, validates parameters and returns expected output paths without running segmentation.'
+                }
+            },
+            required: ['videoPath', 'outputDir']
+        }
+    }
+];
+
+export const segmentationHandlers: Record<string, ToolHandler> = {
+    vfx_segment_subject: async (args) => {
+        const videoPath = typeof args.videoPath === 'string' ? args.videoPath : '';
+        const outputDir = typeof args.outputDir === 'string' ? args.outputDir : '';
+        const fps = typeof args.fps === 'number' ? args.fps : undefined;
+        const subjectHint = typeof args.subjectHint === 'string' ? args.subjectHint : undefined;
+        const dryRun = args.dryRun === true;
+
+        if (!videoPath) {
+            return { resultPayload: { success: false, error: 'videoPath is required' }, status: 'failed', summaryResult: 'Missing videoPath' };
+        }
+        if (!outputDir) {
+            return { resultPayload: { success: false, error: 'outputDir is required' }, status: 'failed', summaryResult: 'Missing outputDir' };
+        }
+
+        const result = await segmenterService.segmentSubject({ videoPath, outputDir, fps, subjectHint, dryRun });
+
+        if (!result.success) {
+            return {
+                resultPayload: result as Record<string, unknown>,
+                status: 'failed',
+                summaryResult: `Segmentation failed: ${result.error}`
+            };
+        }
+
+        return {
+            resultPayload: result as Record<string, unknown>,
+            status: 'completed',
+            summaryResult: dryRun
+                ? `Dry run: would produce ${result.totalFrames} masks at ${result.sampleFps} fps → ${outputDir}`
+                : `Generated ${result.totalFrames} holdout matte masks (${result.width}×${result.height}) → ${outputDir}`
+        };
+    }
+};
+
+// ============================================================================
+// 8. Aggregated Tool Declarations & Handlers
 // ============================================================================
 
 export const VFX_VIDEO_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -1807,7 +1882,8 @@ export const VFX_VIDEO_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...COMPOSITOR_TOOL_DECLARATIONS,
     ...DIRECTOR_TOOL_DECLARATIONS,
     ...CONDITIONING_TOOL_DECLARATIONS,
-    ...VIDEO_QA_TOOL_DECLARATIONS
+    ...VIDEO_QA_TOOL_DECLARATIONS,
+    ...SEGMENTATION_TOOL_DECLARATIONS
 ];
 
 export const vfxVideoHandlers: Record<string, ToolHandler> = {
@@ -1816,5 +1892,6 @@ export const vfxVideoHandlers: Record<string, ToolHandler> = {
     ...compositorHandlers,
     ...directorHandlers,
     ...conditioningHandlers,
-    ...videoQAHandlers
+    ...videoQAHandlers,
+    ...segmentationHandlers
 };

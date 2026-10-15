@@ -871,6 +871,7 @@ Available workspace tools:
 - invoke_subagent: Dynamically delegate focused subtasks (codebase research, isolated debugging) to background agents.
 - lens_project / lens_unproject / lens_sync: Synchronize visual canvas primitives with code files on disk.
 - google_3d_tiles_get_full_texture / google_3d_tiles_get_clay: Ingest any real-world address or coordinates as a high-fidelity 3D GLB mesh from Google Photorealistic 3D Tiles in full photogrammetric texture or studio grey clay.
+- tile_restyle: Restyle the real tile open in the 3D scene while keeping its photo textures. Translate any requested look into continuous quantities: surface fields (raise/sink, level, terrace step, wave relief), new forms (revolve profiles with harmonic lobes and helical twist, tapered/twisted sweeps along paths, replicated around rings or along rows), and a texture palette regrade. Place things in tile-normalised [u, v] using the tile bounds in the scene state. Never describe a restyle you did not run.
 - utdra_probe_tile: Telemetrically classify a 3D tile into 1 of 9 macro-geographic domains (urban, suburban, bridge, mountain, forest, etc.) with relief, verticality, and planarity statistics.
 - utdra_decompose_tile: Decompose and rectify a 3D tile with UTDRA / ULDRA, rectifying architectural shafts and preserving sculptural crowns.
 - utdra_slice_elevation: Non-destructive Sutherland-Hodgman planar slicer across elevation cutoff plane without generating holes.
@@ -1020,7 +1021,10 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
                 source: o.content?.metadata?.source,
                 resolvedAddress: o.content?.metadata?.resolvedAddress || o.content?.metadata?.location,
                 isGround: o.content?.metadata?.isGround,
-                dims: o.content?.metadata?.dims
+                dims: o.content?.metadata?.dims,
+                durableUri: o.content?.durableUri,
+                boundingBox: o.content?.metadata?.boundingBox,
+                restyledFrom: o.content?.metadata?.restyledFrom
             }));
             const sceneSummary = {
                 title: sceneData.title,

@@ -220,18 +220,16 @@ export type {
     SbRigResult
 } from './node/3d-engine/sb-rig-service';
 export {
-    NativeTileRestructurerService,
-    TileRestructurerService,
-    restructureTileMesh,
-    TileStyle,
-    RestructureMaterialMode,
-    TerraformingOp,
-    PrimitiveGraft,
-    TileRestructureConfig,
-    TileRestructureTelemetry,
-    TileRestructureOptions,
-    TileRestructureResult
-} from './node/3d-engine/native-tile-restructurer-service';
+    TileRestyleService,
+    appendGlbScene
+} from './node/3d-engine/tile-restyle-service';
+export type {
+    TileRestyleField,
+    TileRestyleForm,
+    TileRestyleSurface,
+    TileRestyleRequest,
+    TileRestyleResult
+} from './node/3d-engine/tile-restyle-service';
 export {
     NativeTilePathTracerService,
     TileShadingMode,
@@ -351,6 +349,13 @@ export {
     VisualCriticAuditOptions,
     VisualCriticAuditResult
 } from './node/video/MediaPipeVideoDirectorService';
+
+// VFX Subject Segmenter — per-frame holdout matte generation via MediaPipe Image Segmenter
+export {
+    VfxSubjectSegmenterService,
+    SegmentSubjectOptions,
+    SegmentSubjectResult
+} from './node/video/VfxSubjectSegmenterService';
 
 // Google 3D Tile Camera Blockout Pipeline Service (<VIDEO_REF_0>)
 export {
@@ -1199,3 +1204,11 @@ export {
   type HybridRecipeOptions,
   type HybridRecipeResult
 } from './node/3d-engine/hybrid-recipe-pbr-service';
+
+// Real MCP Server (supersedes McpBridge cosmetic fakes)
+export {
+    ScratchboxMcpServer,
+    createVfxMcpServer,
+    SCRATCHBOX_MCP_CONFIG_EXAMPLE,
+    type ScratchboxMcpServerOptions
+} from './node/mcp/ScratchboxMcpServer';

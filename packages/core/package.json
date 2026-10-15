@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@google/genai": "1.32.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@monaco-editor/react": "^4.7.0",
     "3d-tiles-renderer": "^0.5.2",
     "fs-extra": "^11.2.0",
