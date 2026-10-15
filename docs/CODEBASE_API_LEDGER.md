@@ -279,7 +279,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `atmosphere_harmonize_location_3d`: Harmonizes 3D objects with physical skies.
 
 ### 10. Native C++20 Mesh Reshaping (`mesh-shaping-tools.ts`)
-- `mesh_apply_deformers`: Applies explicit taper, twist, bend, shear, bulge, sculpt, FFD lattice, subdivide, repair and weathering operations to a given GLB; positions and sizes are fractions of the mesh's measured bounding box. A GLB with node transforms, instanced meshes or textures is refused, because the native reader uses raw vertex positions and the writer carries no textures (the UTDRA tools refuse such tiles too). (`mesh_reshape_via_prompt` and its keyword parser, and the tile restructure tools with their closed style/primitive taxonomy, are removed.)
+- `mesh_apply_deformers`: Applies explicit taper, twist, bend, shear, bulge, sculpt, FFD lattice, subdivide, repair and weathering operations to a given GLB; positions and sizes are fractions of the mesh's measured bounding box. A GLB with node transforms, instanced meshes, non-triangle primitives, encodings the native reader cannot decode, several materials or textures is refused, because the reader uses raw vertex positions and the writer writes one material and no textures (the UTDRA tools refuse such tiles too); the output keeps the input's own material. (`mesh_reshape_via_prompt` and its keyword parser, and the tile restructure tools with their closed style/primitive taxonomy, are removed.)
 
 ### 11. VFX, Video & Prompt Formatting (`vfx-video-tools.ts`)
 - `build_beautify_prompt`: Verbatim AI Beautify prompt template.
