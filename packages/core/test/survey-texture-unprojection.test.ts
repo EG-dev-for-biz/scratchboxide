@@ -905,7 +905,8 @@ describe('SurveyTextureUnprojector: a mesh without its own UVs', () => {
                 glbPath, anchor: ANCHOR, generator: gen, beautifyContext: { locationName: 'UV-less box' },
                 stations: [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR), stationFromLookAt(2, [25, 0, 0], [0, 0, 0], optics, ANCHOR)],
                 options: { resolution, renderWidth: 256, renderHeight: 144, draft: true, outGlbPath }
-            }).catch(e => e);
+            // A resolved result is summarised (it holds megabytes of buffers that a failure diff would print).
+            }).then(r => `resolved: success ${r.success}, fill rate ${r.metrics.fillRate}`, e => e);
             expect(err).toBeInstanceOf(MissingInputError);
             expect(err.message).toContain('mesh 0 primitive 0 has no TEXCOORD_0');
         }
