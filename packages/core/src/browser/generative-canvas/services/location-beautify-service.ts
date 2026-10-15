@@ -707,14 +707,13 @@ export function beautifyLocationSection(
         mood: options.mood || 'golden-hour'
     });
 
-    // The restyle prompt only: the section keeps its own image and credit until a generation replaces them
-    // (no catalog image is swapped in and credited to a model).
+    // The restyle prompt only: the section keeps its own image, credit and date tag until a generation replaces
+    // them (no catalog image is swapped in and credited to a model, and no era label is made up for the place).
     return {
         ...section,
         type: 'location-image',
         locationName: section.locationName || locContext.locationName,
         stylePreset: styleObj.label,
-        visualPrompt: beautifyPrompt,
-        dateTag: section.dateTag || (eraContext.includes('1776') ? 'Colonial Era • 1776' : 'Historical Landmark')
+        visualPrompt: beautifyPrompt
     };
 }

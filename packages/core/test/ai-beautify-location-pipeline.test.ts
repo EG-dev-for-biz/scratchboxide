@@ -125,7 +125,13 @@ async function runAiBeautifyPipelineTests() {
     // Restyling writes the prompt only: no catalog image is swapped in and no model is credited before a generation ran.
     assert.strictEqual(restyledSection.imageUrl, originalSection.imageUrl);
     assert.strictEqual(restyledSection.attribution, undefined);
-    assert.ok(restyledSection.dateTag && restyledSection.dateTag.includes('1776'));
+    // The date tag is the section's own: none is made up from the era text ("Colonial Era • 1776") or for any place
+    // ("Historical Landmark", even for a shopping mall).
+    assert.strictEqual(restyledSection.dateTag, undefined);
+    const mall = beautifyLocationSection({ id: 'sec-loc-mall', type: 'location-image', locationName: 'Westfield Valley Fair mall', coordinates: { lat: 37.3256, lng: -121.9454 } }, { styleId: 'cinematic-film' });
+    assert.strictEqual(mall.dateTag, undefined);
+    const dated = beautifyLocationSection({ ...originalSection, dateTag: 'July 4, 1776' }, { styleId: 'cinematic-film' });
+    assert.strictEqual(dated.dateTag, 'July 4, 1776');
 
     console.log('  ✓ Test 4 Passed: beautifyLocationSection successfully transforms and stamps document location block');
 
