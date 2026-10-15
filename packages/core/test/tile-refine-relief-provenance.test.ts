@@ -23,7 +23,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
-import { type Chunk, quad, flat, writeGlb, encodePng, buildTileRefine } from './helpers/synthetic-scan-glb';
+import { type Chunk, type Glb, quad, flat, writeGlb, readGlb, encodePng, buildTileRefine } from './helpers/synthetic-scan-glb';
 
 const REPO = path.resolve(__dirname, '../../..');
 const WORK = path.join(REPO, 'test-results/tile-refine-relief-provenance');
@@ -52,28 +52,6 @@ function facadeTexture(paint: Paint): Buffer {
             for (let c = 0; c < 3; c++) rgb[(y * TW + x) * 3 + c] = Math.max(0, Math.min(255, Math.round(v)));
         }
     return encodePng(TW, TH, rgb);
-}
-
-interface Glb { json: any; attribute(name: string): Float32Array[] }
-
-function readGlb(file: string): Glb {
-    const b = fs.readFileSync(file);
-    const jsonLen = b.readUInt32LE(12);
-    const json = JSON.parse(b.subarray(20, 20 + jsonLen).toString('utf8'));
-    const bin = b.subarray(20 + jsonLen + 8);
-    return {
-        json,
-        attribute(name: string) {
-            const out: Float32Array[] = [];
-            for (const m of json.meshes)
-                for (const p of m.primitives) {
-                    if (p.attributes[name] === undefined) continue;
-                    const acc = json.accessors[p.attributes[name]], view = json.bufferViews[acc.bufferView];
-                    out.push(new Float32Array(bin.buffer.slice(bin.byteOffset + (view.byteOffset ?? 0), bin.byteOffset + (view.byteOffset ?? 0) + acc.count * 4)));
-                }
-            return out;
-        }
-    };
 }
 
 function run(paint: Paint): { relief: any; clay: Glb; textured: Glb } {
@@ -134,7 +112,7 @@ describe('tile_refine photometric relief: evidence and provenance', () => {
         expect(relief.regionsTreated).toBe(0);
         expect(relief.recessArea_m2).toBe(0);
         expect(relief.provenance).toBe('none');
-        expect(clay.json.asset.extras).toBeUndefined();
+        expect(clay.json.asset.extras?.scratchbox?.relief).toBeUndefined();
         expect(clay.attribute('_RELIEF_HEIGHT')).toHaveLength(0);
     }, 300_000);
 

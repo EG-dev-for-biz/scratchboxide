@@ -779,6 +779,8 @@ private:
             facadeFlatten();
             lap("facade_flatten");
         }
+        auditProudFeatures();
+        lap("proud_feature_audit");
         if (const char* dump = std::getenv("SB_DUMP_RECTIFIED")) {
             // diagnostics: rectified positions (float32 x 3V) then flags (uint8 x T)
             std::vector<uint8_t> bytes(rect.positions.size() * 4 + rect.flags.size());
@@ -815,6 +817,7 @@ private:
         } else {
             outMesh = passThroughMesh();
         }
+        annotateProvenance(outMesh);
         lap("relief");
 
         // 5. write
@@ -1987,6 +1990,333 @@ private:
     }
 
     // ----------------------------------------------------------------------------------------
+    // Wall planes of the faces `kept` at positions Q (see FacadeFlattenParams): (azimuth, offset) density modes of the
+    // near-vertical faces, each refit robustly and coplanar ones merged, with their in-plane support boxes
+    // ----------------------------------------------------------------------------------------
+    struct WallPlane { V3 n, c, t1, t2; double d{0}, area{0}, lo1{0}, hi1{0}, lo2{0}, hi2{0}, rmsIn{0}; std::vector<uint32_t> tris, inl; };
+
+    std::vector<WallPlane> detectWallPlanes(const std::vector<V3>& Q, const std::vector<uint32_t>& kept, size_t& detectIterations) const {
+        const FacadeFlattenParams& FP = P.flatten;
+        const double kPi = 3.14159265358979323846;
+        const double cosPar = std::cos(FP.parallelDeg * kPi / 180.0);
+        const double cosMerge = std::cos(FP.mergeAngleDeg * kPi / 180.0);
+        // faces further than this from a seed's normal cannot become inliers of the plane it refits to
+        const double cosSeedReach = std::cos(std::min(89.0, FP.parallelDeg + 15.0) * kPi / 180.0);
+        std::vector<V3> nQ(F);
+        for (uint32_t t : kept) {
+            const V3 a = Q[rawIdx[3 * t]], b = Q[rawIdx[3 * t + 1]], c = Q[rawIdx[3 * t + 2]];
+            nQ[t] = (b - a).cross(c - a);
+        }
+        detectIterations = 0;
+        auto inlier = [&](uint32_t t, const V3& n, double d) {
+            const V3 cr = nQ[t];
+            const double l = cr.norm();
+            if (l < 2e-8 || cr.dot(n) / l < cosPar) return false;
+            for (int k = 0; k < 3; ++k) if (std::abs(Q[rawIdx[3 * t + k]].dot(n) - d) > FP.fitBand) return false;
+            return true;
+        };
+        // area-weighted least-squares plane of the faces (exact second moments of the triangles)
+        auto fit = [&](const std::vector<uint32_t>& tris, V3& n, V3& c, double& d, double& area) {
+            double A = 0, S1[3] = {0, 0, 0}, S2[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+            for (uint32_t t : tris) {
+                const V3 vs[3] = {Q[rawIdx[3 * t]], Q[rawIdx[3 * t + 1]], Q[rawIdx[3 * t + 2]]};
+                const double ar = 0.5 * (vs[1] - vs[0]).cross(vs[2] - vs[0]).norm();
+                if (ar <= 0) continue;
+                A += ar;
+                const double co[3][3] = {{vs[0].x, vs[0].y, vs[0].z}, {vs[1].x, vs[1].y, vs[1].z}, {vs[2].x, vs[2].y, vs[2].z}};
+                for (int k = 0; k < 3; ++k) S1[k] += ar * (co[0][k] + co[1][k] + co[2][k]) / 3.0;
+                for (int k = 0; k < 3; ++k)
+                    for (int l = 0; l < 3; ++l) {
+                        double s = 0, sk = 0, sl = 0;
+                        for (int i = 0; i < 3; ++i) { s += co[i][k] * co[i][l]; sk += co[i][k]; sl += co[i][l]; }
+                        S2[k][l] += ar / 12.0 * (s + sk * sl);
+                    }
+            }
+            if (A <= 0) return false;
+            const double cc[3] = {S1[0] / A, S1[1] / A, S1[2] / A};
+            double C[3][3];
+            for (int k = 0; k < 3; ++k) for (int l = 0; l < 3; ++l) C[k][l] = S2[k][l] / A - cc[k] * cc[l];
+            double ev[3];
+            V3 vec[3];
+            scan_rectifier::detail::symmetricEigen3(C, ev, vec);
+            V3 nn = vec[0].normalized();
+            if (nn.dot(n) < 0) nn = nn * -1.0;
+            n = nn;
+            c = V3{cc[0], cc[1], cc[2]};
+            d = n.dot(c);
+            area = A;
+            return true;
+        };
+        auto refine = [&](WallPlane& pl) {
+            for (int it = 0; it < FP.fitIterations; ++it) {
+                std::vector<uint32_t> in;
+                for (uint32_t t : pl.tris) if (inlier(t, pl.n, pl.d)) in.push_back(t);
+                V3 n = pl.n, c;
+                double d = 0, A = 0;
+                if (in.empty() || !fit(in, n, c, d, A)) { pl.inl.clear(); pl.area = 0; return; }
+                pl.n = n; pl.c = c; pl.d = d; pl.area = A; pl.inl = std::move(in);
+            }
+        };
+        std::vector<WallPlane> planes;
+        {
+            // Sequential mode extraction. A cell is 1 degree of azimuth by detectOffsetBin of offset along the cell's
+            // horizontal normal; its score is the live face area in the cells within +-detectAzSmooth degrees and
+            // +-detectOffsetSmooth bins. The best cell seeds a plane and the refit takes its inliers out (when it holds
+            // no plane, the seed cells' faces are retired instead); scores follow every retired face incrementally.
+            const double sb = FP.detectOffsetBin;
+            const int64_t kOffBias = int64_t{1} << 39;
+            auto cellKey = [&](int ab, int64_t s) { return (static_cast<uint64_t>(ab) << 40) | static_cast<uint64_t>(s + kOffBias); };
+            auto cellAz = [](uint64_t k) { return static_cast<int>(k >> 40); };
+            auto cellOff = [&](uint64_t k) { return static_cast<int64_t>(k & ((uint64_t{1} << 40) - 1)) - kOffBias; };
+            auto cellNormal = [&](int ab) { const double ac = (ab + 0.5) * kPi / 180.0; return V3{std::sin(ac), 0, -std::cos(ac)}; };
+            struct WallFace { uint64_t key; uint32_t t; };
+            std::vector<WallFace> wall;
+            std::vector<uint64_t> faceCell(F, 0);
+            for (uint32_t t : kept) {
+                const double l = nQ[t].norm();
+                if (0.5 * l < FP.sliverArea || std::abs(nQ[t].y / l) >= FP.maxAbsNy) continue;
+                const V3 n = nQ[t] * (1.0 / l);
+                const int ab = static_cast<int>(std::floor(std::atan2(n.x, -n.z) * 180.0 / kPi + 360.0)) % 360;
+                const V3 c = (Q[rawIdx[3 * t]] + Q[rawIdx[3 * t + 1]] + Q[rawIdx[3 * t + 2]]) * (1.0 / 3.0);
+                const uint64_t key = cellKey(ab, std::llround(cellNormal(ab).dot(c) / sb));
+                wall.push_back({key, t});
+                faceCell[t] = key;
+            }
+            std::sort(wall.begin(), wall.end(), [](const WallFace& a, const WallFace& b) { return a.key < b.key || (a.key == b.key && a.t < b.t); });
+            struct Cell { uint32_t begin, end, live; double area, score; };
+            std::unordered_map<uint64_t, Cell> cells;
+            for (size_t i = 0; i < wall.size();) {
+                size_t e = i;
+                double a = 0;
+                while (e < wall.size() && wall[e].key == wall[i].key) a += 0.5 * nQ[wall[e++].t].norm();
+                cells.emplace(wall[i].key, Cell{static_cast<uint32_t>(i), static_cast<uint32_t>(e), static_cast<uint32_t>(e - i), a, 0.0});
+                i = e;
+            }
+            auto forNeighbours = [&](uint64_t k, auto&& fn) {
+                const int ab = cellAz(k);
+                const int64_t s = cellOff(k);
+                for (int da = -FP.detectAzSmooth; da <= FP.detectAzSmooth; ++da)
+                    for (int64_t ds = -FP.detectOffsetSmooth; ds <= FP.detectOffsetSmooth; ++ds) {
+                        auto it = cells.find(cellKey(((ab + da) % 360 + 360) % 360, s + ds));
+                        if (it != cells.end()) fn(it->second);
+                    }
+            };
+            for (auto& kv : cells) forNeighbours(kv.first, [&](const Cell& nb) { kv.second.score += nb.area; });
+            std::vector<uint8_t> used(F, 0);
+            auto retire = [&](uint32_t t) {
+                if (used[t]) return;
+                used[t] = 1;
+                const double a = 0.5 * nQ[t].norm();
+                Cell& c = cells.find(faceCell[t])->second;
+                c.area -= a;
+                --c.live;
+                forNeighbours(faceCell[t], [&](Cell& nb) { nb.score -= a; });
+            };
+            for (int iter = 0; iter < FP.detectMaxIterations; ++iter) {
+                ++detectIterations;
+                double best = 0;
+                uint64_t bk = 0;
+                bool found = false;
+                for (const auto& kv : cells) {
+                    if (!kv.second.live) continue;
+                    const double sc = kv.second.score;
+                    if (!found || sc > best || (sc == best && kv.first < bk)) { best = sc; bk = kv.first; found = true; }
+                }
+                if (!found || best < FP.minPlaneArea) break;
+                WallPlane pl;
+                pl.n = cellNormal(cellAz(bk));
+                pl.d = static_cast<double>(cellOff(bk)) * sb;
+                for (const WallFace& w : wall)
+                    if (!used[w.t] && nQ[w.t].dot(pl.n) >= cosSeedReach * nQ[w.t].norm()) pl.tris.push_back(w.t);
+                refine(pl);
+                if (pl.area < FP.minPlaneArea) {
+                    forNeighbours(bk, [&](Cell& nb) { for (uint32_t i = nb.begin; i < nb.end; ++i) retire(wall[i].t); });
+                    continue;
+                }
+                for (uint32_t t : pl.inl) retire(t);
+                pl.tris = pl.inl;
+                planes.push_back(std::move(pl));
+            }
+        }
+        {
+            // merge coplanar planes (union-find), refit on the union of their faces
+            std::vector<int> par(planes.size());
+            std::iota(par.begin(), par.end(), 0);
+            auto root = [&](int i) { while (par[i] != i) i = par[i] = par[par[i]]; return i; };
+            for (size_t i = 0; i < planes.size(); ++i)
+                for (size_t j = i + 1; j < planes.size(); ++j) {
+                    const auto& a = planes[i];
+                    const auto& b = planes[j];
+                    if (a.n.dot(b.n) < cosMerge) continue;
+                    if (std::abs(a.n.dot(b.c) - a.d) > FP.mergeOffset || std::abs(b.n.dot(a.c) - b.d) > FP.mergeOffset) continue;
+                    par[root(static_cast<int>(j))] = root(static_cast<int>(i));
+                }
+            std::vector<WallPlane> merged;
+            std::vector<int> slot(planes.size(), -1);
+            for (size_t i = 0; i < planes.size(); ++i) {
+                const int r = root(static_cast<int>(i));
+                if (slot[r] < 0) { slot[r] = static_cast<int>(merged.size()); merged.push_back(planes[r]); merged.back().tris.clear(); }
+                auto& m = merged[slot[r]];
+                m.tris.insert(m.tris.end(), planes[i].tris.begin(), planes[i].tris.end());
+            }
+            planes.clear();
+            for (auto& m : merged) {
+                refine(m);
+                if (m.area < FP.minPlaneArea) continue;
+                // in-plane support box over the inliers
+                m.t1 = std::abs(m.n.y) < 0.9 ? V3{0, 1, 0}.cross(m.n).normalized() : V3{1, 0, 0}.cross(m.n).normalized();
+                m.t2 = m.n.cross(m.t1).normalized();
+                m.lo1 = m.lo2 = 1e300;
+                m.hi1 = m.hi2 = -1e300;
+                double s2 = 0, A = 0;
+                for (uint32_t t : m.inl) {
+                    double dd[3];
+                    for (int k = 0; k < 3; ++k) {
+                        const V3 q = Q[rawIdx[3 * t + k]];
+                        m.lo1 = std::min(m.lo1, m.t1.dot(q)); m.hi1 = std::max(m.hi1, m.t1.dot(q));
+                        m.lo2 = std::min(m.lo2, m.t2.dot(q)); m.hi2 = std::max(m.hi2, m.t2.dot(q));
+                        dd[k] = q.dot(m.n) - m.d;
+                    }
+                    const double ar = 0.5 * nQ[t].norm();
+                    s2 += ar / 6.0 * (dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2] + dd[0] * dd[1] + dd[1] * dd[2] + dd[0] * dd[2]);
+                    A += ar;
+                }
+                m.rmsIn = A > 0 ? std::sqrt(s2 / A) : 0;
+                planes.push_back(std::move(m));
+            }
+        }
+        return planes;
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Proud-feature audit, independent of the passes it checks: on every wall plane of the raw scan, the parts of the
+    // kept surface standing at least 8 cm out of the plane (the outermost non-horizontal surface on a grid in the plane's
+    // frame) are features; the same cells of the rectified (and flattened) surface say how much of each feature's volume
+    // is left. A feature left with less than half is reported removed. Stats only; nothing changes.
+    // ----------------------------------------------------------------------------------------
+    void auditProudFeatures() {
+        const double minRelief = 0.08, minArea = 0.25, slabBack = 0.6, slabFront = 3.0, margin = 1.0;
+        std::vector<uint32_t> kept;
+        for (size_t t = 0; t < F; ++t) if (rect.flags[t] == scan_rectifier::kFlagKeep) kept.push_back(static_cast<uint32_t>(t));
+        std::vector<V3> Qr(V), Qo(V);
+        for (size_t v = 0; v < V; ++v) {
+            Qr[v] = V3{rawPos[3 * v], rawPos[3 * v + 1], rawPos[3 * v + 2]};
+            Qo[v] = V3{rect.positions[3 * v], rect.positions[3 * v + 1], rect.positions[3 * v + 2]};
+        }
+        size_t iterations = 0;
+        const std::vector<WallPlane> planes = detectWallPlanes(Qr, kept, iterations);
+        struct Lost { V3 c; double area, vol, volOut, rawP95, outP95; };
+        struct PlaneTally { size_t features{0}; double featArea{0}, featVol{0}, keptVol{0}, removedArea{0}, removedVol{0}; std::vector<Lost> lost; };
+        std::vector<PlaneTally> tally(planes.size());
+        scan_rectifier::detail::parallelFor(planes.size(), threads, 1, [&](size_t pb, size_t pe, unsigned) {
+          for (size_t pi = pb; pi < pe; ++pi) {
+            const WallPlane& pl = planes[pi];
+            PlaneTally& T = tally[pi];
+            size_t& features = T.features;
+            double &featArea = T.featArea, &featVol = T.featVol, &keptVol = T.keptVol, &removedArea = T.removedArea, &removedVol = T.removedVol;
+            std::vector<Lost>& lost = T.lost;
+            const double u0 = pl.lo1 - margin, u1 = pl.hi1 + margin, v0 = pl.lo2 - margin, v1 = pl.hi2 + margin;
+            const double px = std::max(0.05, std::sqrt((u1 - u0) * (v1 - v0) / 1e6));  // at most ~1M cells per plane
+            const int W = static_cast<int>(std::ceil((u1 - u0) / px)), H = static_cast<int>(std::ceil((v1 - v0) / px));
+            auto raster = [&](const std::vector<V3>& Q, std::vector<float>& img) {
+                img.assign(static_cast<size_t>(W) * H, std::numeric_limits<float>::quiet_NaN());
+                for (uint32_t t : kept) {
+                    const V3 a = Q[rawIdx[3 * t]], b = Q[rawIdx[3 * t + 1]], c = Q[rawIdx[3 * t + 2]];
+                    const V3 cr = (b - a).cross(c - a);
+                    const double l = cr.norm();
+                    if (l < 1e-12 || std::abs(cr.y / l) > 0.7) continue;
+                    const double q[3][3] = {{pl.t1.dot(a), pl.t2.dot(a), pl.n.dot(a) - pl.d}, {pl.t1.dot(b), pl.t2.dot(b), pl.n.dot(b) - pl.d},
+                                            {pl.t1.dot(c), pl.t2.dot(c), pl.n.dot(c) - pl.d}};
+                    if (std::max({q[0][2], q[1][2], q[2][2]}) < -slabBack || std::min({q[0][2], q[1][2], q[2][2]}) > slabFront) continue;
+                    const int x0 = std::max(0, static_cast<int>(std::floor((std::min({q[0][0], q[1][0], q[2][0]}) - u0) / px)));
+                    const int x1 = std::min(W - 1, static_cast<int>(std::floor((std::max({q[0][0], q[1][0], q[2][0]}) - u0) / px)));
+                    const int y0 = std::max(0, static_cast<int>(std::floor((std::min({q[0][1], q[1][1], q[2][1]}) - v0) / px)));
+                    const int y1 = std::min(H - 1, static_cast<int>(std::floor((std::max({q[0][1], q[1][1], q[2][1]}) - v0) / px)));
+                    if (x1 < x0 || y1 < y0) continue;
+                    const double den = (q[1][1] - q[2][1]) * (q[0][0] - q[2][0]) + (q[2][0] - q[1][0]) * (q[0][1] - q[2][1]);
+                    if (std::abs(den) < 1e-14) continue;
+                    for (int y = y0; y <= y1; ++y)
+                        for (int x = x0; x <= x1; ++x) {
+                            const double u = u0 + (x + 0.5) * px, v = v0 + (y + 0.5) * px;
+                            const double l1 = ((q[1][1] - q[2][1]) * (u - q[2][0]) + (q[2][0] - q[1][0]) * (v - q[2][1])) / den;
+                            const double l2 = ((q[2][1] - q[0][1]) * (u - q[2][0]) + (q[0][0] - q[2][0]) * (v - q[2][1])) / den;
+                            const double l3 = 1 - l1 - l2;
+                            if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+                            const double w = l1 * q[0][2] + l2 * q[1][2] + l3 * q[2][2];
+                            if (w < -slabBack || w > slabFront) continue;
+                            float& o = img[static_cast<size_t>(y) * W + x];
+                            if (!(o >= w)) o = static_cast<float>(w);
+                        }
+                }
+            };
+            std::vector<float> R, O;
+            raster(Qr, R);
+            raster(Qo, O);
+            std::vector<int32_t> lab(R.size(), -1);
+            std::vector<size_t> stack;
+            for (size_t k0 = 0; k0 < R.size(); ++k0) {
+                if (lab[k0] >= 0 || !(R[k0] >= minRelief)) continue;
+                std::vector<float> wr, wo;
+                double vol = 0, volOut = 0, cu = 0, cv = 0, cw = 0;
+                stack.assign(1, k0);
+                lab[k0] = 1;
+                while (!stack.empty()) {
+                    const size_t k = stack.back();
+                    stack.pop_back();
+                    const int x = static_cast<int>(k % W), y = static_cast<int>(k / W);
+                    const double o = O[k] > 0 ? O[k] : 0.0;
+                    wr.push_back(R[k]);
+                    wo.push_back(static_cast<float>(o));
+                    vol += R[k] * px * px;
+                    volOut += std::min(o, static_cast<double>(R[k])) * px * px;
+                    cu += u0 + (x + 0.5) * px; cv += v0 + (y + 0.5) * px; cw += R[k];
+                    const int nb[4][2] = {{x + 1, y}, {x - 1, y}, {x, y + 1}, {x, y - 1}};
+                    for (const auto& q : nb) {
+                        if (q[0] < 0 || q[1] < 0 || q[0] >= W || q[1] >= H) continue;
+                        const size_t r = static_cast<size_t>(q[1]) * W + q[0];
+                        if (lab[r] < 0 && R[r] >= minRelief) { lab[r] = 1; stack.push_back(r); }
+                    }
+                }
+                const double area = wr.size() * px * px;
+                if (area < minArea) continue;
+                ++features;
+                featArea += area;
+                featVol += vol;
+                keptVol += volOut;
+                if (volOut >= 0.5 * vol) continue;
+                removedArea += area;
+                removedVol += vol - volOut;
+                auto p95 = [](std::vector<float> v) {
+                    const size_t k = static_cast<size_t>(std::floor(0.95 * (v.size() - 1)));
+                    std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(k), v.end());
+                    return static_cast<double>(v[k]);
+                };
+                const double n = static_cast<double>(wr.size());
+                lost.push_back({pl.t1 * (cu / n) + pl.t2 * (cv / n) + pl.n * (pl.d + cw / n), area, vol, volOut, p95(wr), p95(wo)});
+            }
+          }
+        });
+        std::vector<Lost> lost;
+        size_t features = 0;
+        double featArea = 0, featVol = 0, keptVol = 0, removedArea = 0, removedVol = 0;
+        for (const auto& T : tally) {
+            features += T.features; featArea += T.featArea; featVol += T.featVol; keptVol += T.keptVol;
+            removedArea += T.removedArea; removedVol += T.removedVol;
+            lost.insert(lost.end(), T.lost.begin(), T.lost.end());
+        }
+        std::sort(lost.begin(), lost.end(), [](const Lost& a, const Lost& b) { return a.vol - a.volOut > b.vol - b.volOut; });
+        js << "  \"proudFeatures\": {\"minRelief_m\": " << num(minRelief) << ", \"planes\": " << planes.size() << ", \"features\": " << features
+           << ", \"area_m2\": " << num(featArea) << ", \"volume_m3\": " << num(featVol) << ", \"retainedVolumeShare\": " << num(featVol > 0 ? keptVol / featVol : 1.0)
+           << ", \"removed\": " << lost.size() << ", \"removedArea_m2\": " << num(removedArea) << ", \"removedVolume_m3\": " << num(removedVol) << ", \"largestRemoved\": [";
+        for (size_t i = 0; i < std::min<size_t>(12, lost.size()); ++i) {
+            const auto& L = lost[i];
+            js << (i ? "," : "") << "{\"centroid\": " << vec(L.c) << ", \"area_m2\": " << num(L.area) << ", \"volume_m3\": " << num(L.vol)
+               << ", \"retained\": " << num(L.vol > 0 ? L.volOut / L.vol : 0) << ", \"rawP95_m\": " << num(L.rawP95) << ", \"outP95_m\": " << num(L.outP95) << "}";
+        }
+        js << "]},\n";
+    }
+
+    // ----------------------------------------------------------------------------------------
     // Facade flatten (see FacadeFlattenParams). Runs on rect.positions in place, before the rectifier checks, so the
     // reported rectify flips / displacement / open edges include it; its own counters go to "flatten".
     // ----------------------------------------------------------------------------------------
@@ -1995,10 +2325,7 @@ private:
         const double band = FP.band;
         const double kPi = 3.14159265358979323846;
         const double cosPar = std::cos(FP.parallelDeg * kPi / 180.0);
-        const double cosMerge = std::cos(FP.mergeAngleDeg * kPi / 180.0);
         const double cosCorner = std::cos(FP.cornerMinDeg * kPi / 180.0);
-        // faces further than this from a seed's normal cannot become inliers of the plane it refits to
-        const double cosSeedReach = std::cos(std::min(89.0, FP.parallelDeg + 15.0) * kPi / 180.0);
         std::vector<std::pair<const char*, double>> stageMs;
         Clock::time_point stageStart = Clock::now();
         auto stage = [&](const char* name) {
@@ -2061,6 +2388,11 @@ private:
             for (size_t v = 0; v < nV; ++v) grp[v] = ren[root(grp[v])];
             G = G2;
         }
+        // the rectifier's proud blocks stay where they were scanned here too
+        std::vector<uint8_t> blockGroup(G, 0);
+        if (rect.groupOfVertex.size() == nV && !rect.groupProudBlock.empty())
+            for (size_t v = 0; v < nV; ++v)
+                if (rect.groupOfVertex[v] < rect.groupProudBlock.size() && rect.groupProudBlock[rect.groupOfVertex[v]]) blockGroup[grp[v]] = 1;
         std::vector<uint32_t> memStart(G + 1, 0), mem(nV);
         for (size_t v = 0; v < nV; ++v) ++memStart[grp[v] + 1];
         for (size_t g = 0; g < G; ++g) memStart[g + 1] += memStart[g];
@@ -2092,197 +2424,19 @@ private:
         stage("setup");
 
         // ---- planes
-        struct FPlane { V3 n, c, t1, t2; double d{0}, area{0}, lo1{0}, hi1{0}, lo2{0}, hi2{0}, rmsIn{0}; std::vector<uint32_t> tris, inl; };
-        auto inlier = [&](uint32_t t, const V3& n, double d) {
-            const V3 cr = nRect[t];
-            const double l = cr.norm();
-            if (l < 2e-8 || cr.dot(n) / l < cosPar) return false;
-            for (int k = 0; k < 3; ++k) if (std::abs(Q0[rawIdx[3 * t + k]].dot(n) - d) > FP.fitBand) return false;
-            return true;
-        };
-        // area-weighted least-squares plane of the faces (exact second moments of the triangles)
-        auto fit = [&](const std::vector<uint32_t>& tris, V3& n, V3& c, double& d, double& area) {
-            double A = 0, S1[3] = {0, 0, 0}, S2[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
-            for (uint32_t t : tris) {
-                const V3 vs[3] = {Q0[rawIdx[3 * t]], Q0[rawIdx[3 * t + 1]], Q0[rawIdx[3 * t + 2]]};
-                const double ar = 0.5 * (vs[1] - vs[0]).cross(vs[2] - vs[0]).norm();
-                if (ar <= 0) continue;
-                A += ar;
-                const double co[3][3] = {{vs[0].x, vs[0].y, vs[0].z}, {vs[1].x, vs[1].y, vs[1].z}, {vs[2].x, vs[2].y, vs[2].z}};
-                for (int k = 0; k < 3; ++k) S1[k] += ar * (co[0][k] + co[1][k] + co[2][k]) / 3.0;
-                for (int k = 0; k < 3; ++k)
-                    for (int l = 0; l < 3; ++l) {
-                        double s = 0, sk = 0, sl = 0;
-                        for (int i = 0; i < 3; ++i) { s += co[i][k] * co[i][l]; sk += co[i][k]; sl += co[i][l]; }
-                        S2[k][l] += ar / 12.0 * (s + sk * sl);
-                    }
-            }
-            if (A <= 0) return false;
-            const double cc[3] = {S1[0] / A, S1[1] / A, S1[2] / A};
-            double C[3][3];
-            for (int k = 0; k < 3; ++k) for (int l = 0; l < 3; ++l) C[k][l] = S2[k][l] / A - cc[k] * cc[l];
-            double ev[3];
-            V3 vec[3];
-            scan_rectifier::detail::symmetricEigen3(C, ev, vec);
-            V3 nn = vec[0].normalized();
-            if (nn.dot(n) < 0) nn = nn * -1.0;
-            n = nn;
-            c = V3{cc[0], cc[1], cc[2]};
-            d = n.dot(c);
-            area = A;
-            return true;
-        };
-        auto refine = [&](FPlane& pl) {
-            for (int it = 0; it < FP.fitIterations; ++it) {
-                std::vector<uint32_t> in;
-                for (uint32_t t : pl.tris) if (inlier(t, pl.n, pl.d)) in.push_back(t);
-                V3 n = pl.n, c;
-                double d = 0, A = 0;
-                if (in.empty() || !fit(in, n, c, d, A)) { pl.inl.clear(); pl.area = 0; return; }
-                pl.n = n; pl.c = c; pl.d = d; pl.area = A; pl.inl = std::move(in);
-            }
-        };
-        std::vector<FPlane> planes;
         size_t detectIterations = 0;
-        {
-            // Sequential mode extraction. A cell is 1 degree of azimuth by detectOffsetBin of offset along the cell's
-            // horizontal normal; its score is the live face area in the cells within +-detectAzSmooth degrees and
-            // +-detectOffsetSmooth bins. The best cell seeds a plane and the refit takes its inliers out (when it holds
-            // no plane, the seed cells' faces are retired instead); scores follow every retired face incrementally.
-            const double sb = FP.detectOffsetBin;
-            const int64_t kOffBias = int64_t{1} << 39;
-            auto cellKey = [&](int ab, int64_t s) { return (static_cast<uint64_t>(ab) << 40) | static_cast<uint64_t>(s + kOffBias); };
-            auto cellAz = [](uint64_t k) { return static_cast<int>(k >> 40); };
-            auto cellOff = [&](uint64_t k) { return static_cast<int64_t>(k & ((uint64_t{1} << 40) - 1)) - kOffBias; };
-            auto cellNormal = [&](int ab) { const double ac = (ab + 0.5) * kPi / 180.0; return V3{std::sin(ac), 0, -std::cos(ac)}; };
-            struct WallFace { uint64_t key; uint32_t t; };
-            std::vector<WallFace> wall;
-            std::vector<uint64_t> faceCell(F, 0);
-            for (uint32_t t : kept) {
-                const double l = nRect[t].norm();
-                if (0.5 * l < FP.sliverArea || std::abs(nRect[t].y / l) >= FP.maxAbsNy) continue;
-                const V3 n = nRect[t] * (1.0 / l);
-                const int ab = static_cast<int>(std::floor(std::atan2(n.x, -n.z) * 180.0 / kPi + 360.0)) % 360;
-                const V3 c = (Q0[rawIdx[3 * t]] + Q0[rawIdx[3 * t + 1]] + Q0[rawIdx[3 * t + 2]]) * (1.0 / 3.0);
-                const uint64_t key = cellKey(ab, std::llround(cellNormal(ab).dot(c) / sb));
-                wall.push_back({key, t});
-                faceCell[t] = key;
-            }
-            std::sort(wall.begin(), wall.end(), [](const WallFace& a, const WallFace& b) { return a.key < b.key || (a.key == b.key && a.t < b.t); });
-            struct Cell { uint32_t begin, end, live; double area, score; };
-            std::unordered_map<uint64_t, Cell> cells;
-            for (size_t i = 0; i < wall.size();) {
-                size_t e = i;
-                double a = 0;
-                while (e < wall.size() && wall[e].key == wall[i].key) a += 0.5 * nRect[wall[e++].t].norm();
-                cells.emplace(wall[i].key, Cell{static_cast<uint32_t>(i), static_cast<uint32_t>(e), static_cast<uint32_t>(e - i), a, 0.0});
-                i = e;
-            }
-            auto forNeighbours = [&](uint64_t k, auto&& fn) {
-                const int ab = cellAz(k);
-                const int64_t s = cellOff(k);
-                for (int da = -FP.detectAzSmooth; da <= FP.detectAzSmooth; ++da)
-                    for (int64_t ds = -FP.detectOffsetSmooth; ds <= FP.detectOffsetSmooth; ++ds) {
-                        auto it = cells.find(cellKey(((ab + da) % 360 + 360) % 360, s + ds));
-                        if (it != cells.end()) fn(it->second);
-                    }
-            };
-            for (auto& kv : cells) forNeighbours(kv.first, [&](const Cell& nb) { kv.second.score += nb.area; });
-            std::vector<uint8_t> used(F, 0);
-            auto retire = [&](uint32_t t) {
-                if (used[t]) return;
-                used[t] = 1;
-                const double a = 0.5 * nRect[t].norm();
-                Cell& c = cells.find(faceCell[t])->second;
-                c.area -= a;
-                --c.live;
-                forNeighbours(faceCell[t], [&](Cell& nb) { nb.score -= a; });
-            };
-            for (int iter = 0; iter < FP.detectMaxIterations; ++iter) {
-                ++detectIterations;
-                double best = 0;
-                uint64_t bk = 0;
-                bool found = false;
-                for (const auto& kv : cells) {
-                    if (!kv.second.live) continue;
-                    const double sc = kv.second.score;
-                    if (!found || sc > best || (sc == best && kv.first < bk)) { best = sc; bk = kv.first; found = true; }
-                }
-                if (!found || best < FP.minPlaneArea) break;
-                FPlane pl;
-                pl.n = cellNormal(cellAz(bk));
-                pl.d = static_cast<double>(cellOff(bk)) * sb;
-                for (const WallFace& w : wall)
-                    if (!used[w.t] && nRect[w.t].dot(pl.n) >= cosSeedReach * nRect[w.t].norm()) pl.tris.push_back(w.t);
-                refine(pl);
-                if (pl.area < FP.minPlaneArea) {
-                    forNeighbours(bk, [&](Cell& nb) { for (uint32_t i = nb.begin; i < nb.end; ++i) retire(wall[i].t); });
-                    continue;
-                }
-                for (uint32_t t : pl.inl) retire(t);
-                pl.tris = pl.inl;
-                planes.push_back(std::move(pl));
-            }
-        }
-        stage("detect");
-        {
-            // merge coplanar planes (union-find), refit on the union of their faces
-            std::vector<int> par(planes.size());
-            std::iota(par.begin(), par.end(), 0);
-            auto root = [&](int i) { while (par[i] != i) i = par[i] = par[par[i]]; return i; };
-            for (size_t i = 0; i < planes.size(); ++i)
-                for (size_t j = i + 1; j < planes.size(); ++j) {
-                    const auto& a = planes[i];
-                    const auto& b = planes[j];
-                    if (a.n.dot(b.n) < cosMerge) continue;
-                    if (std::abs(a.n.dot(b.c) - a.d) > FP.mergeOffset || std::abs(b.n.dot(a.c) - b.d) > FP.mergeOffset) continue;
-                    par[root(static_cast<int>(j))] = root(static_cast<int>(i));
-                }
-            std::vector<FPlane> merged;
-            std::vector<int> slot(planes.size(), -1);
-            for (size_t i = 0; i < planes.size(); ++i) {
-                const int r = root(static_cast<int>(i));
-                if (slot[r] < 0) { slot[r] = static_cast<int>(merged.size()); merged.push_back(planes[r]); merged.back().tris.clear(); }
-                auto& m = merged[slot[r]];
-                m.tris.insert(m.tris.end(), planes[i].tris.begin(), planes[i].tris.end());
-            }
-            planes.clear();
-            for (auto& m : merged) {
-                refine(m);
-                if (m.area < FP.minPlaneArea) continue;
-                // in-plane support box over the inliers
-                m.t1 = std::abs(m.n.y) < 0.9 ? V3{0, 1, 0}.cross(m.n).normalized() : V3{1, 0, 0}.cross(m.n).normalized();
-                m.t2 = m.n.cross(m.t1).normalized();
-                m.lo1 = m.lo2 = 1e300;
-                m.hi1 = m.hi2 = -1e300;
-                double s2 = 0, A = 0;
-                for (uint32_t t : m.inl) {
-                    double dd[3];
-                    for (int k = 0; k < 3; ++k) {
-                        const V3 q = Q0[rawIdx[3 * t + k]];
-                        m.lo1 = std::min(m.lo1, m.t1.dot(q)); m.hi1 = std::max(m.hi1, m.t1.dot(q));
-                        m.lo2 = std::min(m.lo2, m.t2.dot(q)); m.hi2 = std::max(m.hi2, m.t2.dot(q));
-                        dd[k] = q.dot(m.n) - m.d;
-                    }
-                    const double ar = 0.5 * nRect[t].norm();
-                    s2 += ar / 6.0 * (dd[0] * dd[0] + dd[1] * dd[1] + dd[2] * dd[2] + dd[0] * dd[1] + dd[1] * dd[2] + dd[0] * dd[2]);
-                    A += ar;
-                }
-                m.rmsIn = A > 0 ? std::sqrt(s2 / A) : 0;
-                planes.push_back(std::move(m));
-            }
-        }
+        const std::vector<WallPlane> planes = detectWallPlanes(Q0, kept, detectIterations);
         const int K = static_cast<int>(planes.size());
-        stage("merge");
+        stage("planes");
 
         // ---- per weld group: stay, move onto one plane, or onto the line of two
         struct Dec { int a{-1}, b{-1}; };
         auto moveOf = [&](const V3& p, const Dec& d, V3& delta) {
             if (d.a < 0) { delta = V3{}; return true; }
-            const FPlane& A = planes[d.a];
+            const WallPlane& A = planes[d.a];
             const double ra = A.n.dot(p) - A.d;
             if (d.b < 0) { delta = A.n * -ra; return true; }
-            const FPlane& B = planes[d.b];
+            const WallPlane& B = planes[d.b];
             const double rb = B.n.dot(p) - B.d, c = A.n.dot(B.n), det = 1 - c * c;
             if (det < 1e-9) return false;
             const double al = (-ra + c * rb) / det, be = (-rb + c * ra) / det;
@@ -2290,14 +2444,15 @@ private:
             return true;
         };
         std::vector<Dec> dec(G);
-        size_t candGroups = 0, notOnFacade = 0, cornerTooFar = 0;
+        size_t candGroups = 0, notOnFacade = 0, cornerTooFar = 0, proudBlockKept = 0;
         for (size_t g = 0; g < G; ++g) {
             if (triStart[g] == triStart[g + 1]) continue;
+            if (blockGroup[g]) { ++proudBlockKept; continue; }
             const V3 p = rep(static_cast<uint32_t>(g));
             int cand[8];
             int nc = 0;
             for (int k = 0; k < K && nc < 8; ++k) {
-                const FPlane& pl = planes[k];
+                const WallPlane& pl = planes[k];
                 if (std::abs(pl.n.dot(p) - pl.d) > band) continue;
                 const double a1 = pl.t1.dot(p), a2 = pl.t2.dot(p);
                 if (a1 < pl.lo1 - FP.supportMargin || a1 > pl.hi1 + FP.supportMargin || a2 < pl.lo2 - FP.supportMargin || a2 > pl.hi2 + FP.supportMargin) continue;
@@ -2520,7 +2675,7 @@ private:
         stage("census");
         js << "  \"flatten\": {\"band_m\": " << num(band) << ", \"parallelDeg\": " << num(FP.parallelDeg) << ", \"planes\": " << K
            << ", \"detectIterations\": " << detectIterations << ", \"groupsMergedByPosition\": " << mergedByPosition
-           << ", \"candidateGroups\": " << candGroups << ", \"notOnFacade\": " << notOnFacade << ", \"cornerTooFar\": " << cornerTooFar
+           << ", \"candidateGroups\": " << candGroups << ", \"notOnFacade\": " << notOnFacade << ", \"cornerTooFar\": " << cornerTooFar << ", \"proudBlockGroupsKept\": " << proudBlockKept
            << ", \"movedGroups\": " << movedGroups << ", \"cornerGroups\": " << cornerGroups << ", \"movedVertices\": " << disp.size()
            << ", \"displacement_m\": " << dist(Distribution::of(disp)) << ", \"tJunctions\": " << tj.size() << ", \"tjTouchedGroups\": " << tjTouched
            << ", \"tjMaxViolation_m\": " << num(tjMaxViolation) << ", \"flipReverted\": " << flipReverted << ", \"meetReverted\": " << meetReverted
@@ -2605,7 +2760,10 @@ private:
         js << "  \"triangles\": {\"input\": " << F << ", \"hidden\": " << hidden << ", \"droppedDegenerate\": " << dropped << ", \"kept\": " << keptTris.size() << "},\n";
         js << "  \"rectify\": {\"displacementAll_m\": " << dist(Distribution::of(disp)) << ", \"displacementMoved_m\": " << dist(Distribution::of(moved))
            << ", \"flips\": " << flips << ", \"collapsedToZeroArea\": " << collapsed << ", \"movedGroups\": " << S.movedGroups
-           << ", \"wallRegions\": " << S.wallRegions << ", \"roofRegions\": " << S.roofRegions << ", \"snapped\": {\"plane\": " << S.snappedGroups1
+           << ", \"wallRegions\": " << S.wallRegions << ", \"roofRegions\": " << S.roofRegions
+           << ", \"proudBlocks\": {\"blocks\": " << S.proudBlocks << ", \"levelled\": " << S.proudBlocksLevelled << ", \"area_m2\": " << num(S.proudBlockArea)
+           << ", \"groups\": " << S.proudBlockGroups << ", \"keptAsScannedGroups\": " << S.proudBlockFrozenGroups << "}"
+           << ", \"snapped\": {\"plane\": " << S.snappedGroups1
            << ", \"line\": " << S.snappedGroups2 << ", \"point\": " << S.snappedGroups3 << "}, \"guardReverted\": " << S.guardReverted
            << ", \"seamContacts\": " << S.seamContacts << ", \"seamSolves\": " << S.seamSolves << ", \"seamMaxResidual_m\": " << num(S.seamMaxResidual)
            << ", \"stitchSamples\": " << S.stitchSamples << ", \"stitchedGroups\": " << S.stitchedGroups << ", \"stitchHeld\": " << S.stitchHeld
@@ -2723,6 +2881,60 @@ private:
               << num(rows[i].before) << ", \"rmsAfter_m\": " << num(rows[i].after) << "}";
         o << "]}";
         return o.str();
+    }
+
+    /**
+     * Per-vertex provenance for the written GLBs: _RECTIFY_DISPLACEMENT, how far rectify / flatten moved the scan surface
+     * under each output vertex (m; 0 = as scanned), and _PROUD_BLOCK, 1 on a block kept as scanned and 2 on one snapped
+     * at its own level. A vertex the relief inserted takes the displacement interpolated over its parent triangle and the
+     * block flag of the parent's nearest corner; relief displacement itself is _RELIEF_HEIGHT.
+     */
+    void annotateProvenance(photometric_relief::ReliefMesh& m) const {
+        const auto& verts = scene.mesh.vertices;
+        const auto& idx = scene.mesh.indices;
+        std::unordered_map<int, V3> regionNormal;
+        for (const auto& f : relief.facades) regionNormal[f.id] = V3{f.normal.x, f.normal.y, f.normal.z};
+        const bool blocks = rect.groupOfVertex.size() == V && !rect.groupProudBlock.empty();
+        auto pos = [&](uint32_t v) { const auto& p = verts[v].position; return V3{p.x, p.y, p.z}; };
+        auto moved = [&](uint32_t v) { return pos(v) - V3{rawPos[3 * v], rawPos[3 * v + 1], rawPos[3 * v + 2]}; };
+        auto blockOf = [&](uint32_t v) -> float {
+            if (!blocks) return 0.0f;
+            const uint32_t g = rect.groupOfVertex[v];
+            return g < rect.groupProudBlock.size() ? static_cast<float>(rect.groupProudBlock[g]) : 0.0f;
+        };
+        std::vector<float> disp(m.positions.size(), 0.0f), block(m.positions.size(), 0.0f);
+        std::vector<uint8_t> done(m.positions.size(), 0);
+        for (const auto& t : m.triangles) {
+            if (t.parent >= idx.size() / 3) continue;
+            const uint32_t pv[3] = {idx[3 * t.parent], idx[3 * t.parent + 1], idx[3 * t.parent + 2]};
+            const V3 A = pos(pv[0]), e1 = pos(pv[1]) - A, e2 = pos(pv[2]) - A;
+            const double d00 = e1.dot(e1), d01 = e1.dot(e2), d11 = e2.dot(e2), den = d00 * d11 - d01 * d01;
+            for (uint32_t i : t.p) {
+                if (i >= done.size() || done[i]) continue;
+                done[i] = 1;
+                V3 q{m.positions[i].x, m.positions[i].y, m.positions[i].z};
+                if (i < m.heights.size() && m.heights[i] != 0 && m.positionRegion[i] >= 0) {
+                    auto it = regionNormal.find(m.positionRegion[i]);
+                    if (it != regionNormal.end()) q = q - it->second * static_cast<double>(m.heights[i]);
+                }
+                double w[3] = {1, 0, 0};
+                if (std::abs(den) > 1e-18) {
+                    const V3 e = q - A;
+                    const double d20 = e.dot(e1), d21 = e.dot(e2);
+                    w[1] = std::max(0.0, (d11 * d20 - d01 * d21) / den);
+                    w[2] = std::max(0.0, (d00 * d21 - d01 * d20) / den);
+                    w[0] = std::max(0.0, 1.0 - w[1] - w[2]);
+                    const double sum = w[0] + w[1] + w[2];
+                    for (double& x : w) x /= sum;
+                }
+                const V3 D = moved(pv[0]) * w[0] + moved(pv[1]) * w[1] + moved(pv[2]) * w[2];
+                disp[i] = static_cast<float>(D.norm());
+                const int near = w[0] >= w[1] && w[0] >= w[2] ? 0 : (w[1] >= w[2] ? 1 : 2);
+                block[i] = blockOf(pv[near]);
+            }
+        }
+        m.attributes.push_back({"_RECTIFY_DISPLACEMENT", "m the scan surface was moved by rectify and facade flatten (0 = as scanned)", std::move(disp)});
+        m.attributes.push_back({"_PROUD_BLOCK", "1 = block kept as scanned, 2 = block snapped at its own level, 0 = not a block", std::move(block)});
     }
 
     /** Without relief: the rectified, culled scan as a welded output mesh (no re-tessellation). */

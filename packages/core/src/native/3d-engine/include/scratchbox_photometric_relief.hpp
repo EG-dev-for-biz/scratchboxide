@@ -251,11 +251,19 @@ struct OutputTriangle {
     uint32_t parent{0};  // input triangle this one was cut from (for orientation checks)
 };
 
+/** A per-position float the GLB writers emit as an application-specific vertex attribute (name starts with '_'). */
+struct MeshAttribute {
+    std::string name;
+    std::string description;   // written to asset.extras.scratchbox.attributes
+    std::vector<float> values;  // one per position
+};
+
 struct ReliefMesh {
     std::vector<P3> positions;
     std::vector<float> heights;      // displacement applied to each position (0 = original surface)
     std::vector<int32_t> positionRegion;
     std::vector<OutputTriangle> triangles;
+    std::vector<MeshAttribute> attributes;  // written when any value is non-zero, on every primitive
 };
 
 struct ReliefResult {
@@ -2822,7 +2830,8 @@ public:
 };
 
 struct PackedPrimitive {
-    std::vector<float> pos, nrm, uv, relief;  // relief: the position's inferred displacement (ReliefMesh::heights)
+    std::vector<float> pos, nrm, uv;
+    std::vector<std::vector<float>> cols;  // per vertex attribute columns (see attributeColumns)
     std::vector<uint32_t> indices;
     float mn[3]{1e30f, 1e30f, 1e30f}, mx[3]{-1e30f, -1e30f, -1e30f};
 };
@@ -2863,7 +2872,9 @@ inline void packCorner(PackedPrimitive& prim, std::unordered_map<CornerKey, uint
         prim.nrm.push_back(n[c]);
     }
     if (withUv) { prim.uv.push_back(uv[0]); prim.uv.push_back(uv[1]); }
-    prim.relief.push_back(p < m.heights.size() ? m.heights[p] : 0.0f);
+    if (prim.cols.size() < 1 + m.attributes.size()) prim.cols.resize(1 + m.attributes.size());
+    prim.cols[0].push_back(p < m.heights.size() ? m.heights[p] : 0.0f);
+    for (size_t a = 0; a < m.attributes.size(); ++a) prim.cols[1 + a].push_back(p < m.attributes[a].values.size() ? m.attributes[a].values[p] : 0.0f);
     map.emplace(k, id);
     prim.indices.push_back(id);
 }
@@ -2891,34 +2902,74 @@ inline std::string fmt(double v) {
     return s.str();
 }
 
-/** ",\"_RELIEF_HEIGHT\":<accessor>" when the primitive has a displaced vertex, else "" (the scan's own surface only). */
-inline std::string reliefAttribute(GlbBuilder& g, const PackedPrimitive& p) {
-    if (p.relief.size() != p.pos.size() / 3 || std::all_of(p.relief.begin(), p.relief.end(), [](float h) { return h == 0.0f; })) return "";
-    const int a = g.addAccessor(g.addView(p.relief.data(), p.relief.size() * 4, 34962), 5126, p.relief.size(), "SCALAR");
-    return ",\"_RELIEF_HEIGHT\":" + std::to_string(a);
-}
-
-/** asset.extras labelling inferred relief ("" when nothing was displaced). */
-inline std::string reliefAssetExtras(const ReliefMesh& m) {
+/** Values of the positions the triangles use. */
+inline std::vector<uint8_t> usedPositions(const ReliefMesh& m) {
     std::vector<uint8_t> used(m.positions.size(), 0);
     for (const auto& t : m.triangles) for (uint32_t q : t.p) if (q < used.size()) used[q] = 1;
-    size_t n = 0;
-    double mx = 0;
-    for (size_t i = 0; i < m.heights.size() && i < used.size(); ++i) {
-        if (!used[i] || m.heights[i] == 0.0f) continue;
-        ++n;
-        mx = std::max(mx, std::abs(static_cast<double>(m.heights[i])));
+    return used;
+}
+
+/**
+ * The attribute columns the mesh writes: column 0 (_RELIEF_HEIGHT, the inferred relief displacement) when the relief
+ * displaced a vertex, column 1 + i (attributes[i]) when it has a non-zero value. A written column goes on every
+ * primitive, so an absent attribute always means "no per-vertex claim", never "zero here".
+ */
+inline std::vector<int> attributeColumns(const ReliefMesh& m) {
+    const auto used = usedPositions(m);
+    auto any = [&](const std::vector<float>& v) {
+        for (size_t i = 0; i < v.size() && i < used.size(); ++i) if (used[i] && v[i] != 0.0f) return true;
+        return false;
+    };
+    std::vector<int> cols;
+    if (any(m.heights)) cols.push_back(0);
+    for (size_t a = 0; a < m.attributes.size(); ++a) if (any(m.attributes[a].values)) cols.push_back(static_cast<int>(1 + a));
+    return cols;
+}
+
+/** ",\"<name>\":<accessor>" for every written column. */
+inline std::string attributeJson(GlbBuilder& g, const PackedPrimitive& p, const ReliefMesh& m, const std::vector<int>& cols) {
+    std::string out;
+    for (int c : cols) {
+        const auto& v = p.cols[static_cast<size_t>(c)];
+        const int a = g.addAccessor(g.addView(v.data(), v.size() * 4, 34962), 5126, v.size(), "SCALAR");
+        out += ",\"" + (c == 0 ? std::string("_RELIEF_HEIGHT") : m.attributes[static_cast<size_t>(c - 1)].name) + "\":" + std::to_string(a);
     }
-    if (!n) return "";
-    return ",\"extras\":{\"scratchbox\":{\"relief\":{\"provenance\":\"inferred\",\"source\":\"photo texture: window contrast and cast-shadow width\","
-           "\"attribute\":\"_RELIEF_HEIGHT\",\"units\":\"m along the facade normal; 0 = scan surface\",\"displacedVertices\":" + std::to_string(n) +
-           ",\"maxAbsHeight_m\":" + fmt(mx) + "}}}";
+    return out;
+}
+
+/** asset.extras: inferred relief and the written attributes ("" when there is nothing to say). */
+inline std::string assetExtras(const ReliefMesh& m, const std::vector<int>& cols) {
+    std::string body;
+    if (!cols.empty() && cols[0] == 0) {
+        const auto used = usedPositions(m);
+        size_t n = 0;
+        double mx = 0;
+        for (size_t i = 0; i < m.heights.size() && i < used.size(); ++i) {
+            if (!used[i] || m.heights[i] == 0.0f) continue;
+            ++n;
+            mx = std::max(mx, std::abs(static_cast<double>(m.heights[i])));
+        }
+        body += "\"relief\":{\"provenance\":\"inferred\",\"source\":\"photo texture: window contrast and cast-shadow width\","
+                "\"attribute\":\"_RELIEF_HEIGHT\",\"units\":\"m along the facade normal; 0 = scan surface\",\"displacedVertices\":" + std::to_string(n) +
+                ",\"maxAbsHeight_m\":" + fmt(mx) + "}";
+    }
+    std::string attrs;
+    for (int c : cols) {
+        if (c == 0) continue;
+        const auto& a = m.attributes[static_cast<size_t>(c - 1)];
+        std::string d;
+        for (char ch : a.description) { if (ch == '"' || ch == '\\') d += '\\'; d += ch; }
+        attrs += (attrs.empty() ? "" : ",") + ("\"" + a.name + "\":\"" + d + "\"");
+    }
+    if (!attrs.empty()) body += (body.empty() ? "" : ",") + ("\"attributes\":{" + attrs + "}");
+    return body.empty() ? "" : ",\"extras\":{\"scratchbox\":{" + body + "}}";
 }
 
 } // namespace detail
 
 inline std::vector<uint8_t> PhotometricRelief::writeTexturedGlb(const gltf::GltfScene& scene, const ReliefMesh& mesh, double creaseAngleDeg) {
     auto normals = detail::cornerNormals(mesh, creaseAngleDeg);
+    const std::vector<int> cols = detail::attributeColumns(mesh);
     const size_t M = std::max<size_t>(scene.materials.size(), 1);
     std::vector<detail::PackedPrimitive> prims(M);
     std::vector<std::unordered_map<detail::CornerKey, uint32_t, detail::CornerKeyHash>> maps(M);
@@ -2966,14 +3017,14 @@ inline std::vector<uint8_t> PhotometricRelief::writeTexturedGlb(const gltf::Gltf
         if (p.indices.empty()) continue;
         int aPos, aNrm, aUv, aIdx;
         detail::addPrimitiveBuffers(g, p, true, aPos, aNrm, aUv, aIdx);
-        const std::string reliefAttr = detail::reliefAttribute(g, p);
+        const std::string reliefAttr = detail::attributeJson(g, p, mesh, cols);
         meshes.push_back("{\"name\":\"relief_m" + std::to_string(mi) + "\",\"primitives\":[{\"attributes\":{\"POSITION\":" + std::to_string(aPos) +
                          ",\"NORMAL\":" + std::to_string(aNrm) + ",\"TEXCOORD_0\":" + std::to_string(aUv) + reliefAttr + "},\"indices\":" + std::to_string(aIdx) +
                          ",\"material\":" + std::to_string(mi) + ",\"mode\":4}]}");
         nodes.push_back("{\"name\":\"relief_m" + std::to_string(mi) + "\",\"mesh\":" + std::to_string(meshes.size() - 1) + "}");
         children.push_back(std::to_string(nodes.size()));
     }
-    std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox photometric relief\"" + detail::reliefAssetExtras(mesh) + "},";
+    std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox photometric relief\"" + detail::assetExtras(mesh, cols) + "},";
     if (anyUnlit) json += "\"extensionsUsed\":[\"KHR_materials_unlit\"],";
     json += "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"name\":\"PhotometricRelief\",\"children\":[" + detail::GlbBuilder::join(children) + "]}";
     if (!nodes.empty()) json += "," + detail::GlbBuilder::join(nodes);
@@ -2988,6 +3039,7 @@ inline std::vector<uint8_t> PhotometricRelief::writeTexturedGlb(const gltf::Gltf
 
 inline std::vector<uint8_t> PhotometricRelief::writeClayGlb(const ReliefMesh& mesh, double creaseAngleDeg, const std::string& name) {
     auto normals = detail::cornerNormals(mesh, creaseAngleDeg);
+    const std::vector<int> cols = detail::attributeColumns(mesh);
     detail::PackedPrimitive prim;
     std::unordered_map<detail::CornerKey, uint32_t, detail::CornerKeyHash> map;
     for (size_t t = 0; t < mesh.triangles.size(); ++t) {
@@ -2996,8 +3048,8 @@ inline std::vector<uint8_t> PhotometricRelief::writeClayGlb(const ReliefMesh& me
     detail::GlbBuilder g;
     int aPos, aNrm, aUv, aIdx;
     detail::addPrimitiveBuffers(g, prim, false, aPos, aNrm, aUv, aIdx);
-    const std::string reliefAttr = detail::reliefAttribute(g, prim);
-    std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox photometric relief\"" + detail::reliefAssetExtras(mesh) + "},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],";
+    const std::string reliefAttr = detail::attributeJson(g, prim, mesh, cols);
+    std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox photometric relief\"" + detail::assetExtras(mesh, cols) + "},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],";
     json += "\"nodes\":[{\"name\":\"" + name + "\",\"mesh\":0}],\"meshes\":[{\"name\":\"" + name + "\",\"primitives\":[{\"attributes\":{\"POSITION\":" +
             std::to_string(aPos) + ",\"NORMAL\":" + std::to_string(aNrm) + reliefAttr + "},\"indices\":" + std::to_string(aIdx) + ",\"material\":0,\"mode\":4}]}],";
     json += "\"materials\":[{\"name\":\"Mat_StudioGreyClay\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.55,0.57,0.6,1],\"metallicFactor\":0,\"roughnessFactor\":0.85},\"doubleSided\":false}],";

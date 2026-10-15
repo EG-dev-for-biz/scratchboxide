@@ -99,6 +99,29 @@ export function writeGlb(file: string, chunks: Chunk[], images: Buffer[] = []): 
     fs.writeFileSync(file, Buffer.concat([header, jh, js, bh, bin]));
 }
 
+/** A GLB's JSON and its per-primitive float attribute columns. */
+export interface Glb { json: any; attribute(name: string): Float32Array[] }
+
+export function readGlb(file: string): Glb {
+    const b = fs.readFileSync(file);
+    const jsonLen = b.readUInt32LE(12);
+    const json = JSON.parse(b.subarray(20, 20 + jsonLen).toString('utf8'));
+    const bin = b.subarray(20 + jsonLen + 8);
+    return {
+        json,
+        attribute(name: string) {
+            const out: Float32Array[] = [];
+            for (const m of json.meshes)
+                for (const p of m.primitives) {
+                    if (p.attributes[name] === undefined) continue;
+                    const acc = json.accessors[p.attributes[name]], view = json.bufferViews[acc.bufferView];
+                    out.push(new Float32Array(bin.buffer.slice(bin.byteOffset + (view.byteOffset ?? 0), bin.byteOffset + (view.byteOffset ?? 0) + acc.count * 4)));
+                }
+            return out;
+        }
+    };
+}
+
 /** Compiles scripts/tile_refine.cpp to `bin` unless it is newer than the CLI and every engine header. */
 export function buildTileRefine(repo: string, bin: string): void {
     const include = path.join(repo, 'packages/core/src/native/3d-engine/include');
