@@ -16,8 +16,11 @@
  * - the regrowth check must measure how much of the measured crown the regrown leaves reach, not how high one meshed
  *   leaf mass sits: a crown with a lobe no branch can reach used to pass with half of it empty;
  * - every crown that cannot be regrown is named with its reason, not only the first;
+ * - what a tree delivers is measured on its meshed leaf masses (read back here from the trees GLB), not on its
+ *   skeleton: a budget too small for its leaves to fill its crown is reported for that tree, and not called filled;
  * - strip regrows every tree before removing anything and keeps a tree it cannot regrow as scanned, its scan untouched;
- * - without a budget of the caller's own, each tree's budget comes from its crown, within the scene's cap.
+ * - without a budget of the caller's own, each tree's budget comes from its crown and what its leaf masses need,
+ *   within the scene's cap.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -27,6 +30,7 @@ import * as path from 'path';
 import { TileVegetationError, TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
 import { buildSyntheticTile, type SyntheticTileSpec } from './helpers/synthetic-textured-tile';
 import { parseGlb, readGlbTriangles, type GlbTriangles } from './helpers/clay-glb-render';
+import { crownSurfaceAboveBase, foliageReach, readTreeFoliage } from './helpers/foliage-reach';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
 
@@ -55,9 +59,18 @@ function domeSamples(cx: number, cz: number, apexY: number, r: number, drop: num
     return out;
 }
 
-/** A 32 m tree with a 2.5 m crown whose measured surface lies within its top 2 m (crowns 657 and 846 in Central Park). */
-function tallNarrow(id: number, x: number, z: number) {
-    return crown(id, [x, z], 0, 32, new Array(16).fill(2.5), domeSamples(x, z, 32, 2.5, 2));
+/** A tall tree (32 m) with a 2.5 m crown whose measured surface lies within its top 2 m (crowns 657 and 846 in Central Park). */
+function tallNarrow(id: number, x: number, z: number, height = 32) {
+    return crown(id, [x, z], 0, height, new Array(16).fill(2.5), domeSamples(x, z, height, 2.5, 2));
+}
+
+/** Every tree of a trees GLB: its delivered leaves measured independently against its crown, and what its extras say. */
+function deliveredReach(glbFile: string, crowns: any[], crownBaseRatio = 0.35) {
+    return readTreeFoliage(fs.readFileSync(glbFile)).map(f => {
+        const c = crowns.find(k => k.id === f.crownId);
+        const measured = foliageReach(f, f.extras.foliageClumps, crownSurfaceAboveBase(c, crownBaseRatio), f.extras.reachM);
+        return { crownId: f.crownId, apexY: c.apex[1], reachM: f.extras.reachM, share: measured.share, topY: measured.topY, extras: f.extras };
+    });
 }
 
 /** One measured crown made of two 3 m lobes 12 m apart, its stem under the first: no branch can cross to the second. */
@@ -115,14 +128,32 @@ afterAll(() => {
 describe('regrowing a measured crown', () => {
     it('grows a tall narrow crown measured only near its top: the trunk reaches the crown, the leaves reach its apex', async () => {
         // Before: the trunk stopped at the inferred crown base (11.2 m), the shell of attractors under the measured
-        // surface began about 15 m up, more than the 3.3 m perception radius away, so colonisation never started.
+        // surface began about 15 m up, more than the 3.3 m perception radius away, so colonisation never started. The
+        // perception radius now spans the kill reach as well (4.5 m), which sees across that gap; under a 45 m tree
+        // measured in its top 2 m the gap is 5.5 m, and its trunk grows on towards the crown until it is in sight.
+        for (const [height, seeks] of [[32, false], [45, true]] as const) {
+            for (const seed of ['abc', '1', '2']) {
+                const planted = await svc.plant({ crownsPath: writeCrowns('tall.json', [tallNarrow(0, 0, 0, height)]), triangleBudget: 3000, seed });
+                expect(planted.stats.trees).toBe(1);
+                const t = planted.stats.perTree[0];
+                if (seeks) expect(t.colonisation.trunkSeekSteps).toBeGreaterThanOrEqual(1);
+                expect(t.colonisation.iterations).toBeGreaterThan(5);
+                expect(t.grownSurfaceReached).toBeGreaterThanOrEqual(0.9);
+                expect(t.crownSurfaceReached).toBeGreaterThanOrEqual(0.9);
+                expect(planted.stats.shortOfCrown).toEqual([]);
+                const [lo, hi] = t.bounds as number[][];
+                expect(lo[1]).toBeLessThan(0.3);                // stands on its ground ...
+                expect(hi[1]).toBeGreaterThan(height - 1.5);    // ... and its leaves reach the measured apex
+                expect(hi[1]).toBeLessThan(height + 0.5);
+                // the delivered leaf masses, read back from the GLB, reach the measured top surface as the stats say
+                const [d] = deliveredReach(planted.treesGlb, [tallNarrow(0, 0, 0, height)]);
+                expect(d.share).toBeGreaterThanOrEqual(0.9);
+                expect(Math.abs(d.share - t.crownSurfaceReached)).toBeLessThan(0.02);
+            }
+        }
         for (const seed of ['abc', '1', '2']) {
             const planted = await svc.plant({ crownsPath: writeCrowns('tall.json', [tallNarrow(0, 0, 0)]), triangleBudget: 3000, seed });
-            expect(planted.stats.trees).toBe(1);
             const t = planted.stats.perTree[0];
-            expect(t.colonisation.trunkSeekSteps).toBeGreaterThanOrEqual(1);
-            expect(t.colonisation.iterations).toBeGreaterThan(5);
-            expect(t.crownSurfaceReached).toBeGreaterThanOrEqual(0.9);
             const [lo, hi] = t.bounds as number[][];
             expect(lo[1]).toBeLessThan(0.3);            // stands on its ground ...
             expect(hi[1]).toBeGreaterThan(32 - 1.5);    // ... and its leaves reach the measured apex
@@ -161,20 +192,29 @@ describe('the triangle budget of the trees', () => {
         crown(3, [0, 30], 0, 16, new Array(16).fill(8), domeSamples(0, 30, 16, 8, 5))
     ]);
 
-    it('without a budget of the caller\'s own, gives each tree a target that grows with its crown', async () => {
+    it('without a budget of the caller\'s own, gives each tree its own budget: a target that grows with its crown, never under what its leaves need', async () => {
         const planted = await svc.plant({ crownsPath: sized(), sceneTriangleCap: 1_500_000, seed: 'abc' });
         const s = planted.stats;
         expect(s.trees).toBe(3);
         expect(s.triangleBudgetSource).toBe('crown_targets');
         const per = [1, 2, 3].map(id => s.perTree.find((t: any) => t.crownId === id));
         for (const t of per) {
-            expect(t.budget).toBe(t.target);
+            expect(t.budget).toBe(t.ownBudget);
+            expect(t.ownBudget).toBe(Math.max(t.target, t.neededTriangles));
             expect(t.target).toBeGreaterThanOrEqual(120);
             expect(t.triangles).toBeLessThanOrEqual(t.budget);
+            // at its own budget every leaf mass its crown surface needs fits, and its leaves fill its crown
+            expect(t.surfaceMasses).toBe(t.surfaceMassesNeeded);
+            expect(t.crownSurfaceReached).toBeGreaterThanOrEqual(0.9);
         }
+        expect(s.shortOfCrown).toEqual([]);
         expect(per[0].target).toBeLessThan(per[1].target);
         expect(per[1].target).toBeLessThan(per[2].target);
-        expect(s.targetTriangles).toBe(per.reduce((a: number, t: any) => a + t.target, 0));
+        expect(s.targetTriangles).toBe(per.reduce((a: number, t: any) => a + t.ownBudget, 0));
+        for (const d of deliveredReach(planted.treesGlb, JSON.parse(fs.readFileSync(path.join(work, 'sized.json'), 'utf8')).crowns)) {
+            expect(d.share).toBeGreaterThanOrEqual(0.9);
+            expect(d.topY + d.reachM).toBeGreaterThanOrEqual(d.apexY);
+        }
         expect(s.triangleBudget).toBe(s.targetTriangles);
         expect(s.triangles).toBeLessThanOrEqual(s.triangleBudget);
     });
@@ -190,7 +230,9 @@ describe('the triangle budget of the trees', () => {
         const per = [1, 2, 3].map(id => s.perTree.find((t: any) => t.crownId === id));
         for (const t of per) {
             expect(t.budget).toBeGreaterThanOrEqual(120);
-            expect(t.budget).toBeLessThanOrEqual(t.target);
+            expect(t.budget).toBeLessThanOrEqual(t.ownBudget);
+            // what the leaf masses need comes first
+            if (cap >= s.neededTriangles) expect(t.budget).toBeGreaterThanOrEqual(t.neededTriangles);
         }
         expect(per[0].budget).toBeLessThanOrEqual(per[1].budget);
         expect(per[1].budget).toBeLessThanOrEqual(per[2].budget);
@@ -218,6 +260,21 @@ describe('the triangle budget of the trees', () => {
         const err = await svc.plant({ crownsPath: sized(), triangleBudget: 300, seed: 'abc' }).catch(e => e);
         expect(err.code).toBe('budget_too_small');
         expect(err.message).toBe('a triangle budget of 300 cannot hold 3 trees at 120 triangles each (they need at least 360)');
+        // a budget that holds the trees but not every leaf mass their crowns need (40 triangles a tree: one leaf mass):
+        // planted, and each tree that falls short is named with what its leaves reach, which the GLB confirms; none is
+        // called filled
+        const tight = await svc.plant({ crownsPath: sized(), triangleBudget: 120, seed: 'abc', params: { minTrianglesPerTree: 40 } });
+        expect(tight.stats.trees).toBe(3);
+        expect(tight.stats.shortOfCrown.length).toBeGreaterThanOrEqual(1);
+        const delivered = deliveredReach(tight.treesGlb, JSON.parse(fs.readFileSync(path.join(work, 'sized.json'), 'utf8')).crowns);
+        for (const d of delivered) {
+            const short = tight.stats.shortOfCrown.find((k: any) => k.crownId === d.crownId);
+            const fills = d.share >= 0.9 && d.topY + d.reachM >= d.apexY;
+            expect(Math.abs(d.share - d.extras.crownSurfaceReached)).toBeLessThan(0.02);
+            expect(!!short).toBe(!fills);
+            expect(!!d.extras.shortOfCrown).toBe(!fills);
+            if (short) expect(short.reason).toMatch(/^within its budget of \d+ triangles its (\d+ leaf mass(es)? reach(es)? [\d.]+% of its measured crown surface|leaves reach [\d.]+ m above its ground)/);
+        }
         const both = await svc.plant({ crownsPath: sized(), triangleBudget: 3000, sceneTriangleCap: 3000, seed: 'abc' }).catch(e => e);
         expect(both.code).toBe('bad_request');
         const neither = await svc.plant({ crownsPath: sized(), seed: 'abc' }).catch(e => e);
@@ -265,7 +322,12 @@ describe('strip keeps a tree it cannot regrow as scanned', () => {
         expect(planted.stats.trees).toBe(3);
         for (const t of planted.stats.perTree) {
             const c = trees.find((k: any) => k.id === t.crownId);
-            expect(t.crownSurfaceReached).toBeCloseTo(c.regrowth.surfaceShare, 6);
+            // the same skeleton, and at the tree's own budget (no budget of the caller's, room under the cap) the very
+            // mesh strip checked
+            expect(t.grownSurfaceReached).toBeCloseTo(c.regrowth.surfaceShare, 6);
+            expect(t.budget).toBe(c.regrowth.ownBudget);
+            expect(t.crownSurfaceReached).toBeCloseTo(c.regrowth.leaves.surfaceShare, 6);
+            expect(c.regrowth.leaves.surfaceShare).toBeGreaterThanOrEqual(0.9);
         }
         // planting with growth ratios other than the ones the removal was decided with is refused
         const other = await svc.plant({ crownsPath: strip.crownsJson, sceneTriangleCap: 1_500_000, seed: strip.tileSha256.slice(0, 16), params: { crownBaseRatio: 0.5 } }).catch(e => e);
