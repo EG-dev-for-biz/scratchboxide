@@ -235,11 +235,16 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         }
         fs.writeFileSync(path.join(SHOTS, 'flatiron_topdown_measurement_vs_inventory.png'), encodePng(img.width, img.height, img.rgba));
         const park: [number, number, number, number] = [35, -120, 135, -15];
+        // trees tinted green to tell them apart from the scan; the GLB itself is studio clay
         const layers = [{ positions: clay.positions, indices: clay.indices }, { positions: grown.positions, indices: grown.indices, color: [0.45, 0.55, 0.45] as [number, number, number] }];
+        const allClay = [{ positions: clay.positions, indices: clay.indices }, { positions: grown.positions, indices: grown.indices }];
         const shots: Array<[string, Buffer]> = [
             ['flatiron_park_clay_trees_aerial.png', renderClayPng(layers, { kind: 'aerial', width: 1280, height: 860, region: park, bearingDeg: 300, elevationDeg: 55 })],
             ['flatiron_park_clay_trees_top.png', renderClayPng(layers, { kind: 'top', width: 1000, height: 1000, region: park })],
-            ['flatiron_district_clay_trees_aerial.png', renderClayPng(layers, { kind: 'aerial', width: 1280, height: 860, bearingDeg: 200, elevationDeg: 40 })]
+            ['flatiron_district_clay_trees_aerial.png', renderClayPng(layers, { kind: 'aerial', width: 1280, height: 860, bearingDeg: 200, elevationDeg: 40 })],
+            // as mounted: remeshed tiles and trees both in studio clay
+            ['flatiron_park_all_clay_aerial.png', renderClayPng(allClay, { kind: 'aerial', width: 1280, height: 860, region: park, bearingDeg: 200, elevationDeg: 30 })],
+            ['flatiron_park_all_clay_top.png', renderClayPng(allClay, { kind: 'top', width: 1000, height: 1000, region: park })]
         ];
         for (const [name, png] of shots) {
             fs.writeFileSync(path.join(SHOTS, name), png);
