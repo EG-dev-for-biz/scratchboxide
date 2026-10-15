@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MarkdownDocumentPrimitive, SectionHeading, SectionMediaNotice, formatCoordinates, newEmptySection, newLocationSection, sectionGenerationPrompt, sectionMediaFailure, sectionMediaFromJob } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
+import { MarkdownDocumentPrimitive, SectionHeading, SectionMediaNotice, formatCoordinates, newEmptySection, newLocationSection, sectionGenerationPrompt, sectionMediaFailure, sectionMediaFromJob, documentMediaCredit } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
 import { synthesizeContextualNanoBananaPrompt } from '../src/browser/generative-canvas/nano-banana-service';
 import * as nanoBanana from '../src/browser/generative-canvas/nano-banana-service';
 import { generateMotivatedEditorialImageSection, generateMotivatedVideoSection } from '../src/browser/generative-canvas/document-synthesis-engine';
@@ -37,11 +37,19 @@ describe('document image sections', () => {
     it('credits a generated image to the model that actually made it, and claims no fallback it cannot see', () => {
         expect(sectionMediaFromJob(job('gemini-3-pro-image'), '/media/job-1', false)).toEqual({
             imageUrl: '/media/job-1', thumbnailUrl: '/media/job-1', videoUrl: undefined,
-            attribution: 'Generated with gemini-3-pro-image', mediaError: undefined
+            attribution: 'Generated with gemini-3-pro-image.', mediaError: undefined
         });
-        // A versioned id from the API is the same model; nothing compares it to a requested id string.
         expect(sectionMediaFromJob(job('gemini-3.1-flash-image-preview'), '/media/job-1', false).attribution)
-            .toBe('Generated with gemini-3.1-flash-image-preview');
+            .toBe('Generated with gemini-3.1-flash-image-preview.');
+    });
+
+    it('names the requested model too when the model that answered is another id, without claiming why', () => {
+        const asked = (modelUsed: string, modelPriority: string[]): MediaGenerationJob => ({ ...job(modelUsed), request: { ...job(modelUsed).request, modelPriority } });
+        // A video section asks Omni first; Veo answered. The credit no longer reads as if Veo was asked for.
+        expect(documentMediaCredit(asked('veo-3.1-generate-preview', ['google/omni-1.1', 'gemini-omni-flash-video', 'veo-3.1-generate-preview'])))
+            .toBe('Generated with veo-3.1-generate-preview (requested google/omni-1.1).');
+        expect(documentMediaCredit(asked('gemini-3-pro-image', ['gemini-3-pro-image', 'gemini-3.1-flash-image']))).toBe('Generated with gemini-3-pro-image.');
+        expect(documentMediaCredit({ request: { kind: 'image', prompt: 'p' } as any })).toBeUndefined();
     });
 
     it('a failed job records the job\'s error and changes no image', () => {

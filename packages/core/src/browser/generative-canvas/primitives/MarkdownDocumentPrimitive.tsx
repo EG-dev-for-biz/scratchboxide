@@ -53,18 +53,29 @@ import { IMAGE_MODEL_PRIORITY, type MediaGenerationJob } from '../../../common/m
 export { NANO_BANANA_STYLES };
 
 /**
- * What a finished media job writes onto a document section: the generated asset, credited to the model that
- * actually made it (and the requested model when another one in the fallback list answered).
+ * The credit line for a finished media job: the model the job reports as having answered and, when that id is not
+ * the first model the request asked for (its modelPriority), the requested model too. Both are stated as recorded:
+ * the reported id may be a versioned name of the requested model or another model down the list, and the job alone
+ * does not say which (or why), so the line claims neither. Undefined when the job names no model.
+ */
+export function documentMediaCredit(job: Pick<MediaGenerationJob, 'request' | 'result' | 'modelUsed'>): string | undefined {
+    const modelUsed = job.result?.modelUsed || job.modelUsed;
+    if (!modelUsed) return undefined;
+    const requested = job.request?.modelPriority?.[0];
+    return requested && requested !== modelUsed
+        ? `Generated with ${modelUsed} (requested ${requested}).`
+        : `Generated with ${modelUsed}.`;
+}
+
+/**
+ * What a finished media job writes onto a document section: the generated asset, credited by documentMediaCredit.
  */
 export function sectionMediaFromJob(job: MediaGenerationJob, assetUrl: string, isVideo: boolean): Partial<MarkdownSection> {
-    // The model the job reports as having answered. Whether it was the requested one is the job's to say (its
-    // result names skipped models and why); nothing is inferred here by comparing model id strings.
-    const modelUsed = job.result?.modelUsed || job.modelUsed;
     return {
         imageUrl: assetUrl,
         thumbnailUrl: assetUrl,
         videoUrl: isVideo ? assetUrl : undefined,
-        attribution: modelUsed ? `Generated with ${modelUsed}` : undefined,
+        attribution: documentMediaCredit(job),
         mediaError: undefined
     };
 }
