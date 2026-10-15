@@ -33,7 +33,7 @@ export interface ArchieBuildingRefineOptions {
     plinthPadding?: number;
     /** Ground datum level Y in meters. If omitted, uses building bbox min.y. */
     groundDatumY?: number;
-    /** Material palette style. Default: 'roman_ochre'. */
+    /** Material palette style. Required unless customBuildingMaterial is given; an unknown palette is an error. */
     palette?: ArchieBuildingPalette;
     /** Custom PBR material override for building body. */
     customBuildingMaterial?: THREE.Material;
@@ -221,7 +221,7 @@ export class ArchieBuildingRefiner {
         const maxNy = options.maxFacadeNormalY ?? 0.38;
         const plinthDepth = options.plinthDepth ?? 2.5;
         const plinthPadding = options.plinthPadding ?? 0.3;
-        const paletteKey = options.palette || 'roman_ochre';
+        const paletteKey = options.palette;
         const namePrefix = options.namePrefix || (sourceMesh?.name || 'building');
 
         // 1. Bilateral planar facade normal smoothing
@@ -242,11 +242,16 @@ export class ArchieBuildingRefiner {
         }
 
         // 2. Resolve PBR Materials
-        const paletteDef = ARCHIE_BUILDING_PALETTES[paletteKey] || ARCHIE_BUILDING_PALETTES.roman_ochre;
+        // The material is the one asked for: an unknown or missing palette is an error, never another palette.
+        const paletteDef = paletteKey ? ARCHIE_BUILDING_PALETTES[paletteKey] : undefined;
+        if (!options.customBuildingMaterial && !paletteDef) {
+            throw new Error(`ArchieBuildingRefiner: ${paletteKey ? `unknown palette '${paletteKey}'` : 'no palette given'}; `
+                + `give one of ${Object.keys(ARCHIE_BUILDING_PALETTES).join(', ')} or a customBuildingMaterial`);
+        }
         const buildingMaterial = options.customBuildingMaterial || new THREE.MeshStandardMaterial({
-            color: paletteDef.color,
-            roughness: paletteDef.roughness,
-            metalness: paletteDef.metalness,
+            color: paletteDef!.color,
+            roughness: paletteDef!.roughness,
+            metalness: paletteDef!.metalness,
             side: THREE.DoubleSide
         });
 

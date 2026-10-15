@@ -27,6 +27,34 @@ import {
     type ArchieBuildingPalette
 } from '../spatial/ArchieBuildingRefiner';
 
+/**
+ * The meshes of the live viewport whose name or id is `targetMeshId`. Throws when no id is given, no viewport is
+ * attached, or nothing matches (naming the meshes that are there): an operator that edits scene meshes never picks
+ * one by a keyword in its name and never builds a stand-in to edit.
+ */
+export function findViewportMeshes(threeScene: THREE.Scene | undefined, targetMeshId: string | undefined, operator: string): THREE.Mesh[] {
+    if (!targetMeshId) {
+        throw new Error(`${operator} needs targetMeshId: the name or id of the mesh in the scene to edit; no mesh is guessed`);
+    }
+    if (!threeScene) {
+        throw new Error(`${operator} edits meshes in the live 3D viewport, and no viewport is attached here`);
+    }
+    const matches: THREE.Mesh[] = [];
+    const names: string[] = [];
+    threeScene.traverse(node => {
+        if (!(node as THREE.Mesh).isMesh) return;
+        if (node.name) names.push(node.name);
+        if (String((node as any).id) === String(targetMeshId) || node.name === targetMeshId || node.uuid === targetMeshId) {
+            matches.push(node as THREE.Mesh);
+        }
+    });
+    if (matches.length === 0) {
+        const listed = names.slice(0, 20).map(n => `'${n}'`).join(', ');
+        throw new Error(`${operator}: no mesh named or with id '${targetMeshId}' in the scene${names.length ? ` (meshes: ${listed}${names.length > 20 ? ', ...' : ''})` : ' (it has no named meshes)'}`);
+    }
+    return matches;
+}
+
 export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_subdivide_mesh',
@@ -998,7 +1026,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_refine_building_structure',
         category: 'mesh_edit',
-        description: 'Refines authentic scanned building geometry with bilateral planar facade normal smoothing, watertight grounding plinths, and architectural PBR materials.',
+        description: 'Refines the scanned building mesh named by targetMeshId in the live viewport: planar facade normal smoothing, a grounding plinth, and the PBR material of the given palette (required). Fails when the mesh is not in the scene; it never picks a mesh by name keywords or builds a stand-in.',
         execute: (ctx, params: {
             targetMeshId?: string;
             palette?: ArchieBuildingPalette;
@@ -1007,64 +1035,26 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             maxFacadeNormalY?: number;
             groundDatumY?: number;
         }) => {
-            const threeScene = ctx.getThreeScene();
-            let targetMesh: THREE.Mesh | null = null;
+            // The building is the mesh the caller names in the live viewport; no mesh is guessed from its name and
+            // no demo building is built when none is found.
+            const targetMesh = findViewportMeshes(ctx.getThreeScene(), params.targetMeshId, 'sb_refine_building_structure')[0];
+            const result = new ArchieBuildingRefiner().refineBuilding(targetMesh, {
+                palette: params.palette,
+                plinthDepth: params.plinthDepth ?? 2.5,
+                plinthPadding: params.plinthPadding ?? 0.3,
+                maxFacadeNormalY: params.maxFacadeNormalY ?? 0.38,
+                groundDatumY: params.groundDatumY
+            });
+            const threeScene = ctx.getThreeScene()!;
+            targetMesh.parent?.remove(targetMesh);
+            threeScene.add(result.group);
 
-            if (params.targetMeshId && threeScene) {
-                threeScene.traverse(node => {
-                    if ((node as any).id === params.targetMeshId || node.name === params.targetMeshId) {
-                        if ((node as THREE.Mesh).isMesh) {
-                            targetMesh = node as THREE.Mesh;
-                        }
-                    }
-                });
-            }
-
-            if (!targetMesh && threeScene) {
-                // Find first mesh with building in name or first mesh
-                threeScene.traverse(node => {
-                    if (!targetMesh && (node as THREE.Mesh).isMesh) {
-                        if (node.name.toLowerCase().includes('building') || node.name.toLowerCase().includes('palazzo') || node.name.toLowerCase().includes('facade')) {
-                            targetMesh = node as THREE.Mesh;
-                        }
-                    }
-                });
-            }
-
-            const refiner = new ArchieBuildingRefiner();
-            let result;
-
-            if (targetMesh) {
-                result = refiner.refineBuilding(targetMesh, {
-                    palette: params.palette || 'roman_ochre',
-                    plinthDepth: params.plinthDepth ?? 2.5,
-                    plinthPadding: params.plinthPadding ?? 0.3,
-                    maxFacadeNormalY: params.maxFacadeNormalY ?? 0.38,
-                    groundDatumY: params.groundDatumY
-                });
-                if (threeScene) {
-                    (targetMesh as any)?.parent?.remove(targetMesh);
-                    threeScene.add(result.group);
-                }
-            } else {
-                // Fallback: create architectural demo volume
-                const fallbackGeom = new THREE.BoxGeometry(15, 24, 15);
-                fallbackGeom.translate(0, 12, 0);
-                result = refiner.refineBuilding(fallbackGeom, {
-                    palette: params.palette || 'roman_ochre',
-                    plinthDepth: params.plinthDepth ?? 2.5,
-                    plinthPadding: params.plinthPadding ?? 0.3
-                });
-                if (threeScene) {
-                    threeScene.add(result.group);
-                }
-            }
-
-            ctx.recordState(`Archie: Refine Building Structure (${params.palette || 'roman_ochre'})`);
+            ctx.recordState(`Archie: Refine Building Structure (${params.palette})`);
 
             return {
                 success: true,
-                palette: params.palette || 'roman_ochre',
+                targetMeshId: params.targetMeshId,
+                palette: params.palette,
                 metrics: result.metrics,
                 refinedMeshName: result.refinedMesh.name,
                 plinthMeshName: result.plinthMesh.name

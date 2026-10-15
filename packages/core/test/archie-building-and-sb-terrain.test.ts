@@ -270,23 +270,72 @@ describe('SB-Terrain Multi-Material Ground Engine (Universal)', () => {
         // The canvas operators below act on the live scene's own meshes and stay available.
     });
 
-    it('Direct-Dispatch Canvas Operators: executes sb_refine_building_structure and sb_classify_terrain_materials', async () => {
-        const { DirectDispatchOperatorEngine } = await import('../src/browser/generative-canvas/services/direct-dispatch-operator-engine');
-        const opEngine = new DirectDispatchOperatorEngine();
+    it('ArchieBuildingRefiner refuses a missing or unknown palette instead of painting Roman ochre', () => {
+        const refiner = new ArchieBuildingRefiner();
+        const geom = new THREE.BoxGeometry(10, 10, 10);
+        expect(() => refiner.refineBuilding(geom, {})).toThrow(/no palette given; give one of .*limestone/);
+        expect(() => refiner.refineBuilding(geom, { palette: 'gothic_obsidian' as any })).toThrow(/unknown palette 'gothic_obsidian'/);
+    });
 
-        // 1. Execute sb_refine_building_structure
-        const refineRes = opEngine.dispatch('sb_refine_building_structure', {
-            palette: 'limestone',
-            plinthDepth: 2.0
-        });
+    it('Direct-Dispatch Canvas Operators edit the mesh named in the live scene, and fail (adding nothing) when it is not there', async () => {
+        const { DirectDispatchOperatorEngine } = await import('../src/browser/generative-canvas/services/direct-dispatch-operator-engine');
+
+        // The review's probe: an empty scene. Both operators used to build a demo box / demo planes and succeed.
+        const empty = new DirectDispatchOperatorEngine();
+        const emptyScene = new THREE.Scene();
+        empty.attachThreeScene(emptyScene);
+        const refineEmpty = empty.dispatch('sb_refine_building_structure', { palette: 'limestone', plinthDepth: 2.0 });
+        expect(refineEmpty.success).toBe(false);
+        expect(refineEmpty.error).toContain('needs targetMeshId');
+        const terrainEmpty = empty.dispatch('sb_classify_terrain_materials', { targetMeshId: 'ground', layer: 'rocks' });
+        expect(terrainEmpty.success).toBe(false);
+        expect(terrainEmpty.error).toContain("no mesh named or with id 'ground'");
+        expect(emptyScene.children.length).toBe(0);
+
+        // No viewport attached (the server-side dispatch): nothing to edit, so it fails.
+        const headless = new DirectDispatchOperatorEngine().dispatch('sb_refine_building_structure', { targetMeshId: 'palazzo', palette: 'limestone' });
+        expect(headless.success).toBe(false);
+        expect(headless.error).toContain('no viewport is attached');
+
+        // A scene with a building named something that matches no keyword, and a ground mesh.
+        const engine = new DirectDispatchOperatorEngine();
+        const scene = new THREE.Scene();
+        engine.attachThreeScene(scene);
+        const buildingGeom = new THREE.BoxGeometry(12, 18, 12);
+        buildingGeom.translate(0, 9, 0);
+        const building = new THREE.Mesh(buildingGeom, new THREE.MeshStandardMaterial());
+        building.name = 'tile_mesh_0042';
+        scene.add(building);
+        const groundGeom = new THREE.PlaneGeometry(20, 20, 4, 4);
+        groundGeom.rotateX(-Math.PI / 2);
+        const ground = new THREE.Mesh(groundGeom);
+        ground.name = 'tile_mesh_0043';
+        scene.add(ground);
+
+        // A keyword-named decoy is not picked when the named mesh is missing.
+        const decoy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+        decoy.name = 'building_decoy';
+        scene.add(decoy);
+        const missing = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_9999', palette: 'limestone' });
+        expect(missing.success).toBe(false);
+        expect(missing.error).toContain("'tile_mesh_0042'");
+        expect(scene.getObjectByName('building_decoy')).toBe(decoy);
+
+        const noPalette = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_0042' });
+        expect(noPalette.success).toBe(false);
+        expect(noPalette.error).toContain('no palette given');
+
+        const refineRes = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_0042', palette: 'limestone', plinthDepth: 2.0 });
         expect(refineRes.success).toBe(true);
         expect(refineRes.data.palette).toBe('limestone');
+        expect(refineRes.data.metrics.vertexCount).toBe(buildingGeom.getAttribute('position').count);
+        expect(scene.getObjectByName('tile_mesh_0042')).toBeUndefined();
+        expect(scene.getObjectByName('archie_refined_tile_mesh_0042')).toBeDefined();
 
-        // 2. Execute sb_classify_terrain_materials
-        const terrainRes = opEngine.dispatch('sb_classify_terrain_materials', {
-            layer: 'rocks'
-        });
+        const terrainRes = engine.dispatch('sb_classify_terrain_materials', { targetMeshId: 'tile_mesh_0043', layer: 'rocks' });
         expect(terrainRes.success).toBe(true);
         expect(terrainRes.data.layer).toBe('rocks');
+        expect(terrainRes.data.metrics.totalSubmeshes).toBe(1);
+        expect(terrainRes.data.metrics.pavementCount).toBe(1);
     });
 });
