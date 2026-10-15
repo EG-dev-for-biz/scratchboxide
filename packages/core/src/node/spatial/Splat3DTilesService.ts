@@ -27,6 +27,8 @@ export interface Splat3DTilesOptions {
     leafCapacity?: number;             // default 65536
     interiorBudget?: number;           // default 32768
     geometricErrorScale?: number;      // default 0.25 (metres per metre of cell extent)
+    /** Stops the native tiler (the caller's Stop): the result is then a failure carrying the abort. */
+    signal?: AbortSignal;
 }
 
 export interface Splat3DTilesResult {
@@ -90,7 +92,7 @@ export class Splat3DTilesService {
                 '--geometric-error-scale', String(options.geometricErrorScale ?? 0.25),
                 '--json'
             ];
-            const { stdout } = await execFileAsync(bin, args, { maxBuffer: 16 * 1024 * 1024 });
+            const { stdout } = await execFileAsync(bin, args, { maxBuffer: 16 * 1024 * 1024, signal: options.signal });
             const stats = JSON.parse(stdout.trim());
 
             const tree = await fs.readJson(treePath) as { root: TreeNode; totalSplats: number; nodeCount: number };

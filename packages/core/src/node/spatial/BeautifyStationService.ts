@@ -43,6 +43,8 @@ export interface StationImageGenerator {
         maskPng?: Buffer;          // white = disocclusion (fill), black = keep from reference
         aspectRatio: string;       // e.g. '16:9'
         width: number; height: number;
+        /** The caller's Stop: a generator should end its model call with an AbortError when it fires. */
+        signal?: AbortSignal;
     }): Promise<Buffer | StationImageAnswer>;
 }
 
@@ -74,7 +76,7 @@ export interface BeautifyStationOptions {
     renderMode?: 'clay' | 'textured' | 'albedo';
     glbPath?: string;
     stoneType?: StoneAlbedoPreset;
-    /** Stops before the next generation attempt (the chat's Stop or time limit). */
+    /** The chat's Stop or time limit: checked before each generation attempt and passed to the generator's model call. */
     signal?: AbortSignal;
 }
 
@@ -240,7 +242,11 @@ export class BeautifyStationService {
                 throw options.signal.reason instanceof Error ? options.signal.reason : Object.assign(new Error('Station beautify was stopped'), { name: 'AbortError' });
             }
             attempts++;
-            const { png, modelUsed, modelNote } = toStationImageAnswer(await this.generator.generate({ prompt, blockoutPng: blockout.png, referencePng: warp?.warpedPng, maskPng: warp?.maskPng, aspectRatio: resolvedAspectRatio, width, height }));
+            const { png, modelUsed, modelNote } = toStationImageAnswer(await this.generator.generate({ prompt, blockoutPng: blockout.png, referencePng: warp?.warpedPng, maskPng: warp?.maskPng, aspectRatio: resolvedAspectRatio, width, height, signal: options.signal }));
+            // A generator that finished despite the Stop: its image is not used.
+            if (options.signal?.aborted) {
+                throw options.signal.reason instanceof Error ? options.signal.reason : Object.assign(new Error('Station beautify was stopped'), { name: 'AbortError' });
+            }
             const decoded = decodePng(png);
             const { qc, aligned } = this.runQc(
                 station,
@@ -469,7 +475,7 @@ function norm(v: [number, number, number]): [number, number, number] { const l =
  * the blockout, optional warped reference and mask are passed as reference assets in that order.
  */
 export function createGoogleStationImageGenerator(deps: {
-    mediaService: { generateImage(req: any): Promise<{ asset: any; modelUsed: string; modelNote?: string }> };
+    mediaService: { generateImage(req: any, options?: { signal?: AbortSignal }): Promise<{ asset: any; modelUsed: string; modelNote?: string }> };
     assetStore: { put(workspaceRoot: string, bytes: Buffer, mimeType: string): Promise<any>; resolve(workspaceRoot: string, asset: any): string };
     workspaceRoot: string;
     modelPriority?: string[];
@@ -495,7 +501,7 @@ export function createGoogleStationImageGenerator(deps: {
                 imageSize: deps.imageSize ?? (deps.fidelity === 'draft' ? '1K' : '2K'),
                 modelPriority: deps.modelPriority,
                 fidelity: deps.fidelity
-            });
+            }, { signal: args.signal });
             return {
                 png: await ensureStationPng(await fs.readFile(deps.assetStore.resolve(deps.workspaceRoot, res.asset))),
                 modelUsed: res.modelUsed,

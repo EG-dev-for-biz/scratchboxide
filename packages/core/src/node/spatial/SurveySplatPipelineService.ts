@@ -26,6 +26,12 @@ import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas
 
 const execAsync = promisify(exec);
 
+/** Throws the signal's reason (or an AbortError) once the caller has stopped the run. */
+function throwIfStopped(signal?: AbortSignal): void {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : Object.assign(new Error('The survey splat pipeline was stopped'), { name: 'AbortError' });
+}
+
 export interface SurveySplatPipelineRequest {
     glbPath: string;
     anchor: GeodeticAnchor;
@@ -102,6 +108,12 @@ export interface SurveySplatPipelineRequest {
     stoneType?: StoneAlbedoPreset;
     /** Solar position or ephemeris for path tracing */
     sun?: TileSunSpec;
+    /**
+     * The caller's Stop (the chat's Stop button or the tool's time limit). Checked before every station, passed to
+     * the image model (so its call and its rerolls end), and to the native baker, fuser and tiler; nothing more is
+     * generated or written once it fires, and run() rejects with its reason.
+     */
+    signal?: AbortSignal;
 }
 
 export interface SurveySplatStationReport {
@@ -158,7 +170,7 @@ export class SurveySplatPipelineService {
         }
     }
 
-    async ensureBaker(): Promise<string> {
+    async ensureBaker(signal?: AbortSignal): Promise<string> {
         const src = path.resolve(process.cwd(), 'scripts/station_to_splats.cpp');
         if (fs.existsSync(this.bakerPath)) {
             const srcStat = await fs.stat(src);
@@ -168,7 +180,7 @@ export class SurveySplatPipelineService {
             }
         }
         await fs.ensureDir(path.dirname(this.bakerPath));
-        await execAsync(`${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" -lz "${src}" -o "${this.bakerPath}"`);
+        await execAsync(`${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" -lz "${src}" -o "${this.bakerPath}"`, { signal });
         return this.bakerPath;
     }
 
@@ -179,23 +191,27 @@ export class SurveySplatPipelineService {
         const fusedSplatPath = path.join(outDir, 'fused.splat');
         const tilesetPath = path.join(outDir, 'tileset.json');
         const metaPath = path.join(outDir, 'tileset.meta.json');
+        const signal = req.signal;
         try {
+            throwIfStopped(signal);
             await fs.ensureDir(stationsDir);
             report(0.02, 'Loading mesh');
             const renderer = new SurveyStationRenderService();
             await renderer.loadMesh(req.glbPath);
+            throwIfStopped(signal);
             const engine = new SurveySynthesisEngine();
             let stations = renderer.enrichStations(req.stations, { isoDate: req.isoDate });
             if (req.maxStations && req.maxStations < stations.length) stations = engine.rankForBeautify(stations, { maxCount: req.maxStations });
             const mode = req.mode ?? 'chained';
             const width = req.renderWidth ?? 1920;
-            const baker = await this.ensureBaker();
+            const baker = await this.ensureBaker(signal);
             const beautifier = this.deps?.generator ? new BeautifyStationService(renderer, this.deps.generator) : null;
 
             const reports: SurveySplatStationReport[] = [];
             const bakedStations: { splatPath: string; station: ColmapCameraPose }[] = [];
             let reference: BeautifyStationResult | undefined;
             for (let i = 0; i < stations.length; i++) {
+                throwIfStopped(signal);
                 const st = stations[i];
                 const base = path.join(stationsDir, `station_${String(st.id).padStart(3, '0')}`);
                 const splatPath = `${base}.splat`;
@@ -281,8 +297,10 @@ export class SurveySplatPipelineService {
                         draft: req.draft,
                         renderMode: stationRenderMode,
                         glbPath: req.glbPath,
-                        stoneType: req.stoneType
+                        stoneType: req.stoneType,
+                        signal
                     });
+                    throwIfStopped(signal);
                     await fs.outputFile(blockoutPath, res.blockout.png);
                     if (res.accepted) {
                         await fs.outputFile(beautifiedPath, res.imagePng);
@@ -305,6 +323,7 @@ export class SurveySplatPipelineService {
                     imageSource: reuseNote ?? describeStationImageSource(res)
                 };
                 if (res.accepted) {
+                    throwIfStopped(signal);
                     const baked = await this.bakeStation(baker, res, `${base}.splat`, req);
                     rep.splatCount = baked.splatCount;
                     rep.splatPath = baked.splatPath;
@@ -315,6 +334,7 @@ export class SurveySplatPipelineService {
             }
             if (bakedStations.length === 0) throw new Error('No station passed QC; nothing to bake');
 
+            throwIfStopped(signal);
             report(0.8, 'Fusing station splats');
             const voxel = req.voxelSizeMeters ?? 0.025;
             const listPath = path.join(outDir, 'stations_to_fuse.txt');
@@ -336,15 +356,17 @@ export class SurveySplatPipelineService {
             ) : 115.0);
             const cropRadiusArg = cropRadiusVal > 0 ? `--crop-radius ${cropRadiusVal}` : '';
             const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${cropRadiusArg} ${cropCenterArg} ${dropFoliageArg} ${normalPruneArg} ${consistencyArg} ${minViewsArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
-            const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024 });
+            const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024, signal });
             const fuseRes = JSON.parse(fuseStdout.trim());
             await fs.remove(listPath).catch(() => {});
             const fusedCount = fuseRes.fusedSplatCount ?? 0;
 
+            throwIfStopped(signal);
             report(0.88, 'Tiling');
             const tiles = new Splat3DTilesService();
-            const tileRes = await tiles.convert({ inputPath: fusedSplatPath, outDir, origin: { lat: req.anchor.lat, lng: req.anchor.lng, alt: req.anchor.elevationMeters }, headingDeg: req.headingDeg ?? 0, maxDepth: req.tiles?.maxDepth ?? 5, leafCapacity: req.tiles?.leafCapacity, interiorBudget: req.tiles?.interiorBudget });
+            const tileRes = await tiles.convert({ inputPath: fusedSplatPath, outDir, origin: { lat: req.anchor.lat, lng: req.anchor.lng, alt: req.anchor.elevationMeters }, headingDeg: req.headingDeg ?? 0, maxDepth: req.tiles?.maxDepth ?? 5, leafCapacity: req.tiles?.leafCapacity, interiorBudget: req.tiles?.interiorBudget, signal });
             if (!tileRes.success) throw new Error(tileRes.error || 'Tiling failed');
+            throwIfStopped(signal);
 
             const meshBounds = renderer.getMeshBounds()!;
             const fMin = fuseRes.bounds?.min ?? [-100, -100, -100];
@@ -374,6 +396,8 @@ export class SurveySplatPipelineService {
             report(1, 'Done');
             return { success: true, stations: reports, fusedSplatPath, fusedSplatCount: fusedCount, tilesetPath, metaPath, cropBox, durationMs: Date.now() - t0 };
         } catch (e: any) {
+            // A stopped run is not a pipeline failure: the caller gets the stop itself.
+            throwIfStopped(signal);
             return { success: false, stations: [], fusedSplatPath, fusedSplatCount: 0, tilesetPath, metaPath, cropBox: { min: [0, 0, 0], max: [0, 0, 0] }, durationMs: Date.now() - t0, error: e?.message || String(e) };
         }
     }
@@ -440,7 +464,7 @@ export class SurveySplatPipelineService {
         const shDegreeArg = (req.shDegree !== undefined && req.shDegree > 0) ? `--sh-degree ${req.shDegree}` : '';
         const exposureScaleArg = (req.exposureScale !== undefined) ? `--exposure-scale ${req.exposureScale}` : '';
         const cmd = `"${baker}" --rgb "${base}.rgb" --depth "${base}.depth.f32" --width ${width} --height ${height} --pose "${base}.pose.json" --out-splat "${outSplat}" --stride ${req.bakeStride ?? 1} --station-altitude ${alt} ${sigmaScaleArg} ${minCosIncidenceArg} ${dropFoliageArg} ${foliageModeArg} ${erodeSilhouetteArg} ${hybridArg} ${neuralDepthArg} ${neuralWeightArg} ${maxDeltaZArg} ${twoDgsArg} ${shDegreeArg} ${exposureScaleArg} --exclude-underside --json`;
-        const { stdout } = await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024 });
+        const { stdout } = await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024, signal: req.signal });
         await fs.remove(`${base}.rgb`); await fs.remove(`${base}.depth.f32`);
         let splatCount = 0;
         try {

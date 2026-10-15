@@ -251,9 +251,13 @@ export class GoogleMediaGenerationService {
      * Generates one image. The models tried are exactly the request's modelPriority when it names any (product
      * names resolved to API ids), else the default list for its fidelity. The result says which model answered
      * and, when that is not the first one, why each earlier model was skipped.
+     *
+     * `options.signal` stops the request (an AbortError, never a model failure): it is checked before the call and
+     * between models, and passed to the SDK so an in-flight call is cancelled and no further model is asked.
      */
-    async generateImage(request: ImageGenerationRequest): Promise<MediaGenerationResult> {
+    async generateImage(request: ImageGenerationRequest, options?: { signal?: AbortSignal }): Promise<MediaGenerationResult> {
         validateMediaGenerationRequest(request);
+        if (options?.signal?.aborted) throw mediaRequestAborted();
         const client = await this.getClient();
 
         const contents: any[] = [{ text: request.prompt }];
@@ -284,7 +288,8 @@ export class GoogleMediaGenerationService {
             imageConfig: {
                 aspectRatio: request.aspectRatio,
                 imageSize: request.imageSize ?? (isDraft ? '1K' : undefined)
-            }
+            },
+            signal: options?.signal
         });
         const asset = await this.assetStore.put(request.workspaceRoot, answer.data, answer.mimeType);
         return {

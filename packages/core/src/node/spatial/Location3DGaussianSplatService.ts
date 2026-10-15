@@ -62,6 +62,18 @@ export interface Location3DGSRequest {
     /** Generation fidelity tier */
     fidelity?: 'draft' | 'production';
     onProgress?: (progress: number, message?: string) => void;
+    /**
+     * The caller's Stop (the chat's Stop button or the tool's time limit). Checked before and after the tile
+     * extraction and passed down through the survey pipeline to every station's image-model call, the baker, fuser
+     * and tiler; generate() then rejects with its reason and generates or writes nothing more.
+     */
+    signal?: AbortSignal;
+}
+
+/** Throws the signal's reason (or an AbortError) once the caller has stopped the run. */
+function throwIfStopped(signal?: AbortSignal): void {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : Object.assign(new Error('Location 3DGS generation was stopped'), { name: 'AbortError' });
 }
 
 export interface Location3DGSResult {
@@ -129,6 +141,7 @@ export class Location3DGaussianSplatService {
         const t0 = Date.now();
         const root = req.workspaceRoot || this.workspaceRoot;
         const progressReporter = req.onProgress || (() => {});
+        throwIfStopped(req.signal);
 
         progressReporter(0.02, `Resolving geodetic location for "${req.location}"...`);
 
@@ -185,6 +198,7 @@ export class Location3DGaussianSplatService {
             }
             glbPath = extraction.glbPath;
         }
+        throwIfStopped(req.signal);
 
         let stations = preset.stations;
 
@@ -262,8 +276,10 @@ export class Location3DGaussianSplatService {
             stoneType: req.stoneType as any,
             renderProvider: req.renderProvider,
             renderMode: req.renderMode,
-            draft: isDraft
+            draft: isDraft,
+            signal: req.signal
         }, (p, message) => progressReporter(0.1 + 0.85 * Math.max(0, Math.min(1, p)), message));
+        throwIfStopped(req.signal);
 
         if (!pipelineResult.success) {
             throw new GeneratorFailedError('survey splat pipeline', `the 3DGS pipeline for ${beautifyContext.locationName} failed: ${(pipelineResult as any).error || 'no error was reported'}`);

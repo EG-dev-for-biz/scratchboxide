@@ -2961,7 +2961,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const generator = await resolveStationImageGenerator(ctx);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
-        const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath) }, chatProgress(ctx));
+        const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
         const { imageBase64, ...rest } = res;
         return {
             resultPayload: { success: true, ...rest } as unknown as ToolResultPayload,
@@ -2975,7 +2975,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const generator = await resolveStationImageGenerator(ctx);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
-        const res = await deps.beautifyToSplats!({ ...args, stations: data.poses, anchor: data.anchor, glbPath: asString(args.glbPath) }, chatProgress(ctx));
+        // ctx.signal (the chat's Stop or the time limit) goes down to every station's image-model call and the baker.
+        const res = await deps.beautifyToSplats!({ ...args, stations: data.poses, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
         const accepted = res.stations.filter((s: any) => s.accepted).length;
         const imageSources = Array.from(new Set(res.stations.map((s: any) => s.imageSource).filter(Boolean))) as string[];
         return {
@@ -3078,7 +3079,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             forceRebake: typeof args.forceRebake === 'boolean' ? args.forceRebake : undefined,
             draft: typeof args.draft === 'boolean' ? args.draft : undefined,
             styleSuffix: typeof args.styleSuffix === 'string' ? args.styleSuffix : undefined,
-            onProgress: chatProgress(ctx)
+            onProgress: chatProgress(ctx),
+            // The chat's Stop or the time limit ends the run down to the station image-model calls.
+            signal: ctx?.signal
         });
 
         return {
