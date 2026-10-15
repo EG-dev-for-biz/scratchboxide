@@ -7,9 +7,13 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
-import { AlgorithmicUvEngine, type UvEngineMode, type BiophysicalMaterialContract } from '../../spatial/AlgorithmicUvEngine';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolResultPayload } from './types';
+import { AlgorithmicUvEngine, type UvEngineMode, type BiophysicalMaterialContract, type PbrDecompositionResult } from '../../spatial/AlgorithmicUvEngine';
 import { MaxRectsAtlasPacker, type TextureItem } from '../../spatial/TextureAtlasPacker';
+import { decodeImageToRgba, sniffImageFormat, type RgbaImage } from '../../image-codec-ffmpeg';
+import { encodePng } from '../../texture-processing';
 
 function asString(val: unknown): string | undefined {
     return typeof val === 'string' && val.trim().length > 0 ? val.trim() : undefined;
@@ -21,6 +25,18 @@ function asBoolean(val: unknown, fallback: boolean): boolean {
 
 function asNumber(val: unknown, fallback?: number): number | undefined {
     return typeof val === 'number' && !isNaN(val) ? val : fallback;
+}
+
+/** decodePng handles only 8-bit, non-interlaced grey / RGB / RGBA; names the PNG variants it would mis-decode. */
+function unsupportedPngVariant(buf: Buffer): string | undefined {
+    if (buf.length < 29 || buf.toString('ascii', 12, 16) !== 'IHDR') return 'PNG has no IHDR chunk';
+    const bitDepth = buf[24];
+    const colorType = buf[25];
+    const interlace = buf[28];
+    if (bitDepth !== 8 || ![0, 2, 6].includes(colorType) || interlace !== 0) {
+        return `unsupported PNG variant (bit depth ${bitDepth}, colour type ${colorType}, interlace ${interlace}); only 8-bit non-interlaced grey / RGB / RGBA PNGs decode`;
+    }
+    return undefined;
 }
 
 export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -130,47 +146,56 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'pbr_material_decompose',
-        description: 'Photometric De-Lighting & True PBR Material Suite Decomposition. Separates diffuse albedo from incident irradiance, calculates sky-dome ambient occlusion (HBAO), extracts multi-frequency normal maps with RNM blending, computes biophysical Laplacian GGX roughness, Toksvig AA filtering, and packs standard glTF ORM textures.',
+        description: 'Compute PBR maps from the pixels of one texture image on disk (JPEG, PNG or WebP) and write them as PNG at the image\'s own size: albedo (de-lit when enableAlbedoDeLighting is on, otherwise the decoded pixels), a tangent-space normal map from luminance gradients in the glTF convention (+Y toward the image top), and an ORM texture (R = ambient occlusion, G = roughness, B = the contract\'s constant metalness). Relief is inferred from luminance, so the normal and occlusion maps are estimates, not measured geometry. Returns the three file paths and the decoded width and height; an image that cannot be read or decoded fails the call.',
         parameters: {
             type: 'OBJECT',
             properties: {
+                inputImagePath: {
+                    type: 'STRING',
+                    description: 'Path to the source image: JPEG, PNG (8-bit non-interlaced grey, RGB or RGBA) or WebP (needs ffmpeg). Relative paths resolve against the workspace root.'
+                },
+                outputDir: {
+                    type: 'STRING',
+                    description: 'Directory for <name>_albedo.png, <name>_normal.png and <name>_orm.png, created if missing (default: the input image\'s directory).'
+                },
                 enableAlbedoDeLighting: {
                     type: 'BOOLEAN',
-                    description: 'Separate diffuse albedo from illumination via CIELAB bilateral filtering (default: true).'
+                    description: 'Divide each texel by an edge-aware bilateral estimate of its luminance shading, relative to the mean shading, so shadows lift and highlights drop (default: true). When false the albedo PNG is the decoded image.'
                 },
                 normalStrength: {
                     type: 'NUMBER',
-                    description: 'Tangent normal map perturbation intensity (default: 3.2).'
+                    description: 'Gain on luminance gradients for the normal map (default: 3.2; overrides biophysicalContract.normalStrength).'
                 },
                 defaultStoneRoughness: {
                     type: 'NUMBER',
-                    description: 'Base roughness for architectural stone (default: 0.85).'
+                    description: 'Base roughness before the variance and curvature terms (default: 0.85; overrides biophysicalContract.roughness). Green-dominant texels are set to 0.40 and dark neutral-grey texels to 0.55 regardless.'
                 },
                 skyDomeAoIntensity: {
                     type: 'NUMBER',
-                    description: 'Analytical sky-dome AO depth intensity (default: 1.0).'
+                    description: 'Ambient occlusion strength (default: 1.0; overrides biophysicalContract.hbaoIntensity).'
                 },
                 biophysicalContract: {
                     type: 'OBJECT',
-                    description: 'Continuous biophysical material contract (roughness, metalness, normalStrength, etc.).'
+                    description: 'Continuous material contract read by the passes: roughness, metalness (ORM blue channel), normalStrength, laplacianBurnishFactor, laplacianCavityGritFactor, toksvigVarianceScale, hbaoRadius, hbaoIntensity.'
                 },
                 enableMultiFrequencyNormals: {
                     type: 'BOOLEAN',
-                    description: 'Whether to synthesize multi-frequency tangent normal maps (default: true).'
+                    description: 'Blend luminance gradients at 3 px, 1 px (Scharr) and high-pass scales with reoriented normal mapping; false uses a single 3x3 Sobel (default: true).'
                 },
                 enableBiophysicalRoughness: {
                     type: 'BOOLEAN',
-                    description: 'Whether to synthesize biophysical Laplacian curvature roughness (default: true).'
+                    description: 'Add local luminance variance and discrete-Laplacian curvature to the base roughness (lower on convex texels, higher on concave); false uses the base roughness alone (default: true).'
                 },
                 enableHbaoMicroCavity: {
                     type: 'BOOLEAN',
-                    description: 'Whether to compute 8-directional radial horizon raymarched micro-cavity ambient occlusion (HBAO) (default: true).'
+                    description: 'Occlusion from an 8-direction image-space horizon search over a height proxy derived from the normal map; false uses a 4-neighbour luminance cavity term (default: true).'
                 },
                 enableToksvigFiltering: {
                     type: 'BOOLEAN',
-                    description: 'Whether to apply Toksvig specular anti-aliasing (default: true).'
+                    description: 'Raise roughness where the 3x3 neighbourhood of normals varies (Toksvig) (default: true).'
                 }
-            }
+            },
+            required: ['inputImagePath']
         }
     },
     {
@@ -288,40 +313,104 @@ export const algorithmicUvHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    pbr_material_decompose: async (args, _ctx) => {
-        const dummyWidth = 256;
-        const dummyHeight = 256;
-        const dummyRgba = new Uint8Array(dummyWidth * dummyHeight * 4);
-        dummyRgba.fill(200);
+    pbr_material_decompose: async (args, ctx) => {
+        const startTime = performance.now();
+        const requestedPath = asString(args.inputImagePath);
+        const fail = (error: string): ToolHandlerOutcome => ({
+            resultPayload: { success: false, inputImagePath: requestedPath, error },
+            status: 'failed',
+            summaryResult: `PBR material decomposition FAILED: ${error}`
+        });
+        if (!requestedPath) return fail('inputImagePath is required (a JPEG, PNG or WebP file).');
 
-        const biophysicalContract = (args.biophysicalContract && typeof args.biophysicalContract === 'object')
+        const baseDir = ctx?.workspaceRoot || process.cwd();
+        const inputImagePath = path.resolve(baseDir, requestedPath);
+        let encoded: Buffer;
+        try {
+            encoded = await fs.promises.readFile(inputImagePath);
+        } catch (e) {
+            return fail(`could not read ${inputImagePath}: ${(e as Error).message}`);
+        }
+        const format = sniffImageFormat(encoded);
+        if (format === 'unknown') return fail(`${inputImagePath} is not a JPEG, PNG or WebP image.`);
+        const pngProblem = format === 'png' ? unsupportedPngVariant(encoded) : undefined;
+        if (pngProblem) return fail(`${inputImagePath}: ${pngProblem}.`);
+
+        let decoded: RgbaImage;
+        try {
+            decoded = await decodeImageToRgba(encoded);
+        } catch (e) {
+            return fail(`could not decode ${inputImagePath}: ${(e as Error).message}`);
+        }
+        const { width, height } = decoded;
+        if (!(width > 0 && height > 0) || decoded.rgba.length !== width * height * 4) {
+            return fail(`decoder returned ${decoded.rgba.length} bytes for a ${width}x${height} image.`);
+        }
+
+        // decomposePbr reads only the contract when one is given, so the explicit scalar arguments are folded into it.
+        const contractArg = (args.biophysicalContract && typeof args.biophysicalContract === 'object')
             ? args.biophysicalContract as BiophysicalMaterialContract
-            : undefined;
+            : {};
+        const biophysicalContract: BiophysicalMaterialContract = {
+            ...contractArg,
+            roughness: asNumber(args.defaultStoneRoughness) ?? contractArg.roughness ?? 0.85,
+            normalStrength: asNumber(args.normalStrength) ?? contractArg.normalStrength ?? 3.2,
+            hbaoIntensity: asNumber(args.skyDomeAoIntensity) ?? contractArg.hbaoIntensity ?? 1.0
+        };
+        const enableAlbedoDeLighting = asBoolean(args.enableAlbedoDeLighting, true);
 
-        const pbrRes = await AlgorithmicUvEngine.decomposePbr(dummyRgba, {
-            biophysicalContract,
-            enableAlbedoDeLighting: asBoolean(args.enableAlbedoDeLighting, true),
-            normalStrength: asNumber(args.normalStrength, 3.2),
-            defaultStoneRoughness: asNumber(args.defaultStoneRoughness, 0.85),
-            skyDomeAoIntensity: asNumber(args.skyDomeAoIntensity, 1.0),
-            enableMultiFrequencyNormals: asBoolean(args.enableMultiFrequencyNormals, true),
-            enableBiophysicalRoughness: asBoolean(args.enableBiophysicalRoughness, true),
-            enableToksvigFiltering: asBoolean(args.enableToksvigFiltering, true),
-            enableHbaoMicroCavity: asBoolean(args.enableHbaoMicroCavity, true),
-            packOrm: true
-        }, dummyWidth, dummyHeight);
+        let pbr: PbrDecompositionResult;
+        try {
+            pbr = await AlgorithmicUvEngine.decomposePbr(
+                new Uint8Array(decoded.rgba.buffer, decoded.rgba.byteOffset, decoded.rgba.byteLength), {
+                    biophysicalContract,
+                    enableAlbedoDeLighting,
+                    enableMultiFrequencyNormals: asBoolean(args.enableMultiFrequencyNormals, true),
+                    enableBiophysicalRoughness: asBoolean(args.enableBiophysicalRoughness, true),
+                    enableToksvigFiltering: asBoolean(args.enableToksvigFiltering, true),
+                    enableHbaoMicroCavity: asBoolean(args.enableHbaoMicroCavity, true),
+                    packOrm: true
+                }, width, height);
+        } catch (e) {
+            return fail(`decomposition of ${inputImagePath} failed: ${(e as Error).message}`);
+        }
+        if (!pbr.normal || !pbr.orm) return fail('the decomposition returned no normal or ORM map.');
 
+        // decomposePbr's normals point +Y toward the image bottom; glTF tangent space has +Y toward the image top.
+        const normal = Buffer.from(pbr.normal);
+        for (let i = 1; i < normal.length; i += 4) normal[i] = 255 - normal[i];
+        const asBuffer = (u: Uint8Array) => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
+
+        const outputDir = path.resolve(baseDir, asString(args.outputDir) ?? path.dirname(inputImagePath));
+        const stem = path.basename(inputImagePath, path.extname(inputImagePath));
+        const albedoPath = path.join(outputDir, `${stem}_albedo.png`);
+        const normalPath = path.join(outputDir, `${stem}_normal.png`);
+        const ormPath = path.join(outputDir, `${stem}_orm.png`);
+        try {
+            await fs.promises.mkdir(outputDir, { recursive: true });
+            await fs.promises.writeFile(albedoPath, encodePng(width, height, asBuffer(pbr.albedo)));
+            await fs.promises.writeFile(normalPath, encodePng(width, height, normal));
+            await fs.promises.writeFile(ormPath, encodePng(width, height, asBuffer(pbr.orm)));
+        } catch (e) {
+            return fail(`could not write the maps to ${outputDir}: ${(e as Error).message}`);
+        }
+
+        const executionTimeMs = Math.round(performance.now() - startTime);
         return {
             resultPayload: {
                 success: true,
-                width: pbrRes.width,
-                height: pbrRes.height,
-                hasNormalMap: !!pbrRes.normal,
-                hasRoughnessMap: !!pbrRes.roughness,
-                hasAoMap: !!pbrRes.ao,
-                hasOrmMap: !!pbrRes.orm
-            } as unknown as ToolResultPayload,
-            summaryResult: `PBR Material Decomposition completed: Intrinsic Albedo, Multi-Frequency Normal (RNM), Biophysical Roughness (Laplacian + Toksvig), HBAO Sky-Dome AO, and ORM packed.`
+                inputImagePath,
+                format,
+                width,
+                height,
+                albedoDeLit: enableAlbedoDeLighting,
+                albedoPath,
+                normalPath,
+                ormPath,
+                executionTimeMs
+            },
+            status: 'completed',
+            summaryResult: `Decomposed ${path.basename(inputImagePath)} (${width}x${height} ${format.toUpperCase()}) in ${executionTimeMs} ms. Wrote albedo ${enableAlbedoDeLighting ? '(de-lit)' : '(decoded pixels, de-lighting off)'} to ${albedoPath}, normal map (glTF, +Y up) to ${normalPath}, ORM (R = AO, G = roughness, B = metalness) to ${ormPath}.`
         };
     },
 

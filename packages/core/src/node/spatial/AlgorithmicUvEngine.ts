@@ -869,6 +869,17 @@ export class AlgorithmicUvEngine {
         const n_blend = this.blendNormalsRNM(n_macro, n_meso);
         const n_final = this.blendNormalsRNM(n_blend, n_micro);
 
+        // RNM of strongly tilted layers can rotate past the horizon (z < 0) at hard luminance edges; a
+        // tangent-space normal must face out of the surface, so clamp z and keep the xy direction.
+        const minZ = 0.1;
+        if (n_final[2] < minZ) {
+          const xyLen = Math.hypot(n_final[0], n_final[1]) || 1.0;
+          const xyScale = Math.sqrt(1.0 - minZ * minZ) / xyLen;
+          n_final[0] *= xyScale;
+          n_final[1] *= xyScale;
+          n_final[2] = minZ;
+        }
+
         const idx = (y * w + x) * 4;
         out[idx]     = Math.round((n_final[0] * 0.5 + 0.5) * 255);
         out[idx + 1] = Math.round((n_final[1] * 0.5 + 0.5) * 255);
