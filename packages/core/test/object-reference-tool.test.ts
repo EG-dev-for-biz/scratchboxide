@@ -287,10 +287,15 @@ function meshFromFile(file: string): THREE.Mesh {
  * layer (role 'environment' or isGround) attaching re-seats every attached hero. Returns each object's world bounds.
  */
 function seatLikeViewport(objects: any[], order: string[]): Map<string, THREE.Box3> {
+    const { boxes } = seatModelsLikeViewport(objects, order);
+    return boxes;
+}
+
+function seatModelsLikeViewport(objects: any[], order: string[]): { boxes: Map<string, THREE.Box3>; models: Map<string, THREE.Mesh> } {
     const scene = new THREE.Scene();
     const terrain = new TerrainManager({ scene });
     const isEnvironment = (o: any) => o.content.metadata.role === 'environment' || !!o.content.metadata.isGround;
-    const models = new Map<string, THREE.Object3D>();
+    const models = new Map<string, THREE.Mesh>();
     for (const id of order) {
         const def = objects.find(o => o.id === id);
         const model = meshFromFile(path.join(MODELS_DIR, path.basename(def.content.durableUri)));
@@ -310,7 +315,33 @@ function seatLikeViewport(objects: any[], order: string[]): Map<string, THREE.Bo
             terrain.snapObjectToGround(model, 0);
         }
     }
-    return new Map([...models].map(([id, m]) => [id, new THREE.Box3().setFromObject(m)]));
+    return { boxes: new Map([...models].map(([id, m]) => [id, new THREE.Box3().setFromObject(m)])), models };
+}
+
+/**
+ * Saves a clay render of seated models, cropped to a square of 2 * half metres around (cx, cz) in x and z: triangles
+ * wholly outside it collapse to nothing and are dropped.
+ */
+function screenshotSeated(models: Iterable<THREE.Mesh>, cx: number, cz: number, half: number, name: string): void {
+    const positions: number[] = [];
+    const v = new THREE.Vector3();
+    for (const model of models) {
+        model.updateMatrixWorld(true);
+        const geometry = model.geometry as THREE.BufferGeometry;
+        const pos = geometry.getAttribute('position'), index = geometry.getIndex()!;
+        const at = (k: number) => {
+            v.fromBufferAttribute(pos, k).applyMatrix4(model.matrixWorld);
+            return new THREE.Vector3(Math.min(cx + half, Math.max(cx - half, v.x)), v.y, Math.min(cz + half, Math.max(cz - half, v.z)));
+        };
+        for (let t = 0; t < index.count; t += 3) {
+            const [a, b, c] = [at(index.getX(t)), at(index.getX(t + 1)), at(index.getX(t + 2))];
+            if (b.clone().sub(a).cross(c.clone().sub(a)).length() > 1e-6) positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+        }
+    }
+    const soup = { positions: Float32Array.from(positions), indices: Uint32Array.from({ length: positions.length / 3 }, (_, i) => i) };
+    const [view] = renderReviewViews(soup, 512, { views: [{ label: 'three-quarter view', azimuthDeg: 35, elevationDeg: 22 }] });
+    fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+    fs.writeFileSync(path.join(SCREENSHOT_DIR, name), view.png);
 }
 
 /** Every order the objects can attach in (they load in parallel, so any can finish first). */
@@ -1032,6 +1063,9 @@ describe('build_3d_object_from_reference', () => {
             expect(data.camera.target[1]).toBeGreaterThan(box.min.y);
             expect(data.camera.target[1]).toBeLessThan(box.max.y);
         }
+        // Screenshot: the vase on the street beside the crown (the trees layer loading last re-seats it there too).
+        const { models } = seatModelsLikeViewport(data.objects, [heroId, 'tile-clay-1', 'tile-trees-1']);
+        screenshotSeated(models.values(), spots[0].eastMeters, -spots[0].northMeters, 3, 'object_reference_beside_tree.png');
     }, 180_000);
 
     it('builds a given spec before staging, so a spec that cannot be built makes no staging call', async () => {
@@ -1088,6 +1122,9 @@ describe('build_3d_object_from_reference', () => {
                 expect((box.min.z + box.max.z) / 2).toBeCloseTo(z, 1);
             }
         }
+        // Screenshot: both objects on the street, seated as the viewport seats them.
+        const seated = seatModelsLikeViewport(scene2.data.objects, ['tile-clay-1', vaseId, 'tile-trees-1', wheelId]);
+        screenshotSeated(seated.models.values(), 16, -8, 5, 'object_reference_two_objects_at_place.png');
         // The next turn sees both, each with its id, placement and whole spec.
         const context = activeObjectBuildContext(scene2.data);
         expect(context).toContain(`build_3d_object_from_reference built these 2 objects in this scene at location "${location}"`);
@@ -1128,9 +1165,10 @@ describe('build_3d_object_from_reference', () => {
         expect(String(wide.resultPayload.error)).toContain(`"roulette wheel" as built would stand over the base of "fluted vase with a knob" (${editedId}), an object built there earlier, 0.3 m away`);
         expect(wide.resultPayload.spec).toEqual(ROULETTE);
 
-        // Another place is staged afresh, as a scene of its own.
+        // Another place is staged afresh, as a scene of its own, and the summary says the earlier objects are not in it.
         const elsewhere = await run({ request: 'move it', specJson: JSON.stringify(taller), location: 'Dolores Park, San Francisco', placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } }, onScene(scene3));
         expect(elsewhere.status, String(elsewhere.resultPayload.error)).toBe('completed');
+        expect(elsewhere.summaryResult).toContain(`The active scene's objects were built at location "${location}", a different location from "Dolores Park, San Francisco", so this is a new scene without them`);
         expect(stageArgs).toEqual([{ query: location }, { query: 'Dolores Park, San Francisco' }]);
         expect((elsewhere.resultPayload.artifact as any).data.objects.filter((o: any) => o.content.metadata.source === 'build_3d_object_from_reference')).toHaveLength(1);
     }, 300_000);

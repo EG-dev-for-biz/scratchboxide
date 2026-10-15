@@ -299,12 +299,15 @@ function modelFile(uri: string, modelsDirs: string[]): string | undefined {
  * another geocode or extraction. Otherwise the reason it cannot be reused, and, when the scene is staged at this
  * location but cannot be reused, the objects built there (which a fresh staging does not carry over).
  */
-function stagingFromActiveScene(ctx: ToolContext, location: string, modelsDirs: string[]): { staging?: Staging; reason: string; leftBehind?: any[] } {
+function stagingFromActiveScene(ctx: ToolContext, location: string, modelsDirs: string[]): { staging?: Staging; reason: string; leftBehind?: any[]; otherLocation?: string } {
     const active = ctx.request?.activeArtifact as { type?: string; data?: any } | undefined;
     if (active?.type !== '3d-scene') return { reason: 'the active canvas artifact is not a 3D scene' };
     const data = active.data || {};
     const where = data.objectBuild?.location;
-    if (!where || where.query !== location) return { reason: `the active scene is not an object build staged at "${location}"` };
+    if (!where) return { reason: `the active scene is not an object build staged at "${location}"` };
+    if (where.query !== location) {
+        return { reason: `the active scene is an object build staged at "${where.query}", not at "${location}"`, ...(typeof where.query === 'string' ? { otherLocation: where.query } : {}) };
+    }
     const objects: any[] = Array.isArray(data.objects) ? data.objects : [];
     const leftBehind = objects.filter(isBuiltObject);
     if (!objects.some(isGroundLayer)) return { reason: 'the active scene has no ground layer', leftBehind };
@@ -633,6 +636,8 @@ interface Site {
     placement: ObjectPlacement;
     /** When the active scene was staged at this location but could not be reused: why, and its objects not carried over. */
     notReused?: { reason: string; objects: any[] };
+    /** The location the active scene's objects were built at, when it is another location query than this one. */
+    otherLocation?: string;
 }
 
 export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}): Record<string, ToolHandler> {
@@ -701,7 +706,12 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 const notReused = !reuse.staging && reuse.leftBehind?.length ? { reason: reuse.reason, objects: reuse.leftBehind } : undefined;
                 try {
                     const surfaces = loadSurfaces(kept, modelsDirs);
-                    return { site: { staged, kept, ...(replaced ? { replaced } : {}), ...(notReused ? { notReused } : {}), surfaces, placement: placeOnStagedTiles(surfaces, placementArgs) } };
+                    return {
+                        site: {
+                            staged, kept, surfaces, placement: placeOnStagedTiles(surfaces, placementArgs),
+                            ...(replaced ? { replaced } : {}), ...(notReused ? { notReused } : {}), ...(reuse.otherLocation ? { otherLocation: reuse.otherLocation } : {})
+                        }
+                    };
                 } catch (err) {
                     const details = err instanceof PlacementError ? err.details : {};
                     return { failure: failed(`Placing the object at ${location} failed: ${errorMessage(err)}`, { ...details, stage: 'placement', location }) };
@@ -893,7 +903,8 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     `${staged.reused ? `Reused the remeshed Google 3D Tiles in clay already staged at ${place} in the active scene (no new geocode or extraction)` : `Staged at ${place} on remeshed Google 3D Tiles in clay`}, ${placement.eastMeters} m east and ${placement.northMeters} m north of the anchor, facing ${placement.headingDeg} degrees, resting on the ground surface of the tiles there, ${placement.surfaceYMeters} m above the anchor's street level${placement.surfaceYMeters > 3 ? ' (likely a roof or raised structure)' : ''}; nothing else staged there rises above that spot.`,
                     site.replaced ? `It replaces ${named(site.replaced)}.` : '',
                     keptBuilt.length ? `Kept ${keptBuilt.length === 1 ? 'the object' : `the ${keptBuilt.length} objects`} built there earlier: ${keptBuilt.map(named).join(', ')}.` : '',
-                    site.notReused ? `The active scene's staging there could not be reused (${site.notReused.reason}), so the place was staged afresh and the objects built there earlier are not in this scene: ${site.notReused.objects.map(named).join(', ')}.` : ''
+                    site.notReused ? `The active scene's staging there could not be reused (${site.notReused.reason}), so the place was staged afresh and the objects built there earlier are not in this scene: ${site.notReused.objects.map(named).join(', ')}.` : '',
+                    site.otherLocation ? `The active scene's objects were built at location "${site.otherLocation}", a different location from "${location}", so this is a new scene without them (pass that same location to add to that scene).` : ''
                 ].filter(Boolean).join(' ')
                 : 'Shown in a studio grey clay void.';
             const editLine = staged && placement
