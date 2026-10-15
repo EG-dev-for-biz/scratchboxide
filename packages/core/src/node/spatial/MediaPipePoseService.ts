@@ -20,6 +20,7 @@ import {
     RiggedPoseOutput,
     PoseDetectionRequest
 } from '../../common/character-pose-protocol';
+import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 
 interface Vec3 {
     x: number;
@@ -54,51 +55,62 @@ export class MediaPipePoseService {
 
     /**
      * Executes MediaPipe Pose Landmarker via the Python daemon bridge on a raw image buffer.
-     * Returns null if Python or the model is unavailable, or if no persons were detected.
+     * Returns null if Python or the model is unavailable, or if no persons were detected (see runPoseLandmarker for
+     * which of the two it was).
      */
     public async detectPoseLandmarks(
         imageBuffer: Buffer,
         options?: { modelPath?: string; numPoses?: number; minConfidence?: number }
     ): Promise<PoseDetectionResult | null> {
-        if (MediaPipePoseService.unavailable) {
-            return null;
-        }
+        const run = await this.runPoseLandmarker(imageBuffer, options);
+        return 'detection' in run ? run.detection : null;
+    }
 
+    /**
+     * Runs MediaPipe Pose Landmarker and says what happened: the detection, the detector could not run (no script,
+     * no Python, a crash, a timeout, an error from the bridge), or it ran and found no person.
+     */
+    public async runPoseLandmarker(
+        imageBuffer: Buffer,
+        options?: { modelPath?: string; numPoses?: number; minConfidence?: number }
+    ): Promise<{ detection: PoseDetectionResult } | { unavailable: string } | { noPerson: string }> {
+        if (MediaPipePoseService.unavailable) {
+            return { unavailable: 'MediaPipe pose detection was marked unavailable in this process' };
+        }
         if (!fs.existsSync(this.scriptPath)) {
-            return null;
+            return { unavailable: `the MediaPipe bridge script ${this.scriptPath} does not exist` };
         }
 
         const modelPath = options?.modelPath ?? this.modelAssetPath;
         const numPoses = options?.numPoses ?? 5;
         const minConf = options?.minConfidence ?? 0.5;
 
+        const run = await this.spawnPythonWorker(imageBuffer, [
+            this.scriptPath,
+            modelPath,
+            String(numPoses),
+            String(minConf)
+        ]);
+        if ('error' in run) return { unavailable: run.error };
+        let parsed: any;
         try {
-            const rawOutput = await this.spawnPythonWorker(imageBuffer, [
-                this.scriptPath,
-                modelPath,
-                String(numPoses),
-                String(minConf)
-            ]);
-
-            if (!rawOutput) return null;
-
-            const parsed = JSON.parse(rawOutput);
-            if (parsed.error) {
-                return null;
-            }
-
-            const rawPoses = parsed.poses as Array<{ world: MediaPipeLandmark[]; image: MediaPipeLandmark[] }> | undefined;
-            if (!rawPoses || rawPoses.length === 0) {
-                return null;
-            }
-
-            return {
+            parsed = JSON.parse(run.stdout);
+        } catch {
+            return { unavailable: `the MediaPipe bridge printed no JSON (${run.stdout.slice(0, 200)})` };
+        }
+        if (parsed.error) {
+            return { unavailable: `the MediaPipe bridge reported: ${parsed.error}` };
+        }
+        const rawPoses = parsed.poses as Array<{ world: MediaPipeLandmark[]; image: MediaPipeLandmark[] }> | undefined;
+        if (!rawPoses || rawPoses.length === 0) {
+            return { noPerson: `MediaPipe found no person in the image (minimum confidence ${minConf})` };
+        }
+        return {
+            detection: {
                 worldLandmarks: rawPoses.map(p => p.world),
                 imageLandmarks: rawPoses.map(p => p.image)
-            };
-        } catch {
-            return null;
-        }
+            }
+        };
     }
 
     /**
@@ -357,45 +369,43 @@ export class MediaPipePoseService {
     }
 
     /**
-     * End-to-end estimation pipeline: normalizes image, runs detection (or heuristic fallback),
-     * and returns a complete RiggedPoseOutput.
+     * End-to-end estimation: normalizes the image, runs MediaPipe and solves the rig angles from the detected person.
+     * There is no stand-in pose: when the detector cannot run it throws GeneratorFailedError, and when it runs and
+     * finds nobody it throws MissingInputError. The result carries the world landmarks it was solved from.
      */
     public async estimatePoseFromImage(request: PoseDetectionRequest): Promise<RiggedPoseOutput> {
-        try {
-            const buffer = await this.normalizeImageInput(request.image);
-            const detection = await this.detectPoseLandmarks(buffer, {
-                minConfidence: request.minConfidence,
-                numPoses: request.maxPoses ?? 1
-            });
-
-            if (detection && detection.worldLandmarks.length > 0) {
-                const world = detection.worldLandmarks[0];
-                const image = detection.imageLandmarks[0];
-                const solved = this.landmarksToPose(world, image);
-                const groundedY = this.computeGroundedYOffset(world);
-
-                const hipMid = solved.bodyFrame?.hipMid ?? [0, 0, 0];
-
-                return {
-                    success: true,
-                    personIndex: 0,
-                    angles: solved.angles,
-                    hipPositionMeters: [hipMid[0], hipMid[1], hipMid[2]],
-                    groundedYOffsetMeters: groundedY,
-                    confidence: solved.confidence,
-                    bodyFrame: solved.bodyFrame
-                };
-            }
-        } catch {
-            // Fall through to heuristic fallback
+        const buffer = await this.normalizeImageInput(request.image);
+        const run = await this.runPoseLandmarker(buffer, {
+            minConfidence: request.minConfidence,
+            numPoses: request.maxPoses ?? 1
+        });
+        if ('unavailable' in run) {
+            throw new GeneratorFailedError('mediapipe', `pose detection could not run: ${run.unavailable}`);
         }
+        if ('noPerson' in run) {
+            throw new MissingInputError('pose detection', 'a visible person', run.noPerson);
+        }
+        const world = run.detection.worldLandmarks[0];
+        const image = run.detection.imageLandmarks[0];
+        const solved = this.landmarksToPose(world, image);
+        const groundedY = this.computeGroundedYOffset(world);
+        const hipMid = solved.bodyFrame?.hipMid ?? [0, 0, 0];
 
-        // Graceful heuristic fallback
-        return this.synthesizeHeuristicPose('neutral_standing');
+        return {
+            success: true,
+            personIndex: 0,
+            angles: solved.angles,
+            hipPositionMeters: [hipMid[0], hipMid[1], hipMid[2]],
+            groundedYOffsetMeters: groundedY,
+            confidence: solved.confidence,
+            bodyFrame: solved.bodyFrame,
+            worldLandmarks: world,
+            imageLandmarks: image
+        };
     }
 
     /**
-     * Synthesizes canonical kinematic poses without requiring external Python execution.
+     * Canonical kinematic poses for planning (dry runs), never a stand-in for a detection.
      */
     public synthesizeHeuristicPose(
         preset: 'neutral_standing' | 't_pose' | 'walking' | 'action_ready' = 'neutral_standing'
@@ -508,34 +518,39 @@ export class MediaPipePoseService {
         return { x: l.x, y: l.y, z: l.z };
     }
 
-    private spawnPythonWorker(imageBuffer: Buffer, args: string[]): Promise<string | null> {
+    private spawnPythonWorker(imageBuffer: Buffer, args: string[]): Promise<{ stdout: string } | { error: string }> {
         return new Promise((resolve) => {
             const child = spawn(this.pythonBinary, args, { stdio: ['pipe', 'pipe', 'pipe'] });
             let stdout = '';
+            let stderr = '';
             let timedOut = false;
 
             const timer = setTimeout(() => {
                 timedOut = true;
                 child.kill('SIGTERM');
-                resolve(null);
+                resolve({ error: `the MediaPipe bridge timed out after ${this.timeoutMs} ms` });
             }, this.timeoutMs);
 
             child.stdout.on('data', (data) => {
                 stdout += data.toString();
             });
+            child.stderr.on('data', (data) => {
+                stderr += data.toString();
+            });
 
             child.on('close', (code) => {
                 clearTimeout(timer);
-                if (timedOut || code !== 0) {
-                    resolve(null);
+                if (timedOut) return;
+                if (code !== 0) {
+                    resolve({ error: `the MediaPipe bridge exited with code ${code}${stderr.trim() ? `: ${stderr.trim().slice(-500)}` : ''}` });
                 } else {
-                    resolve(stdout.trim());
+                    resolve({ stdout: stdout.trim() });
                 }
             });
 
-            child.on('error', () => {
+            child.on('error', (err) => {
                 clearTimeout(timer);
-                resolve(null);
+                resolve({ error: `${this.pythonBinary} could not be started (${err.message})` });
             });
 
             child.stdin.on('error', () => {});
@@ -543,9 +558,9 @@ export class MediaPipePoseService {
             try {
                 child.stdin.write(imageBuffer);
                 child.stdin.end();
-            } catch {
+            } catch (err: any) {
                 clearTimeout(timer);
-                resolve(null);
+                resolve({ error: `the image could not be sent to the MediaPipe bridge (${err?.message || err})` });
             }
         });
     }

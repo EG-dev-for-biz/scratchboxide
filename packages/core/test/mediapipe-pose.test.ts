@@ -141,16 +141,34 @@ describe('MediaPipePoseService (3D Metric Pose Landmarker & Kinematics)', () => 
         expect(walking.angles.rightUpperLeg[0]).toBeLessThan(0);
     });
 
-    it('should gracefully fallback to valid heuristic pose on arbitrary image input when Python is absent', async () => {
-        const dummyBuffer = Buffer.from('fake-image-bytes-for-unit-test');
-        const output = await service.estimatePoseFromImage({
-            image: dummyBuffer
-        });
+    it('fails instead of returning a canned standing pose when detection cannot run or finds nobody', async () => {
+        const fs = await import('fs');
+        const os = await import('os');
+        const path = await import('path');
+        const { GeneratorFailedError, MissingInputError } = await import('../src/common/errors/pipeline-errors');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-pose-'));
 
-        expect(output.success).toBe(true);
-        expect(output.personIndex).toBe(0);
-        expect(output.confidence).toBeGreaterThan(0.7);
-        expect(output.angles).toBeDefined();
-        expect(output.groundedYOffsetMeters).toBeGreaterThan(0.5);
+        // The review's probe: arbitrary bytes. The bridge cannot produce a detection, and no heuristic pose comes back.
+        const missingScript = new MediaPipePoseService({ scriptPath: path.join(dir, 'no_such_bridge.py') });
+        const unavailable = await missingScript.estimatePoseFromImage({ image: Buffer.from('fake-image-bytes-for-unit-test') }).catch(e => e);
+        expect(unavailable).toBeInstanceOf(GeneratorFailedError);
+        expect(unavailable.message).toContain('no_such_bridge.py does not exist');
+
+        // A bridge that runs and finds no person.
+        const nobody = path.join(dir, 'nobody.py');
+        fs.writeFileSync(nobody, 'import sys, json\nsys.stdin.buffer.read()\nprint(json.dumps({"poses": []}))\n');
+        const noPerson = await new MediaPipePoseService({ scriptPath: nobody }).estimatePoseFromImage({ image: Buffer.from('x') }).catch(e => e);
+        expect(noPerson).toBeInstanceOf(MissingInputError);
+        expect(noPerson.message).toContain('MediaPipe found no person');
+
+        // A bridge that detects a person: the angles are solved from its landmarks, which come back with the pose.
+        const lms = createMockHumanLandmarks(true);
+        const found = path.join(dir, 'found.py');
+        fs.writeFileSync(found, `import sys, json\nsys.stdin.buffer.read()\nprint(json.dumps({"poses": [{"world": ${JSON.stringify(lms)}, "image": ${JSON.stringify(lms)}}]}))\n`);
+        const pose = await new MediaPipePoseService({ scriptPath: found }).estimatePoseFromImage({ image: Buffer.from('x') });
+        expect(pose.success).toBe(true);
+        expect(pose.worldLandmarks).toHaveLength(33);
+        expect(pose.angles).toEqual(service.landmarksToPose(lms, lms).angles);
+        fs.rmSync(dir, { recursive: true, force: true });
     });
 });

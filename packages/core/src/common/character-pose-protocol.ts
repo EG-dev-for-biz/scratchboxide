@@ -114,6 +114,10 @@ export interface RiggedPoseOutput {
     confidence: number;
     bodyFrame?: BodyFrame;
     error?: string;
+    /** The detected person's MediaPipe world landmarks (metres) the angles were solved from. */
+    worldLandmarks?: MediaPipeLandmark[];
+    /** The detected person's normalized image landmarks. */
+    imageLandmarks?: MediaPipeLandmark[];
 }
 
 /**

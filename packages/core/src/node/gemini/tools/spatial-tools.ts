@@ -5038,7 +5038,14 @@ async function readMotionTrack(tool: string, value: unknown): Promise<import('..
     if (track?.success === false) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} records a failed tracking run${track.error ? `: ${track.error}` : ''}`);
     const frames = Array.isArray(track?.frames) ? track.frames : [];
     if (!frames.length) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} has no frames`);
-    const unusable = frames.findIndex((f: any) => !((f?.worldLandmarks?.length ?? 0) >= 33 || (f?.angles && typeof f.angles === 'object')));
+    // Every frame must be a MediaPipe detection: tracks written before detections were marked (which filled frames
+    // with no person with a canned standing pose) and frames without a solved pose are refused.
+    const undetected = frames.findIndex((f: any) => f?.detected !== true);
+    if (undetected >= 0) {
+        throw new MissingInputError(tool, 'motionTrackPath', `frame ${undetected} of ${trackPath} is not marked as a MediaPipe detection (a stand-in pose, or a track written before detections were recorded); track the video again with vfx_mediapipe_track_video_motion`);
+    }
+    const unusable = frames.findIndex((f: any) => !((f?.worldLandmarks?.length ?? 0) >= 33
+        || (f?.angles && typeof f.angles === 'object' && Object.keys(f.angles).length > 0)));
     if (unusable >= 0) throw new MissingInputError(tool, 'motionTrackPath', `frame ${unusable} of ${trackPath} has neither 33 world landmarks nor joint angles`);
     if (!(Number(track.sampleFps) > 0)) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} does not record its sampleFps`);
     return track;
@@ -5149,7 +5156,9 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
                 ),
                 outputMotionPath
             } as unknown as ToolResultPayload,
-            summaryResult: `Retargeted ${retargeted.num_frames} frame(s) of ${trackPath} onto avatar ${avatarId} (${landmarkFrames} from world landmarks, ${track.frames.length - landmarkFrames} from joint angles)${pinFeet ? `, feet pinned to ${groundAlt} m` : ''}. Wrote the avatar motion (SB-Human 22-joint) to ${outputMotionPath}.`
+            summaryResult: `Retargeted ${retargeted.num_frames} frame(s) of ${trackPath} onto avatar ${avatarId} (${landmarkFrames} from world landmarks, ${track.frames.length - landmarkFrames} from joint angles)${pinFeet ? `, feet pinned to ${groundAlt} m` : ''}.`
+                + (Array.isArray(track.undetectedFrames) && track.undetectedFrames.length ? ` ${track.undetectedFrames.length} sampled frame(s) had no detected person and are not in the motion.` : '')
+                + ` Wrote the avatar motion (SB-Human 22-joint) to ${outputMotionPath}.`
         };
     },
 

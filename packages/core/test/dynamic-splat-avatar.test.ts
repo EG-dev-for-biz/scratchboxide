@@ -336,7 +336,7 @@ function writeMotionTrack(dir: string, frames: number, extra: Record<string, unk
         success: true, durationSec: frames / 15, totalFramesAnalyzed: frames, sampleFps: 15, averageConfidence: 0.8,
         maxDisplacementMeters: 0.2, groundedYReferenceMeters: 0.9,
         frames: Array.from({ length: frames }, (_, f) => ({
-            frameIndex: f, timestampSec: f / 15, angles: {}, hipPositionMeters: [0, 0.9, 0], groundedYOffsetMeters: 0, confidence: 0.8,
+            frameIndex: f, timestampSec: f / 15, angles: {}, hipPositionMeters: [0, 0.9, 0], groundedYOffsetMeters: 0, confidence: 0.8, detected: true,
             worldLandmarks: Array.from({ length: 33 }, (_, i) => ({ x: (i % 5) * 0.1 - 0.2 + f * 0.01, y: (i % 6) * 0.2 - 0.5, z: (i % 4) * 0.05, visibility: 0.9 }))
         })),
         ...extra
@@ -362,9 +362,21 @@ describe('avatar_4dgs_retarget needs a recorded motion track', () => {
             .rejects.toThrow(/dry-run/);
         const noPose = writeMotionTrack(dir, 2);
         const parsed = JSON.parse(fs.readFileSync(noPose, 'utf8'));
-        parsed.frames[1] = { frameIndex: 1, timestampSec: 0.1 };
+        parsed.frames[1] = { frameIndex: 1, timestampSec: 0.1, detected: true, angles: {} };
         fs.writeFileSync(noPose, JSON.stringify(parsed));
         await expect(avatar4dgsHandlers.avatar_4dgs_retarget({ avatarId: '2785536', motionTrackPath: noPose }))
             .rejects.toThrow(/frame 1 .* neither 33 world landmarks nor joint angles/);
+
+        // The review's probe: a track whose frames carry the old canned standing pose (12-degree arms, confidence
+        // 0.85, no detection mark), as trackVideoMotion wrote it when MediaPipe could not run.
+        const canned = writeMotionTrack(dir, 3);
+        const cannedTrack = JSON.parse(fs.readFileSync(canned, 'utf8'));
+        cannedTrack.frames = cannedTrack.frames.map((f: any) => ({
+            frameIndex: f.frameIndex, timestampSec: f.timestampSec, confidence: 0.85, hipPositionMeters: [0, 0, 0], groundedYOffsetMeters: 0.85,
+            angles: { leftUpperArm: [0.2094, 0, 0], rightUpperArm: [0.2094, 0, 0], leftLowerArm: [0.1396, 0, 0], rightLowerArm: [0.1396, 0, 0], leftUpperLeg: [0, 0, 0.0698], rightUpperLeg: [0, 0, -0.0698], leftLowerLeg: [0, 0, 0], rightLowerLeg: [0, 0, 0], spine: [0, 0, 0], head: [0, 0, 0] }
+        }));
+        fs.writeFileSync(canned, JSON.stringify(cannedTrack));
+        await expect(avatar4dgsHandlers.avatar_4dgs_retarget({ avatarId: '2785536', motionTrackPath: canned }))
+            .rejects.toThrow(/frame 0 .* is not marked as a MediaPipe detection/);
     });
 });

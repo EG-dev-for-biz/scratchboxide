@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { HeadlessVideoEditorService, VideoProbeResult, toEven } from './HeadlessVideoEditorService';
 import { MediaPipePoseService } from '../spatial/MediaPipePoseService';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 import {
     HumanoidPoseAngles,
     BodyFrame,
@@ -44,6 +45,15 @@ export interface VideoMotionPoseFrame {
     bodyFrame?: BodyFrame;
     worldLandmarks?: MediaPipeLandmark[];
     imageLandmarks?: MediaPipeLandmark[];
+    /** True when MediaPipe detected the person in this frame (every tracked frame is; dry-run plan frames are not). */
+    detected?: boolean;
+}
+
+/** A sampled frame in which MediaPipe found no person: it is left out of the track, never filled with a pose. */
+export interface UndetectedMotionFrame {
+    frameIndex: number;
+    timestampSec: number;
+    reason: string;
 }
 
 export interface VideoMotionTrackResult {
@@ -55,6 +65,8 @@ export interface VideoMotionTrackResult {
     maxDisplacementMeters: number;
     groundedYReferenceMeters: number;
     frames: VideoMotionPoseFrame[];
+    /** Sampled frames with no detected person (left out of frames). */
+    undetectedFrames?: UndetectedMotionFrame[];
     outputJsonPath?: string;
     dryRun?: boolean;
     error?: string;
@@ -247,6 +259,7 @@ export class MediaPipeVideoDirectorService {
         await fs.ensureDir(tmpDir);
 
         const rawFrames: VideoMotionPoseFrame[] = [];
+        const undetectedFrames: UndetectedMotionFrame[] = [];
 
         try {
             // Extract frame images via FFmpeg
@@ -262,6 +275,8 @@ export class MediaPipeVideoDirectorService {
                 const filePath = extractedFiles[i];
                 const ts = timestamps[i] ?? (startSec + i / sampleFps);
 
+                // A frame with nobody detected is left out and listed; a detector that cannot run fails the track
+                // (GeneratorFailedError propagates). No frame is ever filled with a stand-in pose.
                 let poseOutput: RiggedPoseOutput;
                 try {
                     const imgBuffer = await fs.readFile(filePath);
@@ -269,8 +284,12 @@ export class MediaPipeVideoDirectorService {
                         image: imgBuffer,
                         minConfidence: minConf
                     });
-                } catch {
-                    poseOutput = this.poseService.synthesizeHeuristicPose('neutral_standing');
+                } catch (err) {
+                    if (err instanceof MissingInputError) {
+                        undetectedFrames.push({ frameIndex: i, timestampSec: ts, reason: err.message });
+                        continue;
+                    }
+                    throw err;
                 }
 
                 rawFrames.push({
@@ -280,7 +299,10 @@ export class MediaPipeVideoDirectorService {
                     hipPositionMeters: poseOutput.hipPositionMeters,
                     groundedYOffsetMeters: poseOutput.groundedYOffsetMeters,
                     confidence: poseOutput.confidence,
-                    bodyFrame: poseOutput.bodyFrame
+                    bodyFrame: poseOutput.bodyFrame,
+                    worldLandmarks: poseOutput.worldLandmarks,
+                    imageLandmarks: poseOutput.imageLandmarks,
+                    detected: true
                 });
             }
         } finally {
@@ -296,9 +318,12 @@ export class MediaPipeVideoDirectorService {
                 sampleFps,
                 averageConfidence: 0,
                 maxDisplacementMeters: 0,
-                groundedYReferenceMeters: 0.85,
+                groundedYReferenceMeters: 0,
                 frames: [],
-                error: 'No frames were successfully extracted or analyzed'
+                undetectedFrames,
+                error: undetectedFrames.length
+                    ? `MediaPipe found no person in any of the ${undetectedFrames.length} sampled frame(s)`
+                    : 'No frames were extracted from the video'
             };
         }
 
@@ -330,6 +355,7 @@ export class MediaPipeVideoDirectorService {
             maxDisplacementMeters: Math.round(maxDisplacement * 1000) / 1000,
             groundedYReferenceMeters: Math.round(groundedYRef * 1000) / 1000,
             frames: smoothedFrames,
+            undetectedFrames,
             outputJsonPath: options.outputJsonPath
         };
 

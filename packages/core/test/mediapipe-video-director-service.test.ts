@@ -139,4 +139,44 @@ describe('MediaPipeVideoDirectorService (FFmpeg + MediaPipe + Gemini Coordinatio
             expect(dims.photographicRealism.passed).toBe(true);
         });
     });
+
+    describe('Pipeline 1: trackVideoMotion (tracked frames)', () => {
+        it('leaves out frames with no detected person instead of filling them with a standing pose, and fails when the detector cannot run', async () => {
+            const { MissingInputError, GeneratorFailedError } = await import('../src/common/errors/pipeline-errors');
+            const fs = await import('fs');
+            const os = await import('os');
+            const path = await import('path');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-track-'));
+            const video = path.join(dir, 'clip.mp4');
+            fs.writeFileSync(video, 'not decoded by the fake editor');
+            const editor: any = {
+                probeMedia: async () => ({ durationSec: 0.3 }),
+                extractKeyframes: async ({ timestampsSec }: { timestampsSec: number[] }) => ({
+                    outputPaths: timestampsSec.map((_, i) => { const f = path.join(dir, `f${i}.png`); fs.writeFileSync(f, `frame ${i}`); return f; })
+                })
+            };
+            const angles = { leftUpperArm: [0.1, 0, 0], rightUpperArm: [0.1, 0, 0], leftLowerArm: [0, 0, 0], rightLowerArm: [0, 0, 0], leftUpperLeg: [0, 0, 0], rightUpperLeg: [0, 0, 0], leftLowerLeg: [0, 0, 0], rightLowerLeg: [0, 0, 0], spine: [0, 0, 0], head: [0, 0, 0] };
+            const lms = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0, visibility: 0.9 }));
+            const pose: any = {
+                estimatePoseFromImage: async ({ image }: { image: Buffer }) => {
+                    if (image.toString() === 'frame 1') throw new MissingInputError('pose detection', 'a visible person', 'MediaPipe found no person in the image');
+                    return { success: true, personIndex: 0, angles, hipPositionMeters: [0, 0.9, 0], groundedYOffsetMeters: 0.9, confidence: 0.7, worldLandmarks: lms, imageLandmarks: lms };
+                }
+            };
+            const result = await new MediaPipeVideoDirectorService(editor, pose).trackVideoMotion({ videoPath: video, fps: 10, smoothingWindow: 1 });
+            expect(result.success).toBe(true);
+            expect(result.frames.map(f => f.frameIndex)).toEqual([0, 2]);
+            expect(result.frames.every(f => f.detected === true && f.worldLandmarks?.length === 33)).toBe(true);
+            expect(result.undetectedFrames).toEqual([{ frameIndex: 1, timestampSec: 0.1, reason: expect.stringContaining('no person') }]);
+
+            const nobody: any = { estimatePoseFromImage: async () => { throw new MissingInputError('pose detection', 'a visible person', 'MediaPipe found no person in the image'); } };
+            const empty = await new MediaPipeVideoDirectorService(editor, nobody).trackVideoMotion({ videoPath: video, fps: 10 });
+            expect(empty.success).toBe(false);
+            expect(empty.error).toContain('no person in any of the 3 sampled frame(s)');
+
+            const broken: any = { estimatePoseFromImage: async () => { throw new GeneratorFailedError('mediapipe', 'pose detection could not run: python3 could not be started'); } };
+            await expect(new MediaPipeVideoDirectorService(editor, broken).trackVideoMotion({ videoPath: video, fps: 10 })).rejects.toBeInstanceOf(GeneratorFailedError);
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
+    });
 });
