@@ -12,9 +12,12 @@
  * (reference-object-builder.ts). Given specJson instead (an edit of an earlier build's spec), it rebuilds that spec
  * exactly, with no reference image and no model call. With a location, the object is staged on the same geocoded,
  * remeshed clay tiles that google_3d_tiles_get_clay returns, at the placement the model gives relative to the place's
- * anchor, resting on the highest surface there, with the camera framed on the object; a staging or placement failure
- * fails the call before anything is built. The result carries the spec and the build script for later edits, never
- * the reference image.
+ * anchor, resting on the highest ground surface there (the tiles; staged trees are not ground), with the camera
+ * framed on the object. A new build stages first, so an unknown place fails before any model is called; a given spec
+ * is validated and built first, so a spec that cannot be built fails before any billed staging call. When the active
+ * scene is an object build already staged at the same location, its staging is reused instead of geocoding and
+ * extracting the place again. A staging or placement failure fails the call. The result carries the spec and the
+ * build script for later edits, never the reference image.
  */
 
 import * as fs from 'fs';
@@ -45,7 +48,7 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
         description: 'Build one specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) as native 3D geometry in studio grey clay. ' +
             `It draws an internal reference picture with Nano Banana Lite (${REFERENCE_IMAGE_MODEL}; never shown or saved), reads it with the chat's model into a metric build spec of swept, revolved, replicated and relief parts, builds that in the native Python engine, and checks that every part is built and attached and that the build matches the reference (up to two revisions). ` +
             'It builds one object, not a place or a scene: for an imagined environment, a landscape or several objects, write a script for execute_3d_python_script; for a real place, use google_3d_tiles_get_clay. To stand the object at a real place, pass location and placement. ' +
-            'To change an object it built (its shape, its size, or a base or plinth added as parts), pass specJson: the edited spec from that result\'s data.objectBuild.spec. That spec is built exactly as given, with no new reference and no comparison; pass the same location and placement to keep it where it stood.',
+            'To change an object it built (its shape, its size, or a base or plinth added as parts), pass specJson: the edited spec from that result\'s data.objectBuild.spec. That spec is built exactly as given, with no new reference and no comparison; pass the same location and placement to keep it where it stood (the tiles already staged there are reused).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -91,6 +94,18 @@ export interface ObjectReferenceToolDeps {
     publicModelsDir?: string;
 }
 
+/** Marks the hero objects this tool adds, so a later edit can tell them from the staged layers. */
+const OBJECT_SOURCE = 'build_3d_object_from_reference';
+
+/** A staged layer that does not count as ground but rises above the spot where the object stands. */
+export interface OverheadLayer {
+    id: string;
+    role?: string;
+    source?: string;
+    /** Height of that layer's highest surface straight above the spot. */
+    topYMeters: number;
+}
+
 /**
  * Where the object stands in the staged scene (tile frame: x east, y up, z south; origin at the anchor's street
  * level). There is no lift above the surface: the viewport seats a non-zero spatial3d.y as an offset above the
@@ -106,8 +121,17 @@ export interface ObjectPlacement {
     sceneZ: number;
     /** Rotation about +Y that turns the object's front (+Z) to the heading. */
     yawDeg: number;
-    /** Height of the highest staged surface at that spot, measured from the staged models: where the base rests. */
+    /** Height of the highest ground surface at that spot, measured from the staged ground models: where the base rests. */
     surfaceYMeters: number;
+    /** Staged layers that are not ground (such as trees) reaching above the base at that spot. */
+    overheadLayers?: OverheadLayer[];
+}
+
+interface Staging {
+    artifact: any;
+    payload: Record<string, unknown>;
+    /** True when the active scene's staging was reused. */
+    reused: boolean;
 }
 
 function repoRoot(): string {
@@ -189,7 +213,7 @@ function frameCamera(bounds: Vec3, base: Vec3, yawDeg: number): { position: Vec3
  * Stages first so an unknown place fails before any model is called. The staging outcome must be a mounted clay
  * scene; a failed, unremeshed or artifact-less result fails the call.
  */
-async function stage(location: string, ctx: ToolContext, handler: ToolHandler): Promise<{ artifact: any; payload: Record<string, unknown> }> {
+async function stage(location: string, ctx: ToolContext, handler: ToolHandler): Promise<Staging> {
     ctx.reportProgress?.(`Staging at ${location}`);
     let outcome: ToolHandlerOutcome;
     try {
@@ -208,7 +232,40 @@ async function stage(location: string, ctx: ToolContext, handler: ToolHandler): 
     if (!payload.artifact || typeof payload.artifact !== 'object') {
         throw new Error(`Staging at "${location}" failed: google_3d_tiles_get_clay returned no scene to stage on`);
     }
-    return { artifact: payload.artifact, payload };
+    return { artifact: payload.artifact, payload, reused: false };
+}
+
+const glbUriOf = (o: any): string => String(o?.content?.durableUri || '').replace(/\?.*$/, '');
+const isGlbUri = (uri: string) => /\.glb$/i.test(uri);
+
+/**
+ * A staged layer the object can stand on: the tiles, which staging marks as the environment or as ground. Trees and
+ * other objects staged with them are not ground, and neither is the object itself.
+ */
+function isGroundLayer(o: any): boolean {
+    const meta = o?.content?.metadata;
+    return meta?.role === 'environment' || meta?.isGround === true;
+}
+
+/**
+ * The active scene's staging, when that scene is an object build staged at this same location and every staged
+ * model is still on disk: the edit then stands on the same tiles without another geocode or extraction. Undefined
+ * otherwise (the place is then staged as for a new build).
+ */
+function stagingFromActiveScene(ctx: ToolContext, location: string, modelsDirs: string[]): Staging | undefined {
+    const active = ctx.request?.activeArtifact as { type?: string; data?: any } | undefined;
+    if (active?.type !== '3d-scene') return undefined;
+    const data = active.data || {};
+    const where = data.objectBuild?.location;
+    if (!where || where.query !== location) return undefined;
+    const layers = (Array.isArray(data.objects) ? data.objects : []).filter((o: any) => o?.content?.metadata?.source !== OBJECT_SOURCE);
+    const models = layers.map(glbUriOf).filter(isGlbUri);
+    if (!layers.some(isGroundLayer) || models.some((uri: string) => !modelFile(uri, modelsDirs))) return undefined;
+    return {
+        artifact: { ...active, data: { ...data, objects: layers } },
+        payload: { resolvedAddress: where.resolvedAddress, geoAnchor: where.geoAnchor ?? data.geoAnchor },
+        reused: true
+    };
 }
 
 /** Local file behind a served /models/... URI. */
@@ -246,27 +303,45 @@ export function surfaceHeightAt(glb: Buffer, x: number, z: number): number | und
 }
 
 /**
- * Works out where the object stands on the staged tiles and checks there is something to stand on. Like the
- * viewport, which seats the object on the first mesh a ray straight down meets, it reads every model the staged
- * scene shows (tiles, and any trees or structures staged with them) and takes the highest surface at that spot.
+ * Works out where the object stands on the staged tiles and checks there is ground to stand on. The base rests on
+ * the highest surface of the staged ground models (the tiles) at that spot. Other staged layers, such as the trees
+ * rebuilt in the tiles, are not ground: one that rises above the spot is reported, not stood on.
  */
 function placeOnStagedTiles(artifact: any, args: PlacementArgs, modelsDirs: string[]): ObjectPlacement {
     const sceneX = args.eastMeters, sceneZ = -args.northMeters;
     const staged = (Array.isArray(artifact?.data?.objects) ? artifact.data.objects : [])
-        .map((o: any) => String(o?.content?.durableUri || ''))
-        .filter((uri: string) => /\.glb($|\?)/i.test(uri));
-    if (staged.length === 0) throw new Error('the staged scene has no ground model to place the object on');
+        .filter((o: any) => isGlbUri(glbUriOf(o)) && o?.content?.metadata?.source !== OBJECT_SOURCE);
+    const ground = staged.filter(isGroundLayer);
+    if (ground.length === 0) throw new Error('the staged scene has no ground model (a layer staged as the environment or ground) to place the object on');
+    const heightAt = (o: any): number | undefined => {
+        const file = modelFile(glbUriOf(o), modelsDirs);
+        if (!file) throw new Error(`could not read the staged model ${glbUriOf(o)} to place the object (looked in ${modelsDirs.join(', ')})`);
+        return surfaceHeightAt(fs.readFileSync(file), sceneX, sceneZ);
+    };
     let surface: number | undefined;
-    for (const uri of staged) {
-        const file = modelFile(uri.replace(/\?.*$/, ''), modelsDirs);
-        if (!file) throw new Error(`could not read the staged tiles ${uri} to place the object (looked in ${modelsDirs.join(', ')})`);
-        const y = surfaceHeightAt(fs.readFileSync(file), sceneX, sceneZ);
+    for (const layer of ground) {
+        const y = heightAt(layer);
         if (y !== undefined && (surface === undefined || y > surface)) surface = y;
     }
     if (surface === undefined) {
         throw new Error(`placement ${args.eastMeters} m east, ${args.northMeters} m north of the anchor is outside the staged tiles, so there is nothing to stand on there`);
     }
-    return { ...args, sceneX, sceneZ, yawDeg: yawForHeading(args.headingDeg), surfaceYMeters: +surface.toFixed(3) };
+    const overheadLayers: OverheadLayer[] = [];
+    for (const layer of staged.filter((o: any) => !isGroundLayer(o))) {
+        const top = heightAt(layer);
+        if (top === undefined || top <= surface) continue;
+        const meta = layer?.content?.metadata || {};
+        overheadLayers.push({
+            id: String(layer.id),
+            ...(typeof meta.role === 'string' ? { role: meta.role } : {}),
+            ...(typeof meta.source === 'string' ? { source: meta.source } : {}),
+            topYMeters: +top.toFixed(3)
+        });
+    }
+    return {
+        ...args, sceneX, sceneZ, yawDeg: yawForHeading(args.headingDeg), surfaceYMeters: +surface.toFixed(3),
+        ...(overheadLayers.length ? { overheadLayers } : {})
+    };
 }
 
 /** The built object either path produces, with what the result says about how it was made. */
@@ -382,38 +457,57 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             const modelsDir = deps.publicModelsDir ?? path.resolve(repoRoot(), 'public/models');
             const modelsDirs = [...new Set([modelsDir, path.resolve(process.cwd(), 'public/models'), path.resolve(process.cwd(), '..', 'public/models')])];
 
-            let staged: { artifact: any; payload: Record<string, unknown> } | undefined;
-            let placement: ObjectPlacement | undefined;
-            if (location && placementArgs) {
-                try {
-                    staged = await stage(location, ctx, deps.stageAtLocation ?? google3DTilesHandlers.google_3d_tiles_get_clay);
-                } catch (err) {
-                    return failed(errorMessage(err), { stage: 'staging', location });
+            /** Stages at the location (or reuses the active scene's staging there) and places the object. */
+            const stageAndPlace = async (): Promise<{ site?: { staged: Staging; placement: ObjectPlacement }; failure?: ToolHandlerOutcome }> => {
+                if (!location || !placementArgs) return {};
+                let staging = stagingFromActiveScene(ctx, location, modelsDirs);
+                if (staging) {
+                    ctx.reportProgress?.(`Reusing the clay tiles already staged at ${location}`);
+                } else {
+                    try {
+                        staging = await stage(location, ctx, deps.stageAtLocation ?? google3DTilesHandlers.google_3d_tiles_get_clay);
+                    } catch (err) {
+                        return { failure: failed(errorMessage(err), { stage: 'staging', location }) };
+                    }
                 }
                 try {
-                    placement = placeOnStagedTiles(staged.artifact, placementArgs, modelsDirs);
+                    return { site: { staged: staging, placement: placeOnStagedTiles(staging.artifact, placementArgs, modelsDirs) } };
                 } catch (err) {
-                    return failed(`Placing the object at ${location} failed: ${errorMessage(err)}`, { stage: 'placement', location });
+                    return { failure: failed(`Placing the object at ${location} failed: ${errorMessage(err)}`, { stage: 'placement', location }) };
                 }
-            }
+            };
 
             let built: BuiltObject;
+            let site: { staged: Staging; placement: ObjectPlacement } | undefined;
             try {
-                built = givenSpec !== undefined
-                    ? fromSpec(await buildObjectFromSpec(givenSpec, { signal: ctx.signal, reportProgress: ctx.reportProgress }, deps.builder))
-                    : fromReference(await (deps.build ?? buildObjectFromReference)({
+                if (givenSpec !== undefined) {
+                    // A given spec costs no model call: build and check it before any billed staging call.
+                    built = fromSpec(await buildObjectFromSpec(givenSpec, { signal: ctx.signal, reportProgress: ctx.reportProgress }, deps.builder));
+                    const staging = await stageAndPlace();
+                    if (staging.failure) return staging.failure;
+                    site = staging.site;
+                } else {
+                    // A new build stages first, so an unknown place fails before any model is called.
+                    const staging = await stageAndPlace();
+                    if (staging.failure) return staging.failure;
+                    site = staging.site;
+                    built = fromReference(await (deps.build ?? buildObjectFromReference)({
                         request,
                         requestedModel: ctx.request?.model || undefined,
                         dimensionsHintMeters: dimensions,
                         signal: ctx.signal,
                         reportProgress: ctx.reportProgress
                     }, deps.builder));
+                }
             } catch (err) {
                 if (err instanceof ReferenceObjectBuildError) {
                     return failed(err.message, { ...err.details, stage: err.stage });
                 }
                 return failed(errorMessage(err));
             }
+
+            const staged = site?.staged;
+            const placement = site?.placement;
 
             // Publish the GLB where the viewport serves models; the reference never touches disk.
             const fileName = path.basename(built.glbPath);
@@ -430,6 +524,9 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             const bodiesNote = checks.connectivity.bodies === 1 ? 'one connected piece' : `${checks.connectivity.bodies} separate pieces as intended`;
             const subject = built.spec.subject.trim() || request;
             const place = staged ? String(staged.payload.resolvedAddress || location) : undefined;
+            const where = staged && placement
+                ? { query: location, resolvedAddress: staged.payload.resolvedAddress, geoAnchor: staged.payload.geoAnchor, staging: staged.reused ? 'reused from the active scene' : 'staged' }
+                : undefined;
             const objectBuild = {
                 spec: built.spec,
                 ...built.record,
@@ -443,10 +540,10 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     ...(checks.differences ? { differences: checks.differences } : {}),
                     builtBoundingMeters: checks.builtBoundingMeters
                 },
-                ...(staged && placement ? { location: { query: location, resolvedAddress: staged.payload.resolvedAddress }, placement } : {})
+                ...(where && placement ? { location: where, placement } : {})
             };
-            // y 0: the viewport seats the base on the highest surface under (x, z), whichever of the object and the
-            // tiles finishes loading first.
+            // y 0: the viewport seats the base on the surface under (x, z), whichever of the object and the tiles
+            // finishes loading first.
             const heroObject = {
                 id: `hero-${Date.now()}`,
                 content: {
@@ -456,7 +553,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     metadata: {
                         role: 'hero',
                         description: subject,
-                        source: 'build_3d_object_from_reference',
+                        source: OBJECT_SOURCE,
                         originalPath: built.glbPath,
                         metricScale: 1.0,
                         groundSnapped: true
@@ -532,8 +629,13 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 };
             }
 
+            const overhead = (placement?.overheadLayers || [])
+                .map(l => `${l.role ? `the ${l.role} layer` : `layer ${l.id}`}${l.source ? ` (${l.source})` : ''} reaches ${l.topYMeters} m there`);
             const placeLine = staged && placement
-                ? `Staged at ${place} on remeshed Google 3D Tiles in clay, ${placement.eastMeters} m east and ${placement.northMeters} m north of the anchor, facing ${placement.headingDeg} degrees, resting on the surface there, ${placement.surfaceYMeters} m above the anchor's street level${placement.surfaceYMeters > 3 ? ' (likely a roof or raised structure)' : ''}.`
+                ? [
+                    `${staged.reused ? `Reused the remeshed Google 3D Tiles in clay already staged at ${place} in the active scene (no new geocode or extraction)` : `Staged at ${place} on remeshed Google 3D Tiles in clay`}, ${placement.eastMeters} m east and ${placement.northMeters} m north of the anchor, facing ${placement.headingDeg} degrees, resting on the ground surface of the tiles there, ${placement.surfaceYMeters} m above the anchor's street level${placement.surfaceYMeters > 3 ? ' (likely a roof or raised structure)' : ''}.`,
+                    overhead.length ? `Above that spot, ${overhead.join('; ')}: the object stands on the ground beneath, not on it.` : ''
+                ].filter(Boolean).join(' ')
                 : 'Shown in a studio grey clay void.';
             const editLine = `To change it, edit data.objectBuild.spec and call build_3d_object_from_reference with specJson set to the edited spec${staged && placement ? ', and with this location and placement to keep it there' : ''}.`;
             const [howBuilt, ...builtLines] = built.lines;
@@ -558,7 +660,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     partCount: built.spec.parts.length,
                     ...built.record,
                     checks: objectBuild.checks,
-                    ...(staged ? { location: { query: location, resolvedAddress: staged.payload.resolvedAddress, geoAnchor: staged.payload.geoAnchor, placement } } : {}),
+                    ...(where ? { location: { ...where, placement } } : {}),
                     artifact
                 }
             };

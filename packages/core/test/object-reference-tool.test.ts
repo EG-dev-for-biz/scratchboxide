@@ -240,13 +240,26 @@ function writeStagedTiles(): string {
     return '/models/staged_tiles_test.glb';
 }
 
-function stagedScene(tileUri: string): (args: Record<string, unknown>, c: ToolContext) => Promise<ToolHandlerOutcome> {
-    const tile = { id: 'tile-clay-1', content: { type: '3d-model', durableUri: tileUri, metadata: { role: 'environment', isGround: true } } };
+/** A trees layer as the clay staging adds it: one crown whose top is 9 m up over x 3..9, z -7..-1, and a trunk. */
+function writeStagedTrees(): string {
+    const quad = (x0: number, x1: number, z0: number, z1: number, y: number, base: number) => ({
+        p: [x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1],
+        i: [base, base + 2, base + 1, base, base + 3, base + 2]
+    });
+    const crown = quad(3, 9, -7, -1, 9, 0), trunk = quad(5.9, 6.1, -4.1, -3.9, 1.5, 4);
+    fs.mkdirSync(MODELS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(MODELS_DIR, 'staged_trees_test.glb'), makeGlb([...crown.p, ...trunk.p], [...crown.i, ...trunk.i]));
+    return '/models/staged_trees_test.glb';
+}
+
+function stagedScene(tileUri: string, treesUri?: string): (args: Record<string, unknown>, c: ToolContext) => Promise<ToolHandlerOutcome> {
+    const tile = { id: 'tile-clay-1', content: { type: '3d-model', durableUri: tileUri, metadata: { source: 'Google3DTilesClay', role: 'environment', isGround: true } } };
+    const trees = treesUri ? [{ id: 'tile-trees-1', content: { type: '3d-model', durableUri: treesUri, metadata: { source: 'SB-Veggie', role: 'vegetation' } } }] : [];
     return async () => ({
         status: 'completed',
         resultPayload: {
             success: true, resolvedAddress: 'Union Square, San Francisco, CA', geoAnchor: { lat: 37.788, lng: -122.4075 },
-            remesh: { ok: true }, artifact: { id: 'a', type: '3d-scene', title: 'Union Square', data: { renderMode: 'clay', environment: { skybox: 'studio', lighting: 'studio', ground: false }, objects: [tile], geoAnchor: { lat: 37.788, lng: -122.4075 } } }
+            remesh: { ok: true }, artifact: { id: 'a', type: '3d-scene', title: 'Union Square', data: { renderMode: 'clay', environment: { skybox: 'studio', lighting: 'studio', ground: false }, objects: [tile, ...trees], geoAnchor: { lat: 37.788, lng: -122.4075 } } }
         }
     });
 }
@@ -593,7 +606,7 @@ describe('build_3d_object_from_reference', () => {
         expect(hero.space.spatial3d).toEqual({ x: 12, y: 0, z: -8, yaw: 90 });
         const placement = artifact.data.objectBuild.placement;
         expect(placement).toEqual({ eastMeters: 12, northMeters: 8, headingDeg: 90, sceneX: 12, sceneZ: -8, yawDeg: 90, surfaceYMeters: 1.5 });
-        expect(artifact.data.objectBuild.location).toEqual({ query: 'Union Square, San Francisco', resolvedAddress: 'Union Square, San Francisco, CA' });
+        expect(artifact.data.objectBuild.location).toEqual({ query: 'Union Square, San Francisco', resolvedAddress: 'Union Square, San Francisco, CA', geoAnchor: { lat: 37.788, lng: -122.4075 }, staging: 'staged' });
         // The camera looks at the object's middle, from close by, not at the whole district.
         const size = artifact.data.objectBuild.checks.builtBoundingMeters;
         expect(artifact.data.camera.target[0]).toBeCloseTo(12, 3);
@@ -825,6 +838,75 @@ describe('build_3d_object_from_reference', () => {
         expect(specCalls).toHaveLength(2);
         expect(askedText(specCalls[1])).toContain('The build did not finish within 1 s, so it was stopped');
     }, 60_000);
+
+    it('stands the object on the ground of the tiles, not on staged trees above the spot, and says what is above', async () => {
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const out = await handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles(), writeStagedTrees()) })
+            .run({ request: 'a fluted vase under the tree', location: 'Union Square, San Francisco', placement: { eastMeters: 6, northMeters: 4, headingDeg: 0 } });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const data = (out.resultPayload.artifact as any).data;
+        expect(data.objects.map((o: any) => o.content.metadata.role)).toEqual(['environment', 'vegetation', 'hero']);
+        expect(data.objectBuild.placement).toMatchObject({
+            sceneX: 6, sceneZ: -4, surfaceYMeters: 1.5,
+            overheadLayers: [{ id: 'tile-trees-1', role: 'vegetation', source: 'SB-Veggie', topYMeters: 9 }]
+        });
+        expect(data.camera.target[1]).toBeLessThan(3);
+        expect(out.summaryResult).toContain('resting on the ground surface of the tiles there, 1.5 m above');
+        expect(out.summaryResult).toContain('the vegetation layer (SB-Veggie) reaches 9 m there: the object stands on the ground beneath, not on it.');
+        expect(out.summaryResult).not.toContain('likely a roof');
+        // Clear of the crown, nothing is reported above it.
+        const open = await handlerWith(fakeClient({ specs: [JSON.stringify(VASE)] }), { stageAtLocation: stagedScene(writeStagedTiles(), writeStagedTrees()) })
+            .run({ request: 'a fluted vase', location: 'Union Square, San Francisco', placement: { eastMeters: 20, northMeters: 4, headingDeg: 0 } });
+        expect((open.resultPayload.artifact as any).data.objectBuild.placement.overheadLayers).toBeUndefined();
+    }, 180_000);
+
+    it('builds a given spec before staging, so a spec that cannot be built makes no staging call', async () => {
+        const stageArgs: unknown[] = [];
+        const staging = stagedScene(writeStagedTiles());
+        const { run } = handlerWith(fakeClient({}), { stageAtLocation: async (args, c) => { stageArgs.push(args); return staging(args, c); } });
+        const placement = { eastMeters: 12, northMeters: 8, headingDeg: 90 };
+        const invalid = await run({ request: 'the vase', specJson: JSON.stringify({ ...VASE, parts: [{ id: 'a', label: 'a' }] }), location: 'Union Square, San Francisco', placement });
+        expect(invalid.resultPayload.stage).toBe('build-spec');
+        const flat = await run({ request: 'a coin', specJson: JSON.stringify(FLAT_COIN), location: 'Union Square, San Francisco', placement });
+        expect(flat.resultPayload.stage).toBe('build');
+        const apart = await run({ request: 'the vase', specJson: JSON.stringify(DETACHED), location: 'Union Square, San Francisco', placement });
+        expect(apart.resultPayload.stage).toBe('checks');
+        expect(stageArgs).toHaveLength(0);
+        const ok = await run({ request: 'the vase', specJson: JSON.stringify(VASE), location: 'Union Square, San Francisco', placement });
+        expect(ok.status, String(ok.resultPayload.error)).toBe('completed');
+        expect(stageArgs).toEqual([{ query: 'Union Square, San Francisco' }]);
+    }, 180_000);
+
+    it('reuses the active scene\'s staging for an edit at the same place instead of extracting it again', async () => {
+        const stageArgs: unknown[] = [];
+        const staging = stagedScene(writeStagedTiles(), writeStagedTrees());
+        const { run } = handlerWith(fakeClient({ specs: [JSON.stringify(VASE)] }), { stageAtLocation: async (args, c) => { stageArgs.push(args); return staging(args, c); } });
+        const where = { location: 'Union Square, San Francisco', placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } };
+        const first = await run({ request: 'a fluted vase', ...where });
+        expect(first.status, String(first.resultPayload.error)).toBe('completed');
+        expect(stageArgs).toHaveLength(1);
+        const scene = first.resultPayload.artifact as any;
+
+        // Move it and make it taller: the edit stands on the tiles already staged in the active scene.
+        const taller: ObjectBuildSpec = { ...VASE, boundingMeters: [0.36, 0.86, 0.36] };
+        const onScene = (c: ToolContext): ToolContext => ({ ...c, request: { ...c.request, activeArtifact: scene } as any });
+        const moved = await run({ request: 'move it', specJson: JSON.stringify(taller), location: where.location, placement: { eastMeters: -10, northMeters: 3, headingDeg: 0 } }, onScene(ctx()));
+        expect(moved.status, String(moved.resultPayload.error)).toBe('completed');
+        expect(stageArgs).toHaveLength(1);
+        const data = (moved.resultPayload.artifact as any).data;
+        // The staged layers carry over once; the earlier object is replaced, not kept beside the new one.
+        expect(data.objects.map((o: any) => o.content.metadata.role)).toEqual(['environment', 'vegetation', 'hero']);
+        expect(data.objects.filter((o: any) => o.content.metadata.source === 'build_3d_object_from_reference')).toHaveLength(1);
+        expect(data.objectBuild.location).toEqual({ query: where.location, resolvedAddress: 'Union Square, San Francisco, CA', geoAnchor: { lat: 37.788, lng: -122.4075 }, staging: 'reused from the active scene' });
+        expect(data.objectBuild.placement).toMatchObject({ sceneX: -10, sceneZ: -3, surfaceYMeters: 1.5 });
+        expect(data.geoAnchor).toEqual({ lat: 37.788, lng: -122.4075 });
+        expect(moved.summaryResult).toContain('Reused the remeshed Google 3D Tiles in clay already staged at Union Square, San Francisco, CA in the active scene (no new geocode or extraction)');
+
+        // Another place is staged afresh.
+        const elsewhere = await run({ request: 'move it', specJson: JSON.stringify(taller), location: 'Dolores Park, San Francisco', placement: where.placement }, onScene(ctx()));
+        expect(elsewhere.status, String(elsewhere.resultPayload.error)).toBe('completed');
+        expect(stageArgs).toEqual([{ query: where.location }, { query: 'Dolores Park, San Francisco' }]);
+    }, 180_000);
 
     it('the Python runner kills the script when its signal aborts', async () => {
         const controller = new AbortController();
