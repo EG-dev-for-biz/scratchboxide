@@ -162,7 +162,7 @@ function makeStandaloneContext(workspaceRoot: string): ToolContext {
         workspaceRoot,
         request: {
             prompt: '',
-            mode: 'chat',
+            mode: 'agent',
         } as ToolContext['request'],
         sandbox: stub as ToolContext['sandbox'],
         lsp: stub as ToolContext['lsp'],
