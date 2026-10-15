@@ -51,8 +51,11 @@ export interface TileVegetationStripParams {
     supportStep?: number;
     supportSearch?: number;
     footprintDilation?: number;
+    drapeReach?: number;
     clearance?: number;
+    supportBand?: number;
     skirtMin?: number;
+    fragmentMaxArea?: number;
     capGrid?: number;
     seamGap?: number;
     sampleSpacing?: number;
@@ -76,6 +79,8 @@ export interface TileVegetationStripRequest {
     topDown?: boolean;
     threads?: number;
     timeoutMs?: number;
+    /** Stops this request (it rejects with an AbortError); the native run is killed once no request waits on it. */
+    signal?: AbortSignal;
 }
 
 export interface TileVegetationStripResult {
@@ -103,6 +108,8 @@ export interface TileVegetationPlantRequest {
     publishAs?: string;
     threads?: number;
     timeoutMs?: number;
+    /** Stops this request (it rejects with an AbortError); the native run is killed once no request waits on it. */
+    signal?: AbortSignal;
 }
 
 export interface TileVegetationPlantResult {
@@ -116,7 +123,7 @@ export interface TileVegetationPlantResult {
 
 export type TileVegetationErrorCode =
     | 'bad_request' | 'not_found' | 'timeout' | 'failed' | 'build_failed'
-    | 'bad_input' | 'texture_decode' | 'no_photo_texture' | 'budget_too_small' | 'budget_exceeded' | 'plant_failed' | 'io';
+    | 'bad_input' | 'texture_decode' | 'no_photo_texture' | 'no_ground' | 'budget_too_small' | 'budget_exceeded' | 'plant_failed' | 'io';
 
 export class TileVegetationError extends Error {
     constructor(readonly code: TileVegetationErrorCode, message: string, readonly detail?: string) {
@@ -138,9 +145,9 @@ export interface TileVegetationServiceOptions {
 const CLI_SOURCE = path.join('scripts', 'tile_vegetation.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
 const BINARY = path.join('build', '3d-native', 'tile_vegetation');
-const CACHE_VERSION = 'tile_vegetation/v1';
+const CACHE_VERSION = 'tile_vegetation/v2';
 const PUBLISH_FILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\.glb$/;
-const KNOWN_CODES = new Set<TileVegetationErrorCode>(['bad_request', 'not_found', 'timeout', 'failed', 'build_failed', 'bad_input', 'texture_decode', 'no_photo_texture', 'budget_too_small', 'budget_exceeded', 'plant_failed', 'io']);
+const KNOWN_CODES = new Set<TileVegetationErrorCode>(['bad_request', 'not_found', 'timeout', 'failed', 'build_failed', 'bad_input', 'texture_decode', 'no_photo_texture', 'no_ground', 'budget_too_small', 'budget_exceeded', 'plant_failed', 'io']);
 
 /** The checkout that holds scripts/tile_vegetation.cpp: walks up from this file, then from cwd. */
 export function findTileVegetationRepoRoot(): string {
@@ -213,12 +220,26 @@ function cliError(stderr: string, fallbackMessage: string): TileVegetationError 
     return new TileVegetationError('failed', fallbackMessage, stderr.slice(-2000));
 }
 
-function runFile(file: string, args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+/** The error a stopped request rejects with (name 'AbortError', as the chat's own cancellation uses). */
+function stoppedError(): Error {
+    return Object.assign(new Error('Stopped by the chat before it finished'), { name: 'AbortError' });
+}
+
+/** Runs the binary; `signal` kills it (SIGKILL) and rejects with an AbortError when the request is stopped. */
+function runFile(file: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(stoppedError());
+            return;
+        }
         const started = Date.now();
-        execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 32 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 32 * 1024 * 1024, windowsHide: true, ...(signal ? { signal } : {}) }, (err, stdout, stderr) => {
             if (!err) {
                 resolve({ stdout: String(stdout), stderr: String(stderr) });
+                return;
+            }
+            if (signal?.aborted || (err as Error).name === 'AbortError') {
+                reject(stoppedError());
                 return;
             }
             const e = err as NodeJS.ErrnoException & { killed?: boolean };
@@ -240,7 +261,11 @@ export class TileVegetationService {
     private readonly defaultTimeoutMs: number;
     private building?: Promise<string>;
     private binaryHash?: { key: string; hex: string };
-    private readonly inFlight = new Map<string, Promise<unknown>>();
+    /**
+     * Identical runs in progress, shared by every request that asks for them. A run has its own AbortController: it
+     * is stopped only when every request waiting on it has been stopped, and each request rejects with its own stop.
+     */
+    private readonly inFlight = new Map<string, { promise: Promise<unknown>; controller: AbortController; waiters: number; settled: boolean }>();
 
     constructor(options: TileVegetationServiceOptions) {
         this.workspaceRoot = resolveWithinRoot(options.workspaceRoot, '.');
@@ -309,19 +334,24 @@ export class TileVegetationService {
         return file;
     }
 
-    /** Runs `produce` into a fresh temp dir and renames it into the cache entry, unless the entry exists. */
-    private async cached<T>(key: string, outputs: string[], produce: (dir: string) => Promise<void>, result: (dir: string, cached: boolean) => T): Promise<T> {
+    /**
+     * Runs `produce` into a fresh temp dir and renames it into the cache entry, unless the entry exists. Concurrent
+     * identical requests share one run; `signal` stops only this request's wait (and the run, once nobody waits).
+     */
+    private cached<T>(key: string, outputs: string[], produce: (dir: string, signal: AbortSignal) => Promise<void>, result: (dir: string, cached: boolean) => T, signal?: AbortSignal): Promise<T> {
         const dir = path.join(this.cacheDir, key);
         const done = path.join(dir, 'done.json');
-        if (fs.existsSync(done)) return result(dir, true);
-        let pending = this.inFlight.get(key) as Promise<T> | undefined;
-        if (!pending) {
-            pending = (async () => {
+        if (fs.existsSync(done)) return Promise.resolve(result(dir, true));
+        if (signal?.aborted) return Promise.reject(stoppedError());
+        let entry = this.inFlight.get(key);
+        if (!entry) {
+            const controller = new AbortController();
+            const run = (async () => {
                 fs.mkdirSync(this.cacheDir, { recursive: true });
                 const tmp = path.join(this.cacheDir, `${key}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
                 fs.mkdirSync(tmp);
                 try {
-                    await produce(tmp);
+                    await produce(tmp, controller.signal);
                     for (const f of outputs) {
                         if (!fs.existsSync(path.join(tmp, f))) throw new TileVegetationError('failed', `tile_vegetation did not write ${f}`);
                     }
@@ -334,10 +364,41 @@ export class TileVegetationService {
                     throw err;
                 }
                 return result(dir, false);
-            })().finally(() => this.inFlight.delete(key));
-            this.inFlight.set(key, pending);
+            })();
+            const created: { promise: Promise<unknown>; controller: AbortController; waiters: number; settled: boolean } = { promise: run, controller, waiters: 0, settled: false };
+            entry = created;
+            run.then(() => undefined, () => undefined).finally(() => {
+                created.settled = true;
+                if (this.inFlight.get(key) === created) this.inFlight.delete(key);
+            });
+            this.inFlight.set(key, created);
         }
-        return pending;
+        const shared = entry;
+        shared.waiters++;
+        return new Promise<T>((resolve, reject) => {
+            let left = false;
+            const leave = () => {
+                if (left) return false;
+                left = true;
+                signal?.removeEventListener('abort', onAbort);
+                shared.waiters--;
+                return true;
+            };
+            const onAbort = () => {
+                if (!leave()) return;
+                if (shared.waiters === 0 && !shared.settled) {
+                    // nobody waits any more: stop the run, and let the next identical request start its own
+                    if (this.inFlight.get(key) === shared) this.inFlight.delete(key);
+                    shared.controller.abort();
+                }
+                reject(stoppedError());
+            };
+            signal?.addEventListener('abort', onAbort, { once: true });
+            (shared.promise as Promise<T>).then(
+                v => { if (leave()) resolve(v); },
+                e => { if (leave()) reject(e); }
+            );
+        });
     }
 
     async strip(req: TileVegetationStripRequest): Promise<TileVegetationStripResult> {
@@ -350,12 +411,12 @@ export class TileVegetationService {
         const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0strip\0').update(this.hashBinary(bin)).update('\0')
             .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown })).digest('hex');
         const outputs = ['devegetated.glb', 'crowns.json', 'stats.json', ...(req.topDown ? ['topdown.png'] : [])];
-        const res = await this.cached(key, outputs, async dir => {
+        const res = await this.cached(key, outputs, async (dir, signal) => {
             const args = ['strip', '--input', input, '--out', path.join(dir, 'devegetated.glb'), '--crowns', path.join(dir, 'crowns.json'),
                 '--stats', path.join(dir, 'stats.json'), ...flags];
             if (req.topDown) args.push('--topdown', path.join(dir, 'topdown.png'));
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
-            await runFile(bin, args, timeoutMs);
+            await runFile(bin, args, timeoutMs, signal);
         }, (dir, cached) => ({
             devegetatedGlb: path.join(dir, 'devegetated.glb'),
             crownsJson: path.join(dir, 'crowns.json'),
@@ -365,7 +426,7 @@ export class TileVegetationService {
             cached,
             ms: 0,
             cacheKey: key
-        }));
+        }), req.signal);
         return { ...res, ms: Date.now() - t0 };
     }
 
@@ -385,19 +446,19 @@ export class TileVegetationService {
         if (support) sha256File(support, hash);
         hash.update('\0').update(JSON.stringify({ ...keyParams, triangleBudget: Math.floor(req.triangleBudget), seed: req.seed.toLowerCase() }));
         const key = hash.digest('hex');
-        const res = await this.cached(key, ['trees.glb', 'stats.json'], async dir => {
+        const res = await this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
             const args = ['plant', '--crowns', crowns, '--out', path.join(dir, 'trees.glb'), '--stats', path.join(dir, 'stats.json'),
                 '--triangle-budget', String(Math.floor(req.triangleBudget)), '--seed', req.seed, ...flags];
             if (support) args.push('--support-mesh', support);
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
-            await runFile(bin, args, timeoutMs);
+            await runFile(bin, args, timeoutMs, signal);
         }, (dir, cached) => ({
             treesGlb: path.join(dir, 'trees.glb'),
             stats: JSON.parse(fs.readFileSync(path.join(dir, 'stats.json'), 'utf8')),
             cached,
             ms: 0,
             cacheKey: key
-        }));
+        }), req.signal);
         const out: TileVegetationPlantResult = { ...res, ms: 0 };
         if (publishTarget) out.published = this.publish(res.treesGlb, publishTarget);
         out.ms = Date.now() - t0;

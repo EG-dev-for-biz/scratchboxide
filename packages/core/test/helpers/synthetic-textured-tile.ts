@@ -15,7 +15,16 @@
 
 import { encodePng } from '../../src/node/texture-processing';
 
-export interface SyntheticTree { x: number; z: number; height: number; radius: number }
+/**
+ * A crown: a rough green dome. `hem` (m) adds what photogrammetry hangs around real crowns: a rough, shadowed, not green
+ * drape sloping from `hemHeight` at the crown's edge down to the ground over that distance.
+ */
+export interface SyntheticTree { x: number; z: number; height: number; radius: number; hem?: number; hemHeight?: number }
+/**
+ * A flat vertical sheet from the ground up to `belowCanopy` under the canopy above it (a tile-seam curtain: tile
+ * leaves are cut along planes and the scan hangs a planar curtain there), in the plane through (x0, z0)-(x1, z1).
+ */
+export interface SyntheticCurtain { x0: number; z0: number; x1: number; z1: number; belowCanopy: number }
 export interface SyntheticBuilding { x0: number; z0: number; x1: number; z1: number; height: number; roofBump?: { x: number; z: number; height: number; radius: number } }
 
 export interface SyntheticTileSpec {
@@ -24,6 +33,7 @@ export interface SyntheticTileSpec {
     /** Ground grid spacing (m). */
     spacing: number;
     trees: SyntheticTree[];
+    curtains?: SyntheticCurtain[];
     building?: SyntheticBuilding;
     anchor?: { lat: number; lng: number; ellipsoidalHeightM: number };
     /** The foliage image is not a decodable PNG. */
@@ -35,6 +45,8 @@ export interface SyntheticTileSpec {
 export const FOLIAGE_RGB: [number, number, number] = [72, 112, 52];
 export const GROUND_RGB: [number, number, number] = [124, 122, 118];
 export const FACADE_RGB: [number, number, number] = [168, 150, 128];
+/** Shadowed drape: neither green nor dark enough to be left unjudged. */
+export const DRAPE_RGB: [number, number, number] = [92, 88, 84];
 
 function hash(a: number, b: number, c: number): number {
     let h = (Math.imul(a | 0, 73856093) ^ Math.imul(b | 0, 19349663) ^ Math.imul(c | 0, 83492791)) >>> 0;
@@ -63,6 +75,18 @@ function crownHeight(t: SyntheticTree, x: number, z: number): number {
     if (d >= t.radius) return 0;
     const u = 1 - (d / t.radius) ** 2;
     return t.height * Math.pow(u, 0.5);
+}
+
+/**
+ * Height of a crown's drape hem at (x, z): from hemHeight at the crown's edge down towards the ground at radius + hem,
+ * meeting the (flat) ground with a step where it gets lower than 0.4 m, so the ground itself stays exactly level.
+ */
+function hemHeight(t: SyntheticTree, x: number, z: number): number {
+    if (!t.hem) return 0;
+    const d = Math.hypot(x - t.x, z - t.z);
+    if (d < t.radius || d >= t.radius + t.hem) return 0;
+    const h = (t.hemHeight ?? 3) * (1 - (d - t.radius) / t.hem);
+    return h < 0.4 ? 0 : h;
 }
 
 interface Prim { pos: number[]; uv: number[]; idx: number[] }
@@ -100,6 +124,7 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
     const ground: Prim = { pos: [], uv: [], idx: [] };
     const foliage: Prim = { pos: [], uv: [], idx: [] };
     const facade: Prim = { pos: [], uv: [], idx: [] };
+    const drape: Prim = { pos: [], uv: [], idx: [] };
     const b = spec.building;
     const inBuilding = (x: number, z: number) => !!b && x > b.x0 - 1e-6 && x < b.x1 + 1e-6 && z > b.z0 - 1e-6 && z < b.z1 + 1e-6;
 
@@ -110,7 +135,7 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
         for (let k = 0; k <= n; k++) {
             const x = -half + i * s, z = -half + k * s;
             let h = 0;
-            for (const t of spec.trees) h = Math.max(h, crownHeight(t, x, z));
+            for (const t of spec.trees) h = Math.max(h, crownHeight(t, x, z), hemHeight(t, x, z));
             if (h > 0.4) h += (hash(i, k, 7) - 0.5) * 0.7; // rough canopy surface
             H[i].push(Math.max(0, h));
         }
@@ -128,11 +153,30 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
             const x0 = -half + i * s, z0 = -half + k * s, x1 = x0 + s, z1 = z0 + s;
             if (inBuilding(x0, z0) && inBuilding(x1, z1)) continue;
             const hs = [H[i][k], H[i + 1][k], H[i][k + 1], H[i + 1][k + 1]];
-            const p = Math.max(...hs) > 0.5 ? foliage : ground;
+            const cx = x0 + s / 2, cz = z0 + s / 2;
+            const inCrown = spec.trees.some(t => Math.hypot(cx - t.x, cz - t.z) < t.radius);
+            const p = Math.max(...hs) > 0.5 ? (inCrown ? foliage : drape) : ground;
             const a = vid(p, x0 + jx(i, k), hs[0], z0 + jz(i, k)), bb = vid(p, x1 + jx(i + 1, k), hs[1], z0 + jz(i + 1, k));
             const c = vid(p, x0 + jx(i, k + 1), hs[2], z1 + jz(i, k + 1)), d = vid(p, x1 + jx(i + 1, k + 1), hs[3], z1 + jz(i + 1, k + 1));
             // up-facing winding: (a, c, b) and (b, c, d) in the x-east / z-south frame
             p.idx.push(a, c, bb, bb, c, d);
+        }
+    }
+    // curtains: planar vertical sheets in the drape texture, columns ~0.75 m wide, each up to just under the canopy
+    for (const c of spec.curtains ?? []) {
+        const len = Math.hypot(c.x1 - c.x0, c.z1 - c.z0);
+        const nu = Math.max(1, Math.round(len / 0.75));
+        const top = (x: number, z: number) => {
+            let h = 0;
+            for (const t of spec.trees) h = Math.max(h, crownHeight(t, x, z));
+            return Math.max(0.5, h - c.belowCanopy);
+        };
+        for (let u = 0; u < nu; u++) {
+            const ax = c.x0 + ((c.x1 - c.x0) * u) / nu, az = c.z0 + ((c.z1 - c.z0) * u) / nu;
+            const bx = c.x0 + ((c.x1 - c.x0) * (u + 1)) / nu, bz = c.z0 + ((c.z1 - c.z0) * (u + 1)) / nu;
+            const ta = top(ax, az), tb = top(bx, bz);
+            const p0 = vid(drape, ax, 0, az), p1 = vid(drape, bx, 0, bz), p2 = vid(drape, ax, ta, az), p3 = vid(drape, bx, tb, bz);
+            drape.idx.push(p0, p1, p2, p1, p3, p2);
         }
     }
     // building: walls subdivided into ~1.5 m quads, a flat roof grid with an optional low green bump
@@ -188,7 +232,7 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
     const materials: any[] = [];
     const meshes: any[] = [];
     const nodes: any[] = [{ name: 'district', children: [] as number[] }];
-    const prims: Array<[Prim, [number, number, number], number]> = [[ground, GROUND_RGB, 1], [foliage, FOLIAGE_RGB, 2], [facade, FACADE_RGB, 3]];
+    const prims: Array<[Prim, [number, number, number], number]> = [[ground, GROUND_RGB, 1], [foliage, FOLIAGE_RGB, 2], [facade, FACADE_RGB, 3], [drape, DRAPE_RGB, 4]];
     for (const [p, rgb, seed] of prims) {
         if (!p.idx.length) continue;
         let material: number | undefined;

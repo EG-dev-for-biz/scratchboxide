@@ -19,11 +19,20 @@
  *   within a radius) and height above the terrain model. Crowns are local maxima of the canopy height model with a
  *   window that grows with height, grown by a marker-controlled watershed with a climb limit. Each crown is measured
  *   against the surface it stands on (roof or ground): the surface it touches around its footprint, reached through
- *   other canopy when it touches none. Crowns at least minTreeHeight above that surface are trees; their triangles
- *   are removed down to the surface and the holes are closed (skirts down walls, caps on the ground, never new holes).
- *   Lower roof vegetation stays in the scan untouched; crowns that touch the extraction boundary keep their canopy and
- *   are reported as cut. Writes the devegetated tile (textures kept, caps untextured), and a crown list with apex,
- *   stem, support, footprint, sector radii and voxel samples of the crown surface, in the tile frame and as lat/lng.
+ *   other canopy when it touches none. Crowns at least minTreeHeight above that surface are trees; a tree whose crown
+ *   runs to the extraction's edge is still a tree when its apex (its local-maximum window) lies inside, and is measured
+ *   up to the edge. A crown whose apex window reaches the edge is cut: its top and trunk may lie outside. Each tree goes
+ *   with the scanned drape around it (the photogrammetric curtain from crown to ground, planar or not, out to
+ *   drapeReach) and with pieces of its scan left hanging in the air beside it, never with walls, roofs, paving or
+ *   crowns that stay. Cut canopy stays as scanned unless its side would be left standing over a hole: then it goes with
+ *   the trees it joins, is reported, and is not replanted. The ground under a tree is rebuilt on the level surface it
+ *   stood on: every hole loop is lowered onto that surface and capped there, so no cap face climbs to where the tree
+ *   was and no hole opens; where the hole edge stands off that surface (a wall or building side the tree hid, the side
+ *   of a low planting that stays) a vertical skirt continues it down, and its area and height are reported by what it
+ *   continues. Lower roof vegetation stays in the scan untouched. Writes the devegetated tile (textures kept; cap and
+ *   skirt are untextured primitives of their own), and a crown list with apex, stem, support, footprint, sector radii
+ *   and voxel samples of the crown surface, in the tile frame and as lat/lng (the list stays in the cache; plant
+ *   writes no geodetic data).
  *
  * plant: grows one SB-Veggie tree per measured crown with the space-colonisation generator
  *   (nature::SpaceColonizationTreeGenerator), attracted to the crown's own measured samples, meshed within a
@@ -50,6 +59,7 @@
 #include <map>
 #include <numeric>
 #include <queue>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -433,6 +443,59 @@ inline size_t earClip(const std::vector<Vec3>& p, std::vector<uint32_t> loop, st
     return forced;
 }
 
+/**
+ * Lawson edge flips in the x/z plane over triangles [from, to) of `tri` (all facing up): an edge two of them share flips
+ * when the quad they form is convex and the far vertex lies inside the other triangle's circumcircle, so the fans and
+ * slivers of ear clipping become well-shaped triangles. Edges used by one triangle (the polygon's boundary) never move.
+ * Returns the number of flips.
+ */
+inline size_t delaunayFlips(const std::vector<Vec3>& p, std::vector<uint32_t>& tri, size_t from, size_t to) {
+    auto edgeKey = [](uint32_t a, uint32_t b) { return a < b ? (static_cast<uint64_t>(a) << 32 | b) : (static_cast<uint64_t>(b) << 32 | a); };
+    size_t flips = 0;
+    for (int pass = 0; pass < 32; ++pass) {
+        std::unordered_map<uint64_t, std::array<long, 2>> edges;
+        edges.reserve(3 * (to - from));
+        for (size_t k = from; k < to; ++k) {
+            for (int j = 0; j < 3; ++j) {
+                auto& slot = edges.try_emplace(edgeKey(tri[3 * k + static_cast<size_t>(j)], tri[3 * k + static_cast<size_t>((j + 1) % 3)]), std::array<long, 2>{-1, -1}).first->second;
+                const long corner = static_cast<long>(3 * k) + j;
+                if (slot[0] == -1) slot[0] = corner;
+                else if (slot[1] == -1) slot[1] = corner;
+                else slot = {-2, -2};  // used three times or more: never flipped
+            }
+        }
+        std::vector<std::pair<uint64_t, std::array<long, 2>>> ordered(edges.begin(), edges.end());
+        std::sort(ordered.begin(), ordered.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+        std::vector<uint8_t> touched(to - from, 0);
+        size_t passFlips = 0;
+        for (const auto& [key, slot] : ordered) {
+            if (slot[0] < 0 || slot[1] < 0) continue;
+            const size_t k0 = static_cast<size_t>(slot[0]) / 3, k1 = static_cast<size_t>(slot[1]) / 3;
+            if (k0 == k1 || touched[k0 - from] || touched[k1 - from]) continue;
+            const size_t j0 = static_cast<size_t>(slot[0]) % 3, j1 = static_cast<size_t>(slot[1]) % 3;
+            const uint32_t a = tri[3 * k0 + j0], b = tri[3 * k0 + (j0 + 1) % 3], c = tri[3 * k0 + (j0 + 2) % 3];
+            if (tri[3 * k1 + j1] != b || tri[3 * k1 + (j1 + 1) % 3] != a) continue;  // the pair is not consistently wound
+            const uint32_t d = tri[3 * k1 + (j1 + 2) % 3];
+            if (c == d || cross2(p[a], p[b], p[c]) <= 0 || cross2(p[b], p[a], p[d]) <= 0) continue;
+            if (cross2(p[c], p[a], p[d]) <= 1e-12 || cross2(p[d], p[b], p[c]) <= 1e-12) continue;  // not convex
+            // d inside the circumcircle of (a, b, c), which winds clockwise in (x, z)
+            const double adx = static_cast<double>(p[a].x) - p[d].x, adz = static_cast<double>(p[a].z) - p[d].z;
+            const double bdx = static_cast<double>(p[b].x) - p[d].x, bdz = static_cast<double>(p[b].z) - p[d].z;
+            const double cdx = static_cast<double>(p[c].x) - p[d].x, cdz = static_cast<double>(p[c].z) - p[d].z;
+            const double det = (adx * adx + adz * adz) * (bdx * cdz - cdx * bdz) - (bdx * bdx + bdz * bdz) * (adx * cdz - cdx * adz) + (cdx * cdx + cdz * cdz) * (adx * bdz - bdx * adz);
+            const double scale = (adx * adx + adz * adz + bdx * bdx + bdz * bdz + cdx * cdx + cdz * cdz);
+            if (det >= -1e-9 * scale * scale) continue;
+            tri[3 * k0] = c; tri[3 * k0 + 1] = a; tri[3 * k0 + 2] = d;
+            tri[3 * k1] = d; tri[3 * k1 + 1] = b; tri[3 * k1 + 2] = c;
+            touched[k0 - from] = touched[k1 - from] = 1;
+            ++passFlips;
+        }
+        flips += passFlips;
+        if (passFlips == 0) break;
+    }
+    return flips;
+}
+
 } // namespace detail
 
 // ============================================================================================
@@ -462,9 +525,13 @@ struct StripParams {
     double climbLimit{1.0};          // a crown never grows more than this far up into a neighbour (m)
     double supportStep{1.0};         // height gap separating candidate support surfaces (m)
     double supportSearch{25.0};      // how far to look through canopy for a surface to stand on (m)
-    double footprintDilation{1.0};   // removal reaches this far beyond the crown footprint (m)
+    double footprintDilation{1.0};   // everything under the apex this far beyond the crown footprint goes with the tree (m)
+    double drapeReach{10.0};          // the scanned drape connected to a tree goes with it out to this far from its crown (m)
     double clearance{0.3};           // removal stops this high above the support (m)
+    double supportBand{1.5};         // a tree's cap never lies further than this from its measured support (m)
     double skirtMin{0.3};            // boundary points higher than this above the cap get a skirt down (m)
+    double fragmentMaxArea{300.0};   // a kept piece left hanging beside a removal, touching neither ground nor a wall or
+                                     // roof, goes with the tree when it is no larger than this (m^2)
     double capGrid{1.5};             // spacing of interior cap points (m)
     double seamGap{1.0};             // hole boundaries broken by an open tile seam are joined across gaps up to this (m)
     double sampleSpacing{0.7};       // voxel size of the crown surface samples (m)
@@ -473,7 +540,10 @@ struct StripParams {
 
 struct CrownRecord {
     int id{0};
-    std::string status;              // tree | below_min_height | cut_at_boundary
+    // tree | below_min_height | cut_at_boundary (kept as scanned) | cut_at_boundary_removed (taken with the trees it
+    // joins, not replanted)
+    std::string status;
+    bool reachesBoundary{false};     // a tree whose crown runs to the extraction's edge: measured (and rebuilt) up to it
     Vec3 apex;
     double stemX{0}, stemZ{0};
     double supportY{0};
@@ -493,10 +563,24 @@ struct StripStats {
     size_t texturedTriangles{0}, chromaVegetationTriangles{0}, vegetationTriangles{0}, surfaceTriangles{0};
     size_t images{0};
     size_t openEdgesBefore{0}, openEdgesAfter{0};
-    size_t loops{0}, openChains{0}, linkedChains{0}, holesBridged{0}, forcedEars{0}, capInteriorPoints{0}, capFacingDown{0}, capDegenerate{0}, capsReversed{0};
+    size_t loops{0}, openChains{0}, linkedChains{0}, holesBridged{0}, forcedEars{0}, capInteriorPoints{0}, capTurnedUp{0}, capDegenerate{0}, capsReversed{0};
     size_t capFillCells{0};          // footprint cells no loop cap covered (seen from above), filled on the cap surface
+    size_t capFlips{0};              // Delaunay edge flips that reshaped ear-clipped cap triangles
+    double capMaxRiseM{0};           // largest height difference across one cap face (the cap follows its support; it never climbs)
+    // hole boundary points, and those standing more than skirtMin off the cap surface (skirted), by what they hang on
+    size_t boundaryPoints{0}, skirtedPoints{0};
+    double skirtAreaOnWallsM2{0}, skirtAreaOnLevelSurfacesM2{0}, skirtAreaOnKeptCanopyM2{0}, skirtAreaOnOtherM2{0}, skirtMaxHeightM{0};
+    // tallest skirt by what it hangs on (walls, level surfaces, canopy that stays, anything else)
+    double skirtMaxOnWallsM{0}, skirtMaxOnLevelSurfacesM{0}, skirtMaxOnKeptCanopyM{0}, skirtMaxOnOtherM{0};
+    double canopyTakenWithTreesM2{0}; // canopy outside the tree crowns removed with them (their drape, fragments): not replanted
+    size_t fragmentsTaken{0};        // pieces of a tree's scan left hanging in the air beside its removal, taken with it
+    double fragmentAreaTakenM2{0};
+    size_t drapeSheets{0};           // planar sheets of the drape taken with the trees (not walls: nothing planar at their top)
+    double drapeSheetAreaM2{0};
     double canopyAreaM2{0}, treeCanopyAreaM2{0};
-    size_t crownsTree{0}, crownsLow{0}, crownsCut{0}, crownsTooSmall{0};
+    size_t crownsTree{0}, crownsLow{0}, crownsCut{0}, crownsCutRemoved{0}, crownsTooSmall{0};
+    size_t treesReachingBoundary{0}; // trees whose crown runs to the extraction's edge (their apex is inside it)
+    double cutCanopyRemovedM2{0};    // canopy of cut crowns taken with the trees it joined (not replanted)
     std::array<double, 3> greenDispersionQuartiles{}, otherDispersionQuartiles{};
     std::vector<std::pair<std::string, double>> ms;
 };
@@ -556,6 +640,9 @@ private:
     std::vector<uint8_t> chromaVeg;
     std::vector<float> dispersion;
     std::vector<uint8_t> surface;      // face of a large planar segment
+    std::vector<int32_t> segOf;        // planar segment per face (index into segments, -1 when not a surface)
+    struct Segment { double area{0}; Vec3 normal; float minY{0}, maxY{0}; std::vector<uint32_t> faces; };
+    std::vector<Segment> segments;
     std::vector<uint8_t> veg;
     // half-edges sorted by undirected key
     struct HalfEdge { uint64_t key; uint32_t tri; uint8_t j; };
@@ -786,6 +873,7 @@ private:
         std::vector<int32_t> seg(T, -1);
         std::vector<uint32_t> members;
         surface.assign(T, 0);
+        segOf.assign(T, -1);
         int32_t next = 0;
         for (uint32_t seed : order) {
             if (seg[seed] >= 0 || area[seed] <= 0) continue;
@@ -820,7 +908,24 @@ private:
                 }
             }
             if (aSum >= P.planarArea) {
-                for (uint32_t t : members) { surface[t] = 1; ++R.stats.surfaceTriangles; }
+                Segment sg;
+                sg.area = aSum;
+                const float len = nSum.length();
+                sg.normal = len > 1e-12f ? nSum / len : n;
+                sg.minY = std::numeric_limits<float>::infinity();
+                sg.maxY = -std::numeric_limits<float>::infinity();
+                for (uint32_t t : members) {
+                    surface[t] = 1;
+                    ++R.stats.surfaceTriangles;
+                    segOf[t] = static_cast<int32_t>(segments.size());
+                    for (int j = 0; j < 3; ++j) {
+                        const float y = weldPos[wtri[3 * static_cast<size_t>(t) + static_cast<size_t>(j)]].y;
+                        sg.minY = std::min(sg.minY, y);
+                        sg.maxY = std::max(sg.maxY, y);
+                    }
+                }
+                sg.faces = members;
+                segments.push_back(std::move(sg));
             }
         }
     }
@@ -889,14 +994,15 @@ private:
     struct CrownWork {
         std::vector<size_t> cells;
         size_t apexCell{0};
-        bool cut{false};
+        bool cut{false};             // the apex is not measured: its local-maximum window reaches the extraction's edge
+        bool reachesBoundary{false}; // the footprint touches the extraction's edge
         bool tooSmall{false};
         double support{0};
         std::string supportSource;
-        bool groundSupported{true};
         int recordIndex{-1};
     };
     std::vector<CrownWork> work;
+    std::vector<int> edgeDist;       // per cell: distance (cells, 4-connected) from the extraction's outer edge
 
     double windowRadius(double h) const { return std::clamp(P.windowBase + P.windowSlope * h, P.windowMin, P.windowMax); }
 
@@ -1001,6 +1107,33 @@ private:
             }
         }
 
+        // distance (cells, 4-connected) of every cell from the extraction's edge
+        edgeDist.assign(N, std::numeric_limits<int>::max());
+        {
+            std::queue<size_t> q;
+            for (int k = 0; k < g.nz; ++k) {
+                for (int i = 0; i < g.nx; ++i) {
+                    const size_t c = g.id(i, k);
+                    if (outside[c] || i == 0 || k == 0 || i == g.nx - 1 || k == g.nz - 1) { edgeDist[c] = 0; q.push(c); }
+                }
+            }
+            while (!q.empty()) {
+                const size_t c = q.front();
+                q.pop();
+                const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
+                for (const auto& d : D) {
+                    const int a = i + d[0], b = k + d[1];
+                    if (!g.in(a, b)) continue;
+                    const size_t j = g.id(a, b);
+                    if (edgeDist[j] <= edgeDist[c] + 1) continue;
+                    edgeDist[j] = edgeDist[c] + 1;
+                    q.push(j);
+                }
+            }
+        }
+        // A crown whose footprint touches the edge reaches it. Its apex is measured only when the local-maximum window
+        // around it lies inside the extraction; otherwise the top of the tree (and its trunk) may lie outside, and the
+        // crown is cut.
         for (size_t m = 0; m < work.size(); ++m) {
             auto& w = work[m];
             const double area = static_cast<double>(w.cells.size()) * P.cell * P.cell;
@@ -1008,12 +1141,16 @@ private:
             float best = -std::numeric_limits<float>::infinity();
             for (size_t c : w.cells) {
                 if (g.h[c] > best) { best = g.h[c]; w.apexCell = c; }
-                const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
-                for (int dk = -1; dk <= 1 && !w.cut; ++dk) {
-                    for (int di = -1; di <= 1; ++di) {
-                        const int a = i + di, b = k + dk;
-                        if (!g.in(a, b) || outside[g.id(a, b)] || a == 0 || b == 0 || a == g.nx - 1 || b == g.nz - 1) { w.cut = true; break; }
-                    }
+                if (edgeDist[c] <= 1) w.reachesBoundary = true;
+            }
+            if (w.cells.empty()) continue;
+            const double window = windowRadius(smoothChm[w.apexCell]);
+            const int r = static_cast<int>(std::ceil(window / P.cell));
+            const int ai = static_cast<int>(w.apexCell % static_cast<size_t>(g.nx)), ak = static_cast<int>(w.apexCell / static_cast<size_t>(g.nx));
+            for (int dk = -r; dk <= r && !w.cut; ++dk) {
+                for (int di = -r; di <= r; ++di) {
+                    if ((di * di + dk * dk) * P.cell * P.cell > window * window) continue;
+                    if (!g.in(ai + di, ak + dk) || edgeDist[g.id(ai + di, ak + dk)] == 0) { w.cut = true; break; }
                 }
             }
         }
@@ -1023,6 +1160,13 @@ private:
             if (w.tooSmall) { ++R.stats.crownsTooSmall; continue; }
             measureCrown(static_cast<int>(m));
         }
+    }
+
+    bool removedStatus(const std::string& status) const { return status == "tree" || status == "cut_at_boundary_removed"; }
+    /** Crowns the strip removes: the trees (replanted) and the cut canopy joined to them (not replanted). */
+    bool removesCrown(size_t m) const {
+        const auto& w = work[m];
+        return w.recordIndex >= 0 && removedStatus(R.crowns[static_cast<size_t>(w.recordIndex)].status);
     }
 
     /** The surface a crown stands on, its status, footprint, sector radii and surface samples. */
@@ -1049,7 +1193,7 @@ private:
         rec.stemZ = sw > 0 ? sz / sw : rec.apex.z;
         rec.terrainY = dtm.sample(rec.stemX, rec.stemZ);
 
-        // support: the nearest planar surfaces (ground, roofs) around the footprint, reached outward from its edge
+        // support: the nearest level planar surfaces (ground, roofs) around the footprint, reached outward from its edge
         // through anything else (other canopy, rough non-green surfaces), nearest first
         std::vector<float> samples;
         std::unordered_map<size_t, uint8_t> seen;
@@ -1059,7 +1203,7 @@ private:
         std::queue<size_t> frontier;
         for (size_t c : w.cells) frontier.push(c);
         const double reach2 = P.supportSearch * P.supportSearch;
-        const size_t wanted = std::max<size_t>(12, std::min<size_t>(64, w.cells.size() / 2));
+        const size_t wanted = std::max<size_t>(24, std::min<size_t>(64, w.cells.size() / 2));
         while (!frontier.empty() && samples.size() < wanted) {
             const size_t c = frontier.front();
             frontier.pop();
@@ -1079,11 +1223,13 @@ private:
             }
         }
         if (!samples.empty()) {
+            // height clusters of the surrounding surfaces; the tree stands on the lowest one that holds at least a quarter
+            // of them (a street tree under an awning or beside a kiosk stands on the street; a roof garden sees only roof)
             std::sort(samples.begin(), samples.end());
             size_t bestLo = 0, bestN = 0, lo = 0;
             for (size_t i = 1; i <= samples.size(); ++i) {
                 if (i == samples.size() || samples[i] - samples[i - 1] > P.supportStep) {
-                    if (i - lo > bestN) { bestN = i - lo; bestLo = lo; }
+                    if (bestN == 0 && 4 * (i - lo) >= samples.size()) { bestN = i - lo; bestLo = lo; }
                     lo = i;
                 }
             }
@@ -1097,11 +1243,16 @@ private:
         rec.apexAboveSupport = rec.apex.y - rec.supportY;
         w.support = rec.supportY;
         w.supportSource = rec.supportSource;
-        w.groundSupported = std::abs(rec.supportY - rec.terrainY) <= 1.5;
 
+        rec.reachesBoundary = w.reachesBoundary;
         if (w.cut) { rec.status = "cut_at_boundary"; ++R.stats.crownsCut; }
         else if (rec.apexAboveSupport < P.minTreeHeight) { rec.status = "below_min_height"; ++R.stats.crownsLow; }
-        else { rec.status = "tree"; ++R.stats.crownsTree; R.stats.treeCanopyAreaM2 += rec.areaM2; }
+        else {
+            rec.status = "tree";
+            ++R.stats.crownsTree;
+            R.stats.treeCanopyAreaM2 += rec.areaM2;
+            if (w.reachesBoundary) ++R.stats.treesReachingBoundary;
+        }
 
         // sector radii (16 sectors around the stem) and voxel samples of the crown surface
         rec.sectorRadii.fill(0.0);
@@ -1147,22 +1298,226 @@ private:
     std::vector<uint32_t> capTris;       // indices into capPos
     std::vector<uint8_t> capIsSkirt;     // per cap triangle
 
-    double capHeight(int crown, double x, double z) const {
-        const auto& w = work[static_cast<size_t>(crown)];
-        return w.groundSupported ? dtm.sample(x, z) : w.support;
+    /**
+     * The surfaces things stand on, which the ground under a removed tree is rebuilt on: the lowest and the highest
+     * level planar surface (ground, paving, roofs, terraces; not the drape) in each cell of the surface model, filled
+     * where none was scanned (under canopy) from the nearest scanned ones.
+     * A crown's cap takes whichever of the two lies nearer its measured support (so a cell on a wall line gives a roof
+     * tree the roof and a street tree the street); where neither lies within supportBand of that support, the support
+     * itself (the street beside a roof is not what a roof tree stands on, nor is the roof beside a street tree). Unlike the terrain
+     * model, a lower envelope that drops into every stair well and light well, this meets the scanned ground or roof
+     * around the crown.
+     */
+    height_field::Grid supportLow, supportHigh;
+
+    void buildSupportSurface() {
+        const auto& g = surf.top;
+        supportLow.init(g.x0, g.z0, g.x0 + g.nx * g.cell, g.z0 + g.nz * g.cell, g.cell);
+        supportHigh = supportLow;
+        std::vector<uint32_t> level;
+        for (size_t t = 0; t < T; ++t) {
+            // within ~14 degrees of level: paving, roofs, terraces (not the tilted fringe where a scan climbs onto canopy)
+            if (!isArchitecture(t) || normal[t].y < 0.97f) continue;
+            level.insert(level.end(), {wtri[3 * t], wtri[3 * t + 1], wtri[3 * t + 2]});
+        }
+        if (level.empty()) throw VegetationError("no_ground", "the tile has no level surface (ground or roof) to rebuild the ground under its trees on");
+        height_field::rasterizeTriangles(supportLow, weldPos, level, [&](size_t c, float y, size_t) {
+            float& lo = supportLow.h[c];
+            float& hi = supportHigh.h[c];
+            if (std::isnan(lo) || y < lo) lo = y;
+            if (std::isnan(hi) || y > hi) hi = y;
+        });
+        height_field::fillEmpty(supportLow);
+        height_field::fillEmpty(supportHigh);
     }
 
+    double capHeight(int crown, double x, double z) const {
+        const double s = work[static_cast<size_t>(crown)].support;
+        const double lo = supportLow.sample(x, z), hi = supportHigh.sample(x, z);
+        const double pick = std::abs(hi - s) < std::abs(lo - s) ? hi : lo;
+        return std::abs(pick - s) <= P.supportBand ? pick : s;
+    }
+
+    /** How far the highest corner of a triangle rises above a crown's cap surface. */
+    double riseAboveCap(int crown, size_t t) const {
+        double r = -std::numeric_limits<double>::infinity();
+        for (int j = 0; j < 3; ++j) {
+            const Vec3& v = weldPos[wtri[3 * t + static_cast<size_t>(j)]];
+            r = std::max(r, static_cast<double>(v.y) - capHeight(crown, v.x, v.z));
+        }
+        return r;
+    }
+
+    /**
+     * Faces of large planar segments that are not green: walls, roofs, paving. Removal never takes them, except planar
+     * sheets of the drape around a tree (see classifyDrapeSurfaces).
+     */
+    std::vector<uint8_t> drapeFace;
+    bool isArchitecture(size_t t) const { return surface[t] && !chromaVeg[t] && !(drapeFace.size() == T && drapeFace[t]); }
+
+    /**
+     * Planar sheets of the photogrammetric drape around a tree, told apart from walls and roofs by what they meet: a
+     * wall carries a roof or another wall along its top rim, a roof is edged by walls or parapets; a sheet the scan
+     * hangs from a crown down to the ground (or a tile-seam curtain under canopy) meets canopy or nothing at its top,
+     * and a flat patch or underside of a coarse canopy mesh is edged by canopy. Only sheets near a tree, entirely below
+     * the trees around it and (for flat ones and undersides) standing above its ground count; they go with the tree.
+     * Repeated until nothing changes, since a curtain may hang from a flat canopy patch.
+     */
+    void classifyDrapeSurfaces(const std::vector<int>& drapeOwner, const std::vector<float>& regionApex) {
+        const auto& g = surf.top;
+        drapeFace.assign(T, 0);
+        struct Candidate { size_t seg; int owner; bool wholeRim; };
+        std::vector<Candidate> candidates;
+        for (size_t si = 0; si < segments.size(); ++si) {
+            const auto& sg = segments[si];
+            int owner = -1;
+            float apexY = -std::numeric_limits<float>::infinity();
+            for (uint32_t t : sg.faces) {
+                const int i = g.ix(centroid[t].x), k = g.iz(centroid[t].z);
+                if (!g.in(i, k) || drapeOwner[g.id(i, k)] < 0) continue;
+                if (owner < 0) owner = drapeOwner[g.id(i, k)];
+                apexY = std::max(apexY, regionApex[g.id(i, k)]);
+            }
+            if (owner < 0 || sg.maxY > apexY + P.clearance) continue;
+            // flat sheets and undersides are judged by their whole edge, and must stand off the surface the tree stands on
+            // as high as canopy does (a roof garden's roof is the trees' support, not part of them)
+            const bool wholeRim = sg.normal.y >= 0.85f || sg.normal.y <= -0.3f;
+            if (wholeRim && sg.minY - work[static_cast<size_t>(owner)].support < P.canopyMinHeight) continue;
+            candidates.push_back({si, owner, wholeRim});
+        }
+        for (int pass = 0; pass < 8; ++pass) {
+            size_t changed = 0;
+            for (const auto& cand : candidates) {
+                const auto& sg = segments[cand.seg];
+                if (drapeFace[sg.faces.front()]) continue;
+                double rimSurface = 0, rimOther = 0;
+                for (uint32_t t : sg.faces) {
+                    for (int j = 0; j < 3; ++j) {
+                        const uint32_t a = wtri[3 * static_cast<size_t>(t) + static_cast<size_t>(j)], b = wtri[3 * static_cast<size_t>(t) + static_cast<size_t>((j + 1) % 3)];
+                        if (a == b) continue;
+                        const float edgeY = 0.5f * (weldPos[a].y + weldPos[b].y);
+                        if (!cand.wholeRim && edgeY < sg.maxY - 1.0f) continue;
+                        const double len = (weldPos[a] - weldPos[b]).length();
+                        const uint64_t key = a < b ? (static_cast<uint64_t>(a) << 32 | b) : (static_cast<uint64_t>(b) << 32 | a);
+                        auto it = std::lower_bound(halfEdges.begin(), halfEdges.end(), key, [](const HalfEdge& h, uint64_t k) { return h.key < k; });
+                        bool inner = false, across = false;
+                        for (; it != halfEdges.end() && it->key == key; ++it) {
+                            if (it->tri == t) continue;
+                            if (segOf[it->tri] == static_cast<int32_t>(cand.seg)) { inner = true; continue; }
+                            across = true;
+                            // a steep sheet's top rim is what lies over its top (a roof, a coping, canopy); a sheet beside
+                            // it (lower than the edge) is not
+                            if (!cand.wholeRim && centroid[it->tri].y < edgeY - 0.1f) continue;
+                            if (isArchitecture(it->tri)) rimSurface += len; else rimOther += len;
+                        }
+                        if (!inner && !across) rimOther += len;  // an open edge: the sheet ends in the air
+                    }
+                }
+                // a wall or roof meets architecture over its top rim; a sheet that meets canopy, or nothing, is drape
+                if (rimSurface > 0 && rimSurface >= rimOther) continue;
+                for (uint32_t t : sg.faces) drapeFace[t] = 1;
+                ++R.stats.drapeSheets;
+                R.stats.drapeSheetAreaM2 += sg.area;
+                ++changed;
+            }
+            if (changed == 0) break;
+        }
+    }
+
+    /**
+     * Removes each tree down to the surface it stands on and closes the ground under it.
+     *
+     * Removal, everything rising more than `clearance` above the crown's cap surface and below the apex of the trees
+     * around it: the tree's vegetation in its footprint (dilated by footprintDilation); everything else in that
+     * footprint that is not architecture (the drape under and around the crown, connected to it or not); then the drape
+     * connected to that, out to drapeReach from the crowns (beyond twice the dilation, next to walls only what is
+     * green, so a facade's relief stays). Architecture is planar surfaces except the drape sheets classifyDrapeSurfaces
+     * finds. Pieces of the scan the removal leaves hanging in the air beside it go too (takeFloatingFragments). Crowns
+     * that stay (low roof vegetation, cut crowns no removal stands beside) and their rim are never taken; cut canopy
+     * that would be left standing over a hole goes with the trees it joins (removeAndCap).
+     *
+     * Closing: every hole loop is lowered onto its crown's cap surface (a loop inside another uses the outer loop's
+     * crown). A loop point within skirtMin of the cap surface is used as it is; a higher (or lower) one gets a copy on
+     * the cap surface, joined to it by a vertical skirt along the hole edge (never across a seam gap), so walls and
+     * building sides the tree hid continue down to the ground and a low planting that stays gets its side closed. The cap is the lowered loop, ear-clipped, split at
+     * interior points on the cap surface and Delaunay-flipped, so no cap face reaches up to where the tree was. Cap
+     * faces face up. Footprint cells still uncovered seen from above get patches on the cap surface.
+     */
+    std::vector<uint8_t> keptCell;   // canopy of crowns that stay, and its rim: never removed
+    std::vector<int> keptOwner;      // the staying crown each kept cell belongs to (its own cell first, else a rim)
+    std::vector<int> growMask;       // per cell: the removed crown whose (twice dilated) footprint holds it
+
     void removeAndCap() {
+        // Canopy of a crown the extraction cut (its apex, and so its trunk, outside) can stay as scanned only where
+        // nothing is removed beside it. Where its side would be left standing over a hole, more than canopyMinHeight
+        // above the ground rebuilt there, only a wall nobody scanned could close it: it goes with the trees it joins
+        // instead (reported, not replanted), and the removal is redone, until no cut canopy stands over a hole.
+        size_t cutCrowns = 0;
+        for (const auto& rec : R.crowns) cutCrowns += rec.status == "cut_at_boundary";
+        for (size_t pass = 0; pass <= cutCrowns; ++pass) {
+            removeCrowns();
+            if (!takeCutCanopyOverHoles()) break;
+        }
+        closeHoles();
+    }
+
+    /** Hole edges hanging on cut canopy too high above the removed crown's ground: that canopy is taken. */
+    bool takeCutCanopyOverHoles() {
+        const auto& g = surf.top;
+        std::set<int> take;
+        for (size_t i = 0; i < halfEdges.size();) {
+            size_t j = i, kept = 0;
+            int crown = -1;
+            long keptAt = -1;
+            while (j < halfEdges.size() && halfEdges[j].key == halfEdges[i].key) {
+                const uint32_t t = halfEdges[j].tri;
+                if (removedBy[t] >= 0) crown = removedBy[t];
+                else { ++kept; keptAt = static_cast<long>(j); }
+                ++j;
+            }
+            i = j;
+            if (kept != 1 || crown < 0) continue;
+            const auto& he = halfEdges[static_cast<size_t>(keptAt)];
+            if (isArchitecture(he.tri)) continue;
+            const int ci = g.ix(centroid[he.tri].x), ck = g.iz(centroid[he.tri].z);
+            if (!g.in(ci, ck)) continue;
+            const size_t c = g.id(ci, ck);
+            if (!keptCell[c] || keptOwner[c] < 0) continue;
+            const auto& owner = work[static_cast<size_t>(keptOwner[c])];
+            if (owner.recordIndex < 0 || R.crowns[static_cast<size_t>(owner.recordIndex)].status != "cut_at_boundary") continue;
+            const Vec3 &a = weldPos[wtri[3 * he.tri + he.j]], &b = weldPos[wtri[3 * he.tri + static_cast<size_t>((he.j + 1) % 3)]];
+            const double rise = std::max(a.y - capHeight(crown, a.x, a.z), b.y - capHeight(crown, b.x, b.z));
+            if (rise > P.canopyMinHeight) take.insert(keptOwner[c]);
+        }
+        for (int m : take) {
+            auto& rec = R.crowns[static_cast<size_t>(work[static_cast<size_t>(m)].recordIndex)];
+            rec.status = "cut_at_boundary_removed";
+            --R.stats.crownsCut;
+            ++R.stats.crownsCutRemoved;
+            R.stats.cutCanopyRemovedM2 += rec.areaM2;
+        }
+        return !take.empty();
+    }
+
+    /** The removal (removedBy) for the crowns removed now; see removeAndCap. */
+    void removeCrowns() {
         const auto& g = surf.top;
         const size_t N = g.size();
         removedBy.assign(T, -1);
+        R.stats.removedTriangles = 0;
+        R.stats.canopyTakenWithTreesM2 = 0;
+        R.stats.drapeSheets = 0;
+        R.stats.drapeSheetAreaM2 = 0;
+        R.stats.fragmentsTaken = 0;
+        R.stats.fragmentAreaTakenM2 = 0;
         // seed and growth masks per cell: dilated footprints of the trees
-        std::vector<int> seedMask(N, -1), growMask(N, -1);
+        std::vector<int> seedMask(N, -1);
+        growMask.assign(N, -1);
         const int rs = static_cast<int>(std::ceil(P.footprintDilation / P.cell));
         const int rg = static_cast<int>(std::ceil(2.0 * P.footprintDilation / P.cell));
         for (size_t m = 0; m < work.size(); ++m) {
             const auto& w = work[m];
-            if (w.recordIndex < 0 || R.crowns[static_cast<size_t>(w.recordIndex)].status != "tree") continue;
+            if (!removesCrown(m)) continue;
             for (size_t c : w.cells) {
                 const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
                 for (int dk = -rg; dk <= rg; ++dk) {
@@ -1176,59 +1531,234 @@ private:
                 }
             }
         }
-        // canopy that belongs to no kept crown (fragments, cells the watershed did not reach) may be removed with the
-        // tree it hangs on; canopy of crowns that stay (low roof vegetation, crowns cut by the boundary) may not
+        // canopy of crowns that stay (low roof vegetation, cut crowns joined to no removed tree) and its rim is never
+        // removed; canopy that belongs to no kept crown (fragments, cells the watershed did not reach) may go with the
+        // tree it hangs on
+        keptCell.assign(N, 0);
+        keptOwner.assign(N, -1);
         std::vector<uint8_t> freeCanopy(N, 0);
-        {
-            std::vector<uint8_t> kept(N, 0);
-            for (const auto& w : work) {
-                if (w.recordIndex < 0 || R.crowns[static_cast<size_t>(w.recordIndex)].status == "tree") continue;
-                for (size_t c : w.cells) {
-                    const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
-                    for (int dk = -1; dk <= 1; ++dk) for (int di = -1; di <= 1; ++di) if (g.in(i + di, k + dk)) kept[g.id(i + di, k + dk)] = 1;
+        for (size_t m = 0; m < work.size(); ++m) {
+            const auto& w = work[m];
+            if (w.recordIndex < 0 || removesCrown(m)) continue;
+            for (size_t c : w.cells) {
+                const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
+                for (int dk = -1; dk <= 1; ++dk) {
+                    for (int di = -1; di <= 1; ++di) {
+                        if (!g.in(i + di, k + dk)) continue;
+                        const size_t j = g.id(i + di, k + dk);
+                        keptCell[j] = 1;
+                        if (keptOwner[j] < 0 || label[j] == static_cast<int>(m)) keptOwner[j] = static_cast<int>(m);
+                    }
                 }
             }
-            for (size_t c = 0; c < N; ++c) freeCanopy[c] = canopy[c] && !kept[c] && growMask[c] < 0;
         }
+        for (size_t c = 0; c < N; ++c) freeCanopy[c] = canopy[c] && !keptCell[c] && growMask[c] < 0;
         auto cellOf = [&](const Vec3& p) -> long {
             const int i = g.ix(p.x), k = g.iz(p.z);
             return g.in(i, k) ? static_cast<long>(g.id(i, k)) : -1;
         };
-        // the highest corner of a triangle: growth takes every non-surface triangle that reaches above the clearance, so
-        // the hem where a scanned crown drapes down to the ground goes with the tree instead of standing as a sliver
-        auto topY = [&](uint32_t t) {
-            return std::max({weldPos[wtri[3 * static_cast<size_t>(t)]].y, weldPos[wtri[3 * static_cast<size_t>(t) + 1]].y, weldPos[wtri[3 * static_cast<size_t>(t) + 2]].y});
+        // reach of the drape: the nearest tree crown of every cell within drapeReach of one (multi-source breadth-first,
+        // 4-connected, in cells), and the highest apex of the trees within reach of each cell
+        std::vector<int> drapeOwner(N, -1);
+        std::vector<float> regionApex(N, -std::numeric_limits<float>::infinity());
+        {
+            const int reachCells = static_cast<int>(std::ceil(P.drapeReach / P.cell));
+            std::vector<int> stamp(N, -1), sd(N, 0);
+            for (size_t m = 0; m < work.size(); ++m) {
+                const auto& w = work[m];
+                if (!removesCrown(m)) continue;
+                const float apexY = R.crowns[static_cast<size_t>(w.recordIndex)].apex.y;
+                std::queue<size_t> sq;
+                for (size_t c : w.cells) { stamp[c] = static_cast<int>(m); sd[c] = 0; sq.push(c); }
+                while (!sq.empty()) {
+                    const size_t c = sq.front();
+                    sq.pop();
+                    regionApex[c] = std::max(regionApex[c], apexY);
+                    if (sd[c] >= reachCells) continue;
+                    const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
+                    for (const auto& [di, dk] : {std::pair{1, 0}, std::pair{-1, 0}, std::pair{0, 1}, std::pair{0, -1}}) {
+                        if (!g.in(i + di, k + dk)) continue;
+                        const size_t n = g.id(i + di, k + dk);
+                        if (stamp[n] == static_cast<int>(m)) continue;
+                        stamp[n] = static_cast<int>(m);
+                        sd[n] = sd[c] + 1;
+                        sq.push(n);
+                    }
+                }
+            }
+        }
+        {
+            std::vector<int> dist(N, -1);
+            std::queue<size_t> bq;
+            for (size_t m = 0; m < work.size(); ++m) {
+                const auto& w = work[m];
+                if (!removesCrown(m)) continue;
+                for (size_t c : w.cells) if (dist[c] < 0) { dist[c] = 0; drapeOwner[c] = static_cast<int>(m); bq.push(c); }
+            }
+            const int reach = static_cast<int>(std::ceil(P.drapeReach / P.cell));
+            while (!bq.empty()) {
+                const size_t c = bq.front();
+                bq.pop();
+                if (dist[c] >= reach) continue;
+                const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
+                for (const auto& [di, dk] : {std::pair{1, 0}, std::pair{-1, 0}, std::pair{0, 1}, std::pair{0, -1}}) {
+                    if (!g.in(i + di, k + dk)) continue;
+                    const size_t n = g.id(i + di, k + dk);
+                    if (dist[n] >= 0) continue;
+                    dist[n] = dist[c] + 1;
+                    drapeOwner[n] = drapeOwner[c];
+                    bq.push(n);
+                }
+            }
+        }
+        classifyDrapeSurfaces(drapeOwner, regionApex);
+        buildSupportSurface();
+        // cells on or next to a wall (a steep planar surface): there, beyond the tree's own vegetation, only green goes,
+        // so the relief of a facade a crown leans on stays
+        std::vector<uint8_t> nearWall(N, 0);
+        for (size_t t = 0; t < T; ++t) {
+            if (!isArchitecture(t) || std::abs(normal[t].y) >= 0.7f) continue;
+            for (int j = 0; j < 3; ++j) {
+                const Vec3& v = weldPos[wtri[3 * t + static_cast<size_t>(j)]];
+                const int i = g.ix(v.x), k = g.iz(v.z);
+                for (int dk = -1; dk <= 1; ++dk) for (int di = -1; di <= 1; ++di) if (g.in(i + di, k + dk)) nearWall[g.id(i + di, k + dk)] = 1;
+            }
+            const long c = cellOf(centroid[t]);
+            if (c >= 0) nearWall[static_cast<size_t>(c)] = 1;
+        }
+        // nothing above the trees standing around it is part of them
+        auto underApex = [&](size_t t) {
+            const long c = cellOf(centroid[t]);
+            if (c < 0) return false;
+            return std::min({weldPos[wtri[3 * t]].y, weldPos[wtri[3 * t + 1]].y, weldPos[wtri[3 * t + 2]].y}) <= regionApex[static_cast<size_t>(c)];
         };
         std::queue<uint32_t> q;
+        // 1. the tree's vegetation
         for (size_t t = 0; t < T; ++t) {
             if (!veg[t]) continue;
             const long c = cellOf(centroid[t]);
-            if (c < 0 || seedMask[static_cast<size_t>(c)] < 0) continue;
+            if (c < 0 || seedMask[static_cast<size_t>(c)] < 0 || keptCell[static_cast<size_t>(c)]) continue;
             const int m = seedMask[static_cast<size_t>(c)];
-            if (centroid[t].y <= work[static_cast<size_t>(m)].support + P.clearance) continue;
+            if (centroid[t].y - capHeight(m, centroid[t].x, centroid[t].z) <= P.clearance) continue;
             removedBy[t] = m;
             q.push(static_cast<uint32_t>(t));
         }
+        // 2. everything else standing in the footprint under the apex that is not a planar surface (the scanned drape
+        //    under and around the crown), connected to the crown or not
+        for (size_t t = 0; t < T; ++t) {
+            if (removedBy[t] >= 0 || isArchitecture(t)) continue;
+            const long c = cellOf(centroid[t]);
+            if (c < 0 || seedMask[static_cast<size_t>(c)] < 0 || keptCell[static_cast<size_t>(c)]) continue;
+            if (nearWall[static_cast<size_t>(c)] && !chromaVeg[t]) continue;
+            const int m = seedMask[static_cast<size_t>(c)];
+            if (riseAboveCap(m, t) <= P.clearance || !underApex(t)) continue;
+            removedBy[t] = m;
+            q.push(static_cast<uint32_t>(t));
+        }
+        // 3. the drape that hangs on it, out to drapeReach from the crowns (free canopy at any distance), down to the
+        //    ground, walls, roofs and the crowns that stay
         while (!q.empty()) {
             const uint32_t t = q.front();
             q.pop();
-            const int m = removedBy[t];
             for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
                 const uint32_t u = adj[e];
-                if (removedBy[u] >= 0) continue;
-                const long c = cellOf(centroid[u]);
-                if (c < 0 || (growMask[static_cast<size_t>(c)] != m && !freeCanopy[static_cast<size_t>(c)])) continue;
-                if (topY(u) <= work[static_cast<size_t>(m)].support + P.clearance) continue;
-                if (surface[u] && !chromaVeg[u]) continue;  // walls, roofs and ground stop it; green planar patches are canopy
+                if (removedBy[u] >= 0 || isArchitecture(u)) continue;
+                const long cl = cellOf(centroid[u]);
+                if (cl < 0) continue;
+                const size_t c = static_cast<size_t>(cl);
+                if (keptCell[c]) continue;
+                const int m = growMask[c] >= 0 ? growMask[c] : drapeOwner[c] >= 0 ? drapeOwner[c] : freeCanopy[c] ? removedBy[t] : -1;
+                if (m < 0) continue;
+                if (nearWall[c] && !chromaVeg[u] && growMask[c] < 0) continue;
+                if (riseAboveCap(m, u) <= P.clearance || !underApex(u)) continue;
                 removedBy[u] = m;
                 q.push(u);
             }
         }
+        takeFloatingFragments();
         for (size_t t = 0; t < T; ++t) if (removedBy[t] >= 0) ++R.stats.removedTriangles;
+        for (size_t c = 0; c < N; ++c) {
+            if (!canopy[c] || surf.topTriangle[c] < 0 || removedBy[static_cast<size_t>(surf.topTriangle[c])] < 0) continue;
+            const int l = label[c];
+            if (!(l >= 0 && removesCrown(static_cast<size_t>(l)))) R.stats.canopyTakenWithTreesM2 += P.cell * P.cell;
+        }
+    }
 
+    /**
+     * What a removal leaves hanging in the air beside it: kept pieces that are not walls, roofs, ground or canopy that
+     * stays (a shadowed bough the chroma did not judge green, a scrap of the scan's curtain), standing more than
+     * canopyMinHeight over the removed tree's ground and connected (through other such pieces) to neither the ground,
+     * nor a wall or roof, nor kept canopy, within fragmentMaxArea. They are part of that tree's scan and go with it;
+     * left standing, only a wall nobody scanned could close the ground under them.
+     */
+    void takeFloatingFragments() {
+        const auto& g = surf.top;
+        auto keptCanopyAt = [&](uint32_t t) {
+            const int i = g.ix(centroid[t].x), k = g.iz(centroid[t].z);
+            return g.in(i, k) && keptCell[g.id(i, k)];
+        };
+        std::vector<uint8_t> anchored(T, 0);
+        std::vector<uint32_t> stamp(T, 0);
+        uint32_t run = 0;
+        for (int pass = 0; pass < 8; ++pass) {
+            std::vector<std::pair<uint32_t, int>> starts;
+            for (size_t t = 0; t < T; ++t) {
+                if (removedBy[t] < 0) continue;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                    const uint32_t u = adj[e];
+                    if (removedBy[u] >= 0 || anchored[u] || isArchitecture(u) || keptCanopyAt(u)) continue;
+                    if (riseAboveCap(removedBy[t], u) <= P.canopyMinHeight) continue;
+                    starts.emplace_back(u, removedBy[t]);
+                }
+            }
+            size_t taken = 0;
+            for (const auto& [start, m] : starts) {
+                if (removedBy[start] >= 0 || anchored[start]) continue;
+                ++run;
+                std::vector<uint32_t> piece{start};
+                stamp[start] = run;
+                double pieceArea = 0;
+                bool held = false;
+                for (size_t qi = 0; qi < piece.size() && !held; ++qi) {
+                    const uint32_t t = piece[qi];
+                    pieceArea += area[t];
+                    // it reaches the ground (within the support band of the surface the tree stood on), or it is large
+                    double low = std::numeric_limits<double>::infinity();
+                    for (int j = 0; j < 3; ++j) {
+                        const Vec3& v = weldPos[wtri[3 * t + static_cast<size_t>(j)]];
+                        low = std::min(low, static_cast<double>(v.y) - capHeight(m, v.x, v.z));
+                    }
+                    if (low <= P.supportBand || pieceArea > P.fragmentMaxArea) { held = true; break; }
+                    for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                        const uint32_t u = adj[e];
+                        if (removedBy[u] >= 0 || stamp[u] == run) continue;
+                        if (anchored[u] || isArchitecture(u) || keptCanopyAt(u)) { held = true; break; }
+                        stamp[u] = run;
+                        piece.push_back(u);
+                    }
+                }
+                if (held) {
+                    for (uint32_t t : piece) anchored[t] = 1;
+                    continue;
+                }
+                for (uint32_t t : piece) removedBy[t] = m;
+                taken += piece.size();
+                ++R.stats.fragmentsTaken;
+                R.stats.fragmentAreaTakenM2 += pieceArea;
+            }
+            if (taken == 0) break;
+        }
+    }
+
+    /** Closes every hole the removal opened; see removeAndCap. */
+    void closeHoles() {
+        const auto& g = surf.top;
+        auto cellOf = [&](const Vec3& p) -> long {
+            const int i = g.ix(p.x), k = g.iz(p.z);
+            return g.in(i, k) ? static_cast<long>(g.id(i, k)) : -1;
+        };
         // hole edges: an edge of a kept triangle whose other triangles were all removed, reversed
-        // (wall: the kept triangle is a steep planar surface, so the hole's edge there hangs on a wall)
-        struct HoleEdge { uint32_t a, b; int crown; bool used; bool wall; };
+        struct HoleEdge { uint32_t a, b; int crown; uint32_t keptTri; bool used; };
         std::vector<HoleEdge> holes;
         for (size_t i = 0; i < halfEdges.size();) {
             size_t j = i;
@@ -1244,25 +1774,25 @@ private:
             if (kept == 1 && removed >= 1) {
                 const auto& he = halfEdges[static_cast<size_t>(keptAt)];
                 const uint32_t a = wtri[3 * he.tri + he.j], b = wtri[3 * he.tri + static_cast<size_t>((he.j + 1) % 3)];
-                const bool wall = surface[he.tri] && std::abs(normal[he.tri].y) < 0.7f;
-                holes.push_back({b, a, crown, false, wall});
+                holes.push_back({b, a, crown, he.tri, false});
             }
             i = j;
         }
         // Walk the hole edges into paths: chains first (from vertices with more outgoing than incoming hole edges),
         // then the remaining cycles. A chain ends where the hole meets a seam that was open before (tile leaves are
         // separate meshes); chains are then joined end to start across such gaps (nearest first, within seamGap).
+        // Per path edge: the kept triangle it hangs on, or -1 for a gap (a seam crossing or the closing edge).
         std::unordered_map<uint32_t, std::vector<size_t>> out;
         std::unordered_map<uint32_t, int> indeg;
         for (size_t h = 0; h < holes.size(); ++h) { out[holes[h].a].push_back(h); indeg[holes[h].b]++; }
-        struct Path { std::vector<uint32_t> v; std::vector<uint8_t> wall; std::map<int, int> votes; bool closed{false}; };
+        struct Path { std::vector<uint32_t> v; std::vector<int64_t> kept; std::map<int, int> votes; bool closed{false}; };
         auto walk = [&](size_t h0) {
             Path p;
             size_t h = h0;
             while (true) {
                 holes[h].used = true;
                 p.v.push_back(holes[h].a);
-                p.wall.push_back(holes[h].wall ? 1 : 0);
+                p.kept.push_back(holes[h].keptTri);
                 p.votes[holes[h].crown]++;
                 const uint32_t next = holes[h].b;
                 if (next == holes[h0].a) { p.closed = true; break; }
@@ -1309,32 +1839,52 @@ private:
                 Path& nx = openPaths[static_cast<size_t>(best)];
                 chainUsed[static_cast<size_t>(best)] = 1;
                 const size_t skip = nx.v.front() == cycle.v.back() ? 1 : 0;
-                if (!skip) cycle.wall.push_back(0);  // the gap across the seam
+                // the chain's last point has no edge of its own yet: it leads across the seam gap (or nowhere)
+                if (!skip) cycle.kept.push_back(-1);
                 cycle.v.insert(cycle.v.end(), nx.v.begin() + static_cast<long>(skip), nx.v.end());
-                cycle.wall.insert(cycle.wall.end(), nx.wall.begin(), nx.wall.end());
+                cycle.kept.insert(cycle.kept.end(), nx.kept.begin(), nx.kept.end());
                 for (const auto& [c, n] : nx.votes) cycle.votes[c] += n;
                 ++R.stats.linkedChains;
             }
             if (cycle.v.size() > 1 && cycle.v.front() == cycle.v.back()) cycle.v.pop_back();
-            cycle.wall.resize(cycle.v.size(), 0);  // the closing edge
+            cycle.kept.resize(cycle.v.size(), -1);  // the closing edge
             closedPaths.push_back(std::move(cycle));
         }
         std::vector<std::vector<uint32_t>> loops;   // welded vertex ids
-        std::vector<std::vector<uint8_t>> loopWall;  // per edge loop[i] -> loop[i + 1]
+        std::vector<std::vector<int64_t>> loopKept; // per edge loop[i] -> loop[i + 1]: kept triangle, -1 for a gap
         std::vector<int> loopCrown;
         for (auto& p : closedPaths) {
             if (p.v.size() < 3) continue;
             int crown = -1, best = -1;
-            for (const auto& [c, n] : p.votes) if (n > best) { best = n; crown = c; }
-            p.wall.resize(p.v.size(), 0);
+            for (const auto& [c, n] : p.votes) if (c >= 0 && n > best) { best = n; crown = c; }
+            if (crown < 0) continue;
+            p.kept.resize(p.v.size(), -1);
             loops.push_back(std::move(p.v));
-            loopWall.push_back(std::move(p.wall));
+            loopKept.push_back(std::move(p.kept));
             loopCrown.push_back(crown);
         }
         R.stats.loops = loops.size();
+        // a loop inside another (an island left standing in a removal: a wall stub, a kiosk) is closed on the cap of the
+        // loop around it, so one cap never mixes two crowns' surfaces
+        {
+            std::vector<double> xzArea(loops.size());
+            for (size_t l = 0; l < loops.size(); ++l) xzArea[l] = detail::upArea(weldPos, loops[l]);
+            std::vector<long> outer(loops.size(), -1);
+            for (size_t l = 0; l < loops.size(); ++l) {
+                if (xzArea[l] >= 0) continue;
+                const Vec3& probe = weldPos[loops[l][0]];
+                double bestArea = std::numeric_limits<double>::infinity();
+                for (size_t o = 0; o < loops.size(); ++o) {
+                    if (o == l || xzArea[o] <= 0 || xzArea[o] >= bestArea) continue;
+                    if (detail::pointInPolygonXZ(weldPos, loops[o], probe.x, probe.z)) { bestArea = xzArea[o]; outer[l] = static_cast<long>(o); }
+                }
+            }
+            for (size_t l = 0; l < loops.size(); ++l) if (outer[l] >= 0) loopCrown[l] = loopCrown[static_cast<size_t>(outer[l])];
+        }
 
-        // skirts down to the cap surface, then caps
-        std::unordered_map<uint32_t, uint32_t> top, dropped;  // welded id -> cap vertex
+        // lower every loop onto the cap surface: skirts along the hole edges where the loop stands off it
+        std::unordered_map<uint32_t, uint32_t> top;        // welded id -> cap vertex (the kept point itself)
+        std::unordered_map<uint64_t, uint32_t> lowered;    // (welded id, crown) -> its copy on that crown's cap surface
         auto topVertex = [&](uint32_t wv) {
             auto it = top.find(wv);
             if (it != top.end()) return it->second;
@@ -1357,25 +1907,38 @@ private:
                 upper[i] = topVertex(loop[i]);
                 const Vec3 p = weldPos[loop[i]];
                 const double gy = capHeight(crown, p.x, p.z);
-                // only points hanging on a wall get a skirt down it; other high points (canopy that stays) are
-                // reached by the cap itself
-                const bool onWall = loopWall[l][i] || loopWall[l][(i + loop.size() - 1) % loop.size()];
-                if (onWall && p.y - gy > P.skirtMin) {
-                    auto it = dropped.find(loop[i]);
-                    if (it == dropped.end()) {
-                        capPos.push_back(Vec3(p.x, static_cast<float>(gy), p.z));
-                        it = dropped.emplace(loop[i], static_cast<uint32_t>(capPos.size() - 1)).first;
-                    }
-                    lower[i] = it->second;
-                } else {
-                    lower[i] = upper[i];
+                ++R.stats.boundaryPoints;
+                if (std::abs(p.y - gy) <= P.skirtMin) { lower[i] = upper[i]; continue; }
+                ++R.stats.skirtedPoints;
+                const uint64_t key = (static_cast<uint64_t>(loop[i]) << 32) | static_cast<uint32_t>(crown);
+                auto it = lowered.find(key);
+                if (it == lowered.end()) {
+                    capPos.push_back(Vec3(p.x, static_cast<float>(gy), p.z));
+                    it = lowered.emplace(key, static_cast<uint32_t>(capPos.size() - 1)).first;
                 }
+                lower[i] = it->second;
             }
             for (size_t i = 0; i < loop.size(); ++i) {
                 const size_t n = (i + 1) % loop.size();
+                if (loopKept[l][i] < 0) continue;  // no kept edge to hang a skirt on (seam gap, closing edge)
                 if (upper[i] == lower[i] && upper[n] == lower[n]) continue;
+                const size_t before = capIsSkirt.size();
                 addTri(upper[i], upper[n], lower[n], true);
                 addTri(upper[i], lower[n], lower[i], true);
+                // what the skirt hangs on (for the report): a wall, a roof or terrace, canopy that stays, anything else
+                const size_t t = static_cast<size_t>(loopKept[l][i]);
+                const long c = cellOf(centroid[t]);
+                const bool wall = isArchitecture(t) && std::abs(normal[t].y) < 0.7f, level = isArchitecture(t) && !wall;
+                const bool onCanopy = !isArchitecture(t) && c >= 0 && keptCell[static_cast<size_t>(c)];
+                double& bucket = wall ? R.stats.skirtAreaOnWallsM2 : level ? R.stats.skirtAreaOnLevelSurfacesM2 : onCanopy ? R.stats.skirtAreaOnKeptCanopyM2 : R.stats.skirtAreaOnOtherM2;
+                double& tallest = wall ? R.stats.skirtMaxOnWallsM : level ? R.stats.skirtMaxOnLevelSurfacesM : onCanopy ? R.stats.skirtMaxOnKeptCanopyM : R.stats.skirtMaxOnOtherM;
+                for (size_t k = before; k < capIsSkirt.size(); ++k) {
+                    const Vec3 &a = capPos[capTris[3 * k]], &b = capPos[capTris[3 * k + 1]], &cc = capPos[capTris[3 * k + 2]];
+                    bucket += 0.5 * static_cast<double>((b - a).cross(cc - a).length());
+                    const double span = static_cast<double>(std::max({a.y, b.y, cc.y}) - std::min({a.y, b.y, cc.y}));
+                    tallest = std::max(tallest, span);
+                    R.stats.skirtMaxHeightM = std::max(R.stats.skirtMaxHeightM, span);
+                }
             }
             std::vector<uint32_t> poly;
             for (uint32_t v : lower) if (poly.empty() || poly.back() != v) poly.push_back(v);
@@ -1425,7 +1988,7 @@ private:
             R.stats.forcedEars += detail::earClip(capPos, merged, capTris);
             for (size_t k = first / 3; k < capTris.size() / 3; ++k) capIsSkirt.push_back(0);
             // interior points on a grid, each splitting the cap triangle that holds it
-            if (areas[l] > P.capGrid * P.capGrid && loopCrown[l] >= 0) {
+            if (std::abs(areas[l]) > P.capGrid * P.capGrid) {
                 double minX = 1e30, maxX = -1e30, minZ = 1e30, maxZ = -1e30;
                 for (uint32_t v : polys[l]) {
                     minX = std::min(minX, static_cast<double>(capPos[v].x)); maxX = std::max(maxX, static_cast<double>(capPos[v].x));
@@ -1441,16 +2004,16 @@ private:
                         double dmin = std::numeric_limits<double>::infinity();
                         for (size_t i = 0; i < merged.size(); ++i) dmin = std::min(dmin, detail::segmentDistanceXZ(x, z, capPos[merged[i]], capPos[merged[(i + 1) % merged.size()]]));
                         if (dmin < 0.35 * s) continue;
-                        const Vec3 q(static_cast<float>(x), static_cast<float>(capHeight(loopCrown[l], x, z)), static_cast<float>(z));
+                        const Vec3 qp(static_cast<float>(x), static_cast<float>(capHeight(loopCrown[l], x, z)), static_cast<float>(z));
                         for (size_t k = first / 3; k < capTris.size() / 3; ++k) {
                             if (capIsSkirt[k]) continue;
                             const uint32_t a = capTris[3 * k], b = capTris[3 * k + 1], c = capTris[3 * k + 2];
                             const double o = detail::cross2(capPos[a], capPos[b], capPos[c]);
                             if (std::abs(o) < 1e-9) continue;
                             const double sgn = o > 0 ? 1.0 : -1.0;
-                            const double d1 = detail::cross2(capPos[a], capPos[b], q) * sgn, d2 = detail::cross2(capPos[b], capPos[c], q) * sgn, d3 = detail::cross2(capPos[c], capPos[a], q) * sgn;
+                            const double d1 = detail::cross2(capPos[a], capPos[b], qp) * sgn, d2 = detail::cross2(capPos[b], capPos[c], qp) * sgn, d3 = detail::cross2(capPos[c], capPos[a], qp) * sgn;
                             if (d1 <= 1e-9 || d2 <= 1e-9 || d3 <= 1e-9) continue;
-                            capPos.push_back(q);
+                            capPos.push_back(qp);
                             const uint32_t qi = static_cast<uint32_t>(capPos.size() - 1);
                             capTris[3 * k + 2] = qi;  // (a, b, q)
                             capTris.insert(capTris.end(), {b, c, qi, c, a, qi});
@@ -1462,20 +2025,22 @@ private:
                     }
                 }
             }
+            R.stats.capFlips += detail::delaunayFlips(capPos, capTris, first / 3, capTris.size() / 3);
         }
-        fillUncoveredCells(growMask);
+        fillUncoveredCells();
         R.stats.capTriangles = capIsSkirt.size() - R.stats.skirtTriangles;
+        // cap faces are ground or roof: where a folded loop (seen from above) clipped an ear facing down, turn it up
         for (size_t k = 0; k < capIsSkirt.size(); ++k) {
             if (capIsSkirt[k]) continue;
             const Vec3 &a = capPos[capTris[3 * k]], &b = capPos[capTris[3 * k + 1]], &c = capPos[capTris[3 * k + 2]];
             const Vec3 n = (b - a).cross(c - a);
             const float len = n.length();
-            if (len < 1e-9f) ++R.stats.capDegenerate;
-            else if (n.y / len < 0.0f) ++R.stats.capFacingDown;
+            if (len < 1e-9f) { ++R.stats.capDegenerate; continue; }
+            if (n.y < 0.0f) { std::swap(capTris[3 * k + 1], capTris[3 * k + 2]); ++R.stats.capTurnedUp; }
+            R.stats.capMaxRiseM = std::max(R.stats.capMaxRiseM, static_cast<double>(std::max({a.y, b.y, c.y}) - std::min({a.y, b.y, c.y})));
         }
 
-        // how far interior cap points sit from the surface they were put on (should be ~0)
-        // and the open-edge count of the result (welded ids for kept triangles, cap vertices mapped back)
+        // the open-edge count of the result (welded ids for kept triangles, cap vertices mapped back)
         std::vector<uint32_t> after;
         after.reserve(wtri.size());
         for (size_t t = 0; t < T; ++t) {
@@ -1494,38 +2059,56 @@ private:
 
     /**
      * Seen from above, every cell of a removed tree's footprint that the scan covered must still be covered. Hole loops
-     * broken by tile seams, or folded over themselves, can leave part of a hole uncapped; those cells get a grid patch on
-     * the cap surface (one welded patch per run of cells), so the ground under a removed tree is never left open.
+     * broken by tile seams, or folded over themselves, can leave part of a hole uncapped (along a seam, a sliver
+     * narrower than a cell); every cell where any of 4 x 4 sample points the scan covered is no longer covered gets a
+     * grid patch on the cap surface (one welded patch per run of cells), so the ground under a removed tree is never
+     * left open.
      */
-    void fillUncoveredCells(const std::vector<int>& growMask) {
+    void fillUncoveredCells() {
         const auto& g = surf.top;
+        constexpr int F = 4;  // sample points per cell side
+        const int sx = g.nx * F, sz = g.nz * F;
+        const double sub = g.cell / F;
         auto raster = [&](const Vec3& a, const Vec3& b, const Vec3& c, std::vector<uint8_t>& cov) {
             const double d = (static_cast<double>(b.x) - a.x) * (static_cast<double>(c.z) - a.z) - (static_cast<double>(c.x) - a.x) * (static_cast<double>(b.z) - a.z);
             if (std::abs(d) < 1e-12) return;
-            const int i0 = std::max(0, g.ix(std::min({a.x, b.x, c.x}))), i1 = std::min(g.nx - 1, g.ix(std::max({a.x, b.x, c.x})));
-            const int k0 = std::max(0, g.iz(std::min({a.z, b.z, c.z}))), k1 = std::min(g.nz - 1, g.iz(std::max({a.z, b.z, c.z})));
+            const int i0 = std::max(0, static_cast<int>(std::floor((std::min({a.x, b.x, c.x}) - g.x0) / sub))), i1 = std::min(sx - 1, static_cast<int>(std::floor((std::max({a.x, b.x, c.x}) - g.x0) / sub)));
+            const int k0 = std::max(0, static_cast<int>(std::floor((std::min({a.z, b.z, c.z}) - g.z0) / sub))), k1 = std::min(sz - 1, static_cast<int>(std::floor((std::max({a.z, b.z, c.z}) - g.z0) / sub)));
             for (int k = k0; k <= k1; ++k) {
                 for (int i = i0; i <= i1; ++i) {
-                    const double x = g.cx(i), z = g.cz(k);
+                    const double x = g.x0 + (i + 0.5) * sub, z = g.z0 + (k + 0.5) * sub;
                     const double w1 = ((x - a.x) * (c.z - a.z) - (c.x - a.x) * (z - a.z)) / d;
                     const double w2 = ((b.x - a.x) * (z - a.z) - (x - a.x) * (b.z - a.z)) / d;
-                    if (w1 >= -1e-9 && w2 >= -1e-9 && 1 - w1 - w2 >= -1e-9) cov[g.id(i, k)] = 1;
+                    if (w1 >= -1e-9 && w2 >= -1e-9 && 1 - w1 - w2 >= -1e-9) cov[static_cast<size_t>(k) * static_cast<size_t>(sx) + static_cast<size_t>(i)] = 1;
                 }
             }
         };
-        std::vector<uint8_t> before(g.size(), 0), after(g.size(), 0);
+        std::vector<uint8_t> beforeSub(static_cast<size_t>(sx) * static_cast<size_t>(sz), 0), afterSub(beforeSub.size(), 0);
         std::vector<int> cellCrown(g.size(), -1);
         for (size_t t = 0; t < T; ++t) {
             const Vec3 &a = weldPos[wtri[3 * t]], &b = weldPos[wtri[3 * t + 1]], &c = weldPos[wtri[3 * t + 2]];
-            raster(a, b, c, before);
-            if (removedBy[t] < 0) { raster(a, b, c, after); continue; }
+            raster(a, b, c, beforeSub);
+            if (removedBy[t] < 0) { raster(a, b, c, afterSub); continue; }
             const int i = g.ix(centroid[t].x), k = g.iz(centroid[t].z);
             if (g.in(i, k)) cellCrown[g.id(i, k)] = removedBy[t];
         }
-        for (size_t k = 0; 3 * k + 2 < capTris.size(); ++k) raster(capPos[capTris[3 * k]], capPos[capTris[3 * k + 1]], capPos[capTris[3 * k + 2]], after);
+        for (size_t k = 0; 3 * k + 2 < capTris.size(); ++k) raster(capPos[capTris[3 * k]], capPos[capTris[3 * k + 1]], capPos[capTris[3 * k + 2]], afterSub);
+        // per cell: covered before (any sample), and still covered after (every sample the scan covered). Along the
+        // extraction's outer edge a removed crown may have overhung the edge of the ground; what it covered there is
+        // the extraction's edge, not a hole, so those cells are not patched.
+        std::vector<uint8_t> before(g.size(), 0), after(g.size(), 1);
+        for (int k = 0; k < sz; ++k) {
+            for (int i = 0; i < sx; ++i) {
+                const size_t s0 = static_cast<size_t>(k) * static_cast<size_t>(sx) + static_cast<size_t>(i);
+                if (!beforeSub[s0]) continue;
+                const size_t c = g.id(i / F, k / F);
+                before[c] = 1;
+                if (!afterSub[s0] && edgeDist[c] > 1) after[c] = 0;
+            }
+        }
         std::unordered_map<uint64_t, uint32_t> corner;  // grid corner -> cap vertex, so neighbouring fill cells share edges
         auto cornerVertex = [&](int i, int k, int crown) {
-            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(i)) << 32) | static_cast<uint32_t>(k);
+            const uint64_t key = ((static_cast<uint64_t>(static_cast<uint32_t>(i)) << 40) | (static_cast<uint64_t>(static_cast<uint32_t>(k)) << 20)) ^ static_cast<uint64_t>(static_cast<uint32_t>(crown));
             auto it = corner.find(key);
             if (it != corner.end()) return it->second;
             const double x = g.x0 + i * g.cell, z = g.z0 + k * g.cell;
@@ -1593,17 +2176,18 @@ private:
                 pr.i.push_back(it->second);
             }
         }
-        // cap primitive: flat-shaded corners
-        Prim cap;
+        // cap (ground or roof where a tree stood) and skirt (vertical, along the hole edges) primitives: flat-shaded corners
+        Prim cap, skirt;
         for (size_t k = 0; k < capTris.size() / 3; ++k) {
+            Prim& pr = capIsSkirt[k] ? skirt : cap;
             const Vec3 &a = capPos[capTris[3 * k]], &b = capPos[capTris[3 * k + 1]], &c = capPos[capTris[3 * k + 2]];
             Vec3 n = (b - a).cross(c - a);
             n = n.lengthSquared() > 1e-20f ? n.normalized() : Vec3(0, 1, 0);
             for (const Vec3* p : {&a, &b, &c}) {
-                cap.p.insert(cap.p.end(), {p->x, p->y, p->z});
-                cap.n.insert(cap.n.end(), {n.x, n.y, n.z});
-                cap.uv.insert(cap.uv.end(), {0.0f, 0.0f});
-                cap.i.push_back(static_cast<uint32_t>(cap.p.size() / 3 - 1));
+                pr.p.insert(pr.p.end(), {p->x, p->y, p->z});
+                pr.n.insert(pr.n.end(), {n.x, n.y, n.z});
+                pr.uv.insert(pr.uv.end(), {0.0f, 0.0f});
+                pr.i.push_back(static_cast<uint32_t>(pr.p.size() / 3 - 1));
             }
         }
 
@@ -1641,6 +2225,7 @@ private:
         };
         for (size_t mi = 0; mi < M; ++mi) addPrim(prims[mi], mi, "tile_m" + std::to_string(mi));
         addPrim(cap, capMaterial, "vegetation_removed_cap");
+        addPrim(skirt, capMaterial, "vegetation_removed_skirt");
         std::string j = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox tile_vegetation strip\"},";
         if (anyUnlit) j += "\"extensionsUsed\":[\"KHR_materials_unlit\"],";
         j += "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"name\":\"devegetated_tile\",\"children\":[" + detail::GlbBuilder::join(children) + "]}";
@@ -1689,6 +2274,7 @@ private:
             uint8_t cr = 255, cg = 0, cb = 0;
             if (rec.status == "below_min_height") { cr = 255; cg = 140; cb = 0; }
             if (rec.status == "cut_at_boundary") { cr = 255; cg = 0; cb = 255; }
+            if (rec.status == "cut_at_boundary_removed") { cr = 40; cg = 90; cb = 255; }
             for (int dk = -2; dk <= 2; ++dk) {
                 for (int di = -2; di <= 2; ++di) {
                     if (!g.in(ai + di, ak + dk)) continue;
@@ -1716,7 +2302,7 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
       << ",\"sampleSpacing\":" << json::num(P.sampleSpacing) << "},\n\"crowns\":[";
     for (size_t i = 0; i < r.crowns.size(); ++i) {
         const auto& c = r.crowns[i];
-        s << (i ? ",\n" : "\n") << "{\"id\":" << c.id << ",\"status\":" << json::str(c.status) << ",\"apex\":" << v3(c.apex)
+        s << (i ? ",\n" : "\n") << "{\"id\":" << c.id << ",\"status\":" << json::str(c.status) << ",\"reachesBoundary\":" << (c.reachesBoundary ? "true" : "false") << ",\"apex\":" << v3(c.apex)
           << ",\"stem\":[" << json::num(c.stemX) << "," << json::num(c.stemZ) << "],\"supportY\":" << json::num(c.supportY)
           << ",\"supportSource\":" << json::str(c.supportSource) << ",\"terrainY\":" << json::num(c.terrainY)
           << ",\"apexAboveSupport\":" << json::num(c.apexAboveSupport) << ",\"areaM2\":" << json::num(c.areaM2) << ",\"sectorRadii\":[";
@@ -1747,9 +2333,18 @@ inline std::string stripStatsJson(const StripResult& r) {
       << ", \"chromaVegetation\": " << st.chromaVegetationTriangles << ", \"vegetation\": " << st.vegetationTriangles << ", \"planarSurface\": " << st.surfaceTriangles << "},\n";
     s << "  \"images\": " << st.images << ",\n";
     s << "  \"openEdges\": {\"before\": " << st.openEdgesBefore << ", \"after\": " << st.openEdgesAfter << "},\n";
-    s << "  \"holes\": {\"loops\": " << st.loops << ", \"openChains\": " << st.openChains << ", \"linkedChains\": " << st.linkedChains << ", \"holesBridged\": " << st.holesBridged << ", \"forcedEars\": " << st.forcedEars << ", \"capInteriorPoints\": " << st.capInteriorPoints << ", \"capFacingDown\": " << st.capFacingDown << ", \"capDegenerate\": " << st.capDegenerate << ", \"capsReversed\": " << st.capsReversed << ", \"capFillCells\": " << st.capFillCells << "},\n";
+    s << "  \"holes\": {\"loops\": " << st.loops << ", \"openChains\": " << st.openChains << ", \"linkedChains\": " << st.linkedChains << ", \"holesBridged\": " << st.holesBridged << ", \"forcedEars\": " << st.forcedEars << ", \"capInteriorPoints\": " << st.capInteriorPoints << ", \"capTurnedUp\": " << st.capTurnedUp << ", \"capDegenerate\": " << st.capDegenerate << ", \"capsReversed\": " << st.capsReversed << ", \"capFillCells\": " << st.capFillCells << ", \"capFlips\": " << st.capFlips << ", \"capMaxRiseM\": " << json::num(st.capMaxRiseM) << "},\n";
+    s << "  \"skirts\": {\"boundaryPoints\": " << st.boundaryPoints << ", \"skirtedPoints\": " << st.skirtedPoints << ", \"areaM2\": {\"onWalls\": " << json::num(st.skirtAreaOnWallsM2)
+      << ", \"onLevelSurfaces\": " << json::num(st.skirtAreaOnLevelSurfacesM2) << ", \"onKeptCanopy\": " << json::num(st.skirtAreaOnKeptCanopyM2) << ", \"onOther\": " << json::num(st.skirtAreaOnOtherM2)
+      << "}, \"maxHeightM\": " << json::num(st.skirtMaxHeightM) << ", \"maxHeightByHangM\": {\"onWalls\": " << json::num(st.skirtMaxOnWallsM)
+      << ", \"onLevelSurfaces\": " << json::num(st.skirtMaxOnLevelSurfacesM) << ", \"onKeptCanopy\": " << json::num(st.skirtMaxOnKeptCanopyM)
+      << ", \"onOther\": " << json::num(st.skirtMaxOnOtherM) << "}},\n";
+    s << "  \"drape\": {\"sheets\": " << st.drapeSheets << ", \"sheetAreaM2\": " << json::num(st.drapeSheetAreaM2) << ", \"canopyTakenWithTreesM2\": " << json::num(st.canopyTakenWithTreesM2)
+      << ", \"fragmentsTaken\": " << st.fragmentsTaken << ", \"fragmentAreaTakenM2\": " << json::num(st.fragmentAreaTakenM2) << "},\n";
     s << "  \"canopyAreaM2\": " << json::num(st.canopyAreaM2) << ",\n  \"treeCanopyAreaM2\": " << json::num(st.treeCanopyAreaM2) << ",\n";
-    s << "  \"crowns\": {\"tree\": " << st.crownsTree << ", \"belowMinHeight\": " << st.crownsLow << ", \"cutAtBoundary\": " << st.crownsCut << ", \"tooSmall\": " << st.crownsTooSmall << "},\n";
+    s << "  \"crowns\": {\"tree\": " << st.crownsTree << ", \"treesReachingBoundary\": " << st.treesReachingBoundary << ", \"belowMinHeight\": " << st.crownsLow
+      << ", \"cutAtBoundary\": " << st.crownsCut << ", \"cutAtBoundaryRemoved\": " << st.crownsCutRemoved << ", \"tooSmall\": " << st.crownsTooSmall << "},\n";
+    s << "  \"cutCanopyRemovedM2\": " << json::num(st.cutCanopyRemovedM2) << ",\n";
     auto q3 = [](const std::array<double, 3>& q) { return "[" + json::num(q[0]) + ", " + json::num(q[1]) + ", " + json::num(q[2]) + "]"; };
     s << "  \"dispersionQuartiles\": {\"green\": " << q3(st.greenDispersionQuartiles) << ", \"other\": " << q3(st.otherDispersionQuartiles) << "},\n";
     if (!r.topDown.empty()) s << "  \"topDown\": {\"x0\": " << json::num(r.topDownX0) << ", \"z0\": " << json::num(r.topDownZ0) << ", \"cell\": " << json::num(r.topDownCell) << ", \"width\": " << r.topDown.width << ", \"height\": " << r.topDown.height << "},\n";
@@ -1880,7 +2475,8 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
     const size_t n = chosen.size();
     if (n > 0 && P.triangleBudget < P.minTrianglesPerTree * static_cast<double>(n)) {
         std::ostringstream m;
-        m << "a triangle budget of " << static_cast<size_t>(P.triangleBudget) << " cannot hold " << n << " trees at " << static_cast<size_t>(P.minTrianglesPerTree) << " triangles each";
+        m << "a triangle budget of " << static_cast<size_t>(P.triangleBudget) << " cannot hold " << n << " trees at " << static_cast<size_t>(P.minTrianglesPerTree)
+          << " triangles each (they need at least " << static_cast<size_t>(std::ceil(P.minTrianglesPerTree * static_cast<double>(n))) << ")";
         throw VegetationError("budget_too_small", m.str());
     }
     double areaSum = 0;
@@ -1981,7 +2577,11 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
     return R;
 }
 
-/** One node per tree (measurements in extras), studio clay, in the tile frame; root extras carry the tile frame. */
+/**
+ * One node per tree (measurements in extras, in the tile frame), studio clay. The root extras name the frame's axes, the
+ * crown list's label (when it has one) and what was planted; nothing geodetic is written (no lat/lng, no localToEcef): the trees are positioned only relative to
+ * the tile they were measured in, and the geodetic crown list stays in the strip's cache entry (crowns.json).
+ */
 inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJsonValue& crownsDoc, const PlantParams& P) {
     detail::GlbBuilder gb;
     std::vector<std::string> meshes, nodes, children;
@@ -2009,7 +2609,6 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
            << ",\"supportY\":" << json::num(c["supportY"].num) << ",\"supportSource\":" << json::write(c["supportSource"])
            << ",\"heightAboveSupportM\":" << json::num(tr.heightAboveSupport) << ",\"crownAreaM2\":" << json::num(c["areaM2"].num)
            << ",\"sectorRadiiM\":" << json::write(c["sectorRadii"]);
-        if (c.has("stemLatLng")) ex << ",\"stemLatLng\":" << json::write(c["stemLatLng"]) << ",\"apexLatLng\":" << json::write(c["apexLatLng"]);
         ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::num(P.crownBaseRatio)
            << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(P.trunkRadiusPerHeight) << "}"
            << ",\"triangles\":" << (tr.wood.indices.size() + tr.foliage.indices.size()) / 3 << ",\"triangleBudget\":" << tr.budget
@@ -2030,14 +2629,15 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
         j += ",\"accessors\":[" + detail::GlbBuilder::join(gb.accessors) + "],\"bufferViews\":[" + detail::GlbBuilder::join(gb.views) + "]";
         j += ",\"buffers\":[{\"byteLength\":" + std::to_string((gb.bin.size() + 3) & ~static_cast<size_t>(3)) + "}]";
     }
-    // root extras: the tile frame (as the extraction wrote it) plus what was planted
+    // root extras: the frame's axes (as the extraction named them), the request's free-text label (a top-level string
+    // of the crown list; it names the trees, it never changes them) and what was planted
     const auto& frame = crownsDoc["frame"];
     std::string extras = "{";
-    if (frame.type == io::GlbJsonValue::Object) {
-        for (const auto& kv : frame.obj) {
-            if (kv.first == "sbVeggie") continue;
-            extras += json::str(kv.first) + ":" + json::write(kv.second) + ",";
-        }
+    if (frame.type == io::GlbJsonValue::Object && frame.has("frame") && frame["frame"].type == io::GlbJsonValue::String) {
+        extras += "\"frame\":" + json::write(frame["frame"]) + ",";
+    }
+    if (crownsDoc.has("label") && crownsDoc["label"].type == io::GlbJsonValue::String) {
+        extras += "\"label\":" + json::write(crownsDoc["label"]) + ",";
     }
     extras += "\"sbVeggie\":{\"trees\":" + std::to_string(R.trees.size()) + ",\"triangles\":" + std::to_string(R.triangles) +
               ",\"triangleBudget\":" + std::to_string(static_cast<size_t>(P.triangleBudget)) + ",\"generator\":\"space colonisation\"}}";

@@ -92,10 +92,110 @@ function coveredCells(t: GlbTriangles, cells: Set<string>): Set<string> {
     return out;
 }
 
-function insideFootprint(c: any, x: number, z: number): boolean {
+/**
+ * Near-vertical surface (|n.y| < 0.3) whose centroid lies inside a measured tree's footprint and whose top rises at
+ * least 2 m above that tree's support: the walls a removal can leave standing where the tree was.
+ */
+function steepInsideTreeFootprints(t: GlbTriangles, trees: any[], range?: { first: number; count: number }): { areaM2: number; over10m: number } {
+    const P = t.positions;
+    let areaM2 = 0, over10m = 0;
+    const from = range ? range.first : 0, to = range ? range.first + range.count : t.indices.length / 3;
+    for (let f = from; f < to; f++) {
+        const a = t.indices[3 * f] * 3, b = t.indices[3 * f + 1] * 3, c = t.indices[3 * f + 2] * 3;
+        const cx = (P[a] + P[b] + P[c]) / 3, cz = (P[a + 2] + P[b + 2] + P[c + 2]) / 3;
+        const tree = trees.find(tr => Math.abs(cx - tr.stem[0]) < 25 && Math.abs(cz - tr.stem[1]) < 25 && insideFootprint(tr, cx, cz, 0));
+        if (!tree) continue;
+        const top = Math.max(P[a + 1], P[b + 1], P[c + 1]);
+        if (top - tree.supportY < 2) continue;
+        const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2], vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+        const len = Math.hypot(nx, ny, nz);
+        if (len < 1e-9 || Math.abs(ny / len) >= 0.3) continue;
+        areaM2 += len / 2;
+        if (top - Math.min(P[a + 1], P[b + 1], P[c + 1]) > 10) over10m++;
+    }
+    return { areaM2, over10m };
+}
+
+/**
+ * 0.5 m cells within `reachM` of the tile's outer edge: seen from above, the cells the tile does not cover that are
+ * connected to the border of its bounding box (outside the extraction), grown by `reachM`.
+ */
+function outerEdgeCells(t: GlbTriangles, reachM: number): Set<string> {
+    const P = t.positions;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let v = 0; v < P.length; v += 3) { minX = Math.min(minX, P[v]); maxX = Math.max(maxX, P[v]); minZ = Math.min(minZ, P[v + 2]); maxZ = Math.max(maxZ, P[v + 2]); }
+    const j0 = Math.floor(minX / 0.5) - 2, k0 = Math.floor(minZ / 0.5) - 2;
+    const W = Math.floor(maxX / 0.5) + 3 - j0, H = Math.floor(maxZ / 0.5) + 3 - k0;
+    const cov = new Uint8Array(W * H);
+    for (let i = 0; i < t.indices.length; i += 3) {
+        const a = t.indices[i] * 3, b = t.indices[i + 1] * 3, c = t.indices[i + 2] * 3;
+        const d = (P[b] - P[a]) * (P[c + 2] - P[a + 2]) - (P[c] - P[a]) * (P[b + 2] - P[a + 2]);
+        if (Math.abs(d) < 1e-12) continue;
+        const i0 = Math.floor(Math.min(P[a], P[b], P[c]) / 0.5), i1 = Math.floor(Math.max(P[a], P[b], P[c]) / 0.5);
+        const q0 = Math.floor(Math.min(P[a + 2], P[b + 2], P[c + 2]) / 0.5), q1 = Math.floor(Math.max(P[a + 2], P[b + 2], P[c + 2]) / 0.5);
+        for (let k = q0; k <= q1; k++) {
+            for (let j = i0; j <= i1; j++) {
+                const x = (j + 0.5) * 0.5, z = (k + 0.5) * 0.5;
+                const w1 = ((x - P[a]) * (P[c + 2] - P[a + 2]) - (P[c] - P[a]) * (z - P[a + 2])) / d;
+                const w2 = ((P[b] - P[a]) * (z - P[a + 2]) - (x - P[a]) * (P[b + 2] - P[a + 2])) / d;
+                if (w1 >= -1e-9 && w2 >= -1e-9 && 1 - w1 - w2 >= -1e-9) cov[(k - k0) * W + (j - j0)] = 1;
+            }
+        }
+    }
+    const dist = new Int32Array(W * H).fill(-1);
+    const queue: number[] = [];
+    for (let k = 0; k < H; k++) for (let j = 0; j < W; j++) {
+        if ((k === 0 || j === 0 || k === H - 1 || j === W - 1) && !cov[k * W + j]) { dist[k * W + j] = 0; queue.push(k * W + j); }
+    }
+    // outside: uncovered cells connected to the border; then everything within reach of it
+    for (let q = 0; q < queue.length; q++) {
+        const c = queue[q], j = c % W, k = (c - j) / W;
+        for (const [dj, dk] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const jj = j + dj, kk = k + dk;
+            if (jj < 0 || kk < 0 || jj >= W || kk >= H) continue;
+            const n = kk * W + jj;
+            if (dist[n] >= 0 || cov[n]) continue;
+            dist[n] = 0;
+            queue.push(n);
+        }
+    }
+    const reach = Math.ceil(reachM / 0.5);
+    for (let q = 0; q < queue.length; q++) {
+        const c = queue[q], j = c % W, k = (c - j) / W;
+        if (dist[c] >= reach) continue;
+        for (const [dj, dk] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const jj = j + dj, kk = k + dk;
+            if (jj < 0 || kk < 0 || jj >= W || kk >= H) continue;
+            const n = kk * W + jj;
+            if (dist[n] >= 0) continue;
+            dist[n] = dist[c] + 1;
+            queue.push(n);
+        }
+    }
+    const out = new Set<string>();
+    for (let c = 0; c < W * H; c++) if (dist[c] >= 0) out.add(`${(c % W) + j0},${Math.floor(c / W) + k0}`);
+    return out;
+}
+
+/** The scan in clay, with the strip's skirts in red and caps in blue. */
+function closingLayers(t: GlbTriangles): Array<{ positions: Float32Array; indices: Uint32Array; color?: [number, number, number] }> {
+    const scan: number[] = [], skirts: number[] = [], caps: number[] = [];
+    for (const r of t.nodeRanges) {
+        const into = r.name === 'vegetation_removed_skirt' ? skirts : r.name === 'vegetation_removed_cap' ? caps : scan;
+        for (let f = r.firstTriangle; f < r.firstTriangle + r.triangleCount; f++) into.push(t.indices[3 * f], t.indices[3 * f + 1], t.indices[3 * f + 2]);
+    }
+    return [
+        { positions: t.positions, indices: Uint32Array.from(scan) },
+        { positions: t.positions, indices: Uint32Array.from(skirts), color: [0.85, 0.2, 0.15] },
+        { positions: t.positions, indices: Uint32Array.from(caps), color: [0.35, 0.55, 0.9] }
+    ];
+}
+
+function insideFootprint(c: any, x: number, z: number, margin = 0.5): boolean {
     const dx = x - c.stem[0], dz = z - c.stem[1];
     const s = Math.floor(((Math.atan2(dz, dx) + Math.PI) / (2 * Math.PI)) * 16) & 15;
-    return Math.hypot(dx, dz) <= c.sectorRadii[s] + 0.5;
+    return Math.hypot(dx, dz) <= c.sectorRadii[s] + margin;
 }
 
 describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Park photo extraction', () => {
@@ -203,11 +303,84 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
                 }
             }
         }
-        const before = coveredCells(readGlbTriangles(fs.readFileSync(path.join(root, 'flatiron.glb'))), cells);
-        const after = coveredCells(readGlbTriangles(fs.readFileSync(strip.devegetatedGlb)), cells);
-        const opened = [...before].filter(k => !after.has(k)).length;
+        const rawTris = readGlbTriangles(fs.readFileSync(path.join(root, 'flatiron.glb')));
+        const outTris = readGlbTriangles(fs.readFileSync(strip.devegetatedGlb));
+        const before = coveredCells(rawTris, cells);
+        const after = coveredCells(outTris, cells);
+        // the extraction's own outer edge is not a hole: where a removed crown overhung it, the edge stays where the
+        // ground it stood on ends (the strip patches no ground beyond the extraction); cells within 1.5 m of it are
+        // reported, not judged
+        const edge = outerEdgeCells(rawTris, 1.5);
+        const openedAtEdge = [...before].filter(k => !after.has(k) && edge.has(k)).length;
+        const openedCells = [...before].filter(k => !after.has(k) && !edge.has(k));
         expect(before.size).toBeGreaterThan(5000);
-        expect(opened / before.size).toBeLessThan(0.002);
+        // no footprint cell the scan covered is open seen from above, but for single cells where a cap edge and this
+        // test's cell grid disagree by a hair: under 0.2% of the cells, and no hole of a square metre (4 cells)
+        const openSet = new Set(openedCells), seen = new Set<string>();
+        let largest = 0;
+        for (const k of openedCells) {
+            if (seen.has(k)) continue;
+            let n = 0;
+            const queue = [k];
+            seen.add(k);
+            while (queue.length) {
+                const [j, i] = queue.pop()!.split(',').map(Number);
+                n++;
+                for (const [dj, di] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                    const nk = `${j + dj},${i + di}`;
+                    if (openSet.has(nk) && !seen.has(nk)) { seen.add(nk); queue.push(nk); }
+                }
+            }
+            largest = Math.max(largest, n);
+        }
+        expect(openedCells.length / before.size).toBeLessThan(0.002);
+        expect(largest).toBeLessThan(4);
+
+        // ... and closed on the ground, not with walls hung from what stays:
+        // - no cap face climbs (it follows the level surface the tree stood on, within the 1.5 m support band);
+        const cap = outTris.nodeRanges.find(r => r.name === 'vegetation_removed_cap')!;
+        let capRise = 0;
+        for (let f = cap.firstTriangle; f < cap.firstTriangle + cap.triangleCount; f++) {
+            const ys = [0, 1, 2].map(j => outTris.positions[outTris.indices[3 * f + j] * 3 + 1]);
+            capRise = Math.max(capRise, Math.max(...ys) - Math.min(...ys));
+        }
+        expect(capRise).toBeLessThanOrEqual(3.0);
+        expect(strip.stats.holes.capMaxRiseM).toBeLessThanOrEqual(3.0);
+        // - canopy that stays never stands over a hole: cut canopy joined to a removed tree went with it, and the only
+        //   canopy a skirt closes is a low planting (under 3 m above what it stands on, beside a cap within the 1.5 m band);
+        expect(strip.stats.crowns.cutAtBoundaryRemoved).toBeGreaterThanOrEqual(1);
+        expect(strip.stats.skirts.maxHeightByHangM.onKeptCanopy).toBeLessThanOrEqual(5);
+        // - no tall skirt anywhere near a crown that stays cut (where the previous strip hung 20-30 m curtains);
+        const skirt = outTris.nodeRanges.find(r => r.name === 'vegetation_removed_skirt')!;
+        const keptCut = crownsDoc.crowns.filter((c: any) => c.status === 'cut_at_boundary');
+        let tallNearKeptCut = 0, tallSkirts = 0;
+        for (let f = skirt.firstTriangle; f < skirt.firstTriangle + skirt.triangleCount; f++) {
+            const v = [0, 1, 2].map(j => outTris.indices[3 * f + j] * 3);
+            const ys = v.map(o => outTris.positions[o + 1]);
+            if (Math.max(...ys) - Math.min(...ys) <= 5) continue;
+            tallSkirts++;
+            const cx = v.reduce((a, o) => a + outTris.positions[o], 0) / 3, cz = v.reduce((a, o) => a + outTris.positions[o + 2], 0) / 3;
+            if (keptCut.some((c: any) => insideFootprint(c, cx, cz, 3))) tallNearKeptCut++;
+        }
+        expect(tallNearKeptCut).toBe(0);
+        // - pieces of a tree's scan the removal left in the air went with it, rather than standing on new walls;
+        expect(strip.stats.drape.fragmentsTaken).toBeGreaterThanOrEqual(1);
+        // - and the removal leaves less near-vertical surface standing in the trees' footprints than the scan had
+        //   there (the crowns' own sides), with almost none of it in the cap
+        const rawSteep = steepInsideTreeFootprints(rawTris, trees);
+        const outSteep = steepInsideTreeFootprints(outTris, trees);
+        const capSteep = steepInsideTreeFootprints(outTris, trees, { first: cap.firstTriangle, count: cap.triangleCount });
+        const skirtSteep = steepInsideTreeFootprints(outTris, trees, { first: skirt.firstTriangle, count: skirt.triangleCount });
+        expect(rawSteep.areaM2).toBeGreaterThan(1000);
+        expect(outSteep.areaM2).toBeLessThan(rawSteep.areaM2);
+        expect(capSteep.areaM2).toBeLessThan(0.01 * strip.stats.treeCanopyAreaM2);
+        const wallReport = {
+            openedCells: openedCells.length, openedAtExtractionEdge: openedAtEdge, coveredCells: before.size, largestOpenRun: largest, capMaxRiseM: capRise,
+            rawSteepInTreeFootprintsM2: rawSteep.areaM2, outSteepInTreeFootprintsM2: outSteep.areaM2, skirtSteepInTreeFootprintsM2: skirtSteep.areaM2,
+            skirtsTallerThan5m: tallSkirts, tallSkirtsNearKeptCutCrowns: tallNearKeptCut, skirts: strip.stats.skirts, drape: strip.stats.drape,
+            crowns: strip.stats.crowns, cutCanopyRemovedM2: strip.stats.cutCanopyRemovedM2, treeCanopyAreaM2: strip.stats.treeCanopyAreaM2
+        };
+        if (fs.existsSync(REPORT)) fs.writeFileSync(REPORT, JSON.stringify({ ...JSON.parse(fs.readFileSync(REPORT, 'utf8')), walls: wallReport }, null, 2));
     });
 
     it('runs the whole location pipeline: remeshed clay plus SB-Veggie trees within budget, with screenshots', () => {
@@ -244,7 +417,9 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
             ['flatiron_district_clay_trees_aerial.png', renderClayPng(layers, { kind: 'aerial', width: 1280, height: 860, bearingDeg: 200, elevationDeg: 40 })],
             // as mounted: remeshed tiles and trees both in studio clay
             ['flatiron_park_all_clay_aerial.png', renderClayPng(allClay, { kind: 'aerial', width: 1280, height: 860, region: park, bearingDeg: 200, elevationDeg: 30 })],
-            ['flatiron_park_all_clay_top.png', renderClayPng(allClay, { kind: 'top', width: 1000, height: 1000, region: park })]
+            ['flatiron_park_all_clay_top.png', renderClayPng(allClay, { kind: 'top', width: 1000, height: 1000, region: park })],
+            // the devegetated photo tile before remeshing: what closing the ground added, skirts red and caps blue
+            ['flatiron_park_devegetated_skirts_aerial.png', renderClayPng(closingLayers(readGlbTriangles(fs.readFileSync(strip.devegetatedGlb))), { kind: 'aerial', width: 1280, height: 860, region: park, bearingDeg: 220, elevationDeg: 50 })]
         ];
         for (const [name, png] of shots) {
             fs.writeFileSync(path.join(SHOTS, name), png);

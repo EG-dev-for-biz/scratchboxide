@@ -37,15 +37,16 @@ static void usage() {
         "usage:\n"
         "  tile_vegetation strip --input <tile.glb> --out <devegetated.glb> --crowns <crowns.json> --stats <stats.json> [options]\n"
         "    --topdown PATH            write a top-down PNG (green canopy, yellow crown borders, red tree apexes,\n"
-        "                              orange low roof vegetation, magenta crowns cut by the boundary, violet removed)\n"
+        "                              orange low roof vegetation, magenta crowns cut by the boundary,\n"
+        "                              blue cut crowns removed with the trees they join, violet removed)\n"
         "    --topdown-points CSV      diagnostic: also mark these x,z points (tile frame, one per line) in cyan\n"
         "    --cell M (0.5) --terrain-cell M (4) --terrain-radius M (40)\n"
         "    --exg-min V (0.06) --exgr-min V (-0.2) --dark-guard V (0.06)\n"
         "    --roughness-radius M (1) --roughness-min V (0.015) --planar-angle DEG (10) --planar-offset M (0.12) --planar-area M2 (6)\n"
         "    --canopy-min-height M (2) --min-tree-height M (3) --min-crown-area M2 (4)\n"
         "    --window-base M (0.6) --window-slope V (0.11) --window-min M (1.5) --window-max M (4.5) --climb-limit M (1)\n"
-        "    --support-step M (1) --support-search M (25) --footprint-dilation M (1) --clearance M (0.3)\n"
-        "    --skirt-min M (0.3) --cap-grid M (1.5) --seam-gap M (1) --sample-spacing M (0.7) --threads N\n"
+        "    --support-step M (1) --support-search M (25) --footprint-dilation M (1) --drape-reach M (10) --clearance M (0.3) --support-band M (1.5)\n"
+        "    --skirt-min M (0.3) --fragment-max-area M2 (300) --cap-grid M (1.5) --seam-gap M (1) --sample-spacing M (0.7) --threads N\n"
         "  tile_vegetation plant --crowns <crowns.json> --out <trees.glb> --stats <stats.json> --triangle-budget N [options]\n"
         "    --seed HEX                seed (hex, up to 16 digits) mixed with each crown id\n"
         "    --support-mesh PATH       keep only crowns whose trunk base lies on this mesh (isolate requests)\n"
@@ -119,8 +120,11 @@ static int runStrip(const Args& a) {
     P.supportStep = a.num("support-step", P.supportStep);
     P.supportSearch = a.num("support-search", P.supportSearch);
     P.footprintDilation = a.num("footprint-dilation", P.footprintDilation);
+    P.drapeReach = a.num("drape-reach", P.drapeReach);
     P.clearance = a.num("clearance", P.clearance);
+    P.supportBand = a.num("support-band", P.supportBand);
     P.skirtMin = a.num("skirt-min", P.skirtMin);
+    P.fragmentMaxArea = a.num("fragment-max-area", P.fragmentMaxArea);
     P.capGrid = a.num("cap-grid", P.capGrid);
     P.seamGap = a.num("seam-gap", P.seamGap);
     P.sampleSpacing = a.num("sample-spacing", P.sampleSpacing);

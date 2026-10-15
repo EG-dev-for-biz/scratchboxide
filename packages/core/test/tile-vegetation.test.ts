@@ -10,13 +10,15 @@
 /**
  * Tile vegetation (scratchbox_tile_vegetation.hpp + scripts/tile_vegetation.cpp), compiled with clang++ and run through
  * TileVegetationService on a synthetic photo-textured tile with known ground truth: three rough green crowns draped
- * onto flat ground, one crown cut by the tile edge, and a planar building whose roof carries a low green bump.
+ * onto flat ground (one with a grey drape hem hanging 3 m beyond it, one with a planar tile-seam curtain under it, as
+ * real photogrammetry has), one crown cut by the tile edge, and a planar building whose roof carries a low green bump.
  *
  * strip must find each crown where it stands with its height above the ground, keep the roof bump (lower than the
- * minimum tree height) and the cut crown as scanned, remove the trees down to the ground and cap it on the terrain
- * without opening any hole. plant must grow one SB-Veggie tree per crown within the triangle budget, in studio clay,
- * deterministically. Screenshots (top-down measurement, clay renders before/after) go to
- * test-results/screenshots/tile_vegetation/ (gitignored).
+ * minimum tree height) and the cut crown as scanned, remove the trees with their drape and curtains down to the ground
+ * and cap it on the ground without opening any hole or leaving any wall standing. plant must grow one SB-Veggie tree
+ * per crown within the triangle budget, in studio clay, deterministically, and write nothing geodetic into the trees
+ * model. Screenshots (top-down measurement, clay renders before/after) go to test-results/screenshots/tile_vegetation/
+ * (gitignored).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -25,7 +27,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { TileVegetationError, TileVegetationService, type TileVegetationStripResult } from '../src/node/3d-engine/tile-vegetation-service';
-import { buildSyntheticTile, localToEcef, tileToLatLng, type SyntheticTileSpec, type SyntheticTree } from './helpers/synthetic-textured-tile';
+import { buildSyntheticTile, localToEcef, tileToLatLng, type SyntheticCurtain, type SyntheticTileSpec, type SyntheticTree } from './helpers/synthetic-textured-tile';
 import { parseGlb, readGlbTriangles, renderClayPng, type GlbTriangles } from './helpers/clay-glb-render';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
@@ -34,14 +36,17 @@ const SHOTS = path.join(REPO, 'test-results/screenshots/tile_vegetation');
 const INTERIOR: SyntheticTree[] = [
     { x: -12, z: -10, height: 11, radius: 4.5 },
     { x: 10, z: 12, height: 8, radius: 3.5 },
-    { x: -14, z: 14, height: 14, radius: 5.5 }
+    { x: -14, z: 14, height: 14, radius: 5.5, hem: 3, hemHeight: 3.5 }
 ];
+/** A planar curtain under the first crown, from the ground to 0.4 m under its canopy (a tile-seam curtain). */
+const CURTAIN: SyntheticCurtain = { x0: -15.5, z0: -8, x1: -8.5, z1: -8, belowCanopy: 0.4 };
 const CUT: SyntheticTree = { x: 28.5, z: -20, height: 9, radius: 4 };
 const ANCHOR = { lat: 40.7411, lng: -73.9897, ellipsoidalHeightM: -22.5 };
 const SPEC: SyntheticTileSpec = {
     halfSize: 30,
     spacing: 0.75,
     trees: [...INTERIOR, CUT],
+    curtains: [CURTAIN],
     building: { x0: 4, z0: -16, x1: 16, z1: -4, height: 15, roofBump: { x: 10, z: -10, height: 1.6, radius: 2.5 } },
     anchor: ANCHOR
 };
@@ -168,18 +173,35 @@ describe('tile_vegetation strip on a synthetic photo-textured tile', () => {
         for (const t of INTERIOR) {
             expect(trianglesNear(raw, t.x, t.z, 0.75 * t.radius, 1)).toBeGreaterThan(20);
             // nothing is left standing in the cleared footprint or its hem (the scanned crown drapes down to the ground
-            // around it), and the cap sits on the terrain (y = 0 here)
+            // around it, with the grey hem and the curtain), and the cap sits on the ground (y = 0 here)
+            const reach = Math.max(1.5 * t.radius, t.radius + (t.hem ?? 0) + 0.5);
             let maxY = -Infinity, minY = Infinity, n = 0;
             for (let v = 0; v < out.positions.length; v += 3) {
-                if (Math.hypot(out.positions[v] - t.x, out.positions[v + 2] - t.z) > 1.5 * t.radius) continue;
+                if (Math.hypot(out.positions[v] - t.x, out.positions[v + 2] - t.z) > reach) continue;
                 maxY = Math.max(maxY, out.positions[v + 1]);
                 minY = Math.min(minY, out.positions[v + 1]);
                 n++;
             }
             expect(n).toBeGreaterThan(3);
-            expect(maxY).toBeLessThan(0.05);
+            // only scan that never rose more than the clearance (0.3 m) above the ground stays
+            expect(maxY).toBeLessThan(0.35);
             expect(minY).toBeGreaterThan(-0.05);
         }
+        // every point the cap itself put down (lowered loop points, interior points) lies on the ground: within 0.05 m
+        const scanXZ = new Set<string>();
+        for (let v = 0; v < raw.positions.length; v += 3) scanXZ.add(`${Math.round(raw.positions[v] * 100)},${Math.round(raw.positions[v + 2] * 100)}`);
+        const capTris = out.nodeRanges.find(r => r.name === 'vegetation_removed_cap');
+        expect(capTris).toBeDefined();
+        let capPoints = 0, capWorst = 0;
+        for (let i = capTris!.firstTriangle * 3; i < (capTris!.firstTriangle + capTris!.triangleCount) * 3; i++) {
+            const v = out.indices[i];
+            const x = out.positions[v * 3], y = out.positions[v * 3 + 1], z = out.positions[v * 3 + 2];
+            if (scanXZ.has(`${Math.round(x * 100)},${Math.round(z * 100)}`)) continue;
+            capPoints++;
+            capWorst = Math.max(capWorst, Math.abs(y));
+        }
+        expect(capPoints).toBeGreaterThan(50);
+        expect(capWorst).toBeLessThan(0.05);
         // the building is untouched: walls and roof keep every triangle
         const b = SPEC.building!;
         const inBuilding = (g: GlbTriangles) => {
@@ -192,6 +214,12 @@ describe('tile_vegetation strip on a synthetic photo-textured tile', () => {
             return n;
         };
         expect(inBuilding(out)).toBe(inBuilding(raw));
+        // the curtain went with the tree as part of its drape (planar, but nothing planar meets its top), and no skirt
+        // was needed anywhere: every hole edge lay on the ground
+        expect(strip.stats.drape.sheets).toBeGreaterThanOrEqual(1);
+        expect(trianglesNear(raw, (CURTAIN.x0 + CURTAIN.x1) / 2, CURTAIN.z0, 3, 1)).toBeGreaterThan(30);
+        expect(strip.stats.skirts.areaM2).toEqual({ onWalls: 0, onLevelSurfaces: 0, onKeptCanopy: 0, onOther: 0 });
+        expect(strip.stats.holes.capMaxRiseM).toBeLessThan(0.35);
         expectValidGlb(fs.readFileSync(strip.devegetatedGlb));
         // the photographs ride along unchanged
         const rawGlb = parseGlb(fs.readFileSync(path.join(work, 'tile.glb')));
@@ -235,7 +263,10 @@ describe('tile_vegetation plant (SB-Veggie, space colonisation)', () => {
         const glb = parseGlb(fs.readFileSync(planted.treesGlb));
         expect(glb.json.materials).toHaveLength(1);
         expect(glb.json.materials[0].pbrMetallicRoughness).toMatchObject({ baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 });
-        expect(glb.json.extras.localToEcef).toEqual(localToEcef(ANCHOR.lat, ANCHOR.lng, ANCHOR.ellipsoidalHeightM));
+        // nothing geodetic goes into the published model: the trees sit in the tile frame, mounted with the tile; the
+        // crowns' lat/lng stay in the strip's cache entry (crowns.json)
+        expect(glb.json.extras).toEqual({ frame: 'x = east, y = up, z = south (metres)', sbVeggie: expect.any(Object) });
+        expect(JSON.stringify(glb.json)).not.toMatch(/LatLng|localToEcef|anchor/);
         const tris = readGlbTriangles(fs.readFileSync(planted.treesGlb));
         expect(tris.indices.length / 3).toBe(planted.stats.triangles);
         expect(tris.nodeRanges).toHaveLength(INTERIOR.length);
@@ -312,5 +343,85 @@ describe('tile_vegetation plant (SB-Veggie, space colonisation)', () => {
             expect(png.readUInt32BE(0)).toBe(0x89504e47);
             expect(png.length).toBeGreaterThan(5000);
         }
+    });
+});
+
+/**
+ * At the extraction's edge. A tree whose crown runs past the edge with its top well inside is a tree: measured up to the
+ * edge and rebuilt. A crown whose top lies on the edge is cut (its top and trunk may be outside): beside nothing
+ * removed it stays as scanned; joined at height to a tree that is removed, it cannot stay (its side would stand over
+ * the hole the tree leaves, closable only by a wall nobody scanned), so it goes with that tree, reported and not
+ * replanted. No skirt hangs from canopy anywhere.
+ */
+describe('tile_vegetation strip at the extraction edge', () => {
+    const EDGE_REACHING: SyntheticTree = { x: -24, z: -18, height: 12, radius: 6.5 }; // runs past x = -30, top 6 m inside
+    const JOINED_TREE: SyntheticTree = { x: 20, z: 12, height: 12, radius: 5.5 };
+    const JOINED_CUT: SyntheticTree = { x: 29.5, z: 12, height: 12, radius: 6 };       // top on the edge, joined at ~6.5 m
+    const LONE_CUT: SyntheticTree = { x: 2, z: 28.5, height: 9, radius: 4 };            // top 1.5 m from the edge, alone
+    const EDGE_SPEC: SyntheticTileSpec = { halfSize: 30, spacing: 0.75, trees: [EDGE_REACHING, JOINED_TREE, JOINED_CUT, LONE_CUT], anchor: ANCHOR };
+    let edge: TileVegetationStripResult;
+    let edgeCrowns: any[];
+    let edgeRaw: GlbTriangles;
+    let edgeOut: GlbTriangles;
+    const near = (t: SyntheticTree) => edgeCrowns.filter(c => Math.hypot(c.stem[0] - t.x, c.stem[1] - t.z) < t.radius).sort((a, b) => b.areaM2 - a.areaM2)[0];
+
+    beforeAll(async () => {
+        fs.writeFileSync(path.join(work, 'edge.glb'), buildSyntheticTile(EDGE_SPEC));
+        edge = await svc.strip({ tilePath: 'edge.glb', topDown: true });
+        edgeCrowns = JSON.parse(fs.readFileSync(edge.crownsJson, 'utf8')).crowns;
+        edgeRaw = readGlbTriangles(fs.readFileSync(path.join(work, 'edge.glb')));
+        edgeOut = readGlbTriangles(fs.readFileSync(edge.devegetatedGlb));
+    }, 600_000);
+
+    it('measures a tree that runs to the edge with its top inside as a tree, and a crown whose top is on the edge as cut', () => {
+        const reaching = near(EDGE_REACHING);
+        expect(reaching).toMatchObject({ status: 'tree', reachesBoundary: true });
+        expect(Math.hypot(reaching.stem[0] - EDGE_REACHING.x, reaching.stem[1] - EDGE_REACHING.z)).toBeLessThan(1.5);
+        expect(Math.abs(reaching.apexAboveSupport - EDGE_REACHING.height)).toBeLessThan(0.6);
+        expect(near(JOINED_TREE)).toMatchObject({ status: 'tree', reachesBoundary: false });
+        expect(near(LONE_CUT).status).toBe('cut_at_boundary');
+        expect(edge.stats.crowns).toMatchObject({ tree: 2, treesReachingBoundary: 1, cutAtBoundary: 1, cutAtBoundaryRemoved: 1 });
+    });
+
+    it('takes cut canopy joined to a removed tree with it, keeps lone cut canopy, and closes the ground without walls', () => {
+        // the joined cut crown went with the tree (reported, not replanted) ...
+        expect(near(JOINED_CUT).status).toBe('cut_at_boundary_removed');
+        expect(edge.stats.cutCanopyRemovedM2).toBeGreaterThan(20);
+        expect(trianglesNear(edgeRaw, 27, JOINED_CUT.z, 2.5, 1)).toBeGreaterThan(20);
+        expect(trianglesNear(edgeOut, 27, JOINED_CUT.z, 2.5, 0.35)).toBe(0);
+        // ... the lone cut crown stays exactly as scanned ...
+        const lone = trianglesNear(edgeRaw, LONE_CUT.x, LONE_CUT.z, LONE_CUT.radius, 0.5);
+        expect(lone).toBeGreaterThan(20);
+        expect(trianglesNear(edgeOut, LONE_CUT.x, LONE_CUT.z, LONE_CUT.radius, 0.5)).toBe(lone);
+        // ... the tree that runs past the edge is gone up to the edge ...
+        expect(trianglesNear(edgeOut, -28.5, EDGE_REACHING.z, 1.5, 0.35)).toBe(0);
+        // ... and nothing stands where they were: no skirt at all (no wall here; no canopy left beside a hole) and no hole
+        expect(edge.stats.skirts.areaM2).toEqual({ onWalls: 0, onLevelSurfaces: 0, onKeptCanopy: 0, onOther: 0 });
+        expect(edge.stats.skirts.maxHeightByHangM.onKeptCanopy).toBe(0);
+        expect(openEdges(edgeOut)).toBeLessThanOrEqual(openEdges(edgeRaw));
+        for (const t of [JOINED_TREE, JOINED_CUT]) {
+            let maxY = -Infinity;
+            for (let v = 0; v < edgeOut.positions.length; v += 3) {
+                if (Math.hypot(edgeOut.positions[v] - t.x, edgeOut.positions[v + 2] - t.z) <= t.radius) maxY = Math.max(maxY, edgeOut.positions[v + 1]);
+            }
+            expect(maxY).toBeLessThan(0.35);
+        }
+        fs.mkdirSync(SHOTS, { recursive: true });
+        fs.copyFileSync(edge.topDownPng!, path.join(SHOTS, 'synthetic_edge_topdown_measurement.png'));
+    });
+
+    it('rebuilds the tree that runs to the edge up to the edge, and plants nothing for the cut canopy', async () => {
+        const planted = await svc.plant({ crownsPath: edge.crownsJson, triangleBudget: 6000, seed: 'e0ed' });
+        expect(planted.stats.trees).toBe(2);
+        const reaching = near(EDGE_REACHING);
+        const tree = planted.stats.perTree.find((t: any) => t.crownId === reaching.id);
+        expect(tree).toBeDefined();
+        const [lo, hi] = tree.bounds as number[][];
+        expect(lo[0]).toBeGreaterThan(-30.6);                                  // its measured crown ends at the edge
+        expect(hi[1]).toBeGreaterThan(reaching.apex[1] - 1.5);
+        const cutIds = edgeCrowns.filter(c => c.status !== 'tree').map(c => c.id);
+        for (const t of planted.stats.perTree) expect(cutIds).not.toContain(t.crownId);
+        const trees = readGlbTriangles(fs.readFileSync(planted.treesGlb));
+        fs.writeFileSync(path.join(SHOTS, 'synthetic_edge_rebuilt_aerial.png'), renderClayPng([{ positions: edgeOut.positions, indices: edgeOut.indices }, { positions: trees.positions, indices: trees.indices }], { kind: 'aerial', width: 960, height: 640, bearingDeg: 200, elevationDeg: 35 }));
     });
 });

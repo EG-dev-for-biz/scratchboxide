@@ -86,14 +86,16 @@ export const botanicalTreeHandlers: Record<string, ToolHandler> = {
         const seed = typeof args.seed === 'string' && args.seed ? args.seed : crypto.createHash('sha256').update(JSON.stringify([height, diameter, crownBaseRatio, x, y, z])).digest('hex').slice(0, 16);
 
         const root = findTileVegetationRepoRoot();
-        const id = crypto.createHash('sha256').update(JSON.stringify({ height, diameter, crownBaseRatio, trunkRadius, x, y, z, seed })).digest('hex').slice(0, 16);
+        const id = crypto.createHash('sha256').update(JSON.stringify({ height, diameter, crownBaseRatio, trunkRadius, x, y, z, seed, label: label ?? null })).digest('hex').slice(0, 16);
         const requestDir = resolveWithinRoot(root, path.join('.scratchbox', 'cache', 'botanical_requests'));
         fs.mkdirSync(requestDir, { recursive: true });
         const crownsPath = path.join(requestDir, `${id}.json`);
         const area = Math.PI * radius * radius;
         fs.writeFileSync(crownsPath, JSON.stringify({
             version: 1,
-            frame: label ? { label } : null,
+            frame: null,
+            // a free-text name for the tree: written to the GLB's root extras, it never changes the geometry
+            ...(label ? { label } : {}),
             crowns: [{
                 id: 0, status: 'tree', apex: [x, y + height, z], stem: [x, z], supportY: y, supportSource: 'given', terrainY: y,
                 apexAboveSupport: height, areaM2: area, sectorRadii: new Array(16).fill(radius),
