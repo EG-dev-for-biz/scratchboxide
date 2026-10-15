@@ -56,6 +56,38 @@ export interface ChunkedSceneResult {
     success: boolean;
 }
 
+// Contract fields come from model output and end up inside C++ source that is compiled and run,
+// or in output file names. These keep them inert there.
+
+/** An integer for C++ source; throws on anything that is not a finite number. */
+function cppInt(value: unknown, field: string): string {
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${field} must be a finite number`);
+    return String(Math.round(value));
+}
+
+/** A C++ string literal (quotes included): printable ASCII as is, anything else as a 3-digit octal escape. */
+function cppString(value: unknown): string {
+    let out = '"';
+    for (const ch of String(value ?? '')) {
+        const c = ch.codePointAt(0)!;
+        if (c >= 0x20 && c < 0x7f && ch !== '"' && ch !== '\\' && ch !== '?') out += ch;
+        else if (c < 0x100) out += '\\' + c.toString(8).padStart(3, '0');
+        else out += '_';
+    }
+    return out + '"';
+}
+
+/** Text safe inside a // comment: one printable line. */
+function cppComment(value: unknown): string {
+    return String(value ?? '').replace(/[^\x20-\x7e]+/g, ' ').slice(0, 120);
+}
+
+/** A file-name stem: letters, digits, '-' and '_' only. */
+function safeFileStem(value: unknown): string {
+    const stem = String(value ?? '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 96);
+    return stem || 'scene';
+}
+
 export class Adaptive3DSceneSynthesizer {
     private compiler: NativeCppCompilerService;
 
@@ -475,10 +507,11 @@ export class Adaptive3DSceneSynthesizer {
         const chunkOriginZ   = cr ? cr.origin[2] : -((t.gridSize - 1) * t.gridSpacing) / 2;
 
         // Whether the architecture compound falls inside this chunk's XZ bounds
-        const archX = b.dimensions ? 0 : 0;  // primary structure always at origin
+        // The primary structure is built at the origin. Rows overlap in Z, so each chunk owns only
+        // [origin, origin + extent - overlap) in Z; otherwise two rows would both build it.
         const chunkContainsArch = !cr || (
-            archX >= cr.origin[0] && archX < cr.origin[0] + cr.physicalExtentMeters &&
-            0     >= cr.origin[2] && 0     < cr.origin[2] + cr.physicalExtentMeters
+            0 >= cr.origin[0] && 0 < cr.origin[0] + cr.physicalExtentMeters &&
+            0 >= cr.origin[2] && 0 < cr.origin[2] + cr.physicalExtentMeters - cr.physicalOverlapMeters
         );
 
         // For parametric vegetation in chunked mode: tree density from botany contract
@@ -487,7 +520,7 @@ export class Adaptive3DSceneSynthesizer {
         const exclRadius   = chunkContainsArch && botanyPatch ? botanyPatch.exclusionRadius : 0;
         const exclCX       = botanyPatch?.exclusionCenter[0] ?? 0;
         const exclCZ       = botanyPatch?.exclusionCenter[1] ?? 0;
-        // Trees per chunk proportional to area × density / 100 (density is trees per 100m²)
+        // Trees per chunk proportional to area × density (density is trees per 1000 m²)
         const chunkArea    = cr ? cr.physicalExtentMeters * cr.physicalExtentMeters : 150 * 150;
         const chunkTrees   = cr ? Math.round(treeDensity * chunkArea / 1000) : null;
 
@@ -540,8 +573,8 @@ static float getTerrainHeight(float x, float z) {
     float dist = std::sqrt(dx * dx + dz * dz);
     float angle = std::atan2(dz, dx);
 
-    // ${t.ridgeCount}-ridge pyramidal arêtes with sharp knife-edge crests
-    float ridgeWave = std::cos(${t.ridgeCount}.0f * angle);
+    // ${cppInt(t.ridgeCount, 'terrain.ridgeCount')}-ridge pyramidal arêtes with sharp knife-edge crests
+    float ridgeWave = std::cos(${cppInt(t.ridgeCount, 'terrain.ridgeCount')}.0f * angle);
     float ridgeFactor = 1.0f + 0.45f * std::pow(std::abs(ridgeWave), ${t.sharpnessExponent.toFixed(2)}f) * (ridgeWave >= 0 ? 1.0f : -0.7f);
 
     float radialFalloff = std::exp(-dist * 0.024f);
@@ -765,7 +798,7 @@ static ScratchboxMesh buildArchitecturalCompound() {
     BuildingConfig bldgCfg;
     bldgCfg.width = ${b.dimensions.width.toFixed(2)}f;
     bldgCfg.depth = ${b.dimensions.depth.toFixed(2)}f;
-    bldgCfg.floorCount = ${b.dimensions.floorCount};
+    bldgCfg.floorCount = ${cppInt(b.dimensions.floorCount, 'dimensions.floorCount')};
     bldgCfg.floorHeight = ${b.dimensions.floorHeight.toFixed(2)}f;
     bldgCfg.groundFloorHeight = ${(b.dimensions.floorHeight + 0.6).toFixed(2)}f;
     bldgCfg.plinthHeight = 0.1f;
@@ -830,7 +863,7 @@ static ScratchboxMesh buildArchitecturalCompound() {
         const face = r.parameters?.faceAlignment || 'top';
         const clearance = r.parameters?.clearanceMeters ?? 0.0;
         const pred = r.predicate.toLowerCase();
-        return `solver.addConstraint("${r.subjectId}", "${pred}", "${r.targetId}", "${face}", ${clearance.toFixed(2)}f);`;
+        return `solver.addConstraint(${cppString(r.subjectId)}, ${cppString(pred)}, ${cppString(r.targetId)}, ${cppString(face)}, ${clearance.toFixed(2)}f);`;
     }).join('\n    ')}
 
     solver.solve(8, 0.01f);
@@ -939,9 +972,9 @@ int main(int argc, char** argv) {
     const float EXCL_CZ = ${exclCZ.toFixed(2)}f;
     const int TARGET_TREES = ${chunkTrees ?? 0};
 
-    uint32_t rngSeed = static_cast<uint32_t>(
-        std::abs(CHUNK_OX) * 997.0f + std::abs(CHUNK_OZ) * 1009.0f
-    );
+    // Signed origin hash: chunks mirrored about the origin must not share a tree pattern.
+    uint32_t rngSeed = static_cast<uint32_t>(static_cast<int32_t>(std::lround(CHUNK_OX * 8.0f))) * 2654435761u
+        ^ static_cast<uint32_t>(static_cast<int32_t>(std::lround(CHUNK_OZ * 8.0f))) * 40503u;
     std::mt19937 rng(rngSeed);
     std::uniform_real_distribution<float> xDist(CHUNK_OX, CHUNK_OX + CHUNK_EXT);
     std::uniform_real_distribution<float> zDist(CHUNK_OZ, CHUNK_OZ + CHUNK_EXT);
@@ -1066,7 +1099,7 @@ int main(int argc, char** argv) {
 
         return `
     {
-        // Character ${idx}: ${charName} (${charRole})
+        // Character ${idx}: ${cppComment(charName)} (${cppComment(charRole)})
         SbHumanModel charModel = SbHumanModel::loadStandardModel(${charGender}, ${targetH}f);
         kinematics::Skeleton posedRig = charModel.skeleton;
 
@@ -1232,7 +1265,7 @@ int main(int argc, char** argv) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
 
-        const outGlbPath = options.outputGlbPath || path.join(outputDir, `${contract.id}.glb`);
+        const outGlbPath = options.outputGlbPath || path.join(outputDir, `${safeFileStem(contract.id)}.glb`);
 
         // 1. Compile C++20 source code via Apple Clang
         const compileResult = await this.compiler.compileSource(sourceCode, {
@@ -1338,7 +1371,7 @@ int main(int argc, char** argv) {
                     id: `${contract.id}_chunk_r${desc.regionIndex}_l${desc.lateralIndex}`,
                     chunkRegion: AdaptiveSceneChunkPlanner.toChunkRegion(desc)
                 };
-                const glbPath = path.join(outputDir, `${chunkContract.id}.glb`);
+                const glbPath = path.join(outputDir, `${safeFileStem(chunkContract.id)}.glb`);
                 return this.synthesizeAndCompile(chunkContract, { outputDir, outputGlbPath: glbPath });
             }));
             batchResults.forEach((r, batchIdx) => { results[i + batchIdx] = r; });

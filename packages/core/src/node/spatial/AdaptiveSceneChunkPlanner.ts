@@ -41,6 +41,9 @@ export class AdaptiveSceneChunkPlanner {
         const env = contract.sceneGraph?.terrain?.envelope;
         const totalWidth  = env?.width  ?? 150;
         const totalDepth  = env?.depth  ?? 150;
+        if (!(Number.isFinite(totalWidth) && totalWidth > 0 && Number.isFinite(totalDepth) && totalDepth > 0)) {
+            throw new Error(`Terrain envelope must have a positive finite width and depth (got ${totalWidth} x ${totalDepth})`);
+        }
         const halfWidth   = totalWidth  / 2;
         const halfDepth   = totalDepth  / 2;
 
