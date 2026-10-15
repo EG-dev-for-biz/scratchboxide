@@ -210,6 +210,46 @@ describe('geodata services answer for the place they were given or fail', () => 
         expect(() => ChronoSpatialDeductionEngine.generateDeductionReport({ buildingLandmarks: ['Ferry Building'] })).toThrow(MissingInputError);
     });
 
+    it('the XR bridge never takes an origin with no altitude to be at 0 m above sea level', () => {
+        // Denver: the ground is about 1,609 m above sea level. With no origin altitude a target's sea-level altitude
+        // cannot be placed relative to the origin; it used to land about 1.6 km above it.
+        const relative = new WebXRGeospatialAnchorBridge({ origin: { lat: 39.7392, lng: -104.9903 } });
+        expect(relative.getAlignmentState().originGeoAnchor.alt).toBeUndefined();
+        expect(relative.getOriginAnchor().alt).toBeUndefined();
+        expect(() => relative.geodeticToWebXR({ lat: 39.7393, lng: -104.9903, alt: 1619 })).toThrow(MissingInputError);
+        expect(() => relative.calibrateSensors({ lat: 39.7392, lng: -104.9903, alt: 1611 }, { position: [0, 1.6, 0] })).toThrow(MissingInputError);
+        // A target with no altitude is level with the origin, and a WebXR point reports its height above the origin only.
+        expect(relative.geodeticToWebXR({ lat: 39.7392, lng: -104.9903 }).y).toBeCloseTo(0, 6);
+        const back = relative.webXRToGeodetic(relative.geodeticToWebXR({ lat: 39.7393, lng: -104.9903 }).add({ x: 0, y: 12, z: 0 } as any));
+        expect(back.alt).toBeUndefined();
+        expect(back.heightAboveOriginMeters).toBeCloseTo(12, 2);
+
+        // With the origin's altitude, sea-level altitudes place as given.
+        const absolute = new WebXRGeospatialAnchorBridge({ origin: { lat: 39.7392, lng: -104.9903, alt: 1609 } });
+        expect(absolute.geodeticToWebXR({ lat: 39.7392, lng: -104.9903, alt: 1619 }).y).toBeCloseTo(10, 3);
+        expect(absolute.webXRToGeodetic(absolute.geodeticToWebXR({ lat: 39.7392, lng: -104.9903, alt: 1619 })).alt).toBeCloseTo(1619, 3);
+    });
+
+    it('webxr_geospatial_align_coordinates fails on a target altitude without an origin altitude, and says heights are relative', async () => {
+        const registry = createDefaultToolRegistry();
+        const mixed = await registry.dispatch('webxr_geospatial_align_coordinates', {
+            originAnchor: { latitude: 39.7392, longitude: -104.9903 },
+            targetGeodetic: { latitude: 39.7393, longitude: -104.9903, altitudeMsl: 1619 }
+        }, {} as any);
+        expect(mixed.exec.status).toBe('failed');
+        expect(String((mixed.resultPayload as any).error)).toMatch(/origin was given without an altitude/);
+
+        const relative = await registry.dispatch('webxr_geospatial_align_coordinates', {
+            originAnchor: { latitude: 39.7392, longitude: -104.9903 },
+            webXRPosition: [0, 5, -10]
+        }, {} as any);
+        expect(relative.exec.status).toBe('completed');
+        const converted = (relative.resultPayload as any).convertedGeodetic;
+        expect(converted.altitudeMsl).toBeUndefined();
+        expect(converted.heightAboveOriginMeters).toBeCloseTo(5, 2);
+        expect(relative.exec.summaryResult).toMatch(/no origin altitude was given/);
+    });
+
     it('the asset vault has no seeded San Francisco tile or splat records', () => {
         const vault = new SpatialAssetVaultService();
         expect(vault.queryCachedAsset('earth/main', { lat: 37.7940, lng: -122.4010 })).toBeNull();

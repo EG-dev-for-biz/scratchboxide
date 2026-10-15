@@ -3247,7 +3247,7 @@ export const WEBXR_GEOSPATIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     properties: {
                         latitude: { type: 'NUMBER', description: 'Latitude in decimal degrees' },
                         longitude: { type: 'NUMBER', description: 'Longitude in decimal degrees' },
-                        altitudeMsl: { type: 'NUMBER', description: 'Optional altitude above mean sea level in meters' }
+                        altitudeMsl: { type: 'NUMBER', description: 'Optional altitude above mean sea level in meters, only when known. Without it heights are relative to the origin\'s level: no sea-level altitude is reported, and a target altitudeMsl is an error.' }
                     },
                     required: ['latitude', 'longitude']
                 },
@@ -3257,7 +3257,7 @@ export const WEBXR_GEOSPATIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     properties: {
                         latitude: { type: 'NUMBER', description: 'Target latitude in decimal degrees' },
                         longitude: { type: 'NUMBER', description: 'Target longitude in decimal degrees' },
-                        altitudeMsl: { type: 'NUMBER', description: 'Optional target altitude in meters' }
+                        altitudeMsl: { type: 'NUMBER', description: 'Optional target altitude above mean sea level in meters (needs the origin\'s altitudeMsl). Without it the target is level with the origin.' }
                     },
                     required: ['latitude', 'longitude']
                 },
@@ -3454,7 +3454,7 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
         }
 
         let webXRPosition: { x: number; y: number; z: number } | undefined;
-        let convertedGeodetic: { latitude: number; longitude: number; altitudeMsl: number } | undefined;
+        let convertedGeodetic: { latitude: number; longitude: number; altitudeMsl?: number; heightAboveOriginMeters: number } | undefined;
         let quaternion: [number, number, number, number] | undefined;
         let headingFromQuaternionDeg: number | undefined;
 
@@ -3476,7 +3476,8 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
             convertedGeodetic = {
                 latitude: geo.lat,
                 longitude: geo.lng,
-                altitudeMsl: geo.alt
+                ...(geo.alt !== undefined ? { altitudeMsl: geo.alt } : {}),
+                heightAboveOriginMeters: geo.heightAboveOriginMeters
             };
         }
 
@@ -3509,7 +3510,7 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
                 quaternion,
                 headingFromQuaternionDeg
             },
-            summaryResult: `Aligned geospatial coordinates with anchor origin (${originAnchor.latitude.toFixed(6)}, ${originAnchor.longitude.toFixed(6)}).`
+            summaryResult: `Aligned geospatial coordinates with anchor origin (${originAnchor.latitude.toFixed(6)}, ${originAnchor.longitude.toFixed(6)}${originAnchor.altitudeMsl !== undefined ? `, ${originAnchor.altitudeMsl} m MSL` : '; no origin altitude was given, so heights are relative to the origin\'s level and no sea-level altitude is reported'}).`
         };
     },
 
