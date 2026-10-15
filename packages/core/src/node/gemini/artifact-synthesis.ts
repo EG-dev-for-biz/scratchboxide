@@ -551,6 +551,12 @@ export function normalizeModelVideoTimeline(raw: Record<string, any> | undefined
     } as VideoTimelineData;
 }
 
+/** A scene log continued by the model's entries; an empty list from the model is its explicit reset. */
+function appendLog<T>(open: T[] | undefined, sent: T[] | undefined | null): T[] {
+    if (Array.isArray(sent) && sent.length === 0) return [];
+    return [...(open || []), ...(Array.isArray(sent) ? sent : [])];
+}
+
 /**
  * The 3D scene the model sent. A 3d-scene envelope sent while a 3d-scene is open is the next version of that scene
  * (same artifact id), so it is read as an update: every field the model's data contains is taken as sent (an
@@ -632,9 +638,9 @@ function modelAuthoredScene(prompt: string, request: GeminiGenerateRequest, titl
         features,
         customMeshes,
         objects: Array.isArray(data.objects) ? data.objects : (sent('objects') ? [] : open?.objects ?? []),
-        // Logs of what was done to the scene: the model's entries are appended.
-        operatorStack: [...(open?.operatorStack || []), ...(Array.isArray(data.operatorStack) ? data.operatorStack : [])],
-        actionLog: [...(open?.actionLog || []), ...(Array.isArray(data.actionLog) ? data.actionLog : [])],
+        // Logs of what was done to the scene: the model's entries are appended; an empty list it sends resets the log.
+        operatorStack: appendLog(open?.operatorStack, data.operatorStack),
+        actionLog: appendLog(open?.actionLog, data.actionLog),
         sculptSettings: pick('sculptSettings'),
         selectedMeshId: pick('selectedMeshId'),
         wasmPhysics: pick('wasmPhysics'),
