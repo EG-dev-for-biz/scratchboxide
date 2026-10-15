@@ -352,7 +352,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'spatial_verify_visual_alignment',
-        description: 'Verifies 1:1 metric scale, translation, ground snapping, pinhole optical consistency (H3D = h_px * d / fy), sub-pixel edge overlap, and dual AABB vs OBB volume tightness against VFX quality standards.',
+        description: 'Audits an alignment from measurements you supply: computes the scale, translation and ground snap that fit the source model\'s dimensions to the reference\'s, checks the measured edge overlap and residual (from geobox_closed_loop_edge_align) against VFX thresholds, and, when the camera depth, the object\'s 2D box and the camera intrinsics are given, the pinhole height (H3D = h_px * d / fy). Nothing is assumed: missing dimensions or measurements are refused, and a check whose inputs are not given is reported as not measured.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -362,37 +362,45 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 sourceDimensions: {
                     type: 'ARRAY',
-                    description: 'Source 3D model dimensions [width, height, depth] in meters',
+                    description: 'Measured source 3D model dimensions [width, height, depth] in meters',
                     items: { type: 'NUMBER' }
                 },
                 targetDimensions: {
                     type: 'ARRAY',
-                    description: 'Target real-world reference dimensions [width, height, depth] in meters',
+                    description: 'Real-world reference dimensions [width, height, depth] in meters',
                     items: { type: 'NUMBER' }
                 },
                 groundSnap: {
                     type: 'BOOLEAN',
                     description: 'Whether to snap foundation base to reference ground datum (default: true)'
                 },
-                cameraDepthMeters: {
-                    type: 'NUMBER',
-                    description: 'Distance from camera optical center to object in meters'
-                },
-                box2dNormalized: {
-                    type: 'ARRAY',
-                    description: 'Normalized 2D bounding box [ymin, xmin, ymax, xmax] in [0, 1000] scale',
-                    items: { type: 'NUMBER' }
-                },
                 overlapScorePercent: {
                     type: 'NUMBER',
-                    description: 'Evaluated sub-pixel edge overlap percentage (0-100%)'
+                    description: 'Edge overlap percentage (0-100) measured by geobox_closed_loop_edge_align'
                 },
                 residualErrorPx: {
                     type: 'NUMBER',
-                    description: 'Reprojection residual error in pixels'
+                    description: 'Edge residual in pixels measured by geobox_closed_loop_edge_align'
+                },
+                cameraDepthMeters: {
+                    type: 'NUMBER',
+                    description: 'Optional, for the pinhole check: distance from the camera optical center to the object in meters'
+                },
+                box2dNormalized: {
+                    type: 'ARRAY',
+                    description: 'Optional, for the pinhole check: the object\'s 2D box [ymin, xmin, ymax, xmax] on a 0-1000 scale',
+                    items: { type: 'NUMBER' }
+                },
+                imageHeightPx: {
+                    type: 'NUMBER',
+                    description: 'For the pinhole check: the image height in pixels'
+                },
+                focalLengthPx: {
+                    type: 'NUMBER',
+                    description: 'For the pinhole check: the vertical focal length fy in pixels'
                 }
             },
-            required: ['sourceDimensions', 'targetDimensions']
+            required: ['modelName', 'sourceDimensions', 'targetDimensions', 'overlapScorePercent', 'residualErrorPx']
         }
     },
     {
@@ -987,14 +995,41 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
     },
 
     spatial_verify_visual_alignment: async (args, _ctx) => {
-        const modelName = asString(args.modelName) || '3D_Entity';
-        const srcDims = (Array.isArray(args.sourceDimensions) ? args.sourceDimensions : [1, 1, 1]) as [number, number, number];
-        const tgtDims = (Array.isArray(args.targetDimensions) ? args.targetDimensions : [1, 1, 1]) as [number, number, number];
+        // Every number the audit reports is one the caller measured; nothing is defaulted.
+        const tool = 'spatial_verify_visual_alignment';
+        const modelName = asString(args.modelName);
+        if (!modelName) throw new MissingInputError(tool, 'modelName');
+        const dimensions = (key: 'sourceDimensions' | 'targetDimensions'): [number, number, number] => {
+            const v = args[key];
+            if (!Array.isArray(v) || v.length !== 3 || !v.every(n => typeof n === 'number' && Number.isFinite(n) && n > 0)) {
+                throw new MissingInputError(tool, key, `three positive sizes [width, height, depth] in meters (got ${JSON.stringify(v)})`);
+            }
+            return v as [number, number, number];
+        };
+        const measured = (key: 'overlapScorePercent' | 'residualErrorPx'): number => {
+            const v = args[key];
+            if (typeof v !== 'number' || !Number.isFinite(v)) {
+                throw new MissingInputError(tool, key, 'the value measured by geobox_closed_loop_edge_align; no overlap or residual is assumed');
+            }
+            return v;
+        };
+        const srcDims = dimensions('sourceDimensions');
+        const tgtDims = dimensions('targetDimensions');
+        const overlapScore = measured('overlapScorePercent');
+        const residualPx = measured('residualErrorPx');
         const groundSnap = args.groundSnap !== false;
         const cameraDepth = typeof args.cameraDepthMeters === 'number' ? args.cameraDepthMeters : undefined;
         const box2d = Array.isArray(args.box2dNormalized) ? (args.box2dNormalized as [number, number, number, number]) : undefined;
-        const overlapScore = typeof args.overlapScorePercent === 'number' ? args.overlapScorePercent : 98.5;
-        const residualPx = typeof args.residualErrorPx === 'number' ? args.residualErrorPx : 0.04;
+        const imageHeight = typeof args.imageHeightPx === 'number' ? args.imageHeightPx : undefined;
+        const fy = typeof args.focalLengthPx === 'number' ? args.focalLengthPx : undefined;
+        const opticalInputs = [cameraDepth, box2d, imageHeight, fy];
+        if (opticalInputs.some(v => v !== undefined) && opticalInputs.some(v => v === undefined)) {
+            throw new MissingInputError(tool, 'cameraDepthMeters, box2dNormalized, imageHeightPx and focalLengthPx',
+                'the pinhole check needs all four (the camera\'s own intrinsics); none is assumed');
+        }
+        if (box2d && (box2d.length !== 4 || !box2d.every(n => typeof n === 'number' && Number.isFinite(n)))) {
+            throw new MissingInputError(tool, 'box2dNormalized', `[ymin, xmin, ymax, xmax] on a 0-1000 scale (got ${JSON.stringify(box2d)})`);
+        }
 
         const service = new SpatialVisualAlignmentVerificationService();
         const alignReport = service.verifyAlignment({
@@ -1011,13 +1046,14 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 centroid: [0, tgtDims[1] / 2, 0]
             },
             groundSnap,
-            cameraContext: cameraDepth ? {
-                fx: 1866.66,
-                fy: 1866.66,
-                cx: 960,
-                cy: 540,
-                imageWidth: 1920,
-                imageHeight: 1080,
+            // Only fy, the image height and the depth enter the pinhole check; the principal point is not used.
+            cameraContext: cameraDepth !== undefined && fy !== undefined && imageHeight !== undefined ? {
+                fx: fy,
+                fy,
+                cx: Number.NaN,
+                cy: Number.NaN,
+                imageWidth: Number.NaN,
+                imageHeight,
                 cameraDepthToObject: cameraDepth
             } : undefined,
             box2dNormalized: box2d
@@ -1028,12 +1064,12 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
             sourceDimensions: srcDims,
             overlapScorePercent: overlapScore,
             residualErrorPx: residualPx,
-            opticalDiscrepancyPercent: alignReport.opticalDiscrepancyPercent ?? 0
+            opticalDiscrepancyPercent: alignReport.opticalDiscrepancyPercent
         });
 
         return {
             status: 'completed',
-            summaryResult: `Visual alignment audit for ${modelName}: [${cert.auditStatus}] (Overlap: ${cert.metrics.overlapScorePercent.toFixed(1)}%, Residual: ${cert.metrics.residualErrorPx.toFixed(3)}px, Optical Scale: ${cert.metrics.opticalDiscrepancyPercent.toFixed(1)}%).`,
+            summaryResult: `Visual alignment audit for ${modelName} from the measurements given: [${cert.auditStatus}] (Overlap: ${cert.metrics.overlapScorePercent.toFixed(1)}%, Residual: ${cert.metrics.residualErrorPx.toFixed(3)}px, Optical Scale: ${cert.metrics.opticalDiscrepancyPercent === undefined ? 'not measured' : `${cert.metrics.opticalDiscrepancyPercent.toFixed(1)}%`}). Fitting the source to the reference needs scale ${alignReport.scale[1].toFixed(4)}.`,
             resultPayload: {
                 success: cert.isCertified,
                 certificate: cert,
@@ -5034,7 +5070,9 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     },
 
     async avatar_4dgs_get(args) {
-        const avatarId = asString(args.avatarId, '2785536');
+        // The avatar is the one named; there is no demo avatar to load instead.
+        const avatarId = asString(args.avatarId);
+        if (!avatarId) throw new MissingInputError('avatar_4dgs_get', 'avatarId', 'name the avatar (avatar_4dgs_list lists them)');
         const service = new Dynamic4DGaussianSplatService();
         const { details, motion } = service.loadAvatar(avatarId);
         return {
@@ -5051,8 +5089,12 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     },
 
     async avatar_4dgs_animate(args) {
-        const avatarId = asString(args.avatarId, '2785536');
-        const frameIndex = Number(args.frameIndex ?? 0);
+        const avatarId = asString(args.avatarId);
+        if (!avatarId) throw new MissingInputError('avatar_4dgs_animate', 'avatarId', 'name the avatar (avatar_4dgs_list lists them)');
+        if (typeof args.frameIndex !== 'number' || !Number.isInteger(args.frameIndex) || args.frameIndex < 0) {
+            throw new MissingInputError('avatar_4dgs_animate', 'frameIndex', `a frame index of 0 or more (got ${JSON.stringify(args.frameIndex)})`);
+        }
+        const frameIndex = args.frameIndex;
         const exportSplat = Boolean(args.exportSplat ?? false);
 
         const service = new Dynamic4DGaussianSplatService();
@@ -5156,6 +5198,13 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     }
 };
 
+/** The actor a humanoid tool acts on: the one named, never a demo actor. */
+function requiredActorId(tool: string, args: Record<string, unknown>): string {
+    const actorId = asString(args.actorId || args.avatarId);
+    if (!actorId) throw new MissingInputError(tool, 'actorId', 'name the actor (humanoid_avatar_list lists them)');
+    return actorId;
+}
+
 export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
     async humanoid_avatar_list(_args) {
         const service = new SbHumanAvatarService();
@@ -5170,14 +5219,11 @@ export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
     },
 
     async humanoid_avatar_get(args) {
-        const actorId = asString(args.actorId || args.avatarId, '2785536');
+        const actorId = requiredActorId('humanoid_avatar_get', args);
         const service = new SbHumanAvatarService();
         const actor = await service.getActor(actorId);
         if (!actor) {
-            return {
-                resultPayload: { error: `Actor "${actorId}" not found` } as unknown as ToolResultPayload,
-                summaryResult: `Actor "${actorId}" not found.`
-            };
+            throw new MissingInputError('humanoid_avatar_get', 'actorId', `no actor "${actorId}" is installed (humanoid_avatar_list lists them)`);
         }
         return {
             resultPayload: {
@@ -5188,7 +5234,7 @@ export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
     },
 
     async humanoid_avatar_skin(args) {
-        const actorId = asString(args.actorId || args.avatarId, '2785536');
+        const actorId = requiredActorId('humanoid_avatar_skin', args);
         const modality = asString(args.modality, 'pbr-standard') as any;
         const melaninFraction = args.melaninFraction !== undefined ? Number(args.melaninFraction) : undefined;
         const pheomelaninRatio = args.pheomelaninRatio !== undefined ? Number(args.pheomelaninRatio) : undefined;
@@ -5225,8 +5271,11 @@ export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
     },
 
     async humanoid_avatar_animate(args) {
-        const actorId = asString(args.actorId || args.avatarId, '2785536');
-        const frameIndex = Number(args.frameIndex ?? 0);
+        const actorId = requiredActorId('humanoid_avatar_animate', args);
+        if (typeof args.frameIndex !== 'number' || !Number.isInteger(args.frameIndex) || args.frameIndex < 0) {
+            throw new MissingInputError('humanoid_avatar_animate', 'frameIndex', `a frame index of 0 or more (got ${JSON.stringify(args.frameIndex)})`);
+        }
+        const frameIndex = args.frameIndex;
         const modality = asString(args.modality, 'pbr-standard') as any;
         const service = new SbHumanAvatarService();
         const frame = await service.evaluateActorFrame(actorId, frameIndex, modality);

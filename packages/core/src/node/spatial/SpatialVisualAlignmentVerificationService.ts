@@ -54,9 +54,13 @@ export interface EdgeOverlapResult {
 export interface MetrologyCertificationParams {
   modelName: string;
   sourceDimensions: [number, number, number];
+  /** Measured edge overlap (e.g. by closed-loop edge alignment). */
   overlapScorePercent: number;
+  /** Measured reprojection residual in pixels. */
   residualErrorPx: number;
+  /** Measured OBB-over-AABB tightness gain; when absent the check is reported as not measured. */
   tightnessGainPercent?: number;
+  /** Measured optical scale discrepancy; when absent the check is reported as not measured. */
   opticalDiscrepancyPercent?: number;
 }
 
@@ -65,17 +69,18 @@ export interface MetrologyCertificate {
   isCertified: boolean;
   auditStatus: 'PASS' | 'WARN' | 'FAIL';
   timestamp: string;
+  /** A check whose measurement was not given is undefined: neither passed nor failed, and named in the report. */
   checks: {
     edgeOverlapPassed: boolean;
     residualErrorPassed: boolean;
-    tightnessGainPassed: boolean;
-    opticalScalePassed: boolean;
+    tightnessGainPassed?: boolean;
+    opticalScalePassed?: boolean;
   };
   metrics: {
     overlapScorePercent: number;
     residualErrorPx: number;
-    tightnessGainPercent: number;
-    opticalDiscrepancyPercent: number;
+    tightnessGainPercent?: number;
+    opticalDiscrepancyPercent?: number;
   };
   summaryReport: string;
 }
@@ -235,39 +240,37 @@ export class SpatialVisualAlignmentVerificationService {
   }
 
   /**
-   * Generates a formal, certified metrology audit report assessing alignment against
-   * strict photorealistic VFX standards (overlap >= 95%, residual <= 0.1 px).
+   * Generates a metrology audit report assessing the given measurements against photorealistic VFX standards
+   * (overlap >= 95%, residual <= 0.1 px, optical scale discrepancy <= 15%, OBB tightness gain >= 0). Every value is
+   * the caller's measurement; a measurement that is not given is reported as not measured, never as zero or a pass.
    */
   public certifyMetrology(params: MetrologyCertificationParams): MetrologyCertificate {
-    const {
-      modelName,
-      sourceDimensions,
-      overlapScorePercent,
-      residualErrorPx,
-      tightnessGainPercent = 0,
-      opticalDiscrepancyPercent = 0
-    } = params;
+    const { modelName, sourceDimensions, overlapScorePercent, residualErrorPx, tightnessGainPercent, opticalDiscrepancyPercent } = params;
+    if (!Number.isFinite(overlapScorePercent) || !Number.isFinite(residualErrorPx)) {
+      throw new Error(`certifyMetrology needs a measured overlap and residual (got ${overlapScorePercent}% and ${residualErrorPx} px)`);
+    }
 
     const edgeOverlapPassed = overlapScorePercent >= 95.0;
     const residualErrorPassed = residualErrorPx <= 0.1;
-    const tightnessGainPassed = tightnessGainPercent >= 0;
-    const opticalScalePassed = opticalDiscrepancyPercent <= 15.0;
+    const tightnessGainPassed = tightnessGainPercent === undefined ? undefined : tightnessGainPercent >= 0;
+    const opticalScalePassed = opticalDiscrepancyPercent === undefined ? undefined : opticalDiscrepancyPercent <= 15.0;
 
-    const isCertified = edgeOverlapPassed && residualErrorPassed && opticalScalePassed;
+    const isCertified = edgeOverlapPassed && residualErrorPassed && opticalScalePassed !== false;
     const auditStatus: 'PASS' | 'WARN' | 'FAIL' = isCertified
       ? 'PASS'
       : (overlapScorePercent >= 85.0 ? 'WARN' : 'FAIL');
+    const verdict = (passed: boolean | undefined) => (passed === undefined ? 'NOT MEASURED' : passed ? 'PASS' : 'FAIL');
 
     const summaryReport = [
       `=== SPATIAL VISUAL ALIGNMENT & METROLOGY CERTIFICATE ===`,
       `Model: ${modelName}`,
       `Dimensions: [${sourceDimensions.map(d => d.toFixed(1) + 'm').join(' × ')}]`,
-      `Status: [${auditStatus}] ${isCertified ? '✓ CERTIFIED PHOTOREALISTIC ALIGNMENT' : '⚠ VERIFICATION FAILED'}`,
+      `Status: [${auditStatus}] ${isCertified ? '✓ CERTIFIED ALIGNMENT (from the measurements given)' : '⚠ VERIFICATION FAILED'}`,
       `Metrics:`,
-      `  • Sub-Pixel Edge Overlap: ${overlapScorePercent.toFixed(1)}% (Threshold: ≥ 95.0%) -> ${edgeOverlapPassed ? 'PASS' : 'FAIL'}`,
-      `  • Reprojection Residual Error: ${residualErrorPx.toFixed(3)} px (Threshold: ≤ 0.100 px) -> ${residualErrorPassed ? 'PASS' : 'FAIL'}`,
-      `  • Optical Scale Discrepancy: ${opticalDiscrepancyPercent.toFixed(2)}% (Threshold: ≤ 15.0%) -> ${opticalScalePassed ? 'PASS' : 'FAIL'}`,
-      `  • OBB Volume Tightness Gain: +${tightnessGainPercent.toFixed(1)}% (Threshold: ≥ 0.0%) -> ${tightnessGainPassed ? 'PASS' : 'FAIL'}`,
+      `  • Sub-Pixel Edge Overlap: ${overlapScorePercent.toFixed(1)}% (Threshold: ≥ 95.0%) -> ${verdict(edgeOverlapPassed)}`,
+      `  • Reprojection Residual Error: ${residualErrorPx.toFixed(3)} px (Threshold: ≤ 0.100 px) -> ${verdict(residualErrorPassed)}`,
+      `  • Optical Scale Discrepancy: ${opticalDiscrepancyPercent === undefined ? 'not measured' : `${opticalDiscrepancyPercent.toFixed(2)}%`} (Threshold: ≤ 15.0%) -> ${verdict(opticalScalePassed)}`,
+      `  • OBB Volume Tightness Gain: ${tightnessGainPercent === undefined ? 'not measured' : `+${tightnessGainPercent.toFixed(1)}%`} (Threshold: ≥ 0.0%) -> ${verdict(tightnessGainPassed)}`,
       `Timestamp: ${new Date().toISOString()}`
     ].join('\n');
 

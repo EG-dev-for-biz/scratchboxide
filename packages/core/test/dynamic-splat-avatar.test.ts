@@ -287,6 +287,19 @@ int main() {
         expect(toolNames).toContain('performer_4d_create_from_video');
     });
 
+    it('acts only on the avatar it is given: no demo avatar is loaded when none is named', async () => {
+        const { MissingInputError } = await import('../src/common/errors/pipeline-errors');
+        for (const [call, arg] of [
+            [() => avatar4dgsHandlers.avatar_4dgs_get({}), 'avatarId'],
+            [() => avatar4dgsHandlers.avatar_4dgs_animate({ frameIndex: 2 }), 'avatarId'],
+            [() => avatar4dgsHandlers.avatar_4dgs_animate({ avatarId: '2785536' }), 'frameIndex']
+        ] as const) {
+            const error = await (call as () => Promise<unknown>)().catch(e => e);
+            expect(error).toBeInstanceOf(MissingInputError);
+            expect(error.arg).toBe(arg);
+        }
+    });
+
     itAvatar('should successfully invoke the Gemini agent tool handlers', async () => {
         // Test avatar_4dgs_list
         const listRes = await avatar4dgsHandlers.avatar_4dgs_list({});
