@@ -12,6 +12,14 @@ import * as path from 'path';
 import * as https from 'https';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 
+function stoppedError(): Error {
+    return Object.assign(new Error('Trellis reconstruction was stopped'), { name: 'AbortError' });
+}
+
+function throwIfStopped(signal?: AbortSignal): void {
+    if (signal?.aborted) throw stoppedError();
+}
+
 export interface FalTrellisConfig {
     falKey?: string;
     multiImageModel?: string;
@@ -28,6 +36,8 @@ export interface FalTrellisMultiInput {
     textureSize?: string;
     outputFormat?: string;
     destinationGlbPath?: string;
+    /** Stops the run between uploads and aborts the request in flight: a stopped request starts no further Fal work. */
+    signal?: AbortSignal;
 }
 
 export interface FalGlbMeshStats {
@@ -97,12 +107,14 @@ export class FalTrellisService {
     /**
      * Upload an image buffer to Fal's high-speed persistent alpha CDN storage.
      */
-    public async uploadToFalStorage(buf: Buffer, filename = `view_${Date.now()}.png`, contentType = 'image/png'): Promise<string> {
+    public async uploadToFalStorage(buf: Buffer, filename = `view_${Date.now()}.png`, contentType = 'image/png', signal?: AbortSignal): Promise<string> {
         this.requireKey();
+        throwIfStopped(signal);
 
         const initRes = await new Promise<any>((resolve, reject) => {
             const req = https.request('https://rest.alpha.fal.ai/storage/upload/initiate', {
                 method: 'POST',
+                signal,
                 headers: {
                     'Authorization': 'Key ' + this.falKey,
                     'Content-Type': 'application/json'
@@ -127,6 +139,7 @@ export class FalTrellisService {
         await new Promise<void>((resolve, reject) => {
             const req = https.request(uploadUrl, {
                 method: 'PUT',
+                signal,
                 headers: {
                     'Content-Type': contentType,
                     'Content-Length': buf.length
@@ -170,13 +183,13 @@ export class FalTrellisService {
         // 2. Upload file paths if provided
         for (const p of input.imagePaths || []) {
             const buf = await fs.promises.readFile(p);
-            urls.push(await this.uploadToFalStorage(buf, path.basename(p), contentTypeOf(p)));
+            urls.push(await this.uploadToFalStorage(buf, path.basename(p), contentTypeOf(p), input.signal));
         }
 
         // 3. Upload buffers if provided
         if (input.imageBuffers) {
             for (const item of input.imageBuffers) {
-                const url = await this.uploadToFalStorage(item.buffer, item.name, item.contentType || 'image/png');
+                const url = await this.uploadToFalStorage(item.buffer, item.name, item.contentType || 'image/png', input.signal);
                 urls.push(url);
             }
         }
@@ -189,10 +202,12 @@ export class FalTrellisService {
             texture_size: input.textureSize || '1024'
         });
 
+        throwIfStopped(input.signal);
         try {
             const responseData = await new Promise<any>((resolve, reject) => {
                 const req = https.request(`https://fal.run/${this.multiImageModel}`, {
                     method: 'POST',
+                    signal: input.signal,
                     headers: {
                         'Authorization': 'Key ' + this.falKey,
                         'Content-Type': 'application/json',
@@ -226,6 +241,7 @@ export class FalTrellisService {
             let stats: FalGlbMeshStats | undefined;
 
             if (localPath) {
+                throwIfStopped(input.signal);
                 await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
                 const glbBuf = await this.downloadBinary(glbRemoteUrl);
                 await fs.promises.writeFile(localPath, glbBuf);
@@ -241,6 +257,7 @@ export class FalTrellisService {
                 inferenceDurationMs: Date.now() - startTime
             };
         } catch (err: any) {
+            if (input.signal?.aborted) throw stoppedError();
             throw new GeneratorFailedError(FAL_TRELLIS, `Fal Trellis inference failed: ${err?.message || err}`);
         }
     }

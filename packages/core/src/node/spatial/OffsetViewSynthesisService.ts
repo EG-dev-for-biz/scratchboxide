@@ -11,7 +11,8 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { inpaintPanorama } from './Google360PanoramaPipelineService';
+import { Google360PanoramaPipelineService, inpaintPanorama } from './Google360PanoramaPipelineService';
+import { readImageDimensions } from '../image-codec-ffmpeg';
 import { PanoramaDepthService } from './PanoramaDepthService';
 import { SplatService } from '../3d-engine/splat-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
@@ -29,6 +30,12 @@ export interface OffsetSynthesisOptions {
     outDir?: string;
     skipOffsets?: boolean;     // Fast path skipping offset view synthesis
     sceneType?: 'indoor' | 'outdoor';
+    /** Image model for the disocclusion inpainting (default: IMAGE_MODEL_PRIORITY, in order). */
+    model?: string;
+    /** Largest enlargement of the inpainting answer to the view's size (see PanoramaSeamOptions.maxModelUpscale). */
+    maxModelUpscale?: number;
+    /** Stops the synthesis between poses and during the inpainting model call. */
+    signal?: AbortSignal;
 }
 
 export interface OffsetSynthesisResult {
@@ -99,6 +106,14 @@ export class OffsetViewSynthesisService {
         const mockExecution = options.mockExecution ?? false;
 
         console.log(`[OffsetSynthesis] Initializing view synthesis. Base: ${baseName} SkipOffsets: ${skipOffsets}`);
+
+        // Offset views are inpainted at the panorama's own size: when the image model cannot answer that large within
+        // the allowed enlargement, refuse now, before any splat compile or model call.
+        if (!skipOffsets && !mockExecution) {
+            const dims = readImageDimensions(await fs.readFile(sourceRgbPath));
+            if (!dims) throw new GeneratorFailedError('panorama', `cannot read the size of ${sourceRgbPath}`);
+            Google360PanoramaPipelineService.editImageSize(dims.width, dims.height, options.maxModelUpscale);
+        }
 
         // 1. Generate primary source splats first
         const originalSplatPath = path.join(outDir, `${baseName}_original_${timestamp}.splat`);
@@ -186,7 +201,10 @@ export class OffsetViewSynthesisService {
                     maskImagePath: offsetMask,
                     prompt,
                     outputImagePath: inpaintedRgb,
-                    mockExecution: false
+                    mockExecution: false,
+                    model: options.model,
+                    maxModelUpscale: options.maxModelUpscale,
+                    signal: options.signal
                 });
             }
 

@@ -125,33 +125,35 @@ describe('Native 3D Engine AI Render & Keyframing Suite', () => {
             expect(result.y).toBeCloseTo(50, 0);
         });
 
-        it('can execute spatial inpainting using a mock editor client', async () => {
-            const mockClient = {
-                models: {
-                    generateContent: vi.fn(async () => ({
-                        candidates: [{
-                            content: {
-                                parts: [{
-                                    inlineData: {
-                                        mimeType: 'image/png',
-                                        data: Buffer.from('inpainted-result').toString('base64')
-                                    }
-                                }]
-                            }
-                        }]
-                    }))
-                }
-            } as any;
+        it('inpaints at the image\'s own aspect ratio, keeps pixels outside the mask, names the model, and refuses a re-framed answer', async () => {
+            const { encodePng, decodePng } = await import('../src/node/texture-processing');
+            const { ModelAnswerResolutionError } = await import('../src/node/spatial/Google360PanoramaPipelineService');
+            const { fakeImageModelClient } = await import('./helpers/fake-image-model');
+            const W = 80, H = 60; // 4:3
+            const base = Buffer.alloc(W * H * 4);
+            for (let i = 0; i < W * H; i++) { base[i * 4] = 40; base[i * 4 + 1] = 120; base[i * 4 + 2] = 200; base[i * 4 + 3] = 255; }
+            const service = new SpatialSmartPointInpaintService();
+            const mask = service.projectSmartPointToMask(testMesh, testPose, [0, 0, 0], 10, W, H).mask;
 
-            const service = new SpatialSmartPointInpaintService({ client: mockClient });
-            const result = await service.executeSpatialInpaint({
-                image: Buffer.from('base-image'),
-                mask: Buffer.from('mask-image'),
-                prompt: 'Add an ivy climber here'
+            const calls: Array<{ model: string; aspectRatio?: string }> = [];
+            // The fake model answers at 160x120 (same 4:3 ratio, twice the size) in flat red.
+            const client = fakeImageModelClient(calls, { flat: [255, 0, 0], flatSize: [160, 120], modelVersion: 'gemini-3.1-flash-image' });
+            const result = await new SpatialSmartPointInpaintService({ client }).executeSpatialInpaint({
+                image: encodePng(W, H, base), mask, prompt: 'Add an ivy climber here'
             });
+            expect(calls[0].aspectRatio).toBe('4:3');
+            expect(result.modelUsed).toBe('gemini-3.1-flash-image');
+            expect(result.modelNote).toContain('gemini-3.1-flash-image');
+            const out = decodePng(result.image);
+            expect([out.width, out.height]).toEqual([W, H]);
+            const centre = (Math.round(H / 2) * W + Math.round(W / 2)) * 4;
+            expect(out.rgba[centre]).toBe(255);
+            expect(Array.from(out.rgba.subarray(0, 3))).toEqual([40, 120, 200]); // corner, outside the mask
 
-            expect(result.image.toString()).toBe('inpainted-result');
-            expect(mockClient.models.generateContent).toHaveBeenCalled();
+            // A 16:9 answer to a 4:3 request would put the edit in the wrong place: refused, not stretched.
+            const wide = fakeImageModelClient([], { flat: [255, 0, 0], flatSize: [160, 90] });
+            await expect(new SpatialSmartPointInpaintService({ client: wide }).executeSpatialInpaint({ image: encodePng(W, H, base), mask, prompt: 'x' }))
+                .rejects.toBeInstanceOf(ModelAnswerResolutionError);
         });
     });
 

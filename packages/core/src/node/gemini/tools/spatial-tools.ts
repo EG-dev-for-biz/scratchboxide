@@ -18,7 +18,8 @@ import {
     generate4KMonumentalPanorama,
     auditPanoramaQuality,
     reprojectZenithPanorama,
-    extractZenithRectilinearPatch
+    extractZenithRectilinearPatch,
+    Google360PanoramaPipelineService
 } from '../../spatial/Google360PanoramaPipelineService';
 import {
     generate360Perspectives
@@ -1049,7 +1050,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
 /** The `maxModelUpscale` parameter of the panorama edit tools. */
 const PANORAMA_MAX_UPSCALE_PARAMETER: ToolParameterSchema = {
     type: 'NUMBER',
-    description: 'Largest factor (>= 1, default 2) the model\'s answer may be enlarged by to cover the panorama. Image models answer at about 1.5 megapixels, so a larger panorama would get a soft, enlarged band; such an answer is refused unless this is raised. The result states how far the answer was enlarged.'
+    description: 'Largest factor (>= 1, default 2) the model\'s answer may be enlarged by to cover the panorama. The image size (1K, 2K or 4K) is asked for so the answer covers the panorama within this factor; a panorama too large for that even at 4K is refused before any model call unless this is raised. The result states the size the model answered at and how far it was enlarged.'
 };
 
 const PANORAMA_IMAGE_MODEL_PARAMETER: ToolParameterSchema = {
@@ -1307,6 +1308,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     description: 'Optional output file path to write the generated panorama.'
                 },
                 model: PANORAMA_IMAGE_MODEL_PARAMETER,
+                maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER,
                 invertSphericalCurvature: {
                     type: 'BOOLEAN',
                     description: 'Whether to invert spherical curvature so that the panorama wraps concavely towards the user at the lateral edges rather than bowing away convexly (default: false).'
@@ -1504,7 +1506,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'panorama_to_3dgs',
-        description: 'Generate a watertight, high-fidelity walkable 3DGS world from a single 360 equirectangular panorama. Automatically extracts per-pixel geometry using Depth Anything V3, synthesizes multi-perspective offset viewpoints with Gemini image-model disocclusion inpainting (the run fails rather than splatting un-inpainted holes), and compiles a merged standard binary .SPLAT and Niantic NGSP v2 compressed .SPZ.',
+        description: 'Generate a walkable 3DGS world from a single 360 equirectangular panorama. Measures per-pixel metric depth with the local Depth Anything V2 Metric model (the call fails when it cannot run), synthesizes offset viewpoints whose disocclusions are inpainted by a Gemini image model (the run fails rather than splatting un-inpainted holes; a panorama too large for the image model is refused before the depth run), and compiles a merged .SPLAT and Niantic NGSP v2 .SPZ. The result reports the capture height and how it was obtained.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1518,7 +1520,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 eyeHeight: {
                     type: 'NUMBER',
-                    description: 'Camera eye height in meters (default: 1.7).'
+                    description: 'Camera height above the floor in meters, when known. Omitted, it is measured from the metric floor in the depth map, and the call fails when there is too little floor to measure it.'
                 },
                 radius: {
                     type: 'NUMBER',
@@ -1539,7 +1541,9 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 prompt: {
                     type: 'STRING',
                     description: 'Inpainting prompt describing the hidden background scenery for the image model.'
-                }
+                },
+                model: PANORAMA_IMAGE_MODEL_PARAMETER,
+                maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER
             },
             required: ['inputImagePath']
         }
@@ -1785,7 +1789,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'spatial_smart_point_inpaint',
-        description: 'Inpaints a localized region of the scene by projecting a 3D coordinate onto the screen and applying feathered masking.',
+        description: 'Inpaints a localized region of an image of the scene: projects a 3D point into the image with the camera pose, has an image model edit a feathered region around it (at the image\'s own aspect ratio; an answer at another ratio is refused), and keeps every pixel outside that region. The result names the model that answered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1795,8 +1799,9 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 smartPoint: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '3D coordinate [X, Y, Z] to project and edit.' },
                 prompt: { type: 'STRING', description: 'Prompt describing what to add or edit at the smart point region.' },
                 radiusPx: { type: 'NUMBER', description: 'Pixel radius of the feathered mask around the projected point.' },
-                width: { type: 'NUMBER', description: 'Viewport render width.' },
-                height: { type: 'NUMBER', description: 'Viewport render height.' }
+                width: { type: 'NUMBER', description: 'Optional: the image width; it must match the image (the point is projected at the image\'s own size).' },
+                height: { type: 'NUMBER', description: 'Optional: the image height; it must match the image.' },
+                model: { type: 'STRING', description: 'Optional image model id; when given only that model is used, otherwise the image models are tried in priority order and the result names the one that answered.' }
             },
             required: ['imagePath', 'glbPath', 'pose', 'smartPoint', 'prompt']
         }
@@ -2149,47 +2154,57 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const smartPoint = args.smartPoint as [number, number, number];
         const prompt = asString(args.prompt);
         const radiusPx = typeof args.radiusPx === 'number' ? args.radiusPx : 20;
-        const width = typeof args.width === 'number' ? args.width : 640;
-        const height = typeof args.height === 'number' ? args.height : 480;
 
-        if (!imagePath) throw new Error('spatial_smart_point_inpaint: "imagePath" argument is required.');
-        if (!glbPath) throw new Error('spatial_smart_point_inpaint: "glbPath" argument is required.');
-        if (!pose) throw new Error('spatial_smart_point_inpaint: "pose" argument is required.');
-        if (!smartPoint) throw new Error('spatial_smart_point_inpaint: "smartPoint" argument is required.');
-        if (!prompt) throw new Error('spatial_smart_point_inpaint: "prompt" argument is required.');
+        if (!imagePath) throw new MissingInputError('spatial_smart_point_inpaint', 'imagePath');
+        if (!glbPath) throw new MissingInputError('spatial_smart_point_inpaint', 'glbPath');
+        if (!pose) throw new MissingInputError('spatial_smart_point_inpaint', 'pose');
+        if (!smartPoint) throw new MissingInputError('spatial_smart_point_inpaint', 'smartPoint');
+        if (!prompt) throw new MissingInputError('spatial_smart_point_inpaint', 'prompt');
 
         const { SpatialSmartPointInpaintService } = await import('../../spatial/SpatialSmartPointInpaintService');
         const { HeadlessMeshSilhouetteRenderer } = await import('../../spatial/HeadlessMeshSilhouetteRenderer');
         const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
+        const { readImageDimensions } = await import('../../image-codec-ffmpeg');
+        const fs = await import('fs-extra');
 
-        const credentials = new GoogleMediaCredentialsService();
-        const client = credentials.createClient();
+        // The point is projected into the image the edit is made on, at that image's own size.
+        const baseImage = await fs.readFile(imagePath);
+        const dims = readImageDimensions(baseImage);
+        if (!dims) throw new MissingInputError('spatial_smart_point_inpaint', 'imagePath', `the size of ${imagePath} cannot be read (PNG, JPEG or WebP expected)`);
+        for (const [key, value, own] of [['width', args.width, dims.width], ['height', args.height, dims.height]] as const) {
+            if (typeof value === 'number' && value !== own) {
+                throw new MissingInputError('spatial_smart_point_inpaint', key, `${imagePath} is ${dims.width}x${dims.height}; the point is projected at the image's own size (got ${key} ${value})`);
+            }
+        }
 
+        const client = await new GoogleMediaCredentialsService().createClient();
         const service = new SpatialSmartPointInpaintService({ client });
         const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
-
-        const maskRes = service.projectSmartPointToMask(mesh, pose, smartPoint, radiusPx, width, height);
-
-        const fs = await import('fs-extra');
-        const baseImage = await fs.readFile(imagePath);
-
+        const maskRes = service.projectSmartPointToMask(mesh, pose, smartPoint, radiusPx, dims.width, dims.height);
         const result = await service.executeSpatialInpaint({
             image: baseImage,
             mask: maskRes.mask,
-            prompt
+            prompt,
+            model: asString(args.model) || undefined,
+            signal: ctx?.signal
         });
 
-        const outPath = `public/models/smart_inpainted_${Date.now()}.png`;
-        await fs.ensureDir('public/models');
+        const fileName = `smart_inpainted_${Date.now()}.png`;
+        const outPath = path.join(ctx?.workspaceRoot || process.cwd(), 'public', 'models', fileName);
+        await fs.ensureDir(path.dirname(outPath));
         await fs.writeFile(outPath, result.image);
 
         return {
             resultPayload: {
                 inpaintedImagePath: outPath,
+                imageUrl: `/models/${fileName}`,
                 projectedX: maskRes.x,
-                projectedY: maskRes.y
+                projectedY: maskRes.y,
+                modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote
             },
-            summaryResult: `Smart point inpainting complete. Projected point 3D coordinate directly to screen space (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}), applied feathered radial mask, and executed Gemini image editor.`
+            summaryResult: `Smart point inpainting written to ${outPath}: projected the 3D point to (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}) in the ${dims.width}x${dims.height} image and inpainted a ${radiusPx}px feathered region; pixels outside it are unchanged. ${result.modelNote} The model answered at ${result.answerWidth}x${result.answerHeight}.`
         };
     },
     spatial_keyframe_video_interpolation: async (args, ctx) => {
@@ -2314,7 +2329,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    panorama_heal_seam: async (args, _ctx) => {
+    panorama_heal_seam: async (args, ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_heal_seam: "inputImagePath" argument is required.');
         const prompt = asString(args.prompt) || undefined;
@@ -2328,7 +2343,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             seamWidth,
             outputImagePath,
             model,
-            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined
+            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined,
+            signal: ctx?.signal
         });
 
         return {
@@ -2347,7 +2363,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    panorama_inpaint: async (args, _ctx) => {
+    panorama_inpaint: async (args, ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_inpaint: "inputImagePath" argument is required.');
         const maskImagePath = asString(args.maskImagePath) || undefined;
@@ -2371,7 +2387,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             prompt,
             outputImagePath,
             model,
-            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined
+            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined,
+            signal: ctx?.signal
         });
 
         return {
@@ -2389,7 +2406,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    panorama_generate_360: async (args, _ctx) => {
+    panorama_generate_360: async (args, ctx) => {
         let prompt = args.prompt;
         const structuredPrompt = typeof args.structuredPrompt === 'object' && args.structuredPrompt !== null
             ? args.structuredPrompt as any
@@ -2418,7 +2435,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             inpaintNadir,
             outputImagePath,
             model,
-            invertSphericalCurvature
+            invertSphericalCurvature,
+            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined,
+            signal: ctx?.signal
         });
 
         return {
@@ -2438,7 +2457,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    panorama_generate_4k: async (args, _ctx) => {
+    panorama_generate_4k: async (args, ctx) => {
         const prompt = asString(args.prompt);
         if (!prompt) throw new Error('panorama_generate_4k: "prompt" argument is required.');
 
@@ -2464,7 +2483,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             enablePolarCaps,
             enforcePolarSingularity,
             outputImagePath,
-            model
+            model,
+            signal: ctx?.signal
         });
 
         return {
@@ -2562,7 +2582,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    panorama_to_3dgs: async (args, _ctx) => {
+    panorama_to_3dgs: async (args, ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_to_3dgs: "inputImagePath" argument is required.');
 
@@ -2576,6 +2596,18 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         // The depth model and the disocclusion inpainting always run for real here; their mock modes are for service tests.
         const mockExecution = false;
         const prompt = asString(args.prompt) || undefined;
+        const model = asString(args.model) || undefined;
+        const maxModelUpscale = typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined;
+
+        // The offset views are inpainted at the panorama's own size: when the image model cannot answer that large
+        // within the allowed enlargement, refuse now, before the depth run and before any model call.
+        if (!skipOffsets) {
+            const fsMod = await import('fs-extra');
+            const { readImageDimensions } = await import('../../image-codec-ffmpeg');
+            const dims = readImageDimensions(await fsMod.readFile(inputImagePath));
+            if (!dims) throw new MissingInputError('panorama_to_3dgs', 'inputImagePath', `the size of ${inputImagePath} cannot be read (PNG, JPEG or WebP expected)`);
+            Google360PanoramaPipelineService.editImageSize(dims.width, dims.height, maxModelUpscale);
+        }
 
         console.log(`[panorama_to_3dgs] Launching full end-to-end 3DGS pipeline for ${inputImagePath}`);
 
@@ -2602,7 +2634,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             voxelSize,
             skipOffsets,
             mockExecution,
-            sceneType
+            sceneType,
+            model,
+            maxModelUpscale,
+            signal: ctx?.signal
         });
 
         return {
@@ -3008,7 +3043,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    panorama_generate_perspectives: async (args, _ctx) => {
+    panorama_generate_perspectives: async (args, ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_generate_perspectives: "inputImagePath" argument is required.');
         const faceResolution = typeof args.faceResolution === 'number' ? args.faceResolution : undefined;
@@ -3029,7 +3064,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             prompt,
             model,
             useNanoBanana,
-            outputDir
+            outputDir,
+            signal: ctx?.signal
         });
 
         const perspectivesSummary = Object.keys(result.perspectives).map(p => {

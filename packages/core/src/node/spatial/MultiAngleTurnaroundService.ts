@@ -391,7 +391,8 @@ export class MultiAngleTurnaroundService {
                 destinationGlbPath: glbPath,
                 ssSamplingSteps: 12,
                 slatSamplingSteps: 12,
-                meshSimplify: 0.95
+                meshSimplify: 0.95,
+                signal: options.signal
             });
             if (!falResult.localGlbPath || !fs.existsSync(falResult.localGlbPath)) {
                 throw new GeneratorFailedError('fal-trellis', `Trellis returned no GLB at ${glbPath}`);

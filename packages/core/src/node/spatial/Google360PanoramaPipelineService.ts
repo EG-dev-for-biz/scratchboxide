@@ -15,7 +15,50 @@ import { decodeImageToRgba } from '../image-codec-ffmpeg';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { generateImageWithModels, ImageModelAnswer } from '../google-media-generation-service';
 import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, SkippedMediaModel, resolveRequestedModels } from '../../common/media-generation-protocol';
-import { MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { MediaModelUnavailableError, MissingInputError, PipelineError } from '../../common/errors/pipeline-errors';
+
+/** Image size tiers the Gemini image models accept, with the pixel area each answers with (about 1, 4 and 16 MP). */
+export const IMAGE_SIZE_TIERS: ReadonlyArray<readonly ['1K' | '2K' | '4K', number]> = [
+    ['1K', 1024 * 1024], ['2K', 2048 * 2048], ['4K', 4096 * 4096]
+];
+
+/**
+ * The size an image model answers with at a tier and aspect ratio: about the tier's area at that ratio, rounded down
+ * slightly (a 21:9 answer is about 1536x672 at 1K; this estimates 1517x650) so a choice made from it is never too small.
+ */
+export function expectedModelAnswerSize(tier: '1K' | '2K' | '4K', aspectRatio: string): { width: number; height: number } {
+    const area = IMAGE_SIZE_TIERS.find(([t]) => t === tier)![1];
+    const ratio = IMAGE_MODEL_ASPECT_RATIOS.find(([label]) => label === aspectRatio)?.[1] ?? 1;
+    const width = Math.floor(Math.sqrt(area * ratio) * 0.97);
+    return { width, height: Math.floor(width / ratio) };
+}
+
+/**
+ * The smallest image size tier whose answer covers a width x height canvas enlarged by at most maxUpscale, with
+ * the enlargement it needs; undefined when even 4K would need more.
+ */
+export function imageSizeForCanvas(width: number, height: number, aspectRatio: string, maxUpscale: number): { imageSize: '1K' | '2K' | '4K'; upscale: number } | undefined {
+    for (const [tier] of IMAGE_SIZE_TIERS) {
+        const answer = expectedModelAnswerSize(tier, aspectRatio);
+        const upscale = Math.max(width / answer.width, height / answer.height);
+        if (upscale <= maxUpscale) return { imageSize: tier, upscale };
+    }
+    return undefined;
+}
+
+/**
+ * The image model's answer cannot cover the panorama within the allowed enlargement. `beforeCall` is true when this
+ * was known from the canvas size alone, so no model was called (the caller's limit is too tight for the panorama);
+ * false when the model answered smaller than the size asked for. Not an unavailable model: the model may well answer.
+ */
+export class ModelAnswerResolutionError extends PipelineError {
+    readonly code = 'model_answer_resolution';
+
+    constructor(readonly beforeCall: boolean, message: string) {
+        super(message);
+        this.name = 'ModelAnswerResolutionError';
+    }
+}
 
 export interface PanoramaSeamOptions {
     inputImagePath?: string;
@@ -29,9 +72,12 @@ export interface PanoramaSeamOptions {
     model?: string;
     /**
      * Largest factor the model's answer may be enlarged by to cover the panorama (default
-     * DEFAULT_MAX_MODEL_UPSCALE). A smaller answer would blend a soft band into the panorama, so it is refused.
+     * DEFAULT_MAX_MODEL_UPSCALE). The image size is asked for so the answer stays within it; a panorama too large for
+     * that even at 4K is refused before any model call.
      */
     maxModelUpscale?: number;
+    /** Stops the step before (and during) its model call; a stopped step bills no further model. */
+    signal?: AbortSignal;
 }
 
 /** Default limit on enlarging a model's edit answer to the panorama's size (see maxModelUpscale). */
@@ -48,7 +94,7 @@ export interface PanoramaModelReport {
      * The aspect ratio asked of the model, the size it answered at, and the canvas size its answer was resampled to
      * (absent for mock and procedural runs).
      */
-    modelImage?: { requestedAspectRatio?: string; width: number; height: number; resampledWidth: number; resampledHeight: number };
+    modelImage?: { requestedAspectRatio?: string; requestedImageSize?: string; width: number; height: number; resampledWidth: number; resampledHeight: number };
 }
 
 /**
@@ -58,7 +104,8 @@ export interface PanoramaModelReport {
 export function describeModelImage(report: PanoramaModelReport): string {
     const image = report.modelImage;
     if (!image) return '';
-    const answered = ` The model answered at ${image.width}x${image.height}${image.requestedAspectRatio ? ` for a ${image.requestedAspectRatio} request` : ''}`;
+    const asked = [image.requestedAspectRatio, image.requestedImageSize && `imageSize ${image.requestedImageSize}`].filter(Boolean).join(', ');
+    const answered = ` The model answered at ${image.width}x${image.height}${asked ? ` for a ${asked} request` : ''}`;
     if (image.resampledWidth === image.width && image.resampledHeight === image.height) return `${answered}; it was used at that size.`;
     const scale = Math.max(image.resampledWidth / image.width, image.resampledHeight / image.height);
     const change: string[] = [scale >= 1 ? `${scale.toFixed(2)}x larger` : `${(1 / scale).toFixed(2)}x smaller`];
@@ -103,6 +150,8 @@ export interface PanoramaInpaintOptions {
     model?: string;
     /** Largest factor the model's answer may be enlarged by to cover the panorama (default DEFAULT_MAX_MODEL_UPSCALE). */
     maxModelUpscale?: number;
+    /** Stops the step before (and during) its model call. */
+    signal?: AbortSignal;
 }
 
 export interface PanoramaInpaintResult extends PanoramaModelReport {
@@ -162,6 +211,8 @@ export interface Generate360PanoramaOptions {
     model?: string;
     /** Largest factor a seam-heal or infill answer may be enlarged by to cover the panorama (see PanoramaSeamOptions). */
     maxModelUpscale?: number;
+    /** Stops the generation between and during its model calls. */
+    signal?: AbortSignal;
     structuredPrompt?: EquirectangularStructuredPrompt;
     useStructuredPrompt?: boolean;
     invertSphericalCurvature?: boolean;
@@ -235,6 +286,9 @@ export interface Generate4KMonumentalPanoramaOptions {
      * Image model id. When given, only that model is used; otherwise IMAGE_MODEL_PRIORITY, in order.
      */
     model?: string;
+
+    /** Stops the generation during its model call. */
+    signal?: AbortSignal;
 }
 
 export interface Generate4KMonumentalPanoramaResult extends PanoramaModelReport {
@@ -250,34 +304,6 @@ export interface Generate4KMonumentalPanoramaResult extends PanoramaModelReport 
     qcReport: PanoramaQualityAuditResult;
     summary: string;
     structuredPrompt?: EquirectangularStructuredPrompt;
-}
-
-export interface GeneratePanoramaFromImageOptions {
-    inputImagePath?: string;
-    inputImageBuffer?: Buffer;
-    outputImagePath?: string;
-    hfovDeg?: number;
-    width?: number; // default 2048
-    height?: number; // default 1024
-    infillCeiling?: boolean; // default true
-    infillFloor?: boolean; // default true
-    healSeam?: boolean; // default true
-    projectionMode?: 'around_user' | 'gnomonic_frustum'; // default 'around_user'
-    mockExecution?: boolean;
-    model?: string;
-    /** Largest factor a seam-heal or infill answer may be enlarged by to cover the panorama (see PanoramaSeamOptions). */
-    maxModelUpscale?: number;
-}
-
-export interface GeneratePanoramaFromImageResult {
-    success: boolean;
-    width: number;
-    height: number;
-    outputImagePath?: string;
-    outputBuffer: Buffer;
-    coverageRatio: number;
-    modelUsed: string;
-    summary: string;
 }
 
 export interface UpscalePanorama16KOptions {
@@ -420,9 +446,11 @@ export class Google360PanoramaPipelineService {
         contents: any[],
         width: number,
         height: number,
-        imageConfig: { aspectRatio: string },
-        limits: { maxUpscale?: number } = {}
+        imageConfig: { aspectRatio: string; imageSize?: '1K' | '2K' | '4K' },
+        limits: { maxUpscale?: number } = {},
+        signal?: AbortSignal
     ): Promise<{ rgba: Buffer; answer: ImageModelAnswer; modelImage: NonNullable<PanoramaModelReport['modelImage']> }> {
+        if (signal?.aborted) throw Object.assign(new Error('Stopped before the panorama model call'), { name: 'AbortError' });
         const models = resolveRequestedModels(requestedModel, IMAGE_MODEL_PRIORITY);
         let client: any;
         try {
@@ -430,7 +458,7 @@ export class Google360PanoramaPipelineService {
         } catch (err: any) {
             throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${err?.message || err})`);
         }
-        const answer = await generateImageWithModels(client, { models, contents, imageConfig });
+        const answer = await generateImageWithModels(client, { models, contents, imageConfig, signal });
         let decoded: { rgba: Buffer; width: number; height: number };
         try {
             decoded = await decodeImageToRgba(answer.data);
@@ -442,15 +470,15 @@ export class Google360PanoramaPipelineService {
         const asked = IMAGE_MODEL_ASPECT_RATIOS.find(([label]) => label === imageConfig.aspectRatio)?.[1];
         const answered = decoded.width / decoded.height;
         if (asked !== undefined && Math.abs(answered - asked) / asked > MODEL_ANSWER_ASPECT_TOLERANCE) {
-            throw new MediaModelUnavailableError(answer.modelUsed,
-                `asked for a ${imageConfig.aspectRatio} image, the model answered ${decoded.width}x${decoded.height} (${answered.toFixed(3)}:1), which would not line up with the panorama`);
+            throw new ModelAnswerResolutionError(false,
+                `${answer.modelUsed} was asked for a ${imageConfig.aspectRatio} image and answered ${decoded.width}x${decoded.height} (${answered.toFixed(3)}:1), which would not line up with the panorama`);
         }
         // An answer far smaller than the canvas would be blended in as a soft, enlarged band: refused when the caller
         // set a limit (edits of an existing panorama), and always reported in modelImage.
         const upscale = Math.max(width / decoded.width, height / decoded.height);
         if (limits.maxUpscale !== undefined && upscale > limits.maxUpscale * (1 + 1e-6)) {
-            throw new MediaModelUnavailableError(answer.modelUsed,
-                `the model answered at ${decoded.width}x${decoded.height}, which would have to be enlarged ${upscale.toFixed(2)}x to the ${width}x${height} canvas `
+            throw new ModelAnswerResolutionError(false,
+                `${answer.modelUsed} answered at ${decoded.width}x${decoded.height}${imageConfig.imageSize ? ` for an imageSize ${imageConfig.imageSize} request` : ''}, which would have to be enlarged ${upscale.toFixed(2)}x to the ${width}x${height} canvas `
                 + `(more than the allowed ${limits.maxUpscale}x; pass a larger maxModelUpscale to accept a softer edit, or edit a smaller panorama)`);
         }
         const rgba = decoded.width === width && decoded.height === height
@@ -459,7 +487,7 @@ export class Google360PanoramaPipelineService {
         return {
             rgba,
             answer,
-            modelImage: { requestedAspectRatio: imageConfig.aspectRatio, width: decoded.width, height: decoded.height, resampledWidth: width, resampledHeight: height }
+            modelImage: { requestedAspectRatio: imageConfig.aspectRatio, requestedImageSize: imageConfig.imageSize, width: decoded.width, height: decoded.height, resampledWidth: width, resampledHeight: height }
         };
     }
 
@@ -476,6 +504,23 @@ export class Google360PanoramaPipelineService {
                 `${width}x${height} is wider than the widest aspect ratio the image models accept (21:9)`);
         }
         return { aspectRatio: fit[0], canvasWidth: Math.max(width, Math.round(height * fit[1])) };
+    }
+
+    /**
+     * The image size tier to ask for when editing a width x height panorama so the answer covers its edit canvas
+     * enlarged by at most maxUpscale. Throws ModelAnswerResolutionError (beforeCall) when even 4K cannot: callers check
+     * this before any model call (or any other costly step) is made.
+     */
+    static editImageSize(width: number, height: number, maxUpscale: number = DEFAULT_MAX_MODEL_UPSCALE): { imageSize: '1K' | '2K' | '4K'; upscale: number } {
+        const canvas = Google360PanoramaPipelineService.panoramaEditCanvas(width, height);
+        const size = imageSizeForCanvas(canvas.canvasWidth, height, canvas.aspectRatio, maxUpscale);
+        if (size) return size;
+        const at4k = expectedModelAnswerSize('4K', canvas.aspectRatio);
+        const needed = Math.max(canvas.canvasWidth / at4k.width, height / at4k.height);
+        throw new ModelAnswerResolutionError(true,
+            `a ${width}x${height} panorama is edited on a ${canvas.canvasWidth}x${height} ${canvas.aspectRatio} canvas; the image models answer at about `
+            + `${at4k.width}x${at4k.height} at most (imageSize 4K), which would need ${needed.toFixed(2)}x enlargement, more than the allowed ${maxUpscale}x. `
+            + `No model was called. Pass maxModelUpscale >= ${Math.ceil(needed * 100) / 100} to accept a softer edit, or edit a smaller panorama.`);
     }
 
     /** Widens a horizontally wrapping image to canvasWidth by repeating its columns from the left edge. */
@@ -511,12 +556,14 @@ export class Google360PanoramaPipelineService {
         maskRgba: Buffer,
         width: number,
         height: number,
-        maxUpscale: number = DEFAULT_MAX_MODEL_UPSCALE
+        maxUpscale: number = DEFAULT_MAX_MODEL_UPSCALE,
+        signal?: AbortSignal
     ): Promise<{ rgba: Buffer; report: PanoramaModelReport }> {
         if (!(typeof maxUpscale === 'number' && Number.isFinite(maxUpscale) && maxUpscale >= 1)) {
             throw new MissingInputError('panorama edit', 'maxModelUpscale', `must be a number >= 1 (got ${maxUpscale})`);
         }
         const canvas = Google360PanoramaPipelineService.panoramaEditCanvas(width, height);
+        const size = Google360PanoramaPipelineService.editImageSize(width, height, maxUpscale);
         const widened = canvas.canvasWidth !== width;
         const imagePng = encodePng(canvas.canvasWidth, height, Google360PanoramaPipelineService.wrapExtendColumns(rgba, width, height, canvas.canvasWidth));
         const maskPng = encodePng(canvas.canvasWidth, height, Google360PanoramaPipelineService.wrapExtendColumns(maskRgba, width, height, canvas.canvasWidth));
@@ -527,7 +574,7 @@ export class Google360PanoramaPipelineService {
             { text: `${instruction}${framing} Answer with the whole image at exactly the same framing and ${canvas.aspectRatio} aspect ratio.` },
             { inlineData: { data: imagePng.toString('base64'), mimeType: 'image/png' } },
             { inlineData: { data: maskPng.toString('base64'), mimeType: 'image/png' } }
-        ], canvas.canvasWidth, height, { aspectRatio: canvas.aspectRatio }, { maxUpscale });
+        ], canvas.canvasWidth, height, { aspectRatio: canvas.aspectRatio, imageSize: size.imageSize }, { maxUpscale }, signal);
         return {
             rgba: Google360PanoramaPipelineService.cropColumns(generated.rgba, canvas.canvasWidth, height, width),
             report: {
@@ -1060,275 +1107,6 @@ export class Google360PanoramaPipelineService {
             maskRgba,
             validPixelCount: validCount,
             coverageRatio: validCount / (panoWidth * panoHeight)
-        };
-    }
-
-    /**
-     * Projects a 2D photograph concavely AROUND THE USER into a full 360 equirectangular panorama.
-     * Uses cylindrical equirectangular angular mapping:
-     * - Azimuth lambda in [-PI, PI] maps linearly horizontally (x proportional to lambda).
-     * - Elevation phi in [-PI/2, PI/2] maps linearly vertically (y proportional to phi).
-     * Horizontal lines remain horizontal circles at constant elevation, eliminating the
-     * convex outward-bowing barrel distortion of gnomonic projection.
-     * Generatively synthesizes all missing perspectives:
-     * - Forward sector: source image mapped concavely around user
-     * - Left flank (-90 deg) & Right flank (+90 deg): continuous architectural perspective continuation
-     * - Rear sector (180 deg): opposing vista with seamless toroidal closure
-     * - Ceiling (+90 deg): atmospheric sky dome with zero-variance apex cap
-     * - Nadir (-90 deg): perspective ground road with zero-variance nadir disc
-     */
-    static projectAroundUserPanorama(
-        perspectiveRgba: Buffer,
-        pWidth: number,
-        pHeight: number,
-        panoWidth = 2048,
-        panoHeight = 1024,
-        hfovDeg = 140.0,
-        options?: {
-            infillSurrounds?: boolean;
-            infillCeiling?: boolean;
-            infillFloor?: boolean;
-            healSeam?: boolean;
-        }
-    ): {
-        panoRgba: Buffer;
-        maskRgba: Buffer;
-        validPixelCount: number;
-        coverageRatio: number;
-    } {
-        const infillSurrounds = options?.infillSurrounds !== false;
-        const infillCeiling = options?.infillCeiling !== false;
-        const infillFloor = options?.infillFloor !== false;
-        const healSeam = options?.healSeam !== false;
-
-        const panoRgba = Buffer.alloc(panoWidth * panoHeight * 4);
-        const maskRgba = Buffer.alloc(panoWidth * panoHeight * 4);
-
-        const aspectRatio = pWidth / pHeight;
-        const hfovRad = (hfovDeg * Math.PI) / 180.0;
-        const vfovRad = hfovRad / aspectRatio;
-        const halfH = hfovRad * 0.5;
-        const halfV = Math.min(vfovRad * 0.5, (Math.PI / 2.0) * 0.85);
-
-        // Transition blend width at lateral edges of photo
-        const blendH = Math.min(0.2, halfH * 0.15);
-
-        // Precompute edge color statistics for perspective extension
-        const leftEdgeRgb: [number, number, number][] = [];
-        const rightEdgeRgb: [number, number, number][] = [];
-        for (let py = 0; py < pHeight; py++) {
-            const lIdx = py * pWidth * 4;
-            const rIdx = (py * pWidth + (pWidth - 1)) * 4;
-            leftEdgeRgb.push([perspectiveRgba[lIdx], perspectiveRgba[lIdx + 1], perspectiveRgba[lIdx + 2]]);
-            rightEdgeRgb.push([perspectiveRgba[rIdx], perspectiveRgba[rIdx + 1], perspectiveRgba[rIdx + 2]]);
-        }
-
-        let skyAccR = 0, skyAccG = 0, skyAccB = 0;
-        for (let px = 0; px < pWidth; px++) {
-            const idx = px * 4;
-            skyAccR += perspectiveRgba[idx];
-            skyAccG += perspectiveRgba[idx + 1];
-            skyAccB += perspectiveRgba[idx + 2];
-        }
-        const skyR = Math.round(skyAccR / pWidth);
-        const skyG = Math.round(skyAccG / pWidth);
-        const skyB = Math.round(skyAccB / pWidth);
-
-        let gndAccR = 0, gndAccG = 0, gndAccB = 0;
-        const botRow = (pHeight - 1) * pWidth * 4;
-        for (let px = 0; px < pWidth; px++) {
-            const idx = botRow + px * 4;
-            gndAccR += perspectiveRgba[idx];
-            gndAccG += perspectiveRgba[idx + 1];
-            gndAccB += perspectiveRgba[idx + 2];
-        }
-        const gndR = Math.round(gndAccR / pWidth);
-        const gndG = Math.round(gndAccG / pWidth);
-        const gndB = Math.round(gndAccB / pWidth);
-
-        let validCount = 0;
-
-        for (let y = 0; y < panoHeight; y++) {
-            const phi = (0.5 - (y + 0.5) / panoHeight) * Math.PI; // elevation [-PI/2, PI/2]
-            const rowOffset = y * panoWidth * 4;
-
-            for (let x = 0; x < panoWidth; x++) {
-                const lambda = ((x + 0.5) / panoWidth - 0.5) * 2.0 * Math.PI; // azimuth [-PI, PI]
-                const idx = rowOffset + x * 4;
-
-                const inH = Math.abs(lambda) <= halfH;
-                const inV = Math.abs(phi) <= halfV;
-
-                if (inH && inV) {
-                    // Central forward sector: Cylindrical equirectangular unrolling around user
-                    const uNorm = (lambda + halfH) / hfovRad;
-                    const vNorm = 0.5 - (phi / (halfV * 2.0));
-
-                    const px = Math.max(0, Math.min(pWidth - 1, uNorm * (pWidth - 1)));
-                    const py = Math.max(0, Math.min(pHeight - 1, vNorm * (pHeight - 1)));
-
-                    const x0 = Math.floor(px);
-                    const x1 = Math.min(x0 + 1, pWidth - 1);
-                    const y0 = Math.floor(py);
-                    const y1 = Math.min(y0 + 1, pHeight - 1);
-
-                    const fx = px - x0;
-                    const fy = py - y0;
-                    const w00 = (1.0 - fx) * (1.0 - fy);
-                    const w10 = fx * (1.0 - fy);
-                    const w01 = (1.0 - fx) * fy;
-                    const w11 = fx * fy;
-
-                    const i00 = (y0 * pWidth + x0) * 4;
-                    const i10 = (y0 * pWidth + x1) * 4;
-                    const i01 = (y1 * pWidth + x0) * 4;
-                    const i11 = (y1 * pWidth + x1) * 4;
-
-                    const srcR = w00 * perspectiveRgba[i00]     + w10 * perspectiveRgba[i10]     + w01 * perspectiveRgba[i01]     + w11 * perspectiveRgba[i11];
-                    const srcG = w00 * perspectiveRgba[i00 + 1] + w10 * perspectiveRgba[i10 + 1] + w01 * perspectiveRgba[i01 + 1] + w11 * perspectiveRgba[i11 + 1];
-                    const srcB = w00 * perspectiveRgba[i00 + 2] + w10 * perspectiveRgba[i10 + 2] + w01 * perspectiveRgba[i01 + 2] + w11 * perspectiveRgba[i11 + 2];
-
-                    // Check lateral blend edge
-                    const edgeDist = halfH - Math.abs(lambda);
-                    let blendAlpha = 1.0;
-                    if (edgeDist < blendH) {
-                        blendAlpha = 0.5 * (1.0 + Math.cos(Math.PI * (1.0 - edgeDist / blendH)));
-                    }
-
-                    panoRgba[idx]     = Math.round(srcR);
-                    panoRgba[idx + 1] = Math.round(srcG);
-                    panoRgba[idx + 2] = Math.round(srcB);
-                    panoRgba[idx + 3] = 255;
-
-                    maskRgba[idx]     = Math.round(blendAlpha * 255);
-                    maskRgba[idx + 1] = Math.round(blendAlpha * 255);
-                    maskRgba[idx + 2] = Math.round(blendAlpha * 255);
-                    maskRgba[idx + 3] = 255;
-                    validCount++;
-                } else if (infillSurrounds) {
-                    // Multi-perspective synthesis for lateral flanks, rear vista, zenith, and nadir
-                    if (phi > halfV && infillCeiling) {
-                        // Zenith Sky Dome
-                        const tZenith = (phi - halfV) / ((Math.PI / 2.0) - halfV);
-                        const skyApexR = Math.max(5, Math.min(45, Math.round(skyR * 0.3)));
-                        const skyApexG = Math.max(8, Math.min(50, Math.round(skyG * 0.35)));
-                        const skyApexB = Math.max(22, Math.min(80, Math.round(skyB * 0.55)));
-
-                        const cloudNoise = Math.sin(x * 0.02 + y * 0.03) * Math.cos(x * 0.015 - y * 0.02) * 8;
-                        const sunAzimuth = Math.cos(lambda * 1.5) * 10;
-
-                        const r = Math.round(skyApexR * tZenith + skyR * (1.0 - tZenith) * 0.85 + sunAzimuth + cloudNoise);
-                        const g = Math.round(skyApexG * tZenith + skyG * (1.0 - tZenith) * 0.85 + sunAzimuth + cloudNoise);
-                        const b = Math.round(skyApexB * tZenith + skyB * (1.0 - tZenith) * 0.95 + cloudNoise);
-
-                        panoRgba[idx]     = Math.max(0, Math.min(255, r));
-                        panoRgba[idx + 1] = Math.max(0, Math.min(255, g));
-                        panoRgba[idx + 2] = Math.max(0, Math.min(255, b));
-                        panoRgba[idx + 3] = 255;
-                    } else if (phi < -halfV && infillFloor) {
-                        // Nadir Ground / Road Plane
-                        const tNadir = (-phi - halfV) / ((Math.PI / 2.0) - halfV);
-                        const asphaltR = Math.max(12, Math.min(40, Math.round(gndR * 0.6)));
-                        const asphaltG = Math.max(14, Math.min(45, Math.round(gndG * 0.65)));
-                        const asphaltB = Math.max(18, Math.min(50, Math.round(gndB * 0.7)));
-
-                        const groundDist = 1.8 / Math.max(0.04, Math.tan(-phi));
-                        const groundX = Math.sin(lambda) * groundDist;
-                        const groundZ = Math.cos(lambda) * groundDist;
-
-                        const stripePeriodX = ((groundX % 2.0) + 2.0) % 2.0;
-                        const isCrosswalk = (stripePeriodX < 0.6 && groundDist < 16.0 && groundDist > 0.8);
-                        const stripeBrightness = isCrosswalk ? (36 + Math.sin(groundZ * 3.0) * 14) : 0;
-
-                        const wetPuddle = Math.sin(groundX * 1.5 + groundZ * 2.2);
-                        const reflect = wetPuddle > 0.2 ? 0.35 : 0.0;
-                        const grain = ((x * 17 + y * 31) % 9) - 4;
-
-                        const r = Math.round(asphaltR * tNadir + gndR * (1.0 - tNadir) * 0.5 + stripeBrightness + skyR * reflect + grain);
-                        const g = Math.round(asphaltG * tNadir + gndG * (1.0 - tNadir) * 0.5 + stripeBrightness + skyG * reflect + grain);
-                        const b = Math.round(asphaltB * tNadir + gndB * (1.0 - tNadir) * 0.5 + stripeBrightness * 1.2 + skyB * reflect + grain);
-
-                        panoRgba[idx]     = Math.max(0, Math.min(255, r));
-                        panoRgba[idx + 1] = Math.max(0, Math.min(255, g));
-                        panoRgba[idx + 2] = Math.max(0, Math.min(255, b));
-                        panoRgba[idx + 3] = 255;
-                    } else {
-                        // Flanks (Left / Right) and Rear Streetscape / Horizon
-                        // Symmetric C1-continuous Hermite smoothstep boundary mapping to rear meridian:
-                        // Left flank curves smoothly from left edge (u=0.0) to center (u=0.5) at lambda = -PI
-                        // Right flank curves smoothly from right edge (u=1.0) to center (u=0.5) at lambda = +PI
-                        // At lambda = +-PI: uReflect = 0.50000 with du/dlambda = 0 (100% C1 continuity at the seam)
-                        let uReflect: number;
-                        if (lambda > halfH) {
-                            const t = (lambda - halfH) / (Math.PI - halfH);
-                            const s = t * t * (3.0 - 2.0 * t);
-                            uReflect = 1.0 - 0.5 * s;
-                        } else {
-                            const t = (-lambda - halfH) / (Math.PI - halfH);
-                            const s = t * t * (3.0 - 2.0 * t);
-                            uReflect = 0.5 * s;
-                        }
-
-                        const vNorm = 0.5 - (phi / (halfV * 2.0));
-                        const px = Math.max(0, Math.min(pWidth - 1, uReflect * (pWidth - 1)));
-                        const py = Math.max(0, Math.min(pHeight - 1, vNorm * (pHeight - 1)));
-
-                        const x0 = Math.floor(px);
-                        const x1 = Math.min(x0 + 1, pWidth - 1);
-                        const y0 = Math.floor(py);
-                        const y1 = Math.min(y0 + 1, pHeight - 1);
-
-                        const fx = px - x0;
-                        const fy = py - y0;
-                        const w00 = (1.0 - fx) * (1.0 - fy);
-                        const w10 = fx * (1.0 - fy);
-                        const w01 = (1.0 - fx) * fy;
-                        const w11 = fx * fy;
-
-                        const i00 = (y0 * pWidth + x0) * 4;
-                        const i10 = (y0 * pWidth + x1) * 4;
-                        const i01 = (y1 * pWidth + x0) * 4;
-                        const i11 = (y1 * pWidth + x1) * 4;
-
-                        const r2d = w00 * perspectiveRgba[i00]     + w10 * perspectiveRgba[i10]     + w01 * perspectiveRgba[i01]     + w11 * perspectiveRgba[i11];
-                        const g2d = w00 * perspectiveRgba[i00 + 1] + w10 * perspectiveRgba[i10 + 1] + w01 * perspectiveRgba[i01 + 1] + w11 * perspectiveRgba[i11 + 1];
-                        const b2d = w00 * perspectiveRgba[i00 + 2] + w10 * perspectiveRgba[i10 + 2] + w01 * perspectiveRgba[i01 + 2] + w11 * perspectiveRgba[i11 + 2];
-
-                        // Rear sector subtle harmonic atmospheric blend
-                        const isLeft = lambda < 0;
-                        const distFromEdge = isLeft ? (-lambda - halfH) : (lambda - halfH);
-                        const normDist = Math.max(0.0, Math.min(1.0, distFromEdge / (Math.PI - halfH)));
-                        const rearBlend = Math.pow(normDist, 2.0) * 0.20;
-
-                        panoRgba[idx]     = Math.max(0, Math.min(255, Math.round(r2d * (1.0 - rearBlend) + skyR * rearBlend)));
-                        panoRgba[idx + 1] = Math.max(0, Math.min(255, Math.round(g2d * (1.0 - rearBlend) + skyG * rearBlend)));
-                        panoRgba[idx + 2] = Math.max(0, Math.min(255, Math.round(b2d * (1.0 - rearBlend) + skyB * rearBlend)));
-                        panoRgba[idx + 3] = 255;
-                    }
-                }
-            }
-        }
-
-        // Apply Google Street View / Photo Sphere polar cap low-pass filtering at zenith & nadir
-        let resultRgba = this.applyStreetViewPolarCaps(panoRgba, panoWidth, panoHeight, {
-            zenithRatio: 0.12,
-            nadirRatio: 0.12,
-            smoothExponent: 2.0
-        });
-
-        // Apply seamless 360 toroidal boundary seam healing at x = 0 <-> x = W - 1 (rear meridian)
-        if (healSeam) {
-            const shifted = Google360PanoramaPipelineService.shiftImageHorizontally(resultRgba, panoWidth, panoHeight, 0.5, false);
-            const healed = Google360PanoramaPipelineService.proceduralSeamHeal(shifted, panoWidth, panoHeight, Math.round(panoWidth * 0.08));
-            resultRgba = Google360PanoramaPipelineService.shiftImageHorizontally(healed, panoWidth, panoHeight, 0.5, true);
-            resultRgba = Google360PanoramaPipelineService.enforceBitExactBoundarySeam(resultRgba, panoWidth, panoHeight, 16);
-        }
-
-        return {
-            panoRgba: resultRgba,
-            maskRgba,
-            validPixelCount: validCount,
-            coverageRatio: 1.0
         };
     }
 
@@ -2656,7 +2434,7 @@ export class Google360PanoramaPipelineService {
             const prompt = options.prompt || 'Continuous seamless panoramic landscape, photorealistic perspective, matching ambient lighting and textures across the seam';
             const edited = await this.editPanoramaImage(options.model,
                 `${prompt}. The first image is a 360 equirectangular panorama rolled by half its width, so its wrap-around seam runs down the vertical center. The second image is a mask: repaint only the white vertical band so the left and right halves join seamlessly, and keep every other pixel unchanged.`,
-                shiftedRgba, maskRgba, width, height, options.maxModelUpscale);
+                shiftedRgba, maskRgba, width, height, options.maxModelUpscale, options.signal);
             inpaintedRgba = edited.rgba;
             report = edited.report;
         }
@@ -2825,7 +2603,7 @@ export class Google360PanoramaPipelineService {
             // The model edits the panorama; only the masked region of its answer is blended back in below.
             const edited = await this.editPanoramaImage(options.model,
                 `${prompt}. The first image is a 360 equirectangular panorama and the second is a mask: repaint only the white region of the mask, and keep every other pixel unchanged.`,
-                decoded.rgba, maskRgba, width, height, options.maxModelUpscale);
+                decoded.rgba, maskRgba, width, height, options.maxModelUpscale, options.signal);
             inpaintedRgba = edited.rgba;
             report = edited.report;
         }
@@ -3046,8 +2824,10 @@ export class Google360PanoramaPipelineService {
             const fullPrompt = options.useStructuredPrompt === false
                 ? `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360 equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, 8k resolution, seamless horizontal environment${options.style ? `, ${options.style}` : ''}`
                 : JSON.stringify(structuredPrompt, null, 2);
-            // The model answers at its own size (21:9); the panorama is resampled to the requested 2:1 canvas.
-            const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height, { aspectRatio: '21:9' });
+            // The model answers at its own size (21:9) at the smallest image size tier that covers the 2:1 canvas
+            // (4K when none does); the answer is resampled to the canvas and the summary says by how much.
+            const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height,
+                { aspectRatio: '21:9', imageSize: imageSizeForCanvas(width, height, '21:9', 1)?.imageSize ?? '4K' }, {}, options.signal);
             generatedRgba = generated.rgba;
             report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote, modelImage: generated.modelImage };
         }
@@ -3067,7 +2847,8 @@ export class Google360PanoramaPipelineService {
                 inputImageBuffer: outputBuffer,
                 mockExecution: options.mockExecution,
                 model: options.model,
-                maxModelUpscale: editUpscale
+                maxModelUpscale: editUpscale,
+                signal: options.signal
             });
             outputBuffer = seamRes.outputBuffer;
             seamHealed = true;
@@ -3080,7 +2861,8 @@ export class Google360PanoramaPipelineService {
                 nadirOnly: true,
                 mockExecution: options.mockExecution,
                 model: options.model,
-                maxModelUpscale: editUpscale
+                maxModelUpscale: editUpscale,
+                signal: options.signal
             });
             outputBuffer = nadirRes.outputBuffer;
             stepNotes.push(`Nadir infill: ${nadirRes.modelNote}`);
@@ -3190,8 +2972,10 @@ export class Google360PanoramaPipelineService {
             report = { modelUsed: 'procedural-synthesizer (4k mock)', modelNote: 'Mock run: procedural panorama, no model call.' };
         } else {
             const fullPrompt = `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360-degree equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, monumental architecture, 8k resolution, seamless horizontal environment, crisp ceiling dome, reflection floor${options.style ? `, ${options.style}` : ''}`;
-            // Resampled to the target 4K canvas (4096x2048) from the model's own 21:9 answer.
-            const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height, { aspectRatio: '21:9' });
+            // Asked at the image size tier that covers the 4K canvas (4096x2048) and resampled to it from the model's
+            // own 21:9 answer; the summary reports the size the model answered at.
+            const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height,
+                { aspectRatio: '21:9', imageSize: imageSizeForCanvas(width, height, '21:9', 1)?.imageSize ?? '4K' }, {}, options.signal);
             rawRgba = generated.rgba;
             report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote, modelImage: generated.modelImage };
         }
@@ -3296,234 +3080,6 @@ export class Google360PanoramaPipelineService {
             ...report,
             summary,
             structuredPrompt
-        };
-    }
-
-    /**
-     * Generates a full 360 equirectangular panorama from an input perspective 2D image.
-     * Uses inward rectilinear gnomonic projection, generative context-aware ceiling & floor infill,
-     * cubic polar cap low-pass filtering, and boundary seam healing.
-     */
-    async generatePanoramaFromImage(options: GeneratePanoramaFromImageOptions): Promise<GeneratePanoramaFromImageResult> {
-        let inputBuffer: Buffer;
-        if (options.inputImageBuffer) {
-            inputBuffer = options.inputImageBuffer;
-        } else if (options.inputImagePath) {
-            inputBuffer = await fs.readFile(options.inputImagePath);
-        } else {
-            throw new Error('Either inputImagePath or inputImageBuffer must be provided');
-        }
-
-        const decoded = decodePng(inputBuffer);
-        const pWidth = decoded.width;
-        const pHeight = decoded.height;
-        const panoWidth = options.width || 2048;
-        const panoHeight = options.height || 1024;
-        const projectionMode = options.projectionMode || 'around_user';
-
-        if (projectionMode === 'around_user') {
-            const hfovDeg = options.hfovDeg || 140.0;
-            const proj = Google360PanoramaPipelineService.projectAroundUserPanorama(
-                decoded.rgba,
-                pWidth,
-                pHeight,
-                panoWidth,
-                panoHeight,
-                hfovDeg,
-                {
-                    infillSurrounds: true,
-                    infillCeiling: options.infillCeiling !== false,
-                    infillFloor: options.infillFloor !== false,
-                    healSeam: options.healSeam !== false
-                }
-            );
-
-            let outputBuffer = encodePng(panoWidth, panoHeight, proj.panoRgba);
-
-            if (options.outputImagePath) {
-                await fs.ensureDir(path.dirname(options.outputImagePath));
-                await fs.writeFile(options.outputImagePath, outputBuffer);
-            }
-
-            return {
-                success: true,
-                width: panoWidth,
-                height: panoHeight,
-                outputImagePath: options.outputImagePath,
-                outputBuffer,
-                coverageRatio: 1.0,
-                // Purely procedural (projection + polar caps): no model is called, mock or not.
-                modelUsed: 'around-user-panoramic-synthesizer (procedural, no model call)',
-                summary: `360 panorama generated from perspective image successfully concavely around user (${panoWidth}x${panoHeight}, coverage: 100.0%, all perspectives infilled).`
-            };
-        }
-
-        const hfovDeg = options.hfovDeg || 92.0;
-
-        // 1. Inward perspective projection (gnomonic fallback)
-        const proj = Google360PanoramaPipelineService.projectPerspectiveImageInward(
-            decoded.rgba,
-            pWidth,
-            pHeight,
-            panoWidth,
-            panoHeight,
-            hfovDeg
-        );
-
-        let panoRgba: Buffer = Buffer.from(proj.panoRgba) as unknown as Buffer;
-        const isPhoto = new Uint8Array(panoWidth * panoHeight);
-        for (let i = 0; i < panoWidth * panoHeight; i++) {
-            if (proj.maskRgba[i * 4 + 3] > 128) {
-                isPhoto[i] = 1;
-            }
-        }
-
-        // 2. Detect boundary edge colors from the projected image
-        let topAccR = 0, topAccG = 0, topAccB = 0, topCount = 0;
-        let botAccR = 0, botAccG = 0, botAccB = 0, botCount = 0;
-
-        for (let y = 0; y < panoHeight; y++) {
-            for (let x = 0; x < panoWidth; x++) {
-                const pIdx = y * panoWidth + x;
-                if (isPhoto[pIdx] === 1) {
-                    const idx = pIdx * 4;
-                    if (y > 0 && isPhoto[(y - 1) * panoWidth + x] === 0) {
-                        topAccR += panoRgba[idx];
-                        topAccG += panoRgba[idx + 1];
-                        topAccB += panoRgba[idx + 2];
-                        topCount++;
-                    }
-                    if (y < panoHeight - 1 && isPhoto[(y + 1) * panoWidth + x] === 0) {
-                        botAccR += panoRgba[idx];
-                        botAccG += panoRgba[idx + 1];
-                        botAccB += panoRgba[idx + 2];
-                        botCount++;
-                    }
-                }
-            }
-        }
-
-        const topR = topCount > 0 ? Math.round(topAccR / topCount) : 30;
-        const topG = topCount > 0 ? Math.round(topAccG / topCount) : 40;
-        const topB = topCount > 0 ? Math.round(topAccB / topCount) : 60;
-
-        const botR = botCount > 0 ? Math.round(botAccR / botCount) : 35;
-        const botG = botCount > 0 ? Math.round(botAccG / botCount) : 35;
-        const botB = botCount > 0 ? Math.round(botAccB / botCount) : 40;
-
-        const infillCeiling = options.infillCeiling !== false;
-        const infillFloor = options.infillFloor !== false;
-
-        // 3. Generative polar infill
-        for (let y = 0; y < panoHeight; y++) {
-            const phi = (0.5 - (y + 0.5) / panoHeight) * Math.PI;
-            if (phi > 0 && !infillCeiling) continue;
-            if (phi <= 0 && !infillFloor) continue;
-
-            const rowOffset = y * panoWidth * 4;
-
-            for (let x = 0; x < panoWidth; x++) {
-                const pIdx = y * panoWidth + x;
-                if (isPhoto[pIdx] === 1) continue; // Keep original photo bit-exact
-
-                const idx = rowOffset + x * 4;
-                const lambda = ((x + 0.5) / panoWidth - 0.5) * (2.0 * Math.PI);
-
-                if (phi > 0) {
-                    // Ceiling sky dome infill
-                    const tZenith = phi / (Math.PI / 2);
-                    const skyApexR = Math.max(5, Math.min(40, Math.round(topR * 0.3)));
-                    const skyApexG = Math.max(8, Math.min(45, Math.round(topG * 0.35)));
-                    const skyApexB = Math.max(22, Math.min(75, Math.round(topB * 0.55)));
-
-                    const neonAzimuth = Math.cos(lambda * 2.0);
-                    const glowR = Math.max(0, topR * 0.75 + neonAzimuth * 12);
-                    const glowG = Math.max(0, topG * 0.75 + neonAzimuth * 8);
-                    const glowB = Math.max(0, topB * 0.85 + 16);
-
-                    const noise = Math.sin(x * 0.03 + y * 0.02) * Math.cos(x * 0.015 - y * 0.025) * 6;
-
-                    const r = Math.round(skyApexR * tZenith + glowR * (1.0 - tZenith) + noise);
-                    const g = Math.round(skyApexG * tZenith + glowG * (1.0 - tZenith) + noise);
-                    const b = Math.round(skyApexB * tZenith + glowB * (1.0 - tZenith) + noise);
-
-                    panoRgba[idx]     = Math.max(0, Math.min(255, r));
-                    panoRgba[idx + 1] = Math.max(0, Math.min(255, g));
-                    panoRgba[idx + 2] = Math.max(0, Math.min(255, b));
-                    panoRgba[idx + 3] = 255;
-                } else {
-                    // Floor ground infill
-                    const tNadir = (-phi) / (Math.PI / 2);
-                    const asphaltR = Math.max(12, Math.min(45, Math.round(botR * 0.6)));
-                    const asphaltG = Math.max(14, Math.min(50, Math.round(botG * 0.65)));
-                    const asphaltB = Math.max(18, Math.min(55, Math.round(botB * 0.7)));
-
-                    const groundDist = 1.8 / Math.max(0.04, Math.tan(-phi));
-                    const groundX = Math.sin(lambda) * groundDist;
-                    const groundZ = Math.cos(lambda) * groundDist;
-
-                    const stripePeriodX = ((groundX % 2.0) + 2.0) % 2.0;
-                    const isCrosswalk = (stripePeriodX < 0.6 && groundDist < 14.0 && groundDist > 0.6);
-                    const stripeBrightness = isCrosswalk ? (38 + Math.sin(groundZ * 3.5) * 16) : 0;
-
-                    const puddleReflect = Math.sin(groundX * 1.4 + groundZ * 2.1);
-                    const hasPuddle = puddleReflect > 0.25;
-                    const reflectR = hasPuddle ? (topR * 0.45) : 0;
-                    const reflectG = hasPuddle ? (topG * 0.45) : 0;
-                    const reflectB = hasPuddle ? (topB * 0.55) : 0;
-
-                    const grain = ((x * 19 + y * 29) % 11) - 5;
-
-                    const r = Math.round(asphaltR * tNadir + botR * (1.0 - tNadir) * 0.5 + stripeBrightness + reflectR + grain);
-                    const g = Math.round(asphaltG * tNadir + botG * (1.0 - tNadir) * 0.5 + stripeBrightness + reflectG + grain);
-                    const b = Math.round(asphaltB * tNadir + botB * (1.0 - tNadir) * 0.5 + stripeBrightness * 1.2 + reflectB + grain);
-
-                    panoRgba[idx]     = Math.max(0, Math.min(255, r));
-                    panoRgba[idx + 1] = Math.max(0, Math.min(255, g));
-                    panoRgba[idx + 2] = Math.max(0, Math.min(255, b));
-                    panoRgba[idx + 3] = 255;
-                }
-            }
-        }
-
-        // 4. Street View polar cap filtering (28px height)
-        panoRgba = Google360PanoramaPipelineService.applyStreetViewPolarCaps(
-            panoRgba,
-            panoWidth,
-            panoHeight,
-            { zenithCapHeight: 28, nadirCapHeight: 28, ease: 'cubic' }
-        ) as unknown as Buffer;
-
-        let outputBuffer = encodePng(panoWidth, panoHeight, panoRgba);
-
-        // 5. Seam healing if requested (an image model inpaints the seam band; see healPanoramaSeam)
-        let seamNote = '';
-        if (options.healSeam !== false) {
-            const seamRes = await this.healPanoramaSeam({
-                inputImageBuffer: outputBuffer,
-                mockExecution: options.mockExecution ?? false,
-                model: options.model,
-                maxModelUpscale: options.maxModelUpscale
-            });
-            outputBuffer = seamRes.outputBuffer;
-            seamNote = ` Seam heal: ${seamRes.modelNote}${describeModelImage(seamRes)}`;
-        }
-
-        if (options.outputImagePath) {
-            await fs.ensureDir(path.dirname(options.outputImagePath));
-            await fs.writeFile(options.outputImagePath, outputBuffer);
-        }
-
-        return {
-            success: true,
-            width: panoWidth,
-            height: panoHeight,
-            outputImagePath: options.outputImagePath,
-            outputBuffer,
-            coverageRatio: proj.coverageRatio,
-            // The projection is procedural; only the optional seam heal calls an image model, and the summary names it.
-            modelUsed: 'inward-gnomonic-synthesizer (procedural projection)',
-            summary: `360 panorama generated from perspective image (${panoWidth}x${panoHeight}, coverage: ${(proj.coverageRatio * 100).toFixed(1)}%).${seamNote}`
         };
     }
 
@@ -3969,11 +3525,6 @@ export class Google360PanoramaPipelineService {
 }
 
 // Canonical standalone helper functions
-export async function generatePanoramaFromImage(options: GeneratePanoramaFromImageOptions): Promise<GeneratePanoramaFromImageResult> {
-    const service = new Google360PanoramaPipelineService();
-    return service.generatePanoramaFromImage(options);
-}
-
 export async function healPanoramaSeam(options: PanoramaSeamOptions): Promise<PanoramaSeamResult> {
     const service = new Google360PanoramaPipelineService();
     return service.healPanoramaSeam(options);
@@ -4015,31 +3566,6 @@ export function applyStreetViewPolarCaps(
     options?: StreetViewPolarCapOptions
 ): Buffer {
     return Google360PanoramaPipelineService.applyStreetViewPolarCaps(rgba, width, height, options);
-}
-
-export function projectAroundUserPanorama(
-    perspectiveRgba: Buffer,
-    pWidth: number,
-    pHeight: number,
-    panoWidth = 2048,
-    panoHeight = 1024,
-    hfovDeg = 140.0,
-    options?: {
-        infillSurrounds?: boolean;
-        infillCeiling?: boolean;
-        infillFloor?: boolean;
-        healSeam?: boolean;
-    }
-) {
-    return Google360PanoramaPipelineService.projectAroundUserPanorama(
-        perspectiveRgba,
-        pWidth,
-        pHeight,
-        panoWidth,
-        panoHeight,
-        hfovDeg,
-        options
-    );
 }
 
 export function buildEquirectangularStructuredPrompt(

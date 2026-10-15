@@ -21,7 +21,10 @@ import { GoogleMediaGenerationService, generateImageWithModels, withMediaFailure
 import { MediaGenerationJobService } from '../src/node/media-generation-job-service';
 import { MediaAssetStore } from '../src/node/media-asset-store';
 import { MediaModelUnavailableError, MissingInputError } from '../src/common/errors/pipeline-errors';
-import { Google360PanoramaPipelineService } from '../src/node/spatial/Google360PanoramaPipelineService';
+import { Google360PanoramaPipelineService, ModelAnswerResolutionError, expectedModelAnswerSize, imageSizeForCanvas } from '../src/node/spatial/Google360PanoramaPipelineService';
+import { FalTrellisService } from '../src/node/spatial/FalTrellisService';
+import { PanoramaDepthService } from '../src/node/spatial/PanoramaDepthService';
+import { panoramaHandlers } from '../src/node/gemini/tools/spatial-tools';
 import { MultiPerspectivePanoramaSynthesisService } from '../src/node/spatial/MultiPerspectivePanoramaSynthesisService';
 import { MultiAngleTurnaroundService } from '../src/node/spatial/MultiAngleTurnaroundService';
 import { decodePng, encodePng } from '../src/node/texture-processing';
@@ -53,15 +56,19 @@ function columnCodedPanorama(w: number, h: number): Buffer {
     return encodePng(w, h, rgba);
 }
 
-/** An image client that records each request and answers with a solid image of the given size. */
-function recordingImageClient(answerSize: [number, number], requests: any[] = []) {
+/**
+ * An image client that records each request and answers with a solid image of the given size, or (a function) of
+ * the size it computes from the request, e.g. the size a model answers at for the imageSize asked for.
+ */
+function recordingImageClient(answerSize: [number, number] | ((req: any) => [number, number]), requests: any[] = []) {
     return {
         requests,
         client: {
             models: {
                 generateContent: async (req: any) => {
                     requests.push(req);
-                    const png = solidPng(answerSize[0], answerSize[1], [240, 20, 20]);
+                    const [w, h] = typeof answerSize === 'function' ? answerSize(req) : answerSize;
+                    const png = solidPng(w, h, [240, 20, 20]);
                     return { candidates: [{ content: { parts: [{ inlineData: { data: png.toString('base64'), mimeType: 'image/png' } }] } }] };
                 }
             }
@@ -228,7 +235,7 @@ describe('Panorama edits are sent at a ratio the model accepts and checked befor
 
         expect(fake.requests).toHaveLength(1);
         const req = fake.requests[0];
-        expect(req.config.imageConfig).toEqual({ aspectRatio: '21:9' });
+        expect(req.config.imageConfig).toEqual({ aspectRatio: '21:9', imageSize: '1K' });
         const sent = decodePng(Buffer.from(req.contents[1].inlineData.data, 'base64'));
         const mask = decodePng(Buffer.from(req.contents[2].inlineData.data, 'base64'));
         expect(sent.width).toBe(Math.round(128 * 21 / 9));
@@ -240,8 +247,8 @@ describe('Panorama edits are sent at a ratio the model accepts and checked befor
         expect(at(sent, sent.width - 1, 10)).toBe(at(sent, sent.width - 1 - 256, 10));
         expect(req.contents[0].text).toContain('21:9');
 
-        expect(result.modelImage).toEqual({ requestedAspectRatio: '21:9', width: 224, height: 96, resampledWidth: 299, resampledHeight: 128 });
-        expect(result.summary).toContain('The model answered at 224x96 for a 21:9 request; it was resampled to 299x128 (1.33x larger).');
+        expect(result.modelImage).toEqual({ requestedAspectRatio: '21:9', requestedImageSize: '1K', width: 224, height: 96, resampledWidth: 299, resampledHeight: 128 });
+        expect(result.summary).toContain('The model answered at 224x96 for a 21:9, imageSize 1K request; it was resampled to 299x128 (1.33x larger).');
         expect(decodePng(result.outputBuffer).width).toBe(256);
     });
 
@@ -250,8 +257,11 @@ describe('Panorama edits are sent at a ratio the model accepts and checked befor
         const service = new Google360PanoramaPipelineService(credentialsFor(small.client));
         const outputImagePath = path.join(WORK, 'soft_heal.png');
         const refused = await service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(512, 256), outputImagePath }).catch(e => e);
-        expect(refused).toBeInstanceOf(MediaModelUnavailableError);
-        expect(refused.message).toContain('the model answered at 84x36, which would have to be enlarged 7.11x to the 597x256 canvas (more than the allowed 2x');
+        // The model answered smaller than the size asked for: refused, and not reported as an unavailable model.
+        expect(refused).toBeInstanceOf(ModelAnswerResolutionError);
+        expect(refused).not.toBeInstanceOf(MediaModelUnavailableError);
+        expect(refused.beforeCall).toBe(false);
+        expect(refused.message).toContain('answered at 84x36 for an imageSize 1K request, which would have to be enlarged 7.11x to the 597x256 canvas (more than the allowed 2x');
         expect(fs.existsSync(outputImagePath)).toBe(false);
         const inpaintRefused = await service.inpaintPanorama({ inputImageBuffer: columnCodedPanorama(512, 256), nadirOnly: true }).catch(e => e);
         expect(inpaintRefused.message).toContain('enlarged 7.11x');
@@ -265,8 +275,8 @@ describe('Panorama edits are sent at a ratio the model accepts and checked befor
         const fake = recordingImageClient([420, 180]);
         const service = new Google360PanoramaPipelineService(credentialsFor(fake.client));
         const result = await service.generate360Panorama({ prompt: 'salt flats at dawn', width: 256, height: 128, healSeam: false });
-        expect(fake.requests[0].config.imageConfig).toEqual({ aspectRatio: '21:9' });
-        expect(result.summary).toContain('The model answered at 420x180 for a 21:9 request; it was resampled to 256x128 (1.41x smaller, squeezed 14% horizontally).');
+        expect(fake.requests[0].config.imageConfig).toEqual({ aspectRatio: '21:9', imageSize: '1K' });
+        expect(result.summary).toContain('The model answered at 420x180 for a 21:9, imageSize 1K request; it was resampled to 256x128 (1.41x smaller, squeezed 14% horizontally).');
     });
 
     it('refuses an answer at another aspect ratio instead of stretching it onto the panorama', async () => {
@@ -274,15 +284,15 @@ describe('Panorama edits are sent at a ratio the model accepts and checked befor
         const service = new Google360PanoramaPipelineService(credentialsFor(fake.client));
         const outputImagePath = path.join(WORK, 'refused_heal.png');
         const failure = await service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(256, 128), outputImagePath }).catch(e => e);
-        expect(failure).toBeInstanceOf(MediaModelUnavailableError);
-        expect(failure.message).toContain('asked for a 21:9 image, the model answered 64x64');
+        expect(failure).toBeInstanceOf(ModelAnswerResolutionError);
+        expect(failure.message).toContain('was asked for a 21:9 image and answered 64x64');
         expect(failure.message).toContain('would not line up');
         expect(fs.existsSync(outputImagePath)).toBe(false);
 
         const inpaint = await service.inpaintPanorama({ inputImageBuffer: columnCodedPanorama(256, 128), nadirOnly: true }).catch(e => e);
-        expect(inpaint).toBeInstanceOf(MediaModelUnavailableError);
+        expect(inpaint).toBeInstanceOf(ModelAnswerResolutionError);
         const generated = await service.generate360Panorama({ prompt: 'salt flats', width: 256, height: 128, healSeam: false }).catch(e => e);
-        expect(generated).toBeInstanceOf(MediaModelUnavailableError);
+        expect(generated).toBeInstanceOf(ModelAnswerResolutionError);
     });
 
     it('rejects a custom mask of another size and a panorama wider than any accepted ratio', async () => {
@@ -296,5 +306,112 @@ describe('Panorama edits are sent at a ratio the model accepts and checked befor
         expect(() => Google360PanoramaPipelineService.panoramaEditCanvas(1000, 100)).toThrow(MissingInputError);
         expect(Google360PanoramaPipelineService.panoramaEditCanvas(1024, 1024)).toEqual({ aspectRatio: '1:1', canvasWidth: 1024 });
         expect(Google360PanoramaPipelineService.panoramaEditCanvas(1600, 900)).toEqual({ aspectRatio: '16:9', canvasWidth: 1600 });
+    });
+});
+
+/** A PNG whose header says width x height (enough for the size checks, which read only the header). */
+function pngHeaderOnly(width: number, height: number): Buffer {
+    const buf = Buffer.alloc(33);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buf, 0);
+    buf.writeUInt32BE(13, 8);
+    buf.write('IHDR', 12, 'ascii');
+    buf.writeUInt32BE(width, 16);
+    buf.writeUInt32BE(height, 20);
+    buf[24] = 8; buf[25] = 6;
+    return buf;
+}
+
+describe('Panorama edits ask for an image size that covers the panorama, and refuse before calling when none can', () => {
+    it('picks the smallest size tier whose answer covers the canvas within the allowed enlargement', () => {
+        expect(imageSizeForCanvas(299, 128, '21:9', 2)?.imageSize).toBe('1K');
+        // The review's probe: a 4096x2048 panorama is edited on a 4779x2048 canvas; 1K would need about 3x, 2K about 1.5x.
+        expect(imageSizeForCanvas(4779, 2048, '21:9', 2)?.imageSize).toBe('2K');
+        expect(imageSizeForCanvas(4779, 2048, '21:9', 1)?.imageSize).toBe('4K');
+        expect(imageSizeForCanvas(19115, 8192, '21:9', 2)).toBeUndefined();
+        expect(expectedModelAnswerSize('1K', '21:9').width).toBeLessThanOrEqual(1536);
+    });
+
+    it('a 4096x2048 nadir infill asks for imageSize 2K and succeeds at the size a model answers at', async () => {
+        const fake = recordingImageClient(req => (req.config.imageConfig.imageSize === '2K' ? [3168, 1344] : [1584, 672]));
+        const service = new Google360PanoramaPipelineService(credentialsFor(fake.client));
+        const rgba = Buffer.alloc(4096 * 2048 * 4, 90);
+        const result = await service.inpaintPanorama({ inputImageBuffer: encodePng(4096, 2048, rgba), nadirOnly: true });
+        expect(fake.requests).toHaveLength(1);
+        expect(fake.requests[0].config.imageConfig).toEqual({ aspectRatio: '21:9', imageSize: '2K' });
+        expect(result.summary || result.modelNote).toBeDefined();
+        expect(result.modelImage).toMatchObject({ requestedImageSize: '2K', width: 3168, height: 1344, resampledWidth: 4779, resampledHeight: 2048 });
+
+        // A model that ignores the size asked for (answers at 1K) is refused after its answer, as a resolution problem.
+        const ignoring = recordingImageClient([1584, 672]);
+        const refused = await new Google360PanoramaPipelineService(credentialsFor(ignoring.client))
+            .inpaintPanorama({ inputImageBuffer: encodePng(4096, 2048, rgba), nadirOnly: true }).catch(e => e);
+        expect(refused).toBeInstanceOf(ModelAnswerResolutionError);
+        expect(refused.beforeCall).toBe(false);
+        expect(refused.message).toContain('for an imageSize 2K request');
+    }, 60000);
+
+    it('refuses a panorama too large for 4K at the allowed enlargement before any model call', async () => {
+        const service = new Google360PanoramaPipelineService(credentialsFor(recordingImageClient([64, 64]).client));
+        const failure = (() => { try { Google360PanoramaPipelineService.editImageSize(16384, 8192, 2); } catch (e) { return e as any; } })();
+        expect(failure).toBeInstanceOf(ModelAnswerResolutionError);
+        expect(failure.beforeCall).toBe(true);
+        expect(failure.message).toContain('No model was called');
+        expect(failure.message).toMatch(/Pass maxModelUpscale >= 3\.\d+/);
+        expect(() => Google360PanoramaPipelineService.editImageSize(16384, 8192, 4)).not.toThrow();
+        expect(service).toBeDefined();
+    });
+
+    it('panorama_to_3dgs refuses a panorama too large for the inpainting model before the depth run, and takes maxModelUpscale', async () => {
+        const big = path.join(WORK, 'big_pano.png');
+        fs.writeFileSync(big, pngHeaderOnly(16384, 8192));
+        let depthRuns = 0;
+        const original = PanoramaDepthService.prototype.generatePanoramaDepth;
+        PanoramaDepthService.prototype.generatePanoramaDepth = async function () { depthRuns++; throw new Error('not reached'); } as any;
+        try {
+            const refused = await panoramaHandlers.panorama_to_3dgs({ inputImagePath: big }, { workspaceRoot: WORK } as any).catch(e => e);
+            expect(refused).toBeInstanceOf(ModelAnswerResolutionError);
+            expect(refused.beforeCall).toBe(true);
+            expect(depthRuns).toBe(0);
+            // With a larger allowed enlargement the check passes and the depth run starts.
+            const next = await panoramaHandlers.panorama_to_3dgs({ inputImagePath: big, maxModelUpscale: 4 }, { workspaceRoot: WORK } as any).catch(e => e);
+            expect(next.message).toBe('not reached');
+            expect(depthRuns).toBe(1);
+        } finally {
+            PanoramaDepthService.prototype.generatePanoramaDepth = original;
+        }
+    });
+});
+
+describe('Stopped panorama, perspective and Trellis steps start no further model work', () => {
+    it('a stopped seam heal and a stopped perspective rig call no model', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        const fake = recordingImageClient([224, 96]);
+        const heal = await new Google360PanoramaPipelineService(credentialsFor(fake.client))
+            .healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(256, 128), signal: controller.signal }).catch(e => e);
+        expect(heal.name).toBe('AbortError');
+        expect(fake.requests).toHaveLength(0);
+
+        // Stopped after the first view: the rest of the rig is not asked of the model.
+        const during = new AbortController();
+        const calls: any[] = [];
+        const rigClient = { models: { generateContent: async (req: any) => {
+            calls.push(req);
+            during.abort();
+            return { candidates: [{ content: { parts: [{ inlineData: { data: solidPng(64, 64, [1, 2, 3]).toString('base64'), mimeType: 'image/png' } }] } }] };
+        } } };
+        const rig = await new MultiPerspectivePanoramaSynthesisService(credentialsFor(rigClient))
+            .synthesizePerspectivesWithNanoBanana(Buffer.alloc(64 * 64 * 4, 128), 64, { signal: during.signal }).catch(e => e);
+        expect(rig.name).toBe('AbortError');
+        expect(calls).toHaveLength(1);
+    });
+
+    it('a stopped Trellis run uploads nothing', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        const stopped = await new FalTrellisService({ falKey: 'test-key-not-used' }).generate3DFromImages({
+            imageBuffers: [{ name: 'a.png', buffer: solidPng(8, 8, [1, 2, 3]) }], signal: controller.signal
+        }).catch(e => e);
+        expect(stopped.name).toBe('AbortError');
     });
 });

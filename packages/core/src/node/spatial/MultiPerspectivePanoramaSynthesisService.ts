@@ -67,6 +67,8 @@ export interface MultiPerspectiveSynthesisOptions {
     useAiInpainting?: boolean;
     mockExecution?: boolean;                // tests only: procedural copies, no model call (labelled as such)
     outputDir?: string;                     // directory to write individual perspective frames and stitched pano
+    /** Stops the rig between views and during a view's model call: a stopped request bills no further views. */
+    signal?: AbortSignal;
 }
 
 export interface MultiPerspectiveSynthesisResult {
@@ -706,6 +708,7 @@ export class MultiPerspectivePanoramaSynthesisService {
             locationName?: string;
             mockExecution?: boolean;
             perspectivesToGenerate?: PanoramaPerspective[];
+            signal?: AbortSignal;
         }
     ): Promise<PerspectiveSynthesisOutcome> {
         let models = resolveRequestedModels(options?.model, IMAGE_MODEL_PRIORITY);
@@ -746,6 +749,9 @@ export class MultiPerspectivePanoramaSynthesisService {
 
         for (const p of targetPerspectives) {
             if (p === 'front') continue;
+            if (options?.signal?.aborted) {
+                throw Object.assign(new Error(`Stopped before the ${p} perspective`), { name: 'AbortError' });
+            }
 
             const prompt = MultiPerspectivePanoramaSynthesisService.buildNanoBananaPerspectivePrompt(p, options);
             let targetRgba: Buffer;
@@ -762,7 +768,8 @@ export class MultiPerspectivePanoramaSynthesisService {
                             { text: prompt },
                             { inlineData: { data: frontBase64, mimeType: 'image/png' } }
                         ],
-                        imageConfig: { aspectRatio: '1:1' }
+                        imageConfig: { aspectRatio: '1:1' },
+                        signal: options?.signal
                     });
                 } catch (err) {
                     // Model failures gain the perspective name; any other error propagates as it is.
@@ -921,7 +928,8 @@ export class MultiPerspectivePanoramaSynthesisService {
                         styleHint: options.styleHint,
                         locationName: options.locationName,
                         mockExecution: options.mockExecution,
-                        perspectivesToGenerate: options.synthesizePerspectives
+                        perspectivesToGenerate: options.synthesizePerspectives,
+                        signal: options.signal
                     }
                 );
                 const missing = SURROUNDING_PERSPECTIVES.filter(p => !outcome.perspectives[p]);

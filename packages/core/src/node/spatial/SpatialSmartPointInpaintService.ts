@@ -9,8 +9,13 @@
 
 import { RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
-import { encodePng } from '../texture-processing';
+import { encodePng, resampleRgba } from '../texture-processing';
 import { GeminiClient } from '../gemini/gemini-client';
+import { decodeImageToRgba } from '../image-codec-ffmpeg';
+import { generateImageWithModels } from '../google-media-generation-service';
+import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, nearestImageAspectRatio, resolveRequestedModels, type SkippedMediaModel } from '../../common/media-generation-protocol';
+import { MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { MODEL_ANSWER_ASPECT_TOLERANCE, ModelAnswerResolutionError } from './Google360PanoramaPipelineService';
 
 export interface SmartPointInpaintResult {
     x: number;
@@ -155,61 +160,73 @@ export class SpatialSmartPointInpaintService {
     }
 
     /**
-     * Executes localized inpainting of an image using Gemini's native image editing API.
+     * Inpaints the masked region of an image with an image model (the requested one, or IMAGE_MODEL_PRIORITY in order,
+     * moving on only past models that are not served; the result says which answered and why any was skipped). The
+     * request asks for the image's own aspect ratio; an image whose ratio the models do not accept is refused, and an
+     * answer at another ratio is refused rather than stretched (the inpainted pixels would no longer line up with the
+     * projected point). The answer is resampled to the image's size and blended through the mask, so pixels outside
+     * the mask are the input's own.
      */
     public async executeSpatialInpaint(request: {
         image: Buffer;
         mask: Buffer;
         prompt: string;
         model?: string;
-        aspectRatio?: string;
-    }): Promise<{ image: Buffer; mimeType: string }> {
-        const client = await this.getClient();
-        const model = request.model || 'gemini-3.1-flash-image-preview';
-        const aspectRatio = request.aspectRatio || '16:9';
-
-        const contents = [
-            {
-                role: 'user',
-                parts: [
-                    {
-                        inlineData: {
-                            mimeType: 'image/png',
-                            data: request.image.toString('base64')
-                        }
-                    },
-                    {
-                        inlineData: {
-                            mimeType: 'image/png',
-                            data: request.mask.toString('base64')
-                        }
-                    },
-                    {
-                        text: request.prompt
-                    }
-                ]
-            }
-        ];
-
-        const response = await client.models.generateContent({
-            model,
-            contents,
-            config: {
-                responseModalities: ['IMAGE'],
-                imageConfig: {
-                    aspectRatio
-                }
-            }
-        });
-
-        const part = response.candidates?.[0]?.content?.parts?.[0];
-        if (!part || !part.inlineData || !part.inlineData.data) {
-            throw new Error('No image data returned from Gemini for spatial inpainting');
+        signal?: AbortSignal;
+    }): Promise<{ image: Buffer; mimeType: string; width: number; height: number; modelUsed: string; modelNote: string; skippedModels?: SkippedMediaModel[]; answerWidth: number; answerHeight: number }> {
+        const base = await decodeImageToRgba(request.image);
+        const mask = await decodeImageToRgba(request.mask);
+        if (mask.width !== base.width || mask.height !== base.height) {
+            throw new MissingInputError('spatial_smart_point_inpaint', 'mask', `the mask is ${mask.width}x${mask.height} but the image is ${base.width}x${base.height}`);
         }
-
+        const aspectRatio = nearestImageAspectRatio(base.width, base.height);
+        const asked = IMAGE_MODEL_ASPECT_RATIOS.find(([label]) => label === aspectRatio)![1];
+        const own = base.width / base.height;
+        if (Math.abs(own - asked) / asked > MODEL_ANSWER_ASPECT_TOLERANCE) {
+            throw new MissingInputError('spatial_smart_point_inpaint', 'imagePath',
+                `a ${base.width}x${base.height} image (${own.toFixed(3)}:1) has no aspect ratio the image models accept (nearest ${aspectRatio}); the answer would be re-framed and the edit would not line up`);
+        }
+        const client = await this.getClient();
+        const answer = await generateImageWithModels(client, {
+            models: resolveRequestedModels(request.model, IMAGE_MODEL_PRIORITY),
+            contents: [
+                { inlineData: { mimeType: 'image/png', data: encodePng(base.width, base.height, base.rgba).toString('base64') } },
+                { inlineData: { mimeType: 'image/png', data: request.mask.toString('base64') } },
+                { text: `${request.prompt} Edit only the white region of the mask (the second image); answer with the whole image at exactly the same framing and ${aspectRatio} aspect ratio.` }
+            ],
+            imageConfig: { aspectRatio },
+            signal: request.signal
+        });
+        let decoded: { rgba: Buffer; width: number; height: number };
+        try {
+            decoded = await decodeImageToRgba(answer.data);
+        } catch (err: any) {
+            throw new MediaModelUnavailableError(answer.modelUsed, `the returned image could not be decoded (${err?.message || err})`);
+        }
+        const answered = decoded.width / decoded.height;
+        if (Math.abs(answered - asked) / asked > MODEL_ANSWER_ASPECT_TOLERANCE) {
+            throw new ModelAnswerResolutionError(false,
+                `${answer.modelUsed} was asked for a ${aspectRatio} image and answered ${decoded.width}x${decoded.height} (${answered.toFixed(3)}:1); the inpainted region would not line up with the smart point`);
+        }
+        const edited = decoded.width === base.width && decoded.height === base.height
+            ? decoded.rgba
+            : resampleRgba(decoded.rgba, decoded.width, decoded.height, base.width, base.height);
+        const out = Buffer.from(base.rgba);
+        for (let i = 0; i < out.length; i += 4) {
+            const m = mask.rgba[i] / 255;
+            if (m <= 0) continue;
+            for (let k = 0; k < 3; k++) out[i + k] = Math.round(base.rgba[i + k] * (1 - m) + edited[i + k] * m);
+        }
         return {
-            image: Buffer.from(part.inlineData.data, 'base64'),
-            mimeType: part.inlineData.mimeType || 'image/png'
+            image: encodePng(base.width, base.height, out),
+            mimeType: 'image/png',
+            width: base.width,
+            height: base.height,
+            modelUsed: answer.modelUsed,
+            modelNote: answer.modelNote,
+            skippedModels: answer.skippedModels,
+            answerWidth: decoded.width,
+            answerHeight: decoded.height
         };
     }
 }

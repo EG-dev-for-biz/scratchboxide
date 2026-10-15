@@ -21,6 +21,7 @@ import {
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
 import { geoidUndulation } from '../../../packages/core/src/node/spatial/egm96-geoid';
 import { MediaModelUnavailableError, MissingInputError } from '../../../packages/core/src/common/errors/pipeline-errors';
+import { ModelAnswerResolutionError } from '../../../packages/core/src/node/spatial/Google360PanoramaPipelineService';
 
 export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService): Router {
     const router = Router();
@@ -322,7 +323,11 @@ export function createDepthbox360Router(): Router {
  * a bad gateway (502), anything else a server error. The typed error's code goes with the message.
  */
 function sendPanoramaFailure(res: Response, err: any, fallbackMessage: string): void {
-    const status = err instanceof MissingInputError ? 422 : err instanceof MediaModelUnavailableError ? 502 : 500;
+    // A panorama too large for the allowed enlargement is refused before any model call (the caller's request, 422);
+    // a model answer that came back too small or re-framed is the model's (502).
+    const status = err instanceof MissingInputError ? 422
+        : err instanceof ModelAnswerResolutionError ? (err.beforeCall ? 422 : 502)
+            : err instanceof MediaModelUnavailableError ? 502 : 500;
     res.status(status).json({
         success: false,
         error: err?.message || fallbackMessage,
@@ -340,7 +345,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
 
     router.post('/heal-seam', async (req: Request, res: Response) => {
         try {
-            const { inputImagePath, inputImageBase64, prompt, seamWidth, outputImagePath, model } = req.body || {};
+            const { inputImagePath, inputImageBase64, prompt, seamWidth, outputImagePath, model, maxModelUpscale } = req.body || {};
             const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
 
             const result = await panoramaService.healPanoramaSeam({
@@ -349,7 +354,8 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 prompt,
                 seamWidth,
                 outputImagePath,
-                model
+                model,
+                maxModelUpscale: typeof maxModelUpscale === 'number' ? maxModelUpscale : undefined
             });
 
             res.json({
@@ -371,7 +377,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
 
     router.post('/inpaint', async (req: Request, res: Response) => {
         try {
-            const { inputImagePath, inputImageBase64, maskImagePath, maskImageBase64, nadirOnly, nadirRatio, prompt, outputImagePath, model } = req.body || {};
+            const { inputImagePath, inputImageBase64, maskImagePath, maskImageBase64, nadirOnly, nadirRatio, prompt, outputImagePath, model, maxModelUpscale } = req.body || {};
             const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
             const maskBuffer = maskImageBase64 ? Buffer.from(maskImageBase64, 'base64') : undefined;
 
@@ -384,7 +390,8 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 nadirRatio,
                 prompt,
                 outputImagePath,
-                model
+                model,
+                maxModelUpscale: typeof maxModelUpscale === 'number' ? maxModelUpscale : undefined
             });
 
             res.json({
@@ -405,7 +412,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
 
     router.post('/generate', async (req: Request, res: Response) => {
         try {
-            const { prompt, style, width, height, healSeam, inpaintNadir, outputImagePath, model } = req.body || {};
+            const { prompt, style, width, height, healSeam, inpaintNadir, outputImagePath, model, maxModelUpscale } = req.body || {};
             if (!prompt) {
                 res.status(400).json({ success: false, error: 'prompt is required to generate 360 panorama' });
                 return;
@@ -419,7 +426,8 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 healSeam,
                 inpaintNadir,
                 outputImagePath,
-                model
+                model,
+                maxModelUpscale: typeof maxModelUpscale === 'number' ? maxModelUpscale : undefined
             });
 
             res.json({
