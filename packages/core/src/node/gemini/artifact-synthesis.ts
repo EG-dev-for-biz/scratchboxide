@@ -27,9 +27,6 @@ import { applyClayFirstPassBaseline } from './scene3d-clay-baseline';
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
 
-/** Neutral default attribution for synthesized documents. */
-export const DEFAULT_DOCUMENT_AUTHOR = 'Scratchbox Studio';
-
 export interface ExtractedScratchboxTag {
     matched: boolean;
     type?: string;
@@ -689,7 +686,10 @@ function modelAuthoredDocument(
         sections = markdownStringToSections(replyMarkdown);
     }
     const firstHeading = sections.find((s: any) => s?.type === 'heading' && typeof s.content === 'string' && s.content.trim())?.content;
-    let docTitle = named(parsedTitle) || named(rawObject?.title) || named(request.activeArtifact?.title) || named(firstHeading) || extractDocumentTitle(prompt);
+    // The open artifact's title names this document only when the open artifact is a document (this is its next
+    // version); a scene or app that happens to be open never names a document.
+    const openDocTitle = request.activeArtifact?.type === 'markdown-document' ? request.activeArtifact.title : undefined;
+    let docTitle = named(parsedTitle) || named(rawObject?.title) || named(openDocTitle) || named(firstHeading) || extractDocumentTitle(prompt);
 
     // A follow-up that names a section of the open document replaces just that section with the model's sections.
     if (request.activeArtifact?.type === 'markdown-document' && request.activeArtifact.data) {
@@ -799,6 +799,41 @@ export function parseOrSynthesizeArtifact(
         };
     };
 
+    /**
+     * The artifact for the data the model sent, read the same way whichever form carried it (tag or envelope): a
+     * 3d-scene is a first pass in clay or the next version of the open scene, a timeline keeps only the model's
+     * tracks, a document only the model's sections.
+     */
+    const modelArtifact = (
+        type: PrimitiveType,
+        raw: unknown,
+        sent: { title?: string; summary?: string; version?: number; id?: string },
+        replyMarkdown: string
+    ): CanvasArtifact => {
+        let data: any = raw;
+        let title: string | undefined = sent.title;
+        if (type === '3d-scene') {
+            title = sent.title || data?.title || (request.activeArtifact?.type === '3d-scene' ? request.activeArtifact.title : undefined) || '3D Scene';
+            data = modelAuthoredScene(prompt, request, title!, sent.summary, data);
+        } else if (type === 'video-timeline') {
+            data = normalizeModelVideoTimeline(data, sent.title);
+            title = sent.title || data.title;
+        } else if (type === 'markdown-document') {
+            data = modelAuthoredDocument(prompt, request, sent.title, sent.summary, data, replyMarkdown, enrichGroundedCitations);
+            title = data.title;
+        }
+        const { id, version } = versionFor(type, sent.version, sent.id);
+        return {
+            id,
+            type,
+            title: title || data?.title || type,
+            summary: sent.summary || data?.subtitle || '',
+            version,
+            createdAt: timestamp,
+            data
+        };
+    };
+
     // 1. Unified artifact tag: <scratchboxPrimitive type="..." title="..." summary="..." version="...">
     const primitiveTag = extractScratchboxPrimitiveTag(modelText);
     if (primitiveTag.matched && primitiveTag.type) {
@@ -858,33 +893,17 @@ export function parseOrSynthesizeArtifact(
             };
         }
 
-        // ... or the model's markdown for a document.
-        if (tagType === 'markdown-document' && (!parsedTagData || !parsedTagData.sections)) {
-            const rawSections = markdownStringToSections(tagPayload);
-            if (rawSections.length > 0) {
-                const firstHeading = rawSections.find(s => s.type === 'heading' && s.content)?.content;
-                parsedTagData = {
-                    title: primitiveTag.title || firstHeading || extractDocumentTitle(prompt, 'Document'),
-                    subtitle: primitiveTag.summary,
-                    author: DEFAULT_DOCUMENT_AUTHOR,
-                    lastUpdated: 'Just now',
-                    sections: enrichGroundedCitations(rawSections)
-                };
-            }
+        // ... or the model's markdown for a document (a body that is not JSON).
+        if (tagType === 'markdown-document') {
+            const raw = parsedTagData ?? tagPayload;
+            // A document tag with no sections or markdown in it is not mounted; nothing is written for it.
+            if (modelDocumentSections(raw).length === 0) return undefined;
+            return modelArtifact(tagType, raw, { title: primitiveTag.title, summary: primitiveTag.summary, version: primitiveTag.version }, '');
         }
 
         // The tag must name a canvas primitive and carry content; an unknown type or an empty body is not mounted.
         if (parsedTagData && tagType) {
-            const { id, version } = versionFor(tagType, primitiveTag.version);
-            return {
-                id,
-                type: tagType,
-                title: primitiveTag.title || parsedTagData.title || tagType,
-                summary: primitiveTag.summary || parsedTagData.subtitle || '',
-                version,
-                createdAt: timestamp,
-                data: parsedTagData
-            };
+            return modelArtifact(tagType, parsedTagData, { title: primitiveTag.title, summary: primitiveTag.summary, version: primitiveTag.version }, '');
         }
     }
 
@@ -904,28 +923,5 @@ export function parseOrSynthesizeArtifact(
     }
     const type = normalizePrimitiveType(parsed?.type);
     if (!parsed || typeof parsed !== 'object' || !type || parsed.data === undefined || parsed.data === null) return undefined;
-
-    let data: any = parsed.data;
-    let title: string | undefined = parsed.title;
-    if (type === '3d-scene') {
-        title = parsed.title || data?.title || (request.activeArtifact?.type === '3d-scene' ? request.activeArtifact.title : undefined) || '3D Scene';
-        data = modelAuthoredScene(prompt, request, title!, parsed.summary, data);
-    } else if (type === 'video-timeline') {
-        data = normalizeModelVideoTimeline(data, parsed.title);
-        title = parsed.title || data.title;
-    } else if (type === 'markdown-document') {
-        data = modelAuthoredDocument(prompt, request, parsed.title, parsed.summary, data, replyMarkdown, enrichGroundedCitations);
-        title = data.title;
-    }
-
-    const { id, version } = versionFor(type, parsed.version, parsed.id);
-    return {
-        id,
-        type,
-        title: title || data?.title || type,
-        summary: parsed.summary || data?.subtitle || '',
-        version,
-        createdAt: timestamp,
-        data
-    };
+    return modelArtifact(type, parsed.data, { title: parsed.title, summary: parsed.summary, version: parsed.version, id: parsed.id }, replyMarkdown);
 }

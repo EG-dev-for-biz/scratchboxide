@@ -211,6 +211,94 @@ describe('a 3d-scene envelope with a scene open updates that scene; no prompt wo
     });
 });
 
+describe('a <scratchboxPrimitive> tag is read exactly like a {type, data} envelope', () => {
+    // prompt-builder tells the model to always use the tag, so this is the main path. It used to mount the tag's data
+    // as sent: no clay first pass, no merge with the open scene (a follow-up wiped it), no generator reclassification.
+    const tag = (type: string, data: unknown, title = 'Bus') => `<scratchboxPrimitive type="${type}" title="${title}">\n${json(data)}\n</scratchboxPrimitive>`;
+    const GEN = { enabled: true, filename: 'bus.py', sourceCode: 'import scratchbox as sb\n# bus', glbBase64: 'Z2xURg==' };
+    const BUS = { id: 'bus', content: { type: '3d-model', durableUri: '/models/bus.glb', mimeType: 'model/gltf-binary' }, space: { spatial3d: { x: 0, y: 0, z: 0 } } };
+    const ANCHOR = { lat: 51.5007, lng: -0.1246, active: true };
+    const openBus = (): CanvasArtifact => ({
+        id: 'art-bus', type: '3d-scene', title: 'Red Bus', summary: '', version: 3, createdAt: 'now',
+        data: { title: 'Red Bus', renderMode: 'clay', pythonGenerator: GEN, objects: [BUS], geoAnchor: ANCHOR } as Scene3DData
+    });
+    const sameData = (a: CanvasArtifact | undefined, b: CanvasArtifact | undefined) => {
+        expect(a).toBeDefined();
+        expect(b).toBeDefined();
+        expect({ ...a!, createdAt: '', id: '' }).toEqual({ ...b!, createdAt: '', id: '' });
+    };
+
+    it('a first scene in the tag is a clay first pass: the model\'s pbr, sky, atmosphere and materials are dropped', () => {
+        const prompt = 'build a red bus';
+        const data = {
+            renderMode: 'pbr', environment: { skybox: 'realistic-sky', lighting: 'golden-hour' },
+            features: { atmosphericScattering: true, pbrMaterials: true }, pythonGenerator: GEN
+        };
+        const viaTag = parseOrSynthesizeArtifact(prompt, tag('3d-scene', data), { prompt } as any, [])!;
+        const scene = viaTag.data as Scene3DData;
+        expect(scene.renderMode).toBe('clay');
+        expect(scene.environment).toMatchObject({ skybox: 'studio', lighting: 'studio' });
+        expect(scene.features?.atmosphericScattering).toBeUndefined();
+        expect(scene.features?.pbrMaterials).toBeUndefined();
+        expect(scene.pythonGenerator?.sourceCode).toBe(GEN.sourceCode);
+        sameData(viaTag, parseOrSynthesizeArtifact(prompt, json({ type: '3d-scene', title: 'Bus', data }), { prompt } as any, []));
+    });
+
+    it('a follow-up in the tag updates the open scene: what the model left out is kept', () => {
+        const prompt = 'move the camera closer';
+        const camera = { position: [4, 2, 6], target: [0, 1, 0] };
+        const art = parseOrSynthesizeArtifact(prompt, tag('3d-scene', { camera }), { prompt, activeArtifact: openBus() } as any, [])!;
+        const scene = art.data as Scene3DData;
+        expect(art.id).toBe('art-bus');
+        expect(art.version).toBe(4);
+        expect(scene.camera).toEqual(camera);
+        expect(scene.objects?.map(o => o.id)).toEqual(['bus']);
+        expect(scene.geoAnchor).toEqual(ANCHOR);
+        expect(scene.pythonGenerator?.sourceCode).toBe(GEN.sourceCode);
+        expect(scene.renderMode).toBe('clay');
+        sameData(art, parseOrSynthesizeArtifact(prompt, json({ type: '3d-scene', title: 'Bus', data: { camera } }), { prompt, activeArtifact: openBus() } as any, []));
+    });
+
+    it('a Python script the model filed under cppGenerator in the tag is run as Python', () => {
+        vi.spyOn(NativePythonRunnerService.getInstance(), 'runScriptSync').mockReturnValue({ success: true, exitCode: 0, stdout: '', stderr: '', executionTimeMs: 1, glbBase64: 'AAAA', glbPath: '/tmp/bus.glb' } as any);
+        const prompt = 'build a bus';
+        const art = parseOrSynthesizeArtifact(prompt, tag('3d-scene', { cppGenerator: { sourceCode: 'import scratchbox as sb\n# bus' } }), { prompt } as any, [])!;
+        const scene = art.data as Scene3DData;
+        expect(scene.cppGenerator).toBeUndefined();
+        expect(scene.pythonGenerator).toMatchObject({ sourceCode: 'import scratchbox as sb\n# bus', glbBase64: 'AAAA' });
+    });
+
+    it('a video timeline in the tag keeps only the model\'s tracks, like the envelope', () => {
+        const prompt = 'cut the intro';
+        const tracks = [{ id: 't1', type: 'video', name: 'V1', clips: [{ id: 'c1', startTime: 0, duration: 3 }] }];
+        const art = parseOrSynthesizeArtifact(prompt, tag('video-timeline', { tracks }, 'Intro'), { prompt } as any, [])!;
+        expect((art.data as VideoTimelineData).tracks).toEqual(tracks);
+        expect((art.data as VideoTimelineData).duration).toBe(3);
+        sameData(art, parseOrSynthesizeArtifact(prompt, json({ type: 'video-timeline', title: 'Intro', data: { tracks } }), { prompt } as any, []));
+    });
+
+    it('a document tag with no sections or markdown is not mounted', () => {
+        const prompt = 'write it up';
+        expect(parseOrSynthesizeArtifact(prompt, tag('markdown-document', { sections: [] }, 'Notes'), { prompt } as any, [])).toBeUndefined();
+        expect(parseOrSynthesizeArtifact(prompt, '<scratchboxPrimitive type="markdown-document" title="Notes">\n</scratchboxPrimitive>', { prompt } as any, [])).toBeUndefined();
+        // Markdown sent in a JSON field is the document, not the JSON text read as markdown.
+        const art = parseOrSynthesizeArtifact(prompt, tag('markdown-document', { markdown: '# Q3 Budget\n\nFlat.' }, 'Budget'), { prompt } as any, [])!;
+        expect((art.data as MarkdownDocumentData).sections.map(sec => sec.content)).toEqual(['Q3 Budget', 'Flat.']);
+    });
+
+    it('an untitled document is not named after a scene that happens to be open', () => {
+        const prompt = 'summarise the budget';
+        const md = '# Q3 Budget\n\nSpend is flat on Q2.';
+        const viaEnvelope = parseOrSynthesizeArtifact(prompt, json({ type: 'markdown-document', data: { markdown: md } }), { prompt, activeArtifact: openBus() } as any, [])!;
+        expect(viaEnvelope.title).toBe('Q3 Budget');
+        const viaTag = parseOrSynthesizeArtifact(prompt, `<scratchboxPrimitive type="markdown-document">\n${md}\n</scratchboxPrimitive>`, { prompt, activeArtifact: openBus() } as any, [])!;
+        expect(viaTag.title).toBe('Q3 Budget');
+        // The next version of an open document keeps that document's title.
+        const openDoc: CanvasArtifact = { id: 'art-doc', type: 'markdown-document', title: 'Finance notes', summary: '', version: 1, createdAt: 'now', data: { title: 'Finance notes', sections: [] } };
+        expect(parseOrSynthesizeArtifact(prompt, json({ type: 'markdown-document', data: { markdown: md } }), { prompt, activeArtifact: openDoc } as any, [])!.title).toBe('Finance notes');
+    });
+});
+
 describe('mount_canvas_primitive mounts what the model sent or fails', () => {
     const ctx = { request: { prompt: 'Build a brass telescope', chatHistory: [] } } as any;
 

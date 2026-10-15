@@ -133,7 +133,11 @@ This document defines the agent graph and orchestration protocol.
     const synthJsonArtifact = parseOrSynthesizeArtifact('Render deep space nebula', jsonModelOutput, { prompt: 'Render deep space nebula' } as any, []);
     assert.strictEqual(synthJsonArtifact.type, '3d-scene');
     assert.strictEqual(synthJsonArtifact.title, 'Deep Space Nebula');
-    assert.strictEqual(synthJsonArtifact.data.environment.skybox, 'space-nebula');
+    assert.deepStrictEqual(synthJsonArtifact.data.camera, { fov: 55, position: [0, 10, 30] });
+    // A first scene sent in the tag is a clay first pass like one sent as an envelope: the model's sky is dropped
+    // unless the prompt asks for one.
+    assert.strictEqual(synthJsonArtifact.data.renderMode, 'clay');
+    assert.strictEqual(synthJsonArtifact.data.environment.skybox, 'studio');
     console.log('  ✓ 2.3 JSON payload inside <scratchboxPrimitive> parsed and synthesized correctly');
 
     // =========================================================================
