@@ -103,7 +103,8 @@ import type {
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../../3d-engine/location-clay-pipeline';
 import { MissingInputError, TileExtractionError } from '../../../common/errors/pipeline-errors';
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
-import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolResultPayload } from './types';
+import type { ToolHandlerOutcome } from './types';
+import type { ToolContext, ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
 
 function asString(val: unknown, fallback = ''): string {
     return typeof val === 'string' ? val : fallback;
@@ -203,7 +204,11 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 trees: {
                     type: 'BOOLEAN',
-                    description: 'Rebuild the trees measured in the photo tiles as SB-Veggie clay trees (default true): each tree crown found in the photogrammetry is taken out of the remeshed ground and regrown in its measured place, height and spread, within a triangle budget. Crowns cut by the extraction edge and low roof plantings stay as scanned; the result says how many of each. Set false only when the user asks for no trees. Needs remesh (raw tiles keep their scanned trees).'
+                    description: 'Rebuild the trees measured in the photo tiles as SB-Veggie clay trees (default true): each tree crown found in the photogrammetry is taken out of the remeshed ground and regrown in its measured place, height and spread, within a triangle budget. Low roof plantings, and crowns cut by the extraction edge (their tops outside it), stay as scanned unless a cut crown is joined to a removed tree, when it goes with it unrebuilt; the result says how many of each, and what was added to close the ground. Set false only when the user asks for no trees. Needs remesh (raw tiles keep their scanned trees).'
+                },
+                treeTriangleBudget: {
+                    type: 'NUMBER',
+                    description: 'Total triangles all rebuilt trees together may use (default: half the remeshed tile\'s triangles). Set it when the user gives a budget, or when a call failed because the budget could not hold the measured trees (the error says how many they need).'
                 },
                 isolate: {
                     type: 'BOOLEAN',
@@ -526,15 +531,24 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
     if (!query) throw new MissingInputError(toolName, 'query', 'a place name, address or "lat, lng"');
     const remeshing = args.remesh !== false;
     if (!remeshing && args.trees === true) {
-        throw new Error(`${toolName}: trees are rebuilt as part of remeshing; with remesh false the raw tiles keep their scanned trees. Ask again with remesh true, or without trees.`);
+        throw new MissingInputError(toolName, 'remesh true to rebuild trees', 'trees are rebuilt as part of remeshing, and with remesh false the raw tiles keep their scanned trees. Ask again with remesh true, or without trees');
     }
     const trees = flavour === 'clay' && remeshing && args.trees !== false;
+    let treeTriangleBudget: number | undefined;
+    if (args.treeTriangleBudget !== undefined && args.treeTriangleBudget !== null) {
+        treeTriangleBudget = Number(args.treeTriangleBudget);
+        if (!Number.isFinite(treeTriangleBudget) || treeTriangleBudget < 1) {
+            throw new MissingInputError(toolName, 'a treeTriangleBudget of at least 1 triangle', `got ${JSON.stringify(args.treeTriangleBudget)}`);
+        }
+    }
     const options = {
         outputGlbPath: asString(args.outputGlbPath) || undefined,
         atomicBuildingIntegrity: typeof args.atomicBuildingIntegrity === 'boolean' ? args.atomicBuildingIntegrity : undefined,
         enforceZeroBuildingClipping: typeof args.enforceZeroBuildingClipping === 'boolean' ? args.enforceZeroBuildingClipping : undefined,
         zenithAltitudeMeters: typeof args.zenithAltitudeMeters === 'number' ? args.zenithAltitudeMeters : undefined,
-        radiusMeters: typeof args.radiusMeters === 'number' && args.radiusMeters > 0 ? args.radiusMeters : undefined
+        radiusMeters: typeof args.radiusMeters === 'number' && args.radiusMeters > 0 ? args.radiusMeters : undefined,
+        // a stopped chat stops the crawl and its tile downloads too (honoured where the extraction supports it)
+        signal: ctx?.signal
     };
     // Remeshing reads window and pier relief from the photographs, and the trees are measured in them, so whenever
     // remeshing runs the photo-textured tiles are extracted; the clay tool still shows the result as clay.
@@ -549,6 +563,7 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
             isolate: args.isolate === true,
             trees,
             flavour,
+            treeTriangleBudget,
             publishBase: path.basename(result.glbPath).replace(/\.glb$/i, ''),
             signal: ctx?.signal,
             reportProgress: message => ctx?.reportProgress?.(message)
@@ -556,6 +571,10 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
         : undefined;
     const mountPath = pipeline ? pipeline.url : result.glbPath;
     const place = result.resolvedAddress || query;
+    // counts of what is mounted: the remeshed model when remeshing ran, else the extraction itself
+    const mounted = pipeline
+        ? { vertexCount: pipeline.mounted.vertices, triangleCount: pipeline.mounted.triangles }
+        : { vertexCount: result.mesh?.vertexCount, triangleCount: result.mesh?.triangleCount };
     const source = flavour === 'clay' ? 'Google3DTilesClay' : 'Google3DTilesFullTexture';
     const stamp = Date.now();
     const tileObject = {
@@ -573,9 +592,11 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
                 resolvedAddress: place,
                 rawGlbPath: result.glbPath,
                 remeshed: !!pipeline,
-                treesRemoved: !!pipeline?.trees,
-                vertexCount: result.mesh?.vertexCount,
-                triangleCount: result.mesh?.triangleCount,
+                // the measured trees were taken out of this model (and rebuilt in the trees model beside it)
+                treesRemoved: (pipeline?.trees?.strip.removedTriangles ?? 0) > 0,
+                vertexCount: mounted.vertexCount,
+                triangleCount: mounted.triangleCount,
+                ...(pipeline ? { rawVertexCount: result.mesh?.vertexCount, rawTriangleCount: result.mesh?.triangleCount } : {}),
                 boundingBox: result.mesh?.boundingBox
             }
         },
@@ -584,6 +605,9 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
         lineage: { version: 1 }
     };
     const t = pipeline?.trees;
+    // The trees are part of the location layer: role 'environment', so the viewer mounts them where they were measured
+    // (the tile frame, at the same origin as the remeshed tile) instead of seating them on whatever stands at the anchor.
+    // They are not ground: isGround false, so nothing placed under a crown stands on top of it.
     const treesObject = t?.url ? {
         id: `tile-trees-${stamp}`,
         content: {
@@ -592,11 +616,14 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
             mimeType: 'model/gltf-binary',
             metadata: {
                 source: 'SB-Veggie',
-                role: 'vegetation',
+                role: 'environment',
+                layer: 'vegetation',
+                isGround: false,
                 generator: 'space colonisation from the measured crowns',
                 resolvedAddress: place,
                 treeCount: t.count,
                 triangleCount: t.triangles,
+                // the measured crowns these trees were grown into
                 canopyAreaM2: t.treeCanopyAreaM2,
                 measuredFrom: result.glbPath
             }
@@ -606,7 +633,7 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
         lineage: { version: 1 }
     } : undefined;
     const newObjects = treesObject ? [tileObject, treesObject] : [tileObject];
-    const counts = `${result.mesh?.vertexCount || 0} vertices, ${result.mesh?.triangleCount || 0} triangles`;
+    const counts = `${(mounted.vertexCount ?? 0).toLocaleString()} vertices, ${(mounted.triangleCount ?? 0).toLocaleString()} triangles`;
     const groundDatum = { coordinateSystem: 'metric-enu', units: 'meters', scale: 1.0, groundDatumMeters: 0.0, groundLogic: 'shared-metric-ground' };
 
     // The tiles join the active scene only when asked to; otherwise they open as a new studio scene, so an unrelated
@@ -658,8 +685,9 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
         };
     }
 
-    const elevation = flavour === 'clay'
-        ? ` [elevation: ${result.mesh?.boundingBox?.min[1]?.toFixed(1) ?? '0.0'}m to ${result.mesh?.boundingBox?.max[1]?.toFixed(1) ?? '0.0'}m]`
+    const box = result.mesh?.boundingBox;
+    const elevation = flavour === 'clay' && box && Number.isFinite(box.min?.[1]) && Number.isFinite(box.max?.[1])
+        ? ` [elevation: ${box.min[1].toFixed(1)}m to ${box.max[1].toFixed(1)}m]`
         : '';
     return {
         resultPayload: {
@@ -685,7 +713,7 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
             render: result.render,
             artifact: mountedArtifact
         } as unknown as ToolResultPayload,
-        summaryResult: `Google 3D Tiles ingested ${flavour === 'clay' ? 'in studio grey clay' : 'in full texture'} for ${place}${describeTileExtent(result)}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).${describeLocationClay(pipeline, flavour)} Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m${elevation}. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
+        summaryResult: `Google 3D Tiles ingested ${flavour === 'clay' ? 'in studio grey clay' : 'in full texture'} for ${place}${describeTileExtent(result)}. Exported the extracted tiles to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).${describeLocationClay(pipeline, flavour)} Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m${elevation}. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
     };
 }
 
@@ -5719,7 +5747,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                 notes: [
                     'Co-registered with Google 3D Photorealistic Tiles via LocalTangentPlane ENU.',
                     'Universal Spatial Identifiers formatted as urn:scratchbox:spatial:<layer>:<geohash>:<id>.',
-                    'Zero-Fake-Trees Invariant: Authentic trees deferred to Google 3D Tiles or Solar dataLayers (GoogleSolarFoliageClassifier).'
+                    'Vector data carries no individual trees; google_3d_tiles_get_clay measures the trees in the photo tiles and rebuilds them as SB-Veggie trees.'
                 ]
             } as unknown as ToolResultPayload,
             summaryResult: `Spatial Vector Data queried at [${latitude}, ${longitude}] (${dataset.geohash}): ${dataset.stats.buildingCount} buildings (${dataset.stats.totalBuildingFootprintAreaM2}m² footprint, ${dataset.stats.verifiedHeightCount} verified heights), ${dataset.stats.roadSegmentCount} road segments (${dataset.stats.roadNetworkLengthKm}km, ${dataset.stats.bridgeCount} bridges, ${dataset.stats.tunnelCount} tunnels), ${dataset.landuse.length} landuse zones, ${dataset.water.length} water bodies, ${dataset.pois.length} POIs.`

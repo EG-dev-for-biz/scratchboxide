@@ -27,7 +27,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { TileVegetationService, type TileVegetationStripResult } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService } from '../src/node/3d-engine/tile-refine-service';
-import { runLocationClayPipeline, type LocationClayResult } from '../src/node/3d-engine/location-clay-pipeline';
+import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../src/node/3d-engine/location-clay-pipeline';
 import { decodePng, encodePng } from '../src/node/texture-processing';
 import { readGlbTriangles, renderClayPng, type GlbTriangles } from './helpers/clay-glb-render';
 
@@ -392,6 +392,11 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         const clay = readGlbTriangles(fs.readFileSync(clayFile));
         const grown = readGlbTriangles(fs.readFileSync(treesFile));
         expect(grown.nodeRanges).toHaveLength(trees.length);
+        // the summary the model relays says what closing the ground added (walls continued down behind the trees)
+        const text = describeLocationClay(pipeline, 'clay');
+        expect(text).toMatch(/walls and building sides the trees hid were continued straight down to that ground \([\d,]+ m², up to [\d.]+ m tall; not in the scan\)/);
+        expect(text).toContain(`Taken out with the trees`);
+        if (fs.existsSync(REPORT)) fs.writeFileSync(REPORT, JSON.stringify({ ...JSON.parse(fs.readFileSync(REPORT, 'utf8')), summary: text }, null, 2));
 
         fs.mkdirSync(SHOTS, { recursive: true });
         // top-down measurement with the inventory trunks in cyan
