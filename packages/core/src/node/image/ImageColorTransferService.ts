@@ -24,8 +24,8 @@ export interface ImageColorTransferRequest {
      */
     targetImage: string | Buffer;
 
-    /** Contrast curve applied to L* after the transfer (see CONTRAST_CURVES); 'natural' (the default) applies none. */
-    contrastCurve?: ContrastCurve;
+    /** Tone curve applied to L* after the transfer, in continuous parameters (see ToneCurve); omitted, none is applied. */
+    toneCurve?: ToneCurve;
 
     /**
      * Whether to detect and protect human skin tones from extreme color grading tinting.
@@ -62,42 +62,53 @@ export interface ImageColorTransferResult {
         mode: 'local-cielab';
         preservedGeometry: boolean;
         dimensions: { width: number; height: number };
-        /** The contrast curve applied after the transfer ('natural' = none). */
-        contrastCurve: ContrastCurve;
+        /** The tone curve applied after the transfer, with every parameter resolved (null = none). */
+        toneCurve: Required<ToneCurve> | null;
     };
 }
 
 /**
- * The contrast curves the transfer can apply to L* (0-100), each a fixed tone curve:
- * - natural: none (L* as transferred)
- * - cinematic: S-curve (smoothstep-like) that deepens shadows and lifts highlights
- * - high-contrast: power 1.25 on normalised L*
- * - muted: L* pulled 30% of the way toward mid-grey (50), lowering contrast
- * Any other value is refused rather than ignored.
+ * A tone curve on L* (0-100) after the transfer, as continuous parameters (each optional; an empty or omitted curve
+ * changes nothing). Any look is a point in this space: no named presets.
+ * - gamma: power applied to normalised L* first (1 = unchanged; > 1 darkens the midtones, < 1 lifts them).
+ * - contrast: slope of an S-curve through the pivot (1 = unchanged; > 1 deepens shadows and lifts highlights;
+ *   < 1 flattens toward the pivot). The curve maps black to black and white to white and is monotone.
+ * - pivot: the L* (strictly between 0 and 100) the contrast turns around (default 50).
  */
-export const CONTRAST_CURVES = ['natural', 'cinematic', 'high-contrast', 'muted'] as const;
-export type ContrastCurve = typeof CONTRAST_CURVES[number];
-
-/** The curve to apply, or a MissingInputError for a value no curve exists for. */
-function resolveContrastCurve(value: unknown): ContrastCurve {
-    if (value === undefined || value === null || value === '') return 'natural';
-    if ((CONTRAST_CURVES as readonly unknown[]).includes(value)) return value as ContrastCurve;
-    throw new MissingInputError('color transfer', 'contrastCurve', `"${String(value)}" is not one of ${CONTRAST_CURVES.join(', ')}`);
+export interface ToneCurve {
+    gamma?: number;
+    contrast?: number;
+    pivot?: number;
 }
 
-function applyContrastCurve(L: number, curve: ContrastCurve): number {
-    const n = Math.max(0, Math.min(100, L)) / 100.0;
-    switch (curve) {
-        case 'cinematic': return (n < 0.5 ? 2 * n * n : 1 - 2 * (1 - n) * (1 - n)) * 100.0;
-        case 'high-contrast': return Math.pow(n, 1.25) * 100.0;
-        case 'muted': return 50 + (n * 100.0 - 50) * 0.7;
-        default: return L;
+/** The curve with every parameter resolved, or null when it changes nothing; a value out of range is refused. */
+function resolveToneCurve(value: unknown): Required<ToneCurve> | null {
+    if (value === undefined || value === null) return null;
+    if (typeof value !== 'object') {
+        throw new MissingInputError('color transfer', 'toneCurve', `must be an object { gamma?, contrast?, pivot? } (got ${JSON.stringify(value)})`);
     }
+    const v = value as ToneCurve;
+    const gamma = v.gamma ?? 1;
+    const contrast = v.contrast ?? 1;
+    const pivot = v.pivot ?? 50;
+    if (!(Number.isFinite(gamma) && gamma > 0)) throw new MissingInputError('color transfer', 'toneCurve.gamma', `must be a number > 0 (got ${v.gamma})`);
+    if (!(Number.isFinite(contrast) && contrast > 0)) throw new MissingInputError('color transfer', 'toneCurve.contrast', `must be a number > 0 (got ${v.contrast})`);
+    if (!(Number.isFinite(pivot) && pivot > 0 && pivot < 100)) throw new MissingInputError('color transfer', 'toneCurve.pivot', `must be between 0 and 100 (got ${v.pivot})`);
+    if (gamma === 1 && contrast === 1) return null;
+    return { gamma, contrast, pivot };
+}
+
+function applyToneCurve(L: number, curve: Required<ToneCurve> | null): number {
+    if (!curve) return L;
+    let n = Math.pow(Math.max(0, Math.min(100, L)) / 100.0, curve.gamma);
+    const p = curve.pivot / 100;
+    n = n < p ? p * Math.pow(n / p, curve.contrast) : 1 - (1 - p) * Math.pow((1 - n) / (1 - p), curve.contrast);
+    return n * 100.0;
 }
 
 export interface LocalCielabOptions {
     preserveSkinTones?: boolean;
-    contrastCurve?: ContrastCurve;
+    toneCurve?: ToneCurve;
     intensity?: number; // 0.0 (no change) to 1.0 (full transfer), default 1.0
     outputFormat?: 'png' | 'jpg' | 'webp';
 }
@@ -116,13 +127,13 @@ export class ImageColorTransferService {
      */
     static async transferColor(request: ImageColorTransferRequest): Promise<ImageColorTransferResult> {
         const startTime = Date.now();
-        const contrastCurve = resolveContrastCurve(request.contrastCurve);
+        const toneCurve = resolveToneCurve(request.toneCurve);
         const targetBuf = await this.resolveImageBuffer(request.targetImage, 'targetImage');
         const refBuf = await this.resolveImageBuffer(request.referenceImage, 'referenceImage');
 
         const transfer = await this.transferColorLocalCielabWithStats(targetBuf, refBuf, {
             preserveSkinTones: request.preserveSkinTones ?? true,
-            contrastCurve,
+            toneCurve: toneCurve ?? undefined,
             outputFormat: request.outputFormat || 'jpg'
         });
 
@@ -143,7 +154,7 @@ export class ImageColorTransferService {
                 mode: 'local-cielab',
                 preservedGeometry: true,
                 dimensions: { width: transfer.width, height: transfer.height },
-                contrastCurve
+                toneCurve
             }
         };
     }
@@ -165,7 +176,7 @@ export class ImageColorTransferService {
         referenceImage: string | Buffer,
         options: LocalCielabOptions = {}
     ): Promise<{ buffer: Buffer; width: number; height: number; reference: LabStatistics; target: LabStatistics }> {
-        const contrastCurve = resolveContrastCurve(options.contrastCurve);
+        const toneCurve = resolveToneCurve(options.toneCurve);
         const targetBuf = await this.resolveImageBuffer(targetImage, 'targetImage');
         const refBuf = await this.resolveImageBuffer(referenceImage, 'referenceImage');
 
@@ -260,7 +271,7 @@ export class ImageColorTransferService {
             let newA = (origA - tMeanA) * scaleA + rMeanA;
             let newB = (origB - tMeanB) * scaleB + rMeanB;
 
-            newL = applyContrastCurve(newL, contrastCurve);
+            newL = applyToneCurve(newL, toneCurve);
 
             // Skin tone detection in CIELAB
             let skinWeight = 0;

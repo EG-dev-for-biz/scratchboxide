@@ -58,9 +58,9 @@ describe('ImageColorTransferService (2D image-to-image colour transfer)', () => 
         expect(result).not.toHaveProperty('plan');
     });
 
-    it('applies the contrast curve it was asked for, says which, and refuses one it does not have', async () => {
-        const run = (contrastCurve?: any) => transferImageColor({
-            referenceImage: ramp(64, 16), targetImage: ramp(64, 16), outputFormat: 'png', preserveSkinTones: false, contrastCurve
+    it('applies a tone curve given as continuous parameters, reports it, and refuses values out of range', async () => {
+        const run = (toneCurve?: any) => transferImageColor({
+            referenceImage: ramp(64, 16), targetImage: ramp(64, 16), outputFormat: 'png', preserveSkinTones: false, toneCurve
         });
         const lumaSpread = (png: Buffer) => {
             const img = decodePng(png);
@@ -68,14 +68,18 @@ describe('ImageColorTransferService (2D image-to-image colour transfer)', () => 
             return at(img.width - 2) - at(1);
         };
         const natural = await run();
-        const muted = await run('muted');
-        const strong = await run('cinematic');
-        expect(natural.telemetry.contrastCurve).toBe('natural');
-        expect(muted.telemetry.contrastCurve).toBe('muted');
-        // Muted lowers contrast, the S-curve raises it, relative to no curve.
-        expect(lumaSpread(muted.outputBuffer)).toBeLessThan(lumaSpread(natural.outputBuffer) - 10);
-        expect(lumaSpread(strong.outputBuffer)).toBeGreaterThan(lumaSpread(natural.outputBuffer));
-        await expect(run('dreamy')).rejects.toThrow(/contrastCurve: "dreamy" is not one of natural, cinematic, high-contrast, muted/);
+        const flatter = await run({ contrast: 0.6 });
+        const stronger = await run({ contrast: 2 });
+        // Any look is a point in the parameter space; no preset name is needed (the review's 'soft filmic').
+        const softFilmic = await run({ contrast: 0.85, gamma: 0.9, pivot: 45 });
+        expect(natural.telemetry.toneCurve).toBeNull();
+        expect(flatter.telemetry.toneCurve).toEqual({ gamma: 1, contrast: 0.6, pivot: 50 });
+        expect(softFilmic.telemetry.toneCurve).toEqual({ gamma: 0.9, contrast: 0.85, pivot: 45 });
+        expect(lumaSpread(flatter.outputBuffer)).toBeLessThan(lumaSpread(natural.outputBuffer) - 10);
+        expect(lumaSpread(stronger.outputBuffer)).toBeGreaterThan(lumaSpread(natural.outputBuffer));
+        await expect(run({ contrast: 0 })).rejects.toThrow(/toneCurve.contrast: must be a number > 0/);
+        await expect(run({ pivot: 100 })).rejects.toThrow(/toneCurve.pivot: must be between 0 and 100/);
+        await expect(run('cinematic')).rejects.toThrow(/toneCurve: must be an object/);
     });
 
     it('has no canned palette: extractPalette is gone and an unreadable input fails', async () => {
