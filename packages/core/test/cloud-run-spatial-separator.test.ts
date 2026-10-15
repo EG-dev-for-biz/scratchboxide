@@ -94,11 +94,12 @@ describe('Cloud Run Spatial Separator Microservice', () => {
     const data = res.json();
 
     expect(data.success).toBe(true);
-    expect(data.benchmark.objectsCount).toBe(11);
+    expect(data.benchmark.objectsCount).toBe(8);
     expect(data.benchmark.avgGemini3DScaleDiscrepancyPercent).toBeLessThanOrEqual(1.5);
     expect(data.scene.objectCounts.monuments).toBe(4);
     expect(data.scene.objectCounts.ruins).toBe(3);
-    expect(data.scene.objectCounts.foliage).toBe(3);
+    // no hand-written stone pines or cypress among the "detections"
+    expect(data.scene.objectCounts.foliage).toBe(0);
     expect(data.scene.objectCounts.terrain).toBe(1);
 
     // Verify Arch of Constantine has exact Gemini 3D bounding box dimensions
@@ -130,7 +131,7 @@ describe('Cloud Run Spatial Separator Microservice', () => {
     const scene = res.json();
     expect(scene.title).toContain('Colosseum');
     expect(Array.isArray(scene.objects)).toBe(true);
-    expect(scene.objects.length).toBe(11);
+    expect(scene.objects.length).toBe(8);
   });
 
   it('5. should support dynamic POST /api/spatial/separate', async () => {
@@ -156,6 +157,15 @@ describe('Cloud Run Spatial Separator Microservice', () => {
     ] as const) {
       const res = await simulateRequest(method, url, method === 'POST' ? { canopyHeightMeters: 18.5 } : undefined);
       expect(res.statusCode).toBe(404);
+    }
+    // nor does the mesh separation name trees in its macro or detailed lists (a hand-written list of species and places)
+    for (const mode of ['macro', 'detailed']) {
+      const objects = await simulateRequest('GET', `/api/spatial/3d-mesh/objects?mode=${mode}`);
+      expect(objects.statusCode).toBe(200);
+      const listed = objects.json();
+      expect(listed.objects.length).toBe(mode === 'macro' ? 8 : 34);
+      expect(listed.objects.filter((o: any) => /foliage/.test(o.category) || /Pinus|Cupressus|Stone Pine|Cypress/.test(`${o.name} ${o.trellisPrompt}`))).toEqual([]);
+      expect(listed.objectCounts.foliage).toBe(0);
     }
     const trees = await simulateRequest('GET', '/api/spatial/3d-mesh/objects?mode=trees');
     expect(trees.statusCode).toBe(500);

@@ -64,16 +64,18 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(centroid[2]).toBeCloseTo(0.0, 1);
   });
 
-  it('separates 11 discrete 3D spatial entities in macro mode', () => {
+  it('separates 8 discrete 3D spatial entities in macro mode, none of them a named tree', () => {
     const scene = Colosseum3DMeshSeparatorService.separate3DMesh(modelPath, { mode: 'macro' });
-    expect(scene.objects.length).toBe(11);
+    expect(scene.objects.length).toBe(8);
     expect(scene.granularityMode).toBe('macro');
 
     const categories = new Set(scene.objects.map(o => o.category));
     expect(categories.has('monument')).toBe(true);
     expect(categories.has('ruin')).toBe(true);
-    expect(categories.has('foliage')).toBe(true);
     expect(categories.has('terrain')).toBe(true);
+    // the stone pines and cypress were a hand-written list (species, places, sizes), not identified in the mesh
+    expect(categories.has('foliage')).toBe(false);
+    expect(COLOSSEUM_3D_ENTITIES.filter(e => /pine|cypress|pinus|cupressus/i.test(`${e.name} ${e.trellisPrompt}`))).toEqual([]);
 
     fs.writeFileSync(path.join(outDir, 'macro_entities.json'), JSON.stringify(scene.objects, null, 2), 'utf8');
   });
@@ -104,32 +106,26 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(metaSudans).toBeDefined();
     expect(metaSudans!.category).toBe('ruin');
 
-    // 4. Stone Pine Trees (Foliage)
-    const tree1 = scene.objects.find(o => o.id === 'det-tree-stone-pine-1');
-    expect(tree1).toBeDefined();
-    expect(tree1!.category).toBe('foliage');
-    expect(tree1!.material.baseColor).toBe('#2d5a27');
-
-    // 5. Cobblestone Apron (Terrain)
+    // 4. Cobblestone Apron (Terrain)
     const apron = scene.objects.find(o => o.id === 'det-cobblestone-apron');
     expect(apron).toBeDefined();
     expect(apron!.category).toBe('terrain');
     expect(apron!.submeshIndices.length).toBeGreaterThan(15);
   });
 
-  it('separates 52 granular 3D spatial entities in detailed mode with tight 3D Oriented Bounding Boxes (OBBs)', () => {
+  it('separates 34 granular 3D spatial entities in detailed mode with tight 3D Oriented Bounding Boxes (OBBs)', () => {
     const scene = Colosseum3DMeshSeparatorService.separate3DMesh(modelPath, { mode: 'detailed' });
 
-    expect(scene.objects.length).toBe(52);
+    expect(scene.objects.length).toBe(34);
     expect(scene.granularityMode).toBe('detailed');
     expect(scene.objectCounts).toBeDefined();
     expect(scene.objectCounts!.colosseum_architecture).toBe(12);
     expect(scene.objectCounts!.monuments_temples).toBe(8);
-    expect(scene.objectCounts!.foliage_trees).toBe(18);
+    expect(scene.objectCounts!.foliage_trees).toBe(0);
     expect(scene.objectCounts!.archaeology_ruins).toBe(8);
     expect(scene.objectCounts!.urban_infrastructure).toBe(6);
 
-    // Verify all 52 entities have valid OBB, dimensions, and non-empty vertex counts
+    // Verify all 34 entities have valid OBB, dimensions, and non-empty vertex counts
     for (const obj of scene.objects) {
       expect(obj.orientedBoundingBox).toBeDefined();
       expect(obj.orientedBoundingBox.dimensions[0]).toBeGreaterThan(0);
@@ -158,11 +154,9 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(titusBaths).toBeDefined();
     expect(titusBaths!.tightnessGainPercent).toBeGreaterThan(50);
 
-    // 4. Foliage: 12 Stone Pines and 6 Cypresses
-    const pines = scene.objects.filter(o => o.id.startsWith('fol-stone-pine'));
-    expect(pines.length).toBe(12);
-    const cypresses = scene.objects.filter(o => o.id.startsWith('fol-cypress'));
-    expect(cypresses.length).toBe(6);
+    // 4. No trees: the 12 stone pines and 6 cypresses were placed by formula (positions, sizes, species), not found
+    expect(scene.objects.filter(o => o.id.startsWith('fol-'))).toEqual([]);
+    expect(COLOSSEUM_GRANULAR_3D_ENTITIES.filter(e => e.category === 'foliage_trees' || /pine|cypress|pinus|cupressus/i.test(e.name))).toEqual([]);
 
     // 5. Urban Infrastructure: Metro Colosseo and Via Nicola Salvi townhouses
     const metro = scene.objects.find(o => o.id === 'urb-metro-colosseo-pavilion');
@@ -217,7 +211,7 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
     expect(reportDetailed).toContain('Granularity Mode: DETAILED');
     expect(reportDetailed).toContain('Colosseum North Outer Arcade Facade');
     expect(reportDetailed).toContain('Arch of Constantine: Attic Inscription Block');
-    expect(reportDetailed).toContain('Oppian Hill Crest Stone Pine #1');
+    expect(reportDetailed).not.toContain('Stone Pine');
     expect(reportDetailed).toContain('Colosseo Metro Station Entrance Pavilion');
   });
 

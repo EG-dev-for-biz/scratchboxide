@@ -107,7 +107,8 @@ export interface SpatialEntityDefinition {
 }
 
 /**
- * 11 Macro discrete 3D spatial entities (Level of Detail 1).
+ * 8 Macro discrete 3D spatial entities (Level of Detail 1). No trees: a named tree here (a species, a place, a size)
+ * would not be identified in the mesh; trees are measured from photo tiles by tile_vegetation (google_3d_tiles_get_clay).
  */
 export const COLOSSEUM_3D_ENTITIES: SpatialEntityDefinition[] = [
   {
@@ -185,39 +186,6 @@ export const COLOSSEUM_3D_ENTITIES: SpatialEntityDefinition[] = [
     material: { roughness: 0.9, metalness: 0.0, baseColor: '#c7bcab' }
   },
   {
-    id: 'det-tree-stone-pine-1',
-    name: 'Italian Stone Pine Tree #1 (Pinus pinea - Crest)',
-    category: 'foliage',
-    submeshCluster: [47, 48],
-    colorHex: '#22c55e',
-    nominalDimensions: [11.0, 15.0, 11.0],
-    nominalCentroid: [160.0, 54.0, 160.0],
-    trellisPrompt: 'Mediterranean stone pine tree (Pinus pinea) with umbrella-like spreading canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters.',
-    material: { roughness: 0.7, metalness: 0.0, baseColor: '#2d5a27' }
-  },
-  {
-    id: 'det-tree-stone-pine-2',
-    name: 'Italian Stone Pine Tree #2 (Pinus pinea - Slope)',
-    category: 'foliage',
-    submeshCluster: [49, 61],
-    colorHex: '#14b8a6',
-    nominalDimensions: [9.5, 13.5, 9.5],
-    nominalCentroid: [110.0, 42.0, 110.0],
-    trellisPrompt: 'Slightly tilted parasol stone pine tree growing on the Oppian park embankment with irregular branching structure.',
-    material: { roughness: 0.72, metalness: 0.0, baseColor: '#2b5226' }
-  },
-  {
-    id: 'det-tree-cypress-col',
-    name: 'Columnar Italian Cypress (Cupressus sempervirens)',
-    category: 'foliage',
-    submeshCluster: [74],
-    colorHex: '#06b6d4',
-    nominalDimensions: [3.5, 12.0, 3.5],
-    nominalCentroid: [-155.0, 32.0, -80.0],
-    trellisPrompt: 'Slender columnar Mediterranean cypress tree (Cupressus sempervirens) with dense dark emerald-green vertical foliage.',
-    material: { roughness: 0.68, metalness: 0.0, baseColor: '#1d3b22' }
-  },
-  {
     id: 'det-campanile-tower',
     name: 'Santa Francesca Romana Bell Tower (Campanile)',
     category: 'monument',
@@ -242,7 +210,7 @@ export const COLOSSEUM_3D_ENTITIES: SpatialEntityDefinition[] = [
 ];
 
 /**
- * 52 Granular 3D Spatial Entities across 5 distinct categories (Level of Detail 2).
+ * 34 Granular 3D Spatial Entities across 4 distinct categories (Level of Detail 2). No trees (see COLOSSEUM_3D_ENTITIES).
  */
 export const COLOSSEUM_GRANULAR_3D_ENTITIES: SpatialEntityDefinition[] = [
   // 1. Colosseum Architectural Subsystems (12 entities)
@@ -587,51 +555,7 @@ export const COLOSSEUM_GRANULAR_3D_ENTITIES: SpatialEntityDefinition[] = [
     material: { roughness: 0.86, metalness: 0.02, baseColor: '#b46d4e' }
   },
 
-  // 3. Individual Foliage & Trees (18 entities)
-  ...[1, 2, 3, 4, 5, 6].map(idx => ({
-    id: `fol-stone-pine-crest-${idx}`,
-    name: `Oppian Hill Crest Stone Pine #${idx} (Pinus pinea)`,
-    category: 'foliage_trees' as SpatialCategory,
-    submeshCluster: [47, 48, 51, 62],
-    colorHex: '#22c55e',
-    nominalDimensions: [11.0, 15.0, 11.0],
-    nominalCentroid: [140.0 + idx * 12.0, 55.0 + (idx % 2) * 5.0, 60.0 + idx * 10.0] as [number, number, number],
-    spatialFilter: {
-      box: [110 + (idx - 1) * 20, 35, 30 + (idx - 1) * 20, 135 + (idx - 1) * 20, 75, 55 + (idx - 1) * 20] as [number, number, number, number, number, number]
-    },
-    trellisPrompt: `Mature Italian stone pine tree #${idx} (Pinus pinea) with umbrella-like spreading horizontal canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters on the Oppian hilltop.`,
-    material: { roughness: 0.7, metalness: 0.0, baseColor: '#2d5a27' }
-  })),
-  ...[7, 8, 9, 10, 11, 12].map(idx => ({
-    id: `fol-stone-pine-slope-${idx}`,
-    name: `Park Embankment Slope Pine #${idx} (Pinus pinea)`,
-    category: 'foliage_trees' as SpatialCategory,
-    submeshCluster: [49, 61, 45, 15],
-    colorHex: '#16a34a',
-    nominalDimensions: [9.5, 13.5, 9.5],
-    nominalCentroid: [90.0 + (idx - 7) * 14.0, 45.0, 180.0 + (idx - 7) * 8.0] as [number, number, number],
-    spatialFilter: {
-      box: [60 + (idx - 7) * 20, 25, 150 + (idx - 7) * 15, 85 + (idx - 7) * 20, 65, 175 + (idx - 7) * 15] as [number, number, number, number, number, number]
-    },
-    trellisPrompt: `Tilted Mediterranean parasol stone pine tree #${idx} growing along the terraced hillside lawn with twisting trunk and asymmetrical sun-seeking crown.`,
-    material: { roughness: 0.72, metalness: 0.0, baseColor: '#2b5226' }
-  })),
-  ...[1, 2, 3, 4, 5, 6].map(idx => ({
-    id: `fol-cypress-avenue-${idx}`,
-    name: `Avenue Columnar Cypress #${idx} (Cupressus sempervirens)`,
-    category: 'foliage_trees' as SpatialCategory,
-    submeshCluster: [74, 44, 13],
-    colorHex: '#059669',
-    nominalDimensions: [3.5, 14.0, 3.5],
-    nominalCentroid: [-80.0 + (idx - 1) * 18.0, 48.0, 250.0 + (idx - 1) * 5.0] as [number, number, number],
-    spatialFilter: {
-      box: [-95 + (idx - 1) * 20, 30, 230 + (idx - 1) * 8, -70 + (idx - 1) * 20, 70, 275 + (idx - 1) * 8] as [number, number, number, number, number, number]
-    },
-    trellisPrompt: `Tall slender columnar Mediterranean Italian cypress tree #${idx} (Cupressus sempervirens) with dense dark-green vertical silhouette lining the historic boulevard.`,
-    material: { roughness: 0.68, metalness: 0.0, baseColor: '#1d3b22' }
-  })),
-
-  // 4. Archaeological Substructures & Historic Ruins (8 entities)
+  // 3. Archaeological Substructures & Historic Ruins (8 entities)
   {
     id: 'ruin-velian-brick-wall',
     name: 'Velian Hill Opus Latericium Brick Retaining Wall',
@@ -737,7 +661,7 @@ export const COLOSSEUM_GRANULAR_3D_ENTITIES: SpatialEntityDefinition[] = [
     material: { roughness: 0.9, metalness: 0.02, baseColor: '#8c5d4b' }
   },
 
-  // 5. Urban Fabric & Modern Infrastructure (6 entities)
+  // 4. Urban Fabric & Modern Infrastructure (6 entities)
   {
     id: 'urb-metro-colosseo-pavilion',
     name: 'Colosseo Metro Station Entrance Pavilion & Stairwell',
@@ -807,10 +731,9 @@ export const COLOSSEUM_GRANULAR_3D_ENTITIES: SpatialEntityDefinition[] = [
 ];
 
 /**
- * Generates 530 Total Identifiable Objects across the Colosseum 3D tile:
+ * Generates 410 Total Identifiable Objects across the Colosseum 3D tile (no trees; see COLOSSEUM_3D_ENTITIES):
  * - 320 Colosseum Arcade Arches & Attic Bays (80 per tier x 4 tiers)
  * - 28 Hypogeum Subterranean Beast/Gladiator Elevator Hoist Shafts
- * - 120 Individual Trees (Stone Pines, Cypresses, Holm Oaks)
  * - 24 Monuments & Ancient Ruins (Arch of Constantine, Temple of Venus, Ludus Magnus)
  * - 20 Surrounding Urban Palazzi & Buildings
  * - 18 Street Furniture & Micro-Infrastructure

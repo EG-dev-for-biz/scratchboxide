@@ -266,45 +266,6 @@ export class ColosseumObjectSeparationService {
         trellisPrompt: 'Low rectangular Roman travertine stone foundation blocks, chisel-dressed ashlar stone masonry, weathered moss'
       },
       {
-        id: 'det-umbrella-pine-tree',
-        label: 'Italian Stone Pine Tree #1 (Pinus pinea - Crest)',
-        category: 'foliage',
-        box2d: [435, 880, 525, 940],
-        box3d: {
-          center: [95.0, 14.0, 45.0],
-          size: [11.0, 15.0, 11.0],
-          rotationsDeg: [0.0, 0.0, 0.0]
-        },
-        confidence: 0.94,
-        trellisPrompt: 'Photorealistic Italian stone pine tree, Pinus pinea umbrella canopy, tall bare bark trunk, dense Mediterranean needle foliage'
-      },
-      {
-        id: 'det-umbrella-pine-tree-2',
-        label: 'Italian Stone Pine Tree #2 (Pinus pinea - Slope)',
-        category: 'foliage',
-        box2d: [445, 830, 510, 875],
-        box3d: {
-          center: [82.0, 13.0, 52.0],
-          size: [9.5, 13.5, 9.5],
-          rotationsDeg: [0.0, 42.0, 0.0]
-        },
-        confidence: 0.92,
-        trellisPrompt: 'Mediterranean umbrella stone pine, spreading flat-topped crown, gnarly fissured trunk, Mediterranean needle foliage'
-      },
-      {
-        id: 'det-cypress-tree-1',
-        label: 'Columnar Italian Cypress (Cupressus sempervirens)',
-        category: 'foliage',
-        box2d: [460, 665, 520, 695],
-        box3d: {
-          center: [-210.0, 10.0, 90.0],
-          size: [3.5, 12.0, 3.5],
-          rotationsDeg: [0.0, 0.0, 0.0]
-        },
-        confidence: 0.90,
-        trellisPrompt: 'Slender vertical Italian cypress tree, columnar evergreen habit, dense dark green foliage'
-      },
-      {
         id: 'det-church-campanile',
         label: 'Santa Francesca Romana Bell Tower (Campanile)',
         category: 'monument',
@@ -525,7 +486,7 @@ For each object, output its 2D bounding box normalized [ymin, xmin, ymax, xmax] 
     // Assemble unified Scene3DData
     const populatedScene: Scene3DData = {
       title: 'Colosseum & Archaeological Forum Populated 3D Scene',
-      subtitle: 'Individually separated architectural monuments, ruins, and stone pines synthesized via TRELLIS 2',
+      subtitle: 'Individually separated architectural monuments and ruins synthesized via TRELLIS 2',
       sceneType: 'city',
       renderMode: 'pbr',
       cameraMode: 'orbit',
