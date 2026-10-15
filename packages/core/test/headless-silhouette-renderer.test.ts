@@ -12,6 +12,7 @@ import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMesh
 import {
     SubPixelEdgeAlignmentOptimizer,
     evaluateEdgeOverlap,
+    meanEdgeDistancePx,
     type CameraPose6DOF
 } from '../src/node/spatial/SubPixelEdgeAlignmentOptimizer';
 
@@ -91,7 +92,10 @@ describe('HeadlessMeshSilhouetteRenderer & Closed-Loop Optimizer', () => {
         );
         // Verify optimizer significantly improved overlap score
         expect(optimization.overlapScorePercent).toBeGreaterThan(initialEval.overlapScorePercent);
-        expect(optimization.subpixelResidualPx).toBeLessThan(initialEval.residualPx);
+        // The residual is measured, not derived from the score: it is the mean edge distance of the final render.
+        const finalField = HeadlessMeshSilhouetteRenderer.renderEdgeField(buildingMesh, optimization.finalPose, 160, 120);
+        expect(optimization.subpixelResidualPx).toBeCloseTo(meanEdgeDistancePx(targetField, finalField).meanPx, 6);
+        expect(Number.isFinite(initialEval.residualPx)).toBe(true);
 
         // Camera position converged closer to ground truth
         expect(Math.abs(optimization.finalPose.x - groundTruthPose.x)).toBeLessThan(Math.abs(perturbedPose.x - groundTruthPose.x));

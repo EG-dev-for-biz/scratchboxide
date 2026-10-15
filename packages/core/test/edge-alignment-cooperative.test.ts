@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { encodePng } from '../src/node/texture-processing';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
-import { SubPixelEdgeAlignmentOptimizer, computeSobelField, type CameraPose6DOF } from '../src/node/spatial/SubPixelEdgeAlignmentOptimizer';
+import { SubPixelEdgeAlignmentOptimizer, computeSobelField, evaluateEdgeOverlap, meanEdgeDistancePx, type CameraPose6DOF, type SobelEdgeField } from '../src/node/spatial/SubPixelEdgeAlignmentOptimizer';
 import { skyscraperMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 
@@ -119,5 +119,24 @@ describe('Closed-loop edge alignment does not hold the server', () => {
         expect(coop.finalPose).toEqual(sync.finalPose);
         expect(coop.iterations).toBe(sync.iterations);
         expect(coop.overlapScorePercent).toBe(sync.overlapScorePercent);
+    });
+});
+
+describe('The edge residual is a measured pixel distance, not a number derived from the correlation', () => {
+    /** A field with one vertical edge line at column x. */
+    const lineField = (x: number, width = 40, height = 20): SobelEdgeField => {
+        const magnitudes = new Float32Array(width * height);
+        for (let y = 0; y < height; y++) magnitudes[y * width + x] = 1;
+        return { width, height, magnitudes, gradX: new Float32Array(width * height), gradY: new Float32Array(width * height), meanMagnitude: height / (width * height) };
+    };
+
+    it('reports the distance between the edges in pixels, 0 for identical fields, and NaN when there is nothing to measure', () => {
+        expect(meanEdgeDistancePx(lineField(10), lineField(13)).meanPx).toBeCloseTo(3, 6);
+        expect(evaluateEdgeOverlap(lineField(10), lineField(13)).residualPx).toBeCloseTo(3, 6);
+        expect(evaluateEdgeOverlap(lineField(10), lineField(10)).residualPx).toBe(0);
+        const empty = { ...lineField(10), magnitudes: new Float32Array(800), meanMagnitude: 0 };
+        expect(Number.isNaN(evaluateEdgeOverlap(lineField(10), empty).residualPx)).toBe(true);
+        // The old formula ((1 - ncc) * 1.5 + ...) would put two disjoint lines 27 px apart near 1.5 px.
+        expect(evaluateEdgeOverlap(lineField(5), lineField(32)).residualPx).toBeCloseTo(27, 6);
     });
 });

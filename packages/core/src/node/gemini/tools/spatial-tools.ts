@@ -43,6 +43,7 @@ import {
     SubPixelEdgeAlignmentOptimizer,
     computeSobelField,
     evaluateEdgeOverlap,
+    meanEdgeDistancePx as measureMeanEdgeDistance,
     type CameraPose6DOF
 } from '../../spatial/SubPixelEdgeAlignmentOptimizer';
 import {
@@ -3926,47 +3927,6 @@ async function loadFeatureImage(tool: string, arg: string, imagePath: string, ma
     return { gray, width, height, scale: factor, sourceWidth: image.width, sourceHeight: image.height };
 }
 
-/**
- * Mean distance (in analysis pixels) from each edge pixel of the rendered model to the nearest strong edge of the
- * photograph. A model edge pixel has at least a quarter of the render's largest gradient (its silhouette and depth
- * steps, not the gentle shading inside); a strong photo edge is in the top 10% of the photo's gradient magnitudes.
- * Two-pass chamfer distance transform.
- */
-function meanEdgeDistance(photo: Float32Array, model: Float32Array, width: number, height: number): { meanPx: number; modelEdgePixels: number } {
-    const nonZero = Array.from(photo).filter(v => v > 0).sort((a, b) => a - b);
-    const threshold = nonZero.length ? nonZero[Math.floor(nonZero.length * 0.9)] : Infinity;
-    let modelMax = 0;
-    for (let i = 0; i < model.length; i++) modelMax = Math.max(modelMax, model[i]);
-    const modelThreshold = modelMax * 0.25;
-    const INF = 1e9;
-    const dist = new Float32Array(width * height);
-    for (let i = 0; i < dist.length; i++) dist[i] = photo[i] >= threshold && photo[i] > 0 ? 0 : INF;
-    const D = Math.SQRT2;
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-        const i = y * width + x;
-        if (x > 0) dist[i] = Math.min(dist[i], dist[i - 1] + 1);
-        if (y > 0) {
-            dist[i] = Math.min(dist[i], dist[i - width] + 1);
-            if (x > 0) dist[i] = Math.min(dist[i], dist[i - width - 1] + D);
-            if (x < width - 1) dist[i] = Math.min(dist[i], dist[i - width + 1] + D);
-        }
-    }
-    for (let y = height - 1; y >= 0; y--) for (let x = width - 1; x >= 0; x--) {
-        const i = y * width + x;
-        if (x < width - 1) dist[i] = Math.min(dist[i], dist[i + 1] + 1);
-        if (y < height - 1) {
-            dist[i] = Math.min(dist[i], dist[i + width] + 1);
-            if (x < width - 1) dist[i] = Math.min(dist[i], dist[i + width + 1] + D);
-            if (x > 0) dist[i] = Math.min(dist[i], dist[i + width - 1] + D);
-        }
-    }
-    let sum = 0, count = 0;
-    for (let i = 0; i < model.length; i++) {
-        if (model[i] > 0 && model[i] >= modelThreshold && dist[i] < INF) { sum += dist[i]; count++; }
-    }
-    return { meanPx: count ? sum / count : NaN, modelEdgePixels: count };
-}
-
 /** A number argument within [min, max], its default when omitted; anything else is a MissingInputError. */
 function boundedNumber(tool: string, arg: string, value: unknown, fallback: number, min: number, max: number): number {
     if (value === undefined || value === null) return fallback;
@@ -4027,7 +3987,7 @@ async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown
             Math.min(0.99, (Date.now() - started) / timeBudgetMs))
     });
     const finalEval = evaluateEdgeOverlap(queryField, opt.finalField);
-    const distance = meanEdgeDistance(queryField.magnitudes, opt.finalField.magnitudes, width, height);
+    const distance = measureMeanEdgeDistance(queryField, opt.finalField);
     const meanEdgeDistancePx = distance.meanPx * photo.scale;
     const p = opt.finalPose;
     const reached = finalEval.overlapScorePercent >= target;
