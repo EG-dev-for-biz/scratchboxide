@@ -15,23 +15,20 @@ import { GeminiService } from '../src/node/gemini-service';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { UTDRA_TOOL_DECLARATIONS } from '../src/node/gemini/tools/spatial-tools';
-import { UniversalTileDecompositionService, type UtdraBenchmarkType } from '../src/node/3d-engine/universal-tile-decomposition-service';
+import { bridgeWithCurtainMesh, skyscraperMesh, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
 
-// Test inputs: the service writes its synthetic benchmark meshes to GLB files, which the tools then read like any tile.
+// Test inputs: synthetic tiles written to GLB files, which the tools read like any tile (they never build one).
 const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-utdra-fixtures-'));
-const fixtures = new Map<string, Promise<string>>();
-function benchmarkGlb(benchmark: UtdraBenchmarkType): Promise<string> {
-    if (!fixtures.has(benchmark)) {
-        const outputGlbPath = path.join(fixtureDir, `${benchmark}.glb`);
-        fixtures.set(benchmark, new UniversalTileDecompositionService()
-            .decomposeTile({ benchmark, mode: 'probe', outputGlbPath })
-            .then(() => {
-                expect(fs.existsSync(outputGlbPath)).toBe(true);
-                return outputGlbPath;
-            }));
-    }
-    return fixtures.get(benchmark)!;
+const FIXTURES: Record<string, () => FixtureMesh> = {
+    urban: () => skyscraperMesh(),
+    hybrid: () => skyscraperMesh(50, 70, 220),
+    slicer: () => skyscraperMesh(),
+    bridge: () => bridgeWithCurtainMesh()
+};
+async function benchmarkGlb(name: keyof typeof FIXTURES): Promise<string> {
+    const file = path.join(fixtureDir, `${name}.glb`);
+    return fs.existsSync(file) ? file : writeFixtureGlb(file, FIXTURES[name]());
 }
 afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
 

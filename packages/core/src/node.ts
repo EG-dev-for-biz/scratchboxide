@@ -185,7 +185,6 @@ export {
     UldraService,
     GeographicDomain,
     UtdraPipelineMode,
-    UtdraBenchmarkType,
     UtdraServiceOptions,
     UtdraTelemetry,
     UtdraResult
@@ -194,7 +193,6 @@ export {
     NativeMeshReshaperService,
     MeshReshapingService,
     reshapeMesh,
-    parsePromptToMeshOperations,
     MeshDeformationAxis,
     SculptBrushType,
     LatticeOffset,
@@ -219,19 +217,6 @@ export type {
     SbRigReport,
     SbRigResult
 } from './node/3d-engine/sb-rig-service';
-export {
-    NativeTileRestructurerService,
-    TileRestructurerService,
-    restructureTileMesh,
-    TileStyle,
-    RestructureMaterialMode,
-    TerraformingOp,
-    PrimitiveGraft,
-    TileRestructureConfig,
-    TileRestructureTelemetry,
-    TileRestructureOptions,
-    TileRestructureResult
-} from './node/3d-engine/native-tile-restructurer-service';
 export {
     NativeTilePathTracerService,
     TileShadingMode,

@@ -165,7 +165,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 },
                 {
                     prompt: 'Reshape 3D mesh taper and bend deformers',
-                    expected: ['mesh_apply_deformers', 'mesh_reshape_via_prompt']
+                    expected: ['mesh_apply_deformers']
                 },
                 {
                     prompt: 'Simulate atmospheric lighting and NOAA solar ephemeris',
@@ -178,10 +178,6 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 {
                     prompt: 'Calibrate optical camera lens distortion Brown-Conrady',
                     expected: ['optics_configure_lens_distortion', 'optics_export_lens_distortion']
-                },
-                {
-                    prompt: 'Track video points with TAPIR and solve 4DGS rigid clusters',
-                    expected: ['build_4dgs_from_video']
                 },
                 {
                     prompt: 'Build video timeline and audit with visual critic',
@@ -203,6 +199,10 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 const names = fnConfig.functionDeclarations.map((d: any) => d.name);
                 for (const expectedName of item.expected) {
                     expect(names).toContain(expectedName);
+                }
+                // Tools that faked their work are gone: no prompt brings them back.
+                for (const removed of ['mesh_reshape_via_prompt', 'tile_restructure_via_prompt', 'build_4dgs_from_video', 'tapir_track_video_points']) {
+                    expect(names).not.toContain(removed);
                 }
             }
         });
@@ -377,8 +377,8 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
         it('executes mesh_apply_deformers (taper, twist, bend, bulge)', async () => {
             const res = await registry.dispatch('mesh_apply_deformers', {
                 operations: [
-                    { type: 'taper', axis: 'y', factor: 0.65 },
-                    { type: 'twist', axis: 'y', factor: 0.5 }
+                    { type: 'taper', axis: 'y', factor: 0.65, range: [0, 1] },
+                    { type: 'twist', axis: 'y', angleDeg: 20, range: [0.5, 1] }
                 ],
                 inputGlbPath: existingGlbPath,
                 outputGlbPath: path.join(testDir, 'mesh_deformed.glb')
@@ -388,37 +388,10 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect((res.resultPayload as any).telemetry.outputVertices).toBeGreaterThan(0);
         });
 
-        it('executes mesh_reshape_via_prompt with parametric synthesis', async () => {
-            const res = await registry.dispatch('mesh_reshape_via_prompt', {
-                prompt: 'taper the top of the cylinder by 35% and twist 20 degrees',
-                inputGlbPath: existingGlbPath,
-                outputGlbPath: path.join(testDir, 'mesh_reshaped.glb')
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).success).toBe(true);
-            expect((res.resultPayload as any).telemetry.outputVertices).toBeGreaterThan(0);
-        });
-
-        it('executes tile_restructure_via_prompt for architectural terraforming', async () => {
-            const res = await registry.dispatch('tile_restructure_via_prompt', {
-                prompt: 'flatten ground foundation and preserve upper architectural crown',
-                inputGlbPath: existingGlbPath,
-                outputGlbPath: path.join(testDir, 'tile_restructured.glb')
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).success).toBe(true);
-        });
-
-        it('executes tile_apply_terraforming_and_primitives with foundational leveling', async () => {
-            const res = await registry.dispatch('tile_apply_terraforming_and_primitives', {
-                terraforming: [
-                    { type: 'plateau_level', targetElevation: 0.0, radius: 25.0 }
-                ],
-                inputGlbPath: existingGlbPath,
-                outputGlbPath: path.join(testDir, 'tile_terraformed.glb')
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).success).toBe(true);
+        it('does not offer prompt-parsed reshaping or the tile restructure taxonomy', () => {
+            for (const removed of ['mesh_reshape_via_prompt', 'tile_restructure_via_prompt', 'tile_apply_terraforming_and_primitives']) {
+                expect(registry.get(removed), removed).toBeUndefined();
+            }
         });
 
         it('fails a mesh tool that names no mesh instead of deforming a benchmark cylinder', async () => {
@@ -640,16 +613,8 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect(registry.get('tapir_track_video_points')).toBeUndefined();
         });
 
-        it('executes build_4dgs_from_video with ARAP local rigidity graph', async () => {
-            const res = await registry.dispatch('build_4dgs_from_video', {
-                canonicalSubject: [
-                    { position: [0, 0, 0], colorRgb: [1, 0, 0], scale: [0.01, 0.01, 0.01], opacity: 1.0 }
-                ],
-                numFrames: 12,
-                trackingBackend: 'mock'
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).telemetry).toBeDefined();
+        it('does not offer build_4dgs_from_video (it took no video and deformed against self-made grey frames)', () => {
+            expect(registry.get('build_4dgs_from_video')).toBeUndefined();
         });
 
         it.skipIf(!avatar2785536.ok)(withReason('executes avatar_4dgs_list and avatar_4dgs_get', avatar2785536), async () => {

@@ -34,214 +34,15 @@ using namespace scratchbox::utdra;
 using namespace scratchbox::io;
 
 // ============================================================================
-// Benchmark Mesh Generators (for zero-dependency testing & self-validation)
-// ============================================================================
-
-static ScratchboxMesh createSkyscraperBenchmark(float width = 40.0f, float depth = 60.0f, float height = 180.0f) {
-    ScratchboxMesh mesh("SkyscraperBenchmark");
-    float hw = width * 0.5f;
-    float hd = depth * 0.5f;
-
-    auto addQuad = [&](Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 norm, Vec4 col) {
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.addVertex(Vertex(p0, norm, Vec2(0, 0), col));
-        mesh.addVertex(Vertex(p1, norm, Vec2(1, 0), col));
-        mesh.addVertex(Vertex(p2, norm, Vec2(1, 1), col));
-        mesh.addVertex(Vertex(p3, norm, Vec2(0, 1), col));
-        mesh.indices.push_back(base);
-        mesh.indices.push_back(base + 1);
-        mesh.indices.push_back(base + 2);
-        mesh.indices.push_back(base);
-        mesh.indices.push_back(base + 2);
-        mesh.indices.push_back(base + 3);
-    };
-
-    // Tier 1: Base podium (0 to 0.3 * height)
-    float h1 = height * 0.3f;
-    Vec4 colLimestone(0.82f, 0.80f, 0.76f, 1.0f);
-    addQuad(Vec3(-hw, 0, -hd), Vec3(hw, 0, -hd), Vec3(hw, h1, -hd), Vec3(-hw, h1, -hd), Vec3(0, 0, -1), colLimestone);
-    addQuad(Vec3(hw, 0, hd), Vec3(-hw, 0, hd), Vec3(-hw, h1, hd), Vec3(hw, h1, hd), Vec3(0, 0, 1), colLimestone);
-    addQuad(Vec3(-hw, 0, hd), Vec3(-hw, 0, -hd), Vec3(-hw, h1, -hd), Vec3(-hw, h1, hd), Vec3(-1, 0, 0), colLimestone);
-    addQuad(Vec3(hw, 0, -hd), Vec3(hw, 0, hd), Vec3(hw, h1, hd), Vec3(hw, h1, -hd), Vec3(1, 0, 0), colLimestone);
-    addQuad(Vec3(-hw, h1, -hd), Vec3(hw, h1, -hd), Vec3(hw, h1, hd), Vec3(-hw, h1, hd), Vec3(0, 1, 0), Vec4(0.3f, 0.3f, 0.35f, 1.0f));
-
-    // Tier 2: Main tower shaft (h1 to 0.8 * height)
-    float hw2 = hw * 0.75f;
-    float hd2 = hd * 0.75f;
-    float h2 = height * 0.8f;
-    addQuad(Vec3(-hw2, h1, -hd2), Vec3(hw2, h1, -hd2), Vec3(hw2, h2, -hd2), Vec3(-hw2, h2, -hd2), Vec3(0, 0, -1), colLimestone);
-    addQuad(Vec3(hw2, h1, hd2), Vec3(-hw2, h1, hd2), Vec3(-hw2, h2, hd2), Vec3(hw2, h2, hd2), Vec3(0, 0, 1), colLimestone);
-    addQuad(Vec3(-hw2, h1, hd2), Vec3(-hw2, h1, -hd2), Vec3(-hw2, h2, -hd2), Vec3(-hw2, h2, hd2), Vec3(-1, 0, 0), colLimestone);
-    addQuad(Vec3(hw2, h1, -hd2), Vec3(hw2, h1, hd2), Vec3(hw2, h2, hd2), Vec3(hw2, h2, -hd2), Vec3(1, 0, 0), colLimestone);
-    addQuad(Vec3(-hw2, h2, -hd2), Vec3(hw2, h2, -hd2), Vec3(hw2, h2, hd2), Vec3(-hw2, h2, hd2), Vec3(0, 1, 0), Vec4(0.3f, 0.3f, 0.35f, 1.0f));
-
-    // Tier 3: Upper tower shaft (h2 to height)
-    float hw3 = hw * 0.5f;
-    float hd3 = hd * 0.5f;
-    addQuad(Vec3(-hw3, h2, -hd3), Vec3(hw3, h2, -hd3), Vec3(hw3, height, -hd3), Vec3(-hw3, height, -hd3), Vec3(0, 0, -1), colLimestone);
-    addQuad(Vec3(hw3, h2, hd3), Vec3(-hw3, h2, hd3), Vec3(-hw3, height, hd3), Vec3(hw3, height, hd3), Vec3(0, 0, 1), colLimestone);
-    addQuad(Vec3(-hw3, h2, hd3), Vec3(-hw3, h2, -hd3), Vec3(-hw3, height, -hd3), Vec3(-hw3, height, hd3), Vec3(-1, 0, 0), colLimestone);
-    addQuad(Vec3(hw3, h2, -hd3), Vec3(hw3, h2, hd3), Vec3(hw3, height, hd3), Vec3(hw3, height, -hd3), Vec3(1, 0, 0), colLimestone);
-    addQuad(Vec3(-hw3, height, -hd3), Vec3(hw3, height, -hd3), Vec3(hw3, height, hd3), Vec3(-hw3, height, hd3), Vec3(0, 1, 0), Vec4(0.25f, 0.25f, 0.28f, 1.0f));
-
-    mesh.recomputeNormals();
-    mesh.recomputeBounds();
-    return mesh;
-}
-
-static ScratchboxMesh createSuburbanBenchmark(float width = 12.0f, float depth = 16.0f, float wallHeight = 4.5f, float ridgeHeight = 7.5f) {
-    ScratchboxMesh mesh("SuburbanHouseBenchmark");
-    float hw = width * 0.5f;
-    float hd = depth * 0.5f;
-
-    auto addQuad = [&](Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 norm, Vec4 col) {
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.addVertex(Vertex(p0, norm, Vec2(0, 0), col));
-        mesh.addVertex(Vertex(p1, norm, Vec2(1, 0), col));
-        mesh.addVertex(Vertex(p2, norm, Vec2(1, 1), col));
-        mesh.addVertex(Vertex(p3, norm, Vec2(0, 1), col));
-        mesh.indices.push_back(base);
-        mesh.indices.push_back(base + 1);
-        mesh.indices.push_back(base + 2);
-        mesh.indices.push_back(base);
-        mesh.indices.push_back(base + 2);
-        mesh.indices.push_back(base + 3);
-    };
-
-    Vec4 sidingCol(0.88f, 0.85f, 0.80f, 1.0f);
-    Vec4 roofCol(0.28f, 0.29f, 0.32f, 1.0f);
-    Vec4 lawnCol(0.22f, 0.55f, 0.18f, 1.0f);
-
-    addQuad(Vec3(-hw * 1.8f, 0, -hd * 1.8f), Vec3(hw * 1.8f, 0, -hd * 1.8f),
-            Vec3(hw * 1.8f, 0, hd * 1.8f), Vec3(-hw * 1.8f, 0, hd * 1.8f), Vec3(0, 1, 0), lawnCol);
-
-    addQuad(Vec3(-hw, 0, -hd), Vec3(hw, 0, -hd), Vec3(hw, wallHeight, -hd), Vec3(-hw, wallHeight, -hd), Vec3(0, 0, -1), sidingCol);
-    addQuad(Vec3(hw, 0, hd), Vec3(-hw, 0, hd), Vec3(-hw, wallHeight, hd), Vec3(hw, wallHeight, hd), Vec3(0, 0, 1), sidingCol);
-    addQuad(Vec3(-hw, 0, hd), Vec3(-hw, 0, -hd), Vec3(-hw, wallHeight, -hd), Vec3(-hw, wallHeight, hd), Vec3(-1, 0, 0), sidingCol);
-    addQuad(Vec3(hw, 0, -hd), Vec3(hw, 0, hd), Vec3(hw, wallHeight, hd), Vec3(hw, wallHeight, -hd), Vec3(1, 0, 0), sidingCol);
-
-    auto addTri = [&](Vec3 p0, Vec3 p1, Vec3 p2, Vec3 norm, Vec4 col) {
-        uint32_t b = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.addVertex(Vertex(p0, norm, Vec2(0, 0), col));
-        mesh.addVertex(Vertex(p1, norm, Vec2(1, 0), col));
-        mesh.addVertex(Vertex(p2, norm, Vec2(0.5f, 1.0f), col));
-        mesh.indices.push_back(b); mesh.indices.push_back(b + 1); mesh.indices.push_back(b + 2);
-    };
-
-    addTri(Vec3(-hw, wallHeight, -hd), Vec3(hw, wallHeight, -hd), Vec3(0, ridgeHeight, -hd), Vec3(0, 0, -1), sidingCol);
-    addTri(Vec3(hw, wallHeight, hd), Vec3(-hw, wallHeight, hd), Vec3(0, ridgeHeight, hd), Vec3(0, 0, 1), sidingCol);
-
-    Vec3 nSlope1 = Vec3(0, hw, ridgeHeight - wallHeight).cross(Vec3(1, 0, 0)).normalized();
-    Vec3 nSlope2 = Vec3(0, -hw, ridgeHeight - wallHeight).cross(Vec3(-1, 0, 0)).normalized();
-
-    addQuad(Vec3(-hw - 0.4f, wallHeight, -hd - 0.4f), Vec3(0, ridgeHeight + 0.2f, -hd - 0.4f),
-            Vec3(0, ridgeHeight + 0.2f, hd + 0.4f), Vec3(-hw - 0.4f, wallHeight, hd + 0.4f), nSlope1, roofCol);
-    addQuad(Vec3(0, ridgeHeight + 0.2f, -hd - 0.4f), Vec3(hw + 0.4f, wallHeight, -hd - 0.4f),
-            Vec3(hw + 0.4f, wallHeight, hd + 0.4f), Vec3(0, ridgeHeight + 0.2f, hd + 0.4f), nSlope2, roofCol);
-
-    mesh.recomputeNormals();
-    mesh.recomputeBounds();
-    return mesh;
-}
-
-static ScratchboxMesh createBridgeBenchmark() {
-    ScratchboxMesh mesh("BridgeBenchmark");
-    // Horizontal deck at y = 12.0m
-    uint32_t b0 = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(Vec3(-10, 12, -2), Vec3(0, 1, 0), Vec2(0, 0), Vec4(0.35f, 0.35f, 0.38f, 1.0f)));
-    mesh.addVertex(Vertex(Vec3( 10, 12, -2), Vec3(0, 1, 0), Vec2(1, 0), Vec4(0.35f, 0.35f, 0.38f, 1.0f)));
-    mesh.addVertex(Vertex(Vec3( 10, 12,  2), Vec3(0, 1, 0), Vec2(1, 1), Vec4(0.35f, 0.35f, 0.38f, 1.0f)));
-    mesh.indices.push_back(b0); mesh.indices.push_back(b0 + 1); mesh.indices.push_back(b0 + 2);
-
-    // False photogrammetric vertical curtain wall from y = 0 to y = 12m
-    uint32_t b1 = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(Vec3(-10, 0, 0), Vec3(0, 0, 1), Vec2(0, 0), Vec4(0.6f, 0.4f, 0.3f, 1.0f)));
-    mesh.addVertex(Vertex(Vec3( 10, 0, 0), Vec3(0, 0, 1), Vec2(1, 0), Vec4(0.6f, 0.4f, 0.3f, 1.0f)));
-    mesh.addVertex(Vertex(Vec3( 10, 12, 0), Vec3(0, 0, 1), Vec2(1, 1), Vec4(0.6f, 0.4f, 0.3f, 1.0f)));
-    mesh.indices.push_back(b1); mesh.indices.push_back(b1 + 1); mesh.indices.push_back(b1 + 2);
-
-    mesh.recomputeBounds();
-    return mesh;
-}
-
-static ScratchboxMesh createAlpineBenchmark(float baseSpan = 150.0f, float height = 220.0f) {
-    ScratchboxMesh mesh("AlpineCliffBenchmark");
-    int resX = 8, resZ = 8;
-    for (int z = 0; z <= resZ; ++z) {
-        float fz = static_cast<float>(z) / static_cast<float>(resZ);
-        float pz = (fz - 0.5f) * baseSpan;
-        for (int x = 0; x <= resX; ++x) {
-            float fx = static_cast<float>(x) / static_cast<float>(resX);
-            float px = (fx - 0.5f) * baseSpan;
-            float py = 0.0f;
-            if (fz > 0.4f) {
-                float cliffT = (fz - 0.4f) / 0.6f;
-                py = std::pow(cliffT, 1.8f) * height;
-            }
-            Vec3 norm(0, 1, 0);
-            if (fz > 0.4f) norm = Vec3(0, 0.45f, -0.89f).normalized();
-            mesh.addVertex(Vertex(Vec3(px, py, pz), norm, Vec2(fx, fz), Vec4(0.5f, 0.5f, 0.5f, 1.0f)));
-        }
-    }
-    for (int z = 0; z < resZ; ++z) {
-        for (int x = 0; x < resX; ++x) {
-            uint32_t i0 = z * (resX + 1) + x;
-            uint32_t i1 = i0 + 1;
-            uint32_t i2 = (z + 1) * (resX + 1) + x;
-            uint32_t i3 = i2 + 1;
-            mesh.indices.push_back(i0); mesh.indices.push_back(i2); mesh.indices.push_back(i1);
-            mesh.indices.push_back(i1); mesh.indices.push_back(i2); mesh.indices.push_back(i3);
-        }
-    }
-    mesh.recomputeNormals();
-    mesh.recomputeBounds();
-    return mesh;
-}
-
-static ScratchboxMesh createForestBenchmark() {
-    ScratchboxMesh mesh("ForestBenchmark");
-    for (int cluster = 0; cluster < 6; ++cluster) {
-        float cx = (cluster % 3 - 1) * 12.0f;
-        float cz = (cluster / 3 - 0.5f) * 12.0f;
-        float trunkH = 10.0f + (cluster % 2) * 3.0f;
-
-        uint32_t tBase = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.addVertex(Vertex(Vec3(cx - 0.4f, 0, cz), Vec3(1, 0, 0), Vec2(0, 0), Vec4(0.38f, 0.25f, 0.15f, 1.0f)));
-        mesh.addVertex(Vertex(Vec3(cx + 0.4f, 0, cz), Vec3(1, 0, 0), Vec2(1, 0), Vec4(0.38f, 0.25f, 0.15f, 1.0f)));
-        mesh.addVertex(Vertex(Vec3(cx + 0.3f, trunkH, cz), Vec3(1, 0, 0), Vec2(1, 1), Vec4(0.38f, 0.25f, 0.15f, 1.0f)));
-        mesh.addVertex(Vertex(Vec3(cx - 0.3f, trunkH, cz), Vec3(1, 0, 0), Vec2(0, 1), Vec4(0.38f, 0.25f, 0.15f, 1.0f)));
-        mesh.indices.push_back(tBase); mesh.indices.push_back(tBase + 1); mesh.indices.push_back(tBase + 2);
-        mesh.indices.push_back(tBase); mesh.indices.push_back(tBase + 2); mesh.indices.push_back(tBase + 3);
-
-        for (int i = 0; i < 16; ++i) {
-            float phi = (i / 16.0f) * TWO_PI;
-            float r = 4.5f + std::sin(phi * 3.0f) * 0.8f;
-            uint32_t fBase = static_cast<uint32_t>(mesh.vertices.size());
-            Vec3 p0(cx, trunkH + 4.0f, cz);
-            Vec3 p1(cx + std::cos(phi) * r, trunkH + 1.0f, cz + std::sin(phi) * r);
-            float nextPhi = ((i + 1) / 16.0f) * TWO_PI;
-            Vec3 p2(cx + std::cos(nextPhi) * r, trunkH + 1.0f, cz + std::sin(nextPhi) * r);
-            Vec4 folCol(0.12f, 0.68f, 0.18f, 1.0f);
-            mesh.addVertex(Vertex(p0, Vec3(0, 1, 0), Vec2(0.5f, 1), folCol));
-            mesh.addVertex(Vertex(p1, (p1 - Vec3(cx, trunkH, cz)).normalized(), Vec2(0, 0), folCol));
-            mesh.addVertex(Vertex(p2, (p2 - Vec3(cx, trunkH, cz)).normalized(), Vec2(1, 0), folCol));
-            mesh.indices.push_back(fBase); mesh.indices.push_back(fBase + 1); mesh.indices.push_back(fBase + 2);
-        }
-    }
-    mesh.recomputeBounds();
-    return mesh;
-}
-
-// ============================================================================
 // CLI Main Entry Point
 // ============================================================================
 
 int main(int argc, char* argv[]) {
     std::string inputPath = "";
-    std::string outputPath = "public/models/utdra_output.glb";
+    std::string outputPath = "";
     std::string mode = "full"; // full | probe | slicer | bridge | terrain
-    std::string benchmark = ""; // urban | suburban | bridge | mountain | forest | slicer | hybrid
-    float sliceY = 5.0f;
+    float sliceY = 0.0f;
+    bool hasSliceY = false;
     float minVoidHeight = 3.5f;
     double anchorLat = 0.0;
     double anchorLon = 0.0;
@@ -256,10 +57,9 @@ int main(int argc, char* argv[]) {
             outputPath = argv[++i];
         } else if (arg == "--mode" && i + 1 < argc) {
             mode = argv[++i];
-        } else if (arg == "--benchmark" && i + 1 < argc) {
-            benchmark = argv[++i];
         } else if (arg == "--sliceY" && i + 1 < argc) {
             sliceY = std::stof(argv[++i]);
+            hasSliceY = true;
         } else if (arg == "--minVoidHeight" && i + 1 < argc) {
             minVoidHeight = std::stof(argv[++i]);
         } else if (arg == "--lat" && i + 1 < argc) {
@@ -270,7 +70,32 @@ int main(int argc, char* argv[]) {
             hasAnchor = true;
         } else if (arg == "--stream") {
             streamStdout = true;
+        } else {
+            std::cerr << "Error: unknown argument " << arg << "\n";
+            return 2;
         }
+    }
+
+    // The tile to process is required: no stand-in mesh is ever built in its place.
+    if (inputPath.empty()) {
+        std::cerr << "Error: --input <tile.glb> is required; the pipeline processes a given tile and builds none of its own\n";
+        return 2;
+    }
+    if (!fs::exists(inputPath)) {
+        std::cerr << "Error: --input " << inputPath << " does not exist\n";
+        return 2;
+    }
+    if (outputPath.empty() && !streamStdout) {
+        std::cerr << "Error: --output <path.glb> (or --stream) is required\n";
+        return 2;
+    }
+    if (mode != "full" && mode != "probe" && mode != "slicer" && mode != "bridge" && mode != "terrain") {
+        std::cerr << "Error: unknown --mode " << mode << " (full, probe, slicer, bridge or terrain)\n";
+        return 2;
+    }
+    if (mode == "slicer" && !hasSliceY) {
+        std::cerr << "Error: --mode slicer needs --sliceY <elevation>\n";
+        return 2;
     }
 
     if (!streamStdout) {
@@ -281,23 +106,12 @@ int main(int argc, char* argv[]) {
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
-    // 1. Resolve or Generate Input Mesh
-    ScratchboxMesh inputMesh;
-    if (!inputPath.empty() && fs::exists(inputPath)) {
-        if (!streamStdout) std::cout << "  [Input] Ingesting GLB: " << inputPath << "\n";
-        inputMesh = GlbReader::readGlb(inputPath);
-    } else if (!benchmark.empty()) {
-        if (!streamStdout) std::cout << "  [Input] Synthesizing Benchmark: " << benchmark << "\n";
-        if (benchmark == "urban") inputMesh = createSkyscraperBenchmark();
-        else if (benchmark == "suburban") inputMesh = createSuburbanBenchmark();
-        else if (benchmark == "bridge") inputMesh = createBridgeBenchmark();
-        else if (benchmark == "mountain") inputMesh = createAlpineBenchmark();
-        else if (benchmark == "forest") inputMesh = createForestBenchmark();
-        else if (benchmark == "hybrid") inputMesh = createSkyscraperBenchmark(50.0f, 70.0f, 220.0f);
-        else inputMesh = createSkyscraperBenchmark();
-    } else {
-        // Default to Skyscraper benchmark
-        inputMesh = createSkyscraperBenchmark();
+    // 1. Read the input tile
+    if (!streamStdout) std::cout << "  [Input] Ingesting GLB: " << inputPath << "\n";
+    ScratchboxMesh inputMesh = GlbReader::readGlb(inputPath);
+    if (inputMesh.vertices.empty() || inputMesh.indices.size() < 3) {
+        std::cerr << "Error: --input " << inputPath << " has no triangles\n";
+        return 2;
     }
 
     GeodeticCoord anchor;
@@ -366,7 +180,9 @@ int main(int argc, char* argv[]) {
             for (uint32_t idx : decomposed.conformedTerrainSurface.indices) outputMesh.indices.push_back(baseIdx + idx);
         }
         if (outputMesh.vertices.empty()) {
-            outputMesh = inputMesh;
+            // Nothing came out of the decomposition: report it instead of passing the input off as the result.
+            std::cerr << "Error: the full decomposition produced no geometry for " << inputPath << "\n";
+            return 1;
         }
     }
 
@@ -382,13 +198,15 @@ int main(int argc, char* argv[]) {
     if (streamStdout) {
         std::cout.write(reinterpret_cast<const char*>(glbData.data()), glbData.size());
     } else {
-        fs::create_directories(fs::path(outputPath).parent_path());
+        if (fs::path(outputPath).has_parent_path()) fs::create_directories(fs::path(outputPath).parent_path());
         std::ofstream outFile(outputPath, std::ios::binary);
-        if (outFile.is_open()) {
-            outFile.write(reinterpret_cast<const char*>(glbData.data()), glbData.size());
-            outFile.close();
-            std::cout << "  [Output] Wrote " << glbData.size() << " bytes to " << outputPath << "\n";
+        if (!outFile.is_open()) {
+            std::cerr << "Error: failed to open output file " << outputPath << "\n";
+            return 1;
         }
+        outFile.write(reinterpret_cast<const char*>(glbData.data()), glbData.size());
+        outFile.close();
+        std::cout << "  [Output] Wrote " << glbData.size() << " bytes to " << outputPath << "\n";
     }
 
     // 4. Emit Machine-Readable Telemetry Tag

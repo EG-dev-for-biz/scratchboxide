@@ -110,7 +110,7 @@ Scratchbox provides a high-performance C++20 geometry core bound directly to Pyt
   - Classifies across 9 macro-geographic domains, excises curtain walls beneath bridges, rectifies building vertical shafts while preserving historic cornices/crowns, and executes non-destructive elevation slicing.
 
 ### Parametric Mesh Reshaping & Dynamic Avatars
-- **Native Mesh Reshaping (`mesh_reshape_via_prompt` / `NativeMeshReshaperService`)**: Applies Bernstein FFD tensor lattices, taper, bend, twist, bulge, squash, and shear with zero external dependencies.
+- **Native Mesh Reshaping (`mesh_apply_deformers` / `NativeMeshReshaperService`)**: Applies explicit Bernstein FFD lattices, taper, bend, twist, bulge and shear to a given GLB, with values relative to the mesh's measured bounds.
 - **Local SF3D (`local-sf3d-service.ts`)**: Generates small organic forms, rocks, fruit, and biomorphic props in $< 500$ms on local GPU/MPS with flat ground contact planes.
 - **Dynamic 4DGS Humanoids (`scratchbox_4dgs_humanoid.hpp`, `Dynamic4DGaussianSplatService`)**: Controls 22-joint SB-Human canonical kinematic skeletons with Linear Blend Skinning (LBS), ground-contact IK altitude clamping, and SPZ/PLY streaming.
 

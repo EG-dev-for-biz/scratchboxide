@@ -66,7 +66,7 @@ function analyzeVisualPrompt(prompt) {
     nativeTools.push('execute_3d_python_script (import scratchbox as sb)');
     nativeTools.push('google_3d_tiles_get_clay / google_3d_tiles_get_full_texture');
     nativeTools.push('stage_3d_vector_world (roads, curbs, parcels, traffic)');
-    nativeTools.push('mesh_reshape_via_prompt (Bernstein FFD, non-linear deformers)');
+    nativeTools.push('mesh_apply_deformers (explicit Bernstein FFD and non-linear deformers on a given GLB)');
     nativeHeaders.push('#include "scratchbox_engine.hpp"');
     nativeHeaders.push('#include "scratchbox_math.hpp"');
     nativeHeaders.push('#include "scratchbox_archie.hpp"');

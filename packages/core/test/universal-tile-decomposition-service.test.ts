@@ -7,15 +7,37 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import {
     UniversalTileDecompositionService,
     UtdraService,
     UldraService,
     NativeCppCompilerService
 } from '../src/node';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
+import {
+    alpineCliffMesh,
+    bridgeWithCurtainMesh,
+    forestMesh,
+    skyscraperMesh,
+    suburbanHouseMesh,
+    writeFixtureGlb
+} from './helpers/mesh-glb-fixtures';
+
+// Every run takes a tile GLB; these synthetic tiles are written by the test (the pipeline builds none of its own).
+const TILES = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-utdra-tiles-'));
+const tile = {
+    urban: writeFixtureGlb(path.join(TILES, 'urban.glb'), skyscraperMesh()),
+    suburban: writeFixtureGlb(path.join(TILES, 'suburban.glb'), suburbanHouseMesh()),
+    mountain: writeFixtureGlb(path.join(TILES, 'mountain.glb'), alpineCliffMesh()),
+    forest: writeFixtureGlb(path.join(TILES, 'forest.glb'), forestMesh()),
+    bridge: writeFixtureGlb(path.join(TILES, 'bridge.glb'), bridgeWithCurtainMesh())
+};
 
 describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA) Codebase API', () => {
     const service = new UniversalTileDecompositionService();
@@ -41,12 +63,25 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
     it('2. should compile and ensure native runner binary exists', async () => {
         const binPath = await service.ensureBinary();
         expect(fs.existsSync(binPath)).toBe(true);
-    });
+    }, 600000);
+
+    it('2b. every run needs a tile: the service and the native runner refuse to build a stand-in mesh', async () => {
+        await expect(service.decomposeTile({ mode: 'probe' } as any)).rejects.toBeInstanceOf(MissingInputError);
+        await expect(service.decomposeTile({ inputGlbPath: path.join(TILES, 'missing.glb'), mode: 'probe' })).rejects.toThrow('does not exist');
+        await expect(service.decomposeTile({ inputGlbPath: tile.urban, mode: 'slicer' })).rejects.toThrow('sliceElevationCutoff');
+        const bin = await service.ensureBinary();
+        const run = await promisify(execFile)(bin, ['--mode', 'probe', '--benchmark', 'urban', '--output', path.join(TILES, 'x.glb')]).catch(e => e);
+        expect(run.code).toBe(2);
+        const noInput = await promisify(execFile)(bin, ['--mode', 'probe', '--output', path.join(TILES, 'x.glb')]).catch(e => e);
+        expect(noInput.code).toBe(2);
+        expect(String(noInput.stderr)).toContain('--input <tile.glb> is required');
+        expect(fs.existsSync(path.join(TILES, 'x.glb'))).toBe(false);
+    }, 600000);
 
     it('3. should probe and classify macro-domains across Urban, Suburban, Mountain and Forest', async () => {
         // A. Urban High-Rise Benchmark
         const urbanResult = await service.decomposeTile({
-            benchmark: 'urban',
+            inputGlbPath: tile.urban,
             mode: 'probe'
         });
         expect(urbanResult.success).toBe(true);
@@ -57,7 +92,7 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
 
         // B. Suburban Residential Benchmark
         const suburbanResult = await service.decomposeTile({
-            benchmark: 'suburban',
+            inputGlbPath: tile.suburban,
             mode: 'probe'
         });
         expect(suburbanResult.success).toBe(true);
@@ -67,7 +102,7 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
 
         // C. Mountain Alpine Benchmark
         const mountainResult = await service.decomposeTile({
-            benchmark: 'mountain',
+            inputGlbPath: tile.mountain,
             mode: 'probe'
         });
         expect(mountainResult.success).toBe(true);
@@ -77,7 +112,7 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
 
         // D. Forest Woodland Canopy Benchmark
         const forestResult = await service.decomposeTile({
-            benchmark: 'forest',
+            inputGlbPath: tile.forest,
             mode: 'probe'
         });
         expect(forestResult.success).toBe(true);
@@ -88,7 +123,7 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
 
     it('4. should execute non-destructive Sutherland-Hodgman elevation slicer', async () => {
         const result = await service.decomposeTile({
-            benchmark: 'urban',
+            inputGlbPath: tile.urban,
             mode: 'slicer',
             sliceElevationCutoff: 50.0
         });
@@ -108,7 +143,7 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
 
     it('5. should carve false underpass curtain walls beneath bridges and viaducts', async () => {
         const result = await service.decomposeTile({
-            benchmark: 'bridge',
+            inputGlbPath: tile.bridge,
             mode: 'bridge',
             minVoidHeightMeters: 3.5
         });
@@ -126,7 +161,7 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
 
     it('6. should run end-to-end full universal decomposition pipeline with GLB emission', async () => {
         const result = await service.decomposeTile({
-            benchmark: 'urban',
+            inputGlbPath: tile.urban,
             mode: 'full'
         });
 
@@ -154,7 +189,7 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
         expect(uldraInstance).toBeInstanceOf(UniversalTileDecompositionService);
 
         const uldraResult = await uldraInstance.decomposeTile({
-            benchmark: 'suburban',
+            inputGlbPath: tile.suburban,
             mode: 'probe'
         });
         expect(uldraResult.telemetry.dominantDomain).toBe('SuburbanResidential');
@@ -164,3 +199,5 @@ describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
         }
     }, 45000);
 });
+
+afterAll(() => fs.rmSync(TILES, { recursive: true, force: true }));

@@ -17,7 +17,7 @@ import {
     buildToolDeclarations
 } from '../src/node/gemini/tool-registry';
 import type { ToolContext } from '../src/node/gemini/tools/types';
-import { UniversalTileDecompositionService } from '../src/node/3d-engine/universal-tile-decomposition-service';
+import { skyscraperMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
 import { requireAssets, withReason } from './helpers/requirements';
 
 const avatar2785536 = requireAssets(
@@ -103,10 +103,9 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         expect(blockoutRes.exec.status).toBe('completed');
         expect((blockoutRes.resultPayload as any).videoRef).toBe('<VIDEO_REF_0>');
 
-        // Step 2: UTDRA Geometric Classification & Probe. The tools take a tile GLB; this one is the service's
-        // urban benchmark written to disk (the tools themselves never substitute a benchmark).
-        const tileGlbPath = path.join(testDir, 'urban_tile.glb');
-        await new UniversalTileDecompositionService().decomposeTile({ benchmark: 'urban', mode: 'probe', outputGlbPath: tileGlbPath });
+        // Step 2: UTDRA Geometric Classification & Probe. The tools take a tile GLB; this one is a synthetic tower
+        // written by the test (the tools never build a stand-in mesh).
+        const tileGlbPath = writeFixtureGlb(path.join(testDir, 'urban_tile.glb'), skyscraperMesh());
         const probeRes = await registry.dispatch('utdra_probe_tile', {
             inputGlbPath: tileGlbPath
         }, mockContext);
@@ -187,21 +186,10 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         expect(motionRes.exec.status).toBe('completed');
         expect((motionRes.resultPayload as any).prompt).toContain('<FIRST_FRAME><IMAGE_REF_0></FIRST_FRAME>');
 
-        // Step 3: point tracking of a video is not offered as a tool (tapir_track_video_points tracked
-        // self-made synthetic frames), so the journey goes straight to the 4DGS build.
+        // Steps 3-4: neither point tracking nor a 4DGS build is offered as a tool: both took no video and
+        // worked on frames they made themselves.
         expect(registry.get('tapir_track_video_points')).toBeUndefined();
-
-        // Step 4: Build 4DGS with ARAP Rigidity Graph
-        const arapRes = await registry.dispatch('build_4dgs_from_video', {
-            canonicalSubject: [
-                { position: [0, 1.2, 0], colorRgb: [0.8, 0.7, 0.6], scale: [0.015, 0.015, 0.015], opacity: 0.95 },
-                { position: [0.3, 1.0, 0], colorRgb: [0.2, 0.2, 0.2], scale: [0.02, 0.02, 0.02], opacity: 1.0 }
-            ],
-            numFrames: 15,
-            trackingBackend: 'mock'
-        }, mockContext);
-        expect(arapRes.exec.status).toBe('completed');
-        expect((arapRes.resultPayload as any).telemetry).toBeDefined();
+        expect(registry.get('build_4dgs_from_video')).toBeUndefined();
     });
 
     it.skipIf(!avatar2785536.ok)(withReason('Journey 2, step 5: animates the installed Performer avatar and exports deformed splats', avatar2785536), async () => {

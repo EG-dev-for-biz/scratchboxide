@@ -1,176 +1,113 @@
 ---
 name: native-mesh-reshaping
 description: >-
-  Reshape and deform 3D meshes via natural language prompts or explicit parametric operators using the native
-  C++20 Astro 3D engine (scratchbox_shaper.hpp) and NativeMeshReshaperService. Applies non-linear deformers
-  (taper, twist, bend, bulge, squash, shear), Bernstein FFD tensor lattices, sculpt brushes, loop subdivision,
-  and manifold topology healing with zero external dependencies and sub-millisecond execution.
+  Deform a given 3D mesh (.glb) with explicit operations in the native C++20 engine (scratchbox_shaper.hpp)
+  through mesh_apply_deformers / NativeMeshReshaperService: taper, twist, bend, shear, bulge, Bernstein FFD
+  lattices, sculpt brushes, loop subdivision, repair and weathering. Every value is chosen by the agent and is
+  relative to the mesh's measured bounding box; nothing is read from prose or applied by default.
 ---
 
-# Native Prompt-Driven Mesh Reshaping Skill
+# Native Mesh Reshaping Skill
 
-The **Native Prompt-Driven Mesh Reshaping Skill** equips AI agents to translate natural language styling instructions (e.g., *"taper the top by 50%, add a 45 degree twist, bulge the middle, and sculpt fine creases"*) into high-performance C++20 geometric deformation operations executed directly on 3D meshes.
+The agent turns a request such as *"taper the top by half and twist the upper third 45 degrees"* into explicit
+operations itself (the LLM is the domain engine) and runs them on a mesh that exists on disk. There is no prompt
+parser in the engine: an operation without its values, an unknown operation type, a missing mesh or an empty list
+fails with the reason.
 
 ---
 
 ## 1. System Architecture
 
 ```
-[User Prompt or Parametric Ops]
+[Agent: explicit operations, values relative to the mesh bounds]
                  │
                  ▼
-    [Prompt Parser & Schema]
-  (Deform, Taper, Twist, Bend, Bulge,
-   Lattice, Sculpt, Subdivide)
-                 │
+  [mesh_apply_deformers / NativeMeshReshaperService (Node.js)]
+                 │   (rebuilds the binary when its source changed)
                  ▼
-  [NativeMeshReshaperService (Node.js)]
-                 │
-                 ▼
-[Native C++20 Pipeline Runner (Apple Clang)]
- (scripts/run_mesh_reshaping_pipeline.cpp)
+[Native C++20 runner: scripts/run_mesh_reshaping_pipeline.cpp]
+  --input <mesh.glb> (required)  --operationsFile <ops.json> (required)
                  │
    ┌─────────────┼─────────────┬─────────────┐
    ▼             ▼             ▼             ▼
 [Deformer]  [Lattice3D]  [SculptEngine] [Loop Subdiv]
-(Taper,      (Bernstein   (Clay, Crease, (Topology
- Twist, Bend, 3D Tensor   Smooth, Flat,   Cleaner &
- Bulge, Shear) FFD)       Inflate)        Re-normal)
-   └─────────────┼─────────────┴─────────────┘
                  │
                  ▼
-   [Standard Binary glTF 2.0 (.glb) Output]
-   - Magic header: 0x46546C67 ("glTF")
-   - Updated vertex coordinates & normals
-   - Exact execution telemetry (< 1ms execution time)
-                 │
-                 ▼
-   [Mount to Three.js Canvas Stage]
+   [Binary glTF 2.0 (.glb) + [TELEMETRY] line with the measured input bounds]
 ```
 
 ---
 
-## 2. Supported Deformation Operations
+## 2. Operations
 
-All operations conform to the `MeshDeformOperation` contract:
+Positions and sizes are fractions of the mesh's axis-aligned bounding box as it stands before each operation, so an
+operation means the same on a 4 cm prop and a 60 m tower:
 
-| Operation Type | Key Parameters | Description |
+- `range: [start, end]` — fractions of the extent along `axis` (0 = min, 1 = max), `0 <= start < end <= 1`.
+- `center: [u, v, w]` — fractions of the box along X, Y, Z.
+- `radius`, `strength` — fractions of the box diagonal (`strength` is a 0..1 blend for the smooth and flatten brushes).
+
+| Type | Required parameters | Effect |
 | :--- | :--- | :--- |
-| **`taper`** | `factor` (0.0–2.0), `axis` ('x'\|'y'\|'z') | Scales cross-section along the selected axis. Values $< 1.0$ narrow towards the top; $> 1.0$ expand. |
-| **`twist`** | `angle` (degrees), `axis` ('x'\|'y'\|'z') | Progressively rotates vertices about the central axis. |
-| **`bend`** | `angle` (degrees), `axis` ('x'\|'y'\|'z') | Curvatures mesh geometry along a circular arc. |
-| **`bulge`** | `factor` (e.g. 0.4), `axis` ('x'\|'y'\|'z') | Parabolic middle expansion / waist pinching. |
-| **`squash`** | `factor` (e.g. 0.7), `axis` ('x'\|'y'\|'z') | Compresses primary axis while volume-preserving orthogonal axes expand. |
-| **`shear`** | `amount` (e.g. 0.3), `axis` ('x'\|'y'\|'z') | Skews cross-sections relative to axis elevation. |
-| **`sculpt`** | `brush` ('clay'\|'crease'\|'smooth'\|'flatten'\|'inflate'), `strength`, `radius`, `center` | Applies local spherical brush deformation with smooth falloff. |
-| **`lattice`** | `controlPoints` ($3 \times 3 \times 3$), `resolution` | Trivariate Bernstein polynomial Free-Form Deformation (FFD). |
-| **`subdivide`**| `iterations` (1–2) | Loop subdivision smoothing and resolution refinement. |
-| **`weather`** | `roughness`, `erosionAmount` | Procedural weathering, micro-relief, and edge erosion. |
+| `taper` | `axis`, `factor` (> 0), `range`; optional `power` (default 1) | Scales cross-sections about the box's centre line, reaching `factor` at the range end. |
+| `twist` | `axis`, `angleDeg`, `range` | Rotates cross-sections about the box's centre line, `angleDeg` in total across the range. |
+| `bend` | `axis` (length direction), `secondaryAxis`, `angleDeg` | Arc-length preserving bend of the whole extent; the min end stays fixed. |
+| `shear` | `axis`, `secondaryAxis`, `factor` | The far end moves `factor` x the extent along `axis`; the min end stays fixed. |
+| `bulge` | `center`, `radius`, `strength`; optional `power` (default 2) | Radial push (negative `strength` pinches). |
+| `sculpt` | `sculptBrush`, `center`, `radius`, `strength`; `direction` for grab, clay, flatten | Local brush stroke (grab, clay, inflate, flatten, pinch, crease, smooth). |
+| `lattice` | `latticeDimensions` (2..8 each), `latticeOffsets` `[{ i, j, k, offset: [dx, dy, dz] }]` | Bernstein FFD; offsets are fractions of the box size per axis. |
+| `subdivide` | `subdivideIterations` (1..3) | Loop subdivision. |
+| `repair` | — | Removes degenerate faces. |
+| `weathering` | `weatheringIntensity`, `weatheringScale` (noise cycles across the mesh) | Vertex colour variation. |
 
 ---
 
-## 3. Dedicated In-App Agent Tools
+## 3. Agent Tool: `mesh_apply_deformers`
 
-Agents can reshape meshes directly using these two tools via Gemini Function Calling:
-
-### 1. `mesh_reshape_via_prompt`
-Parses a natural language instruction and executes deformation on input GLB mesh or benchmark geometry:
-```json
-{
-  "name": "mesh_reshape_via_prompt",
-  "args": {
-    "prompt": "Taper the top by 50% and twist 60 degrees around the Y axis, then bulge the waist",
-    "inputGlbPath": "public/models/base_sculpture.glb",
-    "outputGlbPath": "public/models/base_sculpture_reshaped.glb"
-  }
-}
-```
-
-### 2. `mesh_apply_deformers`
-Applies an explicit array of structured deformation operations:
 ```json
 {
   "name": "mesh_apply_deformers",
   "args": {
-    "benchmark": "cylinder",
+    "inputGlbPath": "public/models/tower.glb",
     "operations": [
-      { "type": "taper", "factor": 0.4, "axis": "y" },
-      { "type": "twist", "angle": 45.0, "axis": "y" },
-      { "type": "bulge", "factor": 0.3, "axis": "y" }
+      { "type": "taper", "axis": "Y", "factor": 0.5, "range": [0, 1] },
+      { "type": "twist", "axis": "Y", "angleDeg": 45, "range": [0.66, 1] }
     ],
-    "outputGlbPath": "public/models/twisted_cylinder.glb"
+    "outputGlbPath": "public/models/tower_twisted.glb"
   }
 }
 ```
 
-### 3. `tile_restructure_via_prompt`
-Restructures, terraforms, and grafts architectural primitives onto real-world 3D tiles or benchmark districts from a natural language prompt:
-```json
-{
-  "name": "tile_restructure_via_prompt",
-  "args": {
-    "prompt": "Terrace the hillside into 3 stepped tiers and graft 4 obelisks at the perimeter",
-    "inputGlbPath": "public/models/hillside.glb",
-    "materialMode": "studio_clay",
-    "clayPreset": "SlateGrey"
-  }
-}
-```
-
-### 4. `tile_apply_terraforming_and_primitives`
-Applies explicit parametric terraforming (terracing, plateau leveling, crater basins, moats) and grafts architectural primitives (colonnades, obelisks, domes, pylons) directly into the 3D tile mesh.
+The summary reports the measured input bounds the operations were read against. There is no
+`mesh_reshape_via_prompt`, and the tile restructure tools (closed style and primitive taxonomy, keyword prompt parser)
+are removed; for new geometry, build it procedurally instead.
 
 ---
 
-## 4. TypeScript Codebase APIs
-
-In Node.js services, background tasks, or server routes, developers can use either the standalone functional API or `NativeMeshReshaperService` (aliased as `MeshReshapingService`):
+## 4. TypeScript API
 
 ```typescript
-import {
-  reshapeMesh,
-  parsePromptToMeshOperations,
-  NativeMeshReshaperService,
-  MeshReshapingService
-} from '@scratchbox/core'; // also available from '@scratchbox/core/node'
+import { reshapeMesh, NativeMeshReshaperService } from '@scratchbox/core/node';
 
-// Option A: Standalone functional API
 const result = await reshapeMesh({
-  prompt: 'Taper the top to a spire and twist 90 degrees',
-  inputGlbPath: 'public/models/tower.glb',
-  outputGlbPath: 'public/models/tower_twisted.glb'
-});
-
-// Option B: Parse prompt into inspectable AST before execution
-const operations = parsePromptToMeshOperations('Bulge the center by 0.4 and twist 30 deg');
-const parametricResult = await reshapeMesh({
   inputGlbPath: 'public/models/vase.glb',
-  operations
+  operations: [{ type: 'bulge', center: [0.5, 0.5, 0.5], radius: 0.3, strength: 0.05 }]
 });
-
-// Option C: Class facade / instance
-const service = NativeMeshReshaperService.getDefault();
-const classResult = await service.reshapeMesh({ benchmark: 'cylinder', prompt: 'taper top' });
-
-console.log(result.telemetry);
-// {
-//   executionTimeMs: 0.11,
-//   inputVertexCount: 1024,
-//   outputVertexCount: 1024,
-//   operationsApplied: 2,
-//   ...
-// }
+console.log(result.telemetry.inputBoundsMin, result.telemetry.inputBoundsMax, result.telemetry.outputVertices);
 ```
+
+`reshapeMesh` throws `MissingInputError` for a missing mesh, an empty list or an invalid operation, and
+`GeneratorFailedError` when the native run fails or reports no telemetry or no output.
 
 ---
 
 ## 5. Canvas Direct-Dispatch Operator
 
-In the Three.js viewport / browser client, trigger interactive deformations in-memory with zero network overhead:
+`sb_reshape_mesh` deforms a viewport mesh in memory along its vertical extent, with explicit operations only:
 
 ```typescript
 operatorEngine.dispatch('sb_reshape_mesh', {
   objectId: 'mesh-123',
-  prompt: 'Taper top and twist 45 degrees'
+  operations: [{ type: 'taper', factor: 0.5 }, { type: 'twist', angle: 45 }]
 });
 ```

@@ -592,39 +592,34 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_reshape_mesh',
         category: 'mesh_edit',
-        description: 'Applies prompt-driven or parametric deformation operations (taper, twist, bend, bulge, sculpt, lattice) directly to mesh geometry.',
+        description: 'Applies explicit deformation operations (taper factor, twist angle, bend angle, bulge factor) along the mesh\'s vertical (Y) extent in the viewport. Each operation gives its own values; nothing is read from prose and nothing is applied by default.',
         execute: (ctx, params: {
             objectId: string;
             prompt?: string;
             operations?: Array<{
-                type: 'taper' | 'twist' | 'bend' | 'bulge' | 'squash' | 'shear' | 'sculpt' | 'subdivide' | 'weather';
+                type: 'taper' | 'twist' | 'bend' | 'bulge' | (string & {});
                 factor?: number;
                 angle?: number;
-                axis?: 'x' | 'y' | 'z';
-                amount?: number;
-                radius?: number;
-                strength?: number;
-                brush?: string;
-                iterations?: number;
                 [key: string]: any;
             }>;
-            strength?: number;
         }) => {
             const found = ctx.findObject(params.objectId);
             if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
 
-            const ops = params.operations ? [...params.operations] : [];
-            // If prompt is provided and no explicit operations, parse operations from prompt keywords
-            if (ops.length === 0 && params.prompt) {
-                const lower = params.prompt.toLowerCase();
-                if (/taper/i.test(lower)) ops.push({ type: 'taper', factor: 0.5, axis: 'y' });
-                if (/twist/i.test(lower)) ops.push({ type: 'twist', angle: 45, axis: 'y' });
-                if (/bend/i.test(lower)) ops.push({ type: 'bend', angle: 30, axis: 'x' });
-                if (/bulge|inflate/i.test(lower)) ops.push({ type: 'bulge', factor: 0.4, axis: 'y' });
-                if (/squash/i.test(lower)) ops.push({ type: 'squash', factor: 0.6, axis: 'y' });
-                if (/shear/i.test(lower)) ops.push({ type: 'shear', amount: 0.3, axis: 'x' });
-                if (/sculpt|crease|clay|smooth/i.test(lower)) ops.push({ type: 'sculpt', brush: 'clay', strength: 0.5, radius: 0.5 });
-                if (/subdivide|smooth\s*mesh/i.test(lower)) ops.push({ type: 'subdivide', iterations: 1 });
+            // The operations are the caller's: a prompt is kept as a note but never turned into stock magnitudes.
+            const ops = Array.isArray(params.operations) ? [...params.operations] : [];
+            if (ops.length === 0) {
+                throw new Error('sb_reshape_mesh needs operations: give each deformation with its own values (taper factor, twist angle, bend angle, bulge factor).');
+            }
+            const required: Record<string, 'factor' | 'angle'> = { taper: 'factor', twist: 'angle', bend: 'angle', bulge: 'factor' };
+            for (const op of ops) {
+                const key = required[op.type];
+                if (!key) throw new Error(`sb_reshape_mesh cannot apply "${op.type}" in the viewport (taper, twist, bend, bulge); use the native mesh_apply_deformers tool for others.`);
+                if (typeof op[key] !== 'number' || !Number.isFinite(op[key])) throw new Error(`sb_reshape_mesh: ${op.type} needs a number ${key}.`);
+            }
+            const geometry = found.threeObject && (found.threeObject as THREE.Mesh).geometry;
+            if (!geometry || !(geometry.attributes.position as THREE.BufferAttribute | undefined)) {
+                throw new Error(`sb_reshape_mesh: object '${params.objectId}' has no mesh geometry in the viewport to deform.`);
             }
 
             let vertexCount = 0;
@@ -640,7 +635,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                     const heightY = Math.max(1e-4, maxY - minY);
 
                     for (const op of ops) {
-                        const factor = op.factor ?? (op.strength ?? 0.5);
+                        const factor = op.factor as number;
                         if (op.type === 'taper') {
                             for (let i = 0; i < pos.count; i++) {
                                 const y = pos.getY(i);
@@ -650,7 +645,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                                 pos.setZ(i, pos.getZ(i) * scale);
                             }
                         } else if (op.type === 'twist') {
-                            const angleRad = ((op.angle ?? 45) * Math.PI) / 180;
+                            const angleRad = ((op.angle as number) * Math.PI) / 180;
                             for (let i = 0; i < pos.count; i++) {
                                 const y = pos.getY(i);
                                 const t = Math.max(0, Math.min(1, (y - minY) / heightY));
@@ -672,7 +667,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                                 pos.setZ(i, pos.getZ(i) * scale);
                             }
                         } else if (op.type === 'bend') {
-                            const bendAngle = ((op.angle ?? 30) * Math.PI) / 180;
+                            const bendAngle = ((op.angle as number) * Math.PI) / 180;
                             for (let i = 0; i < pos.count; i++) {
                                 const y = pos.getY(i);
                                 const t = Math.max(0, Math.min(1, (y - minY) / heightY));
@@ -698,183 +693,6 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 appliedOperations: ops,
                 vertexCount,
                 prompt: params.prompt,
-                success: true
-            };
-        }
-    },
-    {
-        name: 'sb_restructure_tile_mesh',
-        category: 'mesh_edit',
-        description: 'Restructures a 3D tile mesh by terraforming (terracing, plateau leveling, moats, craters) and grafting architectural primitives (obelisks, colonnades, domes, stepped pyramids).',
-        execute: (ctx, params: {
-            objectId: string;
-            prompt?: string;
-            style?: 'SolarpunkCitadel' | 'NeoclassicalMonument' | 'BrutalistFortress' | 'GothicCathedral' | 'SciFiOutpost' | 'Custom';
-            materialMode?: 'stylized_pbr' | 'studio_clay' | 'hybrid_photogrammetric';
-            clayPreset?: string;
-            terraforming?: Array<{
-                type: 'terrace' | 'plateau_level' | 'crater_basin' | 'trench_moat' | 'ridge_ramp';
-                center?: [number, number, number];
-                radius?: number;
-                targetElevation?: number;
-                stepHeight?: number;
-                stepCount?: number;
-                depth?: number;
-            }>;
-            primitives?: Array<{
-                type: 'obelisk' | 'column_colonnade' | 'dome' | 'gothic_portal' | 'stepped_pyramid' | 'pylon_gate';
-                position?: [number, number, number];
-                scale?: [number, number, number];
-                count?: number;
-                radius?: number;
-                anchor?: 'custom' | 'corners' | 'apex' | 'plaza' | 'center' | 'entrance';
-            }>;
-        }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            let style = params.style || 'SolarpunkCitadel';
-            let materialMode = params.materialMode || 'stylized_pbr';
-            const terraforming = params.terraforming ? [...params.terraforming] : [];
-            const primitives = params.primitives ? [...params.primitives] : [];
-
-            if (params.prompt) {
-                const lower = params.prompt.toLowerCase();
-                if (/brutalist|fortress|bunker|monolith/i.test(lower)) style = 'BrutalistFortress';
-                else if (/neoclassical|roman|colonnade|temple|classical|marble/i.test(lower)) style = 'NeoclassicalMonument';
-                else if (/gothic|cathedral|pointed\s*arch|spire/i.test(lower)) style = 'GothicCathedral';
-                else if (/scifi|sci-fi|cyberpunk|colony|outpost/i.test(lower)) style = 'SciFiOutpost';
-
-                if (/clay|studio\s*grey|massing/i.test(lower)) materialMode = 'studio_clay';
-                else if (/hybrid/i.test(lower)) materialMode = 'hybrid_photogrammetric';
-
-                if (terraforming.length === 0) {
-                    if (/terrace|stepped/i.test(lower)) {
-                        const stepMatch = lower.match(/(\d+)\s*(?:steps|tiers|stepped\s*tiers)/i);
-                        terraforming.push({ type: 'terrace', stepHeight: 2.5, stepCount: stepMatch ? parseInt(stepMatch[1], 10) : 3 });
-                    }
-                    if (/level|flatten|plaza|courtyard/i.test(lower)) {
-                        terraforming.push({ type: 'plateau_level', radius: 12.0, targetElevation: 6.0 });
-                    }
-                    if (/moat|trench|canal/i.test(lower)) {
-                        terraforming.push({ type: 'trench_moat', radius: 18.0, depth: 3.5 });
-                    }
-                    if (/crater|basin|sunken/i.test(lower)) {
-                        terraforming.push({ type: 'crater_basin', radius: 14.0, depth: 4.0 });
-                    }
-                }
-
-                if (primitives.length === 0) {
-                    if (/obelisk|spire/i.test(lower)) {
-                        const countMatch = lower.match(/(\d+)\s*(?:solar\s*)?(?:obelisks|spires)/i);
-                        primitives.push({ type: 'obelisk', count: countMatch ? parseInt(countMatch[1], 10) : 4, anchor: 'corners' });
-                    }
-                    if (/dome|bio-dome/i.test(lower)) {
-                        primitives.push({ type: 'dome', count: 1, anchor: 'apex' });
-                    }
-                    if (/column|colonnade|pillar|pylon/i.test(lower)) {
-                        primitives.push({ type: 'column_colonnade', count: 6, anchor: 'plaza' });
-                    }
-                    if (/pyramid|ziggurat/i.test(lower)) {
-                        primitives.push({ type: 'stepped_pyramid', count: 1, anchor: 'center' });
-                    }
-                }
-            }
-
-            if (terraforming.length === 0) {
-                terraforming.push({ type: 'terrace', stepHeight: 2.5, stepCount: 3 });
-            }
-            if (primitives.length === 0) {
-                primitives.push({ type: 'obelisk', count: 4, anchor: 'corners' });
-            }
-
-            let vertexCount = 0;
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
-                const pos = geo.attributes.position as THREE.BufferAttribute;
-                if (pos) {
-                    vertexCount = pos.count;
-                    geo.computeBoundingBox();
-                    const bbox = geo.boundingBox || new THREE.Box3();
-                    const minY = bbox.min.y;
-
-                    for (const tf of terraforming) {
-                        if (tf.type === 'terrace') {
-                            const stepH = tf.stepHeight ?? 2.5;
-                            for (let i = 0; i < pos.count; i++) {
-                                const y = pos.getY(i);
-                                const normY = y - minY;
-                                const stepIdx = Math.floor(normY / stepH);
-                                const remainder = normY - stepIdx * stepH;
-                                const frac = remainder / stepH;
-                                const shaped = frac < 0.8 ? (frac / 0.8) * 0.15 * stepH : (0.15 + 0.85 * Math.pow((frac - 0.8) / 0.2, 2)) * stepH;
-                                pos.setY(i, minY + stepIdx * stepH + shaped);
-                            }
-                        } else if (tf.type === 'plateau_level') {
-                            const targetY = tf.targetElevation ?? 6.0;
-                            const r = tf.radius ?? 12.0;
-                            const cx = tf.center ? tf.center[0] : 0;
-                            const cz = tf.center ? tf.center[2] : 0;
-                            for (let i = 0; i < pos.count; i++) {
-                                const dx = pos.getX(i) - cx;
-                                const dz = pos.getZ(i) - cz;
-                                const d = Math.sqrt(dx * dx + dz * dz);
-                                if (d < r) {
-                                    const w = 1.0 - Math.min(1.0, d / r);
-                                    pos.setY(i, pos.getY(i) * (1 - w) + targetY * w);
-                                }
-                            }
-                        }
-                    }
-                    pos.needsUpdate = true;
-                    recomputeGeometryNormals(geo);
-                }
-
-                // Material styling
-                const mesh = found.threeObject as THREE.Mesh;
-                if (mesh.material) {
-                    const mat = mesh.material as THREE.MeshStandardMaterial;
-                    if (materialMode === 'studio_clay') {
-                        mat.color = new THREE.Color(0xdcd6cd);
-                        mat.roughness = 0.85;
-                        mat.metalness = 0.02;
-                    } else if (style === 'SolarpunkCitadel') {
-                        mat.color = new THREE.Color(0xe2ded6);
-                        mat.roughness = 0.65;
-                        mat.metalness = 0.08;
-                    } else if (style === 'BrutalistFortress') {
-                        mat.color = new THREE.Color(0x7a7f84);
-                        mat.roughness = 0.88;
-                        mat.metalness = 0.05;
-                    } else if (style === 'NeoclassicalMonument') {
-                        mat.color = new THREE.Color(0xedeae4);
-                        mat.roughness = 0.45;
-                        mat.metalness = 0.04;
-                    }
-                }
-            }
-
-            let totalPlacedCount = 0;
-            for (const p of primitives) {
-                if (p.anchor === 'corners') totalPlacedCount += 4;
-                else totalPlacedCount += (p.count ?? 1);
-            }
-
-            (found.object as any).tileRestructuring = {
-                style,
-                materialMode,
-                appliedTerraforming: terraforming,
-                graftedPrimitivesCount: totalPlacedCount,
-                timestamp: Date.now()
-            };
-
-            return {
-                objectId: params.objectId,
-                appliedTerraforming: terraforming,
-                graftedPrimitivesCount: totalPlacedCount,
-                style,
-                materialMode,
-                vertexCount,
                 success: true
             };
         }

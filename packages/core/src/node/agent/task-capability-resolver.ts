@@ -398,18 +398,18 @@ export class TaskCapabilityResolver {
                 primaryNativeEngine = 'cpp-3d-engine';
                 nativeCapabilities.push('Native C++20 Astro Mesh Reshaper Engine (scratchbox_shaper.hpp)');
                 nativeCapabilities.push('NativeMeshReshaperService / MeshReshapingService');
-                nativeCapabilities.push('Parametric Non-Linear Deformers (Taper, Twist, Bend, Bulge, Squash, Shear)');
+                nativeCapabilities.push('Parametric Non-Linear Deformers (Taper, Twist, Bend, Bulge, Shear) with parameters relative to the mesh bounds');
                 nativeCapabilities.push('Trivariate Bernstein FFD 3D Tensor Lattice (Lattice3D)');
                 nativeCapabilities.push('Multi-Brush Digital Sculpt Engine (Clay, Crease, Smooth, Flatten, Inflate)');
                 nativeCapabilities.push('Loop Subdivision & Manifold Topology Repair');
-                nativeCapabilities.push('In-App Agent Tools: mesh_reshape_via_prompt & mesh_apply_deformers');
+                nativeCapabilities.push('In-App Agent Tool: mesh_apply_deformers (explicit operations on a given GLB)');
                 rationale = 'Native Scratchbox C++20 Astro 3D engine executes sub-second parametric deformers, Bernstein FFD lattices, sculpt strokes, and loop subdivision directly on meshes, compiling via Apple Clang with zero external dependencies.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
-                    serviceOrTool: 'mesh_reshape_via_prompt or NativeMeshReshaperService',
-                    targetTool: 'mesh_reshape_via_prompt',
+                    serviceOrTool: 'mesh_apply_deformers or NativeMeshReshaperService',
+                    targetTool: 'mesh_apply_deformers',
                     targetService: 'NativeMeshReshaperService',
-                    details: 'Call mesh_reshape_via_prompt with the user prompt or execute NativeMeshReshaperService.reshapeMesh to deform the mesh and stream binary .glb into 3d-scene.'
+                    details: 'Turn the request into explicit operations (values relative to the mesh bounding box) and call mesh_apply_deformers on the given GLB; stream the binary .glb into 3d-scene.'
                 };
             } else if (/utdra|uldra|tile\s*decomposition|rectif(?:y|ication)|bridge\s*void|underpass\s*void|sutherland\s*-?\s*hodgman|slope\s*stratified|domain\s*probe/i.test(lower)) {
                 canSolveNatively = true;
