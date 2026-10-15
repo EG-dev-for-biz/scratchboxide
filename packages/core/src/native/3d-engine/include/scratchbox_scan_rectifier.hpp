@@ -233,6 +233,21 @@ struct ScanRectifierParams {
     double reliefCrispDeg{3.5};         // its faces are within this of the wall's plane (crinkle is not relief)
     double reliefRasterCell{0.2};       // m
     double reliefSlab{1.5};             // only surfaces within this of the plane are part of the wall's visible surface (m)
+    // Proud blocks: a patch of a wall region standing at least proudBlockMinRelief off the region's plane (out or in)
+    // whose outline runs, over at least proudBlockMinRiserShare of its length, along creases to risers (faces within
+    // acos(proudBlockRiserMaxDot) of perpendicular to the wall that reach back toward it by at least the relief) is an
+    // element the scan shows standing out with its own sides (a keystone, a medallion, a pedestal, a deep reveal). Its
+    // offset is kept: a block whose vertices lie within max(proudBlockFlatSpread, proudBlockFlatSpreadOfRelief x its
+    // level) of one level snaps onto the wall's plane at that level (like a relief panel); any other block is left where
+    // it was scanned. Crinkle bumps meet the wall's own faces and melt slopes have no risers, so both still snap; a patch
+    // larger than proudBlockMaxRegionShare of its region is the wall itself, badly fitted.
+    double proudBlockMinRelief{0.08};   // m (0 = off)
+    double proudBlockMinRiserShare{0.6};
+    double proudBlockFlatSpread{0.05};  // m
+    double proudBlockFlatSpreadOfRelief{0.5};
+    double proudBlockRiserMaxDot{0.5};
+    double proudBlockMinArea{0.25};     // m^2
+    double proudBlockMaxRegionShare{0.5};
 
     // --- D6 constrained snapping
     bool snap{true};
@@ -423,6 +438,8 @@ struct ScanRectifierStats {
     size_t levelSplits{0}, localOrientationSnapped{0}, familyLocked{0};
     size_t sheets{0}, rejectedUnlevelable{0}, orientationOffFamily{0}, reliefProtectedVertices{0}, reliefPanelFaces{0};
     double reliefPanelArea{0};
+    size_t proudBlocks{0}, proudBlocksLevelled{0}, proudBlockFaces{0}, proudBlockGroups{0}, proudBlockFrozenGroups{0};
+    double proudBlockArea{0};
     double sheetArea{0};
     double localOrientationMaxRotationDeg{0};
     double regionArea{0};
@@ -466,6 +483,7 @@ struct ScanRectifierResult {
     std::vector<float> groupDelta;                     // 3G: final displacement
     std::vector<uint8_t> groupInfo;                    // G: bit0 on a seam, bit1 guard-marked, bits2-4 snap kind (1 plane, 2 line, 3 point)
     std::vector<uint8_t> groupGuardReasons;            // G: bit0 budget, 1 flip, 2 shrink, 3 stretch, 4 crease, 5 seam neighbour, 6 turn
+    std::vector<uint8_t> groupProudBlock;              // G: vertex of a proud block: 1 left where it was scanned, 2 snapped at the block's level
     std::vector<std::array<double, 3>> outdoorSites;   // sight-line viewer eyes
     std::vector<std::array<float, 4>> opposedPairs;    // t, u, input gap, violated by the unguarded solve (0/1)
     std::vector<std::array<float, 16>> seamContacts;   // nv, ns, v0..v4, w0..w4, kind (0 vertex on edge, 1 edge on face), follow, mode, input gap
@@ -1346,6 +1364,8 @@ public:
           << ", \"levelSplits\": " << s.levelSplits << ", \"localOrientationSnapped\": " << s.localOrientationSnapped
           << ", \"familyLocked\": " << s.familyLocked << ", \"localOrientationMaxRotationDeg\": " << s.localOrientationMaxRotationDeg
           << ", \"reliefSheets\": " << s.sheets << ", \"reliefSheetArea\": " << s.sheetArea << ", \"rejectedUnlevelableRoofs\": " << s.rejectedUnlevelable << ", \"orientationOffFamily\": " << s.orientationOffFamily << ", \"reliefPanelFaces\": " << s.reliefPanelFaces << ", \"reliefPanelArea\": " << s.reliefPanelArea << ", \"reliefPanelVertices\": " << s.reliefProtectedVertices
+          << ", \"proudBlocks\": " << s.proudBlocks << ", \"proudBlocksLevelled\": " << s.proudBlocksLevelled << ", \"proudBlockFaces\": " << s.proudBlockFaces
+          << ", \"proudBlockArea\": " << s.proudBlockArea << ", \"proudBlockGroups\": " << s.proudBlockGroups << ", \"proudBlockFrozenGroups\": " << s.proudBlockFrozenGroups
           << ", \"area\": " << s.regionArea << "},\n";
         o << "  \"snapping\": {\"movableGroups\": " << s.movableGroups << ", \"onePlane\": " << s.snappedGroups1
           << ", \"line\": " << s.snappedGroups2 << ", \"point\": " << s.snappedGroups3 << ", \"capped\": " << s.cappedGroups
@@ -1486,6 +1506,7 @@ private:
 
             t = Clock::now();
             buildReliefProtection();
+            buildProudBlocks();
             S.timingsMs.push_back({"relief_protection", msSince(t)});
 
             t = Clock::now();
@@ -1556,6 +1577,7 @@ private:
             out.flags = flags;
             out.triangleRegion = triRegion;
             out.groupOfVertex = groupOf;
+            out.groupProudBlock = proudBlockGroup;
             out.outdoorSites = siteEyes;
             for (const Contact& c : contacts) {
                 std::array<float, 16> row{};
@@ -3623,6 +3645,141 @@ private:
         }
 
         // ------------------------------------------------------------------
+        // Proud blocks (see ScanRectifierParams::proudBlockMinRelief), found on the input positions
+        std::vector<uint8_t> proudBlockGroup;  // G: 1 left as scanned, 2 snapped at the block's level
+
+        void buildProudBlocks() {
+            proudBlockGroup.assign(G, 0);
+            if (!(P.proudBlockMinRelief > 0)) return;
+            // edges over weld groups -> visible faces
+            std::vector<std::pair<uint64_t, uint32_t>> ek;
+            ek.reserve(F * 3);
+            for (size_t t = 0; t < F; ++t) {
+                if (!visible[t] || !(triA0[t] > 1e-8)) continue;
+                for (int k = 0; k < 3; ++k) {
+                    const uint32_t a = triG[t][k], b = triG[t][(k + 1) % 3];
+                    if (a == b) continue;
+                    ek.push_back({(static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b), static_cast<uint32_t>(t)});
+                }
+            }
+            std::sort(ek.begin(), ek.end());
+            auto edgeFaces = [&](uint64_t key) {
+                auto it = std::lower_bound(ek.begin(), ek.end(), std::pair<uint64_t, uint32_t>{key, 0u});
+                std::vector<uint32_t> fs;
+                for (; it != ek.end() && it->first == key; ++it) fs.push_back(it->second);
+                return fs;
+            };
+            auto res = [&](const PlaneRegion& R, uint32_t g) { return R.n.dot(groupPos[g]) - R.d; };
+            // candidates: faces of a wall region with a vertex at least the relief off its plane; sign = side of the plane
+            std::vector<int8_t> side(F, 0);
+            for (size_t t = 0; t < F; ++t) {
+                const int32_t r = triRegion[t];
+                if (r < 0 || !visible[t] || !(triA0[t] > 1e-8)) continue;
+                const auto& R = regions[static_cast<size_t>(r)];
+                if (R.cls != 0 || R.sheet) continue;
+                double lo = 1e300, hi = -1e300;
+                for (int k = 0; k < 3; ++k) { const double e = res(R, triG[t][k]); lo = std::min(lo, e); hi = std::max(hi, e); }
+                if (hi >= P.proudBlockMinRelief && lo > -P.proudBlockMinRelief) side[t] = 1;
+                else if (lo <= -P.proudBlockMinRelief && hi < P.proudBlockMinRelief) side[t] = -1;
+            }
+            // patches: candidates of one region and side joined across shared edges
+            std::vector<uint32_t> up(F);
+            std::iota(up.begin(), up.end(), 0u);
+            auto root = [&](uint32_t x) { while (up[x] != x) x = up[x] = up[up[x]]; return x; };
+            for (size_t i = 0; i < ek.size();) {
+                size_t e = i;
+                while (e < ek.size() && ek[e].first == ek[i].first) ++e;
+                for (size_t a = i; a < e; ++a)
+                    for (size_t b = a + 1; b < e; ++b) {
+                        const uint32_t ta = ek[a].second, tb = ek[b].second;
+                        if (!side[ta] || side[ta] != side[tb] || triRegion[ta] != triRegion[tb]) continue;
+                        const uint32_t ra = root(ta), rb = root(tb);
+                        if (ra != rb) up[rb] = ra;
+                    }
+                i = e;
+            }
+            std::unordered_map<uint32_t, std::vector<uint32_t>> patches;
+            for (size_t t = 0; t < F; ++t) if (side[t]) patches[root(static_cast<uint32_t>(t))].push_back(static_cast<uint32_t>(t));
+            for (auto& kv : patches) {
+                const std::vector<uint32_t>& faces = kv.second;
+                const auto& R = regions[static_cast<size_t>(triRegion[faces[0]])];
+                const double sgn = side[faces[0]];
+                double area = 0;
+                for (uint32_t t : faces) area += triA0[t];
+                if (area < P.proudBlockMinArea || area > P.proudBlockMaxRegionShare * R.area) continue;
+                std::unordered_map<uint32_t, uint8_t> in;
+                for (uint32_t t : faces) in[t] = 1;
+                // outline: edges with no other patch face; a riser edge has a steep face across that reaches back toward
+                // the wall by at least the relief
+                double outline = 0, riser = 0;
+                for (uint32_t t : faces)
+                    for (int k = 0; k < 3; ++k) {
+                        const uint32_t a = triG[t][k], b = triG[t][(k + 1) % 3];
+                        if (a == b) continue;
+                        const auto fs = edgeFaces((static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b));
+                        bool inner = false;
+                        for (uint32_t f : fs) if (f != t && in.count(f)) inner = true;
+                        if (inner) continue;
+                        bool across = false, isRiser = false;
+                        const double edgeLevel = std::min(sgn * res(R, a), sgn * res(R, b));
+                        for (uint32_t f : fs) {
+                            if (f == t) continue;
+                            across = true;
+                            if (std::abs(triN0[f].dot(R.n)) > P.proudBlockRiserMaxDot) continue;
+                            double back = 1e300;
+                            for (int j = 0; j < 3; ++j) back = std::min(back, sgn * res(R, triG[f][j]));
+                            if (back <= edgeLevel - P.proudBlockMinRelief) isRiser = true;
+                        }
+                        if (!across) continue;  // an open edge says nothing either way
+                        const double len = (groupPos[a] - groupPos[b]).norm();
+                        outline += len;
+                        if (isRiser) riser += len;
+                    }
+                if (std::getenv("SB_DEBUG_PROUD_BLOCKS")) {
+                    V3 c;
+                    double mx = 0;
+                    for (uint32_t t : faces) {
+                        c += triC0[t] * triA0[t];
+                        for (int k = 0; k < 3; ++k) mx = std::max(mx, sgn * res(R, triG[t][k]));
+                    }
+                    c = c * (1.0 / area);
+                    std::fprintf(stderr, "proud patch %s side %+d faces %zu area %.2f relief %.3f outline %.2f riser %.2f (%.2f) at (%.2f %.2f %.2f) region area %.0f\n",
+                                 riser >= P.proudBlockMinRiserShare * outline ? "BLOCK" : "-", static_cast<int>(sgn), faces.size(), area, mx, outline, riser,
+                                 outline > 0 ? riser / outline : 0.0, c.x, c.y, c.z, R.area);
+                }
+                if (!(outline > 0) || riser < P.proudBlockMinRiserShare * outline) continue;
+                ++S.proudBlocks;
+                S.proudBlockFaces += faces.size();
+                S.proudBlockArea += area;
+                // flat at one level: snapped onto the wall's plane at that level (median of its vertices); else as scanned
+                std::vector<uint32_t> gs;
+                for (uint32_t t : faces) for (int k = 0; k < 3; ++k) gs.push_back(triG[t][k]);
+                std::sort(gs.begin(), gs.end());
+                gs.erase(std::unique(gs.begin(), gs.end()), gs.end());
+                std::vector<double> lv;
+                for (uint32_t g : gs) lv.push_back(res(R, g));
+                const auto [mnIt, mxIt] = std::minmax_element(lv.begin(), lv.end());
+                std::vector<double> sorted = lv;
+                std::nth_element(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(sorted.size() / 2), sorted.end());
+                const double level = sorted[sorted.size() / 2];
+                const bool flatBlock = *mxIt - *mnIt <= std::max(P.proudBlockFlatSpread, P.proudBlockFlatSpreadOfRelief * std::abs(level));
+                const uint32_t r = static_cast<uint32_t>(triRegion[faces[0]]);
+                if (flatBlock) ++S.proudBlocksLevelled;
+                for (uint32_t g : gs) {
+                    if (flatBlock) {
+                        auto& acc = reliefVertex[(static_cast<uint64_t>(g) << 32) | r];
+                        acc.first += level;
+                        ++acc.second;
+                        if (proudBlockGroup[g] != 1) proudBlockGroup[g] = 2;  // a vertex another block keeps as scanned stays so
+                    } else {
+                        proudBlockGroup[g] = 1;
+                    }
+                }
+            }
+            for (uint8_t b : proudBlockGroup) { S.proudBlockGroups += b != 0; S.proudBlockFrozenGroups += b == 1; }
+        }
+
+        // ------------------------------------------------------------------
         // D6: constrained snapping per weld group
         double strength(double res, double tau) const {
             double a = std::abs(res);
@@ -3691,7 +3848,7 @@ private:
                 std::vector<Candidate> cands;
                 std::vector<V3> ownN;
                 for (size_t g = b; g < e; ++g) {
-                    if (!movable[g]) continue;
+                    if (!movable[g] || (!proudBlockGroup.empty() && proudBlockGroup[g] == 1)) continue;
                     const V3 p = groupPos[g];
                     cands.clear();
                     ownN.clear();
