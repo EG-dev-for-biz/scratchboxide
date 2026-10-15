@@ -46,7 +46,7 @@ import {
     IconPlay
 } from '../canvas-icons';
 import { InlineMarkdown } from '../ChatMarkdownRenderer';
-import { NANO_BANANA_STYLES, synthesizeContextualNanoBananaPrompt } from '../nano-banana-service';
+import { NANO_BANANA_STYLES, applyNanoBananaStyle } from '../nano-banana-service';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
 import { IMAGE_MODEL_PRIORITY, type MediaGenerationJob } from '../../../common/media-generation-protocol';
@@ -104,6 +104,38 @@ export function newLocationSection(id: string): MarkdownSection {
     return { id, type: 'location-image' };
 }
 
+/** What a section's image or video is generated from, or why it cannot be generated. */
+export type SectionGenerationPrompt =
+    | { prompt: string; patch: Partial<MarkdownSection> }
+    | { error: string };
+
+/**
+ * The prompt a section's image or video is generated from: the section's own prompt (the one the user wrote, or the
+ * model's visualPrompt), in the style the user picks from the style menu. Without a picked style the prompt last used
+ * is run again. A section with no prompt cannot be generated: nothing is composed for it from the document's title
+ * or keywords (that composed a canned subject, e.g. Lexington minutemen for a Kentucky bourbon document).
+ * `patch` is what the section records once the job is started.
+ */
+export function sectionGenerationPrompt(section: MarkdownSection, selectedStyleId?: string): SectionGenerationPrompt {
+    const kind = section.type === 'video' ? 'video' : 'image';
+    const written = (section.prompt || section.visualPrompt || '').trim();
+    if (!written) {
+        return {
+            error: section.type === 'location-image'
+                ? 'Restyling a location image needs a 3D tiles render to work from, and this section has none. Describe the image you want in the prompt to generate one.'
+                : `This section has no ${kind} prompt. Describe the ${kind} you want in the prompt to generate it.`
+        };
+    }
+    if (selectedStyleId) {
+        const styled = applyNanoBananaStyle(written, selectedStyleId);
+        if (!styled) return { error: `Unknown style "${selectedStyleId}".` };
+        // The unstyled words stay in `prompt`, so picking another style restyles them instead of stacking styles.
+        return { prompt: styled.prompt, patch: { prompt: written, visualPrompt: styled.prompt, stylePreset: styled.styleLabel } };
+    }
+    const lastUsed = (section.visualPrompt || section.prompt || '').trim();
+    return { prompt: lastUsed, patch: { visualPrompt: lastUsed } };
+}
+
 /** What a failed generation writes onto a document section: the error, and no change to its image. */
 export function sectionMediaFailure(err: unknown, isVideo: boolean): Partial<MarkdownSection> {
     const message = err instanceof Error ? err.message : typeof err === 'string' ? err : 'unknown error';
@@ -132,6 +164,32 @@ export const SectionMediaNotice: React.FC<{ kind: 'image' | 'video'; error?: str
             : <div data-testid="sb-doc-media-missing" style={{ ...MEDIA_NOTICE_BASE, color: '#a1a1aa' }}>No {kind} yet. Describe it in the prompt below to generate one.</div>;
     }
     return null;
+};
+
+/**
+ * A heading section shows exactly its text. An empty heading shows no text in a read-only view, and an "Empty
+ * heading" hint (styled as a hint, not a title) where it can be edited; no heading is written for it.
+ */
+export const SectionHeading: React.FC<{
+    level?: number;
+    content?: string;
+    readOnly: boolean;
+    streaming?: boolean;
+    onOpenInBrowser?: (url: string, title?: string) => void;
+    onOpenWikilink?: (target: string, anchor?: string) => void;
+}> = ({ level, content, readOnly, streaming, onOpenInBrowser, onOpenWikilink }) => {
+    const text = content || '';
+    if (!text.trim() && readOnly && !streaming) return null;
+    const Tag = level === 1 ? 'h2' : level === 2 ? 'h3' : 'h4';
+    const className = level === 1 ? 'sb-doc-h1' : level === 2 ? 'sb-doc-h2' : 'sb-doc-h3';
+    return (
+        <Tag className={className}>
+            {text.trim()
+                ? <InlineMarkdown text={text} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
+                : !streaming && <span data-testid="sb-doc-empty-heading" style={{ opacity: 0.4, fontStyle: 'italic', fontWeight: 400 }}>Empty heading</span>}
+            {streaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}
+        </Tag>
+    );
 };
 
 export interface MarkdownDocumentPrimitiveProps {
@@ -584,10 +642,9 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
             calloutType: 'ai',
             calloutTitle: 'AI Provenance & Synthesis',
             content: selectedText,
+            // The user's own selected text: no model wrote it, so none (and no prompt) is credited.
             aiProvenance: {
-                model: 'Gemini 2.5 Pro',
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                prompt: 'Extracted key insight for document knowledge graph',
                 isCollapsed: false,
                 originalContent: selectedText
             }
@@ -701,49 +758,14 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
         setRegeneratingImages(prev => ({ ...prev, [section.id]: true }));
         setOpenStyleMenuSectionId(null);
 
-        const styleKey = selectedStyleId || (
-            section.stylePreset?.toLowerCase().includes('oil') ? 'oil-painting'
-            : section.stylePreset?.toLowerCase().includes('engraving') ? 'vintage-engraving'
-            : section.stylePreset?.toLowerCase().includes('blueprint') || section.stylePreset?.toLowerCase().includes('schematic') || section.stylePreset?.toLowerCase().includes('architectural') ? 'architectural'
-            : section.stylePreset?.toLowerCase().includes('neural') ? 'neural-ai'
-            : section.stylePreset?.toLowerCase().includes('cupertino') || section.stylePreset?.toLowerCase().includes('studio') ? 'modern-editorial'
-            : section.stylePreset?.toLowerCase().includes('chiaroscuro') ? 'chiaroscuro'
-            : section.stylePreset?.toLowerCase().includes('watercolor') ? 'watercolor'
-            : 'cinematic-film'
-        );
-
         const isVideo = section.type === 'video';
-        let activePrompt: string;
-        let styleLabel: string | undefined;
-        if (section.type === 'location-image') {
-            // The AI Beautify prompt restyles a 3D tiles render, which a document section does not have; without a
-            // reference frame only the user's own description can be generated (nothing is swapped in instead).
-            const described = (section.prompt || '').trim();
-            if (!described) {
-                handleUpdateSection(section.id, {
-                    mediaError: 'Restyling a location image needs a 3D tiles render to work from, and this section has none. Describe the image you want in the prompt to generate one.'
-                });
-                setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
-                return;
-            }
-            activePrompt = described;
-            styleLabel = section.stylePreset;
-        } else {
-            // Surrounding context (nearby headings, paragraphs, callouts) grounds the prompt.
-            const secIndex = (doc.sections || []).findIndex(s => s.id === section.id);
-            const adjacentSections = (doc.sections || []).slice(Math.max(0, secIndex - 2), secIndex + 3);
-            const adjacentText = adjacentSections.map(s => s.content || s.caption || s.calloutTitle || s.locationName || s.videoTitle || '').join(' ');
-            const synth = synthesizeContextualNanoBananaPrompt({
-                docTitle: doc.title,
-                docSubtitle: doc.subtitle,
-                sectionTitle: section.imageTitle || section.videoTitle || section.locationName,
-                sectionContent: section.caption || section.description || section.content,
-                adjacentText,
-                styleId: styleKey
-            });
-            activePrompt = section.prompt || section.visualPrompt || synth.prompt;
-            styleLabel = synth.styleLabel;
+        const resolved = sectionGenerationPrompt(section, selectedStyleId);
+        if ('error' in resolved) {
+            handleUpdateSection(section.id, { mediaError: resolved.error });
+            setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
+            return;
         }
+        const activePrompt = resolved.prompt;
 
         const modelPriority = isVideo
             ? ['google/omni-1.1', 'gemini-omni-flash-video', 'veo-3.1-generate-preview']
@@ -773,8 +795,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 onComplete: done => {
                     handleUpdateSection(section.id, {
                         ...sectionMediaFromJob(done, client.contentUrl(job.id, wsPath), isVideo),
-                        stylePreset: styleLabel,
-                        visualPrompt: activePrompt
+                        ...resolved.patch
                     });
                     setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
                 },
@@ -907,7 +928,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
             } else if (sec.type === 'citation') {
                 md += `### Primary Sources & References\n\n`;
                 (sec.citationItems || []).forEach((c, idx) => {
-                    md += `${idx + 1}. [**${c.sourceTitle}**](${c.url || '#'}) — _${c.author || 'Archival Reference'}_ (${c.year || ''})${c.verified ? ' `[Verified]`' : ''}\n`;
+                    md += `${idx + 1}. [**${c.sourceTitle}**](${c.url || '#'})${c.author ? ` — _${c.author}_` : ''}${c.year ? ` (${c.year})` : ''}${c.verified ? ' `[Verified]`' : ''}\n`;
                     if (c.quoteSnippet) {
                         md += `   > "${c.quoteSnippet}"\n`;
                     }
@@ -1220,9 +1241,14 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                 onClick={() => { if (!readOnly) setEditingSectionId(section.id); }}
                                 title={readOnly ? undefined : "Click to edit heading"}
                             >
-                                {section.level === 1 && <h2 className="sb-doc-h1"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '1. Executive Overview & Foundations'} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h2>}
-                                {section.level === 2 && <h3 className="sb-doc-h2"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '2. Key Technical Pillars & Analysis'} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h3>}
-                                {(!section.level || section.level === 3) && <h4 className="sb-doc-h3"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '3. Implementation Details'} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h4>}
+                                <SectionHeading
+                                    level={section.level}
+                                    content={section.content}
+                                    readOnly={!!readOnly}
+                                    streaming={isSectionStreaming}
+                                    onOpenInBrowser={onOpenInBrowser}
+                                    onOpenWikilink={handleWikilinkNavigation}
+                                />
                             </div>
                         )}
                     </div>
@@ -1630,7 +1656,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                                     {section.visualPrompt || section.prompt}
                                                 </div>
                                                 <div className="sb-prompt-actions-bar">
-                                                    <span className="sb-prompt-char-count">{(section.visualPrompt || section.prompt || '').length} chars • Nano Banana Pro Contextual Engine</span>
+                                                    <span className="sb-prompt-char-count">{(section.visualPrompt || section.prompt || '').length} chars</span>
                                                     <button
                                                         type="button"
                                                         className="sb-btn sb-prompt-copy-btn"
@@ -1900,7 +1926,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                                     {section.visualPrompt || section.prompt}
                                                 </div>
                                                 <div className="sb-prompt-actions-bar">
-                                                    <span className="sb-prompt-char-count">{(section.visualPrompt || section.prompt || '').length} chars • Nano Banana Pro Contextual Engine</span>
+                                                    <span className="sb-prompt-char-count">{(section.visualPrompt || section.prompt || '').length} chars</span>
                                                     <button
                                                         type="button"
                                                         className="sb-btn sb-prompt-copy-btn"
@@ -2061,7 +2087,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                             ✕
                                         </button>
                                     </div>
-                                    <p className="sb-node-detail-desc">{node.detail || 'Standard pipeline node interface contract.'}</p>
+                                    {node.detail && <p className="sb-node-detail-desc">{node.detail}</p>}
                                 </div>
                             );
                         })()}
@@ -2150,7 +2176,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                     <span className="sb-callout-badge-ai">
                                         <IconSparkles size={11} />
-                                        <span>{section.aiProvenance?.model || 'Gemini 2.5 Pro'}</span>
+                                        <span>{section.aiProvenance?.model || 'No model recorded'}</span>
                                     </span>
                                     {section.aiProvenance?.timestamp && (
                                         <span className="sb-ai-provenance-meta">{section.aiProvenance.timestamp}</span>

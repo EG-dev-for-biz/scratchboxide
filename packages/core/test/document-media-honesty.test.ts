@@ -17,11 +17,11 @@
 import { describe, it, expect } from 'vitest';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MarkdownDocumentPrimitive, SectionMediaNotice, formatCoordinates, newEmptySection, newLocationSection, sectionMediaFailure, sectionMediaFromJob } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
+import { MarkdownDocumentPrimitive, SectionHeading, SectionMediaNotice, formatCoordinates, newEmptySection, newLocationSection, sectionGenerationPrompt, sectionMediaFailure, sectionMediaFromJob } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
 import { synthesizeContextualNanoBananaPrompt } from '../src/browser/generative-canvas/nano-banana-service';
 import * as nanoBanana from '../src/browser/generative-canvas/nano-banana-service';
 import { generateMotivatedEditorialImageSection, generateMotivatedVideoSection } from '../src/browser/generative-canvas/document-synthesis-engine';
-import type { MarkdownDocumentData } from '../src/browser/generative-canvas/canvas-types';
+import type { MarkdownDocumentData, MarkdownSection } from '../src/browser/generative-canvas/canvas-types';
 import type { MediaGenerationJob } from '../src/common/media-generation-protocol';
 import { decodePng } from '../src/node/texture-processing';
 import { htmlScreenshotChrome, saveHtmlScreenshot } from './helpers/html-screenshot';
@@ -127,5 +127,81 @@ describe('document image sections', () => {
         let red = 0;
         for (let i = 0; i < data.length; i += 4) if (data[i] > 40 && data[i] > data[i + 1] * 1.6 && data[i] > data[i + 2] * 1.6) red++;
         expect(red).toBeGreaterThan(2000);
+    });
+});
+
+describe('a section\'s image is generated from its own prompt', () => {
+    // Regenerate on a section without a prompt used to compose one from the document's keywords
+    // (synthesizeContextualNanoBananaPrompt): a "Lexington, Kentucky Bourbon Trail" document got Captain John Parker's
+    // minutemen, a "Retail security staffing plan" got a Zero-Trust Ed25519 schematic, credited "Generated with <model>".
+    const sec = (fields: Partial<MarkdownSection>): MarkdownSection => ({ id: 's', type: 'editorial-image', ...fields } as MarkdownSection);
+
+    it('a section with no prompt cannot be generated: it says so, and nothing is composed from the document', () => {
+        for (const section of [newEmptySection('a', 'editorial-image'), newEmptySection('b', 'image'), sec({ imageTitle: 'Distillery tour', caption: 'Lexington, Kentucky' })]) {
+            const out = sectionGenerationPrompt(section);
+            expect(out, section.id).toEqual({ error: 'This section has no image prompt. Describe the image you want in the prompt to generate it.' });
+        }
+        expect(sectionGenerationPrompt(newEmptySection('v', 'video'))).toEqual({ error: 'This section has no video prompt. Describe the video you want in the prompt to generate it.' });
+        expect((sectionGenerationPrompt(newLocationSection('l')) as { error: string }).error).toContain('needs a 3D tiles render');
+        // Picking a style does not invent a subject either.
+        expect('error' in sectionGenerationPrompt(sec({ imageTitle: 'Night shift guards' }), 'oil-painting')).toBe(true);
+    });
+
+    it('runs exactly the prompt the section has', () => {
+        expect(sectionGenerationPrompt(sec({ prompt: 'A copper pot still in a Kentucky rickhouse' }))).toEqual({
+            prompt: 'A copper pot still in a Kentucky rickhouse', patch: { visualPrompt: 'A copper pot still in a Kentucky rickhouse' }
+        });
+        // The model's visualPrompt is the section's prompt when the user wrote none.
+        const modelPrompt = sectionGenerationPrompt(sec({ visualPrompt: 'Barrels stacked nine high' })) as { prompt: string };
+        expect(modelPrompt.prompt).toBe('Barrels stacked nine high');
+        expect(modelPrompt.prompt).not.toMatch(/Parker|minutemen|Zero-Trust|Ed25519/);
+    });
+
+    it('a picked style restyles the section\'s own words, and another pick replaces it instead of stacking', () => {
+        const first = sectionGenerationPrompt(sec({ prompt: 'A copper pot still' }), 'oil-painting') as { prompt: string; patch: Partial<MarkdownSection> };
+        expect(first.prompt.startsWith('A copper pot still. Medium: ')).toBe(true);
+        expect(first.prompt).toContain('oil painting');
+        expect(first.patch).toMatchObject({ prompt: 'A copper pot still', stylePreset: 'Classical Oil Painting', visualPrompt: first.prompt });
+        const second = sectionGenerationPrompt(sec({ ...first.patch }), 'cinematic-film') as { prompt: string; patch: Partial<MarkdownSection> };
+        expect(second.prompt.startsWith('A copper pot still. Medium: ')).toBe(true);
+        expect(second.prompt).not.toContain('oil painting');
+        expect(second.patch.stylePreset).toBe('Cinematic Editorial Film');
+        // Regenerate without a pick runs the styled prompt last used again.
+        expect((sectionGenerationPrompt(sec({ ...second.patch })) as { prompt: string }).prompt).toBe(second.prompt);
+        expect(sectionGenerationPrompt(sec({ prompt: 'x' }), 'no-such-style')).toEqual({ error: 'Unknown style "no-such-style".' });
+    });
+});
+
+describe('the document view shows only what the document holds', () => {
+    const render = (data: MarkdownDocumentData, readOnly = false) => renderToStaticMarkup(React.createElement(MarkdownDocumentPrimitive, { data, readOnly }));
+    const CANNED = /Executive Overview|Key Technical Pillars|Implementation Details/;
+
+    it('an empty heading shows no made-up heading: a hint where it can be edited, nothing when read-only', () => {
+        for (const level of [1, 2, 3] as const) {
+            const doc: MarkdownDocumentData = { title: 'Plan', sections: [{ id: 'h', type: 'heading', level, content: '' }] };
+            const editable = render(doc);
+            expect(editable, `level ${level}`).not.toMatch(CANNED);
+            expect(editable).toContain('data-testid="sb-doc-empty-heading"');
+            const readOnly = render(doc, true);
+            expect(readOnly).not.toMatch(CANNED);
+            expect(readOnly).not.toContain('sb-doc-empty-heading');
+            expect(readOnly.match(/<h[1-6][\s>]/g)).toHaveLength(1); // only the document title
+        }
+        expect(render({ title: 'Plan', sections: [newEmptySection('n', 'heading')] })).not.toMatch(CANNED);
+    });
+
+    it('a heading is shown as written, even when it reads like a placeholder', () => {
+        for (const content of ['Heading text...', 'New section heading', 'Background']) {
+            const html = renderToStaticMarkup(React.createElement(SectionHeading, { level: 2, content, readOnly: true }));
+            expect(html).toBe(`<h3 class="sb-doc-h2">${content}</h3>`);
+        }
+    });
+
+    it('an AI callout credits no model it has no record of', () => {
+        const html = render({ title: 'Notes', sections: [{ id: 'c', type: 'callout', calloutType: 'ai', content: 'Selected excerpt.', aiProvenance: { isCollapsed: false } } as any] });
+        expect(html).not.toContain('Gemini 2.5 Pro');
+        expect(html).toContain('No model recorded');
+        const credited = render({ title: 'Notes', sections: [{ id: 'c', type: 'callout', calloutType: 'ai', content: 'x', aiProvenance: { model: 'gemini-3.8-flash' } } as any] });
+        expect(credited).toContain('gemini-3.8-flash');
     });
 });

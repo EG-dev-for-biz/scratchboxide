@@ -34,7 +34,29 @@ export interface NanoBananaPromptResult {
 }
 
 /**
+ * A prompt someone wrote (the user, or the model's visualPrompt), rendered in a style the user picked. The subject is
+ * exactly the given prompt; the style only adds its medium, lighting, optics and colour directives.
+ */
+export function applyNanoBananaStyle(basePrompt: string, styleId: string): NanoBananaPromptResult | undefined {
+    const style = NANO_BANANA_STYLES.find(s => s.id === styleId);
+    if (!style) return undefined;
+    const subject = basePrompt.trim().replace(/[.\s]+$/, '');
+    return {
+        prompt: [
+            `${subject}.`,
+            `Medium: ${style.mediumDirective}.`,
+            `Lighting & Atmosphere: ${style.lightingDirective}.`,
+            `Optics & Camera: ${style.opticsDirective}.`,
+            `Color Palette: ${style.colorGrading}.`
+        ].join(' '),
+        styleLabel: style.label
+    };
+}
+
+/**
  * Synthesizes a structured, hyper-specific Nano Banana prompt deeply distilled from the document's contextual text.
+ * Used only by the template document engine (document-synthesis-engine); a document section's image is generated
+ * from the section's own prompt (see sectionGenerationPrompt in MarkdownDocumentPrimitive), never from this.
  */
 export function synthesizeContextualNanoBananaPrompt(context: NanoBananaPromptContext): NanoBananaPromptResult {
     const theme = context.theme || detectDocumentTheme(
