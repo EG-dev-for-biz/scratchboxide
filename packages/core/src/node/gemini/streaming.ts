@@ -261,7 +261,9 @@ export class StreamingEngine {
         // and shown on the reply (credentialNote) rather than taken silently.
         let streamAuth: StreamAuth | undefined;
         let credentialNote: string | undefined;
-        const serviceAccountConfigured = this.client.isAuthenticated();
+        // ensureAuth re-runs discovery, as getAccessToken does: a service account added since startup is found here
+        // too, so a token failure on it is reported rather than the API key answering silently.
+        const serviceAccountConfigured = this.client.ensureAuth();
         try {
             const { token, projectId } = await this.client.getAccessToken();
             if (token && projectId) {

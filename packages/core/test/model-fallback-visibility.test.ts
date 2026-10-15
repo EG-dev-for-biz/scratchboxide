@@ -133,6 +133,27 @@ describe('server: which model and credential answered', () => {
         });
     });
 
+    it('a service account first found on this turn whose token fails is reported, not passed over silently', async () => {
+        // No service account at startup; one is discovered when the turn asks for a token, and its token fails.
+        process.env.GEMINI_API_KEY = 'test-key-not-real';
+        const { service, urls } = serviceWith({
+            'gemini-3.8-flash': () => ({ ok: true, status: 200, body: sse('ok') }),
+            'gemini-3.1-flash-lite': () => ({ ok: true, status: 200, body: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'plan' }] } }] }) })
+        });
+        const client = (service as any).client as GeminiClient;
+        client.auth = undefined;
+        client.cachedProjectId = undefined;
+        vi.spyOn(client, 'initAuth').mockImplementation(() => {
+            client.auth = { getClient: async () => ({ getAccessToken: async () => { throw new Error('invalid_grant: account not found'); } }) } as any;
+            client.cachedProjectId = 'late-project';
+        });
+        const response = await service.streamGenerate({ prompt: 'hi', model: 'gemini-3.8-flash', mode: 'ask' } as any, () => {});
+        expect(urls[0]).toContain('generativelanguage.googleapis.com');
+        expect(response.modelProvenance).toMatchObject({ credential: 'api-key', credentialNote: expect.stringContaining('could not get an access token (invalid_grant: account not found)') });
+        const sub = await service.executeSubagentTask({ taskType: 'preprocess', prompt: 'p', model: 'gemini-3.1-flash-lite' } as any);
+        expect(sub.modelProvenance).toMatchObject({ credential: 'api-key', credentialNote: expect.stringContaining('invalid_grant: account not found') });
+    });
+
     it('a subagent that falls back does not become the default subagent model', async () => {
         const { service, urls } = serviceWith({
             'gemini-3.1-flash-lite-preview': () => ({ ok: false, status: 404, body: NOT_FOUND }),
