@@ -11,17 +11,20 @@
  * A real-world location as remeshed studio clay with its trees rebuilt.
  *
  * From the photo-textured extraction (already on disk):
- *   1. vegetation: tile_vegetation strip measures the tree crowns in the photo tiles and removes them, closing the
- *      ground under them (trees only);
+ *   1. vegetation: tile_vegetation strip measures the tree crowns in the photo tiles, regrows each as an SB-Veggie
+ *      tree, and removes the ones that regrow into their measured crown, closing the ground under them; a tree the
+ *      regrown tree does not fill stays in the scan as it was (not_regrowable, with the reason, reported per crown);
  *   2. remesh: tile_refine (its public refine()) remeshes the devegetated tile (or the raw one without trees);
- *   3. planting: tile_vegetation plant grows one SB-Veggie tree per measured crown (space colonisation) in studio clay,
- *      within a share of the remeshed tile's triangle count; isolate requests plant only crowns that stand on the
- *      isolated structure.
+ *   3. planting: tile_vegetation plant grows the same SB-Veggie trees (space colonisation) in studio clay, within the
+ *      request's treeTriangleBudget or, without one, a per-tree target from each measured crown's size within
+ *      SCENE_TREE_TRIANGLE_CAP for all of them; isolate requests plant only crowns that stand on the isolated structure.
  * The remeshed tile and the trees share the extraction's frame, so both mount at the same origin.
  *
  * Any stage that fails fails the whole request with a TileExtractionError (common/errors/pipeline-errors) naming the
- * stage ('vegetation', 'remesh' or 'planting'); nothing is mounted and nothing is substituted. A tile with no measurable
- * canopy is a valid result with zero trees, and says so. The request's AbortSignal kills a running native stage.
+ * stage ('vegetation', 'remesh' or 'planting'); nothing is mounted and nothing is substituted. One tree that cannot be
+ * regrown faithfully does not fail it: that tree stays as scanned and is reported. A tile with no measurable canopy,
+ * or whose trees all stay as scanned, is a valid result that says so. The request's AbortSignal kills a running native
+ * stage.
  */
 
 import * as crypto from 'crypto';
@@ -30,6 +33,7 @@ import { TileExtractionError, type TileExtractionStage } from '../../common/erro
 import { getTileRefineService, summarizeTileRefineStats, type TileRefineRequest, type TileRefineResult } from './tile-refine-service';
 import {
     getTileVegetationService,
+    SCENE_TREE_TRIANGLE_CAP,
     TileVegetationError,
     type TileVegetationPlantRequest,
     type TileVegetationPlantResult,
@@ -55,23 +59,46 @@ export interface LocationClayRequest {
     flavour: 'clay' | 'textured';
     /** Base name for public/models (any text: it is made into a name tile_refine accepts, see locationPublishBase). */
     publishBase: string;
-    /** Share of the remeshed tile's triangle count all trees together may use (default 0.5). */
-    treeTriangleShare?: number;
-    /** Total triangles all trees together may use, instead of the share of the remeshed tile (the user's own budget). */
+    /**
+     * Total triangles all trees together may use (the user's own budget). Without it the budget comes from the measured
+     * trees: a target per tree that grows with its crown, all within SCENE_TREE_TRIANGLE_CAP.
+     */
     treeTriangleBudget?: number;
     signal?: AbortSignal;
     reportProgress?: (message: string) => void;
+}
+
+/** A measured tree left in the scan as it was, because the regrown SB-Veggie tree does not fill its crown. */
+export interface KeptAsScannedTree {
+    crownId: number;
+    /** Diagnostic label (an open string, e.g. crown_not_reached); nothing branches on it. */
+    reasonCode: string;
+    reason: string;
+    /** How growing it went (attractors reached, iterations, why colonisation stopped). */
+    colonisation?: string;
+    areaM2: number;
+    heightM: number;
 }
 
 export interface LocationClayTrees {
     /** Mounted trees model (absent when no tree was planted). */
     url?: string;
     glbPath?: string;
-    /** Crowns measured as trees in the photo tiles, and how many of them were planted. */
+    /** Crowns measured as trees in the photo tiles (rebuilt or left as scanned), and how many of them were planted. */
     measured: number;
     count: number;
+    /** Measured trees left as scanned because the regrown tree does not fill their crown, each with its reason. */
+    notRegrowable: number;
+    keptAsScanned: KeptAsScannedTree[];
+    /** "N of M trees rebuilt as SB-Veggie; K left as scanned: <reasons>" (the summary says it too). */
+    outcome: string;
     triangles: number;
     triangleBudget: number;
+    /** Where the budget came from: the request's treeTriangleBudget, or the measured crowns' targets (within the cap). */
+    triangleBudgetSource?: string;
+    /** The triangles the measured crowns' sizes ask for together, and the scene's cap on trees (when it applied). */
+    targetTriangles?: number;
+    sceneTriangleCap?: number;
     /** All vegetation measured in the photo tiles above the canopy height (m²). */
     canopyAreaM2: number;
     /** Crown area of every crown measured as a tree in the photo tiles (m²). */
@@ -190,8 +217,6 @@ async function stage<T>(name: TileExtractionStage, signal: AbortSignal | undefin
 export async function runLocationClayPipeline(req: LocationClayRequest, deps?: LocationClayDeps): Promise<LocationClayResult> {
     const t0 = Date.now();
     const d: LocationClayDeps = deps ?? { vegetation: getTileVegetationService(req.workspaceRoot), refine: getTileRefineService(req.workspaceRoot) };
-    const share = req.treeTriangleShare ?? 0.5;
-    if (!(share > 0 && share <= 1)) throw new TileExtractionError('planting', new Error('treeTriangleShare must be in (0, 1]'));
     if (req.treeTriangleBudget !== undefined && !(Number.isFinite(req.treeTriangleBudget) && req.treeTriangleBudget >= 1)) {
         throw new TileExtractionError('planting', new Error('treeTriangleBudget must be a number of triangles of at least 1'));
     }
@@ -234,13 +259,26 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
     let trees: LocationClayTrees | undefined;
     if (strip) {
         const crownsDoc = JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'));
-        const crowns: Array<{ id: number; status: string; areaM2?: number; reachesBoundary?: boolean }> = Array.isArray(crownsDoc.crowns) ? crownsDoc.crowns : [];
+        const crowns: Array<{ id: number; status: string; areaM2?: number; reachesBoundary?: boolean; apexAboveSupport?: number; regrowth?: { reason?: string; reasonCode?: string; colonisation?: string } }> =
+            Array.isArray(crownsDoc.crowns) ? crownsDoc.crowns : [];
         const measuredTrees = crowns.filter(c => c.status === 'tree');
         const count = (s: string) => crowns.filter(c => c.status === s).length;
         const st = strip.stats;
+        // trees the regrown SB-Veggie tree does not fill: the strip left them in the scan, each with its reason
+        const keptAsScanned: KeptAsScannedTree[] = crowns.filter(c => c.status === 'not_regrowable').map(c => {
+            if (!c.regrowth?.reason) throw new TileExtractionError('vegetation', new Error(`crown ${c.id} was kept as scanned without a reason`));
+            return {
+                crownId: c.id, reasonCode: String(c.regrowth.reasonCode ?? ''), reason: c.regrowth.reason,
+                ...(c.regrowth.colonisation ? { colonisation: String(c.regrowth.colonisation) } : {}),
+                areaM2: Number(c.areaM2 ?? 0), heightM: Number(c.apexAboveSupport ?? 0)
+            };
+        });
         trees = {
-            measured: measuredTrees.length,
+            measured: measuredTrees.length + keptAsScanned.length,
             count: 0,
+            notRegrowable: keptAsScanned.length,
+            keptAsScanned,
+            outcome: '',
             triangles: 0,
             triangleBudget: 0,
             canopyAreaM2: Number(st.canopyAreaM2 ?? 0),
@@ -272,14 +310,14 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
             req.reportProgress?.(`Growing ${measuredTrees.length} SB-Veggie trees from the measured crowns`);
             const tp = Date.now();
             const planted = await stage('planting', req.signal, async () => {
-                let budget: number;
-                if (req.treeTriangleBudget !== undefined) budget = Math.floor(req.treeTriangleBudget);
-                else if (typeof outputTriangles === 'number' && outputTriangles > 0) budget = Math.floor(outputTriangles * share);
-                else throw new Error('the remeshed tile reports no triangle count to size the tree budget from');
+                // the user's own budget, or one sized from the measured trees within the scene's cap (never from the
+                // buildings: a park has many trees and few triangles of building)
+                const budget = req.treeTriangleBudget !== undefined ? { triangleBudget: Math.floor(req.treeTriangleBudget) } : { sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP };
                 try {
                     return await d.vegetation.plant({
                         crownsPath: strip!.crownsJson,
-                        triangleBudget: budget,
+                        ...budget,
+                        // the seed the strip regrew the trees with to decide which to remove (its default)
                         seed: strip!.tileSha256.slice(0, 16),
                         supportMeshPath: req.isolate ? refined.r.clayGlb : undefined,
                         publishAs: `${base}_trees.glb`,
@@ -287,8 +325,10 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
                     });
                 } catch (err) {
                     if (err instanceof TileVegetationError && err.code === 'budget_too_small') {
-                        const whose = req.treeTriangleBudget !== undefined ? 'the treeTriangleBudget asked for' : `half the remeshed tile's ${outputTriangles!.toLocaleString()} triangles`;
-                        throw new TileVegetationError(err.code, `${err.message}; the budget was ${whose}. Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.`, err.detail);
+                        if (req.treeTriangleBudget !== undefined) {
+                            throw new TileVegetationError(err.code, `${err.message}; the budget was the treeTriangleBudget asked for. Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.`, err.detail);
+                        }
+                        throw new TileVegetationError(err.code, `${err.message}. Ask again with a smaller radiusMeters (fewer trees), or with treeTriangleBudget set to at least that many triangles to go over the cap, or with trees false.`, err.detail);
                     }
                     throw err;
                 }
@@ -298,6 +338,9 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
             trees.count = Number(planted.stats.trees ?? 0);
             trees.triangles = Number(planted.stats.triangles ?? 0);
             trees.triangleBudget = Number(planted.stats.triangleBudget ?? 0);
+            if (typeof planted.stats.triangleBudgetSource === 'string') trees.triangleBudgetSource = planted.stats.triangleBudgetSource;
+            if (typeof planted.stats.targetTriangles === 'number') trees.targetTriangles = planted.stats.targetTriangles;
+            if (req.treeTriangleBudget === undefined) trees.sceneTriangleCap = SCENE_TREE_TRIANGLE_CAP;
             trees.notOnStructure = Array.isArray(planted.stats.skipped) ? planted.stats.skipped.length : 0;
             trees.inferred = planted.stats.inferred ?? {};
             // what the planted trees were grown into: their own measured crowns (an isolate request plants a subset)
@@ -314,6 +357,7 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
                 trees.glbPath = planted.treesGlb;
             }
         }
+        trees.outcome = describeTreeOutcome(trees);
     }
 
     timings.total = Date.now() - t0;
@@ -357,13 +401,17 @@ export function describeLocationClay(result: LocationClayResult | undefined, fla
         notes += describeGroundClosing(t);
         // the trees are measured, and the ground closed, over the whole extraction; an isolated structure is part of it
         if (notes && result.isolate) notes = ` In the extracted district around it:${notes}`;
+        if (t.measured > 0) s += ` ${t.outcome || describeTreeOutcome(t)}.`;
         if (t.count > 0) {
-            s += ` Rebuilt ${plural(t.count, 'measured tree')} as SB-Veggie trees (space colonisation, studio clay) from ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
+            s += ` The rebuilt trees (space colonisation, studio clay) fill ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
             if (t.reachingBoundary) s += ` (${t.reachingBoundary} of them ${t.reachingBoundary === 1 ? 'runs' : 'run'} to the extraction's edge and ${t.reachingBoundary === 1 ? 'was' : 'were'} rebuilt up to it)`;
-            s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}; the trees model is ${t.url}.`;
+            s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
             if (t.notOnStructure) s += ` Left out: ${plural(t.notOnStructure, 'measured tree')} not standing on the isolated structure.`;
         } else if (t.measured > 0 && t.notOnStructure === t.measured) {
             s += ` The photo tiles show ${plural(t.measured, 'measured tree')}, none standing on the isolated structure, so no trees were added to it.`;
+        } else if (t.measured > 0) {
+            if (t.notOnStructure) s += ` Left out: ${plural(t.notOnStructure, 'measured tree')} not standing on the isolated structure.`;
+            s += ' No trees model was added.';
         } else if (t.canopyAreaM2 > 0) {
             s += ` The photo tiles show ${Math.round(t.canopyAreaM2)} m² of vegetation but no crown that measures as a tree, so no trees were added.`;
         } else {
@@ -372,6 +420,30 @@ export function describeLocationClay(result: LocationClayResult | undefined, fla
         s += notes;
     }
     return s;
+}
+
+/**
+ * "N of M trees rebuilt as SB-Veggie; K left as scanned: <reasons>": M counts every crown measured as a tree, N the
+ * trees planted, K the trees left in the scan because the regrown tree does not fill their crown (each named, with why).
+ * A scanned tree is never counted as rebuilt.
+ */
+export function describeTreeOutcome(t: Pick<LocationClayTrees, 'count' | 'measured' | 'keptAsScanned'>): string {
+    const kept = t.keptAsScanned ?? [];
+    let s = `${t.count.toLocaleString()} of ${t.measured.toLocaleString()} trees rebuilt as SB-Veggie; ${kept.length.toLocaleString()} left as scanned`;
+    if (!kept.length) return s;
+    const SHOWN = 5;
+    const named = kept.slice(0, SHOWN).map(k => `crown ${k.crownId} (${Math.round(k.areaM2).toLocaleString()} m², ${k.heightM.toFixed(1)} m tall), ${k.reason}`);
+    s += `: ${named.join('; ')}`;
+    if (kept.length > SHOWN) s += `; and ${(kept.length - SHOWN).toLocaleString()} more (crowns ${kept.slice(SHOWN).map(k => k.crownId).join(', ')})`;
+    return s;
+}
+
+/** Where the trees' triangle budget came from, when it was not the user's own. */
+function describeTreeBudget(t: LocationClayTrees): string {
+    if (t.sceneTriangleCap === undefined || t.targetTriangles === undefined) return '';
+    return t.targetTriangles > t.sceneTriangleCap
+        ? ` (sized from the measured crowns, which ask for ${t.targetTriangles.toLocaleString()}; held to the cap of ${t.sceneTriangleCap.toLocaleString()} triangles for the trees of a scene)`
+        : ' (sized from the measured crowns)';
 }
 
 /**

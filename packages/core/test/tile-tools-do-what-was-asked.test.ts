@@ -459,13 +459,18 @@ describe('a location request returns remeshed geometry', () => {
     });
 
     /** Stand-ins for the native tile_vegetation stages (exercised for real in tile-vegetation.test.ts). */
-    const fakeVegetation = (opts: { trees: number; canopyAreaM2?: number; removed?: number; fail?: 'strip' | 'plant' }) => {
+    const fakeVegetation = (opts: { trees: number; canopyAreaM2?: number; removed?: number; fail?: 'strip' | 'plant' | 'plant_explicit'; notRegrowable?: number }) => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tile-veg-'));
         scratch.push(dir);
         const crowns = path.join(dir, 'crowns.json');
         // measured crowns of 100, 110, 120 ... m², the first one running to the extraction's edge
         const list = Array.from({ length: opts.trees }, (_, i) => ({ id: i, status: 'tree', areaM2: 100 + 10 * i, reachesBoundary: i === 0 }));
-        fs.writeFileSync(crowns, JSON.stringify({ version: 1, crowns: [...list, { id: 97, status: 'cut_at_boundary_removed', areaM2: 30 }, { id: 98, status: 'cut_at_boundary' }, { id: 99, status: 'below_min_height' }] }));
+        // measured trees the strip could not regrow: left in the scan with their reason
+        const kept = Array.from({ length: opts.notRegrowable ?? 0 }, (_, i) => ({
+            id: 50 + i, status: 'not_regrowable', areaM2: 479, apexAboveSupport: 3.6515,
+            regrowth: { reasonCode: 'crown_not_reached', reason: "the regrown tree's leaves reach 89% of its measured crown surface (162 of 182 samples within 1.4 m; 90% needed)", colonisation: '193 of 215 attractors reached in 52 iterations, stopped: no_attractor_within_perception' }
+        }));
+        fs.writeFileSync(crowns, JSON.stringify({ version: 1, crowns: [...list, ...kept, { id: 97, status: 'cut_at_boundary_removed', areaM2: 30 }, { id: 98, status: 'cut_at_boundary' }, { id: 99, status: 'below_min_height' }] }));
         const strip = vi.spyOn(TileVegetationService.prototype, 'strip').mockImplementation(async () => {
             if (opts.fail === 'strip') throw new TileVegetationError('texture_decode', 'photo texture 3 could not be decoded: bad Huffman code');
             return {
@@ -478,11 +483,13 @@ describe('a location request returns remeshed geometry', () => {
             } as any;
         });
         const plant = vi.spyOn(TileVegetationService.prototype, 'plant').mockImplementation(async (req: any) => {
-            if (opts.fail === 'plant') throw new TileVegetationError('budget_too_small', 'a triangle budget of 10 cannot hold 3 trees at 120 triangles each (they need at least 360)');
+            if (opts.fail === 'plant') throw new TileVegetationError('budget_too_small', "the 13,000 measured trees need at least 1,560,000 triangles at 120 each, more than the scene's cap of 1,500,000 triangles for trees");
+            if (opts.fail === 'plant_explicit') throw new TileVegetationError('budget_too_small', 'a triangle budget of 10 cannot hold 3 trees at 120 triangles each (they need at least 360)');
             return {
                 treesGlb: path.join(dir, 'trees.glb'), cached: false, ms: 400, cacheKey: 'p',
                 stats: {
-                    trees: opts.trees, triangles: 21_000, triangleBudget: req.triangleBudget, skipped: [], inferred: { crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016, shellDepth: 0.8 },
+                    trees: opts.trees, triangles: 21_000, triangleBudget: req.triangleBudget ?? 23_500, triangleBudgetSource: req.triangleBudget !== undefined ? 'explicit' : 'crown_targets', targetTriangles: 23_500,
+                    skipped: [], inferred: { crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016, shellDepth: 0.8 },
                     perTree: list.map(c => ({ crownId: c.id }))
                 },
                 published: { path: `public/models/${req.publishAs}`, url: `/models/${req.publishAs}` }
@@ -528,7 +535,9 @@ describe('a location request returns remeshed geometry', () => {
         expect(veg.strip.mock.calls[0][0]).toMatchObject({ tilePath: payload.glbPath });
         expect(refine.mock.calls[0][0]).toMatchObject({ tilePath: path.join(veg.dir, 'devegetated.glb') });
         expect(veg.plant).toHaveBeenCalledTimes(1);
-        expect(veg.plant.mock.calls[0][0]).toMatchObject({ crownsPath: path.join(veg.dir, 'crowns.json'), triangleBudget: 23_110, seed: 'abababababababab', supportMeshPath: undefined });
+        // no budget given: the trees' budget comes from the measured crowns within the scene's cap, not from the remeshed tile
+        expect(veg.plant.mock.calls[0][0]).toMatchObject({ crownsPath: path.join(veg.dir, 'crowns.json'), sceneTriangleCap: 1_500_000, seed: 'abababababababab', supportMeshPath: undefined });
+        expect(veg.plant.mock.calls[0][0].triangleBudget).toBeUndefined();
         const [env, trees] = payload.artifact.data.objects;
         expect(payload.artifact.data.objects).toHaveLength(2);
         expect(env.content.metadata).toMatchObject({ role: 'environment', remeshed: true, treesRemoved: true });
@@ -542,9 +551,11 @@ describe('a location request returns remeshed geometry', () => {
         expect(trees.content.durableUri.endsWith('_sbveggie_trees.glb')).toBe(true);
         expect(trees.space.spatial3d).toEqual(env.space.spatial3d);
         expect(payload.artifact.data.renderMode).toBe('clay');
-        expect(payload.trees).toMatchObject({ count: 3, triangles: 21_000, triangleBudget: 23_110, cutAtBoundary: 1, cutRemoved: 1, belowMinHeight: 1, canopyAreaM2: 812.5, treeCanopyAreaM2: 330, reachingBoundary: 1 });
+        expect(payload.trees).toMatchObject({ measured: 3, count: 3, notRegrowable: 0, triangles: 21_000, triangleBudget: 23_500, triangleBudgetSource: 'crown_targets', cutAtBoundary: 1, cutRemoved: 1, belowMinHeight: 1, canopyAreaM2: 812.5, treeCanopyAreaM2: 330, reachingBoundary: 1 });
+        expect(payload.trees.outcome).toBe('3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned');
+        expect(payload.artifact.summary).toContain('; 3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned.');
         const summary = outcome.exec.summaryResult!;
-        expect(summary).toContain('Rebuilt 3 measured trees as SB-Veggie trees (space colonisation, studio clay) from 330 m² of measured crown (1 of them runs to the extraction\'s edge and was rebuilt up to it)');
+        expect(summary).toContain('3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned. The rebuilt trees (space colonisation, studio clay) fill 330 m² of measured crown (1 of them runs to the extraction\'s edge and was rebuilt up to it), 21,000 triangles within a budget of 23,500 (sized from the measured crowns)');
         expect(summary).toContain('Kept as scanned: 1 crown cut by the extraction boundary (its top lies outside it), 1 low planting');
         expect(summary).toContain('Taken out with the trees it was joined to, and not rebuilt (its trunk lies outside the extraction): 1 cut crown, 30 m² of canopy.');
         // what closing the ground added is said, not hidden in the payload
@@ -683,17 +694,49 @@ describe('a location request returns remeshed geometry', () => {
         expect(refine).not.toHaveBeenCalled();
     });
 
-    it('google_3d_tiles_get_clay fails, and mounts nothing, when growing the trees fails', async () => {
+    it('google_3d_tiles_get_clay fails, and mounts nothing, when the measured trees need more than the scene cap', async () => {
         serveTiles();
         fakeRefine();
         fakeVegetation({ trees: 3, fail: 'plant' });
         const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_plant_fail.glb');
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('failed');
-        expect(payload.error).toContain('Tile extraction failed at planting: a triangle budget of 10 cannot hold 3 trees');
-        // the model is told how to ask for a budget that holds them
+        expect(payload.error).toContain("Tile extraction failed at planting: the 13,000 measured trees need at least 1,560,000 triangles at 120 each, more than the scene's cap of 1,500,000 triangles for trees.");
+        // the model is told how to ask for fewer trees, or a budget that holds them
+        expect(payload.error).toContain('Ask again with a smaller radiusMeters (fewer trees), or with treeTriangleBudget set to at least that many triangles to go over the cap, or with trees false.');
+        expect(payload.artifact).toBeUndefined();
+    });
+
+    it('google_3d_tiles_get_clay fails, and mounts nothing, when the treeTriangleBudget asked for cannot hold the trees', async () => {
+        serveTiles();
+        fakeRefine();
+        fakeVegetation({ trees: 3, fail: 'plant_explicit' });
+        const outcome = await ask('google_3d_tiles_get_clay', { treeTriangleBudget: 10 }, 'clay_plant_fail_explicit.glb');
+        const payload: any = outcome.resultPayload;
+        expect(outcome.exec.status).toBe('failed');
+        expect(payload.error).toContain('Tile extraction failed at planting: a triangle budget of 10 cannot hold 3 trees at 120 triangles each (they need at least 360); the budget was the treeTriangleBudget asked for.');
         expect(payload.error).toContain('Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.');
         expect(payload.artifact).toBeUndefined();
+    });
+
+    it('google_3d_tiles_get_clay names the measured trees left as scanned, with why, and never counts them as rebuilt', async () => {
+        serveTiles();
+        fakeRefine();
+        fakeVegetation({ trees: 3, notRegrowable: 1 });
+        const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_kept_scanned.glb');
+        const payload: any = outcome.resultPayload;
+        expect(outcome.exec.status).toBe('completed');
+        expect(payload.trees).toMatchObject({ measured: 4, count: 3, notRegrowable: 1 });
+        expect(payload.trees.keptAsScanned).toEqual([{
+            crownId: 50, reasonCode: 'crown_not_reached', reason: "the regrown tree's leaves reach 89% of its measured crown surface (162 of 182 samples within 1.4 m; 90% needed)",
+            colonisation: '193 of 215 attractors reached in 52 iterations, stopped: no_attractor_within_perception', areaM2: 479, heightM: 3.6515
+        }]);
+        const said = "3 of 4 trees rebuilt as SB-Veggie; 1 left as scanned: crown 50 (479 m², 3.7 m tall), the regrown tree's leaves reach 89% of its measured crown surface (162 of 182 samples within 1.4 m; 90% needed)";
+        expect(payload.trees.outcome).toBe(said);
+        expect(outcome.exec.summaryResult).toContain(` ${said}.`);
+        expect(payload.artifact.summary).toContain(said);
+        const trees = payload.artifact.data.objects[1];
+        expect(trees.content.metadata).toMatchObject({ treeCount: 3, treesLeftAsScanned: 1 });
     });
 
     it('both extraction tools fail with a typed missing-input error when no place is given', async () => {

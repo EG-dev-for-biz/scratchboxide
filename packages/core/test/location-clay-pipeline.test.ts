@@ -20,7 +20,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { runLocationClayPipeline, describeLocationClay, locationPublishBase, glbMeshCounts, type LocationClayDeps } from '../src/node/3d-engine/location-clay-pipeline';
 import { TileExtractionError } from '../src/common/errors/pipeline-errors';
-import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
+import { SCENE_TREE_TRIANGLE_CAP, TileVegetationService, type TileVegetationPlantRequest, type TileVegetationStripRequest } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService, type TileRefineRequest, type TileRefineResult } from '../src/node/3d-engine/tile-refine-service';
 import { buildSyntheticTile, type SyntheticTileSpec } from './helpers/synthetic-textured-tile';
 import { readGlbTriangles } from './helpers/clay-glb-render';
@@ -94,8 +94,12 @@ describe('runLocationClayPipeline', () => {
         expect(String(stub.calls[0].tilePath)).toMatch(/devegetated\.glb$/);
         expect(stub.calls[0].publishAs).toBe('district_sbveggie');
         expect(r.url).toBe('/models/district_sbveggie_refined_clay.glb');
-        expect(r.trees).toMatchObject({ count: 3, triangleBudget: 10_000, cutAtBoundary: 0, belowMinHeight: 0, notOnStructure: 0, url: '/models/district_sbveggie_trees.glb' });
-        expect(r.trees!.triangles).toBeLessThanOrEqual(10_000);
+        // the budget comes from the measured trees (a target per crown), within the scene's cap: not from the buildings
+        expect(r.trees).toMatchObject({ measured: 3, count: 3, notRegrowable: 0, keptAsScanned: [], cutAtBoundary: 0, belowMinHeight: 0, notOnStructure: 0, url: '/models/district_sbveggie_trees.glb' });
+        expect(r.trees).toMatchObject({ triangleBudgetSource: 'crown_targets', sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP });
+        expect(r.trees!.triangleBudget).toBe(r.trees!.targetTriangles);
+        expect(r.trees!.triangleBudget).toBeGreaterThanOrEqual(3 * 120);
+        expect(r.trees!.triangles).toBeLessThanOrEqual(r.trees!.triangleBudget);
         expect(r.trees!.canopyAreaM2).toBeGreaterThan(150);
         expect(r.trees!.inferred).toMatchObject({ crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016 });
         const published = path.join(root, 'public', 'models', 'district_sbveggie_trees.glb');
@@ -106,7 +110,9 @@ describe('runLocationClayPipeline', () => {
         expect(r.timingsMs.planting).toBeGreaterThanOrEqual(0);
         expect(progress.join(' | ')).toContain('Measuring the trees');
         expect(progress.join(' | ')).toContain('Growing 3 SB-Veggie trees');
-        expect(describeLocationClay(r, 'clay')).toContain('Rebuilt 3 measured trees as SB-Veggie trees');
+        expect(r.trees!.outcome).toBe('3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned');
+        expect(describeLocationClay(r, 'clay')).toContain(' 3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned. The rebuilt trees (space colonisation, studio clay) fill');
+        expect(describeLocationClay(r, 'clay')).toContain('(sized from the measured crowns)');
         // tile_refine reports its input as an object; the count, and the mounted model's own counts, are numbers
         expect(r.remesh.inputTriangles).toBe(14_000);
         expect(r.mounted).toEqual(glbMeshCounts(String(stub.calls[0].tilePath)));
@@ -155,20 +161,81 @@ describe('runLocationClayPipeline', () => {
         // each tree stands on the slope where it was measured
         const crowns = JSON.parse(fs.readFileSync(r.trees!.crownsJson, 'utf8')).crowns;
         for (const c of crowns) expect(Math.abs(c.supportY - slope * c.stem[0])).toBeLessThan(0.1);
-        expect(describeLocationClay(r, 'clay')).toContain('Rebuilt 2 measured trees as SB-Veggie trees');
+        expect(describeLocationClay(r, 'clay')).toContain('2 of 2 trees rebuilt as SB-Veggie; 0 left as scanned');
         const bare = await runLocationClayPipeline({ rawTilePath: path.join(root, 'hillside_bare.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'hillside_bare' }, deps(refineStub()));
         expect(bare.trees).toMatchObject({ measured: 0, count: 0, canopyAreaM2: 0 });
         expect(describeLocationClay(bare, 'clay')).toContain('No tree canopy was measured in the photo tiles, so no trees were added.');
     });
 
-    it('fails at the planting stage when the remeshed tile leaves too small a budget for the trees, and says how to ask for more', async () => {
+    it('sizes the trees\' budget from the measured trees, however few triangles the remeshed tile has', async () => {
+        // the budget used to be half the remeshed tile's triangles: 150 here, which cannot hold 3 trees
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'few_building_triangles' },
+            deps(refineStub({ outputTriangles: 300 })));
+        expect(r.trees).toMatchObject({ count: 3, triangleBudgetSource: 'crown_targets' });
+        expect(r.trees!.triangleBudget).toBeGreaterThan(300);
+    });
+
+    it('fails at the planting stage when the measured trees need more than the scene cap, and says how to ask for fewer or a budget', async () => {
         const before = publishedTrees();
-        const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'tiny_budget' }, deps(refineStub({ outputTriangles: 300 }))).catch(e => e);
+        // the real native plant, held to a cap of 300 triangles (the scene cap is 1,500,000: it takes 12,501 trees to
+        // exceed it), so its own message is the one the pipeline explains
+        const capped: LocationClayDeps = {
+            vegetation: { strip: req => vegetation.strip(req), plant: (req: TileVegetationPlantRequest) => vegetation.plant({ ...req, sceneTriangleCap: req.sceneTriangleCap === undefined ? undefined : 300 }) },
+            refine: refineStub().refine
+        };
+        const err = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'over_cap' }, capped).catch(e => e);
         expect(err).toBeInstanceOf(TileExtractionError);
         expect(err.stage).toBe('planting');
-        expect(err.message).toContain('cannot hold 3 trees at 120 triangles each (they need at least 360)');
-        expect(err.message).toContain("the budget was half the remeshed tile's 300 triangles. Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.");
+        expect(err.message).toBe("Tile extraction failed at planting: the 3 measured trees need at least 360 triangles at 120 each, more than the scene's cap of 300 triangles for trees. Ask again with a smaller radiusMeters (fewer trees), or with treeTriangleBudget set to at least that many triangles to go over the cap, or with trees false.");
         expect(publishedTrees()).toEqual(before);
+    });
+
+    it('keeps a measured tree it cannot regrow as scanned, says which and why, and still mounts the scene', async () => {
+        // the strip regrows every tree before removing anything; with the crown base inferred at 99 % of each tree's
+        // height, the two lower crowns have no measured surface above it, so no tree can be grown into them
+        const stub = refineStub();
+        const kept: LocationClayDeps = {
+            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.99 } }), plant: req => vegetation.plant(req) },
+            refine: stub.refine
+        };
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'kept_scanned' }, kept);
+        expect(r.url).toBe('/models/kept_scanned_sbveggie_refined_clay.glb');
+        expect(r.trees).toMatchObject({ measured: 3, count: 1, notRegrowable: 2, url: '/models/kept_scanned_sbveggie_trees.glb' });
+        expect(r.trees!.keptAsScanned).toHaveLength(2);
+        for (const k of r.trees!.keptAsScanned) {
+            expect(k.reasonCode).toBe('no_crown_above_base');
+            expect(k.reason).toContain('above its inferred crown base');
+            expect(k.colonisation).toBeUndefined();
+        }
+        const ids = r.trees!.keptAsScanned.map(k => k.crownId);
+        expect(r.trees!.outcome).toMatch(new RegExp(`^1 of 3 trees rebuilt as SB-Veggie; 2 left as scanned: crown ${ids[0]} \\(\\d+ m², [\\d.]+ m tall\\), (none|only)`));
+        expect(r.trees!.outcome).toContain(`; crown ${ids[1]} (`);
+        const text = describeLocationClay(r, 'clay');
+        expect(text).toContain(` ${r.trees!.outcome}.`);
+        // a scanned tree is never described as rebuilt: one tree model node, the trees left in the scan in the remesh input
+        expect(readGlbTriangles(fs.readFileSync(path.join(root, 'public', 'models', 'kept_scanned_sbveggie_trees.glb'))).nodeRanges).toHaveLength(1);
+        const crowns = JSON.parse(fs.readFileSync(r.trees!.crownsJson, 'utf8')).crowns;
+        expect(crowns.filter((c: any) => c.status === 'not_regrowable').map((c: any) => c.id).sort()).toEqual([...ids].sort());
+    });
+
+    it('returns the tiles with every tree as scanned, and says so, when none can be regrown', async () => {
+        const stub = refineStub();
+        const none: LocationClayDeps = {
+            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.9999 } }), plant: req => vegetation.plant(req) },
+            refine: stub.refine
+        };
+        const before = publishedTrees();
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'none_regrown' }, none);
+        expect(r.url).toBe('/models/none_regrown_sbveggie_refined_clay.glb');
+        expect(r.trees).toMatchObject({ count: 0, notRegrowable: r.trees!.measured });
+        expect(r.trees!.measured).toBeGreaterThan(0);
+        expect(r.trees!.url).toBeUndefined();
+        expect(r.trees!.strip.removedTriangles).toBe(0);
+        expect(publishedTrees()).toEqual(before);
+        const text = describeLocationClay(r, 'clay');
+        expect(text).toContain(` 0 of ${r.trees!.measured} trees rebuilt as SB-Veggie; ${r.trees!.measured} left as scanned: crown `);
+        expect(text).toContain('No trees model was added.');
+        expect(text).not.toContain('Where trees were taken out');
     });
 
     it('plants within the budget the request gives (treeTriangleBudget) instead of the share of the remeshed tile', async () => {
@@ -208,7 +275,7 @@ describe('runLocationClayPipeline', () => {
         expect(r.trees!.treeCanopyAreaM2).toBeCloseTo(plantedCrown.areaM2, 6);
         expect(r.trees!.measuredTreeCanopyAreaM2).toBeCloseTo(measured.reduce((a: number, c: any) => a + c.areaM2, 0), 6);
         expect(r.trees!.treeCanopyAreaM2).toBeLessThan(0.6 * r.trees!.measuredTreeCanopyAreaM2);
-        expect(describeLocationClay(r, 'clay')).toContain(`from ${Math.round(plantedCrown.areaM2)} m² of measured crown`);
+        expect(describeLocationClay(r, 'clay')).toContain(`fill ${Math.round(plantedCrown.areaM2)} m² of measured crown`);
         // what was measured and closed over the whole extraction is said to be about the district, not the structure
         expect(describeLocationClay(r, 'clay')).toContain('In the extracted district around it: Where trees were taken out, the ground was rebuilt');
 
@@ -271,7 +338,7 @@ describe('runLocationClayPipeline', () => {
         expect(r.trees).toMatchObject({ measured: 2, count: 2, reachingBoundary: 1, cutAtBoundary: 1, cutRemoved: 1 });
         expect(r.trees!.cutCanopyRemovedM2).toBeGreaterThan(20);
         const text = describeLocationClay(r, 'clay');
-        expect(text).toContain("Rebuilt 2 measured trees as SB-Veggie trees (space colonisation, studio clay) from");
+        expect(text).toContain('2 of 2 trees rebuilt as SB-Veggie; 0 left as scanned. The rebuilt trees (space colonisation, studio clay) fill');
         expect(text).toContain("(1 of them runs to the extraction's edge and was rebuilt up to it)");
         expect(text).toContain('Kept as scanned: 1 crown cut by the extraction boundary (its top lies outside it)');
         expect(text).toContain('Taken out with the trees it was joined to, and not rebuilt (its trunk lies outside the extraction): 1 cut crown');
