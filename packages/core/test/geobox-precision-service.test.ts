@@ -56,23 +56,27 @@ describe('GeoBoxPrecisionResectionService API', () => {
         expect(result.cameraAttitude.pitchDeg).toBe(6.0);
         expect(result.cameraAttitude.rollDeg).toBe(0.0);
 
-        // Frustum & Google 3D Tiles validation
-        expect(result.frustum.horizontalFovDeg).toBe(57.0);
+        // Frustum & Google 3D Tiles validation: the FOV is the 26 mm lens's on a 36 mm sensor, not a constant 57°
+        expect(result.frustum.horizontalFovDeg).toBeCloseTo(69.39, 1);
         expect(result.frustum.reachMeters).toBe(350.0);
         expect(result.frustum.polygonCoords.length).toBeGreaterThanOrEqual(3);
         expect(result.googleMapTiles3DConfig.camera_position.lat).toBeCloseTo(41.8908, 3);
-        expect(result.googleMapTiles3DConfig.fov).toBe(57.0);
+        expect(result.googleMapTiles3DConfig.fov).toBeCloseTo(69.39, 1);
 
-        // Brown-Conrady lens parameters
+        // Typical Brown-Conrady coefficients for the lens, labelled as such
         expect(result.lensDistortion.k1).toBe(-0.038);
         expect(result.lensDistortion.k2).toBe(0.008);
         expect(result.lensDistortion.chromaticAberration).toBe(0.0003);
+        expect(result.lensDistortionSource).toMatch(/not measured from the image/);
 
-        // 100% Sub-Pixel Edge Overlap Certification
-        expect(result.edgeAlignment.overlapScorePct).toBe(100.0);
-        expect(result.edgeAlignment.subPixelResidualPx).toBeLessThanOrEqual(0.08);
-        expect(result.edgeAlignment.physicalDeltaMm).toBeLessThan(0.10);
-        expect(result.edgeAlignment.converged).toBe(true);
+        // Nothing it did not compute: no edge-overlap certification and no match score
+        expect(result.imageAnalysed).toBe(false);
+        expect((result as any).edgeAlignment).toBeUndefined();
+        expect(result.googleMapTiles3DConfig.match_confidence).toBeUndefined();
+        expect(result.googleMapTiles3DConfig.photometric_match_score).toBeUndefined();
+        expect(result.poseSource).toMatch(/stated camera position \(cameraOpticalCenter\), stated heading, stated pitch/);
+        expect(result.landmark.resolvedFrom).toBe('targetCoords');
+        expect((result.landmark as any).confidence).toBeUndefined();
         expect(result.glbPath).toContain('colosseum_rome_textured.glb');
     });
 
@@ -88,7 +92,7 @@ describe('GeoBoxPrecisionResectionService API', () => {
         expect(result.cameraOpticalCenter.lat).toBeCloseTo(48.8571, 3);
         expect(result.cameraAttitude.headingDeg).toBe(332.0);
         expect(result.cameraAttitude.pitchDeg).toBe(18.0);
-        expect(result.edgeAlignment.overlapScorePct).toBe(100.0);
+        expect(result.imageAnalysed).toBe(false);
     });
 
     it('calculates Brown-Conrady lens distortion for telephoto vs wide-angle', () => {
@@ -100,30 +104,25 @@ describe('GeoBoxPrecisionResectionService API', () => {
         expect(wide.k2).toBeGreaterThan(tele.k2);
     });
 
-    it('executes direct sub-pixel edge alignment optimization', async () => {
+    it('measures edge overlap of two fixed images at a stated pose, and does not claim a refinement', async () => {
         const width = 32;
         const height = 32;
         const query = new Float32Array(width * height);
         const render = new Float32Array(width * height);
-
         for (let y = 10; y < 22; y++) {
             for (let x = 10; x < 22; x++) {
                 query[y * width + x] = 1.0;
-                render[y * width + x] = 1.0;
+                render[y * width + x + 3] = 1.0; // the render is 3 px off
             }
         }
-
-        const optResult = await service.optimizeEdgeAlignment({
-            queryGrayscale: query,
-            renderGrayscale: render,
-            width,
-            height,
-            maxIterations: 10
-        });
-
-        expect(optResult.finalOverlapScorePct).toBe(100.0);
-        expect(optResult.subPixelResidualPx).toBeLessThanOrEqual(0.10);
-        expect(optResult.physicalErrorMm).toBeLessThanOrEqual(0.10);
+        const pose = { position: [0, 0, 50] as [number, number, number], target: [0, 0, 0] as [number, number, number], fov: 45 };
+        const optResult = await service.optimizeEdgeAlignment({ queryGrayscale: query, renderGrayscale: render, width, height, initialPose: pose });
+        expect(optResult.initialOverlapScorePct).toBe(optResult.finalOverlapScorePct); // measured, not a constant 98.4
+        expect(optResult.finalOverlapScorePct).toBeLessThan(100);
+        expect(optResult.converged).toBe(false);
+        expect(optResult.iterations).toBe(0);
+        expect(optResult.optimizedPose).toEqual(pose);
+        await expect(service.optimizeEdgeAlignment({ queryGrayscale: query, renderGrayscale: render, width, height })).rejects.toThrow(MissingInputError);
     });
     it('resects arbitrary non-monument coordinates without presets or hardcoded locations', async () => {
         const result = await service.resectCameraPose({
@@ -140,8 +139,7 @@ describe('GeoBoxPrecisionResectionService API', () => {
         expect(result.cameraAttitude.headingDeg).toBe(245.0);
         expect(result.cameraAttitude.pitchDeg).toBe(4.5);
         expect(result.cameraOpticalCenter.standoffDistanceMeters).toBe(65.0);
-        expect(result.edgeAlignment.overlapScorePct).toBe(100.0);
-        expect(result.edgeAlignment.converged).toBe(true);
+        expect(result.poseSource).toBe('stated heading, stated pitch and stated standoff distance');
     });
 
     it('resects camera pose analytically from 2D-to-3D point correspondences via solvePnP', async () => {
@@ -165,13 +163,19 @@ describe('GeoBoxPrecisionResectionService API', () => {
             targetCoords: { lat: 34.0522, lng: -118.2437, alt: 75.0 },
             points2D,
             points3D,
+            imageWidthPx: 1920,
+            imageHeightPx: 1080,
             sensorFocalMm: 26.0,
             optimizeTo100Percent: true
         });
 
         expect(result.success).toBe(true);
         expect(result.cameraOpticalCenter.standoffDistanceMeters).toBeCloseTo(50.0, 1);
-        expect(result.edgeAlignment.overlapScorePct).toBe(100.0);
+        expect(result.poseSource).toMatch(/^solvePnP from 5 point correspondences/);
+
+        // The principal point comes from the image size: without it nothing is assumed.
+        await expect(service.resectCameraPose({ targetCoords: { lat: 34.0522, lng: -118.2437, alt: 75.0 }, points2D, points3D }))
+            .rejects.toThrow(/imageWidthPx and imageHeightPx/);
     });
 
     it('enforces Zero Presets by throwing actionable error when no coordinates or query are provided', async () => {
@@ -221,10 +225,11 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
         );
 
         expect(outcome.exec.status).toBe('completed');
-        expect(outcome.exec.summaryResult).toContain('Resected 6-DOF camera pose');
-        expect(outcome.exec.summaryResult).toContain('100.0% edge overlap');
+        expect(outcome.exec.summaryResult).toContain('Camera pose for Colosseum');
+        expect(outcome.exec.summaryResult).toContain("The photo's pixels were not analysed and no edge alignment was run.");
+        expect(outcome.exec.summaryResult).not.toMatch(/edge overlap|Millimeter|mm tolerance/);
         expect((outcome.resultPayload as any).success).toBe(true);
-        expect((outcome.resultPayload as any).edgeAlignment.overlapScorePct).toBe(100.0);
+        expect((outcome.resultPayload as any).edgeAlignment).toBeUndefined();
     });
 
     it('dispatches geobox_optimize_edge_alignment via tool registry', async () => {
@@ -238,9 +243,9 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
             {} as any
         );
 
-        expect(outcome.exec.status).toBe('completed');
-        expect(outcome.exec.summaryResult).toContain('Sub-pixel edge alignment reached 100.0% overlap');
-        expect((outcome.resultPayload as any).finalOverlapScorePct).toBe(100.0);
+        // Without a model and a starting pose there is nothing to align: no 100% from two synthetic squares.
+        expect(outcome.exec.status).toBe('failed');
+        expect(String((outcome.resultPayload as any).error)).toMatch(/needs (glbPath|initialPose)/);
     });
 
     it('refuses to invent a camera pose when only the target location is known', async () => {
@@ -248,6 +253,26 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
             imagePath: 'unknown.jpg',
             targetCoords: { lat: 35.6586, lng: 139.7454, alt: 40.0 }
         })).rejects.toThrow(/only the target location is known/);
+    });
+
+    it('a heading alone does not place the camera: no 100 m standoff or 5° pitch is assumed, and a nonexistent photo gets no certificate', async () => {
+        // This used to "resect" /definitely/not/a/real/photo.jpg to 100% edge overlap at 0.00 mm.
+        await expect(new GeoBoxPrecisionResectionService().resectCameraPose({
+            imagePath: '/definitely/not/a/real/photo.jpg',
+            targetCoords: { lat: 40.7411, lng: -73.9897, alt: 12 },
+            targetLandmarkName: 'Flatiron Building',
+            headingDeg: 90
+        })).rejects.toThrow(MissingInputError);
+        await expect(new GeoBoxPrecisionResectionService().resectCameraPose({
+            targetCoords: { lat: 40.7411, lng: -73.9897, alt: 12 },
+            headingDeg: 90,
+            pitchDeg: 5
+        })).rejects.toThrow(/standoffDistanceMeters/);
+        // A camera position without its altitude: no "eye height" of ground + 2 m.
+        await expect(new GeoBoxPrecisionResectionService().resectCameraPose({
+            targetCoords: { lat: 40.7411, lng: -73.9897, alt: 12 },
+            knownCoords: { lat: 40.7405, lng: -73.9900 }
+        })).rejects.toThrow(/knownCoords\.alt/);
     });
 
     it('places the camera from a supplied heading when no other pose evidence exists', async () => {

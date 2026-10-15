@@ -47,7 +47,7 @@ describe('Precision Camera Matchmove Pipeline Integration Test Suite', () => {
     // -------------------------------------------------------------------------
     // Test 1: Milestone Resectioning (Frame 1 & Final Frame)
     // -------------------------------------------------------------------------
-    it('1. Resects Frame 1 & Final Frame with 100% Certified Millimeter Precision', async () => {
+    it('1. Resects Frame 1 & Final Frame from the stated pose evidence', async () => {
         // Frame 1: Oblique Roofline Perspective (Plaza Hotel mansard & turret)
         const frame1Result = await resectionService.resectImageLocation({
             ...fixturePose('plaza'),
@@ -64,9 +64,10 @@ describe('Precision Camera Matchmove Pipeline Integration Test Suite', () => {
         expect(frame1Result.cameraOpticalCenter.elevationMslMeters).toBeCloseTo(82.0, 1);
         expect(frame1Result.cameraAttitude.headingDeg).toBeCloseTo(-29.0, 1);
         expect(frame1Result.cameraAttitude.pitchDeg).toBeCloseTo(-30.0, 1);
-        expect(frame1Result.edgeAlignment.overlapScorePct).toBe(100.0);
-        expect(frame1Result.edgeAlignment.subPixelResidualPx).toBeLessThanOrEqual(0.10);
-        expect(frame1Result.edgeAlignment.physicalDeltaMm).toBeLessThanOrEqual(0.10);
+        // The pose is the stated evidence; no edge-overlap or millimetre certification is claimed.
+        expect(frame1Result.imageAnalysed).toBe(false);
+        expect((frame1Result as any).edgeAlignment).toBeUndefined();
+        expect(frame1Result.poseSource).toMatch(/stated camera position \(cameraOpticalCenter\), stated heading, stated pitch/);
         expect(frame1Result.googleMapTiles3DConfig.tilt).toBeCloseTo(60.0, 1); // 90° - 30°
 
         // Final Frame (Frame 360): Overhead Nadir Landing
@@ -79,14 +80,18 @@ describe('Precision Camera Matchmove Pipeline Integration Test Suite', () => {
                 lng: -73.974400,
                 alt: 10.5
             },
+            headingDeg: -29.0, // straight above or below the target: the heading is not derivable, so it is stated
             optimizeTo100Percent: true,
             sensorFocalMm: 41.4
         });
 
         expect(finalFrameResult.success).toBe(true);
         expect(finalFrameResult.cameraOpticalCenter.elevationMslMeters).toBeCloseTo(10.5, 1);
-        expect(finalFrameResult.edgeAlignment.overlapScorePct).toBe(100.0);
-        expect(finalFrameResult.edgeAlignment.physicalDeltaMm).toBeLessThanOrEqual(0.10);
+        expect(finalFrameResult.poseSource).toMatch(/stated camera position \(knownCoords\), stated heading/);
+        await expect(resectionService.resectImageLocation({
+            targetCoords: { ...KNOWN_RESECTION_LANDMARKS.plaza.targetCoords, alt: KNOWN_RESECTION_LANDMARKS.plaza.groundElevation },
+            knownCoords: { lat: 40.764500, lng: -73.974400, alt: 10.5 }
+        })).rejects.toThrow(/needs headingDeg/);
     });
 
     // -------------------------------------------------------------------------
