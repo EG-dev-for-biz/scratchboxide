@@ -83,6 +83,33 @@ export const NodeMediaStatus: React.FC<{ node: GraphNode }> = ({ node }) => {
     return <MediaModelNotice note={node.parameters?.modelNote} style={{ ...overlay, background: 'rgba(69, 26, 3, 0.85)', maxHeight: '60%', overflow: 'hidden' }} />;
 };
 
+/**
+ * The parameters a finished media job writes onto its node, merged over the node's parameters as they are when the
+ * job ends. A success clears any error left by an earlier run; a failure clears the previous output's model note
+ * (the error is what the node shows now).
+ */
+export function mediaJobOutcomeParameters(
+    current: Record<string, any> | undefined,
+    outcome: { resultUrl: string; result?: Parameters<typeof substitutedModelNote>[0] & { modelUsed?: string } } | { error: string }
+): Record<string, any> {
+    if ('error' in outcome) {
+        return { ...current, isGenerating: false, generationError: outcome.error, modelNote: undefined };
+    }
+    const { resultUrl, result } = outcome;
+    return {
+        ...current,
+        isGenerating: false,
+        generationError: undefined,
+        mediaUrl: resultUrl,
+        imageUrl: resultUrl,
+        videoUrl: resultUrl,
+        audioUrl: resultUrl,
+        // Which model made the output; the note is shown on the node when it is not the node's model.
+        generatedBy: result?.modelUsed,
+        modelNote: substitutedModelNote(result)
+    };
+}
+
 const getNodePort = (node: GraphNode) => {
     let nodeHeight = node.notes ? 126 : 96;
     if (node.category === 'scene-3d' || node.category === '3d-card') {
@@ -375,6 +402,10 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
 
     const viewportRef = React.useRef<HTMLDivElement>(null);
     const [graph, setGraph] = React.useState<NodeGraphData>(() => sanitizeGraph(data));
+    // The latest graph, for updates that land after an await (media jobs): those must merge into the graph as it is
+    // then, not as it was when the job started, or they would bring back stale state (an old error) and drop edits.
+    const graphRef = React.useRef<NodeGraphData>(graph);
+    graphRef.current = graph;
     const [selectedNodeId, setSelectedNodeId] = React.useState<string | undefined>(undefined);
     const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | undefined>(undefined);
     const [draggingNodeId, setDraggingNodeId] = React.useState<string | undefined>(undefined);
@@ -1143,8 +1174,10 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
     };
 
     const handleUpdateNode = (nodeId: string, updates: Partial<GraphNode>) => {
-        const updatedNodes = graph.nodes.map(n => (n.id === nodeId ? { ...n, ...updates } : n));
-        const updatedGraph = { ...graph, nodes: updatedNodes };
+        const latest = graphRef.current;
+        const updatedNodes = latest.nodes.map(n => (n.id === nodeId ? { ...n, ...updates } : n));
+        const updatedGraph = { ...latest, nodes: updatedNodes };
+        graphRef.current = updatedGraph;
         setGraph(updatedGraph);
         if (onUpdate) {
             onUpdate(updatedGraph);
@@ -1159,6 +1192,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
         handleUpdateNode(node.id, {
             parameters: { ...node.parameters, isGenerating: true, generationError: undefined }
         });
+        const currentParameters = () => graphRef.current.nodes.find(n => n.id === node.id)?.parameters;
 
         if (onPromptAction) {
             onPromptAction(`Generate ${node.category || 'media'} with prompt "${prompt}" for node "${node.label}" in flow "${graph.title}"`);
@@ -1252,27 +1286,15 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                     onComplete: (done) => {
                         const resultUrl = client.contentUrl(job.id, wsPath);
                         handleUpdateNode(node.id, {
-                            parameters: {
-                                ...node.parameters,
-                                isGenerating: false,
-                                mediaUrl: resultUrl,
-                                imageUrl: resultUrl,
-                                videoUrl: resultUrl,
-                                audioUrl: resultUrl,
-                                // Which model made the output; the note is shown on the node when it is not the node's model.
-                                generatedBy: done.result?.modelUsed,
-                                modelNote: substitutedModelNote(done.result)
-                            },
+                            parameters: mediaJobOutcomeParameters(currentParameters(), { resultUrl, result: done.result }),
                             outputData: { url: resultUrl, modelUsed: done.result?.modelUsed }
                         });
                     },
                     onError: (pollErr, failedJob) => {
                         handleUpdateNode(node.id, {
-                            parameters: {
-                                ...node.parameters,
-                                isGenerating: false,
-                                generationError: pollErr?.message || (failedJob?.error?.message ?? 'Media generation failed')
-                            }
+                            parameters: mediaJobOutcomeParameters(currentParameters(), {
+                                error: pollErr?.message || (failedJob?.error?.message ?? 'Media generation failed')
+                            })
                         });
                     }
                 });
@@ -1282,11 +1304,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
 
         } catch (err: any) {
             handleUpdateNode(node.id, {
-                parameters: {
-                    ...node.parameters,
-                    isGenerating: false,
-                    generationError: err?.message || 'Media generation request failed'
-                }
+                parameters: mediaJobOutcomeParameters(currentParameters(), { error: err?.message || 'Media generation request failed' })
             });
         }
     };
