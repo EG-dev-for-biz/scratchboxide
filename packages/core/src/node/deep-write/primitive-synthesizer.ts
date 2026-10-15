@@ -7,9 +7,13 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 import { DiscoveredGoalPlan, MultiArtifactPlanBundle } from '../../common/deep-write/deep-write-protocol';
-import { PrimitiveType } from '../../browser/generative-canvas/canvas-types';
-import { synthesizeContextual3DScene } from '../../browser/generative-canvas/procedural-3d-synthesizer';
-import { synthesizeVibeToolSandbox } from '../../browser/generative-canvas/vibe-tool-synthesizer';
+import { CodeFileTab, LiveCodeSandboxData, PrimitiveType, SandboxLanguage } from '../../browser/generative-canvas/canvas-types';
+
+/**
+ * Builds the deep-write bundle from what the pipeline produced: its stage outputs, its files and its plan. A primitive
+ * the plan asked for that the pipeline produced nothing for is left out and named in the summary; no template scene
+ * or app picked from words in the project name stands in for it.
+ */
 export class PrimitiveSynthesizer {
     /**
      * Synthesize and bundle multiple coordinated Scratchbox Canvas Primitives from the planning/code results.
@@ -32,22 +36,22 @@ export class PrimitiveSynthesizer {
             });
         }
 
-        // 2. Synthesize 3D Scene Viewport
+        const notMade: string[] = [];
+
+        // 2. The pipeline writes code and documents, not scene geometry: a 3D scene is not made up for it (a keyword
+        // template scene used to be mounted as the project's viewport).
         if (primitivesToCreate.includes('3d-scene')) {
-            artifacts.push({
-                type: '3d-scene',
-                title: `${projectName} Graphics Viewport`,
-                data: this.synthesize3DScene(projectName, stageHistory)
-            });
+            notMade.push('a 3D scene (the pipeline produced no scene geometry)');
         }
 
-        // 3. Synthesize Live Runnable Sandbox
+        // 3. The files the pipeline wrote, in a sandbox; with no files there is no sandbox (a template app was used).
         if (primitivesToCreate.includes('live-code-sandbox')) {
-            artifacts.push({
-                type: 'live-code-sandbox',
-                title: `${projectName} Runtime Sandbox`,
-                data: this.synthesizeSandbox(projectName, files)
-            });
+            const sandbox = this.synthesizeSandbox(projectName, files);
+            if (sandbox) {
+                artifacts.push({ type: 'live-code-sandbox', title: `${projectName} Runtime Sandbox`, data: sandbox });
+            } else {
+                notMade.push('a runtime sandbox (the pipeline wrote no files)');
+            }
         }
 
         // 4. Synthesize Module Dependency Node Graph
@@ -70,7 +74,7 @@ export class PrimitiveSynthesizer {
 
         return {
             title: projectName,
-            summary: `Autonomous multi-primitive deliverable bundle compiled for goal: "${plan.goal}".`,
+            summary: `Deliverables for the goal "${plan.goal}".${notMade.length > 0 ? ` Not made: ${notMade.join('; ')}.` : ''}`,
             artifacts,
             files
         };
@@ -81,9 +85,9 @@ export class PrimitiveSynthesizer {
             {
                 id: 'sec-summary',
                 type: 'callout',
-                calloutTitle: `System Architecture & Strategic Objectives: ${projectName}`,
+                calloutTitle: projectName,
                 calloutType: 'info',
-                content: `Exhaustive planning spec autonomously compiled for "${projectName}". Includes architectural patterns, platform scopes, and comprehensive deliverables.`
+                content: `Goal: ${plan.goal}`
             }
         ];
 
@@ -96,14 +100,13 @@ export class PrimitiveSynthesizer {
             });
         }
 
-        // Add comparison matrix
+        // The planned files with the plan's platforms and toolchain (no role is made up for each file).
         sections.push({
             id: 'sec-comparison',
             type: 'table',
-            tableHeaders: ['Module / Asset', 'Expressive Target', 'Build Platform', 'Toolchain Status'],
-            tableRows: plan.deliverables.filePaths.map((p, idx) => [
+            tableHeaders: ['File', 'Build Platform', 'Toolchain'],
+            tableRows: plan.deliverables.filePaths.map(p => [
                 p,
-                idx === 0 ? 'Core controller logic' : 'Simulation interface module',
                 plan.deliverables.config.platforms.join(', '),
                 plan.deliverables.config.toolchain.toUpperCase()
             ])
@@ -118,45 +121,32 @@ export class PrimitiveSynthesizer {
         };
     }
 
-    private synthesize3DScene(projectName: string, history: Record<string, any>): any {
-        const historyContext = Object.values(history).map((h: any) => `${h.description || ''} ${h.content || ''}`).join(' ');
-        return synthesizeContextual3DScene(projectName, {
-            docTitle: projectName,
-            docContent: historyContext
-        });
-    }
-
-    public synthesizeStudioTool(toolName: string, prompt?: string): any {
-        return synthesizeVibeToolSandbox(prompt || toolName, toolName);
-    }
-
-    private synthesizeSandbox(projectName: string, files: Record<string, string>): any {
-        if (Object.keys(files).length === 0 || /tool|studio|blocking|pre-viz|editor/i.test(projectName)) {
-            return synthesizeVibeToolSandbox(projectName, `${projectName} Studio`);
-        }
-        const tabs = Object.entries(files).map(([filePath, content], idx) => {
-            const ext = filePath.split('.').pop() || 'js';
-            let language = 'javascript';
-            if (ext === 'cpp' || ext === 'hpp') language = 'cpp';
-            if (ext === 'rs') language = 'rust';
-            if (ext === 'wgsl') language = 'wgsl';
-            if (ext === 'glsl') language = 'glsl';
-            if (ext === 'ts' || ext === 'tsx') language = 'typescript';
-
+    /** The pipeline's files as sandbox tabs; undefined when it wrote none. */
+    private synthesizeSandbox(projectName: string, files: Record<string, string>): LiveCodeSandboxData | undefined {
+        const entries = Object.entries(files);
+        if (entries.length === 0) return undefined;
+        const LANGUAGE_BY_EXT: Record<string, SandboxLanguage> = {
+            cpp: 'cpp', hpp: 'cpp', cc: 'cpp', h: 'c', c: 'c', ts: 'typescript', tsx: 'typescript', js: 'javascript',
+            jsx: 'javascript', py: 'python', css: 'css', html: 'html', json: 'json', md: 'markdown', yaml: 'yaml', yml: 'yaml', wasm: 'wasm'
+        };
+        const tabs: CodeFileTab[] = entries.map(([filePath, content], idx) => {
+            const ext = (filePath.split('.').pop() || '').toLowerCase();
             return {
-                name: filePath,
+                id: `file-${idx}`,
+                name: filePath.split('/').pop() || filePath,
                 path: filePath,
+                // A file type the sandbox has no name for keeps its own extension as its label.
+                language: LANGUAGE_BY_EXT[ext] ?? (ext as SandboxLanguage),
                 content,
-                language,
-                isActive: idx === 0
+                isEntry: idx === 0
             };
         });
-
         return {
             title: `${projectName} Sandbox`,
-            template: 'webassembly',
-            tabs,
-            activeTabId: tabs[0]?.path || ''
+            files: tabs,
+            activeFileId: tabs[0].id,
+            // The pipeline's files are shown as code; nothing is run as an app they were not written as.
+            viewMode: 'code'
         };
     }
 

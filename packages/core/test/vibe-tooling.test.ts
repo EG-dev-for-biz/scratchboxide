@@ -16,7 +16,6 @@ import {
 import {
     buildSandboxSrcDoc
 } from '../src/browser/generative-canvas/primitives/LiveCodeSandboxPrimitive';
-import { PrimitiveSynthesizer } from '../src/node/deep-write/primitive-synthesizer';
 
 test('vibe-tooling.test', () => {
 
@@ -96,16 +95,8 @@ test('vibe-tooling.test', () => {
     assert.ok(srcDoc.includes('window.THREE = THREE;'), 'Babel module script must bind global window.THREE');
     console.log('  ✓ Test 4 Passed: Sandbox HTML bundler packages Three.js ESM maps and @scratchbox/tool-sdk bridge');
 
-    // ----------------------------------------------------
-    // Test 5: DeepWrite PrimitiveSynthesizer Studio Tool Integration
-    // ----------------------------------------------------
-    console.log('  Testing PrimitiveSynthesizer Studio Tool Integration...');
-    const synth = new PrimitiveSynthesizer();
-    const synthesizedTool = synth.synthesizeStudioTool('Director Blocking Tool', 'build a blocking tool');
-    assert.ok(synthesizedTool, 'PrimitiveSynthesizer must return a synthesized tool');
-    assert.strictEqual(synthesizedTool.template, 'react');
-    assert.ok(synthesizedTool.dependencies?.['three'], 'Must include three in dependencies');
-    console.log('  ✓ Test 5 Passed: PrimitiveSynthesizer exposes synthesizeStudioTool for autonomous planning');
+    // Test 5 (PrimitiveSynthesizer.synthesizeStudioTool) removed: deep write no longer builds a template tool app
+    // from words in a name (see deep-write-bundle-model-output.test.ts).
 
     console.log('\n🎉 ALL VIBE-CODED CUSTOM TOOL TESTS PASSED SUCCESSFULLY!\n');
 
