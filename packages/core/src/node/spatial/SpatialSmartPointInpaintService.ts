@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
+import { HeadlessMeshSilhouetteRenderer, RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 import { encodePng, resampleRgba } from '../texture-processing';
 import { GeminiClient } from '../gemini/gemini-client';
@@ -21,7 +21,16 @@ export interface SmartPointInpaintResult {
     x: number;
     y: number;
     mask: Buffer; // PNG encoded feathered mask
+    /** Distance of the point from the camera along the view direction, in scene units. */
+    depth: number;
+    /** Depth of the mesh surface at the projected pixel (undefined when no surface covers it). */
+    surfaceDepth?: number;
+    /** Pixels the mask edits (any weight above zero). */
+    maskedPixels: number;
 }
+
+/** The renderer's near plane: a point nearer than this along the view direction is not in the image. */
+const NEAR_PLANE = 0.5;
 
 export interface SpatialSmartPointInpaintServiceOptions {
     client?: any; // Google GenAI client
@@ -45,8 +54,11 @@ export class SpatialSmartPointInpaintService {
     }
 
     /**
-     * Projects a 3D world coordinate (smart point) onto the screen using 6-DOF camera pose matrices,
-     * and generates a high-quality feathered radial PNG mask centered at the projected point.
+     * Projects a 3D world coordinate (smart point) into a width x height image taken with the camera pose, checks that
+     * the image really shows it, and builds a feathered radial PNG mask centred on it. The point must be in front of
+     * the camera, project inside the image, and not be hidden behind the mesh (the mesh's depth at that pixel is
+     * rendered and compared); otherwise MissingInputError is thrown, before any model is asked to edit the wrong
+     * pixels.
      */
     public projectSmartPointToMask(
         mesh: RenderMesh3D,
@@ -56,93 +68,76 @@ export class SpatialSmartPointInpaintService {
         width: number = 640,
         height: number = 480
     ): SmartPointInpaintResult {
-        // 1. Build View Matrix V
-        const eye: [number, number, number] = [pose.x, pose.y, pose.z];
-        const target: [number, number, number] = [pose.targetX, pose.targetY, pose.targetZ];
-        const up: [number, number, number] = pose.up ?? [0, 1, 0];
-
-        let fx = target[0] - eye[0];
-        let fy = target[1] - eye[1];
-        let fz = target[2] - eye[2];
-        let fLen = Math.hypot(fx, fy, fz) || 1;
-        fx /= fLen; fy /= fLen; fz /= fLen;
-
-        let rx = fy * up[2] - fz * up[1];
-        let ry = fz * up[0] - fx * up[2];
-        let rz = fx * up[1] - fy * up[0];
-        let rLen = Math.hypot(rx, ry, rz) || 1;
-        rx /= rLen; ry /= rLen; rz /= rLen;
-
-        const ux = ry * fz - rz * fy;
-        const uy = rz * fx - rx * fz;
-        const uz = rx * fy - ry * fx;
-
-        const V = [
-            rx, ux, -fx, 0,
-            ry, uy, -fy, 0,
-            rz, uz, -fz, 0,
-            -(eye[0] * rx + eye[1] * ry + eye[2] * rz),
-            -(eye[0] * ux + eye[1] * uy + eye[2] * uz),
-            (eye[0] * fx + eye[1] * fy + eye[2] * fz),
-            1
-        ];
-
-        // 2. Build Projection Matrix P
-        const fovRad = (pose.fov * Math.PI) / 180.0;
-        const f = 1.0 / Math.tan(fovRad * 0.5);
-        const aspect = width / height;
-        const zNear = 0.5;
-        const zFar = 20000.0;
-
-        const P = [
-            f / aspect, 0, 0, 0,
-            0, f, 0, 0,
-            0, 0, (zFar + zNear) / (zNear - zFar), -1,
-            0, 0, (2 * zFar * zNear) / (zNear - zFar), 0
-        ];
-
-        // 3. Compute View-Projection Matrix VP
-        const VP = new Float32Array(16);
-        for (let i = 0; i < 4; i++) {
-            for (let j = 0; j < 4; j++) {
-                let sum = 0;
-                for (let k = 0; k < 4; k++) {
-                    sum += V[i * 4 + k] * P[k * 4 + j];
-                }
-                VP[i * 4 + j] = sum;
-            }
+        const tool = 'spatial_smart_point_inpaint';
+        if (!Array.isArray(smartPoint) || smartPoint.length !== 3 || !smartPoint.every(v => Number.isFinite(v))) {
+            throw new MissingInputError(tool, 'smartPoint', `an [x, y, z] point is required (got ${JSON.stringify(smartPoint)})`);
         }
+        if (!(radiusPx > 0)) throw new MissingInputError(tool, 'radiusPx', `a positive pixel radius is required (got ${radiusPx})`);
+        if (!(pose?.fov > 0 && pose.fov < 180)) throw new MissingInputError(tool, 'pose.fov', `a vertical field of view between 0 and 180 degrees is required (got ${pose?.fov})`);
 
-        // 4. Project the Smart Point
-        const [vx, vy, vz] = smartPoint;
-        const cx = vx * VP[0] + vy * VP[4] + vz * VP[8] + VP[12];
-        const cy = vx * VP[1] + vy * VP[5] + vz * VP[9] + VP[13];
-        const cw = vx * VP[3] + vy * VP[7] + vz * VP[11] + VP[15];
+        // Camera frame, as the renderer builds it: +X right, +Y up, looking from the eye to the target.
+        const eye: [number, number, number] = [pose.x, pose.y, pose.z];
+        const up: [number, number, number] = pose.up ?? [0, 1, 0];
+        let fwd: [number, number, number] = [pose.targetX - pose.x, pose.targetY - pose.y, pose.targetZ - pose.z];
+        const fLen = Math.hypot(...fwd);
+        if (!(fLen > 1e-9)) throw new MissingInputError(tool, 'pose', 'the camera position equals its target, so it has no view direction');
+        fwd = [fwd[0] / fLen, fwd[1] / fLen, fwd[2] / fLen];
+        let right: [number, number, number] = [fwd[1] * up[2] - fwd[2] * up[1], fwd[2] * up[0] - fwd[0] * up[2], fwd[0] * up[1] - fwd[1] * up[0]];
+        const rLen = Math.hypot(...right);
+        if (!(rLen > 1e-9)) throw new MissingInputError(tool, 'pose.up', 'the up vector is parallel to the view direction, so the image has no orientation');
+        right = [right[0] / rLen, right[1] / rLen, right[2] / rLen];
+        const camUp: [number, number, number] = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
 
-        const invW = 1.0 / (cw || 1);
-        const ndcX = cx * invW;
-        const ndcY = cy * invW;
+        const rel = [smartPoint[0] - eye[0], smartPoint[1] - eye[1], smartPoint[2] - eye[2]];
+        const depth = rel[0] * fwd[0] + rel[1] * fwd[1] + rel[2] * fwd[2];
+        if (!(depth > NEAR_PLANE)) {
+            throw new MissingInputError(tool, 'smartPoint', `[${smartPoint.join(', ')}] is ${depth.toFixed(3)} along the view direction: behind the camera (or nearer than its ${NEAR_PLANE} near plane), so the image does not show it`);
+        }
+        const tanHalf = Math.tan((pose.fov * Math.PI) / 360);
+        const ndcX = (rel[0] * right[0] + rel[1] * right[1] + rel[2] * right[2]) / (depth * tanHalf * (width / height));
+        const ndcY = (rel[0] * camUp[0] + rel[1] * camUp[1] + rel[2] * camUp[2]) / (depth * tanHalf);
         const screenX = (ndcX * 0.5 + 0.5) * width;
         const screenY = (1.0 - (ndcY * 0.5 + 0.5)) * height;
+        if (!(screenX >= 0 && screenX < width && screenY >= 0 && screenY < height)) {
+            throw new MissingInputError(tool, 'smartPoint', `[${smartPoint.join(', ')}] projects to (${screenX.toFixed(1)}, ${screenY.toFixed(1)}), outside the ${width}x${height} image`);
+        }
 
-        // 5. Generate Feathered Radial Mask
-        const size = width * height;
-        const maskRgba = Buffer.alloc(size * 4);
+        // Occlusion: the mesh's nearest surface around the projected pixel. The point is hidden when every surface
+        // there lies in front of it by more than a small depth tolerance (1% of its distance).
+        const { depthBuffer } = HeadlessMeshSilhouetteRenderer.renderMesh(mesh, pose, width, height, { clipNearPlane: true });
+        const px = Math.floor(screenX), py = Math.floor(screenY);
+        const tolerance = Math.max(depth * 0.01, 1e-3);
+        let surfaceDepth: number | undefined;
+        let visible = false;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const x = px + dx, y = py + dy;
+                if (x < 0 || y < 0 || x >= width || y >= height) continue;
+                const d = depthBuffer[y * width + x];
+                if (d >= 1e9) { visible = true; continue; }
+                if (dx === 0 && dy === 0) surfaceDepth = d;
+                if (d >= depth - tolerance) visible = true;
+            }
+        }
+        if (!visible) {
+            throw new MissingInputError(tool, 'smartPoint', `[${smartPoint.join(', ')}] is ${depth.toFixed(3)} from the camera, but the mesh surface at its pixel (${screenX.toFixed(1)}, ${screenY.toFixed(1)}) is ${(surfaceDepth ?? NaN).toFixed(3)} away: the point is hidden behind it, so an edit there would paint the occluder`);
+        }
 
+        // Feathered radial mask
+        const maskRgba = Buffer.alloc(width * height * 4);
+        let maskedPixels = 0;
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const idx = (y * width + x) * 4;
                 const dist = Math.hypot(x - screenX, y - screenY);
-
                 let grayscale = 0;
                 if (dist <= radiusPx * 0.5) {
                     grayscale = 255;
                 } else if (dist <= radiusPx) {
                     const t = (dist - radiusPx * 0.5) / (radiusPx * 0.5);
-                    // Smooth linear/cosine falloff
                     grayscale = Math.round(255 * (0.5 + 0.5 * Math.cos(t * Math.PI)));
                 }
-
+                if (grayscale > 0) maskedPixels++;
                 maskRgba[idx] = grayscale;
                 maskRgba[idx + 1] = grayscale;
                 maskRgba[idx + 2] = grayscale;
@@ -150,12 +145,13 @@ export class SpatialSmartPointInpaintService {
             }
         }
 
-        const maskPng = encodePng(width, height, maskRgba);
-
         return {
             x: screenX,
             y: screenY,
-            mask: maskPng
+            mask: encodePng(width, height, maskRgba),
+            depth,
+            surfaceDepth,
+            maskedPixels
         };
     }
 

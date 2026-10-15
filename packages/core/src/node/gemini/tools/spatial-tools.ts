@@ -1790,7 +1790,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'spatial_smart_point_inpaint',
-        description: 'Inpaints a localized region of an image of the scene: projects a 3D point into the image with the camera pose, has an image model edit a feathered region around it (at the image\'s own aspect ratio; an answer at another ratio is refused), and keeps every pixel outside that region. The result names the model that answered.',
+        description: 'Inpaints a localized region of an image of the scene: projects a 3D point into the image with the camera pose, has an image model edit a feathered region around it (at the image\'s own aspect ratio; an answer at another ratio is refused), and keeps every pixel outside that region. A point behind the camera, outside the image, or hidden behind the mesh (its rendered depth) is refused before any model call. The result names the model that answered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -2178,10 +2178,13 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             }
         }
 
+        if (!(await fs.pathExists(glbPath))) throw new MissingInputError('spatial_smart_point_inpaint', 'glbPath', `${glbPath} does not exist`);
+        // The point is checked against the image before any model call: in front of the camera, inside the frame,
+        // and not hidden behind the mesh.
+        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+        const maskRes = new SpatialSmartPointInpaintService().projectSmartPointToMask(mesh, pose, smartPoint, radiusPx, dims.width, dims.height);
         const client = await new GoogleMediaCredentialsService().createClient();
         const service = new SpatialSmartPointInpaintService({ client });
-        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
-        const maskRes = service.projectSmartPointToMask(mesh, pose, smartPoint, radiusPx, dims.width, dims.height);
         const result = await service.executeSpatialInpaint({
             image: baseImage,
             mask: maskRes.mask,
@@ -2201,11 +2204,14 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 imageUrl: `/models/${fileName}`,
                 projectedX: maskRes.x,
                 projectedY: maskRes.y,
+                pointDepth: maskRes.depth,
+                surfaceDepth: maskRes.surfaceDepth,
+                maskedPixels: maskRes.maskedPixels,
                 modelUsed: result.modelUsed,
                 skippedModels: result.skippedModels,
                 modelNote: result.modelNote
             },
-            summaryResult: `Smart point inpainting written to ${outPath}: projected the 3D point to (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}) in the ${dims.width}x${dims.height} image and inpainted a ${radiusPx}px feathered region; pixels outside it are unchanged. ${result.modelNote} The model answered at ${result.answerWidth}x${result.answerHeight}.`
+            summaryResult: `Smart point inpainting written to ${outPath}: the 3D point projects to (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}) in the ${dims.width}x${dims.height} image, ${maskRes.depth.toFixed(2)} from the camera and ${maskRes.surfaceDepth === undefined ? 'with no mesh surface at that pixel' : `not hidden by the mesh (surface at ${maskRes.surfaceDepth.toFixed(2)})`}; ${maskRes.maskedPixels} pixels within ${radiusPx}px of it were blended from the model's edit and every other pixel is unchanged. ${result.modelNote} The model answered at ${result.answerWidth}x${result.answerHeight}.`
         };
     },
     spatial_keyframe_video_interpolation: async (args, ctx) => {

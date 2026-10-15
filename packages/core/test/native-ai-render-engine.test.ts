@@ -157,6 +157,59 @@ describe('Native 3D Engine AI Render & Keyframing Suite', () => {
         });
     });
 
+    describe('2b. spatial_smart_point_inpaint tool', () => {
+        it('edits only a point the image shows: refuses one behind the camera, outside the frame or hidden by the mesh, before any model call', async () => {
+            const fs = await import('fs');
+            const os = await import('os');
+            const path = await import('path');
+            const { encodePng, decodePng } = await import('../src/node/texture-processing');
+            const { writeFixtureGlb, uvCubeMesh } = await import('./helpers/mesh-glb-fixtures');
+            const { spatialHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+            const { GoogleMediaCredentialsService } = await import('../src/node/google-media-credentials-service');
+            const { MissingInputError } = await import('../src/common/errors/pipeline-errors');
+            const { fakeImageModelClient } = await import('./helpers/fake-image-model');
+            const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-smart-point-'));
+            const W = 80, H = 60;
+            const rgba = Buffer.alloc(W * H * 4);
+            for (let i = 0; i < W * H; i++) { rgba[i * 4] = 40; rgba[i * 4 + 1] = 120; rgba[i * 4 + 2] = 200; rgba[i * 4 + 3] = 255; }
+            const imagePath = path.join(ws, 'photo.png');
+            fs.writeFileSync(imagePath, encodePng(W, H, rgba));
+            // A 2 m cube at the origin, seen from 5 m down +Z: its front face is at z = 1.
+            const glbPath = writeFixtureGlb(path.join(ws, 'cube.glb'), uvCubeMesh(2));
+            const pose = { x: 0, y: 0, z: 5, targetX: 0, targetY: 0, targetZ: 0, up: [0, 1, 0], fov: 60 };
+            const calls: any[] = [];
+            const spy = vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(fakeImageModelClient(calls, { flat: [255, 0, 0], flatSize: [160, 120], modelVersion: 'gemini-3.1-flash-image' }) as any);
+            const run = (smartPoint: number[]) => spatialHandlers.spatial_smart_point_inpaint({ imagePath, glbPath, prompt: 'a red door', smartPoint, radiusPx: 10, pose }, { workspaceRoot: ws } as any);
+            try {
+                for (const [point, why] of [
+                    [[0, 0, 30], /behind the camera/],
+                    [[500, 0, 0], /projects to \(5236\.2, 30\.0\), outside the 80x60 image/],
+                    [[0, 0, -0.9], /hidden behind it/]
+                ] as const) {
+                    const error = await run(point as unknown as number[]).catch(e => e);
+                    expect(error).toBeInstanceOf(MissingInputError);
+                    expect(error.message).toMatch(why);
+                }
+                expect(calls).toHaveLength(0);
+
+                // A point on the visible front face is edited, at the pixel it projects to.
+                const res = await run([0, 0, 1]);
+                expect(calls).toHaveLength(1);
+                const payload = res.resultPayload as any;
+                expect([payload.projectedX, payload.projectedY]).toEqual([40, 30]);
+                expect(payload.pointDepth).toBeCloseTo(4, 5);
+                expect(payload.surfaceDepth).toBeCloseTo(4, 2);
+                const out = decodePng(fs.readFileSync(payload.inpaintedImagePath));
+                expect(out.rgba[(30 * W + 40) * 4]).toBe(255);
+                expect(Array.from(out.rgba.subarray(0, 3))).toEqual([40, 120, 200]);
+                expect(res.summaryResult).toContain(`${payload.maskedPixels} pixels within 10px`);
+            } finally {
+                spy.mockRestore();
+                fs.rmSync(ws, { recursive: true, force: true });
+            }
+        });
+    });
+
     describe('3. MeshAiTextureBakingService', () => {
         it('can generate a 6-camera orthogonal rig around a mesh', () => {
             const service = new MeshAiTextureBakingService();
