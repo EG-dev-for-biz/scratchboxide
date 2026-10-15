@@ -154,6 +154,16 @@ describe('resolveAddress: Google Places Text Search, never a dictionary', () => 
         await expect(service.resolveAddress({ lat: 0, lng: 0 })).rejects.toBeInstanceOf(LocationUnresolvedError);
         await expect(service.resolveAddress('91, 10')).rejects.toBeInstanceOf(LocationUnresolvedError);
     });
+
+    it.each(['7 11', '40 40', '1 2 3', '90 210'])('bare whole numbers "%s" are place text for Places, not coordinates', async query => {
+        const place = { displayName: { text: 'Somewhere' }, formattedAddress: 'Somewhere, Earth', location: { latitude: 35.6812, longitude: 139.7671 } };
+        const fake = placesFetch(place);
+        const anchor = await service.resolveAddress(query, 'test-maps-key', fake.impl);
+        expect([anchor.lat, anchor.lng]).toEqual([35.6812, 139.7671]);
+        expect(anchor.elevation).toBeUndefined();
+        expect(fake.calls).toHaveLength(1);
+        expect(JSON.parse(fake.calls[0].init.body).textQuery).toBe(query);
+    });
 });
 
 describe('Places key sources and refusals', () => {

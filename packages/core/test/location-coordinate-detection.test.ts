@@ -14,7 +14,12 @@ describe('whole-input coordinate parsing', () => {
         'Pier 39, 2 Beach St, San Francisco',
         'Building 10, 5 Main St, Cambridge',
         'Midtown Manhattan, coordinates: 40.748400, -73.985700',
-        'gondola in venice'
+        'gondola in venice',
+        // bare whole numbers split by spaces are not written as coordinates (they go to Places as text)
+        '7 11',
+        '40 40',
+        '1 2 3',
+        '90 210'
     ])('is not a coordinate: %s', text => {
         expect(parseCoordinateText(text)).toBeUndefined();
     });
@@ -26,7 +31,12 @@ describe('whole-input coordinate parsing', () => {
         ['48.8584° N, 2.2945° E', 48.8584, 2.2945, undefined],
         ['33.8568° S, 151.2153° E', -33.8568, 151.2153, undefined],
         ['40.7411 -73.9897', 40.7411, -73.9897, undefined],
-        ['40.764632, -73.974325, 18.66', 40.764632, -73.974325, 18.66]
+        ['40.764632, -73.974325, 18.66', 40.764632, -73.974325, 18.66],
+        // whole numbers count when written as coordinates: a comma, a degree sign, a hemisphere or a label
+        ['40, 40', 40, 40, undefined],
+        ['40° 74°', 40, 74, undefined],
+        ['40 N 74 W', 40, -74, undefined],
+        ['lat 40 lng -74', 40, -74, undefined]
     ])('reads %s', (text, lat, lng, elevation) => {
         const hit = parseCoordinateText(text);
         expect(hit?.lat).toBeCloseTo(lat as number, 6);

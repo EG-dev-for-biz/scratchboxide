@@ -18,11 +18,13 @@ export interface ParsedCoordinates {
 
 const NUMBER = '([-+]?\\d{1,3}(?:\\.\\d+)?)';
 const SEPARATOR = '(?:\\s*[,;]\\s*|\\s+)';
+const LAT_LABEL = '(lat(?:itude)?\\s*[:=]?\\s*)?';
+const LNG_LABEL = '((?:lng|lon|long|longitude)\\s*[:=]?\\s*)?';
 const WHOLE_INPUT_COORDINATES = new RegExp(
     '^\\s*[\\[(]?\\s*' +
-    `(?:lat(?:itude)?\\s*[:=]?\\s*)?${NUMBER}\\s*°?\\s*([NS])?` +
-    SEPARATOR +
-    `(?:(?:lng|lon|long|longitude)\\s*[:=]?\\s*)?${NUMBER}\\s*°?\\s*([EW])?` +
+    `${LAT_LABEL}${NUMBER}\\s*(°)?\\s*([NS])?` +
+    `(\\s*[,;]\\s*|\\s+)` +
+    `${LNG_LABEL}${NUMBER}\\s*(°)?\\s*([EW])?` +
     `(?:${SEPARATOR}(?:(?:elevation|elev|alt|altitude)\\s*[:=]?\\s*)?([-+]?\\d+(?:\\.\\d+)?)\\s*m?)?` +
     '\\s*[\\])]?\\s*$',
     'i'
@@ -33,17 +35,24 @@ const WHOLE_INPUT_COORDINATES = new RegExp(
  * "40.7411° N, 73.9897° W" or "lat: 40.7411, lng: -73.9897", with an optional trailing elevation in
  * metres. Anything else returns undefined: an address that merely contains numbers
  * ("Pier 39, 2 Beach St, San Francisco") is a place name, not a coordinate.
+ *
+ * The pair must also be written as coordinates: a decimal point in the latitude or longitude, a comma or
+ * semicolon between them, a degree sign, a hemisphere letter or a lat/lng label. Bare whole numbers split by
+ * spaces ("7 11", "90 210", "1 2 3") are place text for Places, not coordinates.
  */
 export function parseCoordinateText(text: string): ParsedCoordinates | undefined {
     const match = WHOLE_INPUT_COORDINATES.exec(text);
     if (!match) return undefined;
-    let lat = parseFloat(match[1]);
-    let lng = parseFloat(match[3]);
-    const latHemisphere = (match[2] || '').toUpperCase();
-    const lngHemisphere = (match[4] || '').toUpperCase();
-    if (latHemisphere === 'S') lat = -Math.abs(lat);
-    if (lngHemisphere === 'W') lng = -Math.abs(lng);
-    const elevation = match[5] !== undefined ? parseFloat(match[5]) : undefined;
+    const [, latLabel, latText, latDegree, latHemi, pairSeparator, lngLabel, lngText, lngDegree, lngHemi, elevationText] = match;
+    const writtenAsCoordinates = latText.includes('.') || lngText.includes('.')
+        || /[,;]/.test(pairSeparator)
+        || !!(latDegree || lngDegree || latHemi || lngHemi || latLabel || lngLabel);
+    if (!writtenAsCoordinates) return undefined;
+    let lat = parseFloat(latText);
+    let lng = parseFloat(lngText);
+    if ((latHemi || '').toUpperCase() === 'S') lat = -Math.abs(lat);
+    if ((lngHemi || '').toUpperCase() === 'W') lng = -Math.abs(lng);
+    const elevation = elevationText !== undefined ? parseFloat(elevationText) : undefined;
     return { lat, lng, ...(elevation !== undefined ? { elevation } : {}) };
 }
 
