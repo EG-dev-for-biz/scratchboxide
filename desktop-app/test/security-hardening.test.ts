@@ -183,6 +183,21 @@ describe('video composite route confines output and inputs', () => {
         assert.ok(remote.json.ffmpegCommand.includes('https://example.com/clip.mp4'));
     });
 
+    test('a timeline with no duration is measured from its clips, and one with nothing to measure is refused (422)', async () => {
+        const measured = await invokeRouter(router, 'POST', '/filtergraph', { body: { timeline: { ...timeline(), duration: 0 } } });
+        assert.strictEqual(measured.status, 200);
+        assert.strictEqual(measured.json.graph.durationSec, 2);
+        const empty = { ...timeline(), duration: 0, tracks: [] };
+        const graph = await invokeRouter(router, 'POST', '/filtergraph', { body: { timeline: empty } });
+        assert.strictEqual(graph.status, 422);
+        assert.strictEqual(graph.json.code, 'missing_input');
+        const composite = await invokeRouter(router, 'POST', '/composite', {
+            body: { timeline: empty, outputPath: 'out.mp4', workspaceRoot: root, dryRun: true }
+        });
+        assert.strictEqual(composite.status, 422);
+        assert.match(composite.json.error, /video composite needs timeline\.duration/);
+    });
+
     test('filtergraph strings cannot be smuggled through ids or numeric fields', () => {
         const svc = new HeadlessVideoCompositorService();
         const evil: any = timeline();

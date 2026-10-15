@@ -308,6 +308,7 @@ export { Synthetic4DDataGenerator, Synthetic4DGenerationConfig, Synthetic4DDatas
 // Headless Video Compositor & Editor Services
 export {
     HeadlessVideoCompositorService,
+    measureCompositeDuration,
     CompositeJobRequest,
     CompositeJobResult
 } from './node/video/HeadlessVideoCompositorService';

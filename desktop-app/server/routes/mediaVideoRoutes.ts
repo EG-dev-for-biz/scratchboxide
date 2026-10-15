@@ -21,6 +21,7 @@ import {
     HeadlessVideoCompositorService
 } from '../../../packages/core/src/node';
 import { resolveWithinRoot } from '../../../packages/core/src/node/security/path-guard';
+import { MissingInputError } from '../../../packages/core/src/common/errors/pipeline-errors';
 import { RouteContext } from './types';
 
 export interface MediaRouterServices {
@@ -204,6 +205,11 @@ export function createVideoRouter(videoCompositor: HeadlessVideoCompositorServic
             const graph = videoCompositor.buildFilterGraph(timeline, resolution, customInputs);
             res.json({ success: true, graph });
         } catch (err: any) {
+            // A timeline whose length cannot be measured is the caller's input (422), not a server fault.
+            if (err instanceof MissingInputError) {
+                res.status(422).json({ success: false, error: err.message, code: err.code });
+                return;
+            }
             res.status(500).json({ success: false, error: err?.message || 'Filtergraph generation failed' });
         }
     });
@@ -256,6 +262,10 @@ export function createVideoRouter(videoCompositor: HeadlessVideoCompositorServic
             }
             if (err?.code === 'invalid_media_input') {
                 res.status(400).json({ success: false, error: err.message });
+                return;
+            }
+            if (err instanceof MissingInputError) {
+                res.status(422).json({ success: false, error: err.message, code: err.code });
                 return;
             }
             res.status(500).json({ success: false, error: err?.message || 'Video compositing failed' });

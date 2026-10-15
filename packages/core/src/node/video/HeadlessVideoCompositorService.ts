@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { exec, spawn } from 'child_process';
 import { resolveWithinRoot } from '../security/path-guard';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 import type {
     VideoTimelineData,
     TimelineElement,
@@ -44,6 +45,37 @@ export const FFMPEG_INPUT_PROTOCOL_WHITELIST = 'file,http,https,tcp,tls';
 function finiteNumber(value: unknown, fallback: number): number {
     const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
     return Number.isFinite(n) ? n : fallback;
+}
+
+/** A media path the compositor reads as a real input (blob: and data: URLs only exist in the browser). */
+function renderablePath(value: unknown): string {
+    return typeof value === 'string' && value && !value.startsWith('blob:') && !value.startsWith('data:') ? value : '';
+}
+
+/**
+ * How long the composite runs: the duration the timeline states, else the end of its last clip that renders (an
+ * element of a visible video or overlay track, or of an unmuted audio track with a media path). A timeline that
+ * states no duration and has no such clip is refused with MissingInputError; no length is assumed.
+ */
+export function measureCompositeDuration(timeline: VideoTimelineData, customInputs?: Record<string, string>): number {
+    const stated = finiteNumber(timeline?.duration, 0);
+    if (stated > 0) return stated;
+    let end = 0;
+    for (const track of timeline?.tracks || []) {
+        const isPicture = track.type === 'video' || track.type === 'overlay';
+        if (isPicture ? track.visible === false : track.type !== 'audio' || track.muted) continue;
+        for (const el of track.elements || []) {
+            if (!isPicture && !renderablePath(customInputs?.[el.id] || el.url)) continue;
+            const start = Math.max(0, finiteNumber(el.startTime, 0));
+            const duration = finiteNumber(el.duration, 0);
+            if (duration > 0) end = Math.max(end, start + duration);
+        }
+    }
+    if (!(end > 0)) {
+        throw new MissingInputError('video composite', 'timeline.duration',
+            'the timeline states no duration and has no rendered clip with a duration to measure it from');
+    }
+    return Number(end.toFixed(6));
 }
 
 /** Filtergraph link labels may only contain safe identifier characters. */
@@ -97,6 +129,8 @@ export class HeadlessVideoCompositorService {
         filterComplex: string;
         videoOutputTag: string;
         audioOutputTag: string;
+        /** The composite's length: the timeline's duration, or the end of its last rendered clip (measureCompositeDuration). */
+        durationSec: number;
     } {
         const width = Math.max(2, Math.round(finiteNumber(resolution?.width, 1920)));
         const height = Math.max(2, Math.round(finiteNumber(resolution?.height, 1080)));
@@ -109,8 +143,8 @@ export class HeadlessVideoCompositorService {
         const inputs: Array<{ path: string; isVirtual: boolean; duration: number }> = [];
         const filterChains: string[] = [];
 
-        // Base solid background canvas generator (e.g. black canvas of project duration)
-        const totalDuration = finiteNumber(timeline.duration, 0) || 10;
+        // Base solid background canvas generator: black, for the composite's measured length
+        const totalDuration = measureCompositeDuration(timeline, customInputs);
         // Input 0: virtual color background canvas
         inputs.push({
             path: `color=c=black:s=${width}x${height}:r=${fps}:d=${totalDuration}`,
@@ -298,9 +332,8 @@ export class HeadlessVideoCompositorService {
         for (const track of audioTracks) {
             if (track.muted) continue;
             for (const el of track.elements) {
-                const audioPathRaw = customInputs?.[el.id] || el.url;
-                const audioPath = typeof audioPathRaw === 'string' ? audioPathRaw : '';
-                if (audioPath && !audioPath.startsWith('blob:') && !audioPath.startsWith('data:')) {
+                const audioPath = renderablePath(customInputs?.[el.id] || el.url);
+                if (audioPath) {
                     inputs.push({
                         path: audioPath,
                         isVirtual: false,
@@ -325,7 +358,8 @@ export class HeadlessVideoCompositorService {
             inputs,
             filterComplex: filterChains.join('; '),
             videoOutputTag: finalVideoTag,
-            audioOutputTag: finalAudioTag
+            audioOutputTag: finalAudioTag,
+            durationSec: totalDuration
         };
     }
 
@@ -337,9 +371,10 @@ export class HeadlessVideoCompositorService {
         args: string[];
         commandString: string;
         filterComplex: string;
+        durationSec: number;
     } {
         const resolution = request.resolution || { width: 1920, height: 1080 };
-        const { inputs, filterComplex, videoOutputTag, audioOutputTag } = this.buildFilterGraph(
+        const { inputs, filterComplex, videoOutputTag, audioOutputTag, durationSec } = this.buildFilterGraph(
             request.timeline,
             resolution,
             request.customInputs
@@ -378,7 +413,7 @@ export class HeadlessVideoCompositorService {
             args.push('-f', 'gif');
         }
 
-        args.push('-t', (finiteNumber(request.timeline.duration, 0) || 10).toString());
+        args.push('-t', durationSec.toString());
         args.push(request.outputPath);
 
         const commandString = `${this.ffmpegPath} ${args.map(a => a.includes(' ') || a.includes(';') || a.includes('=') ? `"${a.replace(/"/g, '\\"')}"` : a).join(' ')}`;
@@ -387,16 +422,17 @@ export class HeadlessVideoCompositorService {
             executable: this.ffmpegPath,
             args,
             commandString,
-            filterComplex
+            filterComplex,
+            durationSec
         };
     }
 
     /**
-     * Executes the headless composite job via FFmpeg subprocess.
+     * Executes the headless composite job via FFmpeg subprocess. A timeline whose length cannot be measured rejects
+     * with MissingInputError before FFmpeg runs.
      */
     async execute(request: CompositeJobRequest): Promise<CompositeJobResult> {
-        const { executable, args, commandString, filterComplex } = this.buildFFmpegArgs(request);
-        const durationSec = request.timeline.duration || 10;
+        const { executable, args, commandString, filterComplex, durationSec } = this.buildFFmpegArgs(request);
 
         if (request.dryRun) {
             return {
