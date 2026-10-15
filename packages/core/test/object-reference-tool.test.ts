@@ -12,15 +12,20 @@
  * gemini-3.1-flash-lite-image; the spec is read by the model chat runs on (its default when the request names none,
  * and the chat's next model, said so, when the named one is not served); every failing stage fails the call with
  * its own error; spec problems the interpreter finds get the same single corrective re-ask as validator problems;
- * a failed revision returns the last build that passed every check and says so; the native build is real; and the
- * reference image never reaches the payload or the disk.
+ * a failed revision returns the last build that passed every check and says so; a given spec is rebuilt exactly,
+ * with no model call; a stop reaches the Python process; an object at a place is drawn where the viewport's own
+ * rules put it; the native build is real; and the reference image never reaches the payload or the disk.
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as THREE from 'three';
 import { createObjectReferenceHandlers, OBJECT_REFERENCE_TOOL_DECLARATIONS, yawForHeading } from '../src/node/gemini/tools/object-reference-tools';
+import { generatorFileIsObject } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
+import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
+import { glbToTriangleSoup } from '../src/node/3d-engine/part-connectivity';
 import { REFERENCE_IMAGE_MODEL, schemaInstruction, type ChatModelSource, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, type ObjectBuildSpec } from '../src/common/spatial/object-build-spec';
 import { NativePythonRunnerService, type PythonExecutionResult } from '../src/node/3d-engine/native-python-runner-service';
@@ -262,6 +267,8 @@ describe('build_3d_object_from_reference', () => {
         expect(String(out.resultPayload.error)).toContain('unsupported');
         expect(out.resultPayload.artifact).toBeUndefined();
         expect(pythonRuns).toHaveLength(0);
+        // The HTTP status is a detail of its own; it never replaces the outcome.
+        expect(out.resultPayload).toMatchObject({ status: 'failed', success: false, httpStatus: 404 });
     });
 
     it('requests the image with responseModalities IMAGE at 1:1 and retries 503 and empty answers on the same model only', async () => {
@@ -554,7 +561,7 @@ describe('build_3d_object_from_reference', () => {
         const failing = handlerWith(client, {
             stageAtLocation: async args => { stageArgs.push(args); return { status: 'failed', resultPayload: { status: 'failed', error: 'No place matched "Atlantis Plaza"' }, summaryResult: 'Failed' }; }
         });
-        const out = await failing.run({ request: 'a bronze statue', location: 'Atlantis Plaza' });
+        const out = await failing.run({ request: 'a bronze statue', location: 'Atlantis Plaza', placement: { eastMeters: 0, northMeters: 0, headingDeg: 0 } });
         expect(out.status).toBe('failed');
         expect(out.resultPayload.stage).toBe('staging');
         expect(String(out.resultPayload.error)).toContain('No place matched "Atlantis Plaza"');
@@ -563,7 +570,7 @@ describe('build_3d_object_from_reference', () => {
 
         const unremeshed = await handlerWith(client, {
             stageAtLocation: async () => ({ status: 'completed', resultPayload: { success: true, remesh: { ok: false, error: 'tile_refine crashed' }, artifact: { type: '3d-scene', data: { objects: [] } } } })
-        }).run({ request: 'a bronze statue', location: 'Union Square, San Francisco' });
+        }).run({ request: 'a bronze statue', location: 'Union Square, San Francisco', placement: { eastMeters: 0, northMeters: 0, headingDeg: 0 } });
         expect(unremeshed.status).toBe('failed');
         expect(String(unremeshed.resultPayload.error)).toContain('not remeshed (tile_refine crashed)');
     });
@@ -577,11 +584,12 @@ describe('build_3d_object_from_reference', () => {
         expect(artifact.title).toContain('Union Square, San Francisco, CA');
         expect(artifact.data.objects.map((o: any) => o.content.metadata.role)).toEqual(['environment', 'hero']);
         expect(artifact.data.geoAnchor).toEqual({ lat: 37.788, lng: -122.4075 });
-        // Tile frame: x east, z south. The base rests on the ground there (y 0 lets the viewport seat it).
+        // Tile frame: x east, z south. The base rests on the surface there (y 0 lets the viewport seat it).
         const hero = artifact.data.objects[1];
         expect(hero.space.spatial3d).toEqual({ x: 12, y: 0, z: -8, yaw: 90 });
         const placement = artifact.data.objectBuild.placement;
-        expect(placement).toMatchObject({ eastMeters: 12, northMeters: 8, headingDeg: 90, sceneX: 12, sceneZ: -8, yawDeg: 90, surfaceYMeters: 1.5 });
+        expect(placement).toEqual({ eastMeters: 12, northMeters: 8, headingDeg: 90, sceneX: 12, sceneZ: -8, yawDeg: 90, surfaceYMeters: 1.5 });
+        expect(artifact.data.objectBuild.location).toEqual({ query: 'Union Square, San Francisco', resolvedAddress: 'Union Square, San Francisco, CA' });
         // The camera looks at the object's middle, from close by, not at the whole district.
         const size = artifact.data.objectBuild.checks.builtBoundingMeters;
         expect(artifact.data.camera.target[0]).toBeCloseTo(12, 3);
@@ -590,29 +598,169 @@ describe('build_3d_object_from_reference', () => {
         const distance = Math.hypot(...[0, 1, 2].map(k => artifact.data.camera.position[k] - artifact.data.camera.target[k]));
         expect(distance).toBeLessThan(5);
         expect(out.summaryResult).toContain('12 m east and 8 m north of the anchor, facing 90 degrees');
+        expect(out.summaryResult).toContain('call build_3d_object_from_reference with specJson set to the edited spec, and with this location and placement');
     }, 180_000);
 
-    it('with a location but no placement, stands at the anchor and says when that is a roof', async () => {
+    it('is drawn by the viewport where the placement says, whichever of the object and the tiles loads first', async () => {
+        const tileUri = writeStagedTiles();
         const client = fakeClient({ specs: [JSON.stringify(VASE)] });
-        const out = await handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles()) })
-            .run({ request: 'a fluted vase', location: 'Union Square, San Francisco' });
+        const handler = handlerWith(client, { stageAtLocation: stagedScene(tileUri) });
+        for (const placementArgs of [{ eastMeters: 12, northMeters: 8, headingDeg: 90 }, { eastMeters: 1, northMeters: -2, headingDeg: 200 }]) {
+            const out = await handler.run({ request: 'a fluted vase', location: 'Union Square, San Francisco', placement: placementArgs });
+            expect(out.status, String(out.resultPayload.error)).toBe('completed');
+            const data = (out.resultPayload.artifact as any).data;
+            const placement = data.objectBuild.placement;
+            const hero = data.objects.find((o: any) => o.content.metadata.role === 'hero');
+
+            // Scene3DPrimitive: effect 5b draws an inline generator GLB at the origin, unturned, and effect 5c then
+            // drops every object loading the same file; 5a-bis rebuilds a generator without one unless an object
+            // loads its file. The staged object must reach the viewport as the hero object, so no inline GLB.
+            const gen = data.pythonGenerator;
+            expect(gen.glbBase64).toBeUndefined();
+            expect(gen.sourceCode).toContain('sb.object_spec.build(SPEC)');
+            const generatorGlbFile = gen.glbBase64 ? path.basename(gen.glbPath) : undefined;
+            const drawn = data.objects.filter((o: any) => !generatorGlbFile || path.basename(o.content.durableUri) !== generatorGlbFile);
+            expect(drawn).toContain(hero);
+            expect(generatorFileIsObject(gen, data.objects)).toBe(true);
+
+            // Seat it with the real TerrainManager by the viewport's settleOnGround rules, in both load orders.
+            const meshFrom = (file: string) => {
+                const soup = glbToTriangleSoup(fs.readFileSync(file))!;
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(soup.positions, 3));
+                geometry.setIndex(new THREE.BufferAttribute(soup.indices, 1));
+                return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+            };
+            const s = hero.space.spatial3d;
+            for (const order of ['object first', 'tiles first']) {
+                const scene = new THREE.Scene();
+                const terrain = new TerrainManager({ scene });
+                const tiles = meshFrom(path.join(MODELS_DIR, path.basename(tileUri)));
+                const model = meshFrom(String(out.resultPayload.glbPath));
+                model.position.set(s.x, s.y, s.z);
+                model.rotation.y = (s.yaw * Math.PI) / 180;
+                // A hero attaching: y 0 snaps it onto the ground. Tiles attaching: every hero is re-seated with y as an offset.
+                const heroAttaches = () => { scene.add(model); if (!s.y) terrain.snapObjectToGround(model, 0); };
+                const tilesAttach = () => { scene.add(tiles); if (model.parent) terrain.snapObjectToGround(model, s.y !== 0 ? s.y : 0); };
+                if (order === 'object first') { heroAttaches(); tilesAttach(); } else { tilesAttach(); heroAttaches(); }
+                const box = new THREE.Box3().setFromObject(model);
+                expect(box.min.y, order).toBeCloseTo(placement.surfaceYMeters, 3);
+                expect((box.min.x + box.max.x) / 2, order).toBeCloseTo(placement.sceneX, 1);
+                expect((box.min.z + box.max.z) / 2, order).toBeCloseTo(placement.sceneZ, 1);
+                expect(data.camera.target[0]).toBeCloseTo(placement.sceneX, 3);
+                expect(data.camera.target[2]).toBeCloseTo(placement.sceneZ, 3);
+                expect(data.camera.target[1]).toBeGreaterThan(box.min.y);
+                expect(data.camera.target[1]).toBeLessThan(box.max.y);
+            }
+        }
+    }, 180_000);
+
+    it('with a location, needs a placement, and rests the object on a roof when one is there', async () => {
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const stageArgs: unknown[] = [];
+        const tileUri = writeStagedTiles();
+        const staging = stagedScene(tileUri);
+        const handler = handlerWith(client, { stageAtLocation: async (args, c) => { stageArgs.push(args); return staging(args, c); } });
+        const missing = await handler.run({ request: 'a fluted vase', location: 'Union Square, San Francisco' });
+        expect(missing.status).toBe('failed');
+        expect(String(missing.resultPayload.error)).toContain('With location, pass placement {eastMeters, northMeters, headingDeg}');
+        expect(stageArgs).toHaveLength(0);
+        expect(client.calls).toHaveLength(0);
+
+        const out = await handler.run({ request: 'a fluted vase', location: 'Union Square, San Francisco', placement: { eastMeters: 0, northMeters: 0, headingDeg: 180 } });
         expect(out.status, String(out.resultPayload.error)).toBe('completed');
         expect((out.resultPayload.artifact as any).data.objectBuild.placement.surfaceYMeters).toBe(20);
         expect(out.summaryResult).toContain('likely a roof or raised structure');
     }, 180_000);
 
-    it('fails before any model call when the placement is off the staged tiles or has no location', async () => {
+    it('fails before any model call when the placement is off the staged tiles, lifts the object, or has no location', async () => {
         const client = fakeClient({ specs: [JSON.stringify(VASE)] });
         const off = await handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles()) })
             .run({ request: 'a fluted vase', location: 'Union Square, San Francisco', placement: { eastMeters: 400, northMeters: 0, headingDeg: 0 } });
         expect(off.status).toBe('failed');
         expect(off.resultPayload.stage).toBe('placement');
         expect(String(off.resultPayload.error)).toContain('outside the staged tiles');
+        // No lift: the viewport would seat a lifted object at a height that depends on load order.
+        const lifted = await handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles()) })
+            .run({ request: 'a balloon', location: 'Union Square, San Francisco', placement: { eastMeters: 0, northMeters: 0, headingDeg: 0, upMeters: 1 } });
+        expect(lifted.status).toBe('failed');
+        expect(String(lifted.resultPayload.error)).toContain('placement takes only eastMeters, northMeters and headingDeg (not upMeters)');
         const noPlace = await handlerWith(client).run({ request: 'a fluted vase', placement: { eastMeters: 1, northMeters: 1, headingDeg: 0 } });
         expect(noPlace.status).toBe('failed');
         expect(String(noPlace.resultPayload.error)).toContain('placement is relative to a place');
         expect(client.calls).toHaveLength(0);
     });
+
+    it('rebuilds a given spec exactly, with no model call, and keeps the object at its place', async () => {
+        const client = fakeClient({});
+        const taller: ObjectBuildSpec = { ...VASE, boundingMeters: [0.36, 0.86, 0.36], parts: [{ ...VASE.parts[0], revolve: revolve([[0, 0], [0, 0.12], [0.3, 0.18], [0.65, 0.1], [0.8, 0.14]], { smoothing: 0.8, lobeCount: 10, lobeDepthRatio: 0.15, helixPitchMeters: 0.9 }) }, VASE.parts[1]] };
+        const { run, pythonRuns } = handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles()) });
+        const out = await run({ request: 'make the vase taller', specJson: JSON.stringify(taller), location: 'Union Square, San Francisco', placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        expect(client.calls).toHaveLength(0);
+        expect(pythonRuns).toHaveLength(1);
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.source).toBe('spec');
+        expect(build.spec).toEqual(taller);
+        expect(build.imageModel).toBeUndefined();
+        expect(build.visionModel).toBeUndefined();
+        expect(build.remainingDifferences).toBeUndefined();
+        expect(build.passes).toEqual([expect.objectContaining({ pass: 1, source: 'spec', outcome: 'built', passedChecks: true })]);
+        expect(build.checks.parts.map((p: any) => [p.id, p.built, p.touchesParent])).toEqual([['vase', true, undefined], ['knob', true, true]]);
+        expect(build.checks.builtBoundingMeters[1]).toBeGreaterThan(0.8);
+        expect(build.placement).toMatchObject({ sceneX: 12, sceneZ: -8, yawDeg: 90 });
+        expect((out.resultPayload.artifact as any).data.objects[1].space.spatial3d).toEqual({ x: 12, y: 0, z: -8, yaw: 90 });
+        expect(out.summaryResult).toContain('from the given spec, built exactly as given');
+        expect(out.summaryResult).toContain('No reference image was drawn and no model was called or compared the result.');
+    }, 180_000);
+
+    it('fails a given spec with every problem listed when it cannot be built or does not pass its checks', async () => {
+        const client = fakeClient({});
+        const { run } = handlerWith(client);
+        const badJson = await run({ request: 'the vase', specJson: '{"subject": "vase", ' });
+        expect(badJson.resultPayload).toMatchObject({ status: 'failed', stage: 'build-spec' });
+        expect(String(badJson.resultPayload.error)).toContain('specJson is not valid JSON');
+        const invalid = await run({ request: 'the vase', specJson: JSON.stringify({ ...VASE, parts: [{ id: 'a', label: 'a' }] }) });
+        expect(invalid.resultPayload.stage).toBe('build-spec');
+        expect(String(invalid.resultPayload.error)).toContain('must have exactly one of sweep, revolve, replicate, relief');
+        const flat = await run({ request: 'a coin', specJson: JSON.stringify(FLAT_COIN) });
+        expect(flat.resultPayload.stage).toBe('build');
+        expect(String(flat.resultPayload.error)).toContain('part "coin" revolve.meridian: the outline encloses no area with the axis');
+        const apart = await run({ request: 'the vase', specJson: JSON.stringify(DETACHED) });
+        expect(apart.resultPayload.stage).toBe('checks');
+        expect(String(apart.resultPayload.error)).toContain('The build is 2 separate pieces but expectedBodies is 1');
+        expect(apart.resultPayload.artifact).toBeUndefined();
+        const sized = await run({ request: 'the vase', specJson: JSON.stringify(VASE), dimensionsHintMeters: [1, 1, 1] });
+        expect(String(sized.resultPayload.error)).toContain('with specJson, set the sizes in the spec itself');
+        expect(client.calls).toHaveLength(0);
+    }, 180_000);
+
+    it('passes a stop to the Python process and ends at the build without checking or comparing', async () => {
+        const controller = new AbortController();
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        let seen: AbortSignal | undefined;
+        const { run } = handlerWith(client, {
+            runPython: async (_script, options) => {
+                seen = options.signal;
+                controller.abort();
+                return { success: false, exitCode: 1, stdout: '', stderr: 'The operation was aborted', executionTimeMs: 1, errorDetails: 'The operation was aborted' };
+            }
+        });
+        const out = await run({ request: 'a fluted vase' }, { ...ctx(), signal: controller.signal });
+        expect(seen).toBe(controller.signal);
+        expect(out.status).toBe('failed');
+        expect(out.resultPayload).toMatchObject({ status: 'failed', stage: 'build', aborted: true, error: 'Stopped by the user.' });
+        expect(client.calls.filter(isComparisonCall)).toHaveLength(0);
+    });
+
+    it('the Python runner kills the script when its signal aborts', async () => {
+        const controller = new AbortController();
+        const started = Date.now();
+        setTimeout(() => controller.abort(), 1500);
+        const res = await NativePythonRunnerService.getInstance().runScript('import time\ntime.sleep(90)\n', { outputDir: path.join(TMP, 'build'), timeoutMs: 120_000, signal: controller.signal });
+        expect(res.success).toBe(false);
+        expect(Date.now() - started).toBeLessThan(45_000);
+    }, 180_000);
 
     it('turns the object front (+Z) to a compass heading in the tile frame (x east, z south)', () => {
         const front = (heading: number) => {

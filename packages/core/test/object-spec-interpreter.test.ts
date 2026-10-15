@@ -180,6 +180,22 @@ describe('sb.object_spec interpreter', () => {
         expect(problems![0]).toMatch(/^part "coin_a" revolve\.meridian: the outline encloses no area with the axis/);
         expect(problems![1]).toMatch(/^part "coin_b" revolve\.meridian:/);
         expect(interpreterSpecProblems('Traceback (most recent call last):\nZeroDivisionError: float division by zero')).toBeUndefined();
+
+        // A replicate path that turns straight back has no direction there: the problem names the replicate part
+        // and its field, not a sweep the spec does not have.
+        const reversing: ObjectBuildSpec = {
+            subject: 'beads', observations: [], boundingMeters: [0.3, 0.05, 0.05], expectedBodies: 5,
+            parts: [
+                { id: 'bead', label: 'bead', revolve: revolve([[0, 0], [0, 0.02], [0.04, 0.02], [0.04, 0]]) },
+                { id: 'beads', label: 'beads', replicate: { seedPartId: 'bead', path: { points: [[0, 0, 0], [0.2, 0, 0], [0, 0, 0]], count: 5, orientToPath: true } } } as any
+            ]
+        };
+        expect(validateObjectBuildSpec(reversing)).toEqual([]);
+        const back = await NativePythonRunnerService.getInstance().runScript(buildObjectSpecScript(reversing), { outputDir: OUT_DIR, timeoutMs: 120_000 });
+        expect(back.success).toBe(false);
+        expect(interpreterSpecProblems(back.stderr)).toEqual([
+            'part "beads": replicate.path.points: the curve turns straight back on itself near [0.2, 0, 0], so it has no direction there; move the points so the curve does not reverse'
+        ]);
     }, 180_000);
 
     it('measures that every listed part is built and that each child touches its parent', async () => {
@@ -210,6 +226,29 @@ describe('sb.object_spec interpreter', () => {
         const spread: ObjectBuildSpec = { ...vase, parts: vase.parts.map(p => p.id === 'spouts' ? { ...p, replicate: { seedPartId: 'spout', ring: { centerMeters: [0.6, 0, 0], axisDirection: [0, 1, 0], count: 3, spanDeg: 360, risePerCopyMeters: 0 } } } : p) };
         const floating = measureBuild(spread, (await build('checks_spread', spread)).glb);
         expect(floating.detachedParts.map(d => d.id)).toEqual(['spout']);
+    }, 180_000);
+
+    it('checks a build of many attached parts with one contact analysis, naming the one child that is off', async () => {
+        const studs = Array.from({ length: 40 }, (_, i) => ({
+            id: `stud_${i}`, label: 'stud', parentId: 'post',
+            // Stud 7 stands 5 cm off the post; the rest sink into it.
+            attach: { u: 0.1 + (0.8 * (i % 10)) / 10, angleDeg: (i * 37) % 360, normalOffsetMeters: i === 7 ? 0.05 : -0.003 },
+            revolve: revolve([[0, 0], [0, 0.012], [0.024, 0.01], [0.028, 0]], { axisDirection: [Math.cos(i), 0.2, Math.sin(i)] })
+        }));
+        const post: ObjectBuildSpec = {
+            subject: 'studded post', observations: [], boundingMeters: [0.4, 1.2, 0.4], expectedBodies: 1,
+            parts: [{ id: 'post', label: 'post', revolve: revolve([[0, 0], [0, 0.15], [1.2, 0.15], [1.2, 0]]) }, ...studs]
+        };
+        const { glb } = await build('checks_many_parts', post);
+        const started = Date.now();
+        const checks = measureBuild(post, glb);
+        const ms = Date.now() - started;
+        expect(checks.parts).toHaveLength(41);
+        expect(checks.parts.filter(p => p.built)).toHaveLength(41);
+        expect(checks.detachedParts).toEqual([{ id: 'stud_7', parentId: 'post' }]);
+        expect(checks.connectivity).toMatchObject({ bodies: 2, expectedBodies: 1, passed: false });
+        // One analysis of the whole build, not one per child: well inside the time a single pass may take.
+        expect(ms).toBeLessThan(60_000);
     }, 180_000);
 
     it('raises on an invalid spec instead of guessing, naming the field', async () => {

@@ -63,6 +63,8 @@ export interface PythonExecutionOptions {
     env?: NodeJS.ProcessEnv;
     cwd?: string;
     assets?: PythonExecutionAsset[];
+    /** Aborting it kills the Python process (runScript / runScriptFile only). */
+    signal?: AbortSignal;
 }
 
 export interface PythonExecutionResult {
@@ -356,7 +358,8 @@ export class NativePythonRunnerService {
                 cwd,
                 timeout,
                 maxBuffer: 64 * 1024 * 1024,
-                env
+                env,
+                ...(options.signal ? { signal: options.signal } : {})
             });
 
             // Inspect output for generated GLB

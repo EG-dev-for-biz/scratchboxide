@@ -755,10 +755,14 @@ export function toPythonLiteral(value: unknown, indent = 0): string {
     throw new Error(`Cannot write a ${typeof value} into a build script`);
 }
 
-/** The build script stored with the scene: edit SPEC and run it again to change the object. */
+/**
+ * The build script stored with the scene (data.pythonGenerator.sourceCode): running it rebuilds the object from SPEC.
+ * The object is changed through build_3d_object_from_reference with the edited spec, which keeps it at its place.
+ */
 export function buildObjectSpecScript(spec: ObjectBuildSpec): string {
     return [
-        '# Built by build_3d_object_from_reference. Edit SPEC (metres, +Y up) and run again to change the object.',
+        '# Built by build_3d_object_from_reference from SPEC (metres, +Y up). To change the object, pass the edited',
+        '# spec to build_3d_object_from_reference as specJson (with its location and placement when it stands at a place).',
         'import scratchbox as sb',
         '',
         `SPEC = ${toPythonLiteral(spec)}`,

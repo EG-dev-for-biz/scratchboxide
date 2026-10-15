@@ -21,8 +21,10 @@
  *      for up to two revision passes. The result is the last build that passed every check; a revision that fails
  *      is reported as such, and differences still present are listed verbatim. A build that never passed every
  *      check is rejected, never mounted.
- * Nothing here reads part labels or ids for meaning: ids only pair spec parts with their meshes. There is no other
- * image model, template, neural reconstruction or text-only path to fall back to.
+ * buildObjectFromSpec builds a given spec (an edit of an earlier one) through stages 3 and 4 only, with no model call:
+ * it fails with every problem listed instead of revising. A stop kills the Python process and ends the build at the
+ * stage it reached. Nothing here reads part labels or ids for meaning: ids only pair spec parts with their meshes.
+ * There is no other image model, template, neural reconstruction or text-only path to fall back to.
  */
 
 import * as fs from 'fs';
@@ -40,8 +42,8 @@ import { NativePythonRunnerService, type PythonExecutionOptions, type PythonExec
 import {
     analyzePartConnectivity,
     glbToNamedTriangleSoups,
-    glbToTriangleSoup,
     mergeTriangleSoups,
+    type ContactGraph,
     type FloatingPart,
     type TriangleSoup
 } from './part-connectivity';
@@ -147,7 +149,8 @@ export interface ObjectBuildChecks {
 
 export interface ObjectBuildPass {
     pass: number;
-    source: 'reference' | 'revision';
+    /** reference: the first pass from the reference; revision: a pass that fixes problems; spec: a spec rebuilt as given. */
+    source: 'reference' | 'revision' | 'spec';
     /** 'built' when the pass produced a checked build; 'failed' when its spec could not be built or checked. */
     outcome: 'built' | 'failed';
     /** Spec requests the pass took: 1, or 2 when the first answer needed the corrective re-ask. */
@@ -328,8 +331,9 @@ const DIFFERENCES_JSON_SCHEMA: Record<string, unknown> = {
 // Model calls
 // ---------------------------------------------------------------------------
 
-function throwIfAborted(signal?: AbortSignal): void {
-    if (signal?.aborted) throw new ReferenceObjectBuildError('build-spec', 'Stopped by the user.', { aborted: true });
+/** Ends the build at `stage` once the user has pressed stop. */
+function throwIfAborted(signal: AbortSignal | undefined, stage: ObjectBuildStage): void {
+    if (signal?.aborted) throw new ReferenceObjectBuildError(stage, 'Stopped by the user.', { aborted: true });
 }
 
 function responseText(response: GenerateContentResponse): string {
@@ -346,7 +350,7 @@ async function callModel(
 ): Promise<GenerateContentResponse> {
     const sleep = deps.sleep ?? defaultSleep;
     for (let attempt = 0; ; attempt++) {
-        throwIfAborted(signal);
+        throwIfAborted(signal, stage);
         try {
             return await client.models.generateContent(params);
         } catch (err) {
@@ -358,7 +362,7 @@ async function callModel(
             }
             throw new ReferenceObjectBuildError(stage,
                 `${params.model} failed (${classified.code}${classified.status ? ` ${classified.status}` : ''}): ${classified.message}`,
-                { model: params.model, code: classified.code, status: classified.status, modelNotFound: isModelNotFoundError(err) });
+                { model: params.model, code: classified.code, httpStatus: classified.status, modelNotFound: isModelNotFoundError(err) });
         }
     }
 }
@@ -548,11 +552,14 @@ interface NativeBuild {
 }
 
 /** Runs the spec's script. A SpecError comes back as problems for the model; any other failure throws. */
-async function runBuild(spec: ObjectBuildSpec, deps: ReferenceObjectBuilderDeps): Promise<NativeBuild | { specProblems: string[] }> {
+async function runBuild(spec: ObjectBuildSpec, deps: ReferenceObjectBuilderDeps, signal?: AbortSignal): Promise<NativeBuild | { specProblems: string[] }> {
+    throwIfAborted(signal, 'build');
     const sourceCode = buildObjectSpecScript(spec);
     const runPython = deps.runPython ?? ((script: string, options: PythonExecutionOptions) => NativePythonRunnerService.getInstance().runScript(script, options));
     const started = Date.now();
-    const result = await runPython(sourceCode, { timeoutMs: 120_000, ...(deps.outputDir ? { outputDir: deps.outputDir } : {}) });
+    // A stop kills the Python process rather than waiting for it to finish.
+    const result = await runPython(sourceCode, { timeoutMs: 120_000, ...(deps.outputDir ? { outputDir: deps.outputDir } : {}), ...(signal ? { signal } : {}) });
+    throwIfAborted(signal, 'build');
     if (!result.success) {
         const stderr = result.stderr || result.errorDetails || '';
         const specProblems = interpreterSpecProblems(stderr);
@@ -584,8 +591,7 @@ async function requestBuildableSpec(vision: VisionModel, contents: Content[], de
         const errors = reply.parseError ? [reply.parseError] : validateObjectBuildSpec(reply.value);
         if (errors.length) return { problems: errors, from: 'build-spec' };
         const spec = reply.value as ObjectBuildSpec;
-        throwIfAborted(signal);
-        const built = await runBuild(spec, deps);
+        const built = await runBuild(spec, deps, signal);
         if ('specProblems' in built) return { problems: built.specProblems, from: 'build' };
         return { build: built, spec, problems: [], from: 'build' };
     };
@@ -619,22 +625,46 @@ function soupBounds(soup: TriangleSoup): { min: Vec3; max: Vec3 } {
 const round3 = (v: number) => +v.toFixed(3);
 
 /**
+ * Whether every piece of a child part is joined to its parent: reachable from the parent's pieces through pieces of
+ * the two parts that touch or embed each other (so each copy of a replicated child is covered, and a child made of
+ * several touching pieces counts as attached when one of them reaches the parent).
+ */
+function reachesParent(childPieces: Set<number>, parentPieces: Set<number>, graph: ContactGraph): boolean {
+    const allowed = new Set([...childPieces, ...parentPieces]);
+    const reached = new Set(parentPieces);
+    const stack = [...parentPieces];
+    while (stack.length) {
+        for (const next of graph.touching[stack.pop()!]) {
+            if (allowed.has(next) && !reached.has(next)) { reached.add(next); stack.push(next); }
+        }
+    }
+    return [...childPieces].every(p => reached.has(p));
+}
+
+/**
  * Measures what was modelled: every sweep and revolve part the spec lists has real geometry, every child touches
- * its parent (adding the child to its parent must not add a separate piece, so each copy of a replicated child is
- * covered), and the whole build is as many pieces as expectedBodies. Part ids pair parts with their meshes only.
+ * its parent, and the whole build is as many pieces as expectedBodies. One contact analysis of the whole build
+ * answers all three, whatever the number of parts. Part ids pair parts with their meshes only.
  */
 export function measureBuild(spec: ObjectBuildSpec, glb: Buffer): Omit<ObjectBuildChecks, 'differences'> & { soup: TriangleSoup; partBounds: PartBounds } {
-    const soup = glbToTriangleSoup(glb);
     const named = glbToNamedTriangleSoups(glb);
-    if (!soup || !named || soup.indices.length === 0) {
+    const meshes = named ? [...named].filter(([, s]) => s.indices.length > 0) : [];
+    if (meshes.length === 0) {
         throw new ReferenceObjectBuildError('checks', 'The built GLB could not be read back for checking.');
     }
-    const whole = analyzePartConnectivity(soup);
-    const tolerance = whole.toleranceMeters;
+    // The whole build as one soup, each mesh's triangles a known range of it.
+    const soup = mergeTriangleSoups(meshes.map(([, s]) => s));
+    const triangleRange = new Map<string, [number, number]>();
+    let first = 0;
+    for (const [id, s] of meshes) {
+        triangleRange.set(id, [first, first + s.indices.length / 3]);
+        first += s.indices.length / 3;
+    }
+    const whole = analyzePartConnectivity(soup, { withGraph: true });
     const { min, max } = soupBounds(soup);
 
     const parts: PartBuildCheck[] = spec.parts.filter(p => p.sweep || p.revolve).map(p => {
-        const own = named.get(p.id);
+        const own = named!.get(p.id);
         const triangles = own ? own.indices.length / 3 : 0;
         const b = own && triangles ? soupBounds(own) : undefined;
         const sizeMeters: Vec3 = b ? [round3(b.max[0] - b.min[0]), round3(b.max[1] - b.min[1]), round3(b.max[2] - b.min[2])] : [0, 0, 0];
@@ -642,20 +672,23 @@ export function measureBuild(spec: ObjectBuildSpec, glb: Buffer): Omit<ObjectBui
         return { id: p.id, triangles, sizeMeters, built, ...(p.parentId ? { parentId: p.parentId } : {}) };
     });
 
-    const piecesAlone = new Map<string, number>();
-    const piecesOf = (id: string, s: TriangleSoup) => {
-        if (!piecesAlone.has(id)) piecesAlone.set(id, analyzePartConnectivity(s, { toleranceMeters: tolerance }).structureCount);
-        return piecesAlone.get(id)!;
-    };
-    const byId = new Map(parts.map(p => [p.id, p]));
-    for (const part of parts) {
-        if (!part.parentId || !part.built || !byId.get(part.parentId)?.built) continue;
-        const parentSoup = named.get(part.parentId)!;
-        const joined = analyzePartConnectivity(mergeTriangleSoups([parentSoup, named.get(part.id)!]), { toleranceMeters: tolerance });
-        part.touchesParent = !joined.skippedReason && joined.structureCount <= piecesOf(part.parentId, parentSoup);
+    // Without the graph (the analysis was skipped) nothing is judged detached here; the skipped check fails below.
+    const graph = whole.graph;
+    if (graph) {
+        const piecesOf = (id: string): Set<number> => {
+            const [from, to] = triangleRange.get(id)!;
+            const pieces = new Set<number>();
+            for (let t = from; t < to; t++) pieces.add(graph.trianglePiece[t]);
+            return pieces;
+        };
+        const byId = new Map(parts.map(p => [p.id, p]));
+        for (const part of parts) {
+            if (!part.parentId || !part.built || !byId.get(part.parentId)?.built) continue;
+            part.touchesParent = reachesParent(piecesOf(part.id), piecesOf(part.parentId), graph);
+        }
     }
 
-    const partBounds: PartBounds = new Map([...named].filter(([, s]) => s.indices.length).map(([id, s]) => [id, soupBounds(s)]));
+    const partBounds: PartBounds = new Map(meshes.map(([id, s]) => [id, soupBounds(s)]));
     return {
         soup,
         partBounds,
@@ -701,7 +734,9 @@ async function checkBuild(
     vision: VisionModel,
     reference: ReferenceImage
 ): Promise<CheckedPass> {
+    throwIfAborted(input.signal, 'checks');
     const { soup, partBounds, ...measured } = measureBuild(spec, build.glb);
+    throwIfAborted(input.signal, 'checks');
     const render = renderReviewViews(soup, 512, { views: THREE_QUARTER_VIEW })[0].png;
     input.reportProgress?.(`Comparing the clay build (pass ${pass}) with the reference`);
     const differences = await compareToReference(vision, input.request, reference, render, spec, input.signal);
@@ -779,6 +814,50 @@ function passRecord(checked: CheckedPass, source: ObjectBuildPass['source'], req
     };
 }
 
+export interface SpecObjectBuildResult {
+    spec: ObjectBuildSpec;
+    sourceCode: string;
+    glb: Buffer;
+    glbPath: string;
+    /** The measured checks; there is no comparison with a reference, so no differences. */
+    checks: Omit<ObjectBuildChecks, 'differences'>;
+    /** Problems that do not stop the build (such as its size disagreeing with boundingMeters). */
+    openProblems: string[];
+    buildMs: number;
+}
+
+/**
+ * Builds a spec exactly as given, typically an edit of an earlier build's spec: no reference image, no model call
+ * and no comparison. A spec the validator or the interpreter rejects, or a build that fails its checks (a part not
+ * built, a child off its parent, a piece count other than expectedBodies), throws with every problem listed for the
+ * caller to fix; nothing is revised here and nothing failing is returned.
+ */
+export async function buildObjectFromSpec(
+    spec: unknown,
+    input: Pick<ReferenceObjectBuildRequest, 'signal' | 'reportProgress'> = {},
+    deps: ReferenceObjectBuilderDeps = {}
+): Promise<SpecObjectBuildResult> {
+    const errors = validateObjectBuildSpec(spec);
+    if (errors.length) {
+        throw new ReferenceObjectBuildError('build-spec', `The spec cannot be built (the validator found: ${errors.join('; ')})`, { errors });
+    }
+    const valid = spec as ObjectBuildSpec;
+    input.reportProgress?.('Building the spec natively', 0.2);
+    const built = await runBuild(valid, deps, input.signal);
+    if ('specProblems' in built) {
+        throw new ReferenceObjectBuildError('build', `The spec cannot be built (the interpreter found: ${built.specProblems.join('; ')})`, { errors: built.specProblems });
+    }
+    throwIfAborted(input.signal, 'checks');
+    input.reportProgress?.('Checking that every part is built and attached', 0.8);
+    const { soup: _soup, partBounds, ...measured } = measureBuild(valid, built.glb);
+    const problems = describeProblems({ ...measured, differences: [] }, valid, partBounds);
+    if (!passedEveryCheck(measured)) {
+        throw new ReferenceObjectBuildError('checks', `The build does not pass its checks, so nothing was mounted: ${problems.join(' ')}`,
+            { problems, connectivity: measured.connectivity, missingParts: measured.missingParts, detachedParts: measured.detachedParts });
+    }
+    return { spec: valid, sourceCode: built.sourceCode, glb: built.glb, glbPath: built.glbPath, checks: measured, openProblems: problems, buildMs: built.buildMs };
+}
+
 /**
  * Builds a request as native clay geometry from an internal reference image. Throws ReferenceObjectBuildError
  * for any stage that cannot do what it was asked.
@@ -815,7 +894,7 @@ export async function buildObjectFromReference(
         let revisionFailed: RevisionFailure | undefined;
 
         for (let revision = 1; revision <= MAX_REVISION_PASSES && current.problems.length > 0; revision++) {
-            throwIfAborted(input.signal);
+            throwIfAborted(input.signal, 'build-spec');
             const pass = revision + 1;
             const count = current.problems.length;
             progress(`Revision ${revision}: fixing ${count} problem${count === 1 ? '' : 's'}`, 0.35 + 0.25 * revision);
