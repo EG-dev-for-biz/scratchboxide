@@ -1839,7 +1839,7 @@ const segmenterService = new VfxSubjectSegmenterService();
 export const SEGMENTATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'vfx_segment_subject',
-        description: 'Generate per-frame holdout matte masks for a subject in a video using MediaPipe Image Segmenter. Produces a PNG sequence (mask_0000.png, mask_0001.png, …) in the output directory where white pixels (255) mark the foreground subject and black pixels (0) mark background. Masks are directly usable as FFmpeg alphamerge inputs or as holdout mattes in the Video Timeline compositor.',
+        description: 'Generate per-frame holdout matte masks for the person in a video with the MediaPipe selfie segmenter. Produces a PNG sequence with one mask per sampled frame and no gaps (mask_0000.png, mask_0001.png, …) in the output directory, where white pixels (255) mark the person and black pixels (0) the background. Masks are directly usable as FFmpeg alphamerge inputs or as holdout mattes in the Video Timeline compositor. The call fails, naming the frame and the error, if any frame cannot be segmented (for example when MediaPipe is not installed); it then leaves no masks behind. The result names the MediaPipe model that made the masks.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1854,10 +1854,6 @@ export const SEGMENTATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 fps: {
                     type: 'NUMBER',
                     description: 'Frame sampling rate in frames-per-second (default 5). Lower values run faster with fewer masks.'
-                },
-                subjectHint: {
-                    type: 'STRING',
-                    description: 'Optional natural-language description of the subject to segment (e.g. "person", "car"). Used for model routing in future versions.'
                 },
                 dryRun: {
                     type: 'BOOLEAN',
@@ -1874,7 +1870,6 @@ export const segmentationHandlers: Record<string, ToolHandler> = {
         const videoPath = typeof args.videoPath === 'string' ? args.videoPath : '';
         const outputDir = typeof args.outputDir === 'string' ? args.outputDir : '';
         const fps = typeof args.fps === 'number' ? args.fps : undefined;
-        const subjectHint = typeof args.subjectHint === 'string' ? args.subjectHint : undefined;
         const dryRun = args.dryRun === true;
 
         if (!videoPath) {
@@ -1884,22 +1879,18 @@ export const segmentationHandlers: Record<string, ToolHandler> = {
             return { resultPayload: { success: false, error: 'outputDir is required' }, status: 'failed', summaryResult: 'Missing outputDir' };
         }
 
-        const result = await segmenterService.segmentSubject({ videoPath, outputDir, fps, subjectHint, dryRun });
-
-        if (!result.success) {
-            return {
-                resultPayload: result as Record<string, unknown>,
-                status: 'failed',
-                summaryResult: `Segmentation failed: ${result.error}`
-            };
-        }
+        // A missing video, a failed probe or extraction, or any frame the segmenter cannot do throws a typed error,
+        // which fails the call; a result is a complete mask sequence.
+        const result = await segmenterService.segmentSubject({ videoPath, outputDir, fps, dryRun });
+        const madeBy = result.models.length ? ` with ${result.models.join(', ')}` : '';
+        const notes = result.modelNotes.length ? ` ${result.modelNotes.join(' ')}` : '';
 
         return {
             resultPayload: result as Record<string, unknown>,
             status: 'completed',
             summaryResult: dryRun
-                ? `Dry run: would produce ${result.totalFrames} masks at ${result.sampleFps} fps → ${outputDir}`
-                : `Generated ${result.totalFrames} holdout matte masks (${result.width}×${result.height}) → ${outputDir}`
+                ? `Dry run: would produce ${result.totalFrames} masks at ${result.sampleFps} fps → ${outputDir} (nothing segmented)`
+                : `Generated ${result.totalFrames} holdout matte masks (${result.width}×${result.height}, every sampled frame)${madeBy} → ${outputDir}.${notes}`
         };
     }
 };

@@ -9,10 +9,13 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { spawn, exec } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
+import { resolveBinary } from './HeadlessVideoEditorService';
+import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+const TOOL = 'vfx_segment_subject';
 
 // ============================================================================
 // Types
@@ -25,8 +28,6 @@ export interface SegmentSubjectOptions {
     outputDir: string;
     /** Frame sampling rate (default 5 fps). Lower = faster, fewer masks. */
     fps?: number;
-    /** Optional subject hint forwarded to the Python segmenter (for future model routing). */
-    subjectHint?: string;
     /** When true, plans execution without spawning processes. */
     dryRun?: boolean;
     /** Override path to segment_subject.py script. */
@@ -36,25 +37,32 @@ export interface SegmentSubjectOptions {
 }
 
 export interface SegmentSubjectResult {
-    success: boolean;
+    success: true;
     videoPath: string;
     outputDir: string;
+    /** Frames sampled from the video; every one has a mask (a frame that cannot be segmented fails the call). */
     totalFrames: number;
     sampleFps: number;
     width: number;
     height: number;
-    /** Absolute paths to mask PNGs, in frame order: mask_0000.png, mask_0001.png, … */
+    /** Absolute paths to mask PNGs, in frame order without gaps: mask_0000.png, mask_0001.png, … */
     maskPaths: string[];
     /**
      * Relative pattern usable with FFmpeg image2 demuxer:
      *   ffmpeg -framerate <fps> -i <outputDir>/mask_%04d.png …
      */
     ffmpegPattern: string;
-    durationSec: number;
+    /** The video's length as ffprobe measured it (absent when ffprobe reports none; a dry run then fails). */
+    durationSec?: number;
+    /** The segmentation models that made the masks (empty for a dry run). */
+    models: string[];
+    /** Why a model other than the segmenter's first choice made masks, one line per distinct reason. */
+    modelNotes: string[];
     dryRun?: boolean;
-    error?: string;
     [key: string]: unknown;
 }
+
+type FrameOutcome = { ok: true; model?: string; modelNote?: string } | { ok: false; error: string };
 
 // ============================================================================
 // Service
@@ -70,6 +78,11 @@ export class VfxSubjectSegmenterService {
             ?? path.resolve(process.cwd(), 'scripts/segment_subject.py');
     }
 
+    /**
+     * Writes one binary mask per sampled frame, or throws: a missing video is a MissingInputError, and a failed probe,
+     * frame extraction or segmentation of any frame is a GeneratorFailedError naming the step (and the frame). A failed
+     * run removes the masks it wrote, so no partial sequence with gaps is left for an alphamerge to pick up.
+     */
     async segmentSubject(options: SegmentSubjectOptions): Promise<SegmentSubjectResult> {
         const {
             videoPath,
@@ -79,84 +92,69 @@ export class VfxSubjectSegmenterService {
         } = options;
 
         if (!fs.existsSync(videoPath)) {
-            return this.failure(videoPath, outputDir, fps, `Video file not found: ${videoPath}`);
+            throw new MissingInputError(TOOL, 'videoPath', `${videoPath} does not exist`);
         }
-
         if (!fs.existsSync(this.scriptPath)) {
-            return this.failure(videoPath, outputDir, fps,
-                `Segmentation script not found: ${this.scriptPath}`);
+            throw new GeneratorFailedError('python', `${TOOL}: the segmentation script ${this.scriptPath} does not exist`);
         }
 
-        // Probe video dimensions and duration.
-        let width = 0;
-        let height = 0;
-        let durationSec = 0;
-        try {
-            const probe = await this.probeVideo(videoPath);
-            width = probe.width;
-            height = probe.height;
-            durationSec = probe.duration;
-        } catch (err: unknown) {
-            return this.failure(videoPath, outputDir, fps,
-                `FFmpeg probe failed: ${String(err)}`);
-        }
+        const { width, height, duration: durationSec } = await this.probeVideo(videoPath);
 
         const safeFps = Math.max(1, Math.min(fps, 30));
-        const expectedFrames = Math.max(1, Math.ceil(durationSec * safeFps));
         const ffmpegPattern = path.join(outputDir, 'mask_%04d.png');
 
         if (dryRun) {
+            if (durationSec === undefined) {
+                throw new GeneratorFailedError('ffprobe', `${TOOL}: ffprobe could not measure the length of ${videoPath}, so a dry run cannot say how many frames it would segment`);
+            }
             return {
                 success: true,
                 videoPath,
                 outputDir,
-                totalFrames: expectedFrames,
+                totalFrames: Math.max(1, Math.ceil(durationSec * safeFps)),
                 sampleFps: safeFps,
                 width,
                 height,
                 maskPaths: [],
                 ffmpegPattern,
                 durationSec,
+                models: [],
+                modelNotes: [],
                 dryRun: true
             };
         }
 
         await fs.ensureDir(outputDir);
-
-        // Step 1: Extract frames from video using FFmpeg.
         const rawFrameDir = path.join(outputDir, '.raw_frames');
-        await fs.ensureDir(rawFrameDir);
-        const rawPattern = path.join(rawFrameDir, 'frame_%04d.png');
-
-        await this.extractFrames(videoPath, rawPattern, safeFps);
-
-        // Step 2: Collect extracted frames.
-        const rawFrames = (await fs.readdir(rawFrameDir))
-            .filter(f => f.endsWith('.png'))
-            .sort();
-
-        if (rawFrames.length === 0) {
-            await fs.remove(rawFrameDir);
-            return this.failure(videoPath, outputDir, fps,
-                'FFmpeg extracted zero frames — check video file and fps setting');
-        }
-
-        // Step 3: Run segmenter on each frame via Python subprocess.
         const maskPaths: string[] = [];
-        for (let i = 0; i < rawFrames.length; i++) {
-            const inputFrame = path.join(rawFrameDir, rawFrames[i]);
-            const maskPath = path.join(outputDir, `mask_${String(i).padStart(4, '0')}.png`);
-            const ok = await this.runSegmenterOnFrame(inputFrame, maskPath);
-            if (ok) {
-                maskPaths.push(maskPath);
+        const models = new Set<string>();
+        const modelNotes = new Set<string>();
+        let complete = false;
+        try {
+            // Step 1: Extract frames from video using FFmpeg.
+            await fs.emptyDir(rawFrameDir);
+            await this.extractFrames(videoPath, path.join(rawFrameDir, 'frame_%04d.png'), safeFps);
+            const rawFrames = (await fs.readdir(rawFrameDir)).filter(f => f.endsWith('.png')).sort();
+            if (rawFrames.length === 0) {
+                throw new GeneratorFailedError('ffmpeg', `${TOOL}: FFmpeg extracted no frames from ${videoPath} at ${safeFps} fps`);
             }
-        }
 
-        await fs.remove(rawFrameDir);
-
-        if (maskPaths.length === 0) {
-            return this.failure(videoPath, outputDir, fps,
-                'Segmenter produced no output masks — check Python dependencies (mediapipe, opencv-python-headless)');
+            // Step 2: Segment every frame; the first frame that cannot be segmented fails the call.
+            for (let i = 0; i < rawFrames.length; i++) {
+                const maskPath = path.join(outputDir, `mask_${String(i).padStart(4, '0')}.png`);
+                const outcome = await this.runSegmenterOnFrame(path.join(rawFrameDir, rawFrames[i]), maskPath);
+                if (!outcome.ok) {
+                    await fs.remove(maskPath);
+                    throw new GeneratorFailedError('python', `${TOOL}: frame ${i + 1} of ${rawFrames.length} (${(i / safeFps).toFixed(2)} s into ${path.basename(videoPath)}) could not be segmented, so no matte sequence was written: ${outcome.error}`);
+                }
+                maskPaths.push(maskPath);
+                if (outcome.model) models.add(outcome.model);
+                if (outcome.modelNote) modelNotes.add(outcome.modelNote);
+            }
+            complete = true;
+        } finally {
+            await fs.remove(rawFrameDir);
+            if (!complete) await Promise.all(maskPaths.map(p => fs.remove(p)));
         }
 
         return {
@@ -169,7 +167,9 @@ export class VfxSubjectSegmenterService {
             height,
             maskPaths,
             ffmpegPattern,
-            durationSec
+            durationSec,
+            models: Array.from(models),
+            modelNotes: Array.from(modelNotes)
         };
     }
 
@@ -177,19 +177,34 @@ export class VfxSubjectSegmenterService {
     // Private helpers
     // -------------------------------------------------------------------------
 
+    /** Dimensions (throws when there are none) and length (the stream's duration, else the container's, else undefined). */
     private async probeVideo(
         videoPath: string
-    ): Promise<{ width: number; height: number; duration: number }> {
-        const cmd = `ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration -of csv=p=0 "${videoPath}"`;
-        const { stdout } = await execAsync(cmd, { timeout: 10_000 });
-        const parts = stdout.trim().split(',');
-        const width = parseInt(parts[0] ?? '0', 10);
-        const height = parseInt(parts[1] ?? '0', 10);
-        const duration = parseFloat(parts[2] ?? '0');
-        if (!width || !height) {
-            throw new Error(`Unable to read dimensions from ffprobe output: ${stdout.trim()}`);
+    ): Promise<{ width: number; height: number; duration?: number }> {
+        let stdout: string;
+        try {
+            ({ stdout } = await execFileAsync(resolveBinary('ffprobe'), [
+                '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height,duration:format=duration',
+                '-of', 'json', videoPath
+            ], { timeout: 10_000 }));
+        } catch (err: any) {
+            throw new GeneratorFailedError('ffprobe', `${TOOL} could not probe ${videoPath}: ${err?.stderr || err?.message || String(err)}`);
         }
-        return { width, height, duration: isNaN(duration) ? 0 : duration };
+        let parsed: any;
+        try {
+            parsed = JSON.parse(stdout);
+        } catch {
+            throw new GeneratorFailedError('ffprobe', `${TOOL} could not read ffprobe's answer for ${videoPath}: ${stdout.trim().slice(0, 200)}`);
+        }
+        const stream = parsed?.streams?.[0] ?? {};
+        const width = Number(stream.width);
+        const height = Number(stream.height);
+        const duration = Number(stream.duration ?? parsed?.format?.duration);
+        if (!(width > 0 && height > 0)) {
+            throw new GeneratorFailedError('ffprobe', `${TOOL}: ffprobe found no video stream with dimensions in ${videoPath}`);
+        }
+        return { width, height, duration: Number.isFinite(duration) && duration > 0 ? duration : undefined };
     }
 
     private extractFrames(
@@ -205,57 +220,49 @@ export class VfxSubjectSegmenterService {
                 '-q:v', '2',
                 outputPattern
             ];
-            const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+            const child = spawn(resolveBinary('ffmpeg'), args, { stdio: ['ignore', 'pipe', 'pipe'] });
             let stderr = '';
             child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
             child.on('close', code => {
                 if (code !== 0) {
-                    reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-400)}`));
+                    reject(new GeneratorFailedError('ffmpeg', `${TOOL}: frame extraction from ${videoPath} exited ${code}: ${stderr.slice(-400)}`));
                 } else {
                     resolve();
                 }
             });
-            child.on('error', reject);
+            child.on('error', err => reject(new GeneratorFailedError('ffmpeg', `${TOOL}: FFmpeg could not be started: ${err.message}`)));
         });
     }
 
-    private runSegmenterOnFrame(inputPath: string, outputPath: string): Promise<boolean> {
+    /** Runs the segmentation script on one frame; the outcome carries the script's error, or the model that made the mask. */
+    private runSegmenterOnFrame(inputPath: string, outputPath: string): Promise<FrameOutcome> {
         return new Promise(resolve => {
             const child = spawn(this.pythonBinary, [this.scriptPath, inputPath, outputPath], {
                 stdio: ['ignore', 'pipe', 'pipe']
             });
             let stdout = '';
+            let stderr = '';
             child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-            child.on('close', () => {
+            child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+            child.on('close', code => {
+                // The script answers with one JSON line (the last one; libraries may log before it).
+                const line = stdout.trim().split('\n').reverse().find(l => l.trim().startsWith('{'));
+                let answer: any;
                 try {
-                    const result = JSON.parse(stdout.trim());
-                    resolve(result.success === true && fs.existsSync(outputPath));
+                    answer = line ? JSON.parse(line) : undefined;
                 } catch {
-                    resolve(false);
+                    answer = undefined;
                 }
+                const stderrTail = stderr.trim() ? `: ${stderr.trim().slice(-400)}` : '';
+                if (answer?.success === true) {
+                    if (code !== 0) resolve({ ok: false, error: `the segmenter answered success but exited ${code}${stderrTail}` });
+                    else if (!fs.existsSync(outputPath)) resolve({ ok: false, error: `the segmenter answered success but wrote no mask at ${outputPath}` });
+                    else resolve({ ok: true, model: typeof answer.model === 'string' ? answer.model : undefined, modelNote: typeof answer.modelNote === 'string' ? answer.modelNote : undefined });
+                    return;
+                }
+                resolve({ ok: false, error: typeof answer?.error === 'string' ? answer.error : `the segmenter exited ${code} without an answer${stderrTail}` });
             });
-            child.on('error', () => resolve(false));
+            child.on('error', err => resolve({ ok: false, error: `${this.pythonBinary} could not be started: ${err.message}` }));
         });
-    }
-
-    private failure(
-        videoPath: string,
-        outputDir: string,
-        fps: number,
-        error: string
-    ): SegmentSubjectResult {
-        return {
-            success: false,
-            videoPath,
-            outputDir,
-            totalFrames: 0,
-            sampleFps: fps,
-            width: 0,
-            height: 0,
-            maskPaths: [],
-            ffmpegPattern: path.join(outputDir, 'mask_%04d.png'),
-            durationSec: 0,
-            error
-        };
     }
 }

@@ -7,9 +7,15 @@ White pixels (255) = foreground subject; black pixels (0) = background.
 Usage:
     python3 scripts/segment_subject.py <input_png_path> <output_mask_path>
 
-Output (stdout):
-    JSON: {"success": true, "inputPath": "...", "outputPath": "...", "width": 1920, "height": 1080}
-    On error: {"success": false, "error": "..."}
+The mask comes from MediaPipe: the Tasks ImageSegmenter with a selfie_segmenter.tflite model file when one is
+found, else the legacy SelfieSegmentation solution. The answer names the model that made the mask, and why the
+first one was not used. When neither can run, no mask is written and the answer is a failure with each reason;
+nothing else (no GrabCut guess, no fixed rectangle) stands in for a segmentation.
+
+Output (stdout, one JSON line):
+    {"success": true, "inputPath": "...", "outputPath": "...", "width": 1920, "height": 1080,
+     "model": "...", "modelNote": "..." (only when the first model was not used)}
+    On error: {"success": false, "error": "..."} and a non-zero exit code
 """
 
 import json
@@ -20,7 +26,7 @@ import sys
 def main() -> None:
     try:
         import cv2  # type: ignore
-        import numpy as np  # type: ignore
+        import numpy as np  # type: ignore  # noqa: F401
     except ImportError as e:
         print(json.dumps({"success": False, "error": f"Missing dependency: {e}. Install: pip install opencv-python-headless"}))
         sys.exit(1)
@@ -43,105 +49,75 @@ def main() -> None:
 
     h, w = img_bgr.shape[:2]
 
-    # Try MediaPipe Image Segmenter (selfie segmentation model).
-    # Falls back to GrabCut-based saliency segmentation if MediaPipe is unavailable.
-    mask = _run_mediapipe_segmenter(img_bgr) or _run_grabcut_fallback(img_bgr)
+    mask, model, reasons = _run_mediapipe_segmenter(img_bgr)
+    if mask is None:
+        print(json.dumps({"success": False, "error": "MediaPipe could not segment the frame: " + "; ".join(reasons)}))
+        sys.exit(4)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    success = cv2.imwrite(output_path, mask)
-    if not success:
+    if not cv2.imwrite(output_path, mask):
         print(json.dumps({"success": False, "error": f"Failed to write mask to: {output_path}"}))
         sys.exit(3)
 
-    print(json.dumps({"success": True, "inputPath": input_path, "outputPath": output_path, "width": w, "height": h}))
+    answer = {"success": True, "inputPath": input_path, "outputPath": output_path, "width": w, "height": h, "model": model}
+    if reasons:
+        answer["modelNote"] = "The MediaPipe Tasks selfie segmenter was not used: " + "; ".join(reasons)
+    print(json.dumps(answer))
 
 
-def _run_mediapipe_segmenter(img_bgr) -> "np.ndarray | None":  # type: ignore
-    """Run MediaPipe SelfieSegmentation model. Returns uint8 binary mask or None if unavailable."""
+def _run_mediapipe_segmenter(img_bgr):  # type: ignore
+    """Returns (uint8 binary mask, model name, reasons earlier models were not used), or (None, None, reasons)."""
+    reasons = []
     try:
         import mediapipe as mp  # type: ignore
         import numpy as np  # type: ignore
-    except ImportError:
-        return None
+    except ImportError as e:
+        return None, None, [f"mediapipe is not installed ({e}); install it with: pip install mediapipe"]
 
-    try:
-        # Try the newer Tasks API first (MediaPipe 0.10+)
-        from mediapipe.tasks import python as mp_python  # type: ignore
-        from mediapipe.tasks.python import vision  # type: ignore
-        import numpy as np  # type: ignore
+    img_rgb = img_bgr[:, :, ::-1].copy()
 
-        # Look for model in common locations
-        model_path = _find_model_path([
-            "assets/models/selfie_segmenter.tflite",
-            "assets/models/selfie_segmentation.tflite",
-            os.path.expanduser("~/.cache/mediapipe/selfie_segmenter.tflite"),
-        ])
+    # MediaPipe Tasks ImageSegmenter (MediaPipe 0.10+) with a selfie segmenter model file.
+    model_path = _find_model_path([
+        "assets/models/selfie_segmenter.tflite",
+        "assets/models/selfie_segmentation.tflite",
+        os.path.expanduser("~/.cache/mediapipe/selfie_segmenter.tflite"),
+    ])
+    if not model_path:
+        reasons.append("no selfie_segmenter.tflite in assets/models or ~/.cache/mediapipe")
+    else:
+        try:
+            from mediapipe.tasks import python as mp_python  # type: ignore
+            from mediapipe.tasks.python import vision  # type: ignore
 
-        if model_path:
-            base_opts = mp_python.BaseOptions(model_asset_path=model_path)
             opts = vision.ImageSegmenterOptions(
-                base_options=base_opts,
+                base_options=mp_python.BaseOptions(model_asset_path=model_path),
                 output_category_mask=True
             )
             segmenter = vision.ImageSegmenter.create_from_options(opts)
-            img_rgb = img_bgr[:, :, ::-1].copy()
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-            result = segmenter.segment(mp_image)
+            try:
+                result = segmenter.segment(mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb))
+            finally:
+                segmenter.close()
             if result.category_mask is not None:
                 cat = result.category_mask.numpy_view().astype(np.uint8)
                 # Category 1 = person/foreground
-                mask = np.where(cat == 1, np.uint8(255), np.uint8(0))
-                return mask
-            segmenter.close()
-    except Exception:
-        pass
+                return np.where(cat == 1, np.uint8(255), np.uint8(0)), f"mediapipe-tasks-image-segmenter ({os.path.basename(model_path)})", reasons
+            reasons.append(f"the Tasks ImageSegmenter ({model_path}) returned no category mask")
+        except Exception as e:  # noqa: BLE001 - the reason is reported in the answer
+            reasons.append(f"the Tasks ImageSegmenter ({model_path}) failed: {e}")
 
-    # Legacy SelfieSegmentation model
+    # Legacy SelfieSegmentation solution (bundled with the mediapipe package).
     try:
-        import mediapipe as mp  # type: ignore
-        import numpy as np  # type: ignore
-
         with mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1) as seg:  # type: ignore
-            img_rgb = img_bgr[:, :, ::-1].copy()
             result = seg.process(img_rgb)
-            if result.segmentation_mask is not None:
-                raw = result.segmentation_mask
-                # Binarize: > 0.5 confidence → foreground
-                mask = (raw > 0.5).astype("uint8") * 255
-                return mask
-    except Exception:
-        pass
+        if result.segmentation_mask is not None:
+            # Binarize: > 0.5 confidence → foreground
+            return (result.segmentation_mask > 0.5).astype("uint8") * 255, "mediapipe-legacy-selfie-segmentation (model_selection=1)", reasons
+        reasons.append("the legacy SelfieSegmentation solution returned no mask")
+    except Exception as e:  # noqa: BLE001 - the reason is reported in the answer
+        reasons.append(f"the legacy SelfieSegmentation solution failed: {e}")
 
-    return None
-
-
-def _run_grabcut_fallback(img_bgr) -> "np.ndarray":  # type: ignore
-    """GrabCut-based coarse foreground/background segmentation (no model required)."""
-    import cv2  # type: ignore
-    import numpy as np  # type: ignore
-
-    h, w = img_bgr.shape[:2]
-
-    # Assume subject is centred in the frame (typical for talent/performer shots)
-    margin_x = max(1, w // 10)
-    margin_y = max(1, h // 10)
-    rect = (margin_x, margin_y, w - 2 * margin_x, h - 2 * margin_y)
-
-    mask_gc = np.zeros((h, w), np.uint8)
-    bg_model = np.zeros((1, 65), np.float64)
-    fg_model = np.zeros((1, 65), np.float64)
-
-    try:
-        cv2.grabCut(img_bgr, mask_gc, rect, bg_model, fg_model, 5, cv2.GC_INIT_WITH_RECT)
-        final = np.where((mask_gc == cv2.GC_FGD) | (mask_gc == cv2.GC_PR_FGD), np.uint8(255), np.uint8(0))
-    except Exception:
-        # Last-resort: return a solid white rectangle in the centre third
-        final = np.zeros((h, w), dtype=np.uint8)
-        x1, y1 = w // 3, h // 3
-        x2, y2 = 2 * w // 3, 2 * h // 3
-        final[y1:y2, x1:x2] = 255
-
-    return final
+    return None, None, reasons
 
 
 def _find_model_path(candidates: list) -> "str | None":
