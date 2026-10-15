@@ -43,36 +43,47 @@ export class HeadlessSpatialAiBridge {
     const ltp = new LocalTangentPlane(origin);
 
     // Compute geographic positions and angles
-    const geoPos = entity.space.geoAnchor || origin;
+    const geoPos = origin;
     const localPos = ltp.toLocal(geoPos);
-
-    const solar = sceneDoc.environment.solar || { altitude: 0.5, azimuth: 3.2 };
-    const sunAzimuthDeg = (solar.azimuth * 180.0) / Math.PI;
-    const sunAltitudeDeg = (solar.altitude * 180.0) / Math.PI;
-
-    const weather = sceneDoc.environment.weather?.conditions || 'sunny';
-    const fogDensity = sceneDoc.environment.weather?.fogDensity ?? 0.0;
+    // Only what the scene document states: no altitude, sun or weather is assumed when it is missing.
+    const altitudeText = (alt: number | undefined) => typeof alt === 'number' ? `Alt: ${alt.toFixed(1)}m` : 'altitude not given';
+    const solar = sceneDoc.environment.solar;
+    const sunAzimuthDeg = solar ? (solar.azimuth * 180.0) / Math.PI : undefined;
+    const sunAltitudeDeg = solar ? (solar.altitude * 180.0) / Math.PI : undefined;
+    const weather = sceneDoc.environment.weather?.conditions;
+    const fogDensity = sceneDoc.environment.weather?.fogDensity;
 
     // Build the structured spatial-temporal text instructions
     let prompt = `================================================================================\n`;
     prompt += `GOOGLE MULTIMODAL AI GROUNDING COMPILER (IMAGEN 3 / VEO 2 ENGINE)\n`;
     prompt += `================================================================================\n`;
     prompt += `CONTEXT PRIOR: Spatio-Temporal 4D Conditioning Matrix\n`;
-    prompt += `- Geodetic Origin : Lat ${origin.lat.toFixed(5)}°, Lng ${origin.lng.toFixed(5)}° (Alt: ${(origin.alt ?? 0).toFixed(1)}m)\n`;
-    prompt += `- Target Coordinates: Lat ${geoPos.lat.toFixed(5)}°, Lng ${geoPos.lng.toFixed(5)}° (Alt: ${(geoPos.alt ?? 0).toFixed(1)}m)\n`;
+    prompt += `- Geodetic Origin : Lat ${origin.lat.toFixed(5)}°, Lng ${origin.lng.toFixed(5)}° (${altitudeText(origin.alt)})\n`;
+    prompt += `- Target Coordinates: Lat ${geoPos.lat.toFixed(5)}°, Lng ${geoPos.lng.toFixed(5)}° (${altitudeText(geoPos.alt)})\n`;
     prompt += `- Metric Transform : Local ENU [${localPos[0].toFixed(3)}m East, ${localPos[1].toFixed(3)}m Up, ${localPos[2].toFixed(3)}m South]\n`;
-    prompt += `- Astronomical Sun : Altitude ${sunAltitudeDeg.toFixed(1)}° above horizon, Azimuth ${sunAzimuthDeg.toFixed(1)}° (North-relative)\n`;
-    prompt += `- Atmospheric State: Weather: ${weather} (Fog Density: ${(fogDensity * 100).toFixed(0)}%)\n`;
+    prompt += solar
+        ? `- Astronomical Sun : Altitude ${sunAltitudeDeg!.toFixed(1)}° above horizon, Azimuth ${sunAzimuthDeg!.toFixed(1)}° (North-relative)\n`
+        : `- Astronomical Sun : not given in the scene document\n`;
+    prompt += weather
+        ? `- Atmospheric State: Weather: ${weather}${typeof fogDensity === 'number' ? ` (Fog Density: ${(fogDensity * 100).toFixed(0)}%)` : ''}\n`
+        : `- Atmospheric State: not given in the scene document\n`;
     prompt += `- Lineage Layer    : Branch "${entity.lineage.worldBranchId}" (Version ${entity.lineage.version})\n`;
     prompt += `================================================================================\n\n`;
+
+    const directives: string[] = [];
+    if (solar) {
+        directives.push(`LIGHTING DIRECTION: Cast sharp, coherent directional light rays pointing from sun azimuth ${sunAzimuthDeg!.toFixed(1)}° and elevation ${sunAltitudeDeg!.toFixed(1)}°.`);
+        directives.push(`SHADOW GEOMETRY: Cast physically accurate volumetric shadows stretching opposite the sun vector. Shadow length ratio relative to height must scale exactly to ${Math.max(0.1, 1.0 / Math.tan(solar.altitude)).toFixed(2)}x.`);
+    }
+    if (weather) {
+        directives.push(`WEATHER & SKYDOME: Map the ambient hemisphere light to ${weather} sky characteristics${sunAltitudeDeg !== undefined ? `, setting the color temperature to ${this.estimateColorTemperature(sunAltitudeDeg)}K` : ''}.`);
+    }
+    directives.push('BOUNDING GEOMETRY: Retain all real architectural boundaries, height caps, and terrain slopes of the Local Tangent Plane. Do not warp buildings or streets.');
 
     prompt += `DIRECTIVE FOR GENERATIVE STYLIZATION:\n`;
     prompt += `Synthesize a high-fidelity visual composition based on the following user concept: "${rawUserConcept}".\n`;
     prompt += `Your output must strictly respect the physical light rays and geographic horizon vectors compiled above:\n`;
-    prompt += `1. LIGHTING DIRECTION: Cast sharp, coherent directional light rays pointing from sun azimuth ${sunAzimuthDeg.toFixed(1)}° and elevation ${sunAltitudeDeg.toFixed(1)}°.\n`;
-    prompt += `2. SHADOW GEOMETRY: Cast physically accurate volumetric shadows stretching opposite the sun vector. Shadow length ratio relative to height must scale exactly to ${Math.max(0.1, 1.0 / Math.tan(solar.altitude)).toFixed(2)}x.\n`;
-    prompt += `3. WEATHER & SKYDOME: Map the ambient hemisphere light to ${weather} sky characteristics, setting the color temperature to ${this.estimateColorTemperature(sunAltitudeDeg)}K.\n`;
-    prompt += `4. BOUNDING GEOMETRY: Retain all real architectural boundaries, height caps, and terrain slopes of the Local Tangent Plane. Do not warp buildings or streets.\n`;
+    directives.forEach((d, k) => { prompt += `${k + 1}. ${d}\n`; });
 
     const payload: SpatialAIConditioningPayload = {
       restylePrompt: prompt,

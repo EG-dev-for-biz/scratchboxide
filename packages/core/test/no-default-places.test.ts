@@ -168,6 +168,17 @@ describe('vector world and survey tools need the place: no Empire State Building
         await expect(real.clay({ query: 'Flatiron Building, New York' })).resolves.toMatchObject({ success: true, glbPath: '/tmp/real.glb' });
     });
 
+    it('POST /clay passes only extraction options: a client cannot choose where the GLB is written', async () => {
+        const fetchClayGlb = vi.fn(async (_q: any, _o?: Record<string, any>) => ({ glbPath: '/tmp/real.glb', mock: false }));
+        const api = new SurveyApi({ workspaceRoot: os.tmpdir(), fetchClayGlb });
+        await api.clay({
+            query: '40.7411, -73.9897',
+            options: { radiusMeters: 150, outputGlbPath: '/Users/someone/.zshrc', outputDir: '/etc', apiKey: 'client-key', fetchImpl: 'x' }
+        });
+        expect(fetchClayGlb).toHaveBeenCalledTimes(1);
+        expect(fetchClayGlb.mock.calls[0][1]).toEqual({ radiusMeters: 150 });
+    });
+
     it('the survey plan takes no style or era from words in the place name', async () => {
         const preset = await resolveSurveyPreset({ location: 'Waste Transfer Station, Hartford' }, os.tmpdir(), {
             geocode: async () => ({ lat: 41.7637, lng: -72.6851, elevation: 18, formattedAddress: 'Waste Transfer Station, Hartford, CT, USA' })
@@ -220,6 +231,28 @@ describe('geodata services answer for the place they were given or fail', () => 
         const doc: any = { schemaVersion: '0.3.0', metadata: { id: 'd', title: 't', totalDurationMs: 0, generator: 'test' }, environment: {}, entities: [{ id: 'e1', space: {}, content: {} }] };
         expect(() => HeadlessSpatialAiBridge.synthesizeGroundedMultimodalPrompt(doc, 'e1', 'a kiosk')).toThrow(MissingInputError);
         expect(() => ChronoSpatialDeductionEngine.generateDeductionReport({ buildingLandmarks: ['Ferry Building'] })).toThrow(MissingInputError);
+    });
+
+    it('the 4D prompt bridge states no altitude, sun or weather the scene document does not give', () => {
+        const doc: any = {
+            schemaVersion: '0.3.0', metadata: { id: 'd', title: 't', totalDurationMs: 0, generator: 'test' }, environment: {},
+            entities: [{ id: 'e1', space: { geoAnchor: { lat: 39.7392, lng: -104.9903 } }, content: {}, lineage: { worldBranchId: 'main', version: 1 } }]
+        };
+        const { structuredPrompt } = HeadlessSpatialAiBridge.synthesizeGroundedMultimodalPrompt(doc, 'e1', 'a kiosk');
+        // Denver: an origin with no altitude used to be described as "Alt: 0.0m", and a missing sun as a fixed one.
+        expect(structuredPrompt).not.toMatch(/Alt: 0\.0m|Azimuth 183|sunny/);
+        expect(structuredPrompt).toContain('altitude not given');
+        expect(structuredPrompt).toContain('Astronomical Sun : not given in the scene document');
+        expect(structuredPrompt).not.toContain('LIGHTING DIRECTION');
+        const withSun = HeadlessSpatialAiBridge.synthesizeGroundedMultimodalPrompt({
+            ...doc,
+            environment: { solar: { altitude: Math.PI / 6, azimuth: Math.PI }, weather: { conditions: 'overcast', fogDensity: 0.2 } },
+            entities: [{ ...doc.entities[0], space: { geoAnchor: { lat: 39.7392, lng: -104.9903, alt: 1609 } } }]
+        }, 'e1', 'a kiosk').structuredPrompt;
+        expect(withSun).toContain('Alt: 1609.0m');
+        expect(withSun).toContain('Altitude 30.0° above horizon, Azimuth 180.0°');
+        expect(withSun).toContain('Weather: overcast (Fog Density: 20%)');
+        expect(withSun).toContain('1. LIGHTING DIRECTION');
     });
 
     it('the XR bridge never takes an origin with no altitude to be at 0 m above sea level', () => {
@@ -423,6 +456,28 @@ describe('a Maps key Settings kept only in the window reaches the server', () =>
         const none = server({ configured: false, savedInSettings: false });
         expect(await syncSavedMapsKeyToServer('', none.impl)).toBeUndefined();
         expect(none.calls).toEqual([]);
+    });
+
+    it('clearing the Settings key also clears the names older builds saved it under', () => {
+        const store = new Map<string, string>([['GOOGLE_MAPS_API_KEY', 'legacy-window-key'], ['sb_google_maps_key', 'older-key']]);
+        const localStorage = {
+            getItem: (k: string) => store.get(k) ?? null,
+            setItem: (k: string, v: string) => { store.set(k, String(v)); },
+            removeItem: (k: string) => { store.delete(k); }
+        };
+        vi.stubGlobal('window', { localStorage });
+        try {
+            const maps = GoogleMapsService.getInstance();
+            maps.setApiKey('settings-key');
+            expect(maps.getStoredSettingsKey()).toBe('settings-key');
+            maps.setApiKey('');
+            // Nothing is left for the startup sync to send back to the server.
+            expect(maps.getStoredSettingsKey()).toBe('');
+            expect([...store.keys()]).toEqual([]);
+        } finally {
+            vi.unstubAllGlobals();
+            GoogleMapsService.getInstance().setApiKey('');
+        }
     });
 
     it('says why the key did not reach the server', async () => {

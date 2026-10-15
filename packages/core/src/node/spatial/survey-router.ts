@@ -252,6 +252,9 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
     return deps;
 }
 
+/** The /clay request options a client may set; everything else (output paths, credentials, fetch) is the server's. */
+const SURVEY_CLAY_CLIENT_OPTIONS = ['radiusMeters', 'clayPreset', 'maxLeaves', 'lodQuality', 'atomicBuildingIntegrity', 'enforceZeroBuildingClipping', 'zenithAltitudeMeters'] as const;
+
 export class SurveyApi {
     readonly engine = new SurveySynthesisEngine();
     private jobs = new Map<string, SurveyJob>();
@@ -394,7 +397,13 @@ export class SurveyApi {
         if (!query) throw new Error('query or anchor is required');
         // The extraction's offline test mode writes placeholder tiles; an API request gets real tiles or fails.
         if (body?.options?.offlineMock) throw new Error('options.offlineMock is a test-only extraction mode and is not accepted by /clay');
-        const res = await this.deps.fetchClayGlb(query, body?.options);
+        // Only options that shape the extraction pass through. Where the GLB is written, the key and the fetch are the
+        // server's: a client path (outputGlbPath, outputDir) would let a request write anywhere on disk.
+        const options: Record<string, any> = {};
+        for (const k of SURVEY_CLAY_CLIENT_OPTIONS) {
+            if (body?.options?.[k] !== undefined) options[k] = body.options[k];
+        }
+        const res = await this.deps.fetchClayGlb(query, options);
         if (res.mock) throw new Error('Clay ingestion produced placeholder (mock) tiles, not Google 3D Tiles');
         return { success: true, glbPath: res.glbPath, glbUrl: res.glbUrl, mesh: res.mesh, geoAnchor: res.geoAnchor, resolvedAddress: res.resolvedAddress, quality: res.quality, mode: res.mode };
     }

@@ -211,6 +211,8 @@ export interface GoogleMapsState {
 }
 
 const STORAGE_KEY = 'scratchbox_google_maps_api_key_v1';
+/** Names older builds saved the Settings key under; read until Settings saves or clears the key, then removed. */
+const LEGACY_STORAGE_KEYS = ['GOOGLE_MAPS_API_KEY', 'sb_google_maps_key'];
 
 export class GoogleMapsService {
     private static instance: GoogleMapsService;
@@ -356,6 +358,9 @@ export class GoogleMapsService {
                 } else {
                     window.localStorage.removeItem(STORAGE_KEY);
                 }
+                // Saving or clearing the key replaces what older builds stored, so a cleared key does not come back
+                // from a legacy name at the next start.
+                for (const legacy of LEGACY_STORAGE_KEYS) window.localStorage.removeItem(legacy);
             } catch (e) {
                 // Ignore storage errors
             }

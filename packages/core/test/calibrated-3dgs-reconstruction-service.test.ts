@@ -48,6 +48,18 @@ describe('Calibrated3DGSReconstructionService: 1:1 Metric Matrix Lock 3DGS Recon
         expect(fs.existsSync(outDir)).toBe(false);
     });
 
+    it('a geo-anchored tileset needs the anchor\'s height: it is not placed at sea level', async () => {
+        // With customStations the rig needs no anchor, but a 3D Tiles tileset anchored without a height used to be
+        // placed at 0 m (about 1.6 km under the ground in Denver).
+        const outDir = path.join(OUT_DIR, 'tileset_no_height');
+        const station = { id: 1, name: 's1', positionLocalENU: [0, 2, 10], forwardVector: [0, 0, -1], yawDegrees: 0, pitchDegrees: 0, rollDegrees: 0 } as any;
+        await expect(service.reconstruct({
+            glbPath: GLB_PATH, outDir, customStations: [station], enable3DTilesStreaming: true,
+            anchor: { lat: 39.7392, lng: -104.9903 } as any
+        })).rejects.toThrow(/needs anchor\.elevationMeters for a geo-anchored 3D Tiles tileset/);
+        expect(fs.existsSync(outDir)).toBe(false);
+    });
+
     it('validates 1:1 pinhole optical congruence and zero-drift center alignment', () => {
         const dummyPoses: ColmapCameraPose[] = [
             {

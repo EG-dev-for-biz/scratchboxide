@@ -258,6 +258,12 @@ export class Calibrated3DGSReconstructionService {
             throw new MissingInputError('calibrated_3dgs_reconstruction', 'anchor { lat, lng, elevationMeters } or customStations',
                 'the planned stations carry WGS-84 coordinates, so the model\'s location is needed; no default place is used');
         }
+        // A geo-anchored tileset is placed at the anchor's height: without one it would sit at sea level.
+        const anchorElevation = a ? (Number.isFinite(a.elevationMeters) ? a.elevationMeters : Number.isFinite((a as any).elevation) ? (a as any).elevation as number : undefined) : undefined;
+        if (options.enable3DTilesStreaming && a && anchorElevation === undefined) {
+            throw new MissingInputError('calibrated_3dgs_reconstruction', 'anchor.elevationMeters for a geo-anchored 3D Tiles tileset',
+                'the tileset is placed at the anchor\'s height, and no 0 m (sea level) default is used');
+        }
 
         report(0.05, 'Ensuring native baker compilation');
         const baker = await this.ensureBaker();
@@ -467,7 +473,7 @@ export class Calibrated3DGSReconstructionService {
             tilesetResult = await tilesService.convert({
                 inputPath: outSplatPath,
                 outDir: tilesDir,
-                origin: options.anchor ? { lat: options.anchor.lat, lng: options.anchor.lng, alt: options.anchor.elevationMeters ?? (options.anchor as any).elevation ?? 0 } : undefined,
+                origin: options.anchor ? { lat: options.anchor.lat, lng: options.anchor.lng, alt: anchorElevation } : undefined,
                 maxDepth: options.octreeOptions?.maxDepth ?? 5,
                 leafCapacity: options.octreeOptions?.leafCapacity ?? 65536,
                 interiorBudget: options.octreeOptions?.interiorBudget ?? 32768,
