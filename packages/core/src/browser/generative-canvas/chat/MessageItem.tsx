@@ -701,7 +701,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
 
                 {/* High-Fidelity Multimedia & Maps Grounding Cards */}
                 {!isUser && (msg.imageContent || (msg.imagesContent && msg.imagesContent.length > 0)) && (
-                    <ImageGeneratedCard imageContent={msg.imageContent} imagesContent={msg.imagesContent} />
+                    <ImageGeneratedCard imageContent={msg.imageContent} imagesContent={msg.imagesContent} modelNote={msg.mediaModelNote} />
                 )}
                 {msg.textureMatrixContent && (
                     <TextureMatrixCard result={msg.textureMatrixContent} />
@@ -710,7 +710,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     <AudioNarratedCard audioContent={msg.audioContent} />
                 )}
                 {msg.videoContent && (
-                    <CinematicVideoCard videoContent={msg.videoContent} />
+                    <CinematicVideoCard videoContent={msg.videoContent} modelNote={msg.mediaModelNote} />
                 )}
                 {msg.mapContent && (
                     <GoogleMapsCard mapContent={msg.mapContent} />

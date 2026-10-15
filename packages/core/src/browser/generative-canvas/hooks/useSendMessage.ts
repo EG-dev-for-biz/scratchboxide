@@ -37,7 +37,9 @@ import {
     buildStoppedReply,
     committedSessionCanvas,
     mcpExecutionToStep,
+    mediaModelNoteOf,
     recordExecution,
+    recordMediaModelNote,
     settleRunningExecution,
     settleRunningSteps,
     STREAM_CANCELLED,
@@ -142,6 +144,8 @@ interface StreamProgress {
     executionPlanCard?: ExecutionPlanCardData;
     /** Which model and credential answered (from the stream's `done` event). */
     modelProvenance?: ModelAnswerProvenance;
+    /** Notes from tool results whose media a model other than the requested one made (recordMediaModelNote). */
+    mediaModelNotes: string[];
 }
 
 interface GenerationContext {
@@ -333,7 +337,7 @@ function beginGeneration(d: SendMessageDeps, text: string, textToSend: string | 
             setLiveThinkingSeconds(parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1)));
         }
     }, 100);
-    const progress: StreamProgress = { text: '', thinking: '', steps: [], execs: [] };
+    const progress: StreamProgress = { text: '', thinking: '', steps: [], execs: [], mediaModelNotes: [] };
     return { text, textToSend, targetPrimitiveType, targetSessionId, updatedMessages, generationStartTime, thinkingTimer, progress };
 }
 
@@ -571,6 +575,11 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                     setMcpExecutions(prev => recordExecution(prev, exec));
                     updateSteps(prev => upsertStep(prev, mcpExecutionToStep(exec)));
                 }
+                if (event.toolResult) {
+                    // A tool whose media came from a model other than the one asked for says which and why; the
+                    // reply's image and video cards show it.
+                    progress.mediaModelNotes = recordMediaModelNote(progress.mediaModelNotes, event.toolResult.result);
+                }
                 if (isReplyText) {
                     progress.text = event.type === 'delta' ? progress.text + event.text : event.text!;
                     if (visible) {
@@ -642,7 +651,8 @@ function partialReplyFrom(ctx: GenerationContext): PartialReply {
         questionCard: progress.questionCard,
         executionPlanCard: progress.executionPlanCard,
         // A fallback model or the API key may have answered before the stream failed: the notice says so.
-        modelProvenance: progress.modelProvenance
+        modelProvenance: progress.modelProvenance,
+        mediaModelNote: mediaModelNoteOf(progress.mediaModelNotes)
     };
 }
 
@@ -675,7 +685,8 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             steps: liveSteps.length > 0 ? liveSteps : undefined,
             questionCard: backend.streamQuestionCard,
             executionPlanCard: backend.streamExecutionPlanCard,
-            modelProvenance: ctx.progress.modelProvenance
+            modelProvenance: ctx.progress.modelProvenance,
+            mediaModelNote: mediaModelNoteOf(ctx.progress.mediaModelNotes)
         };
     } else if (usedBackend) {
         finalAssistantMsg = {
@@ -690,7 +701,8 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             steps: liveSteps.length > 0 ? liveSteps : undefined,
             questionCard: backend.streamQuestionCard,
             executionPlanCard: backend.streamExecutionPlanCard,
-            modelProvenance: ctx.progress.modelProvenance
+            modelProvenance: ctx.progress.modelProvenance,
+            mediaModelNote: mediaModelNoteOf(ctx.progress.mediaModelNotes)
         };
     } else {
         throw new Error('finalizeBackendMessage called without a backend response');

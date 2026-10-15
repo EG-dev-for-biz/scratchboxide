@@ -19,6 +19,7 @@ import type {
     StudioLayoutMode
 } from '../canvas-types';
 import type { ModelAnswerProvenance } from '../../../common/gemini-protocol';
+import { substitutedModelNote } from '../../../common/media-generation-protocol';
 
 /**
  * How a chat reply's tool steps look while a tool runs, and what becomes of the ones still running
@@ -176,6 +177,23 @@ export interface PartialReply {
     executionPlanCard?: ExecutionPlanCardData;
     /** Which model and credential had answered (when the stream said so): kept so a cut-short reply still shows it. */
     modelProvenance?: ModelAnswerProvenance;
+    /** Which model made the media the reply's tools had already generated, when it was not the requested one. */
+    mediaModelNote?: string;
+}
+
+/**
+ * Adds a tool result's media-model note to `notes` (once): the note substitutedModelNote gives when the result says
+ * a model other than the requested one produced its media, and why. A result from the requested model, or one that
+ * names no model, adds nothing.
+ */
+export function recordMediaModelNote(notes: readonly string[], toolResult: unknown): string[] {
+    const note = toolResult && typeof toolResult === 'object' ? substitutedModelNote(toolResult as Parameters<typeof substitutedModelNote>[0]) : undefined;
+    return note && !notes.includes(note) ? [...notes, note] : [...notes];
+}
+
+/** The reply's media-model note: every distinct note its tool results recorded, or undefined when there is none. */
+export function mediaModelNoteOf(notes: readonly string[]): string | undefined {
+    return notes.length ? notes.join(' ') : undefined;
 }
 
 /**
@@ -213,7 +231,8 @@ function buildCutShortReply(partial: PartialReply, cutoff: StepCutoff, text: str
         steps: steps.length > 0 ? steps : undefined,
         questionCard: partial.questionCard,
         executionPlanCard: partial.executionPlanCard,
-        modelProvenance: partial.modelProvenance
+        modelProvenance: partial.modelProvenance,
+        mediaModelNote: partial.mediaModelNote
     };
 }
 

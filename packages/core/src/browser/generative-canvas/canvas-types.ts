@@ -1384,6 +1384,11 @@ export interface ChatMessage {
     imagesContent?: string[];
     imageContent?: string;
     videoContent?: string;
+    /**
+     * When a tool in this reply generated media with a model other than the one asked for: which model answered and
+     * why each earlier one was skipped (substitutedModelNote of that tool's result). Shown on the image and video cards.
+     */
+    mediaModelNote?: string;
     audioContent?: string;
     mapContent?: { lat: number; lng: number; placeName: string; address?: string };
     deepWriteOffer?: boolean;
