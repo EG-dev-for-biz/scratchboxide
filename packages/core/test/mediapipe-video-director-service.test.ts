@@ -140,6 +140,54 @@ describe('MediaPipeVideoDirectorService (FFmpeg + MediaPipe + Gemini Coordinatio
         });
     });
 
+    describe('Pipeline 2: autoReframeVideo (tracked frames)', () => {
+        it('frames the tracked person, leaves out frames with nobody, and never centres the crop in place of a detection', async () => {
+            const { MissingInputError, GeneratorFailedError } = await import('../src/common/errors/pipeline-errors');
+            const fs = await import('fs');
+            const os = await import('os');
+            const path = await import('path');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-reframe-'));
+            const video = path.join(dir, 'clip.mp4');
+            fs.writeFileSync(video, 'not decoded by the fake editor');
+            const crops: any[] = [];
+            const editor: any = {
+                probeMedia: async () => ({ width: 1920, height: 1080, durationSec: 1.0 }),
+                extractKeyframes: async ({ timestampsSec }: { timestampsSec: number[] }) => ({
+                    outputPaths: timestampsSec.map((_, i) => { const f = path.join(dir, `f${i}.png`); fs.writeFileSync(f, `frame ${i}`); return f; })
+                }),
+                quickEdit: async (args: any) => { crops.push(args.crop.box); return { success: true, ffmpegCommand: 'ffmpeg (fake)' }; }
+            };
+            // Two samples (0 s and 0.5 s): a person standing at x = 0.2 of the frame in the first, nobody in the second.
+            const lms = Array.from({ length: 33 }, () => ({ x: 0.2, y: 0.5, z: 0, visibility: 0.8 }));
+            const tracked: any = {
+                runPoseLandmarker: async (image: Buffer) => image.toString() === 'frame 0'
+                    ? { detection: { imageLandmarks: [lms], worldLandmarks: [lms] } }
+                    : { noPerson: 'MediaPipe found no person in the image' }
+            };
+            const result = await new MediaPipeVideoDirectorService(editor, tracked).autoReframeVideo({ inputVideoPath: video, targetAspectRatio: '9:16', sampleIntervalSec: 0.5 });
+            expect(result.waypoints).toHaveLength(1);
+            expect(result.waypoints[0].confidence).toBeCloseTo(0.8, 5);
+            expect(result.undetectedSamples?.map(u => u.timestampSec)).toEqual([0.5]);
+            // The crop is centred on the person (0.2 x 1920 = 384 px), clamped at the left edge, not on the frame centre.
+            expect(crops[0].x).toBe(Math.max(0, Math.round(384 - result.cropDimensions.width / 2)));
+            expect(crops[0].x).toBeLessThan((1920 - result.cropDimensions.width) / 2);
+
+            const nobody: any = { runPoseLandmarker: async () => ({ noPerson: 'MediaPipe found no person in the image' }) };
+            await expect(new MediaPipeVideoDirectorService(editor, nobody).autoReframeVideo({ inputVideoPath: video, targetAspectRatio: '9:16' }))
+                .rejects.toBeInstanceOf(MissingInputError);
+            const broken: any = { runPoseLandmarker: async () => ({ unavailable: 'python3 could not be started' }) };
+            await expect(new MediaPipeVideoDirectorService(editor, broken).autoReframeVideo({ inputVideoPath: video, targetAspectRatio: '9:16' }))
+                .rejects.toBeInstanceOf(GeneratorFailedError);
+
+            // A centred crop only when asked for, without running the detector.
+            const never: any = { runPoseLandmarker: async () => { throw new Error('the detector must not run for a centred crop'); } };
+            const centred = await new MediaPipeVideoDirectorService(editor, never).autoReframeVideo({ inputVideoPath: video, targetAspectRatio: '9:16', focusMode: 'center' });
+            expect(centred.waypoints.every(w => w.confidence === undefined)).toBe(true);
+            expect(crops[crops.length - 1].x).toBe(Math.round((1920 - centred.cropDimensions.width) / 2));
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
+    });
+
     describe('Pipeline 1: trackVideoMotion (tracked frames)', () => {
         it('leaves out frames with no detected person instead of filling them with a standing pose, and fails when the detector cannot run', async () => {
             const { MissingInputError, GeneratorFailedError } = await import('../src/common/errors/pipeline-errors');

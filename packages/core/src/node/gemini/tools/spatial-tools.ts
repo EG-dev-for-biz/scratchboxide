@@ -4544,7 +4544,7 @@ export const poseDepthHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: result as unknown as ToolResultPayload,
             summaryResult: result.success
-                ? `Detected human pose with confidence ${(result.confidence * 100).toFixed(1)}%, grounded Y-offset: ${result.groundedYOffsetMeters.toFixed(3)}m.`
+                ? `Detected human pose with confidence ${(result.confidence * 100).toFixed(1)}%, ${result.groundedYOffsetMeters === undefined ? 'no foot visible, so no ground offset was measured' : `grounded Y-offset (hip to the lowest visible foot): ${result.groundedYOffsetMeters.toFixed(3)}m`}.`
                 : `Pose detection failed: ${result.error ?? 'Unknown error'}`
         };
     },

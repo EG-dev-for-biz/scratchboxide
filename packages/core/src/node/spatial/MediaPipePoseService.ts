@@ -340,8 +340,10 @@ export class MediaPipePoseService {
      * In MediaPipe world coordinates (+Y is down), the lowest point on the human
      * (ankles or heels) has the largest positive Y.
      * Subtracting this ground reference ensures characters stand naturally on Y=0.
+     * Undefined when no foot landmark is visible: the ground is not in the image, so no offset is measured (no
+     * standard leg length stands in for it).
      */
-    public computeGroundedYOffset(worldLms: MediaPipeLandmark[]): number {
+    public computeGroundedYOffset(worldLms: MediaPipeLandmark[]): number | undefined {
         const footIndices = [
             IDX.LEFT_ANKLE,
             IDX.RIGHT_ANKLE,
@@ -360,12 +362,11 @@ export class MediaPipePoseService {
         }
 
         if (maxY === -Infinity) {
-            // Default leg length fallback: approx 0.85m below hip
-            return 0.85;
+            return undefined;
         }
 
-        // Return positive distance from hip midpoint to ground
-        return Math.max(maxY, 0.4);
+        // The measured distance from the hip midpoint down to the lowest visible foot landmark
+        return maxY;
     }
 
     /**

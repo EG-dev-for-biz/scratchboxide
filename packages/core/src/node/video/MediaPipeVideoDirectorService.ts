@@ -12,7 +12,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { HeadlessVideoEditorService, VideoProbeResult, toEven } from './HeadlessVideoEditorService';
 import { MediaPipePoseService } from '../spatial/MediaPipePoseService';
-import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 import {
     HumanoidPoseAngles,
     BodyFrame,
@@ -40,7 +40,8 @@ export interface VideoMotionPoseFrame {
     timestampSec: number;
     angles: HumanoidPoseAngles;
     hipPositionMeters: [number, number, number];
-    groundedYOffsetMeters: number;
+    /** Hip-to-ground distance measured from the visible feet; absent when no foot is visible in the frame. */
+    groundedYOffsetMeters?: number;
     confidence: number;
     bodyFrame?: BodyFrame;
     worldLandmarks?: MediaPipeLandmark[];
@@ -63,7 +64,8 @@ export interface VideoMotionTrackResult {
     sampleFps: number;
     averageConfidence: number;
     maxDisplacementMeters: number;
-    groundedYReferenceMeters: number;
+    /** Mean hip-to-ground distance over the frames whose feet were visible; absent when no frame showed a foot. */
+    groundedYReferenceMeters?: number;
     frames: VideoMotionPoseFrame[];
     /** Sampled frames with no detected person (left out of frames). */
     undetectedFrames?: UndetectedMotionFrame[];
@@ -91,7 +93,8 @@ export interface ReframeWaypoint {
     cropHeight: number;
     subjectCenterX: number;
     subjectCenterY: number;
-    confidence: number;
+    /** Mean visibility of the landmarks the subject centre came from; absent for focusMode 'center' (no tracking). */
+    confidence?: number;
 }
 
 export interface AutoReframeResult {
@@ -102,6 +105,8 @@ export interface AutoReframeResult {
     inputDimensions: { width: number; height: number };
     cropDimensions: { width: number; height: number };
     waypoints: ReframeWaypoint[];
+    /** Sampled frames in which MediaPipe found no person: left out of the crop, never centred instead. */
+    undetectedSamples?: Array<{ timestampSec: number; reason: string }>;
     ffmpegCommand?: string;
     filtergraph?: string;
     dryRun?: boolean;
@@ -318,7 +323,6 @@ export class MediaPipeVideoDirectorService {
                 sampleFps,
                 averageConfidence: 0,
                 maxDisplacementMeters: 0,
-                groundedYReferenceMeters: 0,
                 frames: [],
                 undetectedFrames,
                 error: undetectedFrames.length
@@ -344,7 +348,9 @@ export class MediaPipeVideoDirectorService {
             if (dist > maxDisplacement) maxDisplacement = dist;
         }
 
-        const groundedYRef = smoothedFrames.reduce((acc, f) => acc + f.groundedYOffsetMeters, 0) / smoothedFrames.length;
+        // Only frames whose feet were visible measured the ground; the others do not count towards it.
+        const grounded = smoothedFrames.map(f => f.groundedYOffsetMeters).filter((v): v is number => v !== undefined);
+        const groundedYRef = grounded.length ? grounded.reduce((acc, v) => acc + v, 0) / grounded.length : undefined;
 
         const result: VideoMotionTrackResult = {
             success: true,
@@ -353,7 +359,7 @@ export class MediaPipeVideoDirectorService {
             sampleFps,
             averageConfidence: avgConf,
             maxDisplacementMeters: Math.round(maxDisplacement * 1000) / 1000,
-            groundedYReferenceMeters: Math.round(groundedYRef * 1000) / 1000,
+            groundedYReferenceMeters: groundedYRef === undefined ? undefined : Math.round(groundedYRef * 1000) / 1000,
             frames: smoothedFrames,
             undetectedFrames,
             outputJsonPath: options.outputJsonPath
@@ -404,19 +410,21 @@ export class MediaPipeVideoDirectorService {
             }
 
             let hipX = 0, hipY = 0, hipZ = 0;
-            let groundedY = 0;
+            let groundedY = 0, groundedCount = 0;
             for (let k = startIdx; k <= endIdx; k++) {
                 hipX += frames[k].hipPositionMeters[0];
                 hipY += frames[k].hipPositionMeters[1];
                 hipZ += frames[k].hipPositionMeters[2];
-                groundedY += frames[k].groundedYOffsetMeters;
+                const g = frames[k].groundedYOffsetMeters;
+                if (g !== undefined) { groundedY += g; groundedCount++; }
             }
 
             smoothed.push({
                 ...frames[i],
                 angles: avgAngles as HumanoidPoseAngles,
                 hipPositionMeters: [hipX / count, hipY / count, hipZ / count],
-                groundedYOffsetMeters: groundedY / count
+                // A frame with no visible foot keeps no offset rather than borrowing its neighbours'.
+                groundedYOffsetMeters: frames[i].groundedYOffsetMeters === undefined || groundedCount === 0 ? undefined : groundedY / groundedCount
             });
         }
 
@@ -476,6 +484,7 @@ export class MediaPipeVideoDirectorService {
         // Generate sample timestamps
         const sampleCount = Math.max(2, Math.ceil(duration / sampleInterval));
         const waypoints: ReframeWaypoint[] = [];
+        const undetectedSamples: Array<{ timestampSec: number; reason: string }> = [];
 
         if (options.dryRun) {
             for (let i = 0; i < sampleCount; i++) {
@@ -525,33 +534,28 @@ export class MediaPipeVideoDirectorService {
                     const filePath = extractedFiles[i];
                     const ts = sampleTimestamps[i];
 
-                    let normCenterX = 0.5;
-                    let normCenterY = 0.5;
-                    let confidence = 0.5;
-
-                    try {
-                        const imgBuf = await fs.readFile(filePath);
-                        const pose = await this.poseService.detectPoseLandmarks(imgBuf, { numPoses: 1 });
-                        if (pose && pose.imageLandmarks.length > 0 && pose.imageLandmarks[0].length >= 33) {
-                            const lms = pose.imageLandmarks[0];
-                            if (focusMode === 'face') {
-                                // Face: landmarks 0 to 10
-                                const nose = lms[0];
-                                normCenterX = nose.x;
-                                normCenterY = nose.y;
-                            } else {
-                                // Body torso: mid of shoulders and hips
-                                const sX = (lms[11].x + lms[12].x) / 2;
-                                const sY = (lms[11].y + lms[12].y) / 2;
-                                const hX = (lms[23].x + lms[24].x) / 2;
-                                const hY = (lms[23].y + lms[24].y) / 2;
-                                normCenterX = (sX + hX) / 2;
-                                normCenterY = (sY + hY) / 2;
-                            }
-                            confidence = 0.9;
+                    let normCenterX: number;
+                    let normCenterY: number;
+                    let confidence: number | undefined;
+                    if (focusMode === 'center') {
+                        // Asked for: a centred crop, with no subject tracking.
+                        normCenterX = 0.5;
+                        normCenterY = 0.5;
+                    } else {
+                        const run = await this.poseService.runPoseLandmarker(await fs.readFile(filePath), { numPoses: 1 });
+                        if ('unavailable' in run) {
+                            throw new GeneratorFailedError('mediapipe', `pose detection could not run, so the subject cannot be tracked for reframing: ${run.unavailable}`);
                         }
-                    } catch {
-                        // Fallback to center
+                        const lms = 'detection' in run ? run.detection.imageLandmarks[0] : undefined;
+                        if (!lms || lms.length < 33) {
+                            undetectedSamples.push({ timestampSec: Math.round(ts * 100) / 100, reason: 'noPerson' in run ? run.noPerson : 'MediaPipe returned no full set of body landmarks' });
+                            continue;
+                        }
+                        // Face: the nose; body and action: the middle of the shoulders and hips.
+                        const used = focusMode === 'face' ? [lms[0]] : [lms[11], lms[12], lms[23], lms[24]];
+                        normCenterX = used.reduce((acc, lm) => acc + lm.x, 0) / used.length;
+                        normCenterY = used.reduce((acc, lm) => acc + lm.y, 0) / used.length;
+                        confidence = used.reduce((acc, lm) => acc + (lm.visibility ?? 0), 0) / used.length;
                     }
 
                     const centerPixX = normCenterX * inputDims.width;
@@ -573,12 +577,17 @@ export class MediaPipeVideoDirectorService {
                         cropHeight: cropH,
                         subjectCenterX: Math.round(centerPixX),
                         subjectCenterY: Math.round(centerPixY),
-                        confidence
+                        ...(confidence === undefined ? {} : { confidence })
                     });
                 }
             } finally {
                 await fs.remove(tmpDir).catch(() => {});
             }
+        }
+
+        if (waypoints.length === 0) {
+            throw new MissingInputError('vfx_video_auto_reframe', 'a video with a visible person',
+                `MediaPipe found no person in any of the ${undetectedSamples.length} sampled frame(s) of ${options.inputVideoPath}, so there is no subject to frame on (focusMode 'center' crops the middle without tracking)`);
         }
 
         // Compute average/median crop position or synthesize smooth dynamic expression
@@ -628,6 +637,7 @@ export class MediaPipeVideoDirectorService {
             inputDimensions: inputDims,
             cropDimensions: { width: cropW, height: cropH },
             waypoints,
+            undetectedSamples,
             filtergraph,
             ffmpegCommand: editRes.ffmpegCommand
         };

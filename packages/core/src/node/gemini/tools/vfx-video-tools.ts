@@ -1632,7 +1632,10 @@ export const directorHandlers: Record<string, ToolHandler> = {
             resultPayload: result as unknown as Record<string, unknown>,
             summaryResult: dryRun
                 ? `Planned auto-reframe for ${inputVideoPath} to ${result.targetAspectRatio} (${result.cropDimensions.width}x${result.cropDimensions.height}, dry run).`
-                : `Auto-reframed video to ${result.targetAspectRatio} (${result.cropDimensions.width}x${result.cropDimensions.height}) -> ${result.outputVideoPath}.`
+                : `Auto-reframed video to ${result.targetAspectRatio} (${result.cropDimensions.width}x${result.cropDimensions.height}) -> ${result.outputVideoPath}, `
+                    + (focusMode === 'center'
+                        ? 'cropped on the frame centre as asked (no subject tracking).'
+                        : `framed on the person MediaPipe tracked in ${result.waypoints.length} sampled frame(s)${result.undetectedSamples?.length ? `; ${result.undetectedSamples.length} sampled frame(s) showed no person and were left out` : ''}.`)
         };
     },
 

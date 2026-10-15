@@ -125,6 +125,22 @@ describe('MediaPipePoseService (3D Metric Pose Landmarker & Kinematics)', () => 
         expect(groundedY).toBeCloseTo(0.92, 2);
     });
 
+    it('measures the ground offset only from visible feet: none without a visible foot, and no floor clamp', () => {
+        // Waist-up framing: every foot landmark is out of view.
+        const waistUp = createMockHumanLandmarks(true).map((lm, i) => [
+            MEDIAPIPE_LANDMARK_INDEX.LEFT_ANKLE, MEDIAPIPE_LANDMARK_INDEX.RIGHT_ANKLE, MEDIAPIPE_LANDMARK_INDEX.LEFT_HEEL,
+            MEDIAPIPE_LANDMARK_INDEX.RIGHT_HEEL, MEDIAPIPE_LANDMARK_INDEX.LEFT_FOOT_INDEX, MEDIAPIPE_LANDMARK_INDEX.RIGHT_FOOT_INDEX
+        ].includes(i) ? { ...lm, visibility: 0.05 } : lm);
+        expect(service.computeGroundedYOffset(waistUp)).toBeUndefined();
+
+        // A crouch puts the feet 0.3 m below the hips: reported as measured, not raised to a minimum.
+        const crouch = createMockHumanLandmarks(true).map((lm, i) => [
+            MEDIAPIPE_LANDMARK_INDEX.LEFT_ANKLE, MEDIAPIPE_LANDMARK_INDEX.RIGHT_ANKLE, MEDIAPIPE_LANDMARK_INDEX.LEFT_HEEL,
+            MEDIAPIPE_LANDMARK_INDEX.RIGHT_HEEL, MEDIAPIPE_LANDMARK_INDEX.LEFT_FOOT_INDEX, MEDIAPIPE_LANDMARK_INDEX.RIGHT_FOOT_INDEX
+        ].includes(i) ? { ...lm, y: 0.3 } : lm);
+        expect(service.computeGroundedYOffset(crouch)).toBeCloseTo(0.3, 5);
+    });
+
     it('should synthesize standard heuristic poses cleanly across presets', () => {
         const neutral = service.synthesizeHeuristicPose('neutral_standing');
         expect(neutral.success).toBe(true);

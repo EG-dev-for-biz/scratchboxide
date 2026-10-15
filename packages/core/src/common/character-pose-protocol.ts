@@ -110,7 +110,8 @@ export interface RiggedPoseOutput {
     personIndex: number;
     angles: HumanoidPoseAngles;
     hipPositionMeters: [number, number, number];
-    groundedYOffsetMeters: number;
+    /** Hip-to-ground distance measured from the visible feet; absent when no foot landmark is visible. */
+    groundedYOffsetMeters?: number;
     confidence: number;
     bodyFrame?: BodyFrame;
     error?: string;
