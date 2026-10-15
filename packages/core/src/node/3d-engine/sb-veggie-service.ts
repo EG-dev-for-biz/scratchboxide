@@ -10,6 +10,7 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { buildNativeIfStale } from './native-build';
 import { MissingInputError } from '../../common/errors/pipeline-errors';
 import {
     SbVeggieSynthesizeOptions,
@@ -56,8 +57,9 @@ export class SbVeggieService {
     }
 
     /**
-     * Builds build/run_sb_veggie from scripts/run_sb_veggie.cpp when it is missing or older than the source or any
-     * engine header, so a binary built from older sources is never run.
+     * Builds build/run_sb_veggie from scripts/run_sb_veggie.cpp when it is missing or older than a file it was compiled
+     * from (native-build: clang's dependency list, one build at a time across processes), so a binary built from older
+     * sources is never run.
      */
     ensureBinary(): Promise<string> {
         let pending = building.get(this.binaryPath);
@@ -69,23 +71,11 @@ export class SbVeggieService {
     }
 
     private async buildIfStale(): Promise<string> {
-        if (!fs.existsSync(this.sourcePath)) throw new Error(`run_sb_veggie source not found: ${this.sourcePath}`);
-        const includePath = this.compiler.getSdkIncludePath();
-        const binTime = fs.existsSync(this.binaryPath) ? fs.statSync(this.binaryPath).mtimeMs : -1;
-        const sources = [this.sourcePath, ...fs.readdirSync(includePath).filter(f => f.endsWith('.hpp') || f.endsWith('.h')).map(f => path.join(includePath, f))];
-        if (binTime >= 0 && sources.every(f => fs.statSync(f).mtimeMs <= binTime)) return this.binaryPath;
-
-        fs.mkdirSync(path.dirname(this.binaryPath), { recursive: true });
-        const tmp = `${this.binaryPath}.tmp-${process.pid}-${Date.now()}`;
-        const args = ['-std=c++20', '-O3', ...(process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? ['-march=native'] : []), '-I', includePath, this.sourcePath, '-o', tmp];
         try {
-            await execFileAsync(process.env.CXX || 'clang++', args, RUN_OPTIONS);
+            return await buildNativeIfStale({ source: this.sourcePath, binary: this.binaryPath, includeDir: this.compiler.getSdkIncludePath() });
         } catch (err: any) {
-            fs.rmSync(tmp, { force: true });
-            throw new Error(`could not build run_sb_veggie: ${String(err?.stderr || err?.message || err).slice(-2000)}`);
+            throw new Error(String(err?.message ?? err).slice(-2000));
         }
-        fs.renameSync(tmp, this.binaryPath);
-        return this.binaryPath;
     }
 
     /**
