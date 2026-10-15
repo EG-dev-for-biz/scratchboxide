@@ -25,8 +25,8 @@ import {
 } from '../../spatial/MultiPerspectivePanoramaSynthesisService';
 import {
     UniversalTileDecompositionService,
-    type UtdraPipelineMode,
-    type UtdraResult
+    type UtdraSpanBox,
+    type UtdraTelemetry
 } from '../../3d-engine/universal-tile-decomposition-service';
 import { GeneratorFailedError, MissingInputError } from '../../../common/errors/pipeline-errors';
 import {
@@ -3053,10 +3053,24 @@ const UTDRA_INPUT_GLB_PARAMETER: ToolParameterSchema = {
     description: 'Path on disk to the input .glb tile file (required; the tool fails rather than process a stand-in mesh).'
 };
 
+const UTDRA_SPAN_PARAMETER: ToolParameterSchema = {
+    type: 'OBJECT',
+    description: 'The elevated deck\'s footprint and the heights of the ground under it and of the deck, in the tile\'s own coordinates (metres; read them from utdra_probe_tile bounds or get them from the user). Required.',
+    properties: {
+        minX: { type: 'NUMBER', description: 'Footprint minimum X.' },
+        maxX: { type: 'NUMBER', description: 'Footprint maximum X.' },
+        minZ: { type: 'NUMBER', description: 'Footprint minimum Z.' },
+        maxZ: { type: 'NUMBER', description: 'Footprint maximum Z.' },
+        groundY: { type: 'NUMBER', description: 'Elevation of the ground under the deck.' },
+        deckY: { type: 'NUMBER', description: 'Elevation of the deck.' }
+    },
+    required: ['minX', 'maxX', 'minZ', 'maxZ', 'groundY', 'deckY']
+};
+
 export const UTDRA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'utdra_probe_tile',
-        description: 'Probe and telemetrically classify a 3D tile mesh (.glb) into one of 9 macro-geographic domains (UrbanHighRiseCore, SuburbanResidential, CivilInfrastructure, MountainAlpineCanyon, ForestWoodlandCanopy, IndustrialLogistics, CoastalShorelineHarbor, AridDesertBadlands, OpenAgriculturalPlains). Returns domain classification, confidence score, bounding relief (ΔY), planarity ratio, and verticality score without mutating geometry.',
+        description: 'Measure a 3D tile mesh (.glb) without changing it: bounds, relief (ΔY), surface area, the share of that area by slope band (horizontal < 15°, inclined 15-45°, steep 45-75°, vertical ≥ 75°), the dominant wall orientation, and a vertex-colour green index when the tile has vertex colours. It does not classify the tile or report a confidence; interpret the measurements yourself.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -3066,42 +3080,19 @@ export const UTDRA_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
-        name: 'utdra_decompose_tile',
-        description: 'Decompose and rectify a 3D tile mesh using the Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA). Rectifies vertical architectural shafts, preserves structural crowns/spires, excises bridge curtain walls, and outputs standardized binary glTF 2.0 (.glb) with geometric telemetry.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                inputGlbPath: UTDRA_INPUT_GLB_PARAMETER,
-                mode: {
-                    type: 'STRING',
-                    description: 'Pipeline decomposition mode: "full", "probe", "slicer", "bridge", or "terrain". Defaults to "full".'
-                },
-                minVoidHeightMeters: {
-                    type: 'NUMBER',
-                    description: 'Minimum void height clearance beneath bridges/viaducts in meters (default: 3.5).'
-                },
-                outputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path on disk to write the exported rectified binary .glb file.'
-                }
-            },
-            required: ['inputGlbPath']
-        }
-    },
-    {
         name: 'utdra_slice_elevation',
-        description: 'Non-destructively slice a 3D tile mesh across an elevation cutoff plane using the Sutherland-Hodgman analytical kernel. Preserves manifold geometry and clips straddling triangles without hole formation.',
+        description: 'Keep the part of a 3D tile mesh above an elevation and remove the rest, clipping triangles that straddle the plane exactly (Sutherland-Hodgman), so no hole opens along the cut. Use it to prune below-ground geometry; a cut above ground also removes the lower parts of buildings.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 inputGlbPath: UTDRA_INPUT_GLB_PARAMETER,
                 cutoffY: {
                     type: 'NUMBER',
-                    description: 'Elevation cutoff height in meters (Y-axis).'
+                    description: 'Elevation of the cut plane in the tile\'s coordinates (Y axis, metres).'
                 },
                 outputGlbPath: {
                     type: 'STRING',
-                    description: 'Optional path on disk to write the exported sliced binary .glb file.'
+                    description: 'Optional path on disk to write the sliced binary .glb file.'
                 }
             },
             required: ['inputGlbPath', 'cutoffY']
@@ -3109,21 +3100,22 @@ export const UTDRA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'utdra_carve_bridge_voids',
-        description: 'Excise false photogrammetric vertical curtain walls beneath elevated bridges, ramps, and viaducts, preserving the top road deck and bottom terrain while restoring authentic clearances.',
+        description: 'Remove the near-vertical triangles (photogrammetric curtain walls) inside a span box you give: the footprint of an elevated deck between the ground under it and the deck. It does not find bridges itself: every near-vertical triangle wholly inside the box is removed, including any building wall that falls inside it, and the count is reported. Geometry outside the box is untouched.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 inputGlbPath: UTDRA_INPUT_GLB_PARAMETER,
+                span: UTDRA_SPAN_PARAMETER,
                 minVoidHeightMeters: {
                     type: 'NUMBER',
-                    description: 'Minimum void height clearance in meters (default: 3.5).'
+                    description: 'Optional: refuse a span whose clearance (deckY - groundY) is below this many metres.'
                 },
                 outputGlbPath: {
                     type: 'STRING',
-                    description: 'Optional path on disk to write the exported rectified binary .glb file.'
+                    description: 'Optional path on disk to write the carved binary .glb file.'
                 }
             },
-            required: ['inputGlbPath']
+            required: ['inputGlbPath', 'span']
         }
     }
 ];
@@ -3141,63 +3133,27 @@ async function requireInputGlb(tool: string, value: unknown): Promise<string> {
     return inputGlbPath;
 }
 
-/**
- * The UTDRA binary reports through a [TELEMETRY] line; without it the parsed values are defaults, not
- * measurements. A run that read no triangles did not process the input.
- */
-function requireUtdraRun(tool: string, inputGlbPath: string, result: UtdraResult, expectOutput: boolean): void {
-    if (!/\[TELEMETRY\]/.test(result.stdout || '')) {
-        throw new GeneratorFailedError('cpp', `${tool}: the UTDRA pipeline reported no telemetry for ${inputGlbPath}. ${result.stderr || ''}`);
-    }
-    if (!(result.telemetry.inputTriangles > 0)) {
-        throw new GeneratorFailedError('cpp', `${tool}: the UTDRA pipeline read no triangles from ${inputGlbPath}. ${result.stderr || ''}`);
-    }
-    if (expectOutput && !result.glbBuffer) {
-        throw new GeneratorFailedError('cpp', `${tool}: the UTDRA pipeline wrote no GLB to ${result.outputGlbPath}. ${result.stderr || ''}`);
-    }
+function describeTileMeasurements(t: UtdraTelemetry): string {
+    const pct = (f: number) => `${(f * 100).toFixed(1)}%`;
+    const b = (v: [number, number, number]) => `[${v.map(n => Number(n.toFixed(2))).join(', ')}]`;
+    return `bounds ${b(t.boundsMin)} to ${b(t.boundsMax)}, relief ΔY=${t.reliefMeters.toFixed(2)} m, surface ${t.surfaceAreaM2.toFixed(1)} m², `
+        + `area by slope: horizontal ${pct(t.slopeAreaFractions.horizontal)}, inclined ${pct(t.slopeAreaFractions.inclined)}, steep ${pct(t.slopeAreaFractions.steep)}, vertical ${pct(t.slopeAreaFractions.vertical)}`
+        + (t.dominantWallYawDeg !== undefined ? `, walls mostly at ${t.dominantWallYawDeg.toFixed(1)}° (mod 90)` : ', no vertical faces')
+        + (t.vertexGreenIndex !== undefined ? `, vertex-colour green index ${t.vertexGreenIndex.toFixed(3)}` : ', no vertex colours')
+        + `, ${t.outputTriangles} triangles`;
 }
 
 export const utdraHandlers: Record<string, ToolHandler> = {
     utdra_probe_tile: async (args, _ctx) => {
         const inputGlbPath = await requireInputGlb('utdra_probe_tile', args.inputGlbPath);
-        const service = new UniversalTileDecompositionService();
-        const probe = await service.decomposeTile({ inputGlbPath, mode: 'probe' });
-        requireUtdraRun('utdra_probe_tile', inputGlbPath, probe, false);
-        const telemetry = probe.telemetry;
-
+        const telemetry = await new UniversalTileDecompositionService().probeTile(inputGlbPath);
         return {
             resultPayload: {
                 success: true,
                 mode: 'probe',
                 telemetry
             },
-            summaryResult: `UTDRA probe classified tile as ${telemetry.dominantDomain} (${(telemetry.confidence * 100).toFixed(1)}% confidence, relief ΔY=${telemetry.totalReliefDeltaY.toFixed(1)}m, planarity=${(telemetry.planarityScore * 100).toFixed(1)}%, verticality=${(telemetry.verticalityScore * 100).toFixed(1)}%).`
-        };
-    },
-
-    utdra_decompose_tile: async (args, _ctx) => {
-        const inputGlbPath = await requireInputGlb('utdra_decompose_tile', args.inputGlbPath);
-        const mode = (asString(args.mode) as UtdraPipelineMode) || 'full';
-        const minVoidHeightMeters = typeof args.minVoidHeightMeters === 'number' ? args.minVoidHeightMeters : undefined;
-        const outputGlbPath = asString(args.outputGlbPath) || undefined;
-
-        const service = new UniversalTileDecompositionService();
-        const result = await service.decomposeTile({
-            inputGlbPath,
-            mode,
-            minVoidHeightMeters,
-            outputGlbPath
-        });
-        requireUtdraRun('utdra_decompose_tile', inputGlbPath, result, mode !== 'probe');
-
-        return {
-            resultPayload: {
-                success: result.success,
-                mode: result.mode,
-                telemetry: result.telemetry,
-                outputGlbPath: result.outputGlbPath
-            },
-            summaryResult: `UTDRA decomposed tile in ${result.telemetry.processingTimeMs.toFixed(2)} ms. Dominant Domain: ${result.telemetry.dominantDomain}. Triangles: ${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles}. Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+            summaryResult: `UTDRA measured ${inputGlbPath}: ${describeTileMeasurements(telemetry)}. These are measurements, not a classification.`
         };
     },
 
@@ -3209,12 +3165,7 @@ export const utdraHandlers: Record<string, ToolHandler> = {
         const inputGlbPath = await requireInputGlb('utdra_slice_elevation', args.inputGlbPath);
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
 
-        const service = new UniversalTileDecompositionService();
-        const result = await service.sliceElevation(inputGlbPath, cutoffY, {
-            outputGlbPath
-        });
-        requireUtdraRun('utdra_slice_elevation', inputGlbPath, result, true);
-
+        const result = await new UniversalTileDecompositionService().sliceElevation(inputGlbPath, cutoffY, { outputGlbPath });
         return {
             resultPayload: {
                 success: result.success,
@@ -3222,30 +3173,33 @@ export const utdraHandlers: Record<string, ToolHandler> = {
                 telemetry: result.telemetry,
                 outputGlbPath: result.outputGlbPath
             },
-            summaryResult: `Sutherland-Hodgman non-destructive slicer clipped tile at y=${cutoffY}m (${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles, runtime: ${result.telemetry.processingTimeMs.toFixed(2)} ms). Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+            summaryResult: `Kept the part of ${inputGlbPath} above y=${cutoffY} m (${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles, straddling triangles clipped). Result: ${describeTileMeasurements(result.telemetry)}. Output GLB: ${result.outputGlbPath}.`
         };
     },
 
     utdra_carve_bridge_voids: async (args, _ctx) => {
         const inputGlbPath = await requireInputGlb('utdra_carve_bridge_voids', args.inputGlbPath);
-        const minVoidHeightMeters = typeof args.minVoidHeightMeters === 'number' ? args.minVoidHeightMeters : 3.5;
+        const span = args.span as UtdraSpanBox | undefined;
+        const minVoidHeightMeters = typeof args.minVoidHeightMeters === 'number' ? args.minVoidHeightMeters : undefined;
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
+        if (!span || typeof span !== 'object') {
+            throw new MissingInputError('utdra_carve_bridge_voids', 'span', 'give the deck footprint and heights {minX, maxX, minZ, maxZ, groundY, deckY}; the carver does not find bridges itself');
+        }
 
-        const service = new UniversalTileDecompositionService();
-        const result = await service.carveBridgeUnderpass(inputGlbPath, {
-            minVoidHeightMeters,
-            outputGlbPath
-        });
-        requireUtdraRun('utdra_carve_bridge_voids', inputGlbPath, result, true);
-
+        const result = await new UniversalTileDecompositionService().carveBridgeUnderpass(inputGlbPath, span, { minVoidHeightMeters, outputGlbPath });
+        const removed = result.telemetry.removedTriangles;
         return {
             resultPayload: {
                 success: result.success,
                 mode: result.mode,
+                span,
+                removedTriangles: removed,
                 telemetry: result.telemetry,
                 outputGlbPath: result.outputGlbPath
             },
-            summaryResult: `UTDRA Multi-level void carver excised false underpass curtain walls (clearance >= ${minVoidHeightMeters}m, ${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles). Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+            summaryResult: removed > 0
+                ? `Removed ${removed} near-vertical triangle(s) inside the span x ${span.minX}..${span.maxX}, z ${span.minZ}..${span.maxZ}, y ${span.groundY}..${span.deckY} of ${inputGlbPath} (${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles). Everything outside the span is unchanged. Output GLB: ${result.outputGlbPath}.`
+                : `No near-vertical triangle lies wholly inside the span x ${span.minX}..${span.maxX}, z ${span.minZ}..${span.maxZ}, y ${span.groundY}..${span.deckY} of ${inputGlbPath}; nothing was removed (output written unchanged to ${result.outputGlbPath}).`
         };
     }
 };

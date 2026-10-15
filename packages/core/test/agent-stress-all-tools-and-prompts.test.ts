@@ -161,7 +161,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             const promptsAndExpectedTools = [
                 {
                     prompt: 'Decompose and rectify photogrammetric 3D tile with UTDRA',
-                    expected: ['utdra_probe_tile', 'utdra_decompose_tile']
+                    expected: ['utdra_probe_tile', 'utdra_slice_elevation']
                 },
                 {
                     prompt: 'Ingest Google Maps 3D Tiles clay blockout for Colosseum',
@@ -314,24 +314,15 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
     // Category 4: Real-World Google 3D Tiles & UTDRA Metrology
     // =========================================================================
     describe('4. Google 3D Tiles & UTDRA Decomposition Tools', () => {
-        it('executes utdra_probe_tile on a given tile GLB', async () => {
+        it('executes utdra_probe_tile on a given tile GLB and reports measurements, not a classification', async () => {
             const res = await registry.dispatch('utdra_probe_tile', {
                 inputGlbPath: existingGlbPath
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
-            expect((res.resultPayload as any).telemetry.dominantDomain).toBeDefined();
+            expect((res.resultPayload as any).telemetry).not.toHaveProperty('dominantDomain');
+            expect((res.resultPayload as any).telemetry.surfaceAreaM2).toBeGreaterThan(0);
             expect((res.resultPayload as any).telemetry.inputTriangles).toBe(2);
-        });
-
-        it('executes utdra_decompose_tile with non-destructive classification', async () => {
-            const res = await registry.dispatch('utdra_decompose_tile', {
-                inputGlbPath: clayGlbPath,
-                outputGlbPath: path.join(testDir, 'utdra_decomposed.glb')
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).mode).toBe('full');
-            expect((res.resultPayload as any).telemetry.inputTriangles).toBeGreaterThan(0);
         });
 
         it('executes utdra_slice_elevation with Sutherland-Hodgman clipping', async () => {
@@ -342,21 +333,33 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
-            expect((res.resultPayload as any).telemetry.outputTriangles).toBeDefined();
+            expect((res.resultPayload as any).telemetry.boundsMin[1]).toBeCloseTo(0.5, 4);
         });
 
-        it('executes utdra_carve_bridge_voids', async () => {
+        it('utdra_carve_bridge_voids removes nothing from a clay tower when the span box lies beside it', async () => {
             const res = await registry.dispatch('utdra_carve_bridge_voids', {
                 minVoidHeightMeters: 3.5,
+                span: { minX: 50, maxX: 80, minZ: -5, maxZ: 5, groundY: 0, deckY: 8 },
                 inputGlbPath: clayGlbPath,
                 outputGlbPath: path.join(testDir, 'utdra_carved.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).success).toBe(true);
+            expect((res.resultPayload as any).removedTriangles).toBe(0);
+            expect((res.resultPayload as any).telemetry.outputTriangles).toBe((res.resultPayload as any).telemetry.inputTriangles);
+        });
+
+        it('refuses utdra_carve_bridge_voids without a span instead of stripping every tall wall', async () => {
+            const res = await registry.dispatch('utdra_carve_bridge_voids', {
+                minVoidHeightMeters: 3.5,
+                inputGlbPath: clayGlbPath
+            }, mockContext);
+            expect(res.exec.status).toBe('failed');
+            expect(String((res.resultPayload as any).error)).toContain('does not find bridges itself');
         });
 
         it('refuses a textured tile for a UTDRA step that writes a tile (the native writer would drop its textures)', async () => {
-            const res = await registry.dispatch('utdra_decompose_tile', {
+            const res = await registry.dispatch('utdra_slice_elevation', {
+                cutoffY: 0,
                 inputGlbPath: existingGlbPath,
                 outputGlbPath: path.join(testDir, 'utdra_textured.glb')
             }, mockContext);

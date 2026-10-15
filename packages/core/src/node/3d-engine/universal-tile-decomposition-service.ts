@@ -15,56 +15,78 @@ import { NativeCppCompilerService } from './native-compiler-service';
 import { carryOverInputMaterial, ensurePipelineBinary, parseTelemetryLine, rawMeshReadIssues, runPipelineBinary } from './native-pipeline-binary';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 
-export type GeographicDomain =
-    | 'UrbanHighRiseCore'
-    | 'SuburbanResidential'
-    | 'IndustrialLogisticsPort'
-    | 'CivilInfrastructure'
-    | 'MountainAlpineCanyon'
-    | 'ForestWoodlandCanopy'
-    | 'AquaticCoastalFluvial'
-    | 'AridDesertBadlands'
-    | 'HybridInterface'
-    | (string & {});
+export type UtdraPipelineMode = 'probe' | 'slicer' | 'bridge';
 
-export type UtdraPipelineMode = 'full' | 'probe' | 'slicer' | 'bridge' | 'terrain';
+/**
+ * The footprint of an elevated deck and the heights of the ground under it and of the deck, in the tile's own
+ * coordinates (metres). The bridge carver removes the near-vertical triangles inside this box; it does not find
+ * bridges itself.
+ */
+export interface UtdraSpanBox {
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+    groundY: number;
+    deckY: number;
+}
 
 export interface UtdraServiceOptions {
     /** The tile to process. Required: no stand-in mesh is built. */
     inputGlbPath: string;
     outputGlbPath?: string;
-    mode?: UtdraPipelineMode;
-    anchorCoord?: {
-        latitude: number;
-        longitude: number;
-        altitudeMeters?: number;
-    };
-    /** Required for mode 'slicer'. */
+    /** Required: what to do with the tile. */
+    mode: UtdraPipelineMode;
+    /** Required for mode 'slicer': the part of the tile above this elevation is kept. */
     sliceElevationCutoff?: number;
+    /** Required for mode 'bridge'. */
+    span?: UtdraSpanBox;
+    /** Mode 'bridge': refuse a span whose clearance (deckY - groundY) is below this. */
     minVoidHeightMeters?: number;
-    streamStdout?: boolean;
 }
 
+/**
+ * What the pipeline measured on the mesh it wrote (the input, for a probe). Fractions are of the surface area, by
+ * the slope of each triangle's face normal. Nothing here is a classification or a confidence.
+ */
 export interface UtdraTelemetry {
-    dominantDomain: GeographicDomain;
-    confidence: number;
-    totalReliefDeltaY: number;
-    planarityScore: number;
-    verticalityScore: number;
-    vegetationIndexNdvi: number;
-    pitchedRoofRatio: number;
-    waterSurfaceRatio: number;
-    underpassVoidRatio: number;
-    dominantStreetYawDeg: number;
+    mode: UtdraPipelineMode;
+    boundsMin: [number, number, number];
+    boundsMax: [number, number, number];
+    /** maxY - minY, metres. */
+    reliefMeters: number;
+    /** Total triangle area, square metres. */
+    surfaceAreaM2: number;
+    slopeAreaFractions: {
+        /** Slope under 15 degrees. */
+        horizontal: number;
+        /** 15 to 45 degrees. */
+        inclined: number;
+        /** 45 to 75 degrees. */
+        steep: number;
+        /** 75 degrees and steeper. */
+        vertical: number;
+    };
+    /**
+     * Area-weighted mean (2G - R - B) / (2G + R + B) of the vertex colours; absent when the input has no vertex colours
+     * (the value would describe the reader's white default, not the tile).
+     */
+    vertexGreenIndex?: number;
+    /** The most common horizontal orientation of the vertical faces, degrees modulo 90; absent when there are none. */
+    dominantWallYawDeg?: number;
+    degenerateTriangles: number;
     inputTriangles: number;
     outputTriangles: number;
+    /** Mode 'bridge': triangles removed inside the span. */
+    removedTriangles: number;
     processingTimeMs: number;
 }
 
 export interface UtdraResult {
     success: boolean;
     mode: UtdraPipelineMode;
-    outputGlbPath: string;
+    /** Absent for a probe, which writes no GLB. */
+    outputGlbPath?: string;
     glbBuffer?: Buffer;
     glbBase64?: string;
     telemetry: UtdraTelemetry;
@@ -72,17 +94,28 @@ export interface UtdraResult {
     stderr?: string;
 }
 
+function hasVertexColors(glb: Buffer): boolean {
+    try {
+        const json = JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+        return (json.meshes || []).some((m: any) => (m?.primitives || []).some((p: any) => p?.attributes?.COLOR_0 !== undefined));
+    } catch {
+        return false;
+    }
+}
+
+function parseVec3(value: string | undefined, key: string): [number, number, number] {
+    const parts = (value || '').split(',').map(Number);
+    if (parts.length !== 3 || parts.some(n => !Number.isFinite(n))) {
+        throw new GeneratorFailedError('cpp', `the UTDRA pipeline reported no valid ${key}`);
+    }
+    return parts as [number, number, number];
+}
+
 /**
- * Service exposing the Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA) on a given tile.
- *
- * Core Capabilities:
- * - Macro-Domain Telemetry & Ingestion Classification across 9 Canonical Geographic Domains
- * - Sutherland-Hodgman Non-Destructive Triangle-Plane Elevation Slicing
- * - Multi-Level Bridge, Viaduct, & Flyover Void Underpass Clearance
- * - Slope-Stratified Natural Biomes (Bedrock Triplanar, Talus Scree, Alpine Turf)
- * - Cohesive Hybrid Decomposition: Rectified Extruded Shafts & Preserved Sculptural Crowns
- *
- * Every run needs an input GLB; a missing input, a failed native run, or telemetry without a value is an error.
+ * UTDRA on a given tile: measure it (probe), keep what lies above an elevation (slicer), or remove the near-vertical
+ * triangles inside a span box the caller gives (bridge). It classifies nothing: the probe reports measurements only.
+ * The output keeps the input's own material. A missing input, a failed native run, or telemetry without a value is
+ * an error.
  */
 export class UniversalTileDecompositionService {
     private compiler: NativeCppCompilerService;
@@ -112,10 +145,8 @@ export class UniversalTileDecompositionService {
         });
     }
 
-    /**
-     * Decomposes and rectifies the given tile (or only probes, slices or carves it, by mode).
-     */
-    async decomposeTile(options: UtdraServiceOptions): Promise<UtdraResult> {
+    /** Runs one mode on the given tile. */
+    async run(options: UtdraServiceOptions): Promise<UtdraResult> {
         const inputGlbPath = options?.inputGlbPath;
         if (!inputGlbPath) {
             throw new MissingInputError('UTDRA', 'inputGlbPath', 'give the tile to process; no stand-in mesh is built');
@@ -123,9 +154,12 @@ export class UniversalTileDecompositionService {
         if (!fs.existsSync(inputGlbPath)) {
             throw new MissingInputError('UTDRA', 'inputGlbPath', `${inputGlbPath} does not exist`);
         }
-        const mode = options.mode ?? 'full';
+        const mode = options.mode;
+        if (mode !== 'probe' && mode !== 'slicer' && mode !== 'bridge') {
+            throw new MissingInputError('UTDRA', 'mode', `must be probe, slicer or bridge (got ${JSON.stringify(mode)})`);
+        }
         // The native reader ignores node transforms (so measurements and output would be misplaced) and the writer
-        // drops textures (so a written tile would come back untextured): refuse such a tile instead.
+        // writes one material and no textures (so a written tile would lose them): refuse such a tile instead.
         const inputGlb = fs.readFileSync(inputGlbPath);
         const issues = rawMeshReadIssues(inputGlb);
         const blocking = [...issues.geometry, ...(mode === 'probe' ? [] : issues.content)];
@@ -133,19 +167,31 @@ export class UniversalTileDecompositionService {
             throw new MissingInputError('UTDRA', 'inputGlbPath',
                 `${inputGlbPath} cannot be processed faithfully: ${blocking.join('; ')}. Use a tile with baked transforms, one material and no textures (the clay extraction).`);
         }
-        if (mode === 'slicer' && (typeof options.sliceElevationCutoff !== 'number' || !Number.isFinite(options.sliceElevationCutoff))) {
-            throw new MissingInputError('UTDRA', 'sliceElevationCutoff', 'the elevation to slice at is required');
+        const args = ['--input', inputGlbPath, '--mode', mode];
+        let outputGlbPath: string | undefined;
+        if (mode === 'slicer') {
+            if (typeof options.sliceElevationCutoff !== 'number' || !Number.isFinite(options.sliceElevationCutoff)) {
+                throw new MissingInputError('UTDRA', 'sliceElevationCutoff', 'the elevation to slice at is required');
+            }
+            args.push('--sliceY', String(options.sliceElevationCutoff));
         }
+        if (mode === 'bridge') {
+            const span = options.span;
+            const keys: Array<keyof UtdraSpanBox> = ['minX', 'maxX', 'minZ', 'maxZ', 'groundY', 'deckY'];
+            if (!span || keys.some(k => typeof span[k] !== 'number' || !Number.isFinite(span[k]))) {
+                throw new MissingInputError('UTDRA', 'span', 'give the deck footprint and heights {minX, maxX, minZ, maxZ, groundY, deckY} in the tile\'s coordinates; the carver does not find bridges itself');
+            }
+            args.push('--span', keys.map(k => String(span[k])).join(','));
+            if (options.minVoidHeightMeters !== undefined) args.push('--minVoidHeight', String(options.minVoidHeightMeters));
+        }
+        if (mode !== 'probe') {
+            const artifactsDir = path.resolve(process.cwd(), '.scratchbox', 'artifacts');
+            fs.mkdirSync(artifactsDir, { recursive: true });
+            outputGlbPath = options.outputGlbPath || path.join(artifactsDir, `utdra_${mode}_${Date.now()}.glb`);
+            args.push('--output', outputGlbPath);
+        }
+
         const bin = await this.ensureBinary();
-        const artifactsDir = path.resolve(process.cwd(), '.scratchbox', 'artifacts');
-        fs.mkdirSync(artifactsDir, { recursive: true });
-        const outputGlbPath = options.outputGlbPath || path.join(artifactsDir, `utdra_${Date.now()}.glb`);
-
-        const args = ['--input', inputGlbPath, '--output', outputGlbPath, '--mode', mode];
-        if (options.sliceElevationCutoff !== undefined) args.push('--sliceY', String(options.sliceElevationCutoff));
-        if (options.minVoidHeightMeters !== undefined) args.push('--minVoidHeight', String(options.minVoidHeightMeters));
-        if (options.anchorCoord) args.push('--lat', String(options.anchorCoord.latitude), '--lon', String(options.anchorCoord.longitude));
-
         let run: { stdout: string; stderr: string };
         try {
             run = await runPipelineBinary(bin, args);
@@ -163,28 +209,38 @@ export class UniversalTileDecompositionService {
             }
             return n;
         };
-        const dominantDomain = values.get('DOMAIN');
-        if (!dominantDomain) throw new GeneratorFailedError('cpp', 'the UTDRA pipeline reported no DOMAIN');
+        const wallYaw = values.get('WALL_YAW');
         const telemetry: UtdraTelemetry = {
-            dominantDomain,
-            confidence: num('CONFIDENCE'),
-            totalReliefDeltaY: num('RELIEF'),
-            planarityScore: num('PLANARITY'),
-            verticalityScore: num('VERTICALITY'),
-            vegetationIndexNdvi: num('VEG_NDVI'),
-            pitchedRoofRatio: num('PITCHED_ROOF'),
-            waterSurfaceRatio: num('WATER'),
-            underpassVoidRatio: num('VOID'),
-            dominantStreetYawDeg: num('YAW'),
+            mode,
+            boundsMin: parseVec3(values.get('BOUNDS_MIN'), 'BOUNDS_MIN'),
+            boundsMax: parseVec3(values.get('BOUNDS_MAX'), 'BOUNDS_MAX'),
+            reliefMeters: num('RELIEF'),
+            surfaceAreaM2: num('AREA'),
+            slopeAreaFractions: {
+                horizontal: num('HORIZONTAL'),
+                inclined: num('INCLINED'),
+                steep: num('STEEP'),
+                vertical: num('VERTICAL')
+            },
+            vertexGreenIndex: hasVertexColors(inputGlb) ? num('GREEN_INDEX') : undefined,
+            dominantWallYawDeg: wallYaw === undefined || wallYaw === 'none' ? undefined : num('WALL_YAW'),
+            degenerateTriangles: num('DEGENERATE_TRIS'),
             inputTriangles: num('INPUT_TRIS'),
             outputTriangles: num('OUTPUT_TRIS'),
+            removedTriangles: num('REMOVED_TRIS'),
             processingTimeMs: num('RUNTIME_MS')
         };
+        if (!(telemetry.inputTriangles > 0)) {
+            throw new GeneratorFailedError('cpp', `the UTDRA pipeline read no triangles from ${inputGlbPath}`);
+        }
+        if (!outputGlbPath) {
+            return { success: true, mode, telemetry, stdout: run.stdout, stderr: run.stderr };
+        }
         if (!fs.existsSync(outputGlbPath)) {
             throw new GeneratorFailedError('cpp', `the UTDRA pipeline wrote no GLB to ${outputGlbPath}`);
         }
         // The writer's stock material is replaced with the input's own (clay stays clay).
-        const glbBuffer = mode === 'probe' ? fs.readFileSync(outputGlbPath) : carryOverInputMaterial(inputGlb, outputGlbPath);
+        const glbBuffer = carryOverInputMaterial(inputGlb, outputGlbPath);
         return {
             success: true,
             mode,
@@ -197,54 +253,27 @@ export class UniversalTileDecompositionService {
         };
     }
 
-    /**
-     * Probes the macro-domain metrics of a tile without mesh decomposition.
-     */
-    async probeTile(
-        inputGlbPath: string,
-        optionsOrAnchor?: { latitude: number; longitude: number } | Partial<UtdraServiceOptions>
-    ): Promise<UtdraTelemetry> {
-        let opts: UtdraServiceOptions = { inputGlbPath, mode: 'probe' };
-        if (optionsOrAnchor) {
-            if ('latitude' in optionsOrAnchor && 'longitude' in optionsOrAnchor) {
-                opts.anchorCoord = optionsOrAnchor as { latitude: number; longitude: number };
-            } else {
-                opts = { ...opts, ...(optionsOrAnchor as Partial<UtdraServiceOptions>), inputGlbPath, mode: 'probe' };
-            }
-        }
-        const result = await this.decomposeTile(opts);
-        return result.telemetry;
+    /** Measures a tile without changing it (no GLB is written). */
+    async probeTile(inputGlbPath: string): Promise<UtdraTelemetry> {
+        return (await this.run({ inputGlbPath, mode: 'probe' })).telemetry;
     }
 
-    /**
-     * Carves out false photogrammetric underpass curtain walls beneath bridges, viaducts, and flyovers.
-     */
+    /** Removes the near-vertical triangles inside the given span box (see UtdraSpanBox). */
     async carveBridgeUnderpass(
         inputGlbPath: string,
-        options: Partial<UtdraServiceOptions> = {}
+        span: UtdraSpanBox,
+        options: { minVoidHeightMeters?: number; outputGlbPath?: string } = {}
     ): Promise<UtdraResult> {
-        return this.decomposeTile({ ...options, inputGlbPath, mode: 'bridge' });
+        return this.run({ ...options, inputGlbPath, mode: 'bridge', span });
     }
 
-    /**
-     * Applies non-destructive Sutherland-Hodgman clipping across an elevation plane threshold.
-     */
+    /** Keeps the part of the tile above the elevation, clipping straddling triangles (Sutherland-Hodgman). */
     async sliceElevation(
         inputGlbPath: string,
         sliceElevationCutoff: number,
-        options: Partial<UtdraServiceOptions> = {}
+        options: { outputGlbPath?: string } = {}
     ): Promise<UtdraResult> {
-        return this.decomposeTile({ ...options, inputGlbPath, mode: 'slicer', sliceElevationCutoff });
-    }
-
-    /**
-     * Convenience method to decompose an existing on-disk GLB file.
-     */
-    async decomposeGlbFile(
-        inputGlbPath: string,
-        options: Partial<UtdraServiceOptions> = {}
-    ): Promise<UtdraResult> {
-        return this.decomposeTile({ ...options, inputGlbPath, mode: options.mode ?? 'full' });
+        return this.run({ ...options, inputGlbPath, mode: 'slicer', sliceElevationCutoff });
     }
 }
 

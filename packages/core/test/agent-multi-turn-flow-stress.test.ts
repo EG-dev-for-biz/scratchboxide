@@ -103,14 +103,14 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         expect(blockoutRes.exec.status).toBe('completed');
         expect((blockoutRes.resultPayload as any).videoRef).toBe('<VIDEO_REF_0>');
 
-        // Step 2: UTDRA Geometric Classification & Probe. The tools take a tile GLB; this one is a synthetic tower
-        // written by the test (the tools never build a stand-in mesh).
+        // Step 2: UTDRA measurement probe. The tools take a tile GLB; this one is a synthetic tower written by the test
+        // (the tools never build a stand-in mesh). The probe measures; it does not classify.
         const tileGlbPath = writeFixtureGlb(path.join(testDir, 'urban_tile.glb'), skyscraperMesh());
         const probeRes = await registry.dispatch('utdra_probe_tile', {
             inputGlbPath: tileGlbPath
         }, mockContext);
         expect(probeRes.exec.status).toBe('completed');
-        expect((probeRes.resultPayload as any).telemetry.dominantDomain).toBeDefined();
+        expect((probeRes.resultPayload as any).telemetry.reliefMeters).toBeCloseTo(180, 3);
 
         // Step 3: Elevation Slicing with Sutherland-Hodgman clipping (subterranean pruning)
         const sliceRes = await registry.dispatch('utdra_slice_elevation', {

@@ -111,10 +111,10 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 
 ### Universal Tile Decomposition & Mesh Engineering (UTDRA / ULDRA)
 - **`UniversalTileDecompositionService`** (`packages/core/src/node/3d-engine/universal-tile-decomposition-service.ts`):
-  - `probeTile`: Non-destructive classification into 9 macro-geographic domains (`UrbanHighRiseCore`, `SuburbanResidential`, `CivilInfrastructure`, `MountainAlpineCanyon`, etc.).
-  - `decomposeTile`: Full pipeline rectification of facades, spires, and road grades.
-  - `carveBridgeVoids`: Excises photogrammetric curtain walls beneath spans while ensuring $\ge 3.5\text{m}$ clearance.
-  - `sliceElevation`: Sutherland-Hodgman analytical planar slicing preserving building envelopes.
+  - `probeTile`: Measures a given tile (bounds, relief, surface area by slope band, wall orientation, vertex-colour green index). It classifies nothing and reports no confidence.
+  - `sliceElevation`: Keeps the part above an elevation, clipping straddling triangles (Sutherland-Hodgman).
+  - `carveBridgeUnderpass`: Removes the near-vertical triangles inside a span box the caller gives (deck footprint, ground and deck heights); it does not find bridges itself.
+  - Outputs keep the input's own material; GLBs the native reader would misread (transforms, several materials, textures) are refused.
 - **`NativeMeshReshaperService`** (`packages/core/src/node/3d-engine/native-mesh-reshaper-service.ts`): C++20 Astro engine deformation runner (taper, twist, bend, bulge, squash, shear, FFD tensor lattices, sculpt brushes).
 - **`FieldAlignedQuadRemeshService`** (`packages/core/src/node/3d-engine/field-remesh-service.ts`): 4-RoSy directional cross-field calculation and quad-dominant remeshing.
 - **`PhotorealTileCleanupService`** (`packages/core/src/node/3d-engine/tile-cleanup-service.ts`): Decimates coplanar triangles, repairs non-manifold seams, and removes floating geometry.
@@ -238,10 +238,9 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `survey_beautify_to_splats`: Runs full survey synthesis to beautified splat tileset.
 
 ### 5. Universal Tile Decomposition & Rectification (`spatial-tools.ts`)
-- `utdra_probe_tile`: Non-destructive domain probe (relief, planarity, verticality).
-- `utdra_decompose_tile`: Full geometric shaft rectification.
-- `utdra_slice_elevation`: Sutherland-Hodgman analytical planar slicing.
-- `utdra_carve_bridge_voids`: Multi-level void carving beneath bridges.
+- `utdra_probe_tile`: Measurements only (bounds, relief, area by slope band, wall orientation); no classification or confidence.
+- `utdra_slice_elevation`: Keeps the part above an elevation, clipping straddling triangles (Sutherland-Hodgman).
+- `utdra_carve_bridge_voids`: Removes near-vertical triangles inside a caller-given span box. (`utdra_decompose_tile`, its domain classifier and its "rectification" are removed.)
 
 ### 6. WebXR Metric Alignment (`spatial-tools.ts`)
 - `webxr_geospatial_align_coordinates`: Bidirectional WGS-84 $\leftrightarrow$ WebXR metric coords.
@@ -472,7 +471,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 2. **`scratchbox_math.hpp`**: SIMD-accelerated 3D vector, matrix, and quaternion math.
 3. **`scratchbox_geometry.hpp`**: Half-edge mesh topology, winged-edge structures, and manifold connectivity.
 4. **`scratchbox_sdf.hpp`**: Signed Distance Field primitives, smooth CSG min/max/subtraction blending.
-5. **`scratchbox_utdra.hpp`**: Universal Tile Decomposition & Rectification kernel.
+5. **`scratchbox_utdra.hpp`**: Tile measurements, Sutherland-Hodgman elevation slicer and span-box curtain carver.
 6. **`scratchbox_visual_hull.hpp`**: High-performance multi-camera silhouette voxel carving.
 7. **`scratchbox_4dgs_humanoid.hpp`**: Dynamic 4D Gaussian Splatting with 4-bone partition-of-unity LBS.
 8. **`scratchbox_skinning.hpp`**: SIMD linear blend skinning and dual quaternion skinning.
@@ -625,7 +624,7 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
 ### Stage 1: Plate Ingestion & Optical Calibration
 1. **Lens Undistortion & Metrology**: Live-action footage is ingested. `VfxLensInterchangeService` and `LensDistortionEffect` solve or extract Brown-Conrady coefficients ($k_1, k_2, p_1, p_2$), linearizing barrel/pincushion distortion.
 2. **6-DOF Camera Resection**: `VisualFeatureMatcherService` detects Harris/FAST corners, unprojects 2D features against 3D surface depth, and `SpatialPoseEstimatorService.solvePnPRansac` solves analytical camera extrinsics and focal breathing.
-3. **Sub-Pixel Edge Alignment**: `SubPixelEdgeAlignmentOptimizer` connects to `HeadlessMeshSilhouetteRenderer` to run iterative coordinate descent in $<5\text{ms}$ per pose, ensuring sub-pixel registration ($< 0.05\text{ px RMS}$, $\ge 98\%$ edge correlation).
+3. **Edge Alignment**: `SubPixelEdgeAlignmentOptimizer` renders the model's silhouette with `HeadlessMeshSilhouetteRenderer` at each candidate pose and searches the pose that raises the edge overlap with the photo; it reports the overlap before and after and the measured mean edge distance (chamfer, px), with no guaranteed residual.
 
 ### Stage 2: Physical Sky, Solar Ephemeris & Lighting Inversion
 1. **NOAASolar Ephemeris**: `calculateNOAASolarPosition` computes sun elevation and azimuth from real-world GPS coordinates and timestamps.
@@ -634,7 +633,7 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
 
 ### Stage 3: Real-World Set Extension & Volumetric Massing
 1. **Leaf LOD 3D Tiles**: `Google3DTileBlockoutPipelineService` downloads high-fidelity geometry without preset boundaries.
-2. **UTDRA Rectification**: `UniversalTileDecompositionService` rectifies tilted facades, carves viaduct voids ($\ge 3.5\text{m}$ clearance), and slices terrain cleanly without dollhouse seams.
+2. **UTDRA edits**: `UniversalTileDecompositionService` measures the tile, slices below-ground geometry at a given elevation, and removes curtain-wall triangles inside a span box taken from the vector bridge layer.
 3. **Procedural Set Dressing**: `UniversalBotanicalBridgeService` (SB-Veggie) scatters biologically accurate trees, while `UniversalArchiBridgeService` (SB-Archi) snaps classical architectural colonnades and entablatures to real-world ground datum planes.
 
 ### Stage 4: 4D Dynamic Performer & Character Integration

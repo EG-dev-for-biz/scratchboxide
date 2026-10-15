@@ -183,9 +183,9 @@ export {
     UniversalTileDecompositionService,
     UtdraService,
     UldraService,
-    GeographicDomain,
     UtdraPipelineMode,
     UtdraServiceOptions,
+    UtdraSpanBox,
     UtdraTelemetry,
     UtdraResult
 } from './node/3d-engine/universal-tile-decomposition-service';

@@ -102,7 +102,7 @@ Include directly in ephemerally compiled C++ modules:
 - **2D Roadmap Vector Staging (`stage_3d_vector_world`)**:
   - Ingests MVT/PBF vector tiles at zoom 16.
   - Constructs 5-tier kinematic road profiles with beveled granite curbs, sidewalks, parcel massing prisms, lane-aligned traffic, and streetlamps.
-- **UTDRA / ULDRA Mesh Rectification (`utdra_probe_tile`)**:
-  - Excises curtain walls beneath bridges.
-  - Rectifies vertical skyscraper shafts while preserving historic cornices/crowns.
-  - Non-destructive elevation slicing without hole formation.
+- **UTDRA / ULDRA tile tools (`utdra_probe_tile`, `utdra_slice_elevation`, `utdra_carve_bridge_voids`)**:
+  - Measures a tile (bounds, relief, area by slope band, wall orientation); classifies nothing.
+  - Elevation slicing that clips straddling triangles (below-ground pruning).
+  - Removes curtain-wall triangles inside a span box you give (it does not find bridges itself).

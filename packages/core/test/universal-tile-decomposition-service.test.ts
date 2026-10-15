@@ -7,6 +7,11 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+/**
+ * UTDRA works on a given tile and reports what it measured: no domain is inferred, no confidence is invented, and
+ * the bridge carver removes walls only inside a span box the caller gives (a tower with no bridge is left whole).
+ */
+
 import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -21,9 +26,10 @@ import {
 } from '../src/node';
 import { MissingInputError } from '../src/common/errors/pipeline-errors';
 import {
-    alpineCliffMesh,
     bridgeWithCurtainMesh,
-    forestMesh,
+    readGlbJson,
+    readGlbPositions,
+    rewriteGlbJson,
     skyscraperMesh,
     suburbanHouseMesh,
     writeFixtureGlb
@@ -34,170 +40,129 @@ const TILES = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-utdra-tiles-'));
 const tile = {
     urban: writeFixtureGlb(path.join(TILES, 'urban.glb'), skyscraperMesh()),
     suburban: writeFixtureGlb(path.join(TILES, 'suburban.glb'), suburbanHouseMesh()),
-    mountain: writeFixtureGlb(path.join(TILES, 'mountain.glb'), alpineCliffMesh()),
-    forest: writeFixtureGlb(path.join(TILES, 'forest.glb'), forestMesh()),
     bridge: writeFixtureGlb(path.join(TILES, 'bridge.glb'), bridgeWithCurtainMesh())
 };
+const CLAY = { name: 'studio_clay', pbrMetallicRoughness: { baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 } };
 
-describe('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA) Codebase API', () => {
+/** A 1 m cube with no vertex colours. */
+function writeUnitCube(file: string): string {
+    const p = (x: number, y: number, z: number) => [x, y, z];
+    const positions: number[] = [];
+    const indices: number[] = [];
+    const face = (a: number[], b: number[], c: number[], d: number[]) => {
+        const base = positions.length / 3;
+        positions.push(...a, ...b, ...c, ...d);
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    };
+    face(p(0, 0, 0), p(1, 0, 0), p(1, 1, 0), p(0, 1, 0));
+    face(p(1, 0, 1), p(0, 0, 1), p(0, 1, 1), p(1, 1, 1));
+    face(p(0, 0, 1), p(0, 0, 0), p(0, 1, 0), p(0, 1, 1));
+    face(p(1, 0, 0), p(1, 0, 1), p(1, 1, 1), p(1, 1, 0));
+    face(p(0, 1, 0), p(1, 1, 0), p(1, 1, 1), p(0, 1, 1));
+    face(p(0, 0, 1), p(1, 0, 1), p(1, 0, 0), p(0, 0, 0));
+    return writeFixtureGlb(file, { positions, indices });
+}
+
+describe('UTDRA / ULDRA: measurements, elevation slicing and span carving on a given tile', () => {
     const service = new UniversalTileDecompositionService();
 
-    it('1. should verify native C++20 UTDRA headers and types are accessible', () => {
-        const compiler = new NativeCppCompilerService();
-        const sdkInclude = compiler.getSdkIncludePath();
-        expect(fs.existsSync(sdkInclude)).toBe(true);
-
-        const utdraHeader = path.join(sdkInclude, 'scratchbox_utdra.hpp');
-        expect(fs.existsSync(utdraHeader)).toBe(true);
-
-        const content = fs.readFileSync(utdraHeader, 'utf8');
-        expect(content).toContain('namespace utdra');
-        expect(content).toContain('enum class GeographicDomain');
-        expect(content).toContain('struct GeographicDomainProbe');
-        expect(content).toContain('class SutherlandHodgmanSlicer');
-        expect(content).toContain('class MultiLevelVoidCarver');
-        expect(content).toContain('class NaturalTerrainProcessor');
-        expect(content).toContain('class UniversalTilePipeline');
+    it('1. the native header measures and edits; it has no domain classifier or confidence table', () => {
+        const header = fs.readFileSync(path.join(new NativeCppCompilerService().getSdkIncludePath(), 'scratchbox_utdra.hpp'), 'utf8');
+        expect(header).toContain('namespace utdra');
+        expect(header).toContain('class TileMeasurer');
+        expect(header).toContain('class SutherlandHodgmanSlicer');
+        expect(header).toContain('class SpanCurtainCarver');
+        expect(header).not.toMatch(/GeographicDomain|DomainClassifier|float confidence|UniversalTilePipeline/);
     });
 
-    it('2. should compile and ensure native runner binary exists', async () => {
-        const binPath = await service.ensureBinary();
-        expect(fs.existsSync(binPath)).toBe(true);
-    }, 600000);
-
-    it('2b. every run needs a tile: the service and the native runner refuse to build a stand-in mesh', async () => {
-        await expect(service.decomposeTile({ mode: 'probe' } as any)).rejects.toBeInstanceOf(MissingInputError);
-        await expect(service.decomposeTile({ inputGlbPath: path.join(TILES, 'missing.glb'), mode: 'probe' })).rejects.toThrow('does not exist');
-        await expect(service.decomposeTile({ inputGlbPath: tile.urban, mode: 'slicer' })).rejects.toThrow('sliceElevationCutoff');
+    it('2. every run needs a tile and a mode; the native runner refuses to build a stand-in mesh', async () => {
+        await expect(service.run({ mode: 'probe' } as any)).rejects.toBeInstanceOf(MissingInputError);
+        await expect(service.run({ inputGlbPath: path.join(TILES, 'missing.glb'), mode: 'probe' })).rejects.toThrow('does not exist');
+        await expect(service.run({ inputGlbPath: tile.urban } as any)).rejects.toThrow('must be probe, slicer or bridge');
+        await expect(service.run({ inputGlbPath: tile.urban, mode: 'full' as any })).rejects.toThrow('must be probe, slicer or bridge');
+        await expect(service.run({ inputGlbPath: tile.urban, mode: 'slicer' })).rejects.toThrow('sliceElevationCutoff');
         const bin = await service.ensureBinary();
-        const run = await promisify(execFile)(bin, ['--mode', 'probe', '--benchmark', 'urban', '--output', path.join(TILES, 'x.glb')]).catch(e => e);
-        expect(run.code).toBe(2);
-        const noInput = await promisify(execFile)(bin, ['--mode', 'probe', '--output', path.join(TILES, 'x.glb')]).catch(e => e);
+        const noInput = await promisify(execFile)(bin, ['--mode', 'probe']).catch(e => e);
         expect(noInput.code).toBe(2);
         expect(String(noInput.stderr)).toContain('--input <tile.glb> is required');
-        expect(fs.existsSync(path.join(TILES, 'x.glb'))).toBe(false);
     }, 600000);
 
-    it('3. should probe and classify macro-domains across Urban, Suburban, Mountain and Forest', async () => {
-        // A. Urban High-Rise Benchmark
-        const urbanResult = await service.decomposeTile({
-            inputGlbPath: tile.urban,
-            mode: 'probe'
+    it('3. a probe reports measurements only, matching the tile\'s own geometry, and writes no GLB', async () => {
+        const urban = await service.probeTile(tile.urban);
+        expect(urban).not.toHaveProperty('dominantDomain');
+        expect(urban).not.toHaveProperty('confidence');
+        expect(urban.reliefMeters).toBeCloseTo(180, 3);
+        expect(urban.boundsMin).toEqual([-20, 0, -30]);
+        expect(urban.boundsMax).toEqual([20, 180, 30]);
+        // Walls 27,900 m² and roofs 4,350 m² of the three-tier tower.
+        expect(urban.surfaceAreaM2).toBeCloseTo(32250, 0);
+        expect(urban.slopeAreaFractions.vertical).toBeCloseTo(27900 / 32250, 4);
+        expect(urban.slopeAreaFractions.horizontal).toBeCloseTo(4350 / 32250, 4);
+        expect(urban.slopeAreaFractions.inclined).toBe(0);
+        expect(urban.dominantWallYawDeg).toBeCloseTo(0.5, 3);
+
+        // The gabled house's roof is inclined and its lawn is green in the vertex colours.
+        const suburban = await service.probeTile(tile.suburban);
+        expect(suburban.slopeAreaFractions.inclined).toBeGreaterThan(0.1);
+        expect(suburban.vertexGreenIndex).toBeGreaterThan(0.1);
+
+        // A 1 m cube with no vertex colours: measured as such, with no green index and no invented domain.
+        const cube = await service.probeTile(writeUnitCube(path.join(TILES, 'cube.glb')));
+        expect(cube.reliefMeters).toBeCloseTo(1, 5);
+        expect(cube.surfaceAreaM2).toBeCloseTo(6, 4);
+        expect(cube.slopeAreaFractions.vertical).toBeCloseTo(4 / 6, 4);
+        expect(cube.vertexGreenIndex).toBeUndefined();
+        const result = await service.run({ inputGlbPath: tile.urban, mode: 'probe' });
+        expect(result.outputGlbPath).toBeUndefined();
+        expect(result.glbBuffer).toBeUndefined();
+    }, 600000);
+
+    it('4. the slicer keeps what lies above the cut, clipping straddling walls, and keeps the clay material', async () => {
+        const clayTower = rewriteGlbJson(writeFixtureGlb(path.join(TILES, 'clay_tower.glb'), skyscraperMesh()), g => {
+            g.materials = [CLAY];
+            g.meshes[0].primitives[0].material = 0;
         });
-        expect(urbanResult.success).toBe(true);
-        expect(urbanResult.telemetry.dominantDomain).toBe('UrbanHighRiseCore');
-        expect(urbanResult.telemetry.confidence).toBeGreaterThan(0.9);
-        expect(urbanResult.telemetry.totalReliefDeltaY).toBeGreaterThanOrEqual(180);
-        expect(urbanResult.telemetry.verticalityScore).toBeGreaterThanOrEqual(0.7);
+        const outputGlbPath = path.join(TILES, 'sliced.glb');
+        const result = await service.sliceElevation(clayTower, 50, { outputGlbPath });
+        expect(result.glbBuffer!.toString('utf8', 0, 4)).toBe('glTF');
+        const { min, max } = readGlbPositions(outputGlbPath);
+        expect(min[1]).toBeCloseTo(50, 3);
+        expect(max[1]).toBeCloseTo(180, 3);
+        expect(result.telemetry.reliefMeters).toBeCloseTo(130, 3);
+        expect(readGlbJson(outputGlbPath).materials).toEqual([CLAY]);
+    }, 600000);
 
-        // B. Suburban Residential Benchmark
-        const suburbanResult = await service.decomposeTile({
-            inputGlbPath: tile.suburban,
-            mode: 'probe'
-        });
-        expect(suburbanResult.success).toBe(true);
-        expect(suburbanResult.telemetry.dominantDomain).toBe('SuburbanResidential');
-        expect(suburbanResult.telemetry.confidence).toBeGreaterThan(0.85);
-        expect(suburbanResult.telemetry.pitchedRoofRatio).toBeGreaterThan(0.2);
+    it('5. the carver needs a span box, removes only the near-vertical triangles inside it, and leaves a tower with no bridge whole', async () => {
+        await expect(service.run({ inputGlbPath: tile.bridge, mode: 'bridge' })).rejects.toThrow(/span/);
 
-        // C. Mountain Alpine Benchmark
-        const mountainResult = await service.decomposeTile({
-            inputGlbPath: tile.mountain,
-            mode: 'probe'
-        });
-        expect(mountainResult.success).toBe(true);
-        expect(mountainResult.telemetry.dominantDomain).toBe('MountainAlpineCanyon');
-        expect(mountainResult.telemetry.confidence).toBeGreaterThan(0.85);
-        expect(mountainResult.telemetry.totalReliefDeltaY).toBeGreaterThan(150);
+        const carved = await service.carveBridgeUnderpass(tile.bridge,
+            { minX: -10, maxX: 10, minZ: -2, maxZ: 2, groundY: 0, deckY: 12 },
+            { minVoidHeightMeters: 3.5, outputGlbPath: path.join(TILES, 'carved_bridge.glb') });
+        expect(carved.telemetry.inputTriangles).toBe(2);
+        expect(carved.telemetry.removedTriangles).toBe(1);
+        expect(carved.telemetry.outputTriangles).toBe(1);
+        // The deck stays.
+        expect(readGlbPositions(carved.outputGlbPath!).min[1]).toBeCloseTo(12, 4);
 
-        // D. Forest Woodland Canopy Benchmark
-        const forestResult = await service.decomposeTile({
-            inputGlbPath: tile.forest,
-            mode: 'probe'
-        });
-        expect(forestResult.success).toBe(true);
-        expect(forestResult.telemetry.dominantDomain).toBe('ForestWoodlandCanopy');
-        expect(forestResult.telemetry.confidence).toBeGreaterThan(0.85);
-        expect(forestResult.telemetry.vegetationIndexNdvi).toBeGreaterThan(0.3);
-    }, 45000);
+        // The review's tower: a span box beside it removes nothing, and the 30 triangles stay.
+        const tower = await service.carveBridgeUnderpass(tile.urban,
+            { minX: 100, maxX: 140, minZ: -10, maxZ: 10, groundY: 0, deckY: 12 },
+            { outputGlbPath: path.join(TILES, 'carved_tower.glb') });
+        expect(tower.telemetry.inputTriangles).toBe(30);
+        expect(tower.telemetry.removedTriangles).toBe(0);
+        expect(tower.telemetry.outputTriangles).toBe(30);
 
-    it('4. should execute non-destructive Sutherland-Hodgman elevation slicer', async () => {
-        const result = await service.decomposeTile({
-            inputGlbPath: tile.urban,
-            mode: 'slicer',
-            sliceElevationCutoff: 50.0
-        });
+        // A span lower than the asked clearance is refused.
+        await expect(service.carveBridgeUnderpass(tile.bridge, { minX: -10, maxX: 10, minZ: -2, maxZ: 2, groundY: 0, deckY: 2 }, { minVoidHeightMeters: 3.5 }))
+            .rejects.toThrow(/clearance/);
+    }, 600000);
 
-        expect(result.success).toBe(true);
-        expect(result.telemetry.outputTriangles).toBeGreaterThan(0);
-        expect(result.glbBuffer).toBeDefined();
-
-        // Verify valid binary glTF 2.0 output with 'glTF' magic header
-        const magic = result.glbBuffer!.toString('utf8', 0, 4);
-        expect(magic).toBe('glTF');
-
-        if (fs.existsSync(result.outputGlbPath)) {
-            fs.unlinkSync(result.outputGlbPath);
-        }
-    }, 45000);
-
-    it('5. should carve false underpass curtain walls beneath bridges and viaducts', async () => {
-        const result = await service.decomposeTile({
-            inputGlbPath: tile.bridge,
-            mode: 'bridge',
-            minVoidHeightMeters: 3.5
-        });
-
-        expect(result.success).toBe(true);
-        expect(result.telemetry.inputTriangles).toBe(2);
-        // The vertical curtain wall triangle was excised, leaving only the horizontal bridge deck
-        expect(result.telemetry.outputTriangles).toBe(1);
-        expect(result.glbBuffer).toBeDefined();
-
-        if (fs.existsSync(result.outputGlbPath)) {
-            fs.unlinkSync(result.outputGlbPath);
-        }
-    }, 45000);
-
-    it('6. should run end-to-end full universal decomposition pipeline with GLB emission', async () => {
-        const result = await service.decomposeTile({
-            inputGlbPath: tile.urban,
-            mode: 'full'
-        });
-
-        expect(result.success).toBe(true);
-        expect(result.telemetry.dominantDomain).toBe('UrbanHighRiseCore');
-        expect(result.telemetry.outputTriangles).toBeGreaterThan(0);
-        expect(result.telemetry.processingTimeMs).toBeGreaterThan(0);
-        expect(result.telemetry.processingTimeMs).toBeLessThan(1000); // Sub-second C++20 execution
-
-        expect(result.glbBuffer).toBeDefined();
-        expect(result.glbBuffer!.length).toBeGreaterThan(5000);
-        const magic = result.glbBuffer!.toString('utf8', 0, 4);
-        expect(magic).toBe('glTF');
-
-        if (fs.existsSync(result.outputGlbPath)) {
-            fs.unlinkSync(result.outputGlbPath);
-        }
-    }, 45000);
-
-    it('7. should verify UtdraService and UldraService aliases work identically', async () => {
-        const utdraInstance = new UtdraService();
-        const uldraInstance = new UldraService();
-
-        expect(utdraInstance).toBeInstanceOf(UniversalTileDecompositionService);
-        expect(uldraInstance).toBeInstanceOf(UniversalTileDecompositionService);
-
-        const uldraResult = await uldraInstance.decomposeTile({
-            inputGlbPath: tile.suburban,
-            mode: 'probe'
-        });
-        expect(uldraResult.telemetry.dominantDomain).toBe('SuburbanResidential');
-
-        if (fs.existsSync(uldraResult.outputGlbPath)) {
-            fs.unlinkSync(uldraResult.outputGlbPath);
-        }
-    }, 45000);
+    it('6. the UtdraService and UldraService aliases are the same service', async () => {
+        expect(new UtdraService()).toBeInstanceOf(UniversalTileDecompositionService);
+        expect(new UldraService()).toBeInstanceOf(UniversalTileDecompositionService);
+        const probe = await new UldraService().probeTile(tile.suburban);
+        expect(probe.inputTriangles).toBeGreaterThan(0);
+    }, 600000);
 });
 
 afterAll(() => fs.rmSync(TILES, { recursive: true, force: true }));

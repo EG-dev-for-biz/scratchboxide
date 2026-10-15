@@ -414,18 +414,17 @@ export class TaskCapabilityResolver {
             } else if (/utdra|uldra|tile\s*decomposition|rectif(?:y|ication)|bridge\s*void|underpass\s*void|sutherland\s*-?\s*hodgman|slope\s*stratified|domain\s*probe/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)');
-                nativeCapabilities.push('UniversalTileDecompositionService / UtdraService / UldraService');
-                nativeCapabilities.push('DomainClassifier (9 Macro-Geographic Domains)');
-                nativeCapabilities.push('Sutherland-Hodgman Non-Destructive Slicer & Multi-Level Void Carver');
+                nativeCapabilities.push('UniversalTileDecompositionService / UtdraService / UldraService (UTDRA / ULDRA)');
+                nativeCapabilities.push('Tile measurements: bounds, relief, area by slope band, wall orientation (no classification)');
+                nativeCapabilities.push('Sutherland-Hodgman elevation slicer and a span-box curtain-wall carver');
                 nativeCapabilities.push('C++20 Native Pipeline (run_utdra_pipeline)');
-                rationale = 'Native C++20 UTDRA / ULDRA pipeline probes macro-domains, rectifies architectural shafts, carves underpass voids beneath bridges, and slices at an elevation, on the tile it is given (it reports the triangles and bounds it measured).';
+                rationale = 'Native C++20 UTDRA pipeline measures a given tile, keeps what lies above an elevation, or removes the near-vertical triangles inside a span box the caller gives; it reports what it measured and removed, and classifies nothing.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
-                    serviceOrTool: 'utdra_decompose_tile or UniversalTileDecompositionService',
-                    targetTool: 'utdra_decompose_tile',
+                    serviceOrTool: 'utdra_probe_tile, utdra_slice_elevation or utdra_carve_bridge_voids',
+                    targetTool: 'utdra_probe_tile',
                     targetService: 'UniversalTileDecompositionService',
-                    details: 'Call utdra_decompose_tile / utdra_probe_tile or execute UniversalTileDecompositionService to rectify mesh and stream into 3d-scene primitive.'
+                    details: 'Call utdra_probe_tile on the given GLB to measure it; slice with utdra_slice_elevation (an elevation) or carve with utdra_carve_bridge_voids (a span box in the tile\'s coordinates).'
                 };
             } else if (/beautif|nano\s*banana[\s\w-]{0,30}(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
                 canSolveNatively = true;

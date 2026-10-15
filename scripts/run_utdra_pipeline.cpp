@@ -1,18 +1,17 @@
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * Standalone Headless Universal Tile Decomposition & Rectification Pipeline CLI
- * (UTDRA / ULDRA)
- * Suitable for In-App Native Execution, Service Pipelines, and Cloud Run.
+ * Standalone headless UTDRA tile runner (C++20).
  *
- * Implements:
- * 1. Macro-Domain Classifier (9 Canonical Geographic Domains)
- * 2. Non-Destructive Triangle-Plane Slicer (Sutherland-Hodgman)
- * 3. Multi-Level Void Carver (Bridges, Viaducts, Flyovers)
- * 4. Slope-Stratified Natural Terrain Biomes (Alpine, Bedrock, Talus Scree)
- * 5. Full Universal Tile Decomposed Hybrid Assembly (Rectified Shafts & Sculptural Crowns)
+ * Modes, each on a given tile (--input is required; no stand-in mesh is ever built):
+ *   probe   measures the tile (bounds, relief, area by slope band, wall orientation, vertex-colour green index);
+ *           it classifies nothing and writes no GLB.
+ *   slicer  keeps the part of the tile above --sliceY, clipping straddling triangles (Sutherland-Hodgman).
+ *   bridge  removes the near-vertical triangles inside the span box given with
+ *           --span minX,maxX,minZ,maxZ,groundY,deckY (it does not decide what is a bridge).
  *
- * Streams binary glTF 2.0 (.glb) chunks over stdout or writes to disk.
+ * Telemetry is one machine-readable [TELEMETRY] line measuring the written mesh (the input for probe).
+ * Exit code 2 is an invalid input or argument; 1 is a failure while running.
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"
@@ -21,9 +20,11 @@
 
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 
 namespace fs = std::filesystem;
@@ -33,43 +34,62 @@ using namespace scratchbox::geometry;
 using namespace scratchbox::utdra;
 using namespace scratchbox::io;
 
-// ============================================================================
-// CLI Main Entry Point
-// ============================================================================
+static bool parseFloat(const std::string& text, float& out) {
+    try {
+        size_t used = 0;
+        out = std::stof(text, &used);
+        return used == text.size() && std::isfinite(out);
+    } catch (...) {
+        return false;
+    }
+}
+
+static bool parseSpan(const std::string& text, SpanBox& box) {
+    std::vector<float> values;
+    std::stringstream ss(text);
+    std::string part;
+    while (std::getline(ss, part, ',')) {
+        float v = 0.0f;
+        if (!parseFloat(part, v)) return false;
+        values.push_back(v);
+    }
+    if (values.size() != 6) return false;
+    box = SpanBox{values[0], values[1], values[2], values[3], values[4], values[5]};
+    return true;
+}
 
 int main(int argc, char* argv[]) {
-    std::string inputPath = "";
-    std::string outputPath = "";
-    std::string mode = "full"; // full | probe | slicer | bridge | terrain
+    std::string inputPath;
+    std::string outputPath;
+    std::string mode;
     float sliceY = 0.0f;
     bool hasSliceY = false;
-    float minVoidHeight = 3.5f;
-    double anchorLat = 0.0;
-    double anchorLon = 0.0;
-    bool hasAnchor = false;
-    bool streamStdout = false;
+    SpanBox span;
+    bool hasSpan = false;
+    float minVoidHeight = 0.0f;
+    bool hasMinVoidHeight = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--input" && i + 1 < argc) {
-            inputPath = argv[++i];
-        } else if (arg == "--output" && i + 1 < argc) {
-            outputPath = argv[++i];
-        } else if (arg == "--mode" && i + 1 < argc) {
-            mode = argv[++i];
-        } else if (arg == "--sliceY" && i + 1 < argc) {
-            sliceY = std::stof(argv[++i]);
+        auto next = [&](const char* name) -> std::string {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: " << name << " needs a value\n";
+                std::exit(2);
+            }
+            return argv[++i];
+        };
+        if (arg == "--input") inputPath = next("--input");
+        else if (arg == "--output") outputPath = next("--output");
+        else if (arg == "--mode") mode = next("--mode");
+        else if (arg == "--sliceY") {
+            if (!parseFloat(next("--sliceY"), sliceY)) { std::cerr << "Error: --sliceY must be a number\n"; return 2; }
             hasSliceY = true;
-        } else if (arg == "--minVoidHeight" && i + 1 < argc) {
-            minVoidHeight = std::stof(argv[++i]);
-        } else if (arg == "--lat" && i + 1 < argc) {
-            anchorLat = std::stod(argv[++i]);
-            hasAnchor = true;
-        } else if (arg == "--lon" && i + 1 < argc) {
-            anchorLon = std::stod(argv[++i]);
-            hasAnchor = true;
-        } else if (arg == "--stream") {
-            streamStdout = true;
+        } else if (arg == "--span") {
+            if (!parseSpan(next("--span"), span)) { std::cerr << "Error: --span must be six numbers minX,maxX,minZ,maxZ,groundY,deckY\n"; return 2; }
+            hasSpan = true;
+        } else if (arg == "--minVoidHeight") {
+            if (!parseFloat(next("--minVoidHeight"), minVoidHeight) || minVoidHeight < 0.0f) { std::cerr << "Error: --minVoidHeight must be a number >= 0\n"; return 2; }
+            hasMinVoidHeight = true;
         } else {
             std::cerr << "Error: unknown argument " << arg << "\n";
             return 2;
@@ -85,47 +105,45 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: --input " << inputPath << " does not exist\n";
         return 2;
     }
-    if (outputPath.empty() && !streamStdout) {
-        std::cerr << "Error: --output <path.glb> (or --stream) is required\n";
+    if (mode != "probe" && mode != "slicer" && mode != "bridge") {
+        std::cerr << "Error: --mode must be probe, slicer or bridge (got \"" << mode << "\")\n";
         return 2;
     }
-    if (mode != "full" && mode != "probe" && mode != "slicer" && mode != "bridge" && mode != "terrain") {
-        std::cerr << "Error: unknown --mode " << mode << " (full, probe, slicer, bridge or terrain)\n";
+    if (mode != "probe" && outputPath.empty()) {
+        std::cerr << "Error: --output <path.glb> is required for --mode " << mode << "\n";
         return 2;
     }
     if (mode == "slicer" && !hasSliceY) {
         std::cerr << "Error: --mode slicer needs --sliceY <elevation>\n";
         return 2;
     }
-
-    if (!streamStdout) {
-        std::cout << "======================================================================\n";
-        std::cout << "  SCRATCHBOX 3D ENGINE: UTDRA / ULDRA PIPELINE RUNNER (C++20)\n";
-        std::cout << "======================================================================\n";
+    if (mode == "bridge") {
+        if (!hasSpan) {
+            std::cerr << "Error: --mode bridge needs --span minX,maxX,minZ,maxZ,groundY,deckY (the deck's footprint and the ground and deck heights); the carver does not find bridges itself\n";
+            return 2;
+        }
+        if (!(span.maxX > span.minX && span.maxZ > span.minZ && span.deckY > span.groundY)) {
+            std::cerr << "Error: --span needs maxX > minX, maxZ > minZ and deckY > groundY\n";
+            return 2;
+        }
+        if (hasMinVoidHeight && span.deckY - span.groundY < minVoidHeight) {
+            std::cerr << "Error: the span's clearance (deckY - groundY = " << (span.deckY - span.groundY)
+                      << " m) is below --minVoidHeight " << minVoidHeight << " m\n";
+            return 2;
+        }
     }
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
-    // 1. Read the input tile
-    if (!streamStdout) std::cout << "  [Input] Ingesting GLB: " << inputPath << "\n";
     ScratchboxMesh inputMesh = GlbReader::readGlb(inputPath);
     if (inputMesh.vertices.empty() || inputMesh.indices.size() < 3) {
         std::cerr << "Error: --input " << inputPath << " has no triangles\n";
         return 2;
     }
 
-    GeodeticCoord anchor;
-    if (hasAnchor) {
-        anchor.latDeg = anchorLat;
-        anchor.lngDeg = anchorLon;
-    }
-
     ScratchboxMesh outputMesh("UtdraOutputMesh");
-    GeographicDomainProbe probe;
-
-    // 2. Execute Requested Pipeline Mode
+    size_t removedTris = 0;
     if (mode == "probe") {
-        probe = DomainClassifier::probeTile(inputMesh, anchor);
         outputMesh = inputMesh;
     } else if (mode == "slicer") {
         std::vector<SutherlandHodgmanSlicer::Triangle> clipped;
@@ -137,101 +155,59 @@ int main(int argc, char* argv[]) {
         }
         for (const auto& tri : clipped) {
             uint32_t bIdx = static_cast<uint32_t>(outputMesh.vertices.size());
-            outputMesh.vertices.push_back(tri.v0);
-            outputMesh.vertices.push_back(tri.v1);
-            outputMesh.vertices.push_back(tri.v2);
+            outputMesh.addVertex(tri.v0);
+            outputMesh.addVertex(tri.v1);
+            outputMesh.addVertex(tri.v2);
             outputMesh.indices.push_back(bIdx);
             outputMesh.indices.push_back(bIdx + 1);
             outputMesh.indices.push_back(bIdx + 2);
         }
-        probe = DomainClassifier::probeTile(outputMesh, anchor);
-    } else if (mode == "bridge") {
-        outputMesh = MultiLevelVoidCarver::carveUnderpassVoids(inputMesh, minVoidHeight);
-        probe = DomainClassifier::probeTile(outputMesh, anchor);
-    } else if (mode == "terrain") {
-        outputMesh = inputMesh;
-        NaturalTerrainProcessor::applySlopeStratifiedBiomes(outputMesh);
-        probe = DomainClassifier::probeTile(outputMesh, anchor);
+        if (outputMesh.indices.empty()) {
+            std::cerr << "Error: nothing of " << inputPath << " lies above y=" << sliceY << "\n";
+            return 1;
+        }
     } else {
-        // Full Universal Tile Pipeline Mode
-        UniversalDecomposedTile decomposed = UniversalTilePipeline::processRawTile(inputMesh, anchor);
-        probe = decomposed.probe;
-
-        // Combine decomposed components into single cohesive mesh
-        uint32_t baseIdx = 0;
-        for (const auto& bldg : decomposed.rectifiedBuildings) {
-            baseIdx = static_cast<uint32_t>(outputMesh.vertices.size());
-            for (const auto& v : bldg.vertices) outputMesh.vertices.push_back(v);
-            for (uint32_t idx : bldg.indices) outputMesh.indices.push_back(baseIdx + idx);
-        }
-        for (const auto& crown : decomposed.preservedSculpturalCrowns) {
-            baseIdx = static_cast<uint32_t>(outputMesh.vertices.size());
-            for (const auto& v : crown.vertices) outputMesh.vertices.push_back(v);
-            for (uint32_t idx : crown.indices) outputMesh.indices.push_back(baseIdx + idx);
-        }
-        if (!decomposed.clearedUnderpassBridges.vertices.empty()) {
-            baseIdx = static_cast<uint32_t>(outputMesh.vertices.size());
-            for (const auto& v : decomposed.clearedUnderpassBridges.vertices) outputMesh.vertices.push_back(v);
-            for (uint32_t idx : decomposed.clearedUnderpassBridges.indices) outputMesh.indices.push_back(baseIdx + idx);
-        }
-        if (!decomposed.conformedTerrainSurface.vertices.empty()) {
-            baseIdx = static_cast<uint32_t>(outputMesh.vertices.size());
-            for (const auto& v : decomposed.conformedTerrainSurface.vertices) outputMesh.vertices.push_back(v);
-            for (uint32_t idx : decomposed.conformedTerrainSurface.indices) outputMesh.indices.push_back(baseIdx + idx);
-        }
-        if (outputMesh.vertices.empty()) {
-            // Nothing came out of the decomposition: report it instead of passing the input off as the result.
-            std::cerr << "Error: the full decomposition produced no geometry for " << inputPath << "\n";
+        SpanCarveResult carved = SpanCurtainCarver::carve(inputMesh, span);
+        removedTris = carved.removedTriangles;
+        outputMesh = std::move(carved.mesh);
+        if (outputMesh.indices.empty()) {
+            std::cerr << "Error: carving the span removed every triangle of " << inputPath << "\n";
             return 1;
         }
     }
 
-    auto endTime = std::chrono::high_resolution_clock::now();
-    double elapsedMs = std::chrono::duration<double, std::milli>(endTime - startTime).count();
+    const TileMeasurements m = TileMeasurer::measure(outputMesh);
+    double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - startTime).count();
 
-    size_t inputTris = inputMesh.indices.size() / 3;
-    size_t outputTris = outputMesh.indices.size() / 3;
-
-    // 3. Serialize and Write Binary GLB
-    std::vector<uint8_t> glbData = GlbWriter::writeGlb(outputMesh);
-
-    if (streamStdout) {
-        std::cout.write(reinterpret_cast<const char*>(glbData.data()), glbData.size());
-    } else {
+    if (mode != "probe") {
+        std::vector<uint8_t> glbData = GlbWriter::writeGlb(outputMesh);
         if (fs::path(outputPath).has_parent_path()) fs::create_directories(fs::path(outputPath).parent_path());
         std::ofstream outFile(outputPath, std::ios::binary);
         if (!outFile.is_open()) {
             std::cerr << "Error: failed to open output file " << outputPath << "\n";
             return 1;
         }
-        outFile.write(reinterpret_cast<const char*>(glbData.data()), glbData.size());
+        outFile.write(reinterpret_cast<const char*>(glbData.data()), static_cast<std::streamsize>(glbData.size()));
         outFile.close();
-        std::cout << "  [Output] Wrote " << glbData.size() << " bytes to " << outputPath << "\n";
+        std::cout << "[Output] Wrote " << glbData.size() << " bytes to " << outputPath << "\n";
     }
 
-    // 4. Emit Machine-Readable Telemetry Tag
-    std::cout << "\n[TELEMETRY] "
-              << "DOMAIN=" << getGeographicDomainName(probe.dominantDomain) << " "
-              << "CONFIDENCE=" << probe.confidence << " "
-              << "RELIEF=" << probe.totalReliefDeltaY << " "
-              << "PLANARITY=" << probe.planarityScore << " "
-              << "VERTICALITY=" << probe.verticalityScore << " "
-              << "VEG_NDVI=" << probe.vegetationIndexNDVI << " "
-              << "PITCHED_ROOF=" << probe.pitchedRoofRatio << " "
-              << "WATER=" << probe.waterSurfaceRatio << " "
-              << "VOID=" << probe.underpassVoidRatio << " "
-              << "YAW=" << probe.dominantStreetYawDeg << " "
-              << "INPUT_TRIS=" << inputTris << " "
-              << "OUTPUT_TRIS=" << outputTris << " "
+    std::cout << "[TELEMETRY] "
+              << "MODE=" << mode << " "
+              << "BOUNDS_MIN=" << m.bounds.min.x << "," << m.bounds.min.y << "," << m.bounds.min.z << " "
+              << "BOUNDS_MAX=" << m.bounds.max.x << "," << m.bounds.max.y << "," << m.bounds.max.z << " "
+              << "RELIEF=" << m.reliefMeters << " "
+              << "AREA=" << m.surfaceArea << " "
+              << "HORIZONTAL=" << m.horizontalFraction << " "
+              << "INCLINED=" << m.inclinedFraction << " "
+              << "STEEP=" << m.steepFraction << " "
+              << "VERTICAL=" << m.verticalFraction << " "
+              << "GREEN_INDEX=" << m.greenIndex << " "
+              << "WALL_YAW=" << (m.hasWalls ? std::to_string(m.dominantWallYawDeg) : std::string("none")) << " "
+              << "DEGENERATE_TRIS=" << m.degenerateTriangles << " "
+              << "INPUT_TRIS=" << (inputMesh.indices.size() / 3) << " "
+              << "OUTPUT_TRIS=" << (outputMesh.indices.size() / 3) << " "
+              << "REMOVED_TRIS=" << removedTris << " "
               << "RUNTIME_MS=" << elapsedMs << "\n";
-
-    if (!streamStdout) {
-        probe.printSummary();
-        std::cout << "  Input Triangles:      " << inputTris << "\n";
-        std::cout << "  Output Triangles:     " << outputTris << "\n";
-        std::cout << "  Execution Time:       " << elapsedMs << " ms\n";
-        std::cout << "======================================================================\n";
-    }
-
     return 0;
 }
