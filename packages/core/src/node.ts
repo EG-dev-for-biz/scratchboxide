@@ -352,6 +352,13 @@ export {
     VisualCriticAuditResult
 } from './node/video/MediaPipeVideoDirectorService';
 
+// VFX Subject Segmenter — per-frame holdout matte generation via MediaPipe Image Segmenter
+export {
+    VfxSubjectSegmenterService,
+    SegmentSubjectOptions,
+    SegmentSubjectResult
+} from './node/video/VfxSubjectSegmenterService';
+
 // Google 3D Tile Camera Blockout Pipeline Service (<VIDEO_REF_0>)
 export {
     Google3DTileBlockoutPipelineService,
@@ -1220,3 +1227,11 @@ export {
   type HybridRecipeOptions,
   type HybridRecipeResult
 } from './node/3d-engine/hybrid-recipe-pbr-service';
+
+// Real MCP Server (supersedes McpBridge cosmetic fakes)
+export {
+    ScratchboxMcpServer,
+    createVfxMcpServer,
+    SCRATCHBOX_MCP_CONFIG_EXAMPLE,
+    type ScratchboxMcpServerOptions
+} from './node/mcp/ScratchboxMcpServer';
