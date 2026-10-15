@@ -25,7 +25,19 @@ import {
 // Types & Interfaces
 // ============================================================================
 
-export interface TrackVideoMotionOptions {
+/** What every director pipeline takes from its caller (a chat tool passes its ctx.signal and ctx.reportProgress). */
+export interface DirectorRunControl {
+    /**
+     * The caller's Stop (the chat's Stop button or the tool's time limit). It ends the run where it is: the ffmpeg
+     * and MediaPipe processes in flight are killed, no further frame is processed, no model is called and nothing
+     * more is written. The run then rejects with an AbortError.
+     */
+    signal?: AbortSignal;
+    /** Progress after each step and frame; `fraction` is 0..1. */
+    onProgress?: (message: string, fraction?: number) => void;
+}
+
+export interface TrackVideoMotionOptions extends DirectorRunControl {
     videoPath: string;
     fps?: number; // Sampling frame rate (default: 15)
     startTime?: number; // Start offset in seconds (default: 0)
@@ -33,6 +45,11 @@ export interface TrackVideoMotionOptions {
     smoothingWindow?: number; // Moving average window size for joint smoothing (default: 3)
     minConfidence?: number; // Minimum pose confidence threshold (default: 0.4)
     outputJsonPath?: string; // Optional path to write JSON motion telemetry
+    /**
+     * Most frames to track. When `fps` over the window would sample more, the frames are spread evenly over the
+     * window at the lower rate instead (the result's sampleFps is the rate used).
+     */
+    maxFrames?: number;
 }
 
 export interface VideoMotionPoseFrame {
@@ -74,7 +91,7 @@ export interface VideoMotionTrackResult {
     [key: string]: unknown;
 }
 
-export interface AutoReframeOptions {
+export interface AutoReframeOptions extends DirectorRunControl {
     inputVideoPath: string;
     outputVideoPath?: string;
     targetAspectRatio: '9:16' | '1:1' | '4:5' | '16:9' | string;
@@ -136,7 +153,13 @@ export type VisualCriticDimension = keyof typeof VISUAL_CRITIC_DIMENSIONS;
 /** The vision model that scores the rubric. */
 export const VISUAL_CRITIC_MODEL = 'gemini-2.5-flash';
 
-export interface VisualCriticAuditOptions {
+/**
+ * Most frames the audit tracks for body consistency, spread evenly over the clip (8 fps, or fewer on a clip longer
+ * than 3 s). Each frame is one MediaPipe process, so a long clip at 8 fps would take many minutes.
+ */
+export const VISUAL_CRITIC_MAX_TRACKED_FRAMES = 24;
+
+export interface VisualCriticAuditOptions extends DirectorRunControl {
     videoPath: string;
     promptContext?: string;
     referencePlatePath?: string;
@@ -205,6 +228,17 @@ const visualCriticSchema: Schema = {
     required: ['dimensions', 'actionDirectives', 'suggestedFfmpegFilters']
 };
 
+/** The error a stopped run rejects with: an AbortError that says what was stopped and why. */
+function stopError(signal: AbortSignal, what: string): Error {
+    const reason = signal.reason instanceof Error && signal.reason.message ? `: ${signal.reason.message}` : '';
+    return Object.assign(new Error(`${what} was stopped${reason}`), { name: 'AbortError', cause: signal.reason });
+}
+
+/** Throws the stop error once the caller has stopped the run. */
+function throwIfStopped(signal: AbortSignal | undefined, what: string): void {
+    if (signal?.aborted) throw stopError(signal, what);
+}
+
 // ============================================================================
 // Service Implementation
 // ============================================================================
@@ -256,19 +290,33 @@ export class MediaPipeVideoDirectorService {
      * articulated motion tracks ready for the native C++20 SB-Human engine.
      */
     public async trackVideoMotion(options: TrackVideoMotionOptions): Promise<VideoMotionTrackResult> {
-        const sampleFps = options.fps ?? 15;
+        const tool = 'vfx_mediapipe_track_video_motion';
+        const what = `Motion tracking of ${options.videoPath}`;
+        const { signal, onProgress } = options;
+        const requestedFps = options.fps ?? 15;
+        if (!Number.isFinite(requestedFps) || requestedFps <= 0) {
+            throw new MissingInputError(tool, 'fps', `${options.fps} is not a positive frame rate`);
+        }
+        if (options.maxFrames !== undefined && !(Number.isInteger(options.maxFrames) && options.maxFrames > 0)) {
+            throw new MissingInputError(tool, 'maxFrames', `${options.maxFrames} is not a positive whole number of frames`);
+        }
         const smoothingWindow = Math.max(1, options.smoothingWindow ?? 3);
         const minConf = options.minConfidence ?? 0.4;
+        throwIfStopped(signal, what);
 
         if (!await fs.pathExists(options.videoPath)) {
-            throw new MissingInputError('vfx_mediapipe_track_video_motion', 'videoPath', `${options.videoPath} does not exist`);
+            throw new MissingInputError(tool, 'videoPath', `${options.videoPath} does not exist`);
         }
 
         const probe = await this.editorService.probeMedia(options.videoPath);
+        throwIfStopped(signal, what);
         const totalDuration = options.duration ?? Math.max(0.1, probe.durationSec - (options.startTime ?? 0));
         const startSec = Math.max(0, options.startTime ?? 0);
 
-        // Generate timestamps to extract
+        // Generate timestamps to extract (spread over the window at a lower rate when that would exceed maxFrames)
+        const sampleFps = options.maxFrames !== undefined && totalDuration * requestedFps > options.maxFrames
+            ? options.maxFrames / totalDuration
+            : requestedFps;
         const totalSamples = Math.max(1, Math.round(totalDuration * sampleFps));
         const timestamps: number[] = [];
         for (let i = 0; i < totalSamples; i++) {
@@ -287,34 +335,46 @@ export class MediaPipeVideoDirectorService {
 
         try {
             // Extract frame images via FFmpeg
-            const extractRes = await this.editorService.extractKeyframes({
-                inputPath: options.videoPath,
-                outputDir: tmpDir,
-                timestampsSec: timestamps,
-                format: 'png'
-            });
+            onProgress?.(`Extracting ${timestamps.length} frame(s) to track`, 0);
+            let extractRes;
+            try {
+                extractRes = await this.editorService.extractKeyframes({
+                    inputPath: options.videoPath,
+                    outputDir: tmpDir,
+                    timestampsSec: timestamps,
+                    format: 'png',
+                    signal
+                });
+            } catch (err) {
+                throwIfStopped(signal, what);
+                throw err;
+            }
 
             const extractedFiles = extractRes.outputPaths || [];
             for (let i = 0; i < extractedFiles.length; i++) {
+                throwIfStopped(signal, what);
                 const filePath = extractedFiles[i];
                 const ts = timestamps[i] ?? (startSec + i / sampleFps);
 
                 // A frame with nobody detected is left out and listed; a detector that cannot run fails the track
                 // (GeneratorFailedError propagates). No frame is ever filled with a stand-in pose.
-                let poseOutput: RiggedPoseOutput;
+                let poseOutput: RiggedPoseOutput | undefined;
                 try {
                     const imgBuffer = await fs.readFile(filePath);
                     poseOutput = await this.poseService.estimatePoseFromImage({
                         image: imgBuffer,
                         minConfidence: minConf
-                    });
+                    }, { signal });
                 } catch (err) {
+                    throwIfStopped(signal, what);
                     if (err instanceof MissingInputError) {
                         undetectedFrames.push({ frameIndex: i, timestampSec: ts, reason: err.message });
-                        continue;
+                    } else {
+                        throw err;
                     }
-                    throw err;
                 }
+                onProgress?.(`Tracking motion: frame ${i + 1}/${extractedFiles.length}`, (i + 1) / extractedFiles.length);
+                if (!poseOutput) continue;
 
                 rawFrames.push({
                     frameIndex: i,
@@ -385,6 +445,7 @@ export class MediaPipeVideoDirectorService {
         };
 
         if (options.outputJsonPath) {
+            throwIfStopped(signal, what);
             await fs.ensureDir(path.dirname(options.outputJsonPath));
             await fs.writeJson(options.outputJsonPath, result, { spaces: 2 });
         }
@@ -458,14 +519,26 @@ export class MediaPipeVideoDirectorService {
      * The input's real size and length come from probing it.
      */
     public async autoReframeVideo(options: AutoReframeOptions): Promise<AutoReframeResult> {
+        const tool = 'vfx_video_auto_reframe';
+        const what = `Reframing ${options.inputVideoPath}`;
+        const { signal, onProgress } = options;
         const targetRatio = MediaPipeVideoDirectorService.parseAspectRatio(options.targetAspectRatio);
         const sampleInterval = Math.max(0.1, options.sampleIntervalSec ?? 0.5);
         const focusMode = options.focusMode ?? 'body';
+        // The default output sits next to the input, named after it (a path with no extension gets .mp4).
+        const parsedInput = path.parse(options.inputVideoPath);
+        const outPath = options.outputVideoPath
+            ?? path.join(parsedInput.dir, `${parsedInput.name}_reframe_${options.targetAspectRatio.replace(':', 'x')}${parsedInput.ext || '.mp4'}`);
+        if (path.resolve(outPath) === path.resolve(options.inputVideoPath)) {
+            throw new MissingInputError(tool, 'outputVideoPath', `it is the input video itself (${options.inputVideoPath}); reframing writes a new file`);
+        }
+        throwIfStopped(signal, what);
 
         if (!await fs.pathExists(options.inputVideoPath)) {
-            throw new MissingInputError('vfx_video_auto_reframe', 'inputVideoPath', `${options.inputVideoPath} does not exist`);
+            throw new MissingInputError(tool, 'inputVideoPath', `${options.inputVideoPath} does not exist`);
         }
         const probe = await this.editorService.probeMedia(options.inputVideoPath);
+        throwIfStopped(signal, what);
         const inputDims = { width: probe.width, height: probe.height };
         const duration = probe.durationSec;
 
@@ -509,18 +582,28 @@ export class MediaPipeVideoDirectorService {
         }
 
         try {
-            const extractRes = await this.editorService.extractKeyframes({
-                inputPath: options.inputVideoPath,
-                outputDir: tmpDir,
-                timestampsSec: sampleTimestamps,
-                format: 'png'
-            });
+            onProgress?.(`Extracting ${sampleTimestamps.length} frame(s) to find the subject in`, 0);
+            let extractRes;
+            try {
+                extractRes = await this.editorService.extractKeyframes({
+                    inputPath: options.inputVideoPath,
+                    outputDir: tmpDir,
+                    timestampsSec: sampleTimestamps,
+                    format: 'png',
+                    signal
+                });
+            } catch (err) {
+                throwIfStopped(signal, what);
+                throw err;
+            }
 
             const extractedFiles = extractRes.outputPaths || [];
             if (extractedFiles.length === 0) {
                 throw new GeneratorFailedError('ffmpeg', `no frames could be extracted from ${options.inputVideoPath} to track the subject in`);
             }
             for (let i = 0; i < extractedFiles.length; i++) {
+                throwIfStopped(signal, what);
+                onProgress?.(`Finding the subject: frame ${i + 1}/${extractedFiles.length}`, 0.8 * (i + 1) / extractedFiles.length);
                 const filePath = extractedFiles[i];
                 const ts = sampleTimestamps[i];
 
@@ -532,7 +615,13 @@ export class MediaPipeVideoDirectorService {
                     normCenterX = 0.5;
                     normCenterY = 0.5;
                 } else {
-                    const run = await this.poseService.runPoseLandmarker(await fs.readFile(filePath), { numPoses: 1 });
+                    let run: Awaited<ReturnType<MediaPipePoseService['runPoseLandmarker']>>;
+                    try {
+                        run = await this.poseService.runPoseLandmarker(await fs.readFile(filePath), { numPoses: 1, signal });
+                    } catch (err) {
+                        throwIfStopped(signal, what);
+                        throw err;
+                    }
                     if ('unavailable' in run) {
                         throw new GeneratorFailedError('mediapipe', `pose detection could not run, so the subject cannot be tracked for reframing: ${run.unavailable}`);
                     }
@@ -588,20 +677,31 @@ export class MediaPipeVideoDirectorService {
         const finalCropY = Math.max(0, Math.min(maxCropY, avgY));
         const filtergraph = `crop=${cropW}:${cropH}:${finalCropX}:${finalCropY}`;
 
-        const outPath = options.outputVideoPath ?? options.inputVideoPath.replace(/\.([a-z0-9]+)$/i, `_reframe_${options.targetAspectRatio.replace(':', 'x')}.$1`);
-
-        const editRes = await this.editorService.quickEdit({
-            inputPath: options.inputVideoPath,
-            outputPath: outPath,
-            crop: {
-                box: {
-                    x: finalCropX,
-                    y: finalCropY,
-                    width: cropW,
-                    height: cropH
-                }
+        throwIfStopped(signal, what);
+        onProgress?.(`Encoding the ${cropW}x${cropH} crop`, 0.8);
+        let editRes;
+        try {
+            editRes = await this.editorService.quickEdit({
+                inputPath: options.inputVideoPath,
+                outputPath: outPath,
+                crop: {
+                    box: {
+                        x: finalCropX,
+                        y: finalCropY,
+                        width: cropW,
+                        height: cropH
+                    }
+                },
+                signal
+            });
+        } catch (err) {
+            if (signal?.aborted) {
+                // ffmpeg was killed part-way: what it wrote is not a video, so it is not left behind.
+                await fs.remove(outPath).catch(() => {});
+                throw stopError(signal, what);
             }
-        });
+            throw err;
+        }
 
         return {
             success: editRes.success,
@@ -621,87 +721,119 @@ export class MediaPipeVideoDirectorService {
 
     /**
      * Audits a video against the 8-Dimension Visual Fidelity Rubric. FFmpeg makes a 3x3 contact sheet across the clip,
-     * MediaPipe measures how steady the limbs of a person in it stay, and a vision model scores each dimension from the
-     * sheet (with the measured body consistency and the caller's context as evidence). Every score is the model's;
-     * none is assumed. The audit fails, with the reason, when the sheet cannot be made, the motion tracking cannot run,
-     * or the vision model cannot score the sheet: it never passes a step it could not do.
+     * MediaPipe measures how steady the limbs of a person in it stay (on at most VISUAL_CRITIC_MAX_TRACKED_FRAMES frames
+     * spread over the clip), and a vision model scores each dimension from the sheet (with the measured body
+     * consistency and the caller's context as evidence). Every score is the model's; none is assumed. The audit fails,
+     * with the reason, when the sheet cannot be made, the motion tracking cannot run, or the vision model cannot score
+     * the sheet: it never passes a step it could not do. A Stop on `options.signal` ends it at the step or frame it is
+     * on, cancels the vision request, and leaves no contact sheet behind.
      */
     public async auditVideoFidelity(options: VisualCriticAuditOptions): Promise<VisualCriticAuditResult> {
         const tool = 'vfx_visual_critic_audit';
+        const what = `The visual critic audit of ${options.videoPath}`;
+        const { signal, onProgress } = options;
         const minPassing = options.minPassingScore ?? 8.5;
         if (!Number.isFinite(minPassing) || minPassing < 0 || minPassing > 10) {
             throw new MissingInputError(tool, 'minPassingScore', `${options.minPassingScore} is not a score between 0 and 10`);
         }
+        throwIfStopped(signal, what);
         if (!await fs.pathExists(options.videoPath)) {
             throw new MissingInputError(tool, 'videoPath', `${options.videoPath} does not exist`);
         }
         if (options.referencePlatePath && !await fs.pathExists(options.referencePlatePath)) {
             throw new MissingInputError(tool, 'referencePlatePath', `${options.referencePlatePath} does not exist`);
         }
+        throwIfStopped(signal, what);
 
-        // 1. The 3x3 contact sheet the vision model scores. Without it there is nothing to look at: the audit fails.
-        const sheetPath = options.videoPath.replace(/\.([a-z0-9]+)$/i, `_audit_sheet_${Date.now()}.jpg`);
+        // The sheet sits next to the video and is part of the result; an audit that does not finish (stopped or
+        // failed) removes it, so nothing is left from an audit that gave no score.
+        const parsedVideo = path.parse(options.videoPath);
+        const sheetPath = path.join(parsedVideo.dir, `${parsedVideo.name}_audit_sheet_${Date.now()}.jpg`);
+        let finished = false;
         try {
-            await this.editorService.generateStoryboardSheet({
-                inputPath: options.videoPath,
-                outputPath: sheetPath,
-                columns: 3,
-                rows: 3,
-                labelTimecode: true
-            });
-        } catch (err: any) {
-            throw new GeneratorFailedError('ffmpeg', `the visual critic could not make the contact sheet of ${options.videoPath}: ${err?.stderr || err?.message || String(err)}`);
-        }
-        const sheetStat = await fs.stat(sheetPath).catch(() => null);
-        if (!sheetStat || sheetStat.size === 0) {
-            throw new GeneratorFailedError('ffmpeg', `the visual critic's contact sheet of ${options.videoPath} was not written (${sheetPath} is ${sheetStat ? 'empty' : 'missing'})`);
-        }
-
-        // 2. Body consistency, measured. Tracking that cannot run fails the audit; a video with nobody in it has no
-        //    limbs to measure, which the result says rather than scoring them.
-        let track: VideoMotionTrackResult;
-        try {
-            track = await this.trackVideoMotion({ videoPath: options.videoPath, fps: 8, smoothingWindow: 1 });
-        } catch (err: any) {
-            throw new GeneratorFailedError('mediapipe', `the visual critic could not track motion in ${options.videoPath}: ${err?.message || String(err)}`);
-        }
-        const framesWithPerson = track.frames.length;
-        const framesSampled = framesWithPerson + (track.undetectedFrames?.length ?? 0);
-        if (framesSampled === 0) {
-            throw new GeneratorFailedError('mediapipe', `the visual critic could not track motion in ${options.videoPath}: ${track.error || 'no frames were sampled'}`);
-        }
-        const anatomicalConsistency: AnatomicalConsistencyAudit = { framesSampled, framesWithPerson, ...this.measureLimbLengthStability(track.frames) };
-
-        // 3. The vision model scores the eight dimensions from the sheet.
-        const sheet = await fs.readFile(sheetPath);
-        const reference = options.referencePlatePath ? await fs.readFile(options.referencePlatePath) : undefined;
-        const scored = await this.scoreRubric(sheet, reference, options, anatomicalConsistency, minPassing);
-
-        const dimensionAudits = Object.fromEntries(Object.keys(VISUAL_CRITIC_DIMENSIONS).map(key => {
-            const d = scored.dimensions[key as VisualCriticDimension];
-            return [key, { score: d.score, passed: d.score >= minPassing, notes: d.notes }];
-        })) as Record<VisualCriticDimension, VisualCriticDimensionAudit>;
-        const scores = Object.values(dimensionAudits).map(d => d.score);
-        const overall = Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100;
-        const failedDimensions = (Object.keys(dimensionAudits) as VisualCriticDimension[]).filter(k => !dimensionAudits[k].passed);
-        const passed = failedDimensions.length === 0;
-
-        return {
-            success: true,
-            videoPath: options.videoPath,
-            overallScore: overall,
-            passed,
-            minPassingScore: minPassing,
-            failedDimensions,
-            storyboardSheetPath: sheetPath,
-            visionModel: VISUAL_CRITIC_MODEL,
-            anatomicalConsistency,
-            dimensionAudits,
-            remediationRecipe: passed ? undefined : {
-                actionDirectives: scored.actionDirectives,
-                suggestedFfmpegFilters: scored.suggestedFfmpegFilters
+            // 1. The 3x3 contact sheet the vision model scores. Without it there is nothing to look at: the audit fails.
+            onProgress?.('Making the 3x3 contact sheet', 0);
+            try {
+                await this.editorService.generateStoryboardSheet({
+                    inputPath: options.videoPath,
+                    outputPath: sheetPath,
+                    columns: 3,
+                    rows: 3,
+                    labelTimecode: true,
+                    signal
+                });
+            } catch (err: any) {
+                throwIfStopped(signal, what);
+                throw new GeneratorFailedError('ffmpeg', `the visual critic could not make the contact sheet of ${options.videoPath}: ${err?.stderr || err?.message || String(err)}`);
             }
-        };
+            throwIfStopped(signal, what);
+            const sheetStat = await fs.stat(sheetPath).catch(() => null);
+            if (!sheetStat || sheetStat.size === 0) {
+                throw new GeneratorFailedError('ffmpeg', `the visual critic's contact sheet of ${options.videoPath} was not written (${sheetPath} is ${sheetStat ? 'empty' : 'missing'})`);
+            }
+
+            // 2. Body consistency, measured on at most VISUAL_CRITIC_MAX_TRACKED_FRAMES frames spread over the clip.
+            //    Tracking that cannot run fails the audit; a video with nobody in it has no limbs to measure, which the
+            //    result says rather than scoring them.
+            let track: VideoMotionTrackResult;
+            try {
+                track = await this.trackVideoMotion({
+                    videoPath: options.videoPath,
+                    fps: 8,
+                    smoothingWindow: 1,
+                    maxFrames: VISUAL_CRITIC_MAX_TRACKED_FRAMES,
+                    signal,
+                    onProgress: (message, fraction) => onProgress?.(message, 0.05 + 0.85 * (fraction ?? 0))
+                });
+            } catch (err: any) {
+                throwIfStopped(signal, what);
+                throw new GeneratorFailedError('mediapipe', `the visual critic could not track motion in ${options.videoPath}: ${err?.message || String(err)}`);
+            }
+            const framesWithPerson = track.frames.length;
+            const framesSampled = framesWithPerson + (track.undetectedFrames?.length ?? 0);
+            if (framesSampled === 0) {
+                throw new GeneratorFailedError('mediapipe', `the visual critic could not track motion in ${options.videoPath}: ${track.error || 'no frames were sampled'}`);
+            }
+            const anatomicalConsistency: AnatomicalConsistencyAudit = { framesSampled, framesWithPerson, ...this.measureLimbLengthStability(track.frames) };
+
+            // 3. The vision model scores the eight dimensions from the sheet (a billed call: never made after a Stop).
+            throwIfStopped(signal, what);
+            onProgress?.(`Scoring the rubric with the vision model (${VISUAL_CRITIC_MODEL})`, 0.9);
+            const sheet = await fs.readFile(sheetPath);
+            const reference = options.referencePlatePath ? await fs.readFile(options.referencePlatePath) : undefined;
+            const scored = await this.scoreRubric(sheet, reference, options, anatomicalConsistency, minPassing, what);
+            // An answer that arrives after a Stop is dropped.
+            throwIfStopped(signal, what);
+
+            const dimensionAudits = Object.fromEntries(Object.keys(VISUAL_CRITIC_DIMENSIONS).map(key => {
+                const d = scored.dimensions[key as VisualCriticDimension];
+                return [key, { score: d.score, passed: d.score >= minPassing, notes: d.notes }];
+            })) as Record<VisualCriticDimension, VisualCriticDimensionAudit>;
+            const scores = Object.values(dimensionAudits).map(d => d.score);
+            const overall = Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100;
+            const failedDimensions = (Object.keys(dimensionAudits) as VisualCriticDimension[]).filter(k => !dimensionAudits[k].passed);
+            const passed = failedDimensions.length === 0;
+
+            finished = true;
+            return {
+                success: true,
+                videoPath: options.videoPath,
+                overallScore: overall,
+                passed,
+                minPassingScore: minPassing,
+                failedDimensions,
+                storyboardSheetPath: sheetPath,
+                visionModel: VISUAL_CRITIC_MODEL,
+                anatomicalConsistency,
+                dimensionAudits,
+                remediationRecipe: passed ? undefined : {
+                    actionDirectives: scored.actionDirectives,
+                    suggestedFfmpegFilters: scored.suggestedFfmpegFilters
+                }
+            };
+        } finally {
+            if (!finished) await fs.remove(sheetPath).catch(() => {});
+        }
     }
 
     /** Limb-length steadiness over the frames that have 3D landmarks, or why it cannot be measured. */
@@ -749,10 +881,13 @@ export class MediaPipeVideoDirectorService {
         reference: Buffer | undefined,
         options: VisualCriticAuditOptions,
         anatomy: AnatomicalConsistencyAudit,
-        minPassing: number
+        minPassing: number,
+        what: string
     ): Promise<{ dimensions: Record<VisualCriticDimension, { score: number; notes: string }>; actionDirectives: string[]; suggestedFfmpegFilters: string[] }> {
         const model = VISUAL_CRITIC_MODEL;
+        const signal = options.signal;
         const client = await this.getVisionClient();
+        throwIfStopped(signal, what);
         const anatomyLine = anatomy.limbLengthStabilityRatio !== undefined
             ? `Measured with MediaPipe on ${anatomy.framesSampled} sampled frames (a person in ${anatomy.framesWithPerson}): limb-length stability ${anatomy.limbLengthStabilityRatio} (1 = limbs keep their length).`
             : `Body consistency was not measured: ${anatomy.notMeasuredReason} (${anatomy.framesSampled} frames sampled).`;
@@ -779,11 +914,14 @@ export class MediaPipeVideoDirectorService {
                     systemInstruction: 'You are a strict VFX supervisor auditing frames for photographic and geometric fidelity. Score only what is visible; do not assume quality you cannot see.',
                     responseMimeType: 'application/json',
                     responseSchema: visualCriticSchema,
-                    temperature: 0.1
+                    temperature: 0.1,
+                    // A Stop cancels the request in flight.
+                    ...(signal ? { abortSignal: signal } : {})
                 }
             });
             text = response?.text || '';
         } catch (err: any) {
+            throwIfStopped(signal, what);
             throw new VisionUnavailableError(model, err?.status || err?.code || 'request-failed', err?.message || String(err));
         }
         let parsed: any;

@@ -1580,7 +1580,7 @@ export const DIRECTOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const directorHandlers: Record<string, ToolHandler> = {
-    vfx_mediapipe_track_video_motion: async (args, _ctx) => {
+    vfx_mediapipe_track_video_motion: async (args, ctx) => {
         const videoPath = asString(args.videoPath);
         if (!videoPath) {
             return {
@@ -1605,7 +1605,9 @@ export const directorHandlers: Record<string, ToolHandler> = {
             duration,
             smoothingWindow,
             minConfidence,
-            outputJsonPath
+            outputJsonPath,
+            signal: ctx?.signal,
+            onProgress: ctx?.reportProgress
         });
 
         if (!result.success) {
@@ -1622,7 +1624,7 @@ export const directorHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    vfx_video_auto_reframe: async (args, _ctx) => {
+    vfx_video_auto_reframe: async (args, ctx) => {
         const inputVideoPath = asString(args.inputVideoPath);
         const targetAspectRatio = asString(args.targetAspectRatio);
         if (!inputVideoPath || !targetAspectRatio) {
@@ -1643,7 +1645,9 @@ export const directorHandlers: Record<string, ToolHandler> = {
             outputVideoPath,
             targetAspectRatio,
             focusMode,
-            sampleIntervalSec
+            sampleIntervalSec,
+            signal: ctx?.signal,
+            onProgress: ctx?.reportProgress
         });
 
         return {
@@ -1655,7 +1659,7 @@ export const directorHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    vfx_visual_critic_audit: async (args, _ctx) => {
+    vfx_visual_critic_audit: async (args, ctx) => {
         const videoPath = asString(args.videoPath);
         if (!videoPath) {
             return {
@@ -1670,12 +1674,15 @@ export const directorHandlers: Record<string, ToolHandler> = {
         const noDryRun = refuseDryRun('vfx_visual_critic_audit', args);
         if (noDryRun) return noDryRun;
 
-        // Sheet, tracking or vision failures throw: the registry reports the audit as failed with the reason.
+        // Sheet, tracking or vision failures throw: the registry reports the audit as failed with the reason. A Stop
+        // (ctx.signal) ends it at the frame or step it is on and cancels the vision request.
         const result = await directorService.auditVideoFidelity({
             videoPath,
             promptContext,
             referencePlatePath,
-            minPassingScore
+            minPassingScore,
+            signal: ctx?.signal,
+            onProgress: ctx?.reportProgress
         });
 
         const anatomy = result.anatomicalConsistency;

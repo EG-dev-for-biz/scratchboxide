@@ -114,10 +114,12 @@ Subject-aware reframing:
 ### 15. `vfx_visual_critic_audit`
 Visual quality gate against the 8-Dimension Visual Fidelity Rubric:
 - Uses FFmpeg to make a 3×3 timestamped contact sheet across the clip.
-- Measures limb-length stability with MediaPipe on frames sampled at 8 fps (shoulder-elbow-wrist and hip-knee-ankle on each side); a video with nobody in it reports this as not measured, with the reason.
+- Measures limb-length stability with MediaPipe on frames sampled at 8 fps, at most 24 spread evenly over a longer clip (shoulder-elbow-wrist and hip-knee-ankle on each side); a video with nobody in it reports this as not measured, with the reason.
 - A Gemini vision model scores each of the 8 dimensions (Geometric Definition, Pixel/Splat Density, Material/Micro-surface, Environmental Grounding, Radiometric Lighting, Color Temperature, Volumetric Depth, Photographic Realism) from the sheet, with the measured body consistency and the shot context as evidence. Every score is the model's; none is assumed.
 - Passes only when every dimension reaches `minPassingScore` (default 8.5); `overallScore` is their mean. A failing audit lists the failing dimensions and the model's suggested fixes (directives and FFmpeg filters).
 - Fails, with the reason and no score, when the contact sheet cannot be made, motion tracking cannot run, or the vision model is unavailable. The MediaPipe tools (13-15) have no dry run.
+
+The MediaPipe tools (13-15) report progress per frame, and the chat's Stop (or the tool's time limit) ends them at the frame they are on: the ffmpeg and MediaPipe processes are killed, the audit's vision request is cancelled and its contact sheet removed, and a reframe writes no video.
 
 ---
 

@@ -68,12 +68,16 @@ export class MediaPipePoseService {
 
     /**
      * Runs MediaPipe Pose Landmarker and says what happened: the detection, the detector could not run (no script,
-     * no Python, a crash, a timeout, an error from the bridge), or it ran and found no person.
+     * no Python, a crash, a timeout, an error from the bridge), or it ran and found no person. `options.signal` is the
+     * caller's Stop: it kills the Python bridge and rejects with an AbortError (never reported as "could not run").
      */
     public async runPoseLandmarker(
         imageBuffer: Buffer,
-        options?: { modelPath?: string; numPoses?: number; minConfidence?: number }
+        options?: { modelPath?: string; numPoses?: number; minConfidence?: number; signal?: AbortSignal }
     ): Promise<{ detection: PoseDetectionResult } | { unavailable: string } | { noPerson: string }> {
+        if (options?.signal?.aborted) {
+            throw Object.assign(new Error('MediaPipe pose detection was stopped'), { name: 'AbortError', cause: options.signal.reason });
+        }
         if (MediaPipePoseService.unavailable) {
             return { unavailable: 'MediaPipe pose detection was marked unavailable in this process' };
         }
@@ -90,7 +94,7 @@ export class MediaPipePoseService {
             modelPath,
             String(numPoses),
             String(minConf)
-        ]);
+        ], options?.signal);
         if ('error' in run) return { unavailable: run.error };
         let parsed: any;
         try {
@@ -373,12 +377,14 @@ export class MediaPipePoseService {
      * End-to-end estimation: normalizes the image, runs MediaPipe and solves the rig angles from the detected person.
      * There is no stand-in pose: when the detector cannot run it throws GeneratorFailedError, and when it runs and
      * finds nobody it throws MissingInputError. The result carries the world landmarks it was solved from.
+     * `options.signal` (the caller's Stop) kills the detector and rejects with an AbortError.
      */
-    public async estimatePoseFromImage(request: PoseDetectionRequest): Promise<RiggedPoseOutput> {
+    public async estimatePoseFromImage(request: PoseDetectionRequest, options?: { signal?: AbortSignal }): Promise<RiggedPoseOutput> {
         const buffer = await this.normalizeImageInput(request.image);
         const run = await this.runPoseLandmarker(buffer, {
             minConfidence: request.minConfidence,
-            numPoses: request.maxPoses ?? 1
+            numPoses: request.maxPoses ?? 1,
+            signal: options?.signal
         });
         if ('unavailable' in run) {
             throw new GeneratorFailedError('mediapipe', `pose detection could not run: ${run.unavailable}`);
@@ -468,18 +474,29 @@ export class MediaPipePoseService {
         return { x: l.x, y: l.y, z: l.z };
     }
 
-    private spawnPythonWorker(imageBuffer: Buffer, args: string[]): Promise<{ stdout: string } | { error: string }> {
-        return new Promise((resolve) => {
+    /** Runs the bridge on one image. A Stop on `signal` kills it and rejects with an AbortError; nothing starts once stopped. */
+    private spawnPythonWorker(imageBuffer: Buffer, args: string[], signal?: AbortSignal): Promise<{ stdout: string } | { error: string }> {
+        const stoppedError = () => Object.assign(new Error('MediaPipe pose detection was stopped'), { name: 'AbortError', cause: signal?.reason });
+        if (signal?.aborted) return Promise.reject(stoppedError());
+        return new Promise((resolve, reject) => {
             const child = spawn(this.pythonBinary, args, { stdio: ['pipe', 'pipe', 'pipe'] });
             let stdout = '';
             let stderr = '';
             let timedOut = false;
+            let aborted = false;
 
             const timer = setTimeout(() => {
                 timedOut = true;
                 child.kill('SIGTERM');
                 resolve({ error: `the MediaPipe bridge timed out after ${this.timeoutMs} ms` });
             }, this.timeoutMs);
+            const onAbort = () => {
+                aborted = true;
+                clearTimeout(timer);
+                child.kill('SIGTERM');
+                reject(stoppedError());
+            };
+            signal?.addEventListener('abort', onAbort, { once: true });
 
             child.stdout.on('data', (data) => {
                 stdout += data.toString();
@@ -490,7 +507,8 @@ export class MediaPipePoseService {
 
             child.on('close', (code) => {
                 clearTimeout(timer);
-                if (timedOut) return;
+                signal?.removeEventListener('abort', onAbort);
+                if (timedOut || aborted) return;
                 if (code !== 0) {
                     resolve({ error: `the MediaPipe bridge exited with code ${code}${stderr.trim() ? `: ${stderr.trim().slice(-500)}` : ''}` });
                 } else {
@@ -500,6 +518,8 @@ export class MediaPipePoseService {
 
             child.on('error', (err) => {
                 clearTimeout(timer);
+                signal?.removeEventListener('abort', onAbort);
+                if (aborted) return;
                 resolve({ error: `${this.pythonBinary} could not be started (${err.message})` });
             });
 
@@ -510,6 +530,7 @@ export class MediaPipePoseService {
                 child.stdin.end();
             } catch (err: any) {
                 clearTimeout(timer);
+                signal?.removeEventListener('abort', onAbort);
                 resolve({ error: `the image could not be sent to the MediaPipe bridge (${err?.message || err})` });
             }
         });
