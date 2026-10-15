@@ -10,9 +10,10 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as os from 'os';
-import { HeadlessVideoEditorService, VideoProbeResult, toEven } from './HeadlessVideoEditorService';
+import { Type, type Schema } from '@google/genai';
+import { HeadlessVideoEditorService, toEven } from './HeadlessVideoEditorService';
 import { MediaPipePoseService } from '../spatial/MediaPipePoseService';
-import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { GeneratorFailedError, MissingInputError, VisionUnavailableError } from '../../common/errors/pipeline-errors';
 import {
     HumanoidPoseAngles,
     BodyFrame,
@@ -32,7 +33,6 @@ export interface TrackVideoMotionOptions {
     smoothingWindow?: number; // Moving average window size for joint smoothing (default: 3)
     minConfidence?: number; // Minimum pose confidence threshold (default: 0.4)
     outputJsonPath?: string; // Optional path to write JSON motion telemetry
-    dryRun?: boolean; // When true, plans execution without spawning processes
 }
 
 export interface VideoMotionPoseFrame {
@@ -46,7 +46,7 @@ export interface VideoMotionPoseFrame {
     bodyFrame?: BodyFrame;
     worldLandmarks?: MediaPipeLandmark[];
     imageLandmarks?: MediaPipeLandmark[];
-    /** True when MediaPipe detected the person in this frame (every tracked frame is; dry-run plan frames are not). */
+    /** True when MediaPipe detected the person in this frame (every tracked frame is). */
     detected?: boolean;
 }
 
@@ -70,7 +70,6 @@ export interface VideoMotionTrackResult {
     /** Sampled frames with no detected person (left out of frames). */
     undetectedFrames?: UndetectedMotionFrame[];
     outputJsonPath?: string;
-    dryRun?: boolean;
     error?: string;
     [key: string]: unknown;
 }
@@ -80,9 +79,7 @@ export interface AutoReframeOptions {
     outputVideoPath?: string;
     targetAspectRatio: '9:16' | '1:1' | '4:5' | '16:9' | string;
     focusMode?: 'face' | 'body' | 'action' | 'center'; // default: 'body'
-    sampleIntervalSec?: number; // Sampling interval for camera trajectory (default: 0.5s)
-    cropPadding?: number; // Margin factor around detected subject (default: 1.25)
-    dryRun?: boolean;
+    sampleIntervalSec?: number; // Sampling interval for subject tracking (default: 0.5s)
 }
 
 export interface ReframeWaypoint {
@@ -109,57 +106,104 @@ export interface AutoReframeResult {
     undetectedSamples?: Array<{ timestampSec: number; reason: string }>;
     ffmpegCommand?: string;
     filtergraph?: string;
-    dryRun?: boolean;
     error?: string;
     [key: string]: unknown;
 }
 
 export interface VisualCriticDimensionAudit {
-    score: number; // 0.0 - 10.0
-    passed: boolean; // score >= 8.5
+    /** The vision model's score for this dimension, 0..10. */
+    score: number;
+    /** score >= the audit's minPassingScore. */
+    passed: boolean;
+    /** What the vision model saw that led to the score. */
     notes: string;
 }
+
+/** The 8 dimensions of the Visual Fidelity Rubric, each scored by the vision model from the contact sheet. */
+export const VISUAL_CRITIC_DIMENSIONS = {
+    geometricDefinition: 'Geometric definition and silhouette crispness: no amorphous, lumpy, melting or stretched shapes; limbs and edges keep their form across frames.',
+    pixelSplatDensity: 'Pixel / splat density: even sampling with no macro-blocking, compression banding, holes, or point-sprite billboard discs.',
+    materialMicroSurface: 'Material and micro-surface definition: physically plausible albedo, roughness, specular highlights and micro-detail, not flat untextured grey.',
+    environmentalGrounding: 'Environmental context and grounding: a complete environment (no black or empty void), subjects in contact with the ground, nothing floating or cut off.',
+    radiometricLighting: 'Radiometric lighting and shadows: shadows that match the light direction and the silhouettes, contact occlusion, no painted-on 2D drop shadows.',
+    colorTemperature: 'Colour temperature harmony: foreground and background lit at one consistent colour temperature, no unexplained colour cast.',
+    volumetricDepth: 'Volumetric depth and interleaving: believable depth separation and parallax, no clipping or boundary seams between layers.',
+    photographicRealism: 'Photographic realism (the squint test): would an unprimed viewer take these frames for a real optical photograph?'
+} as const;
+
+export type VisualCriticDimension = keyof typeof VISUAL_CRITIC_DIMENSIONS;
+
+/** The vision model that scores the rubric. */
+export const VISUAL_CRITIC_MODEL = 'gemini-2.5-flash';
 
 export interface VisualCriticAuditOptions {
     videoPath: string;
     promptContext?: string;
     referencePlatePath?: string;
     minPassingScore?: number; // default: 8.5
-    dryRun?: boolean;
+}
+
+/**
+ * Body consistency measured with MediaPipe on frames sampled from the video. A video with nobody in it has nothing to
+ * measure: the counts say so and limbLengthStabilityRatio is absent with the reason.
+ */
+export interface AnatomicalConsistencyAudit {
+    framesSampled: number;
+    framesWithPerson: number;
+    /**
+     * 1 minus the mean coefficient of variation of the four limb lengths (shoulder-elbow-wrist, hip-knee-ankle)
+     * across the frames with 3D landmarks (1 = the limbs keep their length). Absent when fewer than two frames had them.
+     */
+    limbLengthStabilityRatio?: number;
+    /** Why limbLengthStabilityRatio is absent. */
+    notMeasuredReason?: string;
 }
 
 export interface VisualCriticAuditResult {
     success: boolean;
     videoPath: string;
-    overallScore: number; // 0.0 - 10.0
-    passed: boolean; // overallScore >= minPassingScore
-    storyboardSheetPath?: string;
-    anatomicalConsistency: {
-        limbLengthStabilityRatio: number; // 0.0 - 1.0 (1.0 = perfect preservation)
-        jointContinuityScore: number; // 0.0 - 1.0
-        personCountStability: number; // 0.0 - 1.0
-    };
-    dimensionAudits: {
-        geometricDefinition: VisualCriticDimensionAudit;
-        pixelSplatDensity: VisualCriticDimensionAudit;
-        materialMicroSurface: VisualCriticDimensionAudit;
-        environmentalGrounding: VisualCriticDimensionAudit;
-        radiometricLighting: VisualCriticDimensionAudit;
-        colorTemperature: VisualCriticDimensionAudit;
-        volumetricDepth: VisualCriticDimensionAudit;
-        photographicRealism: VisualCriticDimensionAudit;
-    };
+    /** Mean of the eight dimension scores the vision model gave. */
+    overallScore: number;
+    /** True only when every dimension scored at least minPassingScore. */
+    passed: boolean;
+    minPassingScore: number;
+    failedDimensions: VisualCriticDimension[];
+    /** The 3x3 contact sheet the vision model scored. */
+    storyboardSheetPath: string;
+    /** The vision model that scored the dimensions. */
+    visionModel: string;
+    anatomicalConsistency: AnatomicalConsistencyAudit;
+    dimensionAudits: Record<VisualCriticDimension, VisualCriticDimensionAudit>;
+    /** The vision model's fixes for the failing dimensions; present only when the audit failed. */
     remediationRecipe?: {
-        suggestedFfmpegFilters: string[];
-        recommendedKelvinShift?: number;
-        recommendedLut?: string;
-        recommendedCrop?: string;
         actionDirectives: string[];
+        suggestedFfmpegFilters: string[];
     };
-    dryRun?: boolean;
-    error?: string;
     [key: string]: unknown;
 }
+
+const visualCriticDimensionSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+        score: { type: Type.NUMBER, description: 'Score from 0 (fails completely) to 10 (flawless), from what the frames show.' },
+        notes: { type: Type.STRING, description: 'What in the frames led to this score, specific to this video.' }
+    },
+    required: ['score', 'notes']
+};
+
+const visualCriticSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+        dimensions: {
+            type: Type.OBJECT,
+            properties: Object.fromEntries(Object.keys(VISUAL_CRITIC_DIMENSIONS).map(k => [k, visualCriticDimensionSchema])),
+            required: Object.keys(VISUAL_CRITIC_DIMENSIONS)
+        },
+        actionDirectives: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Concrete fixes for the dimensions that score below the passing score; empty when none do.' },
+        suggestedFfmpegFilters: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'FFmpeg -vf filter expressions that would address those dimensions, if any can; empty otherwise.' }
+    },
+    required: ['dimensions', 'actionDirectives', 'suggestedFfmpegFilters']
+};
 
 // ============================================================================
 // Service Implementation
@@ -168,17 +212,25 @@ export interface VisualCriticAuditResult {
 export class MediaPipeVideoDirectorService {
     private editorService: HeadlessVideoEditorService;
     private poseService: MediaPipePoseService;
+    private visionClient: any;
 
+    /**
+     * @param options.visionClient a `@google/genai` client for the visual critic (tests inject one); otherwise the
+     *   configured Gemini client is used when an audit runs.
+     */
     constructor(
         editorService?: HeadlessVideoEditorService,
-        poseService?: MediaPipePoseService
+        poseService?: MediaPipePoseService,
+        options?: { visionClient?: any }
     ) {
         this.editorService = editorService ?? new HeadlessVideoEditorService();
         this.poseService = poseService ?? new MediaPipePoseService();
+        this.visionClient = options?.visionClient;
     }
 
     /**
-     * Parse target aspect ratio string into a float (width / height).
+     * Parse target aspect ratio string into a float (width / height). A ratio that does not parse to a positive
+     * number throws MissingInputError; no ratio is assumed in its place.
      */
     public static parseAspectRatio(ratioStr: string): number {
         const cleaned = ratioStr.trim().toLowerCase();
@@ -187,13 +239,13 @@ export class MediaPipeVideoDirectorService {
         if (cleaned === '4:5') return 4 / 5;
         if (cleaned === '16:9' || cleaned === 'horizontal' || cleaned === 'landscape') return 16 / 9;
 
-        const parts = cleaned.split(':').map(p => parseFloat(p));
-        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1]) && parts[1] > 0) {
+        const parts = cleaned.split(':').map(p => Number(p));
+        if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && parts[0] > 0 && parts[1] > 0) {
             return parts[0] / parts[1];
         }
-        const val = parseFloat(cleaned);
-        if (!isNaN(val) && val > 0) return val;
-        return 9 / 16;
+        const val = Number(cleaned);
+        if (Number.isFinite(val) && val > 0) return val;
+        throw new MissingInputError('vfx_video_auto_reframe', 'targetAspectRatio', `"${ratioStr}" is not a ratio such as "9:16", "4:5" or 0.75`);
     }
 
     // ── Pipeline 1: Video Motion Tracking & SB-Human Kinematics ─────────────
@@ -208,41 +260,8 @@ export class MediaPipeVideoDirectorService {
         const smoothingWindow = Math.max(1, options.smoothingWindow ?? 3);
         const minConf = options.minConfidence ?? 0.4;
 
-        if (options.dryRun) {
-            const mockFrames: VideoMotionPoseFrame[] = [];
-            const duration = options.duration ?? 2.0;
-            const totalMockFrames = Math.max(1, Math.round(duration * sampleFps));
-
-            for (let i = 0; i < totalMockFrames; i++) {
-                const t = i / sampleFps;
-                const pose = this.poseService.synthesizeHeuristicPose(i % 2 === 0 ? 'walking' : 'action_ready');
-                mockFrames.push({
-                    frameIndex: i,
-                    timestampSec: Math.round(t * 1000) / 1000,
-                    angles: pose.angles,
-                    hipPositionMeters: [0, 0, Math.round(t * 0.5 * 100) / 100],
-                    groundedYOffsetMeters: pose.groundedYOffsetMeters,
-                    confidence: pose.confidence,
-                    bodyFrame: pose.bodyFrame
-                });
-            }
-
-            return {
-                success: true,
-                durationSec: duration,
-                totalFramesAnalyzed: totalMockFrames,
-                sampleFps,
-                averageConfidence: 0.88,
-                maxDisplacementMeters: 1.0,
-                groundedYReferenceMeters: 0.85,
-                frames: mockFrames,
-                outputJsonPath: options.outputJsonPath,
-                dryRun: true
-            };
-        }
-
         if (!await fs.pathExists(options.videoPath)) {
-            throw new Error(`Input video not found at: ${options.videoPath}`);
+            throw new MissingInputError('vfx_mediapipe_track_video_motion', 'videoPath', `${options.videoPath} does not exist`);
         }
 
         const probe = await this.editorService.probeMedia(options.videoPath);
@@ -434,27 +453,21 @@ export class MediaPipeVideoDirectorService {
     // ── Pipeline 2: Intelligent Video Auto-Reframing ─────────────────────────
 
     /**
-     * Intelligently re-frames widescreen or arbitrary aspect ratio video into vertical
-     * (9:16), square (1:1), or custom aspect ratios by tracking subjects across time
-     * using MediaPipe and generating smooth Catmull-Rom spline camera pan paths via FFmpeg.
+     * Re-frames a video into vertical (9:16), square (1:1) or any other aspect ratio: MediaPipe finds the person in
+     * frames sampled across the clip, and FFmpeg renders one static crop at the average of the tracked positions.
+     * The input's real size and length come from probing it.
      */
     public async autoReframeVideo(options: AutoReframeOptions): Promise<AutoReframeResult> {
         const targetRatio = MediaPipeVideoDirectorService.parseAspectRatio(options.targetAspectRatio);
         const sampleInterval = Math.max(0.1, options.sampleIntervalSec ?? 0.5);
         const focusMode = options.focusMode ?? 'body';
-        const cropPadding = options.cropPadding ?? 1.25;
 
-        let inputDims = { width: 1920, height: 1080 };
-        let duration = 3.0;
-
-        if (!options.dryRun) {
-            if (!await fs.pathExists(options.inputVideoPath)) {
-                throw new Error(`Input video not found at: ${options.inputVideoPath}`);
-            }
-            const probe = await this.editorService.probeMedia(options.inputVideoPath);
-            inputDims = { width: probe.width, height: probe.height };
-            duration = probe.durationSec;
+        if (!await fs.pathExists(options.inputVideoPath)) {
+            throw new MissingInputError('vfx_video_auto_reframe', 'inputVideoPath', `${options.inputVideoPath} does not exist`);
         }
+        const probe = await this.editorService.probeMedia(options.inputVideoPath);
+        const inputDims = { width: probe.width, height: probe.height };
+        const duration = probe.durationSec;
 
         // Calculate crop window dimensions bounded inside input dimensions
         let cropW: number;
@@ -486,19 +499,65 @@ export class MediaPipeVideoDirectorService {
         const waypoints: ReframeWaypoint[] = [];
         const undetectedSamples: Array<{ timestampSec: number; reason: string }> = [];
 
-        if (options.dryRun) {
-            for (let i = 0; i < sampleCount; i++) {
-                const ts = Math.min(duration, i * sampleInterval);
-                // Simulated gentle pan across video width
-                const tNorm = i / (sampleCount - 1);
-                const subjNormX = 0.4 + 0.2 * Math.sin(tNorm * Math.PI);
-                const subjNormY = 0.45;
+        // Extract sample keyframes
+        const tmpDir = path.join(os.tmpdir(), `sb_reframe_samples_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+        await fs.ensureDir(tmpDir);
 
-                const centerPixX = subjNormX * inputDims.width;
-                const centerPixY = subjNormY * inputDims.height;
+        const sampleTimestamps: number[] = [];
+        for (let i = 0; i < sampleCount; i++) {
+            sampleTimestamps.push(Math.min(duration, i * sampleInterval));
+        }
 
-                const cropX = Math.round(Math.max(0, Math.min(maxCropX, centerPixX - cropW / 2)));
-                const cropY = Math.round(Math.max(0, Math.min(maxCropY, centerPixY - cropH / 2)));
+        try {
+            const extractRes = await this.editorService.extractKeyframes({
+                inputPath: options.inputVideoPath,
+                outputDir: tmpDir,
+                timestampsSec: sampleTimestamps,
+                format: 'png'
+            });
+
+            const extractedFiles = extractRes.outputPaths || [];
+            if (extractedFiles.length === 0) {
+                throw new GeneratorFailedError('ffmpeg', `no frames could be extracted from ${options.inputVideoPath} to track the subject in`);
+            }
+            for (let i = 0; i < extractedFiles.length; i++) {
+                const filePath = extractedFiles[i];
+                const ts = sampleTimestamps[i];
+
+                let normCenterX: number;
+                let normCenterY: number;
+                let confidence: number | undefined;
+                if (focusMode === 'center') {
+                    // Asked for: a centred crop, with no subject tracking.
+                    normCenterX = 0.5;
+                    normCenterY = 0.5;
+                } else {
+                    const run = await this.poseService.runPoseLandmarker(await fs.readFile(filePath), { numPoses: 1 });
+                    if ('unavailable' in run) {
+                        throw new GeneratorFailedError('mediapipe', `pose detection could not run, so the subject cannot be tracked for reframing: ${run.unavailable}`);
+                    }
+                    const lms = 'detection' in run ? run.detection.imageLandmarks[0] : undefined;
+                    if (!lms || lms.length < 33) {
+                        undetectedSamples.push({ timestampSec: Math.round(ts * 100) / 100, reason: 'noPerson' in run ? run.noPerson : 'MediaPipe returned no full set of body landmarks' });
+                        continue;
+                    }
+                    // Face: the nose; body and action: the middle of the shoulders and hips.
+                    const used = focusMode === 'face' ? [lms[0]] : [lms[11], lms[12], lms[23], lms[24]];
+                    normCenterX = used.reduce((acc, lm) => acc + lm.x, 0) / used.length;
+                    normCenterY = used.reduce((acc, lm) => acc + lm.y, 0) / used.length;
+                    confidence = used.reduce((acc, lm) => acc + (lm.visibility ?? 0), 0) / used.length;
+                }
+
+                const centerPixX = normCenterX * inputDims.width;
+                // For vertical formats (9:16), position head in upper third for pleasing composition
+                const verticalBias = targetRatio < 1.0 ? 0.38 : 0.5;
+                const centerPixY = normCenterY * inputDims.height;
+
+                const targetX = centerPixX - cropW / 2;
+                const targetY = centerPixY - cropH * verticalBias;
+
+                const cropX = Math.round(Math.max(0, Math.min(maxCropX, targetX)));
+                const cropY = Math.round(Math.max(0, Math.min(maxCropY, targetY)));
 
                 waypoints.push({
                     timestampSec: Math.round(ts * 100) / 100,
@@ -508,81 +567,11 @@ export class MediaPipeVideoDirectorService {
                     cropHeight: cropH,
                     subjectCenterX: Math.round(centerPixX),
                     subjectCenterY: Math.round(centerPixY),
-                    confidence: 0.92
+                    ...(confidence === undefined ? {} : { confidence })
                 });
             }
-        } else {
-            // Extract sample keyframes
-            const tmpDir = path.join(os.tmpdir(), `sb_reframe_samples_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
-            await fs.ensureDir(tmpDir);
-
-            const sampleTimestamps: number[] = [];
-            for (let i = 0; i < sampleCount; i++) {
-                sampleTimestamps.push(Math.min(duration, i * sampleInterval));
-            }
-
-            try {
-                const extractRes = await this.editorService.extractKeyframes({
-                    inputPath: options.inputVideoPath,
-                    outputDir: tmpDir,
-                    timestampsSec: sampleTimestamps,
-                    format: 'png'
-                });
-
-                const extractedFiles = extractRes.outputPaths || [];
-                for (let i = 0; i < extractedFiles.length; i++) {
-                    const filePath = extractedFiles[i];
-                    const ts = sampleTimestamps[i];
-
-                    let normCenterX: number;
-                    let normCenterY: number;
-                    let confidence: number | undefined;
-                    if (focusMode === 'center') {
-                        // Asked for: a centred crop, with no subject tracking.
-                        normCenterX = 0.5;
-                        normCenterY = 0.5;
-                    } else {
-                        const run = await this.poseService.runPoseLandmarker(await fs.readFile(filePath), { numPoses: 1 });
-                        if ('unavailable' in run) {
-                            throw new GeneratorFailedError('mediapipe', `pose detection could not run, so the subject cannot be tracked for reframing: ${run.unavailable}`);
-                        }
-                        const lms = 'detection' in run ? run.detection.imageLandmarks[0] : undefined;
-                        if (!lms || lms.length < 33) {
-                            undetectedSamples.push({ timestampSec: Math.round(ts * 100) / 100, reason: 'noPerson' in run ? run.noPerson : 'MediaPipe returned no full set of body landmarks' });
-                            continue;
-                        }
-                        // Face: the nose; body and action: the middle of the shoulders and hips.
-                        const used = focusMode === 'face' ? [lms[0]] : [lms[11], lms[12], lms[23], lms[24]];
-                        normCenterX = used.reduce((acc, lm) => acc + lm.x, 0) / used.length;
-                        normCenterY = used.reduce((acc, lm) => acc + lm.y, 0) / used.length;
-                        confidence = used.reduce((acc, lm) => acc + (lm.visibility ?? 0), 0) / used.length;
-                    }
-
-                    const centerPixX = normCenterX * inputDims.width;
-                    // For vertical formats (9:16), position head in upper third for pleasing composition
-                    const verticalBias = targetRatio < 1.0 ? 0.38 : 0.5;
-                    const centerPixY = normCenterY * inputDims.height;
-
-                    const targetX = centerPixX - cropW / 2;
-                    const targetY = centerPixY - cropH * verticalBias;
-
-                    const cropX = Math.round(Math.max(0, Math.min(maxCropX, targetX)));
-                    const cropY = Math.round(Math.max(0, Math.min(maxCropY, targetY)));
-
-                    waypoints.push({
-                        timestampSec: Math.round(ts * 100) / 100,
-                        cropX,
-                        cropY,
-                        cropWidth: cropW,
-                        cropHeight: cropH,
-                        subjectCenterX: Math.round(centerPixX),
-                        subjectCenterY: Math.round(centerPixY),
-                        ...(confidence === undefined ? {} : { confidence })
-                    });
-                }
-            } finally {
-                await fs.remove(tmpDir).catch(() => {});
-            }
+        } finally {
+            await fs.remove(tmpDir).catch(() => {});
         }
 
         if (waypoints.length === 0) {
@@ -590,7 +579,7 @@ export class MediaPipeVideoDirectorService {
                 `MediaPipe found no person in any of the ${undetectedSamples.length} sampled frame(s) of ${options.inputVideoPath}, so there is no subject to frame on (focusMode 'center' crops the middle without tracking)`);
         }
 
-        // Compute average/median crop position or synthesize smooth dynamic expression
+        // One static crop at the mean of the tracked positions (the video is not panned).
         const avgX = Math.round(waypoints.reduce((acc, w) => acc + w.cropX, 0) / Math.max(1, waypoints.length));
         const avgY = Math.round(waypoints.reduce((acc, w) => acc + w.cropY, 0) / Math.max(1, waypoints.length));
 
@@ -600,21 +589,6 @@ export class MediaPipeVideoDirectorService {
         const filtergraph = `crop=${cropW}:${cropH}:${finalCropX}:${finalCropY}`;
 
         const outPath = options.outputVideoPath ?? options.inputVideoPath.replace(/\.([a-z0-9]+)$/i, `_reframe_${options.targetAspectRatio.replace(':', 'x')}.$1`);
-
-        if (options.dryRun) {
-            return {
-                success: true,
-                inputVideoPath: options.inputVideoPath,
-                outputVideoPath: outPath,
-                targetAspectRatio: options.targetAspectRatio,
-                inputDimensions: inputDims,
-                cropDimensions: { width: cropW, height: cropH },
-                waypoints,
-                filtergraph,
-                ffmpegCommand: `ffmpeg -y -i "${options.inputVideoPath}" -vf "${filtergraph}" -c:v libx264 -pix_fmt yuv420p -movflags +faststart -c:a copy "${outPath}"`,
-                dryRun: true
-            };
-        }
 
         const editRes = await this.editorService.quickEdit({
             inputPath: options.inputVideoPath,
@@ -646,154 +620,198 @@ export class MediaPipeVideoDirectorService {
     // ── Pipeline 3: Multimodal Visual Critic Quality Audit ──────────────────
 
     /**
-     * Executes an autonomous visual audit evaluating video quality against the 8-Dimension
-     * Visual Fidelity Rubric by combining an FFmpeg storyboard contact sheet, MediaPipe
-     * anatomical consistency tracking, and automated remediation recipe synthesis.
+     * Audits a video against the 8-Dimension Visual Fidelity Rubric. FFmpeg makes a 3x3 contact sheet across the clip,
+     * MediaPipe measures how steady the limbs of a person in it stay, and a vision model scores each dimension from the
+     * sheet (with the measured body consistency and the caller's context as evidence). Every score is the model's;
+     * none is assumed. The audit fails, with the reason, when the sheet cannot be made, the motion tracking cannot run,
+     * or the vision model cannot score the sheet: it never passes a step it could not do.
      */
     public async auditVideoFidelity(options: VisualCriticAuditOptions): Promise<VisualCriticAuditResult> {
+        const tool = 'vfx_visual_critic_audit';
         const minPassing = options.minPassingScore ?? 8.5;
-
-        if (options.dryRun) {
-            const dimAudits = {
-                geometricDefinition: { score: 9.1, passed: true, notes: 'Sharp architectural silhouettes, clean human contour edges without melting.' },
-                pixelSplatDensity: { score: 8.8, passed: true, notes: 'Uniform sampling density, no visible macro-blocking or compression banding.' },
-                materialMicroSurface: { score: 8.6, passed: true, notes: 'Physically plausible roughness, distinct specular highlights on surfaces.' },
-                environmentalGrounding: { score: 8.9, passed: true, notes: 'Authentic contact shadows, grounded feet alignment without floating.' },
-                radiometricLighting: { score: 8.7, passed: true, notes: 'Directional sunlight matches shadow azimuth and time-of-day ephemeris.' },
-                colorTemperature: { score: 8.5, passed: true, notes: 'Balanced 5,500K daylight radiance, zero green/magenta color cast.' },
-                volumetricDepth: { score: 8.8, passed: true, notes: 'Natural foreground-to-background parallax and atmospheric depth falloff.' },
-                photographicRealism: { score: 8.9, passed: true, notes: 'Squint test passes: coherent optical lens characteristics.' }
-            };
-
-            const overall = 8.79;
-
-            return {
-                success: true,
-                videoPath: options.videoPath,
-                overallScore: overall,
-                passed: overall >= minPassing,
-                storyboardSheetPath: options.videoPath.replace(/\.([a-z0-9]+)$/i, '_storyboard.jpg'),
-                anatomicalConsistency: {
-                    limbLengthStabilityRatio: 0.96,
-                    jointContinuityScore: 0.94,
-                    personCountStability: 1.0
-                },
-                dimensionAudits: dimAudits,
-                dryRun: true
-            };
+        if (!Number.isFinite(minPassing) || minPassing < 0 || minPassing > 10) {
+            throw new MissingInputError(tool, 'minPassingScore', `${options.minPassingScore} is not a score between 0 and 10`);
         }
-
         if (!await fs.pathExists(options.videoPath)) {
-            throw new Error(`Input video not found at: ${options.videoPath}`);
+            throw new MissingInputError(tool, 'videoPath', `${options.videoPath} does not exist`);
+        }
+        if (options.referencePlatePath && !await fs.pathExists(options.referencePlatePath)) {
+            throw new MissingInputError(tool, 'referencePlatePath', `${options.referencePlatePath} does not exist`);
         }
 
-        // 1. Generate 3x3 contact sheet via FFmpeg
+        // 1. The 3x3 contact sheet the vision model scores. Without it there is nothing to look at: the audit fails.
         const sheetPath = options.videoPath.replace(/\.([a-z0-9]+)$/i, `_audit_sheet_${Date.now()}.jpg`);
-        let sheetCreated = false;
         try {
-            const sheetRes = await this.editorService.generateStoryboardSheet({
+            await this.editorService.generateStoryboardSheet({
                 inputPath: options.videoPath,
                 outputPath: sheetPath,
                 columns: 3,
                 rows: 3,
                 labelTimecode: true
             });
-            sheetCreated = sheetRes.success;
-        } catch {
-            // Non-fatal if ffmpeg cannot make sheet
+        } catch (err: any) {
+            throw new GeneratorFailedError('ffmpeg', `the visual critic could not make the contact sheet of ${options.videoPath}: ${err?.stderr || err?.message || String(err)}`);
+        }
+        const sheetStat = await fs.stat(sheetPath).catch(() => null);
+        if (!sheetStat || sheetStat.size === 0) {
+            throw new GeneratorFailedError('ffmpeg', `the visual critic's contact sheet of ${options.videoPath} was not written (${sheetPath} is ${sheetStat ? 'empty' : 'missing'})`);
         }
 
-        // 2. Track motion & anatomical stability via MediaPipe
-        let limbStability = 0.92;
-        let jointContinuity = 0.90;
-        let personStability = 1.0;
-
+        // 2. Body consistency, measured. Tracking that cannot run fails the audit; a video with nobody in it has no
+        //    limbs to measure, which the result says rather than scoring them.
+        let track: VideoMotionTrackResult;
         try {
-            const motionTrack = await this.trackVideoMotion({
-                videoPath: options.videoPath,
-                fps: 8,
-                smoothingWindow: 1
-            });
-
-            if (motionTrack.frames.length > 2) {
-                // Calculate limb length variation across frames
-                const limbLengths: number[] = [];
-                for (const frame of motionTrack.frames) {
-                    if (frame.worldLandmarks && frame.worldLandmarks.length >= 33) {
-                        const lms = frame.worldLandmarks;
-                        // Left arm: shoulder(11) to elbow(13) + elbow(13) to wrist(15)
-                        const d1 = this.dist3D(lms[11], lms[13]);
-                        const d2 = this.dist3D(lms[13], lms[15]);
-                        limbLengths.push(d1 + d2);
-                    }
-                }
-
-                if (limbLengths.length > 1) {
-                    const avgLen = limbLengths.reduce((a, b) => a + b, 0) / limbLengths.length;
-                    const variance = limbLengths.reduce((a, b) => a + Math.pow(b - avgLen, 2), 0) / limbLengths.length;
-                    const stdDev = Math.sqrt(variance);
-                    limbStability = Math.max(0.5, Math.min(1.0, 1.0 - (stdDev / Math.max(avgLen, 0.1))));
-                }
-            }
-        } catch {
-            // Heuristic fallbacks preserved
+            track = await this.trackVideoMotion({ videoPath: options.videoPath, fps: 8, smoothingWindow: 1 });
+        } catch (err: any) {
+            throw new GeneratorFailedError('mediapipe', `the visual critic could not track motion in ${options.videoPath}: ${err?.message || String(err)}`);
         }
+        const framesWithPerson = track.frames.length;
+        const framesSampled = framesWithPerson + (track.undetectedFrames?.length ?? 0);
+        if (framesSampled === 0) {
+            throw new GeneratorFailedError('mediapipe', `the visual critic could not track motion in ${options.videoPath}: ${track.error || 'no frames were sampled'}`);
+        }
+        const anatomicalConsistency: AnatomicalConsistencyAudit = { framesSampled, framesWithPerson, ...this.measureLimbLengthStability(track.frames) };
 
-        // 3. Compute 8-dimension rubric scores
-        const geomScore = Math.round((8.2 + limbStability * 1.5) * 10) / 10;
-        const colorScore = 8.5;
-        const lightingScore = 8.6;
-        const realismScore = Math.round(((geomScore + colorScore + lightingScore) / 3) * 10) / 10;
+        // 3. The vision model scores the eight dimensions from the sheet.
+        const sheet = await fs.readFile(sheetPath);
+        const reference = options.referencePlatePath ? await fs.readFile(options.referencePlatePath) : undefined;
+        const scored = await this.scoreRubric(sheet, reference, options, anatomicalConsistency, minPassing);
 
-        const dimensionAudits = {
-            geometricDefinition: {
-                score: Math.min(10, geomScore),
-                passed: geomScore >= minPassing,
-                notes: limbStability > 0.85 ? 'High limb rigidity and silhouette crispness.' : 'Minor anatomical stretching observed.'
-            },
-            pixelSplatDensity: { score: 8.7, passed: true, notes: 'Dense spatial coverage with minimal aliasing.' },
-            materialMicroSurface: { score: 8.5, passed: true, notes: 'Authentic material reflectivity and PBR finish.' },
-            environmentalGrounding: { score: 8.8, passed: true, notes: 'Solid contact geometry and ambient occlusion shadows.' },
-            radiometricLighting: { score: lightingScore, passed: lightingScore >= minPassing, notes: 'Consistent key and rim light illumination.' },
-            colorTemperature: { score: colorScore, passed: colorScore >= minPassing, notes: 'Harmonized spectral color grading.' },
-            volumetricDepth: { score: 8.7, passed: true, notes: 'Distinct depth separation between planes.' },
-            photographicRealism: { score: realismScore, passed: realismScore >= minPassing, notes: 'Coherent optical characteristics.' }
-        };
-
+        const dimensionAudits = Object.fromEntries(Object.keys(VISUAL_CRITIC_DIMENSIONS).map(key => {
+            const d = scored.dimensions[key as VisualCriticDimension];
+            return [key, { score: d.score, passed: d.score >= minPassing, notes: d.notes }];
+        })) as Record<VisualCriticDimension, VisualCriticDimensionAudit>;
         const scores = Object.values(dimensionAudits).map(d => d.score);
         const overall = Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100;
-        const passed = overall >= minPassing;
-
-        const remediationDirectives: string[] = [];
-        const ffmpegFilters: string[] = [];
-
-        if (colorScore < minPassing) {
-            remediationDirectives.push('Correct color cast with Planckian white balance adjustment');
-            ffmpegFilters.push('colortemperature=temperature=5600');
-        }
-        if (geomScore < minPassing) {
-            remediationDirectives.push('Apply edge-preserving unsharp mask or Sobel reinforcement');
-            ffmpegFilters.push('unsharp=5:5:0.8:3:3:0.4');
-        }
+        const failedDimensions = (Object.keys(dimensionAudits) as VisualCriticDimension[]).filter(k => !dimensionAudits[k].passed);
+        const passed = failedDimensions.length === 0;
 
         return {
             success: true,
             videoPath: options.videoPath,
             overallScore: overall,
             passed,
-            storyboardSheetPath: sheetCreated ? sheetPath : undefined,
-            anatomicalConsistency: {
-                limbLengthStabilityRatio: Math.round(limbStability * 100) / 100,
-                jointContinuityScore: Math.round(jointContinuity * 100) / 100,
-                personCountStability: personStability
-            },
+            minPassingScore: minPassing,
+            failedDimensions,
+            storyboardSheetPath: sheetPath,
+            visionModel: VISUAL_CRITIC_MODEL,
+            anatomicalConsistency,
             dimensionAudits,
-            remediationRecipe: remediationDirectives.length > 0 ? {
-                suggestedFfmpegFilters: ffmpegFilters,
-                recommendedKelvinShift: colorScore < minPassing ? 5600 : undefined,
-                actionDirectives: remediationDirectives
-            } : undefined
+            remediationRecipe: passed ? undefined : {
+                actionDirectives: scored.actionDirectives,
+                suggestedFfmpegFilters: scored.suggestedFfmpegFilters
+            }
         };
+    }
+
+    /** Limb-length steadiness over the frames that have 3D landmarks, or why it cannot be measured. */
+    private measureLimbLengthStability(frames: VideoMotionPoseFrame[]): Pick<AnatomicalConsistencyAudit, 'limbLengthStabilityRatio' | 'notMeasuredReason'> {
+        const withLandmarks = frames.filter(f => f.worldLandmarks && f.worldLandmarks.length >= 33);
+        if (withLandmarks.length < 2) {
+            return {
+                notMeasuredReason: frames.length === 0
+                    ? 'MediaPipe found no person in any sampled frame, so there are no limbs to measure'
+                    : `only ${withLandmarks.length} sampled frame(s) had 3D body landmarks; limb lengths need at least two`
+            };
+        }
+        // Shoulder-elbow-wrist and hip-knee-ankle on each side (MediaPipe pose landmark indices).
+        const limbs: Array<[number, number, number]> = [[11, 13, 15], [12, 14, 16], [23, 25, 27], [24, 26, 28]];
+        const variations = limbs.map(([a, b, c]) => {
+            const lengths = withLandmarks.map(f => {
+                const lms = f.worldLandmarks!;
+                return this.dist3D(lms[a], lms[b]) + this.dist3D(lms[b], lms[c]);
+            });
+            const mean = lengths.reduce((s, v) => s + v, 0) / lengths.length;
+            const std = Math.sqrt(lengths.reduce((s, v) => s + (v - mean) ** 2, 0) / lengths.length);
+            return mean > 0 ? std / mean : 1;
+        });
+        const meanVariation = variations.reduce((s, v) => s + v, 0) / variations.length;
+        return { limbLengthStabilityRatio: Math.round(Math.max(0, Math.min(1, 1 - meanVariation)) * 1000) / 1000 };
+    }
+
+    private async getVisionClient(): Promise<any> {
+        if (this.visionClient) return this.visionClient;
+        try {
+            const { GeminiClient } = await import('../gemini/gemini-client');
+            this.visionClient = await new GeminiClient().getGenAIClient();
+        } catch (err: any) {
+            throw new VisionUnavailableError(VISUAL_CRITIC_MODEL, 'no-credentials', err?.message || String(err));
+        }
+        if (!this.visionClient?.models?.generateContent) {
+            throw new VisionUnavailableError(VISUAL_CRITIC_MODEL, 'no-credentials', 'no Gemini client is configured');
+        }
+        return this.visionClient;
+    }
+
+    /** Has the vision model score every rubric dimension from the sheet; an incomplete or failed answer throws. */
+    private async scoreRubric(
+        sheet: Buffer,
+        reference: Buffer | undefined,
+        options: VisualCriticAuditOptions,
+        anatomy: AnatomicalConsistencyAudit,
+        minPassing: number
+    ): Promise<{ dimensions: Record<VisualCriticDimension, { score: number; notes: string }>; actionDirectives: string[]; suggestedFfmpegFilters: string[] }> {
+        const model = VISUAL_CRITIC_MODEL;
+        const client = await this.getVisionClient();
+        const anatomyLine = anatomy.limbLengthStabilityRatio !== undefined
+            ? `Measured with MediaPipe on ${anatomy.framesSampled} sampled frames (a person in ${anatomy.framesWithPerson}): limb-length stability ${anatomy.limbLengthStabilityRatio} (1 = limbs keep their length).`
+            : `Body consistency was not measured: ${anatomy.notMeasuredReason} (${anatomy.framesSampled} frames sampled).`;
+        const contents: any[] = [
+            { inlineData: { mimeType: 'image/jpeg', data: sheet.toString('base64') } },
+            ...(reference ? [{ inlineData: { mimeType: this.imageMimeType(reference), data: reference.toString('base64') } }] : []),
+            [
+                'The first image is a 3x3 contact sheet of nine frames sampled evenly across a video, each labelled with its timecode.',
+                reference ? 'The second image is the original reference plate the video was made from.' : '',
+                options.promptContext ? `The shot is meant to be: ${options.promptContext}` : '',
+                anatomyLine,
+                `Score each dimension from 0 to 10 from what these frames actually show (${minPassing} is the passing score), and say what you saw:`,
+                ...Object.entries(VISUAL_CRITIC_DIMENSIONS).map(([key, text]) => `- ${key}: ${text}`),
+                `Then list concrete fixes for every dimension below ${minPassing}, and any FFmpeg -vf filters that would help.`
+            ].filter(Boolean).join('\n')
+        ];
+
+        let text: string;
+        try {
+            const response = await client.models.generateContent({
+                model,
+                contents,
+                config: {
+                    systemInstruction: 'You are a strict VFX supervisor auditing frames for photographic and geometric fidelity. Score only what is visible; do not assume quality you cannot see.',
+                    responseMimeType: 'application/json',
+                    responseSchema: visualCriticSchema,
+                    temperature: 0.1
+                }
+            });
+            text = response?.text || '';
+        } catch (err: any) {
+            throw new VisionUnavailableError(model, err?.status || err?.code || 'request-failed', err?.message || String(err));
+        }
+        let parsed: any;
+        try {
+            parsed = JSON.parse(text);
+        } catch {
+            throw new VisionUnavailableError(model, 'invalid-response', `the answer is not JSON: ${text.slice(0, 200) || '(empty)'}`);
+        }
+        const missing = Object.keys(VISUAL_CRITIC_DIMENSIONS).filter(key => {
+            const d = parsed?.dimensions?.[key];
+            return !d || typeof d.score !== 'number' || !Number.isFinite(d.score) || d.score < 0 || d.score > 10 || typeof d.notes !== 'string' || !d.notes.trim();
+        });
+        if (missing.length) {
+            throw new VisionUnavailableError(model, 'invalid-response', `the answer has no valid 0..10 score and notes for ${missing.join(', ')}`);
+        }
+        const strings = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : [];
+        return {
+            dimensions: parsed.dimensions,
+            actionDirectives: strings(parsed.actionDirectives),
+            suggestedFfmpegFilters: strings(parsed.suggestedFfmpegFilters)
+        };
+    }
+
+    private imageMimeType(bytes: Buffer): string {
+        if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'image/png';
+        if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg';
+        if (bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+        throw new MissingInputError('vfx_visual_critic_audit', 'referencePlatePath', 'the reference plate is not a PNG, JPEG or WebP image');
     }
 
     private dist3D(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {

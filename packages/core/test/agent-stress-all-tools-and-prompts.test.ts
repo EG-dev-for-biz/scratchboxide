@@ -609,15 +609,15 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect((res.resultPayload as any).commandString).toContain('-ss 2');
         });
 
-        it('executes vfx_visual_critic_audit on video output', async () => {
+        it('vfx_visual_critic_audit fails on a video that is not there instead of passing a simulated rubric', async () => {
             const res = await registry.dispatch('vfx_visual_critic_audit', {
                 videoPath: '/workspace/rendered_scene.mp4',
                 promptContext: 'Photorealistic Colosseum architectural orbit',
-                minPassingScore: 8.5,
-                dryRun: true
+                minPassingScore: 8.5
             }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).overallScore).toBeGreaterThanOrEqual(8.0);
+            expect(res.exec.status).toBe('failed');
+            expect(res.exec.summaryResult).toContain('/workspace/rendered_scene.mp4 does not exist');
+            expect((res.resultPayload as any).overallScore).toBeUndefined();
         });
     });
 

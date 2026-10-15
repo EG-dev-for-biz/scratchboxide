@@ -26,117 +26,48 @@ describe('MediaPipeVideoDirectorService (FFmpeg + MediaPipe + Gemini Coordinatio
             expect(MediaPipeVideoDirectorService.parseAspectRatio('landscape')).toBeCloseTo(16 / 9);
         });
 
-        it('handles custom aspect ratio expressions and falls back cleanly', () => {
+        it('parses custom ratios and refuses one that is not a ratio instead of assuming 9:16', async () => {
+            const { MissingInputError } = await import('../src/common/errors/pipeline-errors');
             expect(MediaPipeVideoDirectorService.parseAspectRatio('21:9')).toBeCloseTo(21 / 9);
             expect(MediaPipeVideoDirectorService.parseAspectRatio('0.75')).toBeCloseTo(0.75);
-            expect(MediaPipeVideoDirectorService.parseAspectRatio('invalid')).toBeCloseTo(9 / 16);
+            expect(() => MediaPipeVideoDirectorService.parseAspectRatio('invalid')).toThrow(MissingInputError);
+            expect(() => MediaPipeVideoDirectorService.parseAspectRatio('0:16')).toThrow(/not a ratio/);
         });
     });
 
-    describe('Pipeline 1: trackVideoMotion (Dry Run)', () => {
-        it('generates articulated 3D kinematic frames with SB-Human joint angles', async () => {
-            const result = await directorService.trackVideoMotion({
-                videoPath: '/virtual/test_dancer.mp4',
-                fps: 10,
-                duration: 2.0,
-                smoothingWindow: 3,
-                minConfidence: 0.5,
-                dryRun: true
-            });
-
-            expect(result.success).toBe(true);
-            expect(result.dryRun).toBe(true);
-            expect(result.durationSec).toBe(2.0);
-            expect(result.sampleFps).toBe(10);
-            expect(result.totalFramesAnalyzed).toBe(20);
-            expect(result.averageConfidence).toBeGreaterThan(0.7);
-            expect(result.groundedYReferenceMeters).toBeGreaterThan(0);
-            expect(result.frames.length).toBe(20);
-
-            // Verify joint kinematics contract for frame 0
-            const frame0 = result.frames[0];
-            expect(frame0.frameIndex).toBe(0);
-            expect(frame0.timestampSec).toBe(0);
-            expect(frame0.angles).toBeDefined();
-            expect(Array.isArray(frame0.angles.spine)).toBe(true);
-            expect(Array.isArray(frame0.angles.leftUpperArm)).toBe(true);
-            expect(Array.isArray(frame0.angles.rightUpperArm)).toBe(true);
-            expect(Array.isArray(frame0.angles.leftUpperLeg)).toBe(true);
-            expect(Array.isArray(frame0.angles.rightUpperLeg)).toBe(true);
-            expect(frame0.hipPositionMeters.length).toBe(3);
-        });
-    });
-
-    describe('Pipeline 2: autoReframeVideo (Dry Run)', () => {
-        it('computes vertical 9:16 crop window from 16:9 input and plans FFmpeg filter', async () => {
-            const result = await directorService.autoReframeVideo({
-                inputVideoPath: '/virtual/wide_landscape_action.mp4',
-                targetAspectRatio: '9:16',
-                focusMode: 'body',
-                sampleIntervalSec: 0.5,
-                dryRun: true
-            });
-
-            expect(result.success).toBe(true);
-            expect(result.dryRun).toBe(true);
-            expect(result.targetAspectRatio).toBe('9:16');
-            expect(result.cropDimensions.height).toBe(1080);
-            // 1080 * 9 / 16 = 607.5 -> rounded to even = 608
-            expect(result.cropDimensions.width).toBe(608);
-            expect(result.waypoints.length).toBeGreaterThan(1);
-            expect(result.filtergraph).toContain('crop=608:1080:');
-            expect(result.ffmpegCommand).toContain('-vf "crop=608:1080:');
-            expect(result.ffmpegCommand).toContain('-movflags +faststart');
+    describe('No dry runs: nothing is reported for a video that was not read', () => {
+        it('tracking and reframing a missing video fail, with no canned poses, sizes or crop', async () => {
+            const { MissingInputError } = await import('../src/common/errors/pipeline-errors');
+            // The review's probes: these used to return 30 canned walking poses (confidence 0.88) and a 1920x1080 crop plan.
+            await expect(directorService.trackVideoMotion({ videoPath: '/nonexistent/clip.mp4', fps: 15, dryRun: true } as any))
+                .rejects.toBeInstanceOf(MissingInputError);
+            await expect(directorService.autoReframeVideo({ inputVideoPath: '/nonexistent/portrait.mp4', targetAspectRatio: '9:16', dryRun: true } as any))
+                .rejects.toBeInstanceOf(MissingInputError);
         });
 
-        it('computes square 1:1 crop window and preserves even dimensions', async () => {
-            const result = await directorService.autoReframeVideo({
-                inputVideoPath: '/virtual/action_runner.mp4',
-                targetAspectRatio: '1:1',
-                focusMode: 'face',
-                sampleIntervalSec: 0.25,
-                dryRun: true
-            });
-
-            expect(result.success).toBe(true);
-            expect(result.cropDimensions.width).toBe(1080);
-            expect(result.cropDimensions.height).toBe(1080);
-            expect(result.cropDimensions.width % 2).toBe(0);
-            expect(result.cropDimensions.height % 2).toBe(0);
-            expect(result.filtergraph).toContain('crop=1080:1080:');
-        });
-    });
-
-    describe('Pipeline 3: auditVideoFidelity (Dry Run)', () => {
-        it('evaluates video against 8-Dimension Visual Fidelity Rubric', async () => {
-            const audit = await directorService.auditVideoFidelity({
-                videoPath: '/virtual/vfx_shot_final.mp4',
-                promptContext: 'Cinematic drone shot flying through neo-classical stone archway',
-                minPassingScore: 8.5,
-                dryRun: true
-            });
-
-            expect(audit.success).toBe(true);
-            expect(audit.dryRun).toBe(true);
-            expect(audit.overallScore).toBeGreaterThanOrEqual(8.5);
-            expect(audit.passed).toBe(true);
-            expect(audit.storyboardSheetPath).toContain('_storyboard.jpg');
-
-            // Anatomical consistency metrics
-            expect(audit.anatomicalConsistency.limbLengthStabilityRatio).toBeGreaterThan(0.9);
-            expect(audit.anatomicalConsistency.jointContinuityScore).toBeGreaterThan(0.9);
-            expect(audit.anatomicalConsistency.personCountStability).toBe(1.0);
-
-            // 8 Dimensions verified
-            const dims = audit.dimensionAudits;
-            expect(dims.geometricDefinition.passed).toBe(true);
-            expect(dims.pixelSplatDensity.passed).toBe(true);
-            expect(dims.materialMicroSurface.passed).toBe(true);
-            expect(dims.environmentalGrounding.passed).toBe(true);
-            expect(dims.radiometricLighting.passed).toBe(true);
-            expect(dims.colorTemperature.passed).toBe(true);
-            expect(dims.volumetricDepth.passed).toBe(true);
-            expect(dims.photographicRealism.passed).toBe(true);
+        it('reframes from the probed size of the real input (a portrait clip is not treated as 1920x1080)', async () => {
+            const fs = await import('fs');
+            const os = await import('os');
+            const path = await import('path');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-reframe-probe-'));
+            const video = path.join(dir, 'portrait.mp4');
+            fs.writeFileSync(video, 'not decoded by the fake editor');
+            const crops: any[] = [];
+            const editor: any = {
+                probeMedia: async () => ({ width: 720, height: 1280, durationSec: 1.0 }),
+                extractKeyframes: async ({ timestampsSec }: { timestampsSec: number[] }) => ({
+                    outputPaths: timestampsSec.map((_, i) => { const f = path.join(dir, `f${i}.png`); fs.writeFileSync(f, `frame ${i}`); return f; })
+                }),
+                quickEdit: async (args: any) => { crops.push(args.crop.box); return { success: true, ffmpegCommand: 'ffmpeg (fake)' }; }
+            };
+            const lms = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.9 }));
+            const pose: any = { runPoseLandmarker: async () => ({ detection: { imageLandmarks: [lms], worldLandmarks: [lms] } }) };
+            const result = await new MediaPipeVideoDirectorService(editor, pose).autoReframeVideo({ inputVideoPath: video, targetAspectRatio: '1:1' });
+            expect(result.inputDimensions).toEqual({ width: 720, height: 1280 });
+            expect(result.cropDimensions).toEqual({ width: 720, height: 720 });
+            expect(result.dryRun).toBeUndefined();
+            expect(crops).toHaveLength(1);
+            fs.rmSync(dir, { recursive: true, force: true });
         });
     });
 

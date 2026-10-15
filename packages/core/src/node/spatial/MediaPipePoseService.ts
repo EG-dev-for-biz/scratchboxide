@@ -405,57 +405,6 @@ export class MediaPipePoseService {
         };
     }
 
-    /**
-     * Canonical kinematic poses for planning (dry runs), never a stand-in for a detection.
-     */
-    public synthesizeHeuristicPose(
-        preset: 'neutral_standing' | 't_pose' | 'walking' | 'action_ready' = 'neutral_standing'
-    ): RiggedPoseOutput {
-        const angles: HumanoidPoseAngles = {
-            leftUpperArm: [this.toRad(12), 0, 0],
-            rightUpperArm: [this.toRad(12), 0, 0],
-            leftLowerArm: [this.toRad(8), 0, 0],
-            rightLowerArm: [this.toRad(8), 0, 0],
-            leftUpperLeg: [0, 0, this.toRad(4)],
-            rightUpperLeg: [0, 0, this.toRad(-4)],
-            leftLowerLeg: [0, 0, 0],
-            rightLowerLeg: [0, 0, 0],
-            spine: [0, 0, 0],
-            head: [0, 0, 0]
-        };
-
-        if (preset === 't_pose') {
-            angles.leftUpperArm = [0, 0, this.toRad(90)];
-            angles.rightUpperArm = [0, 0, this.toRad(-90)];
-        } else if (preset === 'walking') {
-            angles.leftUpperArm = [this.toRad(-20), 0, 0];
-            angles.rightUpperArm = [this.toRad(25), 0, 0];
-            angles.leftUpperLeg = [this.toRad(25), 0, this.toRad(3)];
-            angles.rightUpperLeg = [this.toRad(-20), 0, this.toRad(-3)];
-            angles.leftLowerLeg = [this.toRad(-15), 0, 0];
-            angles.rightLowerLeg = [this.toRad(-5), 0, 0];
-        } else if (preset === 'action_ready') {
-            angles.leftUpperArm = [this.toRad(35), this.toRad(20), 0];
-            angles.rightUpperArm = [this.toRad(35), this.toRad(-20), 0];
-            angles.leftLowerArm = [this.toRad(65), 0, 0];
-            angles.rightLowerArm = [this.toRad(65), 0, 0];
-            angles.leftUpperLeg = [this.toRad(15), 0, this.toRad(8)];
-            angles.rightUpperLeg = [this.toRad(-10), 0, this.toRad(-8)];
-            angles.leftLowerLeg = [this.toRad(-25), 0, 0];
-            angles.rightLowerLeg = [this.toRad(-20), 0, 0];
-            angles.spine = [this.toRad(10), 0, 0];
-        }
-
-        return {
-            success: true,
-            personIndex: 0,
-            angles,
-            hipPositionMeters: [0, 0, 0],
-            groundedYOffsetMeters: 0.85,
-            confidence: 0.85
-        };
-    }
-
     // ── Internal Vector Utilities ──────────────────────────────────────────────
 
     private sub(a: Vec3, b: Vec3): Vec3 {

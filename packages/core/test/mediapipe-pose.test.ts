@@ -141,20 +141,8 @@ describe('MediaPipePoseService (3D Metric Pose Landmarker & Kinematics)', () => 
         expect(service.computeGroundedYOffset(crouch)).toBeCloseTo(0.3, 5);
     });
 
-    it('should synthesize standard heuristic poses cleanly across presets', () => {
-        const neutral = service.synthesizeHeuristicPose('neutral_standing');
-        expect(neutral.success).toBe(true);
-        expect(neutral.groundedYOffsetMeters).toBeCloseTo(0.85, 2);
-
-        const tPose = service.synthesizeHeuristicPose('t_pose');
-        // In T-pose, arms are elevated 90 degrees (pi/2 radians)
-        expect(tPose.angles.leftUpperArm[2]).toBeCloseTo(Math.PI / 2, 2);
-        expect(tPose.angles.rightUpperArm[2]).toBeCloseTo(-Math.PI / 2, 2);
-
-        const walking = service.synthesizeHeuristicPose('walking');
-        // One leg forward, one leg back
-        expect(walking.angles.leftUpperLeg[0]).toBeGreaterThan(0);
-        expect(walking.angles.rightUpperLeg[0]).toBeLessThan(0);
+    it('offers no canned preset poses (they were a stand-in for a detection in dry runs)', () => {
+        expect((service as any).synthesizeHeuristicPose).toBeUndefined();
     });
 
     it('fails instead of returning a canned standing pose when detection cannot run or finds nobody', async () => {
