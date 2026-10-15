@@ -580,6 +580,8 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 glbUrl: rel && !rel.startsWith('..') ? `/${rel}` : undefined,
                 triangleCount: res.mesh?.triangleCount,
                 vertexCount: res.mesh?.vertexCount,
+                // SurveyApi.clay fails on placeholder tiles instead of reporting them as a success
+                mock: res.mock === true,
             };
         },
     });

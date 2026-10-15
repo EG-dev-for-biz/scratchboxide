@@ -156,6 +156,18 @@ describe('vector world and survey tools need the place: no Empire State Building
         }
     });
 
+    it('POST /clay never reports placeholder (mock) tiles as a success', async () => {
+        const fetchClayGlb = vi.fn(async () => ({ glbPath: '/tmp/placeholder.glb', mock: true }));
+        const api = new SurveyApi({ workspaceRoot: os.tmpdir(), fetchClayGlb });
+        // A client cannot switch the extraction into its offline test mode...
+        await expect(api.clay({ query: 'x', options: { offlineMock: true } })).rejects.toThrow(/offlineMock is a test-only extraction mode/);
+        expect(fetchClayGlb).not.toHaveBeenCalled();
+        // ...and a mock result from the extraction fails instead of returning success with its path.
+        await expect(api.clay({ query: 'Flatiron Building, New York' })).rejects.toThrow(/placeholder \(mock\) tiles/);
+        const real = new SurveyApi({ workspaceRoot: os.tmpdir(), fetchClayGlb: async () => ({ glbPath: '/tmp/real.glb', mock: false }) });
+        await expect(real.clay({ query: 'Flatiron Building, New York' })).resolves.toMatchObject({ success: true, glbPath: '/tmp/real.glb' });
+    });
+
     it('the survey plan takes no style or era from words in the place name', async () => {
         const preset = await resolveSurveyPreset({ location: 'Waste Transfer Station, Hartford' }, os.tmpdir(), {
             geocode: async () => ({ lat: 41.7637, lng: -72.6851, elevation: 18, formattedAddress: 'Waste Transfer Station, Hartford, CT, USA' })

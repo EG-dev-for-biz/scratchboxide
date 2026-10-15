@@ -43,7 +43,8 @@ export interface SurveyJob {
 
 export interface SurveyApiDeps {
     /** Resolves a query/anchor to a clay GLB on disk (wraps getGoogle3DTilesClay). Optional so the API works offline. */
-    fetchClayGlb?: (query: string | (Pick<GeodeticAnchor, 'lat' | 'lng'> & Partial<GeodeticAnchor>), options?: Record<string, any>) => Promise<{ glbPath: string; glbUrl?: string; mesh?: any; geoAnchor?: any; resolvedAddress?: string; quality?: any; mode?: string }>;
+    /** Real Google 3D Tiles extraction; `mock` is true when the extraction produced placeholder data instead. */
+    fetchClayGlb?: (query: string | (Pick<GeodeticAnchor, 'lat' | 'lng'> & Partial<GeodeticAnchor>), options?: Record<string, any>) => Promise<{ glbPath: string; glbUrl?: string; mesh?: any; geoAnchor?: any; resolvedAddress?: string; quality?: any; mode?: string; mock?: boolean }>;
     /** Root directory that glbPath arguments must live under (path traversal guard). */
     workspaceRoot?: string;
     /** Registered by later phases: beautify one station / whole batch to splat tiles. */
@@ -391,7 +392,10 @@ export class SurveyApi {
             ? { lat: a.lat, lng: a.lng, ...(typeof a.elevationMeters === 'number' ? { elevationMeters: a.elevationMeters } : {}), formattedAddress: a.formattedAddress }
             : undefined);
         if (!query) throw new Error('query or anchor is required');
+        // The extraction's offline test mode writes placeholder tiles; an API request gets real tiles or fails.
+        if (body?.options?.offlineMock) throw new Error('options.offlineMock is a test-only extraction mode and is not accepted by /clay');
         const res = await this.deps.fetchClayGlb(query, body?.options);
+        if (res.mock) throw new Error('Clay ingestion produced placeholder (mock) tiles, not Google 3D Tiles');
         return { success: true, glbPath: res.glbPath, glbUrl: res.glbUrl, mesh: res.mesh, geoAnchor: res.geoAnchor, resolvedAddress: res.resolvedAddress, quality: res.quality, mode: res.mode };
     }
 
