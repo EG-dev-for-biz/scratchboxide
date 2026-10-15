@@ -79,7 +79,7 @@ When creating or rendering volumetric fur, hair grooms, feathered surfaces, or s
 ### Rule: Lean on C/C++ First for 3D (C++20 as Geometry Generator, Three.js as Pure Viewport)
 When implementing 3D (scenes, models, procedural geometry, terrain generation, spatial physics, or visual effects):
 1. **Primary Generation Path (C/C++20 Engine)**:
-   - Always prioritize modern C++20 via the native Scratchbox 3D Engine (`#include "scratchbox_engine.hpp"`), SB-Veggie (`scratchbox_veggie.hpp`), and Archie (`scratchbox_archie.hpp`).
+   - Always prioritize modern C++20 via the native Scratchbox 3D Engine (`#include "scratchbox_engine.hpp"`), SB-Veggie (`scratchbox_veggie.hpp`), and Archie (`scratchbox_architecture.hpp`, `scratchbox_sb_archi.hpp`).
    - Native C++ with Apple Clang (`-std=c++20 -O3`) compiles and generates 100,000+ vertices, calculates smooth envelope normals, applies noise algorithms, and serializes a standard binary `.glb` in under 200 milliseconds.
    - Use high-performance SIMD vector math (`scratchbox_math.hpp`), Signed Distance Fields (SDFs), Marching Cubes polygonization, FastNoise3D (Perlin/FBM/Worley), transferred envelope normals, and physical material assignment.
    - Procedural C++ modules compile via Apple Clang / modern C++ toolchain (`process.env.CXX || 'clang++' -std=c++20 -O3`) through `NativeCppCompilerService`.
@@ -91,6 +91,7 @@ When implementing 3D (scenes, models, procedural geometry, terrain generation, s
    - **No Silent Fallback to Toy Primitives**: Viewports, canvas studios, and generative endpoints must NEVER catch backend generation errors and silently substitute client-side Three.js primitives (`new THREE.BoxGeometry`, `new THREE.CylinderGeometry`, `new THREE.ConeGeometry`, `new THREE.SphereGeometry`). Stacking flat boxes is prohibited.
    - **Surface Native Faults**: If native C++20 / Python generation encounters a runtime fault, report the error to the user. Dropping to flat JavaScript primitives is an unconstitutional "Tier 0" regression.
    - **Mandatory Geometric Complexity Floor (`GeometricComplexityGate`)**: Every generative scene must pass `GeometricComplexityGate` with a strict minimum of **25,000 vertices** (5,000 for single isolated props), **15,000 triangles**, and an authentic 70-20-10 multi-mesh hierarchy (Primary edifice, secondary wings, tertiary botanical/architectural detail). Any generator emitting fewer vertices or un-subdivided primitive boxes must be rejected with `GeometricFidelityViolationError`.
+   - **Measured-Geometry Exemption**: Geometry measured from a real scan (remeshed Google 3D Tiles and scan-fitted architectural rebuilds) is exempt from the vertex floor. Judge it by its measured fit to the scan (coverage and RMS residual) instead. Never pad measured geometry with extra vertices to pass the floor: padding adds no information.
    - **Static Analysis CI Gate (`npm run lint:primitives`)**: The codebase is protected by `scripts/lint_no_js_primitives.js`. Any PR, commit, or agent change that introduces prohibited Three.js primitive constructors into generative viewports will immediately fail the CI build.
    - **Client-Side Viewport Scope**: Three.js is restricted strictly to pure rendering, camera choreography, post-processing, and UI gizmo overlays. It is NEVER the procedural geometry generator.
 
@@ -359,7 +360,7 @@ When planning, implementing, or verifying architectures, pipelines, and features
 3. **Analytical Forward Mapping Over Inverse Fictions**:
    - If mathematical or procedural ground truth exists (hair curves, geometry vectors, camera matrices), project forward directly into target buffers (`.spz`, `.glb`). Never round-trip through 2D synthetic renders to re-estimate geometry via neural inverse solvers.
 4. **Geometric Complexity Floors over Toy Script Regressions**:
-   - Procedural 3D assets must pass `GeometricComplexityGate` ($\ge 25,000$ vertices for scenes, $\ge 5,000$ for props). Catching native engine errors and silently substituting client-side JS toy primitives (`THREE.BoxGeometry`) is strictly prohibited.
+   - Procedural 3D assets must pass `GeometricComplexityGate` ($\ge 25,000$ vertices for scenes, $\ge 5,000$ for props); geometry measured from a real scan is exempt and is judged by its fit to the scan instead. Catching native engine errors and silently substituting client-side JS toy primitives (`THREE.BoxGeometry`) is strictly prohibited.
 5. **Continuous Dimensional Manifolds Over Closed Enums**:
    - Systems must project into continuous physical fields (meters, roughness, Kelvin), never discrete string enums or static switch-case trees. The LLM is the domain engine.
 
@@ -461,7 +462,7 @@ To uphold Adaptive Domain Architecture and eliminate static kitbashing:
    - Kitbashing static assets violates ADA: it locks the application to human-modeled presets and fails completely when faced with open-domain or novel prompts (e.g. alien spore towers, geothermal biomes).
 2. **Procedural Grammars Over Static Meshes (Verbs)**:
    - All spatial assets must be generated on the fly using continuous parametric grammars:
-     - **Archie** ([`scratchbox_architecture.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_architecture.hpp)): Procedural architectural operations (`extrudeSlab`, `punchRecessedOpening`, `generateLouverBay`, `createChamferedParapet`).
+     - **Archie** ([`scratchbox_architecture.hpp`](packages/core/src/native/3d-engine/include/scratchbox_architecture.hpp), [`scratchbox_sb_archi.hpp`](packages/core/src/native/3d-engine/include/scratchbox_sb_archi.hpp)): procedural buildings from continuous parameters (`ProceduralBuildingGenerator`: facades, floor slabs, parapet/gable/hip/mansard roofs, plinths; `SbArchiModelBuilder`: tiered massing). Mesh building blocks for fitted and parametric architecture: `Loft3D` (`scratchbox_shaper.hpp`), `PolygonTriangulator` (`scratchbox_footprints.hpp`), `BvhTree` (`scratchbox_bvh.hpp`).
      - **SB-Veggie** ([`scratchbox_sb_veggie.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_sb_veggie.hpp)): Algorithmic botanical branching (`apicalDominance`, `branchAngleDeg`, stem tapering, transferred envelope normals).
      - **Astro Noise** ([`scratchbox_engine.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_engine.hpp)): Multi-fractal terrain harmonics (arête knife-edges, cirque hollows, scree talus noise).
 
@@ -475,6 +476,9 @@ When synthesizing a 3D scene from an open-ended natural language prompt:
    - **Stage 2 (Multimodal Vision Reverse-Engineering)**: Gemini Multimodal Vision inspects the reference image as an architectural draftsperson, reverse-engineering visual features into the continuous physical fields of `Adaptive3DSceneContract` (measuring fenestration reveals, cantilevered floorplates, specific rooftop mechanical dimensions, and ridge profiles).
    - **Stage 3 (Immediate Cleanup / Zero Chat Clutter)**: The reference image is strictly an internal, intermediate latent representation. It must NEVER be presented to the user in chat or retained in the gallery. The file is unlinked immediately upon schema extraction.
    - **Stage 4 (Bare-Metal C++20 Polygonization)**: The native C++20 engine polygonizes the schema with CAD-grade precision (sub-millimeter bevels, planar walls, authentic window reveals, 100,000+ vertices) in under 200 milliseconds and streams the `.glb` directly to the viewport.
+3. **Photo-Read Detail Is Inference, Labelled as Such**:
+   - Ornament or detail that a vision model reads from photos (Google tile textures, or Street View close-ups fetched through the Maps Imagery Grounding API) is inference, not measurement. It must carry the provenance `photo-inferred` with a confidence in the GLB extras, the tool result and the viewport's provenance view. A correction a vision model makes to scan-fitted geometry is labelled `photo-corrected` and must stay within the range the scan's fit residuals allow.
+   - Only geometry fitted to a scan, or measured from calibrated multi-view photos, may be labelled measured.
 
 ## Video Pipeline & Multi-District Gallery Directives
 
