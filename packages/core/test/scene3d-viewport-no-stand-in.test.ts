@@ -20,7 +20,7 @@ import * as React from 'react';
 import * as THREE from 'three';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Scene3DPrimitive, captureSceneScreenshot } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
-import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent } from '../src/browser/generative-canvas/primitives/scene3d/syncSceneContent';
+import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent, undrawableSceneObjects } from '../src/browser/generative-canvas/primitives/scene3d/syncSceneContent';
 import { liveTilesAnchor, syncTilesLayer } from '../src/browser/generative-canvas/primitives/scene3d/syncTilesLayer';
 import { groundDatumBadge, projectRoutePoint } from '../src/browser/generative-canvas/primitives/scene3d/geoAnchorLabels';
 import { DEFAULT_METERS_PER_SCENE_UNIT } from '../src/common/coordinate/GeoFrame';
@@ -203,6 +203,54 @@ describe('content failures are shown in the viewport', () => {
         expect(count(webglShot.png, (r, g, b) => r > 50 && r < 120 && g < 40 && b < 40)).toBeGreaterThan(2000);
         expect(count(emptyShot.png, (r, g, b) => r > 50 && r < 120 && g < 40 && b < 40)).toBe(0);
         expect(count(emptyShot.png, (r, g, b) => r < 100 && Math.abs(r - g) < 12 && Math.abs(g - b) < 12)).toBeGreaterThan(3000);
+    });
+});
+
+describe('objects the viewport cannot draw or load are named in the viewport', () => {
+    const plane = { id: 'aircraft', content: { type: '3d-scene', durableUri: 'internal:plane', mimeType: 'model/procedural-aircraft' } };
+    const photo = { id: 'photo', content: { type: 'image', durableUri: 'https://example.com/photo.jpg', mimeType: 'image/jpeg' } };
+    const real = { id: 'a', content: { type: '3d-model', durableUri: '/models/a.glb', mimeType: 'model/gltf-binary' } };
+
+    it('an object the loader skips is not content, and the viewport says which and why', () => {
+        expect(hasNonFallbackObjectContent({ objects: [plane, photo] as any })).toBe(false);
+        expect(undrawableSceneObjects({ objects: [plane, photo, real] as any })).toEqual([
+            { id: 'aircraft', reason: 'internal:plane is not a .glb, .gltf, .splat or .spz file' },
+            { id: 'photo', reason: 'https://example.com/photo.jpg is not a .glb, .gltf, .splat or .spz file' }
+        ]);
+        // Alone: the viewport used to show neither "No geometry" nor an error.
+        const html = render({ title: 'Jet', objects: [plane] as any });
+        expect(noticeKinds(html)).toEqual(['undrawable-objects']);
+        expect(html).toContain('aircraft: internal:plane is not a .glb, .gltf, .splat or .spz file');
+        // Beside a drawable model: the model is drawn and the skipped object is still named.
+        expect(noticeKinds(render({ title: 'Jet', objects: [real, photo] as any }))).toEqual(['undrawable-objects']);
+        // A placeholder or a map-3d object is not reported as undrawable.
+        expect(undrawableSceneObjects({ objects: [{ id: 'p', content: { type: '3d-model', durableUri: 'internal:mesh' } }, { id: 'm', content: { type: 'map-3d' } }] as any })).toEqual([]);
+    });
+
+    it('a model that fails to load is shown in the viewport, not only in the console', () => {
+        const notices = resolveViewportNotice({ webglError: null, generatorError: null, tilesError: null, contentKind: 'objects', objectLoadErrors: [{ id: 'hero', error: 'HTTP 404: /models/hero.glb' }] });
+        expect(notices).toEqual([{ kind: 'object-load-error', title: 'A model failed to load', detail: 'hero: HTTP 404: /models/hero.glb' }]);
+    });
+
+    it('biome terrain the scene draws is not covered by "No geometry"; in clay (no biomes drawn) the scene is empty', () => {
+        const biomes = { title: 'Valley', features: { terrainBiomes: { biomeType: 'alpine' } } } as any;
+        expect(noticeKinds(render({ ...biomes, renderMode: 'pbr' }))).toEqual([]);
+        expect(noticeKinds(render({ ...biomes, renderMode: 'clay' }))).toEqual(['empty']);
+    });
+
+    it.skipIf(!htmlScreenshotChrome.ok)(withReason('screenshots the load-failure and undrawable-object notices', htmlScreenshotChrome), async () => {
+        const notices = resolveViewportNotice({
+            webglError: null, generatorError: null, tilesError: null, contentKind: 'objects',
+            objectLoadErrors: [{ id: 'hero', error: 'HTTP 404: /models/hero.glb' }],
+            undrawableObjects: undrawableSceneObjects({ objects: [plane, photo] as any })
+        });
+        const html = renderToStaticMarkup(React.createElement(ViewportNotice, { notices }));
+        expect(noticeKinds(html)).toEqual(['object-load-error', 'undrawable-objects']);
+        const shot = await saveHtmlScreenshot('scene3d_viewport_object_notices', html);
+        const { data } = decodePng(shot.png);
+        let red = 0;
+        for (let i = 0; i < data.length; i += 4) if (data[i] > 50 && data[i] < 120 && data[i + 1] < 40 && data[i + 2] < 40) red++;
+        expect(red).toBeGreaterThan(5000);
     });
 });
 

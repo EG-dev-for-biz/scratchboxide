@@ -18,24 +18,28 @@ import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { applyClayFirstPassBaseline, keepOpenSceneRenderMode } from '../scene3d-clay-baseline';
+import { isDrawableSceneObject, isTilesObject, undrawableSceneObjects } from '../../../browser/generative-canvas/primitives/scene3d/syncSceneContent';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
 }
 
 /**
- * Whether a 3d-scene declares anything for the viewport to draw: objects (other than the `internal:mesh`
- * placeholder), a splat, a generator's model or script, a live three.js script, or a geoAnchor for live tiles.
+ * Whether a 3d-scene declares anything the viewport draws, judged as the viewport judges it: an object it loads
+ * (a .glb / .gltf model or a .splat / .spz splat; see isDrawableSceneObject), a map-3d object with an anchor, a splat
+ * file (splatUrl), a generator with its model inline (glbBase64) or its source, a live three.js script, or a
+ * geoAnchor for live tiles. A generator known only by a server file path (glbPath) is not loaded by the viewport.
  * A scene with none of these would mount as an empty "No geometry" viewport.
  */
 export function sceneDeclaresContent(scene: Partial<Scene3DData>): boolean {
     const finite = (v: unknown) => v !== null && v !== '' && Number.isFinite(Number(v));
     const anchor = scene.geoAnchor;
+    const objects = Array.isArray(scene.objects) ? scene.objects : [];
     return !!(
-        (Array.isArray(scene.objects) && scene.objects.some(o => o?.content?.durableUri !== 'internal:mesh'))
-        || scene.splatUrl || scene.splatTilesetUrl
-        || scene.pythonGenerator?.glbBase64 || scene.pythonGenerator?.glbPath || scene.pythonGenerator?.sourceCode?.trim()
-        || scene.cppGenerator?.glbBase64 || scene.cppGenerator?.glbPath
+        objects.some(o => isDrawableSceneObject(o) || (isTilesObject(o) && !!o.space?.geoAnchor))
+        || scene.splatUrl
+        || scene.pythonGenerator?.glbBase64 || scene.pythonGenerator?.sourceCode?.trim()
+        || scene.cppGenerator?.glbBase64 || scene.cppGenerator?.sourceCode?.trim()
         || (scene.customScript || scene.code || '').trim()
         || (anchor && anchor.active !== false && finite(anchor.lat) && finite(anchor.lng))
     );
@@ -359,6 +363,19 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 ? keepOpenSceneRenderMode(payload as any, active3D.renderMode)
                 : applyClayFirstPassBaseline(payload as any, prompt);
 
+            // Objects the viewport would skip (internal:plane, an image, an .obj) would be reported as mounted while
+            // nothing of them is drawn.
+            const undrawable = undrawableSceneObjects(payload as Scene3DData);
+            if (undrawable.length > 0) {
+                const error = `${undrawable.length === 1 ? 'An object' : `${undrawable.length} objects`} in payload.objects cannot be drawn: ${undrawable.map(o => `${o.id} (${o.reason})`).join('; ')}. Each object's content.durableUri must be a .glb / .gltf model or a .splat / .spz splat the app serves; build geometry with a Python script (payload.script) or execute_3d_python_script. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            // A generator known only by a server file path is not loaded by the viewport.
+            const gen = (payload as Scene3DData).pythonGenerator;
+            if (gen?.glbPath && !gen.glbBase64 && !gen.sourceCode?.trim() && !sceneDeclaresContent(payload as Scene3DData)) {
+                const error = `pythonGenerator.glbPath (${gen.glbPath}) is a file on the server that the viewport does not load. Send the script (payload.script) so it runs here, or reference a served model in payload.objects. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
             // A mount replaces the canvas: a scene that declares nothing to draw would be an empty viewport
             // reported as mounted.
             if (!sceneDeclaresContent(payload as Scene3DData)) {

@@ -355,7 +355,8 @@ describe('a splat scene holds only the splat the model sent', () => {
 
     it('counts a splat file as the scene\'s own content, so no fallback mesh is drawn beside it', () => {
         expect(hasNonFallbackObjectContent({ splatUrl: '/models/x.splat' })).toBe(true);
-        expect(hasNonFallbackObjectContent({ splatTilesetUrl: '/tilesets/x/tileset.json' })).toBe(true);
+        // The viewport loads no splat tileset, so a tileset alone is not content it draws.
+        expect(hasNonFallbackObjectContent({ splatTilesetUrl: '/tilesets/x/tileset.json' } as Scene3DData)).toBe(false);
         expect(hasNonFallbackObjectContent({ objects: [] })).toBe(false);
         expect(hasNonFallbackObjectContent({ objects: [{ id: 'm', content: { type: '3d-scene', durableUri: 'internal:mesh' } }] as any })).toBe(false);
         // The viewport adds no mesh of its own (it once drew a blue sculpt sphere) next to the splat.

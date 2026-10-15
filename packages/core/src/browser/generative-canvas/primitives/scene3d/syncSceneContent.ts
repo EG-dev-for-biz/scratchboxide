@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import type { BakedGaussian } from '../../../../common/geospatial-4d-protocol';
-import type { Scene3DData } from '../../canvas-types';
+import type { Media4DObject, Scene3DData } from '../../canvas-types';
 import type { RendererStack, Scene3DRenderMode, SceneContentHandle, SceneContentKind, WasmMeshHandle } from './types';
 import { removeAndDispose } from './types';
 
@@ -22,8 +22,8 @@ export interface SceneContentInput {
     has3DTiles: boolean;
     hasCustomMeshes: boolean;
     /**
-     * The scene loads content of its own: objects other than the `internal:mesh` placeholder, or a splat
-     * (splatUrl / splatTilesetUrl, which the viewport loads as an object). See hasNonFallbackObjectContent.
+     * The scene loads content of its own: objects the viewport's loader draws (a .glb / .gltf model or a splat), or
+     * a splat file (splatUrl, which the viewport loads as an object). See hasNonFallbackObjectContent.
      */
     hasNonFallbackObjects: boolean;
     hasCppGenerator?: boolean;
@@ -41,13 +41,60 @@ export interface SceneContentFactories {
     } | null;
 }
 
+/** Model files the viewport's object loader draws (objects[].content.durableUri); anything else it skips. */
+const DRAWABLE_MODEL_URI = /\.(glb|gltf|splat|spz)($|[?#])/i;
+
+/** The `internal:mesh` placeholder a workspace file opening seeds next to real objects; it draws nothing. */
+export function isPlaceholderObject(o: Media4DObject | undefined): boolean {
+    return o?.content?.durableUri === 'internal:mesh';
+}
+
+/** A `map-3d` object asks for live 3D tiles at its own anchor; the tiles layer draws it (and reports its errors). */
+export function isTilesObject(o: Media4DObject | undefined): boolean {
+    return o?.content?.type === 'map-3d';
+}
+
 /**
- * True when the scene loads content of its own: any object other than the `internal:mesh` placeholder (which a
- * workspace file opening seeds next to real objects), or a splat. A placeholder never hides the real objects beside it.
+ * True when the viewport's object loader draws this object: its durableUri is a .glb / .gltf model or a .splat /
+ * .spz splat (or it is typed gaussian-splat with a file). Other URIs (internal:plane, images, .obj) are skipped.
  */
-export function hasNonFallbackObjectContent(scene: Pick<Scene3DData, 'objects' | 'splatUrl' | 'splatTilesetUrl'>): boolean {
-    if (scene.splatUrl || scene.splatTilesetUrl) return true;
-    return Array.isArray(scene.objects) && scene.objects.some(o => o?.content?.durableUri !== 'internal:mesh');
+export function isDrawableSceneObject(o: Media4DObject | undefined): boolean {
+    const uri = o?.content?.durableUri;
+    if (!uri || isPlaceholderObject(o) || isTilesObject(o)) return false;
+    return o?.content?.type === 'gaussian-splat' || DRAWABLE_MODEL_URI.test(uri);
+}
+
+/** A declared object the viewport cannot draw, and why. */
+export interface UndrawableSceneObject {
+    id: string;
+    reason: string;
+}
+
+/**
+ * The declared objects the viewport would skip without a word: neither a model or splat file the loader draws,
+ * nor a placeholder or a tiles object. A scene that holds them says so instead of looking empty or complete.
+ */
+export function undrawableSceneObjects(scene: Pick<Scene3DData, 'objects'>): UndrawableSceneObject[] {
+    if (!Array.isArray(scene.objects)) return [];
+    return scene.objects
+        .filter(o => !isPlaceholderObject(o) && !isTilesObject(o) && !isDrawableSceneObject(o))
+        .map((o, i) => {
+            const uri = o?.content?.durableUri;
+            return {
+                id: o?.id || `objects[${i}]`,
+                reason: uri ? `${uri} is not a .glb, .gltf, .splat or .spz file` : 'it has no content.durableUri'
+            };
+        });
+}
+
+/**
+ * True when the scene loads content of its own: an object the loader draws (see isDrawableSceneObject), or a splat
+ * file (splatUrl). A placeholder never hides the real objects beside it, and an object the loader skips (an image,
+ * internal:plane) is not content.
+ */
+export function hasNonFallbackObjectContent(scene: Pick<Scene3DData, 'objects' | 'splatUrl'>): boolean {
+    if (scene.splatUrl) return true;
+    return Array.isArray(scene.objects) && scene.objects.some(isDrawableSceneObject);
 }
 
 /**

@@ -42,6 +42,11 @@ export interface AtmosphereInput {
     contentRadiusMeters?: number;
 }
 
+/** Whether the atmosphere slice draws procedural biome terrain for these inputs (it is the scene's ground then). */
+export function drawsProceduralBiomeTerrain(input: Pick<AtmosphereInput, 'renderMode' | 'terrainBiomes' | 'hasGeoCoordinates' | 'has3DTiles'>): boolean {
+    return input.renderMode !== 'clay' && !!input.terrainBiomes && !input.hasGeoCoordinates && !input.has3DTiles;
+}
+
 /** Bounding radius the cinematic studio rigs are authored around (lights sit ~4-5 m out, 20-25 m range). */
 const STUDIO_RIG_REFERENCE_RADIUS_METERS = 6.0;
 
@@ -409,7 +414,7 @@ export function syncAtmosphere(
     }
 
     // Procedural biome terrain (only when not standing on real terrain)
-    if (hasBiomes && !input.hasGeoCoordinates && !input.has3DTiles) {
+    if (hasBiomes && drawsProceduralBiomeTerrain(input)) {
         terrainBiome = factories.createProceduralBiomeTerrain(scene, biomeType, input.renderMode, isSunset);
         if (terrainCloudShadows && terrainBiome?.terrainMesh?.material) {
             terrainCloudShadows.attachToMaterial(terrainBiome.terrainMesh.material);

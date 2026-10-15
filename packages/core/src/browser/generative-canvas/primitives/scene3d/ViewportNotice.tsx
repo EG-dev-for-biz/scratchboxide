@@ -12,7 +12,7 @@ import type { SceneContentKind } from './types';
 import type { GeneratorRunError } from './generatorRun';
 
 export interface ViewportNoticeEntry {
-    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'empty';
+    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'undrawable-objects' | 'empty';
     title: string;
     detail?: string;
 }
@@ -22,9 +22,18 @@ export interface ViewportNoticeInput {
     generatorError: GeneratorRunError | null;
     tilesError: string | null;
     contentKind: SceneContentKind;
-    /** Content drawn by slices outside the focal-content classification (vector roadmap underlay, WASM wave mesh). */
+    /**
+     * Content drawn by slices outside the focal-content classification (vector roadmap underlay, WASM wave mesh,
+     * procedural biome terrain).
+     */
     hasAuxiliaryContent?: boolean;
+    /** Declared objects whose model or splat file failed to download or parse. */
+    objectLoadErrors?: Array<{ id: string; error: string }>;
+    /** Declared objects the loader skips (not a model or splat file); see undrawableSceneObjects. */
+    undrawableObjects?: Array<{ id: string; reason: string }>;
 }
+
+const listOf = (items: string[]) => items.slice(0, 6).join('\n') + (items.length > 6 ? `\n… and ${items.length - 6} more` : '');
 
 /**
  * What the viewport must say about its own state. Failures are reported as they are, and a scene whose data
@@ -40,6 +49,22 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
     }
     if (input.tilesError) {
         notices.push({ kind: 'tiles-error', title: '3D Tiles unavailable', detail: input.tilesError });
+    }
+    const loadErrors = input.objectLoadErrors || [];
+    if (loadErrors.length > 0) {
+        notices.push({
+            kind: 'object-load-error',
+            title: loadErrors.length === 1 ? 'A model failed to load' : `${loadErrors.length} models failed to load`,
+            detail: listOf(loadErrors.map(e => `${e.id}: ${e.error}`))
+        });
+    }
+    const undrawable = input.undrawableObjects || [];
+    if (undrawable.length > 0) {
+        notices.push({
+            kind: 'undrawable-objects',
+            title: undrawable.length === 1 ? 'An object cannot be drawn' : `${undrawable.length} objects cannot be drawn`,
+            detail: listOf(undrawable.map(o => `${o.id}: ${o.reason}`))
+        });
     }
     if (notices.length === 0 && input.contentKind === 'empty' && !input.hasAuxiliaryContent) {
         notices.push({ kind: 'empty', title: 'No geometry', detail: 'This scene has no models, meshes, generator or script to draw.' });

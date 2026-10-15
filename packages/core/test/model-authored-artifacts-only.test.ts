@@ -379,6 +379,39 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
         }
     });
 
+    it('a mount reports success only for what the viewport draws', async () => {
+        // A generator known only by a server file path: the viewport never loads it (it showed "No geometry").
+        const pathOnly: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'Lantern', payload: { pythonGenerator: { glbPath: '/tmp/build/3d-python/lantern.glb' } } }, ctx);
+        expect(pathOnly.status).toBe('failed');
+        expect(pathOnly.resultPayload.error).toContain('pythonGenerator.glbPath (/tmp/build/3d-python/lantern.glb) is a file on the server that the viewport does not load');
+        expect(pathOnly.summaryResult).not.toContain('Mounted');
+        // Objects the viewport's loader skips: internal:plane (taught by an old schema example), an image, an .obj.
+        for (const durableUri of ['internal:plane', 'https://example.com/photo.jpg', '/models/teapot.obj']) {
+            const payload = { objects: [{ id: 'hero', content: { type: '3d-model', durableUri, mimeType: 'model/procedural-aircraft' } }] };
+            const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload }, ctx);
+            expect(res.status, durableUri).toBe('failed');
+            expect(res.resultPayload.error).toContain(`hero (${durableUri} is not a .glb, .gltf, .splat or .spz file)`);
+            expect(res.resultPayload.artifact).toBeUndefined();
+        }
+        // Next to a drawable model, an undrawable object still fails the mount rather than vanishing.
+        const mixed: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { objects: [
+            { id: 'a', content: { type: '3d-model', durableUri: '/models/a.glb' } },
+            { id: 'b', content: { type: '3d-model' } }
+        ] } }, ctx);
+        expect(mixed.status).toBe('failed');
+        expect(mixed.resultPayload.error).toContain('b (it has no content.durableUri)');
+        // What the viewport does draw mounts: models, splats, a map-3d object with an anchor, a generator GLB.
+        for (const payload of [
+            { objects: [{ id: 'a', content: { type: '3d-model', durableUri: '/api/models/a.glb?v=2' } }] },
+            { objects: [{ id: 's', content: { type: 'gaussian-splat', durableUri: '/models/s.spz' } }] },
+            { objects: [{ id: 'm', content: { type: 'map-3d' }, space: { geoAnchor: { lat: 51.5, lng: -0.12, alt: 10 } } }] },
+            { pythonGenerator: { glbPath: '/tmp/x.glb', glbBase64: 'Z2xURg==' } }
+        ]) {
+            const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload }, ctx);
+            expect(res.resultPayload.status, JSON.stringify(payload)).toBe('success');
+        }
+    });
+
     it('operators dispatched with no scene open start from a clay first pass', async () => {
         const res: any = await canvasHandlers.scene_3d_dispatch_operators({ commands: [] }, { request: { prompt: 'add a key light' } } as any);
         expect(res.resultPayload.artifact.data.renderMode).toBe('clay');

@@ -129,9 +129,9 @@ import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize }
 import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
-import { syncAtmosphere } from './scene3d/syncAtmosphere';
+import { drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
-import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
+import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
 import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRunFailure, type GeneratorRunError } from './scene3d/generatorRun';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
@@ -1847,7 +1847,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         hasCppGenerator: !!sceneData.cppGenerator?.glbBase64 || !!(sceneData.cppGenerator?.sourceCode && sceneData.cppGenerator.sourceCode.trim().length > 0),
         hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64 || !!(sceneData.pythonGenerator?.sourceCode && sceneData.pythonGenerator.sourceCode.trim().length > 0)
     }), [
-        hasActiveScript, tilesInput.has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.splatUrl, sceneData.splatTilesetUrl,
+        hasActiveScript, tilesInput.has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.splatUrl,
         sceneData.cppGenerator?.glbBase64, sceneData.cppGenerator?.sourceCode,
         sceneData.pythonGenerator?.glbBase64, sceneData.pythonGenerator?.sourceCode
     ]);
@@ -3409,13 +3409,26 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
     // Only an error about the scene's current generator source or model; a later version that fixed it clears it.
     const currentGeneratorError = generatorErrorForScene(generatorError, sceneData);
+    // Objects the loader skips (an image, internal:plane) and models that failed to download or parse are said in
+    // the viewport, not only in the console or the variant switcher.
+    const undrawableObjects = React.useMemo(() => undrawableSceneObjects(sceneData), [sceneData.objects]);
+    const objectLoadErrors = React.useMemo(() => {
+        const declared = new Set((sceneData.objects || []).map(o => o.id));
+        if (sceneData.splatUrl) declared.add('primary-location-splat');
+        return Object.entries(externalLoadStatus)
+            .filter(([id, st]) => st.phase === 'error' && declared.has(id))
+            .map(([id, st]) => ({ id, error: st.error || 'the file could not be loaded' }));
+    }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl]);
+    const drawsBiomeTerrain = drawsProceduralBiomeTerrain({ renderMode, terrainBiomes: sceneData.features?.terrainBiomes, hasGeoCoordinates, has3DTiles });
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
         tilesError,
         contentKind: sceneContentKind,
-        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh
-    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh]);
+        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
+        objectLoadErrors,
+        undrawableObjects
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;
