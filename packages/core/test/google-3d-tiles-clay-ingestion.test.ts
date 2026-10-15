@@ -9,7 +9,7 @@ import { test } from 'vitest';
  ********************************************************************************/
 
 import * as assert from 'assert';
-import { LocationUnresolvedError, MissingInputError } from '../src/common/errors/pipeline-errors';
+import { LocationUnresolvedError, MissingInputError, TileExtractionError } from '../src/common/errors/pipeline-errors';
 import { GoogleMapsService } from '../src/browser/generative-canvas/services/google-maps-service';
 import * as THREE from 'three';
 import { LocalTangentPlane } from '../src/common/coordinate/LocalTangentPlane';
@@ -25,11 +25,7 @@ import {
     ClayPresetId,
     ClayMaterialConfig
 } from '../src/browser/generative-canvas/services/TileClayProcessor';
-import {
-    Google3DTileService,
-    TileIngestionOptions,
-    TileIngestionResult
-} from '../src/browser/generative-canvas/services/Google3DTileService';
+import { Google3DTileService } from '../src/browser/generative-canvas/services/Google3DTileService';
 import {
     Google3DTileIngestionService
 } from '../src/node/spatial/Google3DTileIngestionService';
@@ -158,48 +154,24 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
             if (savedKeys.m !== undefined) process.env.MAP_TILES_API_KEY = savedKeys.m;
         }
 
-        // 2. Test Ingesting 3D Map Tile Region
-        const ingestionOptions: TileIngestionOptions = {
+        // 2. The viewport cannot fetch Google 3D Tiles, so ingestion fails visibly. It used to synthesize
+        // trig-harmonic terrain and box buildings and label them "Google 3D Map Tile".
+        await assert.rejects(tileService.ingestTileRegion({
             query: 'san francisco ferry building',
             lat: 37.7955,
             lng: -122.3937,
-            elevation: 2.4,
-            zoom: 17,
-            radiusMeters: 180,
-            clayPreset: 'warm-clay',
-            includeTerrain: true,
-            includeBuildings: true,
-            detailLevel: 'high'
-        };
+            elevation: 2.4
+        }), TileExtractionError);
 
-        const result: TileIngestionResult = await tileService.ingestTileRegion(ingestionOptions);
-
-        assert.ok(result.success, 'Ingestion must succeed');
-        assert.ok(result.mesh, 'Result must contain Three.js Mesh / Group');
-        assert.ok(result.media4DObject, 'Result must contain Media4DObject');
-        assert.ok(result.customMeshDefinition, 'Result must contain customMeshDefinition for Scene3DData');
-        assert.ok(result.stats.buildingCount > 0, 'Should synthesize architectural building topologies');
-        assert.ok(result.stats.vertexCount > 100, 'Vertex count should reflect realistic 3D geometry');
-
-        // Check Media4DObject conformance to 4D geospatial protocol
-        const m4d = result.media4DObject;
-        assert.strictEqual(m4d.content.type, 'map-3d');
-        assert.ok(m4d.space.geoAnchor, 'Media4DObject must include geoAnchor');
-        assert.ok(m4d.space.geoAnchor!.lat > 0, 'Valid lat in geoAnchor');
-        assert.ok(m4d.space.boundingBox, 'Media4DObject must include boundingBox');
-        assert.ok(m4d.content.metadata?.vertices, 'Media4DObject must document vertex count');
-
-        // Check Clay Material applied to Ingested Mesh
-        const meshMat = result.mesh.material as THREE.MeshStandardMaterial;
-        assert.strictEqual(meshMat.userData.clayPreset, 'warm-clay');
-        assert.strictEqual(meshMat.userData.is3DMapTile, true);
-
-        // Check GLTF / GLB Buffer Export Synthesis
-        const glbBuffer = await tileService.synthesizeGlbTileBuffer(result.mesh);
+        // GLB export of a mesh the caller already has (here one triangle) still works.
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
+        geometry.computeVertexNormals();
+        const glbBuffer = await tileService.synthesizeGlbTileBuffer(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial()));
         assert.ok(glbBuffer instanceof ArrayBuffer || glbBuffer instanceof Uint8Array, 'GLB buffer created');
         assert.ok(glbBuffer.byteLength > 0, 'GLB buffer must not be empty');
 
-        console.log(`  ✓ Test 3 Passed: Ingested 3D Tile region with ${result.stats.buildingCount} buildings, ${result.stats.vertexCount} vertices, and GLB export.`);
+        console.log('  ✓ Test 3 Passed: viewport tile ingestion fails instead of synthesizing a tile; GLB export works.');
     }
 
     // ========================================================================
@@ -259,34 +231,19 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
 
         const engine = createOperatorEngine(initialScene);
 
-        // 1. Test `sb_import_3d_tile` (a place name alone is not resolved here: it needs coordinates)
-        const byName = await engine.dispatch('sb_import_3d_tile', { query: 'independence hall' });
-        assert.strictEqual(byName.success, false, 'A bare place name must not be resolved from a table');
-        const importRes = await engine.dispatch('sb_import_3d_tile', {
-            query: 'independence hall',
-            lat: 39.9489,
-            lng: -75.15,
-            elevation: 12.0,
-            clayPreset: 'terracotta',
-            radiusMeters: 120,
-            detailLevel: 'medium'
-        });
-
-        assert.strictEqual(importRes.success, true, `sb_import_3d_tile failed: ${importRes.error}`);
-        assert.ok(importRes.data.objectId, 'Must return imported object ID');
-        assert.ok(importRes.data.vertexCount > 0, 'Must report imported vertex count');
-
-        const updatedScene = engine.getSceneData();
-        assert.ok(updatedScene.customMeshes && updatedScene.customMeshes.length > 0, 'Custom meshes array must contain tile');
-        assert.ok(updatedScene.objects && updatedScene.objects.length > 0, 'Media4D objects array must contain tile');
-
-        const tileMesh = updatedScene.customMeshes.find(m => m.id === importRes.data.objectId);
-        assert.ok(tileMesh, 'Imported tile mesh must exist in customMeshes');
-        assert.strictEqual(tileMesh!.material?.shaderKey, 'terracotta');
+        // 1. `sb_import_3d_tile` is gone: it built a synthetic tile and labelled it a Google 3D Tile.
+        const importRes = await engine.dispatch('sb_import_3d_tile', { query: 'independence hall', lat: 39.9489, lng: -75.15, elevation: 12.0 });
+        assert.strictEqual(importRes.success, false, 'sb_import_3d_tile no longer exists');
+        assert.ok(!engine.getSceneData().customMeshes?.length, 'nothing was mounted');
+        const tileMeshId = 'tile_mesh_extracted';
+        engine.getSceneData().customMeshes!.push({
+            id: tileMeshId, name: 'Extracted tiles', type: 'custom', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+            material: { type: 'MeshStandardMaterial', shaderKey: 'terracotta' }
+        } as any);
 
         // 2. Test `sb_set_clay_mode`
         const clayRes = await engine.dispatch('sb_set_clay_mode', {
-            targetId: importRes.data.objectId,
+            targetId: tileMeshId,
             preset: 'onyx',
             roughness: 0.82,
             metalness: 0.05
@@ -296,7 +253,7 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
         assert.strictEqual(clayRes.data.appliedPreset, 'onyx');
 
         const mutatedScene = engine.getSceneData();
-        const updatedTileMesh = mutatedScene.customMeshes?.find(m => m.id === importRes.data.objectId);
+        const updatedTileMesh = mutatedScene.customMeshes?.find(m => m.id === tileMeshId);
         assert.strictEqual(updatedTileMesh?.material?.shaderKey, 'onyx');
 
         // 3. Test `sb_set_tile_anchor`
@@ -314,7 +271,7 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
         assert.strictEqual(finalScene.geoAnchor?.landmarkName, 'Eiffel Tower');
         assert.strictEqual(finalScene.geoAnchor?.lat, 48.8584);
 
-        console.log('  ✓ Test 5 Passed: sb_import_3d_tile, sb_set_clay_mode, and sb_set_tile_anchor operators execute cleanly.');
+        console.log('  ✓ Test 5 Passed: sb_import_3d_tile is gone; sb_set_clay_mode and sb_set_tile_anchor operators execute cleanly.');
     }
 
     // ========================================================================
@@ -325,14 +282,12 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
         const threeScene = new THREE.Scene();
         const tileService = Google3DTileService.getInstance();
 
-        const ingestion = await tileService.ingestTileRegion({
-            query: 'san francisco',
-            lat: 37.7749,
-            lng: -122.4194,
-            elevation: 16.0,
-            clayPreset: 'alabaster',
-            radiusMeters: 100
-        });
+        // A tile mesh as the viewport holds it after a server extraction (one triangle stands in for the tiles).
+        const tileGeometry = new THREE.BufferGeometry();
+        tileGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 10, 0, 0, 0, 0, 10], 3));
+        const ingestion = { mesh: new THREE.Mesh(tileGeometry, new THREE.MeshStandardMaterial()) };
+        ingestion.mesh.name = 'Extracted tiles';
+        ingestion.mesh.userData = { is3DMapTile: true };
 
         threeScene.add(ingestion.mesh);
 

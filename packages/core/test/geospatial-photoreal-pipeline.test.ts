@@ -8,110 +8,19 @@ import { test, expect } from 'vitest';
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import {
-  GeospatialPhotorealPipeline,
-  PhotorealReconstructionOptions
-} from '../src/browser/generative-canvas/services/GeospatialPhotorealPipeline';
-import {
-  Google3DTileService,
-  generatePhotorealProceduralCppSource
-} from '../src/browser/generative-canvas/services/Google3DTileService';
-import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
+import { Google3DTileService } from '../src/browser/generative-canvas/services/Google3DTileService';
+import { TileExtractionError } from '../src/common/errors/pipeline-errors';
 
-test('GeospatialPhotorealPipeline: Location-agnostic C++20 code generation', () => {
-  const pipeline = GeospatialPhotorealPipeline.getInstance();
-
-  // A place name is not resolved offline (no landmark table): it must come with coordinates.
-  expect(() => pipeline.generatePhotorealCppSource({ query: 'Empire State Building' })).toThrow(LocationUnresolvedError);
-
-  // Test 1: Empire State Building NYC (explicit coordinates)
-  const esbOptions: PhotorealReconstructionOptions = {
-    lat: 40.7484405,
-    lng: -73.9856644,
-    elevation: 15.0,
-    landmarkName: 'Empire State Building',
-    footprintWidth: 65.0,
-    footprintDepth: 55.0,
-    towerHeight: 380.0,
-    spireHeight: 443.2
-  };
-
-  const esbCpp = pipeline.generatePhotorealCppSource(esbOptions);
-  expect(esbCpp).toContain('#include "scratchbox_engine.hpp"');
-  expect(esbCpp).toContain('UniversalPhotorealSynthesizer::synthesizeLandmark');
-  expect(esbCpp).toContain('.towerTotalHeightMeters = 380.0f');
-  expect(esbCpp).toContain('.spireTotalHeightMeters = 443.2f');
-  expect(esbCpp).toContain('GlbWriter::streamChunk');
-
-  // Test 2: San Francisco Ferry Building
-  const sfOptions: PhotorealReconstructionOptions = {
-    lat: 37.7955,
-    lng: -122.3937,
-    elevation: 2.4,
-    landmarkName: 'San Francisco Ferry Building',
-    footprintWidth: 45.0,
-    footprintDepth: 35.0,
-    towerHeight: 75.0,
-    spireHeight: 75.0
-  };
-
-  const sfCpp = pipeline.generatePhotorealCppSource(sfOptions);
-  expect(sfCpp).toContain('#include "scratchbox_engine.hpp"');
-  expect(sfCpp).toContain('.towerTotalHeightMeters = 75.0f');
-  expect(sfCpp).toContain('.spireTotalHeightMeters = 75.0f');
-
-  // Test 3: Arbitrary Coordinates (Tokyo Tower lat 35.6586, lng 139.7454)
-  const tokyoOptions: PhotorealReconstructionOptions = {
-    lat: 35.6586,
-    lng: 139.7454,
-    elevation: 25.0,
-    landmarkName: 'Tokyo Tower',
-    towerHeight: 332.9,
-    spireHeight: 332.9
-  };
-
-  const tokyoCpp = generatePhotorealProceduralCppSource(tokyoOptions);
-  expect(tokyoCpp).toContain('Tokyo Tower');
-  expect(tokyoCpp).toContain('.latDeg = 35.6586');
-  expect(tokyoCpp).toContain('.lngDeg = 139.7454');
-  expect(tokyoCpp).toContain('.towerTotalHeightMeters = 332.9f');
-});
-
-test('GeospatialPhotorealPipeline: Scene synthesis with PBR materials and ground details', () => {
-  // Google3DTileService.synthesizePhotorealLandmark was a thin delegate to
-  // GeospatialPhotorealPipeline.synthesizePhotorealScene; commit 025cfe0 removed the delegate,
-  // so exercise the pipeline method it forwarded to.
-  // Free-text queries are no longer resolved offline: deb84c7 removed the
-  // OFFLINE_TEST_FIXTURE_COORDINATES landmark table (zero presets; AGENTS.md "queries must supply
-  // explicit geodetic coordinates or an active Google Maps API key"), so pass the anchor explicitly.
-  const pipeline = GeospatialPhotorealPipeline.getInstance();
-
-  const result = pipeline.synthesizePhotorealScene({
-    lat: 40.7644,
-    lng: -73.9744,
-    elevation: 18.0,
-    landmarkName: 'The Plaza Hotel NYC',
-    footprintWidth: 70.0,
-    footprintDepth: 60.0,
-    towerHeight: 75.0,
-    spireHeight: 75.0
-  });
-
-  expect(result.success).toBe(true);
-  expect(result.landmarkName).toBe('The Plaza Hotel NYC');
-  expect(result.mesh).toBeDefined();
-  expect(result.media4DObject).toBeDefined();
-  expect(result.media4DObject.content.type).toBe('map-3d');
-  expect(result.media4DObject.space.geoAnchor.lat).toBeCloseTo(40.7644, 2);
-  expect(result.media4DObject.space.geoAnchor.lng).toBeCloseTo(-73.9744, 2);
-
-  // Check stats and materials
-  expect(result.stats.materialsUsed).toContain('PBR_IndianaLimestone');
-  expect(result.stats.materialsUsed).toContain('PBR_CharcoalGranitePlinth');
-  expect(result.stats.materialsUsed).toContain('PBR_ConcreteSidewalk');
-  expect(result.stats.materialsUsed).toContain('PBR_SolarWindowGlass');
-  expect(result.stats.materialsUsed).toContain('PBR_StainlessSteel');
-  expect(result.stats.vertexCount).toBeGreaterThan(10000);
+test('Google3DTileService never synthesizes a tile: the viewport ingest fails visibly', async () => {
+  const service = Google3DTileService.getInstance();
+  // It used to build trig-harmonic terrain and box buildings labelled "Google 3D Map Tile (...)".
+  await expect(service.ingestTileRegion({ query: 'Flatiron Building', lat: 40.7411, lng: -73.9897, elevation: 12 }))
+    .rejects.toThrow(TileExtractionError);
+  await expect(service.ingestTileRegion({ lat: 40.7411, lng: -73.9897 })).rejects.toThrow(/google_3d_tiles_get_clay/);
+  const tileModule: Record<string, unknown> = await import('../src/browser/generative-canvas/services/Google3DTileService');
+  expect(tileModule.generateGeospatialCpp3DSource).toBeUndefined();
+  expect(tileModule.GeospatialPhotorealPipeline).toBeUndefined();
+  expect((service as any).ingestTileRegionSync).toBeUndefined();
 });
 
 test('GoogleMapsService: Multi-source geospatial endpoints (Aerial View, Solar, Street View)', async () => {

@@ -213,96 +213,6 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
     return 'general';
 }
 
-/**
- * Generates modern, fully compilable C++20 procedural source code for geospatial 3D tile scenes.
- * Enforces the "C/C++ First" architecture directive for real-world landmarks and photorealistic tiles.
- */
-export function generateGeospatialCpp3DSource(params: {
-    landmarkName?: string;
-    lat: number;
-    lng: number;
-    elevation?: number;
-    clayPreset?: string;
-    castingRationale?: string;
-}): string {
-    const rawLandmark = params.landmarkName || 'Geospatial Site';
-    const sanitizedTitle = rawLandmark.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase().slice(0, 40) || 'geospatial_site';
-    const elevComment = params.elevation !== undefined
-        ? `// Ground Elevation: ${params.elevation.toFixed(2)}m MSL [Google Elevation Ground Truth, Datum: EGM96]\n`
-        : '';
-    const rationaleComment = params.castingRationale
-        ? `// Creative Casting Rationale: ${params.castingRationale.replace(/\n/g, ' ')}\n`
-        : '';
-
-    let clayEnum = 'WARM_TERRACOTTA';
-    const preset = (params.clayPreset || '').toLowerCase();
-    if (preset.includes('white') || preset.includes('arch')) clayEnum = 'ARCHITECTURAL_WHITE';
-    else if (preset.includes('sandstone') || preset.includes('desert')) clayEnum = 'SANDSTONE';
-    else if (preset.includes('concrete') || preset.includes('brutalist')) clayEnum = 'CONCRETE_BRUTALIST';
-    else if (preset.includes('slate') || preset.includes('grey') || preset.includes('gray')) clayEnum = 'SLATE_GREY';
-
-    return `// ==============================================================================
-// Scratchbox 3D Engine: Geospatial Procedural Generator (C++20)
-// Landmark: ${rawLandmark} (${params.lat.toFixed(4)}, ${params.lng.toFixed(4)})
-${elevComment}${rationaleComment}// ==============================================================================
-#include "scratchbox_engine.hpp"
-#include <iostream>
-#include <vector>
-
-int main() {
-    using namespace scratchbox::tiles;
-    using namespace scratchbox::footprints;
-    using namespace scratchbox::io;
-    using namespace scratchbox::math;
-
-    // 1. Establish Geospatial Anchor for Landmark
-    TileRegionAnchor anchor{
-        .latDeg = ${params.lat},
-        .lngDeg = ${params.lng},
-        .altitudeMeters = ${params.elevation || 10.0},
-        .landmarkName = "${rawLandmark}",
-        .groundRadiusMeters = 200.0f,
-        .clayPreset = ClayPreset::${clayEnum}
-    };
-
-    // 2. Synthesize High-Resolution Geological Ground & Terrain Mesh
-    auto terrain = TileIngestor::createTerrainPatch(anchor, 250.0f, 32);
-
-    // 3. Extrude Landmark Architectural Massing with Stepped Setbacks
-    std::vector<Vec2> towerFootprint = {
-        Vec2(-16.0f, -16.0f),
-        Vec2(16.0f, -16.0f),
-        Vec2(16.0f, 16.0f),
-        Vec2(-16.0f, 16.0f)
-    };
-
-    auto building = BuildingMassingGenerator::extrudeSteppedMassing(
-        towerFootprint,
-        0.0f,
-        18.0f,
-        45.0f,
-        0.78f,
-        TileIngestor::getClayMaterial(anchor.clayPreset)
-    );
-    building.name = "${sanitizedTitle}_Massing";
-
-    // 4. Merge Terrain, Architectural Massing, and Ingested Geometry
-    auto compositeScene = TileIngestor::mergeMeshes({ terrain, building }, "${sanitizedTitle}_Scene");
-
-    // 5. Compute Solar Ephemeris & Atmospheric Sunlight
-    auto lights = TileIngestor::createGeospatialLighting(anchor.latDeg, anchor.lngDeg, 15.0f);
-
-    // 6. Stream glTF 2.0 Binary Chunks directly into Three.js Viewport
-    GlbWriter::streamChunk(compositeScene, compositeScene.name);
-
-    std::cout << "GEOSPATIAL_BUILD_SUCCESS: " << compositeScene.name
-              << " Vertices=" << compositeScene.vertices.size()
-              << " Triangles=" << (compositeScene.indices.size() / 3) << std::endl;
-    return 0;
-}
-`;
-}
-
 export type VehicleArchetype =
     | 'sports_car'
     | 'formula'
@@ -2641,13 +2551,8 @@ onFrame((time, delta) => {
                 ground: true
             },
             features: Object.keys(baseFeatures).length > 0 ? baseFeatures : undefined,
-            geoAnchor: isCastle ? undefined : {
-                lat: 42.4473,
-                lng: -71.2272,
-                elevation: 68.0,
-                active: true,
-                landmarkName: 'Lexington Battle Green, Massachusetts'
-            },
+            // No geoAnchor: words in the prompt never place a scene on Earth (Gettysburg, Waterloo and every other
+            // battle used to be anchored at Lexington Battle Green). A place comes only from the location tools.
             objects: [
                 {
                     id: 'obj-lexington-ground',

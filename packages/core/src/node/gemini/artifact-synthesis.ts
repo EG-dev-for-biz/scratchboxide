@@ -3380,7 +3380,7 @@ export function parseOrSynthesizeArtifact(
 
         // Prompt words never become places and there is no default location: a location reaches the scene only
         // through the location tools (or is already on the active scene).
-        const resolvedGeoAnchor = active3DData?.geoAnchor || contextualSynthesized.geoAnchor;
+        const resolvedGeoAnchor = active3DData?.geoAnchor;
 
         let finalTitle = active3DData?.title || sceneTitle;
         let finalSubtitle = (isAnimateOnly && active3DData?.subtitle) ? active3DData.subtitle : (active3DData?.subtitle || sceneSummary);
