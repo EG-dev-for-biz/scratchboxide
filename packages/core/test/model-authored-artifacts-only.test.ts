@@ -431,6 +431,20 @@ describe('the chat client keeps the model\'s artifact', () => {
         }
     });
 
+    it('only a slash command starts the deep-write pipeline; words in a message go to the model', async () => {
+        for (const prompt of ['Can you deep write the onboarding doc?', 'Do some intensive planning for the launch', 'help me plan a codebase for a todo app']) {
+            const deepWrites: string[] = [];
+            const { streamed } = await sendWithArtifact(prompt, SCENE, p => deepWrites.push(p));
+            expect(deepWrites, prompt).toEqual([]);
+            expect(streamed, prompt).toBe(true);
+            vi.restoreAllMocks();
+        }
+        const deepWrites: string[] = [];
+        const { streamed } = await sendWithArtifact('/plan a todo app', SCENE, p => deepWrites.push(p));
+        expect(deepWrites).toEqual(['a todo app']);
+        expect(streamed).toBe(false);
+    });
+
     it('an "animate" follow-up does not switch on playback the model did not set', async () => {
         const scene: CanvasArtifact = { ...SCENE, data: { title: 'Shed', objects: [] } as Scene3DData };
         const { reply } = await sendWithArtifact('animate the shed door', scene);
@@ -439,9 +453,9 @@ describe('the chat client keeps the model\'s artifact', () => {
     });
 });
 
-async function sendWithArtifact(text: string, artifact: CanvasArtifact) {
+async function sendWithArtifact(text: string, artifact: CanvasArtifact, onDeepWrite?: (prompt: string) => void) {
     vi.spyOn(WorkspaceConfigClient.getInstance(), 'fetchWorkspaceConfig').mockResolvedValue({ workspaceRoot: '/tmp/ws', rules: [], customSkills: [], customMcpServers: [] } as FullWorkspaceConfig);
-    vi.spyOn(BrowserGeminiClient.getInstance(), 'streamGenerate').mockImplementation(async (_request, onEvent) => {
+    const stream = vi.spyOn(BrowserGeminiClient.getInstance(), 'streamGenerate').mockImplementation(async (_request, onEvent) => {
         onEvent({ type: 'artifact_complete', artifact });
         onEvent({ type: 'done', text: 'Done.', artifact });
     });
@@ -450,7 +464,7 @@ async function sendWithArtifact(text: string, artifact: CanvasArtifact) {
     const noop = () => undefined;
     const deps: SendMessageDeps = {
         inputValue: '', isGenerating: false, setInputValue: noop,
-        executeDeepWritePipeline: async () => undefined, handleStartAgent: async () => undefined,
+        executeDeepWritePipeline: async (prompt: string) => { onDeepWrite?.(prompt); }, handleStartAgent: async () => undefined,
         skills: [], selectedSkillIds: [], mcpServers: [], selectedMcpIds: [],
         currentSessionId: 'S', setCurrentSessionId: noop,
         sessions, setSessions: (v: any) => { sessions = typeof v === 'function' ? v(sessions) : v; },
@@ -475,5 +489,5 @@ async function sendWithArtifact(text: string, artifact: CanvasArtifact) {
     await hook!.sendMessage(text);
     const reply = sessions[0].messages.find(m => m.sender === 'assistant')!;
     const user = sessions[0].messages.find(m => m.sender === 'user');
-    return { reply, active, user };
+    return { reply, active, user, streamed: stream.mock.calls.length > 0 };
 }

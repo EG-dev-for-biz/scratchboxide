@@ -258,6 +258,19 @@ describe('chat: the reply carries and shows which model answered', () => {
         expect(saved.modelProvenance).toEqual(provenance);
     });
 
+    it('a reply that fails after a fallback model answered still says which model answered', async () => {
+        // The server's error event carries the provenance; the browser client used to throw before passing it on,
+        // and the failed reply dropped it, so the failure did not say a fallback model (or the API key) had answered.
+        vi.spyOn(WorkspaceConfigClient.getInstance(), 'fetchWorkspaceConfig').mockResolvedValue({ workspaceRoot: '/tmp/ws', rules: [], customSkills: [], customMcpServers: [] } as FullWorkspaceConfig);
+        const sseBody = `data: ${JSON.stringify({ type: 'status', text: 'Thinking...' })}\n\ndata: ${JSON.stringify({ type: 'error', error: 'The model returned an empty reply (finish reason: STOP).', modelUsed: 'gemini-3.8-flash', modelProvenance: provenance })}\n\ndata: [DONE]\n\n`;
+        (globalThis as any).fetch = async () => new Response(sseBody, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        const saved = await sendOne('How tall is the arch?');
+        expect(saved.text).toContain('The model returned an empty reply');
+        expect(saved.modelProvenance).toEqual(provenance);
+        const html = renderToStaticMarkup(React.createElement(MessageNotices, { message: saved }));
+        expect(html).toContain('Answered by gemini-3.8-flash — gemini-4-argon unavailable: 404');
+    });
+
     it.skipIf(!htmlScreenshotChrome.ok)(withReason('shows the fallback notice on the message (screenshot)', htmlScreenshotChrome), async () => {
         const message: ChatMessage = { id: 'm', sender: 'assistant', text: 'The arch is 26 m tall.', timestamp: '10:00', modelProvenance: provenance };
         const html = renderToStaticMarkup(React.createElement(MessageNotices, { message }));

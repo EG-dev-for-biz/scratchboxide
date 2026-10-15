@@ -25,7 +25,8 @@ import {
     SubagentRequest,
     SubagentResponse,
     GeminiTtsRequest,
-    GeminiTtsResponse
+    GeminiTtsResponse,
+    ModelAnswerProvenance
 } from '../../common/gemini-protocol';
 import { AgentSessionState, AgentStreamEvent } from '../../common/agent-checkpoint-protocol';
 import { VisualVerificationRequest, VisualVerificationOutcome } from '../../common/visual-verification-protocol';
@@ -34,7 +35,13 @@ import { VisualVerificationRequest, VisualVerificationOutcome } from '../../comm
 export type ChatFailureKind = 'unreachable' | 'server' | 'ai';
 
 export class ChatRequestError extends Error {
-    constructor(message: string, readonly kind: ChatFailureKind, readonly status?: number) {
+    constructor(
+        message: string,
+        readonly kind: ChatFailureKind,
+        readonly status?: number,
+        /** Which model and credential answered before the failure (a fallback model, the API key), when known. */
+        readonly modelProvenance?: ModelAnswerProvenance
+    ) {
         super(message);
         this.name = 'ChatRequestError';
     }
@@ -341,7 +348,7 @@ export class GeminiClient {
                             try {
                                 const event: GeminiStreamEvent = JSON.parse(jsonStr);
                                 if (event.type === 'error') {
-                                    throw new ChatRequestError(event.error || 'AI backend generation error', 'ai');
+                                    throw new ChatRequestError(event.error || 'AI backend generation error', 'ai', undefined, event.modelProvenance);
                                 }
                                 onEvent(event);
                             } catch (parseErr) {

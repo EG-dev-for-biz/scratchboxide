@@ -188,16 +188,9 @@ async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<bo
         return true;
     }
 
-    // 2. Deep planning / spec pipeline
-    const isDeepWrite = 
-        text.trim().startsWith('/plan') ||
-        text.trim().startsWith('/deepwrite') ||
-        text.trim().startsWith('/codebase') ||
-        text.trim().startsWith('/spec') ||
-        lowerText.includes('deep-write') ||
-        lowerText.includes('deep write') ||
-        lowerText.includes('intensive planning') ||
-        lowerText.includes('plan a codebase');
+    // 2. Deep planning / spec pipeline: only its slash commands start it. Words in an ordinary message ("deep
+    // write", "plan a codebase") are the model's to read, never a route.
+    const isDeepWrite = /^\/(plan|deepwrite|codebase|spec)(\s|$)/i.test(text.trim());
 
     if (isDeepWrite) {
         setInputValue('');
@@ -599,6 +592,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
         connectionError = err?.message || 'Connection to backend failed';
         failureKind = err instanceof ChatRequestError ? err.kind : 'unreachable';
         failureStatus = err instanceof ChatRequestError ? err.status : undefined;
+        // The failed reply still says which model (or credential) answered before it failed.
+        if (err instanceof ChatRequestError && err.modelProvenance) progress.modelProvenance = err.modelProvenance;
         if (err?.message && (err.message.includes('Command failed') || err.message.includes('Error:') || err.message.includes('TS'))) {
             setActiveTerminalError({
                 command: 'Gemini AI Execution',
@@ -639,7 +634,9 @@ function partialReplyFrom(ctx: GenerationContext): PartialReply {
         artifact: progress.artifact,
         groundingMetadata: progress.groundingMetadata,
         questionCard: progress.questionCard,
-        executionPlanCard: progress.executionPlanCard
+        executionPlanCard: progress.executionPlanCard,
+        // A fallback model or the API key may have answered before the stream failed: the notice says so.
+        modelProvenance: progress.modelProvenance
     };
 }
 
