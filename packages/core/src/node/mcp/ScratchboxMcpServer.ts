@@ -38,8 +38,8 @@ import {
     CallToolRequestSchema,
     type Tool,
     type CallToolResult
-} from '@modelcontextprotocol/sdk/types';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport';
+} from '@modelcontextprotocol/sdk/types.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import type { ToolDeclaration, ToolHandler, ToolParameterSchema, ToolContext } from '../gemini/tools/types';
 

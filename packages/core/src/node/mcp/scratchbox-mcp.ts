@@ -25,7 +25,7 @@
  *   }
  */
 
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { VFX_VIDEO_TOOL_DECLARATIONS, vfxVideoHandlers } from '../gemini/tools/vfx-video-tools';
 import { ScratchboxMcpServer } from './ScratchboxMcpServer';
 
