@@ -184,7 +184,7 @@ describe('video composite route confines output and inputs', () => {
     });
 
     test('a timeline with no duration is measured from its clips, and one with nothing to measure is refused (422)', async () => {
-        const measured = await invokeRouter(router, 'POST', '/filtergraph', { body: { timeline: { ...timeline(), duration: 0 } } });
+        const measured = await invokeRouter(router, 'POST', '/filtergraph', { body: { timeline: { ...timeline('clip.mp4'), duration: 0 } } });
         assert.strictEqual(measured.status, 200);
         assert.strictEqual(measured.json.graph.durationSec, 2);
         const empty = { ...timeline(), duration: 0, tracks: [] };
@@ -198,9 +198,21 @@ describe('video composite route confines output and inputs', () => {
         assert.match(composite.json.error, /video composite needs timeline\.duration/);
     });
 
+    test('a clip without a media file is refused by name (422), never drawn as a colour slate', async () => {
+        const graph = await invokeRouter(router, 'POST', '/filtergraph', { body: { timeline: timeline() } });
+        assert.strictEqual(graph.status, 422);
+        assert.strictEqual(graph.json.code, 'missing_input');
+        assert.match(graph.json.error, /clip "c" \(clip-1\)/);
+        const composite = await invokeRouter(router, 'POST', '/composite', {
+            body: { timeline: timeline('blob:http://localhost/abc'), outputPath: 'out.mp4', workspaceRoot: root, dryRun: true }
+        });
+        assert.strictEqual(composite.status, 422);
+        assert.match(composite.json.error, /blob: URL/);
+    });
+
     test('filtergraph strings cannot be smuggled through ids or numeric fields', () => {
         const svc = new HeadlessVideoCompositorService();
-        const evil: any = timeline();
+        const evil: any = timeline('clip.mp4');
         evil.tracks[0].elements[0].id = 'x];movie=/etc/passwd[y';
         evil.tracks[0].elements[0].startTime = '0);movie=/etc/passwd;(';
         evil.tracks[0].elements[0].keying = { enabled: true, keyColor: 'a;b[c]' };

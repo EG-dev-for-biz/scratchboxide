@@ -52,9 +52,53 @@ function renderablePath(value: unknown): string {
     return typeof value === 'string' && value && !value.startsWith('blob:') && !value.startsWith('data:') ? value : '';
 }
 
+/** The media value a clip names: the caller's customInputs entry for it, else its own url (or sourceUrl / src). */
+function clipMediaValue(el: TimelineElement, customInputs?: Record<string, string>): string {
+    const raw = customInputs?.[el.id] || el.url || (el as any).sourceUrl || (el as any).src;
+    return typeof raw === 'string' ? raw : '';
+}
+
+function browserOnlyUrlKind(value: string): string | undefined {
+    return value.startsWith('blob:') ? 'blob:' : value.startsWith('data:') ? 'data:' : undefined;
+}
+
+/**
+ * The media file a clip on a visible video or overlay track renders from. The compositor renders media files only:
+ * a clip with none (a text, 3D or adjustment element, or a video clip without a url) or whose media is a blob: or
+ * data: URL is refused with MissingInputError naming the clip; nothing is drawn in its place.
+ */
+function requirePictureClipMedia(el: TimelineElement, customInputs?: Record<string, string>): string {
+    const value = clipMediaValue(el, customInputs);
+    const path = renderablePath(value);
+    if (path) return path;
+    const arg = `media for clip "${el.name ?? el.id}" (${el.id})`;
+    const howTo = `set its url (or customInputs["${el.id}"]) to a video or image file path or http(s) URL, or hide its track`;
+    const browserOnly = browserOnlyUrlKind(value);
+    if (browserOnly) {
+        throw new MissingInputError('video composite', arg, `its media is a ${browserOnly} URL, which exists only in the browser; ${howTo}`);
+    }
+    if (el.type && el.type !== 'video' && el.type !== 'image' && el.type !== 'overlay') {
+        throw new MissingInputError('video composite', arg, `it is a ${el.type} element with no media file, and the headless compositor renders only video and image files; ${howTo}`);
+    }
+    throw new MissingInputError('video composite', arg, `it has no media file (url); ${howTo}`);
+}
+
+/** The patch file of a clip's enabled generative patch; a missing or browser-only one is refused, never drawn grey. */
+function requirePatchMedia(el: TimelineElement, customInputs?: Record<string, string>): string {
+    const raw = customInputs?.[`${el.id}_patch`] || el.generativePatch?.patchUrl;
+    const value = typeof raw === 'string' ? raw : '';
+    const path = renderablePath(value);
+    if (path) return path;
+    const browserOnly = browserOnlyUrlKind(value);
+    throw new MissingInputError('video composite', `the generative patch of clip "${el.name ?? el.id}" (${el.id})`,
+        browserOnly
+            ? `its patch media is a ${browserOnly} URL, which exists only in the browser; save it to a file and set patchUrl (or customInputs["${el.id}_patch"]) to its path`
+            : `it has no patch file (patchUrl); generate the patch first and set patchUrl (or customInputs["${el.id}_patch"]) to its file`);
+}
+
 /**
  * How long the composite runs: the duration the timeline states, else the end of its last clip that renders (an
- * element of a visible video or overlay track, or of an unmuted audio track with a media path). A timeline that
+ * element with a media file on a visible video or overlay track, or on an unmuted audio track). A timeline that
  * states no duration and has no such clip is refused with MissingInputError; no length is assumed.
  */
 export function measureCompositeDuration(timeline: VideoTimelineData, customInputs?: Record<string, string>): number {
@@ -65,7 +109,7 @@ export function measureCompositeDuration(timeline: VideoTimelineData, customInpu
         const isPicture = track.type === 'video' || track.type === 'overlay';
         if (isPicture ? track.visible === false : track.type !== 'audio' || track.muted) continue;
         for (const el of track.elements || []) {
-            if (!isPicture && !renderablePath(customInputs?.[el.id] || el.url)) continue;
+            if (!renderablePath(isPicture ? clipMediaValue(el, customInputs) : customInputs?.[el.id] || el.url)) continue;
             const start = Math.max(0, finiteNumber(el.startTime, 0));
             const duration = finiteNumber(el.duration, 0);
             if (duration > 0) end = Math.max(end, start + duration);
@@ -143,6 +187,16 @@ export class HeadlessVideoCompositorService {
         const inputs: Array<{ path: string; isVirtual: boolean; duration: number }> = [];
         const filterChains: string[] = [];
 
+        // Every clip that would be drawn must have its media file (and patch file) before anything is built: a clip
+        // without one is refused by name, never replaced by a colour slate.
+        for (const track of videoTracks) {
+            if (track.visible === false) continue;
+            for (const rawEl of track.elements) {
+                requirePictureClipMedia(rawEl, customInputs);
+                if (rawEl.generativePatch?.enabled && rawEl.generativePatch.targetBox) requirePatchMedia(rawEl, customInputs);
+            }
+        }
+
         // Base solid background canvas generator: black, for the composite's measured length
         const totalDuration = measureCompositeDuration(timeline, customInputs);
         // Input 0: virtual color background canvas
@@ -167,25 +221,11 @@ export class HeadlessVideoCompositorService {
                     duration: finiteNumber(rawEl.duration, 0),
                     startTime: finiteNumber(rawEl.startTime, 0)
                 } as TimelineElement;
-                const clipFilePathRaw = customInputs?.[rawEl.id] || rawEl.url || (rawEl as any).sourceUrl || (rawEl as any).src;
-                const clipFilePath = typeof clipFilePathRaw === 'string' ? clipFilePathRaw : '';
-                const isVirtualColor = !clipFilePath || clipFilePath.startsWith('blob:') || clipFilePath.startsWith('data:');
-
-                if (isVirtualColor) {
-                    // Create a virtual color source if no physical media path is available
-                    const hexColor = el.color ? this.mapNamedColorToHex(el.color) : '0x1e293b';
-                    inputs.push({
-                        path: `color=c=${hexColor}:s=${width}x${height}:r=${fps}:d=${el.duration}`,
-                        isVirtual: true,
-                        duration: el.duration
-                    });
-                } else {
-                    inputs.push({
-                        path: clipFilePath,
-                        isVirtual: false,
-                        duration: el.duration
-                    });
-                }
+                inputs.push({
+                    path: requirePictureClipMedia(rawEl, customInputs),
+                    isVirtual: false,
+                    duration: el.duration
+                });
 
                 const rawInputTag = `[${inputIdx}:v]`;
                 let lastTag = rawInputTag;
@@ -199,8 +239,6 @@ export class HeadlessVideoCompositorService {
                 // 1.5 Generative VFX / Inpainting Patch
                 if (el.generativePatch && el.generativePatch.enabled && el.generativePatch.targetBox) {
                     const patch = el.generativePatch;
-                    const patchFilePathRaw = customInputs?.[`${rawEl.id}_patch`] || patch.patchUrl;
-                    const patchFilePath = typeof patchFilePathRaw === 'string' ? patchFilePathRaw : '';
 
                     const cropBox = el.generativePatch.targetBox;
                     const cropW = Math.max(2, Math.round(finiteNumber(cropBox.width, 2)));
@@ -210,20 +248,11 @@ export class HeadlessVideoCompositorService {
 
                     inputIdx++;
                     const patchInputIdx = inputIdx;
-                    if (patchFilePath && !patchFilePath.startsWith('blob:') && !patchFilePath.startsWith('data:')) {
-                        inputs.push({
-                            path: patchFilePath,
-                            isVirtual: false,
-                            duration: el.duration
-                        });
-                    } else {
-                        // Virtual color source for patch placeholder / dry run
-                        inputs.push({
-                            path: `color=c=gray:s=${cropW}x${cropH}:r=${fps}:d=${el.duration}`,
-                            isVirtual: true,
-                            duration: el.duration
-                        });
-                    }
+                    inputs.push({
+                        path: requirePatchMedia(rawEl, customInputs),
+                        isVirtual: false,
+                        duration: el.duration
+                    });
 
                     const rawPatchTag = `[${patchInputIdx}:v]`;
                     let patchStepIdx = 0;
@@ -428,8 +457,8 @@ export class HeadlessVideoCompositorService {
     }
 
     /**
-     * Executes the headless composite job via FFmpeg subprocess. A timeline whose length cannot be measured rejects
-     * with MissingInputError before FFmpeg runs.
+     * Executes the headless composite job via FFmpeg subprocess. A timeline whose length cannot be measured, or with a
+     * visible clip (or generative patch) that has no media file, rejects with MissingInputError before FFmpeg runs.
      */
     async execute(request: CompositeJobRequest): Promise<CompositeJobResult> {
         const { executable, args, commandString, filterComplex, durationSec } = this.buildFFmpegArgs(request);
@@ -529,26 +558,5 @@ export class HeadlessVideoCompositorService {
             return `0x${expanded.toUpperCase()}`;
         }
         return '0x00FF00';
-    }
-
-    private mapNamedColorToHex(color: string): string {
-        switch (String(color).toLowerCase()) {
-            case 'emerald':
-            case 'green':
-                return '0x10b981';
-            case 'blue':
-                return '0x3b82f6';
-            case 'purple':
-                return '0x8b5cf6';
-            case 'amber':
-                return '0xf59e0b';
-            case 'rose':
-            case 'red':
-                return '0xf43f5e';
-            case 'cyan':
-                return '0x06b6d4';
-            default:
-                return '0x334155';
-        }
     }
 }

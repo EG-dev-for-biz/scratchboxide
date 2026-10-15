@@ -202,10 +202,11 @@ describe('Generative Video Inpaint & VFX Patch Engine', () => {
                             duration: 5,
                             trimStart: 0,
                             trimEnd: 5,
-                            color: 'blue',
+                            url: '/plates/documentary_reel.mp4',
                             generativePatch: {
                                 enabled: true,
                                 mode: 'remove',
+                                patchUrl: '/plates/bitc_inpaint_patch.mp4',
                                 targetBox: {
                                     x: 120,
                                     y: 840,

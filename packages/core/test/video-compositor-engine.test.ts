@@ -201,7 +201,7 @@ describe('Video Compositing Engine - Full Stack Compositor & Headless Service', 
                             duration: 10,
                             trimStart: 0,
                             trimEnd: 10,
-                            color: 'blue'
+                            url: '/mock/workspace/cyber_city_bg.mp4'
                         }
                     ]
                 },
@@ -219,7 +219,7 @@ describe('Video Compositing Engine - Full Stack Compositor & Headless Service', 
                             duration: 10,
                             trimStart: 0,
                             trimEnd: 10,
-                            color: 'green',
+                            url: '/mock/workspace/green_screen_actor.mp4',
                             keying: {
                                 enabled: true,
                                 keyColor: '#00ff00',

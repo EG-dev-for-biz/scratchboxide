@@ -10,7 +10,8 @@
 /**
  * The headless compositor's length is the timeline's own duration or, when the timeline states none, the end of its
  * last clip that renders. A timeline with neither is refused with MissingInputError; no length (the old 10 s) is
- * assumed. When ffmpeg is installed, a real render is probed to confirm the output runs exactly the measured length.
+ * assumed. When ffmpeg is installed, a real render of real clips (made here with ffmpeg's test source) is probed to
+ * confirm the output runs exactly the measured length.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -26,8 +27,9 @@ import { HOW_TO, findBinary, requireBinary, withReason } from './helpers/require
 const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
 const ffprobe = requireBinary('ffprobe', HOW_TO.ffmpeg);
 
+/** A clip with a media file (the compositor refuses clips without one). */
 function clip(id: string, startTime: number, duration: number, extra: Record<string, unknown> = {}) {
-    return { id, name: id, type: 'video', startTime, duration, trimStart: 0, trimEnd: duration, color: 'blue', ...extra };
+    return { id, name: id, type: 'video', startTime, duration, trimStart: 0, trimEnd: duration, url: `/plates/${id}.mp4`, ...extra };
 }
 
 function timeline(duration: number | undefined, tracks: Array<Partial<TimelineTrack> & { elements: any[] }>): VideoTimelineData {
@@ -100,7 +102,13 @@ describe('HeadlessVideoCompositorService measures the composite length', () => {
         const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-composite-duration-'));
         try {
             const outputPath = path.join(work, 'measured.mp4');
-            const tl = timeline(0, [{ elements: [clip('bg', 0, 1), clip('next', 1, 0.5, { color: 'amber' })] }]);
+            // Real media for both clips: one 1 s and one 0.5 s test-pattern clip.
+            const source = (name: string, seconds: number) => {
+                const file = path.join(work, name);
+                execFileSync(findBinary('ffmpeg')!, ['-y', '-v', 'error', '-f', 'lavfi', '-i', `testsrc2=s=160x90:r=24:d=${seconds}`, '-pix_fmt', 'yuv420p', file]);
+                return file;
+            };
+            const tl = timeline(0, [{ elements: [clip('bg', 0, 1, { url: source('bg.mp4', 1) }), clip('next', 1, 0.5, { url: source('next.mp4', 0.5) })] }]);
             const result = await service.execute({ timeline: tl, outputPath, resolution: { width: 160, height: 90 }, preset: 'ultrafast' });
             expect(result.error).toBeUndefined();
             expect(result.success).toBe(true);

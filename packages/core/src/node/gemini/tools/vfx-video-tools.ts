@@ -1288,7 +1288,7 @@ export const COMPOSITOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'vfx_composite_timeline',
-        description: 'Execute complete multi-track video timeline compositing (V1 background to overlay tracks, chroma keying, despill suppression, 2D affine transforms, and audio mixing).',
+        description: 'Execute complete multi-track video timeline compositing (V1 background to overlay tracks, chroma keying, despill suppression, 2D affine transforms, and audio mixing). Every clip on a visible video or overlay track needs a media file: its url must be a video or image file path or http(s) URL. The call fails, naming the clip, for a clip without one, including text, 3D and adjustment elements (not rendered headlessly) and clips whose media is a browser-only blob: or data: URL.',
         parameters: {
             type: 'OBJECT',
             properties: {
