@@ -11,7 +11,6 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
-import { DynamicDagPlanner } from '../src/node/deep-write/dynamic-dag-planner';
 import { detect3DSceneTheme, generateDefaultCpp3DSource } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 
 describe('Photorealistic Physically Based Rendering (PBR) Mastery (C++20 Engine, glTF PBR Next, Operators, & Autonomous DAG)', () => {
@@ -356,36 +355,6 @@ int main() {
         const execResult = await compiler.executeBinary(compileResult.binaryPath!);
         expect(execResult.exitCode).toBe(0);
         expect(execResult.stdout).toContain('[Scratchbox PBR Engine] Evaluated BRDF Total Lum:');
-    });
-
-    it('plans and executes autonomous DAG with Stage 4 Physically Based Materials', async () => {
-        const planner = new DynamicDagPlanner();
-        const prompt = 'Construct a photorealistic PBR material gallery with titanium, optical glass, and velvet';
-
-        const dagPlan = planner.generate3DPlanDAG(prompt);
-        expect(dagPlan).toBeDefined();
-        expect(dagPlan.stages.length).toBeGreaterThanOrEqual(4);
-
-        // Find Phase 4: Materials and Shading stage
-        const stage4 = dagPlan.stages.find(s => s.id === 'stage_04_materials_and_shading' || s.type === 'materials_and_shading');
-        expect(stage4).toBeDefined();
-        expect(stage4!.operators.length).toBeGreaterThan(0);
-
-        // Verify stage 4 depends on prior topological stages
-        expect(stage4!.dependencies.length).toBeGreaterThan(0);
-
-        // Verify operators in stage 4 include sb_create_material and sb_assign_material
-        const createOps = stage4!.operators.filter(op => op.operator === 'sb_create_material');
-        const assignOps = stage4!.operators.filter(op => op.operator === 'sb_assign_material');
-        expect(createOps.length).toBeGreaterThan(0);
-        expect(assignOps.length).toBeGreaterThan(0);
-
-        // Execute workflow through autonomous DAG
-        const executionResult = await planner.executeAutonomous3DWorkflow(prompt);
-        expect(executionResult.success).toBe(true);
-        expect(executionResult.finalScene).toBeDefined();
-        expect(executionResult.executedStages.length).toBe(dagPlan.stages.length);
-        expect(executionResult.executedStages.every(s => s.success && s.verification.passed)).toBe(true);
     });
 
 });

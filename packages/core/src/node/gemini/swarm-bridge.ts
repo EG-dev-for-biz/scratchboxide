@@ -8,22 +8,13 @@
  ********************************************************************************/
 import type { Content, Part } from '@google/genai';
 import type { ModelAnswerProvenance, SubagentRequest, SubagentResponse } from '../../common/gemini-protocol';
-import type { Scene3DData } from '../../browser/generative-canvas/canvas-types';
 import {
     SubagentPoolService,
     type SubagentDAGPlan,
     type SubagentDAGResult,
     type SubagentPoolMetrics
 } from '../subagent-pool-service';
-import {
-    DynamicDagPlanner,
-    type Autonomous3DPlanResult,
-    type Autonomous3DStageDAG
-} from '../deep-write/dynamic-dag-planner';
 import { GeminiClient, resolveFetch, summarizeModelError, type VertexGenerateContentJson } from './gemini-client';
-
-/** The host object `DynamicDagPlanner` expects (structurally the GeminiService facade). */
-export type DynamicDagPlannerHost = NonNullable<ConstructorParameters<typeof DynamicDagPlanner>[0]>;
 
 /** Anything that can run a subagent task; the pool calls back into it for worker execution. */
 export interface SubagentExecutor {
@@ -34,8 +25,6 @@ export interface SwarmBridgeOptions {
     client: GeminiClient;
     /** Executor handed to the subagent pool (normally the facade, so subclass overrides are honoured). */
     subagentExecutor: SubagentExecutor;
-    /** Host handed to `DynamicDagPlanner` for autonomous 3D planning. */
-    plannerHost: DynamicDagPlannerHost;
     maxConcurrentWorkers?: number;
 }
 
@@ -48,16 +37,14 @@ interface SubagentGeneratePayload {
 
 /**
  * Subagent swarm orchestration: lightweight background model calls, the subagent pool/DAG
- * executor, subagent model routing, and the autonomous 3D planning entry points.
+ * executor and subagent model routing.
  */
 export class SwarmBridge {
     private readonly client: GeminiClient;
-    private readonly plannerHost: DynamicDagPlannerHost;
     private readonly pool: SubagentPoolService;
 
     constructor(options: SwarmBridgeOptions) {
         this.client = options.client;
-        this.plannerHost = options.plannerHost;
         this.pool = new SubagentPoolService({
             maxConcurrentWorkers: options.maxConcurrentWorkers ?? 64,
             orchestratorModel: this.client.defaultModel,
@@ -179,17 +166,5 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
             ...(credentialNote ? { credentialNote } : {})
         };
         return { ...response, modelProvenance };
-    }
-
-    /** Autonomous multi-step 3D planning agent workflow (PocoLibre/blender-mcp paradigm). */
-    async plan3DAutonomousWorkflow(prompt: string, currentScene?: Scene3DData): Promise<Autonomous3DPlanResult> {
-        const planner = new DynamicDagPlanner(this.plannerHost);
-        return planner.executeAutonomous3DWorkflow(prompt, currentScene);
-    }
-
-    /** Dependency-resolved 3D planning DAG for a prompt and scene. */
-    generate3DPlanDAG(prompt: string, currentScene?: Scene3DData): Autonomous3DStageDAG {
-        const planner = new DynamicDagPlanner(this.plannerHost);
-        return planner.generate3DPlanDAG(prompt, currentScene);
     }
 }

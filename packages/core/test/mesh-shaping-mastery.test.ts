@@ -11,7 +11,6 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
-import { DynamicDagPlanner } from '../src/node/deep-write/dynamic-dag-planner';
 import { detect3DSceneTheme, generateDefaultCpp3DSource } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 
 describe('3D Mesh Shaping Mastery (C++20 Engine, Operators, & Autonomous DAG)', () => {
@@ -284,38 +283,6 @@ int main() {
         expect(cppSource).toContain('SculptEngine::applyStroke');
         expect(cppSource).toContain('LoopSubdivision::subdivide');
         expect(cppSource).toContain('GlbWriter::streamChunk');
-    });
-
-    it('plans and executes autonomous 3D DAG with dedicated mesh_shaping stage and invariant verification', async () => {
-        const planner = new DynamicDagPlanner();
-        const prompt = 'Design a master 3D mesh shaping kinetic sculpture with taper, twist, and clay sculpting';
-
-        const dag = planner.generate3DPlanDAG(prompt);
-        expect(dag.theme).toBe('mesh-shaping');
-
-        // Verify stage_03b_mesh_shaping exists and is placed correctly
-        const shapingStage = dag.stages.find(s => s.type === 'mesh_shaping');
-        expect(shapingStage).toBeDefined();
-        expect(shapingStage?.id).toBe('stage_03b_mesh_shaping');
-        expect(shapingStage?.dependencies).toContain('stage_03_modifiers_and_edit');
-        expect(shapingStage?.expectedStateChecks?.meshDeformationsApplied).toBe(true);
-
-        // Verify stage_04 depends on shapingStage
-        const matStage = dag.stages.find(s => s.type === 'materials_and_shading');
-        expect(matStage?.dependencies).toContain('stage_03b_mesh_shaping');
-
-        // Execute autonomous workflow
-        const execution = await planner.executeAutonomous3DWorkflow(prompt);
-        expect(execution.success).toBe(true);
-        expect(execution.executedStages.length).toBe(dag.stages.length);
-
-        const shapingExecution = execution.executedStages.find(r => r.type === 'mesh_shaping');
-        expect(shapingExecution?.success).toBe(true);
-        expect(shapingExecution?.verification.passed).toBe(true);
-
-        // Verify final scene state
-        expect(execution.finalScene.cppGenerator).toBeDefined();
-        expect(execution.finalScene.cppGenerator?.sourceCode).toContain('scratchbox::shaper');
     });
 
 });

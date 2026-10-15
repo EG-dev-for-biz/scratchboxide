@@ -16,9 +16,6 @@ import {
     createOperatorEngine
 } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
 import {
-    DynamicDagPlanner
-} from '../src/node/deep-write/dynamic-dag-planner';
-import {
     NativeCppCompilerService
 } from '../src/node/3d-engine/native-compiler-service';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
@@ -127,34 +124,6 @@ describe('Universal Nature, Atmosphere, SSS & Triplanar 3D Systems', () => {
         const updatedScene = engine.getSceneData();
         expect(updatedScene.customMeshes?.length).toBeGreaterThanOrEqual(4);
         expect((updatedScene.environment as any)?.volumetricFog?.enabled).toBe(true);
-    });
-
-    it('2. should plan Stage 3e Nature & Ecosystem and Stage 5 Volumetric Fog in DynamicDagPlanner', async () => {
-        const planner = new DynamicDagPlanner();
-        const dag = planner.generate3DPlanDAG('Generate an ancient mossy monolith inside an overgrown misty forest with golden god rays');
-
-        // Check Stage 3e
-        const natureStage = dag.stages.find(s => s.id === 'stage_03e_nature_and_ecosystem');
-        expect(natureStage).toBeDefined();
-        expect(natureStage?.expectedStateChecks?.natureGenerated).toBe(true);
-        expect(natureStage?.operators.some(op => op.operator === 'sb_generate_biome_terrain')).toBe(true);
-        expect(natureStage?.operators.some(op => op.operator === 'sb_generate_l_system_vegetation')).toBe(true);
-
-        // Check Stage 4 Material Triplanar & SSS
-        const matStage = dag.stages.find(s => s.id === 'stage_04_materials_and_shading');
-        expect(matStage).toBeDefined();
-        expect(matStage?.operators.some(op => op.operator === 'sb_apply_triplanar_material')).toBe(true);
-        expect(matStage?.operators.some(op => op.operator === 'sb_set_subsurface_scattering')).toBe(true);
-
-        // Check Stage 5 Volumetric Fog
-        const lightStage = dag.stages.find(s => s.id === 'stage_05_lighting_and_atmosphere');
-        expect(lightStage).toBeDefined();
-        expect(lightStage?.operators.some(op => op.operator === 'sb_add_volumetric_fog')).toBe(true);
-
-        // Execute autonomous workflow
-        const workflow = await planner.executeAutonomous3DWorkflow('Generate an ancient mossy monolith inside an overgrown misty forest with golden god rays');
-        expect(workflow.success).toBe(true);
-        expect(workflow.executedStages.map(s => s.stageId)).toContain('stage_03e_nature_and_ecosystem');
     });
 
     it('3. should generate nature_atmosphere C++20 source code utilizing all 4 new engine modules', () => {

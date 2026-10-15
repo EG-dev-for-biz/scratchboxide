@@ -32,8 +32,7 @@ import { QuickEditService } from './quick-edit-service';
 import {
     CanvasArtifact,
     MarkdownSection,
-    McpExecutionState,
-    Scene3DData
+    McpExecutionState
 } from '../browser/generative-canvas/canvas-types';
 import { ProjectContextGraphService } from './project-context-graph-service';
 import { UserMemoriesService } from './user-memories-service';
@@ -69,7 +68,6 @@ import {
     VisualSelfCorrection3DLoopResult
 } from '../common/visual-verification-protocol';
 import { VisualVerificationService } from './visual-verification-service';
-import type { Autonomous3DPlanResult, Autonomous3DStageDAG } from './deep-write/dynamic-dag-planner';
 import {
     GeminiClient,
     DEFAULT_GEMINI_MODEL,
@@ -118,8 +116,7 @@ export class GeminiService {
     private readonly quickEditService: QuickEditService = new QuickEditService(this.client);
     private readonly swarm: SwarmBridge = new SwarmBridge({
         client: this.client,
-        subagentExecutor: this,
-        plannerHost: this
+        subagentExecutor: this
     });
     private readonly streaming: StreamingEngine = new StreamingEngine({
         client: this.client,
@@ -595,20 +592,6 @@ export class GeminiService {
         groundingMetadata?: GroundingMetadata
     ): CanvasArtifact | undefined {
         return parseOrSynthesizeArtifact(prompt, modelText, request, mcpExecutions, groundingMetadata);
-    }
-
-    // ------------------------------------------------------------------
-    // Autonomous 3D planning
-    // ------------------------------------------------------------------
-
-    /** Autonomous multi-step 3D planning agent workflow (PocoLibre/blender-mcp paradigm). */
-    public async plan3DAutonomousWorkflow(prompt: string, currentScene?: Scene3DData): Promise<Autonomous3DPlanResult> {
-        return this.swarm.plan3DAutonomousWorkflow(prompt, currentScene);
-    }
-
-    /** Dependency-resolved 3D planning DAG for a prompt and scene. */
-    public generate3DPlanDAG(prompt: string, currentScene?: Scene3DData): Autonomous3DStageDAG {
-        return this.swarm.generate3DPlanDAG(prompt, currentScene);
     }
 
     // ------------------------------------------------------------------

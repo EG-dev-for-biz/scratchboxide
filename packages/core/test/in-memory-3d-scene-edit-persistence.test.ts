@@ -252,12 +252,6 @@ async function runInMemory3DSceneEditPersistenceTests() {
     assert.ok(lastUserPrompt.includes('golden_hour') || lastUserPrompt.includes('lightingPreset') || lastUserPrompt.includes('environment'), 'Prompt must retain environment lighting');
     console.log('    ✓ AI Prompt Compiler retained in-memory 3D scene mutations.');
 
-    // Test follow-up incremental reasoning
-    const followUpPlan = geminiService.generate3DPlanDAG('now add another building next to it', activeEditedScene);
-    assert.ok(followUpPlan, 'DAG planner must produce a plan from active scene');
-    assert.ok(followUpPlan.stages.length >= 1);
-    console.log('    ✓ Follow-up AI planning over in-memory scene verified.');
-
     // =========================================================================
     // Test 7: Lossless In-Memory Undo/Redo & Version History
     // =========================================================================

@@ -13,9 +13,6 @@ import {
     DirectDispatchOperatorEngine
 } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
 import {
-    DynamicDagPlanner
-} from '../src/node/deep-write/dynamic-dag-planner';
-import {
     detect3DSceneTheme,
     synthesizeContextual3DScene,
     generateDefaultCpp3DSource
@@ -139,32 +136,6 @@ test('Universal Scene Synthesis & Photorealistic Mastery Integration Suite', asy
     const currentScene = engine.getSceneData();
     assert.strictEqual(currentScene.environment?.lighting, 'cinematic_3point_studio');
     assert.strictEqual(currentScene.environment?.cinematicRig?.keyLight?.kelvin, 5600);
-
-    // =========================================================================
-    // Test 2: Dynamic DAG Planner Universal Scene Stage & Verification
-    // =========================================================================
-    console.log('  Testing Dynamic DAG Planner Universal Scene stage orchestration & invariant verification...');
-    const planner = new DynamicDagPlanner();
-    const plan = await planner.generate3DPlanDAG(
-        'Assemble a universal photorealistic entire scene with quantum reactor core, procedural clutter debris, and cinematic 3-point studio lighting.',
-        { isIncremental: false }
-    );
-
-    assert.ok(plan.stages.length >= 5);
-    const sceneAssemblyStage = plan.stages.find(s => s.type === 'scene_assembly');
-    assert.ok(sceneAssemblyStage, 'DAG should contain scene_assembly stage');
-    assert.strictEqual(sceneAssemblyStage?.expectedStateChecks?.sceneAssemblyVerified, true);
-
-    // Execute the planned DAG through the engine and verify each stage passes
-    const execEngine = new DirectDispatchOperatorEngine();
-    for (const stage of plan.stages) {
-        if (stage.type === 'reasoning_inspect' || stage.type === 'cpp_native_generation') continue;
-        for (const op of stage.operators) {
-            execEngine.dispatch(op.operator, op.params);
-        }
-        const verifyResult = (planner as any).verifyStageInvariants(stage, execEngine);
-        assert.strictEqual(verifyResult.passed, true, `Stage ${stage.name} verification failed: ${verifyResult.details}`);
-    }
 
     // =========================================================================
     // Test 3: Procedural 3D Theme Detection & Synthesizer

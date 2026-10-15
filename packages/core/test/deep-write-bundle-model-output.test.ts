@@ -14,6 +14,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { PrimitiveSynthesizer } from '../src/node/deep-write/primitive-synthesizer';
+import { DynamicDagPlanner } from '../src/node/deep-write/dynamic-dag-planner';
+import { GeminiService } from '../src/node/gemini-service';
 import type { DiscoveredGoalPlan } from '../src/common/deep-write/deep-write-protocol';
 
 const plan = (primitives: string[]): DiscoveredGoalPlan => ({
@@ -50,3 +52,38 @@ describe('deep-write bundle', () => {
         expect(JSON.stringify(table)).not.toContain('Core controller logic');
     });
 });
+
+describe('deep-write stages', () => {
+    const stage = plan(['markdown-document']).stages[0];
+    /** A planner whose model replies with `reply` (no network). */
+    const plannerReplying = (reply: string) => new DynamicDagPlanner({
+        streamGenerate: async (_req: unknown, onEvent: (e: { text?: string }) => void) => { onEvent({ text: reply }); }
+    } as any);
+
+    it('a stage with no model connected fails instead of reporting a "deterministic fallback" as done', async () => {
+        const res = await new DynamicDagPlanner().executeStage(plan(['markdown-document']), stage, {});
+        expect(res.success).toBe(false);
+        expect(res.error).toBe('Stage "Survey" was not run: no model service is connected to the planner.');
+        expect(JSON.stringify(res)).not.toContain('Deterministic fallback');
+    });
+
+    it('a reply that is not the stage JSON fails the stage; the stage JSON is its output', async () => {
+        const prose = await plannerReplying('I surveyed the site and everything looks fine.').executeStage(plan(['markdown-document']), stage, {});
+        expect(prose.success).toBe(false);
+        expect(prose.output.files).toBeUndefined();
+        expect(prose.error).toMatch(/^Stage "Survey" did not return its stage JSON \(.+\); the reply began: I surveyed the site/);
+
+        const json = await plannerReplying('{"description":"Surveyed","content":"# Site","files":{"src/main.ts":"export {};"}}').executeStage(plan(['markdown-document']), stage, {});
+        expect(json).toEqual({ success: true, output: { description: 'Surveyed', content: '# Site', files: { 'src/main.ts': 'export {};' } } });
+    });
+
+    it('the keyword-themed 3D planner (template C++ scene per theme word) is gone from the planner and the facade', () => {
+        for (const name of ['generate3DPlanDAG', 'executeAutonomous3DWorkflow', 'execute3DStageWithVerification', 'inspectAndReasonScene']) {
+            expect((DynamicDagPlanner.prototype as any)[name]).toBeUndefined();
+        }
+        for (const name of ['generate3DPlanDAG', 'plan3DAutonomousWorkflow']) {
+            expect((GeminiService.prototype as any)[name]).toBeUndefined();
+        }
+    });
+});
+
