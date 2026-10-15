@@ -13,7 +13,7 @@ import * as path from 'path';
 
 /**
  * Coordination and Visibility Logic Evaluator
- * Mirroring spatial_photoreal_3dgs_demo.html animate() & updateLightingUniforms()
+ * Mirroring the splat viewer's animate() & updateLightingUniforms()
  */
 function evaluateTileVisibility(
     renderMode: 'softz' | 'split' | 'splats' | 'tiles',
@@ -131,43 +131,21 @@ describe('Google 3D Tiles and Gaussian Splats Coordination', () => {
         });
     });
 
-    describe('3. Viewer Source Integrity (spatial_photoreal_3dgs_demo.html)', () => {
-        const demoPath = path.resolve(__dirname, '../../../public/spatial_photoreal_3dgs_demo.html');
+    describe('3. Walkable viewer opens survey tilesets (walkable_3dgs_viewer)', () => {
+        const pagePath = path.resolve(__dirname, '../../../public/demos/showcase/walkable_3dgs_viewer.html');
+        const sourcePath = path.resolve(__dirname, '../../../scripts/walkable/walkable_3dgs_viewer.ts');
 
-        it('should exist and contain required survey integration components', async () => {
-            expect(await fs.pathExists(demoPath)).toBe(true);
-            const html = await fs.readFile(demoPath, 'utf8');
-
-            // Model button
-            expect(html).toContain('data-model="survey_box"');
-            expect(html).toContain('Google 3D Tiles Survey');
-
-            // Survey stations panel
-            expect(html).toContain('id="panel-survey-stations"');
-            expect(html).toContain('id="survey-stations-list"');
-
-            // Survey camera bookmark
-            expect(html).toContain('id="cam-survey"');
-            expect(html).toMatch(/survey:\s+\{/);
-
-            // Logic functions and handles
-            expect(html).toContain('loadSurveyTileset');
-            expect(html).toContain('setupCameraStationsUI');
-            expect(html).toContain('SurveyClayMesh');
-            expect(html).toContain('mockPavementGroup');
-            expect(html).toContain('surveyStationsGroup');
-
-            // TileStreamer integration
-            expect(html).toContain('tileStreamer.clear');
-            expect(html).toContain('isFullScene: false');
-
-            // Non-destructive survey_box cleanup in loadSplatModel
-            expect(html).toContain("if (modelKey === 'survey_box')");
-
-            // Soft-Z uniforms sync
-            expect(html).toContain('uTileDepthNear.value = camera.near');
-            expect(html).toContain('uTileDepthFar.value = camera.far');
-            expect(html).toContain('uTileDepthMap.value = tileDepthTarget.depthTexture');
+        it('loads the fused splat a tileset was baked from, its clay ground and its crop box, with the app renderer', async () => {
+            expect(await fs.pathExists(pagePath)).toBe(true);
+            expect(await fs.readFile(pagePath, 'utf8')).toContain('js/walkable_3dgs_viewer.js');
+            const src = await fs.readFile(sourcePath, 'utf8');
+            expect(src).toContain('PhotorealGaussianSplatMesh');
+            // tileset=<dir>/tileset.json -> <dir>/fused.splat (SurveySplatPipelineService writes it there)
+            expect(src).toMatch(/tilesetUrl\.replace\([^)]*'fused\.splat'\)/);
+            expect(src).toContain("params.get('glb')");
+            expect(src).toContain('GLTFLoader');
+            expect(src).toContain('cropBox');
+            expect(src).toContain('setClipBox');
         });
     });
 
@@ -182,8 +160,8 @@ describe('Google 3D Tiles and Gaussian Splats Coordination', () => {
             expect(html).toContain('id="btn-view-3dgs"');
             expect(html).toContain('id="btn-view-sample-3dgs"');
 
-            // Routing to spatial_photoreal_3dgs_demo.html with tileset & glb params
-            expect(html).toContain('/spatial_photoreal_3dgs_demo.html?tileset=');
+            // Routing to the walkable 3DGS viewer with tileset & glb params
+            expect(html).toContain('/walkable_3dgs_viewer.html?tileset=');
             expect(html).toContain('glb=');
             expect(html).toContain('/models/survey_box_ground.glb');
             expect(html).toContain('/tilesets/survey_box/tileset.json');

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Walkable 3DGS Viewer</title>
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #14171c; color: #e7e9ee; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+        canvas { display: block; }
+        .panel { position: fixed; background: rgba(18, 20, 26, 0.82); border: 1px solid rgba(255, 255, 255, 0.10); border-radius: 10px; backdrop-filter: blur(8px); }
+        #hud { top: 16px; left: 16px; padding: 12px 14px; max-width: calc(100% - 64px); }
+        #hud .hint { color: #9aa1ad; }
+        #status { top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 16px 20px; max-width: min(520px, calc(100% - 32px)); text-align: center; }
+    </style>
+</head>
+<body>
+    <div id="hud" class="panel">Loading splats…</div>
+    <div id="status" class="panel">Loading splats…</div>
+    <!-- Built by scripts/walkable/build.sh from scripts/walkable/walkable_3dgs_viewer.ts -->
+    <script src="../../js/walkable_3dgs_viewer.js" onerror="document.getElementById('status').textContent='The viewer bundle has not been built yet. From the repository root run scripts/walkable/build.sh, then reload.'; document.getElementById('hud').hidden = true;"></script>
+</body>
+</html>

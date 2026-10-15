@@ -37,7 +37,7 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
         expect(adminSrc).toContain('next_gen_astra_viewport_studio.html');
         expect(adminSrc).toContain('nanite_meshlet_pathtracing_studio.html');
         expect(adminSrc).toContain('colosseum_recolor_proof.html');
-        expect(adminSrc).toContain('spatial_photoreal_3dgs_demo.html');
+        expect(adminSrc).toContain('walkable_3dgs_viewer.html');
         expect(adminSrc).toContain('agent_lighting_proof.html');
         expect(adminSrc).toContain('nano_banana_texture_upscale_experiment.html');
         expect(adminSrc).toContain('image_to_adaptive_pbr_studio.html');
@@ -74,7 +74,7 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
             'next_gen_astra_viewport_studio.html',
             'nanite_meshlet_pathtracing_studio.html',
             'colosseum_recolor_proof.html',
-            'spatial_photoreal_3dgs_demo.html',
+            'walkable_3dgs_viewer.html',
             'agent_lighting_proof.html',
             'nano_banana_texture_upscale_experiment.html',
             'image_to_adaptive_pbr_studio.html',

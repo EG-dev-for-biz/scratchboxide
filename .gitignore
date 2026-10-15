@@ -112,6 +112,8 @@ public/comfyui_outputs/
 !public/**/*.svg
 !public/demos/**
 !manifests/**
+# Built from scripts/walkable/walkable_3dgs_viewer.ts by scripts/walkable/build.sh
+public/js/walkable_3dgs_viewer.js
 
 data/s4d_dataset/
 **/s4d_tile_blockout_runner*.html
