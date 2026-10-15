@@ -26,6 +26,7 @@ import { groundDatumBadge, projectRoutePoint } from '../src/browser/generative-c
 import { DEFAULT_METERS_PER_SCENE_UNIT } from '../src/common/coordinate/GeoFrame';
 import { fromInput, generatorErrorForScene, generatorRunFailure, generatorRequestFailure } from '../src/browser/generative-canvas/primitives/scene3d/generatorRun';
 import { ViewportNotice, resolveViewportNotice } from '../src/browser/generative-canvas/primitives/scene3d/ViewportNotice';
+import { VectorRoadmapHUD, copyTextToClipboard } from '../src/browser/generative-canvas/primitives/scene3d/VectorRoadmapHUD';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { decodePng } from '../src/node/texture-processing';
 import { saveViewportSnapshot } from './helpers/scene3d-viewport-snapshot';
@@ -396,6 +397,22 @@ describe('the viewport uses the scene\'s own anchor and route, with no default p
         expect(withElevation).toContain('data-testid="sb-ground-datum-badge"');
         expect(withElevation).toContain('source: not recorded');
         expect(withElevation).not.toContain('Google Elevation API');
+    });
+
+    it('the roadmap HUD shows no map or coordinates without the scene\'s anchor, and a failed copy is not called copied', async () => {
+        const hud = (geoAnchor: any) => renderToStaticMarkup(React.createElement(VectorRoadmapHUD, { geoAnchor, isOpen: true, onToggleOpen: () => {}, onUpdateConfig: () => {} }));
+        const none = hud(null);
+        expect(none).toContain('data-testid="sb-roadmap-no-anchor"');
+        expect(none).not.toContain('37.7955');
+        expect(none).not.toContain('-122.3937');
+        expect(none).not.toContain('<img');
+        const denver = hud({ lat: 39.7392, lng: -104.9903, elevation: 1609.3 });
+        expect(denver).toContain('39.7392°, -104.9903°');
+        expect(denver).toContain('source not recorded');
+        expect(denver).not.toContain('Authoritative Google');
+        expect(await copyTextToClipboard('x', { writeText: async () => { throw new Error('Document is not focused.'); } })).toEqual({ ok: false, error: 'Document is not focused.' });
+        expect(await copyTextToClipboard('x', undefined)).toEqual({ ok: false, error: 'the clipboard is not available here' });
+        expect(await copyTextToClipboard('x', { writeText: async () => undefined })).toEqual({ ok: true });
     });
 
     it('a workspace placeholder object does not hide the real objects beside it', () => {
