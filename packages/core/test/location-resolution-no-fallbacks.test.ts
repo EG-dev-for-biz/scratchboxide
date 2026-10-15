@@ -33,6 +33,18 @@ import { LocationUnresolvedError, TileExtractionError } from '../src/common/erro
 import { GoogleMapsService, PLACES_TEXT_SEARCH_FIELD_MASK, PLACES_TEXT_SEARCH_URL } from '../src/browser/generative-canvas/services/google-maps-service';
 import { synthesizeContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 import { Location3DGaussianSplatService } from '../src/node/spatial/Location3DGaussianSplatService';
+import { NoSceneBuiltError } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
+import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
+
+/** The scene the template synthesizer builds, or undefined when it builds none (NoSceneBuiltError). */
+function sceneUnlessNoneBuilt(prompt: string): Scene3DData | undefined {
+    try {
+        return synthesizeContextual3DScene(prompt);
+    } catch (e) {
+        if (e instanceof NoSceneBuiltError) return undefined;
+        throw e;
+    }
+}
 
 /** A fetch that answers Places Text Search with `place` (or no result) and records each request. */
 function placesFetch(place?: Record<string, unknown>) {
@@ -633,10 +645,11 @@ describe('template scenes never stand in a place or an object build', () => {
 
     it('object prompts do not become an "ADA Hero Asset" template, and no scene gets a location from prompt words', () => {
         for (const prompt of ['build a 3d drone', 'a robot arm machine', 'race car in Central Park, New York', 'F1 car at the Monaco GP circuit', 'downtown city skyline']) {
-            const scene = synthesizeContextual3DScene(prompt);
-            expect(scene.title, prompt).not.toMatch(/ADA Hero Asset|Staged in|3D Real-World Clay Model/);
-            expect(scene.geoAnchor, prompt).toBeUndefined();
-            expect(JSON.stringify(scene.objects || []), prompt).not.toMatch(/google-tiles|Google3DTilesClay/);
+            // A prompt no template fits builds no scene at all (NoSceneBuiltError); one that does gets no place.
+            const scene = sceneUnlessNoneBuilt(prompt);
+            expect(scene?.title ?? '', prompt).not.toMatch(/ADA Hero Asset|Staged in|3D Real-World Clay Model/);
+            expect(scene?.geoAnchor, prompt).toBeUndefined();
+            expect(JSON.stringify(scene?.objects || []), prompt).not.toMatch(/google-tiles|Google3DTilesClay/);
         }
     });
 });

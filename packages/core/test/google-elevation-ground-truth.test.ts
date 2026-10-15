@@ -17,6 +17,17 @@ import {
 import { syncVectorRoadmapBlueprint } from '../src/browser/generative-canvas/primitives/scene3d/syncVectorRoadmapBlueprint';
 import { LocalTangentPlane } from '../src/common/coordinate/LocalTangentPlane';
 import type { Scene3DData, VectorRoadmapConfig } from '../src/browser/generative-canvas/canvas-types';
+import { NoSceneBuiltError } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
+
+/** The scene the template synthesizer builds, or undefined when it builds none (NoSceneBuiltError). */
+function sceneUnlessNoneBuilt(prompt: string): Scene3DData | undefined {
+    try {
+        return synthesizeContextual3DScene(prompt);
+    } catch (e) {
+        if (e instanceof NoSceneBuiltError) return undefined;
+        throw e;
+    }
+}
 
 describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
     const mapsService = GoogleMapsService.getInstance();
@@ -92,7 +103,8 @@ describe('Google Elevation Data as Source of Truth for 3D Scenes', () => {
 
         it('does not cast a scene onto an archetype location (no place table, no default city)', () => {
             for (const prompt of ['tactical target practice outdoor shooting range with steel targets', 'vast arid badlands depression salt pan basin', 'downtown city skyline waterfront plaza']) {
-                expect(synthesizeContextual3DScene(prompt).geoAnchor).toBeUndefined();
+                // A prompt no template fits builds no scene at all (NoSceneBuiltError); one that does gets no place.
+                expect(sceneUnlessNoneBuilt(prompt)?.geoAnchor).toBeUndefined();
             }
         });
     });

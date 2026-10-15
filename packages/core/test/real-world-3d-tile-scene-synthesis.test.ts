@@ -13,6 +13,8 @@ import {
   synthesizeContextual3DScene
 } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
+import { NoSceneBuiltError } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
+import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { GoogleMapsService } from '../src/browser/generative-canvas/services/google-maps-service';
 import { Google3DTileService } from '../src/browser/generative-canvas/services/Google3DTileService';
 import { GooglePhotorealistic3DTilesLayer } from '../src/browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
@@ -37,8 +39,14 @@ async function runTests() {
       'model of Colosseum in Rome'
     ];
     for (const prompt of prompts) {
-      const scene = synthesizeContextual3DScene(prompt);
-      assert.strictEqual(scene.geoAnchor, undefined, `"${prompt}" must not be anchored from a name table or a regex`);
+      // A prompt no template fits builds no scene at all (NoSceneBuiltError); one that does gets no place.
+      let scene: Scene3DData | undefined;
+      try {
+        scene = synthesizeContextual3DScene(prompt);
+      } catch (e) {
+        if (!(e instanceof NoSceneBuiltError)) throw e;
+      }
+      assert.strictEqual(scene?.geoAnchor, undefined, `"${prompt}" must not be anchored from a name table or a regex`);
     }
     console.log(' ✓ Test 1 Passed: template synthesis leaves locations to the location tools.');
   }

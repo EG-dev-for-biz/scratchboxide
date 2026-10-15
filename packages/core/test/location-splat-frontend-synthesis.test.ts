@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { synthesizeContextual3DScene, detect3DSceneTheme } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
+import { NoSceneBuiltError } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { CANVAS_TOOL_DECLARATIONS, canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
 import { buildContents, buildSystemInstruction } from '../src/node/gemini/prompt-builder';
@@ -32,24 +33,16 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
             expect(result.tier1Assessment.rationale).toContain('without requiring the user to invoke or mention Nano Banana explicitly');
         });
 
-        it('resolves 3dgs prompt for Empire State Building natively without nano banana in prompt', () => {
-            const result = TaskCapabilityResolver.resolveTaskCapability(
-                'Create a 3dgs radiance field of Empire State Building'
-            );
+        // A named subject is not recognised as a place from a list, and the 3D default branch suggests no tool: the
+        // model decides from the request which 3D tool fits (the system instruction's intent policy).
+        it.each([
+            'Create a 3dgs radiance field of Empire State Building',
+            'Make a 3d gaussian splat of the Eiffel Tower'
+        ])('"%s" is solvable natively with no tool steered by the place name', (prompt) => {
+            const result = TaskCapabilityResolver.resolveTaskCapability(prompt);
 
             expect(result.canSolveNatively).toBe(true);
-            expect(result.canSolveNatively).toBe(true);
-            expect(result.suggestedNativeAction?.primitiveType).toBe('3d-scene');
-        });
-
-        it('resolves 3d gaussian splat of Eiffel Tower natively without nano banana', () => {
-            const result = TaskCapabilityResolver.resolveTaskCapability(
-                'Make a 3d gaussian splat of the Eiffel Tower'
-            );
-
-            expect(result.canSolveNatively).toBe(true);
-            expect(result.canSolveNatively).toBe(true);
-            expect(result.suggestedNativeAction?.primitiveType).toBe('3d-scene');
+            expect(result.suggestedNativeAction).toBeUndefined();
         });
     });
 
@@ -59,16 +52,14 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
             expect(theme).toBe('gaussian_splat');
         });
 
-        // A place named in a template prompt is never looked up in a table: no anchor and no canned splat for it.
+        // A place named in a template prompt is never looked up in a table, and no template scene stands in for a
+        // splat the prompt does not name: the step fails, so nothing is anchored and no canned splat is mounted.
         // Location splats come from location_generate_3dgs, which resolves the place with Google Places.
         it.each([
-            ['Make a gaussian splat of the Colosseum', 'Colosseum'],
-            ['Generate a 3dgs of Empire State Building', 'Empire State']
-        ])('"%s" gets no table-looked-up anchor or canned splat', (prompt, name) => {
-            const data = synthesizeContextual3DScene(prompt) as Scene3DData;
-            expect(data.title).toContain(name);
-            expect(data.geoAnchor).toBeUndefined();
-            expect(data.splatUrl).toBeUndefined();
+            'Make a gaussian splat of the Colosseum',
+            'Generate a 3dgs of Empire State Building'
+        ])('"%s" gets no table-looked-up anchor or canned splat', (prompt) => {
+            expect(() => synthesizeContextual3DScene(prompt)).toThrow(NoSceneBuiltError);
         });
 
         it('a named place with no coordinates offline gets no invented anchor or stand-in splat', () => {
