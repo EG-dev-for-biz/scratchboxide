@@ -25,14 +25,15 @@
  *   with the scanned drape around it (the photogrammetric curtain from crown to ground, planar or not, out to
  *   drapeReach) and with pieces of its scan left hanging in the air beside it, never with walls, roofs, paving or
  *   crowns that stay. Cut canopy stays as scanned unless its side would be left standing over a hole: then it goes with
- *   the trees it joins, is reported, and is not replanted. The ground under a tree is rebuilt on the level surface it
- *   stood on: every hole loop is lowered onto that surface and capped there, so no cap face climbs to where the tree
- *   was and no hole opens; where the hole edge stands off that surface (a wall or building side the tree hid, the side
- *   of a low planting that stays) a vertical skirt continues it down, and its area and height are reported by what it
- *   continues. Lower roof vegetation stays in the scan untouched. Writes the devegetated tile (textures kept; cap and
- *   skirt are untextured primitives of their own), and a crown list with apex, stem, support, footprint, sector radii
- *   and voxel samples of the crown surface, in the tile frame and as lat/lng (the list stays in the cache; plant
- *   writes no geodetic data).
+ *   the trees it joins, is reported, and is not replanted. The ground under a tree is rebuilt on the surface it stood
+ *   on (level paving or roof, or ground that slopes: a hillside's slope is measured from the surfaces around the
+ *   crown): every hole loop is lowered onto that surface and capped there, so no cap face climbs to where the tree
+ *   was and no hole opens; a tile with no tree is left as it is, whatever its ground. Where the hole edge stands off
+ *   that surface (a wall or building side the tree hid, the side of a low planting that stays) a vertical skirt
+ *   continues it down, and its area and height are reported by what it continues. Lower roof vegetation stays in the
+ *   scan untouched. Writes the devegetated tile (textures kept; cap and skirt are untextured primitives of their own),
+ *   and a crown list with apex, stem, support (height and slope), footprint, sector radii and voxel samples of the
+ *   crown surface, in the tile frame and as lat/lng (the list stays in the cache; plant writes no geodetic data).
  *
  * plant: grows one SB-Veggie tree per measured crown with the space-colonisation generator
  *   (nature::SpaceColonizationTreeGenerator), attracted to the crown's own measured samples, meshed within a
@@ -546,7 +547,8 @@ struct CrownRecord {
     bool reachesBoundary{false};     // a tree whose crown runs to the extraction's edge: measured (and rebuilt) up to it
     Vec3 apex;
     double stemX{0}, stemZ{0};
-    double supportY{0};
+    double supportY{0};              // the support surface's height at the stem
+    double tiltX{0}, tiltZ{0};       // its gradient (dy/dx, dy/dz) around the crown
     std::string supportSource;       // surrounding_surface | terrain_model
     double terrainY{0};
     double apexAboveSupport{0};
@@ -641,7 +643,7 @@ private:
     std::vector<float> dispersion;
     std::vector<uint8_t> surface;      // face of a large planar segment
     std::vector<int32_t> segOf;        // planar segment per face (index into segments, -1 when not a surface)
-    struct Segment { double area{0}; Vec3 normal; float minY{0}, maxY{0}; std::vector<uint32_t> faces; };
+    struct Segment { double area{0}; Vec3 normal; float minY{0}, maxY{0}; float lowX{0}, lowZ{0}; std::vector<uint32_t> faces; };
     std::vector<Segment> segments;
     std::vector<uint8_t> veg;
     // half-edges sorted by undirected key
@@ -919,9 +921,9 @@ private:
                     ++R.stats.surfaceTriangles;
                     segOf[t] = static_cast<int32_t>(segments.size());
                     for (int j = 0; j < 3; ++j) {
-                        const float y = weldPos[wtri[3 * static_cast<size_t>(t) + static_cast<size_t>(j)]].y;
-                        sg.minY = std::min(sg.minY, y);
-                        sg.maxY = std::max(sg.maxY, y);
+                        const Vec3& v = weldPos[wtri[3 * static_cast<size_t>(t) + static_cast<size_t>(j)]];
+                        if (v.y < sg.minY) { sg.minY = v.y; sg.lowX = v.x; sg.lowZ = v.z; }
+                        sg.maxY = std::max(sg.maxY, v.y);
                     }
                 }
                 sg.faces = members;
@@ -997,7 +999,9 @@ private:
         bool cut{false};             // the apex is not measured: its local-maximum window reaches the extraction's edge
         bool reachesBoundary{false}; // the footprint touches the extraction's edge
         bool tooSmall{false};
-        double support{0};
+        double support{0};           // the support surface's height at the stem
+        double tiltX{0}, tiltZ{0};   // its gradient (dy/dx, dy/dz): the ground a tree stands on may slope
+        double stemX{0}, stemZ{0};
         std::string supportSource;
         int recordIndex{-1};
     };
@@ -1169,6 +1173,24 @@ private:
         return w.recordIndex >= 0 && removedStatus(R.crowns[static_cast<size_t>(w.recordIndex)].status);
     }
 
+    /** A surface a tree can stand on is planar and within ~32 degrees of level (ground, roofs; not walls or drapes). */
+    static constexpr float kStandableNormalY = 0.85f;
+    /** Level: within ~14 degrees (paving, roofs, terraces; not the tilted fringe where a scan climbs onto canopy). */
+    static constexpr float kLevelNormalY = 0.97f;
+
+    /** A support surface is never steeper than the surfaces it is measured from. */
+    static void clampTilt(CrownRecord& rec) {
+        const double maxGrade = std::sqrt(1.0 - static_cast<double>(kStandableNormalY) * kStandableNormalY) / kStandableNormalY;
+        const double grade = std::hypot(rec.tiltX, rec.tiltZ);
+        if (grade > maxGrade) { rec.tiltX *= maxGrade / grade; rec.tiltZ *= maxGrade / grade; }
+    }
+
+    /** Height of the surface a crown stands on at (x, z): its height at the stem continued along its slope. */
+    double supportAt(int crown, double x, double z) const {
+        const auto& w = work[static_cast<size_t>(crown)];
+        return w.support + w.tiltX * (x - w.stemX) + w.tiltZ * (z - w.stemZ);
+    }
+
     /** The surface a crown stands on, its status, footprint, sector radii and surface samples. */
     void measureCrown(int m) {
         const auto& g = surf.top;
@@ -1195,7 +1217,8 @@ private:
 
         // support: the nearest level planar surfaces (ground, roofs) around the footprint, reached outward from its edge
         // through anything else (other canopy, rough non-green surfaces), nearest first
-        std::vector<float> samples;
+        struct SupportSample { float x, y, z; Vec3 n; };
+        std::vector<SupportSample> samples;
         std::unordered_map<size_t, uint8_t> seen;
         seen.reserve(w.cells.size() * 4);
         for (size_t c : w.cells) seen.emplace(c, 1);
@@ -1219,29 +1242,70 @@ private:
                 frontier.push(j);
                 const int t = surf.topTriangle[j];
                 // a surface to stand on is planar and close to level (ground, roofs); steep planar patches are walls or drapes
-                if (!canopy[j] && t >= 0 && surface[static_cast<size_t>(t)] && std::abs(normal[static_cast<size_t>(t)].y) >= 0.85f && !std::isnan(g.h[j])) samples.push_back(g.h[j]);
+                if (!canopy[j] && t >= 0 && surface[static_cast<size_t>(t)] && std::abs(normal[static_cast<size_t>(t)].y) >= kStandableNormalY && !std::isnan(g.h[j])) {
+                    // the slope of the planar surface this sample lies on (its segment's normal, facing up)
+                    Vec3 n = segments[static_cast<size_t>(segOf[static_cast<size_t>(t)])].normal;
+                    if (n.y < 0) n = n * -1.0f;
+                    samples.push_back({static_cast<float>(g.cx(a)), g.h[j], static_cast<float>(g.cz(b)), n});
+                }
             }
         }
         if (!samples.empty()) {
             // height clusters of the surrounding surfaces; the tree stands on the lowest one that holds at least a quarter
             // of them (a street tree under an awning or beside a kiosk stands on the street; a roof garden sees only roof)
-            std::sort(samples.begin(), samples.end());
+            std::sort(samples.begin(), samples.end(), [](const SupportSample& a, const SupportSample& b) { return a.y < b.y; });
             size_t bestLo = 0, bestN = 0, lo = 0;
             for (size_t i = 1; i <= samples.size(); ++i) {
-                if (i == samples.size() || samples[i] - samples[i - 1] > P.supportStep) {
+                if (i == samples.size() || samples[i].y - samples[i - 1].y > P.supportStep) {
                     if (bestN == 0 && 4 * (i - lo) >= samples.size()) { bestN = i - lo; bestLo = lo; }
                     lo = i;
                 }
             }
-            rec.supportY = samples[bestLo + bestN / 2];
+            // That surface may slope (a hillside, a steep street). When most of the cluster's samples lie on level surfaces
+            // (within ~14 degrees, as the support grids count level) it is level: steps between level surfaces (curbs,
+            // stairs, a raised plaza within supportStep) are not a slope. Otherwise its gradient is the median gradient of
+            // the planar surfaces the samples lie on. Its height at the stem is the median of the samples with that slope
+            // taken out (on level ground, the median of the cluster).
+            size_t levelSamples = 0;
+            std::vector<double> gx, gz;
+            gx.reserve(bestN);
+            gz.reserve(bestN);
+            for (size_t i = bestLo; i < bestLo + bestN; ++i) {
+                const Vec3& n = samples[i].n;
+                if (n.y >= kLevelNormalY) ++levelSamples;
+                gx.push_back(-static_cast<double>(n.x) / n.y);
+                gz.push_back(-static_cast<double>(n.z) / n.y);
+            }
+            if (2 * levelSamples < bestN) {
+                std::nth_element(gx.begin(), gx.begin() + static_cast<long>(bestN / 2), gx.end());
+                std::nth_element(gz.begin(), gz.begin() + static_cast<long>(bestN / 2), gz.end());
+                rec.tiltX = gx[bestN / 2];
+                rec.tiltZ = gz[bestN / 2];
+            }
+            clampTilt(rec);
+            std::vector<double> level;
+            level.reserve(bestN);
+            for (size_t i = bestLo; i < bestLo + bestN; ++i) level.push_back(samples[i].y - rec.tiltX * (samples[i].x - rec.stemX) - rec.tiltZ * (samples[i].z - rec.stemZ));
+            std::nth_element(level.begin(), level.begin() + static_cast<long>(bestN / 2), level.end());
+            rec.supportY = level[bestN / 2];
             rec.supportSource = "surrounding_surface";
         } else {
+            // nothing standable around it within supportSearch (steeper ground, all canopy): the terrain model, with
+            // its slope at the stem
+            const double d = P.terrainCell;
             rec.supportY = rec.terrainY;
+            rec.tiltX = (dtm.sample(rec.stemX + d, rec.stemZ) - dtm.sample(rec.stemX - d, rec.stemZ)) / (2 * d);
+            rec.tiltZ = (dtm.sample(rec.stemX, rec.stemZ + d) - dtm.sample(rec.stemX, rec.stemZ - d)) / (2 * d);
+            if (!std::isfinite(rec.tiltX) || !std::isfinite(rec.tiltZ)) rec.tiltX = rec.tiltZ = 0;
             rec.supportSource = "terrain_model";
         }
         rec.supportY = std::min(rec.supportY, static_cast<double>(rec.apex.y));
         rec.apexAboveSupport = rec.apex.y - rec.supportY;
         w.support = rec.supportY;
+        w.tiltX = rec.tiltX;
+        w.tiltZ = rec.tiltZ;
+        w.stemX = rec.stemX;
+        w.stemZ = rec.stemZ;
         w.supportSource = rec.supportSource;
 
         rec.reachesBoundary = w.reachesBoundary;
@@ -1301,14 +1365,17 @@ private:
     /**
      * The surfaces things stand on, which the ground under a removed tree is rebuilt on: the lowest and the highest
      * level planar surface (ground, paving, roofs, terraces; not the drape) in each cell of the surface model, filled
-     * where none was scanned (under canopy) from the nearest scanned ones.
-     * A crown's cap takes whichever of the two lies nearer its measured support (so a cell on a wall line gives a roof
-     * tree the roof and a street tree the street); where neither lies within supportBand of that support, the support
-     * itself (the street beside a roof is not what a roof tree stands on, nor is the roof beside a street tree). Unlike the terrain
-     * model, a lower envelope that drops into every stair well and light well, this meets the scanned ground or roof
-     * around the crown.
+     * where none was scanned (under canopy) from the nearest scanned ones, each filled cell remembering where its value
+     * came from.
+     * A crown's cap takes whichever of the two lies nearer its measured support surface (so a cell on a wall line gives
+     * a roof tree the roof and a street tree the street), continued from where it was scanned along that support's
+     * slope; where neither lies within supportBand of the support, the support itself (the street beside a roof is not
+     * what a roof tree stands on, nor is the roof beside a street tree; on a hillside with no level surface near, the
+     * ground is the sloping support measured around the crown). Unlike the terrain model, a lower envelope that drops
+     * into every stair well and light well, this meets the scanned ground or roof around the crown.
      */
-    height_field::Grid supportLow, supportHigh;
+    height_field::Grid supportLow, supportHigh, lowFromX, lowFromZ, highFromX, highFromZ;
+    bool haveLevelSurface{false};
 
     void buildSupportSurface() {
         const auto& g = surf.top;
@@ -1316,24 +1383,27 @@ private:
         supportHigh = supportLow;
         std::vector<uint32_t> level;
         for (size_t t = 0; t < T; ++t) {
-            // within ~14 degrees of level: paving, roofs, terraces (not the tilted fringe where a scan climbs onto canopy)
-            if (!isArchitecture(t) || normal[t].y < 0.97f) continue;
+            if (!isArchitecture(t) || normal[t].y < kLevelNormalY) continue;
             level.insert(level.end(), {wtri[3 * t], wtri[3 * t + 1], wtri[3 * t + 2]});
         }
-        if (level.empty()) throw VegetationError("no_ground", "the tile has no level surface (ground or roof) to rebuild the ground under its trees on");
+        haveLevelSurface = !level.empty();
+        if (!haveLevelSurface) return;
         height_field::rasterizeTriangles(supportLow, weldPos, level, [&](size_t c, float y, size_t) {
             float& lo = supportLow.h[c];
             float& hi = supportHigh.h[c];
             if (std::isnan(lo) || y < lo) lo = y;
             if (std::isnan(hi) || y > hi) hi = y;
         });
-        height_field::fillEmpty(supportLow);
-        height_field::fillEmpty(supportHigh);
+        height_field::fillEmpty(supportLow, &lowFromX, &lowFromZ);
+        height_field::fillEmpty(supportHigh, &highFromX, &highFromZ);
     }
 
     double capHeight(int crown, double x, double z) const {
-        const double s = work[static_cast<size_t>(crown)].support;
-        const double lo = supportLow.sample(x, z), hi = supportHigh.sample(x, z);
+        const auto& w = work[static_cast<size_t>(crown)];
+        const double s = supportAt(crown, x, z);
+        if (!haveLevelSurface) return s;
+        const double lo = supportLow.sample(x, z) + w.tiltX * (x - lowFromX.sample(x, z)) + w.tiltZ * (z - lowFromZ.sample(x, z));
+        const double hi = supportHigh.sample(x, z) + w.tiltX * (x - highFromX.sample(x, z)) + w.tiltZ * (z - highFromZ.sample(x, z));
         const double pick = std::abs(hi - s) < std::abs(lo - s) ? hi : lo;
         return std::abs(pick - s) <= P.supportBand ? pick : s;
     }
@@ -1382,7 +1452,7 @@ private:
             // flat sheets and undersides are judged by their whole edge, and must stand off the surface the tree stands on
             // as high as canopy does (a roof garden's roof is the trees' support, not part of them)
             const bool wholeRim = sg.normal.y >= 0.85f || sg.normal.y <= -0.3f;
-            if (wholeRim && sg.minY - work[static_cast<size_t>(owner)].support < P.canopyMinHeight) continue;
+            if (wholeRim && sg.minY - supportAt(owner, sg.lowX, sg.lowZ) < P.canopyMinHeight) continue;
             candidates.push_back({si, owner, wholeRim});
         }
         for (int pass = 0; pass < 8; ++pass) {
@@ -1612,7 +1682,10 @@ private:
             }
         }
         classifyDrapeSurfaces(drapeOwner, regionApex);
-        buildSupportSurface();
+        bool removesAny = false;
+        for (size_t m = 0; m < work.size() && !removesAny; ++m) removesAny = removesCrown(m);
+        // no tree to take out: no ground to rebuild (a tile without trees, on a hillside or not, is left as it is)
+        if (removesAny) buildSupportSurface();
         // cells on or next to a wall (a steep planar surface): there, beyond the tree's own vegetation, only green goes,
         // so the relief of a facade a crown leans on stays
         std::vector<uint8_t> nearWall(N, 0);
@@ -2304,6 +2377,7 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
         const auto& c = r.crowns[i];
         s << (i ? ",\n" : "\n") << "{\"id\":" << c.id << ",\"status\":" << json::str(c.status) << ",\"reachesBoundary\":" << (c.reachesBoundary ? "true" : "false") << ",\"apex\":" << v3(c.apex)
           << ",\"stem\":[" << json::num(c.stemX) << "," << json::num(c.stemZ) << "],\"supportY\":" << json::num(c.supportY)
+          << ",\"supportTilt\":[" << json::num(c.tiltX) << "," << json::num(c.tiltZ) << "]"
           << ",\"supportSource\":" << json::str(c.supportSource) << ",\"terrainY\":" << json::num(c.terrainY)
           << ",\"apexAboveSupport\":" << json::num(c.apexAboveSupport) << ",\"areaM2\":" << json::num(c.areaM2) << ",\"sectorRadii\":[";
         for (size_t k = 0; k < 16; ++k) s << (k ? "," : "") << json::num(c.sectorRadii[k]);

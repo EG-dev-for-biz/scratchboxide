@@ -40,6 +40,13 @@ export interface SyntheticTileSpec {
     corruptTexture?: boolean;
     /** No textures at all (a clay extraction). */
     untextured?: boolean;
+    /**
+     * Tilts the whole tile into a hillside: every vertex is raised by slope * x (ground, crowns, building alike), so the
+     * ground is the plane y = slope * x.
+     */
+    slope?: number;
+    /** Colour of the ground texture (default GROUND_RGB, grey paving); a green one makes a lawn. */
+    groundRgb?: [number, number, number];
 }
 
 export const FOLIAGE_RGB: [number, number, number] = [72, 112, 52];
@@ -140,8 +147,9 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
             H[i].push(Math.max(0, h));
         }
     }
+    const slope = spec.slope ?? 0;
     const vid = (p: Prim, x: number, y: number, z: number) => {
-        p.pos.push(x, y, z);
+        p.pos.push(x, y + slope * x, z);
         p.uv.push(((x * 0.1) % 1 + 1) % 1, ((z * 0.1) % 1 + 1) % 1);
         return p.pos.length / 3 - 1;
     };
@@ -232,7 +240,7 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
     const materials: any[] = [];
     const meshes: any[] = [];
     const nodes: any[] = [{ name: 'district', children: [] as number[] }];
-    const prims: Array<[Prim, [number, number, number], number]> = [[ground, GROUND_RGB, 1], [foliage, FOLIAGE_RGB, 2], [facade, FACADE_RGB, 3], [drape, DRAPE_RGB, 4]];
+    const prims: Array<[Prim, [number, number, number], number]> = [[ground, spec.groundRgb ?? GROUND_RGB, 1], [foliage, FOLIAGE_RGB, 2], [facade, FACADE_RGB, 3], [drape, DRAPE_RGB, 4]];
     for (const [p, rgb, seed] of prims) {
         if (!p.idx.length) continue;
         let material: number | undefined;

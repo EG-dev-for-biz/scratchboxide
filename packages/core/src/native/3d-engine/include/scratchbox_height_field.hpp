@@ -159,8 +159,28 @@ inline Grid diskFilter(const Grid& g, int radiusCells, bool takeMin) {
     return o;
 }
 
-/** Fills NaN cells from the nearest filled cells (breadth-first rings, averaging the filled 8-neighbours). */
-inline void fillEmpty(Grid& g) {
+/**
+ * Fills NaN cells from the nearest filled cells (breadth-first rings, averaging the filled 8-neighbours).
+ *
+ * With `fromX`/`fromZ` (grids of the same layout), every cell also gets where its value came from: a scanned cell its
+ * own centre, a filled cell the same average of its neighbours' origins. The averaging is linear, so a filled value is
+ * the scanned surface at that origin exactly when the surface is a plane; adding the plane's gradient times the offset
+ * from the origin continues a slope instead of flattening it.
+ */
+inline void fillEmpty(Grid& g, Grid* fromX = nullptr, Grid* fromZ = nullptr) {
+    const bool carry = fromX && fromZ;
+    if (carry) {
+        *fromX = g;
+        *fromZ = g;
+        for (int k = 0; k < g.nz; ++k) {
+            for (int i = 0; i < g.nx; ++i) {
+                const size_t c = g.id(i, k);
+                if (std::isnan(g.h[c])) continue;
+                fromX->h[c] = static_cast<float>(g.cx(i));
+                fromZ->h[c] = static_cast<float>(g.cz(k));
+            }
+        }
+    }
     std::vector<uint8_t> known(g.size(), 0);
     std::queue<size_t> frontier;
     for (size_t c = 0; c < g.size(); ++c) {
@@ -185,17 +205,21 @@ inline void fillEmpty(Grid& g) {
         const size_t c = q.front();
         q.pop();
         const int i = static_cast<int>(c % static_cast<size_t>(g.nx)), k = static_cast<int>(c / static_cast<size_t>(g.nx));
-        double sum = 0;
+        double sum = 0, sx = 0, sz = 0;
         int n = 0;
         for (int dk = -1; dk <= 1; ++dk) {
             for (int di = -1; di <= 1; ++di) {
                 if (!g.in(i + di, k + dk)) continue;
                 const size_t j = g.id(i + di, k + dk);
-                if (known[j]) { sum += g.h[j]; ++n; }
+                if (!known[j]) continue;
+                sum += g.h[j];
+                if (carry) { sx += fromX->h[j]; sz += fromZ->h[j]; }
+                ++n;
             }
         }
         if (n == 0) continue;
         g.h[c] = static_cast<float>(sum / n);
+        if (carry) { fromX->h[c] = static_cast<float>(sx / n); fromZ->h[c] = static_cast<float>(sz / n); }
         known[c] = 1;
         for (int dk = -1; dk <= 1; ++dk) {
             for (int di = -1; di <= 1; ++di) {

@@ -123,7 +123,7 @@ export interface TileVegetationPlantResult {
 
 export type TileVegetationErrorCode =
     | 'bad_request' | 'not_found' | 'timeout' | 'failed' | 'build_failed'
-    | 'bad_input' | 'texture_decode' | 'no_photo_texture' | 'no_ground' | 'budget_too_small' | 'budget_exceeded' | 'plant_failed' | 'io';
+    | 'bad_input' | 'texture_decode' | 'no_photo_texture' | 'budget_too_small' | 'budget_exceeded' | 'plant_failed' | 'io';
 
 export class TileVegetationError extends Error {
     constructor(readonly code: TileVegetationErrorCode, message: string, readonly detail?: string) {
@@ -147,7 +147,7 @@ const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 
 const BINARY = path.join('build', '3d-native', 'tile_vegetation');
 const CACHE_VERSION = 'tile_vegetation/v2';
 const PUBLISH_FILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\.glb$/;
-const KNOWN_CODES = new Set<TileVegetationErrorCode>(['bad_request', 'not_found', 'timeout', 'failed', 'build_failed', 'bad_input', 'texture_decode', 'no_photo_texture', 'no_ground', 'budget_too_small', 'budget_exceeded', 'plant_failed', 'io']);
+const KNOWN_CODES = new Set<TileVegetationErrorCode>(['bad_request', 'not_found', 'timeout', 'failed', 'build_failed', 'bad_input', 'texture_decode', 'no_photo_texture', 'budget_too_small', 'budget_exceeded', 'plant_failed', 'io']);
 
 /** The checkout that holds scripts/tile_vegetation.cpp: walks up from this file, then from cwd. */
 export function findTileVegetationRepoRoot(): string {

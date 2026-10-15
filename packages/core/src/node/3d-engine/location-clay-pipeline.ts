@@ -199,7 +199,16 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
     if (req.trees) {
         req.reportProgress?.('Measuring the trees in the photo tiles');
         const ts = Date.now();
-        strip = await stage('vegetation', req.signal, () => d.vegetation.strip({ tilePath: req.rawTilePath, signal: req.signal }));
+        strip = await stage('vegetation', req.signal, async () => {
+            try {
+                return await d.vegetation.strip({ tilePath: req.rawTilePath, signal: req.signal });
+            } catch (err) {
+                if (err instanceof TileVegetationError) {
+                    throw new TileVegetationError(err.code, `${err.message}. The trees could not be measured, so nothing was remeshed or mounted; ask again with trees false for the remeshed tiles without rebuilt trees.`, err.detail);
+                }
+                throw err;
+            }
+        });
         timings.vegetation = Date.now() - ts;
     }
 

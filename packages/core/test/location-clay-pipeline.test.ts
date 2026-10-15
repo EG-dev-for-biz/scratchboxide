@@ -70,13 +70,15 @@ function publishedTrees(): string[] {
     return fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('_trees.glb')) : [];
 }
 
-beforeAll(() => {
+beforeAll(async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'location-clay-')));
     fs.writeFileSync(path.join(root, 'district.glb'), buildSyntheticTile(SPEC));
     fs.writeFileSync(path.join(root, 'bare.glb'), buildSyntheticTile({ ...SPEC, trees: [] }));
     fs.writeFileSync(path.join(root, 'corrupt.glb'), buildSyntheticTile({ ...SPEC, corruptTexture: true }));
     vegetation = new TileVegetationService({ workspaceRoot: root, repoRoot: REPO });
-});
+    // the native build (or the wait for another worker's) is not part of any one test's time
+    await vegetation.ensureBinary();
+}, 900_000);
 
 afterAll(() => {
     if (root) fs.rmSync(root, { recursive: true, force: true });
@@ -137,7 +139,26 @@ describe('runLocationClayPipeline', () => {
         expect(err).toBeInstanceOf(TileExtractionError);
         expect(err.stage).toBe('vegetation');
         expect(err.message).toContain('Tile extraction failed at vegetation: photo texture');
+        // and says how to get the location without its trees
+        expect(err.message).toContain('ask again with trees false for the remeshed tiles without rebuilt trees');
         expect(stub.calls).toHaveLength(0);
+    });
+
+    it('rebuilds the trees of a hillside with no level surface, and returns a treeless hillside with zero trees', async () => {
+        const slope = 0.36; // 20 degrees: every surface tilted, so the tile has no level ground or roof anywhere
+        fs.writeFileSync(path.join(root, 'hillside.glb'), buildSyntheticTile({ ...SPEC, trees: SPEC.trees.slice(0, 2), slope }));
+        fs.writeFileSync(path.join(root, 'hillside_bare.glb'), buildSyntheticTile({ ...SPEC, trees: [], slope }));
+        const stub = refineStub();
+        const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'hillside.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'hillside' }, deps(stub));
+        expect(stub.calls).toHaveLength(1);
+        expect(r.trees).toMatchObject({ measured: 2, count: 2, url: '/models/hillside_sbveggie_trees.glb' });
+        // each tree stands on the slope where it was measured
+        const crowns = JSON.parse(fs.readFileSync(r.trees!.crownsJson, 'utf8')).crowns;
+        for (const c of crowns) expect(Math.abs(c.supportY - slope * c.stem[0])).toBeLessThan(0.1);
+        expect(describeLocationClay(r, 'clay')).toContain('Rebuilt 2 measured trees as SB-Veggie trees');
+        const bare = await runLocationClayPipeline({ rawTilePath: path.join(root, 'hillside_bare.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'hillside_bare' }, deps(refineStub()));
+        expect(bare.trees).toMatchObject({ measured: 0, count: 0, canopyAreaM2: 0 });
+        expect(describeLocationClay(bare, 'clay')).toContain('No tree canopy was measured in the photo tiles, so no trees were added.');
     });
 
     it('fails at the planting stage when the remeshed tile leaves too small a budget for the trees, and says how to ask for more', async () => {

@@ -425,3 +425,84 @@ describe('tile_vegetation strip at the extraction edge', () => {
         fs.writeFileSync(path.join(SHOTS, 'synthetic_edge_rebuilt_aerial.png'), renderClayPng([{ positions: edgeOut.positions, indices: edgeOut.indices }, { positions: trees.positions, indices: trees.indices }], { kind: 'aerial', width: 960, height: 640, bearingDeg: 200, elevationDeg: 35 }));
     });
 });
+
+/**
+ * Ground with no level paving around the trees: a 20 degree hillside (every surface tilted, the building's roof too,
+ * so the tile has no level surface at all) and a flat lawn (level, but green). Neither has a level grey surface to
+ * rebuild the ground on; the ground is what the trees stand on, measured around each crown.
+ */
+describe('tile_vegetation strip where no level paving surrounds the trees: a hillside, a lawn', () => {
+    const SLOPE = 0.36; // 19.8 degrees
+    const HILL_TREES: SyntheticTree[] = [{ x: -10, z: -8, height: 11, radius: 4.5 }, { x: 9, z: 10, height: 9, radius: 3.5 }];
+    const HILL_BUILDING = { x0: 12, z0: -22, x1: 24, z1: -12, height: 12 };
+    const LAWN_RGB: [number, number, number] = [86, 128, 58];
+
+    /** Strips `name` and checks the trees were measured and removed, and the ground rebuilt on `ground(x)`. */
+    async function stripAndCheck(name: string, spec: SyntheticTileSpec, ground: (x: number) => number) {
+        fs.writeFileSync(path.join(work, name), buildSyntheticTile(spec));
+        const r = await svc.strip({ tilePath: name });
+        const cs = JSON.parse(fs.readFileSync(r.crownsJson, 'utf8')).crowns;
+        const before = readGlbTriangles(fs.readFileSync(path.join(work, name)));
+        const after = readGlbTriangles(fs.readFileSync(r.devegetatedGlb));
+        return { r, cs, before, after, ground };
+    }
+
+    function expectGroundRebuilt(x: Awaited<ReturnType<typeof stripAndCheck>>, trees: SyntheticTree[]) {
+        const { r, cs, before, after, ground } = x;
+        expect(cs.filter((c: any) => c.status === 'tree')).toHaveLength(trees.length);
+        for (const t of trees) {
+            const c = cs.find((k: any) => Math.hypot(k.stem[0] - t.x, k.stem[1] - t.z) < 0.75);
+            expect(c?.status).toBe('tree');
+            // the ground it stands on, measured against the slope: height under the stem and slope
+            expect(Math.abs(c.supportY - ground(c.stem[0]))).toBeLessThan(0.1);
+            expect(Math.abs(c.apexAboveSupport - t.height)).toBeLessThan(0.6);
+            expect(Math.abs(c.supportTilt[0] - (ground(1) - ground(0)))).toBeLessThan(0.01);
+            expect(Math.abs(c.supportTilt[1])).toBeLessThan(0.01);
+            // nothing above the clearance is left where it stood
+            expect(trianglesNear(before, t.x, t.z, 0.75 * t.radius, ground(t.x) + 1)).toBeGreaterThan(20);
+            for (let v = 0; v < after.positions.length; v += 3) {
+                if (Math.hypot(after.positions[v] - t.x, after.positions[v + 2] - t.z) > 1.5 * t.radius) continue;
+                expect(after.positions[v + 1] - ground(after.positions[v])).toBeLessThan(0.35);
+            }
+        }
+        expect(r.stats.triangles.removed).toBeGreaterThan(300);
+        expect(openEdges(after)).toBeLessThanOrEqual(openEdges(before));
+        // every point the cap put down lies on the ground (within 0.05 m), and nothing needed a skirt
+        const scanXZ = new Set<string>();
+        for (let v = 0; v < before.positions.length; v += 3) scanXZ.add(`${Math.round(before.positions[v] * 100)},${Math.round(before.positions[v + 2] * 100)}`);
+        const cap = after.nodeRanges.find(n => n.name === 'vegetation_removed_cap')!;
+        let capPoints = 0, worst = 0;
+        for (let i = cap.firstTriangle * 3; i < (cap.firstTriangle + cap.triangleCount) * 3; i++) {
+            const v = after.indices[i];
+            const px = after.positions[v * 3], py = after.positions[v * 3 + 1], pz = after.positions[v * 3 + 2];
+            if (scanXZ.has(`${Math.round(px * 100)},${Math.round(pz * 100)}`)) continue;
+            capPoints++;
+            worst = Math.max(worst, Math.abs(py - ground(px)));
+        }
+        expect(capPoints).toBeGreaterThan(20);
+        expect(worst).toBeLessThan(0.05);
+        expect(r.stats.skirts.areaM2).toEqual({ onWalls: 0, onLevelSurfaces: 0, onKeptCanopy: 0, onOther: 0 });
+        expectValidGlb(fs.readFileSync(r.devegetatedGlb));
+    }
+
+    it('leaves a treeless 20 degree hillside as it is: zero canopy is a valid result', async () => {
+        fs.writeFileSync(path.join(work, 'hill_bare.glb'), buildSyntheticTile({ halfSize: 30, spacing: 0.75, trees: [], slope: SLOPE, anchor: ANCHOR }));
+        const r = await svc.strip({ tilePath: 'hill_bare.glb' });
+        expect(JSON.parse(fs.readFileSync(r.crownsJson, 'utf8')).crowns).toEqual([]);
+        expect(r.stats.triangles).toMatchObject({ removed: 0, cap: 0, skirt: 0 });
+        expect(readGlbTriangles(fs.readFileSync(r.devegetatedGlb)).indices.length).toBe(readGlbTriangles(fs.readFileSync(path.join(work, 'hill_bare.glb'))).indices.length);
+    });
+
+    it('measures the trees on a 20 degree hillside with no level surface at all, and rebuilds the ground on the slope', async () => {
+        const x = await stripAndCheck('hill.glb', { halfSize: 30, spacing: 0.75, trees: HILL_TREES, building: HILL_BUILDING, slope: SLOPE, anchor: ANCHOR }, px => SLOPE * px);
+        expectGroundRebuilt(x, HILL_TREES);
+        expect(x.cs.every((c: any) => c.supportSource === 'surrounding_surface')).toBe(true);
+        fs.mkdirSync(SHOTS, { recursive: true });
+        fs.writeFileSync(path.join(SHOTS, 'synthetic_hillside_devegetated_aerial.png'), renderClayPng([{ positions: x.after.positions, indices: x.after.indices }], { kind: 'aerial', width: 960, height: 640, bearingDeg: 160, elevationDeg: 30 }));
+    });
+
+    it('measures the trees on a level lawn (green, so no paving) against the lawn', async () => {
+        const x = await stripAndCheck('lawn.glb', { halfSize: 30, spacing: 0.75, trees: HILL_TREES, groundRgb: LAWN_RGB, anchor: ANCHOR }, () => 0);
+        expectGroundRebuilt(x, HILL_TREES);
+    });
+});
