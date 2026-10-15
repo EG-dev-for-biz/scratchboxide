@@ -176,6 +176,204 @@ export function evaluateEdgeOverlap(
     };
 }
 
+/** Running state of one pose search: the best pose so far and how it scored. */
+interface PoseSearchState {
+    bestPose: CameraPose6DOF;
+    bestScore: number;
+    bestResPx: number;
+    /** The rendered edge field of bestPose. */
+    bestField?: SobelEdgeField;
+    iterations: number;
+    edgeCount: number;
+    /** The initial pose already met the target, so no search ran. */
+    convergedAtStart: boolean;
+}
+
+/** Options for the cooperative (async) search; see {@link SubPixelEdgeAlignmentOptimizer.optimizePoseAsync}. */
+export interface AsyncOptimizationOptions extends OptimizationOptions {
+    /** Checked before every render; an aborted signal ends the search with an AbortError. */
+    signal?: AbortSignal;
+    /** Wall-clock budget in ms. When it runs out the search stops and returns the best pose so far (stoppedBy). */
+    timeBudgetMs?: number;
+    /** Called after every render with the number of renders so far and the best correlation. */
+    onRender?: (renders: number, bestScorePercent: number) => void;
+    /** The caller's own render of initialPose, used instead of rendering it again (it counts as a render). */
+    initialField?: SobelEdgeField;
+}
+
+export interface AsyncEdgeAlignmentMetrics extends EdgeAlignmentMetrics {
+    /** Why the search ended. */
+    stoppedBy: 'target reached' | 'no further improvement' | 'iteration limit' | 'time budget';
+    /** Renders made, the initial one included. */
+    renders: number;
+    /** The rendered edge field of finalPose. */
+    finalField: SobelEdgeField;
+}
+
+/**
+ * The coordinate-descent pose search as a generator: it yields each pose to render and receives that pose's edge
+ * field, so the same search runs synchronously or cooperatively. It updates `state` as it goes.
+ */
+function* searchPoses(
+    initialPose: CameraPose6DOF,
+    queryField: SobelEdgeField,
+    options: OptimizationOptions,
+    state: PoseSearchState
+): Generator<CameraPose6DOF, void, SobelEdgeField> {
+    const maxIter = options.maxIterations ?? 30;
+    const targetScore = options.targetOverlapScore ?? 99.9;
+    const targetResPx = options.subpixelTolerancePx ?? 0.10;
+
+    let currentPose: CameraPose6DOF = { ...initialPose };
+    const initialField = yield currentPose;
+    const evalResult = evaluateEdgeOverlap(queryField, initialField);
+    state.bestPose = { ...initialPose };
+    state.bestScore = evalResult.overlapScorePercent;
+    state.bestResPx = evalResult.residualPx;
+    state.bestField = initialField;
+    state.edgeCount = evalResult.edgeCount;
+
+    if (state.bestScore >= targetScore && state.bestResPx <= targetResPx) {
+        state.convergedAtStart = true;
+        return;
+    }
+
+    let stepPos = options.stepSizes?.pos ?? 1.8;
+    let stepTarget = options.stepSizes?.target ?? 0.5;
+    let stepFov = options.stepSizes?.fov ?? 1.0;
+    let stepK1 = options.stepSizes?.k1 ?? 0.005;
+
+    type ScalarPoseKey = 'x' | 'y' | 'z' | 'targetX' | 'targetY' | 'targetZ' | 'fov' | 'k1';
+    const paramDefs: Array<{ key: ScalarPoseKey; getStep: () => number }> = [
+        { key: "x", getStep: () => stepPos },
+        { key: "y", getStep: () => stepPos * 0.7 },
+        { key: "z", getStep: () => stepPos },
+        { key: "targetX", getStep: () => stepTarget },
+        { key: "targetY", getStep: () => stepTarget * 0.7 },
+        { key: "targetZ", getStep: () => stepTarget },
+        { key: "fov", getStep: () => stepFov }
+    ];
+
+    if (initialPose.k1 !== undefined || options.optimizeK1) {
+        if (initialPose.k1 === undefined) {
+            currentPose.k1 = 0;
+            state.bestPose.k1 = 0;
+        }
+        paramDefs.push({ key: "k1", getStep: () => stepK1 });
+    }
+
+    while (state.iterations < maxIter) {
+        state.iterations++;
+
+        if (state.bestScore >= targetScore && state.bestResPx <= targetResPx) {
+            break;
+        }
+
+        let improvedInPass = false;
+
+        // Gauss-Seidel coordinate descent: optimize each DOF sequentially
+        for (const param of paramDefs) {
+            const step = param.getStep();
+            let bestParamScore = state.bestScore;
+            let bestParamResPx = state.bestResPx;
+            let bestParamVal: number | null = null;
+            let bestParamField: SobelEdgeField | undefined;
+
+            for (const delta of [-step, step]) {
+                const testPose: CameraPose6DOF = { ...currentPose };
+                testPose[param.key] = (testPose[param.key] ?? 0) + delta;
+
+                const testField = yield testPose;
+                const testEval = evaluateEdgeOverlap(queryField, testField);
+
+                // Check if target is satisfied
+                if (testEval.overlapScorePercent >= targetScore && testEval.residualPx <= targetResPx) {
+                    state.bestScore = testEval.overlapScorePercent;
+                    state.bestResPx = testEval.residualPx;
+                    state.bestPose = { ...testPose };
+                    state.bestField = testField;
+                    currentPose = { ...testPose };
+                    improvedInPass = true;
+                    break;
+                }
+
+                if (testEval.overlapScorePercent > bestParamScore + 0.01) {
+                    bestParamScore = testEval.overlapScorePercent;
+                    bestParamResPx = testEval.residualPx;
+                    bestParamVal = testPose[param.key]!;
+                    bestParamField = testField;
+                }
+            }
+
+            if (bestParamVal !== null) {
+                currentPose[param.key] = bestParamVal;
+                state.bestPose = { ...currentPose };
+                state.bestScore = bestParamScore;
+                state.bestResPx = bestParamResPx;
+                state.bestField = bestParamField;
+                improvedInPass = true;
+            }
+
+            if (state.bestScore >= targetScore && state.bestResPx <= targetResPx) {
+                break;
+            }
+        }
+
+        // Decay step size for fine sub-pixel convergence when pass produced no improvement
+        if (!improvedInPass) {
+            stepPos *= 0.5;
+            stepTarget *= 0.5;
+            stepFov *= 0.5;
+            stepK1 *= 0.5;
+        }
+
+        if (stepPos < 0.005 && stepTarget < 0.005 && stepFov < 0.002 && stepK1 < 0.0001) {
+            break;
+        }
+    }
+}
+
+function newSearchState(initialPose: CameraPose6DOF): PoseSearchState {
+    return { bestPose: { ...initialPose }, bestScore: 0, bestResPx: Infinity, iterations: 0, edgeCount: 0, convergedAtStart: false };
+}
+
+/** The metrics of a finished (or stopped) search. */
+function searchMetrics(state: PoseSearchState, queryField: SobelEdgeField, options: OptimizationOptions): EdgeAlignmentMetrics {
+    const targetScore = options.targetOverlapScore ?? 99.9;
+    const targetResPx = options.subpixelTolerancePx ?? 0.10;
+    const bestPose = state.bestPose;
+    if (state.convergedAtStart) {
+        return {
+            overlapScorePercent: Math.min(100.0, Math.max(0.0, state.bestScore)),
+            subpixelResidualPx: state.bestResPx,
+            metrologicalErrorMm: 0.0,
+            edgePointCount: state.edgeCount,
+            converged: true,
+            iterations: 0,
+            finalPose: bestPose
+        };
+    }
+    // Calculate physical metrological error based on standoff distance and sub-pixel residual
+    const dist = Math.sqrt(
+        (bestPose.x - bestPose.targetX) ** 2 +
+        (bestPose.y - bestPose.targetY) ** 2 +
+        (bestPose.z - bestPose.targetZ) ** 2
+    );
+    // metrological error: (residualPx / f_px) * distance * 1000 mm
+    const fPx = (queryField.height * 0.5) / Math.tan((bestPose.fov * 0.5 * Math.PI) / 180.0);
+    const metrologicalErrorMm = (state.bestResPx / Math.max(1.0, fPx)) * dist * 1000.0;
+
+    return {
+        overlapScorePercent: Math.min(100.0, Math.max(0.0, state.bestScore)),
+        subpixelResidualPx: state.bestResPx,
+        metrologicalErrorMm,
+        edgePointCount: state.edgeCount,
+        converged: state.bestScore >= targetScore && state.bestResPx <= targetResPx,
+        iterations: state.iterations,
+        finalPose: bestPose
+    };
+}
+
 /**
  * Direct Sub-Pixel Edge Overlap Alignment Optimizer.
  * Iteratively refines 6-DOF camera parameters to achieve 100.0% structural edge overlap.
@@ -190,142 +388,58 @@ export class SubPixelEdgeAlignmentOptimizer {
         renderFunc: (pose: CameraPose6DOF) => SobelEdgeField,
         options: OptimizationOptions = {}
     ): EdgeAlignmentMetrics {
+        const state = newSearchState(initialPose);
+        const search = searchPoses(initialPose, queryField, options, state);
+        let step = search.next();
+        while (!step.done) {
+            step = search.next(renderFunc(step.value));
+        }
+        return searchMetrics(state, queryField, options);
+    }
+
+    /**
+     * The same search, made cooperative for servers: it yields to the event loop before every render (so timers,
+     * Stop and other requests keep being served), ends with an AbortError when `signal` is aborted, and stops with
+     * the best pose so far when `timeBudgetMs` runs out. The result says why it stopped and how many renders it made.
+     */
+    public static async optimizePoseAsync(
+        initialPose: CameraPose6DOF,
+        queryField: SobelEdgeField,
+        renderFunc: (pose: CameraPose6DOF) => SobelEdgeField | Promise<SobelEdgeField>,
+        options: AsyncOptimizationOptions = {}
+    ): Promise<AsyncEdgeAlignmentMetrics> {
+        const started = Date.now();
+        const state = newSearchState(initialPose);
+        const search = searchPoses(initialPose, queryField, options, state);
+        let renders = 0;
+        let outOfTime = false;
+        let step = search.next();
+        if (options.initialField && !step.done) {
+            renders++;
+            step = search.next(options.initialField);
+            options.onRender?.(renders, state.bestScore);
+        }
+        while (!step.done) {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            if (options.signal?.aborted) {
+                throw Object.assign(new Error('Edge alignment stopped before it finished'), { name: 'AbortError' });
+            }
+            // The initial render always runs, so a result always has a measured pose.
+            if (renders > 0 && options.timeBudgetMs !== undefined && Date.now() - started >= options.timeBudgetMs) {
+                outOfTime = true;
+                break;
+            }
+            const field = await renderFunc(step.value);
+            renders++;
+            step = search.next(field);
+            options.onRender?.(renders, state.bestScore);
+        }
+        const metrics = searchMetrics(state, queryField, options);
         const maxIter = options.maxIterations ?? 30;
-        const targetScore = options.targetOverlapScore ?? 99.9;
-        const targetResPx = options.subpixelTolerancePx ?? 0.10;
-
-        let currentPose: CameraPose6DOF = { ...initialPose };
-        let bestPose: CameraPose6DOF = { ...initialPose };
-        let currentField = renderFunc(currentPose);
-        let evalResult = evaluateEdgeOverlap(queryField, currentField);
-
-        let bestScore = evalResult.overlapScorePercent;
-        let bestResPx = evalResult.residualPx;
-        let iterations = 0;
-
-        if (bestScore >= targetScore && bestResPx <= targetResPx) {
-            return {
-                overlapScorePercent: Math.min(100.0, Math.max(0.0, bestScore)),
-                subpixelResidualPx: bestResPx,
-                metrologicalErrorMm: 0.0,
-                edgePointCount: evalResult.edgeCount,
-                converged: true,
-                iterations: 0,
-                finalPose: bestPose
-            };
-        }
-
-        let stepPos = options.stepSizes?.pos ?? 1.8;
-        let stepTarget = options.stepSizes?.target ?? 0.5;
-        let stepFov = options.stepSizes?.fov ?? 1.0;
-        let stepK1 = options.stepSizes?.k1 ?? 0.005;
-
-        type ScalarPoseKey = 'x' | 'y' | 'z' | 'targetX' | 'targetY' | 'targetZ' | 'fov' | 'k1';
-        const paramDefs: Array<{ key: ScalarPoseKey; getStep: () => number }> = [
-            { key: "x", getStep: () => stepPos },
-            { key: "y", getStep: () => stepPos * 0.7 },
-            { key: "z", getStep: () => stepPos },
-            { key: "targetX", getStep: () => stepTarget },
-            { key: "targetY", getStep: () => stepTarget * 0.7 },
-            { key: "targetZ", getStep: () => stepTarget },
-            { key: "fov", getStep: () => stepFov }
-        ];
-
-        if (initialPose.k1 !== undefined || options.optimizeK1) {
-            if (initialPose.k1 === undefined) {
-                currentPose.k1 = 0;
-                bestPose.k1 = 0;
-            }
-            paramDefs.push({ key: "k1", getStep: () => stepK1 });
-        }
-
-        while (iterations < maxIter) {
-            iterations++;
-
-            if (bestScore >= targetScore && bestResPx <= targetResPx) {
-                break;
-            }
-
-            let improvedInPass = false;
-
-            // Gauss-Seidel coordinate descent: optimize each DOF sequentially
-            for (const param of paramDefs) {
-                const step = param.getStep();
-                let bestParamScore = bestScore;
-                let bestParamResPx = bestResPx;
-                let bestParamVal: number | null = null;
-
-                for (const delta of [-step, step]) {
-                    const testPose: CameraPose6DOF = { ...currentPose };
-                    testPose[param.key] = (testPose[param.key] ?? 0) + delta;
-
-                    const testField = renderFunc(testPose);
-                    const testEval = evaluateEdgeOverlap(queryField, testField);
-
-                    // Check if target is satisfied
-                    if (testEval.overlapScorePercent >= targetScore && testEval.residualPx <= targetResPx) {
-                        bestScore = testEval.overlapScorePercent;
-                        bestResPx = testEval.residualPx;
-                        bestPose = { ...testPose };
-                        currentPose = { ...testPose };
-                        improvedInPass = true;
-                        break;
-                    }
-
-                    if (testEval.overlapScorePercent > bestParamScore + 0.01) {
-                        bestParamScore = testEval.overlapScorePercent;
-                        bestParamResPx = testEval.residualPx;
-                        bestParamVal = testPose[param.key]!;
-                    }
-                }
-
-                if (bestParamVal !== null) {
-                    currentPose[param.key] = bestParamVal;
-                    bestPose = { ...currentPose };
-                    bestScore = bestParamScore;
-                    bestResPx = bestParamResPx;
-                    improvedInPass = true;
-                }
-
-                if (bestScore >= targetScore && bestResPx <= targetResPx) {
-                    break;
-                }
-            }
-
-            // Decay step size for fine sub-pixel convergence when pass produced no improvement
-            if (!improvedInPass) {
-                stepPos *= 0.5;
-                stepTarget *= 0.5;
-                stepFov *= 0.5;
-                stepK1 *= 0.5;
-            }
-
-            if (stepPos < 0.005 && stepTarget < 0.005 && stepFov < 0.002 && stepK1 < 0.0001) {
-                break;
-            }
-        }
-
-        // Calculate physical metrological error based on standoff distance and sub-pixel residual
-        const dist = Math.sqrt(
-            (bestPose.x - bestPose.targetX) ** 2 +
-            (bestPose.y - bestPose.targetY) ** 2 +
-            (bestPose.z - bestPose.targetZ) ** 2
-        );
-        // metrological error: (residualPx / f_px) * distance * 1000 mm
-        const fPx = (queryField.height * 0.5) / Math.tan((bestPose.fov * 0.5 * Math.PI) / 180.0);
-        const metrologicalErrorMm = (bestResPx / Math.max(1.0, fPx)) * dist * 1000.0;
-
-        const converged = bestScore >= targetScore && bestResPx <= targetResPx;
-
-        return {
-            overlapScorePercent: Math.min(100.0, Math.max(0.0, bestScore)),
-            subpixelResidualPx: bestResPx,
-            metrologicalErrorMm,
-            edgePointCount: evalResult.edgeCount,
-            converged,
-            iterations,
-            finalPose: bestPose
-        };
+        const stoppedBy: AsyncEdgeAlignmentMetrics['stoppedBy'] = outOfTime ? 'time budget'
+            : metrics.converged ? 'target reached'
+            : state.iterations >= maxIter ? 'iteration limit' : 'no further improvement';
+        return { ...metrics, stoppedBy, renders, finalField: state.bestField! };
     }
 
     /**

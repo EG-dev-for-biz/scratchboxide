@@ -3669,6 +3669,9 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
 // GeoBox Precision Declarations & Handlers
 // ============================================================================
 
+/** Bounds on the edge alignment search, so one call cannot hold the server for hours. Out-of-range values fail the call. */
+const EDGE_ALIGN_LIMITS = { maxIterations: 50, minAnalysisSide: 32, maxAnalysisSide: 640, minSeconds: 5, maxSeconds: 240 } as const;
+
 /**
  * Closed-loop edge alignment of a photograph against a given 3D model (the same tool under three names). The model is
  * rendered at each trial pose and its silhouette/depth edges are correlated with the photograph's edges.
@@ -3696,9 +3699,10 @@ function EDGE_ALIGNMENT_DECLARATION(name: string): ToolDeclaration {
                     },
                     required: ['x', 'y', 'z', 'targetX', 'targetY', 'targetZ', 'fov']
                 },
-                maxIterations: { type: 'NUMBER', description: 'Maximum coordinate-descent passes (default 25).' },
+                maxIterations: { type: 'NUMBER', description: `Maximum coordinate-descent passes, 1-${EDGE_ALIGN_LIMITS.maxIterations} (default 25).` },
                 targetEdgeCorrelation: { type: 'NUMBER', description: 'Stop once the edge correlation (0-100) reaches this (default 95).' },
-                analysisMaxSide: { type: 'NUMBER', description: 'Longest side, in pixels, at which edges are compared (default 320).' }
+                analysisMaxSide: { type: 'NUMBER', description: `Longest side, in pixels, at which edges are compared, ${EDGE_ALIGN_LIMITS.minAnalysisSide}-${EDGE_ALIGN_LIMITS.maxAnalysisSide} (default 320).` },
+                timeBudgetSeconds: { type: 'NUMBER', description: `Stop after this long with the best pose so far, ${EDGE_ALIGN_LIMITS.minSeconds}-${EDGE_ALIGN_LIMITS.maxSeconds} s (default 120). Each trial renders the whole model, so large models get few trials; the result says why it stopped.` }
             },
             required: ['imagePath', 'glbPath', 'initialPose']
         }
@@ -3945,8 +3949,21 @@ function meanEdgeDistance(photo: Float32Array, model: Float32Array, width: numbe
     return { meanPx: count ? sum / count : NaN, modelEdgePixels: count };
 }
 
-/** Closed-loop edge alignment of a photograph against a given model (see EDGE_ALIGNMENT_DECLARATION). */
-async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown>) {
+/** A number argument within [min, max], its default when omitted; anything else is a MissingInputError. */
+function boundedNumber(tool: string, arg: string, value: unknown, fallback: number, min: number, max: number): number {
+    if (value === undefined || value === null) return fallback;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+        throw new MissingInputError(tool, arg, `must be a number from ${min} to ${max} (got ${JSON.stringify(value)})`);
+    }
+    return value;
+}
+
+/**
+ * Closed-loop edge alignment of a photograph against a given model (see EDGE_ALIGNMENT_DECLARATION). The search runs
+ * cooperatively: it yields to the event loop between renders, stops with an AbortError when the chat stops the call,
+ * and returns the best pose so far when its time budget runs out.
+ */
+async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown>, ctx?: ToolContext) {
     const imagePath = asString(args.imagePath);
     if (!imagePath) throw new MissingInputError(tool, 'imagePath', 'give the photograph to align to');
     const glbPath = asString(args.glbPath) || asString(args.renderedGlbPath);
@@ -3962,9 +3979,11 @@ async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown
     const standoff = Math.hypot(initialPose.x - initialPose.targetX, initialPose.y - initialPose.targetY, initialPose.z - initialPose.targetZ);
     if (!(standoff > 0)) throw new MissingInputError(tool, 'initialPose', 'the camera position and target must differ');
 
-    const maxIterations = typeof args.maxIterations === 'number' ? args.maxIterations : 25;
-    const target = typeof args.targetEdgeCorrelation === 'number' ? args.targetEdgeCorrelation : 95;
-    const maxSide = typeof args.analysisMaxSide === 'number' && args.analysisMaxSide >= 32 ? Math.round(args.analysisMaxSide) : 320;
+    const L = EDGE_ALIGN_LIMITS;
+    const maxIterations = Math.round(boundedNumber(tool, 'maxIterations', args.maxIterations, 25, 1, L.maxIterations));
+    const target = boundedNumber(tool, 'targetEdgeCorrelation', args.targetEdgeCorrelation, 95, 0, 100);
+    const maxSide = Math.round(boundedNumber(tool, 'analysisMaxSide', args.analysisMaxSide, 320, L.minAnalysisSide, L.maxAnalysisSide));
+    const timeBudgetMs = 1000 * boundedNumber(tool, 'timeBudgetSeconds', args.timeBudgetSeconds, 120, L.minSeconds, L.maxSeconds);
 
     const photo = await loadFeatureImage(tool, 'imagePath', imagePath, maxSide);
     const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
@@ -3976,18 +3995,24 @@ async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown
     const initialField = render(initialPose);
     if (!(initialField.meanMagnitude > 0)) throw new MissingInputError(tool, 'initialPose', `the model in ${glbPath} is not in view from initialPose`);
     const initial = evaluateEdgeOverlap(queryField, initialField);
+    const started = Date.now();
     // Step sizes scale with the camera's distance to its target, so the search means the same at any model scale.
-    const opt = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(initialPose, queryField, render, {
+    const opt = await SubPixelEdgeAlignmentOptimizer.optimizePoseAsync(initialPose, queryField, render, {
         maxIterations,
         targetOverlapScore: target,
         subpixelTolerancePx: Number.POSITIVE_INFINITY,
-        stepSizes: { pos: standoff * 0.02, target: standoff * 0.01, fov: 1.0 }
+        stepSizes: { pos: standoff * 0.02, target: standoff * 0.01, fov: 1.0 },
+        signal: ctx?.signal,
+        timeBudgetMs,
+        initialField,
+        onRender: (renders, best) => ctx?.reportProgress?.(`Edge alignment: ${renders} renders, best correlation ${best.toFixed(1)}%`,
+            Math.min(0.99, (Date.now() - started) / timeBudgetMs))
     });
-    const finalField = render(opt.finalPose);
-    const finalEval = evaluateEdgeOverlap(queryField, finalField);
-    const distance = meanEdgeDistance(queryField.magnitudes, finalField.magnitudes, width, height);
+    const finalEval = evaluateEdgeOverlap(queryField, opt.finalField);
+    const distance = meanEdgeDistance(queryField.magnitudes, opt.finalField.magnitudes, width, height);
     const meanEdgeDistancePx = distance.meanPx * photo.scale;
     const p = opt.finalPose;
+    const reached = finalEval.overlapScorePercent >= target;
     return {
         resultPayload: {
             imagePath,
@@ -3999,13 +4024,17 @@ async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown
             initialEdgeCorrelationPct: initial.overlapScorePercent,
             finalEdgeCorrelationPct: finalEval.overlapScorePercent,
             targetEdgeCorrelationPct: target,
-            reachedTarget: finalEval.overlapScorePercent >= target,
+            reachedTarget: reached,
             iterations: opt.iterations,
+            renders: opt.renders,
+            stoppedBy: opt.stoppedBy,
+            elapsedSeconds: (Date.now() - started) / 1000,
             meanEdgeDistancePx,
             modelEdgePixels: distance.modelEdgePixels,
+            modelTriangles: mesh.indices.length / 3,
             edgeDefinition: 'model edges: at least 25% of the render\'s largest gradient; photo edges: top 10% of the photo\'s gradient magnitudes'
         } as unknown as ToolResultPayload,
-        summaryResult: `Aligned ${glbPath} to ${imagePath}: edge correlation ${initial.overlapScorePercent.toFixed(1)}% -> ${finalEval.overlapScorePercent.toFixed(1)}% in ${opt.iterations} pass(es) (target ${target}% ${finalEval.overlapScorePercent >= target ? 'reached' : 'not reached'}). The model's edges lie ${Number.isFinite(meanEdgeDistancePx) ? meanEdgeDistancePx.toFixed(1) : 'n/a'} px on average from the nearest strong photo edge. Final camera: position [${[p.x, p.y, p.z].map(v => v.toFixed(2)).join(', ')}], target [${[p.targetX, p.targetY, p.targetZ].map(v => v.toFixed(2)).join(', ')}], fov ${p.fov.toFixed(1)} deg.`
+        summaryResult: `Aligned ${glbPath} to ${imagePath}: edge correlation ${initial.overlapScorePercent.toFixed(1)}% -> ${finalEval.overlapScorePercent.toFixed(1)}% in ${opt.iterations} pass(es), ${opt.renders} render(s) (target ${target}% ${reached ? 'reached' : 'not reached'}; stopped: ${opt.stoppedBy}). The model's edges lie ${Number.isFinite(meanEdgeDistancePx) ? meanEdgeDistancePx.toFixed(1) : 'n/a'} px on average from the nearest strong photo edge. Final camera: position [${[p.x, p.y, p.z].map(v => v.toFixed(2)).join(', ')}], target [${[p.targetX, p.targetY, p.targetZ].map(v => v.toFixed(2)).join(', ')}], fov ${p.fov.toFixed(1)} deg.`
     };
 }
 
@@ -4058,7 +4087,7 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             summaryResult: `Harmonized location 3D lighting for ${result.landmarkContext?.name || 'landmark'} (${result.preset}, diurnal: ${result.diurnalPhase}). Calibrated de-lighting (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}), and ${result.architecturalFixtures.length} architectural portal window fixtures.`
         };
     },
-    geobox_optimize_edge_alignment: async (args, _ctx) => alignModelEdgesToPhoto('geobox_optimize_edge_alignment', args),
+    geobox_optimize_edge_alignment: async (args, ctx) => alignModelEdgesToPhoto('geobox_optimize_edge_alignment', args, ctx),
     spatial_solve_pnp: async (args, _ctx) => {
         const rawPoints2D = Array.isArray(args.points2D) ? args.points2D : [];
         const rawPoints3D = Array.isArray(args.points3D) ? args.points3D : [];
@@ -4143,8 +4172,8 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             summaryResult: `Matched ${queryImagePath} against ${renderImagePath}: ${k1.length} photo keypoints, ${k2.length} render keypoints, ${matches.length} 2D correspondences (Lowe ratio ${loweRatio}${crossCheck ? ', cross-checked' : ''}). Lift the render points with the render's depth to get 3D points for spatial_solve_pnp.`
         };
     },
-    geobox_closed_loop_edge_align: async (args, _ctx) => alignModelEdgesToPhoto('geobox_closed_loop_edge_align', args),
-    spatial_closed_loop_edge_align: async (args, _ctx) => alignModelEdgesToPhoto('spatial_closed_loop_edge_align', args),
+    geobox_closed_loop_edge_align: async (args, ctx) => alignModelEdgesToPhoto('geobox_closed_loop_edge_align', args, ctx),
+    spatial_closed_loop_edge_align: async (args, ctx) => alignModelEdgesToPhoto('spatial_closed_loop_edge_align', args, ctx),
     spatial_resect_image_location: async (args, ctx) => {
         return geoboxPrecisionHandlers.geobox_resect_image_location(args, ctx);
     }
