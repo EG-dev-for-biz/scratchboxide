@@ -56,7 +56,9 @@ async function main() {
     solarSunVector: result.solarSunVector,
     khrExtensionsInjected: result.khrExtensionsInjected,
     boundaryWeldingResult: result.boundaryWeldingResult,
-    toksvigMipLevelsGenerated: result.toksvigMipLevelsGenerated,
+    imagesProcessed: result.imagesProcessed,
+    imagesFailed: result.imagesFailed,
+    attachments: result.attachments,
     executionTimeMs: result.executionTimeMs
   }, null, 2));
 }

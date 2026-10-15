@@ -784,7 +784,11 @@
             icon.classList.add('spinning');
             text.textContent = 'Running Recipe Pipeline...';
             try {
-                const res = await fetch('/api/3d/pbr/colosseum-recipe/rerun', { method: 'POST' });
+                const res = await fetch('/api/3d/pbr/colosseum-recipe/rerun', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
                 const data = await res.json();
                 if (!data.success) throw new Error(data.error || 'pipeline failed');
                 const k = data.variants && data.variants.ktx2;

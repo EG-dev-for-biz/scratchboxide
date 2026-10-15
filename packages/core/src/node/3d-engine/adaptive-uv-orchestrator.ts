@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ContinuousMaterialDescriptor } from '../../common/adaptive-material-types.js';
+import type { AlgorithmicUvOptions, AlgorithmicUvResult, TextureImageReport } from '../spatial/AlgorithmicUvEngine.js';
 
 export type AdaptiveUvStrategy =
   | 'auto'
@@ -98,6 +99,16 @@ export interface AdaptiveUvPbrResult {
   usdzBuffer?: Buffer;
   outputFiles: Record<string, string>;
   executionTimeMs: number;
+  /** AlgorithmicUvEngine.processGlb report (per-image results and attached map slots) for 'elevation_stratified_conformal'. */
+  algorithmicUv?: AlgorithmicUvResult;
+}
+
+/** 'elevation_stratified_conformal' could not decompose the asset's baseColor images; nothing is written. */
+export class AdaptivePbrImageProcessingError extends Error {
+  constructor(message: string, public readonly images: TextureImageReport[]) {
+    super(message);
+    this.name = 'AdaptivePbrImageProcessingError';
+  }
 }
 
 function parseGlbBasic(buffer: Buffer) {
@@ -283,6 +294,7 @@ export class AdaptiveUvOrchestrator {
     let finalGlbBuffer: Buffer | undefined;
     let materialxXml: string | undefined;
     let usdzBuffer: Buffer | undefined;
+    let algorithmicUv: AlgorithmicUvResult | undefined;
 
     const baseDir = request.outputPath ? path.dirname(request.outputPath) : process.cwd();
     const baseName = request.outputPath ? path.basename(request.outputPath, path.extname(request.outputPath)) : 'pbr_asset';
@@ -296,9 +308,11 @@ export class AdaptiveUvOrchestrator {
       finalGlbBuffer = recipeRes.recipeGlbBuffer;
     } else if (appliedStrategy === 'elevation_stratified_conformal') {
       const { AlgorithmicUvEngine } = await import('../spatial/AlgorithmicUvEngine.js');
-      const pbrOptions: any = {
+      const solar = request.solarDelighting;
+      // processGlb has no gutter-dilation pass and cannot store a custom Toksvig MIP chain in glTF, so neither is requested.
+      const pbrOptions: AlgorithmicUvOptions = {
+        inputGlbBuffer: rawBuffer,
         mode: 'preserve-100-lock',
-        gutterDilationPixels: request.gutterPaddingPx ?? topology.seamStrategy.recommendedGutterPaddingPx,
         pbrDecomposition: {
           enableAlbedoDeLighting: true,
           enableHeightStratifiedDeLighting: true,
@@ -306,8 +320,15 @@ export class AdaptiveUvOrchestrator {
           enableBiophysicalRoughness: true,
           enableHbaoMicroCavity: true,
           enableToksvigFiltering: true,
-          enableToksvigMipPyramid: true,
-          toksvigMipLevels: 4
+          enableSolarInverseDelighting: !!solar,
+          solarDelighting: solar && {
+            latitude: solar.latitude,
+            longitude: solar.longitude,
+            timestampIso: solar.timestampIso || new Date().toISOString(),
+            regularizationEpsilon: solar.regularizationEpsilon ?? 0.18,
+            ambientWeight: solar.ambientWeight ?? 0.35,
+            directWeight: solar.directWeight ?? 0.65
+          }
         },
         khrMaterials: {
           enableKhrMaterialsExtensions: true,
@@ -321,33 +342,23 @@ export class AdaptiveUvOrchestrator {
         }
       };
 
-      if (request.solarDelighting) {
-        pbrOptions.pbrDecomposition.enableSolarInverseDelighting = true;
-        pbrOptions.pbrDecomposition.solarDelighting = {
-          latitude: request.solarDelighting.latitude,
-          longitude: request.solarDelighting.longitude,
-          timestampIso: request.solarDelighting.timestampIso || new Date().toISOString(),
-          regularizationEpsilon: request.solarDelighting.regularizationEpsilon ?? 0.18,
-          ambientWeight: request.solarDelighting.ambientWeight ?? 0.35,
-          directWeight: request.solarDelighting.directWeight ?? 0.65
-        };
+      const uvResult = await AlgorithmicUvEngine.processGlb(pbrOptions);
+      if (!uvResult.success) {
+        const failed = uvResult.images.filter(r => r.status === 'failed');
+        const detail = failed.map(r => `${r.imageIndex !== undefined ? `image ${r.imageIndex}` : `texture ${r.textureIndex}`}: ${r.error}`).join('; ');
+        throw new AdaptivePbrImageProcessingError(
+          `AdaptiveUvOrchestrator: elevation_stratified_conformal failed on ${failed.length} of ${uvResult.images.length} baseColor textures (${detail})`,
+          uvResult.images
+        );
       }
-
-      const tempInPath = path.join(baseDir, `temp_${Date.now()}_in.glb`);
-      const tempOutPath = path.join(baseDir, `temp_${Date.now()}_out.glb`);
-      fs.writeFileSync(tempInPath, rawBuffer);
-
-      try {
-        await AlgorithmicUvEngine.processGlb({
-          inputPath: tempInPath,
-          outputPath: tempOutPath,
-          ...pbrOptions
-        });
-        finalGlbBuffer = fs.readFileSync(tempOutPath);
-      } finally {
-        if (fs.existsSync(tempInPath)) fs.unlinkSync(tempInPath);
-        if (fs.existsSync(tempOutPath)) fs.unlinkSync(tempOutPath);
+      if (uvResult.imagesProcessed === 0) {
+        throw new AdaptivePbrImageProcessingError(
+          'AdaptiveUvOrchestrator: elevation_stratified_conformal decomposes embedded baseColor images, and no material in this GLB samples one',
+          uvResult.images
+        );
       }
+      algorithmicUv = uvResult;
+      finalGlbBuffer = uvResult.outputGlbBuffer;
     } else {
       // Triplanar or Carrier Conformal Sheet
       const resMap: Record<string, number> = { '1K': 1024, '2K': 2048, '4K': 4096, '8K': 8192, '12K': 12288 };
@@ -417,7 +428,8 @@ export class AdaptiveUvOrchestrator {
       materialxXml,
       usdzBuffer,
       outputFiles,
-      executionTimeMs: Date.now() - t0
+      executionTimeMs: Date.now() - t0,
+      algorithmicUv
     };
   }
 }

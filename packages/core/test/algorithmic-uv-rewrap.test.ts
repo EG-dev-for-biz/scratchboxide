@@ -296,11 +296,14 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
 
   it('injects KHR_texture_transform for scale-invariant micro-detail tiling', async () => {
     const colosseumPath = colosseumInputPath;
+    // Map generation is off: this checks the KHR_texture_transform injection only (the real-pixel passes are
+    // covered by algorithmic-uv-real-texture.test.ts; on all 79 Colosseum textures they take about a minute).
     const result = await AlgorithmicUvEngine.processGlb({
       inputGlbPath: colosseumPath,
       enableMicroDetailTiling: true,
       microDetailScale: 32.0,
-      mode: 'preserve-100-lock'
+      mode: 'preserve-100-lock',
+      pbrDecomposition: { generateNormalMaps: false, generateRoughnessMaps: false, generateAoMaps: false }
     });
 
     expect(result.success).toBe(true);
@@ -337,11 +340,14 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
       lithologyProfile: 'bedford-limestone',
       enableHeightStratifiedDeLighting: true,
       enableMicroDetailTiling: true,
-      microDetailScale: 32.0
+      microDetailScale: 32.0,
+      generateNormalMaps: false,
+      generateRoughnessMaps: false,
+      generateAoMaps: false
     }, { sessionId: 'test', cancellationToken: { isCancellationRequested: false } as any });
 
     expect(outcomeUv.exec.status).toBe('completed');
-    expect(outcomeUv.exec.summaryResult).toContain('Algorithmic UV Unwrap & Rewrap Engine completed');
+    expect(outcomeUv.exec.summaryResult).toContain('Algorithmic UV engine completed');
     const uvPayload = outcomeUv.resultPayload as any;
     expect(uvPayload.lithologyProfile).toBe('bedford-limestone');
     expect(uvPayload.microDetailTilingInjected).toBe(true);
@@ -537,14 +543,20 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
           normalStrength: 3.5,
           hbaoIntensity: 1.1,
           laplacianBurnishFactor: 0.4
-        }
+        },
+        pbrDecomposition: { generateNormalMaps: false, generateRoughnessMaps: false, generateAoMaps: false }
       });
 
       expect(result.success).toBe(true);
       expect(result.biophysicalContract).toBeDefined();
       expect(result.biophysicalContract?.roughness).toBe(0.78);
-      expect(result.inducedSpatialProfile).toBeDefined();
-      expect(result.microDetailTilingInjected).toBe(true);
+      // Periodicity is measured on the largest decoded baseColor image (the 2048 x 2048 one), and only that image is decoded.
+      const profile = result.inducedSpatialProfile!;
+      expect(profile).toBeDefined();
+      expect(result.images).toHaveLength(1);
+      expect(result.images[0]).toMatchObject({ imageIndex: profile.sourceImageIndex, width: 2048, height: 2048 });
+      expect(result.texelsProcessed).toBe(2048 * 2048);
+      expect(result.microDetailTilingInjected).toBe(profile.isPeriodic);
     });
   });
 });

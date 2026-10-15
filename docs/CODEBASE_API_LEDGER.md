@@ -306,7 +306,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 ### 12. Algorithmic UVs, PBR & Color Transfer (`algorithmic-uv-tools.ts` & `nano-banana-tools.ts`)
 - `algorithmic_uv_unwrap_rewrap`: Algorithmic UV unwrapping and repack.
 - `uv_analyze_texel_density`: Analyzes texel density across submeshes.
-- `pbr_material_decompose`: Decomposes albedo into roughness, normal, and AO.
+- `pbr_material_decompose`: Decodes an image file (`inputImagePath`) and writes albedo, glTF normal and ORM PNGs computed from its pixels.
 - `atlas_maxrects_pack`: Packs textures into unified atlas.
 - `nano_banana_extract_color_palette`: Two-step palette extraction.
 - `nano_banana_apply_color_palette`: Two-step palette application.

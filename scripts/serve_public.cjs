@@ -221,11 +221,192 @@ function renderVideoBranch(options) {
     });
 }
 
+// ── Request path & origin hardening ─────────────────────────────────────────
+// Static files come from public/. The only repo-root paths served are the ones
+// public/ demos load by root-relative URL: the three / 3d-tiles-renderer import
+// maps, /public/... model URLs and /docs/screenshots proof images. Everything
+// else at the repo root (secrets.json, .env, service-account.json, source) is not.
+const REPO_ROOT_STATIC_DIRS = ['node_modules/three', 'node_modules/3d-tiles-renderer', 'public', 'docs/screenshots'];
+const STATIC_ROOTS = [PUBLIC_DIR, ...REPO_ROOT_STATIC_DIRS.map((dir) => path.join(REPO_ROOT, dir))];
+const SURVEY_JOB_ID_PATTERN = /^rerun-[a-z0-9]+-[a-z0-9]+$/;
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+/** Separator-aware containment: true when `candidate` is `root` or inside it. */
+function isWithinDir(root, candidate) {
+    const rel = path.relative(root, candidate);
+    return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
+}
+
+/** Resolve a user-supplied relative path strictly inside `root`; returns null on escape. */
+function resolveInside(root, userPath) {
+    if (typeof userPath !== 'string' || !userPath || userPath.includes('\0')) return null;
+    const resolved = path.resolve(root, userPath.replace(/^[\\/]+/, ''));
+    return isWithinDir(root, resolved) ? resolved : null;
+}
+
+/** True for a regular file whose real path (symlinks followed) lies inside a static root. */
+function isServableFile(candidate) {
+    let real;
+    try {
+        if (!fs.statSync(candidate).isFile()) return false;
+        real = fs.realpathSync(candidate);
+    } catch {
+        return false;
+    }
+    return STATIC_ROOTS.some((root) => {
+        try { return isWithinDir(fs.realpathSync(root), real); } catch { return false; }
+    });
+}
+
+/** Map a request path onto a servable file, or null. Dotfiles and `..` segments are never served. */
+function resolveStaticFile(reqPath) {
+    if (reqPath.split(/[\\/]/).some((segment) => segment.startsWith('.'))) return null;
+    const publicPath = resolveInside(PUBLIC_DIR, reqPath);
+    if (!publicPath) return null;
+
+    const relPath = reqPath.replace(/^[\\/]+/, '');
+    const rootDir = REPO_ROOT_STATIC_DIRS.find((dir) => relPath.startsWith(dir + '/'));
+    const baseName = path.basename(publicPath);
+    const htmlName = baseName.endsWith('.html') ? baseName : baseName + '.html';
+    const candidates = [
+        publicPath,
+        rootDir ? resolveInside(path.join(REPO_ROOT, rootDir), relPath.slice(rootDir.length + 1)) : null,
+        publicPath.endsWith('.html') ? null : publicPath + '.html',
+        path.join(PUBLIC_DIR, 'demos/showcase', baseName),
+        path.join(PUBLIC_DIR, 'demos/showcase', htmlName),
+        path.join(PUBLIC_DIR, 'demos/experiments', baseName),
+        path.join(PUBLIC_DIR, 'demos/experiments', htmlName),
+        path.join(PUBLIC_DIR, 'demos', baseName),
+        path.join(PUBLIC_DIR, 'demos', htmlName)
+    ];
+    return candidates.find((candidate) => candidate && isServableFile(candidate)) || null;
+}
+
+function parseEnvList(...names) {
+    const out = new Set();
+    for (const name of names) {
+        for (const entry of String(process.env[name] || '').split(',')) {
+            const trimmed = entry.trim().replace(/\/+$/, '');
+            if (trimmed) out.add(trimmed.toLowerCase());
+        }
+    }
+    return out;
+}
+
+const ENV_ALLOWED_ORIGINS = parseEnvList('SERVE_PUBLIC_ALLOWED_ORIGINS', 'SCRATCHBOX_ALLOWED_ORIGINS');
+const ENV_ALLOWED_HOSTS = parseEnvList('SERVE_PUBLIC_ALLOWED_HOSTS');
+
+/** The port actually bound (PORT=0 picks an ephemeral one). */
+function boundPort() {
+    const address = server.address();
+    return address ? address.port : PORT;
+}
+
+/** DNS-rebinding guard: only loopback Host headers for this server's port, or the env allowlist. */
+function isAllowedHost(hostHeader) {
+    if (!hostHeader) return false;
+    const host = String(hostHeader).toLowerCase();
+    if (ENV_ALLOWED_HOSTS.has(host)) return true;
+    const m = host.match(/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/);
+    if (!m) return false;
+    if (ENV_ALLOWED_HOSTS.has(m[1])) return true;
+    return LOOPBACK_HOSTNAMES.has(m[1]) && (m[2] === undefined || Number(m[2]) === boundPort());
+}
+
+/** Only this server's own loopback origins (e.g. a localhost:<port> page calling 127.0.0.1:<port>), or the env allowlist. */
+function isAllowedOrigin(origin) {
+    if (!origin) return false;
+    const normalized = String(origin).toLowerCase().replace(/\/+$/, '');
+    if (ENV_ALLOWED_ORIGINS.has(normalized)) return true;
+    let parsed;
+    try { parsed = new URL(normalized); } catch { return false; }
+    if (parsed.protocol !== 'http:') return false;
+    const port = parsed.port ? Number(parsed.port) : 80;
+    return LOOPBACK_HOSTNAMES.has(parsed.hostname) && port === boundPort();
+}
+
+function rejectRequest(res, status, error) {
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Vary': 'Origin' });
+    res.end(JSON.stringify({ success: false, error }));
+}
+
+// ── API path containment ────────────────────────────────────────────────────
+// API routes read media and write outputs only inside public/.
+const REAL_PUBLIC_DIR = fs.realpathSync(PUBLIC_DIR);
+const GLB_WRITE_DIRS = [path.join(PUBLIC_DIR, 'models'), path.join(PUBLIC_DIR, 'tiles')];
+const USD_WRITE_DIRS = [path.join(PUBLIC_DIR, 'data')];
+const GLB_MAGIC = 0x46546c67; // 'glTF' little-endian
+
+/**
+ * Resolve a media path the demos send (`/videos/x.mp4`, `public/videos/x.mp4`, or an absolute
+ * path the GeoBox pipeline returned) to the real path of an existing file inside public/, or null.
+ */
+function resolvePublicInputFile(userPath) {
+    if (typeof userPath !== 'string' || !userPath || userPath.includes('\0')) return null;
+    const candidates = [
+        path.isAbsolute(userPath) ? path.resolve(userPath) : null,
+        resolveInside(REPO_ROOT, userPath),
+        resolveInside(PUBLIC_DIR, userPath)
+    ];
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        try {
+            if (!fs.statSync(candidate).isFile()) continue;
+            const real = fs.realpathSync(candidate);
+            if (isWithinDir(REAL_PUBLIC_DIR, real)) return real;
+        } catch { /* missing: try the next candidate */ }
+    }
+    return null;
+}
+
+/** Root-relative web URL for a real path inside public/. */
+function publicUrlFor(realPath) {
+    return '/' + path.relative(REAL_PUBLIC_DIR, realPath).split(path.sep).join('/');
+}
+
+/**
+ * Resolve a repo-relative write target (e.g. `public/models/x.glb`) inside one of `dirs` with
+ * extension `ext`, or null. Dot segments, existing non-regular files (symlinks) and parent
+ * directories whose real path leaves the allowed directory are refused.
+ */
+function resolveWriteTarget(userPath, dirs, ext) {
+    const resolved = resolveInside(REPO_ROOT, userPath);
+    if (!resolved || path.extname(resolved).toLowerCase() !== ext) return null;
+    const dir = dirs.find((d) => isWithinDir(d, resolved) && resolved !== d);
+    if (!dir || path.relative(dir, resolved).split(path.sep).some((segment) => segment.startsWith('.'))) return null;
+
+    fs.mkdirSync(dir, { recursive: true });
+    let existing = path.dirname(resolved);
+    while (!fs.existsSync(existing)) existing = path.dirname(existing);
+    try {
+        if (!isWithinDir(fs.realpathSync(dir), fs.realpathSync(existing))) return null;
+        if (!fs.lstatSync(resolved).isFile()) return null;
+    } catch (err) {
+        if (err.code !== 'ENOENT') return null;
+    }
+    return resolved;
+}
+
 const server = http.createServer(async (req, res) => {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    // DNS-rebinding guard: only answer to loopback Host headers (or the env allowlist).
+    if (!isAllowedHost(req.headers.host)) {
+        rejectRequest(res, 421, 'Host not allowed');
+        return;
+    }
+
+    // Origin guard: echo CORS only for this server's own loopback origins (or the env
+    // allowlist), and refuse any request that carries a foreign Origin.
+    const origin = req.headers.origin;
+    res.setHeader('Vary', 'Origin');
+    if (origin !== undefined) {
+        if (!isAllowedOrigin(origin)) {
+            rejectRequest(res, 403, 'Origin not allowed');
+            return;
+        }
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    }
 
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -234,7 +415,33 @@ const server = http.createServer(async (req, res) => {
     }
 
     const urlParts = req.url.split('?');
-    const reqPath = decodeURI(urlParts[0]);
+    let reqPath;
+    try {
+        reqPath = decodeURI(urlParts[0]);
+    } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('400 Malformed URL');
+        return;
+    }
+
+    if (reqPath.startsWith('/api/')) {
+        // Block cross-site no-Origin subresource loads (<img>, navigations) against API routes.
+        const fetchSite = req.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none' && !isAllowedOrigin(origin)) {
+            rejectRequest(res, 403, 'Cross-site API request rejected');
+            return;
+        }
+        // Force a CORS preflight for state-changing calls: no "simple" text/plain, form or
+        // untyped POSTs. save_glb takes a raw binary glTF body; every other POST takes JSON.
+        if (req.method === 'POST') {
+            const contentType = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+            const expected = reqPath === '/api/save_glb' ? ['model/gltf-binary', 'application/octet-stream'] : ['application/json'];
+            if (!expected.includes(contentType)) {
+                rejectRequest(res, 415, `POST ${reqPath} requires Content-Type: ${expected.join(' or ')}`);
+                return;
+            }
+        }
+    }
 
     // Health check endpoint
     if (reqPath === '/api/geobox/health') {
@@ -296,19 +503,14 @@ const server = http.createServer(async (req, res) => {
                 relativeUploadUrl = `/uploads/${outFilename}`;
             } else if (rawPath || rawUrl) {
                 const targetPath = rawPath || rawUrl;
-                // Check direct path (e.g. absolute path), or workspace/public relative path
-                let resolved = fs.existsSync(targetPath) ? targetPath : path.join(REPO_ROOT, targetPath.replace(/^\//, ''));
-                if (!fs.existsSync(resolved)) {
-                    resolved = path.join(PUBLIC_DIR, targetPath.replace(/^\//, ''));
-                }
-                if (fs.existsSync(resolved)) {
-                    savedImagePath = resolved;
-                    relativeUploadUrl = targetPath.startsWith('/') ? targetPath : `/${targetPath}`;
-                } else {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: `Media file not found: ${targetPath}` }));
+                // Web path (/test_images/x.jpg), repo path (public/...) or absolute path, inside public/ only
+                const resolved = resolvePublicInputFile(targetPath);
+                if (!resolved) {
+                    rejectRequest(res, 400, `Media file not found under public/: ${targetPath}`);
                     return;
                 }
+                savedImagePath = resolved;
+                relativeUploadUrl = publicUrlFor(resolved);
             } else if (payload.hint || payload.query || payload.text) {
                 // Text-only search mode: No input image/video provided
                 savedImagePath = null;
@@ -456,18 +658,13 @@ const server = http.createServer(async (req, res) => {
                 imgPath = path.join(UPLOADS_DIR, filename);
                 fs.writeFileSync(imgPath, Buffer.from(b64, 'base64'));
                 relativeImgUrl = `/uploads/${filename}`;
-            } else if (!imgPath || !fs.existsSync(imgPath)) {
-                imgPath = path.join(PUBLIC_DIR, (body.imagePath || 'test_images/the_plaza_hotel_user_photo.jpg').replace(/^\//, ''));
-                if (fs.existsSync(imgPath)) {
-                    relativeImgUrl = body.imagePath?.startsWith('/') ? body.imagePath : `/${body.imagePath}`;
-                }
             } else {
-                relativeImgUrl = imgPath.startsWith(PUBLIC_DIR) ? imgPath.replace(PUBLIC_DIR, '') : imgPath;
-            }
-
-            if (!fs.existsSync(imgPath)) {
-                imgPath = path.join(PUBLIC_DIR, 'test_images', 'the_plaza_hotel_user_photo.jpg');
-                relativeImgUrl = '/test_images/the_plaza_hotel_user_photo.jpg';
+                imgPath = resolvePublicInputFile(body.imagePath || 'test_images/the_plaza_hotel_user_photo.jpg');
+                if (!imgPath) {
+                    rejectRequest(res, 400, `Image not found under public/: ${body.imagePath}`);
+                    return;
+                }
+                relativeImgUrl = publicUrlFor(imgPath);
             }
 
             const { matchImageAndLightingToLocation, matchLightingToReference } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
@@ -522,8 +719,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && reqPath === '/api/lighting/export-usd') {
         try {
             const body = await parseBody(req);
+            const outPath = body.outputPath
+                ? resolveWriteTarget(body.outputPath, USD_WRITE_DIRS, '.usda')
+                : path.join(PUBLIC_DIR, 'data', 'scene_lighting_export.usda');
+            if (!outPath) {
+                rejectRequest(res, 400, 'outputPath must be a .usda path under public/data/');
+                return;
+            }
             const { PhotometricUsdBridgeService } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
-            const outPath = body.outputPath ? path.join(REPO_ROOT, body.outputPath.replace(/^\//, '')) : path.join(PUBLIC_DIR, 'data', 'scene_lighting_export.usda');
             const result = PhotometricUsdBridgeService.exportToUsd(body.rig, {
                 outputPath: outPath,
                 assetName: body.assetName || 'PhotometricScene',
@@ -618,14 +821,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && reqPath === '/api/video-branch/extract-frame') {
         try {
             const body = await parseBody(req);
-            let inputVideo = body.videoPath || 'public/videos/plaza_hotel_omni_15s_720p.mp4';
-            let resolvedVideo = path.join(REPO_ROOT, inputVideo.replace(/^\//, ''));
-            if (!fs.existsSync(resolvedVideo)) {
-                resolvedVideo = path.join(PUBLIC_DIR, inputVideo.replace(/^\//, ''));
-            }
-            if (!fs.existsSync(resolvedVideo)) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: `Video not found: ${inputVideo}` }));
+            const inputVideo = body.videoPath || 'public/videos/plaza_hotel_omni_15s_720p.mp4';
+            const resolvedVideo = resolvePublicInputFile(inputVideo);
+            if (!resolvedVideo) {
+                rejectRequest(res, 400, `Video not found under public/: ${inputVideo}`);
                 return;
             }
             const timeSec = parseFloat(body.timestampSec !== undefined ? body.timestampSec : 4.0);
@@ -652,14 +851,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && reqPath === '/api/video-branch/render-branch') {
         try {
             const body = await parseBody(req);
-            let inputVideo = body.videoPath || 'public/videos/plaza_hotel_omni_15s_720p.mp4';
-            let resolvedVideo = path.join(REPO_ROOT, inputVideo.replace(/^\//, ''));
-            if (!fs.existsSync(resolvedVideo)) {
-                resolvedVideo = path.join(PUBLIC_DIR, inputVideo.replace(/^\//, ''));
-            }
-            if (!fs.existsSync(resolvedVideo)) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: `Video not found: ${inputVideo}` }));
+            const inputVideo = body.videoPath || 'public/videos/plaza_hotel_omni_15s_720p.mp4';
+            const resolvedVideo = resolvePublicInputFile(inputVideo);
+            if (!resolvedVideo) {
+                rejectRequest(res, 400, `Video not found under public/: ${inputVideo}`);
                 return;
             }
 
@@ -695,12 +890,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && reqPath === '/api/save_glb') {
         const searchParams = new URLSearchParams(urlParts[1] || '');
         const targetRelFile = searchParams.get('file') || 'public/models/colosseum_rome_textured.glb';
-        const targetPath = path.resolve(REPO_ROOT, targetRelFile);
+        const targetPath = resolveWriteTarget(targetRelFile, GLB_WRITE_DIRS, '.glb');
+        if (!targetPath) {
+            rejectRequest(res, 400, 'file must be a .glb path under public/models/ or public/tiles/');
+            return;
+        }
 
         const chunks = [];
         req.on('data', chunk => chunks.push(chunk));
         req.on('end', () => {
             const buffer = Buffer.concat(chunks);
+            if (buffer.length < 12 || buffer.readUInt32LE(0) !== GLB_MAGIC) {
+                rejectRequest(res, 400, 'Request body is not a binary glTF (.glb)');
+                return;
+            }
             fs.mkdirSync(path.dirname(targetPath), { recursive: true });
             fs.writeFileSync(targetPath, buffer);
             console.log(`[save_glb] Saved ${buffer.length} bytes to ${targetPath}`);
@@ -783,7 +986,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && reqPath.startsWith('/api/3d/survey/jobs/')) {
         const jobId = reqPath.slice('/api/3d/survey/jobs/'.length);
         const jobFile = path.join(PUBLIC_DIR, 'tilesets', 'jobs', `${jobId}.json`);
-        if (fs.existsSync(jobFile)) {
+        if (SURVEY_JOB_ID_PATTERN.test(jobId) && fs.existsSync(jobFile)) {
             try {
                 const jobData = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -801,34 +1004,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Static File Serving
-    let filePath = path.join(PUBLIC_DIR, reqPath === '/' || reqPath === '' ? 'index.html' : reqPath);
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-        const rootPath = path.join(REPO_ROOT, reqPath);
-        if (fs.existsSync(rootPath) && fs.statSync(rootPath).isFile()) {
-            filePath = rootPath;
-        } else {
-            const withHtml = filePath.endsWith('.html') ? filePath : filePath + '.html';
-            if (fs.existsSync(withHtml) && fs.statSync(withHtml).isFile()) {
-                filePath = withHtml;
-            } else {
-                const baseName = path.basename(reqPath);
-                const htmlName = baseName.endsWith('.html') ? baseName : baseName + '.html';
-                const candidates = [
-                    path.join(PUBLIC_DIR, 'demos/showcase', baseName),
-                    path.join(PUBLIC_DIR, 'demos/showcase', htmlName),
-                    path.join(PUBLIC_DIR, 'demos/experiments', baseName),
-                    path.join(PUBLIC_DIR, 'demos/experiments', htmlName),
-                    path.join(PUBLIC_DIR, 'demos', baseName),
-                    path.join(PUBLIC_DIR, 'demos', htmlName)
-                ];
-                for (const cand of candidates) {
-                    if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
-                        filePath = cand;
-                        break;
-                    }
-                }
-            }
-        }
+    const filePath = resolveStaticFile(reqPath === '/' || reqPath === '' ? 'index.html' : reqPath);
+    if (!filePath) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('404 Not Found: ' + reqPath);
+        return;
     }
 
     fs.stat(filePath, (err, stats) => {
@@ -868,9 +1048,11 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-    console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://127.0.0.1:${PORT}/`);
-    console.log(`  - Hub: http://127.0.0.1:${PORT}/index.html`);
-    console.log(`  - Showcase: http://127.0.0.1:${PORT}/model_showcase.html?model=geobox`);
-    console.log(`  - GeoBox Demo: http://127.0.0.1:${PORT}/geobox_demo.html`);
-    console.log(`  - API Resection: POST http://127.0.0.1:${PORT}/api/geobox/resect`);
+    // PORT=0 binds an ephemeral port; report the one actually bound.
+    const port = server.address().port;
+    console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://127.0.0.1:${port}/`);
+    console.log(`  - Hub: http://127.0.0.1:${port}/index.html`);
+    console.log(`  - Showcase: http://127.0.0.1:${port}/model_showcase.html?model=geobox`);
+    console.log(`  - GeoBox Demo: http://127.0.0.1:${port}/geobox_demo.html`);
+    console.log(`  - API Resection: POST http://127.0.0.1:${port}/api/geobox/resect`);
 });
