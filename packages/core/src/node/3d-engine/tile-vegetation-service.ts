@@ -11,9 +11,12 @@
  * Service wrapper for the native tile vegetation pipeline (scratchbox_tile_vegetation.hpp + scripts/tile_vegetation.cpp):
  *
  * - strip: a photo-textured tile GLB in; the devegetated tile GLB (measured tree crowns removed, holes closed), the
- *   crown list (crowns.json) and stats out.
- * - plant: crowns.json in; one SB-Veggie tree per measured crown (space colonisation, studio clay) within a triangle
- *   budget, as one GLB in the tile frame.
+ *   crown list (crowns.json) and stats out. Every tree crown is regrown first (seeded with the tile's sha256 unless the
+ *   request gives a seed); a crown the regrown tree does not fill stays as scanned (status not_regrowable, with the
+ *   reason in crowns.json and stats.notRegrowable), and only the others are removed.
+ * - plant: crowns.json in; one SB-Veggie tree per measured crown (space colonisation, studio clay), the same trees
+ *   strip grew, within the caller's triangle budget or, without one, a per-tree target from each crown's size within
+ *   a scene cap (SCENE_TREE_TRIANGLE_CAP), as one GLB in the tile frame.
  *
  * Paths are confined to the workspace root. The binary is built with clang++ on first use and rebuilt when one of
  * its sources (clang's -MMD list) is newer, once across processes (native-build); a failed build is an error, never an
@@ -60,17 +63,42 @@ export interface TileVegetationStripParams {
     capGrid?: number;
     seamGap?: number;
     sampleSpacing?: number;
+    /** How each tree crown is regrown before anything is removed (plant grows them again with the same). */
+    crownBaseRatio?: number;
+    trunkRadiusPerHeight?: number;
+    shellDepth?: number;
+    /** Share of a crown's measured surface the regrown leaves must reach for it to be removed and rebuilt (0.9). */
+    minSurfaceReached?: number;
 }
 
-/** Continuous plant parameters. crownBaseRatio and trunkRadiusPerHeight are not observed by a scan: inferred. */
+/**
+ * Continuous plant parameters. crownBaseRatio and trunkRadiusPerHeight are not observed by a scan: inferred. For crowns
+ * a strip measured, the growth ratios default to the ones it regrew them with (crowns.json "growth"); another value is
+ * refused (bad_request), since it decided which crowns were removed.
+ */
 export interface TileVegetationPlantParams {
     minTrianglesPerTree?: number;
+    /** A tree's triangle target per m² of its crown envelope (footprint plus side), when no budget is given (4). */
+    trianglesPerCrownM2?: number;
     crownBaseRatio?: number;
     trunkRadiusPerHeight?: number;
     woodShare?: number;
     shellDepth?: number;
+    minSurfaceReached?: number;
     supportTolerance?: number;
 }
+
+/**
+ * The most triangles the trees of one location may use together when the request gives no budget of its own: each
+ * tree's target grows with its crown and the targets are scaled down to fit under this cap (never below the per-tree
+ * minimum of 120). 1.5 million triangles: the trees model is written as positions, normals and 32-bit indices, about
+ * 33 bytes a triangle (Central Park at a 250 m radius: 940 trees, 1.40 million triangles, 46 MB), so at the cap it
+ * stays near 50 MB, about the size of the photo-textured extraction of a 250 m radius it was measured in (41 MB there);
+ * with the remeshed tile (0.2-1 million triangles) the scene stays under about 2.5 million triangles, which a WebGL
+ * viewport draws at interactive rates on integrated GPUs. At 120 triangles a tree the cap holds 12,500 trees, over ten
+ * times what a 250 m radius of dense park holds (941 in Central Park).
+ */
+export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
 
 export interface TileVegetationStripRequest {
     /** Photo-textured tile GLB, relative to the workspace root or absolute inside it. */
@@ -78,6 +106,8 @@ export interface TileVegetationStripRequest {
     params?: TileVegetationStripParams;
     /** Also write a top-down PNG of the measurement. */
     topDown?: boolean;
+    /** Hex seed (1-16 digits) the trees are regrown with to decide which to remove; default the tile's sha256 (16 hex digits), as plant is seeded by the pipeline. */
+    seed?: string;
     threads?: number;
     timeoutMs?: number;
     /** Stops this request (it rejects with an AbortError); the native run is killed once no request waits on it. */
@@ -98,8 +128,10 @@ export interface TileVegetationStripResult {
 
 export interface TileVegetationPlantRequest {
     crownsPath: string;
-    /** Total triangles all trees may use (> 0). */
-    triangleBudget: number;
+    /** Total triangles all trees may use (> 0): the caller's own budget. Give this or sceneTriangleCap. */
+    triangleBudget?: number;
+    /** No budget of the caller's own: each tree gets a target from its crown's size, all within this cap (> 0). */
+    sceneTriangleCap?: number;
     /** Hex seed (1-16 digits), mixed with each crown id. */
     seed: string;
     /** Isolate requests: plant only crowns whose trunk base lies on this mesh. */
@@ -146,7 +178,7 @@ export interface TileVegetationServiceOptions {
 const CLI_SOURCE = path.join('scripts', 'tile_vegetation.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
 const BINARY = path.join('build', '3d-native', 'tile_vegetation');
-const CACHE_VERSION = 'tile_vegetation/v2';
+const CACHE_VERSION = 'tile_vegetation/v3';
 const PUBLISH_FILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\.glb$/;
 const KNOWN_CODES = new Set<TileVegetationErrorCode>(['bad_request', 'not_found', 'timeout', 'failed', 'build_failed', 'bad_input', 'texture_decode', 'no_photo_texture', 'budget_too_small', 'budget_exceeded', 'plant_failed', 'io']);
 
@@ -379,12 +411,14 @@ export class TileVegetationService {
         const timeoutMs = req.timeoutMs ?? this.defaultTimeoutMs;
         const bin = await this.ensureBinary();
         const tileSha256 = fileSha256(input);
+        if (req.seed !== undefined && (typeof req.seed !== 'string' || !/^[0-9a-fA-F]{1,16}$/.test(req.seed))) throw new TileVegetationError('bad_request', 'seed must be 1-16 hex digits');
+        const seed = (req.seed ?? tileSha256.slice(0, 16)).toLowerCase();
         const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0strip\0').update(this.hashBinary(bin)).update('\0')
-            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown })).digest('hex');
+            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed })).digest('hex');
         const outputs = ['devegetated.glb', 'crowns.json', 'stats.json', ...(req.topDown ? ['topdown.png'] : [])];
         const res = await this.cached(key, outputs, async (dir, signal) => {
             const args = ['strip', '--input', input, '--out', path.join(dir, 'devegetated.glb'), '--crowns', path.join(dir, 'crowns.json'),
-                '--stats', path.join(dir, 'stats.json'), ...flags];
+                '--stats', path.join(dir, 'stats.json'), '--seed', seed, ...flags];
             if (req.topDown) args.push('--topdown', path.join(dir, 'topdown.png'));
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
             await runFile(bin, args, timeoutMs, signal);
@@ -405,7 +439,10 @@ export class TileVegetationService {
         const t0 = Date.now();
         const crowns = this.resolveInput(req.crownsPath, 'crownsPath', '.json');
         const support = req.supportMeshPath !== undefined ? this.resolveInput(req.supportMeshPath, 'supportMeshPath', '.glb') : undefined;
-        if (!Number.isFinite(req.triangleBudget) || req.triangleBudget <= 0) throw new TileVegetationError('bad_request', 'triangleBudget must be a number > 0');
+        if ((req.triangleBudget === undefined) === (req.sceneTriangleCap === undefined)) throw new TileVegetationError('bad_request', 'give exactly one of triangleBudget (the caller\'s own) and sceneTriangleCap (size the trees from their crowns)');
+        if (req.triangleBudget !== undefined && !(Number.isFinite(req.triangleBudget) && req.triangleBudget >= 1)) throw new TileVegetationError('bad_request', 'triangleBudget must be a number of at least 1');
+        if (req.sceneTriangleCap !== undefined && !(Number.isFinite(req.sceneTriangleCap) && req.sceneTriangleCap >= 1)) throw new TileVegetationError('bad_request', 'sceneTriangleCap must be a number of at least 1');
+        const budget = req.triangleBudget !== undefined ? { triangleBudget: Math.floor(req.triangleBudget) } : { sceneTriangleCap: Math.floor(req.sceneTriangleCap!) };
         if (typeof req.seed !== 'string' || !/^[0-9a-fA-F]{1,16}$/.test(req.seed)) throw new TileVegetationError('bad_request', 'seed must be 1-16 hex digits');
         const publishTarget = req.publishAs === undefined ? undefined : this.resolvePublishTarget(req.publishAs);
         const { flags, key: keyParams } = paramFlags(req.params);
@@ -415,11 +452,12 @@ export class TileVegetationService {
         sha256File(crowns, hash);
         hash.update('\0');
         if (support) sha256File(support, hash);
-        hash.update('\0').update(JSON.stringify({ ...keyParams, triangleBudget: Math.floor(req.triangleBudget), seed: req.seed.toLowerCase() }));
+        hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase() }));
         const key = hash.digest('hex');
         const res = await this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
             const args = ['plant', '--crowns', crowns, '--out', path.join(dir, 'trees.glb'), '--stats', path.join(dir, 'stats.json'),
-                '--triangle-budget', String(Math.floor(req.triangleBudget)), '--seed', req.seed, ...flags];
+                ...('triangleBudget' in budget ? ['--triangle-budget', String(budget.triangleBudget)] : ['--scene-triangle-cap', String(budget.sceneTriangleCap)]),
+                '--seed', req.seed, ...flags];
             if (support) args.push('--support-mesh', support);
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
             await runFile(bin, args, timeoutMs, signal);

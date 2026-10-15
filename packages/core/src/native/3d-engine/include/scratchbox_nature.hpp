@@ -14,9 +14,11 @@
 #include "scratchbox_geometry.hpp"
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <random>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 
 namespace scratchbox {
@@ -1048,6 +1050,21 @@ struct SpaceColonizationConfig {
     float triangleBudget{0.0f};
     float woodBudgetShare{0.4f};         // share of the budget the wood may use; foliage takes the rest
 
+    // Measured crowns (customAttractors). The trunk stops at clearTrunkHeight, or just above the lowest attractor; when
+    // the crown starts higher than that by more than perceptionRadius, no attractor can see the trunk and nothing grows.
+    // With trunkSeeksCrown the trunk keeps growing from there towards the nearest attractor until one lies within
+    // perceptionRadius of its tip (and its forward cone), so colonisation starts where the measured crown begins.
+    bool trunkSeeksCrown{false};
+    // Measured crowns (customAttractors). Leaves go on the tips and the twigs thinner than kTwigRadiusShare of the
+    // trunk; a crown with few tips (a wide flat one grown along a few long branches) then has leaves only at its branch
+    // ends. With leavesOnCrownBranches every branch node that came within the kill reach of an attractor (a branch that
+    // grew through the measured crown) carries leaves too, so the leaves fill the crown where its branches went.
+    bool leavesOnCrownBranches{false};
+    // Colonisation stops once this many iterations in a row reached no attractor (0: it runs to maxIterations). The
+    // attractors left by then are ones no branch converges on (a node that keeps sprouting towards an attractor it never
+    // reaches), so further iterations only add nodes.
+    int stallIterations{0};
+
     static SpaceColonizationConfig fromBlobTelemetry(const BotanicalBlobTelemetry& tel) {
         SpaceColonizationConfig cfg;
         cfg.customAttractors = tel.conformalAttractors;
@@ -1099,15 +1116,32 @@ struct TreeBudgetReport {
     int trianglesPerClump{0};
 };
 
+/** How colonisation went (growSkeleton). `stop` is a diagnostic label; nothing branches on it. */
+struct ColonizationReport {
+    int iterations{0};              // colonisation iterations run
+    std::string stop;               // all_attractors_reached | no_attractor_within_perception | stalled | iteration_cap | (string)
+    size_t attractors{0};           // attractors at the start
+    size_t attractorsReached{0};    // attractors a node came within the kill radius of
+    int trunkNodes{0};              // nodes from the root to the crown break (the scaffold limbs start there)
+    float trunkTopY{0.0f};
+    int trunkSeekSteps{0};          // trunk steps grown past clearTrunkHeight to reach the crown (trunkSeeksCrown)
+};
+
 class SpaceColonizationTreeGenerator {
 public:
     /**
      * Grows the branch skeleton (attractors, trunk, scaffold limbs, colonisation, da Vinci radii, root flare).
-     * `rng` is seeded by the caller and keeps its state for the meshing that follows.
+     * `rng` is seeded by the caller and keeps its state for the meshing that follows. `report` (optional) says how the
+     * colonisation went. Each attractor keeps its nearest seeing node as nodes are added (through a grid over the
+     * attractors), which picks the node a scan over every node would (the nearest, ties to the lowest id): the skeleton is
+     * the one the plain O(attractors x nodes) search per iteration grows.
      */
-    static std::vector<ColonizationNode> growSkeleton(const SpaceColonizationConfig& cfg, std::mt19937& rng) {
+    static std::vector<ColonizationNode> growSkeleton(const SpaceColonizationConfig& cfg, std::mt19937& rng, ColonizationReport* report = nullptr) {
         std::uniform_real_distribution<float> distMinus1To1(-1.0f, 1.0f);
         std::uniform_real_distribution<float> dist0To1(0.0f, 1.0f);
+        ColonizationReport localReport;
+        ColonizationReport& rep = report ? *report : localReport;
+        rep = ColonizationReport{};
 
         // 1. Gather or scatter attractor points inside crown envelope
         std::vector<Vec3> attractors;
@@ -1130,6 +1164,7 @@ public:
                 }
             }
         }
+        rep.attractors = attractors.size();
 
         // 2. Initialize tree with base root and grow trunk upward toward crown
         std::vector<ColonizationNode> nodes;
@@ -1180,6 +1215,51 @@ public:
             nodes.push_back(nextNode);
         }
 
+        float perceptionSq = cfg.perceptionRadius * cfg.perceptionRadius;
+        // what a node sees: an attractor within the perception radius, ahead of it or to the side (the forward cone:
+        // dot >= -0.2 * length prevents 180-degree backward turns)
+        auto sees = [&](const ColonizationNode& node, const Vec3& attr, float& d2) {
+            const Vec3 toAttr = attr - node.position;
+            d2 = toAttr.lengthSquared();
+            return d2 < perceptionSq && toAttr.dot(node.growthDir) >= -0.20f * std::sqrt(d2);
+        };
+
+        // The measured crown may begin higher (or further out) than the trunk stopped: grow on towards the nearest
+        // attractor until one is in sight, never downwards, at most as many steps as that attractor is away.
+        if (cfg.trunkSeeksCrown && !cfg.isShrub && !cfg.customAttractors.empty() && !attractors.empty() && cfg.branchStepLength > 0.0f) {
+            auto inSight = [&]() {
+                float d2 = 0.0f;
+                for (const auto& a : attractors) if (sees(nodes.back(), a, d2)) return true;
+                return false;
+            };
+            float nearestD = 1e30f;
+            for (const auto& a : attractors) nearestD = std::min(nearestD, (a - nodes.back().position).length());
+            const int maxSteps = static_cast<int>(std::ceil(nearestD / cfg.branchStepLength)) + 2;
+            while (!inSight() && rep.trunkSeekSteps < maxSteps) {
+                const Vec3 tip = nodes.back().position;
+                Vec3 nearest = attractors.front();
+                float best = 1e30f;
+                for (const auto& a : attractors) {
+                    const float d2 = (a - tip).lengthSquared();
+                    if (d2 < best) { best = d2; nearest = a; }
+                }
+                Vec3 dir = nearest - tip;
+                if (dir.y < 0.0f) dir.y = 0.0f;
+                if (dir.lengthSquared() < 1e-12f) break;
+                dir = dir.normalized();
+                ColonizationNode nextNode;
+                nextNode.id = static_cast<int>(nodes.size());
+                nextNode.parentId = nodes.back().id;
+                nextNode.position = tip + dir * cfg.branchStepLength;
+                nextNode.growthDir = dir;
+                nodes.back().children.push_back(nextNode.id);
+                nodes.push_back(nextNode);
+                ++rep.trunkSeekSteps;
+            }
+        }
+        rep.trunkNodes = static_cast<int>(nodes.size());
+        rep.trunkTopY = nodes.back().position.y;
+
         if (cfg.isShrub) {
             int baseNodeId = nodes.back().id;
             // Sprout 4 basal outward radial shoots angled ~35-50 degrees
@@ -1214,43 +1294,94 @@ public:
         }
 
         // 3. Iterative Space Colonization Growth
-        float perceptionSq = cfg.perceptionRadius * cfg.perceptionRadius;
-        float killSq = cfg.killRadius * cfg.killRadius;
+        // Each attractor keeps the nearest node that sees it. Only nodes added since can change that (an older node was
+        // already compared), and only they can come within the kill reach of an attractor still alive, so each new node
+        // is compared with the attractors in the 27 grid cells around it (cell size >= the perception radius and the kill
+        // reach). Ties keep the lower node id, as a scan over every node in id order would: the skeleton is the one the
+        // plain O(attractors x nodes) search per iteration grows.
+        const float effectiveKill = cfg.killRadius * 1.25f;
+        const float effectiveKillSq = effectiveKill * effectiveKill;
+        const float gridCell = std::max({cfg.perceptionRadius, effectiveKill, 1e-3f});
+        auto cellOf = [&](const Vec3& p) {
+            return std::array<int64_t, 3>{static_cast<int64_t>(std::floor(p.x / gridCell)), static_cast<int64_t>(std::floor(p.y / gridCell)),
+                                          static_cast<int64_t>(std::floor(p.z / gridCell))};
+        };
+        auto packKey = [](int64_t a, int64_t b, int64_t c) {
+            return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
+        };
+        const size_t A = attractors.size();
+        std::unordered_map<uint64_t, std::vector<uint32_t>> attractorGrid;
+        for (uint32_t i = 0; i < A; ++i) {
+            const auto k = cellOf(attractors[i]);
+            attractorGrid[packKey(k[0], k[1], k[2])].push_back(i);
+        }
+        std::vector<uint8_t> alive(A, 1);
+        std::vector<float> bestD2(A, perceptionSq);
+        std::vector<int> bestNode(A, -1);
+        size_t aliveCount = A;
+        auto forAttractorsNear = [&](const Vec3& p, auto&& visit) {
+            const auto k = cellOf(p);
+            for (int64_t dz = -1; dz <= 1; ++dz) {
+                for (int64_t dy = -1; dy <= 1; ++dy) {
+                    for (int64_t dx = -1; dx <= 1; ++dx) {
+                        auto it = attractorGrid.find(packKey(k[0] + dx, k[1] + dy, k[2] + dz));
+                        if (it == attractorGrid.end()) continue;
+                        for (uint32_t i : it->second) {
+                            if (alive[i]) visit(i);
+                        }
+                    }
+                }
+            }
+        };
+        // nearest seeing node per attractor, over the nodes from `from` on (in id order: a tie keeps the earlier node)
+        auto compareNodes = [&](size_t from) {
+            for (size_t n = from; n < nodes.size(); ++n) {
+                const ColonizationNode& node = nodes[n];
+                forAttractorsNear(node.position, [&](uint32_t i) {
+                    float d2 = 0.0f;
+                    if (sees(node, attractors[i], d2) && d2 < bestD2[i]) {
+                        bestD2[i] = d2;
+                        bestNode[i] = node.id;
+                    }
+                });
+            }
+        };
+        // attractors within the kill reach of the nodes from `from` on die; returns how many
+        auto killNear = [&](size_t from) {
+            size_t killed = 0;
+            for (size_t n = from; n < nodes.size(); ++n) {
+                const Vec3 p = nodes[n].position;
+                forAttractorsNear(p, [&](uint32_t i) {
+                    if ((attractors[i] - p).lengthSquared() < effectiveKillSq) {
+                        alive[i] = 0;
+                        ++killed;
+                    }
+                });
+            }
+            aliveCount -= killed;
+            return killed;
+        };
+        compareNodes(0);
+        size_t killChecked = 0;  // nodes from here on have not been kill-checked yet (the first check takes the trunk too)
 
+        rep.stop = "iteration_cap";
+        int sinceReached = 0;
         for (int iter = 0; iter < cfg.maxIterations; ++iter) {
-            if (attractors.empty()) break;
+            if (aliveCount == 0) { rep.stop = "all_attractors_reached"; break; }
 
             // Map each node to accumulated attraction direction and count
             std::unordered_map<int, Vec3> nodeAttractionDir;
             std::unordered_map<int, int> nodeAttractionCount;
 
-            // Find closest tree node for each attractor
-            for (const auto& attr : attractors) {
-                float bestDistSq = perceptionSq;
-                int bestNode = -1;
-
-                for (const auto& node : nodes) {
-                    Vec3 toAttr = attr - node.position;
-                    float d2 = toAttr.lengthSquared();
-                    if (d2 < bestDistSq) {
-                        // Forward perception cone: node only sees attractors ahead or laterally
-                        // (dot product >= -0.2 * length prevents 180-degree backward turns)
-                        float toAttrLen = std::sqrt(d2);
-                        if (toAttr.dot(node.growthDir) >= -0.20f * toAttrLen) {
-                            bestDistSq = d2;
-                            bestNode = node.id;
-                        }
-                    }
-                }
-
-                if (bestNode >= 0) {
-                    Vec3 dir = (attr - nodes[bestNode].position).normalized();
-                    nodeAttractionDir[bestNode] += dir;
-                    nodeAttractionCount[bestNode]++;
-                }
+            // Each attractor pulls its nearest seeing node (in attractor order, as the sums are taken)
+            for (size_t i = 0; i < A; ++i) {
+                if (!alive[i] || bestNode[i] < 0) continue;
+                Vec3 dir = (attractors[i] - nodes[bestNode[i]].position).normalized();
+                nodeAttractionDir[bestNode[i]] += dir;
+                nodeAttractionCount[bestNode[i]]++;
             }
 
-            if (nodeAttractionDir.empty()) break;
+            if (nodeAttractionDir.empty()) { rep.stop = "no_attractor_within_perception"; break; }
 
             // Sprout new nodes
             std::vector<ColonizationNode> newNodes;
@@ -1297,31 +1428,24 @@ public:
                 newNodes.push_back(child);
             }
 
+            const size_t firstNew = nodes.size();
             for (const auto& n : newNodes) {
                 nodes[n.parentId].children.push_back(n.id);
                 nodes.push_back(n);
             }
+            rep.iterations = iter + 1;
 
             if (newNodes.empty()) break;
 
-            // Prune attractors inside kill radius of any node
-            float effectiveKillSq = (cfg.killRadius * 1.25f) * (cfg.killRadius * 1.25f);
-            std::vector<Vec3> remainingAttractors;
-            remainingAttractors.reserve(attractors.size());
-            for (const auto& attr : attractors) {
-                bool killed = false;
-                for (const auto& node : nodes) {
-                    if ((attr - node.position).lengthSquared() < effectiveKillSq) {
-                        killed = true;
-                        break;
-                    }
-                }
-                if (!killed) {
-                    remainingAttractors.push_back(attr);
-                }
-            }
-            attractors = std::move(remainingAttractors);
+            // Prune attractors inside kill radius of any node, then let the survivors see the new nodes
+            const size_t killed = killNear(killChecked);
+            killChecked = nodes.size();
+            compareNodes(firstNew);
+            sinceReached = killed > 0 ? 0 : sinceReached + 1;
+            if (cfg.stallIterations > 0 && sinceReached >= cfg.stallIterations) { rep.stop = "stalled"; break; }
         }
+        if (aliveCount == 0) rep.stop = "all_attractors_reached";
+        rep.attractorsReached = A - aliveCount;
 
         // 4. Propagate Branch Radii via Leonardo da Vinci's Rule: r_parent^p = sum(r_child^p)
         for (int i = static_cast<int>(nodes.size()) - 1; i >= 0; --i) {
@@ -1353,6 +1477,90 @@ public:
         return nodes;
     }
 
+    /**
+     * Meshes a skeleton growSkeleton grew from `cfg` within cfg.triangleBudget (> 0): the same meshes
+     * generateTreeComponents gives for that budget, without growing the skeleton again.
+     */
+    static std::pair<geometry::Mesh, geometry::Mesh> meshGrownSkeleton(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& nodes, TreeBudgetReport* report = nullptr) {
+        geometry::Mesh woodMesh("Tree_Wood");
+        woodMesh.material = geometry::PbrMaterial::roughWood();
+        woodMesh.material.name = "PBR_Redwood_Bark";
+        woodMesh.material.roughnessFactor = 0.92f;
+        woodMesh.material.metallicFactor = 0.02f;
+        geometry::Mesh foliageMesh("Tree_Foliage");
+        foliageMesh.material.name = "PBR_Canopy_Foliage";
+        foliageMesh.material.roughnessFactor = 0.58f;
+        foliageMesh.material.metallicFactor = 0.01f;
+        foliageMesh.material.doubleSided = true;
+        foliageMesh.material.alphaMode = "MASK";
+        foliageMesh.material.alphaCutoff = 0.45f;
+        TreeBudgetReport local;
+        if (cfg.triangleBudget > 0.0f) meshWithinBudget(cfg, nodes, woodMesh, foliageMesh, report ? *report : local);
+        for (const auto& v : woodMesh.vertices) woodMesh.bounds.expand(v);
+        for (const auto& v : foliageMesh.vertices) foliageMesh.bounds.expand(v);
+        return {woodMesh, foliageMesh};
+    }
+
+    /** Share of the trunk radius below which a branch carries leaves at any budget (budgeted meshing). */
+    static constexpr float kTwigRadiusShare = 0.12f;
+
+    /**
+     * Where the budgeted meshing puts leaves whatever the budget: every tip, and every twig thinner than
+     * kTwigRadiusShare of the trunk, above the crown break (rootAnchor.y + 0.85 clearTrunkHeight), and with
+     * leavesOnCrownBranches every branch node that grew through the measured crown. A smaller budget prunes more wood
+     * into leaves; it never takes leaves away from these points.
+     */
+    static std::vector<Vec3> foliageAnchors(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g) {
+        std::vector<Vec3> pts;
+        if (g.size() < 2) return pts;
+        const std::vector<uint8_t> leafy = leafyNodes(cfg, g, kTwigRadiusShare * trunkReferenceRadius(cfg, g));
+        for (size_t i = 0; i < g.size(); ++i) {
+            if (leafy[i]) pts.push_back(g[i].position);
+        }
+        return pts;
+    }
+
+    /**
+     * Nodes that carry leaves at a twig radius: above the crown break, every tip and every twig thinner than
+     * `twigRadius` (in `radii`, the meshing's scaled radii, when given; else the skeleton's own), and with
+     * leavesOnCrownBranches every node within the kill reach of an attractor.
+     */
+    static std::vector<uint8_t> leafyNodes(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g, float twigRadius,
+                                           const std::vector<float>* radii = nullptr) {
+        std::vector<uint8_t> leafy(g.size(), 0);
+        const float crownBottom = cfg.rootAnchor.y + cfg.clearTrunkHeight * 0.85f;
+        for (size_t i = 0; i < g.size(); ++i) {
+            if (g[i].position.y < crownBottom) continue;
+            const float r = radii ? (*radii)[i] : g[i].radius;
+            if (g[i].children.empty() || r < twigRadius) leafy[i] = 1;
+        }
+        if (!cfg.leavesOnCrownBranches || cfg.customAttractors.empty()) return leafy;
+        const float reach = std::max(1e-3f, cfg.killRadius * 1.25f);
+        const float reachSq = reach * reach;
+        auto pack = [&](const Vec3& p, int dx, int dy, int dz) {
+            const int64_t a = static_cast<int64_t>(std::floor(p.x / reach)) + dx, b = static_cast<int64_t>(std::floor(p.y / reach)) + dy, c = static_cast<int64_t>(std::floor(p.z / reach)) + dz;
+            return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
+        };
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+        for (uint32_t i = 0; i < cfg.customAttractors.size(); ++i) grid[pack(cfg.customAttractors[i], 0, 0, 0)].push_back(i);
+        for (size_t i = 0; i < g.size(); ++i) {
+            if (leafy[i] || g[i].position.y < crownBottom) continue;
+            const Vec3 p = g[i].position;
+            for (int dz = -1; dz <= 1 && !leafy[i]; ++dz) {
+                for (int dy = -1; dy <= 1 && !leafy[i]; ++dy) {
+                    for (int dx = -1; dx <= 1 && !leafy[i]; ++dx) {
+                        auto it = grid.find(pack(p, dx, dy, dz));
+                        if (it == grid.end()) continue;
+                        for (uint32_t a : it->second) {
+                            if ((cfg.customAttractors[a] - p).lengthSquared() < reachSq) { leafy[i] = 1; break; }
+                        }
+                    }
+                }
+            }
+        }
+        return leafy;
+    }
+
     static std::pair<geometry::Mesh, geometry::Mesh> generateTreeComponents(const SpaceColonizationConfig& cfg, TreeBudgetReport* report = nullptr) {
         geometry::Mesh woodMesh("Tree_Wood");
         woodMesh.material = geometry::PbrMaterial::roughWood();
@@ -1372,13 +1580,7 @@ public:
 
         const std::vector<ColonizationNode> nodes = growSkeleton(cfg, rng);
 
-        if (cfg.triangleBudget > 0.0f) {
-            TreeBudgetReport local;
-            meshWithinBudget(cfg, nodes, woodMesh, foliageMesh, report ? *report : local);
-            for (const auto& v : woodMesh.vertices) woodMesh.bounds.expand(v);
-            for (const auto& v : foliageMesh.vertices) foliageMesh.bounds.expand(v);
-            return {woodMesh, foliageMesh};
-        }
+        if (cfg.triangleBudget > 0.0f) return meshGrownSkeleton(cfg, nodes, report);
 
         // 5. Build Branch Cylinder Meshes
         for (const auto& node : nodes) {
@@ -1632,6 +1834,18 @@ private:
         }
     }
 
+    /** Trunk radius reference: the first trunk node above the root flare (or the last one before the crown break). */
+    static float trunkReferenceRadius(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g) {
+        float trunkRef = g[0].radius;
+        size_t n = 0;
+        while (g[n].children.size() == 1) {
+            n = static_cast<size_t>(g[n].children[0]);
+            trunkRef = g[n].radius;
+            if (g[n].position.y >= cfg.rootAnchor.y + cfg.rootFlareHeight) break;
+        }
+        return trunkRef;
+    }
+
     /**
      * Meshes a grown skeleton within cfg.triangleBudget. Wood: chains of single-child nodes are simplified
      * (Douglas-Peucker, tolerance a fraction of the local radius), each kept segment is a tube whose side count grows
@@ -1648,16 +1862,7 @@ private:
         const size_t budget = static_cast<size_t>(std::max(0.0f, cfg.triangleBudget));
         auto node = [&](int i) -> const ColonizationNode& { return g[static_cast<size_t>(i)]; };
 
-        // Trunk radius reference: the first trunk node above the root flare (or the last one before the crown break).
-        float trunkRef = g[0].radius;
-        {
-            int n = 0;
-            while (node(n).children.size() == 1) {
-                n = node(n).children[0];
-                trunkRef = node(n).radius;
-                if (node(n).position.y >= cfg.rootAnchor.y + cfg.rootFlareHeight) break;
-            }
-        }
+        const float trunkRef = trunkReferenceRadius(cfg, g);
         const float scale = (cfg.baseRadius > 0.0f && trunkRef > 1e-6f) ? cfg.baseRadius / trunkRef : 1.0f;
         std::vector<float> radius(N);
         for (size_t i = 0; i < N; ++i) radius[i] = g[i].radius * scale;
@@ -1760,13 +1965,13 @@ private:
         rep.woodTriangles = wood.indices.size() / 3;
         rep.prunedBelowRadius = rMin;
 
-        // Foliage: twigs thinner than the pruning radius (or than a small share of the trunk) and every tip.
-        const float crownBottom = cfg.rootAnchor.y + cfg.clearTrunkHeight * 0.85f;
-        const float twigRadius = std::max(rMin, 0.12f * rRef);
+        // Foliage: twigs thinner than the pruning radius (or than a small share of the trunk) and every tip above the
+        // crown break (and, with leavesOnCrownBranches, the branches that grew through the measured crown).
+        const float twigRadius = std::max(rMin, kTwigRadiusShare * rRef);
         std::vector<Vec3> pts;
+        const std::vector<uint8_t> leafy = leafyNodes(cfg, g, twigRadius, &radius);
         for (size_t i = 0; i < N; ++i) {
-            if (g[i].position.y < crownBottom) continue;
-            if (g[i].children.empty() || radius[i] < twigRadius) pts.push_back(g[i].position);
+            if (leafy[i]) pts.push_back(g[i].position);
         }
         const size_t foliageBudget = budget > rep.woodTriangles ? budget - rep.woodTriangles : 0;
         if (pts.empty() || foliageBudget < 20) return;
