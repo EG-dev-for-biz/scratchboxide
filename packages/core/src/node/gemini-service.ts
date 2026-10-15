@@ -100,7 +100,8 @@ import {
     extractDocumentTitle,
     markdownStringToSections,
     parseOrSynthesizeArtifact,
-    synthesizeComprehensiveDocument
+    synthesizeComprehensiveDocument,
+    withOpenArtifactRule
 } from './gemini/artifact-synthesis';
 
 export { DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS, DEFAULT_SUBAGENT_MODEL, FALLBACK_SUBAGENT_MODELS };
@@ -530,7 +531,8 @@ export class GeminiService {
 
     /** Rich system instruction injecting canvas primitives, superpowers, workspace context and schemas. */
     private async buildSystemInstruction(request: GeminiGenerateRequest): Promise<string> {
-        return buildSystemInstruction(request, this.getPromptContextServices());
+        // As streamed turns get it: with the open-artifact rule while an artifact is open.
+        return withOpenArtifactRule(await buildSystemInstruction(request, this.getPromptContextServices()), request.activeArtifact);
     }
 
     public async buildSystemInstructionPrompt(request: GeminiGenerateRequest): Promise<string> {

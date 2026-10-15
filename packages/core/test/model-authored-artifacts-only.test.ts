@@ -21,10 +21,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { parseOrSynthesizeArtifact, extractCodeSandboxArtifact, extractDocumentTitle } from '../src/node/gemini/artifact-synthesis';
+import { parseOrSynthesizeArtifact, extractCodeSandboxArtifact, extractDocumentTitle, openArtifactUpdateRule, withOpenArtifactRule } from '../src/node/gemini/artifact-synthesis';
 import { MarkdownDocumentPrimitive } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
 import { DocumentCodeSurfaces } from '../src/browser/generative-canvas/studio/CanvasCardBody';
 import { canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
+import { GeminiService } from '../src/node/gemini-service';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 import { useSendMessage, type SendMessageDeps, type UseSendMessageResult } from '../src/browser/generative-canvas/hooks/useSendMessage';
 import { GeminiClient as BrowserGeminiClient } from '../src/browser/generative-canvas/gemini-client';
@@ -208,6 +209,98 @@ describe('a 3d-scene envelope with a scene open updates that scene; no prompt wo
         expect(scene.features?.atmosphericScattering).toBeUndefined();
         expect(scene.features?.godRays).toBeUndefined();
         expect(scene.environment?.skybox).toBe('studio');
+    });
+});
+
+describe('the model starts a new artifact by saying so, never by prompt wording', () => {
+    // An open Paris scene: live tiles at its anchor, a tiles object, a drone route and playback.
+    const paris: CanvasArtifact = {
+        id: 'art-eiffel', type: '3d-scene', title: 'Eiffel Tower', summary: '', version: 3, createdAt: 'now',
+        data: {
+            title: 'Eiffel Tower', renderMode: 'clay',
+            geoAnchor: { lat: 48.8584, lng: 2.2945, elevation: 35, active: true },
+            objects: [{ id: 'tiles', content: { type: 'model', durableUri: '/models/eiffel_clay.glb', mimeType: 'model/gltf-binary', metadata: { source: 'google3dtilesclay', role: 'environment' } }, space: { spatial3d: { x: 0, y: 0, z: 0 } } }],
+            droneRoute: { active: true, pinA: { lat: 48.858, lng: 2.29 }, pinB: { lat: 48.86, lng: 2.3 } },
+            timeline: { isPlaying: true }
+        } as any
+    };
+    const teapot = { title: 'Teapot', pythonGenerator: { sourceCode: 'import scratchbox as sb\n# teapot', glbBase64: 'Z2xURg==' } };
+    const expectFresh = (art: CanvasArtifact | undefined) => {
+        const d = art!.data as Scene3DData;
+        expect(art!.id).not.toBe('art-eiffel');
+        expect(art!.version).toBe(1);
+        expect(art!.title).toBe('Teapot');
+        expect(d.geoAnchor).toBeUndefined();
+        expect(d.objects).toEqual([]);
+        expect(d.droneRoute).toBeUndefined();
+        expect(d.timeline).toBeUndefined();
+        expect(d.pythonGenerator?.sourceCode).toBe(teapot.pythonGenerator.sourceCode);
+        expect(d.renderMode).toBe('clay');
+    };
+
+    it('an envelope with "newArtifact": true is a new scene: nothing of the open place is kept', () => {
+        const text = 'Here is a teapot.\n' + json({ type: '3d-scene', title: 'Teapot', newArtifact: true, data: teapot });
+        expectFresh(parseOrSynthesizeArtifact('now model a teapot', text, { prompt: 'now model a teapot', activeArtifact: paris } as any, []));
+    });
+
+    it('an id other than the open artifact\'s is a new artifact too; the open id continues it', () => {
+        const other = json({ type: '3d-scene', title: 'Teapot', id: 'art-teapot', data: teapot });
+        const art = parseOrSynthesizeArtifact('now model a teapot', other, { prompt: 'now model a teapot', activeArtifact: paris } as any, []);
+        expectFresh(art);
+        expect(art!.id).toBe('art-teapot');
+        const same = parseOrSynthesizeArtifact('add a fountain', json({ type: '3d-scene', id: 'art-eiffel', data: { objects: [] } }), { prompt: 'add a fountain', activeArtifact: paris } as any, [])!;
+        expect(same.id).toBe('art-eiffel');
+        expect(same.version).toBe(4);
+        expect((same.data as Scene3DData).geoAnchor).toMatchObject({ lat: 48.8584 });
+    });
+
+    it('a tag with newArtifact="true" is a new scene', () => {
+        const text = `<scratchboxPrimitive type="3d-scene" title="Teapot" newArtifact="true">\n${json(teapot)}\n</scratchboxPrimitive>`;
+        expectFresh(parseOrSynthesizeArtifact('now model a teapot', text, { prompt: 'now model a teapot', activeArtifact: paris } as any, []));
+    });
+
+    it('without either, the envelope is the next version of the open scene, whatever the prompt says', () => {
+        const art = parseOrSynthesizeArtifact('now model a teapot', json({ type: '3d-scene', title: 'Teapot', data: teapot }), { prompt: 'now model a teapot', activeArtifact: paris } as any, [])!;
+        expect(art.id).toBe('art-eiffel');
+        expect((art.data as Scene3DData).geoAnchor).toMatchObject({ lat: 48.8584 });
+    });
+
+    it('a new document is not named after, or merged into, the open one', () => {
+        const openDoc: CanvasArtifact = { id: 'art-doc', type: 'markdown-document', title: 'Q3 Review', summary: '', version: 2, createdAt: 'now', data: { title: 'Q3 Review', sections: [{ id: 's', type: 'paragraph', content: 'Revenue up.' }] } as any };
+        const art = parseOrSynthesizeArtifact('write a packing list', json({ type: 'markdown-document', newArtifact: true, data: { markdown: '# Packing list\n\n- tent' } }), { prompt: 'write a packing list', activeArtifact: openDoc } as any, [])!;
+        expect(art.id).not.toBe('art-doc');
+        expect(art.title).toBe('Packing list');
+    });
+
+    it('the model is told how while an artifact is open, and not otherwise', () => {
+        const rule = openArtifactUpdateRule(paris)!;
+        expect(rule).toContain('"Eiffel Tower" (3d-scene, id "art-eiffel")');
+        expect(rule).toContain('newArtifact="true"');
+        expect(rule).toContain('"newArtifact": true');
+        expect(withOpenArtifactRule('SYSTEM', paris)).toBe(`SYSTEM\n\n${rule}`);
+        expect(withOpenArtifactRule('SYSTEM', undefined)).toBe('SYSTEM');
+    });
+
+    it('a streamed turn sends the rule in its system instruction while an artifact is open', async () => {
+        const service = new GeminiService();
+        (service as any).auth = { getClient: async () => ({ getAccessToken: async () => ({ token: 'mock-token' }) }) };
+        (service as any).cachedProjectId = 'mock-project';
+        const bodies: any[] = [];
+        const savedFetch = (globalThis as any).fetch;
+        (globalThis as any).fetch = async (_url: string, init: any) => {
+            bodies.push(JSON.parse(init.body));
+            const body = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] })}\ndata: [DONE]`;
+            return { ok: true, status: 200, text: async () => body, json: async () => ({}), body: null };
+        };
+        try {
+            await service.streamGenerate({ prompt: 'now model a teapot', model: 'gemini-3.8-flash', mode: 'ask', activeArtifact: paris } as any, () => {});
+            await service.streamGenerate({ prompt: 'model a teapot', model: 'gemini-3.8-flash', mode: 'ask' } as any, () => {});
+        } finally {
+            (globalThis as any).fetch = savedFetch;
+        }
+        const systemText = (b: any) => (b.systemInstruction?.parts || []).map((p: any) => p.text).join('');
+        expect(systemText(bodies[0])).toContain(openArtifactUpdateRule(paris)!);
+        expect(systemText(bodies[1])).not.toContain('OPEN ARTIFACT:');
     });
 });
 

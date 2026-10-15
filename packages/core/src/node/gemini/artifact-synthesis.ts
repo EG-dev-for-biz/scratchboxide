@@ -33,8 +33,27 @@ export interface ExtractedScratchboxTag {
     title?: string;
     summary?: string;
     version?: number;
+    /** The artifact id the model gave (id="..."); another id than the open artifact's starts a new artifact. */
+    id?: string;
+    /** newArtifact="true": the model starts a new artifact instead of the next version of the open one. */
+    newArtifact?: boolean;
     rawPayload?: string;
     cleanText?: string;
+}
+
+/**
+ * The rule the model is given while an artifact is open: an artifact it sends of the open type is the next version
+ * of the open one unless it says otherwise (newArtifact, or another id). The model decides; no prompt word does.
+ */
+export function openArtifactUpdateRule(open: Pick<CanvasArtifact, 'id' | 'type' | 'title'> | undefined): string | undefined {
+    if (!open?.type) return undefined;
+    return `[OPEN ARTIFACT: "${open.title}" (${open.type}, id "${open.id}") is open on the canvas. A ${open.type} you send as a <scratchboxPrimitive> tag or a {"type", "data"} JSON envelope is read as the next version of it: the fields you send replace its values and the fields you leave out keep theirs. To start a new ${open.type} instead (a new object, place or subject), add newArtifact="true" to the tag or "newArtifact": true to the envelope; nothing of the open one is kept then. A mount_canvas_primitive call always starts a new artifact.]`;
+}
+
+/** The system instruction with openArtifactUpdateRule appended while an artifact is open. */
+export function withOpenArtifactRule(systemInstruction: string, open: Pick<CanvasArtifact, 'id' | 'type' | 'title'> | undefined): string {
+    const rule = openArtifactUpdateRule(open);
+    return rule ? `${systemInstruction}\n\n${rule}` : systemInstruction;
 }
 
 /**
@@ -83,6 +102,8 @@ export function extractScratchboxPrimitiveTag(modelText: string): ExtractedScrat
         title: attrs.title || undefined,
         summary: attrs.summary || undefined,
         version: attrs.version ? parseInt(attrs.version, 10) : 1,
+        id: attrs.id || undefined,
+        newArtifact: (attrs.newartifact || '').trim().toLowerCase() === 'true',
         rawPayload,
         cleanText
     };
@@ -558,8 +579,9 @@ function appendLog<T>(open: T[] | undefined, sent: T[] | undefined | null): T[] 
  * The 3D scene the model sent. A 3d-scene envelope sent while a 3d-scene is open is the next version of that scene
  * (same artifact id), so it is read as an update: every field the model's data contains is taken as sent (an
  * explicit `null` or `[]` clears it) and every field it leaves out keeps the open scene's value. Whether the prompt
- * starts something new is the model's call, expressed by what it sends (a new generator, `objects: []`); no prompt
- * wording is read. No template supplies geometry, scripts, generators, a title, a camera or lighting.
+ * starts something new is the model's call, expressed by what it sends (`newArtifact: true` or another id, which
+ * reaches here with no open scene; see openArtifactUpdateRule); no prompt wording is read. No template supplies
+ * geometry, scripts, generators, a title, a camera or lighting.
  */
 function modelAuthoredScene(prompt: string, request: GeminiGenerateRequest, title: string, summary: string | undefined, raw: unknown): Scene3DData {
     const data = reclassifyMisfiledPythonGenerator((raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Scene3DData)!;
@@ -791,38 +813,43 @@ export function parseOrSynthesizeArtifact(
         ];
     };
 
-    const versionFor = (type: PrimitiveType, ownVersion?: number, ownId?: string) => {
-        const isSameType = request.activeArtifact?.type === type;
+    const versionFor = (base: GeminiGenerateRequest, type: PrimitiveType, ownVersion?: number, ownId?: string) => {
+        const isSameType = base.activeArtifact?.type === type;
         return {
-            id: (isSameType && request.activeArtifact) ? request.activeArtifact.id : (ownId || `art-${type}-${Date.now()}`),
-            version: (isSameType && request.activeArtifact) ? (request.activeArtifact.version || 1) + 1 : (ownVersion || 1)
+            id: (isSameType && base.activeArtifact) ? base.activeArtifact.id : (ownId || `art-${type}-${Date.now()}`),
+            version: (isSameType && base.activeArtifact) ? (base.activeArtifact.version || 1) + 1 : (ownVersion || 1)
         };
     };
 
     /**
      * The artifact for the data the model sent, read the same way whichever form carried it (tag or envelope): a
      * 3d-scene is a first pass in clay or the next version of the open scene, a timeline keeps only the model's
-     * tracks, a document only the model's sections.
+     * tracks, a document only the model's sections. The model starts a new artifact instead of the next version of
+     * the open one by saying so (newArtifact, or an id other than the open artifact's); then nothing of the open one
+     * is kept.
      */
     const modelArtifact = (
         type: PrimitiveType,
         raw: unknown,
-        sent: { title?: string; summary?: string; version?: number; id?: string },
+        sent: { title?: string; summary?: string; version?: number; id?: string; newArtifact?: boolean },
         replyMarkdown: string
     ): CanvasArtifact => {
+        const open = request.activeArtifact;
+        const startsNew = !!open && open.type === type && (sent.newArtifact === true || (!!sent.id && sent.id !== open.id));
+        const base: GeminiGenerateRequest = startsNew ? { ...request, activeArtifact: undefined } : request;
         let data: any = raw;
         let title: string | undefined = sent.title;
         if (type === '3d-scene') {
-            title = sent.title || data?.title || (request.activeArtifact?.type === '3d-scene' ? request.activeArtifact.title : undefined) || '3D Scene';
-            data = modelAuthoredScene(prompt, request, title!, sent.summary, data);
+            title = sent.title || data?.title || (base.activeArtifact?.type === '3d-scene' ? base.activeArtifact.title : undefined) || '3D Scene';
+            data = modelAuthoredScene(prompt, base, title!, sent.summary, data);
         } else if (type === 'video-timeline') {
             data = normalizeModelVideoTimeline(data, sent.title);
             title = sent.title || data.title;
         } else if (type === 'markdown-document') {
-            data = modelAuthoredDocument(prompt, request, sent.title, sent.summary, data, replyMarkdown, enrichGroundedCitations);
+            data = modelAuthoredDocument(prompt, base, sent.title, sent.summary, data, replyMarkdown, enrichGroundedCitations);
             title = data.title;
         }
-        const { id, version } = versionFor(type, sent.version, sent.id);
+        const { id, version } = versionFor(base, type, sent.version, sent.id);
         return {
             id,
             type,
@@ -843,10 +870,16 @@ export function parseOrSynthesizeArtifact(
         // The body is a JSON block or object ...
         const jsonInTag = tagPayload.match(/```json\s*([\s\S]*?)\s*```/) || (tagPayload.startsWith('{') && tagPayload.endsWith('}') ? [null, tagPayload] : null);
         let parsedTagData: any = null;
+        // Whether the tag continues the open artifact: its attributes, or the envelope inside it, say so.
+        const tagSent = { title: primitiveTag.title, summary: primitiveTag.summary, version: primitiveTag.version, id: primitiveTag.id, newArtifact: primitiveTag.newArtifact };
         if (jsonInTag) {
             try {
                 const parsed = JSON.parse(jsonInTag[1]!);
                 if (parsed) {
+                    if (parsed.data !== undefined) {
+                        if (parsed.newArtifact === true) tagSent.newArtifact = true;
+                        if (typeof parsed.id === 'string' && parsed.id && !tagSent.id) tagSent.id = parsed.id;
+                    }
                     parsedTagData = parsed.data !== undefined ? parsed.data : parsed;
                     // An inner `type` re-types the tag only when it names a primitive; otherwise it is a field of the data.
                     const innerType = normalizePrimitiveType(parsed.type);
@@ -898,12 +931,12 @@ export function parseOrSynthesizeArtifact(
             const raw = parsedTagData ?? tagPayload;
             // A document tag with no sections or markdown in it is not mounted; nothing is written for it.
             if (modelDocumentSections(raw).length === 0) return undefined;
-            return modelArtifact(tagType, raw, { title: primitiveTag.title, summary: primitiveTag.summary, version: primitiveTag.version }, '');
+            return modelArtifact(tagType, raw, tagSent, '');
         }
 
         // The tag must name a canvas primitive and carry content; an unknown type or an empty body is not mounted.
         if (parsedTagData && tagType) {
-            return modelArtifact(tagType, parsedTagData, { title: primitiveTag.title, summary: primitiveTag.summary, version: primitiveTag.version }, '');
+            return modelArtifact(tagType, parsedTagData, tagSent, '');
         }
     }
 
@@ -923,5 +956,11 @@ export function parseOrSynthesizeArtifact(
     }
     const type = normalizePrimitiveType(parsed?.type);
     if (!parsed || typeof parsed !== 'object' || !type || parsed.data === undefined || parsed.data === null) return undefined;
-    return modelArtifact(type, parsed.data, { title: parsed.title, summary: parsed.summary, version: parsed.version, id: parsed.id }, replyMarkdown);
+    return modelArtifact(type, parsed.data, {
+        title: parsed.title,
+        summary: parsed.summary,
+        version: parsed.version,
+        id: typeof parsed.id === 'string' && parsed.id ? parsed.id : undefined,
+        newArtifact: parsed.newArtifact === true
+    }, replyMarkdown);
 }

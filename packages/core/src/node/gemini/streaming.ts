@@ -42,7 +42,7 @@ import {
 import type { McpBridge } from './mcp-bridge';
 import type { LensBridge } from './lens-bridge';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './prompt-builder';
-import { parseOrSynthesizeArtifact } from './artifact-synthesis';
+import { parseOrSynthesizeArtifact, withOpenArtifactRule } from './artifact-synthesis';
 import { AgentVerificationService } from './agent-verification-service';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
@@ -584,7 +584,9 @@ export class StreamingEngine {
             ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
             : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
 
-        const systemInstructionText = await buildSystemInstruction(request, this.promptServices());
+        // While an artifact is open, the model is told how to continue it or start a new one (the reply's tag or
+        // envelope is read that way by artifact synthesis).
+        const systemInstructionText = withOpenArtifactRule(await buildSystemInstruction(request, this.promptServices()), request.activeArtifact);
         // The summary of older turns is a helper call: when the API key answered it, or it failed and the older
         // turns were dropped, the reply says so (helperNotes), not only a passing status line.
         const addHelperNote = (note: string) => {
