@@ -271,9 +271,16 @@ describe('chat: the reply carries and shows which model answered', () => {
         const keyHtml = renderToStaticMarkup(React.createElement(MessageNotices, { message: keyMessage }));
         expect(keyHtml).toContain('Answered with the Gemini API key — the Vertex AI service account could not get an access token');
         expect(keyHtml).toContain('Answered by gemini-3.8-flash · Gemini API key');
+        // A helper call of the turn (skill preprocessing) that fell back is named on the reply too.
+        const helperMessage: ChatMessage = {
+            ...message, id: 'm3',
+            modelProvenance: { requestedModel: 'gemini-3.8-flash', modelUsed: 'gemini-3.8-flash', credential: 'vertex', helperNotes: ['Skill preprocessing answered by gemini-3.1-flash-lite — gemini-3.1-flash-lite-preview unavailable: 404: model not found'] }
+        };
+        const helperHtml = renderToStaticMarkup(React.createElement(MessageNotices, { message: helperMessage }));
+        expect(helperHtml).toContain('Skill preprocessing answered by gemini-3.1-flash-lite');
         const shot = await saveHtmlScreenshot('chat_model_fallback_notice',
-            `<div style="padding:16px;max-width:560px;display:flex;flex-direction:column;gap:14px">${html}${keyHtml}</div>`,
-            { width: 600, height: 230, background: '#18181b' });
+            `<div style="padding:16px;max-width:560px;display:flex;flex-direction:column;gap:14px">${html}${keyHtml}${helperHtml}</div>`,
+            { width: 600, height: 300, background: '#18181b' });
         const { data } = decodePng(shot.png);
         let amber = 0;
         for (let i = 0; i < data.length; i += 4) if (data[i] > 200 && data[i + 1] > 160 && data[i + 2] < 120) amber++;
