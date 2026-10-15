@@ -1248,13 +1248,12 @@ class _GeospatialModule:
         query_val = query or os.environ.get("SCRATCHBOX_LOCATION_QUERY", "")
 
         class LocationData:
+            """The place extracted for this run: file paths and the query only. The tiles' geometry is not loaded
+            into sb meshes; the tool mounts the extracted GLB under the script's model itself."""
             def __init__(self, glb_p, manifest_p, q):
                 self.query = q
                 self.glb_path = glb_p
                 self.manifest_path = manifest_p
-                self.raw_mesh = None
-                self.terrain_mesh = None
-                self.buildings_mesh = None
 
         return LocationData(glb_path, manifest_path, query_val)
 

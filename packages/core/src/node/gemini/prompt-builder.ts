@@ -1080,20 +1080,7 @@ FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stac
 
 - REAL-WORLD LOCATION STAGING VS PURE LOCATIONS:
   * PURE LOCATION QUERY (e.g. "Colosseum", "Eiffel Tower", "Venice Beach"): Call google_3d_tiles_get_clay({ query: "<query>" }) directly, or google_3d_tiles_get_full_texture when the user asks for photo texture! DO NOT call execute_3d_python_script; for this function we do not build synthetic structures, the real-world architecture is streamed directly from Google 3D Tiles in Studio Grey Clay mode.
-  * HERO OBJECT STAGED AT LOCATION (e.g. "race car in Central Park", "F1 car in Monaco"): Pass location: "<query>" to execute_3d_python_script to model the hero asset and stage it on the real-world terrain. The backend exposes location terrain in sb.geospatial.load_location():
-\`\`\`python
-import scratchbox as sb
-
-# Ingest tiles and extracted shape manifest
-loc = sb.geospatial.load_location()
-scene = sb.geometry.Mesh("LocationScene")
-if loc.raw_mesh:
-    scene.merge(loc.raw_mesh)
-
-# Replace photogrammetric melted foliage with authentic procedural C++20 trees
-scene.merge(loc.create_procedural_vegetation(density=1.0))
-sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-\`\`\`
+  * HERO OBJECT STAGED AT LOCATION (e.g. "race car in Central Park", "F1 car in Monaco"): Pass location: "<query>" to execute_3d_python_script and model only the hero asset. The place's tiles are extracted and mounted under the model by the tool; the script does not receive their geometry (sb.geospatial.load_location() gives only the extracted file and manifest paths).
 
 - SHARED METRIC SCALING & GROUND LOGIC INVARIANT:
   * Ingested Google 3D Tiles and procedurally built objects share the exact same SI metric coordinate frame (1 unit = 1.0 meter; +X East, +Y Up, +Z South).

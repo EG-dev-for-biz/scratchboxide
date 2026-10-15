@@ -77,6 +77,25 @@ export interface PythonExecutionResult {
 }
 
 /**
+ * The GLB this run wrote: the expected output path, else <script>.glb or output.glb in the working directory.
+ * A file is only taken when it was written during this run, so a previous run's output.glb is never reported as
+ * this run's model.
+ */
+export function findWrittenGlb(expected: string | undefined, scriptPath: string, cwd: string, startTime: number): string | undefined {
+    const candidates = [expected, path.join(cwd, `${path.basename(scriptPath, '.py')}.glb`), path.join(cwd, 'output.glb')];
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        try {
+            // Compared at whole seconds: some filesystems store mtimes at one-second resolution.
+            if (fs.statSync(candidate).mtimeMs >= Math.floor(startTime / 1000) * 1000) return candidate;
+        } catch {
+            // not written
+        }
+    }
+    return undefined;
+}
+
+/**
  * NativePythonRunnerService
  *
  * Executes Python 3D scene generation scripts powered by Scratchbox C++20 engine
@@ -363,21 +382,10 @@ export class NativePythonRunnerService {
             let glbPath: string | undefined;
             let glbBase64: string | undefined;
 
-            if (options.outputGlbPath && fs.existsSync(options.outputGlbPath)) {
-                glbPath = options.outputGlbPath;
-                glbBase64 = fs.readFileSync(glbPath).toString('base64');
-            } else {
-                // Check if a .glb with the script name was written
-                const scriptBaseGlb = path.join(cwd, `${path.basename(scriptPath, '.py')}.glb`);
-                const genericGlb = path.join(cwd, 'output.glb');
-
-                if (fs.existsSync(scriptBaseGlb)) {
-                    glbPath = scriptBaseGlb;
-                    glbBase64 = fs.readFileSync(glbPath).toString('base64');
-                } else if (fs.existsSync(genericGlb)) {
-                    glbPath = genericGlb;
-                    glbBase64 = fs.readFileSync(genericGlb).toString('base64');
-                }
+            const written = findWrittenGlb(options.outputGlbPath, scriptPath, cwd, startTime);
+            if (written) {
+                glbPath = written;
+                glbBase64 = fs.readFileSync(written).toString('base64');
             }
 
             return {
@@ -480,20 +488,10 @@ export class NativePythonRunnerService {
             let glbPath: string | undefined;
             let glbBase64: string | undefined;
 
-            if (options.outputGlbPath && fs.existsSync(options.outputGlbPath)) {
-                glbPath = options.outputGlbPath;
-                glbBase64 = fs.readFileSync(glbPath).toString('base64');
-            } else {
-                const scriptBaseGlb = path.join(cwd, `${path.basename(scriptPath, '.py')}.glb`);
-                const genericGlb = path.join(cwd, 'output.glb');
-
-                if (fs.existsSync(scriptBaseGlb)) {
-                    glbPath = scriptBaseGlb;
-                    glbBase64 = fs.readFileSync(glbPath).toString('base64');
-                } else if (fs.existsSync(genericGlb)) {
-                    glbPath = genericGlb;
-                    glbBase64 = fs.readFileSync(genericGlb).toString('base64');
-                }
+            const written = findWrittenGlb(options.outputGlbPath, scriptPath, cwd, startTime);
+            if (written) {
+                glbPath = written;
+                glbBase64 = fs.readFileSync(written).toString('base64');
             }
 
             return {
