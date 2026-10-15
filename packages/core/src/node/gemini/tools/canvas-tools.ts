@@ -18,7 +18,8 @@ import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { applyClayFirstPassBaseline, keepOpenSceneRenderMode } from '../scene3d-clay-baseline';
-import { isDrawableSceneObject, isTilesObject, undrawableSceneObjects } from '../../../browser/generative-canvas/primitives/scene3d/syncSceneContent';
+import { isDrawableSceneObject, undrawableSceneObjects } from '../../../browser/generative-canvas/primitives/scene3d/syncSceneContent';
+import { liveTilesAnchorProblem, sceneAsksForLiveTiles } from '../../../browser/generative-canvas/primitives/scene3d/liveTilesAnchor';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -26,22 +27,22 @@ function asString(val: unknown): string {
 
 /**
  * Whether a 3d-scene declares anything the viewport draws, judged as the viewport judges it: an object it loads
- * (a .glb / .gltf model or a .splat / .spz splat; see isDrawableSceneObject), a map-3d object with an anchor, a splat
- * file (splatUrl), a generator with its model inline (glbBase64) or its source, a live three.js script, or a
- * geoAnchor for live tiles. A generator known only by a server file path (glbPath) is not loaded by the viewport.
- * A scene with none of these would mount as an empty "No geometry" viewport.
+ * (a .glb / .gltf model or a .splat / .spz splat; see isDrawableSceneObject), a splat file (splatUrl), a generator
+ * with its model inline (glbBase64) or its source, a live three.js script, or live tiles (a geoAnchor or a map-3d
+ * object) at an anchor the tiles layer accepts (see liveTilesAnchorProblem). A generator known only by a server file
+ * path (glbPath) is not loaded by the viewport. A scene with none of these would mount as an empty "No geometry"
+ * viewport.
  */
 export function sceneDeclaresContent(scene: Partial<Scene3DData>): boolean {
-    const finite = (v: unknown) => v !== null && v !== '' && Number.isFinite(Number(v));
-    const anchor = scene.geoAnchor;
     const objects = Array.isArray(scene.objects) ? scene.objects : [];
+    const tiles = { geoAnchor: scene.geoAnchor, objects };
     return !!(
-        objects.some(o => isDrawableSceneObject(o) || (isTilesObject(o) && !!o.space?.geoAnchor))
+        objects.some(isDrawableSceneObject)
         || scene.splatUrl
         || scene.pythonGenerator?.glbBase64 || scene.pythonGenerator?.sourceCode?.trim()
         || scene.cppGenerator?.glbBase64 || scene.cppGenerator?.sourceCode?.trim()
         || (scene.customScript || scene.code || '').trim()
-        || (anchor && anchor.active !== false && finite(anchor.lat) && finite(anchor.lng))
+        || (sceneAsksForLiveTiles(tiles) && liveTilesAnchorProblem(tiles) === null)
     );
 }
 
@@ -66,7 +67,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 payload: {
                     type: 'OBJECT',
-                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A mount starts a new canvas artifact, so the scene must declare something the viewport draws (objects whose content.durableUri is a .glb / .gltf model or a .splat / .spz splat, a script, a generator GLB as glbBase64, a splatUrl, a customScript or a geoAnchor for live tiles); an object the viewport cannot draw fails the mount, and payload.customMeshes (client-side primitive meshes) are refused. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted.'
+                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A mount starts a new canvas artifact, so the scene must declare something the viewport draws (objects whose content.durableUri is a .glb / .gltf model or a .splat / .spz splat, a script, a generator GLB as glbBase64, a splatUrl, a customScript or a geoAnchor {lat, lng} for live tiles); an object the viewport cannot draw, or a geoAnchor that is 0, 0, out of range or not numbers, fails the mount, and payload.customMeshes (client-side primitive meshes) are refused. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted.'
                 }
             },
             required: ['primitiveType', 'title', 'payload']
@@ -368,6 +369,13 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             const undrawable = undrawableSceneObjects(payload as Scene3DData);
             if (undrawable.length > 0) {
                 const error = `${undrawable.length === 1 ? 'An object' : `${undrawable.length} objects`} in payload.objects cannot be drawn: ${undrawable.map(o => `${o.id} (${o.reason})`).join('; ')}. Each object's content.durableUri must be a .glb / .gltf model or a .splat / .spz splat the app serves; build geometry with a Python script (payload.script) or execute_3d_python_script. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            // Live tiles the scene asks for (geoAnchor or a map-3d object) at an anchor the tiles layer refuses would
+            // mount as an error panel in the viewport.
+            const anchorProblem = liveTilesAnchorProblem(payload as Scene3DData);
+            if (anchorProblem) {
+                const error = `The scene asks for live 3D tiles, but ${anchorProblem}, so the viewport cannot place them. Send the place's real latitude and longitude in payload.geoAnchor (resolve a place with google_3d_tiles_get_clay), or leave geoAnchor and map-3d objects out. Nothing was mounted.`;
                 return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
             }
             // A generator known only by a server file path is not loaded by the viewport.

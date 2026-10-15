@@ -10,28 +10,19 @@
 import { GooglePhotorealistic3DTilesLayer } from '../../services/GooglePhotorealistic3DTilesLayer';
 import { TerrainManager } from '../../services/TerrainManager';
 import type { RendererStack, Scene3DRenderMode, TilesLayerHandle } from './types';
-import type { GroundTileMode, Scene3DData } from '../../canvas-types';
+import type { GroundTileMode } from '../../canvas-types';
+import { checkLiveTilesAnchor, type LiveTilesAnchorInput } from './liveTilesAnchor';
 
 export interface TilesLayerInput {
     has3DTiles: boolean;
     /** Numbers, or numeric strings as some saved scenes hold them. */
-    geoAnchor?: { lat: number | string; lng: number | string; elevation?: number | string; geoidUndulationMeters?: number } | null;
+    geoAnchor?: LiveTilesAnchorInput | null;
     renderMode: Scene3DRenderMode;
     groundTileMode?: GroundTileMode;
 }
 
-/**
- * Where live tiles are placed for a scene: its active geoAnchor, else the anchor of the map-3d object that asks for
- * them. The known geoid undulation travels with it so the tile heights need no lookup. Null when neither has one.
- */
-export function liveTilesAnchor(scene: Pick<Scene3DData, 'geoAnchor' | 'objects'>): TilesLayerInput['geoAnchor'] {
-    const a = scene.geoAnchor;
-    if (a && a.active !== false) {
-        return { lat: a.lat, lng: a.lng, elevation: a.elevation, geoidUndulationMeters: a.geoidUndulationMeters };
-    }
-    const g = scene.objects?.find(o => o.content?.type === 'map-3d' && o.space?.geoAnchor)?.space?.geoAnchor;
-    return g ? { lat: g.lat, lng: g.lng, elevation: g.alt } : null;
-}
+// Where the tiles go and whether that place is usable is decided in liveTilesAnchor.ts, which the mount tool shares.
+export { liveTilesAnchor } from './liveTilesAnchor';
 
 export interface TilesLayerCallbacks {
     onTileLoaded?: (terrainManager: TerrainManager) => void;
@@ -58,16 +49,6 @@ async function fetchGeoidUndulationFromServer(lat: number, lng: number): Promise
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
-/** A finite number from a number or a numeric string; undefined otherwise (never a default). */
-function toFiniteNumber(v: unknown): number | undefined {
-    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
-    if (typeof v === 'string' && v.trim() !== '') {
-        const n = Number(v);
-        return Number.isFinite(n) ? n : undefined;
-    }
-    return undefined;
-}
 
 /** Ground below the origin is re-measured until it sits within this distance of y = 0. */
 const GROUND_TOLERANCE_M = 0.25;
@@ -124,25 +105,14 @@ export function syncTilesLayer(
     if (!input.has3DTiles || isSuppressed) return handle;
 
     const anchor = input.geoAnchor;
-    if (!anchor) {
-        callbacks.onError?.('Live 3D Tiles need the scene\'s geoAnchor (lat/lng), and this scene has none, so no tiles are shown.');
+    const check = checkLiveTilesAnchor(anchor);
+    if (!check.ok) {
+        callbacks.onError?.(check.missing
+            ? 'Live 3D Tiles need the scene\'s geoAnchor (lat/lng), and this scene has none, so no tiles are shown.'
+            : `Live 3D Tiles are not shown: ${check.reason}.`);
         return handle;
     }
-    const lat = toFiniteNumber(anchor.lat);
-    const lng = toFiniteNumber(anchor.lng);
-    if (lat === undefined || lng === undefined) {
-        callbacks.onError?.(`Live 3D Tiles are not shown: the scene's geoAnchor lat/lng are not numbers (lat ${JSON.stringify(anchor.lat)}, lng ${JSON.stringify(anchor.lng)}).`);
-        return handle;
-    }
-    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
-        callbacks.onError?.(`Live 3D Tiles are not shown: the scene's geoAnchor ${lat}, ${lng} is outside the valid latitude/longitude range.`);
-        return handle;
-    }
-    if (lat === 0 && lng === 0) {
-        callbacks.onError?.('Live 3D Tiles are not shown: the scene\'s geoAnchor is 0, 0, which is an unset location, not a place.');
-        return handle;
-    }
-    const elevation = toFiniteNumber(anchor.elevation);
+    const { lat, lng, elevation } = check;
     // With no elevation the layer starts at sea level and is re-placed on the measured ground (see measureGround).
     const origin = { lat, lng, alt: elevation ?? 0 };
     const isClay = mode === 'photoreal-clay' || (mode !== 'photoreal-textured' && input.renderMode === 'clay');
@@ -201,8 +171,9 @@ export function syncTilesLayer(
         }
     };
 
-    if (typeof anchor.geoidUndulationMeters === 'number') {
-        place(anchor.geoidUndulationMeters);
+    const knownUndulation = anchor?.geoidUndulationMeters;
+    if (typeof knownUndulation === 'number') {
+        place(knownUndulation);
     } else {
         (deps.fetchGeoidUndulation ?? fetchGeoidUndulationFromServer)(origin.lat, origin.lng)
             .then(undulation => place(undulation))

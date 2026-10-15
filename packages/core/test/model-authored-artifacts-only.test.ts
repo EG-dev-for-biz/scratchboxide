@@ -458,13 +458,17 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
     });
 
     it('a scene that declares nothing to draw fails instead of mounting an empty viewport', async () => {
-        for (const payload of [{}, { camera: { position: [0, 2, 5] } }, { objects: [] }, { geoAnchor: { lat: 'x', lng: 2 } },
+        for (const payload of [{}, { camera: { position: [0, 2, 5] } }, { objects: [] },
             { objects: [{ id: 'p', content: { type: '3d-model', durableUri: 'internal:mesh' } }] }]) {
             const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload }, ctx);
             expect(res.status, JSON.stringify(payload)).toBe('failed');
             expect(res.resultPayload.error).toContain('has no content to draw');
             expect(res.summaryResult).not.toContain('Mounted');
         }
+        // An anchor the tiles layer would refuse fails with the layer's own reason.
+        const badAnchor: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { geoAnchor: { lat: 'x', lng: 2 } } }, ctx);
+        expect(badAnchor.status).toBe('failed');
+        expect(badAnchor.resultPayload.error).toContain('the scene\'s geoAnchor lat/lng are not numbers (lat "x", lng 2)');
         for (const payload of [{ objects: [{ id: 'a', content: { type: '3d-model', durableUri: '/models/a.glb' } }] }, { geoAnchor: { lat: 51.5, lng: -0.12 } },
             { splatUrl: '/models/a.splat' }, { customScript: 'scene.add(x)' }]) {
             const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload }, ctx);

@@ -41,12 +41,34 @@ export interface SceneContentFactories {
     } | null;
 }
 
-/** Model files the viewport's object loader draws (objects[].content.durableUri); anything else it skips. */
-const DRAWABLE_MODEL_URI = /\.(glb|gltf|splat|spz)($|[?#])/i;
+/** glTF models the viewport's object loader draws (objects[].content.durableUri), with any query or fragment. */
+const GLTF_MODEL_URI = /\.(glb|gltf)($|[?#])/i;
+/** Gaussian splat files the loader draws. */
+const SPLAT_URI = /\.(splat|spz)($|[?#])/i;
 
-/** The `internal:mesh` placeholder a workspace file opening seeds next to real objects; it draws nothing. */
+/**
+ * How the viewport's object loader reads a durableUri: as a splat (typed gaussian-splat, or a .splat / .spz file),
+ * as a glTF model (.glb / .gltf), or not at all (null). The loader and the drawability checks (the viewport notices
+ * and the mount) share this, so a URI counted as drawable is one the loader loads.
+ */
+export function drawableModelKind(uri: string | undefined, contentType?: string): 'splat' | 'gltf' | null {
+    if (!uri) return null;
+    if (contentType === 'gaussian-splat' || SPLAT_URI.test(uri)) return 'splat';
+    if (GLTF_MODEL_URI.test(uri)) return 'gltf';
+    return null;
+}
+
+/**
+ * Placeholders the app itself seeds into scenes it opens or creates (the file opener's `internal:mesh`, and the
+ * `internal:grid` / `internal:sunlight` older "New 4D Scene" workspaces were saved with). They draw nothing and were
+ * never asked for, so they are neither content nor an error; any other URI the loader cannot read is reported.
+ */
+const APP_SEEDED_PLACEHOLDER_URIS = new Set(['internal:mesh', 'internal:grid', 'internal:sunlight']);
+
+/** A placeholder the app seeded next to (or instead of) real objects; it draws nothing. */
 export function isPlaceholderObject(o: Media4DObject | undefined): boolean {
-    return o?.content?.durableUri === 'internal:mesh';
+    const uri = o?.content?.durableUri;
+    return typeof uri === 'string' && APP_SEEDED_PLACEHOLDER_URIS.has(uri);
 }
 
 /** A `map-3d` object asks for live 3D tiles at its own anchor; the tiles layer draws it (and reports its errors). */
@@ -61,7 +83,7 @@ export function isTilesObject(o: Media4DObject | undefined): boolean {
 export function isDrawableSceneObject(o: Media4DObject | undefined): boolean {
     const uri = o?.content?.durableUri;
     if (!uri || isPlaceholderObject(o) || isTilesObject(o)) return false;
-    return o?.content?.type === 'gaussian-splat' || DRAWABLE_MODEL_URI.test(uri);
+    return drawableModelKind(uri, o?.content?.type) !== null;
 }
 
 /** A declared object the viewport cannot draw, and why. */

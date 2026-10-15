@@ -127,11 +127,12 @@ import type { ArticulatedAircraftComponents } from '../services/mesh/aircraft';
 import { useLatest } from '../hooks/useLatest';
 import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize } from './scene3d/createRendererStack';
 import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
+import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
 import { drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
-import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
+import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
 import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRunFailure, type GeneratorRunError } from './scene3d/generatorRun';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
@@ -1754,10 +1755,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // sceneDataRef is declared next to mutateSceneData above.
 
     // ---- Slice fingerprints -------------------------------------------------------
-    const has3DTiles = React.useMemo(() => !!(
-        (sceneData.geoAnchor && sceneData.geoAnchor.active !== false) ||
-        sceneData.objects?.some(o => o.content?.type === 'map-3d')
-    ), [sceneData.geoAnchor, sceneData.objects]);
+    const has3DTiles = React.useMemo(() => sceneAsksForLiveTiles(sceneData), [sceneData.geoAnchor, sceneData.objects]);
 
     const effectiveGroundTileMode: GroundTileMode = React.useMemo(() => {
         if (sceneData.groundTileMode) return sceneData.groundTileMode;
@@ -2728,9 +2726,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const rawUri = obj.content?.durableUri;
             if (!rawUri) return;
             const uri = resolveExternalModelUri(rawUri);
-            const isSplat = obj.content?.type === 'gaussian-splat' || !!uri.match(/\.(splat|spz)($|\?)/i);
-            const isGltf = !!uri.match(/\.(glb|gltf)($|\?)/i);
-            if (!isSplat && !isGltf) return;
+            // The same reading the notices and the mount use (drawableModelKind), so nothing counted as drawable is skipped here.
+            const modelKind = drawableModelKind(uri, obj.content?.type);
+            if (!modelKind) return;
+            const isSplat = modelKind === 'splat';
             activeIds.add(obj.id);
 
             const visibleForGroundMode = isVisibleForGroundMode(obj, effectiveGroundTileMode, hasExplicit3DTileObject);
