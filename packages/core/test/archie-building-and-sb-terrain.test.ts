@@ -179,9 +179,14 @@ describe('Archie Authentic Building Structure Refinement (Universal)', () => {
         const after = new THREE.Box3().setFromObject(result.refinedMesh);
         expect(after.min.distanceTo(before.min)).toBeLessThan(1e-6);
         expect(after.max.distanceTo(before.max)).toBeLessThan(1e-6);
-        // The plinth sits under the building's base in the same frame.
+        // The plinth sits under the building's base in the same frame: rotated and scaled with it, so its footprint
+        // covers the building's (it used to be offset by the source position only, at the unscaled size).
         const plinth = new THREE.Box3().setFromObject(result.plinthMesh);
         expect(plinth.max.y).toBeLessThan(before.min.y + 1);
+        expect(plinth.min.x).toBeLessThanOrEqual(before.min.x);
+        expect(plinth.max.x).toBeGreaterThanOrEqual(before.max.x);
+        expect(plinth.min.z).toBeLessThanOrEqual(before.min.z);
+        expect(plinth.max.z).toBeGreaterThanOrEqual(before.max.z);
     });
 });
 
