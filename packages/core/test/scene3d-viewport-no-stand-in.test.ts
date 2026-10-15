@@ -22,6 +22,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Scene3DPrimitive, captureSceneScreenshot } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent, undrawableSceneObjects } from '../src/browser/generative-canvas/primitives/scene3d/syncSceneContent';
 import { liveTilesAnchor, syncTilesLayer } from '../src/browser/generative-canvas/primitives/scene3d/syncTilesLayer';
+import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { groundDatumBadge, projectRoutePoint } from '../src/browser/generative-canvas/primitives/scene3d/geoAnchorLabels';
 import { DEFAULT_METERS_PER_SCENE_UNIT } from '../src/common/coordinate/GeoFrame';
 import { fromInput, generatorErrorForScene, generatorRunFailure, generatorRequestFailure } from '../src/browser/generative-canvas/primitives/scene3d/generatorRun';
@@ -325,6 +326,42 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
         // Once the ground is at y = 0 (within tolerance) nothing more is moved.
         layer.onTileLoaded();
         expect(origins).toHaveLength(1);
+    });
+
+    it('finds ground far above sea level (La Paz, ~3600 m) on real tiles geometry, which the 2000 m probe missed', async () => {
+        // The layer starts at sea level; its loaded ground sits 3600 m up. A real TerrainManager raycasts it.
+        const scene = new THREE.Scene();
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial());
+        ground.position.y = 3600;
+        ground.updateMatrixWorld(true);
+        scene.add(ground);
+        const terrain = new TerrainManager({ scene });
+        expect(terrain.sampleGroundHeight(0, 0)).toBeNull();
+        const origins: any[] = [];
+        const errors: string[] = [];
+        const layer: any = { ...fakeLayer(), getTerrainManager: () => terrain, updateOrigin: (o: any) => { origins.push({ ...o }); ground.position.y = 0; ground.updateMatrixWorld(true); } };
+        syncTilesLayer({ scene } as any, { has3DTiles: true, geoAnchor: { lat: -16.5, lng: -68.15, geoidUndulationMeters: 44 }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
+            { onError: m => errors.push(m) }, { createLayer: () => layer });
+        layer.onTileLoaded();
+        expect(origins).toHaveLength(1);
+        expect(origins[0].alt).toBeCloseTo(3600, 3);
+        expect(errors).toEqual([]);
+    });
+
+    it('when no ground is found under the anchor, the sea-level placement is reported once, and cleared when ground appears', () => {
+        const errors: string[] = [];
+        let recovered = 0;
+        let groundY: number | null = null;
+        const layer: any = { ...fakeLayer(), getTerrainManager: () => ({ sampleGroundHeight: () => groundY }), updateOrigin: () => { groundY = 0; } };
+        syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: { lat: -16.5, lng: -68.15, geoidUndulationMeters: 44 }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
+            { onError: m => errors.push(m), onRecovered: () => recovered++ }, { createLayer: () => layer });
+        for (let i = 0; i < 31; i++) layer.onTileLoaded();
+        expect(errors).toEqual([]);
+        for (let i = 0; i < 10; i++) layer.onTileLoaded();
+        expect(errors).toEqual(['Google 3D Tiles are placed at sea level: the scene\'s geoAnchor has no elevation and no ground was found under -16.50000, -68.15000 on the loaded tiles, so they may sit above or below the camera.']);
+        groundY = 3600;
+        layer.onTileLoaded();
+        expect(recovered).toBe(1);
     });
 
     it('takes the anchor from a map-3d object when the scene has none, with its known geoid height', () => {

@@ -2187,6 +2187,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 terrainManagerRef.current = terrainManager;
             },
             onError: message => setTilesError(message),
+            onRecovered: () => setTilesError(null),
             onTileLoaded: (terrainManager) => {
                 const cppRoot = stack.scene?.getObjectByName('scratchbox-cpp-generated-root');
                 if (cppRoot) {

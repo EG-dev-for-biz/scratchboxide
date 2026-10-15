@@ -37,8 +37,10 @@ export interface TilesLayerCallbacks {
     onTileLoaded?: (terrainManager: TerrainManager) => void;
     /** The live layer exists and is placed at the anchor; it may arrive after syncTilesLayer returns (geoid lookup). */
     onLayerReady?: (tilesLayer: any, terrainManager: TerrainManager) => void;
-    /** The live layer was asked for but cannot be shown; the message says why. */
+    /** The live layer was asked for but cannot be shown, or cannot be placed; the message says why. */
     onError?: (message: string) => void;
+    /** A placement problem reported through onError was resolved (the ground was measured after all). */
+    onRecovered?: () => void;
 }
 
 export interface TilesLayerDeps {
@@ -71,6 +73,15 @@ function toFiniteNumber(v: unknown): number | undefined {
 const GROUND_TOLERANCE_M = 0.25;
 /** Each finer level of detail can move the measured ground; stop re-placing after this many corrections. */
 const MAX_GROUND_CORRECTIONS = 12;
+/**
+ * The ground probe starts above any land on Earth (Everest is 8849 m) and reaches below any (the Dead Sea shore is
+ * about -430 m), since with no elevation the layer starts at sea level and the ground can be anywhere in that range.
+ * The terrain manager's default probe (from y = 2000 m) misses ground above it, such as La Paz at about 3600 m.
+ */
+const GROUND_PROBE_TOP_M = 9000;
+const GROUND_PROBE_REACH_M = 10000;
+/** Tile loads with no ground found under the origin before the unmeasured placement is reported. */
+const GROUND_MISS_LIMIT = 32;
 
 /**
  * Creates (or tears down) the Google Photorealistic 3D Tiles layer and the TerrainManager used for ground snapping.
@@ -138,10 +149,34 @@ export function syncTilesLayer(
     const createLayer = deps.createLayer ?? (options => new GooglePhotorealistic3DTilesLayer(options));
 
     let groundCorrections = 0;
+    let groundFound = false;
+    let groundMisses = 0;
+    let groundMissReported = false;
+    /** Ground height under the origin on the loaded tiles, probing from above any land; null when nothing is hit. */
+    const sampleOriginGround = (layer: any): number | null => {
+        const terrain = typeof layer.getTerrainManager === 'function' ? layer.getTerrainManager(scene) : undefined;
+        const h = typeof terrain?.sampleGroundHeight === 'function'
+            ? terrain.sampleGroundHeight(0, 0, 4, GROUND_PROBE_TOP_M, GROUND_PROBE_REACH_M)
+            : typeof layer.sampleGroundHeight === 'function' ? layer.sampleGroundHeight(0, 0) : null;
+        return typeof h === 'number' && Number.isFinite(h) ? h : null;
+    };
     const measureGround = (layer: any, geoidHeight: number) => {
-        if (elevation !== undefined || groundCorrections >= MAX_GROUND_CORRECTIONS || typeof layer.sampleGroundHeight !== 'function') return;
-        const h = layer.sampleGroundHeight(0, 0);
-        if (typeof h !== 'number' || !Number.isFinite(h) || Math.abs(h) <= GROUND_TOLERANCE_M) return;
+        if (elevation !== undefined || groundCorrections >= MAX_GROUND_CORRECTIONS) return;
+        const h = sampleOriginGround(layer);
+        if (h === null) {
+            // No elevation and no ground found yet: the tiles' height is unknown. Said once, not assumed.
+            if (!groundFound && ++groundMisses >= GROUND_MISS_LIMIT && !groundMissReported) {
+                groundMissReported = true;
+                callbacks.onError?.(`Google 3D Tiles are placed at sea level: the scene's geoAnchor has no elevation and no ground was found under ${lat.toFixed(5)}, ${lng.toFixed(5)} on the loaded tiles, so they may sit above or below the camera.`);
+            }
+            return;
+        }
+        groundFound = true;
+        if (groundMissReported) {
+            groundMissReported = false;
+            callbacks.onRecovered?.();
+        }
+        if (Math.abs(h) <= GROUND_TOLERANCE_M) return;
         origin.alt += h;
         groundCorrections++;
         layer.updateOrigin?.({ ...origin }, geoidHeight);
