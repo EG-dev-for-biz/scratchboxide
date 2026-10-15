@@ -49,16 +49,20 @@ import { InlineMarkdown } from '../ChatMarkdownRenderer';
 import { NANO_BANANA_STYLES, applyNanoBananaStyle } from '../nano-banana-service';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
-import { IMAGE_MODEL_PRIORITY, type MediaGenerationJob } from '../../../common/media-generation-protocol';
+import { IMAGE_MODEL_PRIORITY, substitutedModelNote, type MediaGenerationJob } from '../../../common/media-generation-protocol';
 export { NANO_BANANA_STYLES };
 
 /**
- * The credit line for a finished media job: the model the job reports as having answered and, when that id is not
- * the first model the request asked for (its modelPriority), the requested model too. Both are stated as recorded:
- * the reported id may be a versioned name of the requested model or another model down the list, and the job alone
+ * The credit line for a finished media job. When the result records that another model answered than the one asked
+ * for (its requestedModels or skippedModels), the result's own note: which model answered and why each earlier one
+ * was skipped. Otherwise the model the job reports as having answered and, when that id is not the first model the
+ * request asked for (its modelPriority), the requested model too, stated as recorded: the reported id may be a
+ * versioned name of the requested model or another model down the list, and without the result's record the job
  * does not say which (or why), so the line claims neither. Undefined when the job names no model.
  */
 export function documentMediaCredit(job: Pick<MediaGenerationJob, 'request' | 'result' | 'modelUsed'>): string | undefined {
+    const recorded = substitutedModelNote(job.result);
+    if (recorded) return recorded;
     const modelUsed = job.result?.modelUsed || job.modelUsed;
     if (!modelUsed) return undefined;
     const requested = job.request?.modelPriority?.[0];

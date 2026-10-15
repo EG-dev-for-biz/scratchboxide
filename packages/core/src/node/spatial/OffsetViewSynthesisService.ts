@@ -11,10 +11,12 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { inpaintPanorama } from './Google360PanoramaPipelineService';
+import { Google360PanoramaPipelineService, inpaintPanorama } from './Google360PanoramaPipelineService';
+import { readImageDimensions } from '../image-codec-ffmpeg';
 import { PanoramaDepthService } from './PanoramaDepthService';
 import { SplatService } from '../3d-engine/splat-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
+import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
 
 const execAsync = promisify(exec);
 
@@ -28,6 +30,12 @@ export interface OffsetSynthesisOptions {
     outDir?: string;
     skipOffsets?: boolean;     // Fast path skipping offset view synthesis
     sceneType?: 'indoor' | 'outdoor';
+    /** Image model for the disocclusion inpainting (default: IMAGE_MODEL_PRIORITY, in order). */
+    model?: string;
+    /** Largest enlargement of the inpainting answer to the view's size (see PanoramaSeamOptions.maxModelUpscale). */
+    maxModelUpscale?: number;
+    /** Stops the synthesis between poses and during the inpainting model call. */
+    signal?: AbortSignal;
 }
 
 export interface OffsetSynthesisResult {
@@ -99,6 +107,14 @@ export class OffsetViewSynthesisService {
 
         console.log(`[OffsetSynthesis] Initializing view synthesis. Base: ${baseName} SkipOffsets: ${skipOffsets}`);
 
+        // Offset views are inpainted at the panorama's own size: when the image model cannot answer that large within
+        // the allowed enlargement, refuse now, before any splat compile or model call.
+        if (!skipOffsets && !mockExecution) {
+            const dims = readImageDimensions(await fs.readFile(sourceRgbPath));
+            if (!dims) throw new GeneratorFailedError('panorama', `cannot read the size of ${sourceRgbPath}`);
+            Google360PanoramaPipelineService.editImageSize(dims.width, dims.height, options.maxModelUpscale);
+        }
+
         // 1. Generate primary source splats first
         const originalSplatPath = path.join(outDir, `${baseName}_original_${timestamp}.splat`);
         const originalSpzPath = path.join(outDir, `${baseName}_original_${timestamp}.spz`);
@@ -155,7 +171,11 @@ export class OffsetViewSynthesisService {
             const warpCmd = `"${this.offsetRendererBin}" --input "${sourceRgbPath}" --depth "${sourceDepthPath}" --offset-x ${pose.x} --offset-y ${pose.y} --offset-z ${pose.z} --out-rgb "${offsetRgb}" --out-mask "${offsetMask}" --out-depth "${offsetDepth}" --eye-height ${eyeHeight} --json`;
             const { stdout } = await execAsync(warpCmd);
             const warpStats = JSON.parse(stdout.trim());
-            const disocclusionPercent = warpStats.disocclusionPercent ?? 0;
+            const disocclusionPercent = warpStats.disocclusionPercent;
+            if (typeof disocclusionPercent !== 'number' || !Number.isFinite(disocclusionPercent)) {
+                // Without the measured hole fraction the pose cannot be judged; no "no holes" is assumed.
+                throw new GeneratorFailedError('cpp', `the offset warper reported no disocclusionPercent for pose ${i}: ${stdout.trim().slice(0, 500)}`);
+            }
 
             activePosesReport.push({ ...pose, disocclusionPercent });
 
@@ -173,23 +193,19 @@ export class OffsetViewSynthesisService {
                 // Copy warped rgb directly in mock mode
                 await fs.copy(offsetRgb, inpaintedRgb);
             } else {
-                try {
-                    const prompt = options.prompt || 'Seamless highly detailed continuous background under consistent cinematic lighting, photorealistic matching albedo';
-                    const inpaintRes = await inpaintPanorama({
-                        inputImagePath: offsetRgb,
-                        maskImagePath: offsetMask,
-                        prompt,
-                        outputImagePath: inpaintedRgb,
-                        mockExecution: false
-                    });
-
-                    if (!inpaintRes.success) {
-                        throw new Error('Imagen inpaint failed');
-                    }
-                } catch (e: any) {
-                    console.warn(`[OffsetSynthesis] [Pose ${i}] Imagen inpainting failed: ${e.message}. Falling back to warped image.`);
-                    await fs.copy(offsetRgb, inpaintedRgb);
-                }
+                // The disocclusion holes are filled by an image model or the run fails (MediaModelUnavailableError);
+                // the warped image with its holes is never splatted in place of the inpainted view.
+                const prompt = options.prompt || 'Seamless highly detailed continuous background under consistent cinematic lighting, photorealistic matching albedo';
+                await inpaintPanorama({
+                    inputImagePath: offsetRgb,
+                    maskImagePath: offsetMask,
+                    prompt,
+                    outputImagePath: inpaintedRgb,
+                    mockExecution: false,
+                    model: options.model,
+                    maxModelUpscale: options.maxModelUpscale,
+                    signal: options.signal
+                });
             }
 
             console.log(`[OffsetSynthesis] [Pose ${i}] Generating depth map for inpainted view...`);
@@ -207,7 +223,11 @@ export class OffsetViewSynthesisService {
             const compileCmd = `"${this.splatCompilerBin}" --input "${inpaintedRgb}" --depth "${inpaintedDepthRes.depthPath}" --mask "${offsetMask}" --out-splat "${offsetSplat}" --out-spz "${offsetSpz}" --eye-height ${eyeHeight} --stride 4`;
             await execAsync(compileCmd);
 
-            if (await fs.pathExists(offsetSplat)) {
+            if (!(await fs.pathExists(offsetSplat))) {
+                // The inpainted view must reach the fused world; a pose is never dropped silently.
+                throw new GeneratorFailedError('cpp', `the splat compiler wrote no ${offsetSplat} for pose ${i}`);
+            }
+            {
                 const splatBuf = await fs.readFile(offsetSplat);
                 const poseSplats = SplatService.parseSplatBuffer(splatBuf);
                 

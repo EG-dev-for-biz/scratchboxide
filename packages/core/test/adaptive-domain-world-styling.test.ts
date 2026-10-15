@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -21,6 +21,22 @@ import {
   AdaptiveStyleDeconstructionService
 } from '../src/node';
 import { REPO_ROOT, HOW_TO, requireBinary, withReason } from './helpers/requirements';
+import { encodePng } from '../src/node/texture-processing';
+import { VisionUnavailableError } from '../src/common/errors/pipeline-errors';
+
+/** A complete contract as a vision model would answer it, with some photometric values overridden. */
+function modelContract(photometric: Partial<AdaptiveWorldStyleContract['photometric']>): AdaptiveWorldStyleContract {
+  const c = JSON.parse(JSON.stringify(DEFAULT_ADAPTIVE_STYLE_CONTRACT)) as AdaptiveWorldStyleContract;
+  delete (c as any).cameraProjection;
+  Object.assign(c.photometric, photometric);
+  return c;
+}
+
+/** A GenAI client whose generateContent answers `text` and records each request. */
+function fakeVisionClient(text: string): { client: any; calls: any[] } {
+  const calls: any[] = [];
+  return { calls, client: { models: { generateContent: async (req: any) => { calls.push(req); return { text }; } } } };
+}
 
 // GlbTextureRecolorService decodes and re-encodes every texture by spawning `ffmpeg` from PATH.
 const ffmpeg = requireBinary('ffmpeg', HOW_TO.ffmpeg);
@@ -41,45 +57,72 @@ describe('Adaptive Domain Architecture: Universal Styling Engine', () => {
   });
 
   describe('AdaptiveStyleDeconstructionService (Image Analysis)', () => {
-    it('runs fast offline heuristic deconstruction for Comic preset', () => {
-      const service = new AdaptiveStyleDeconstructionService();
-      const contract = service.deconstructHeuristic(
-        'mock_image.png',
-        undefined,
-        'Please apply a stylish comic book outline look'
-      );
-
-      expect(contract.stylizationFilter.quantizationBands).toBe(4);
-      expect(contract.geometricContours.enabled).toBe(true);
-      expect(contract.geometricContours.lineWidth).toBe(2.0);
-      expect(contract.photometric.shadowLift).toBe(0.6);
+    let refPng = '';
+    beforeAll(() => {
+      refPng = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-style-ref-')), 'ref.png');
+      fs.writeFileSync(refPng, encodePng(2, 2, Buffer.alloc(16, 200)));
     });
 
-    it('runs fast offline heuristic deconstruction for Golden Hour sunset preset', () => {
-      const service = new AdaptiveStyleDeconstructionService();
-      const contract = service.deconstructHeuristic(
-        'mock_image.png',
-        undefined,
-        'A warm sunset establishing view at twilight'
-      );
+    it('returns the contract the vision model read, and which model read it', async () => {
+      const answer = modelContract({ colorTemperatureK: 3150, shadowLift: 0.71 });
+      const { client, calls } = fakeVisionClient(JSON.stringify(answer));
+      const service = new AdaptiveStyleDeconstructionService({ client });
+      const result = await service.deconstructStyle(refPng, { position: [100, 100, 100], target: [0, 0, 0], fov: 45 }, { promptHint: 'golden hour' });
 
-      expect(contract.photometric.colorTemperatureK).toBe(3200);
-      expect(contract.photometric.colorGradingWheel.gain.r).toBeGreaterThan(1.0);
-      expect(contract.photometric.colorGradingWheel.lift.b).toBeGreaterThan(0.2);
+      expect(result.modelUsed).toBe('gemini-2.5-flash');
+      expect(result.contract.photometric.colorTemperatureK).toBe(3150);
+      expect(result.contract.photometric.shadowLift).toBe(0.71);
+      expect(result.contract.cameraProjection?.referenceImageUri).toBe(refPng);
+      expect(result.contract.cameraProjection?.fovDeg).toBe(45);
+      // The image itself goes to the model, with the response schema.
+      expect(calls).toHaveLength(1);
+      expect(calls[0].model).toBe('gemini-2.5-flash');
+      expect(calls[0].contents[0].inlineData.data).toBe(fs.readFileSync(refPng).toString('base64'));
+      expect(calls[0].config.responseSchema).toBeDefined();
     });
 
-    it('creates camera projection anchor inside contract when camera pose is provided', () => {
-      const service = new AdaptiveStyleDeconstructionService();
-      const contract = service.deconstructHeuristic(
-        'public/images/ref.png',
-        { position: [100, 100, 100], target: [0, 0, 0], fov: 45 },
-        'hyperrealistic daylight view'
-      );
+    it('deep-multimodal fidelity reads the image with gemini-2.5-pro', async () => {
+      const { client, calls } = fakeVisionClient(JSON.stringify(modelContract({})));
+      const result = await new AdaptiveStyleDeconstructionService({ client }).deconstructStyle(refPng, undefined, { fidelity: 'deep-multimodal' });
+      expect(result.modelUsed).toBe('gemini-2.5-pro');
+      expect(calls[0].model).toBe('gemini-2.5-pro');
+    });
 
-      expect(contract.cameraProjection).toBeDefined();
-      expect(contract.cameraProjection?.enabled).toBe(true);
-      expect(contract.cameraProjection?.referenceImageUri).toBe('public/images/ref.png');
-      expect(contract.cameraProjection?.fovDeg).toBe(45);
+    it('fails when the vision model cannot be reached; no contract is guessed from the hint words', async () => {
+      const client = { models: { generateContent: async () => { throw Object.assign(new Error('Resource exhausted'), { status: 429 }); } } };
+      await expect(new AdaptiveStyleDeconstructionService({ client }).deconstructStyle(refPng, undefined, { promptHint: 'comic book sunset' }))
+        .rejects.toBeInstanceOf(VisionUnavailableError);
+      await expect(new AdaptiveStyleDeconstructionService({ client: {} }).deconstructStyle(refPng))
+        .rejects.toThrow(/no Gemini client is configured/);
+      expect((AdaptiveStyleDeconstructionService.prototype as any).deconstructHeuristic).toBeUndefined();
+      await expect(new AdaptiveStyleDeconstructionService({ client }).deconstructStyle(refPng, undefined, { fidelity: 'fast-analytical' as any }))
+        .rejects.toThrow(/fast-analytical/);
+    });
+
+    it('refuses an incomplete or non-JSON answer instead of filling in defaults', async () => {
+      const partial = modelContract({}) as any;
+      delete partial.photometric.colorTemperatureK;
+      delete partial.geometricContours.inkColor;
+      await expect(new AdaptiveStyleDeconstructionService({ client: fakeVisionClient(JSON.stringify(partial)).client }).deconstructStyle(refPng))
+        .rejects.toThrow(/photometric\.colorTemperatureK, geometricContours\.inkColor/);
+      await expect(new AdaptiveStyleDeconstructionService({ client: fakeVisionClient('not json').client }).deconstructStyle(refPng))
+        .rejects.toThrow(/not JSON/);
+    });
+
+    it('the tool summary names the model that read the style', async () => {
+      const { spatialHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+      const original = AdaptiveStyleDeconstructionService.prototype.deconstructStyle;
+      AdaptiveStyleDeconstructionService.prototype.deconstructStyle = async function () {
+        return { contract: modelContract({ colorTemperatureK: 5200 }), modelUsed: 'gemini-2.5-flash' };
+      };
+      try {
+        const res = await spatialHandlers.adaptive_world_style_deconstruct({ referenceImagePath: refPng }, { workspaceRoot: os.tmpdir() } as any);
+        expect(res.summaryResult).toContain('gemini-2.5-flash read the style');
+        expect(res.summaryResult).toContain('5200 K');
+        expect((res.resultPayload as any).modelUsed).toBe('gemini-2.5-flash');
+      } finally {
+        AdaptiveStyleDeconstructionService.prototype.deconstructStyle = original;
+      }
     });
   });
 
@@ -160,16 +203,19 @@ describe('Adaptive Domain Architecture: Universal Styling Engine', () => {
       const inputGlbPath = path.join(REPO_ROOT, 'deploy/cloud-run/spatial-separator/assets/colosseum_clay.glb');
       const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-restyle-world-'));
       try {
+        const refPng = path.join(outDir, 'ref.png');
+        fs.writeFileSync(refPng, encodePng(2, 2, Buffer.alloc(16, 180)));
         const result = await AdaptiveDomainStyleService.restyleWorld({
-          referenceImage: 'mock_image.png',
+          referenceImage: refPng,
           inputGlbPath,
           outputPath: path.join(outDir, 'colosseum_clay_styled_test.glb'),
           promptHint: 'A glowing sunset with deep golden light',
-          fidelity: 'fast-analytical'
+          client: fakeVisionClient(JSON.stringify(modelContract({ colorTemperatureK: 3000, shadowLift: 0.6 }))).client
         });
 
         expect(result.success).toBe(true);
-        expect(result.contract).toBeDefined();
+        expect(result.modelUsed).toBe('gemini-2.5-flash');
+        expect(result.contract.photometric.colorTemperatureK).toBe(3000);
         expect(result.palette).toBeDefined();
         expect(result.outputGlbPath).toContain('_styled_test.glb');
       } finally {

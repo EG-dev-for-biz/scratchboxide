@@ -87,12 +87,14 @@ Composite localized generative video patches or 3D overlays onto a master video 
 - Downscales patch to target bounding box using **Lanczos-8** resampling.
 - Generates an analytical soft-feathered alpha edge mask via `geq`.
 - Injects matching temporal film grain (`noise=alls=...:allf=t+u`) to eliminate AI plastic smoothness.
+- Spans `duration`, or the background plate's measured length; fails when the plate cannot be measured. Fails with FFmpeg's error when FFmpeg is missing or the render fails (no video is reported that was not written).
 
 ### 12. `vfx_composite_timeline`
 Renders a complete multi-track `VideoTimelineData` structure:
 - Multi-track layering (V1 background to top overlays).
 - Chroma keying with Euclidean YCbCr tolerance and green/blue despill suppression.
 - Layer affine transforms, picture-in-picture, and audio mixing.
+- Fails with FFmpeg's error when FFmpeg is missing or the render fails.
 
 ### 13. `vfx_mediapipe_track_video_motion`
 Coordinated motion analysis extracting articulated 3D kinematic telemetry:
@@ -100,20 +102,24 @@ Coordinated motion analysis extracting articulated 3D kinematic telemetry:
 - Runs MediaPipe 3D pose detection per frame, solving 3D joint Euler angles conforming to the Scratchbox Parametric Humanoid Standard (`SB-Human`).
 - Applies moving-average temporal smoothing across joint Euler angles and hip translation vectors to eliminate tracking jitter.
 - Streams motion data directly into the native C++20 Astro 3D engine for character driving, physics ragdolls, or WebGL playback.
+- Frames with nobody in them are left out and listed; when no sampled frame shows a person, the track fails.
 
 ### 14. `vfx_video_auto_reframe`
-Intelligent subject-aware camera reframing:
-- Analyzes video frames with MediaPipe to detect and track human subjects (face or body center).
-- Calculates target aspect ratio crop boxes (`9:16`, `1:1`, `4:5`, or custom) with rule-of-thirds composition bias.
-- Generates smooth Catmull-Rom spline camera trajectory pan waypoints.
-- Compiles into an FFmpeg single-pass hardware-accelerated `crop=w:h:x:y` render with `-movflags +faststart`.
+Subject-aware reframing:
+- Samples frames and runs MediaPipe on each to find the person (the nose for `focusMode: 'face'`, the middle of the shoulders and hips otherwise).
+- Calculates target aspect ratio crop boxes (`9:16`, `1:1`, `4:5`, or custom) with a rule-of-thirds bias, one waypoint per frame where the person was found; frames with nobody are left out and listed.
+- Renders one crop at the waypoints' average position with FFmpeg (`crop=w:h:x:y`).
+- Fails when MediaPipe cannot run, or finds nobody in any sampled frame; it never centres the crop in place of a detection. `focusMode: 'center'` crops the frame centre on purpose, without tracking.
 
 ### 15. `vfx_visual_critic_audit`
-Autonomous visual quality gate auditing against the 8-Dimension Visual Fidelity Rubric:
-- Uses FFmpeg to compile an automated 3×3 timestamped contact sheet.
-- Inspects MediaPipe anatomical consistency across frames (limb length stability ratio, joint flip detection).
-- Evaluates the 8 dimensions (Geometric Definition, Pixel/Splat Density, Material/Micro-surface, Environmental Grounding, Radiometric Lighting, Color Temperature, Volumetric Depth, Photographic Realism) with a strict $\ge 8.5/10$ passing gate.
-- Generates automated FFmpeg remediation recipes (e.g. Planckian Kelvin balance `colortemperature`, unsharp mask `unsharp=...`) when any dimension fails.
+Visual quality gate against the 8-Dimension Visual Fidelity Rubric:
+- Uses FFmpeg to make a 3×3 timestamped contact sheet across the clip.
+- Measures limb-length stability with MediaPipe on frames sampled at 8 fps, at most 24 spread evenly over a longer clip (shoulder-elbow-wrist and hip-knee-ankle on each side); a video with nobody in it reports this as not measured, with the reason.
+- A Gemini vision model scores each of the 8 dimensions (Geometric Definition, Pixel/Splat Density, Material/Micro-surface, Environmental Grounding, Radiometric Lighting, Color Temperature, Volumetric Depth, Photographic Realism) from the sheet, with the measured body consistency and the shot context as evidence. Every score is the model's; none is assumed.
+- Passes only when every dimension reaches `minPassingScore` (default 8.5); `overallScore` is their mean. A failing audit lists the failing dimensions and the model's suggested fixes (directives and FFmpeg filters).
+- Fails, with the reason and no score, when the contact sheet cannot be made, motion tracking cannot run, or the vision model is unavailable. The MediaPipe tools (13-15) have no dry run.
+
+The MediaPipe tools (13-15) report progress per frame, and the chat's Stop (or the tool's time limit) ends them at the frame they are on: the ffmpeg and MediaPipe processes are killed, the audit's vision request is cancelled and its contact sheet removed, and a reframe writes no video.
 
 ---
 

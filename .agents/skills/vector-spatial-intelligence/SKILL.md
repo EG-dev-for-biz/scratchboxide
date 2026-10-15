@@ -33,7 +33,7 @@ Never treat 2D vector roadmap data as an isolated rendering layer. The foundatio
                              [Multi-Modal Spatial Data Fusion]
                         ┌───────────────────────────────────────────┐
                         │ • Sub-millimeter ENU Co-Registration      │
-                        │ • Automated UTDRA Underpass Void Carving  │
+                        │ • UTDRA Span-Box Curtain Carving          │
                         │ • Raycast Click-to-Identify HUD Billboard │
                         │ • 2D Analytical Excavation Stencils       │
                         │ • Kinematic Vehicle & Camera Choreography │
@@ -100,8 +100,8 @@ When replacing an existing building in a real city with a custom user-generated 
 Raw photogrammetry suffers from "curtain walls"—solid geometry stretching beneath bridges down to water or road surfaces because aerial sensors cannot see underneath.
 1. `SpatialVectorDataService` flags roads where `isBridge === true` and `layerIndex > 0`.
 2. Extract the bridge corridor polyline and width $W$.
-3. Pass corridor coordinates to **UTDRA** (`UniversalTileDecompositionService.exciseBridgeCurtainWalls`).
-4. UTDRA sweeps an inverted volumetric cutter along the carrier curve $\mathbf{C}(t)$, carving out the underpass void and preserving the bridge deck above.
+3. Convert the corridor's footprint to the tile's local coordinates and pass it, with the ground and deck elevations, as the `span` box of `utdra_carve_bridge_voids` (`UniversalTileDecompositionService.carveBridgeUnderpass`).
+4. UTDRA removes the near-vertical triangles inside that box and reports how many; the deck (horizontal) and everything outside the box stay. A long or curved corridor is carved as several boxes.
 
 ### Workflow 4: Authentic Vegetation Grounding (Strict Prohibition on Fake Trees)
 **Invariant**: 2D vector roadmap tiles do NOT contain real-world tree coordinates. Scattering procedural "lollipop" trees across parks or sidewalks based on 2D vector landuse polygons is **strictly prohibited**.

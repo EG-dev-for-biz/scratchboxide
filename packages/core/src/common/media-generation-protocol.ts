@@ -14,27 +14,122 @@ export const IMAGE_MODEL_PRIORITY = [
     'gemini-2.5-flash-image'
 ];
 
+/** Aspect ratios the Gemini image models accept, narrowest first, as [label, width / height]. */
+export const IMAGE_MODEL_ASPECT_RATIOS: ReadonlyArray<readonly [string, number]> = [
+    ['9:16', 9 / 16], ['2:3', 2 / 3], ['3:4', 3 / 4], ['4:5', 4 / 5], ['1:1', 1], ['5:4', 5 / 4],
+    ['4:3', 4 / 3], ['3:2', 3 / 2], ['16:9', 16 / 9], ['21:9', 21 / 9]
+];
+
+/** The accepted aspect ratio label closest to width:height (the models reject any other ratio, e.g. "640:480"). */
+export function nearestImageAspectRatio(width: number, height: number): string {
+    const ratio = width / height;
+    let best = IMAGE_MODEL_ASPECT_RATIOS[0];
+    for (const candidate of IMAGE_MODEL_ASPECT_RATIOS) {
+        if (Math.abs(Math.log(candidate[1] / ratio)) < Math.abs(Math.log(best[1] / ratio))) best = candidate;
+    }
+    return best[0];
+}
+
 export const IMAGE_MODEL_PRIORITY_DRAFT = [
     'gemini-2.5-flash-image',
     'gemini-3.1-flash-image'
 ];
 
 /**
- * Product names (and an Imagen id neither backend serves) that callers and saved documents still send, mapped
- * to the API model id that serves them. Sending one of these names as-is costs a 404 round trip.
+ * Product names that callers and saved documents still send, mapped to the API model id of the same model.
+ * Sending one of these names as-is costs a 404 round trip. An alias only ever names the same model under its
+ * API id: a name for another model family (an Imagen id, say) is not an alias and is sent as given.
  */
 export const IMAGE_MODEL_ALIASES: Record<string, string> = {
     'nano-banana-2': 'gemini-3.1-flash-image',
     'google/nano-banana-pro': 'gemini-3-pro-image',
     'nano-banana-pro': 'gemini-3-pro-image',
-    'nano-banana-lite': 'gemini-3.1-flash-lite-image',
-    'imagen-3.0-generate-002': 'gemini-3.1-flash-image'
+    'nano-banana-lite': 'gemini-3.1-flash-lite-image'
 };
 
 /** The API model id for an image model name; a name that is not an alias passes through unchanged. */
 export function resolveImageModelId(model: string): string {
     const key = model.toLowerCase();
     return Object.prototype.hasOwnProperty.call(IMAGE_MODEL_ALIASES, key) ? IMAGE_MODEL_ALIASES[key] : model;
+}
+
+/**
+ * The models to try for a request, in order: exactly the caller's models (product names resolved to API ids)
+ * when it names any, otherwise the defaults. The defaults are never appended to a caller's list, so a caller
+ * that names one model gets that model or an error.
+ */
+export function resolveRequestedModels(requested: readonly string[] | string | undefined, defaults: readonly string[]): string[] {
+    const named = (typeof requested === 'string' ? [requested] : (requested || []))
+        .map(model => (typeof model === 'string' ? model.trim() : ''))
+        .filter(Boolean);
+    const list = named.length ? named : defaults;
+    return Array.from(new Set(list.map(resolveImageModelId)));
+}
+
+/** A model that was tried before the one that answered, and why it did not answer. */
+export interface SkippedMediaModel {
+    model: string;
+    code: MediaGenerationErrorCode;
+    reason: string;
+}
+
+/**
+ * One sentence naming the model that answered. When it is not the first model asked for, the sentence says
+ * so and gives the reason each earlier model was skipped.
+ */
+export function describeModelUsed(modelUsed: string, skipped: readonly SkippedMediaModel[] = []): string {
+    if (!skipped.length) {
+        return `Generated with ${modelUsed}.`;
+    }
+    const reasons = skipped.map(s => `${s.model} (${s.reason})`).join('; ');
+    return `Generated with ${modelUsed}, not the requested ${skipped[0].model}: skipped ${reasons}.`;
+}
+
+/**
+ * The note to show beside generated media when a model other than the first one asked for produced it: the
+ * result's modelNote (or one built from modelUsed and skippedModels). Undefined when the requested model answered,
+ * so callers show nothing extra in the normal case.
+ */
+export function substitutedModelNote(result: {
+    modelUsed?: string;
+    requestedModels?: readonly string[];
+    skippedModels?: readonly SkippedMediaModel[];
+    modelNote?: string;
+} | undefined | null): string | undefined {
+    if (!result?.modelUsed) {
+        return undefined;
+    }
+    const skipped = result.skippedModels || [];
+    const requested = result.requestedModels?.[0];
+    if (!skipped.length && (!requested || requested === result.modelUsed)) {
+        return undefined;
+    }
+    if (result.modelNote) {
+        return result.modelNote;
+    }
+    return skipped.length
+        ? describeModelUsed(result.modelUsed, skipped)
+        : `Generated with ${result.modelUsed}, not the requested ${requested}.`;
+}
+
+/**
+ * The credit line for a finished media job: "Generated with <model>." when the requested model answered, or the
+ * substitution note (which model answered instead, and why) when another one did. Undefined when the job names
+ * no model.
+ */
+export function mediaJobAttribution(job: { result?: MediaGenerationResult; modelUsed?: string } | undefined | null): string | undefined {
+    const note = substitutedModelNote(job?.result);
+    if (note) return note;
+    const model = job?.result?.modelUsed || job?.modelUsed;
+    return model ? `Generated with ${model}.` : undefined;
+}
+
+/** The failure message when no model in a list produced output: every model tried, with its reason. */
+export function describeNoModelAnswered(kind: string, skipped: readonly SkippedMediaModel[]): string {
+    if (!skipped.length) {
+        return `No ${kind} model was tried`;
+    }
+    return `No ${kind} model produced output: ${skipped.map(s => `${s.model} (${s.reason})`).join('; ')}`;
 }
 
 export const VIDEO_MODEL_PRIORITY = [
@@ -129,7 +224,14 @@ export type MediaGenerationRequest = ImageGenerationRequest | VideoGenerationReq
 
 export interface MediaGenerationResult {
     asset: MediaAssetRef;
+    /** The model that produced the asset. */
     modelUsed: string;
+    /** The models the request asked for, in order; the first is the requested model. */
+    requestedModels?: string[];
+    /** Models tried before modelUsed that produced nothing, with the reason; empty when the first model answered. */
+    skippedModels?: SkippedMediaModel[];
+    /** Plain statement of which model answered and, when it was not the requested one, why (describeModelUsed). */
+    modelNote?: string;
     operationName?: string;
     responseText?: string;
     createdAt?: string;
@@ -262,14 +364,20 @@ export function classifyMediaGenerationError(error: unknown, model?: string): Me
     if (status === 429 || /quota|resource exhausted|rate limit/.test(lower)) {
         return { code: 'quota', message, retryable: true, model, status };
     }
-    if (/safety|blocked|rai|responsible ai|prohibited content/.test(lower)) {
+    if (/safety|blocked|\brai\b|responsible ai|prohibited content/.test(lower)) {
         return { code: 'safety_filtered', message, retryable: false, model, status };
     }
-    if (status === 404 || /model.+not found|unsupported model|not supported/.test(lower)) {
+    // Only "this model is not served" moves on to the next model. A 400 is an invalid request whatever its text says
+    // (e.g. "model X is not supported for image editing with a mask"): the request is wrong, so substituting another
+    // model would not answer it. The message is consulted only when the error carries no status.
+    if (status === 404) {
         return { code: 'unsupported', message, retryable: false, model, status };
     }
     if (status === 400 || /invalid argument|bad request/.test(lower)) {
         return { code: 'invalid_request', message, retryable: false, model, status };
+    }
+    if (!status && /model.+not (found|supported)|unsupported model/.test(lower)) {
+        return { code: 'unsupported', message, retryable: false, model, status };
     }
     if (!status || status >= 500 || /timeout|temporar|unavailable|network|fetch failed/.test(lower)) {
         return { code: 'transient', message, retryable: true, model, status };

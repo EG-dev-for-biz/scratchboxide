@@ -7,10 +7,12 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
+import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
+import { MediaModelUnavailableError } from '../src/common/errors/pipeline-errors';
 import {
     MultiPerspectivePanoramaSynthesisService,
     generate360Perspectives,
@@ -273,26 +275,48 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         const buf = Buffer.alloc(imgW * imgH * 4, 120);
         await fs.writeFile(inputPath, encodePng(imgW, imgH, buf));
 
-        const registry = createDefaultToolRegistry();
-        const tool = registry.get('panorama_generate_perspectives');
-        expect(tool).toBeDefined();
-        expect(tool?.name).toBe('panorama_generate_perspectives');
+        // No test reaches a real model: the tool's client is a fake.
+        const calls: string[] = [];
+        vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(await fakeImageCredentials(calls).createClient());
+        try {
+            const registry = createDefaultToolRegistry();
+            const tool = registry.get('panorama_generate_perspectives');
+            expect(tool).toBeDefined();
+            expect(tool?.name).toBe('panorama_generate_perspectives');
+            expect(Object.keys(tool?.declaration.parameters.properties || {})).not.toContain('mockExecution');
 
-        const execution = await registry.dispatch('panorama_generate_perspectives', {
-            inputImagePath: inputPath,
-            faceResolution: 32,
-            equirectangularWidth: 128,
-            equirectangularHeight: 64,
-            mockExecution: true,
-            outputDir: tmpDir
-        }, {} as any);
+            // The user asked for procedural perspectives: no model call, and the summary says so.
+            const procedural = await registry.dispatch('panorama_generate_perspectives', {
+                inputImagePath: inputPath,
+                faceResolution: 32,
+                equirectangularWidth: 128,
+                equirectangularHeight: 64,
+                useNanoBanana: false,
+                outputDir: tmpDir
+            }, {} as any);
 
-        expect(execution.exec.summaryResult).toContain('360°x180°');
-        expect(execution.exec.summaryResult).toContain('no model call');
-        expect(execution.exec.summaryResult).toContain('TOP');
-        expect(execution.exec.summaryResult).toContain('BOTTOM');
+            expect(procedural.exec.summaryResult).toContain('360°x180°');
+            expect(procedural.exec.summaryResult).toContain('useNanoBanana: false');
+            expect(procedural.exec.summaryResult).toContain('no model call');
+            expect(procedural.exec.summaryResult).toContain('TOP');
+            expect(procedural.exec.summaryResult).toContain('BOTTOM');
+            expect(calls).toEqual([]);
 
-        await fs.remove(tmpDir);
+            // A model-supplied mockExecution is no longer honoured: the image model makes the views and is named.
+            const generated = await registry.dispatch('panorama_generate_perspectives', {
+                inputImagePath: inputPath,
+                faceResolution: 32,
+                equirectangularWidth: 128,
+                equirectangularHeight: 64,
+                mockExecution: true
+            }, {} as any);
+            expect(generated.exec.status).toBe('completed');
+            expect(calls).toEqual(Array(5).fill('gemini-3.1-flash-image'));
+            expect(generated.exec.summaryResult).toContain('Generated with gemini-3.1-flash-image.');
+        } finally {
+            vi.restoreAllMocks();
+            await fs.remove(tmpDir);
+        }
     });
 
     it('builds specialized Nano Banana 2 prompts for all 5 missing perspective views', () => {
@@ -341,7 +365,7 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         }
 
         const service = new MultiPerspectivePanoramaSynthesisService();
-        const perspectives = await service.synthesizePerspectivesWithNanoBanana(
+        const { perspectives, modelUsed } = await service.synthesizePerspectivesWithNanoBanana(
             frontRgba,
             res,
             {
@@ -352,6 +376,7 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
             }
         );
 
+        expect(modelUsed).toBe('gemini-3.1-flash-image mock: procedural copies, no model call');
         expect(perspectives.front.isSynthesized).toBe(false);
         expect(perspectives.right.isSynthesized).toBe(true);
         expect(perspectives.back.isSynthesized).toBe(true);
@@ -448,41 +473,42 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         const imgPng = encodePng(48, 36, Buffer.alloc(48 * 36 * 4, 200));
         const options = { inputImageBuffer: imgPng, faceResolution: 16, equirectangularWidth: 64, equirectangularHeight: 32 };
 
-        // A model that is not served falls back to the served list (like the media service) and says so.
+        // A named model that is not served fails the run; no other model is asked in its place.
         const unservedCalls: string[] = [];
         const unserved = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials(unservedCalls));
-        const fellBack = await unserved.generate360Perspectives({ ...options, model: 'unserved-image-model' });
-        expect(unservedCalls.slice(0, 2)).toEqual(['unserved-image-model', 'gemini-3.1-flash-image']);
-        expect(fellBack.modelUsed).toBe('gemini-3.1-flash-image (requested unserved-image-model is not served)');
+        const failed = await unserved.generate360Perspectives({ ...options, model: 'unserved-image-model' }).catch((e: Error) => e);
+        expect(failed).toBeInstanceOf(MediaModelUnavailableError);
+        expect((failed as Error).message).toContain('unserved-image-model (not served:');
+        expect(unservedCalls).toEqual(['unserved-image-model']);
 
-        // Every served model answering with no image, after the retries, is an error, not procedural copies.
+        // A model answering with no image, after the retries, is an error, not procedural copies.
         const emptyCalls: string[] = [];
         const empty = new MultiPerspectivePanoramaSynthesisService(fakeImageCredentials(emptyCalls, 'empty'));
         await expect(empty.generate360Perspectives(options))
-            .rejects.toThrow(/No image model produced the right perspective: .* returned no image \(STOP\)/);
+            .rejects.toThrow(/returned no image \(STOP\).*right perspective/);
         expect(emptyCalls.filter(m => m === 'gemini-3.1-flash-image').length).toBe(3);
 
         // Any other model error ends the run.
         const broken = new MultiPerspectivePanoramaSynthesisService({ createClient: async () => ({ models: { generateContent: async () => { throw Object.assign(new Error('quota exceeded'), { status: 429 }); } } }) } as any);
-        await expect(broken.generate360Perspectives(options)).rejects.toThrow('gemini-3.1-flash-image failed on the right perspective: quota exceeded');
+        await expect(broken.generate360Perspectives(options)).rejects.toThrow(/gemini-3.1-flash-image is unavailable: quota exceeded \(on the right perspective\)/);
 
         const unconfigured = new MultiPerspectivePanoramaSynthesisService({
             createClient: async () => { throw new Error('Google media credentials are not configured'); }
         } as any);
         await expect(unconfigured.generate360Perspectives(options))
-            .rejects.toThrow(/needs Google credentials \(Google media credentials are not configured\)/);
+            .rejects.toThrow(/Google media credentials are not available \(Google media credentials are not configured\)/);
     });
 
-    it('asks again when the model answers with no image, and moves to the next served model on a 404', async () => {
+    it('with no model named, walks the default list past an unserved model, asks again after an empty answer, and says which model answered', async () => {
         const png = encodePng(24, 24, Buffer.alloc(24 * 24 * 4, 90));
         const calls: string[] = [];
-        let emptiesLeft = 1; // the first answer has no image part (finish STOP), as gemini-3.1-flash-image sometimes does
+        let emptiesLeft = 1; // the first answer has no image part (finish STOP), as image models sometimes do
         const credentials: any = {
             createClient: async () => ({
                 models: {
                     generateContent: async ({ model }: { model: string }) => {
                         calls.push(model);
-                        if (!SERVED_IMAGE_MODEL_IDS.includes(model)) throw Object.assign(new Error(`models/${model} is not found`), { status: 404 });
+                        if (model === 'gemini-3.1-flash-image') throw Object.assign(new Error(`models/${model} is not found`), { status: 404 });
                         if (emptiesLeft-- > 0) return { candidates: [{ finishReason: 'STOP', content: { parts: [] } }] };
                         return { candidates: [{ finishReason: 'STOP', content: { parts: [{ inlineData: { data: png.toString('base64'), mimeType: 'image/png' } }] } }] };
                     }
@@ -492,12 +518,13 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         const service = new MultiPerspectivePanoramaSynthesisService(credentials);
         const result = await service.generate360Perspectives({
             inputImageBuffer: encodePng(48, 36, Buffer.alloc(48 * 36 * 4, 200)),
-            faceResolution: 16, equirectangularWidth: 64, equirectangularHeight: 32,
-            model: 'some-retired-image-model' // not served: falls through to the default list
+            faceResolution: 16, equirectangularWidth: 64, equirectangularHeight: 32
         });
         expect(result.success).toBe(true);
-        // right: retired id 404s, then gemini-3.1-flash-image answers empty once and is asked again; the rest succeed first time
-        expect(calls.slice(0, 3)).toEqual(['some-retired-image-model', 'gemini-3.1-flash-image', 'gemini-3.1-flash-image']);
-        expect(calls.filter(m => m === 'some-retired-image-model').length).toBe(5);
+        // right: gemini-3.1-flash-image 404s once, gemini-3-pro-image answers empty and is asked again; the other four views go straight to it
+        expect(calls).toEqual(['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-3-pro-image', ...Array(4).fill('gemini-3-pro-image')]);
+        expect(result.modelUsed).toBe('gemini-3-pro-image');
+        expect(result.skippedModels?.map(s => s.model)).toEqual(['gemini-3.1-flash-image']);
+        expect(result.summary).toContain('Generated with gemini-3-pro-image, not the requested gemini-3.1-flash-image');
     });
 });

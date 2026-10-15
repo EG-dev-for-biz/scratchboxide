@@ -43,234 +43,83 @@ using geometry::AABB;
 using geospatial::wgs84::GeodeticCoord;
 
 // ============================================================================
-// 1. The 9 Canonical Geographic Domains
+// 1. Tile Measurements
 // ============================================================================
+//
+// What a tile measures, and nothing else: no domain is inferred and no confidence is reported. Fractions are by
+// surface area, from each triangle's face normal. The caller (or the model reading the numbers) interprets them.
 
-enum class GeographicDomain {
-    UrbanHighRiseCore,       // Modern/historic skyscrapers, deep street canyons, regularized setbacks, spire crowns
-    SuburbanResidential,     // Pitched roofs (gable/hip), chimneys, driveways, curbs, yard lawns
-    IndustrialLogisticsPort,  // Massive footprint warehouses, saw-tooth roofs, silos, container stacks
-    CivilInfrastructure,     // Bridges, flyovers, viaducts, dams (requires underpass void carving)
-    MountainAlpineCanyon,    // High relief, steep bedrock cliffs (>45° triplanar), scree talus slopes
-    ForestWoodlandCanopy,    // Dense vegetation, canopy envelope clustering, space-colonization trunks
-    AquaticCoastalFluvial,   // Oceans, harbors, rivers, lakes (planar water basin excision, IOR 1.333)
-    AridDesertBadlands,      // Dunes, wind-ripple normal synthesis, horizontal sedimentary strata
-    HybridInterface          // Mountain towns, hillside favelas, coastal port cities (stepped foundations)
+struct TileMeasurements {
+    AABB bounds;
+    float reliefMeters{0.0f};          // maxY - minY
+    double surfaceArea{0.0};           // total triangle area, square metres
+    float horizontalFraction{0.0f};    // slope < 15 degrees
+    float inclinedFraction{0.0f};      // 15 to 45 degrees
+    float steepFraction{0.0f};         // 45 to 75 degrees
+    float verticalFraction{0.0f};      // 75 degrees and steeper
+    float greenIndex{0.0f};            // area-weighted mean (2G - R - B) / (2G + R + B) of the vertex colours
+    bool hasWalls{false};
+    float dominantWallYawDeg{0.0f};    // peak of the vertical faces' horizontal normal angle, modulo 90, 1-degree bins
+    size_t triangles{0};
+    size_t degenerateTriangles{0};     // zero-area triangles (not counted in the fractions)
 };
 
-inline const char* getGeographicDomainName(GeographicDomain domain) {
-    switch (domain) {
-        case GeographicDomain::UrbanHighRiseCore:      return "UrbanHighRiseCore";
-        case GeographicDomain::SuburbanResidential:    return "SuburbanResidential";
-        case GeographicDomain::IndustrialLogisticsPort: return "IndustrialLogisticsPort";
-        case GeographicDomain::CivilInfrastructure:    return "CivilInfrastructure";
-        case GeographicDomain::MountainAlpineCanyon:   return "MountainAlpineCanyon";
-        case GeographicDomain::ForestWoodlandCanopy:   return "ForestWoodlandCanopy";
-        case GeographicDomain::AquaticCoastalFluvial:  return "AquaticCoastalFluvial";
-        case GeographicDomain::AridDesertBadlands:     return "AridDesertBadlands";
-        case GeographicDomain::HybridInterface:         return "HybridInterface";
-        default: return "UnknownDomain";
-    }
-}
-
-// ============================================================================
-// 2. Geographic Domain Probe & Telemetry
-// ============================================================================
-
-struct GeographicDomainProbe {
-    GeographicDomain dominantDomain{GeographicDomain::UrbanHighRiseCore};
-    float confidence{0.95f};
-
-    // Metric Environmental Indicators
-    float planarityScore{0.0f};          // Ratio of planar facade/roof/pavement triangles [0, 1]
-    float vegetationIndexNDVI{0.0f};     // Mean (2G - R - B) / (2G + R + B) [0, 1]
-    float totalReliefDeltaY{0.0f};       // Max elevation minus min elevation in meters
-    float verticalityScore{0.0f};        // Proportion of near-vertical wall triangles
-    float pitchedRoofRatio{0.0f};        // Ratio of inclined planar triangles (15° to 65°)
-    float waterSurfaceRatio{0.0f};       // Ratio of flat horizontal triangles at base elevation
-    float underpassVoidRatio{0.0f};      // Dual-surface raycast clearance score
-    float dominantStreetYawDeg{0.0f};    // Manhattan / Street grid orientation angle [0, 90)
-
-    // Geospatial Anchor
-    GeodeticCoord anchorCoord;
-    AABB localBoundingBox;
-    Vec3 localCentroid{0.0f, 0.0f, 0.0f};
-
-    void printSummary() const {
-        std::cout << "\n======================================================================\n";
-        std::cout << "  UTDRA GEOGRAPHIC DOMAIN PROBE\n";
-        std::cout << "======================================================================\n";
-        std::cout << "  Classified Domain:    " << getGeographicDomainName(dominantDomain)
-                  << " (Confidence: " << std::fixed << std::setprecision(1) << (confidence * 100.0f) << "%)\n";
-        std::cout << "  Relief Span (ΔY):     " << totalReliefDeltaY << " meters\n";
-        std::cout << "  Planarity Score:      " << (planarityScore * 100.0f) << " %\n";
-        std::cout << "  Vegetation NDVI:      " << vegetationIndexNDVI << "\n";
-        std::cout << "  Pitched Roof Ratio:   " << (pitchedRoofRatio * 100.0f) << " %\n";
-        std::cout << "  Water Surface Ratio:  " << (waterSurfaceRatio * 100.0f) << " %\n";
-        std::cout << "  Street Grid Yaw:      " << dominantStreetYawDeg << " degrees\n";
-        std::cout << "======================================================================\n\n";
-    }
-};
-
-// ============================================================================
-// 3. Domain Classifier
-// ============================================================================
-
-class DomainClassifier {
+class TileMeasurer {
 public:
-    static GeographicDomainProbe probeTile(
-        const ScratchboxMesh& mesh,
-        const GeodeticCoord& anchor = {}
-    ) {
-        GeographicDomainProbe probe;
-        probe.anchorCoord = anchor;
+    static TileMeasurements measure(const ScratchboxMesh& mesh) {
+        TileMeasurements m;
+        for (const auto& v : mesh.vertices) m.bounds.expand(v.position);
+        if (!mesh.vertices.empty()) m.reliefMeters = m.bounds.max.y - m.bounds.min.y;
 
-        if (mesh.vertices.empty()) return probe;
-
-        // 1. Calculate Bounding Box & Elevation Extents
-        float minY = 1e9f, maxY = -1e9f;
-        double sumX = 0, sumY = 0, sumZ = 0;
-        float minX = 1e9f, maxX = -1e9f;
-        float minZ = 1e9f, maxZ = -1e9f;
-
-        for (const auto& v : mesh.vertices) {
-            minX = std::min(minX, v.position.x);
-            maxX = std::max(maxX, v.position.x);
-            minY = std::min(minY, v.position.y);
-            maxY = std::max(maxY, v.position.y);
-            minZ = std::min(minZ, v.position.z);
-            maxZ = std::max(maxZ, v.position.z);
-            sumX += v.position.x;
-            sumY += v.position.y;
-            sumZ += v.position.z;
-        }
-
-        probe.localBoundingBox.min = Vec3(minX, minY, minZ);
-        probe.localBoundingBox.max = Vec3(maxX, maxY, maxZ);
-        probe.localCentroid = Vec3(
-            static_cast<float>(sumX / mesh.vertices.size()),
-            static_cast<float>(sumY / mesh.vertices.size()),
-            static_cast<float>(sumZ / mesh.vertices.size())
-        );
-        probe.totalReliefDeltaY = std::max(1.0f, maxY - minY);
-
-        // 2. Classify Triangles by Orientation and Chrominance
         const size_t numTriangles = mesh.indices.size() / 3;
-        size_t verticalWallCount = 0;
-        size_t horizontalGroundCount = 0;
-        size_t pitchedRoofCount = 0;
-        size_t steepCliffCount = 0;
-        size_t highVegCount = 0;
-        size_t planarCount = 0;
-        double totalVegNdvi = 0.0;
-
-        int yawBins[90] = {0};
-
+        m.triangles = numTriangles;
+        double horizontal = 0.0, inclined = 0.0, steep = 0.0, vertical = 0.0, green = 0.0;
+        double yawBins[90] = {0.0};
         for (size_t t = 0; t < numTriangles; ++t) {
             const auto& v0 = mesh.vertices[mesh.indices[t * 3]];
             const auto& v1 = mesh.vertices[mesh.indices[t * 3 + 1]];
             const auto& v2 = mesh.vertices[mesh.indices[t * 3 + 2]];
-
-            Vec3 e1 = v1.position - v0.position;
-            Vec3 e2 = v2.position - v0.position;
-            Vec3 norm = e1.cross(e2);
-            if (norm.lengthSquared() > 1e-6f) norm = norm.normalized();
-            else norm = Vec3(0, 1, 0);
-
-            float ny = norm.y;
-            float absNy = std::abs(ny);
-            float slopeDeg = std::acos(std::clamp(absNy, 0.0f, 1.0f)) * math::RAD_TO_DEG;
-
-            // Chromatic Vegetation NDVI
-            Vec4 avgColor = (v0.color + v1.color + v2.color) * (1.0f / 3.0f);
-            float ndvi = 0.0f;
-            float denom = 2.0f * avgColor.y + avgColor.x + avgColor.z;
-            if (denom > 0.05f) {
-                ndvi = (2.0f * avgColor.y - avgColor.x - avgColor.z) / denom;
-            }
-            totalVegNdvi += ndvi;
-            if (ndvi > 0.12f) highVegCount++;
-
-            // If triangle has high green vegetation index, it is natural canopy foliage, not architectural
-            if (ndvi > 0.15f) {
+            Vec3 cross = (v1.position - v0.position).cross(v2.position - v0.position);
+            const double area = 0.5 * static_cast<double>(cross.length());
+            if (!(area > 1e-12)) {
+                m.degenerateTriangles++;
                 continue;
             }
-
-            // Orientation metrics
-            if (absNy < 0.25f) {
-                verticalWallCount++;
-                planarCount++;
-
-                // Histogram for street grid orientation
-                float angle = std::atan2(norm.z, norm.x) * 180.0f / math::PI;
+            const Vec3 n = cross.normalized();
+            const float slopeDeg = std::acos(std::clamp(std::abs(n.y), 0.0f, 1.0f)) * math::RAD_TO_DEG;
+            if (slopeDeg < 15.0f) horizontal += area;
+            else if (slopeDeg < 45.0f) inclined += area;
+            else if (slopeDeg < 75.0f) steep += area;
+            else {
+                vertical += area;
+                float angle = std::atan2(n.z, n.x) * math::RAD_TO_DEG;
                 if (angle < 0.0f) angle += 360.0f;
-                int bin = std::clamp(static_cast<int>(std::fmod(angle, 90.0f)), 0, 89);
-                yawBins[bin]++;
-            } else if (absNy > 0.97f) {
-                // Slope < 14 degrees: Flat horizontal roof or ground
-                horizontalGroundCount++;
-                planarCount++;
-            } else if (slopeDeg > 45.0f) {
-                // Steep slope / mountain bedrock / escarpment
-                steepCliffCount++;
-            } else if (slopeDeg >= 14.0f && slopeDeg <= 45.0f) {
-                // Moderate slope: pitched roofs or hills
-                if (probe.totalReliefDeltaY < 35.0f) {
-                    pitchedRoofCount++;
-                    planarCount++;
-                } else {
-                    steepCliffCount++;
-                }
+                yawBins[std::clamp(static_cast<int>(std::fmod(angle, 90.0f)), 0, 89)] += area;
             }
+            const Vec4 c = (v0.color + v1.color + v2.color) * (1.0f / 3.0f);
+            const float denom = 2.0f * c.y + c.x + c.z;
+            if (denom > 1e-6f) green += area * ((2.0f * c.y - c.x - c.z) / denom);
+            m.surfaceArea += area;
         }
-
-        float fTri = static_cast<float>(std::max<size_t>(1, numTriangles));
-        probe.verticalityScore = static_cast<float>(verticalWallCount) / fTri;
-        probe.pitchedRoofRatio = static_cast<float>(pitchedRoofCount) / fTri;
-        probe.vegetationIndexNDVI = static_cast<float>(totalVegNdvi / fTri);
-        probe.planarityScore = static_cast<float>(planarCount) / fTri;
-        float steepCliffRatio = static_cast<float>(steepCliffCount) / fTri;
-
-        // Peak bin for yaw
-        int maxBin = 0, maxCount = -1;
-        for (int i = 0; i < 90; ++i) {
-            if (yawBins[i] > maxCount) {
-                maxCount = yawBins[i];
-                maxBin = i;
-            }
+        if (m.surfaceArea > 0.0) {
+            m.horizontalFraction = static_cast<float>(horizontal / m.surfaceArea);
+            m.inclinedFraction = static_cast<float>(inclined / m.surfaceArea);
+            m.steepFraction = static_cast<float>(steep / m.surfaceArea);
+            m.verticalFraction = static_cast<float>(vertical / m.surfaceArea);
+            m.greenIndex = static_cast<float>(green / m.surfaceArea);
         }
-        probe.dominantStreetYawDeg = static_cast<float>(maxBin);
-
-        // 3. Unsupervised Macro-Domain Decision Rules
-        if (probe.vegetationIndexNDVI > 0.20f) {
-            probe.dominantDomain = GeographicDomain::ForestWoodlandCanopy;
-            probe.confidence = 0.96f;
-        } else if (probe.totalReliefDeltaY > 80.0f && (steepCliffRatio > 0.35f || probe.planarityScore < 0.30f)) {
-            probe.dominantDomain = GeographicDomain::MountainAlpineCanyon;
-            probe.confidence = 0.93f;
-        } else if (probe.verticalityScore > 0.35f && probe.totalReliefDeltaY > 40.0f) {
-            probe.dominantDomain = GeographicDomain::UrbanHighRiseCore;
-            probe.confidence = 0.96f;
-        } else if (probe.pitchedRoofRatio > 0.20f && probe.totalReliefDeltaY < 25.0f) {
-            probe.dominantDomain = GeographicDomain::SuburbanResidential;
-            probe.confidence = 0.89f;
-        } else if (probe.planarityScore > 0.70f && probe.verticalityScore < 0.15f && probe.totalReliefDeltaY < 18.0f) {
-            probe.dominantDomain = GeographicDomain::IndustrialLogisticsPort;
-            probe.confidence = 0.86f;
-        } else if (probe.totalReliefDeltaY > 40.0f && probe.verticalityScore > 0.20f && probe.planarityScore < 0.50f) {
-            probe.dominantDomain = GeographicDomain::HybridInterface;
-            probe.confidence = 0.88f;
-        } else {
-            probe.dominantDomain = GeographicDomain::UrbanHighRiseCore;
-            probe.confidence = 0.75f;
+        if (vertical > 0.0) {
+            int peak = 0;
+            for (int i = 1; i < 90; ++i) if (yawBins[i] > yawBins[peak]) peak = i;
+            m.hasWalls = true;
+            m.dominantWallYawDeg = static_cast<float>(peak) + 0.5f;
         }
-
-        return probe;
+        return m;
     }
 };
 
 // ============================================================================
-// 4. Non-Destructive Triangle-Plane Slicer (Sutherland-Hodgman)
+// 2. Triangle-Plane Slicer (Sutherland-Hodgman)
 // ============================================================================
 
 class SutherlandHodgmanSlicer {
@@ -376,232 +225,59 @@ private:
 };
 
 // ============================================================================
-// 5. Multi-Level Void Carver (Bridges & Highway Overpasses)
+// 3. Span Curtain Carver
 // ============================================================================
+//
+// Removes the near-vertical triangles inside a span box the caller gives: the footprint of an elevated deck
+// (minX..maxX, minZ..maxZ) between the ground under it and the deck. It does not decide what is a bridge; every
+// near-vertical triangle wholly inside the box is removed, whatever it belongs to, and the count is reported.
 
-class MultiLevelVoidCarver {
+struct SpanBox {
+    float minX{0.0f}, maxX{0.0f};
+    float minZ{0.0f}, maxZ{0.0f};
+    float groundY{0.0f}, deckY{0.0f};
+};
+
+struct SpanCarveResult {
+    ScratchboxMesh mesh{"UtdraOutputMesh"};
+    size_t removedTriangles{0};
+};
+
+class SpanCurtainCarver {
 public:
-    /**
-     * Excises false photogrammetric solid walls underneath elevated bridge decks
-     * by finding underpass voids and dropping curtain walls.
-     */
-    static ScratchboxMesh carveUnderpassVoids(
-        const ScratchboxMesh& inputMesh,
-        float minVoidHeightMeters = 3.5f
-    ) {
-        ScratchboxMesh result;
-        const size_t numTriangles = inputMesh.indices.size() / 3;
+    /** Triangles whose face normal has |y| below this are near-vertical (steeper than about 78.5 degrees). */
+    static constexpr float kMaxWallNormalY = 0.2f;
 
+    static SpanCarveResult carve(const ScratchboxMesh& input, const SpanBox& box) {
+        constexpr float eps = 1e-3f;
+        auto inside = [&](const Vec3& p) {
+            return p.x >= box.minX - eps && p.x <= box.maxX + eps
+                && p.z >= box.minZ - eps && p.z <= box.maxZ + eps
+                && p.y >= box.groundY - eps && p.y <= box.deckY + eps;
+        };
+        SpanCarveResult result;
+        std::vector<int64_t> remap(input.vertices.size(), -1);
+        const size_t numTriangles = input.indices.size() / 3;
         for (size_t t = 0; t < numTriangles; ++t) {
-            const auto& v0 = inputMesh.vertices[inputMesh.indices[t * 3]];
-            const auto& v1 = inputMesh.vertices[inputMesh.indices[t * 3 + 1]];
-            const auto& v2 = inputMesh.vertices[inputMesh.indices[t * 3 + 2]];
-
-            Vec3 e1 = v1.position - v0.position;
-            Vec3 e2 = v2.position - v0.position;
-            Vec3 norm = e1.cross(e2);
-            if (norm.lengthSquared() > 1e-6f) norm = norm.normalized();
-
-            // Detect near-vertical curtain walls between elevated decks and ground
-            float minY = std::min({v0.position.y, v1.position.y, v2.position.y});
-            float maxY = std::max({v0.position.y, v1.position.y, v2.position.y});
-            float heightSpan = maxY - minY;
-
-            // If a single near-vertical triangle spans the full underpass height, it's false fill
-            if (std::abs(norm.y) < 0.20f && heightSpan >= minVoidHeightMeters) {
-                // Drop false underpass fill triangle
+            const uint32_t i[3] = {input.indices[t * 3], input.indices[t * 3 + 1], input.indices[t * 3 + 2]};
+            const Vec3& p0 = input.vertices[i[0]].position;
+            const Vec3& p1 = input.vertices[i[1]].position;
+            const Vec3& p2 = input.vertices[i[2]].position;
+            Vec3 cross = (p1 - p0).cross(p2 - p0);
+            const bool nearVertical = cross.lengthSquared() > 1e-12f && std::abs(cross.normalized().y) < kMaxWallNormalY;
+            if (nearVertical && inside(p0) && inside(p1) && inside(p2)) {
+                result.removedTriangles++;
                 continue;
             }
-
-            uint32_t bIdx = static_cast<uint32_t>(result.vertices.size());
-            result.vertices.push_back(v0);
-            result.vertices.push_back(v1);
-            result.vertices.push_back(v2);
-            result.indices.push_back(bIdx);
-            result.indices.push_back(bIdx + 1);
-            result.indices.push_back(bIdx + 2);
+            for (uint32_t k : i) {
+                if (remap[k] < 0) {
+                    remap[k] = static_cast<int64_t>(result.mesh.vertices.size());
+                    result.mesh.addVertex(input.vertices[k]);
+                }
+                result.mesh.indices.push_back(static_cast<uint32_t>(remap[k]));
+            }
         }
-
         return result;
-    }
-};
-
-// ============================================================================
-// 6. Slope-Stratified Natural Terrain Processor
-// ============================================================================
-
-class NaturalTerrainProcessor {
-public:
-    /**
-     * Applies geomorphologically validated PBR parameters to mountain / alpine / canyon terrain:
-     * - Slope > 45°: Granite Cliff Bedrock (Triplanar UVs, eliminates smearing)
-     * - Slope 25°-45°: Thermal Scree Talus
-     * - Slope < 25°: Alpine Meadow / Topsoil / Lichen
-     */
-    static void applySlopeStratifiedBiomes(
-        ScratchboxMesh& terrainMesh,
-        float rockSlopeThresholdDeg = 45.0f,
-        float screeSlopeThresholdDeg = 25.0f
-    ) {
-        for (size_t i = 0; i < terrainMesh.vertices.size(); ++i) {
-            auto& v = terrainMesh.vertices[i];
-            float cosSlope = std::clamp(std::abs(v.normal.y), 0.0f, 1.0f);
-            float slopeDeg = std::acos(cosSlope) * math::RAD_TO_DEG;
-
-            float rockWeight = math::smoothstep(screeSlopeThresholdDeg, rockSlopeThresholdDeg, slopeDeg);
-            float grassWeight = 1.0f - rockWeight;
-
-            // Pack into vertex color: R = Rock, G = Grass/Moss, B = Scree, A = Roughness
-            v.color = Vec4(
-                rockWeight,
-                grassWeight * 0.85f,
-                (1.0f - rockWeight) * 0.15f,
-                rockWeight > 0.5f ? 0.45f : 0.80f // Roughness
-            );
-        }
-    }
-};
-
-// ============================================================================
-// 7. Universal Tile Decomposition & Rectification Pipeline
-// ============================================================================
-
-struct UniversalDecomposedTile {
-    GeographicDomainProbe probe;
-
-    // Architectural outputs
-    std::vector<ScratchboxMesh> rectifiedBuildings;
-    std::vector<ScratchboxMesh> preservedSculpturalCrowns;
-
-    // Infrastructure outputs
-    ScratchboxMesh conformedRoadways;
-    ScratchboxMesh clearedUnderpassBridges;
-
-    // Natural landscape outputs
-    ScratchboxMesh conformedTerrainSurface;
-    ScratchboxMesh rectifiedWaterBasins;
-    std::vector<ScratchboxMesh> proceduralFoliageCanopies;
-
-    // Statistics
-    size_t totalInputTriangles{0};
-    size_t totalOutputTriangles{0};
-};
-
-class UniversalTilePipeline {
-public:
-    /**
-     * Ingests, analyzes, rectifies, and decomposes any arbitrary Google 3D Tile
-     * across all 9 canonical geographic domains.
-     */
-    static UniversalDecomposedTile processRawTile(
-        const ScratchboxMesh& rawTileMesh,
-        const GeodeticCoord& anchorCoord = {}
-    ) {
-        UniversalDecomposedTile output;
-        output.totalInputTriangles = rawTileMesh.indices.size() / 3;
-
-        // Stage 1: Macro-Geographic Probe
-        output.probe = DomainClassifier::probeTile(rawTileMesh, anchorCoord);
-
-        // Stage 2: Domain-Aware Branching
-        switch (output.probe.dominantDomain) {
-            case GeographicDomain::UrbanHighRiseCore: {
-                // High-rise: Slicing, setback detection, spire preservation
-                processHighRiseDomain(rawTileMesh, output);
-                break;
-            }
-            case GeographicDomain::CivilInfrastructure: {
-                // Bridges & flyovers: Underpass void carving
-                output.clearedUnderpassBridges = MultiLevelVoidCarver::carveUnderpassVoids(rawTileMesh);
-                break;
-            }
-            case GeographicDomain::MountainAlpineCanyon: {
-                // Mountain: Slope-stratified triplanar rock vs scree
-                output.conformedTerrainSurface = rawTileMesh;
-                NaturalTerrainProcessor::applySlopeStratifiedBiomes(output.conformedTerrainSurface);
-                break;
-            }
-            case GeographicDomain::ForestWoodlandCanopy: {
-                // Forest: Understory void clearance & canopy normal transfer
-                processForestDomain(rawTileMesh, output);
-                break;
-            }
-            case GeographicDomain::SuburbanResidential:
-            case GeographicDomain::IndustrialLogisticsPort:
-            case GeographicDomain::AquaticCoastalFluvial:
-            case GeographicDomain::AridDesertBadlands:
-            case GeographicDomain::HybridInterface:
-            default: {
-                // Generic conformed terrain & buildings
-                output.conformedTerrainSurface = rawTileMesh;
-                break;
-            }
-        }
-
-        output.totalOutputTriangles = computeTotalOutputTriangles(output);
-        return output;
-    }
-
-private:
-    static void processHighRiseDomain(const ScratchboxMesh& raw, UniversalDecomposedTile& out) {
-        // Find crown interface elevation (upper 15% of vertical relief)
-        float yCutoff = out.probe.localBoundingBox.min.y + out.probe.totalReliefDeltaY * 0.76f;
-
-        // Sutherland-Hodgman non-destructive slicer for crown and shaft
-        std::vector<SutherlandHodgmanSlicer::Triangle> crownTris;
-        std::vector<SutherlandHodgmanSlicer::Triangle> shaftTris;
-        for (size_t t = 0; t + 2 < raw.indices.size(); t += 3) {
-            const auto& v0 = raw.vertices[raw.indices[t + 0]];
-            const auto& v1 = raw.vertices[raw.indices[t + 1]];
-            const auto& v2 = raw.vertices[raw.indices[t + 2]];
-
-            SutherlandHodgmanSlicer::clipTriangleAboveElevation(v0, v1, v2, yCutoff, crownTris);
-            SutherlandHodgmanSlicer::clipTriangleBelowElevation(v0, v1, v2, yCutoff, shaftTris);
-        }
-
-        ScratchboxMesh crownMesh;
-        for (const auto& tri : crownTris) {
-            uint32_t bIdx = static_cast<uint32_t>(crownMesh.vertices.size());
-            crownMesh.vertices.push_back(tri.v0);
-            crownMesh.vertices.push_back(tri.v1);
-            crownMesh.vertices.push_back(tri.v2);
-            crownMesh.indices.push_back(bIdx);
-            crownMesh.indices.push_back(bIdx + 1);
-            crownMesh.indices.push_back(bIdx + 2);
-        }
-
-        ScratchboxMesh shaftMesh;
-        for (const auto& tri : shaftTris) {
-            uint32_t bIdx = static_cast<uint32_t>(shaftMesh.vertices.size());
-            shaftMesh.vertices.push_back(tri.v0);
-            shaftMesh.vertices.push_back(tri.v1);
-            shaftMesh.vertices.push_back(tri.v2);
-            shaftMesh.indices.push_back(bIdx);
-            shaftMesh.indices.push_back(bIdx + 1);
-            shaftMesh.indices.push_back(bIdx + 2);
-        }
-
-        out.preservedSculpturalCrowns.push_back(crownMesh);
-        out.rectifiedBuildings.push_back(shaftMesh);
-        out.conformedTerrainSurface = raw;
-    }
-
-    static void processForestDomain(const ScratchboxMesh& raw, UniversalDecomposedTile& out) {
-        out.conformedTerrainSurface = raw;
-        // Natural normal smoothing
-        for (auto& v : out.conformedTerrainSurface.vertices) {
-            if (v.color.y > 0.4f) { // Green vegetation
-                v.color = Vec4(0.18f, 0.45f, 0.12f, 0.85f);
-            }
-        }
-    }
-
-    static size_t computeTotalOutputTriangles(const UniversalDecomposedTile& out) {
-        size_t count = out.conformedTerrainSurface.indices.size() / 3;
-        count += out.clearedUnderpassBridges.indices.size() / 3;
-        for (const auto& m : out.rectifiedBuildings) count += m.indices.size() / 3;
-        for (const auto& m : out.preservedSculpturalCrowns) count += m.indices.size() / 3;
-        return count;
     }
 };
 

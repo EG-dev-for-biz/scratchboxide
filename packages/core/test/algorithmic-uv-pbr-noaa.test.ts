@@ -115,6 +115,14 @@ describe('Algorithmic UV PBR Pipeline: NOAA Solar De-Lighting, Toksvig AA & Mate
   // --------------------------------------------------------------------------
   // 3. Custom Toksvig MIP Pyramid Pre-Filtering
   // --------------------------------------------------------------------------
+  it('refuses solar de-lighting without a sun: no default place or date stands in for it', async () => {
+    const albedo = new Uint8Array(8 * 8 * 4).fill(180);
+    for (const solarDelighting of [{}, { latitude: 40.7, longitude: -74.0 }, { latitude: 40.7, timestampIso: '2026-06-21T17:00:00Z' }]) {
+      await expect(AlgorithmicUvEngine.decomposePbr(albedo, { enableSolarInverseDelighting: true, solarDelighting }, 8, 8))
+        .rejects.toThrow(/Solar de-lighting needs solarDelighting\.sunVector, or latitude, longitude and a UTC timestampIso/);
+    }
+  });
+
   it('generates multi-scale Toksvig MIP pyramid folding normal variance into roughness', () => {
     const w = 16;
     const h = 16;

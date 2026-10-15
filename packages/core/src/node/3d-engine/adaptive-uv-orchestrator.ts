@@ -65,7 +65,8 @@ export interface TopologyProbeResult {
 export interface AdaptiveSolarDelightingConfig {
   latitude: number;
   longitude: number;
-  timestampIso?: string;
+  /** The UTC time whose sun lit the source imagery (required: the run's own clock is not that time). */
+  timestampIso: string;
   regularizationEpsilon?: number;
   ambientWeight?: number;
   directWeight?: number;
@@ -309,6 +310,12 @@ export class AdaptiveUvOrchestrator {
     } else if (appliedStrategy === 'elevation_stratified_conformal') {
       const { AlgorithmicUvEngine } = await import('../spatial/AlgorithmicUvEngine.js');
       const solar = request.solarDelighting;
+      if (solar) {
+        const { latitude, longitude, timestampIso } = solar;
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !timestampIso || Number.isNaN(Date.parse(timestampIso))) {
+          throw new Error(`Solar de-lighting needs the latitude, longitude and UTC timestampIso of the sun that lit the imagery (got ${latitude}, ${longitude}, ${JSON.stringify(timestampIso)}); none is assumed`);
+        }
+      }
       // processGlb has no gutter-dilation pass and cannot store a custom Toksvig MIP chain in glTF, so neither is requested.
       const pbrOptions: AlgorithmicUvOptions = {
         inputGlbBuffer: rawBuffer,
@@ -324,7 +331,7 @@ export class AdaptiveUvOrchestrator {
           solarDelighting: solar && {
             latitude: solar.latitude,
             longitude: solar.longitude,
-            timestampIso: solar.timestampIso || new Date().toISOString(),
+            timestampIso: solar.timestampIso,
             regularizationEpsilon: solar.regularizationEpsilon ?? 0.18,
             ambientWeight: solar.ambientWeight ?? 0.35,
             directWeight: solar.directWeight ?? 0.65

@@ -38,7 +38,7 @@ The **Complex Visual Workflows Skill** equips Antigravity to act as a **Master V
   • 70-20-10 Form Hierarchy     • Headless 4K 3D Blockout   • Multi-Angle Turnarounds
   • 4 Geometric Operators       • Omni 1.1 Conditioning     • PBR Material Director
   • Google 3D Tiles Clay/Tex    • Multi-Angle Quad-Split    • 2DGS Planar Surfels
-  • UTDRA Mesh Rectification    • Video Timeline NLE        • Analytical Forward Grooms
+  • UTDRA Tile Measurement      • Video Timeline NLE        • Analytical Forward Grooms
   • Dynamic 4DGS Humanoids      • 50/50 Comparison Splits   • Algorithmic UV Rewrap
              │                          │                          │
              └──────────────────────────┼──────────────────────────┘
@@ -106,11 +106,11 @@ Scratchbox provides a high-performance C++20 geometry core bound directly to Pyt
   - Always download/extract a fresh 3D model directly from Google Maps Platform Photorealistic 3D Tiles (`getGoogle3DTilesFullTexture` / `getGoogle3DTilesClay`) at leaf LOD (`errorTarget <= 0.5`) to establish a pristine, uncorrupted ground-truth geometric foundation.
 - **2D Vector Roadmap Staging (`stage_3d_vector_world`)**:
   - Queries Google 2D roadmap vector tiles (zoom 16) to generate 5-tier road cross-sections with beveled granite curbs, sidewalks, parcel massing prisms, lane-aligned traffic, streetlamps, and street trees.
-- **UTDRA Photogrammetric Rectification (`utdra_probe_tile`)**:
-  - Classifies across 9 macro-geographic domains, excises curtain walls beneath bridges, rectifies building vertical shafts while preserving historic cornices/crowns, and executes non-destructive elevation slicing.
+- **UTDRA tile tools (`utdra_probe_tile`, `utdra_slice_elevation`, `utdra_carve_bridge_voids`)**:
+  - Measures a tile (no classification), slices below-ground geometry at a given elevation, and removes curtain-wall triangles inside a span box you give.
 
 ### Parametric Mesh Reshaping & Dynamic Avatars
-- **Native Mesh Reshaping (`mesh_reshape_via_prompt` / `NativeMeshReshaperService`)**: Applies Bernstein FFD tensor lattices, taper, bend, twist, bulge, squash, and shear with zero external dependencies.
+- **Native Mesh Reshaping (`mesh_apply_deformers` / `NativeMeshReshaperService`)**: Applies explicit Bernstein FFD lattices, taper, bend, twist, bulge and shear to a given GLB, with values relative to the mesh's measured bounds.
 - **Local SF3D (`local-sf3d-service.ts`)**: Generates small organic forms, rocks, fruit, and biomorphic props in $< 500$ms on local GPU/MPS with flat ground contact planes.
 - **Dynamic 4DGS Humanoids (`scratchbox_4dgs_humanoid.hpp`, `Dynamic4DGaussianSplatService`)**: Controls 22-joint SB-Human canonical kinematic skeletons with Linear Blend Skinning (LBS), ground-contact IK altitude clamping, and SPZ/PLY streaming.
 
@@ -217,7 +217,7 @@ Transforms coarse 3D tile captures into photographic-grade imagery by constructi
 
 ### Runbook C: Google 3D Tiles Landmark $\rightarrow$ UTDRA $\rightarrow$ Algorithmic PBR $\rightarrow$ 4K Turnaround
 1. **Ingest Maximum Quality 3D Tiles**: Call `getGoogle3DTilesFullTexture` with `errorTarget <= 0.5`. Wait for leaf tiles to settle and package to `.glb`.
-2. **UTDRA Rectification**: Probe tile with `utdra_probe_tile`. Excise curtain walls beneath bridges and rectify vertical building shafts.
+2. **UTDRA**: Measure the tile with `utdra_probe_tile`; where the vector bridge layer gives a deck footprint, remove the curtain walls inside it with `utdra_carve_bridge_voids` (a clay tile; textured tiles are refused).
 3. **Algorithmic Micro-Textures**: Apply `AlgorithmicUVRewrapService` to deepen masonry joints and inject travertine cavitation pores with 0.000 px spatial lock.
 4. **Multi-Angle Turnaround Orbits**: Execute `generate_multi_angle_turnaround` across 8 dual-anchor orbit stations in isolated neutral void.
 

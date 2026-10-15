@@ -183,10 +183,9 @@ export {
     UniversalTileDecompositionService,
     UtdraService,
     UldraService,
-    GeographicDomain,
     UtdraPipelineMode,
-    UtdraBenchmarkType,
     UtdraServiceOptions,
+    UtdraSpanBox,
     UtdraTelemetry,
     UtdraResult
 } from './node/3d-engine/universal-tile-decomposition-service';
@@ -194,7 +193,6 @@ export {
     NativeMeshReshaperService,
     MeshReshapingService,
     reshapeMesh,
-    parsePromptToMeshOperations,
     MeshDeformationAxis,
     SculptBrushType,
     LatticeOffset,
@@ -393,6 +391,7 @@ export {
 export {
     ImageColorTransferService,
     transferImageColor,
+    type ToneCurve,
     type ImageColorTransferRequest,
     type ImageColorTransferResult,
     type LocalCielabOptions
@@ -529,6 +528,8 @@ export {
     type CameraPose6DOF,
     type EdgeAlignmentMetrics,
     type OptimizationOptions,
+    type AsyncOptimizationOptions,
+    type AsyncEdgeAlignmentMetrics,
     computeSobelField,
     evaluateEdgeOverlap
 } from './node/spatial/SubPixelEdgeAlignmentOptimizer';
@@ -1057,7 +1058,8 @@ export {
     AdaptiveStyleDeconstructionService
 } from './node/spatial/AdaptiveStyleDeconstructionService';
 export type {
-    DeconstructionOptions
+    DeconstructionOptions,
+    StyleDeconstructionResult
 } from './node/spatial/AdaptiveStyleDeconstructionService';
 
 // Adaptive Domain Particle Architecture (Zero-Preset & Schema-Guided)

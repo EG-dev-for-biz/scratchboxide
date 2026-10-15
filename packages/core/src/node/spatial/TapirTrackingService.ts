@@ -8,8 +8,10 @@
  ********************************************************************************/
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
 import type {
     IPointTracker
 } from '../../common/tracking/PointTrackingModel';
@@ -43,7 +45,9 @@ export interface TrackingExecutionResult {
 
 /**
  * Service for tracking 2D points and feature trajectories across video sequences.
- * Employs Google DeepMind TAPIR with automatic two-tier failover to native pyramidal Lucas-Kanade optical flow.
+ * The backend is the caller's choice and is reported in backendUsed: 'tapir' (Google DeepMind TAPIR through the
+ * Python bridge, the default), 'lk_flow' (native pyramidal Lucas-Kanade optical flow) or 'mock' (tests only).
+ * When TAPIR cannot run, the call fails with the reason; it never switches to optical flow on its own.
  */
 export class TapirTrackingService implements IPointTracker {
     private pythonBinary: string;
@@ -110,42 +114,36 @@ export class TapirTrackingService implements IPointTracker {
             };
         }
 
-        // Try Python DeepMind TAPIR first
-        try {
-            if (fs.existsSync(this.scriptPath)) {
-                const tapirOutput = await this.runPythonTapir({
-                    frames,
-                    queryPoints,
-                    queryFrames,
-                    checkpointPath: config?.checkpointPath ?? this.checkpointPath,
-                    useCausal: config?.useCausal ?? true
-                });
-
-                if (tapirOutput && tapirOutput.success && tapirOutput.coords) {
-                    return {
-                        tracks: {
-                            coords: tapirOutput.coords,
-                            visibilities: tapirOutput.visibilities ?? [],
-                            queryPoints,
-                            queryFrames
-                        },
-                        backendUsed: 'tapir',
-                        durationMs: Date.now() - start,
-                        numFrames: frames.length,
-                        numPoints: queryPoints.length
-                    };
-                }
-            }
-        } catch {
-            // Python execution failed or TAPIR not installed; fall through to native Lucas-Kanade
+        if (backend !== 'tapir') {
+            throw new GeneratorFailedError('tracking', `unknown tracker backend "${backend}" (tapir, lk_flow or mock)`);
         }
-
-        // Automatic transparent failover to native optical flow
-        const tracker = config ? new LucasKanadeFlowTracker(config) : this.lkTracker;
-        const tracks = tracker.trackPoints(frames, queryPoints, queryFrames);
+        // DeepMind TAPIR through the Python bridge: the frames go with the request. Any failure is reported as such.
+        if (!fs.existsSync(this.scriptPath)) {
+            throw new GeneratorFailedError('tapir', `the TAPIR bridge script ${this.scriptPath} does not exist; choose backend 'lk_flow' explicitly for optical flow`);
+        }
+        let tapirOutput: any;
+        try {
+            tapirOutput = await this.runPythonTapir({
+                frames,
+                queryPoints,
+                queryFrames,
+                checkpointPath: config?.checkpointPath ?? this.checkpointPath,
+                useCausal: config?.useCausal ?? true
+            });
+        } catch (err: any) {
+            throw new GeneratorFailedError('tapir', `TAPIR tracking failed: ${err?.message || err}`);
+        }
+        if (!tapirOutput?.success || !Array.isArray(tapirOutput.coords) || tapirOutput.coords.length !== frames.length) {
+            throw new GeneratorFailedError('tapir', `TAPIR returned no tracks for the ${frames.length} frames: ${tapirOutput?.error || tapirOutput?.reason || JSON.stringify(tapirOutput).slice(0, 300)}`);
+        }
         return {
-            tracks,
-            backendUsed: 'lk_flow',
+            tracks: {
+                coords: tapirOutput.coords,
+                visibilities: tapirOutput.visibilities ?? [],
+                queryPoints,
+                queryFrames
+            },
+            backendUsed: 'tapir',
             durationMs: Date.now() - start,
             numFrames: frames.length,
             numPoints: queryPoints.length
@@ -198,15 +196,60 @@ export class TapirTrackingService implements IPointTracker {
     }
 
     /**
-     * Internal helper to run the Python TAPIR bridge script.
+     * Runs the Python TAPIR bridge. The frames are written to a raw RGB file (T x H x W x 3, uint8) whose path and
+     * shape go in the JSON request on stdin; the bridge answers with JSON on stdout and exits non-zero on failure.
      */
-    private runPythonTapir(input: {
+    private async runPythonTapir(input: {
         frames: VideoFrameData[];
         queryPoints: NormalizedPoint2D[];
         queryFrames?: number[];
         checkpointPath?: string;
         useCausal?: boolean;
     }): Promise<any> {
+        if (input.frames.length === 0) {
+            throw new Error('no video frames to track');
+        }
+        const { width, height } = input.frames[0];
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tapir-'));
+        const framesPath = path.join(dir, 'frames.rgb');
+        try {
+            const fd = fs.openSync(framesPath, 'w');
+            try {
+                for (const frame of input.frames) {
+                    if (frame.width !== width || frame.height !== height) {
+                        throw new Error(`frame ${frame.frameIndex} is ${frame.width}x${frame.height}, the first frame ${width}x${height}`);
+                    }
+                    const channels = frame.channels ?? 3;
+                    let rgb: Uint8Array = frame.data;
+                    if (channels !== 3) {
+                        rgb = new Uint8Array(width * height * 3);
+                        for (let i = 0; i < width * height; i++) {
+                            rgb[i * 3] = frame.data[i * channels];
+                            rgb[i * 3 + 1] = frame.data[i * channels + 1];
+                            rgb[i * 3 + 2] = frame.data[i * channels + 2];
+                        }
+                    }
+                    fs.writeSync(fd, rgb, 0, width * height * 3);
+                }
+            } finally {
+                fs.closeSync(fd);
+            }
+            return await this.spawnBridge(JSON.stringify({
+                framesPath,
+                numFrames: input.frames.length,
+                width,
+                height,
+                queryPoints: input.queryPoints,
+                queryFrames: input.queryFrames,
+                checkpointPath: input.checkpointPath,
+                useCausal: input.useCausal
+            }));
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    private spawnBridge(payload: string): Promise<any> {
         return new Promise((resolve, reject) => {
             const child = spawn(this.pythonBinary, [this.scriptPath], {
                 stdio: ['pipe', 'pipe', 'pipe']
@@ -233,31 +276,26 @@ export class TapirTrackingService implements IPointTracker {
             child.on('close', (code) => {
                 clearTimeout(timer);
                 if (timedOut) return;
-
+                let parsed: any;
+                try {
+                    parsed = JSON.parse(stdout.trim());
+                } catch {
+                    parsed = undefined;
+                }
                 if (code !== 0) {
-                    reject(new Error(`TAPIR process exited with code ${code}: ${stderr}`));
+                    reject(new Error(`TAPIR process exited with code ${code}: ${parsed?.error || stderr.trim() || stdout.trim().slice(0, 300)}`));
                     return;
                 }
-
-                try {
-                    const parsed = JSON.parse(stdout.trim());
-                    resolve(parsed);
-                } catch (e) {
+                if (parsed === undefined) {
                     reject(new Error(`Failed to parse TAPIR stdout JSON: ${stdout.slice(0, 200)}...`));
+                    return;
                 }
+                resolve(parsed);
             });
 
             child.on('error', (err) => {
                 clearTimeout(timer);
                 reject(err);
-            });
-
-            // Write input payload: we pass query points and config (video loading handled via path or fallback)
-            const payload = JSON.stringify({
-                queryPoints: input.queryPoints,
-                queryFrames: input.queryFrames,
-                checkpointPath: input.checkpointPath,
-                useCausal: input.useCausal
             });
 
             child.stdin.write(payload);

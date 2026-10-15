@@ -7,10 +7,13 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
+import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
+import { MediaModelUnavailableError } from '../src/common/errors/pipeline-errors';
+import { decodePng } from '../src/node/texture-processing';
 import {
     Google360PanoramaPipelineService,
     healPanoramaSeam,
@@ -29,6 +32,38 @@ import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 
 const service = new Google360PanoramaPipelineService();
+
+/**
+ * A fake Gen AI client: every image call answers with a flat PNG of `color` (at its own 21:9-ish size, as real
+ * models do), or throws `failWith`. Records the model ids asked for. No test here reaches a real model.
+ */
+function fakeImageClient(calls: string[], color: [number, number, number], options: { failWith?: Error; served?: string[] } = {}) {
+    return {
+        models: {
+            generateContent: async ({ model }: { model: string }) => {
+                calls.push(model);
+                if (options.failWith) throw options.failWith;
+                if (options.served && !options.served.includes(model)) {
+                    throw Object.assign(new Error(`models/${model} is not found`), { status: 404 });
+                }
+                const w = 224, h = 96; // 21:9, about 1.3x smaller than the 299x128 edit canvas of a 256x128 panorama
+                const rgba = Buffer.alloc(w * h * 4);
+                for (let i = 0; i < w * h; i++) {
+                    rgba[i * 4] = color[0]; rgba[i * 4 + 1] = color[1]; rgba[i * 4 + 2] = color[2]; rgba[i * 4 + 3] = 255;
+                }
+                return { candidates: [{ content: { parts: [{ inlineData: { data: encodePng(w, h, rgba).toString('base64'), mimeType: 'image/png' } }] } }] };
+            }
+        }
+    };
+}
+
+function credentialsWith(client: unknown): GoogleMediaCredentialsService {
+    return { createClient: async () => client } as unknown as GoogleMediaCredentialsService;
+}
+
+afterEach(() => {
+    vi.restoreAllMocks();
+});
 
 describe('Google 360 Panorama Pipeline Service', () => {
 
@@ -177,7 +212,8 @@ describe('Google 360 Panorama Pipeline Service', () => {
         expect(healResult.outputImagePath).toBe(outputPath);
         expect(fs.existsSync(outputPath)).toBe(true);
         expect(fs.statSync(outputPath).size).toBeGreaterThan(1000);
-        expect(healResult.summary).toContain('seam healed successfully across 64px boundary');
+        expect(healResult.summary).toContain('seam healed across a 64px band');
+        expect(healResult.summary).toContain('Mock run: procedural seam heal, no model call.');
 
         await fs.remove(tempDir);
     });
@@ -209,7 +245,8 @@ describe('Google 360 Panorama Pipeline Service', () => {
         expect(inpaintResult.width).toBe(256);
         expect(inpaintResult.height).toBe(128);
         expect(fs.existsSync(outputPath)).toBe(true);
-        expect(inpaintResult.summary).toContain('inpainting completed successfully');
+        expect(inpaintResult.summary).toContain('Panorama inpainted');
+        expect(inpaintResult.summary).toContain('Mock run: procedural infill, no model call.');
 
         await fs.remove(tempDir);
     });
@@ -415,7 +452,9 @@ describe('Gemini Agent Tools for 360 Panorama', () => {
         expect(extractDecl?.parameters.required).toContain('inputImagePath');
     });
 
-    it('dispatches panorama_generate_360 via tool registry in mock mode', async () => {
+    it('dispatches panorama_generate_360 through the registry: the model generates the panorama and heals the seam, and the summary names it', async () => {
+        const calls: string[] = [];
+        vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(fakeImageClient(calls, [180, 120, 60]) as any);
         const registry = createDefaultToolRegistry();
         const outcome = await registry.dispatch(
             'panorama_generate_360',
@@ -424,6 +463,7 @@ describe('Gemini Agent Tools for 360 Panorama', () => {
                 width: 256,
                 height: 128,
                 healSeam: true,
+                // no longer a tool parameter: a model asking for mock output gets the real pipeline
                 mockExecution: true
             },
             {} as any
@@ -435,10 +475,15 @@ describe('Gemini Agent Tools for 360 Panorama', () => {
         expect(payload.width).toBe(256);
         expect(payload.height).toBe(128);
         expect(payload.seamHealed).toBe(true);
-        expect(payload.summary).toContain('360 panorama generated successfully');
+        expect(payload.modelUsed).toBe('gemini-3.1-flash-image');
+        expect(payload.summary).toContain('360 panorama generated from prompt');
+        expect(payload.summary).toContain('Generated with gemini-3.1-flash-image.');
+        expect(payload.summary).toContain('Seam heal: Generated with gemini-3.1-flash-image.');
+        expect(calls).toEqual(['gemini-3.1-flash-image', 'gemini-3.1-flash-image']);
     });
 
     it('dispatches panorama_generate_360 with structuredPrompt object via tool registry', async () => {
+        vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(fakeImageClient([], [40, 60, 200]) as any);
         const registry = createDefaultToolRegistry();
         const structured = buildEquirectangularStructuredPrompt('Tokyo Shibuya neon night street crossing', {
             lighting: 'Vibrant neon reflections with wet asphalt sheen'
@@ -450,8 +495,7 @@ describe('Gemini Agent Tools for 360 Panorama', () => {
                 prompt: 'Tokyo Shibuya neon crossing',
                 structuredPrompt: structured,
                 width: 256,
-                height: 128,
-                mockExecution: true
+                height: 128
             },
             {} as any
         );
@@ -466,6 +510,97 @@ describe('Gemini Agent Tools for 360 Panorama', () => {
         expect(payload.structuredPrompt.scene_context.description).toBe('Tokyo Shibuya neon night street crossing');
         expect(payload.structuredPrompt.rendering_style.lighting).toBe('Vibrant neon reflections with wet asphalt sheen');
     });
+
+    it('the panorama tools no longer offer a model-selectable mock mode, and take an optional model id', () => {
+        const registry = createDefaultToolRegistry();
+        for (const name of ['panorama_heal_seam', 'panorama_inpaint', 'panorama_generate_360', 'panorama_generate_4k', 'panorama_generate_perspectives', 'panorama_to_3dgs']) {
+            const properties = registry.get(name)?.declaration.parameters.properties || {};
+            expect(Object.keys(properties), name).not.toContain('mockExecution');
+        }
+        for (const name of ['panorama_heal_seam', 'panorama_inpaint', 'panorama_generate_360', 'panorama_generate_4k']) {
+            expect(registry.get(name)?.declaration.parameters.properties?.model, name).toBeDefined();
+        }
+    });
+
+    it('a panorama tool whose model cannot be reached fails with MediaModelUnavailableError instead of returning a procedural image', async () => {
+        vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockRejectedValue(new Error('Google media credentials are not configured'));
+        const registry = createDefaultToolRegistry();
+        const outcome = await registry.dispatch('panorama_generate_360', { prompt: 'Alpine meadow', width: 256, height: 128 }, {} as any);
+        expect(outcome.exec.status).toBe('failed');
+        expect(String((outcome.resultPayload as any).error)).toContain('Media model gemini-3.1-flash-image is unavailable');
+        expect(String((outcome.resultPayload as any).error)).toContain('Google media credentials are not available');
+    });
+});
+
+describe('Panorama model steps fail instead of substituting procedural output', () => {
+    async function rolledPanorama(): Promise<Buffer> {
+        const w = 256, h = 128;
+        const rgba = Buffer.alloc(w * h * 4);
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const i = (y * w + x) * 4;
+                rgba[i] = Math.round((x / w) * 255); rgba[i + 1] = 90; rgba[i + 2] = Math.round((y / h) * 255); rgba[i + 3] = 255;
+            }
+        }
+        return encodePng(w, h, rgba);
+    }
+
+    it('heals the seam with the model image inside the band and the input outside it, and says which model answered', async () => {
+        const calls: string[] = [];
+        const healer = new Google360PanoramaPipelineService(credentialsWith(fakeImageClient(calls, [250, 20, 20])));
+        const input = await rolledPanorama();
+        const result = await healer.healPanoramaSeam({ inputImageBuffer: input, seamWidth: 32 });
+        const out = decodePng(result.outputBuffer);
+        const original = decodePng(input);
+
+        expect(calls).toEqual(['gemini-3.1-flash-image']);
+        expect(result.modelUsed).toBe('gemini-3.1-flash-image');
+        expect(result.summary).toContain('Generated with gemini-3.1-flash-image.');
+        // Column 0 is the middle of the seam band: it carries the model's red.
+        expect(out.rgba[(64 * 256 + 0) * 4]).toBeGreaterThan(200);
+        expect(out.rgba[(64 * 256 + 0) * 4 + 1]).toBeLessThan(60);
+        // The middle of the image is far from the seam: bit-exact input.
+        const mid = (64 * 256 + 128) * 4;
+        expect([out.rgba[mid], out.rgba[mid + 1], out.rgba[mid + 2]]).toEqual([original.rgba[mid], original.rgba[mid + 1], original.rgba[mid + 2]]);
+
+        const shotDir = path.resolve(__dirname, '../../../test-results/screenshots');
+        await fs.ensureDir(shotDir);
+        await fs.writeFile(path.join(shotDir, 'panorama_seam_heal_model_band.png'), result.outputBuffer);
+    });
+
+    it('names the explicit model only, and reports the default list skipping an unserved model', async () => {
+        const pinnedCalls: string[] = [];
+        const pinned = new Google360PanoramaPipelineService(credentialsWith(fakeImageClient(pinnedCalls, [0, 0, 0], { served: ['gemini-3-pro-image'] })));
+        await expect(pinned.healPanoramaSeam({ inputImageBuffer: await rolledPanorama(), model: 'gemini-3.1-flash-image' }))
+            .rejects.toBeInstanceOf(MediaModelUnavailableError);
+        expect(pinnedCalls).toEqual(['gemini-3.1-flash-image']);
+
+        const listCalls: string[] = [];
+        const listed = new Google360PanoramaPipelineService(credentialsWith(fakeImageClient(listCalls, [0, 200, 0], { served: ['gemini-3-pro-image'] })));
+        const result = await listed.inpaintPanorama({ inputImageBuffer: await rolledPanorama(), nadirOnly: true });
+        expect(listCalls).toEqual(['gemini-3.1-flash-image', 'gemini-3-pro-image']);
+        expect(result.modelUsed).toBe('gemini-3-pro-image');
+        expect(result.skippedModels?.map(s => s.model)).toEqual(['gemini-3.1-flash-image']);
+        expect(result.summary).toContain('Generated with gemini-3-pro-image, not the requested gemini-3.1-flash-image');
+    });
+
+    it('seam heal, inpaint, 360 and 4K generation each reject when the model fails', async () => {
+        const quota = Object.assign(new Error('Resource exhausted'), { status: 429 });
+        const failing = new Google360PanoramaPipelineService(credentialsWith(fakeImageClient([], [0, 0, 0], { failWith: quota })));
+        const input = await rolledPanorama();
+        await expect(failing.healPanoramaSeam({ inputImageBuffer: input })).rejects.toBeInstanceOf(MediaModelUnavailableError);
+        await expect(failing.inpaintPanorama({ inputImageBuffer: input, nadirOnly: true })).rejects.toBeInstanceOf(MediaModelUnavailableError);
+        await expect(failing.generate360Panorama({ prompt: 'canyon', width: 256, height: 128 })).rejects.toThrow('Resource exhausted');
+        await expect(failing.generate4KMonumentalPanorama({ prompt: 'atrium', width: 512, height: 256 })).rejects.toBeInstanceOf(MediaModelUnavailableError);
+    });
+
+    it('the 16K upscaler names the interpolation it runs and refuses engines it does not run', async () => {
+        const result = await upscalePanorama16K({ inputImageBuffer: await rolledPanorama() });
+        expect(result.engineUsed).toContain('local-bilinear-4x');
+        expect(result.summary).toContain('no super-resolution model');
+        await expect(upscalePanorama16K({ inputImageBuffer: await rolledPanorama(), engine: 'vertex_ai_endpoint' }))
+            .rejects.toThrow('not run by the app');
+    }, 120_000);
 });
 
 describe('Structured 360 Equirectangular Prompt Format (User Specification)', () => {
@@ -846,144 +981,9 @@ describe('Structured 360 Equirectangular Prompt Format (User Specification)', ()
             expect(polarResult.height).toBe(height);
         });
 
-        it('generates a full 360 equirectangular panorama from an input 2D image with infill and polar filtering', async () => {
-            const pWidth = 120;
-            const pHeight = 80;
-            const inputRgba = Buffer.alloc(pWidth * pHeight * 4, 180); // perspective 2D image
-            const inputPng = encodePng(pWidth, pHeight, inputRgba);
-
-            const result = await service.generatePanoramaFromImage({
-                inputImageBuffer: inputPng,
-                width: 128,
-                height: 64,
-                hfovDeg: 90.0,
-                infillCeiling: true,
-                infillFloor: true,
-                healSeam: true,
-                mockExecution: true
-            });
-
-            expect(result.success).toBe(true);
-            expect(result.width).toBe(128);
-            expect(result.height).toBe(64);
-            expect(result.coverageRatio).toBeGreaterThan(0.05);
-            expect(result.outputBuffer.length).toBeGreaterThan(0);
-            expect(result.summary).toContain('360 panorama generated from perspective image successfully');
-        });
-
-        it('projects an input image concavely around the user with linear elevation mapping (zero cos(lambda) pinch)', () => {
-            const pWidth = 100;
-            const pHeight = 50;
-            const pRgba = Buffer.alloc(pWidth * pHeight * 4, 0);
-
-            // Draw a distinct horizontal stripe at rows 24, 25, 26 (elevation phi ~ 0, horizon)
-            for (let py = 24; py <= 26; py++) {
-                for (let px = 0; px < pWidth; px++) {
-                    const idx = (py * pWidth + px) * 4;
-                    pRgba[idx] = 255;
-                    pRgba[idx + 1] = 255;
-                    pRgba[idx + 2] = 255;
-                    pRgba[idx + 3] = 255;
-                }
-            }
-
-            const panoWidth = 128;
-            const panoHeight = 64;
-            const proj = Google360PanoramaPipelineService.projectAroundUserPanorama(
-                pRgba,
-                pWidth,
-                pHeight,
-                panoWidth,
-                panoHeight,
-                140.0,
-                { infillSurrounds: false, healSeam: false }
-            );
-
-            // Check that in the forward sector, the horizontal stripe stays on horizon rows (31 and 32)
-            // across all azimuths and does NOT pinch/curve vertically like gnomonic projection
-            let horizonHitCount = 0;
-            for (let x = 32; x < 96; x++) {
-                const idx31 = (31 * panoWidth + x) * 4;
-                const idx32 = (32 * panoWidth + x) * 4;
-                if (proj.panoRgba[idx31] > 100 || proj.panoRgba[idx32] > 100) {
-                    horizonHitCount++;
-                }
-            }
-            // Linear elevation mapping preserves horizontal lines across all longitudes
-            expect(horizonHitCount).toBeGreaterThanOrEqual(45);
-        });
-
-        it('synthesizes 100% full 360x180 surround with all perspectives infilled and polar cap invariance', () => {
-            const pWidth = 80;
-            const pHeight = 60;
-            const pRgba = Buffer.alloc(pWidth * pHeight * 4, 100);
-
-            const panoWidth = 64;
-            const panoHeight = 32;
-            const proj = Google360PanoramaPipelineService.projectAroundUserPanorama(
-                pRgba,
-                pWidth,
-                pHeight,
-                panoWidth,
-                panoHeight,
-                140.0,
-                { infillSurrounds: true, healSeam: true }
-            );
-
-            expect(proj.coverageRatio).toBe(1.0);
-            expect(proj.validPixelCount).toBeGreaterThan(0);
-
-            // Verify all pixels are filled (alpha = 255)
-            for (let y = 0; y < panoHeight; y++) {
-                for (let x = 0; x < panoWidth; x++) {
-                    const a = proj.panoRgba[(y * panoWidth + x) * 4 + 3];
-                    expect(a).toBe(255);
-                }
-            }
-
-            // Verify rotational invariance at zenith (row 0)
-            const zenithR0 = proj.panoRgba[0];
-            const zenithG0 = proj.panoRgba[1];
-            const zenithB0 = proj.panoRgba[2];
-            for (let x = 1; x < panoWidth; x++) {
-                const idx = x * 4;
-                expect(proj.panoRgba[idx]).toBe(zenithR0);
-                expect(proj.panoRgba[idx + 1]).toBe(zenithG0);
-                expect(proj.panoRgba[idx + 2]).toBe(zenithB0);
-            }
-        });
-
-        it('always executes boundary seam heal automatically by default when options are omitted', () => {
-            const pWidth = 80;
-            const pHeight = 60;
-            const pRgba = Buffer.alloc(pWidth * pHeight * 4, 150);
-
-            const panoWidth = 64;
-            const panoHeight = 32;
-            // Call without options or with empty options - healSeam must default to true
-            const projDefault = Google360PanoramaPipelineService.projectAroundUserPanorama(
-                pRgba,
-                pWidth,
-                pHeight,
-                panoWidth,
-                panoHeight,
-                140.0
-            );
-
-            expect(projDefault.coverageRatio).toBe(1.0);
-            expect(projDefault.validPixelCount).toBeGreaterThan(0);
-
-            // Boundary continuity: verify left edge (x=0) and right edge (x=panoWidth-1) transition smoothly without discontinuity
-            for (let y = 8; y < panoHeight - 8; y++) {
-                const leftIdx = (y * panoWidth + 0) * 4;
-                const rightIdx = (y * panoWidth + (panoWidth - 1)) * 4;
-                const diffR = Math.abs(projDefault.panoRgba[leftIdx] - projDefault.panoRgba[rightIdx]);
-                const diffG = Math.abs(projDefault.panoRgba[leftIdx + 1] - projDefault.panoRgba[rightIdx + 1]);
-                const diffB = Math.abs(projDefault.panoRgba[leftIdx + 2] - projDefault.panoRgba[rightIdx + 2]);
-                expect(diffR).toBeLessThan(10);
-                expect(diffG).toBeLessThan(10);
-                expect(diffB).toBeLessThan(10);
-            }
+        it('has no path that paints a panorama around a photo (invented sky, road, crosswalks and a mirrored rear)', () => {
+            expect((service as any).generatePanoramaFromImage).toBeUndefined();
+            expect((Google360PanoramaPipelineService as any).projectAroundUserPanorama).toBeUndefined();
         });
     });
 });

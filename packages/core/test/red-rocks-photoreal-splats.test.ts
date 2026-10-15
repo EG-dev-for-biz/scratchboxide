@@ -15,7 +15,6 @@ import * as http from 'http';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { requireAsset, requireAssets, withReason } from './helpers/requirements';
-import { injectTileExtraction } from './helpers/inject-tile-extraction';
 import {
   PhotorealGaussianSplatMesh,
   type SplatData
@@ -50,10 +49,17 @@ afterAll(() => {
   for (const dir of tempDirs) fs.removeSync(dir);
 });
 
-/** Runs `fn` with the station image model's credentials unset, so no billed image call can be made. */
+/**
+ * Runs `fn` with no image-model credentials reachable (environment keys and Vertex settings unset, and HOME pointed at
+ * an empty directory so no key saved in Settings is found), so no billed image call can be made.
+ */
 async function withoutStationImageCredentials<T>(fn: () => Promise<T>): Promise<T> {
-  const saved = { GEMINI_API_KEY: process.env.GEMINI_API_KEY, GOOGLE_API_KEY: process.env.GOOGLE_API_KEY, SCRATCHBOX_STATION_IMAGE_GENERATOR: process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR };
-  for (const key of Object.keys(saved)) delete process.env[key];
+  const keys = ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_AI_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS', 'GEMINI_SERVICE_ACCOUNT_PATH', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT', 'HOME'];
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-no-credentials-'));
+  tempDirs.push(emptyHome);
+  process.env.HOME = emptyHome;
   try {
     return await fn();
   } finally {
@@ -214,12 +220,14 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(droneStat.size).toBeGreaterThan(500 * 1024);
   });
 
-  it('7. Synthesizes Red Rocks venue through Location3DGaussianSplatService facade', async () => {
+  // The committed station plates were made from the real capture: reused plates must pass geometry QC against the
+  // mesh they are baked onto, so this runs only where that capture exists (never against a stand-in tile).
+  it.skipIf(!redRocksGlb.ok)(withReason('7. Synthesizes Red Rocks venue through Location3DGaussianSplatService facade', redRocksGlb), async () => {
     const { Location3DGaussianSplatService } = await import('../src/node/spatial/Location3DGaussianSplatService');
     // Run against a temp workspace so the pipeline never rewrites the tracked tileset in
     // public/tilesets/red_rocks (pose JSONs, tileset.json, tree.json) or drops synthesized
     // GLBs into public/models. Seed it with the tracked cached station plates so the run
-    // still bakes from the committed beautified images instead of regenerating them.
+    // still bakes from the committed beautified images (each re-checked against the mesh) instead of regenerating them.
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-red-rocks-3dgs-'));
     tempDirs.push(workspaceRoot);
     const outDir = path.join(workspaceRoot, 'public/tilesets/red_rocks');
@@ -230,16 +238,14 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
         await fs.copy(path.join(srcStations, name), path.join(outDir, 'stations', name));
       }
     }
-    // Use the real Google 3D Tiles capture when this machine has it (passed explicitly: the service never picks a
-    // GLB by name); otherwise the fresh extraction the service performs is injected (no network in tests).
-    const extraction = redRocksGlb.ok ? undefined : injectTileExtraction();
+    // The real Google 3D Tiles capture, passed explicitly: the service never picks a GLB by name.
     const service = new Location3DGaussianSplatService({ workspaceRoot });
 
     // No generator and no image-model credentials: with forceRebake: false the service builds no image generator,
     // so every station must bake from its cached plate. A station without one fails the run (success: false).
     const result = await withoutStationImageCredentials(() => service.generate({
       location: 'Red Rocks Amphitheatre',
-      ...(redRocksGlb.ok ? { glbPath: path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb') } : {}),
+      glbPath: path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb'),
       lat: 39.66555,
       lng: -105.20525,
       elevation: 1932.0,
@@ -251,12 +257,13 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
       forceRebake: false // reuse cached station plates instead of regenerating them
     }));
 
-    expect(result.error).toBeUndefined();
     expect(result.success).toBe(true);
     const meta = await fs.readJson(result.metaPath);
     expect(meta.generator).toBe('cached-beautified-plates');
     expect(meta.stations.length).toBe(result.stationCount);
-    for (const st of meta.stations) expect(st.qc.reason).toBe('cached plate reused; QC not re-run');
+    expect(result.acceptedStations).toBe(result.stationCount);
+    // Each cached plate was checked against the mesh again before it was baked; none was generated.
+    for (const st of meta.stations) expect(st.imageSource).toMatch(/passed geometry QC again.*no image was generated/);
     expect(result.locationName).toContain('Red Rocks');
     expect(result.geoAnchor.lat).toBeCloseTo(39.66555, 3);
     expect(result.geoAnchor.lng).toBeCloseTo(-105.20525, 3);
@@ -266,10 +273,6 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(result.scene3DData.sceneType).toBe('gaussian_splat');
     expect(result.scene3DData.splatUrl).toContain('red_rocks/fused.splat');
     expect(result.scene3DData.splatTilesetUrl).toContain('red_rocks/tileset.json');
-    if (extraction) {
-      expect(extraction).toHaveBeenCalledTimes(1);
-      extraction.mockRestore();
-    }
   });
 
   it('8. Fails up front with a typed error when every plate must be painted and no image model is configured', async () => {
@@ -293,7 +296,7 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     }));
 
     await expect(run).rejects.toBeInstanceOf(MissingInputError);
-    await expect(run).rejects.toThrow(/GEMINI_API_KEY or GOOGLE_API_KEY/);
+    await expect(run).rejects.toThrow(/image model credentials/);
     // No station was rendered or written.
     expect(await fs.pathExists(path.join(workspaceRoot, 'out/stations'))).toBe(false);
   });

@@ -12,8 +12,9 @@ import * as path from 'path';
 import { encodePng, decodePng } from '../texture-processing';
 import { decodeImageToRgba } from '../image-codec-ffmpeg';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
-import { classifyMediaGenerationError, IMAGE_MODEL_PRIORITY, resolveImageModelId } from '../../common/media-generation-protocol';
-import { EMPTY_IMAGE_RESPONSE_ATTEMPTS } from '../google-media-generation-service';
+import { IMAGE_MODEL_PRIORITY, SkippedMediaModel, describeModelUsed, resolveRequestedModels } from '../../common/media-generation-protocol';
+import { MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { generateImageWithModels, withMediaFailureContext } from '../google-media-generation-service';
 import {
     Google360PanoramaPipelineService,
     StreetViewCubeFace,
@@ -56,15 +57,18 @@ export interface MultiPerspectiveSynthesisOptions {
     faceResolution?: number;                // default 512
     equirectangularWidth?: number;          // default 2048
     equirectangularHeight?: number;         // default 1024
-    synthesizePerspectives?: PanoramaPerspective[]; // default ['right', 'back', 'left', 'top', 'bottom']
+    /** The views to generate around the input (default all five). A 360 stitch needs all five: a subset is refused. */
+    synthesizePerspectives?: PanoramaPerspective[];
     styleHint?: string;                     // e.g. 'photorealistic urban streetscape at sunset'
     prompt?: string;                        // optional prompt context describing the environment
     locationName?: string;                  // optional landmark or location name
-    model?: string;                         // default IMAGE_MODEL_PRIORITY[0]; product names resolve to API ids
-    useNanoBanana?: boolean;                // default true (set false for pure procedural)
+    model?: string;                         // when given, only this model is used; else IMAGE_MODEL_PRIORITY in order
+    useNanoBanana?: boolean;                // default true; false (user-requested) runs the procedural synthesizer, labelled as such
     useAiInpainting?: boolean;
-    mockExecution?: boolean;
+    mockExecution?: boolean;                // tests only: procedural copies, no model call (labelled as such)
     outputDir?: string;                     // directory to write individual perspective frames and stitched pano
+    /** Stops the rig between views and during a view's model call: a stopped request bills no further views. */
+    signal?: AbortSignal;
 }
 
 export interface MultiPerspectiveSynthesisResult {
@@ -84,7 +88,25 @@ export interface MultiPerspectiveSynthesisResult {
     };
     perspectivesSynthesized: PanoramaPerspective[];
     modelUsed: string;
+    /** Image models tried before the one that produced the views, with the reason (empty when the first answered). */
+    skippedModels?: SkippedMediaModel[];
+    /** Which model produced the views and, when it was not the requested one, why. */
+    modelNote?: string;
     summary: string;
+}
+
+/** The views around the input, in the order a 360 rig needs them. */
+export const SURROUNDING_PERSPECTIVES: readonly PanoramaPerspective[] = ['right', 'back', 'left', 'top', 'bottom'];
+
+/**
+ * The synthesized views and the image model that produced them. Only the input view and the views that were asked
+ * for are present: a view that was not generated is absent, never filled with a procedural stand-in.
+ */
+export interface PerspectiveSynthesisOutcome {
+    perspectives: Partial<Record<PanoramaPerspective, PerspectiveFrame>> & { front: PerspectiveFrame };
+    modelUsed: string;
+    skippedModels: SkippedMediaModel[];
+    modelNote: string;
 }
 
 export class MultiPerspectivePanoramaSynthesisService {
@@ -671,8 +693,10 @@ export class MultiPerspectivePanoramaSynthesisService {
     /**
      * Synthesizes the 5 missing perspective views (right, back, left, top, bottom)
      * conditioned on the initial front image using Nano Banana 2 (or Google GenAI).
-     * Throws when the model cannot be reached or answers without an image; only mockExecution
-     * returns procedural copies.
+     * The models tried are exactly `options.model` when given, else IMAGE_MODEL_PRIORITY; the first model that
+     * answers produces every view (one model per rig keeps the views consistent), and the outcome says which model
+     * that was and why any earlier one was skipped. Throws MediaModelUnavailableError when there are no
+     * credentials or no model produces a view; only mockExecution (tests) returns procedural copies.
      */
     async synthesizePerspectivesWithNanoBanana(
         frontRgba: Buffer,
@@ -684,19 +708,18 @@ export class MultiPerspectivePanoramaSynthesisService {
             locationName?: string;
             mockExecution?: boolean;
             perspectivesToGenerate?: PanoramaPerspective[];
+            signal?: AbortSignal;
         }
-    ): Promise<Record<PanoramaPerspective, PerspectiveFrame>> {
-        const model = resolveImageModelId(options?.model || IMAGE_MODEL_PRIORITY[0]);
-        const targetPerspectives: PanoramaPerspective[] = options?.perspectivesToGenerate || [
-            'right', 'back', 'left', 'top', 'bottom'
-        ];
+    ): Promise<PerspectiveSynthesisOutcome> {
+        let models = resolveRequestedModels(options?.model, IMAGE_MODEL_PRIORITY);
+        let skippedModels: SkippedMediaModel[] = [];
+        let modelUsed: string | undefined;
+        const targetPerspectives: PanoramaPerspective[] = options?.perspectivesToGenerate || [...SURROUNDING_PERSPECTIVES];
 
-        // 1. Procedural base reference with edge continuations
-        const proceduralBase = MultiPerspectivePanoramaSynthesisService.synthesizeMissingPerspectivesFromFront(
-            frontRgba,
-            res,
-            { styleHint: options?.styleHint || options?.prompt }
-        );
+        // Tests only (mockExecution): procedural copies of the input stand in for the model, labelled as such.
+        const proceduralBase = options?.mockExecution
+            ? MultiPerspectivePanoramaSynthesisService.synthesizeMissingPerspectivesFromFront(frontRgba, res, { styleHint: options?.styleHint || options?.prompt })
+            : undefined;
 
         const frontPng = encodePng(res, res, frontRgba);
         const frontFrame: PerspectiveFrame = {
@@ -710,14 +733,8 @@ export class MultiPerspectivePanoramaSynthesisService {
             cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS.front
         };
 
-        const result: Record<PanoramaPerspective, PerspectiveFrame> = {
-            front: frontFrame,
-            right: proceduralBase.right,
-            back: proceduralBase.back,
-            left: proceduralBase.left,
-            top: proceduralBase.top,
-            bottom: proceduralBase.bottom
-        };
+        // Only the input view and the views generated below: nothing stands in for a view that was not asked for.
+        const result: PerspectiveSynthesisOutcome['perspectives'] = { front: frontFrame };
 
         const frontBase64 = frontPng.toString('base64');
 
@@ -726,72 +743,55 @@ export class MultiPerspectivePanoramaSynthesisService {
             try {
                 client = await this.credentialsService.createClient();
             } catch (err: any) {
-                throw Object.assign(new Error(`Perspective synthesis with ${model} needs Google credentials (${err?.message || err}); ` +
-                    'pass useNanoBanana: false for procedural perspectives instead.'), { status: err?.status });
+                throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${err?.message || err})`);
             }
         }
 
         for (const p of targetPerspectives) {
             if (p === 'front') continue;
+            if (options?.signal?.aborted) {
+                throw Object.assign(new Error(`Stopped before the ${p} perspective`), { name: 'AbortError' });
+            }
 
             const prompt = MultiPerspectivePanoramaSynthesisService.buildNanoBananaPerspectivePrompt(p, options);
             let targetRgba: Buffer;
             let generatedBy: string | undefined;
 
             if (client) {
-                // Like the media service: ask again when a model answers with no image (gemini-3.1-flash-image
-                // sometimes finishes with STOP and no image part), and move on to the next model when one is not
-                // served (404); any other error ends the run.
-                const candidates = [model, ...IMAGE_MODEL_PRIORITY.filter(m => m !== model)];
-                let imageData: string | undefined;
-                let producedBy: string | undefined;
-                let lastEmpty = '';
-                for (const candidate of candidates) {
-                    for (let attempt = 0; attempt < EMPTY_IMAGE_RESPONSE_ATTEMPTS && !imageData; attempt++) {
-                        let response: any;
-                        try {
-                            response = await client.models.generateContent({
-                                model: candidate,
-                                contents: [
-                                    { text: prompt },
-                                    {
-                                        inlineData: {
-                                            data: frontBase64,
-                                            mimeType: 'image/png'
-                                        }
-                                    }
-                                ],
-                                config: {
-                                    responseModalities: ['TEXT', 'IMAGE'],
-                                    imageConfig: {
-                                        aspectRatio: '1:1'
-                                    }
-                                }
-                            } as any);
-                        } catch (err: any) {
-                            if (classifyMediaGenerationError(err, candidate).code === 'unsupported') break; // not served: next model
-                            throw Object.assign(new Error(`${candidate} failed on the ${p} perspective: ${err?.message || err}`), { status: err?.status });
-                        }
-                        const part = response.candidates?.[0]?.content?.parts?.find((pt: any) => pt.inlineData?.data);
-                        if (part?.inlineData?.data) {
-                            imageData = part.inlineData.data;
-                            producedBy = candidate;
-                        } else {
-                            const finishReason = response.candidates?.[0]?.finishReason;
-                            lastEmpty = `${candidate} returned no image${finishReason ? ` (${finishReason})` : ''}`;
-                        }
-                    }
-                    if (imageData) break;
+                // Moves on only past models that are not served (each recorded with its reason); any other
+                // failure ends the run with the model and perspective named.
+                let answer;
+                try {
+                    answer = await generateImageWithModels(client, {
+                        models,
+                        contents: [
+                            { text: prompt },
+                            { inlineData: { data: frontBase64, mimeType: 'image/png' } }
+                        ],
+                        imageConfig: { aspectRatio: '1:1' },
+                        signal: options?.signal
+                    });
+                } catch (err) {
+                    // Model failures gain the perspective name; any other error propagates as it is.
+                    throw withMediaFailureContext(err, `on the ${p} perspective`);
                 }
-                if (!imageData) {
-                    throw new Error(`No image model produced the ${p} perspective${lastEmpty ? `: ${lastEmpty}` : ' (none of them is served)'}`);
+                if (!modelUsed) {
+                    // The first view decides the model: the rest of the rig is asked of that model only.
+                    modelUsed = answer.modelUsed;
+                    skippedModels = answer.skippedModels;
+                    models = [answer.modelUsed];
                 }
-                const dec = await decodeImageToRgba(Buffer.from(imageData, 'base64'));
+                let dec;
+                try {
+                    dec = await decodeImageToRgba(answer.data);
+                } catch (err: any) {
+                    throw new MediaModelUnavailableError(answer.modelUsed, `the ${p} perspective image could not be decoded (${err?.message || err})`);
+                }
                 targetRgba = MultiPerspectivePanoramaSynthesisService.resampleRgba(dec.rgba, dec.width, dec.height, res, res);
-                generatedBy = producedBy;
+                generatedBy = answer.modelUsed;
             } else {
                 // mockExecution: a procedural copy of the base view, not model output
-                targetRgba = Buffer.from(proceduralBase[p].rgba);
+                targetRgba = Buffer.from(proceduralBase![p].rgba);
                 const rotOffset = (MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS[p].yawDeg / 90.0) * 0.15;
                 for (let i = 0; i < targetRgba.length; i += 4) {
                     const subtleMod = 1.0 + Math.sin((i / 4) * 0.005 + rotOffset) * 0.03;
@@ -817,7 +817,16 @@ export class MultiPerspectivePanoramaSynthesisService {
             };
         }
 
-        return result;
+        if (!client) {
+            return {
+                perspectives: result,
+                modelUsed: `${models[0]} mock: procedural copies, no model call`,
+                skippedModels: [],
+                modelNote: 'Mock run: procedural copies of the input, no model call.'
+            };
+        }
+        const used = modelUsed || models[0];
+        return { perspectives: result, modelUsed: used, skippedModels, modelNote: describeModelUsed(used, skippedModels) };
     }
 
     /**
@@ -848,9 +857,19 @@ export class MultiPerspectivePanoramaSynthesisService {
         const faceRes = options.faceResolution || 512;
         const panoW = options.equirectangularWidth || 2048;
         const panoH = options.equirectangularHeight || 1024;
+        if (options.synthesizePerspectives) {
+            const missing = SURROUNDING_PERSPECTIVES.filter(p => !options.synthesizePerspectives!.includes(p));
+            if (missing.length) {
+                throw new MissingInputError('panorama_generate_perspectives', 'synthesizePerspectives',
+                    `a 360 stitch needs all of ${SURROUNDING_PERSPECTIVES.join(', ')}; ${missing.join(', ')} would be missing and no view is filled in procedurally`);
+            }
+        }
 
         let perspectives: Record<PanoramaPerspective, PerspectiveFrame>;
+        let perspectivesSynthesized: PanoramaPerspective[];
         let modelUsed: string;
+        let skippedModels: SkippedMediaModel[] | undefined;
+        let modelNote: string | undefined;
 
         const ar = inWidth / inHeight;
         if (ar >= 1.85 && ar <= 2.15) {
@@ -874,7 +893,9 @@ export class MultiPerspectivePanoramaSynthesisService {
                     inputRgba, inWidth, inHeight, MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS.bottom, faceRes, faceRes
                 )
             };
+            perspectivesSynthesized = [];
             modelUsed = 'Equirectangular Camera Extractor (EAC Bilinear Backward Ray)';
+            modelNote = 'All six views were extracted from the input panorama; no model call.';
         } else {
             const frontRgba = Buffer.alloc(faceRes * faceRes * 4);
             const scaleX = inWidth / faceRes;
@@ -898,28 +919,30 @@ export class MultiPerspectivePanoramaSynthesisService {
             }
 
             if (options.useNanoBanana !== false && options.model !== 'procedural') {
-                const imageModel = resolveImageModelId(options.model || IMAGE_MODEL_PRIORITY[0]);
-                perspectives = await this.synthesizePerspectivesWithNanoBanana(
+                const outcome = await this.synthesizePerspectivesWithNanoBanana(
                     frontRgba,
                     faceRes,
                     {
-                        model: imageModel,
+                        model: options.model,
                         prompt: options.prompt,
                         styleHint: options.styleHint,
                         locationName: options.locationName,
                         mockExecution: options.mockExecution,
-                        perspectivesToGenerate: options.synthesizePerspectives
+                        perspectivesToGenerate: options.synthesizePerspectives,
+                        signal: options.signal
                     }
                 );
-                if (options.mockExecution) {
-                    modelUsed = `${imageModel} mock: procedural copies, no model call`;
-                } else {
-                    // Report the models that actually answered; the requested one may not be served.
-                    const used = Array.from(new Set(Object.values(perspectives).map(f => f?.generatedBy).filter((m): m is string => !!m)));
-                    const usedLabel = used.join(' + ') || imageModel;
-                    modelUsed = used.length && !used.includes(imageModel) ? `${usedLabel} (requested ${imageModel} is not served)` : usedLabel;
+                const missing = SURROUNDING_PERSPECTIVES.filter(p => !outcome.perspectives[p]);
+                if (missing.length) {
+                    throw new MediaModelUnavailableError(outcome.modelUsed, `no ${missing.join(', ')} view was generated, so there is nothing to stitch there`);
                 }
+                perspectives = outcome.perspectives as Record<PanoramaPerspective, PerspectiveFrame>;
+                perspectivesSynthesized = [...SURROUNDING_PERSPECTIVES];
+                modelUsed = outcome.modelUsed;
+                skippedModels = outcome.skippedModels;
+                modelNote = outcome.modelNote;
             } else {
+                // Explicitly requested procedural mode (useNanoBanana: false): edge continuations of the input, no model.
                 perspectives = MultiPerspectivePanoramaSynthesisService.synthesizeMissingPerspectivesFromFront(
                     frontRgba,
                     faceRes,
@@ -928,7 +951,9 @@ export class MultiPerspectivePanoramaSynthesisService {
                         inputFovDeg: options.inputFovDeg || 90.0
                     }
                 );
-                modelUsed = 'Native Procedural Perspective Synthesizer (C++/TS)';
+                perspectivesSynthesized = [...SURROUNDING_PERSPECTIVES];
+                modelUsed = 'procedural perspective synthesizer (requested: useNanoBanana false; no model call)';
+                modelNote = 'Procedural perspectives as requested (useNanoBanana: false): edge continuations of the input image, no model call.';
             }
         }
 
@@ -967,9 +992,11 @@ export class MultiPerspectivePanoramaSynthesisService {
                 horizontal: 360.0,
                 vertical: 180.0
             },
-            perspectivesSynthesized: ['right', 'back', 'left', 'top', 'bottom'],
+            perspectivesSynthesized,
             modelUsed,
-            summary: `Successfully generated 6-camera rectilinear perspective rig and stitched 360 equirectangular panorama (${panoW}x${panoH}, coverage: 360°x180°, 6/6 perspectives generated via ${modelUsed}).`
+            skippedModels,
+            modelNote,
+            summary: `Generated a 6-camera rectilinear perspective rig and stitched a 360 equirectangular panorama (${panoW}x${panoH}, coverage: 360°x180°, perspectives via ${modelUsed}).${modelNote ? ` ${modelNote}` : ''}`
         };
     }
 }

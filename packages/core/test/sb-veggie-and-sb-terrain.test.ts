@@ -6,7 +6,7 @@
  *
  * Verifies:
  * 1. SB-Veggie C++20/Node synthesis across archetypes, phenology, and morphology.
- * 2. SB-Terrain multi-material classification (pavement, grass, rock) & textures.
+ * 2. SB-Terrain slope materials: measured slope -> the caller's continuous material ramp.
  * 3. SB-Veggie planting on SB-Terrain: raycast ground snapping, biome admissibility,
  *    phototropic trunk vs slope root alignment, and grove distribution.
  ********************************************************************************/
@@ -17,12 +17,7 @@ import * as fs from 'fs';
 import { SbVeggieService } from '../src/node/3d-engine/sb-veggie-service';
 import {
     SbTerrainGroundEngine,
-    classifyTerrainSurfaceType,
-    createProceduralRockStrataTexture,
-    createProceduralGrassTexture,
-    createProceduralCobblestoneTexture,
-    type TerrainSurfaceType,
-    type SbTerrainClassificationResult
+    measureSurfaceSlope
 } from '../src/browser/generative-canvas/services/spatial/SbTerrainGroundEngine';
 import {
     TerrainManager,
@@ -110,78 +105,43 @@ describe('SB-Veggie Botanical Engine Core', () => {
 
 });
 
-describe('SB-Terrain Multi-Material Ground Engine Core', () => {
+describe('SB-Terrain slope materials core', () => {
     let terrainEngine: SbTerrainGroundEngine;
 
     beforeAll(() => {
         terrainEngine = new SbTerrainGroundEngine();
     });
 
-    it('1. classifyTerrainSurfaceType: accurately categorizes surfaces by slope angle', () => {
-        // Flat pavement plaza (slope 0°)
-        const flatGeom = new THREE.PlaneGeometry(10, 10, 4, 4);
-        flatGeom.rotateX(-Math.PI / 2);
-        expect(classifyTerrainSurfaceType(flatGeom)).toBe('pavement');
-
-        // Rolling lawn (slope ~ 20°)
-        const lawnGeom = new THREE.PlaneGeometry(10, 10, 4, 4);
-        lawnGeom.rotateX(-Math.PI / 2 + Math.PI / 9);
-        expect(classifyTerrainSurfaceType(lawnGeom)).toBe('grass');
-
-        // Steep bedrock scarp (slope ~ 50° > 32° threshold)
-        const cliffGeom = new THREE.PlaneGeometry(10, 10, 4, 4);
-        cliffGeom.rotateX(-Math.PI / 2 + Math.PI / 3.6);
-        expect(classifyTerrainSurfaceType(cliffGeom, { rockSlopeThresholdDeg: 32 })).toBe('rock');
+    it('1. measureSurfaceSlope: measures the mean slope of level, rolling and steep ground', () => {
+        const at = (deg: number) => {
+            const geom = new THREE.PlaneGeometry(10, 10, 4, 4);
+            geom.rotateX(-Math.PI / 2 + THREE.MathUtils.degToRad(deg));
+            return measureSurfaceSlope(geom).meanSlopeDeg;
+        };
+        expect(at(0)).toBeCloseTo(0, 4);
+        expect(at(20)).toBeCloseTo(20, 4);
+        expect(at(50)).toBeCloseTo(50, 4);
     });
 
-    it('2. generates procedural textures for rock strata, grass soil, and cobblestone pavers', () => {
-        const rockTex = createProceduralRockStrataTexture();
-        const grassTex = createProceduralGrassTexture();
-        const cobbleTex = createProceduralCobblestoneTexture();
-
-        expect(rockTex).toBeInstanceOf(THREE.Texture);
-        expect(grassTex).toBeInstanceOf(THREE.Texture);
-        expect(cobbleTex).toBeInstanceOf(THREE.Texture);
-
-        expect(rockTex.wrapS).toBe(THREE.RepeatWrapping);
-        expect(grassTex.wrapS).toBe(THREE.RepeatWrapping);
-        expect(cobbleTex.wrapS).toBe(THREE.RepeatWrapping);
-    });
-
-    it('3. classifyAndRenderTerrain: segments ground meshes into dedicated material groups', () => {
-        const pGeom = new THREE.PlaneGeometry(20, 20, 2, 2);
-        pGeom.rotateX(-Math.PI / 2);
-        const pMesh = new THREE.Mesh(pGeom);
-        pMesh.name = 'plaza_pavement';
-
-        const gGeom = new THREE.PlaneGeometry(20, 20, 2, 2);
-        gGeom.rotateX(-Math.PI / 2 + Math.PI / 10);
-        const gMesh = new THREE.Mesh(gGeom);
-        gMesh.name = 'meadow_lawn';
-
-        const rGeom = new THREE.PlaneGeometry(20, 20, 2, 2);
-        rGeom.rotateX(-Math.PI / 2 + Math.PI / 3);
-        const rMesh = new THREE.Mesh(rGeom);
-        rMesh.name = 'escarpment_rock';
-
-        const res = terrainEngine.classifyAndRenderTerrain([pMesh, gMesh, rMesh]);
-
-        expect(res.terrainGroup.children.length).toBe(3);
-        expect(res.metrics.totalSubmeshes).toBe(3);
-        expect(res.metrics.pavementCount).toBe(1);
-        expect(res.metrics.grassCount).toBe(1);
-        expect(res.metrics.rockCount).toBe(1);
-
-        // Test layer isolation
-        terrainEngine.setLayer('grass');
-        expect(res.grassGroup.visible).toBe(true);
-        expect(res.pavementGroup.visible).toBe(false);
-        expect(res.rocksGroup.visible).toBe(false);
-
-        terrainEngine.setLayer('all');
-        expect(res.grassGroup.visible).toBe(true);
-        expect(res.pavementGroup.visible).toBe(true);
-        expect(res.rocksGroup.visible).toBe(true);
+    it('2. applySlopeMaterials: steeper ground gets the rougher end of the ramp the caller chose', () => {
+        const meshes = [0, 18, 60].map(deg => {
+            const geom = new THREE.PlaneGeometry(20, 20, 2, 2);
+            geom.rotateX(-Math.PI / 2 + THREE.MathUtils.degToRad(deg));
+            const mesh = new THREE.Mesh(geom);
+            mesh.name = `ground_${deg}`;
+            return mesh;
+        });
+        const res = terrainEngine.applySlopeMaterials(meshes, {
+            stops: [
+                { slopeDeg: 0, color: [0.35, 0.35, 0.37], roughness: 0.5, metalness: 0.05 },
+                { slopeDeg: 60, color: [0.45, 0.38, 0.3], roughness: 0.95, metalness: 0.0 }
+            ]
+        });
+        const roughness = res.meshes.map(m => m.material.roughness);
+        expect(roughness[0]).toBeCloseTo(0.5, 6);
+        expect(roughness[1]).toBeGreaterThan(roughness[0]);
+        expect(roughness[2]).toBeCloseTo(0.95, 3);
+        expect(meshes.every(m => (m.material as THREE.MeshStandardMaterial).isMeshStandardMaterial)).toBe(true);
     });
 });
 
@@ -284,33 +244,6 @@ describe('SB-Veggie on SB-Terrain: Grounding, Biome Snapping & Phototropism', ()
         expect(trunkGrowthVector.y).toBe(1.0);
         expect(trunkGrowthVector.x).toBe(0.0);
         expect(trunkGrowthVector.z).toBe(0.0);
-    });
-
-    it('4. should enforce ecological biome admissibility: planting on grass and rejecting pavement/cliffs', () => {
-        // Simulated biome classification function
-        const canPlantTree = (surfaceType: TerrainSurfaceType, slopeDeg: number): { allowed: boolean; reason: string } => {
-            if (surfaceType === 'pavement') {
-                return { allowed: false, reason: 'Impervious urban pavement / cobblestone plaza' };
-            }
-            if (surfaceType === 'rock' || slopeDeg > 32) {
-                return { allowed: false, reason: 'Steep bedrock escarpment / unstable crag slope' };
-            }
-            return { allowed: true, reason: 'Fertile park lawn / natural meadow soil' };
-        };
-
-        // Case A: Park Lawn (grass, slope 15°)
-        const lawnCheck = canPlantTree('grass', 15);
-        expect(lawnCheck.allowed).toBe(true);
-
-        // Case B: Cobblestone Piazza (pavement, slope 2°)
-        const pavementCheck = canPlantTree('pavement', 2);
-        expect(pavementCheck.allowed).toBe(false);
-        expect(pavementCheck.reason).toContain('pavement');
-
-        // Case C: Steep Crag Scarp (rock, slope 48°)
-        const cliffCheck = canPlantTree('rock', 48);
-        expect(cliffCheck.allowed).toBe(false);
-        expect(cliffCheck.reason).toContain('bedrock');
     });
 
     it('5. should distribute a grove of trees with minimum collision spacing and 100% terrain grounding', () => {

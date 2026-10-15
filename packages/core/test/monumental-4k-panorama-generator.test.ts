@@ -7,10 +7,12 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
+import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
+import { encodePng } from '../src/node/texture-processing';
 import {
     Google360PanoramaPipelineService,
     generate4KMonumentalPanorama,
@@ -123,17 +125,32 @@ describe('4K Monumental 360 Panorama Generator Pipeline & Agent Tool', () => {
     });
 
     it('dispatches panorama_generate_4k via agent tool registry and receives certified 100/100 payload', async () => {
+        // A fake image model (no network): the tool's panorama comes from this client, as it would from Gemini.
+        const calls: string[] = [];
+        const gradient = Buffer.alloc(168 * 72 * 4);
+        for (let i = 0; i < 168 * 72; i++) {
+            gradient[i * 4] = 90 + (i % 168); gradient[i * 4 + 1] = 120; gradient[i * 4 + 2] = 170; gradient[i * 4 + 3] = 255;
+        }
+        vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue({
+            models: {
+                generateContent: async ({ model }: { model: string }) => {
+                    calls.push(model);
+                    return { candidates: [{ content: { parts: [{ inlineData: { data: encodePng(168, 72, gradient).toString('base64'), mimeType: 'image/png' } }] } }] };
+                }
+            }
+        } as any);
         const registry = createDefaultToolRegistry();
         const outcome = await registry.dispatch(
             'panorama_generate_4k',
             {
                 prompt: 'Neo-futuristic circular sky lounge with panoramic 360 glass curtain wall',
                 width: 2048,
-                height: 1024,
-                mockExecution: true
+                height: 1024
             },
             {} as any
         );
+        vi.restoreAllMocks();
+        expect(calls).toEqual(['gemini-3.1-flash-image']);
 
         expect(outcome.exec.status).toBe('completed');
         expect(outcome.resultPayload).toBeDefined();
@@ -145,7 +162,9 @@ describe('4K Monumental 360 Panorama Generator Pipeline & Agent Tool', () => {
         expect(payload.polarCapsRemoved).toBe(true);
         expect(payload.qualityScore).toBe(100);
         expect(payload.qcPass).toBe(true);
+        expect(payload.modelUsed).toBe('gemini-3.1-flash-image');
         expect(payload.summary).toContain('Generated 4K Monumental 360 Panorama');
+        expect(payload.summary).toContain('Generated with gemini-3.1-flash-image.');
     });
 
     it('routes 4K monumental panorama generation to Tier 1 Native Google Models', () => {

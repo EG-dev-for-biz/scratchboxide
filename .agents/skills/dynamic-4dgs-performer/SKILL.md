@@ -100,12 +100,15 @@ Deforms the avatar's 4D Gaussian cloud to an exact frame index, optionally retur
 ```
 
 ### 4. `avatar_4dgs_retarget`
-Retargets external motion tracks (e.g. MediaPipe pose solve or custom joint angles) onto the avatar with terrain ground-contact altitude clamping:
+Retargets a recorded motion track onto the avatar with ground-contact altitude clamping. The track is the JSON that
+`vfx_mediapipe_track_video_motion` writes to its `outputJsonPath` (per-frame MediaPipe world landmarks or joint angles);
+the call fails without one, refuses a dry-run track, and writes the retargeted avatar motion to `outputMotionPath`:
 ```json
 {
   "name": "avatar_4dgs_retarget",
   "args": {
     "avatarId": "2785536",
+    "motionTrackPath": "output/tracks/dancer_take3.json",
     "groundAltitudeMeters": 14.5,
     "pinFeetToGround": true,
     "smoothingWindow": 3

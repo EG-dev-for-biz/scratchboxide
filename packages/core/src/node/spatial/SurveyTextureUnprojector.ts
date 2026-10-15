@@ -13,7 +13,8 @@ import { HeadlessMeshSilhouetteRenderer, type RenderMesh3D } from './HeadlessMes
 import { stationToPinhole, cameraBasis, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH, solarAtUtcInstant } from './SurveyStationRenderService';
-import { BeautifyStationService, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { BeautifyStationService, describeStationImageSource, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { AlgorithmicUvEngine, type PbrDecompositionOptions, type PbrDecompositionResult } from './AlgorithmicUvEngine';
 import { MaxRectsAtlasPacker, type TextureItem } from './TextureAtlasPacker';
@@ -40,6 +41,10 @@ export interface StationPlate {
      * (no 8-bit requantisation), e.g. exposure / white-balance normalisation. Undefined = unchanged.
      */
     linearGain?: [number, number, number];
+    /** Where the plate's picture came from (the image model that answered, and why when another one was asked for). */
+    imageSource?: string;
+    /** The image model that produced the plate's picture, when the generator named one. */
+    modelUsed?: string;
 }
 
 /** Robust (IRLS Huber) re-weighting of multi-view observations. Opt-in. */
@@ -103,7 +108,10 @@ export interface SurveyTextureUnprojectorOptions {
     angleWeightExponent?: number;
     /** Number of gutter dilation bleed pixels to prevent edge fringing. Default 4. */
     edgeBleedPixels?: number;
-    /** Default stone fallback color if a surface is never observed. Default limestone [210, 205, 195]. */
+    /**
+     * sRGB colour for texels no station observes. When unset, processGlbWithSurveyStations keeps the mesh's own
+     * colour there (its base colour texture or factor); a direct unprojectPrimitiveToAtlas call leaves them transparent.
+     */
     defaultColor?: [number, number, number];
     /** Solar ephemeris coordinates and timestamp for NOAA inverse de-lighting. */
     solarDelighting?: {
@@ -156,6 +164,16 @@ export interface SurveyTextureUnprojectorOptions {
     perTriangleCameraCulling?: boolean;
 }
 
+/** A station whose generated image failed geometry QC: it is not painted into the texture. */
+export interface RejectedStation {
+    stationId: number;
+    reason: string;
+    imageSource: string;
+}
+
+/** What unobserved texels are filled with: one sRGB colour, or a same-UV-space RGBA image at the atlas size. */
+export type UnobservedTexelFill = { rgb: [number, number, number] } | { rgba: Buffer | Uint8Array };
+
 export interface StationContribution {
     stationId: number;
     texelCount: number;
@@ -191,6 +209,8 @@ export interface SubmeshTextureResult {
     metallicPng: Buffer;
     metrics: UnprojectionMetrics;
     pbrResult?: PbrDecompositionResult;
+    /** True when the albedo was de-lit for the sun position given in options.solarDelighting. */
+    solarDelightingApplied?: boolean;
 }
 
 export interface SurveyTextureResult {
@@ -206,6 +226,14 @@ export interface SurveyTextureResult {
     metrics: UnprojectionMetrics;
     pbrResult?: PbrDecompositionResult;
     submeshes?: SubmeshTextureResult[];
+    /** Image models that produced the station plates (empty for precomputed plates that name none). */
+    modelsUsed: string[];
+    /** One line per distinct plate source: the model that answered and, when it was not the requested one, why. */
+    imageSources: string[];
+    /** Stations whose image failed geometry QC and were left out of the texture. */
+    rejectedStations: RejectedStation[];
+    /** Covered texels no station observed; they keep the mesh's own colour. */
+    unobservedTexels: number;
 }
 
 export interface SurveyTexturePipelineRequest {
@@ -296,6 +324,9 @@ export class SurveyTextureUnprojector {
     ): Promise<SurveyTextureResult> {
         const startTime = performance.now();
         const glbBuffer = await fs.readFile(request.glbPath);
+        // The texture is baked into the mesh's own UVs, so a mesh without them is refused before any station image
+        // is generated: UVs made up here would not be in the written GLB, and the texture could not show.
+        this.requireOwnUvs(glbBuffer, request.glbPath);
         const options = request.options || {};
         const isDraft = options.draft === true;
         const defaultResolution = options.resolution;
@@ -310,33 +341,32 @@ export class SurveyTextureUnprojector {
                 throw new Error('Generator fidelity (draft) disagrees with options.draft (production)');
             }
         } else if (!request.precomputedPlates || request.precomputedPlates.length === 0) {
-            try {
-                const { GoogleMediaGenerationService } = await import('../google-media-generation-service');
-                const { GoogleMediaCredentialsService } = await import('../google-media-credentials-service');
-                const { MediaAssetStore } = await import('../media-asset-store');
-                const { createGoogleStationImageGenerator } = await import('./BeautifyStationService');
+            // The stations are photographed by the image model; the clay blockouts are never used as texture instead.
+            const { GoogleMediaGenerationService } = await import('../google-media-generation-service');
+            const { GoogleMediaCredentialsService } = await import('../google-media-credentials-service');
+            const { MediaAssetStore } = await import('../media-asset-store');
+            const { createGoogleStationImageGenerator } = await import('./BeautifyStationService');
 
-                const credentials = new GoogleMediaCredentialsService();
-                const assetStore = new MediaAssetStore();
-                const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
-                generator = createGoogleStationImageGenerator({
-                    mediaService,
-                    assetStore,
-                    workspaceRoot: process.cwd(),
-                    fidelity: isDraft ? 'draft' : 'production',
-                    imageSize: isDraft ? '1K' : '2K'
-                });
-            } catch {
-                // Ignore if Google GenAI unavailable in environment
-            }
+            const credentials = new GoogleMediaCredentialsService();
+            const assetStore = new MediaAssetStore();
+            const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
+            generator = createGoogleStationImageGenerator({
+                mediaService,
+                assetStore,
+                workspaceRoot: process.cwd(),
+                fidelity: isDraft ? 'draft' : 'production',
+                imageSize: isDraft ? '1K' : '2K'
+            });
         }
 
-        // 1. Prepare station plates (render blockouts + depth + beautified RGBA)
+        // 1. Prepare station plates (render blockouts + depth + beautified RGBA). Stations whose image fails geometry
+        //    QC are left out: an image that moved the geometry would be painted onto the wrong surfaces.
         let plates: StationPlate[] = [];
+        let rejectedStations: RejectedStation[] = [];
         if (request.precomputedPlates && request.precomputedPlates.length > 0) {
             plates = request.precomputedPlates;
         } else {
-            plates = await this.renderAndBeautifyStations(
+            const prepared = await this.renderAndBeautifyStations(
                 glbBuffer,
                 request.stations,
                 request.beautifyContext,
@@ -344,9 +374,15 @@ export class SurveyTextureUnprojector {
                 options,
                 request
             );
+            plates = prepared.plates;
+            rejectedStations = prepared.rejected;
         }
 
         if (plates.length === 0) {
+            if (rejectedStations.length > 0) {
+                throw new GeneratorFailedError('image model', `every station image failed geometry QC, so nothing can be painted: `
+                    + rejectedStations.map(r => `station ${r.stationId}: ${r.reason} (${r.imageSource})`).join('; '));
+            }
             throw new Error('SurveyTextureUnprojector: No valid station plates available for unprojection');
         }
 
@@ -374,7 +410,8 @@ export class SurveyTextureUnprojector {
             }
             console.log(`[SurveyTextureUnprojector] Submesh ${i + 1}/${primitives.length}: ${prim.indices.length / 3} tris, target res ${primW}x${primH}...`);
             const subT0 = performance.now();
-            const sub = await this.unprojectPrimitiveToAtlas(prim, i, preparedCameras, options, primW, primH);
+            const fill = options.defaultColor ? { rgb: options.defaultColor } : await this.primitiveOwnColor(prim, glbJson, glbBin, primW, primH);
+            const sub = await this.unprojectPrimitiveToAtlas(prim, i, preparedCameras, options, primW, primH, fill);
             console.log(`[SurveyTextureUnprojector] Submesh ${i + 1}/${primitives.length} finished in ${((performance.now() - subT0) / 1000).toFixed(2)}s`);
             submeshResults.push(sub);
             // The bake is synchronous per submesh; yield so a Stop (an I/O event) can land between submeshes.
@@ -442,8 +479,43 @@ export class SurveyTextureUnprojector {
             metallicPng: primarySub.metallicPng,
             metrics: overallMetrics,
             pbrResult: primarySub.pbrResult,
-            submeshes: submeshResults
+            submeshes: submeshResults,
+            modelsUsed: Array.from(new Set(plates.map(p => p.modelUsed).filter((m): m is string => !!m))),
+            imageSources: Array.from(new Set(plates.map(p => p.imageSource).filter((m): m is string => !!m))),
+            rejectedStations,
+            unobservedTexels: totalCoveredTexels - totalPaintedTexels
         };
+    }
+
+    /**
+     * The colour a primitive already has, as an atlas-sized fill for texels no station sees: its base colour texture
+     * resampled into the atlas's UV space, or its base colour factor, or white (glTF's default material).
+     */
+    public static async primitiveOwnColor(prim: MeshPrimitiveData, glbJson: any, glbBin: Buffer, atlasW: number, atlasH: number): Promise<UnobservedTexelFill> {
+        const material = prim.materialIndex === undefined ? undefined : glbJson.materials?.[prim.materialIndex];
+        const pbr = material?.pbrMetallicRoughness || {};
+        const toSrgb8 = (c: number) => {
+            const v = Math.max(0, Math.min(1, Number.isFinite(c) ? c : 1));
+            return Math.round(255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055));
+        };
+        const factor: number[] = Array.isArray(pbr.baseColorFactor) ? pbr.baseColorFactor : [1, 1, 1, 1];
+        const texIdx = pbr.baseColorTexture?.index;
+        const image = texIdx === undefined ? undefined : glbJson.images?.[glbJson.textures?.[texIdx]?.source];
+        const view = image?.bufferView === undefined ? undefined : glbJson.bufferViews?.[image.bufferView];
+        if (view) {
+            const { decodeImageToRgba } = await import('../image-codec-ffmpeg');
+            const offset = view.byteOffset || 0;
+            const decoded = await decodeImageToRgba(glbBin.subarray(offset, offset + view.byteLength));
+            const rgba = resampleRgba(decoded.rgba, decoded.width, decoded.height, atlasW, atlasH);
+            // The texture is multiplied by the base colour factor in linear light, as the viewer does.
+            if (factor.slice(0, 3).some(f => Math.abs(f - 1) > 1e-6)) {
+                for (let i = 0; i < rgba.length; i += 4) {
+                    for (let k = 0; k < 3; k++) rgba[i + k] = toSrgb8(SRGB_TO_LINEAR_LUT[rgba[i + k]] * factor[k]);
+                }
+            }
+            return { rgba };
+        }
+        return { rgb: [toSrgb8(factor[0]), toSrgb8(factor[1]), toSrgb8(factor[2])] };
     }
 
     /**
@@ -456,7 +528,9 @@ export class SurveyTextureUnprojector {
         preparedCameras: PreparedCamera[],
         options: SurveyTextureUnprojectorOptions,
         resolution: number,
-        atlasHeight?: number
+        atlasHeight?: number,
+        /** What texels no station observes are filled with (default: options.defaultColor, else left transparent). */
+        unobservedFill?: UnobservedTexelFill
     ): Promise<SubmeshTextureResult> {
         const atlasW = resolution;
         const atlasH = atlasHeight !== undefined && atlasHeight > 0 ? atlasHeight : resolution;
@@ -479,7 +553,7 @@ export class SurveyTextureUnprojector {
         const atlasColorSqSum = new Float32Array(totalTexels);
         const atlasObsCount = new Uint16Array(totalTexels);
 
-        const defaultCol = options.defaultColor || [210, 205, 195];
+        const fill: UnobservedTexelFill | undefined = unobservedFill ?? (options.defaultColor ? { rgb: options.defaultColor } : undefined);
         const minCosIncidence = options.minCosIncidence ?? 0.08;
         const angleExp = options.angleWeightExponent ?? 2.0;
         const depthTol = options.depthTolerance ?? 0.20;
@@ -748,13 +822,22 @@ export class SurveyTextureUnprojector {
             }
         }
 
-        for (let i = 0; i < totalTexels; i++) {
-            if (atlasCoverage[i] === 1 && atlasBestScore[i] === 0 && (!useMultiBlend || atlasWeight[i] === 0)) {
-                const pIdx = i * 4;
-                atlasRgba[pIdx] = defaultCol[0];
-                atlasRgba[pIdx + 1] = defaultCol[1];
-                atlasRgba[pIdx + 2] = defaultCol[2];
-                atlasRgba[pIdx + 3] = 255;
+        // Texels no station saw keep the surface's own colour (never an invented one).
+        if (fill) {
+            for (let i = 0; i < totalTexels; i++) {
+                if (atlasCoverage[i] === 1 && atlasBestScore[i] === 0 && (!useMultiBlend || atlasWeight[i] === 0)) {
+                    const pIdx = i * 4;
+                    if ('rgb' in fill) {
+                        atlasRgba[pIdx] = fill.rgb[0];
+                        atlasRgba[pIdx + 1] = fill.rgb[1];
+                        atlasRgba[pIdx + 2] = fill.rgb[2];
+                    } else {
+                        atlasRgba[pIdx] = fill.rgba[pIdx];
+                        atlasRgba[pIdx + 1] = fill.rgba[pIdx + 1];
+                        atlasRgba[pIdx + 2] = fill.rgba[pIdx + 2];
+                    }
+                    atlasRgba[pIdx + 3] = 255;
+                }
             }
         }
 
@@ -765,6 +848,7 @@ export class SurveyTextureUnprojector {
 
         const encodeTextures = options.encodeTextures !== false;
         let pbrResult: PbrDecompositionResult | undefined;
+        let solarDelightingApplied = false;
         let albedoPng: Buffer;
         let normalPng: Buffer;
         let ormPng: Buffer;
@@ -810,11 +894,12 @@ export class SurveyTextureUnprojector {
             };
 
             if ((!isDraft || options.pbrDecomposition?.enableSolarInverseDelighting === true) &&
-                options.solarDelighting?.lat && options.solarDelighting?.lng && options.solarDelighting?.isoDate) {
+                Number.isFinite(options.solarDelighting?.lat) && Number.isFinite(options.solarDelighting?.lng) && options.solarDelighting?.isoDate) {
                 pbrOpts.enableSolarInverseDelighting = true;
+                solarDelightingApplied = true;
                 pbrOpts.solarDelighting = {
-                    latitude: options.solarDelighting.lat,
-                    longitude: options.solarDelighting.lng,
+                    latitude: options.solarDelighting.lat!,
+                    longitude: options.solarDelighting.lng!,
                     timestampIso: options.solarDelighting.isoDate,
                     ...options.pbrDecomposition?.solarDelighting
                 };
@@ -924,7 +1009,8 @@ export class SurveyTextureUnprojector {
             aoPng,
             metallicPng,
             metrics: submeshMetrics,
-            pbrResult
+            pbrResult,
+            solarDelightingApplied
         };
     }
 
@@ -1290,7 +1376,10 @@ export class SurveyTextureUnprojector {
         generator?: StationImageGenerator,
         options?: SurveyTextureUnprojectorOptions,
         progress: Pick<SurveyTexturePipelineRequest, 'onProgress' | 'signal'> = {}
-    ): Promise<StationPlate[]> {
+    ): Promise<{ plates: StationPlate[]; rejected: RejectedStation[] }> {
+        if (!beautifyContext?.locationName) {
+            throw new MissingInputError('survey_beautify_to_texture', 'locationName', 'the stations are generated for a named place; no placeholder name is used');
+        }
         const renderService = new SurveyStationRenderService();
         await renderService.loadMesh(glbBuffer);
 
@@ -1298,6 +1387,7 @@ export class SurveyTextureUnprojector {
         const defaultW = isDraft ? 768 : 1280;
         const baseW = options?.renderWidth || (options?.resolution ? Math.min(defaultW, options.resolution) : defaultW);
         const plates: StationPlate[] = [];
+        const rejected: RejectedStation[] = [];
         let previousAccepted: BeautifyStationResult | undefined;
 
         for (const [stationIndex, st] of stations.entries()) {
@@ -1320,13 +1410,17 @@ export class SurveyTextureUnprojector {
                 height: stationH
             });
 
-            let stationRgba: Buffer = blockout.rgba;
-
-            if (generator) {
+            if (!generator) {
+                throw new MissingInputError('survey_beautify_to_texture', 'generator', 'stations need an image generator (or precomputed plates); the clay blockout is never used as the texture');
+            }
+            let stationRgba: Buffer;
+            let imageSource: string;
+            let modelUsed: string | undefined;
+            {
                 const beautifyService = new BeautifyStationService(renderService, generator);
                 const bRes = await beautifyService.beautify(
                     st,
-                    beautifyContext || { locationName: 'Target Location' },
+                    beautifyContext,
                     {
                         width: stationW,
                         height: stationH,
@@ -1336,14 +1430,20 @@ export class SurveyTextureUnprojector {
                         signal: progress.signal
                     }
                 );
-                if (bRes.accepted) {
-                    previousAccepted = bRes;
+                if (!bRes.accepted) {
+                    // The image moved the geometry beyond tolerance: painting it at the blockout pose would put its
+                    // pixels on the wrong surfaces, so the station is left out and reported.
+                    rejected.push({ stationId: st.id, reason: bRes.qc?.reason || 'failed geometry QC', imageSource: describeStationImageSource(bRes) });
+                    continue;
                 }
+                previousAccepted = bRes;
                 if (bRes.image.width !== stationW || bRes.image.height !== stationH) {
                     stationRgba = resampleRgba(bRes.image.rgba, bRes.image.width, bRes.image.height, stationW, stationH);
                 } else {
                     stationRgba = Buffer.from(bRes.image.rgba);
                 }
+                imageSource = describeStationImageSource(bRes);
+                modelUsed = bRes.modelUsed;
             }
 
             plates.push({
@@ -1353,7 +1453,9 @@ export class SurveyTextureUnprojector {
                 height: stationH,
                 depth: blockout.depth,
                 pose: blockout.cameraPose,
-                intrinsics: blockout.intrinsics
+                intrinsics: blockout.intrinsics,
+                imageSource,
+                modelUsed
             });
         }
 
@@ -1363,21 +1465,91 @@ export class SurveyTextureUnprojector {
             console.log(`[SurveyTextureUnprojector] Radiance equalized anchored to station ${eqRes.anchorStationId} (${eqRes.stationsEqualized} plates processed)`);
         }
 
-        return plates;
+        return { plates, rejected };
     }
 
     /**
-     * Loads mesh primitives from GLB. If the mesh lacks UVs, automatically generates
-     * box/planar unwrap and packs them with MaxRectsAtlasPacker.
+     * Reads accessor `index` as `components` floats per element, decoding its declared component type: float as is,
+     * normalized integers to [0, 1] (unsigned) or [-1, 1] (signed), honouring byteStride. What it cannot decode
+     * faithfully (sparse accessors, no buffer view, integers that are not normalized, a component type
+     * `allowFloatOnly` excludes) throws MissingInputError naming `what`, so a mesh is never read as garbage.
+     */
+    private static readFloatAccessor(json: any, bin: Buffer, index: number, components: number, what: string, allowFloatOnly = false): Float32Array {
+        const acc = json.accessors?.[index];
+        if (!acc) throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${what} names accessor ${index}, which the file does not define`);
+        if (acc.sparse) throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${what} is a sparse accessor, which this reader does not decode`);
+        if (acc.bufferView === undefined) throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${what} has no buffer view`);
+        const sizes: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5126: 4 };
+        const size = sizes[acc.componentType];
+        const floatType = acc.componentType === 5126;
+        if (!size || (!floatType && (allowFloatOnly || acc.normalized !== true))) {
+            throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB',
+                `${what} uses component type ${acc.componentType}${acc.normalized ? ' (normalized)' : ''}, which this reader does not decode${allowFloatOnly ? ' (floats only)' : ' (floats or normalized integers)'}`);
+        }
+        const view = json.bufferViews[acc.bufferView];
+        const offset = (view.byteOffset || 0) + (acc.byteOffset || 0);
+        const stride = view.byteStride || size * components;
+        const dv = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
+        const out = new Float32Array(acc.count * components);
+        if (offset + (acc.count - 1) * stride + size * components > bin.byteLength && acc.count > 0) {
+            throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${what} reads past the end of the binary chunk`);
+        }
+        for (let i = 0; i < acc.count; i++) {
+            const base = offset + i * stride;
+            for (let c = 0; c < components; c++) {
+                const at = base + c * size;
+                switch (acc.componentType) {
+                    case 5126: out[i * components + c] = dv.getFloat32(at, true); break;
+                    case 5121: out[i * components + c] = dv.getUint8(at) / 255; break;
+                    case 5123: out[i * components + c] = dv.getUint16(at, true) / 65535; break;
+                    case 5120: out[i * components + c] = Math.max(dv.getInt8(at) / 127, -1); break;
+                    case 5122: out[i * components + c] = Math.max(dv.getInt16(at, true) / 32767, -1); break;
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Refuses a GLB with a triangle primitive that has no TEXCOORD_0: the bake paints into the mesh's own UVs and
+     * writes no new ones, so a texture baked for such a primitive could not be shown. Throws MissingInputError.
+     */
+    public static requireOwnUvs(glbBuffer: Buffer, label: string): void {
+        let json: any;
+        try {
+            json = AlgorithmicUvEngine.parseGlb(glbBuffer).json;
+        } catch (err: any) {
+            throw new MissingInputError('survey_beautify_to_texture', 'glbPath', `${label} is not a readable GLB (${err?.message || err})`);
+        }
+        let primitives = 0;
+        (json.meshes || []).forEach((mesh: any, meshIndex: number) => {
+            (mesh.primitives || []).forEach((prim: any, primIndex: number) => {
+                if (!prim.attributes || prim.attributes.POSITION === undefined) return;
+                primitives++;
+                if (prim.attributes.TEXCOORD_0 === undefined) {
+                    throw new MissingInputError('survey_beautify_to_texture', 'a GLB with UVs',
+                        `${label} mesh ${meshIndex} primitive ${primIndex} has no TEXCOORD_0, so a texture baked for it would have no UVs to show through (unwrap the mesh first)`);
+                }
+            });
+        });
+        if (primitives === 0) {
+            throw new MissingInputError('survey_beautify_to_texture', 'a GLB with a mesh', `${label} has no primitive with POSITION to texture`);
+        }
+    }
+
+    /**
+     * Loads mesh primitives from GLB. If the mesh lacks UVs, generates a box/planar unwrap in memory (packed with
+     * MaxRectsAtlasPacker) for callers that only need geometry; processGlbWithSurveyStations refuses such meshes. Positions and normals must be floats; UVs may be
+     * floats or normalized integers. Index accessors are read by their own type and checked against the vertex
+     * count. An accessor this reader cannot decode throws MissingInputError.
      */
     public static loadMeshPrimitives(
         glbBuffer: Buffer,
         targetResolution: number = 4096,
-        loadOptions?: {
+        _loadOptions?: {
             /**
-             * Decode UNSIGNED_BYTE (5121) index accessors correctly. The legacy path reads every
-             * non-UNSIGNED_SHORT accessor as UNSIGNED_INT, which corrupts uint8-indexed primitives
-             * (Google 3D Tiles use them for small chunks). Opt-in to keep legacy results unchanged.
+             * No longer changes anything: UNSIGNED_BYTE (5121) index accessors are always decoded as bytes (reading
+             * them as UNSIGNED_INT corrupted the uint8-indexed chunks of Google 3D Tiles). Kept for existing callers.
              */
             decodeAllIndexTypes?: boolean;
         }
@@ -1385,89 +1557,62 @@ export class SurveyTextureUnprojector {
         const { json, bin } = AlgorithmicUvEngine.parseGlb(glbBuffer);
         const primitives: MeshPrimitiveData[] = [];
 
-        for (const mesh of json.meshes || []) {
-            for (const prim of mesh.primitives || []) {
-                if (prim.attributes && prim.attributes.POSITION !== undefined) {
-                    const posAcc = json.accessors[prim.attributes.POSITION];
-                    const posView = json.bufferViews[posAcc.bufferView];
-                    const posOffset = (posView.byteOffset || 0) + (posAcc.byteOffset || 0);
-                    const posStride = posView.byteStride ? posView.byteStride / 4 : 3;
-                    const rawPositions = new Float32Array(bin.buffer, bin.byteOffset + posOffset, posAcc.count * posStride);
+        (json.meshes || []).forEach((mesh: any, meshIndex: number) => {
+            (mesh.primitives || []).forEach((prim: any, primIndex: number) => {
+                if (!prim.attributes || prim.attributes.POSITION === undefined) return;
+                const where = `mesh ${meshIndex} primitive ${primIndex}`;
+                const positions = this.readFloatAccessor(json, bin, prim.attributes.POSITION, 3, `${where} POSITION`, true);
+                const vertexCount = positions.length / 3;
 
-                    // Compact positions
-                    const positions = new Float32Array(posAcc.count * 3);
-                    for (let i = 0; i < posAcc.count; i++) {
-                        positions[i * 3] = rawPositions[i * posStride];
-                        positions[i * 3 + 1] = rawPositions[i * posStride + 1];
-                        positions[i * 3 + 2] = rawPositions[i * posStride + 2];
+                // Indices
+                let indices: Uint32Array;
+                if (prim.indices !== undefined) {
+                    const indAcc = json.accessors[prim.indices];
+                    const indView = indAcc?.bufferView === undefined ? undefined : json.bufferViews[indAcc.bufferView];
+                    if (!indAcc || !indView || indAcc.sparse) {
+                        throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${where} indices are missing, sparse or have no buffer view`);
                     }
-
-                    // Indices
-                    let indices: Uint32Array;
-                    if (prim.indices !== undefined) {
-                        const indAcc = json.accessors[prim.indices];
-                        const indView = json.bufferViews[indAcc.bufferView];
-                        const indOffset = (indView.byteOffset || 0) + (indAcc.byteOffset || 0);
-                        if (indAcc.componentType === 5123) { // UNSIGNED_SHORT
-                            const rawInd = new Uint16Array(bin.buffer, bin.byteOffset + indOffset, indAcc.count);
-                            indices = new Uint32Array(rawInd);
-                        } else if (loadOptions?.decodeAllIndexTypes === true && indAcc.componentType === 5121) { // UNSIGNED_BYTE
-                            indices = new Uint32Array(new Uint8Array(bin.buffer, bin.byteOffset + indOffset, indAcc.count));
-                        } else {
-                            indices = new Uint32Array(bin.buffer, bin.byteOffset + indOffset, indAcc.count);
+                    const indOffset = (indView.byteOffset || 0) + (indAcc.byteOffset || 0);
+                    const bytes = { 5121: 1, 5123: 2, 5125: 4 }[indAcc.componentType as 5121 | 5123 | 5125];
+                    if (!bytes) {
+                        throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${where} indices use component type ${indAcc.componentType}`);
+                    }
+                    if (indOffset + indAcc.count * bytes > bin.byteLength) {
+                        throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${where} indices read past the end of the binary chunk`);
+                    }
+                    // Copied out of the chunk, so an index view at any byte offset is read by its own width.
+                    const raw = bin.buffer.slice(bin.byteOffset + indOffset, bin.byteOffset + indOffset + indAcc.count * bytes);
+                    indices = bytes === 1 ? new Uint32Array(new Uint8Array(raw)) : bytes === 2 ? new Uint32Array(new Uint16Array(raw)) : new Uint32Array(raw);
+                    for (let i = 0; i < indices.length; i++) {
+                        if (indices[i] >= vertexCount) {
+                            throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${where} index ${indices[i]} is past its ${vertexCount} vertices`);
                         }
-                    } else {
-                        indices = new Uint32Array(posAcc.count);
-                        for (let i = 0; i < posAcc.count; i++) indices[i] = i;
                     }
-
-                    // Normals
-                    let normals: Float32Array;
-                    if (prim.attributes.NORMAL !== undefined) {
-                        const normAcc = json.accessors[prim.attributes.NORMAL];
-                        const normView = json.bufferViews[normAcc.bufferView];
-                        const normOffset = (normView.byteOffset || 0) + (normAcc.byteOffset || 0);
-                        const normStride = normView.byteStride ? normView.byteStride / 4 : 3;
-                        const rawNorm = new Float32Array(bin.buffer, bin.byteOffset + normOffset, normAcc.count * normStride);
-                        normals = new Float32Array(normAcc.count * 3);
-                        for (let i = 0; i < normAcc.count; i++) {
-                            normals[i * 3] = rawNorm[i * normStride];
-                            normals[i * 3 + 1] = rawNorm[i * normStride + 1];
-                            normals[i * 3 + 2] = rawNorm[i * normStride + 2];
-                        }
-                    } else {
-                        // Calculate vertex normals from faces
-                        normals = this.calculateMeshNormals(positions, indices);
-                    }
-
-                    // UVs
-                    let uvs: Float32Array;
-                    if (prim.attributes.TEXCOORD_0 !== undefined) {
-                        const uvAcc = json.accessors[prim.attributes.TEXCOORD_0];
-                        const uvView = json.bufferViews[uvAcc.bufferView];
-                        const uvOffset = (uvView.byteOffset || 0) + (uvAcc.byteOffset || 0);
-                        const uvStride = uvView.byteStride ? uvView.byteStride / 4 : 2;
-                        const rawUvs = new Float32Array(bin.buffer, bin.byteOffset + uvOffset, uvAcc.count * uvStride);
-                        uvs = new Float32Array(uvAcc.count * 2);
-                        for (let i = 0; i < uvAcc.count; i++) {
-                            uvs[i * 2] = rawUvs[i * uvStride];
-                            uvs[i * 2 + 1] = rawUvs[i * uvStride + 1];
-                        }
-                    } else {
-                        // Synthesize box UV unwrap packed with MaxRects
-                        uvs = this.generateBoxUvs(positions, normals, indices, targetResolution);
-                    }
-
-                    primitives.push({
-                        positions,
-                        normals,
-                        uvs,
-                        indices,
-                        materialIndex: prim.material
-                    });
+                } else {
+                    indices = new Uint32Array(vertexCount);
+                    for (let i = 0; i < vertexCount; i++) indices[i] = i;
                 }
-            }
-        }
+
+                // Normals
+                const normals = prim.attributes.NORMAL !== undefined
+                    ? this.readFloatAccessor(json, bin, prim.attributes.NORMAL, 3, `${where} NORMAL`, true)
+                    : this.calculateMeshNormals(positions, indices);
+
+                // UVs (floats, or normalized integers decoded to [0, 1])
+                const uvs = prim.attributes.TEXCOORD_0 !== undefined
+                    ? this.readFloatAccessor(json, bin, prim.attributes.TEXCOORD_0, 2, `${where} TEXCOORD_0`)
+                    // Synthesize box UV unwrap packed with MaxRects
+                    : this.generateBoxUvs(positions, normals, indices, targetResolution);
+
+                primitives.push({
+                    positions,
+                    normals,
+                    uvs,
+                    indices,
+                    materialIndex: prim.material
+                });
+            });
+        });
 
         return { primitives, glbJson: json, glbBin: bin };
     }
@@ -1566,31 +1711,45 @@ export class SurveyTextureUnprojector {
             if (v > b.maxV) b.maxV = v;
         }
 
-        // Pack the 6 charts using MaxRectsAtlasPacker
-        const packer = new MaxRectsAtlasPacker({
-            maxWidth: atlasResolution,
-            maxHeight: atlasResolution,
-            padding: 8,
-            allowRotation: false
-        });
-
-        const activeCharts: number[] = [];
+        // Pack the charts with MaxRectsAtlasPacker at their metric proportions, scaled so they fill the atlas. The
+        // packer falls back to shelf packing when the charts do not fit, which can place them outside its atlas; such
+        // a layout is never used: the charts are packed smaller until every one lies inside.
+        const activeCharts: Array<{ chart: number; wMeters: number; hMeters: number }> = [];
         for (let c = 0; c < 6; c++) {
             const b = chartBounds[c];
-            const wMeters = Math.max(0.1, b.maxU - b.minU);
-            const hMeters = Math.max(0.1, b.maxV - b.minV);
             if (b.minU !== Infinity) {
-                activeCharts.push(c);
-                packer.addTexture({
-                    id: c,
-                    width: Math.max(64, Math.round(wMeters * 30)),
-                    height: Math.max(64, Math.round(hMeters * 30)),
-                    data: new Uint8Array(64 * 64 * 4)
-                });
+                activeCharts.push({ chart: c, wMeters: Math.max(0.1, b.maxU - b.minU), hMeters: Math.max(0.1, b.maxV - b.minV) });
             }
         }
-
-        const packed = packer.pack();
+        const metricArea = activeCharts.reduce((sum, a) => sum + a.wMeters * a.hMeters, 0);
+        let texelsPerMeter = metricArea > 0 ? Math.sqrt((0.6 * atlasResolution * atlasResolution) / metricArea) : 1;
+        let packed: ReturnType<MaxRectsAtlasPacker['pack']> | undefined;
+        for (let attempt = 0; attempt < 32 && !packed; attempt++) {
+            const packer = new MaxRectsAtlasPacker({
+                maxWidth: atlasResolution,
+                maxHeight: atlasResolution,
+                padding: 8,
+                allowRotation: false
+            });
+            for (const a of activeCharts) {
+                packer.addTexture({
+                    id: a.chart,
+                    width: Math.max(1, Math.round(a.wMeters * texelsPerMeter)),
+                    height: Math.max(1, Math.round(a.hMeters * texelsPerMeter))
+                });
+            }
+            const attemptResult = packer.pack();
+            const inside = attemptResult.width <= atlasResolution && attemptResult.height <= atlasResolution
+                && activeCharts.every(a => {
+                    const r = attemptResult.rects.get(a.chart);
+                    return !!r && r.x >= 0 && r.y >= 0 && r.x + r.width <= attemptResult.width && r.y + r.height <= attemptResult.height;
+                });
+            if (inside) packed = attemptResult;
+            else texelsPerMeter *= 0.8;
+        }
+        if (!packed) {
+            throw new GeneratorFailedError('uv unwrap', `the ${activeCharts.length} box-projection charts could not be packed into a ${atlasResolution}px atlas`);
+        }
 
         // Assign UV coordinates into the packed rects
         for (let i = 0; i < vertCount; i++) {

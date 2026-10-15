@@ -230,23 +230,20 @@ export {
     ArchieBuildingRefiner,
     smoothFacadeNormals,
     generateWatertightPlinth,
-    ARCHIE_BUILDING_PALETTES,
-    type ArchieBuildingPalette,
+    createArchieMaterial,
+    type ArchieMaterialParameters,
     type ArchieBuildingRefineOptions,
     type ArchieRefinedBuildingResult
 } from './browser/generative-canvas/services/spatial/ArchieBuildingRefiner';
 
 export {
     SbTerrainGroundEngine,
-    classifyTerrainSurfaceType,
-    createProceduralRockStrataTexture,
-    createProceduralGrassTexture,
-    createProceduralCobblestoneTexture,
-    type TerrainSurfaceType,
-    type TerrainLayerMode,
-    type TerrainClassificationMetrics,
-    type SbTerrainOptions,
-    type SbTerrainClassificationResult
+    measureSurfaceSlope,
+    materialAtSlope,
+    validateSlopeStops,
+    type SlopeMaterialStop,
+    type SurfaceSlopeMetrics,
+    type SlopeMaterialResult
 } from './browser/generative-canvas/services/spatial/SbTerrainGroundEngine';
 
 // Adaptive Domain Style Shader API & Schema Contract

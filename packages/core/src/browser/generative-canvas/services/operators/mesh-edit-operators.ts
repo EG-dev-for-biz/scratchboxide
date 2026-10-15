@@ -19,8 +19,36 @@ import {
 } from '../mesh-sculpting-engine';
 import {
     ArchieBuildingRefiner,
-    type ArchieBuildingPalette
+    type ArchieMaterialParameters
 } from '../spatial/ArchieBuildingRefiner';
+
+/**
+ * The meshes of the live viewport whose name or id is `targetMeshId`. Throws when no id is given, no viewport is
+ * attached, or nothing matches (naming the meshes that are there): an operator that edits scene meshes never picks
+ * one by a keyword in its name and never builds a stand-in to edit.
+ */
+export function findViewportMeshes(threeScene: THREE.Scene | undefined, targetMeshId: string | undefined, operator: string): THREE.Mesh[] {
+    if (!targetMeshId) {
+        throw new Error(`${operator} needs targetMeshId: the name or id of the mesh in the scene to edit; no mesh is guessed`);
+    }
+    if (!threeScene) {
+        throw new Error(`${operator} edits meshes in the live 3D viewport, and no viewport is attached here`);
+    }
+    const matches: THREE.Mesh[] = [];
+    const names: string[] = [];
+    threeScene.traverse(node => {
+        if (!(node as THREE.Mesh).isMesh) return;
+        if (node.name) names.push(node.name);
+        if (String((node as any).id) === String(targetMeshId) || node.name === targetMeshId || node.uuid === targetMeshId) {
+            matches.push(node as THREE.Mesh);
+        }
+    });
+    if (matches.length === 0) {
+        const listed = names.slice(0, 20).map(n => `'${n}'`).join(', ');
+        throw new Error(`${operator}: no mesh named or with id '${targetMeshId}' in the scene${names.length ? ` (meshes: ${listed}${names.length > 20 ? ', ...' : ''})` : ' (it has no named meshes)'}`);
+    }
+    return matches;
+}
 
 export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
@@ -587,39 +615,34 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_reshape_mesh',
         category: 'mesh_edit',
-        description: 'Applies prompt-driven or parametric deformation operations (taper, twist, bend, bulge, sculpt, lattice) directly to mesh geometry.',
+        description: 'Applies explicit deformation operations (taper factor, twist angle, bend angle, bulge factor) along the mesh\'s vertical (Y) extent in the viewport. Each operation gives its own values; nothing is read from prose and nothing is applied by default.',
         execute: (ctx, params: {
             objectId: string;
             prompt?: string;
             operations?: Array<{
-                type: 'taper' | 'twist' | 'bend' | 'bulge' | 'squash' | 'shear' | 'sculpt' | 'subdivide' | 'weather';
+                type: 'taper' | 'twist' | 'bend' | 'bulge' | (string & {});
                 factor?: number;
                 angle?: number;
-                axis?: 'x' | 'y' | 'z';
-                amount?: number;
-                radius?: number;
-                strength?: number;
-                brush?: string;
-                iterations?: number;
                 [key: string]: any;
             }>;
-            strength?: number;
         }) => {
             const found = ctx.findObject(params.objectId);
             if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
 
-            const ops = params.operations ? [...params.operations] : [];
-            // If prompt is provided and no explicit operations, parse operations from prompt keywords
-            if (ops.length === 0 && params.prompt) {
-                const lower = params.prompt.toLowerCase();
-                if (/taper/i.test(lower)) ops.push({ type: 'taper', factor: 0.5, axis: 'y' });
-                if (/twist/i.test(lower)) ops.push({ type: 'twist', angle: 45, axis: 'y' });
-                if (/bend/i.test(lower)) ops.push({ type: 'bend', angle: 30, axis: 'x' });
-                if (/bulge|inflate/i.test(lower)) ops.push({ type: 'bulge', factor: 0.4, axis: 'y' });
-                if (/squash/i.test(lower)) ops.push({ type: 'squash', factor: 0.6, axis: 'y' });
-                if (/shear/i.test(lower)) ops.push({ type: 'shear', amount: 0.3, axis: 'x' });
-                if (/sculpt|crease|clay|smooth/i.test(lower)) ops.push({ type: 'sculpt', brush: 'clay', strength: 0.5, radius: 0.5 });
-                if (/subdivide|smooth\s*mesh/i.test(lower)) ops.push({ type: 'subdivide', iterations: 1 });
+            // The operations are the caller's: a prompt is kept as a note but never turned into stock magnitudes.
+            const ops = Array.isArray(params.operations) ? [...params.operations] : [];
+            if (ops.length === 0) {
+                throw new Error('sb_reshape_mesh needs operations: give each deformation with its own values (taper factor, twist angle, bend angle, bulge factor).');
+            }
+            const required: Record<string, 'factor' | 'angle'> = { taper: 'factor', twist: 'angle', bend: 'angle', bulge: 'factor' };
+            for (const op of ops) {
+                const key = required[op.type];
+                if (!key) throw new Error(`sb_reshape_mesh cannot apply "${op.type}" in the viewport (taper, twist, bend, bulge); use the native mesh_apply_deformers tool for others.`);
+                if (typeof op[key] !== 'number' || !Number.isFinite(op[key])) throw new Error(`sb_reshape_mesh: ${op.type} needs a number ${key}.`);
+            }
+            const geometry = found.threeObject && (found.threeObject as THREE.Mesh).geometry;
+            if (!geometry || !(geometry.attributes.position as THREE.BufferAttribute | undefined)) {
+                throw new Error(`sb_reshape_mesh: object '${params.objectId}' has no mesh geometry in the viewport to deform.`);
             }
 
             let vertexCount = 0;
@@ -635,7 +658,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                     const heightY = Math.max(1e-4, maxY - minY);
 
                     for (const op of ops) {
-                        const factor = op.factor ?? (op.strength ?? 0.5);
+                        const factor = op.factor as number;
                         if (op.type === 'taper') {
                             for (let i = 0; i < pos.count; i++) {
                                 const y = pos.getY(i);
@@ -645,7 +668,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                                 pos.setZ(i, pos.getZ(i) * scale);
                             }
                         } else if (op.type === 'twist') {
-                            const angleRad = ((op.angle ?? 45) * Math.PI) / 180;
+                            const angleRad = ((op.angle as number) * Math.PI) / 180;
                             for (let i = 0; i < pos.count; i++) {
                                 const y = pos.getY(i);
                                 const t = Math.max(0, Math.min(1, (y - minY) / heightY));
@@ -667,7 +690,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                                 pos.setZ(i, pos.getZ(i) * scale);
                             }
                         } else if (op.type === 'bend') {
-                            const bendAngle = ((op.angle ?? 30) * Math.PI) / 180;
+                            const bendAngle = ((op.angle as number) * Math.PI) / 180;
                             for (let i = 0; i < pos.count; i++) {
                                 const y = pos.getY(i);
                                 const t = Math.max(0, Math.min(1, (y - minY) / heightY));
@@ -909,76 +932,53 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_refine_building_structure',
         category: 'mesh_edit',
-        description: 'Refines authentic scanned building geometry with bilateral planar facade normal smoothing, watertight grounding plinths, and architectural PBR materials.',
+        description: 'Refines the scanned building mesh(es) named by targetMeshId in the live viewport: planar facade normal smoothing and a level grounding plinth under the building (both in scene space, +Y up, through the mesh\'s whole parent chain), and the PBR material given as material { color: [r, g, b] sRGB 0..1, roughness 0..1, metalness 0..1 } (required; plinthMaterial is optional and defaults to the same material). Every mesh with that name or id is refined in place, under its own parent with its own transform. Fails when no such mesh is in the scene; it never picks a mesh by name keywords or builds a stand-in.',
         execute: (ctx, params: {
             targetMeshId?: string;
-            palette?: ArchieBuildingPalette;
+            material?: ArchieMaterialParameters;
+            plinthMaterial?: ArchieMaterialParameters;
             plinthDepth?: number;
             plinthPadding?: number;
             maxFacadeNormalY?: number;
             groundDatumY?: number;
         }) => {
-            const threeScene = ctx.getThreeScene();
-            let targetMesh: THREE.Mesh | null = null;
-
-            if (params.targetMeshId && threeScene) {
-                threeScene.traverse(node => {
-                    if ((node as any).id === params.targetMeshId || node.name === params.targetMeshId) {
-                        if ((node as THREE.Mesh).isMesh) {
-                            targetMesh = node as THREE.Mesh;
-                        }
-                    }
-                });
-            }
-
-            if (!targetMesh && threeScene) {
-                // Find first mesh with building in name or first mesh
-                threeScene.traverse(node => {
-                    if (!targetMesh && (node as THREE.Mesh).isMesh) {
-                        if (node.name.toLowerCase().includes('building') || node.name.toLowerCase().includes('palazzo') || node.name.toLowerCase().includes('facade')) {
-                            targetMesh = node as THREE.Mesh;
-                        }
-                    }
-                });
-            }
-
+            // The buildings are the meshes the caller names in the live viewport; no mesh is guessed from its name
+            // and no demo building is built when none is found.
+            const targets = findViewportMeshes(ctx.getThreeScene(), params.targetMeshId, 'sb_refine_building_structure');
             const refiner = new ArchieBuildingRefiner();
-            let result;
-
-            if (targetMesh) {
-                result = refiner.refineBuilding(targetMesh, {
-                    palette: params.palette || 'roman_ochre',
+            // Every target is refined before the scene changes, so a bad material leaves the scene untouched.
+            const refined = targets.map(target => ({
+                target,
+                result: refiner.refineBuilding(target, {
+                    material: params.material,
+                    plinthMaterial: params.plinthMaterial,
                     plinthDepth: params.plinthDepth ?? 2.5,
                     plinthPadding: params.plinthPadding ?? 0.3,
                     maxFacadeNormalY: params.maxFacadeNormalY ?? 0.38,
                     groundDatumY: params.groundDatumY
-                });
-                if (threeScene) {
-                    (targetMesh as any)?.parent?.remove(targetMesh);
-                    threeScene.add(result.group);
-                }
-            } else {
-                // Fallback: create architectural demo volume
-                const fallbackGeom = new THREE.BoxGeometry(15, 24, 15);
-                fallbackGeom.translate(0, 12, 0);
-                result = refiner.refineBuilding(fallbackGeom, {
-                    palette: params.palette || 'roman_ochre',
-                    plinthDepth: params.plinthDepth ?? 2.5,
-                    plinthPadding: params.plinthPadding ?? 0.3
-                });
-                if (threeScene) {
-                    threeScene.add(result.group);
-                }
+                })
+            }));
+            const threeScene = ctx.getThreeScene()!;
+            for (const { target, result } of refined) {
+                // The refined group carries the target's local transform: it replaces the target under the same parent.
+                const parent = target.parent ?? threeScene;
+                parent.add(result.group);
+                parent.remove(target);
             }
 
-            ctx.recordState(`Archie: Refine Building Structure (${params.palette || 'roman_ochre'})`);
+            ctx.recordState(`Archie: Refine Building Structure (${refined.length} mesh${refined.length === 1 ? '' : 'es'} named ${params.targetMeshId})`);
 
             return {
                 success: true,
-                palette: params.palette || 'roman_ochre',
-                metrics: result.metrics,
-                refinedMeshName: result.refinedMesh.name,
-                plinthMeshName: result.plinthMesh.name
+                targetMeshId: params.targetMeshId,
+                material: params.material,
+                refinedCount: refined.length,
+                buildings: refined.map(({ result }) => ({
+                    refinedMeshName: result.refinedMesh.name,
+                    plinthMeshName: result.plinthMesh.name,
+                    parentName: result.group.parent?.name,
+                    metrics: result.metrics
+                }))
             };
         }
     }

@@ -74,10 +74,12 @@ export class AdaptiveDomainStyleService {
     inputGlbPath: string;
     cameraPose?: { position: [number, number, number]; target: [number, number, number]; fov: number };
     outputPath?: string;
-    fidelity?: 'fast-analytical' | 'balanced' | 'deep-multimodal';
+    fidelity?: 'balanced' | 'deep-multimodal';
     promptHint?: string;
     protectFoliage?: boolean;
     protectAsphalt?: boolean;
+    /** GenAI client for the vision model (default: the workspace's Gemini client). */
+    client?: any;
   }): Promise<any> {
     if (typeof window !== 'undefined') {
       throw new Error('restyleWorld is only supported in Node.js / server runtime.');
@@ -86,9 +88,10 @@ export class AdaptiveDomainStyleService {
     const { AdaptiveStyleDeconstructionService } = await import(/* @vite-ignore */ `${nodeSpatialPath}AdaptiveStyleDeconstructionService`);
     const { recolor3DTilesGlb } = await import(/* @vite-ignore */ `${nodeSpatialPath}GlbTextureRecolorService`);
 
-    const service = new AdaptiveStyleDeconstructionService();
-    const contract = await service.deconstructStyle(request.referenceImage, request.cameraPose, {
-      fidelity: request.fidelity || 'fast-analytical',
+    // A vision model reads the style from the reference image, or this throws (VisionUnavailableError).
+    const service = new AdaptiveStyleDeconstructionService({ client: request.client });
+    const { contract, modelUsed } = await service.deconstructStyle(request.referenceImage, request.cameraPose, {
+      fidelity: request.fidelity,
       promptHint: request.promptHint
     });
 
@@ -115,6 +118,7 @@ export class AdaptiveDomainStyleService {
     return {
       success: result.success,
       contract,
+      modelUsed,
       palette,
       outputGlbPath: result.outputGlbPath,
       textureCount: result.textureCount,

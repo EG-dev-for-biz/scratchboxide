@@ -210,6 +210,7 @@ def stitch_depth_maps(face_depths, fov_deg, face_size, equirect_size, rot_params
     """
     Stitches predicted perspective face depth maps (num_faces, face_size, face_size)
     back to a single equirectangular depth map of size equirect_size (H_eq, W_eq).
+    Raises DepthFailure when any panorama pixel is seen by no face: no depth is invented for it.
     """
     n = len(rot_params)
     fovs = _as_fov_list(fov_deg, n)
@@ -221,183 +222,129 @@ def stitch_depth_maps(face_depths, fov_deg, face_size, equirect_size, rot_params
         accum_depth += radial * s * weight
         accum_weight += weight
 
-    final_depth = accum_depth / torch.clamp(accum_weight, min=1e-4)
-    final_depth = torch.where(accum_weight > 1e-4, final_depth, torch.full_like(final_depth, 30.0))
-    return final_depth
+    covered = accum_weight > 0
+    uncovered = int((~covered).sum())
+    if uncovered:
+        raise DepthFailure(f"{uncovered} panorama pixels are seen by no depth face")
+    return accum_depth / torch.where(covered, accum_weight, torch.ones_like(accum_weight))
 
-def generate_synthetic_depth(W, H, eye_height):
+
+class DepthFailure(Exception):
+    """The depth step could not do what was asked. The sidecar exits non-zero with this message; nothing is written."""
+
+
+def fail(message, code=3):
+    print(f"ERROR: {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def mock_room_depth(W, H, eye_height):
     """
-    High-fidelity synthetic room depth fallback (guarantees pipeline robustness).
+    Test geometry for --mock only (pipeline tests with no depth model): a cylindrical room with floor, ceiling and
+    columns. Its metadata names it as mock geometry; it is never produced in place of a failed model run.
     """
     v, u = np.meshgrid(np.linspace(0, H - 1, H), np.linspace(0, W - 1, W), indexing='ij')
     pitch = (0.5 - v / H) * np.pi
     yaw = (u / W * 2.0 - 1.0) * np.pi
-    
     cos_pitch = np.cos(pitch)
-    sin_pitch = np.sin(pitch)
-    
-    rx = np.sin(yaw) * cos_pitch
-    ry = sin_pitch
-    rz = -np.cos(yaw) * cos_pitch
-    
-    # Synthetic cylindrical room with floor, ceiling, and columns
+    ry = np.sin(pitch)
+
     depth = np.zeros((H, W), dtype=np.float32)
-    
     for y in range(H):
-        p_val = pitch[y, 0]
         ry_val = ry[y, 0]
-        
         if ry_val < -0.05:
-            # Floor plane at Y = 0 (distance relative to camera Y = eye_height)
             depth[y, :] = -eye_height / ry_val
         elif ry_val > 0.4:
-            # Ceiling plane at Y = 10m
             depth[y, :] = (10.0 - eye_height) / ry_val
         else:
-            # Circular wall at R = 15m with vertical architectural columns
-            r_wall = 15.0
-            col_freq = 12.0
-            col_depth = 1.2
-            
-            # Simple column relief based on yaw
-            relief = np.maximum(0, np.cos(yaw[y, :] * col_freq)) * col_depth
-            depth[y, :] = (r_wall - relief) / cos_pitch[y, 0]
-            
-    # Clip to reasonable boundaries
-    depth = np.clip(depth, 0.1, 80.0)
-    return depth
+            relief = np.maximum(0, np.cos(yaw[y, :] * 12.0)) * 1.2
+            depth[y, :] = (15.0 - relief) / cos_pitch[y, 0]
+    return np.clip(depth, 0.1, 80.0)
 
-def main():
-    parser = argparse.ArgumentParser(description="Multi-view Depth Anything V3/V2 High-Fidelity Panorama Depth Service")
-    parser.add_argument("--input", required=True, help="Input 360 equirectangular panorama image path")
-    parser.add_argument("--output-depth", required=True, help="Output metric float32 binary depth map path")
-    parser.add_argument("--output-preview", required=True, help="Output colormapped preview PNG path")
-    parser.add_argument("--output-json", required=True, help="Output metadata JSON path")
-    parser.add_argument("--scene-type", default="outdoor", choices=["indoor", "outdoor"], help="Scene type to load appropriate metric model")
-    parser.add_argument("--eye-height", default="auto", help="Camera eye height in meters, or 'auto' to infer it from the metric floor (default auto; mock mode uses 1.7)")
-    parser.add_argument("--device", default="auto", help="Execution device (auto, mps, cuda, cpu)")
-    parser.add_argument("--mock", action="store_true", help="Force synthetic fallback depth generation")
-    
-    args = parser.parse_args()
-    
-    # Ensure directory structures
-    for path_arg in [args.output_depth, args.output_preview, args.output_json]:
-        dir_name = os.path.dirname(path_arg)
-        if dir_name and not os.path.exists(dir_name):
-            os.makedirs(dir_name, exist_ok=True)
-            
-    device_str = args.device
-    if device_str == "auto":
-        device = get_device()
-    else:
-        device = torch.device(device_str)
-        
-    print(f"[DepthService] Initializing. Device: {device} MockMode: {args.mock}")
-    
-    # Load input image
-    if not os.path.exists(args.input):
-        print(f"ERROR: Input panorama not found: {args.input}")
-        sys.exit(1)
-        
+
+def load_depth_model(scene_type, device):
+    """Loads Depth Anything V2 Metric (indoor or outdoor). Any failure is a DepthFailure."""
+    model_name = ("depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf" if scene_type == "indoor"
+                  else "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf")
     try:
-        img_pil = Image.open(args.input).convert("RGB")
-        W_eq, H_eq = img_pil.size
-        print(f"[DepthService] Loaded image: {args.input} ({W_eq}x{H_eq})")
+        from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+        print(f"[DepthService] Loading model weights from Hugging Face: {model_name}")
+        processor = AutoImageProcessor.from_pretrained(model_name)
+        model = AutoModelForDepthEstimation.from_pretrained(model_name).to(device)
+        model.eval()
     except Exception as e:
-        print(f"ERROR: Failed to open image: {e}")
-        sys.exit(1)
-        
-    model_name = ""
-    scale_correction = 1.0
-    
-    # Check if we should execute real model inference
-    success = False
-    if not args.mock:
-        try:
-            from transformers import AutoImageProcessor, AutoModelForDepthEstimation
-            
-            # Select model
-            if args.scene_type == "indoor":
-                model_name = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
-            else:
-                model_name = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf"
-                
-            print(f"[DepthService] Loading model weights from Hugging Face: {model_name}")
-            
-            processor = AutoImageProcessor.from_pretrained(model_name)
-            model = AutoModelForDepthEstimation.from_pretrained(model_name).to(device)
-            model.eval()
-            
-            # Extract 10 perspective camera views
-            # 8 horizontal yaw plates at 45 degree intervals, 2 polar vertical plates (Zenith/Nadir)
-            rot_params = [
-                (0.0, 0.0), (45.0, 0.0), (90.0, 0.0), (135.0, 0.0),
-                (180.0, 0.0), (225.0, 0.0), (270.0, 0.0), (315.0, 0.0),
-                (0.0, 90.0), (0.0, -90.0)
-            ]
-            
-            # Ring faces at 90 deg reach only ~42.7 deg pitch midway between centers, while a 90 deg
-            # polar face starts at 45 deg: zero overlap -> scalloped seam. Widen the poles to 120 deg
-            # (coverage down to ~22-30 deg) so every direction is seen by at least two faces.
-            face_fovs = [90.0] * 8 + [120.0, 120.0]
-            face_size = 512
-            
-            # Convert PIL image to PyTorch tensor (C, H, W) normalized to [0, 1]
-            img_tensor = torch.from_numpy(np.array(img_pil).transpose(2, 0, 1)).float() / 255.0
-            
-            print(f"[DepthService] Extracting {len(rot_params)} perspective face plates at {face_size}x{face_size}...")
-            # Extract face plates on device
-            faces_batch = extract_perspective_faces(img_tensor, face_fovs, face_size, rot_params, device)
-            
-            # Run inference per face plate
-            face_depths = []
-            for i in range(len(rot_params)):
-                face_np = (faces_batch[i].cpu().numpy().transpose(1, 2, 0) * 255.0).astype(np.uint8)
-                inputs = processor(images=face_np, return_tensors="pt").to(device)
-                
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    # Outputs are metric depth maps
-                    predicted_depth = outputs.predicted_depth
-                    # Interpolate back to face_size x face_size
-                    predicted_depth = F.interpolate(predicted_depth.unsqueeze(1), size=(face_size, face_size), mode="bilinear", align_corners=False).squeeze()
-                    face_depths.append(predicted_depth)
-                    
-            face_depths_tensor = torch.stack(face_depths, dim=0)
-            
-            print(f"[DepthService] Stitching and blending multi-view depth maps back to equirectangular grid...")
-            # Stitch back to equirect on CPU: grid_sample(padding_mode='border') is not implemented on MPS,
-            # and the stitch is memory-bound rather than compute-bound.
-            equirect_size = (H_eq, W_eq)
-            stitch_device = torch.device("cpu") if device.type == "mps" else device
-            fd = face_depths_tensor.to(stitch_device)
-            # Per-face scale alignment in the overlap bands (monocular metric depth is consistent
-            # only up to a per-view scale); absolute scale is fixed afterwards by the floor prior.
-            face_scales = align_face_scales(fd, face_fovs, face_size, rot_params, stitch_device)
-            print(f"[DepthService] Face scale alignment: " + ", ".join(f"{s:.3f}" for s in face_scales))
-            depth_tensor = stitch_depth_maps(fd, face_fovs, face_size, equirect_size, rot_params, stitch_device, face_scales)
-            
-            equirect_depth = depth_tensor.cpu().numpy()
-            success = True
-            
-        except Exception as e:
-            print(f"[DepthService] WARNING: Hugging Face model inference failed, reverting to synthetic fallback: {e}")
-            
-    auto_eye = str(args.eye_height).lower() == "auto"
-    eye_height = 1.70 if auto_eye else float(args.eye_height)
+        raise DepthFailure(f"the depth model {model_name} could not be loaded: {e}")
+    return processor, model, model_name
 
-    if not success:
-        # Fallback to high-fidelity synthetic Room Depth
-        print(f"[DepthService] Executing high-fidelity geometric fallback depth generation...")
-        equirect_depth = generate_synthetic_depth(W_eq, H_eq, eye_height)
-        model_name = "synthetic-fallback-depth"
-        auto_eye = False  # synthetic geometry is already built at eye_height
 
-    # Floor band: rows in the lower 80-95% of the frame (pitch ~ -54 .. -81 deg), central half of azimuth.
-    # For each floor pixel the vertical drop is h = -ry * d. If the depth is metric and the camera is
-    # level, h is the eye height. Two modes:
-    #   auto:     trust the metric model, infer eyeHeight = median(h)        (AI panoramas: unknown rig height)
-    #   explicit: trust the given eyeHeight, rescale depth so median(h) == eyeHeight
+def predict_depth(processor, model, image_np, size, device):
+    """Metric depth for one HxWx3 uint8 image, resampled to size=(H, W)."""
+    inputs = processor(images=image_np, return_tensors="pt").to(device)
+    with torch.no_grad():
+        predicted = model(**inputs).predicted_depth
+    return F.interpolate(predicted.unsqueeze(1), size=size, mode="bilinear", align_corners=False).squeeze()
+
+
+def equirect_depth_from_model(img_pil, scene_type, device):
+    processor, model, model_name = load_depth_model(scene_type, device)
+    W_eq, H_eq = img_pil.size
+    try:
+        # 8 horizontal yaw plates at 45 degree intervals, 2 polar vertical plates (zenith / nadir)
+        rot_params = [
+            (0.0, 0.0), (45.0, 0.0), (90.0, 0.0), (135.0, 0.0),
+            (180.0, 0.0), (225.0, 0.0), (270.0, 0.0), (315.0, 0.0),
+            (0.0, 90.0), (0.0, -90.0)
+        ]
+        # Ring faces at 90 deg reach only ~42.7 deg pitch midway between centers, while a 90 deg polar face starts
+        # at 45 deg: zero overlap -> scalloped seam. Widen the poles to 120 deg (coverage down to ~22-30 deg) so
+        # every direction is seen by at least two faces.
+        face_fovs = [90.0] * 8 + [120.0, 120.0]
+        face_size = 512
+        img_tensor = torch.from_numpy(np.array(img_pil).transpose(2, 0, 1)).float() / 255.0
+        print(f"[DepthService] Extracting {len(rot_params)} perspective face plates at {face_size}x{face_size}...")
+        faces_batch = extract_perspective_faces(img_tensor, face_fovs, face_size, rot_params, device)
+        face_depths = []
+        for i in range(len(rot_params)):
+            face_np = (faces_batch[i].cpu().numpy().transpose(1, 2, 0) * 255.0).astype(np.uint8)
+            face_depths.append(predict_depth(processor, model, face_np, (face_size, face_size), device))
+        face_depths_tensor = torch.stack(face_depths, dim=0)
+    except DepthFailure:
+        raise
+    except Exception as e:
+        raise DepthFailure(f"depth inference with {model_name} failed: {e}")
+
+    print("[DepthService] Stitching and blending multi-view depth maps back to equirectangular grid...")
+    # Stitch on CPU: grid_sample(padding_mode='border') is not implemented on MPS, and the stitch is memory-bound.
+    stitch_device = torch.device("cpu") if device.type == "mps" else device
+    fd = face_depths_tensor.to(stitch_device)
+    # Per-face scale alignment in the overlap bands (monocular metric depth is consistent only up to a per-view
+    # scale); absolute scale is fixed afterwards by the floor fit.
+    face_scales = align_face_scales(fd, face_fovs, face_size, rot_params, stitch_device)
+    print("[DepthService] Face scale alignment: " + ", ".join(f"{s:.3f}" for s in face_scales))
+    depth = stitch_depth_maps(fd, face_fovs, face_size, (H_eq, W_eq), rot_params, stitch_device, face_scales)
+    return depth.cpu().numpy(), model_name
+
+
+def perspective_depth_from_model(img_pil, scene_type, device):
+    """Planar (z) metric depth for an ordinary perspective photo, at the photo's own size."""
+    processor, model, model_name = load_depth_model(scene_type, device)
+    W, H = img_pil.size
+    try:
+        depth = predict_depth(processor, model, np.array(img_pil), (H, W), device)
+    except Exception as e:
+        raise DepthFailure(f"depth inference with {model_name} failed: {e}")
+    return depth.cpu().numpy(), model_name
+
+
+def fit_floor(equirect_depth, H_eq, W_eq, auto_eye, eye_height):
+    """
+    Floor band: rows in the lower 80-95% of the frame (pitch ~ -54 .. -81 deg), central half of azimuth. For each
+    floor pixel the vertical drop is h = -ry * d; with metric depth and a level camera, h is the eye height.
+      auto:     trust the metric model, eyeHeight = median(h)          (AI panoramas: unknown rig height)
+      explicit: trust the given eyeHeight, rescale depth so median(h) == eyeHeight
+    Returns (eye_height, scale_correction, floor_fit_applied, tilt_deg, tilt_yaw_deg). Raises DepthFailure when
+    the eye height cannot be measured or the depth disagrees with the given eye height beyond a 4x rescale.
+    """
     lower_v_start = int(0.80 * H_eq)
     lower_v_end = int(0.95 * H_eq)
     center_u_start = int(0.25 * W_eq)
@@ -408,103 +355,160 @@ def main():
     ry_rows = np.sin(pitch_rows)
     valid_rows = ry_rows < -0.05
     band = equirect_depth[rows[valid_rows], center_u_start:center_u_end]
-    drops = (-ry_rows[valid_rows])[:, None] * band  # vertical drop h per floor pixel
+    drops = (-ry_rows[valid_rows])[:, None] * band
 
-    scale_correction = 1.0
-    horizon_tilt_deg = 0.0
-    horizon_tilt_yaw_deg = 0.0
-    if drops.size > 100:
-        median_drop = float(np.median(drops))
-        # Level-camera QC: per-azimuth median floor drop should be flat. A tilted horizon (pitch/roll
-        # baked into the panorama) shows up as a first-harmonic variation h(yaw) = c + a cos + b sin.
-        col_drop = np.median(drops, axis=0)
-        yaws = ((np.arange(center_u_start, center_u_end) + 0.5) / W_eq * 2.0 - 1.0) * np.pi
-        A = np.stack([np.ones_like(yaws), np.cos(yaws), np.sin(yaws)], axis=1)
-        coef, *_ = np.linalg.lstsq(A, col_drop, rcond=None)
-        amp = float(math.hypot(coef[1], coef[2]))
-        # Convert drop modulation to an angle at the mean floor distance of the band
-        mean_floor_dist = float(np.median(band))
-        horizon_tilt_deg = math.degrees(math.atan2(amp, max(1e-3, mean_floor_dist)))
-        horizon_tilt_yaw_deg = math.degrees(math.atan2(coef[2], coef[1]))
-        level_msg = "OK" if horizon_tilt_deg < 2.0 else "WARNING: panorama is not level; regenerate with a level camera or rotate with the SO(3) resampler"
-        print(f"[DepthService] Horizon level QC: tilt {horizon_tilt_deg:.2f} deg toward yaw {horizon_tilt_yaw_deg:.0f} deg -> {level_msg}")
+    if drops.size <= 100:
         if auto_eye:
-            eye_height = float(max(0.5, min(12.0, median_drop)))
-            print(f"[DepthService] Inferred camera eye height from metric floor: {eye_height:.3f} m")
-        else:
-            scale_correction = max(0.25, min(4.0, eye_height / max(1e-3, median_drop)))
-            print(f"[DepthService] Absolute floor-fit scale correction calculated: {scale_correction:.4f} (floor drop {median_drop:.3f} m -> {eye_height:.2f} m)")
-    else:
-        print("[DepthService] Floor fit skipped: insufficient floor pixels")
+            raise DepthFailure(f"the eye height cannot be measured: only {drops.size} floor pixels in a {W_eq}x{H_eq} panorama; pass an explicit eye height")
+        print("[DepthService] Floor fit skipped: too few floor pixels; depth is used at the model's own scale")
+        return eye_height, 1.0, False, 0.0, 0.0
 
-    # Scale depth
-    equirect_depth = equirect_depth * scale_correction
-    
-    # Clip to absolute limits
-    min_d = float(np.min(equirect_depth))
-    max_d = float(np.max(equirect_depth))
-    avg_d = float(np.mean(equirect_depth))
-    
-    # Write metric depth raw binary (f32 file containing H_eq * W_eq float32 values)
+    median_drop = float(np.median(drops))
+    if not median_drop > 0:
+        raise DepthFailure(f"the floor band has no positive depth (median drop {median_drop})")
+    # Level-camera QC: per-azimuth median floor drop should be flat. A tilted horizon shows up as a first-harmonic
+    # variation h(yaw) = c + a cos + b sin.
+    col_drop = np.median(drops, axis=0)
+    yaws = ((np.arange(center_u_start, center_u_end) + 0.5) / W_eq * 2.0 - 1.0) * np.pi
+    A = np.stack([np.ones_like(yaws), np.cos(yaws), np.sin(yaws)], axis=1)
+    coef, *_ = np.linalg.lstsq(A, col_drop, rcond=None)
+    amp = float(math.hypot(coef[1], coef[2]))
+    mean_floor_dist = float(np.median(band))
+    tilt_deg = math.degrees(math.atan2(amp, max(1e-3, mean_floor_dist)))
+    tilt_yaw_deg = math.degrees(math.atan2(coef[2], coef[1]))
+    level_msg = "OK" if tilt_deg < 2.0 else "WARNING: panorama is not level; regenerate with a level camera or rotate with the SO(3) resampler"
+    print(f"[DepthService] Horizon level QC: tilt {tilt_deg:.2f} deg toward yaw {tilt_yaw_deg:.0f} deg -> {level_msg}")
+
+    if auto_eye:
+        print(f"[DepthService] Measured camera eye height from the metric floor: {median_drop:.3f} m")
+        return median_drop, 1.0, True, tilt_deg, tilt_yaw_deg
+    scale_correction = eye_height / median_drop
+    if not (0.25 <= scale_correction <= 4.0):
+        raise DepthFailure(f"the depth model puts the floor {median_drop:.2f} m below the camera, which needs a {scale_correction:.2f}x rescale "
+                           f"to match the given eye height {eye_height:.2f} m (more than 4x either way); check the eye height or the panorama")
+    print(f"[DepthService] Floor-fit scale correction: {scale_correction:.4f} (floor drop {median_drop:.3f} m -> {eye_height:.2f} m)")
+    return eye_height, scale_correction, True, tilt_deg, tilt_yaw_deg
+
+
+def save_preview(depth, path):
+    # Log-scaled colour ramp: near is warm/bright, far is deep purple.
+    log_depth = np.log(np.clip(depth, 0.1, 100.0))
+    normalized = (log_depth - np.min(log_depth)) / max((np.max(log_depth) - np.min(log_depth)), 1e-5)
+    r_map = 255 - (normalized * 255.0).astype(np.uint8)
+    g_map = 255 - (np.power(normalized, 1.8) * 255.0).astype(np.uint8)
+    b_map = (np.power(normalized, 3.0) * 255.0).astype(np.uint8)
+    Image.fromarray(np.stack([r_map, g_map, b_map], axis=-1)).save(path)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Depth Anything V2 metric depth for 360 panoramas and perspective photos")
+    parser.add_argument("--input", required=True, help="Input image path (equirectangular panorama, or a photo with --projection perspective)")
+    parser.add_argument("--output-depth", required=True, help="Output metric float32 binary depth map path")
+    parser.add_argument("--output-preview", required=True, help="Output colormapped preview PNG path")
+    parser.add_argument("--output-json", required=True, help="Output metadata JSON path")
+    parser.add_argument("--projection", default="equirect", choices=["equirect", "perspective"],
+                        help="equirect: radial depth for a 360 panorama (default); perspective: planar z depth for a photo")
+    parser.add_argument("--scene-type", default="outdoor", choices=["indoor", "outdoor"], help="Scene type to load appropriate metric model")
+    parser.add_argument("--eye-height", default="auto", help="Equirect only: camera eye height in meters, or 'auto' to measure it from the metric floor")
+    parser.add_argument("--device", default="auto", help="Execution device (auto, mps, cuda, cpu)")
+    parser.add_argument("--mock", action="store_true", help="Equirect test geometry (a synthetic room) instead of the depth model; labelled as mock in the metadata")
+    args = parser.parse_args()
+
+    if args.mock and args.projection != "equirect":
+        fail("--mock is equirect test geometry only", 2)
+
+    for path_arg in [args.output_depth, args.output_preview, args.output_json]:
+        dir_name = os.path.dirname(path_arg)
+        if dir_name and not os.path.exists(dir_name):
+            os.makedirs(dir_name, exist_ok=True)
+
+    device = get_device() if args.device == "auto" else torch.device(args.device)
+    print(f"[DepthService] Initializing. Device: {device} Projection: {args.projection} MockMode: {args.mock}")
+
+    if not os.path.exists(args.input):
+        fail(f"input image not found: {args.input}", 1)
+    try:
+        img_pil = Image.open(args.input).convert("RGB")
+        W, H = img_pil.size
+        print(f"[DepthService] Loaded image: {args.input} ({W}x{H})")
+    except Exception as e:
+        fail(f"failed to open image {args.input}: {e}", 1)
+
+    auto_eye = str(args.eye_height).lower() == "auto"
+    if not auto_eye:
+        try:
+            eye_height = float(args.eye_height)
+        except ValueError:
+            fail(f"--eye-height must be a number of meters or 'auto', got {args.eye_height}", 2)
+        if not eye_height > 0:
+            fail(f"--eye-height must be positive, got {eye_height}", 2)
+    else:
+        eye_height = None
+
+    try:
+        if args.projection == "perspective":
+            depth, model_name = perspective_depth_from_model(img_pil, args.scene_type, device)
+        elif args.mock:
+            if auto_eye:
+                fail("--mock builds its room at a given eye height; pass --eye-height", 2)
+            depth = mock_room_depth(W, H, eye_height)
+            model_name = "mock-synthetic-room (test geometry, no depth model)"
+        else:
+            depth, model_name = equirect_depth_from_model(img_pil, args.scene_type, device)
+
+        depth = np.asarray(depth, dtype=np.float32)
+        if depth.shape != (H, W):
+            raise DepthFailure(f"the depth map is {depth.shape[1]}x{depth.shape[0]}, not the image's {W}x{H}")
+        if not np.all(np.isfinite(depth)) or float(np.min(depth)) <= 0:
+            raise DepthFailure("the depth map has non-finite or non-positive values")
+
+        metadata = {
+            "success": True,
+            "projection": args.projection,
+            "depthKind": "planar-z" if args.projection == "perspective" else "radial",
+            "width": W,
+            "height": H,
+            "modelUsed": model_name,
+        }
+        if args.projection == "equirect":
+            if args.mock:
+                eye, scale_correction, floor_fit, tilt, tilt_yaw = eye_height, 1.0, False, 0.0, 0.0
+            else:
+                eye, scale_correction, floor_fit, tilt, tilt_yaw = fit_floor(depth, H, W, auto_eye, eye_height)
+            depth = depth * scale_correction
+            metadata.update({
+                "eyeHeight": eye,
+                "eyeHeightInferred": auto_eye and not args.mock,
+                "floorFitApplied": floor_fit,
+                "horizonTiltDeg": tilt,
+                "horizonTiltYawDeg": tilt_yaw,
+                "levelCameraOk": tilt < 2.0,
+                "groundY": -eye,
+                "scaleCorrection": scale_correction,
+            })
+    except DepthFailure as e:
+        fail(str(e))
+
+    metadata.update({
+        "minDepth": float(np.min(depth)),
+        "maxDepth": float(np.max(depth)),
+        "averageDepth": float(np.mean(depth)),
+    })
+
     try:
         with open(args.output_depth, "wb") as f:
-            f.write(equirect_depth.astype(np.float32).tobytes())
-        print(f"[DepthService] Wrote float32 binary depth: {args.output_depth} ({equirect_depth.nbytes / (1024*1024):.2f} MB)")
-    except Exception as e:
-        print(f"ERROR: Failed to write depth binary: {e}")
-        sys.exit(1)
-        
-    # Generate beautifully colormapped PNG preview
-    try:
-        # Inverse log-scaled depth mapping for crisp visual contrast in high-range metric maps
-        log_depth = np.log(np.clip(equirect_depth, 0.1, 100.0))
-        min_log = np.min(log_depth)
-        max_log = np.max(log_depth)
-        normalized = (log_depth - min_log) / max((max_log - min_log), 1e-5)
-        
-        # Color mapping (Plasma/Inferno-like high-contrast thermal ramp: near is warm/bright, far is deep purple)
-        r_map = (normalized * 255.0).astype(np.uint8)
-        g_map = (np.power(normalized, 1.8) * 255.0).astype(np.uint8)
-        b_map = (np.power(normalized, 3.0) * 255.0).astype(np.uint8)
-        
-        # Let's map so near (small depth) is yellow/bright and far is dark blue/purple
-        r_map = 255 - r_map
-        g_map = 255 - g_map
-        # Stack colors
-        rgb_preview = np.stack([r_map, g_map, b_map], axis=-1)
-        
-        preview_img = Image.fromarray(rgb_preview)
-        preview_img.save(args.output_preview)
+            f.write(depth.astype(np.float32).tobytes())
+        print(f"[DepthService] Wrote float32 binary depth: {args.output_depth} ({depth.nbytes / (1024*1024):.2f} MB)")
+        save_preview(depth, args.output_preview)
         print(f"[DepthService] Saved colormapped preview image: {args.output_preview}")
-    except Exception as e:
-        print(f"ERROR: Failed to save colormapped preview: {e}")
-        
-    # Write JSON metadata
-    metadata = {
-        "success": True,
-        "width": W_eq,
-        "height": H_eq,
-        "minDepth": min_d,
-        "maxDepth": max_d,
-        "averageDepth": avg_d,
-        "eyeHeight": eye_height,
-        "eyeHeightInferred": auto_eye,
-        "horizonTiltDeg": horizon_tilt_deg,
-        "horizonTiltYawDeg": horizon_tilt_yaw_deg,
-        "levelCameraOk": horizon_tilt_deg < 2.0,
-        "groundY": -eye_height,
-        "scaleCorrection": scale_correction,
-        "modelUsed": model_name
-    }
-    
-    try:
         with open(args.output_json, "w") as f:
             json.dump(metadata, f, indent=2)
         print(f"[DepthService] Saved metadata JSON: {args.output_json}")
     except Exception as e:
-        print(f"ERROR: Failed to write metadata JSON: {e}")
-        
-    print(f"[DepthService] Completed successfully. Range: {min_d:.2f}m - {max_d:.2f}m Avg: {avg_d:.2f}m")
-    
+        fail(f"failed to write the depth outputs: {e}", 1)
+
+    print(f"[DepthService] Completed. Range: {metadata['minDepth']:.2f}m - {metadata['maxDepth']:.2f}m Avg: {metadata['averageDepth']:.2f}m ({model_name})")
+
+
 if __name__ == "__main__":
     main()

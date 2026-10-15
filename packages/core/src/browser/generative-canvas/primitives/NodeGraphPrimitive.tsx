@@ -41,7 +41,8 @@ import {
 } from '../canvas-icons';
 import { MediaGenerationClient } from '../media-generation-client';
 import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
-import { IMAGE_MODEL_PRIORITY, resolveImageModelId } from '../../../common/media-generation-protocol';
+import { IMAGE_MODEL_PRIORITY, VIDEO_MODEL_PRIORITY, resolveImageModelId, substitutedModelNote } from '../../../common/media-generation-protocol';
+import { MediaModelNotice } from '../chat/MediaCards';
 
 export interface NodeGraphPrimitiveProps {
     data: NodeGraphData;
@@ -61,6 +62,53 @@ const ACCENT_COLORS: { color: AccentColor; label: string; hex: string }[] = [
 ];
 
 const NODE_CARD_WIDTH = 240;
+
+/**
+ * Overlaid at the bottom of an image or video node's preview: the generation error, or, when a model other than
+ * the node's own produced the output, which one did and why.
+ */
+export const NodeMediaStatus: React.FC<{ node: GraphNode }> = ({ node }) => {
+    if (node.parameters?.isGenerating) return null;
+    const overlay: React.CSSProperties = { position: 'absolute', left: 4, right: 4, bottom: 4, zIndex: 2 };
+    if (node.parameters?.generationError) {
+        return (
+            <div data-testid="sb-node-media-error" role="alert" title={node.parameters.generationError} style={{
+                ...overlay, fontSize: '10.5px', lineHeight: 1.35, color: '#fecaca', background: 'rgba(127, 29, 29, 0.75)',
+                borderRadius: '6px', padding: '3px 6px', overflowWrap: 'anywhere', maxHeight: '60%', overflow: 'hidden'
+            }}>
+                {node.parameters.generationError}
+            </div>
+        );
+    }
+    return <MediaModelNotice note={node.parameters?.modelNote} style={{ ...overlay, background: 'rgba(69, 26, 3, 0.85)', maxHeight: '60%', overflow: 'hidden' }} />;
+};
+
+/**
+ * The parameters a finished media job writes onto its node, merged over the node's parameters as they are when the
+ * job ends. A success clears any error left by an earlier run; a failure clears the previous output's model note
+ * (the error is what the node shows now).
+ */
+export function mediaJobOutcomeParameters(
+    current: Record<string, any> | undefined,
+    outcome: { resultUrl: string; result?: Parameters<typeof substitutedModelNote>[0] & { modelUsed?: string } } | { error: string }
+): Record<string, any> {
+    if ('error' in outcome) {
+        return { ...current, isGenerating: false, generationError: outcome.error, modelNote: undefined };
+    }
+    const { resultUrl, result } = outcome;
+    return {
+        ...current,
+        isGenerating: false,
+        generationError: undefined,
+        mediaUrl: resultUrl,
+        imageUrl: resultUrl,
+        videoUrl: resultUrl,
+        audioUrl: resultUrl,
+        // Which model made the output; the note is shown on the node when it is not the node's model.
+        generatedBy: result?.modelUsed,
+        modelNote: substitutedModelNote(result)
+    };
+}
 
 const getNodePort = (node: GraphNode) => {
     let nodeHeight = node.notes ? 126 : 96;
@@ -354,6 +402,10 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
 
     const viewportRef = React.useRef<HTMLDivElement>(null);
     const [graph, setGraph] = React.useState<NodeGraphData>(() => sanitizeGraph(data));
+    // The latest graph, for updates that land after an await (media jobs): those must merge into the graph as it is
+    // then, not as it was when the job started, or they would bring back stale state (an old error) and drop edits.
+    const graphRef = React.useRef<NodeGraphData>(graph);
+    graphRef.current = graph;
     const [selectedNodeId, setSelectedNodeId] = React.useState<string | undefined>(undefined);
     const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | undefined>(undefined);
     const [draggingNodeId, setDraggingNodeId] = React.useState<string | undefined>(undefined);
@@ -1122,8 +1174,10 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
     };
 
     const handleUpdateNode = (nodeId: string, updates: Partial<GraphNode>) => {
-        const updatedNodes = graph.nodes.map(n => (n.id === nodeId ? { ...n, ...updates } : n));
-        const updatedGraph = { ...graph, nodes: updatedNodes };
+        const latest = graphRef.current;
+        const updatedNodes = latest.nodes.map(n => (n.id === nodeId ? { ...n, ...updates } : n));
+        const updatedGraph = { ...latest, nodes: updatedNodes };
+        graphRef.current = updatedGraph;
         setGraph(updatedGraph);
         if (onUpdate) {
             onUpdate(updatedGraph);
@@ -1138,6 +1192,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
         handleUpdateNode(node.id, {
             parameters: { ...node.parameters, isGenerating: true, generationError: undefined }
         });
+        const currentParameters = () => graphRef.current.nodes.find(n => n.id === node.id)?.parameters;
 
         if (onPromptAction) {
             onPromptAction(`Generate ${node.category || 'media'} with prompt "${prompt}" for node "${node.label}" in flow "${graph.title}"`);
@@ -1198,7 +1253,8 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                     idempotencyKey,
                     aspectRatio: '16:9',
                     durationSeconds: node.parameters?.durationSeconds || 6,
-                    modelPriority: [requestedModel, 'google/omni-1.1', 'gemini-omni-flash-video', 'omni-1.1-video'],
+                    // The node's model first, then the default video list (Omni, then Veo); the job says which one answered.
+                    modelPriority: [requestedModel, ...VIDEO_MODEL_PRIORITY],
                     sourceAsset: sourceAsset || (referenceAssets.length > 0 ? referenceAssets[0] : undefined)
                 });
             } else if (node.category === 'audio' || node.category === 'audio-card') {
@@ -1227,27 +1283,18 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                     jobId: job.id,
                     workspaceRoot: wsPath,
                     intervalMs: 1000,
-                    onComplete: () => {
+                    onComplete: (done) => {
                         const resultUrl = client.contentUrl(job.id, wsPath);
                         handleUpdateNode(node.id, {
-                            parameters: {
-                                ...node.parameters,
-                                isGenerating: false,
-                                mediaUrl: resultUrl,
-                                imageUrl: resultUrl,
-                                videoUrl: resultUrl,
-                                audioUrl: resultUrl
-                            },
-                            outputData: { url: resultUrl }
+                            parameters: mediaJobOutcomeParameters(currentParameters(), { resultUrl, result: done.result }),
+                            outputData: { url: resultUrl, modelUsed: done.result?.modelUsed }
                         });
                     },
                     onError: (pollErr, failedJob) => {
                         handleUpdateNode(node.id, {
-                            parameters: {
-                                ...node.parameters,
-                                isGenerating: false,
-                                generationError: pollErr?.message || (failedJob?.error?.message ?? 'Media generation failed')
-                            }
+                            parameters: mediaJobOutcomeParameters(currentParameters(), {
+                                error: pollErr?.message || (failedJob?.error?.message ?? 'Media generation failed')
+                            })
                         });
                     }
                 });
@@ -1257,11 +1304,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
 
         } catch (err: any) {
             handleUpdateNode(node.id, {
-                parameters: {
-                    ...node.parameters,
-                    isGenerating: false,
-                    generationError: err?.message || 'Media generation request failed'
-                }
+                parameters: mediaJobOutcomeParameters(currentParameters(), { error: err?.message || 'Media generation request failed' })
             });
         }
     };
@@ -1878,6 +1921,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                     <span>No Image Synthesized</span>
                                                 </div>
                                             )}
+                                            <NodeMediaStatus node={node} />
                                         </div>
                                         <div className="sb-node-prompt-box" style={{
                                             display: 'flex',
@@ -1986,6 +2030,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                     <span>No Video Synthesized</span>
                                                 </div>
                                             )}
+                                            <NodeMediaStatus node={node} />
                                         </div>
                                         <div className="sb-node-prompt-box" style={{
                                             display: 'flex',

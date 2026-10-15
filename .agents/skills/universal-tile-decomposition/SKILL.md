@@ -1,160 +1,93 @@
 ---
 name: universal-tile-decomposition
 description: >-
-  Decompose, probe, and rectify photogrammetric 3D tiles using the Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
-  via native C++20 engine and TypeScript API. Classifies across 9 macro-geographic domains, rectifies building shafts while preserving crowns,
-  excises bridge curtain walls, and executes non-destructive elevation slicing with zero hole formation.
+  Measure, slice and carve photogrammetric 3D tiles (.glb) with the UTDRA / ULDRA native C++20 tools: measurements
+  (bounds, relief, surface area by slope band, wall orientation, vertex-colour green index), elevation slicing that
+  clips straddling triangles, and removal of near-vertical curtain-wall triangles inside a span box the caller gives.
+  The tools classify nothing; the agent interprets the measurements.
 ---
 
-# Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)
+# UTDRA / ULDRA: tile measurements, elevation slicing and span carving
 
-The **Universal Tile Decomposition & Rectification Skill** equips AI agents to inspect, classify, and mathematically rectify raw photogrammetric 3D tiles (such as Google Photorealistic 3D Tiles, Cesium datasets, or drone scans) into clean architectural massings and topological terrain meshes.
-
----
-
-## 1. System Architecture
-
-```
-[Raw Photogrammetric 3D Tile (.glb)]
-                 │
-                 ▼
-     [Macro-Domain Classifier]
- (Urban, Suburban, Bridge, Mountain, Forest, etc.)
-                 │
-  ┌──────────────┼──────────────┬──────────────┐
-  ▼              ▼              ▼              ▼
-[Shaft & Crown] [Bridge Void]  [Elevation]    [Slope Biomes]
-Rectification   Carver         Slicer         Stratification
-(Planar facade  (Excises       (Sutherland-   (Turf, scree,
- & spires)      curtain walls) Hodgman)       bedrock)
-  └──────────────┼──────────────┴──────────────┘
-                 │
-                 ▼
-  [Standard Binary glTF 2.0 (.glb) Object]
-  - Magic header: 0x46546C67 ("glTF")
-  - Manifold preserved mesh (zero holes)
-  - Full geometric telemetry (runtime, triangles, planarity)
-                 │
-                 ▼
-   [Mount to Stage / 3D Canvas / NLE]
-```
+The UTDRA tools work on a tile GLB they are given (a Google 3D Tiles clay extraction, a scan, any untextured mesh with
+one material and baked transforms). They report what they measured or removed. They do not classify a tile into a
+domain, report a confidence, or "rectify" anything on their own judgement.
 
 ---
 
-## 2. Continuous Morphometric Telemetry & Open Domain Classification
+## 1. What each tool does
 
-In strict adherence to **Adaptive Domain Architecture (ADA)**, the rectification engine never branches on rigid taxonomies. Diagnostic telemetry labels use open literals (`type MacroDomain = 'UrbanHighRiseCore' | 'SuburbanResidential' | (string & {})`), while all physical operations are driven by **continuous dimensional fields**: geometric relief ($\Delta Y$), surface normal verticality ($\mathbf{N} \cdot [0, 1, 0]$), horizontal footprint aspect ratio, and slope variance:
+| Tool | Input | What it does | Output |
+| :--- | :--- | :--- | :--- |
+| `utdra_probe_tile` | `inputGlbPath` | Measures the tile: bounds, relief ΔY, surface area, the share of that area by slope band (horizontal < 15°, inclined 15–45°, steep 45–75°, vertical ≥ 75°), the dominant wall orientation (mod 90°), and the area-weighted vertex-colour green index when the tile has vertex colours. | Telemetry only; no GLB is written. |
+| `utdra_slice_elevation` | `inputGlbPath`, `cutoffY` | Keeps the part of the tile above `cutoffY`, clipping straddling triangles exactly (Sutherland-Hodgman). | A GLB with the input's own material. |
+| `utdra_carve_bridge_voids` | `inputGlbPath`, `span {minX, maxX, minZ, maxZ, groundY, deckY}`, optional `minVoidHeightMeters` | Removes every near-vertical triangle wholly inside the span box. It does not find bridges: the box comes from the user or from coordinates you measured. A building wall inside the box is removed too. | A GLB with the input's own material, and the number of triangles removed. |
 
-| Diagnostic Domain Hint | Dimensional Telemetry Signature | Continuous Physical Rectification Action |
-| :--- | :--- | :--- |
-| **UrbanHighRiseCore** | Relief $\Delta Y > 60\text{m}$, Verticality $> 0.65$ | Planar shaft rectification + sculptural crown preservation |
-| **SuburbanResidential** | Relief $\Delta Y < 25\text{m}$, Pitched roofs $\sim 35^\circ$ | Gable / hip roof facet preservation + eave separation |
-| **CivilInfrastructure** | Multi-level elevation variance under decks | Multi-level underpass void carving ($\ge 3.5\text{m}$ clearance) |
-| **MountainAlpineCanyon** | Relief $\Delta Y > 100\text{m}$, High slope variance | Slope-stratified physical PBR biomes (turf to bedrock) |
-| **ForestWoodlandCanopy** | Dense high-NDVI foliage domes | Understory trunk synthesis + crown preservation |
-| **IndustrialLogistics** | Expansive low-pitch planar roofs | Large-footprint slab extraction |
-| **CoastalShorelineHarbor** | Flat sea-level datum + pier projection | Hydrographic clipping and shoreline seam welding |
-| **AridDesertBadlands** | Layered sedimentary stratigraphy | Stepped bench contour preservation |
-| **OpenAgriculturalPlains** | Continuous low relief ($\Delta Y < 5\text{m}$) | Quad-aligned terrain surface optimization |
-| *(Open-Domain / Alien)* | Dimensional continuous coordinates $(\Delta Y, \kappa, \mathbf{N})$ | Continuous parametric boundary projection |
+The tools refuse a GLB they would misread or strip (node transforms, instancing, non-triangle primitives, compressed
+or sparse accessors, several materials, textures) instead of returning it moved or recoloured.
 
 ---
 
-## 3. Dedicated In-App Agent Tools
+## 2. Reading the measurements
 
-Agents can call these 4 tools directly via Gemini Function Calling:
+The probe gives numbers, not a label. For example, a tile whose area is mostly vertical with a large relief and
+walls aligned to one orientation is likely a street of tall buildings; a tile with a large inclined share and low
+relief may be pitched roofs or a hillside; a positive green index means the vertex colours are green, which only
+means something when the tile carries colours. Say what the numbers are when you report them, and do not present an
+interpretation as a measurement.
 
-### 1. `utdra_probe_tile`
-Probes and telemetrically classifies a 3D tile without mutating geometry.
+---
+
+## 3. Calls
+
 ```json
-{
-  "name": "utdra_probe_tile",
-  "args": {
-    "inputGlbPath": "public/models/midtown_manhattan_raw.glb",
-    "benchmark": "urban"
-  }
-}
+{ "name": "utdra_probe_tile", "args": { "inputGlbPath": "public/models/midtown_clay.glb" } }
 ```
 
-### 2. `utdra_decompose_tile`
-Executes end-to-end decomposition, planar shaft rectification, and crown preservation.
 ```json
-{
-  "name": "utdra_decompose_tile",
-  "args": {
-    "inputGlbPath": "public/models/chrysler_building_raw.glb",
-    "mode": "full",
-    "outputGlbPath": "public/models/chrysler_rectified.glb"
-  }
-}
+{ "name": "utdra_slice_elevation", "args": { "inputGlbPath": "public/models/midtown_clay.glb", "cutoffY": -2.0, "outputGlbPath": "public/models/midtown_above_ground.glb" } }
 ```
 
-### 3. `utdra_slice_elevation`
-Non-destructively slices geometry across an elevation plane ($y$) using the Sutherland-Hodgman analytical polygon clipping kernel.
-```json
-{
-  "name": "utdra_slice_elevation",
-  "args": {
-    "inputGlbPath": "public/models/elevation_study.glb",
-    "cutoffY": 5.0,
-    "outputGlbPath": "public/models/elevation_sliced.glb"
-  }
-}
-```
-
-### 4. `utdra_carve_bridge_voids`
-Excises false photogrammetric vertical curtain walls beneath elevated bridges and viaducts.
 ```json
 {
   "name": "utdra_carve_bridge_voids",
   "args": {
-    "inputGlbPath": "public/models/brooklyn_bridge_raw.glb",
+    "inputGlbPath": "public/models/overpass_clay.glb",
+    "span": { "minX": -40, "maxX": 40, "minZ": -6, "maxZ": 6, "groundY": 0, "deckY": 7.5 },
     "minVoidHeightMeters": 3.5,
-    "outputGlbPath": "public/models/brooklyn_bridge_carved.glb"
+    "outputGlbPath": "public/models/overpass_carved.glb"
   }
 }
 ```
 
 ---
 
-## 4. TypeScript Codebase API Usage
-
-Agents writing application code or synthesizing custom scripts can import the services directly:
+## 4. TypeScript API
 
 ```typescript
-import {
-    UniversalTileDecompositionService,
-    UtdraService,
-    UldraService
-} from '@scratchbox/core';
+import { UniversalTileDecompositionService } from '@scratchbox/core';
 
 const service = new UniversalTileDecompositionService();
+const measured = await service.probeTile('public/tiles/manhattan_clay.glb');
+console.log(measured.reliefMeters, measured.slopeAreaFractions.vertical);
 
-// 1. Zero-mutation domain probe
-const probeResult = await service.probeTile('public/tiles/manhattan_raw.glb');
-console.log(`Classified as ${probeResult.telemetry.dominantDomain} (${probeResult.telemetry.confidence * 100}%)`);
+const sliced = await service.sliceElevation('public/tiles/manhattan_clay.glb', -2.0, { outputGlbPath: 'public/tiles/manhattan_sliced.glb' });
 
-// 2. Full UTDRA decomposition and GLB export
-const decompResult = await service.decomposeTile({
-    inputGlbPath: 'public/tiles/manhattan_raw.glb',
-    mode: 'full',
-    minVoidHeightMeters: 3.5,
-    outputPath: 'public/tiles/manhattan_rectified.glb'
-});
-
-// 3. Sutherland-Hodgman Elevation Slicing
-const slicedResult = await service.sliceElevation('public/tiles/manhattan_raw.glb', 12.0);
-
-// 4. Bridge Void Carving
-const bridgeResult = await service.carveBridgeUnderpass('public/tiles/bridge_raw.glb', {
-    minVoidHeightMeters: 4.0
-});
+const carved = await service.carveBridgeUnderpass('public/tiles/overpass_clay.glb',
+    { minX: -40, maxX: 40, minZ: -6, maxZ: 6, groundY: 0, deckY: 7.5 },
+    { minVoidHeightMeters: 3.5 });
+console.log(`${carved.telemetry.removedTriangles} triangles removed`);
 ```
 
 ---
 
 ## 5. Non-Negotiable Directives: Atomic Building Integrity & Zero Roof Slicing
 
-1. **Atomic Structural Integrity**: Buildings, architectural envelopes, and high-rise shafts are indivisible entities. Under no circumstance may an extraction boundary or planar slicer bisect a building or sever its superstructure.
-2. **Zero Roof Shearing ($Y_{\max} = +\infty$)**: Slicing planes must NEVER cut downward through building roofs, crowns, or spires. Vertical skyward envelopes remain unbounded ($+\infty$). Elevation slicing (`utdra_slice_elevation`) is strictly reserved for baseline terrain leveling, subterranean noise excision, or ground datum calibration below building foundations ($Y \le Y_{\text{ground}}$).
-3. **Crown & Spire Preservation**: Sculptural crowns, antennae, and ornamental finials must be fully isolated and retained in `preservedSculpturalCrowns` without geometric truncation.
+1. **Atomic Structural Integrity**: Buildings are indivisible. Never slice through a building, and never give the
+   carver a span box that contains building walls you mean to keep (it removes every near-vertical triangle inside).
+2. **Zero Roof Shearing ($Y_{\max} = +\infty$)**: Elevation slicing (`utdra_slice_elevation`) is for pruning below the
+   ground (`cutoffY` at or below the foundation level, $Y \le Y_{\text{ground}}$). It keeps everything above the cut, so
+   it never cuts down through roofs, crowns or spires; a cut above the ground removes the lower parts of every building.
+3. **Crown & Spire Preservation**: no UTDRA tool removes geometry above the cut plane or outside the span box, so
+   crowns, antennae and finials stay whole. Check the measured bounds and `removedTriangles` after every edit, and
+   tell the user what was removed.

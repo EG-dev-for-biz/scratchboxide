@@ -190,7 +190,18 @@ export class GaussianSplat4DService {
 
         const numSubject = canonicalSubject.length;
         if (numSubject === 0) {
-            // Static background only
+            // Static background only: nothing is tracked, and the bounds are the background's own.
+            if (staticBackground.length === 0) {
+                throw new Error('No canonical subject or static background Gaussians provided for the 4DGS scene.');
+            }
+            const min: [number, number, number] = [Infinity, Infinity, Infinity];
+            const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+            for (const g of staticBackground) {
+                for (let a = 0; a < 3; a++) {
+                    min[a] = Math.min(min[a], g.position[a]);
+                    max[a] = Math.max(max[a], g.position[a]);
+                }
+            }
             return {
                 staticLayer: staticBackground,
                 canonicalSubject: [],
@@ -198,16 +209,13 @@ export class GaussianSplat4DService {
                 numFrames: T,
                 heroFrameIndex: hero,
                 frameTimestamps,
-                bounds: {
-                    min: [-10, -10, -10],
-                    max: [10, 10, 10]
-                },
+                bounds: { min, max },
                 telemetry: {
-                    trackerUsed: 'lk_flow',
+                    trackerUsed: 'none',
                     numDynamicGaussians: 0,
                     numStaticGaussians: staticBackground.length,
                     prunedGaussians: 0,
-                    meanPhotometricError: 0,
+                    meanPhotometricError: null,
                     processingTimeMs: Date.now() - startTime
                 }
             };

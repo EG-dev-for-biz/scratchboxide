@@ -193,6 +193,19 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
         expect(typeof avatar4dgsHandlers.humanoid_avatar_animate).toBe('function');
     });
 
+    it('humanoid tools act only on the actor they are given: no demo actor when none is named, and an unknown one fails', async () => {
+        const { MissingInputError } = await import('../src/common/errors/pipeline-errors');
+        for (const call of [
+            () => humanoidAvatarHandlers.humanoid_avatar_get({}),
+            () => humanoidAvatarHandlers.humanoid_avatar_skin({ modality: 'pbr-standard' }),
+            () => humanoidAvatarHandlers.humanoid_avatar_animate({ frameIndex: 1 }),
+            () => humanoidAvatarHandlers.humanoid_avatar_animate({ actorId: '2785536' }),
+            () => humanoidAvatarHandlers.humanoid_avatar_get({ actorId: 'no_such_actor_7f3a' })
+        ]) {
+            await expect(call()).rejects.toBeInstanceOf(MissingInputError);
+        }
+    });
+
     itActor('humanoid avatar Gemini spatial tools respond with correct payloads', async () => {
         // Test humanoid_avatar_list
         const listRes = await humanoidAvatarHandlers.humanoid_avatar_list({});

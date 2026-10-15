@@ -110,10 +110,15 @@ export interface RiggedPoseOutput {
     personIndex: number;
     angles: HumanoidPoseAngles;
     hipPositionMeters: [number, number, number];
-    groundedYOffsetMeters: number;
+    /** Hip-to-ground distance measured from the visible feet; absent when no foot landmark is visible. */
+    groundedYOffsetMeters?: number;
     confidence: number;
     bodyFrame?: BodyFrame;
     error?: string;
+    /** The detected person's MediaPipe world landmarks (metres) the angles were solved from. */
+    worldLandmarks?: MediaPipeLandmark[];
+    /** The detected person's normalized image landmarks. */
+    imageLandmarks?: MediaPipeLandmark[];
 }
 
 /**

@@ -1,46 +1,98 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
+ ********************************************************************************/
+
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
     ImageColorTransferService,
     transferImageColor
 } from '../src/node/image/ImageColorTransferService';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
+import { decodePng, encodePng } from '../src/node/texture-processing';
 
-describe('ImageColorTransferService (2D Image-to-Image Color Transfer API)', () => {
-    it('generates a valid two-stage prompt plan in plan-only mode', async () => {
+/** A w x h PNG filled with one colour. */
+function solid(w: number, h: number, rgb: [number, number, number]): Buffer {
+    const rgba = Buffer.alloc(w * h * 4);
+    for (let i = 0; i < w * h; i++) { rgba[i * 4] = rgb[0]; rgba[i * 4 + 1] = rgb[1]; rgba[i * 4 + 2] = rgb[2]; rgba[i * 4 + 3] = 255; }
+    return encodePng(w, h, rgba);
+}
+
+/** A horizontal grey ramp, so the target has structure the transfer must keep in place. */
+function ramp(w: number, h: number): Buffer {
+    const rgba = Buffer.alloc(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4, v = Math.round(40 + (x / (w - 1)) * 160);
+        rgba[i] = v; rgba[i + 1] = v; rgba[i + 2] = v; rgba[i + 3] = 255;
+    }
+    return encodePng(w, h, rgba);
+}
+
+describe('ImageColorTransferService (2D image-to-image colour transfer)', () => {
+    it('measures both images and moves the target toward the reference colours, pixel for pixel in place', async () => {
         const result = await transferImageColor({
-            referenceImage: 'sunset_rome.jpg',
-            targetImage: 'colosseum_noon.jpg',
-            mode: 'plan-only',
-            contrastCurve: 'cinematic',
-            preserveSkinTones: true
+            referenceImage: solid(48, 32, [200, 90, 40]),
+            targetImage: ramp(96, 40),
+            outputFormat: 'png',
+            preserveSkinTones: false
         });
-
         expect(result.success).toBe(true);
-        expect(result.telemetry.mode).toBe('plan-only');
-        expect(result.telemetry.preservedGeometry).toBe(true);
-        expect(result.plan).toBeDefined();
-        expect(result.plan.phase1ExtractionPrompt).toContain('extract its complete color palette');
-        expect(result.plan.phase2ApplicationPrompt).toContain('100% identical composition');
-        expect(result.palette.shadowProfile.hex).toBe('#0F172A');
-        expect(result.palette.highlightProfile.hex).toBe('#FEF3C7');
+        expect(result.telemetry.mode).toBe('local-cielab');
+        expect(result.telemetry.dimensions).toEqual({ width: 96, height: 40 });
+        // The reference is orange: positive a* and b* means; the grey target's are near zero.
+        expect(result.referenceStatistics.mean[1]).toBeGreaterThan(20);
+        expect(result.referenceStatistics.mean[2]).toBeGreaterThan(20);
+        expect(Math.abs(result.targetStatistics.mean[1])).toBeLessThan(2);
+        const out = decodePng(result.outputBuffer);
+        expect([out.width, out.height]).toEqual([96, 40]);
+        const mid = (20 * 96 + 48) * 4;
+        expect(out.rgba[mid]).toBeGreaterThan(out.rgba[mid + 2]); // warmer: red above blue
+        expect(result).not.toHaveProperty('palette');
+        expect(result).not.toHaveProperty('plan');
     });
 
-    it('extracts structured palette from reference image descriptor', async () => {
-        const palette = await ImageColorTransferService.extractPalette('sunset_rome.jpg');
-        expect(palette.primaryTones.length).toBeGreaterThan(0);
-        expect(palette.primaryTones[0].hex).toBe('#1E293B');
-        expect(palette.shadowProfile.temperature).toBe('cool');
-        expect(palette.highlightProfile.temperature).toBe('warm');
-    });
-
-    it('validates plan prompt constraints for geometry locking', async () => {
-        const result = await ImageColorTransferService.transferColor({
-            referenceImage: 'ref.png',
-            targetImage: 'target.png',
-            mode: 'plan-only',
-            contrastCurve: 'high-contrast'
+    it('applies a tone curve given as continuous parameters, reports it, and refuses values out of range', async () => {
+        const run = (toneCurve?: any) => transferImageColor({
+            referenceImage: ramp(64, 16), targetImage: ramp(64, 16), outputFormat: 'png', preserveSkinTones: false, toneCurve
         });
+        const lumaSpread = (png: Buffer) => {
+            const img = decodePng(png);
+            const at = (x: number) => img.rgba[(8 * img.width + x) * 4];
+            return at(img.width - 2) - at(1);
+        };
+        const natural = await run();
+        const flatter = await run({ contrast: 0.6 });
+        const stronger = await run({ contrast: 2 });
+        // Any look is a point in the parameter space; no preset name is needed (the review's 'soft filmic').
+        const softFilmic = await run({ contrast: 0.85, gamma: 0.9, pivot: 45 });
+        expect(natural.telemetry.toneCurve).toBeNull();
+        expect(flatter.telemetry.toneCurve).toEqual({ gamma: 1, contrast: 0.6, pivot: 50 });
+        expect(softFilmic.telemetry.toneCurve).toEqual({ gamma: 0.9, contrast: 0.85, pivot: 45 });
+        expect(lumaSpread(flatter.outputBuffer)).toBeLessThan(lumaSpread(natural.outputBuffer) - 10);
+        expect(lumaSpread(stronger.outputBuffer)).toBeGreaterThan(lumaSpread(natural.outputBuffer));
+        await expect(run({ contrast: 0 })).rejects.toThrow(/toneCurve.contrast: must be a number > 0/);
+        await expect(run({ pivot: 100 })).rejects.toThrow(/toneCurve.pivot: must be between 0 and 100/);
+        await expect(run('cinematic')).rejects.toThrow(/toneCurve: must be an object/);
+    });
 
-        expect(result.plan.phase2ApplicationPrompt).toContain('Keep all objects, characters, buildings');
-        expect(result.plan.phase2ApplicationPrompt).toContain('high-contrast');
+    it('has no canned palette: extractPalette is gone and an unreadable input fails', async () => {
+        expect((ImageColorTransferService as any).extractPalette).toBeUndefined();
+        await expect(ImageColorTransferService.transferColor({ referenceImage: 'sunset_rome.jpg', targetImage: 'colosseum_noon.jpg' }))
+            .rejects.toBeInstanceOf(MissingInputError);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-color-transfer-'));
+        try {
+            const bogus = path.join(dir, 'not_an_image.png');
+            fs.writeFileSync(bogus, 'not an image');
+            await expect(ImageColorTransferService.transferColor({ referenceImage: bogus, targetImage: ramp(8, 8) })).rejects.toThrow();
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 });

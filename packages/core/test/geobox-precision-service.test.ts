@@ -335,7 +335,7 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
             'GeoBox Precision Resection Service (GeoBoxPrecisionResectionService)'
         );
         expect(resolution.tier1Assessment.nativeCapabilitiesUsed).toContain(
-            'Closed-Loop Sub-Pixel Edge Alignment Optimizer (SubPixelEdgeAlignmentOptimizer, 100% overlap, < 0.1px)'
+            'Closed-Loop Edge Alignment (SubPixelEdgeAlignmentOptimizer: refines a camera pose against a given photo and model, reports the edge correlation it measured)'
         );
         expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toContain(
             'GeoBoxPrecisionResectionService'

@@ -4,6 +4,8 @@
 Tracks dense query points across video frames using Google DeepMind's TAPIR / TAP-Net model.
 Reads JSON input from stdin:
   {
+    "framesPath": "/path/to/frames.rgb",   # raw uint8 RGB, numFrames x height x width x 3 (or videoPath / framePaths)
+    "numFrames": T, "width": W, "height": H,
     "videoPath": "/path/to/video.mp4",
     "queryPoints": [[x_norm, y_norm], ...],
     "queryFrames": [0, ...],
@@ -11,6 +13,7 @@ Reads JSON input from stdin:
     "useCausal": true
   }
 
+On failure it writes {"error": "..."} and exits non-zero; it never substitutes another tracker.
 Writes JSON result to stdout:
   {
     "success": true,
@@ -44,6 +47,7 @@ def main() -> None:
     checkpoint_path = input_data.get("checkpointPath", None)
     video_path = input_data.get("videoPath", None)
     frame_paths = input_data.get("framePaths", None)
+    frames_path = input_data.get("framesPath", None)
 
     if not query_points:
         print(json.dumps({"error": "No queryPoints provided"}))
@@ -51,7 +55,14 @@ def main() -> None:
 
     # 1. Load video frames
     frames = []
-    if video_path and os.path.exists(video_path):
+    if frames_path and os.path.exists(frames_path):
+        t, h, w = int(input_data.get("numFrames", 0)), int(input_data.get("height", 0)), int(input_data.get("width", 0))
+        raw = np.fromfile(frames_path, dtype=np.uint8)
+        if t <= 0 or h <= 0 or w <= 0 or raw.size != t * h * w * 3:
+            print(json.dumps({"error": f"framesPath holds {raw.size} bytes, expected {t}x{h}x{w}x3"}))
+            sys.exit(2)
+        frames = list(raw.reshape(t, h, w, 3))
+    elif video_path and os.path.exists(video_path):
         cap = cv2.VideoCapture(video_path)
         while cap.isOpened():
             ret, frame = cap.read()
@@ -68,7 +79,7 @@ def main() -> None:
                     frames.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
     if not frames:
-        print(json.dumps({"error": "No frames loaded from videoPath or framePaths", "fallback": True}))
+        print(json.dumps({"error": "No frames loaded from framesPath, videoPath or framePaths"}))
         sys.exit(2)
 
     T = len(frames)
@@ -98,11 +109,8 @@ def main() -> None:
                     break
 
         if model is None:
-            print(json.dumps({
-                "fallback": True,
-                "reason": "TAPIR checkpoint not found on disk. Falling back to native optical flow."
-            }))
-            return
+            print(json.dumps({"error": "TAPIR checkpoint not found (pass checkpointPath, or place it at ~/.cache/tapir/tapir_checkpoint_panning.pt)"}))
+            sys.exit(3)
 
         # Prepare tensors
         queries_np = np.zeros((1, N, 3), dtype=np.float32)
@@ -175,10 +183,8 @@ def main() -> None:
         }))
 
     except Exception as e:
-        print(json.dumps({
-            "fallback": True,
-            "reason": f"TAPIR native inference failed: {e}. Falling back to native optical flow."
-        }))
+        print(json.dumps({"error": f"TAPIR inference failed: {e}"}))
+        sys.exit(4)
 
 if __name__ == "__main__":
     main()

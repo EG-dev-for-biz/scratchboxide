@@ -19,6 +19,7 @@ import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirecto
 import { buildContactSheet, normalizePlates } from '../../video/ConditioningPlateService';
 import { checkVideo } from '../../video/GenerativeVideoQAService';
 import { VfxSubjectSegmenterService } from '../../video/VfxSubjectSegmenterService';
+import { GeneratorFailedError } from '../../../common/errors/pipeline-errors';
 import type { VideoTimelineData } from '../../../browser/generative-canvas/services/video/videoTypes';
 import type { ToolDeclaration, ToolHandler } from './types';
 
@@ -39,6 +40,16 @@ function asBoolean(val: unknown): boolean {
     if (typeof val === 'boolean') return val;
     if (typeof val === 'string') return val.toLowerCase() === 'true';
     return false;
+}
+
+/**
+ * The MediaPipe director tools read the real video and have no dry run (a plan made without the video was a canned
+ * pose track, crop or score). A call that still asks for one is refused before anything runs, with nothing analysed.
+ */
+function refuseDryRun(tool: string, args: Record<string, unknown>) {
+    if (!asBoolean(args.dryRun)) return undefined;
+    const error = `${tool} has no dry run: it only reports what it measured in the video itself. Dry run, nothing analysed; call it without dryRun to analyse the video.`;
+    return { resultPayload: { success: false, dryRun: true, error }, status: 'failed' as const, summaryResult: error };
 }
 
 const editorService = new HeadlessVideoEditorService();
@@ -1257,7 +1268,7 @@ export const COMPOSITOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 duration: {
                     type: 'NUMBER',
-                    description: 'Optional total composite duration in seconds'
+                    description: 'Composite duration in seconds (default: the background plate\'s measured length; the call fails if it cannot be measured)'
                 },
                 prompt: {
                     type: 'STRING',
@@ -1343,14 +1354,19 @@ export const compositorHandlers: Record<string, ToolHandler> = {
         const crf = asNumber(args.crf) || 18;
         const dryRun = asBoolean(args.dryRun);
 
+        // The patch spans the background plate: its length is the caller's or the plate's measured one, never assumed.
         let durationSec = asNumber(args.duration);
         if (!durationSec) {
+            let probe;
             try {
-                const probe = await editorService.probeMedia(backgroundVideo);
-                durationSec = probe.durationSec || 10;
-            } catch {
-                durationSec = 10;
+                probe = await editorService.probeMedia(backgroundVideo);
+            } catch (err: any) {
+                throw new GeneratorFailedError('ffprobe', `vfx_composite_patch could not measure the length of the background plate ${backgroundVideo} (pass "duration" to set it): ${err?.stderr || err?.message || String(err)}`);
             }
+            if (!(Number.isFinite(probe.durationSec) && probe.durationSec > 0)) {
+                throw new GeneratorFailedError('ffprobe', `vfx_composite_patch could not measure the length of the background plate ${backgroundVideo}: ffprobe reported ${probe.durationSec} s (pass "duration" to set it)`);
+            }
+            durationSec = probe.durationSec;
         }
 
         const timeline: VideoTimelineData = {
@@ -1408,11 +1424,18 @@ export const compositorHandlers: Record<string, ToolHandler> = {
             dryRun
         });
 
+        if (!result.success) {
+            return {
+                resultPayload: result,
+                status: 'failed',
+                summaryResult: `The generative patch composite into ${outputPath} failed, so no video was written: ${result.error || 'FFmpeg reported no error'}`
+            };
+        }
         return {
             resultPayload: result,
             summaryResult: dryRun
-                ? `Planned localized inpaint patch composite for ${outputPath} (dry run).`
-                : `Successfully composited generative patch into ${outputPath}.`
+                ? `Planned localized inpaint patch composite for ${outputPath} (dry run, nothing rendered).`
+                : `Composited the generative patch into ${outputPath} (${durationSec} s).`
         };
     },
 
@@ -1440,11 +1463,18 @@ export const compositorHandlers: Record<string, ToolHandler> = {
             dryRun
         });
 
+        if (!result.success) {
+            return {
+                resultPayload: result,
+                status: 'failed',
+                summaryResult: `The timeline composite to ${outputPath} failed, so no video was written: ${result.error || 'FFmpeg reported no error'}`
+            };
+        }
         return {
             resultPayload: result,
             summaryResult: dryRun
-                ? `Planned multi-track timeline composite for ${outputPath} (dry run).`
-                : `Successfully rendered timeline composite to ${outputPath}.`
+                ? `Planned multi-track timeline composite for ${outputPath} (dry run, nothing rendered).`
+                : `Rendered timeline composite to ${outputPath}.`
         };
     }
 };
@@ -1487,10 +1517,6 @@ export const DIRECTOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputJsonPath: {
                     type: 'STRING',
                     description: 'Optional path to write JSON motion telemetry'
-                },
-                dryRun: {
-                    type: 'BOOLEAN',
-                    description: 'If true, returns planned kinematics without spawning processes'
                 }
             },
             required: ['videoPath']
@@ -1498,7 +1524,7 @@ export const DIRECTOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'vfx_video_auto_reframe',
-        description: 'Intelligently re-frame widescreen or arbitrary aspect ratio video into vertical (9:16), square (1:1), or custom formats by tracking human subjects across time with MediaPipe and executing smooth Catmull-Rom spline camera pans via FFmpeg.',
+        description: 'Re-frame a video into vertical (9:16), square (1:1) or any W:H format: MediaPipe finds the person in frames sampled across the clip, and FFmpeg renders one static crop at the average of the tracked positions (the crop does not pan). Fails when MediaPipe cannot run or finds nobody; focusMode "center" crops the middle without tracking.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1520,15 +1546,7 @@ export const DIRECTOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 sampleIntervalSec: {
                     type: 'NUMBER',
-                    description: 'Sampling interval for camera trajectory keyframes (default 0.5s)'
-                },
-                cropPadding: {
-                    type: 'NUMBER',
-                    description: 'Margin factor around detected subject (default 1.25)'
-                },
-                dryRun: {
-                    type: 'BOOLEAN',
-                    description: 'If true, returns planned crop window and FFmpeg filtergraph without rendering'
+                    description: 'Seconds between the frames the person is tracked in (default 0.5)'
                 }
             },
             required: ['inputVideoPath', 'targetAspectRatio']
@@ -1536,7 +1554,7 @@ export const DIRECTOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'vfx_visual_critic_audit',
-        description: 'Execute an autonomous visual fidelity and photorealism audit on video or VFX composites against the 8-Dimension Visual Fidelity Rubric using FFmpeg contact sheets and MediaPipe anatomical consistency tracking, synthesizing actionable remediation recipes if score < 8.5/10.',
+        description: 'Audit a video or VFX composite against the 8-Dimension Visual Fidelity Rubric: FFmpeg makes a 3x3 contact sheet, MediaPipe measures how steady the limbs of a person in it stay, and a Gemini vision model scores every dimension from the sheet. Passes only when every dimension reaches minPassingScore; a failing audit includes the model\'s fixes. Fails (no score) when the sheet cannot be made, motion tracking cannot run, or the vision model is unavailable.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1554,11 +1572,7 @@ export const DIRECTOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 minPassingScore: {
                     type: 'NUMBER',
-                    description: 'Minimum passing score threshold (default 8.5)'
-                },
-                dryRun: {
-                    type: 'BOOLEAN',
-                    description: 'If true, returns simulated rubric evaluation without rendering contact sheets'
+                    description: 'Score every dimension must reach to pass (default 8.5)'
                 }
             },
             required: ['videoPath']
@@ -1567,7 +1581,7 @@ export const DIRECTOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const directorHandlers: Record<string, ToolHandler> = {
-    vfx_mediapipe_track_video_motion: async (args, _ctx) => {
+    vfx_mediapipe_track_video_motion: async (args, ctx) => {
         const videoPath = asString(args.videoPath);
         if (!videoPath) {
             return {
@@ -1582,7 +1596,8 @@ export const directorHandlers: Record<string, ToolHandler> = {
         const smoothingWindow = asNumber(args.smoothingWindow);
         const minConfidence = asNumber(args.minConfidence);
         const outputJsonPath = asString(args.outputJsonPath) || undefined;
-        const dryRun = asBoolean(args.dryRun);
+        const noDryRun = refuseDryRun('vfx_mediapipe_track_video_motion', args);
+        if (noDryRun) return noDryRun;
 
         const result = await directorService.trackVideoMotion({
             videoPath,
@@ -1592,18 +1607,25 @@ export const directorHandlers: Record<string, ToolHandler> = {
             smoothingWindow,
             minConfidence,
             outputJsonPath,
-            dryRun
+            signal: ctx?.signal,
+            onProgress: ctx?.reportProgress
         });
 
+        if (!result.success) {
+            return {
+                resultPayload: result as unknown as Record<string, unknown>,
+                status: 'failed',
+                summaryResult: `Motion tracking failed for ${videoPath}: ${result.error}`
+            };
+        }
         return {
             resultPayload: result as unknown as Record<string, unknown>,
-            summaryResult: dryRun
-                ? `Planned motion tracking for ${videoPath} (${result.totalFramesAnalyzed} frames, dry run).`
-                : `Tracked video motion: ${result.totalFramesAnalyzed} frames at ${result.sampleFps}fps (avg confidence ${(result.averageConfidence * 100).toFixed(1)}%, max displacement ${result.maxDisplacementMeters.toFixed(2)}m).`
+            summaryResult: `Tracked video motion: ${result.totalFramesAnalyzed} frames at ${result.sampleFps}fps (avg confidence ${(result.averageConfidence * 100).toFixed(1)}%, max displacement ${result.maxDisplacementMeters.toFixed(2)}m)`
+                + (result.undetectedFrames?.length ? `; ${result.undetectedFrames.length} sampled frame(s) showed no person and were left out.` : '.')
         };
     },
 
-    vfx_video_auto_reframe: async (args, _ctx) => {
+    vfx_video_auto_reframe: async (args, ctx) => {
         const inputVideoPath = asString(args.inputVideoPath);
         const targetAspectRatio = asString(args.targetAspectRatio);
         if (!inputVideoPath || !targetAspectRatio) {
@@ -1616,8 +1638,8 @@ export const directorHandlers: Record<string, ToolHandler> = {
         const outputVideoPath = asString(args.outputVideoPath) || undefined;
         const focusMode = (asString(args.focusMode) as 'face' | 'body' | 'action' | 'center') || 'body';
         const sampleIntervalSec = asNumber(args.sampleIntervalSec);
-        const cropPadding = asNumber(args.cropPadding);
-        const dryRun = asBoolean(args.dryRun);
+        const noDryRun = refuseDryRun('vfx_video_auto_reframe', args);
+        if (noDryRun) return noDryRun;
 
         const result = await directorService.autoReframeVideo({
             inputVideoPath,
@@ -1625,19 +1647,20 @@ export const directorHandlers: Record<string, ToolHandler> = {
             targetAspectRatio,
             focusMode,
             sampleIntervalSec,
-            cropPadding,
-            dryRun
+            signal: ctx?.signal,
+            onProgress: ctx?.reportProgress
         });
 
         return {
             resultPayload: result as unknown as Record<string, unknown>,
-            summaryResult: dryRun
-                ? `Planned auto-reframe for ${inputVideoPath} to ${result.targetAspectRatio} (${result.cropDimensions.width}x${result.cropDimensions.height}, dry run).`
-                : `Auto-reframed video to ${result.targetAspectRatio} (${result.cropDimensions.width}x${result.cropDimensions.height}) -> ${result.outputVideoPath}.`
+            summaryResult: `Auto-reframed video to ${result.targetAspectRatio} (${result.cropDimensions.width}x${result.cropDimensions.height}) -> ${result.outputVideoPath}, `
+                    + (focusMode === 'center'
+                        ? 'cropped on the frame centre as asked (no subject tracking).'
+                        : `framed on the person MediaPipe tracked in ${result.waypoints.length} sampled frame(s)${result.undetectedSamples?.length ? `; ${result.undetectedSamples.length} sampled frame(s) showed no person and were left out` : ''}.`)
         };
     },
 
-    vfx_visual_critic_audit: async (args, _ctx) => {
+    vfx_visual_critic_audit: async (args, ctx) => {
         const videoPath = asString(args.videoPath);
         if (!videoPath) {
             return {
@@ -1649,19 +1672,28 @@ export const directorHandlers: Record<string, ToolHandler> = {
         const promptContext = asString(args.promptContext) || undefined;
         const referencePlatePath = asString(args.referencePlatePath) || undefined;
         const minPassingScore = asNumber(args.minPassingScore);
-        const dryRun = asBoolean(args.dryRun);
+        const noDryRun = refuseDryRun('vfx_visual_critic_audit', args);
+        if (noDryRun) return noDryRun;
 
+        // Sheet, tracking or vision failures throw: the registry reports the audit as failed with the reason. A Stop
+        // (ctx.signal) ends it at the frame or step it is on and cancels the vision request.
         const result = await directorService.auditVideoFidelity({
             videoPath,
             promptContext,
             referencePlatePath,
             minPassingScore,
-            dryRun
+            signal: ctx?.signal,
+            onProgress: ctx?.reportProgress
         });
 
+        const anatomy = result.anatomicalConsistency;
+        const anatomyNote = anatomy.limbLengthStabilityRatio !== undefined
+            ? `limb-length stability ${(anatomy.limbLengthStabilityRatio * 100).toFixed(0)}% over ${anatomy.framesWithPerson}/${anatomy.framesSampled} sampled frames with a person`
+            : `body consistency not measured: ${anatomy.notMeasuredReason}`;
         return {
             resultPayload: result as unknown as Record<string, unknown>,
-            summaryResult: `Visual Critic audit: ${result.passed ? 'PASSED' : 'FAILED'} (score ${result.overallScore.toFixed(2)}/10, limb stability ${(result.anatomicalConsistency.limbLengthStabilityRatio * 100).toFixed(0)}%).`
+            summaryResult: `Visual Critic audit by ${result.visionModel} on a 3x3 contact sheet: ${result.passed ? 'PASSED' : 'FAILED'} `
+                + `(mean ${result.overallScore.toFixed(2)}/10; ${result.passed ? `every dimension >= ${result.minPassingScore}` : `below ${result.minPassingScore}: ${result.failedDimensions.map(d => `${d} ${result.dimensionAudits[d].score}`).join(', ')}`}); ${anatomyNote}.`
         };
     }
 };

@@ -10,16 +10,16 @@
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { SurveySplatPipelineService } from './SurveySplatPipelineService';
+import { GeneratorFailedError, MissingInputError, TileExtractionError } from '../../common/errors/pipeline-errors';
 import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngine';
 import {
     createDefaultStationImageGenerator,
-    createArchitecturalStationGenerator,
     hasStationImageCredentials,
+    requireStationImageCredentials,
     type StationImageGenerator
 } from './BeautifyStationService';
 import { resolveSurveyPreset } from './survey-router';
 import { getGoogle3DTilesClay } from './Google3DTileBlockoutPipelineService';
-import { MissingInputError } from '../../common/errors/pipeline-errors';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 
@@ -63,6 +63,18 @@ export interface Location3DGSRequest {
     /** Generation fidelity tier */
     fidelity?: 'draft' | 'production';
     onProgress?: (progress: number, message?: string) => void;
+    /**
+     * The caller's Stop (the chat's Stop button or the tool's time limit). Checked before and after the tile
+     * extraction and passed down through the survey pipeline to every station's image-model call, the baker, fuser
+     * and tiler; generate() then rejects with its reason and generates or writes nothing more.
+     */
+    signal?: AbortSignal;
+}
+
+/** Throws the signal's reason (or an AbortError) once the caller has stopped the run. */
+function throwIfStopped(signal?: AbortSignal): void {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : Object.assign(new Error('Location 3DGS generation was stopped'), { name: 'AbortError' });
 }
 
 export interface Location3DGSResult {
@@ -79,7 +91,14 @@ export interface Location3DGSResult {
     scene3DData: Scene3DData;
     cropBox: { min: [number, number, number]; max: [number, number, number] };
     durationMs: number;
-    error?: string;
+    /** The clay tiles the survey rendered (the caller's GLB, or the fresh extraction). */
+    glbPath: string;
+    /** Stations whose generated image passed geometry QC and was baked into splats. */
+    acceptedStations: number;
+    /** Image models that made the station images. */
+    modelsUsed: string[];
+    /** One line per distinct station image source: the model that answered and, when another was asked for, why. */
+    imageSources: string[];
 }
 
 /**
@@ -123,6 +142,7 @@ export class Location3DGaussianSplatService {
         const t0 = Date.now();
         const root = req.workspaceRoot || this.workspaceRoot;
         const progressReporter = req.onProgress || (() => {});
+        throwIfStopped(req.signal);
 
         progressReporter(0.02, `Resolving geodetic location for "${req.location}"...`);
 
@@ -150,7 +170,8 @@ export class Location3DGaussianSplatService {
 
         const anchor = preset.anchor;
         // The survey renders the place's own clay tiles: a GLB the caller passed, else a fresh extraction at the
-        // resolved anchor. A failed extraction fails the call; no other model is picked by name or substituted.
+        // resolved anchor. A failed extraction fails the call; no model on disk is picked by the place's name, no
+        // tile geometry is synthesized, and no other place's model is substituted.
         let glbPath: string;
         if (preset.glbPath) {
             glbPath = path.isAbsolute(preset.glbPath) ? preset.glbPath : path.resolve(root, preset.glbPath);
@@ -165,8 +186,12 @@ export class Location3DGaussianSplatService {
                 // overwrite each other's tiles.
                 { radiusMeters: preset.cropRadius || 75, outputDir: path.resolve(root, 'public/models') }
             );
+            if (extraction.success === false || !extraction.glbPath || !fs.existsSync(extraction.glbPath)) {
+                throw new TileExtractionError('download', `no clay tiles were extracted at ${anchor.lat}, ${anchor.lng} for ${anchor.formattedAddress}`);
+            }
             glbPath = extraction.glbPath;
         }
+        throwIfStopped(req.signal);
 
         let stations = preset.stations;
 
@@ -194,39 +219,22 @@ export class Location3DGaussianSplatService {
         const outDir = path.isAbsolute(resolvedOutDir) ? resolvedOutDir : path.resolve(root, resolvedOutDir);
         await fs.ensureDir(outDir);
 
-        // 2. Resolve image generator (Nano Banana / Google media generation or procedural mock)
+        // 2. Resolve the image generator (Nano Banana / Google media generation). There is no stand-in: an injected
+        //    generator is the only other source, and every result says which model made the station images.
         let generator = req.generator;
-        if (!generator) {
-            if (process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR === 'mock') {
-                const { decodePng, encodePng } = await import('../texture-processing');
-                generator = {
-                    name: 'mock-recolour',
-                    async generate(a) {
-                        const b = decodePng(a.blockoutPng);
-                        const out = Buffer.alloc(b.rgba.length);
-                        for (let i = 0; i < b.rgba.length; i += 4) {
-                            const r = b.rgba[i], g = b.rgba[i + 1], bl = b.rgba[i + 2];
-                            const isSky = bl > 170 && r < 140;
-                            out[i] = isSky ? 135 : Math.min(255, r * 1.1 + 15);
-                            out[i + 1] = isSky ? 170 : g * 0.95;
-                            out[i + 2] = isSky ? 215 : bl * 0.75;
-                            out[i + 3] = 255;
-                        }
-                        return encodePng(b.width, b.height, out);
-                    }
-                };
-            } else if (req.forceRebake !== false || hasStationImageCredentials()) {
-                // Every plate is painted unless cached plates may be reused, so then the image model (and its
-                // credentials) is required up front and a missing key fails here, before any station is rendered.
-                // With forceRebake: false and no credentials no generator is built: cached plates are reused, and a
-                // station without one fails in SurveySplatPipelineService, naming the station and the missing plate.
-                const isDraft = req.draft === true || req.fidelity === 'draft';
-                generator = createDefaultStationImageGenerator({
-                    workspaceRoot: root,
-                    fidelity: isDraft ? 'draft' : (req.fidelity || 'production'),
-                    imageSize: isDraft ? '1K' : '2K'
-                });
-            }
+        if (!generator && (req.forceRebake !== false || hasStationImageCredentials())) {
+            // Every plate is painted unless cached plates may be reused, so then the image model is required: its
+            // credentials (an environment or saved API key, or Vertex AI) are resolved here, and a missing one fails
+            // before any station is rendered. With forceRebake: false and no key in the environment no generator is
+            // built: cached plates are reused after geometry QC, and a station without one fails the pipeline, naming
+            // the station and the missing plate.
+            await requireStationImageCredentials('location_generate_3dgs');
+            const isDraftGenerator = req.draft === true || req.fidelity === 'draft';
+            generator = createDefaultStationImageGenerator({
+                workspaceRoot: root,
+                fidelity: isDraftGenerator ? 'draft' : (req.fidelity || 'production'),
+                imageSize: isDraftGenerator ? '1K' : '2K'
+            });
         }
 
         const isDraft = req.draft === true || req.fidelity === 'draft';
@@ -267,8 +275,18 @@ export class Location3DGaussianSplatService {
             stoneType: req.stoneType as any,
             renderProvider: req.renderProvider,
             renderMode: req.renderMode,
-            draft: isDraft
+            draft: isDraft,
+            signal: req.signal
         }, (p, message) => progressReporter(0.1 + 0.85 * Math.max(0, Math.min(1, p)), message));
+        throwIfStopped(req.signal);
+
+        if (!pipelineResult.success) {
+            throw new GeneratorFailedError('survey splat pipeline', `the 3DGS pipeline for ${beautifyContext.locationName} failed: ${(pipelineResult as any).error || 'no error was reported'}`);
+        }
+        const accepted = pipelineResult.stations.filter(st => st.accepted);
+        if (accepted.length === 0 || !(pipelineResult.fusedSplatCount > 0)) {
+            throw new GeneratorFailedError('survey splat pipeline', `the 3DGS pipeline for ${beautifyContext.locationName} produced no splats (${accepted.length}/${pipelineResult.stations.length} station images accepted)`);
+        }
 
         const { scene3DData, splatMediaObject } = SurveySplatPipelineService.toScene3DData(
             pipelineResult,
@@ -279,9 +297,7 @@ export class Location3DGaussianSplatService {
         const splatUrl = splatMediaObject.content.durableUri || SurveySplatPipelineService.toWebUrl(pipelineResult.fusedSplatPath);
         const tilesetUrl = SurveySplatPipelineService.toWebUrl(pipelineResult.tilesetPath);
 
-        if (pipelineResult.success) {
-            progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
-        }
+        progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
 
         return {
             success: pipelineResult.success,
@@ -294,10 +310,13 @@ export class Location3DGaussianSplatService {
             metaPath: pipelineResult.metaPath,
             splatCount: pipelineResult.fusedSplatCount,
             stationCount: pipelineResult.stations.length,
+            glbPath,
+            acceptedStations: accepted.length,
             scene3DData,
             cropBox: pipelineResult.cropBox,
             durationMs: Date.now() - t0,
-            error: (pipelineResult as any).error
+            modelsUsed: Array.from(new Set(pipelineResult.stations.map(st => st.modelUsed).filter((m): m is string => !!m))),
+            imageSources: Array.from(new Set(pipelineResult.stations.map(st => st.imageSource).filter((m): m is string => !!m)))
         };
     }
 }

@@ -90,6 +90,8 @@ export interface QuickEditOptions {
     preset?: string;
     dryRun?: boolean;
     timeoutMs?: number;
+    /** The caller's Stop: kills the running ffmpeg, which rejects with an AbortError. */
+    signal?: AbortSignal;
 }
 
 export interface ExtractKeyframesOptions {
@@ -101,6 +103,8 @@ export interface ExtractKeyframesOptions {
     format?: 'png' | 'jpg';
     dryRun?: boolean;
     timeoutMs?: number;
+    /** The caller's Stop: kills the ffmpeg of the frame in flight and starts none for the frames after it (AbortError). */
+    signal?: AbortSignal;
 }
 
 export interface SplitScreenOptions {
@@ -138,6 +142,8 @@ export interface StoryboardSheetOptions {
     labelTimecode?: boolean;
     timeoutMs?: number;
     dryRun?: boolean;
+    /** The caller's Stop: kills the running ffmpeg, which rejects with an AbortError. */
+    signal?: AbortSignal;
 }
 
 export interface LutGradeOptions {
@@ -397,7 +403,8 @@ export class HeadlessVideoEditorService {
             crf = 20,
             preset = 'fast',
             dryRun = false,
-            timeoutMs = 120000
+            timeoutMs = 120000,
+            signal
         } = opts;
 
         const args: string[] = ['-y'];
@@ -547,7 +554,7 @@ export class HeadlessVideoEditorService {
             fs.mkdirSync(outDir, { recursive: true });
         }
 
-        const execRes = await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const execRes = await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, signal });
         const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
 
         return {
@@ -576,7 +583,8 @@ export class HeadlessVideoEditorService {
             heroFrameOnly = false,
             format = 'png',
             dryRun = false,
-            timeoutMs = 60000
+            timeoutMs = 60000,
+            signal
         } = opts;
 
         if (!fs.existsSync(inputPath) && !dryRun) {
@@ -621,7 +629,10 @@ export class HeadlessVideoEditorService {
             executedCommands.push(cmd);
 
             if (!dryRun) {
-                await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs });
+                if (signal?.aborted) {
+                    throw Object.assign(new Error(`extractKeyframes was stopped after ${i} of ${targetTimestamps.length} frames`), { name: 'AbortError', cause: signal.reason });
+                }
+                await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, signal });
             }
         }
 
@@ -912,7 +923,7 @@ export class HeadlessVideoEditorService {
             fs.mkdirSync(outDir, { recursive: true });
         }
 
-        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, signal: opts.signal });
         const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
 
         return {

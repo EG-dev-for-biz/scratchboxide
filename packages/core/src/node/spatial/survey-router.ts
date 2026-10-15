@@ -13,7 +13,7 @@ import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngin
 import type { ColmapCameraPose, GeodeticAnchor, SurveyPatternConfig } from '../../common/spatial/colmap-vector-reference-types';
 import { AdaptiveSurveyRigService } from './AdaptiveSurveyRigService';
 import { SurveyStationRenderService } from './SurveyStationRenderService';
-import { BeautifyStationService, type StationImageGenerator } from './BeautifyStationService';
+import { BeautifyStationService, describeStationImageSource, type StationImageGenerator } from './BeautifyStationService';
 import { SurveySplatPipelineService } from './SurveySplatPipelineService';
 import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
 import { geocode3DTilesAddress, type GeoAnchor } from './Google3DTileBlockoutPipelineService';
@@ -175,12 +175,12 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
         const [station] = renderer.enrichStations([args.station], { isoDate: args.isoDate });
         const svc = new BeautifyStationService(renderer, generator);
         report(0.2, `Generating with ${generator.name}`);
-        const res = await svc.beautify(station, { locationName: args.locationName || args.anchor?.formattedAddress || 'the location', moodPromptContext: args.moodPromptContext, styleSuffix: args.styleSuffix }, { width: args.width ?? 1920, maxRerolls: args.maxRerolls });
+        const res = await svc.beautify(station, { locationName: args.locationName || args.anchor?.formattedAddress || 'the location', moodPromptContext: args.moodPromptContext, styleSuffix: args.styleSuffix }, { width: args.width ?? 1920, maxRerolls: args.maxRerolls, signal: args.signal });
         const outDir = path.resolve(workspaceRoot, args.outDir || `build/beautify_stations/${Date.now()}`);
         await fs.outputFile(path.join(outDir, `station_${station.id}_blockout.png`), res.blockout.png);
         await fs.outputFile(path.join(outDir, `station_${station.id}_beautified.png`), res.imagePng);
         report(1, res.accepted ? 'Accepted' : `Rejected: ${res.qc.reason}`);
-        return { stationId: station.id, accepted: res.accepted, attempts: res.attempts, qc: res.qc, prompt: res.prompt, imageBase64: res.imagePng.toString('base64'), imagePath: path.join(outDir, `station_${station.id}_beautified.png`), blockoutPath: path.join(outDir, `station_${station.id}_blockout.png`), alignedStation: res.alignedStation };
+        return { stationId: station.id, accepted: res.accepted, attempts: res.attempts, qc: res.qc, prompt: res.prompt, imageBase64: res.imagePng.toString('base64'), imagePath: path.join(outDir, `station_${station.id}_beautified.png`), blockoutPath: path.join(outDir, `station_${station.id}_blockout.png`), alignedStation: res.alignedStation, modelUsed: res.modelUsed, imageSource: describeStationImageSource(res) };
     };
 
     const runSurveyPipeline = async (args: any, report: (p: number, msg?: string) => void) => {
@@ -235,7 +235,9 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
             use2dgs: args?.use2dgs === true || args?.surfaceModel === 'planar',
             surfaceModel: args?.surfaceModel,
             shDegree: args?.shDegree !== undefined ? parseInt(args.shDegree, 10) : undefined,
-            exposureScale: args?.exposureScale !== undefined ? parseFloat(args.exposureScale) : undefined
+            exposureScale: args?.exposureScale !== undefined ? parseFloat(args.exposureScale) : undefined,
+            // The caller's Stop (a tool call's ctx.signal): the pipeline stops between stations and inside them.
+            signal: args?.signal
         }, report);
 
         if (!res.success) throw new Error(res.error || 'pipeline failed');

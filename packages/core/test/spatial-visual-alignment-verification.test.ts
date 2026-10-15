@@ -125,3 +125,40 @@ describe('SpatialVisualAlignmentVerificationService (Universal Visual Alignment 
     expect(certifiedAudit.summaryReport).toContain('PASS');
   });
 });
+
+describe('spatial_verify_visual_alignment: an audit of measurements given, never of assumed ones', () => {
+  it('refuses missing dimensions or measurements and a partial pinhole check, instead of certifying defaults', async () => {
+    const { google3DTilesHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+    const { MissingInputError } = await import('../src/common/errors/pipeline-errors');
+    const audit = google3DTilesHandlers.spatial_verify_visual_alignment;
+    const base = { modelName: 'Flatiron', sourceDimensions: [24, 87, 52], targetDimensions: [26, 87, 58], overlapScorePercent: 96.2, residualErrorPx: 0.08 };
+    for (const [args, arg] of [
+      [{ modelName: 'Flatiron' }, 'sourceDimensions'],
+      [{ ...base, overlapScorePercent: undefined }, 'overlapScorePercent'],
+      [{ ...base, residualErrorPx: undefined }, 'residualErrorPx'],
+      [{ ...base, sourceDimensions: [1, 1] }, 'sourceDimensions'],
+      [{ ...base, cameraDepthMeters: 120 }, 'cameraDepthMeters, box2dNormalized, imageHeightPx and focalLengthPx']
+    ] as const) {
+      const error = await audit(args as any, {} as any).catch(e => e);
+      expect(error).toBeInstanceOf(MissingInputError);
+      expect(error.arg).toBe(arg);
+    }
+
+    // Measured overlap and residual are judged; the pinhole check without its inputs is reported as not measured.
+    const res = await audit(base as any, {} as any);
+    const cert = (res.resultPayload as any).certificate;
+    expect(cert.metrics.overlapScorePercent).toBe(96.2);
+    expect(cert.metrics.residualErrorPx).toBe(0.08);
+    expect(cert.checks.opticalScalePassed).toBeUndefined();
+    expect(cert.metrics.opticalDiscrepancyPercent).toBeUndefined();
+    expect(cert.summaryReport).toContain('Optical Scale Discrepancy: not measured');
+    expect(cert.summaryReport).toContain('OBB Volume Tightness Gain: not measured');
+    expect(res.summaryResult).toContain('Optical Scale: not measured');
+
+    // With the camera's own intrinsics, the pinhole height is computed: 87 m at 290 m with fy 1500 spans 450 px.
+    const withOptics = await audit({ ...base, cameraDepthMeters: 290, box2dNormalized: [100, 300, 400, 700], imageHeightPx: 1500, focalLengthPx: 1500 } as any, {} as any);
+    const optical = (withOptics.resultPayload as any).certificate;
+    expect(optical.metrics.opticalDiscrepancyPercent).toBeCloseTo(0, 5);
+    expect(optical.checks.opticalScalePassed).toBe(true);
+  });
+});

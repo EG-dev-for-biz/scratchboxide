@@ -399,34 +399,33 @@ export class TaskCapabilityResolver {
                 primaryNativeEngine = 'cpp-3d-engine';
                 nativeCapabilities.push('Native C++20 Astro Mesh Reshaper Engine (scratchbox_shaper.hpp)');
                 nativeCapabilities.push('NativeMeshReshaperService / MeshReshapingService');
-                nativeCapabilities.push('Parametric Non-Linear Deformers (Taper, Twist, Bend, Bulge, Squash, Shear)');
+                nativeCapabilities.push('Parametric Non-Linear Deformers (Taper, Twist, Bend, Bulge, Shear) with parameters relative to the mesh bounds');
                 nativeCapabilities.push('Trivariate Bernstein FFD 3D Tensor Lattice (Lattice3D)');
                 nativeCapabilities.push('Multi-Brush Digital Sculpt Engine (Clay, Crease, Smooth, Flatten, Inflate)');
                 nativeCapabilities.push('Loop Subdivision & Manifold Topology Repair');
-                nativeCapabilities.push('In-App Agent Tools: mesh_reshape_via_prompt & mesh_apply_deformers');
+                nativeCapabilities.push('In-App Agent Tool: mesh_apply_deformers (explicit operations on a given GLB)');
                 rationale = 'Native Scratchbox C++20 Astro 3D engine executes sub-second parametric deformers, Bernstein FFD lattices, sculpt strokes, and loop subdivision directly on meshes, compiling via Apple Clang with zero external dependencies.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
-                    serviceOrTool: 'mesh_reshape_via_prompt or NativeMeshReshaperService',
-                    targetTool: 'mesh_reshape_via_prompt',
+                    serviceOrTool: 'mesh_apply_deformers or NativeMeshReshaperService',
+                    targetTool: 'mesh_apply_deformers',
                     targetService: 'NativeMeshReshaperService',
-                    details: 'Call mesh_reshape_via_prompt with the user prompt or execute NativeMeshReshaperService.reshapeMesh to deform the mesh and stream binary .glb into 3d-scene.'
+                    details: 'Turn the request into explicit operations (values relative to the mesh bounding box) and call mesh_apply_deformers on the given GLB; stream the binary .glb into 3d-scene.'
                 };
             } else if (/utdra|uldra|tile\s*decomposition|rectif(?:y|ication)|bridge\s*void|underpass\s*void|sutherland\s*-?\s*hodgman|slope\s*stratified|domain\s*probe/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA)');
-                nativeCapabilities.push('UniversalTileDecompositionService / UtdraService / UldraService');
-                nativeCapabilities.push('DomainClassifier (9 Macro-Geographic Domains)');
-                nativeCapabilities.push('Sutherland-Hodgman Non-Destructive Slicer & Multi-Level Void Carver');
+                nativeCapabilities.push('UniversalTileDecompositionService / UtdraService / UldraService (UTDRA / ULDRA)');
+                nativeCapabilities.push('Tile measurements: bounds, relief, area by slope band, wall orientation (no classification)');
+                nativeCapabilities.push('Sutherland-Hodgman elevation slicer and a span-box curtain-wall carver');
                 nativeCapabilities.push('C++20 Native Pipeline (run_utdra_pipeline)');
-                rationale = 'Native C++20 UTDRA / ULDRA pipeline probes macro-domains, rectifies architectural shafts, carves underpass voids beneath bridges, and performs elevation slicing with 100% geometric manifold preservation.';
+                rationale = 'Native C++20 UTDRA pipeline measures a given tile, keeps what lies above an elevation, or removes the near-vertical triangles inside a span box the caller gives; it reports what it measured and removed, and classifies nothing.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
-                    serviceOrTool: 'utdra_decompose_tile or UniversalTileDecompositionService',
-                    targetTool: 'utdra_decompose_tile',
+                    serviceOrTool: 'utdra_probe_tile, utdra_slice_elevation or utdra_carve_bridge_voids',
+                    targetTool: 'utdra_probe_tile',
                     targetService: 'UniversalTileDecompositionService',
-                    details: 'Call utdra_decompose_tile / utdra_probe_tile or execute UniversalTileDecompositionService to rectify mesh and stream into 3d-scene primitive.'
+                    details: 'Call utdra_probe_tile on the given GLB to measure it; slice with utdra_slice_elevation (an elevation) or carve with utdra_carve_bridge_voids (a span box in the tile\'s coordinates).'
                 };
             } else if (/beautif|nano\s*banana[\s\w-]{0,30}(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
                 canSolveNatively = true;
@@ -530,11 +529,11 @@ export class TaskCapabilityResolver {
                 nativeCapabilities.push('Spatial Pose Estimator (SpatialPoseEstimatorService.solvePnP, solvePnPRansac)');
                 nativeCapabilities.push('Visual Feature Matcher (VisualFeatureMatcherService, Harris/FAST, 128-D descriptors, Lowe ratio)');
                 nativeCapabilities.push('Headless Mesh Silhouette & Edge Renderer (HeadlessMeshSilhouetteRenderer, binary .glb loading)');
-                nativeCapabilities.push('Closed-Loop Sub-Pixel Edge Alignment Optimizer (SubPixelEdgeAlignmentOptimizer, 100% overlap, < 0.1px)');
+                nativeCapabilities.push('Closed-Loop Edge Alignment (SubPixelEdgeAlignmentOptimizer: refines a camera pose against a given photo and model, reports the edge correlation it measured)');
                 nativeCapabilities.push('GeoBox Precision Resection Service (GeoBoxPrecisionResectionService)');
                 nativeCapabilities.push('Brown-Conrady Lens Calibration (k1, k2, p1, p2, chromatic aberration)');
                 nativeCapabilities.push('spatial_solve_pnp, spatial_match_features_2d_3d, spatial_closed_loop_edge_align, geobox_resect_image_location Tools');
-                rationale = 'Native Spatial Pose Estimation and GeoBox resection pipeline calculates exact analytical 6-DOF camera poses via solvePnP/DLT/Levenberg-Marquardt from 2D-to-3D feature matches, with pure Node.js headless silhouette rasterization and closed-loop edge optimization converging to 100% overlap and sub-pixel residuals (< 0.1 px).';
+                rationale = 'Native Spatial Pose Estimation and GeoBox resection pipeline calculates exact analytical 6-DOF camera poses via solvePnP/DLT/Levenberg-Marquardt from 2D-to-3D feature matches, with pure Node.js headless silhouette rasterization and closed-loop edge alignment that refines the pose against the photo and reports the edge correlation it measured (it certifies no overlap it did not reach).';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'GeoBoxPrecisionResectionService / SpatialPoseEstimatorService (spatial_solve_pnp / geobox_resect_image_location)',
@@ -554,14 +553,14 @@ export class TaskCapabilityResolver {
                 nativeCapabilities.push('Atmospheric Rayleigh & Mie Scattering Dome (AtmosphericSkyDome)');
                 nativeCapabilities.push('Diurnal Solar Ephemeris & Planckian Kelvin Radiometry (1,000K - 40,000K)');
                 nativeCapabilities.push('Aerial Perspective Koschmieder Extinction & Volumetric God Rays');
-                nativeCapabilities.push('Agent Tools (lighting_estimate_from_photo, lighting_configure_gaffer_rig, lighting_optimize_closed_loop, geobox_harmonize_location_lighting)');
-                rationale = 'Native LightingGafferService, InverseLightingEstimatorService, and ClosedLoopLightingOptimizerService provide photographic gaffer reasoning (Rembrandt, Split, Butterfly), beam modifiers, inverse photo estimation, and closed-loop lighting alignment directly in Tier 1.';
+                nativeCapabilities.push('Agent Tools (lighting_estimate_from_photo, lighting_configure_gaffer_rig, geobox_harmonize_location_lighting)');
+                rationale = 'Native LightingGafferService and InverseLightingEstimatorService provide photographic gaffer reasoning (Rembrandt, Split, Butterfly), beam modifiers and inverse photo estimation directly in Tier 1.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'LocationObjectLightingService & geobox_harmonize_location_lighting / LightingGafferService / lighting_* tools',
                     targetTool: 'geobox_harmonize_location_lighting',
                     targetService: 'LocationObjectLightingService',
-                    details: 'Invoke lighting_estimate_from_photo or lighting_configure_gaffer_rig, or run lighting_optimize_closed_loop to achieve >=95% photometric correlation.'
+                    details: 'Invoke lighting_estimate_from_photo to read the lighting from a photo, or lighting_configure_gaffer_rig to build a rig.'
                 };
 
             } else if (/360\s*panorama|4k\s*panorama|monumental\s*panorama|equirectangular|seam\s*heal|nadir\s*inpaint|zenith|polar\s*pinch|panorama_heal_seam|panorama_reproject_zenith|panorama_generate_4k/i.test(lower)) {
@@ -674,14 +673,14 @@ export class TaskCapabilityResolver {
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('Nano Banana Color Transfer Pipeline (Method 2: Extract-then-Apply)');
                 nativeCapabilities.push('NanoBananaColorService (buildExtractPalettePrompt, parseExtractedPalette, buildApplyPalettePrompt)');
-                nativeCapabilities.push('nano_banana_transfer_color, nano_banana_extract_color_palette & nano_banana_apply_color_palette Agent Tools');
-                rationale = 'Native Nano Banana Two-Step Extract-then-Apply color transfer extracts structured palette DNA and lighting atmosphere from a reference image, and applies global color overrides to the target image with strict non-negotiable geometry locking.';
+                nativeCapabilities.push('nano_banana_apply_color_palette Agent Tool (geometry-locked color override prompt from a complete palette)');
+                rationale = 'Read the palette and lighting atmosphere from the reference image, then nano_banana_apply_color_palette builds the global color override prompt that applies it to the target image with strict non-negotiable geometry locking.';
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
-                    serviceOrTool: 'NanoBananaColorService & nano_banana_transfer_color tool',
-                    targetTool: 'nano_banana_transfer_color',
+                    serviceOrTool: 'NanoBananaColorService & nano_banana_apply_color_palette tool',
+                    targetTool: 'nano_banana_apply_color_palette',
                     targetService: 'NanoBananaColorService',
-                    details: 'Invoke nano_banana_transfer_color or nano_banana_extract_color_palette / nano_banana_apply_color_palette to transfer color palette with geometry locking.'
+                    details: 'Read the reference palette, then invoke nano_banana_apply_color_palette with the complete palette to build the geometry-locked color override prompt.'
                 };
             } else if (/beautif|nano\s*banana[\s\w-]{0,30}(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
                 canSolveNatively = true;

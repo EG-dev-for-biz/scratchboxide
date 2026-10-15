@@ -227,8 +227,10 @@ describe('Generalized Location 3DGS Pipeline & Tools', () => {
             }
 
             // Test location specification with explicit survey pattern and stone calibration
+            // The service never picks a GLB by the place's name: the capture is passed explicitly.
             const res = await svc.synthesize({
                 location: 'Red Rocks Amphitheatre',
+                glbPath,
                 lat: 39.6655,
                 lng: -105.2052,
                 elevation: 1932.0,
@@ -266,6 +268,7 @@ describe('Generalized Location 3DGS Pipeline & Tools', () => {
 
             const res = await svc.generate({
                 location: 'Red Rocks Amphitheatre',
+                glbPath,
                 lat: 39.6655,
                 lng: -105.2052,
                 cameraCount: 2,

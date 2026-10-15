@@ -12,9 +12,26 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Google3DTileCrawlerBaker } from '../src/node/spatial/Google3DTileCrawlerBaker';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
-import { BeautifyStationService, createDefaultStationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { BeautifyStationService, type StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { decodePng, encodePng } from '../src/node/texture-processing';
 import { stationFromLookAt, cameraBasis } from '../src/common/spatial/SurveySynthesisEngine';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
+
+/** Test stand-in for the image model: recolours the clay blockout (keeps its geometry) and names itself as the model. */
+function recolourGenerator(): StationImageGenerator {
+    return {
+        name: 'test-recolour',
+        async generate(args) {
+            const b = decodePng(args.blockoutPng);
+            const out = Buffer.alloc(b.rgba.length);
+            for (let i = 0; i < b.rgba.length; i += 4) {
+                const l = b.rgba[i];
+                out[i] = Math.min(255, l * 1.1 + 15); out[i + 1] = l * 0.95; out[i + 2] = l * 0.8; out[i + 3] = 255;
+            }
+            return { png: encodePng(b.width, b.height, out), modelUsed: 'test-recolour' };
+        }
+    };
+}
 
 describe('Urban Pair Harvesting & Ingestion Pipeline', () => {
   it('converts geodetic coordinates to ECEF and local ENU with zero distortion', () => {
@@ -107,7 +124,7 @@ describe('Urban Pair Harvesting & Ingestion Pipeline', () => {
       formattedAddress: 'Manhattan Test Tower'
     };
     const optics = { focalLengthMm: 28, sensorWidthMm: 36, aspectRatio: 16 / 9 };
-    const generator = createDefaultStationImageGenerator({ allowProceduralGenerator: true });
+    const generator = recolourGenerator();
     const beautifySvc = new BeautifyStationService(renderer, generator);
 
     const stationCount = 4;

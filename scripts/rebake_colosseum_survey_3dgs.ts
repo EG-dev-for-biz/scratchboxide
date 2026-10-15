@@ -12,7 +12,7 @@ import * as fs from 'fs-extra';
 import { MissingInputError } from '../packages/core/src/common/errors/pipeline-errors';
 import { SurveySplatPipelineService } from '../packages/core/src/node/spatial/SurveySplatPipelineService';
 import { resolveSurveyPreset } from '../packages/core/src/node/spatial/survey-router';
-import { createArchitecturalStationGenerator } from '../packages/core/src/node/spatial/BeautifyStationService';
+import { createDefaultStationImageGenerator } from '../packages/core/src/node/spatial/BeautifyStationService';
 
 async function main() {
     console.log('🏛️ Rebaking Colosseum Survey 3DGS centered at monument centroid [-43.42, 24.0, 62.54]...');
@@ -37,7 +37,8 @@ async function main() {
     console.log(`🎯 Station 1 Fwd: ${preset.stations[0].forwardVector.map(v => v.toFixed(2)).join(', ')}`);
     console.log(`📦 Bounding Box: min=[${preset.cropBox?.min.join(', ')}], max=[${preset.cropBox?.max.join(', ')}]`);
 
-    const generator = createArchitecturalStationGenerator();
+    // Station images come from the image model (there is no procedural painter); this run makes billed calls.
+    const generator = createDefaultStationImageGenerator();
     const service = new SurveySplatPipelineService({ generator });
 
     const result = await service.run({

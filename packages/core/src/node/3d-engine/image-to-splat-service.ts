@@ -188,6 +188,28 @@ export class ImageToSplatService {
     }
 
     /**
+     * Converts planar depths (distance along the camera axis, as monocular depth models report it) into distances
+     * along each pixel's ray of {@link computePinholeRayField} with the same field of view, which is what
+     * convertSingleImageToSplat multiplies the unit rays by.
+     */
+    static planarToRayDepths(planar: Float32Array | number[], width: number, height: number, fovDegrees = 65.0): Float32Array {
+        if (planar.length !== width * height) {
+            throw new Error(`planarToRayDepths: ${planar.length} depths for a ${width}x${height} image`);
+        }
+        const f = 0.5 * height / Math.tan(0.5 * (fovDegrees * Math.PI) / 180.0);
+        const cx = width * 0.5;
+        const cy = height * 0.5;
+        const out = new Float32Array(width * height);
+        for (let y = 0; y < height; ++y) {
+            for (let x = 0; x < width; ++x) {
+                const i = y * width + x;
+                out[i] = planar[i] * Math.hypot((x - cx) / f, (y - cy) / f, 1.0);
+            }
+        }
+        return out;
+    }
+
+    /**
      * Synthesizes a plausible metric depth map from RGB luminance and vertical perspective priors
      * when a pre-inferred DepthBox depth map is not directly supplied.
      */

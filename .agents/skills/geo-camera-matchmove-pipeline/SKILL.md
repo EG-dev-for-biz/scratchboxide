@@ -114,8 +114,11 @@ Renders the solved 6-DoF camera trajectory through Google Photorealistic 3D Tile
 }
 ```
 
-### 4. `tapir_track_video_points`
-Tracks persistent 2D visual points across video frames to extract camera motion vectors or verify trajectory stability.
+### Point tracking
+There is no point-tracking tool for the agent to call (the former `tapir_track_video_points` tracked frames it
+synthesized itself and is removed). To track points in a real clip, decode its frames and call
+`TapirTrackingService.executeTracking(frames, queryPoints)` in code: TAPIR runs through `scripts/run_tapir.py` and fails
+with the reason when it cannot run; Lucas-Kanade optical flow runs only when asked for (`backend: 'lk_flow'`).
 
 ---
 

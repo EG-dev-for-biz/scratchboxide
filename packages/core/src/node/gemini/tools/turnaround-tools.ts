@@ -27,7 +27,7 @@ function asBoolean(val: unknown, defaultVal = false): boolean {
 export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'generate_multi_angle_turnaround',
-        description: 'Generates a geometrically consistent multi-angle turnaround image capture set across 3D objects, props, vehicles, or architectural scenes using the Adaptive Multi-Angle Camera Orbit Engine (Nano Banana Lite). Enforces continuous spherical camera orbit mathematics, dual-anchor identity conditioning (Hero Anchor + Adjacent Continuity), and strict negative isolation invariants (zero ground/pedestal, zero cast shadows, zero text/labels) for seamless downstream 3D reconstruction (Trellis via Fal.ai, 3DGS, NeRF).',
+        description: 'Generates a geometrically consistent multi-angle turnaround image set of an object, prop, vehicle or structure with an image model (Nano Banana Lite first by default). Each view after the first is conditioned on the hero view and the previous view, with continuous spherical camera orbit mathematics and strict isolation (no ground/pedestal, no cast shadows, no text/labels). Optionally sends the views to Trellis on Fal.ai for a GLB (only when downstreamTarget is "trellis-fal"). The result names the image model that produced the views and why any earlier model was skipped; a step that fails fails the tool.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -41,7 +41,7 @@ export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 stylePreset: {
                     type: 'STRING',
-                    description: 'Visual styling contract: "18-percent-studio-clay" (default), "pbr-delighted", or "photorealistic".'
+                    description: 'Visual style: "18-percent-studio-clay" (default), "pbr-delighted", "photorealistic", or any other style description, which is used as written.'
                 },
                 floatingVoid: {
                     type: 'BOOLEAN',
@@ -57,19 +57,23 @@ export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 downstreamTarget: {
                     type: 'STRING',
-                    description: 'Optional downstream 3D reconstruction pipeline: "trellis-fal" (default when FAL_KEY present) or "none".'
+                    description: 'Downstream 3D reconstruction: "none" (default) or "trellis-fal" (Trellis on Fal.ai; needs FAL_KEY, and only when the user asks for a reconstruction).'
+                },
+                model: {
+                    type: 'STRING',
+                    description: 'Image model id for the views. When given, only that model is used; omit it to try Nano Banana Lite (gemini-3.1-flash-lite-image) and then the default image models in order.'
                 },
                 lengthMeters: {
                     type: 'NUMBER',
-                    description: 'Optional real-world physical length in meters for downstream .glb scaling.'
+                    description: 'Optional real-world length of the subject in meters, returned with the GLB as its target size (the GLB is not rescaled).'
                 },
                 widthMeters: {
                     type: 'NUMBER',
-                    description: 'Optional real-world physical width in meters for downstream .glb scaling.'
+                    description: 'Optional real-world width of the subject in meters, returned with the GLB as its target size.'
                 },
                 heightMeters: {
                     type: 'NUMBER',
-                    description: 'Optional real-world physical height in meters for downstream .glb scaling.'
+                    description: 'Optional real-world height of the subject in meters, returned with the GLB as its target size.'
                 }
             },
             required: ['subject']
@@ -87,8 +91,8 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
         const floatingVoid = asBoolean(args.floatingVoid, true);
         const suppressShadows = asBoolean(args.suppressShadows, true);
         const suppressText = asBoolean(args.suppressText, true);
-        const downstreamTarget = (asString(args.downstreamTarget) || (process.env.FAL_KEY ? 'trellis-fal' : 'none')) as 'trellis-fal' | 'trellis' | 'none';
-        const mockExecution = asBoolean(args.mockExecution, false);
+        const downstreamTarget = (asString(args.downstreamTarget) || 'none') as 'trellis-fal' | 'trellis' | 'none';
+        const model = asString(args.model) || undefined;
 
         const metricDimensions = (args.lengthMeters || args.widthMeters || args.heightMeters)
             ? {
@@ -109,16 +113,24 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
             downstreamTarget,
             metricDimensions,
             outputDir,
-            mockExecution
+            model,
+            // Stop (or the tool time limit) ends the capture before the next station or the Trellis upload.
+            signal: ctx.signal,
+            onProgress: (fraction, message) => ctx.reportProgress?.(message, fraction)
         });
 
         const downstreamSummary = result.downstreamGlb
-            ? `, synthesized downstream .glb at ${result.downstreamGlb.url} (${result.downstreamGlb.vertexCount} verts)`
+            ? ` Trellis reconstructed ${result.downstreamGlb.path} (${result.downstreamGlb.vertexCount} vertices, ${result.downstreamGlb.triangleCount} triangles).`
             : '';
+        const { views, ...rest } = result;
 
         return {
-            resultPayload: result as unknown as Record<string, unknown>,
-            summaryResult: `Captured ${result.views.length} consistent views for "${subject}" using rig "${rigPreset}" in ${result.totalDurationMs}ms${downstreamSummary}.`
+            resultPayload: {
+                ...rest,
+                // Image bytes stay on disk; the payload carries their paths.
+                views: views.map(({ buffer, ...view }) => view)
+            } as unknown as Record<string, unknown>,
+            summaryResult: `Captured ${views.length} views of "${subject}" on rig "${rigPreset}" in ${result.totalDurationMs}ms into ${outputDir}. ${result.modelNote}${downstreamSummary}`
         };
     }
 };

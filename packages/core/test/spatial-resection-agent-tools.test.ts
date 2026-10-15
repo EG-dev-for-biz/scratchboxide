@@ -1,4 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { encodePng } from '../src/node/texture-processing';
+import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
+import { skyscraperMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { buildSystemInstruction } from '../src/node/gemini/prompt-builder';
@@ -119,53 +125,127 @@ describe('Spatial 2D-to-3D Resection & Pose Estimation Agent Tools', () => {
             expect(payload.translationCamera[2]).toBeCloseTo(40, 1);
         });
 
-        it('should dispatch spatial_match_features_2d_3d and extract correspondences', async () => {
-            const response = await registry.dispatch('spatial_match_features_2d_3d', {
-                queryImagePath: 'public/test_images/storefront.jpg',
-                maxKeypoints: 200,
-                loweRatio: 0.80,
-                crossCheck: true
-            }, {} as any);
+        it('should dispatch spatial_match_features_2d_3d on the two given images and recover their offset', async () => {
+            // A photo and a "render" of the same blocky texture, the render shifted by (+7, +4) px.
+            const w = 200, h = 150, dx = 7, dy = 4;
+            const texture = (x: number, y: number) => {
+                const cell = ((Math.floor(x / 13) * 73856093) ^ (Math.floor(y / 11) * 19349663)) >>> 0;
+                return 40 + (cell % 180);
+            };
+            const image = (shiftX: number, shiftY: number) => {
+                const rgba = Buffer.alloc(w * h * 4);
+                for (let y = 0; y < h; y++) {
+                    for (let x = 0; x < w; x++) {
+                        const v = texture(x - shiftX + 50, y - shiftY + 50);
+                        const i = (y * w + x) * 4;
+                        rgba[i] = v; rgba[i + 1] = v; rgba[i + 2] = v; rgba[i + 3] = 255;
+                    }
+                }
+                return encodePng(w, h, rgba);
+            };
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-feature-match-'));
+            const queryImagePath = path.join(dir, 'photo.png');
+            const renderImagePath = path.join(dir, 'render.png');
+            fs.writeFileSync(queryImagePath, image(0, 0));
+            fs.writeFileSync(renderImagePath, image(dx, dy));
+            try {
+                const response = await registry.dispatch('spatial_match_features_2d_3d', {
+                    queryImagePath,
+                    renderImagePath,
+                    maxKeypoints: 300,
+                    loweRatio: 0.8,
+                    crossCheck: true
+                }, {} as any);
 
-            expect(response.exec.status).toBe('completed');
-            expect(response.exec.summaryResult).toContain('Extracted visual features');
-            expect(response.exec.summaryResult).toContain('query keypoints');
-
-            const payload: any = response.resultPayload;
-            expect(payload.queryKeypointsCount).toBeGreaterThan(0);
-            expect(payload.referenceKeypointsCount).toBeGreaterThan(0);
-            expect(payload.matchesCount).toBeGreaterThan(0);
+                expect(response.exec.status).toBe('completed');
+                expect(response.exec.summaryResult).toContain(`Matched ${queryImagePath} against ${renderImagePath}`);
+                const payload: any = response.resultPayload;
+                expect(payload.queryImageSize).toEqual([w, h]);
+                expect(payload.matchesCount).toBeGreaterThan(10);
+                const offsets = payload.matches.map((m: any) => [m.point2[0] - m.point1[0], m.point2[1] - m.point1[1]]);
+                const near = offsets.filter(([ox, oy]: number[]) => Math.abs(ox - dx) <= 1 && Math.abs(oy - dy) <= 1);
+                expect(near.length / offsets.length).toBeGreaterThan(0.8);
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
         });
 
-        it('should dispatch spatial_closed_loop_edge_align and converge to high overlap', async () => {
-            const response = await registry.dispatch('spatial_closed_loop_edge_align', {
-                imagePath: 'public/test_images/building.jpg',
-                meshBoxCenter: [0, 10, 0],
-                meshBoxSize: [10, 20, 15],
-                initialPose: { x: 1.5, y: 10.5, z: -38.5, targetX: 0, targetY: 10, targetZ: 0, fov: 46.0 },
-                maxIterations: 15,
-                targetOverlapScore: 98.0,
-                subpixelTolerancePx: 0.15
+        it('spatial_match_features_2d_3d fails when an image is not given or does not exist (no synthetic images instead)', async () => {
+            const missingRender = await registry.dispatch('spatial_match_features_2d_3d', { queryImagePath: 'photo.png' }, {} as any);
+            expect(missingRender.exec.status).toBe('failed');
+            expect(String((missingRender.resultPayload as any).error)).toContain('renderImagePath');
+
+            const absent = await registry.dispatch('spatial_match_features_2d_3d', {
+                queryImagePath: path.join(os.tmpdir(), 'no-such-photo.png'),
+                renderImagePath: path.join(os.tmpdir(), 'no-such-render.png')
             }, {} as any);
-
-            expect(response.exec.status).toBe('completed');
-            expect(response.exec.summaryResult).toContain('Closed-loop edge optimization converged');
-
-            const payload: any = response.resultPayload;
-            expect(payload.overlapScorePercent).toBeGreaterThan(90.0);
-            expect(payload.subpixelResidualPx).toBeLessThan(0.5);
+            expect(absent.exec.status).toBe('failed');
+            expect(String((absent.resultPayload as any).error)).toContain('does not exist');
         });
 
-        it('should dispatch geobox_closed_loop_edge_align identically', async () => {
-            const response = await registry.dispatch('geobox_closed_loop_edge_align', {
-                imagePath: 'public/test_images/building.jpg',
-                initialPose: { x: 1.0, y: 10.2, z: -39.0, targetX: 0, targetY: 10, targetZ: 0, fov: 45.5 },
-                maxIterations: 10
-            }, {} as any);
+        it('closed-loop edge alignment works on the photograph and model it is given, and reports what it measured', async () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-edge-align-'));
+            try {
+                // The model: a stepped tower. The "photograph": that model shaded from a pose the tool is not told.
+                const glbPath = writeFixtureGlb(path.join(dir, 'tower.glb'), skyscraperMesh(10, 15, 20));
+                const truth = { x: 0, y: 10, z: -40, targetX: 0, targetY: 10, targetZ: 0, fov: 45 };
+                const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+                const photo = HeadlessMeshSilhouetteRenderer.renderShadedMesh(mesh, truth, 320, 240, { clayColor: [200, 196, 188] });
+                const imagePath = path.join(dir, 'photo.png');
+                fs.writeFileSync(imagePath, encodePng(320, 240, photo.rgba));
 
-            expect(response.exec.status).toBe('completed');
-            const payload: any = response.resultPayload;
-            expect(payload.overlapScorePercent).toBeGreaterThan(90.0);
+                const initialPose = { x: 2.5, y: 11, z: -38, targetX: 0.5, targetY: 10, targetZ: 0, fov: 47 };
+                const response = await registry.dispatch('spatial_closed_loop_edge_align', {
+                    imagePath, glbPath, initialPose, maxIterations: 20, targetEdgeCorrelation: 97, analysisMaxSide: 160
+                }, {} as any);
+                expect(response.exec.status).toBe('completed');
+                const payload: any = response.resultPayload;
+                expect(payload.finalEdgeCorrelationPct).toBeGreaterThan(payload.initialEdgeCorrelationPct);
+                const off = (p: any) => Math.hypot(p.x - truth.x, p.y - truth.y, p.z - truth.z);
+                expect(off(payload.finalPose)).toBeLessThan(off(initialPose));
+                expect(payload.meanEdgeDistancePx, JSON.stringify({ final: payload.finalPose, d: payload.meanEdgeDistancePx, c: [payload.initialEdgeCorrelationPct, payload.finalEdgeCorrelationPct] })).toBeLessThan(3);
+                expect(payload.imageSize).toEqual([320, 240]);
+                expect(response.exec.summaryResult).toContain(`Aligned ${glbPath} to ${imagePath}: edge correlation`);
+                expect(payload).not.toHaveProperty('metrologicalErrorMm');
+
+                // Proof image: the photograph with the model's edges at the solved pose drawn in red.
+                const edges = HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, payload.finalPose, 320, 240);
+                let maxMag = 0;
+                for (const m of edges.magnitudes) maxMag = Math.max(maxMag, m);
+                const overlay = Buffer.from(photo.rgba);
+                for (let i = 0; i < edges.magnitudes.length; i++) {
+                    if (edges.magnitudes[i] >= maxMag * 0.25) { overlay[i * 4] = 255; overlay[i * 4 + 1] = 40; overlay[i * 4 + 2] = 40; }
+                }
+                const shots = path.resolve(__dirname, '../../../test-results/screenshots');
+                fs.mkdirSync(shots, { recursive: true });
+                fs.writeFileSync(path.join(shots, 'closed_loop_edge_align_solved_pose.png'), encodePng(320, 240, overlay));
+
+                // The same tool under its other names, on the same inputs.
+                const geobox = await registry.dispatch('geobox_closed_loop_edge_align', { imagePath, glbPath, initialPose, maxIterations: 2, analysisMaxSide: 96 }, {} as any);
+                expect(geobox.exec.status).toBe('completed');
+                const optimize = await registry.dispatch('geobox_optimize_edge_alignment', { imagePath, glbPath, initialPose, maxIterations: 2, analysisMaxSide: 96 }, {} as any);
+                expect(optimize.exec.status).toBe('completed');
+
+                // Nothing is assumed: no proxy box, no default pose, and a model out of view is an error.
+                const noModel = await registry.dispatch('spatial_closed_loop_edge_align', { imagePath, initialPose }, {} as any);
+                expect(String((noModel.resultPayload as any).error)).toContain('needs glbPath');
+                const noPose = await registry.dispatch('spatial_closed_loop_edge_align', { imagePath, glbPath }, {} as any);
+                expect(String((noPose.resultPayload as any).error)).toContain('initialPose');
+                const away = await registry.dispatch('spatial_closed_loop_edge_align', {
+                    imagePath, glbPath, initialPose: { x: 0, y: 10, z: -40, targetX: 0, targetY: 10, targetZ: -80, fov: 45 }
+                }, {} as any);
+                expect(String((away.resultPayload as any).error)).toContain('not in view');
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        });
+
+        it('declares the photograph, the model and the starting pose as required inputs', () => {
+            for (const name of ['spatial_closed_loop_edge_align', 'geobox_closed_loop_edge_align', 'geobox_optimize_edge_alignment']) {
+                const decl = registry.get(name)!.declaration;
+                expect(decl.parameters!.required, name).toEqual(['imagePath', 'glbPath', 'initialPose']);
+                expect(Object.keys(decl.parameters!.properties!), name).not.toContain('meshBoxCenter');
+            }
         });
 
         it('should dispatch spatial_resect_image_location and geobox_resect_image_location', async () => {
@@ -226,7 +306,7 @@ describe('Spatial 2D-to-3D Resection & Pose Estimation Agent Tools', () => {
 
             expect(res.tier1Assessment.canSolveNatively).toBe(true);
             expect(res.tier1Assessment.nativeCapabilitiesUsed).toContain(
-                'Closed-Loop Sub-Pixel Edge Alignment Optimizer (SubPixelEdgeAlignmentOptimizer, 100% overlap, < 0.1px)'
+                'Closed-Loop Edge Alignment (SubPixelEdgeAlignmentOptimizer: refines a camera pose against a given photo and model, reports the edge correlation it measured)'
             );
         });
     });

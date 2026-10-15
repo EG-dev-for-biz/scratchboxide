@@ -14,6 +14,7 @@ import * as path from 'path';
 import { createDefaultStationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 import { SurveySplatPipelineService } from '../src/node/spatial/SurveySplatPipelineService';
 import { PanoramaDepthService } from '../src/node/spatial/PanoramaDepthService';
+import { GeneratorFailedError } from '../src/common/errors/pipeline-errors';
 
 function withoutGoogleKeys<T>(run: () => T): T {
     const saved = { g: process.env.GEMINI_API_KEY, k: process.env.GOOGLE_API_KEY };
@@ -28,11 +29,12 @@ function withoutGoogleKeys<T>(run: () => T): T {
 }
 
 describe('Pipelines refuse to substitute invented output', () => {
-    it('station image generation without Google credentials throws unless the procedural painter is requested', () => {
+    it('station image generation has no procedural painter to fall back to: the default generator is the image model', () => {
         withoutGoogleKeys(() => {
-            expect(() => createDefaultStationImageGenerator()).toThrow(/GEMINI_API_KEY|allowProceduralGenerator/);
-            const painter = createDefaultStationImageGenerator({ allowProceduralGenerator: true });
-            expect(painter.name).toBe('architectural-photoreal-generator');
+            // Built with a media service that must not be reached here; asking for the old painter changes nothing.
+            const mediaService = { generateImage: async () => { throw new Error('not called'); } };
+            expect(createDefaultStationImageGenerator({ mediaService }).name).toBe('google-nano-banana');
+            expect(createDefaultStationImageGenerator({ mediaService, allowProceduralGenerator: true } as any).name).toBe('google-nano-banana');
         });
     });
 
@@ -42,21 +44,13 @@ describe('Pipelines refuse to substitute invented output', () => {
         });
     });
 
-    it('panorama depth fails loudly when the depth model cannot run, unless the heuristic room is requested', async () => {
+    it('panorama depth fails with the generator error when the depth model cannot run; there is no synthetic room', async () => {
         const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pano-depth-'));
         const img = path.join(outDir, 'pano.png');
         fs.writeFileSync(img, Buffer.from('not a real image'));
         const service = new PanoramaDepthService('/nonexistent/panorama_depth.py');
-        await expect(service.generatePanoramaDepth(img, { outDir })).rejects.toThrow(/depth/i);
-        const heuristic = await service.generatePanoramaDepth(img, { outDir, allowHeuristicFallback: true });
-        expect(heuristic.modelUsed).toBe('typescript-fallback-heuristic');
-    });
-
-    it('a cached station plate is reported as not re-checked rather than given typed-in QC scores', () => {
-        const qc = SurveySplatPipelineService.cachedPlateQc();
-        expect(qc.passed).toBe(false);
-        expect(Number.isNaN(qc.overlapPercent)).toBe(true);
-        expect(Number.isNaN(qc.residualPx)).toBe(true);
-        expect(qc.reason).toMatch(/not re-run|not re-checked/i);
+        await expect(service.generatePanoramaDepth(img, { outDir })).rejects.toBeInstanceOf(GeneratorFailedError);
+        await expect(service.generatePanoramaDepth(img, { outDir, allowHeuristicFallback: true } as any)).rejects.toThrow(/Depth model failed/);
+        expect(fs.readdirSync(outDir).filter(f => f.endsWith('.depth.f32'))).toEqual([]);
     });
 });

@@ -10,10 +10,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
+import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
+
+function stoppedError(): Error {
+    return Object.assign(new Error('Trellis reconstruction was stopped'), { name: 'AbortError' });
+}
+
+function throwIfStopped(signal?: AbortSignal): void {
+    if (signal?.aborted) throw stoppedError();
+}
 
 export interface FalTrellisConfig {
     falKey?: string;
-    mockExecution?: boolean;
     multiImageModel?: string;
     singleImageModel?: string;
 }
@@ -28,6 +36,8 @@ export interface FalTrellisMultiInput {
     textureSize?: string;
     outputFormat?: string;
     destinationGlbPath?: string;
+    /** Stops the run between uploads and aborts the request in flight: a stopped request starts no further Fal work. */
+    signal?: AbortSignal;
 }
 
 export interface FalGlbMeshStats {
@@ -45,24 +55,26 @@ export interface FalTrellisResult {
     localGlbPath?: string;
     stats?: FalGlbMeshStats;
     inferenceDurationMs?: number;
-    error?: string;
     timings?: Record<string, number>;
 }
+
+/** The tool name the typed errors of this service carry. */
+const FAL_TRELLIS = 'fal-trellis';
 
 /**
  * First-class Fal.ai Trellis Service for Scratchbox IDE.
  * Dispatches multi-view and single-view reference images directly to Microsoft Trellis
  * running on Fal.ai GPU infrastructure (fal-ai/trellis/multi and fal-ai/trellis).
+ * Without a FAL_KEY it throws MissingInputError; a failed inference throws GeneratorFailedError. It never
+ * returns a stand-in mesh.
  */
 export class FalTrellisService {
     private falKey: string;
-    private mockExecution: boolean;
     private multiImageModel: string;
     private singleImageModel: string;
 
     constructor(config: FalTrellisConfig = {}) {
         this.falKey = config.falKey || this.resolveFalKey();
-        this.mockExecution = config.mockExecution ?? (!this.falKey);
         this.multiImageModel = config.multiImageModel || 'fal-ai/trellis/multi';
         this.singleImageModel = config.singleImageModel || 'fal-ai/trellis';
     }
@@ -86,21 +98,23 @@ export class FalTrellisService {
         return !!this.falKey;
     }
 
-    public setMockExecution(mock: boolean): void {
-        this.mockExecution = mock;
+    private requireKey(): void {
+        if (!this.falKey) {
+            throw new MissingInputError(FAL_TRELLIS, 'FAL_KEY', 'set FAL_KEY in the environment or .env to run Trellis on Fal.ai');
+        }
     }
 
     /**
      * Upload an image buffer to Fal's high-speed persistent alpha CDN storage.
      */
-    public async uploadToFalStorage(buf: Buffer, filename = `view_${Date.now()}.png`, contentType = 'image/png'): Promise<string> {
-        if (this.mockExecution || !this.falKey) {
-            return `mock://storage.fal.ai/files/${filename}`;
-        }
+    public async uploadToFalStorage(buf: Buffer, filename = `view_${Date.now()}.png`, contentType = 'image/png', signal?: AbortSignal): Promise<string> {
+        this.requireKey();
+        throwIfStopped(signal);
 
         const initRes = await new Promise<any>((resolve, reject) => {
             const req = https.request('https://rest.alpha.fal.ai/storage/upload/initiate', {
                 method: 'POST',
+                signal,
                 headers: {
                     'Authorization': 'Key ' + this.falKey,
                     'Content-Type': 'application/json'
@@ -125,13 +139,16 @@ export class FalTrellisService {
         await new Promise<void>((resolve, reject) => {
             const req = https.request(uploadUrl, {
                 method: 'PUT',
+                signal,
                 headers: {
                     'Content-Type': contentType,
                     'Content-Length': buf.length
                 }
             }, res => {
                 res.resume();
-                res.on('end', resolve);
+                res.on('end', () => (res.statusCode && res.statusCode >= 400
+                    ? reject(new Error(`Fal Storage upload failed: HTTP ${res.statusCode}`))
+                    : resolve()));
             });
             req.on('error', reject);
             req.write(buf);
@@ -146,6 +163,16 @@ export class FalTrellisService {
      */
     public async generate3DFromImages(input: FalTrellisMultiInput): Promise<FalTrellisResult> {
         const startTime = Date.now();
+        const imageCount = (input.imageUrls?.length || 0) + (input.imagePaths?.length || 0) + (input.imageBuffers?.length || 0);
+        if (imageCount === 0) {
+            throw new MissingInputError(FAL_TRELLIS, 'images', 'give image URLs, paths or buffers to reconstruct from');
+        }
+        for (const p of input.imagePaths || []) {
+            if (!fs.existsSync(p)) {
+                throw new MissingInputError(FAL_TRELLIS, 'imagePaths', `${p} does not exist`);
+            }
+        }
+        this.requireKey();
         const urls: string[] = [];
 
         // 1. Gather all URLs
@@ -154,33 +181,17 @@ export class FalTrellisService {
         }
 
         // 2. Upload file paths if provided
-        if (input.imagePaths) {
-            for (const p of input.imagePaths) {
-                if (fs.existsSync(p)) {
-                    const buf = await fs.promises.readFile(p);
-                    const url = await this.uploadToFalStorage(buf, path.basename(p));
-                    urls.push(url);
-                }
-            }
+        for (const p of input.imagePaths || []) {
+            const buf = await fs.promises.readFile(p);
+            urls.push(await this.uploadToFalStorage(buf, path.basename(p), contentTypeOf(p), input.signal));
         }
 
         // 3. Upload buffers if provided
         if (input.imageBuffers) {
             for (const item of input.imageBuffers) {
-                const url = await this.uploadToFalStorage(item.buffer, item.name, item.contentType || 'image/png');
+                const url = await this.uploadToFalStorage(item.buffer, item.name, item.contentType || 'image/png', input.signal);
                 urls.push(url);
             }
-        }
-
-        if (urls.length === 0) {
-            return {
-                success: false,
-                error: 'FalTrellisService: No images provided to generate3DFromImages.'
-            };
-        }
-
-        if (this.mockExecution) {
-            return this.executeMock(input.destinationGlbPath);
         }
 
         const payload = JSON.stringify({
@@ -191,10 +202,12 @@ export class FalTrellisService {
             texture_size: input.textureSize || '1024'
         });
 
+        throwIfStopped(input.signal);
         try {
             const responseData = await new Promise<any>((resolve, reject) => {
                 const req = https.request(`https://fal.run/${this.multiImageModel}`, {
                     method: 'POST',
+                    signal: input.signal,
                     headers: {
                         'Authorization': 'Key ' + this.falKey,
                         'Content-Type': 'application/json',
@@ -221,16 +234,14 @@ export class FalTrellisService {
 
             const glbRemoteUrl = responseData.model_mesh?.url || responseData.model_glb?.url;
             if (!glbRemoteUrl) {
-                return {
-                    success: false,
-                    error: `Fal Trellis returned no GLB model URL: ${JSON.stringify(responseData)}`
-                };
+                throw new Error(`Fal Trellis returned no GLB model URL: ${JSON.stringify(responseData).slice(0, 500)}`);
             }
 
             let localPath = input.destinationGlbPath;
             let stats: FalGlbMeshStats | undefined;
 
             if (localPath) {
+                throwIfStopped(input.signal);
                 await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
                 const glbBuf = await this.downloadBinary(glbRemoteUrl);
                 await fs.promises.writeFile(localPath, glbBuf);
@@ -246,10 +257,8 @@ export class FalTrellisService {
                 inferenceDurationMs: Date.now() - startTime
             };
         } catch (err: any) {
-            return {
-                success: false,
-                error: `Fal Trellis inference failed: ${err.message}`
-            };
+            if (input.signal?.aborted) throw stoppedError();
+            throw new GeneratorFailedError(FAL_TRELLIS, `Fal Trellis inference failed: ${err?.message || err}`);
         }
     }
 
@@ -304,29 +313,11 @@ export class FalTrellisService {
         };
     }
 
-    private executeMock(destPath?: string): FalTrellisResult {
-        let stats: FalGlbMeshStats | undefined;
-        if (destPath) {
-            fs.mkdirSync(path.dirname(destPath), { recursive: true });
-            // Minimal valid glTF binary header
-            const mockGlb = Buffer.from('glTF\x02\x00\x00\x00 \x00\x00\x00\x0c\x00\x00\x00JSON{"asset":{"version":"2.0","generator":"FalTrellisServiceMock"},"meshes":[]}\x00\x00\x00\x00BIN\x00');
-            fs.writeFileSync(destPath, mockGlb);
-            stats = {
-                magic: 'glTF',
-                totalBytes: mockGlb.length,
-                totalVertices: 0,
-                totalTriangles: 0,
-                meshesCount: 0,
-                generator: 'FalTrellisServiceMock'
-            };
-        }
+}
 
-        return {
-            success: true,
-            modelGlbUrl: 'https://v3b.fal.media/files/mock/model.glb',
-            localGlbPath: destPath,
-            stats,
-            inferenceDurationMs: 120
-        };
-    }
+function contentTypeOf(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+    if (ext === '.webp') return 'image/webp';
+    return 'image/png';
 }

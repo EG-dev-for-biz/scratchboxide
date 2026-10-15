@@ -16,18 +16,23 @@ import {
     MediaCapabilities,
     MediaGenerationError,
     MediaGenerationResult,
+    SkippedMediaModel,
     TextureMatrixCandidate,
     TextureMatrixRequest,
     TextureMatrixResult,
     VIDEO_MODEL_PRIORITY,
     VideoGenerationRequest,
     classifyMediaGenerationError,
-    resolveImageModelId,
+    describeModelUsed,
+    describeNoModelAnswered,
+    resolveRequestedModels,
     validateMediaGenerationRequest
 } from '../common/media-generation-protocol';
+import { MediaModelUnavailableError } from '../common/errors/pipeline-errors';
 import { GoogleMediaCredentialsService } from './google-media-credentials-service';
 import { MediaAssetStore } from './media-asset-store';
-import { decodePng, decomposeRgbaToPbr, generateProceduralTextureBuffer } from './texture-processing';
+import { decomposeRgbaToPbr } from './texture-processing';
+import { decodeImageToRgba } from './image-codec-ffmpeg';
 
 export interface GoogleMediaGenerationOptions {
     pollIntervalMs?: number;
@@ -39,6 +44,170 @@ export type MediaGenerationStage = 'running' | 'downloading';
 
 /** Calls per model before an answer with no image part counts as a failure. */
 export const EMPTY_IMAGE_RESPONSE_ATTEMPTS = 3;
+
+/** An image request for {@link generateImageWithModels}: the models to try in order and the generateContent input. */
+export interface ImageModelRequest {
+    models: string[];
+    contents: any[];
+    imageConfig?: { aspectRatio?: string; imageSize?: string };
+    /**
+     * Ends the request with an AbortError (never a model failure): checked before every model call and passed to the
+     * SDK, so a stopped caller does not go on to ask, and bill, the next model.
+     */
+    signal?: AbortSignal;
+}
+
+/** The error a stopped media request ends with: not a model failure, so it is not classified or relabelled. */
+export function mediaRequestAborted(): Error {
+    return Object.assign(new Error('The media request was stopped before it finished'), { name: 'AbortError' });
+}
+
+/** The image a model produced, which model produced it, and the models skipped before it (with reasons). */
+export interface ImageModelAnswer {
+    data: Buffer;
+    mimeType: string;
+    /** The model id that answered (the id asked for, not the dated version string). */
+    modelUsed: string;
+    /** The version string the API reported for the answer, when it reported one. */
+    modelVersion?: string;
+    responseText?: string;
+    requestedModels: string[];
+    skippedModels: SkippedMediaModel[];
+    modelNote: string;
+}
+
+const REASON_LIMIT = 240;
+
+/** The reason recorded for a model that produced nothing. */
+export function skipReason(error: MediaGenerationError): string {
+    const message = error.message.length > REASON_LIMIT ? `${error.message.slice(0, REASON_LIMIT)}...` : error.message;
+    return error.code === 'unsupported' ? `not served: ${message}` : `${error.code}: ${message}`;
+}
+
+/**
+ * A MediaModelUnavailableError that also carries the classified error, for the media job service. The carried
+ * error's message is the full reason (including any models skipped before this one), so a failed job shows it.
+ */
+export function mediaModelUnavailable(model: string, reason: string, detail: MediaGenerationError): MediaModelUnavailableError {
+    return Object.assign(new MediaModelUnavailableError(model, reason), { status: detail.status, mediaError: { ...detail, message: reason } });
+}
+
+/**
+ * Adds where a model failure happened (e.g. "station front") to a MediaModelUnavailableError. Any other error is
+ * returned unchanged: a bug or a local failure is never relabelled as a model being unavailable.
+ */
+export function withMediaFailureContext(error: unknown, context: string): unknown {
+    if (!(error instanceof MediaModelUnavailableError)) {
+        return error;
+    }
+    const reason = `${error.reason} (${context})`;
+    const detail = (error as any).mediaError as MediaGenerationError | undefined;
+    return Object.assign(new MediaModelUnavailableError(error.model, reason), {
+        status: (error as any).status,
+        mediaError: detail ? { ...detail, message: reason } : undefined
+    });
+}
+
+/**
+ * A failure of the model service itself: the SDK call threw, or the model answered without the media asked for.
+ * Only these are classified as model failures; any other error (a bug in our own code, a local write) propagates
+ * unchanged, so it is never reported as a model being unavailable.
+ */
+class ModelCallFailure extends Error {
+    constructor(readonly original: unknown) {
+        super(original instanceof Error ? original.message : String(original));
+        this.name = 'ModelCallFailure';
+    }
+}
+
+/** Runs one model-service call; a failure is marked as a model failure (see {@link ModelCallFailure}). */
+async function modelCall<T>(call: () => Promise<T>): Promise<T> {
+    try {
+        return await call();
+    } catch (error) {
+        throw new ModelCallFailure(error);
+    }
+}
+
+/** "(after skipping a: why; b: why)" when earlier models were skipped, else empty. */
+function skippedSuffix(skipped: readonly SkippedMediaModel[]): string {
+    return skipped.length ? ` (after skipping ${skipped.map(s => `${s.model}: ${s.reason}`).join('; ')})` : '';
+}
+
+/**
+ * Asks each model in `request.models` for an image, in order, and returns the first image with the model that
+ * produced it. Only a model that is not served (404) moves the request on to the next model, and each one moved
+ * past is recorded with its reason, so the caller can say which model answered and why. A model that answers
+ * with no image part is asked again ({@link EMPTY_IMAGE_RESPONSE_ATTEMPTS} times in all). Any other model failure
+ * (quota, safety filter, invalid request, no image) ends the request with a MediaModelUnavailableError, as does
+ * a list in which no model is served (the error names every model tried and why). Errors that are not model
+ * failures propagate as they are.
+ */
+export async function generateImageWithModels(client: any, request: ImageModelRequest): Promise<ImageModelAnswer> {
+    const models = request.models.filter(Boolean);
+    if (!models.length) {
+        throw mediaModelUnavailable('(none)', 'no image model was named', {
+            code: 'invalid_request', message: 'no image model was named', retryable: false
+        });
+    }
+    if (typeof client?.models?.generateContent !== 'function') {
+        const message = 'the installed Google Gen AI SDK does not support generateContent';
+        throw mediaModelUnavailable(models[0], message, { code: 'unsupported', message, retryable: false, model: models[0] });
+    }
+    const skipped: SkippedMediaModel[] = [];
+    for (const model of models) {
+        let response: any;
+        let parts: any[] = [];
+        let imagePart: any;
+        try {
+            // Image models sometimes finish (STOP) with no image part; ask again before giving up on the model.
+            for (let attempt = 0; attempt < EMPTY_IMAGE_RESPONSE_ATTEMPTS && !imagePart; attempt++) {
+                if (request.signal?.aborted) throw mediaRequestAborted();
+                response = await modelCall(() => client.models.generateContent({
+                    model,
+                    contents: request.contents,
+                    config: {
+                        responseModalities: ['TEXT', 'IMAGE'],
+                        ...(request.imageConfig ? { imageConfig: request.imageConfig } : {}),
+                        ...(request.signal ? { abortSignal: request.signal } : {})
+                    }
+                }));
+                if (response?.promptFeedback?.blockReason) {
+                    throw new ModelCallFailure(new Error(`Safety filter blocked prompt: ${response.promptFeedback.blockReason}`));
+                }
+                parts = response?.candidates?.[0]?.content?.parts || [];
+                imagePart = parts.find((part: any) => part?.inlineData?.data);
+            }
+            if (!imagePart) {
+                const finishReason = response?.candidates?.[0]?.finishReason;
+                throw new ModelCallFailure(new Error(finishReason
+                    ? `Image generation returned no image (${finishReason})`
+                    : 'Image generation returned no image'));
+            }
+        } catch (error) {
+            if (request.signal?.aborted) throw mediaRequestAborted();
+            if (!(error instanceof ModelCallFailure)) throw error;
+            const classified = classifyMediaGenerationError(error.original, model);
+            if (classified.code === 'unsupported') {
+                skipped.push({ model, code: classified.code, reason: skipReason(classified) });
+                continue;
+            }
+            throw mediaModelUnavailable(model, `${classified.message}${skippedSuffix(skipped)}`, classified);
+        }
+        return {
+            data: Buffer.from(imagePart.inlineData.data, 'base64'),
+            mimeType: imagePart.inlineData.mimeType || 'image/png',
+            modelUsed: model,
+            modelVersion: response?.modelVersion || undefined,
+            responseText: parts.map((part: any) => part?.text || '').filter(Boolean).join('\n') || undefined,
+            requestedModels: models,
+            skippedModels: skipped,
+            modelNote: describeModelUsed(model, skipped)
+        };
+    }
+    const message = describeNoModelAnswered('image', skipped);
+    throw mediaModelUnavailable(models[0], message, { code: 'unsupported', message, retryable: false, model: models[0] });
+}
 
 export class GoogleMediaGenerationService {
     protected readonly credentials?: GoogleMediaCredentialsService;
@@ -78,16 +247,18 @@ export class GoogleMediaGenerationService {
         return capabilities;
     }
 
-    async generateImage(request: ImageGenerationRequest): Promise<MediaGenerationResult> {
+    /**
+     * Generates one image. The models tried are exactly the request's modelPriority when it names any (product
+     * names resolved to API ids), else the default list for its fidelity. The result says which model answered
+     * and, when that is not the first one, why each earlier model was skipped.
+     *
+     * `options.signal` stops the request (an AbortError, never a model failure): it is checked before the call and
+     * between models, and passed to the SDK so an in-flight call is cancelled and no further model is asked.
+     */
+    async generateImage(request: ImageGenerationRequest, options?: { signal?: AbortSignal }): Promise<MediaGenerationResult> {
         validateMediaGenerationRequest(request);
+        if (options?.signal?.aborted) throw mediaRequestAborted();
         const client = await this.getClient();
-        if (typeof client.models?.generateContent !== 'function') {
-            throw this.asServiceError({
-                code: 'unsupported',
-                message: 'Installed Google Gen AI SDK does not support generateContent',
-                retryable: false
-            });
-        }
 
         const contents: any[] = [{ text: request.prompt }];
         if (request.sourceAsset) {
@@ -111,65 +282,25 @@ export class GoogleMediaGenerationService {
 
         const isDraft = request.fidelity === 'draft' || request.draft === true;
         const defaultPriority = isDraft ? IMAGE_MODEL_PRIORITY_DRAFT : IMAGE_MODEL_PRIORITY;
-        const models = this.modelPriority(request.modelPriority, defaultPriority);
-        const resolvedImageSize = request.imageSize ?? (isDraft ? '1K' : undefined);
-        let lastUnsupported: MediaGenerationError | undefined;
-        for (const model of models) {
-            try {
-                let response: any;
-                let parts: any[] = [];
-                let imagePart: any;
-                // Image models sometimes finish (STOP) with no image part; ask again before giving up on the model.
-                for (let attempt = 0; attempt < EMPTY_IMAGE_RESPONSE_ATTEMPTS && !imagePart; attempt++) {
-                    response = await client.models.generateContent({
-                        model,
-                        contents,
-                        config: {
-                            responseModalities: ['TEXT', 'IMAGE'],
-                            imageConfig: {
-                                aspectRatio: request.aspectRatio,
-                                imageSize: resolvedImageSize
-                            }
-                        }
-                    } as any);
-                    if (response.promptFeedback?.blockReason) {
-                        throw new Error(`Safety filter blocked prompt: ${response.promptFeedback.blockReason}`);
-                    }
-                    parts = response.candidates?.[0]?.content?.parts || [];
-                    imagePart = parts.find(part => part.inlineData?.data);
-                }
-                if (!imagePart) {
-                    const finishReason = response.candidates?.[0]?.finishReason;
-                    throw new Error(finishReason
-                        ? `Image generation returned no image (${finishReason})`
-                        : 'Image generation returned no image');
-                }
-                const mimeType = imagePart.inlineData.mimeType || 'image/png';
-                const asset = await this.assetStore.put(
-                    request.workspaceRoot,
-                    Buffer.from(imagePart.inlineData.data, 'base64'),
-                    mimeType
-                );
-                return {
-                    asset,
-                    modelUsed: response.modelVersion || model,
-                    responseText: parts.map(part => part.text || '').filter(Boolean).join('\n') || undefined,
-                    createdAt: new Date().toISOString()
-                };
-            } catch (error) {
-                const classified = classifyMediaGenerationError(error, model);
-                if (classified.code === 'unsupported') {
-                    lastUnsupported = classified;
-                    continue;
-                }
-                throw this.asServiceError(classified);
-            }
-        }
-        throw this.asServiceError(lastUnsupported || {
-            code: 'unsupported',
-            message: 'No configured image generation model is available',
-            retryable: false
+        const answer = await generateImageWithModels(client, {
+            models: resolveRequestedModels(request.modelPriority, defaultPriority),
+            contents,
+            imageConfig: {
+                aspectRatio: request.aspectRatio,
+                imageSize: request.imageSize ?? (isDraft ? '1K' : undefined)
+            },
+            signal: options?.signal
         });
+        const asset = await this.assetStore.put(request.workspaceRoot, answer.data, answer.mimeType);
+        return {
+            asset,
+            modelUsed: answer.modelUsed,
+            requestedModels: answer.requestedModels,
+            skippedModels: answer.skippedModels,
+            modelNote: answer.modelNote,
+            responseText: answer.responseText,
+            createdAt: new Date().toISOString()
+        };
     }
 
     async generateVideo(
@@ -194,12 +325,15 @@ export class GoogleMediaGenerationService {
                 mimeType: seedAsset.mimeType
             }
             : undefined;
-        const models = this.modelPriority(request.modelPriority, VIDEO_MODEL_PRIORITY);
-        let lastUnsupported: MediaGenerationError | undefined;
+        // Exactly the caller's models when it names any; a model it did not name (another family included) is never tried.
+        const models = resolveRequestedModels(request.modelPriority, VIDEO_MODEL_PRIORITY);
+        const skipped: SkippedMediaModel[] = [];
 
         for (const model of models) {
+            let operation: any;
+            let video: any;
             try {
-                let operation: any = await client.models.generateVideos({
+                operation = await modelCall(() => client.models.generateVideos({
                     model,
                     prompt: request.prompt,
                     image: sourceImage,
@@ -211,7 +345,7 @@ export class GoogleMediaGenerationService {
                         generateAudio: request.generateAudio !== false,
                         negativePrompt: request.negativePrompt
                     }
-                } as any);
+                } as any));
                 await onStage?.('running', operation.name, model);
 
                 const maxAttempts = this.options.maxPollAttempts || 180;
@@ -220,64 +354,71 @@ export class GoogleMediaGenerationService {
                 while (!operation.done && attempts < maxAttempts) {
                     attempts++;
                     await this.delay(interval);
-                    operation = await client.operations.getVideosOperation({ operation });
+                    const current = operation;
+                    operation = await modelCall(() => client.operations.getVideosOperation({ operation: current }));
                 }
                 if (!operation.done) {
-                    throw Object.assign(new Error('Video generation operation timed out'), { status: 504 });
+                    throw new ModelCallFailure(Object.assign(new Error('Video generation operation timed out'), { status: 504 }));
                 }
                 if (operation.error) {
-                    throw Object.assign(
+                    throw new ModelCallFailure(Object.assign(
                         new Error(String(operation.error.message || 'Video generation operation failed')),
                         operation.error
-                    );
+                    ));
                 }
-                const video = operation.response?.generatedVideos?.[0]?.video;
+                video = operation.response?.generatedVideos?.[0]?.video;
                 if (!video) {
                     const reasons = operation.response?.raiMediaFilteredReasons;
-                    throw new Error(reasons?.length
+                    throw new ModelCallFailure(new Error(reasons?.length
                         ? `Responsible AI safety filter: ${reasons.join('; ')}`
-                        : 'Video generation completed without a video');
+                        : 'Video generation completed without a video'));
                 }
-
-                await onStage?.('downloading', operation.name, model);
-                const mimeType = video.mimeType || 'video/mp4';
-                let bytes: Buffer;
-                if (video.videoBytes) {
-                    bytes = Buffer.from(video.videoBytes, 'base64');
-                } else {
-                    const stagingPath = this.assetStore.stagingPath(
-                        request.workspaceRoot,
-                        `${operation.name || Date.now()}.mp4`
-                    );
-                    await fs.ensureDir(require('path').dirname(stagingPath));
-                    try {
-                        await client.files.download({ file: video, downloadPath: stagingPath });
-                        bytes = await fs.readFile(stagingPath);
-                    } finally {
-                        await fs.remove(stagingPath);
-                    }
-                }
-                const asset = await this.assetStore.put(request.workspaceRoot, bytes, mimeType);
-                return {
-                    asset,
-                    modelUsed: model,
-                    operationName: operation.name,
-                    createdAt: new Date().toISOString()
-                };
             } catch (error) {
-                const classified = this.extractOrClassify(error, model);
+                if (!(error instanceof ModelCallFailure)) throw error;
+                const classified = this.extractOrClassify(error.original, model);
                 if (classified.code === 'unsupported') {
-                    lastUnsupported = classified;
+                    skipped.push({ model, code: classified.code, reason: skipReason(classified) });
                     continue;
                 }
-                throw this.asServiceError(classified);
+                throw mediaModelUnavailable(model, `${classified.message}${skippedSuffix(skipped)}`, classified);
             }
+
+            await onStage?.('downloading', operation.name, model);
+            const mimeType = video.mimeType || 'video/mp4';
+            let bytes: Buffer;
+            if (video.videoBytes) {
+                bytes = Buffer.from(video.videoBytes, 'base64');
+            } else {
+                const stagingPath = this.assetStore.stagingPath(
+                    request.workspaceRoot,
+                    `${operation.name || Date.now()}.mp4`
+                );
+                await fs.ensureDir(require('path').dirname(stagingPath));
+                try {
+                    try {
+                        await client.files.download({ file: video, downloadPath: stagingPath });
+                    } catch (error) {
+                        const classified = this.extractOrClassify(error, model);
+                        throw mediaModelUnavailable(model, `the finished video could not be downloaded: ${classified.message}${skippedSuffix(skipped)}`, classified);
+                    }
+                    bytes = await fs.readFile(stagingPath);
+                } finally {
+                    await fs.remove(stagingPath);
+                }
+            }
+            const asset = await this.assetStore.put(request.workspaceRoot, bytes, mimeType);
+            return {
+                asset,
+                modelUsed: model,
+                requestedModels: models,
+                skippedModels: skipped,
+                modelNote: describeModelUsed(model, skipped),
+                operationName: operation.name,
+                createdAt: new Date().toISOString()
+            };
         }
-        throw this.asServiceError(lastUnsupported || {
-            code: 'unsupported',
-            message: 'No configured video generation model is available',
-            retryable: false
-        });
+        const message = describeNoModelAnswered('video', skipped);
+        throw mediaModelUnavailable(models[0], message, { code: 'unsupported', message, retryable: false, model: models[0] });
     }
 
     async generateTextureMatrix(request: TextureMatrixRequest): Promise<TextureMatrixResult> {
@@ -313,40 +454,16 @@ export class GoogleMediaGenerationService {
             const style = styleVariations[i];
             const conditionedPrompt = `Top-down flat orthographic albedo texture map of ${request.basePrompt}, ${style.condition}, completely seamless, infinitely tileable, evenly lit flat albedo diffuse, no perspective distortion, no cast shadows, no baked lighting, no specular highlights`;
 
-            let rgbaBuffer: Buffer;
-            let width = 256;
-            let height = 256;
-
-            try {
-                const imgResult = await this.generateImage({
-                    kind: 'image',
-                    prompt: conditionedPrompt,
-                    workspaceRoot: request.workspaceRoot,
-                    idempotencyKey: `${request.idempotencyKey}-candidate-${i}`,
-                    aspectRatio: '1:1'
-                });
-
-                const filePath = this.assetStore.resolve(request.workspaceRoot, imgResult.asset);
-                const fileBytes = await fs.readFile(filePath);
-                try {
-                    const decoded = decodePng(fileBytes);
-                    rgbaBuffer = decoded.rgba;
-                    width = decoded.width;
-                    height = decoded.height;
-                } catch {
-                    rgbaBuffer = generateProceduralTextureBuffer(width, height, [
-                        140 + i * 25,
-                        130 + i * 15,
-                        110 + i * 20
-                    ]);
-                }
-            } catch {
-                rgbaBuffer = generateProceduralTextureBuffer(width, height, [
-                    140 + i * 25,
-                    130 + i * 15,
-                    110 + i * 20
-                ]);
-            }
+            // Every candidate is a generated image; a failed generation or an undecodable image fails the matrix.
+            const imgResult = await this.generateImage({
+                kind: 'image',
+                prompt: conditionedPrompt,
+                workspaceRoot: request.workspaceRoot,
+                idempotencyKey: `${request.idempotencyKey}-candidate-${i}`,
+                aspectRatio: '1:1'
+            });
+            const fileBytes = await fs.readFile(this.assetStore.resolve(request.workspaceRoot, imgResult.asset));
+            const { rgba: rgbaBuffer, width, height } = await decodeImageToRgba(fileBytes);
 
             const decomposed = decomposeRgbaToPbr(rgbaBuffer, width, height, {
                 isMetallic: request.isMetallic ?? false,
@@ -390,26 +507,6 @@ export class GoogleMediaGenerationService {
             return this.clientFactory();
         }
         return (this.credentials || new GoogleMediaCredentialsService()).createClient();
-    }
-
-    private modelPriority(requested: string[] | undefined, defaults: string[]): string[] {
-        const rawList = requested?.length ? requested : defaults;
-        const expanded: string[] = [];
-
-        for (const requestedModel of rawList) {
-            if (!requestedModel) continue;
-            const model = resolveImageModelId(requestedModel);
-            const m = model.toLowerCase();
-            if (m.includes('omni') || m === 'google/omni-1.1' || m === 'omni-1.1-video' || m === 'gemini-omni-flash-video' || m === 'omni-product') {
-                expanded.push(model, 'veo-3.1-fast-generate-preview', 'veo-3.1-generate-preview', 'veo-3.1-lite-generate-preview');
-            } else {
-                expanded.push(model);
-            }
-        }
-
-        // Add fallbacks from defaults
-        expanded.push(...defaults);
-        return Array.from(new Set(expanded.filter(Boolean)));
     }
 
     private asServiceError(detail: MediaGenerationError): Error {

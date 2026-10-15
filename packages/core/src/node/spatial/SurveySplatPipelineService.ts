@@ -14,7 +14,7 @@ import { promisify } from 'util';
 import { SurveySynthesisEngine, cameraBasis } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH } from './SurveyStationRenderService';
-import { BeautifyStationService, createDefaultStationImageGenerator, hasStationImageCredentials, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { BeautifyStationService, createDefaultStationImageGenerator, describeStationImageSource, hasStationImageCredentials, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { Splat3DTilesService } from './Splat3DTilesService';
 import { SplatService } from '../3d-engine/splat-service';
@@ -25,6 +25,12 @@ import type { TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 
 const execAsync = promisify(exec);
+
+/** Throws the signal's reason (or an AbortError) once the caller has stopped the run. */
+function throwIfStopped(signal?: AbortSignal): void {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : Object.assign(new Error('The survey splat pipeline was stopped'), { name: 'AbortError' });
+}
 
 export interface SurveySplatPipelineRequest {
     glbPath: string;
@@ -102,6 +108,12 @@ export interface SurveySplatPipelineRequest {
     stoneType?: StoneAlbedoPreset;
     /** Solar position or ephemeris for path tracing */
     sun?: TileSunSpec;
+    /**
+     * The caller's Stop (the chat's Stop button or the tool's time limit). Checked before every station, passed to
+     * the image model (so its call and its rerolls end), and to the native baker, fuser and tiler; nothing more is
+     * generated or written once it fires, and run() rejects with its reason.
+     */
+    signal?: AbortSignal;
 }
 
 export interface SurveySplatStationReport {
@@ -118,6 +130,10 @@ export interface SurveySplatStationReport {
     positionLocalENU?: [number, number, number];
     forwardVector?: [number, number, number];
     name?: string;
+    /** The image model that produced this station's picture; absent for a plate reused from disk or a generator that names none. */
+    modelUsed?: string;
+    /** Where the picture came from: the model (and why, when it was not the requested one) or the reused plate. */
+    imageSource?: string;
 }
 
 export interface SurveySplatPipelineResult {
@@ -154,20 +170,7 @@ export class SurveySplatPipelineService {
         }
     }
 
-    /** QC for a station whose plate was reused from disk: nothing was re-measured. */
-    static cachedPlateQc(): BeautifyStationResult['qc'] {
-        return {
-            passed: false,
-            overlapPercent: Number.NaN,
-            residualPx: Number.NaN,
-            deltaYawDeg: Number.NaN,
-            deltaPitchDeg: Number.NaN,
-            deltaPositionM: Number.NaN,
-            reason: 'cached plate reused; QC not re-run'
-        };
-    }
-
-    async ensureBaker(): Promise<string> {
+    async ensureBaker(signal?: AbortSignal): Promise<string> {
         const src = path.resolve(process.cwd(), 'scripts/station_to_splats.cpp');
         if (fs.existsSync(this.bakerPath)) {
             const srcStat = await fs.stat(src);
@@ -177,7 +180,7 @@ export class SurveySplatPipelineService {
             }
         }
         await fs.ensureDir(path.dirname(this.bakerPath));
-        await execAsync(`${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" -lz "${src}" -o "${this.bakerPath}"`);
+        await execAsync(`${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" -lz "${src}" -o "${this.bakerPath}"`, { signal });
         return this.bakerPath;
     }
 
@@ -188,23 +191,27 @@ export class SurveySplatPipelineService {
         const fusedSplatPath = path.join(outDir, 'fused.splat');
         const tilesetPath = path.join(outDir, 'tileset.json');
         const metaPath = path.join(outDir, 'tileset.meta.json');
+        const signal = req.signal;
         try {
+            throwIfStopped(signal);
             await fs.ensureDir(stationsDir);
             report(0.02, 'Loading mesh');
             const renderer = new SurveyStationRenderService();
             await renderer.loadMesh(req.glbPath);
+            throwIfStopped(signal);
             const engine = new SurveySynthesisEngine();
             let stations = renderer.enrichStations(req.stations, { isoDate: req.isoDate });
             if (req.maxStations && req.maxStations < stations.length) stations = engine.rankForBeautify(stations, { maxCount: req.maxStations });
             const mode = req.mode ?? 'chained';
             const width = req.renderWidth ?? 1920;
-            const baker = await this.ensureBaker();
+            const baker = await this.ensureBaker(signal);
             const beautifier = this.deps?.generator ? new BeautifyStationService(renderer, this.deps.generator) : null;
 
             const reports: SurveySplatStationReport[] = [];
             const bakedStations: { splatPath: string; station: ColmapCameraPose }[] = [];
             let reference: BeautifyStationResult | undefined;
             for (let i = 0; i < stations.length; i++) {
+                throwIfStopped(signal);
                 const st = stations[i];
                 const base = path.join(stationsDir, `station_${String(st.id).padStart(3, '0')}`);
                 const splatPath = `${base}.splat`;
@@ -212,51 +219,72 @@ export class SurveySplatPipelineService {
                 const beautifiedPath = `${base}_beautified.png`;
                 const blockoutPath = `${base}_blockout.png`;
 
-                if (!req.forceRebake) {
-                    const stStat = await fs.stat(splatPath).catch(() => null);
-                    const bStat = await fs.stat(beautifiedPath).catch(() => null);
-                    if (stStat && stStat.size > 100000 && fs.existsSync(posePath) && (!bStat || stStat.mtimeMs >= bStat.mtimeMs)) {
-                        report(0.05 + 0.7 * (i / stations.length), `Reusing cached station ${st.id} (${i + 1}/${stations.length})`);
-                        const pose = await fs.readJson(posePath).catch(() => null);
-                        const splatCount = Math.floor(stStat.size / 32);
-                        const posENU: [number, number, number] = (pose?.eye || st.positionLocalENU) as [number, number, number];
-                        const fwdVec: [number, number, number] = (pose?.forward || st.forwardVector) as [number, number, number];
-                        const rep: SurveySplatStationReport = {
-                            stationId: st.id, accepted: true, attempts: 1, usedReference: false, splatCount, splatPath,
-                            imagePath: beautifiedPath, blockoutPath,
-                            qc: SurveySplatPipelineService.cachedPlateQc(),
+                const rejectedPath = `${base}_rejected.png`;
+                const pctOf = (qc: BeautifyStationResult['qc']) => `overlap ${qc.overlapPercent.toFixed(1)}%${qc.reason ? `; ${qc.reason}` : ''}`;
+
+                // A plate (or the splat baked from it) found on disk is reused only after it passes the same geometry
+                // QC against this mesh that a fresh image gets; one that fails is moved aside, never baked.
+                let res: BeautifyStationResult | undefined;
+                let reuseNote: string | undefined;
+                if (!req.forceRebake && (await fs.pathExists(beautifiedPath))) {
+                    report(0.05 + 0.7 * (i / stations.length), `Checking the beautified image already on disk for station ${st.id} (${i + 1}/${stations.length})`);
+                    const imagePng = await fs.readFile(beautifiedPath);
+                    const dec = decodePng(imagePng);
+                    const blockout = renderer.renderStationBlockout(st, { width: dec.width, height: dec.height });
+                    await fs.outputFile(blockoutPath, blockout.png);
+                    const verified = BeautifyStationService.verifyStationImage(renderer, st, blockout, dec.rgba, dec.width, dec.height, req.draft ? { maxIterations: 0 } : undefined);
+                    if (verified.qc.passed) {
+                        const stStat = await fs.stat(splatPath).catch(() => null);
+                        const bStat = await fs.stat(beautifiedPath);
+                        if (stStat && stStat.size > 100000 && fs.existsSync(posePath) && stStat.mtimeMs >= bStat.mtimeMs) {
+                            report(0.05 + 0.7 * (i / stations.length), `Reusing cached station ${st.id} (${i + 1}/${stations.length})`);
+                            const pose = await fs.readJson(posePath).catch(() => null);
+                            const posENU: [number, number, number] = (pose?.eye || verified.aligned.positionLocalENU || st.positionLocalENU) as [number, number, number];
+                            const fwdVec: [number, number, number] = (pose?.forward || verified.aligned.forwardVector || st.forwardVector) as [number, number, number];
+                            reports.push({
+                                stationId: st.id, accepted: true, attempts: 0, usedReference: false, splatCount: Math.floor(stStat.size / 32), splatPath,
+                                imagePath: beautifiedPath, blockoutPath,
+                                qc: verified.qc,
+                                prompt: `Photorealistic view of station ${st.id}`,
+                                positionLocalENU: posENU,
+                                forwardVector: fwdVec,
+                                name: st.name,
+                                imageSource: `Reused the station splat already on disk at ${splatPath}, after its beautified plate passed geometry QC again (${pctOf(verified.qc)}); no image was generated.`
+                            });
+                            bakedStations.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
+                            continue;
+                        }
+                        res = {
+                            station: st,
+                            alignedStation: verified.aligned,
                             prompt: `Photorealistic view of station ${st.id}`,
-                            positionLocalENU: posENU,
-                            forwardVector: fwdVec,
-                            name: st.name
+                            blockout,
+                            imagePng,
+                            image: { width: dec.width, height: dec.height, rgba: dec.rgba },
+                            qc: verified.qc,
+                            accepted: true,
+                            attempts: 0,
+                            // The plate was made earlier, by whatever model was used then; this run did not generate it.
+                            generator: 'cached-beautified-plate'
                         };
-                        bakedStations.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
-                        reports.push(rep);
-                        continue;
+                        reuseNote = `Reused the beautified plate already on disk at ${beautifiedPath} after it passed geometry QC again (${pctOf(verified.qc)}); no image was generated.`;
+                    } else {
+                        // Moved aside with the splat baked from it, so no later run takes it for an accepted plate.
+                        await fs.move(beautifiedPath, rejectedPath, { overwrite: true });
+                        await Promise.all([fs.remove(splatPath), fs.remove(posePath)]);
+                        if (!beautifier) {
+                            reports.push({
+                                stationId: st.id, accepted: false, attempts: 0, usedReference: false, splatCount: 0,
+                                imagePath: rejectedPath, blockoutPath, qc: verified.qc, prompt: `Photorealistic view of station ${st.id}`,
+                                positionLocalENU: st.positionLocalENU, forwardVector: st.forwardVector, name: st.name,
+                                imageSource: `The beautified plate on disk failed geometry QC (${pctOf(verified.qc)}) and was moved to ${rejectedPath}; no image generator was supplied to make a new one.`
+                            });
+                            continue;
+                        }
                     }
                 }
 
-                let res: BeautifyStationResult;
-                if (!req.forceRebake && (await fs.pathExists(beautifiedPath))) {
-                    report(0.05 + 0.7 * (i / stations.length), `Baking from existing beautified image for station ${st.id} (${i + 1}/${stations.length})`);
-                    const imagePng = await fs.readFile(beautifiedPath);
-                    const dec = decodePng(imagePng);
-                    const height = Math.round(width * 9 / 16);
-                    const blockout = renderer.renderStationBlockout(st, { width, height });
-                    await fs.outputFile(blockoutPath, blockout.png);
-                    res = {
-                        station: st,
-                        alignedStation: st,
-                        prompt: `Photorealistic view of station ${st.id}`,
-                        blockout,
-                        imagePng,
-                        image: { width: dec.width, height: dec.height, rgba: dec.rgba },
-                        qc: SurveySplatPipelineService.cachedPlateQc(),
-                        accepted: true,
-                        attempts: 1,
-                        generator: this.deps?.generator?.name || 'cached-beautified-plates'
-                    };
-                } else {
+                if (!res) {
                     if (!beautifier) {
                         throw new Error(`Cannot beautify station ${st.id}: no StationImageGenerator was supplied and no cached plate exists on disk at ${beautifiedPath}`);
                     }
@@ -269,21 +297,33 @@ export class SurveySplatPipelineService {
                         draft: req.draft,
                         renderMode: stationRenderMode,
                         glbPath: req.glbPath,
-                        stoneType: req.stoneType
+                        stoneType: req.stoneType,
+                        signal
                     });
+                    throwIfStopped(signal);
                     await fs.outputFile(blockoutPath, res.blockout.png);
-                    await fs.outputFile(beautifiedPath, res.imagePng);
+                    if (res.accepted) {
+                        await fs.outputFile(beautifiedPath, res.imagePng);
+                        await fs.remove(rejectedPath);
+                    } else {
+                        // A rejected image is kept for inspection under its own name, never as the station's plate.
+                        await fs.outputFile(rejectedPath, res.imagePng);
+                        await Promise.all([fs.remove(beautifiedPath), fs.remove(splatPath), fs.remove(posePath)]);
+                    }
                     if (res.warp) await fs.outputFile(`${base}_warp.png`, res.warp.warpedPng);
                 }
 
                 const rep: SurveySplatStationReport = {
                     stationId: st.id, accepted: res.accepted, attempts: res.attempts, usedReference: !!res.warp, splatCount: 0,
-                    imagePath: beautifiedPath, blockoutPath: blockoutPath, qc: res.qc, prompt: res.prompt,
+                    imagePath: res.accepted ? beautifiedPath : rejectedPath, blockoutPath: blockoutPath, qc: res.qc, prompt: res.prompt,
                     positionLocalENU: res.alignedStation.positionLocalENU || st.positionLocalENU,
                     forwardVector: res.alignedStation.forwardVector || st.forwardVector,
-                    name: st.name
+                    name: st.name,
+                    modelUsed: res.modelUsed,
+                    imageSource: reuseNote ?? describeStationImageSource(res)
                 };
                 if (res.accepted) {
+                    throwIfStopped(signal);
                     const baked = await this.bakeStation(baker, res, `${base}.splat`, req);
                     rep.splatCount = baked.splatCount;
                     rep.splatPath = baked.splatPath;
@@ -294,6 +334,7 @@ export class SurveySplatPipelineService {
             }
             if (bakedStations.length === 0) throw new Error('No station passed QC; nothing to bake');
 
+            throwIfStopped(signal);
             report(0.8, 'Fusing station splats');
             const voxel = req.voxelSizeMeters ?? 0.025;
             const listPath = path.join(outDir, 'stations_to_fuse.txt');
@@ -315,15 +356,17 @@ export class SurveySplatPipelineService {
             ) : 115.0);
             const cropRadiusArg = cropRadiusVal > 0 ? `--crop-radius ${cropRadiusVal}` : '';
             const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${cropRadiusArg} ${cropCenterArg} ${dropFoliageArg} ${normalPruneArg} ${consistencyArg} ${minViewsArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
-            const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024 });
+            const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024, signal });
             const fuseRes = JSON.parse(fuseStdout.trim());
             await fs.remove(listPath).catch(() => {});
             const fusedCount = fuseRes.fusedSplatCount ?? 0;
 
+            throwIfStopped(signal);
             report(0.88, 'Tiling');
             const tiles = new Splat3DTilesService();
-            const tileRes = await tiles.convert({ inputPath: fusedSplatPath, outDir, origin: { lat: req.anchor.lat, lng: req.anchor.lng, alt: req.anchor.elevationMeters }, headingDeg: req.headingDeg ?? 0, maxDepth: req.tiles?.maxDepth ?? 5, leafCapacity: req.tiles?.leafCapacity, interiorBudget: req.tiles?.interiorBudget });
+            const tileRes = await tiles.convert({ inputPath: fusedSplatPath, outDir, origin: { lat: req.anchor.lat, lng: req.anchor.lng, alt: req.anchor.elevationMeters }, headingDeg: req.headingDeg ?? 0, maxDepth: req.tiles?.maxDepth ?? 5, leafCapacity: req.tiles?.leafCapacity, interiorBudget: req.tiles?.interiorBudget, signal });
             if (!tileRes.success) throw new Error(tileRes.error || 'Tiling failed');
+            throwIfStopped(signal);
 
             const meshBounds = renderer.getMeshBounds()!;
             const fMin = fuseRes.bounds?.min ?? [-100, -100, -100];
@@ -341,7 +384,9 @@ export class SurveySplatPipelineService {
                 ] as [number, number, number]
             };
             const meta = {
-                generator: this.deps?.generator?.name || 'cached-beautified-plates', mode, anchor: req.anchor, glbPath: req.glbPath,
+                generator: this.deps?.generator?.name || 'cached-beautified-plates',
+                modelsUsed: Array.from(new Set(reports.map(r => r.modelUsed).filter((m): m is string => !!m))),
+                mode, anchor: req.anchor, glbPath: req.glbPath,
                 eyeHeight: stations[0]?.cameraHeightAboveGround ?? 1.7,
                 cropBox, fusedSplatCount: fusedCount, voxelSizeMeters: voxel,
                 stations: reports, tiles: { tileCount: tileRes.tileCount, levels: tileRes.levels, tileBytes: tileRes.tileBytes },
@@ -351,6 +396,8 @@ export class SurveySplatPipelineService {
             report(1, 'Done');
             return { success: true, stations: reports, fusedSplatPath, fusedSplatCount: fusedCount, tilesetPath, metaPath, cropBox, durationMs: Date.now() - t0 };
         } catch (e: any) {
+            // A stopped run is not a pipeline failure: the caller gets the stop itself.
+            throwIfStopped(signal);
             return { success: false, stations: [], fusedSplatPath, fusedSplatCount: 0, tilesetPath, metaPath, cropBox: { min: [0, 0, 0], max: [0, 0, 0] }, durationMs: Date.now() - t0, error: e?.message || String(e) };
         }
     }
@@ -417,8 +464,13 @@ export class SurveySplatPipelineService {
         const shDegreeArg = (req.shDegree !== undefined && req.shDegree > 0) ? `--sh-degree ${req.shDegree}` : '';
         const exposureScaleArg = (req.exposureScale !== undefined) ? `--exposure-scale ${req.exposureScale}` : '';
         const cmd = `"${baker}" --rgb "${base}.rgb" --depth "${base}.depth.f32" --width ${width} --height ${height} --pose "${base}.pose.json" --out-splat "${outSplat}" --stride ${req.bakeStride ?? 1} --station-altitude ${alt} ${sigmaScaleArg} ${minCosIncidenceArg} ${dropFoliageArg} ${foliageModeArg} ${erodeSilhouetteArg} ${hybridArg} ${neuralDepthArg} ${neuralWeightArg} ${maxDeltaZArg} ${twoDgsArg} ${shDegreeArg} ${exposureScaleArg} --exclude-underside --json`;
-        const { stdout } = await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024 });
-        await fs.remove(`${base}.rgb`); await fs.remove(`${base}.depth.f32`);
+        let stdout: string;
+        try {
+            ({ stdout } = await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024, signal: req.signal }));
+        } finally {
+            // The raw inputs go whether the baker finished, failed or was stopped.
+            await fs.remove(`${base}.rgb`); await fs.remove(`${base}.depth.f32`);
+        }
         let splatCount = 0;
         try {
             const parsed = JSON.parse(stdout.trim());

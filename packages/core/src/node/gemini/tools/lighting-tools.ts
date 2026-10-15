@@ -9,7 +9,6 @@
 
 import { LightingGafferService } from '../../../browser/generative-canvas/services/atmosphere/LightingGafferService';
 import { InverseLightingEstimatorService } from '../../spatial/InverseLightingEstimatorService';
-import { ClosedLoopLightingOptimizerService } from '../../spatial/ClosedLoopLightingOptimizerService';
 import {
     PhotometricUsdBridgeService,
     matchLightingToReference,
@@ -110,33 +109,6 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 }
             },
             required: ['style']
-        }
-    },
-    {
-        name: 'lighting_optimize_closed_loop',
-        description: 'Iteratively runs closed-loop coordinate descent to match synthetic 3D lighting against a target reference photograph until reaching >=95% photometric correlation.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                targetImagePath: {
-                    type: 'STRING',
-                    description: 'Path of the target reference photograph.'
-                },
-                initialRigStyle: {
-                    type: 'STRING',
-                    enum: ['rembrandt', 'butterfly', 'split', 'loop', 'three_point', 'high_key', 'noir'],
-                    description: 'Initial lighting rig style before optimization (default: three_point).'
-                },
-                targetCorrelationScore: {
-                    type: 'NUMBER',
-                    description: 'Target photometric correlation threshold (default: 0.95 = 95%).'
-                },
-                maxIterations: {
-                    type: 'NUMBER',
-                    description: 'Maximum coordinate descent iterations (default: 20).'
-                }
-            },
-            required: ['targetImagePath']
         }
     },
     {
@@ -312,42 +284,6 @@ export const lightingHandlers: Record<string, ToolHandler> = {
                 lights: rig.lights
             },
             summaryResult: `Configured ${style.toUpperCase()} photographic lighting rig with ${rig.keyToFillRatio}:1 key-to-fill ratio (${rig.keyToFillStops.toFixed(1)} stops delta) and ${rig.lights.length} physical lights.`
-        };
-    },
-
-    lighting_optimize_closed_loop: async (args, _ctx) => {
-        const style = (asString(args.initialRigStyle) || 'three_point') as any;
-        const initialRig = LightingGafferService.buildGafferRig(style);
-        const targetScore = asNumber(args.targetCorrelationScore, 0.95);
-        const maxIter = asNumber(args.maxIterations, 20);
-
-        // Generate synthetic reference plate for target path
-        const width = 64;
-        const height = 64;
-        const targetPlate = ClosedLoopLightingOptimizerService.renderSyntheticShadowPlate(width, height, 135.0, 45.0);
-
-        const optimization = await ClosedLoopLightingOptimizerService.optimizeSyntheticPlate(
-            targetPlate,
-            width,
-            height,
-            initialRig,
-            {
-                maxIterations: maxIter,
-                targetCorrelationScore: targetScore
-            }
-        );
-
-        return {
-            resultPayload: {
-                success: optimization.success,
-                finalCorrelationScore: optimization.finalCorrelationScore,
-                iterations: optimization.iterations,
-                resectedAzimuthDeg: optimization.resectedAzimuthDeg,
-                resectedElevationDeg: optimization.resectedElevationDeg,
-                optimizedRig: optimization.optimizedRig,
-                history: optimization.history
-            },
-            summaryResult: `Closed-loop lighting optimization converged in ${optimization.iterations} iterations to ${(optimization.finalCorrelationScore * 100).toFixed(1)}% correlation (Azimuth ${optimization.resectedAzimuthDeg}°, Elevation ${optimization.resectedElevationDeg}°).`
         };
     },
 

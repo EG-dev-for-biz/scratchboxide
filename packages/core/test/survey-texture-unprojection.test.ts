@@ -18,7 +18,9 @@ import {
     type SurveyTexturePipelineRequest
 } from '../src/node/spatial/SurveyTextureUnprojector';
 import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
-import { decodePng, encodePng } from '../src/node/texture-processing';
+import { decodePng, encodePng, resampleRgba } from '../src/node/texture-processing';
+import { GeneratorFailedError, MissingInputError } from '../src/common/errors/pipeline-errors';
+import { uvCubeMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
 import type { GeodeticAnchor, ColmapCameraPose } from '../src/common/spatial/colmap-vector-reference-types';
 import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 
@@ -448,13 +450,12 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
             name: 'mock-draft-generator',
             async generate(args) {
                 capturedAspectRatio = args.aspectRatio || '';
+                // A geometry-preserving restyle (the blockout, warmed): it passes the edge QC like a faithful model.
                 const b = decodePng(args.blockoutPng);
-                const out = Buffer.alloc(b.rgba.length);
+                const out = Buffer.from(b.rgba);
                 for (let i = 0; i < out.length; i += 4) {
-                    out[i] = 210;
-                    out[i + 1] = 200;
-                    out[i + 2] = 180;
-                    out[i + 3] = 255;
+                    out[i] = Math.min(255, Math.round(out[i] * 1.1));
+                    out[i + 2] = Math.round(out[i + 2] * 0.85);
                 }
                 return encodePng(b.width, b.height, out);
             }
@@ -490,17 +491,16 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
         const stSouth = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
 
-        // Mock generator returning 1024x1024 plate regardless of requested dimensions (e.g. 512x288)
+        // Mock generator answering at twice the requested size (1024x576 for 512x288), as models answer at their own size
         let generatedWidth = 0;
         let generatedHeight = 0;
         const mockMismatchedGen: StationImageGenerator = {
             name: 'mock-mismatched-generator',
-            async generate() {
-                generatedWidth = 1024;
-                generatedHeight = 1024;
-                const buf = Buffer.alloc(1024 * 1024 * 4);
-                buf.fill(200);
-                return encodePng(1024, 1024, buf);
+            async generate(args) {
+                const b = decodePng(args.blockoutPng);
+                generatedWidth = b.width * 2;
+                generatedHeight = b.height * 2;
+                return encodePng(generatedWidth, generatedHeight, resampleRgba(b.rgba, b.width, b.height, generatedWidth, generatedHeight));
             }
         };
 
@@ -522,6 +522,7 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
 
         expect(result.success).toBe(true);
         expect(generatedWidth).toBe(1024);
+        expect(generatedHeight).toBe(576);
         expect(result.metrics.directlyPaintedTexels).toBeGreaterThan(0);
         expect(fs.existsSync(outResampledGlbPath)).toBe(true);
     });
@@ -614,6 +615,65 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         ).rejects.toThrow(/fidelity.*disagrees/i);
     });
 
+    it('leaves out a station whose image fails geometry QC, keeps the mesh\'s own colour where nothing was seen, and fails when no station passes', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stSouth = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
+        const stNorth = stationFromLookAt(2, [0, 0, -25], [0, 0, 0], optics, ANCHOR);
+        // The first call is restyled faithfully (the blockout itself); every later call comes back as a flat magenta
+        // image that moved every edge, so it fails geometry QC.
+        let call = 0;
+        const mixed: StationImageGenerator = {
+            name: 'qc-mix-gen',
+            async generate(args) {
+                call++;
+                const b = decodePng(args.blockoutPng);
+                if (call === 1) return encodePng(b.width, b.height, b.rgba);
+                const flat = Buffer.alloc(b.rgba.length, 255);
+                for (let i = 0; i < flat.length; i += 4) { flat[i] = 255; flat[i + 1] = 0; flat[i + 2] = 255; }
+                return encodePng(b.width, b.height, flat);
+            }
+        };
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath,
+            anchor: ANCHOR,
+            stations: [stSouth, stNorth],
+            generator: mixed,
+            beautifyContext: { locationName: 'QC Synthetic Cube' },
+            options: { resolution: 256, draft: true, radianceEqualization: { enabled: false }, skipPbrDecomposition: true }
+        });
+        expect(result.rejectedStations.map(r => r.stationId)).toEqual([2]);
+        expect(result.metrics.stationContributions.map(c => c.stationId)).toEqual([1]);
+        // No magenta from the rejected image anywhere in the atlas.
+        const atlas = decodePng(result.albedoPng);
+        let magenta = 0;
+        for (let i = 0; i < atlas.rgba.length; i += 4) if (atlas.rgba[i] > 240 && atlas.rgba[i + 1] < 20 && atlas.rgba[i + 2] > 240) magenta++;
+        expect(magenta).toBe(0);
+        // The back of the cube was seen by no accepted station; it keeps the mesh's own colour, not invented limestone.
+        expect(result.unobservedTexels).toBeGreaterThan(0);
+        let limestone = 0;
+        for (let i = 0; i < atlas.rgba.length; i += 4) if (atlas.rgba[i] === 210 && atlas.rgba[i + 1] === 205 && atlas.rgba[i + 2] === 195) limestone++;
+        expect(limestone).toBe(0);
+        // This cube has no material, so its own colour is glTF's default white.
+        let white = 0;
+        for (let i = 0; i < atlas.rgba.length; i += 4) if (atlas.rgba[i] === 255 && atlas.rgba[i + 1] === 255 && atlas.rgba[i + 2] === 255) white++;
+        expect(white).toBeGreaterThan(0);
+
+        call = 1; // every following call answers with the flat image
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath,
+            anchor: ANCHOR,
+            stations: [stNorth],
+            generator: mixed,
+            beautifyContext: { locationName: 'QC Synthetic Cube' },
+            options: { resolution: 128, draft: true }
+        })).rejects.toBeInstanceOf(GeneratorFailedError);
+
+        // And the stations are generated for a named place: no placeholder name.
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath, anchor: ANCHOR, stations: [stSouth], generator: mixed, options: { resolution: 128, draft: true }
+        })).rejects.toThrow('needs locationName');
+    });
+
     it('chains stations by passing previousAccepted reference', async () => {
         const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
         const st1 = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
@@ -638,6 +698,7 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
             anchor: ANCHOR,
             stations: [st1, st2],
             generator: mockChainingGen,
+            beautifyContext: { locationName: 'Chained Synthetic Cube' },
             options: {
                 resolution: 512,
                 draft: true
@@ -647,6 +708,37 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         expect(result.success).toBe(true);
         expect(callCount).toBe(2);
         expect(receivedReferenceInSecondCall).toBe(true);
+    });
+
+    it('survey_beautify_to_texture de-lights only for the date it is given, says whether it did, and writes into the workspace', async () => {
+        const os = await import('os');
+        const { vi } = await import('vitest');
+        const { spatialHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+        const { GoogleMediaCredentialsService } = await import('../src/node/google-media-credentials-service');
+        const { fakeImageModelClient } = await import('./helpers/fake-image-model');
+        const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-survey-texture-tool-'));
+        const stationsJsonPath = path.join(ws, 'stations.json');
+        // The anchor as survey_synthesize_stations writes it ({ lat, lng }); de-lighting used to read latitude/longitude.
+        await fs.outputJson(stationsJsonPath, { anchor: ANCHOR, poses: [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], { focalLengthMm: 35, sensorWidthMm: 36 }, ANCHOR)] });
+        const spy = vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(fakeImageModelClient([], { modelVersion: 'gemini-3.1-flash-image' }) as any);
+        try {
+            const args = { glbPath: cubeGlbPath, stationsJsonPath, locationName: 'Test Cube', resolution: 64 };
+            const undated = await spatialHandlers.survey_beautify_to_texture(args, { workspaceRoot: ws } as any);
+            const p1 = undated.resultPayload as any;
+            expect(p1.solarDelightingApplied).toBe(false);
+            expect(undated.summaryResult).toContain('without solar de-lighting (it needs the isoDate the images depict)');
+            expect(p1.outGlbPath.startsWith(path.join(ws, 'public', 'models'))).toBe(true);
+
+            const dated = await spatialHandlers.survey_beautify_to_texture({ ...args, isoDate: '2026-06-21T02:00:00Z' }, { workspaceRoot: ws } as any);
+            expect((dated.resultPayload as any).solarDelightingApplied).toBe(true);
+            expect(dated.summaryResult).toContain(`with NOAA solar de-lighting for 2026-06-21T02:00:00Z at ${ANCHOR.lat}, ${ANCHOR.lng}`);
+
+            await expect(spatialHandlers.survey_beautify_to_texture({ ...args, stationsJsonPath: path.join(ws, 'missing.json') }, { workspaceRoot: ws } as any))
+                .rejects.toThrow(/survey_beautify_to_texture needs stationsJsonPath: .*missing\.json does not exist/);
+        } finally {
+            spy.mockRestore();
+            fs.removeSync(ws);
+        }
     });
 
     it('processes multi-submesh GLB into per-submesh original-UV atlases without repacking or UV write-backs', async () => {
@@ -671,6 +763,7 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
             anchor: ANCHOR,
             stations: [stSouth, stNorth],
             generator: mockGen,
+            beautifyContext: { locationName: 'Multi-Submesh Synthetic Building' },
             options: {
                 resolution: 512,
                 draft: true,
@@ -795,4 +888,57 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         await fs.copyFile(outEsbGlbPath, testGlbPath);
         await fs.writeFile(testAlbedoPath, result.albedoPng);
     }, 180000);
+});
+
+describe('SurveyTextureUnprojector: a mesh without its own UVs', () => {
+    /** The review's probe mesh: a 10 m box with POSITION (and normals) but no TEXCOORD_0. */
+    const uvlessBox = (file: string) => writeFixtureGlb(path.join(TEST_DIR, file), { ...uvCubeMesh(10), uvs: undefined });
+
+    it('is refused before any station image is generated, instead of reporting a texture that cannot show', async () => {
+        const glbPath = uvlessBox('uvless_box.glb');
+        const outGlbPath = path.join(TEST_DIR, 'uvless_box_textured.glb');
+        let calls = 0;
+        const gen: StationImageGenerator = { name: 'echo', async generate(a) { calls++; return a.blockoutPng; } };
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        for (const resolution of [1024, 512]) {
+            const err = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+                glbPath, anchor: ANCHOR, generator: gen, beautifyContext: { locationName: 'UV-less box' },
+                stations: [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR), stationFromLookAt(2, [25, 0, 0], [0, 0, 0], optics, ANCHOR)],
+                options: { resolution, renderWidth: 256, renderHeight: 144, draft: true, outGlbPath }
+            // A resolved result is summarised (it holds megabytes of buffers that a failure diff would print).
+            }).then(r => `resolved: success ${r.success}, fill rate ${r.metrics.fillRate}`, e => e);
+            expect(err).toBeInstanceOf(MissingInputError);
+            expect(err.message).toContain('mesh 0 primitive 0 has no TEXCOORD_0');
+        }
+        expect(calls).toBe(0);
+        expect(fs.existsSync(outGlbPath)).toBe(false);
+        // A precomputed-plate run (the mesh bake's path) is refused the same way.
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath, stations: [], precomputedPlates: [{} as StationPlate], options: { resolution: 512 }
+        })).rejects.toThrow(/has no TEXCOORD_0/);
+    });
+
+    it('loads the box at a small atlas without crashing: the generated charts are packed inside the atlas', () => {
+        const glb = fs.readFileSync(uvlessBox('uvless_box_load.glb'));
+        for (const resolution of [512, 256, 64]) {
+            // At 512 this threw RangeError (offset is out of bounds) in the packer's shelf fallback.
+            const { primitives } = SurveyTextureUnprojector.loadMeshPrimitives(glb, resolution);
+            const uvs = primitives[0].uvs;
+            expect(uvs.length).toBe(24 * 2);
+            expect(Array.from(uvs).every(v => v >= 0 && v <= 1)).toBe(true);
+            // The six faces land in six separate atlas rectangles.
+            const boxes = Array.from({ length: 6 }, (_, f) => {
+                const us = [0, 1, 2, 3].map(k => uvs[(f * 4 + k) * 2]);
+                const vs = [0, 1, 2, 3].map(k => uvs[(f * 4 + k) * 2 + 1]);
+                return { u0: Math.min(...us), u1: Math.max(...us), v0: Math.min(...vs), v1: Math.max(...vs) };
+            });
+            for (let a = 0; a < 6; a++) {
+                expect(boxes[a].u1 - boxes[a].u0).toBeGreaterThan(0);
+                for (let b = a + 1; b < 6; b++) {
+                    const overlap = boxes[a].u0 < boxes[b].u1 && boxes[b].u0 < boxes[a].u1 && boxes[a].v0 < boxes[b].v1 && boxes[b].v0 < boxes[a].v1;
+                    expect(overlap).toBe(false);
+                }
+            }
+        }
+    });
 });

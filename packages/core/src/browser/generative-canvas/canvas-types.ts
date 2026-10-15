@@ -1584,17 +1584,17 @@ export const DEFAULT_SKILLS_CATALOG: SkillItem[] = [
     {
         id: 'skill-universal-tile-decomposition',
         name: 'Universal Tile Decomposition (UTDRA)',
-        tagline: 'Classifies 9 macro-geographic domains, rectifies building facades, and excises bridge curtains.',
-        description: 'Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA) via native C++20 engine: segments building crowns, rectifies vertical facade walls, excises planar bridge curtains, and slices elevation datum with zero non-manifold holes.',
+        tagline: 'Measures a tile, slices it at an elevation, and removes curtain walls inside a span box you give.',
+        description: 'UTDRA / ULDRA tile tools on the native C++20 engine: measurements of a given tile (bounds, relief, area by slope band, wall orientation; no classification), an elevation slicer that clips straddling triangles, and removal of the near-vertical triangles inside a caller-given bridge span box.',
         category: 'Engineering',
         accentColor: 'blue',
-        tags: ['UTDRA', '3D Tiles', 'Mesh Rectification', 'Bridge Curtain Cleansing', 'C++20 Engine'],
+        tags: ['UTDRA', '3D Tiles', 'Tile Measurement', 'Elevation Slicing', 'C++20 Engine'],
         isEnabled: true,
         author: 'Scratchbox Spatial',
         version: '1.0.0',
         promptStarters: [
-            'Decompose photogrammetric 3D tile into terrain, building shafts, and architectural crowns',
-            'Excise curtain wall under bridge deck and rectify vertical building facades'
+            'Measure this photogrammetric 3D tile: relief, slope bands and wall orientation',
+            'Remove the curtain walls under this overpass deck (x -40..40, z -6..6, ground 0, deck 7.5)'
         ]
     },
     {

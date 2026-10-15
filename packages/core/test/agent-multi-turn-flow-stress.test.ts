@@ -17,6 +17,7 @@ import {
     buildToolDeclarations
 } from '../src/node/gemini/tool-registry';
 import type { ToolContext } from '../src/node/gemini/tools/types';
+import { skyscraperMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
 import { requireAssets, withReason } from './helpers/requirements';
 
 const avatar2785536 = requireAssets(
@@ -102,17 +103,20 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         // Without a Maps key the real runner cannot measure the ground, so it fails instead of a placeholder video.
         expect(blockoutRes.exec.status).toBe('failed');
 
-        // Step 2: UTDRA Geometric Classification & Probe
+        // Step 2: UTDRA measurement probe. The tools take a tile GLB; this one is a synthetic tower written by the test
+        // (the tools never build a stand-in mesh). The probe measures; it does not classify.
+        const tileGlbPath = writeFixtureGlb(path.join(testDir, 'urban_tile.glb'), skyscraperMesh());
         const probeRes = await registry.dispatch('utdra_probe_tile', {
-            benchmark: 'urban'
+            inputGlbPath: tileGlbPath
         }, mockContext);
         expect(probeRes.exec.status).toBe('completed');
-        expect((probeRes.resultPayload as any).telemetry.dominantDomain).toBeDefined();
+        expect((probeRes.resultPayload as any).telemetry.reliefMeters).toBeCloseTo(180, 3);
 
         // Step 3: Elevation Slicing with Sutherland-Hodgman clipping (subterranean pruning)
         const sliceRes = await registry.dispatch('utdra_slice_elevation', {
             cutoffY: 2.5,
-            benchmark: 'slicer'
+            inputGlbPath: tileGlbPath,
+            outputGlbPath: path.join(testDir, 'urban_tile_sliced.glb')
         }, mockContext);
         expect(sliceRes.exec.status).toBe('completed');
         expect((sliceRes.resultPayload as any).success).toBe(true);
@@ -159,7 +163,7 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
     // =========================================================================
     // Journey 2: Performer Avatar & 4D Dynamic Gaussian Splatting
     // =========================================================================
-    it('Journey 2, steps 1-4: builds performer prompts, tracks points and builds the 4DGS rigidity graph', async () => {
+    it('Journey 2, steps 1-4: builds performer prompts and the 4DGS rigidity graph', async () => {
         // Step 1: Build Neutral Studio Performer Prompt (Strict #808080 studio baseline)
         const neutralRes = await registry.dispatch('build_neutral_performer_prompt', {
             subject: 'Contemporary dancer in fitted athletic apparel',
@@ -182,27 +186,10 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         expect(motionRes.exec.status).toBe('completed');
         expect((motionRes.resultPayload as any).prompt).toContain('<FIRST_FRAME><IMAGE_REF_0></FIRST_FRAME>');
 
-        // Step 3: TAPIR Point Tracking across video frames
-        const trackRes = await registry.dispatch('tapir_track_video_points', {
-            samplerType: 'grid',
-            maxPoints: 256,
-            numFrames: 30,
-            backend: 'mock'
-        }, mockContext);
-        expect(trackRes.exec.status).toBe('completed');
-        expect((trackRes.resultPayload as any).numPoints).toBe(256);
-
-        // Step 4: Build 4DGS with ARAP Rigidity Graph
-        const arapRes = await registry.dispatch('build_4dgs_from_video', {
-            canonicalSubject: [
-                { position: [0, 1.2, 0], colorRgb: [0.8, 0.7, 0.6], scale: [0.015, 0.015, 0.015], opacity: 0.95 },
-                { position: [0.3, 1.0, 0], colorRgb: [0.2, 0.2, 0.2], scale: [0.02, 0.02, 0.02], opacity: 1.0 }
-            ],
-            numFrames: 15,
-            trackingBackend: 'mock'
-        }, mockContext);
-        expect(arapRes.exec.status).toBe('completed');
-        expect((arapRes.resultPayload as any).telemetry).toBeDefined();
+        // Steps 3-4: neither point tracking nor a 4DGS build is offered as a tool: both took no video and
+        // worked on frames they made themselves.
+        expect(registry.get('tapir_track_video_points')).toBeUndefined();
+        expect(registry.get('build_4dgs_from_video')).toBeUndefined();
     });
 
     it.skipIf(!avatar2785536.ok)(withReason('Journey 2, step 5: animates the installed Performer avatar and exports deformed splats', avatar2785536), async () => {

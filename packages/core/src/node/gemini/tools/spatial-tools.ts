@@ -19,16 +19,18 @@ import {
     generate4KMonumentalPanorama,
     auditPanoramaQuality,
     reprojectZenithPanorama,
-    extractZenithRectilinearPatch
+    extractZenithRectilinearPatch,
+    Google360PanoramaPipelineService
 } from '../../spatial/Google360PanoramaPipelineService';
 import {
     generate360Perspectives
 } from '../../spatial/MultiPerspectivePanoramaSynthesisService';
 import {
     UniversalTileDecompositionService,
-    type UtdraBenchmarkType,
-    type UtdraPipelineMode
+    type UtdraSpanBox,
+    type UtdraTelemetry
 } from '../../3d-engine/universal-tile-decomposition-service';
+import { GeneratorFailedError, MissingInputError, TileExtractionError } from '../../../common/errors/pipeline-errors';
 import {
     WebXRGeospatialAnchorBridge,
     type DeviceSensorSample,
@@ -40,6 +42,9 @@ import {
 } from '../../spatial/GeoBoxPrecisionResectionService';
 import {
     SubPixelEdgeAlignmentOptimizer,
+    computeSobelField,
+    evaluateEdgeOverlap,
+    meanEdgeDistancePx as measureMeanEdgeDistance,
     type CameraPose6DOF
 } from '../../spatial/SubPixelEdgeAlignmentOptimizer';
 import {
@@ -67,9 +72,6 @@ import type {
     PhysicalCameraConfig,
     SensorFormatPreset
 } from '../../../common/optics/physical-camera-protocol';
-import { TapirTrackingService } from '../../spatial/TapirTrackingService';
-import { PointSamplers } from '../../../common/tracking/PointTrackingModel';
-import { GaussianSplat4DService } from '../../3d-engine/gaussian-splat-4d-service';
 import { Dynamic4DGaussianSplatService } from '../../3d-engine/Dynamic4DGaussianSplatService';
 import { HumanoidMotionBridgeService } from '../../spatial/HumanoidMotionBridgeService';
 import { VideoTo4DPerformerPipelineService } from '../../spatial/VideoTo4DPerformerPipelineService';
@@ -78,14 +80,6 @@ import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisSer
 import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
 import { Splat3DTilesService } from '../../spatial/Splat3DTilesService';
 import { SurveyApi } from '../../spatial/survey-router';
-import {
-    ArchieBuildingRefiner,
-    type ArchieBuildingPalette
-} from '../../../browser/generative-canvas/services/spatial/ArchieBuildingRefiner';
-import {
-    SbTerrainGroundEngine,
-    type TerrainLayerMode
-} from '../../../browser/generative-canvas/services/spatial/SbTerrainGroundEngine';
 import { Universal3DObjectSeparationService } from '../../spatial/Universal3DObjectSeparationService';
 import { SpatialVisualAlignmentVerificationService } from '../../spatial/SpatialVisualAlignmentVerificationService';
 import { AnalyticalGroomSplatService } from '../../3d-engine/AnalyticalGroomSplatService';
@@ -94,18 +88,9 @@ import { MapsImageryGroundingService } from '../../spatial/MapsImageryGroundingS
 import { createStreetViewGroundingImageService, GROUNDING_ASPECT_RATIOS, StreetViewGroundingImageService, type GooglePano, type GroundingAspectRatio } from '../../spatial/StreetViewGroundingImageService';
 import { GeminiClient } from '../gemini-client';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
-import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
-import type {
-    NormalizedPoint2D,
-    PointSamplerType,
-    TrackerBackend,
-    VideoFrameData
-} from '../../../common/tracking/tapir-tracking-protocol';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../../3d-engine/location-clay-pipeline';
-import { MissingInputError, TileExtractionError } from '../../../common/errors/pipeline-errors';
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
-import type { ToolHandlerOutcome } from './types';
-import type { ToolContext, ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
+import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolParameterSchema, ToolResultPayload } from './types';
 
 function asString(val: unknown, fallback = ''): string {
     return typeof val === 'string' ? val : fallback;
@@ -328,54 +313,6 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
-        name: 'archie_refine_building_structure',
-        description: 'Refines authentic scanned building geometry directly with bilateral planar facade normal smoothing, watertight grounding plinths, and architectural PBR materials without synthetic approximations.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                targetMeshId: {
-                    type: 'STRING',
-                    description: 'Optional ID or name of the target building mesh in the active 3D scene'
-                },
-                palette: {
-                    type: 'STRING',
-                    description: 'Architectural PBR palette style: roman_ochre, limestone, imperial_brick, metro_bronze, granite (default: roman_ochre)',
-                    enum: ['roman_ochre', 'roman_ochre_deep', 'limestone', 'imperial_brick', 'metro_bronze', 'granite']
-                },
-                plinthDepth: {
-                    type: 'NUMBER',
-                    description: 'Depth of watertight extruded grounding plinth in meters (default: 2.5m)'
-                },
-                plinthPadding: {
-                    type: 'NUMBER',
-                    description: 'Perimeter collar padding in meters (default: 0.3m)'
-                }
-            }
-        }
-    },
-    {
-        name: 'sb_terrain_classify_materials',
-        description: 'Dynamically classifies terrain submeshes across three geological/urban material systems (Volcanic Tufa Rocks, Mediterranean Grass/Turf, Basalt Cobblestone Pavement) backed by procedural canvas bump maps.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                layer: {
-                    type: 'STRING',
-                    description: 'Visible layer mode: all, rocks, grass, pavement (default: all)',
-                    enum: ['all', 'rocks', 'grass', 'pavement']
-                },
-                rockSlopeThresholdDeg: {
-                    type: 'NUMBER',
-                    description: 'Slope threshold in degrees above which ground is classified as rock/scarp (default: 32)'
-                },
-                pavementMaxSlopeDeg: {
-                    type: 'NUMBER',
-                    description: 'Maximum slope in degrees for flat pavement/cobblestones (default: 10)'
-                }
-            }
-        }
-    },
-    {
         name: 'spatial_separate_3d_objects',
         description: 'Separates an arbitrary real-world 3D mesh (Google 3D Tiles, photogrammetry, CAD) into discrete spatial entities with tight PCA Oriented Bounding Boxes (OBBs), geometric categorization, and downstream generator routing (SB-Archi, Archie-Building, SB-Terrain). It reads geometry only, so it names no trees; google_3d_tiles_get_clay measures and rebuilds the trees of a location from its photo tiles.',
         parameters: {
@@ -410,7 +347,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'spatial_verify_visual_alignment',
-        description: 'Verifies 1:1 metric scale, translation, ground snapping, pinhole optical consistency (H3D = h_px * d / fy), sub-pixel edge overlap, and dual AABB vs OBB volume tightness against VFX quality standards.',
+        description: 'Audits an alignment from measurements you supply: computes the scale, translation and ground snap that fit the source model\'s dimensions to the reference\'s, checks the measured edge overlap and residual (from geobox_closed_loop_edge_align) against VFX thresholds, and, when the camera depth, the object\'s 2D box and the camera intrinsics are given, the pinhole height (H3D = h_px * d / fy). Nothing is assumed: missing dimensions or measurements are refused, and a check whose inputs are not given is reported as not measured.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -420,37 +357,45 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 sourceDimensions: {
                     type: 'ARRAY',
-                    description: 'Source 3D model dimensions [width, height, depth] in meters',
+                    description: 'Measured source 3D model dimensions [width, height, depth] in meters',
                     items: { type: 'NUMBER' }
                 },
                 targetDimensions: {
                     type: 'ARRAY',
-                    description: 'Target real-world reference dimensions [width, height, depth] in meters',
+                    description: 'Real-world reference dimensions [width, height, depth] in meters',
                     items: { type: 'NUMBER' }
                 },
                 groundSnap: {
                     type: 'BOOLEAN',
                     description: 'Whether to snap foundation base to reference ground datum (default: true)'
                 },
-                cameraDepthMeters: {
-                    type: 'NUMBER',
-                    description: 'Distance from camera optical center to object in meters'
-                },
-                box2dNormalized: {
-                    type: 'ARRAY',
-                    description: 'Normalized 2D bounding box [ymin, xmin, ymax, xmax] in [0, 1000] scale',
-                    items: { type: 'NUMBER' }
-                },
                 overlapScorePercent: {
                     type: 'NUMBER',
-                    description: 'Evaluated sub-pixel edge overlap percentage (0-100%)'
+                    description: 'Edge overlap percentage (0-100) measured by geobox_closed_loop_edge_align'
                 },
                 residualErrorPx: {
                     type: 'NUMBER',
-                    description: 'Reprojection residual error in pixels'
+                    description: 'Edge residual in pixels measured by geobox_closed_loop_edge_align'
+                },
+                cameraDepthMeters: {
+                    type: 'NUMBER',
+                    description: 'Optional, for the pinhole check: distance from the camera optical center to the object in meters'
+                },
+                box2dNormalized: {
+                    type: 'ARRAY',
+                    description: 'Optional, for the pinhole check: the object\'s 2D box [ymin, xmin, ymax, xmax] on a 0-1000 scale',
+                    items: { type: 'NUMBER' }
+                },
+                imageHeightPx: {
+                    type: 'NUMBER',
+                    description: 'For the pinhole check: the image height in pixels'
+                },
+                focalLengthPx: {
+                    type: 'NUMBER',
+                    description: 'For the pinhole check: the vertical focal length fy in pixels'
                 }
             },
-            required: ['sourceDimensions', 'targetDimensions']
+            required: ['modelName', 'sourceDimensions', 'targetDimensions', 'overlapScorePercent', 'residualErrorPx']
         }
     },
     {
@@ -838,64 +783,6 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    archie_refine_building_structure: async (args, _ctx) => {
-        const palette = (asString(args.palette) as ArchieBuildingPalette) || 'roman_ochre';
-        const plinthDepth = typeof args.plinthDepth === 'number' ? args.plinthDepth : 2.5;
-        const plinthPadding = typeof args.plinthPadding === 'number' ? args.plinthPadding : 0.3;
-        const targetMeshId = asString(args.targetMeshId) || undefined;
-
-        const refiner = new ArchieBuildingRefiner();
-        const demoGeom = new THREE.BoxGeometry(15, 25, 15);
-        demoGeom.translate(0, 12.5, 0);
-        const result = refiner.refineBuilding(demoGeom, {
-            palette,
-            plinthDepth,
-            plinthPadding,
-            namePrefix: targetMeshId || 'architectural_entity'
-        });
-
-        return {
-            status: 'completed',
-            summaryResult: `Refined authentic building structure with bilateral planar facade smoothing (${result.metrics.facadeVerticesSmoothed} facade vertices), ${plinthDepth}m watertight plinth, and ${palette} PBR materials.`,
-            resultPayload: {
-                success: true,
-                palette,
-                metrics: result.metrics,
-                refinedMeshName: result.refinedMesh.name,
-                plinthMeshName: result.plinthMesh.name
-            }
-        };
-    },
-
-    sb_terrain_classify_materials: async (args, _ctx) => {
-        const layer = (asString(args.layer) || 'all') as TerrainLayerMode;
-        const rockSlopeThresholdDeg = typeof args.rockSlopeThresholdDeg === 'number' ? args.rockSlopeThresholdDeg : 32;
-        const pavementMaxSlopeDeg = typeof args.pavementMaxSlopeDeg === 'number' ? args.pavementMaxSlopeDeg : 10;
-
-        const engine = new SbTerrainGroundEngine();
-        const demoGroup = new THREE.Group();
-        const p = new THREE.Mesh(new THREE.PlaneGeometry(25, 25)); p.geometry.rotateX(-Math.PI / 2); p.name = 'plaza_submesh_01';
-        const g = new THREE.Mesh(new THREE.PlaneGeometry(25, 25)); g.geometry.rotateX(-Math.PI / 2 + Math.PI / 9); g.name = 'lawn_submesh_02';
-        const r = new THREE.Mesh(new THREE.PlaneGeometry(25, 25)); r.geometry.rotateX(-Math.PI / 2 + Math.PI / 3); r.name = 'scarp_submesh_03';
-        demoGroup.add(p); demoGroup.add(g); demoGroup.add(r);
-
-        const result = engine.classifyAndRenderTerrain(demoGroup, {
-            rockSlopeThresholdDeg,
-            pavementMaxSlopeDeg,
-            initialLayer: layer
-        });
-
-        return {
-            status: 'completed',
-            summaryResult: `Classified terrain submeshes across 3 geological/urban systems: ${result.metrics.rockCount} Volcanic Tufa Rocks, ${result.metrics.grassCount} Mediterranean Grass/Turf, and ${result.metrics.pavementCount} Basalt Cobblestone Pavers.`,
-            resultPayload: {
-                success: true,
-                layer,
-                metrics: result.metrics
-            }
-        };
-    },
-
     spatial_separate_3d_objects: async (args, _ctx) => {
         const glbPath = asString(args.glbPath);
         if (!glbPath) throw new Error('spatial_separate_3d_objects: "glbPath" argument is required.');
@@ -938,14 +825,41 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
     },
 
     spatial_verify_visual_alignment: async (args, _ctx) => {
-        const modelName = asString(args.modelName) || '3D_Entity';
-        const srcDims = (Array.isArray(args.sourceDimensions) ? args.sourceDimensions : [1, 1, 1]) as [number, number, number];
-        const tgtDims = (Array.isArray(args.targetDimensions) ? args.targetDimensions : [1, 1, 1]) as [number, number, number];
+        // Every number the audit reports is one the caller measured; nothing is defaulted.
+        const tool = 'spatial_verify_visual_alignment';
+        const modelName = asString(args.modelName);
+        if (!modelName) throw new MissingInputError(tool, 'modelName');
+        const dimensions = (key: 'sourceDimensions' | 'targetDimensions'): [number, number, number] => {
+            const v = args[key];
+            if (!Array.isArray(v) || v.length !== 3 || !v.every(n => typeof n === 'number' && Number.isFinite(n) && n > 0)) {
+                throw new MissingInputError(tool, key, `three positive sizes [width, height, depth] in meters (got ${JSON.stringify(v)})`);
+            }
+            return v as [number, number, number];
+        };
+        const measured = (key: 'overlapScorePercent' | 'residualErrorPx'): number => {
+            const v = args[key];
+            if (typeof v !== 'number' || !Number.isFinite(v)) {
+                throw new MissingInputError(tool, key, 'the value measured by geobox_closed_loop_edge_align; no overlap or residual is assumed');
+            }
+            return v;
+        };
+        const srcDims = dimensions('sourceDimensions');
+        const tgtDims = dimensions('targetDimensions');
+        const overlapScore = measured('overlapScorePercent');
+        const residualPx = measured('residualErrorPx');
         const groundSnap = args.groundSnap !== false;
         const cameraDepth = typeof args.cameraDepthMeters === 'number' ? args.cameraDepthMeters : undefined;
         const box2d = Array.isArray(args.box2dNormalized) ? (args.box2dNormalized as [number, number, number, number]) : undefined;
-        const overlapScore = typeof args.overlapScorePercent === 'number' ? args.overlapScorePercent : 98.5;
-        const residualPx = typeof args.residualErrorPx === 'number' ? args.residualErrorPx : 0.04;
+        const imageHeight = typeof args.imageHeightPx === 'number' ? args.imageHeightPx : undefined;
+        const fy = typeof args.focalLengthPx === 'number' ? args.focalLengthPx : undefined;
+        const opticalInputs = [cameraDepth, box2d, imageHeight, fy];
+        if (opticalInputs.some(v => v !== undefined) && opticalInputs.some(v => v === undefined)) {
+            throw new MissingInputError(tool, 'cameraDepthMeters, box2dNormalized, imageHeightPx and focalLengthPx',
+                'the pinhole check needs all four (the camera\'s own intrinsics); none is assumed');
+        }
+        if (box2d && (box2d.length !== 4 || !box2d.every(n => typeof n === 'number' && Number.isFinite(n)))) {
+            throw new MissingInputError(tool, 'box2dNormalized', `[ymin, xmin, ymax, xmax] on a 0-1000 scale (got ${JSON.stringify(box2d)})`);
+        }
 
         const service = new SpatialVisualAlignmentVerificationService();
         const alignReport = service.verifyAlignment({
@@ -962,13 +876,14 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 centroid: [0, tgtDims[1] / 2, 0]
             },
             groundSnap,
-            cameraContext: cameraDepth ? {
-                fx: 1866.66,
-                fy: 1866.66,
-                cx: 960,
-                cy: 540,
-                imageWidth: 1920,
-                imageHeight: 1080,
+            // Only fy, the image height and the depth enter the pinhole check; the principal point is not used.
+            cameraContext: cameraDepth !== undefined && fy !== undefined && imageHeight !== undefined ? {
+                fx: fy,
+                fy,
+                cx: Number.NaN,
+                cy: Number.NaN,
+                imageWidth: Number.NaN,
+                imageHeight,
                 cameraDepthToObject: cameraDepth
             } : undefined,
             box2dNormalized: box2d
@@ -979,12 +894,12 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
             sourceDimensions: srcDims,
             overlapScorePercent: overlapScore,
             residualErrorPx: residualPx,
-            opticalDiscrepancyPercent: alignReport.opticalDiscrepancyPercent ?? 0
+            opticalDiscrepancyPercent: alignReport.opticalDiscrepancyPercent
         });
 
         return {
             status: 'completed',
-            summaryResult: `Visual alignment audit for ${modelName}: [${cert.auditStatus}] (Overlap: ${cert.metrics.overlapScorePercent.toFixed(1)}%, Residual: ${cert.metrics.residualErrorPx.toFixed(3)}px, Optical Scale: ${cert.metrics.opticalDiscrepancyPercent.toFixed(1)}%).`,
+            summaryResult: `Visual alignment audit for ${modelName} from the measurements given: [${cert.auditStatus}] (Overlap: ${cert.metrics.overlapScorePercent.toFixed(1)}%, Residual: ${cert.metrics.residualErrorPx.toFixed(3)}px, Optical Scale: ${cert.metrics.opticalDiscrepancyPercent === undefined ? 'not measured' : `${cert.metrics.opticalDiscrepancyPercent.toFixed(1)}%`}). Fitting the source to the reference needs scale ${alignReport.scale[1].toFixed(4)}.`,
             resultPayload: {
                 success: cert.isCertified,
                 certificate: cert,
@@ -998,24 +913,87 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
 // Panorama Declarations & Handlers
 // ============================================================================
 
+/** The `maxModelUpscale` parameter of the panorama edit tools. */
+const PANORAMA_MAX_UPSCALE_PARAMETER: ToolParameterSchema = {
+    type: 'NUMBER',
+    description: 'Largest factor (>= 1, default 2) the model\'s answer may be enlarged by to cover the panorama. The image size (1K, 2K or 4K) is asked for so the answer covers the panorama within this factor; a panorama too large for that even at 4K is refused before any model call unless this is raised. The result states the size the model answered at and how far it was enlarged.'
+};
+
+/** The `model` parameter of the panorama image tools: one named model, or the default list when omitted. */
+const PANORAMA_IMAGE_MODEL_PARAMETER: ToolParameterSchema = {
+    type: 'STRING',
+    description: 'Image model id. When given, only that model is used; omit it to try the default image models in order. The result names the model that answered and, if it was not the first, why each earlier one was skipped.'
+};
+
 export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'synthesize_adaptive_particle_system',
-        description: 'Synthesizes an AdaptiveParticleContract continuous physical specification for any particulate substance (fluids, dust, plasma, steam, sparks, sand, rain, cinders) using zero closed taxonomy presets in accordance with Scratchbox IDE Adaptive Domain Architecture.',
+        description: 'Assemble an AdaptiveParticleContract (the continuous physical description the particle renderer runs) for any particulate substance: fluids, dust, plasma, steam, sparks, spores, anything. You choose every value from the substance the user described, in physical units; the tool keeps no vocabulary of substances and fills in nothing, and a missing or out-of-range value fails the call with the list of fields to fix. manifoldWeights blend six flow shapes [buoyant plume, cyclone funnel, fountain jet, spherical shockwave, accretion disk, lateral gale] and are normalised to sum to 1.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                prompt: {
-                    type: 'STRING',
-                    description: 'Natural language description of the particle substance, dynamics, medium, or visual style (e.g. "bioluminescent marine plankton in ocean wake", "oxy-acetylene welding sparks ricocheting off steel", "Bagnold desert sandstorm with wind shear").'
+                subject: { type: 'STRING', description: 'Short name of the substance and its situation, e.g. "methane geyser spray with bioluminescent spores".' },
+                narrativeContext: { type: 'STRING', description: 'Optional one-line description of the scene the particles are in.' },
+                kinematics: {
+                    type: 'OBJECT',
+                    properties: {
+                        linearVelocity: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Bulk ejection velocity [x, y, z] in m/s.' },
+                        vorticityTensor: { type: 'NUMBER', description: 'Rotation shear in rad/s.' },
+                        radialDivergence: { type: 'NUMBER', description: 'Outward expansion (+) or sink (-).' },
+                        ambientWind: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Wind [x, y, z] in m/s.' },
+                        windGustiness: { type: 'NUMBER', description: 'Turbulent eddy amplitude (>= 0).' },
+                        gravity: { type: 'NUMBER', description: 'Vertical acceleration in m/s^2 (negative pulls down).' },
+                        substanceMass: { type: 'NUMBER', description: 'Normalised particle inertia (> 0): ~0.05 smoke or dust to ~4.5 molten metal.' },
+                        dragCoefficient: { type: 'NUMBER', description: 'Aerodynamic drag (>= 0).' },
+                        restitution: { type: 'NUMBER', description: 'Bounce on contact, 0..1.' },
+                        friction: { type: 'NUMBER', description: 'Contact friction (>= 0).' }
+                    },
+                    required: ['linearVelocity', 'vorticityTensor', 'radialDivergence', 'ambientWind', 'windGustiness', 'gravity', 'substanceMass', 'dragCoefficient', 'restitution', 'friction']
+                },
+                manifoldWeights: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Six non-negative weights [plume, cyclone, fountain, shockwave, disk, gale] with a positive sum.' },
+                manifoldScale: { type: 'NUMBER', description: 'Spatial scale of the flow shape (> 0).' },
+                advectionCurlScale: { type: 'NUMBER', description: 'Curl-noise frequency (>= 0).' },
+                material: {
+                    type: 'OBJECT',
+                    properties: {
+                        emissionModel: { type: 'STRING', description: 'Free-text label for how the particles make or carry light (shown in diagnostics; the renderer reads the numbers).' },
+                        coreRadiance: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Hottest/brightest colour [r, g, b] (>= 0).' },
+                        midRadiance: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Body colour [r, g, b] (>= 0).' },
+                        outerRadiance: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Edge / dissipation colour [r, g, b] (>= 0).' },
+                        opticalExtinction: { type: 'NUMBER', description: 'Beer-Lambert extinction (>= 0).' },
+                        specularGloss: { type: 'NUMBER', description: 'Highlight sharpness, 0..1.' },
+                        colorTemperatureK: { type: 'NUMBER', description: 'Blackbody temperature, 1000..40000 K.' },
+                        particleSizePx: { type: 'NUMBER', description: 'Sprite diameter in pixels (> 0).' },
+                        particleCount: { type: 'NUMBER', description: 'Particle budget (>= 1).' }
+                    },
+                    required: ['emissionModel', 'coreRadiance', 'midRadiance', 'outerRadiance', 'opticalExtinction', 'specularGloss', 'colorTemperatureK', 'particleSizePx', 'particleCount']
+                },
+                optics: {
+                    type: 'OBJECT',
+                    properties: {
+                        bloomMultiplier: { type: 'NUMBER', description: 'HDR glare (>= 0).' },
+                        diffusionBlurRadius: { type: 'NUMBER', description: 'Atmospheric blur (>= 0).' },
+                        thermalMirageHaze: { type: 'NUMBER', description: 'Heat shimmer (>= 0).' },
+                        chromaticDispersion: { type: 'NUMBER', description: 'Wavelength splitting (>= 0).' }
+                    },
+                    required: ['bloomMultiplier', 'diffusionBlurRadius', 'thermalMirageHaze', 'chromaticDispersion']
+                },
+                acoustics: {
+                    type: 'OBJECT',
+                    properties: {
+                        subBassHertz: { type: 'NUMBER', description: 'Fundamental rumble in Hz.' },
+                        resonantCenterHertz: { type: 'NUMBER', description: 'Resonance peak in Hz.' },
+                        impulseRate: { type: 'NUMBER', description: 'Crackle / impact events per second.' }
+                    },
+                    required: ['subBassHertz', 'resonantCenterHertz', 'impulseRate']
                 }
             },
-            required: ['prompt']
+            required: ['subject', 'kinematics', 'manifoldWeights', 'manifoldScale', 'advectionCurlScale', 'material', 'optics', 'acoustics']
         }
     },
     {
         name: 'adaptive_world_style_deconstruct',
-        description: 'Deconstruct any reference image into an adaptive continuous contract of styling, lighting, grading, detail, and NPR parameters using the zero-preset Adaptive Style Deconstruction Engine.',
+        description: 'Have a Gemini vision model read a reference image into an adaptive continuous contract of styling, lighting, grading, detail and NPR parameters. Fails when no vision model can read the image; nothing is guessed from the hint text.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1034,7 +1012,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 fidelity: {
                     type: 'STRING',
-                    description: 'Analysis fidelity: "fast-analytical" (offline, default), "balanced" (Gemini 2.5 flash), or "deep-multimodal" (Gemini 2.5 pro).'
+                    description: 'Which vision model reads the image: "balanced" (Gemini 2.5 Flash, default) or "deep-multimodal" (Gemini 2.5 Pro).'
                 },
                 promptHint: {
                     type: 'STRING',
@@ -1046,7 +1024,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'adaptive_world_style_apply',
-        description: 'Analyze an image style and apply it directly to a 3D Tile GLB mesh. Automatically deconstructs the styling parameters, maps them to a CIELAB palette, and runs the offline PBR texture re-grading engine with 100% geometric vertex lock.',
+        description: 'Read an image\'s style with a Gemini vision model and apply it to a 3D Tile GLB: the contract the model reads is mapped to a CIELAB palette and the GLB\'s textures are re-graded offline (vertex data is not modified). Fails when no vision model can read the image.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1064,7 +1042,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 fidelity: {
                     type: 'STRING',
-                    description: 'Deconstruction quality: "fast-analytical", "balanced", or "deep-multimodal"'
+                    description: 'Which vision model reads the image: "balanced" (Gemini 2.5 Flash, default) or "deep-multimodal" (Gemini 2.5 Pro).'
                 },
                 promptHint: {
                     type: 'STRING',
@@ -1084,7 +1062,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'panorama_heal_seam',
-        description: 'Heal the vertical boundary seam of a 360 equirectangular panorama using Google Vertex AI / Imagen 3 inpainting over a 50% horizontally rolled canvas with soft-edge quadratic gradient masking. Guarantees 100% bit-exact pixel fidelity outside the seam width band.',
+        description: 'Heal the vertical boundary seam of a 360 equirectangular panorama by Gemini image-model inpainting over a 50% horizontally rolled canvas with soft-edge quadratic gradient masking. Guarantees 100% bit-exact pixel fidelity outside the seam width band. Fails (no procedural substitute) when no image model inpaints the seam; the result names the model that answered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1103,14 +1081,16 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputImagePath: {
                     type: 'STRING',
                     description: 'Optional output file path to write the healed seamless panorama.'
-                }
+                },
+                model: PANORAMA_IMAGE_MODEL_PARAMETER,
+                maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER
             },
             required: ['inputImagePath']
         }
     },
     {
         name: 'panorama_inpaint',
-        description: 'Inpaint or remove objects (such as nadir camera rigs, tripods, drone shadows, or unwanted floaters) on a 360 equirectangular panorama using Google Vertex AI / Imagen 3.',
+        description: 'Inpaint or remove objects (such as nadir camera rigs, tripods, drone shadows, or unwanted floaters) on a 360 equirectangular panorama with a Gemini image model. Fails when no image model inpaints it; the result names the model that answered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1149,14 +1129,16 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputImagePath: {
                     type: 'STRING',
                     description: 'Optional output file path to write the inpainted panorama.'
-                }
+                },
+                model: PANORAMA_IMAGE_MODEL_PARAMETER,
+                maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER
             },
             required: ['inputImagePath']
         }
     },
     {
         name: 'panorama_generate_360',
-        description: 'Synthesize a 360 equirectangular panoramic image from prompt (plain text description or structured JSON prompt) using Google generative models with automatic boundary seam healing.',
+        description: 'Synthesize a 360 equirectangular panoramic image from prompt (plain text description or structured JSON prompt) with a Gemini image model and automatic boundary seam healing. Fails when no image model produces it; the result names the model that answered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1192,6 +1174,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional output file path to write the generated panorama.'
                 },
+                model: PANORAMA_IMAGE_MODEL_PARAMETER,
+                maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER,
                 invertSphericalCurvature: {
                     type: 'BOOLEAN',
                     description: 'Whether to invert spherical curvature so that the panorama wraps concavely towards the user at the lateral edges rather than bowing away convexly (default: false).'
@@ -1202,7 +1186,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'panorama_generate_4k',
-        description: 'Synthesize a monumental 4K UHD 360 equirectangular panorama (4096x2048, 8.38 MP) from text prompt using Google generative models with Laplacian 2-band frequency separation seam equalization, clean photographic ceiling/ground preservation (zero artificial polar discs/rings), single-pixel polar singularity collapse, and automated 100/100 QC certification.',
+        description: 'Synthesize a monumental 4K UHD 360 equirectangular panorama (4096x2048, 8.38 MP) from text prompt with a Gemini image model, Laplacian 2-band frequency separation seam equalization, clean photographic ceiling/ground preservation (zero artificial polar discs/rings), single-pixel polar singularity collapse, and an automated QC audit. Fails when no image model produces it; the result names the model that answered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1241,7 +1225,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputImagePath: {
                     type: 'STRING',
                     description: 'Optional output file path to write the generated 4K PNG panorama.'
-                }
+                },
+                model: PANORAMA_IMAGE_MODEL_PARAMETER
             },
             required: ['prompt']
         }
@@ -1346,11 +1331,11 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 model: {
                     type: 'STRING',
-                    description: 'Generative image model id to use for the 5 surrounding perspectives (default: "gemini-3.1-flash-image", i.e. Nano Banana 2).'
+                    description: 'Image model id for the 5 surrounding perspectives. When given, only that model is used; omit it to try the default list in order (gemini-3.1-flash-image, i.e. Nano Banana 2, first). The result names the model that answered and why any earlier one was skipped.'
                 },
                 useNanoBanana: {
                     type: 'BOOLEAN',
-                    description: 'Whether to use Nano Banana 2 conditioning to generate the 5 perspectives matching the initial image (default: true).'
+                    description: 'Default true: an image model generates the 5 perspectives from the initial image. Set false only when the user asks for procedural perspectives (edge continuations of the input, no model call); the result says so.'
                 },
                 outputDir: {
                     type: 'STRING',
@@ -1388,7 +1373,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'panorama_to_3dgs',
-        description: 'Generate a watertight, high-fidelity walkable 3DGS world from a single 360 equirectangular panorama. Automatically extracts per-pixel geometry using Depth Anything V3, synthesizes multi-perspective offset viewpoints with Imagen 3 disocclusion inpainting, and compiles a merged standard binary .SPLAT and Niantic NGSP v2 compressed .SPZ.',
+        description: 'Generate a walkable 3DGS world from a single 360 equirectangular panorama. Measures per-pixel metric depth with the local Depth Anything V2 Metric model (the call fails when it cannot run), synthesizes offset viewpoints whose disocclusions are inpainted by a Gemini image model (the run fails rather than splatting un-inpainted holes; a panorama too large for the image model is refused before the depth run), and compiles a merged .SPLAT and Niantic NGSP v2 .SPZ. The result reports the capture height and how it was obtained.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1402,7 +1387,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 eyeHeight: {
                     type: 'NUMBER',
-                    description: 'Camera eye height in meters (default: 1.7).'
+                    description: 'Camera height above the floor in meters, when known. Omitted, it is measured from the metric floor in the depth map, and the call fails when there is too little floor to measure it.'
                 },
                 radius: {
                     type: 'NUMBER',
@@ -1422,15 +1407,17 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 prompt: {
                     type: 'STRING',
-                    description: 'Inpainting prompt to describe the hidden background scenery for Imagen 3.'
-                }
+                    description: 'Inpainting prompt describing the hidden background scenery for the image model.'
+                },
+                model: PANORAMA_IMAGE_MODEL_PARAMETER,
+                maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER
             },
             required: ['inputImagePath']
         }
     },
     {
         name: 'single_image_to_3dgs',
-        description: 'Convert any single 2D image or AI concept render into photorealistic 3D Gaussian Splats (.splat and Niantic .spz). Uses Depth Anything / metric pinhole depth reconstruction to project pixels into 3D Gaussians with authentic view-dependent color, normal vectors, and covariance scales. Directly loadable into Scene3DPrimitive via splatUrl.',
+        description: 'Convert a single 2D photo or render into 3D Gaussian Splats (.splat and Niantic .spz). Per-pixel metric depth comes from the Depth Anything V2 Metric model (local sidecar); each pixel is lifted along its pinhole ray at that depth, with normals from neighbouring depths. Fails when the depth model cannot run (nothing is guessed from colour or image rows). Directly loadable into Scene3DPrimitive via splatUrl.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1440,7 +1427,11 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 fovDegrees: {
                     type: 'NUMBER',
-                    description: 'Camera field of view in degrees (default: 65.0).'
+                    description: 'Vertical field of view of the photo in degrees. Give the real lens when known; when omitted 65 is assumed and the result says so.'
+                },
+                sceneType: {
+                    type: 'STRING',
+                    description: '"indoor" or "outdoor" (default): which Depth Anything V2 Metric model reads the depth.'
                 },
                 stride: {
                     type: 'NUMBER',
@@ -1612,11 +1603,11 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_to_texture',
-        description: 'Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and full PBR decomposition (NOAA solar de-lighting, Scharr normals, Toksvig AA roughness, HBAO, and dielectric glass classification).',
+        description: 'Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and PBR decomposition (Scharr normals, Toksvig AA roughness, HBAO, dielectric glass classification, and NOAA solar de-lighting when isoDate is given and the stations file has anchor coordinates). The result says whether de-lighting was applied.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Input GLB mesh model.' },
+                glbPath: { type: 'STRING', description: 'Input GLB mesh model. Every primitive must have its own UVs (TEXCOORD_0): the texture is baked into them, and a mesh without UVs is refused before any station image is generated.' },
                 stationsJsonPath: { type: 'STRING', description: 'Stations JSON (with anchor) from survey_synthesize_stations.' },
                 locationName: { type: 'STRING', description: 'Location name for prompts.' },
                 moodPromptContext: { type: 'STRING', description: 'Mood/lighting sentence(s), identical for all stations.' },
@@ -1624,8 +1615,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 resolution: { type: 'NUMBER', description: 'Atlas texture resolution (default 4096).' },
                 depthTolerance: { type: 'NUMBER', description: 'Occlusion test depth tolerance in meters (default 0.20).' },
                 minCosIncidence: { type: 'NUMBER', description: 'Drop glancing incidence angles below this cos theta (default 0.08).' },
-                isoDate: { type: 'STRING', description: 'Acquisition UTC timestamp for NOAA solar ephemeris de-lighting.' },
-                outGlbPath: { type: 'STRING', description: 'Target output path for enhanced GLB (default public/models/survey_pbr_<ts>.glb).' }
+                isoDate: { type: 'STRING', description: 'UTC time whose sun lit the station images (the time of day their mood describes), for NOAA solar de-lighting. Without it nothing is de-lit.' },
+                outGlbPath: { type: 'STRING', description: 'Target output path for enhanced GLB (default <workspace>/public/models/survey_pbr_<ts>.glb).' }
             },
             required: ['glbPath', 'stationsJsonPath', 'locationName']
         }
@@ -1640,6 +1631,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 lat: { type: 'NUMBER', description: 'Geodetic latitude in degrees (optional if named landmark).' },
                 lng: { type: 'NUMBER', description: 'Geodetic longitude in degrees (optional if named landmark).' },
                 elevation: { type: 'NUMBER', description: 'Elevation in meters above sea level.' },
+                glbPath: { type: 'STRING', description: 'Optional: the clay GLB of this place already extracted (e.g. by google_3d_tiles_get_clay). Without it the place\'s Google 3D Tiles are extracted fresh in clay; a failed extraction fails the call.' },
                 stylePreset: { type: 'STRING', description: 'Era or visual style preset (e.g. "cinematic-film", "oil-painting").' },
                 mood: { type: 'STRING', description: 'Diurnal lighting mood ("dawn", "golden-hour", "midday", "dusk", "night").' },
                 cameraCount: { type: 'NUMBER', description: 'Number of survey camera stations (default: 6-12).' },
@@ -1669,7 +1661,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'spatial_smart_point_inpaint',
-        description: 'Inpaints a localized region of the scene by projecting a 3D coordinate onto the screen and applying feathered masking.',
+        description: 'Inpaints a localized region of an image of the scene: projects a 3D point into the image with the camera pose, has an image model edit a feathered region around it (at the image\'s own aspect ratio; an answer at another ratio is refused), and keeps every pixel outside that region. A point behind the camera, outside the image, or hidden behind the mesh (its rendered depth) is refused before any model call. The result names the model that answered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1679,8 +1671,9 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 smartPoint: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '3D coordinate [X, Y, Z] to project and edit.' },
                 prompt: { type: 'STRING', description: 'Prompt describing what to add or edit at the smart point region.' },
                 radiusPx: { type: 'NUMBER', description: 'Pixel radius of the feathered mask around the projected point.' },
-                width: { type: 'NUMBER', description: 'Viewport render width.' },
-                height: { type: 'NUMBER', description: 'Viewport render height.' }
+                width: { type: 'NUMBER', description: 'Optional: the image width; it must match the image (the point is projected at the image\'s own size).' },
+                height: { type: 'NUMBER', description: 'Optional: the image height; it must match the image.' },
+                model: { type: 'STRING', description: 'Optional image model id; when given only that model is used, otherwise the image models are tried in priority order and the result names the one that answered.' }
             },
             required: ['imagePath', 'glbPath', 'pose', 'smartPoint', 'prompt']
         }
@@ -1704,14 +1697,16 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'mesh_bake_ai_textures',
-        description: 'Generates 6 cardinal orthogonal viewpoints of a 3D model, beautifies each view, and bakes them onto the mesh UV texture atlas.',
+        description: 'Texture a mesh from its six axis-aligned views: each view is rendered from the mesh, restyled by an image model to the style prompt (six image-model calls), and projected back onto the mesh\'s existing UVs (TEXCOORD_0) with depth occlusion into a base colour texture. Writes a textured copy of the GLB (the input is not changed) and reports which model made the views, any view that could not be used, and how much of the surface no view saw (those texels keep the mesh\'s own colour). A GLB without UVs, or with accessors that cannot be read, is refused; the bake fails, writing nothing, when any primitive is painted by none of the views.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Input GLB mesh model path.' },
+                glbPath: { type: 'STRING', description: 'Input GLB mesh with UVs (TEXCOORD_0).' },
                 stylePrompt: { type: 'STRING', description: 'Style or material prompt (e.g. "medieval weathered cobblestone").' },
-                width: { type: 'NUMBER', description: 'Baking render resolution per view.' },
-                height: { type: 'NUMBER', description: 'Baking render resolution per view.' }
+                width: { type: 'NUMBER', description: 'Render and image size per view in pixels (default 512).' },
+                height: { type: 'NUMBER', description: 'Render and image size per view in pixels (default 512).' },
+                resolution: { type: 'NUMBER', description: 'Texture size per primitive (default: its current base colour texture size, else 1024).' },
+                outGlbPath: { type: 'STRING', description: 'Where to write the textured GLB (default: public/models/baked_<name>_<time>.glb in the workspace).' }
             },
             required: ['glbPath', 'stylePrompt']
         }
@@ -1826,11 +1821,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 /**
- * Station image generator for the survey beautify tools: Nano Banana / Gemini image via the
- * workspace's Google media credentials. SCRATCHBOX_STATION_IMAGE_GENERATOR=mock swaps in a
- * geometry-preserving recolour (for offline runs and CI).
- */
-/**
  * Adapts the (fraction, message) progress callbacks of the survey services to the chat's progress report. Once the
  * chat has stopped the call (Stop or its time limit), the next report throws, so the pipeline ends at its next
  * checkpoint (the next station) instead of generating and billing the rest in the background.
@@ -1844,21 +1834,12 @@ function chatProgress(ctx: ToolContext | undefined): (fraction: number, message?
     };
 }
 
+/**
+ * Station image generator for the survey, AI render, bake, keyframe and location tools: Nano Banana / Gemini image
+ * models via the workspace's Google media credentials. There is no stand-in generator: without credentials the first
+ * generation fails with the credential error.
+ */
 async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
-    if (process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR === 'mock') {
-        const { decodePng, encodePng } = await import('../../texture-processing');
-        return {
-            name: 'mock-recolour',
-            async generate(a) {
-                const b = decodePng(a.blockoutPng); const out = Buffer.alloc(b.rgba.length);
-                for (let i = 0; i < b.rgba.length; i += 4) {
-                    const r = b.rgba[i], g = b.rgba[i + 1], bl = b.rgba[i + 2]; const sky = bl > 170 && r < 140;
-                    out[i] = sky ? 135 : Math.min(255, r * 1.1 + 15); out[i + 1] = sky ? 170 : g * 0.95; out[i + 2] = sky ? 215 : bl * 0.75; out[i + 3] = 255;
-                }
-                return encodePng(b.width, b.height, out);
-            }
-        };
-    }
     const { createGoogleStationImageGenerator } = await import('../../spatial/BeautifyStationService');
     const { GoogleMediaGenerationService } = await import('../../google-media-generation-service');
     const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
@@ -1871,20 +1852,19 @@ async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Pro
 
 export const panoramaHandlers: Record<string, ToolHandler> = {
     synthesize_adaptive_particle_system: async (args, _ctx) => {
-        const prompt = asString(args.prompt);
-        if (!prompt) throw new Error('synthesize_adaptive_particle_system: "prompt" argument is required.');
         const { AdaptiveDomainParticleService } = await import('../../../browser/generative-canvas/services/spatial/AdaptiveDomainParticleService');
-        const contract = AdaptiveDomainParticleService.synthesizeFromPrompt(prompt);
+        // Every value is the model's own choice; a missing or out-of-range one fails the call (MissingInputError).
+        const contract = AdaptiveDomainParticleService.buildContract(args as any);
         return {
             resultPayload: contract as any,
-            summaryResult: `Synthesized Adaptive Particle Contract for "${contract.subject}": emission=${contract.material.emissionModel}, mass=${contract.kinematics.substanceMass}, restitution=${contract.kinematics.restitution}, gravity=${contract.kinematics.gravity}m/s², wind=[${contract.kinematics.ambientWind.join(', ')}]m/s.`
+            summaryResult: `Assembled the particle contract for "${contract.subject}" from the values given: emission ${contract.material.emissionModel}, mass ${contract.kinematics.substanceMass}, restitution ${contract.kinematics.restitution}, gravity ${contract.kinematics.gravity} m/s², wind [${contract.kinematics.ambientWind.join(', ')}] m/s, ${contract.material.particleCount} particles.`
         };
     },
 
     adaptive_world_style_deconstruct: async (args, ctx) => {
         const referenceImagePath = asString(args.referenceImagePath);
         if (!referenceImagePath) throw new Error('adaptive_world_style_deconstruct: "referenceImagePath" argument is required.');
-        const fidelity = (asString(args.fidelity) || 'fast-analytical') as any;
+        const fidelity = (asString(args.fidelity) || 'balanced') as any;
         const promptHint = asString(args.promptHint) || undefined;
         
         let cameraPoseObj: any = undefined;
@@ -1901,14 +1881,14 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
 
         const { AdaptiveStyleDeconstructionService } = await import('../../spatial/AdaptiveStyleDeconstructionService');
         const service = new AdaptiveStyleDeconstructionService();
-        const contract = await service.deconstructStyle(referenceImagePath, cameraPoseObj, {
+        const { contract, modelUsed } = await service.deconstructStyle(referenceImagePath, cameraPoseObj, {
             fidelity,
             promptHint
         });
 
         return {
-            resultPayload: contract as any,
-            summaryResult: `Deconstructed style from ${referenceImagePath} using ${fidelity} fidelity. Extracted color temp: ${contract.photometric.colorTemperatureK}K, shadow lift: ${contract.photometric.shadowLift}, micro detail scale: ${contract.microSurface.normalPerturbationScale}.`
+            resultPayload: { ...contract, modelUsed } as any,
+            summaryResult: `${modelUsed} read the style of ${referenceImagePath}: color temperature ${contract.photometric.colorTemperatureK} K, shadow lift ${contract.photometric.shadowLift}, micro-detail scale ${contract.microSurface.normalPerturbationScale}.`
         };
     },
 
@@ -1919,7 +1899,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         if (!inputGlbPath) throw new Error('adaptive_world_style_apply: "inputGlbPath" argument is required.');
         
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
-        const fidelity = (asString(args.fidelity) || 'fast-analytical') as any;
+        const fidelity = (asString(args.fidelity) || 'balanced') as any;
         const promptHint = asString(args.promptHint) || undefined;
         const protectFoliage = typeof args.protectFoliage === 'boolean' ? args.protectFoliage : true;
         const protectAsphalt = typeof args.protectAsphalt === 'boolean' ? args.protectAsphalt : true;
@@ -1927,7 +1907,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         // 1. Deconstruct style
         const { AdaptiveStyleDeconstructionService } = await import('../../spatial/AdaptiveStyleDeconstructionService');
         const deconstruction = new AdaptiveStyleDeconstructionService();
-        const contract = await deconstruction.deconstructStyle(referenceImagePath, undefined, {
+        const { contract, modelUsed } = await deconstruction.deconstructStyle(referenceImagePath, undefined, {
             fidelity,
             promptHint
         });
@@ -1959,6 +1939,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             resultPayload: {
                 success: result.success,
                 contract,
+                modelUsed,
                 palette,
                 inputGlbPath: result.inputGlbPath,
                 outputGlbPath: result.outputGlbPath,
@@ -1966,7 +1947,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 originalByteLength: result.originalByteLength,
                 recoloredByteLength: result.recoloredByteLength
             } as any,
-            summaryResult: `Successfully styled 3D model ${inputGlbPath} using reference ${referenceImagePath}. Output path: ${result.outputGlbPath}. Processed ${result.textureCount} textures with 0.000 mm geometric drift.`
+            summaryResult: `Re-graded ${result.textureCount} texture(s) of ${inputGlbPath} to the style ${modelUsed} read from ${referenceImagePath} (vertex data is not modified). Output: ${result.outputGlbPath}.`
         };
     },
 
@@ -1998,14 +1979,24 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             height
         });
 
+        const fs = await import('fs-extra');
+        // Written into the workspace (the server's cwd is not the workspace in the desktop app).
+        const fileName = `ai_rendered_frame_${Date.now()}.png`;
+        const imagePath = path.join(ctx.workspaceRoot || process.cwd(), 'public', 'models', fileName);
+        await fs.ensureDir(path.dirname(imagePath));
+        await fs.writeFile(imagePath, result.image);
+
         return {
             resultPayload: {
-                imagePath: `public/models/ai_rendered_frame_${Date.now()}.png`,
+                imagePath,
+                imageUrl: `/models/${fileName}`,
                 width: result.width,
                 height: result.height,
-                stylePrompt: prompt
+                stylePrompt: prompt,
+                modelUsed: result.modelUsed,
+                imageSource: result.imageSource
             },
-            summaryResult: `Viewport AI render complete via NativeAiRenderEngineService. Output: ${result.width}x${result.height} registered Beauty Frame.`
+            summaryResult: `Viewport AI render written to ${imagePath} (${result.width}x${result.height} blockout restyled). ${result.imageSource}`
         };
     },
     spatial_smart_point_inpaint: async (args, ctx) => {
@@ -2015,47 +2006,63 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const smartPoint = args.smartPoint as [number, number, number];
         const prompt = asString(args.prompt);
         const radiusPx = typeof args.radiusPx === 'number' ? args.radiusPx : 20;
-        const width = typeof args.width === 'number' ? args.width : 640;
-        const height = typeof args.height === 'number' ? args.height : 480;
 
-        if (!imagePath) throw new Error('spatial_smart_point_inpaint: "imagePath" argument is required.');
-        if (!glbPath) throw new Error('spatial_smart_point_inpaint: "glbPath" argument is required.');
-        if (!pose) throw new Error('spatial_smart_point_inpaint: "pose" argument is required.');
-        if (!smartPoint) throw new Error('spatial_smart_point_inpaint: "smartPoint" argument is required.');
-        if (!prompt) throw new Error('spatial_smart_point_inpaint: "prompt" argument is required.');
+        if (!imagePath) throw new MissingInputError('spatial_smart_point_inpaint', 'imagePath');
+        if (!glbPath) throw new MissingInputError('spatial_smart_point_inpaint', 'glbPath');
+        if (!pose) throw new MissingInputError('spatial_smart_point_inpaint', 'pose');
+        if (!smartPoint) throw new MissingInputError('spatial_smart_point_inpaint', 'smartPoint');
+        if (!prompt) throw new MissingInputError('spatial_smart_point_inpaint', 'prompt');
 
         const { SpatialSmartPointInpaintService } = await import('../../spatial/SpatialSmartPointInpaintService');
         const { HeadlessMeshSilhouetteRenderer } = await import('../../spatial/HeadlessMeshSilhouetteRenderer');
         const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
-
-        const credentials = new GoogleMediaCredentialsService();
-        const client = credentials.createClient();
-
-        const service = new SpatialSmartPointInpaintService({ client });
-        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
-
-        const maskRes = service.projectSmartPointToMask(mesh, pose, smartPoint, radiusPx, width, height);
-
+        const { readImageDimensions } = await import('../../image-codec-ffmpeg');
         const fs = await import('fs-extra');
-        const baseImage = await fs.readFile(imagePath);
 
+        // The point is projected into the image the edit is made on, at that image's own size.
+        const baseImage = await fs.readFile(imagePath);
+        const dims = readImageDimensions(baseImage);
+        if (!dims) throw new MissingInputError('spatial_smart_point_inpaint', 'imagePath', `the size of ${imagePath} cannot be read (PNG, JPEG or WebP expected)`);
+        for (const [key, value, own] of [['width', args.width, dims.width], ['height', args.height, dims.height]] as const) {
+            if (typeof value === 'number' && value !== own) {
+                throw new MissingInputError('spatial_smart_point_inpaint', key, `${imagePath} is ${dims.width}x${dims.height}; the point is projected at the image's own size (got ${key} ${value})`);
+            }
+        }
+
+        if (!(await fs.pathExists(glbPath))) throw new MissingInputError('spatial_smart_point_inpaint', 'glbPath', `${glbPath} does not exist`);
+        // The point is checked against the image before any model call: in front of the camera, inside the frame,
+        // and not hidden behind the mesh.
+        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+        const maskRes = new SpatialSmartPointInpaintService().projectSmartPointToMask(mesh, pose, smartPoint, radiusPx, dims.width, dims.height);
+        const client = await new GoogleMediaCredentialsService().createClient();
+        const service = new SpatialSmartPointInpaintService({ client });
         const result = await service.executeSpatialInpaint({
             image: baseImage,
             mask: maskRes.mask,
-            prompt
+            prompt,
+            model: asString(args.model) || undefined,
+            signal: ctx?.signal
         });
 
-        const outPath = `public/models/smart_inpainted_${Date.now()}.png`;
-        await fs.ensureDir('public/models');
+        const fileName = `smart_inpainted_${Date.now()}.png`;
+        const outPath = path.join(ctx?.workspaceRoot || process.cwd(), 'public', 'models', fileName);
+        await fs.ensureDir(path.dirname(outPath));
         await fs.writeFile(outPath, result.image);
 
         return {
             resultPayload: {
                 inpaintedImagePath: outPath,
+                imageUrl: `/models/${fileName}`,
                 projectedX: maskRes.x,
-                projectedY: maskRes.y
+                projectedY: maskRes.y,
+                pointDepth: maskRes.depth,
+                surfaceDepth: maskRes.surfaceDepth,
+                maskedPixels: maskRes.maskedPixels,
+                modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote
             },
-            summaryResult: `Smart point inpainting complete. Projected point 3D coordinate directly to screen space (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}), applied feathered radial mask, and executed Gemini image editor.`
+            summaryResult: `Smart point inpainting written to ${outPath}: the 3D point projects to (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}) in the ${dims.width}x${dims.height} image, ${maskRes.depth.toFixed(2)} from the camera and ${maskRes.surfaceDepth === undefined ? 'with no mesh surface at that pixel' : `not hidden by the mesh (surface at ${maskRes.surfaceDepth.toFixed(2)})`}; ${maskRes.maskedPixels} pixels within ${radiusPx}px of it were blended from the model's edit and every other pixel is unchanged. ${result.modelNote} The model answered at ${result.answerWidth}x${result.answerHeight}.`
         };
     },
     spatial_keyframe_video_interpolation: async (args, ctx) => {
@@ -2101,9 +2108,11 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: {
                 videoPath: outVideoPath,
-                durationSeconds
+                durationSeconds,
+                videoModel: result.videoModel,
+                keyframeImageSources: result.imageSources
             },
-            summaryResult: `Keyframe video interpolation complete! Renders of start & end poses beautified with Nano Banana, and interpolated smoothly using Gemini Omni 1.1 Interactions API.`
+            summaryResult: `Keyframe video written to ${outVideoPath}: start and end renders restyled (${result.imageSources.join(' ')}), video interpolated by ${result.videoModel}.`
         };
     },
     mesh_bake_ai_textures: async (args, ctx) => {
@@ -2111,30 +2120,44 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const stylePrompt = asString(args.stylePrompt);
         const width = typeof args.width === 'number' ? args.width : 512;
         const height = typeof args.height === 'number' ? args.height : 512;
-
-        if (!glbPath) throw new Error('mesh_bake_ai_textures: "glbPath" argument is required.');
-        if (!stylePrompt) throw new Error('mesh_bake_ai_textures: "stylePrompt" argument is required.');
+        if (!glbPath) throw new MissingInputError('mesh_bake_ai_textures', 'glbPath');
+        if (!stylePrompt) throw new MissingInputError('mesh_bake_ai_textures', 'stylePrompt');
 
         const { MeshAiTextureBakingService } = await import('../../spatial/MeshAiTextureBakingService');
-        const { HeadlessMeshSilhouetteRenderer } = await import('../../spatial/HeadlessMeshSilhouetteRenderer');
-
+        const workspaceRoot = ctx.workspaceRoot || process.cwd();
+        const outGlbPath = asString(args.outGlbPath)
+            || path.join(workspaceRoot, 'public', 'models', `baked_${path.basename(glbPath, path.extname(glbPath))}_${Date.now()}.glb`);
         const generator = await resolveStationImageGenerator(ctx);
-        const service = new MeshAiTextureBakingService({ generator, workspaceRoot: ctx.workspaceRoot });
-        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
-
+        const service = new MeshAiTextureBakingService({ generator, workspaceRoot });
         const result = await service.bakeMeshTexturesWithAi({
-            mesh,
+            glbPath,
             stylePrompt,
             width,
-            height
+            height,
+            outGlbPath,
+            resolution: typeof args.resolution === 'number' ? args.resolution : undefined,
+            signal: ctx.signal,
+            onProgress: (message, fraction) => ctx.reportProgress?.(message, fraction)
         });
 
+        const covered = result.metrics.coveredMeshTexels;
+        const unseen = covered > 0 ? (result.unobservedTexels / covered) * 100 : 0;
         return {
             resultPayload: {
-                bakedViewsCount: result.views.length,
-                stylePrompt
+                outGlbPath: result.outGlbPath,
+                bakedViews: result.views.map(v => v.name),
+                rejectedViews: result.rejectedViews,
+                stylePrompt,
+                coveredMeshTexels: covered,
+                unobservedTexels: result.unobservedTexels,
+                stationContributions: result.metrics.stationContributions,
+                modelsUsed: result.modelsUsed,
+                imageSources: result.imageSources
             },
-            summaryResult: `Multi-view AI texture baking complete. Captured 6 cardinal orthogonal viewpoints of mesh, beautified textures matching "${stylePrompt}" with Nano Banana, and returned baked coordinates.`
+            summaryResult: `Textured ${glbPath} from ${result.views.length} restyled view(s) (${result.views.map(v => v.name).join(', ')}) to match "${stylePrompt}" -> ${result.outGlbPath}. `
+                + `Every primitive was painted; ${unseen.toFixed(1)}% of the covered texels were seen by no view and keep the mesh's own colour.`
+                + (result.rejectedViews.length ? ` Left out: ${result.rejectedViews.map(v => `${v.name} (${v.reason})`).join('; ')}.` : '')
+                + ` ${result.imageSources.join(' ')}`
         };
     },
     panorama_audit_quality: async (args, _ctx) => {
@@ -2164,20 +2187,22 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    panorama_heal_seam: async (args, _ctx) => {
+    panorama_heal_seam: async (args, ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_heal_seam: "inputImagePath" argument is required.');
         const prompt = asString(args.prompt) || undefined;
         const seamWidth = typeof args.seamWidth === 'number' ? args.seamWidth : undefined;
         const outputImagePath = asString(args.outputImagePath) || undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const model = asString(args.model) || undefined;
 
         const result = await healPanoramaSeam({
             inputImagePath,
             prompt,
             seamWidth,
             outputImagePath,
-            mockExecution
+            model,
+            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined,
+            signal: ctx?.signal
         });
 
         return {
@@ -2188,13 +2213,15 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 seamWidth: result.seamWidth,
                 outputImagePath: result.outputImagePath,
                 modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote,
                 summary: result.summary
-            },
+            } as unknown as ToolResultPayload,
             summaryResult: result.summary
         };
     },
 
-    panorama_inpaint: async (args, _ctx) => {
+    panorama_inpaint: async (args, ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_inpaint: "inputImagePath" argument is required.');
         const maskImagePath = asString(args.maskImagePath) || undefined;
@@ -2205,7 +2232,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const inpaintBothPolar = typeof args.inpaintBothPolar === 'boolean' ? args.inpaintBothPolar : undefined;
         const prompt = asString(args.prompt) || undefined;
         const outputImagePath = asString(args.outputImagePath) || undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const model = asString(args.model) || undefined;
 
         const result = await inpaintPanorama({
             inputImagePath,
@@ -2217,7 +2244,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             inpaintBothPolar,
             prompt,
             outputImagePath,
-            mockExecution
+            model,
+            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined,
+            signal: ctx?.signal
         });
 
         return {
@@ -2227,13 +2256,15 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 height: result.height,
                 outputImagePath: result.outputImagePath,
                 modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote,
                 summary: result.summary
-            },
+            } as unknown as ToolResultPayload,
             summaryResult: result.summary
         };
     },
 
-    panorama_generate_360: async (args, _ctx) => {
+    panorama_generate_360: async (args, ctx) => {
         let prompt = args.prompt;
         const structuredPrompt = typeof args.structuredPrompt === 'object' && args.structuredPrompt !== null
             ? args.structuredPrompt as any
@@ -2249,7 +2280,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const healSeam = typeof args.healSeam === 'boolean' ? args.healSeam : undefined;
         const inpaintNadir = typeof args.inpaintNadir === 'boolean' ? args.inpaintNadir : undefined;
         const outputImagePath = asString(args.outputImagePath) || undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const model = asString(args.model) || undefined;
         const invertSphericalCurvature = typeof args.invertSphericalCurvature === 'boolean' ? args.invertSphericalCurvature : undefined;
 
         const result = await generate360Panorama({
@@ -2261,8 +2292,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             healSeam,
             inpaintNadir,
             outputImagePath,
-            mockExecution,
-            invertSphericalCurvature
+            model,
+            invertSphericalCurvature,
+            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined,
+            signal: ctx?.signal
         });
 
         return {
@@ -2273,14 +2306,16 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 seamHealed: result.seamHealed,
                 outputImagePath: result.outputImagePath,
                 modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote,
                 structuredPrompt: result.structuredPrompt,
                 summary: result.summary
-            },
+            } as unknown as ToolResultPayload,
             summaryResult: result.summary
         };
     },
 
-    panorama_generate_4k: async (args, _ctx) => {
+    panorama_generate_4k: async (args, ctx) => {
         const prompt = asString(args.prompt);
         if (!prompt) throw new Error('panorama_generate_4k: "prompt" argument is required.');
 
@@ -2294,7 +2329,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const enablePolarCaps = typeof args.enablePolarCaps === 'boolean' ? args.enablePolarCaps : false;
         const enforcePolarSingularity = typeof args.enforcePolarSingularity === 'boolean' ? args.enforcePolarSingularity : true;
         const outputImagePath = asString(args.outputImagePath) || undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const model = asString(args.model) || undefined;
 
         const result = await generate4KMonumentalPanorama({
             prompt,
@@ -2306,7 +2341,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             enablePolarCaps,
             enforcePolarSingularity,
             outputImagePath,
-            mockExecution
+            model,
+            signal: ctx?.signal
         });
 
         return {
@@ -2322,9 +2358,11 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 metrics: result.qcReport.metrics,
                 outputImagePath: result.outputImagePath,
                 modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote,
                 structuredPrompt: result.structuredPrompt,
                 summary: result.summary
-            },
+            } as unknown as ToolResultPayload,
             summaryResult: result.summary
         };
     },
@@ -2402,7 +2440,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    panorama_to_3dgs: async (args, _ctx) => {
+    panorama_to_3dgs: async (args, ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_to_3dgs: "inputImagePath" argument is required.');
 
@@ -2413,8 +2451,21 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const numPoses = typeof args.numPoses === 'number' ? args.numPoses : 6;
         const voxelSize = typeof args.voxelSize === 'number' ? args.voxelSize : 0.04;
         const skipOffsets = typeof args.skipOffsets === 'boolean' ? args.skipOffsets : false;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : false;
+        // The depth model and the disocclusion inpainting always run for real here; their mock modes are for service tests.
+        const mockExecution = false;
         const prompt = asString(args.prompt) || undefined;
+        const model = asString(args.model) || undefined;
+        const maxModelUpscale = typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined;
+
+        // The offset views are inpainted at the panorama's own size: when the image model cannot answer that large
+        // within the allowed enlargement, refuse now, before the depth run and before any model call.
+        if (!skipOffsets) {
+            const fsMod = await import('fs-extra');
+            const { readImageDimensions } = await import('../../image-codec-ffmpeg');
+            const dims = readImageDimensions(await fsMod.readFile(inputImagePath));
+            if (!dims) throw new MissingInputError('panorama_to_3dgs', 'inputImagePath', `the size of ${inputImagePath} cannot be read (PNG, JPEG or WebP expected)`);
+            Google360PanoramaPipelineService.editImageSize(dims.width, dims.height, maxModelUpscale);
+        }
 
         console.log(`[panorama_to_3dgs] Launching full end-to-end 3DGS pipeline for ${inputImagePath}`);
 
@@ -2441,7 +2492,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             voxelSize,
             skipOffsets,
             mockExecution,
-            sceneType
+            sceneType,
+            model,
+            maxModelUpscale,
+            signal: ctx?.signal
         });
 
         return {
@@ -2455,10 +2509,12 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 activePoses: synthesisRes.activePoses,
                 eyeHeight,
                 eyeHeightInferred: depthRes.eyeHeightInferred,
+                floorFitApplied: depthRes.floorFitApplied,
+                depthScaleCorrection: depthRes.scaleCorrection,
                 depthModel: depthRes.modelUsed,
                 metaPath: synthesisRes.metaPath
             } as unknown as ToolResultPayload,
-            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Capture height ${eyeHeight.toFixed(2)} m (${depthRes.eyeHeightInferred ? 'inferred from metric floor' : 'supplied'}), depth: ${depthRes.modelUsed}. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
+            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Capture height ${eyeHeight.toFixed(2)} m (${depthRes.eyeHeightInferred ? 'measured from the metric floor' : 'supplied'}), depth: ${depthRes.modelUsed}${depthRes.floorFitApplied ? (depthRes.scaleCorrection !== 1 ? `, rescaled ${depthRes.scaleCorrection.toFixed(3)}x to the floor` : '') : ' at the model\'s own scale (too few floor pixels to fit)'}. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
         };
     },
 
@@ -2471,7 +2527,12 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             throw new Error(`single_image_to_3dgs: input image does not exist: ${inputImagePath}`);
         }
 
-        const fovDegrees = typeof args.fovDegrees === 'number' ? args.fovDegrees : 65.0;
+        const fovGiven = args.fovDegrees !== undefined && args.fovDegrees !== null;
+        if (fovGiven && !(typeof args.fovDegrees === 'number' && args.fovDegrees > 1 && args.fovDegrees < 179)) {
+            throw new MissingInputError('single_image_to_3dgs', 'fovDegrees', `must be a vertical field of view between 1 and 179 degrees (got ${JSON.stringify(args.fovDegrees)})`);
+        }
+        const fovDegrees = fovGiven ? (args.fovDegrees as number) : 65.0;
+        const sceneType = args.sceneType === 'indoor' ? 'indoor' : 'outdoor';
         const stride = typeof args.stride === 'number' ? Math.max(1, Math.round(args.stride)) : 2;
         const minDepth = typeof args.minDepth === 'number' ? args.minDepth : 0.2;
         const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : 150.0;
@@ -2498,16 +2559,29 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         }
 
         const decoded = decodePng(pngBuf);
+        // Depth from the depth model, or the call fails (GeneratorFailedError); no depth is guessed from the pixels.
+        const depth = await new PanoramaDepthService().generateImageDepth(inputImagePath, {
+            sceneType,
+            outDir: pathMod.join(osMod.tmpdir(), 'sbx-image-depth')
+        });
+        if (depth.width !== decoded.width || depth.height !== decoded.height) {
+            throw new GeneratorFailedError('python', `the depth map is ${depth.width}x${depth.height}, but ${inputImagePath} decodes to ${decoded.width}x${decoded.height}`);
+        }
+        const metricDepths = ImageToSplatService.planarToRayDepths(depth.depths, decoded.width, decoded.height, fovDegrees);
         const splats = ImageToSplatService.convertSingleImageToSplat({
             rgbPixels: new Uint8Array(decoded.rgba),
             width: decoded.width,
             height: decoded.height,
             channels: 4,
+            metricDepths,
             fovDegrees,
             stride,
             minDepth,
             maxDepth
         });
+        if (splats.length === 0) {
+            throw new GeneratorFailedError('python', `no pixel of ${inputImagePath} has a depth between ${minDepth} and ${maxDepth} m (the model measured ${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} m)`);
+        }
 
         const splatBuffer = SplatService.serializeSplatBuffer(splats);
         const spzBuffer = SplatService.serializeSpzBuffer(splats);
@@ -2535,6 +2609,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 width: decoded.width,
                 height: decoded.height,
                 fovDegrees,
+                fovAssumed: !fovGiven,
+                depthModel: depth.modelUsed,
+                depthRangeMeters: [depth.minDepth, depth.maxDepth],
+                depthPath: depth.depthPath,
                 suggestedScene3DData: {
                     splatUrl,
                     camera: {
@@ -2543,7 +2621,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                     }
                 }
             } as unknown as ToolResultPayload,
-            summaryResult: `Synthesized photorealistic 3D Gaussian Splats from image (${splats.length.toLocaleString()} splats). Saved standard binary .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and compressed .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
+            summaryResult: `Built ${splats.length.toLocaleString()} 3D Gaussian splats from ${inputImagePath} with depth from ${depth.modelUsed} (${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} m), ${fovGiven ? `vertical FOV ${fovDegrees} deg` : 'an assumed vertical FOV of 65 deg (pass fovDegrees for the real lens)'}. Saved .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
         };
     },
 
@@ -2698,11 +2776,11 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const generator = await resolveStationImageGenerator(ctx);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
-        const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath) }, chatProgress(ctx));
+        const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
         const { imageBase64, ...rest } = res;
         return {
             resultPayload: { success: true, ...rest } as unknown as ToolResultPayload,
-            summaryResult: `Station ${res.stationId} ${res.accepted ? 'accepted' : 'rejected (' + res.qc.reason + ')'} after ${res.attempts} attempt(s) with ${generator.name}: yaw drift ${res.qc.deltaYawDeg.toFixed(2)} deg -> ${res.imagePath}`
+            summaryResult: `Station ${res.stationId} ${res.accepted ? 'accepted' : 'rejected (' + res.qc.reason + ')'} after ${res.attempts} attempt(s): yaw drift ${res.qc.deltaYawDeg.toFixed(2)} deg -> ${res.imagePath}. ${res.imageSource}`
         };
     },
 
@@ -2712,30 +2790,47 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const generator = await resolveStationImageGenerator(ctx);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
-        const res = await deps.beautifyToSplats!({ ...args, stations: data.poses, anchor: data.anchor, glbPath: asString(args.glbPath) }, chatProgress(ctx));
+        // ctx.signal (the chat's Stop or the time limit) goes down to every station's image-model call and the baker.
+        const res = await deps.beautifyToSplats!({ ...args, stations: data.poses, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
         const accepted = res.stations.filter((s: any) => s.accepted).length;
+        const imageSources = Array.from(new Set(res.stations.map((s: any) => s.imageSource).filter(Boolean))) as string[];
         return {
-            resultPayload: { success: true, tilesetPath: res.tilesetPath, tilesetUrl: res.tilesetUrl, metaPath: res.metaPath, fusedSplatCount: res.fusedSplatCount, acceptedStations: accepted, totalStations: res.stations.length, cropBox: res.cropBox, durationMs: res.durationMs } as unknown as ToolResultPayload,
-            summaryResult: `Beautified ${accepted}/${res.stations.length} stations, baked ${res.fusedSplatCount.toLocaleString()} fused splats into a 3D Tiles tileset in ${(res.durationMs / 1000).toFixed(0)} s -> ${res.tilesetPath}`
+            resultPayload: { success: true, tilesetPath: res.tilesetPath, tilesetUrl: res.tilesetUrl, metaPath: res.metaPath, fusedSplatCount: res.fusedSplatCount, acceptedStations: accepted, totalStations: res.stations.length, cropBox: res.cropBox, durationMs: res.durationMs, imageSources } as unknown as ToolResultPayload,
+            summaryResult: `Beautified ${accepted}/${res.stations.length} stations, baked ${res.fusedSplatCount.toLocaleString()} fused splats into a 3D Tiles tileset in ${(res.durationMs / 1000).toFixed(0)} s -> ${res.tilesetPath}. ${imageSources.join(' ')}`
         };
     },
 
     survey_beautify_to_texture: async (args, ctx) => {
         const fsMod = await import('fs-extra');
         const pathMod = await import('path');
-        const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        const tool = 'survey_beautify_to_texture';
+        const stationsJsonPath = asString(args.stationsJsonPath);
+        const glbPath = asString(args.glbPath);
+        const locationName = asString(args.locationName);
+        if (!glbPath) throw new MissingInputError(tool, 'glbPath');
+        if (!(await fsMod.pathExists(glbPath))) throw new MissingInputError(tool, 'glbPath', `${glbPath} does not exist`);
+        if (!stationsJsonPath) throw new MissingInputError(tool, 'stationsJsonPath', 'the stations JSON written by survey_synthesize_stations');
+        if (!(await fsMod.pathExists(stationsJsonPath))) throw new MissingInputError(tool, 'stationsJsonPath', `${stationsJsonPath} does not exist`);
+        if (!locationName) throw new MissingInputError(tool, 'locationName', 'the stations are generated for a named place; no placeholder name is used');
+        const data = await fsMod.readJson(stationsJsonPath);
+        const stations = data.poses || data.stations;
+        if (!Array.isArray(stations) || stations.length === 0) throw new MissingInputError(tool, 'stationsJsonPath', `${stationsJsonPath} lists no stations`);
         const generator = await resolveStationImageGenerator(ctx);
         const { SurveyTextureUnprojector } = await import('../../spatial/SurveyTextureUnprojector');
 
-        const glbPath = asString(args.glbPath);
-        const locationName = asString(args.locationName) || 'Target Location';
         const resolution = typeof args.resolution === 'number' ? args.resolution : 4096;
-        const outGlbPath = asString(args.outGlbPath) || pathMod.join(process.cwd(), `public/models/survey_pbr_${Date.now()}.glb`);
+        const outGlbPath = asString(args.outGlbPath) || pathMod.join(ctx.workspaceRoot || process.cwd(), 'public', 'models', `survey_pbr_${Date.now()}.glb`);
+        // De-lighting needs the sun the images were lit by: the stations' anchor and the date the caller gives. The
+        // run's own clock is not that date, so without one (or without anchor coordinates) nothing is de-lit.
+        const lat = typeof data.anchor?.lat === 'number' ? data.anchor.lat : undefined;
+        const lng = typeof data.anchor?.lng === 'number' ? data.anchor.lng : undefined;
+        const isoDate = asString(args.isoDate) || undefined;
+        const delightRequested = lat !== undefined && lng !== undefined && isoDate !== undefined;
 
         const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
             glbPath,
             anchor: data.anchor,
-            stations: data.poses || data.stations,
+            stations,
             generator,
             beautifyContext: {
                 locationName,
@@ -2746,16 +2841,16 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 resolution,
                 depthTolerance: typeof args.depthTolerance === 'number' ? args.depthTolerance : 0.20,
                 minCosIncidence: typeof args.minCosIncidence === 'number' ? args.minCosIncidence : 0.08,
-                solarDelighting: {
-                    lat: data.anchor?.latitude,
-                    lng: data.anchor?.longitude,
-                    isoDate: asString(args.isoDate) || new Date().toISOString()
-                },
+                solarDelighting: delightRequested ? { lat, lng, isoDate } : undefined,
                 outGlbPath
             },
             onProgress: (message, fraction) => ctx.reportProgress?.(message, fraction),
             signal: ctx.signal
         });
+        const delit = (result.submeshes || []).some(sub => sub.solarDelightingApplied === true);
+        const delightNote = delit
+            ? `with NOAA solar de-lighting for ${isoDate} at ${lat}, ${lng}`
+            : `without solar de-lighting (${delightRequested ? 'the PBR decomposition did not apply it' : `it needs ${isoDate === undefined ? 'the isoDate the images depict' : 'anchor coordinates in the stations file'}`})`;
 
         return {
             resultPayload: {
@@ -2766,20 +2861,30 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 coveredMeshTexels: result.metrics.coveredMeshTexels,
                 directlyPaintedTexels: result.metrics.directlyPaintedTexels,
                 stationContributions: result.metrics.stationContributions,
-                durationMs: result.metrics.durationMs
+                durationMs: result.metrics.durationMs,
+                solarDelightingApplied: delit,
+                modelsUsed: result.modelsUsed,
+                imageSources: result.imageSources,
+                rejectedStations: result.rejectedStations,
+                unobservedTexels: result.unobservedTexels
             } as unknown as ToolResultPayload,
-            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) with NOAA solar de-lighting and PBR maps -> ${result.outGlbPath}`
+            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) ${delightNote}, with PBR maps -> ${result.outGlbPath}.`
+                + (result.rejectedStations.length ? ` Left out ${result.rejectedStations.length} station(s) whose image failed geometry QC (${result.rejectedStations.map(r => `${r.stationId}: ${r.reason}`).join('; ')}).` : '')
+                + (result.unobservedTexels > 0 && result.metrics.coveredMeshTexels > 0 ? ` ${((result.unobservedTexels / result.metrics.coveredMeshTexels) * 100).toFixed(1)}% of the mesh's texels were seen by no station and keep the mesh's own colour.` : '')
+                + ` ${result.imageSources.join(' ')}`
         };
     },
 
     location_generate_3dgs: async (args, ctx) => {
         const { Location3DGaussianSplatService } = await import('../../spatial/Location3DGaussianSplatService');
         const service = new Location3DGaussianSplatService({ workspaceRoot: ctx?.workspaceRoot || process.cwd() });
+        // The service throws when the survey pipeline fails; a failed run is never reported as a built splat world.
         const res = await service.generate({
             location: asString(args.location),
             lat: typeof args.lat === 'number' ? args.lat : undefined,
             lng: typeof args.lng === 'number' ? args.lng : undefined,
             elevation: typeof args.elevation === 'number' ? args.elevation : undefined,
+            glbPath: asString(args.glbPath) || undefined,
             stylePreset: asString(args.stylePreset) || undefined,
             mood: asString(args.mood) as any,
             cameraCount: typeof args.cameraCount === 'number' ? args.cameraCount : undefined,
@@ -2789,7 +2894,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             forceRebake: typeof args.forceRebake === 'boolean' ? args.forceRebake : undefined,
             draft: typeof args.draft === 'boolean' ? args.draft : undefined,
             styleSuffix: typeof args.styleSuffix === 'string' ? args.styleSuffix : undefined,
-            onProgress: chatProgress(ctx)
+            onProgress: chatProgress(ctx),
+            // The chat's Stop or the time limit ends the run down to the station image-model calls.
+            signal: ctx?.signal
         });
 
         return {
@@ -2803,15 +2910,19 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 tilesetPath: res.tilesetPath,
                 splatCount: res.splatCount,
                 stationCount: res.stationCount,
+                acceptedStations: res.acceptedStations,
+                glbPath: res.glbPath,
                 cropBox: res.cropBox,
                 scene3DData: res.scene3DData,
-                durationMs: res.durationMs
+                durationMs: res.durationMs,
+                modelsUsed: res.modelsUsed,
+                imageSources: res.imageSources
             } as unknown as ToolResultPayload,
-            summaryResult: `Generated photorealistic 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats across ${res.stationCount} stations in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}`
+            summaryResult: `Generated a 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats from ${res.acceptedStations}/${res.stationCount} accepted station image(s) of the clay tiles ${res.glbPath} in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}. ${res.imageSources.join(' ')}`
         };
     },
 
-    panorama_generate_perspectives: async (args, _ctx) => {
+    panorama_generate_perspectives: async (args, ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_generate_perspectives: "inputImagePath" argument is required.');
         const faceResolution = typeof args.faceResolution === 'number' ? args.faceResolution : undefined;
@@ -2821,7 +2932,6 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const prompt = asString(args.prompt) || undefined;
         const model = asString(args.model) || undefined;
         const useNanoBanana = typeof args.useNanoBanana === 'boolean' ? args.useNanoBanana : undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
         const outputDir = asString(args.outputDir) || undefined;
 
         const result = await generate360Perspectives({
@@ -2833,8 +2943,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             prompt,
             model,
             useNanoBanana,
-            mockExecution,
-            outputDir
+            outputDir,
+            signal: ctx?.signal
         });
 
         const perspectivesSummary = Object.keys(result.perspectives).map(p => {
@@ -2850,8 +2960,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 stitchedDimensions: `${result.stitchedEquirectangular.width}x${result.stitchedEquirectangular.height}`,
                 stitchedOutputPath: result.stitchedEquirectangular.outputPath,
                 modelUsed: result.modelUsed,
+                skippedModels: result.skippedModels,
+                modelNote: result.modelNote,
                 summary: `${result.summary} Perspectives: ${perspectivesSummary}`
-            },
+            } as unknown as ToolResultPayload,
             summaryResult: `${result.summary} Perspectives: ${perspectivesSummary}`
         };
     }
@@ -2861,162 +2973,124 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
 // UTDRA Declarations & Handlers
 // ============================================================================
 
+const UTDRA_INPUT_GLB_PARAMETER: ToolParameterSchema = {
+    type: 'STRING',
+    description: 'Path on disk to the input .glb tile file (required; the tool fails rather than process a stand-in mesh).'
+};
+
+const UTDRA_SPAN_PARAMETER: ToolParameterSchema = {
+    type: 'OBJECT',
+    description: 'The elevated deck\'s footprint and the heights of the ground under it and of the deck, in the tile\'s own coordinates (metres; read them from utdra_probe_tile bounds or get them from the user). Required.',
+    properties: {
+        minX: { type: 'NUMBER', description: 'Footprint minimum X.' },
+        maxX: { type: 'NUMBER', description: 'Footprint maximum X.' },
+        minZ: { type: 'NUMBER', description: 'Footprint minimum Z.' },
+        maxZ: { type: 'NUMBER', description: 'Footprint maximum Z.' },
+        groundY: { type: 'NUMBER', description: 'Elevation of the ground under the deck.' },
+        deckY: { type: 'NUMBER', description: 'Elevation of the deck.' }
+    },
+    required: ['minX', 'maxX', 'minZ', 'maxZ', 'groundY', 'deckY']
+};
+
 export const UTDRA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'utdra_probe_tile',
-        description: 'Probe and telemetrically classify a 3D tile mesh or benchmark preset into one of 9 macro-geographic domains (UrbanHighRiseCore, SuburbanResidential, CivilInfrastructure, MountainAlpineCanyon, ForestWoodlandCanopy, IndustrialLogistics, CoastalShorelineHarbor, AridDesertBadlands, OpenAgriculturalPlains). Returns domain classification, confidence score, bounding relief (ΔY), planarity ratio, and verticality score without mutating geometry.',
+        description: 'Measure a 3D tile mesh (.glb) without changing it: bounds, relief (ΔY), surface area, the share of that area by slope band (horizontal < 15°, inclined 15-45°, steep 45-75°, vertical ≥ 75°), the dominant wall orientation, and a vertex-colour green index when the tile has vertex colours. It does not classify the tile or report a confidence; interpret the measurements yourself.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Path on disk to the input .glb tile file. If omitted, benchmark preset will be used.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Optional procedural benchmark preset: "urban", "suburban", "bridge", "mountain", "forest", "slicer", or "hybrid".'
-                }
-            }
-        }
-    },
-    {
-        name: 'utdra_decompose_tile',
-        description: 'Decompose and rectify a 3D tile mesh using the Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA). Rectifies vertical architectural shafts, preserves structural crowns/spires, excises bridge curtain walls, and outputs standardized binary glTF 2.0 (.glb) with geometric telemetry.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Path on disk to the input .glb tile file. If omitted, benchmark preset will be used.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Optional procedural benchmark preset: "urban", "suburban", "bridge", "mountain", "forest", "slicer", or "hybrid".'
-                },
-                mode: {
-                    type: 'STRING',
-                    description: 'Pipeline decomposition mode: "full", "probe", "slicer", "bridge", or "terrain". Defaults to "full".'
-                },
-                minVoidHeightMeters: {
-                    type: 'NUMBER',
-                    description: 'Minimum void height clearance beneath bridges/viaducts in meters (default: 3.5).'
-                },
-                outputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path on disk to write the exported rectified binary .glb file.'
-                }
-            }
+                inputGlbPath: UTDRA_INPUT_GLB_PARAMETER
+            },
+            required: ['inputGlbPath']
         }
     },
     {
         name: 'utdra_slice_elevation',
-        description: 'Non-destructively slice a 3D tile mesh across an elevation cutoff plane using the Sutherland-Hodgman analytical kernel. Preserves manifold geometry and clips straddling triangles without hole formation.',
+        description: 'Keep the part of a 3D tile mesh above an elevation and remove the rest, clipping triangles that straddle the plane exactly (Sutherland-Hodgman), so no hole opens along the cut. Use it to prune below-ground geometry; a cut above ground also removes the lower parts of buildings.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Path on disk to the input .glb tile file. If omitted, benchmark preset will be used.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Optional procedural benchmark preset (e.g. "slicer", "urban").'
-                },
+                inputGlbPath: UTDRA_INPUT_GLB_PARAMETER,
                 cutoffY: {
                     type: 'NUMBER',
-                    description: 'Elevation cutoff height in meters (Y-axis).'
+                    description: 'Elevation of the cut plane in the tile\'s coordinates (Y axis, metres).'
                 },
                 outputGlbPath: {
                     type: 'STRING',
-                    description: 'Optional path on disk to write the exported sliced binary .glb file.'
+                    description: 'Optional path on disk to write the sliced binary .glb file.'
                 }
             },
-            required: ['cutoffY']
+            required: ['inputGlbPath', 'cutoffY']
         }
     },
     {
         name: 'utdra_carve_bridge_voids',
-        description: 'Excise false photogrammetric vertical curtain walls beneath elevated bridges, ramps, and viaducts, preserving the top road deck and bottom terrain while restoring authentic clearances.',
+        description: 'Remove the near-vertical triangles (photogrammetric curtain walls) inside a span box you give: the footprint of an elevated deck between the ground under it and the deck. It does not find bridges itself: every near-vertical triangle wholly inside the box is removed, including any building wall that falls inside it, and the count is reported. Geometry outside the box is untouched.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Path on disk to the input .glb tile file. If omitted, benchmark preset will be used.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Optional procedural benchmark preset: "bridge", etc.'
-                },
+                inputGlbPath: UTDRA_INPUT_GLB_PARAMETER,
+                span: UTDRA_SPAN_PARAMETER,
                 minVoidHeightMeters: {
                     type: 'NUMBER',
-                    description: 'Minimum void height clearance in meters (default: 3.5).'
+                    description: 'Optional: refuse a span whose clearance (deckY - groundY) is below this many metres.'
                 },
                 outputGlbPath: {
                     type: 'STRING',
-                    description: 'Optional path on disk to write the exported rectified binary .glb file.'
+                    description: 'Optional path on disk to write the carved binary .glb file.'
                 }
-            }
+            },
+            required: ['inputGlbPath', 'span']
         }
     }
 ];
 
+/** The input tile must exist on disk; no benchmark mesh stands in for a missing one. */
+async function requireInputGlb(tool: string, value: unknown): Promise<string> {
+    const inputGlbPath = asString(value);
+    if (!inputGlbPath) {
+        throw new MissingInputError(tool, 'inputGlbPath', 'give the path of the .glb to process; no benchmark mesh is substituted');
+    }
+    const fsMod = await import('fs-extra');
+    if (!(await fsMod.pathExists(inputGlbPath))) {
+        throw new MissingInputError(tool, 'inputGlbPath', `${inputGlbPath} does not exist`);
+    }
+    return inputGlbPath;
+}
+
+function describeTileMeasurements(t: UtdraTelemetry): string {
+    const pct = (f: number) => `${(f * 100).toFixed(1)}%`;
+    const b = (v: [number, number, number]) => `[${v.map(n => Number(n.toFixed(2))).join(', ')}]`;
+    return `bounds ${b(t.boundsMin)} to ${b(t.boundsMax)}, relief ΔY=${t.reliefMeters.toFixed(2)} m, surface ${t.surfaceAreaM2.toFixed(1)} m², `
+        + `area by slope: horizontal ${pct(t.slopeAreaFractions.horizontal)}, inclined ${pct(t.slopeAreaFractions.inclined)}, steep ${pct(t.slopeAreaFractions.steep)}, vertical ${pct(t.slopeAreaFractions.vertical)}`
+        + (t.dominantWallYawDeg !== undefined ? `, walls mostly at ${t.dominantWallYawDeg.toFixed(1)}° (mod 90)` : ', no vertical faces')
+        + (t.vertexGreenIndex !== undefined ? `, vertex-colour green index ${t.vertexGreenIndex.toFixed(3)}` : ', no vertex colours')
+        + `, ${t.outputTriangles} triangles`;
+}
+
 export const utdraHandlers: Record<string, ToolHandler> = {
     utdra_probe_tile: async (args, _ctx) => {
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as UtdraBenchmarkType) || (!inputGlbPath ? 'urban' : undefined);
-        const service = new UniversalTileDecompositionService();
-        const telemetry = await service.probeTile(inputGlbPath, { benchmark });
-
+        const inputGlbPath = await requireInputGlb('utdra_probe_tile', args.inputGlbPath);
+        const telemetry = await new UniversalTileDecompositionService().probeTile(inputGlbPath);
         return {
             resultPayload: {
                 success: true,
                 mode: 'probe',
                 telemetry
             },
-            summaryResult: `UTDRA probe classified tile as ${telemetry.dominantDomain} (${(telemetry.confidence * 100).toFixed(1)}% confidence, relief ΔY=${telemetry.totalReliefDeltaY.toFixed(1)}m, planarity=${(telemetry.planarityScore * 100).toFixed(1)}%, verticality=${(telemetry.verticalityScore * 100).toFixed(1)}%).`
-        };
-    },
-
-    utdra_decompose_tile: async (args, _ctx) => {
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as UtdraBenchmarkType) || (!inputGlbPath ? 'hybrid' : undefined);
-        const mode = (asString(args.mode) as UtdraPipelineMode) || 'full';
-        const minVoidHeightMeters = typeof args.minVoidHeightMeters === 'number' ? args.minVoidHeightMeters : undefined;
-        const outputGlbPath = asString(args.outputGlbPath) || undefined;
-
-        const service = new UniversalTileDecompositionService();
-        const result = await service.decomposeTile({
-            inputGlbPath,
-            benchmark,
-            mode,
-            minVoidHeightMeters,
-            outputGlbPath
-        });
-
-        return {
-            resultPayload: {
-                success: result.success,
-                mode: result.mode,
-                telemetry: result.telemetry,
-                outputGlbPath: result.outputGlbPath
-            },
-            summaryResult: `UTDRA decomposed tile in ${result.telemetry.processingTimeMs.toFixed(2)} ms. Dominant Domain: ${result.telemetry.dominantDomain}. Triangles: ${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles}. Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+            summaryResult: `UTDRA measured ${inputGlbPath}: ${describeTileMeasurements(telemetry)}. These are measurements, not a classification.`
         };
     },
 
     utdra_slice_elevation: async (args, _ctx) => {
-        const cutoffY = typeof args.cutoffY === 'number' ? args.cutoffY : 0.0;
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as UtdraBenchmarkType) || (!inputGlbPath ? 'slicer' : undefined);
+        if (typeof args.cutoffY !== 'number' || !Number.isFinite(args.cutoffY)) {
+            throw new MissingInputError('utdra_slice_elevation', 'cutoffY', 'give the elevation of the cut plane in meters');
+        }
+        const cutoffY = args.cutoffY;
+        const inputGlbPath = await requireInputGlb('utdra_slice_elevation', args.inputGlbPath);
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
 
-        const service = new UniversalTileDecompositionService();
-        const result = await service.sliceElevation(inputGlbPath, cutoffY, {
-            benchmark,
-            outputGlbPath
-        });
-
+        const result = await new UniversalTileDecompositionService().sliceElevation(inputGlbPath, cutoffY, { outputGlbPath });
         return {
             resultPayload: {
                 success: result.success,
@@ -3024,31 +3098,33 @@ export const utdraHandlers: Record<string, ToolHandler> = {
                 telemetry: result.telemetry,
                 outputGlbPath: result.outputGlbPath
             },
-            summaryResult: `Sutherland-Hodgman non-destructive slicer clipped tile at y=${cutoffY}m (${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles, runtime: ${result.telemetry.processingTimeMs.toFixed(2)} ms). Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+            summaryResult: `Kept the part of ${inputGlbPath} above y=${cutoffY} m (${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles, straddling triangles clipped). Result: ${describeTileMeasurements(result.telemetry)}. Output GLB: ${result.outputGlbPath}.`
         };
     },
 
     utdra_carve_bridge_voids: async (args, _ctx) => {
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as UtdraBenchmarkType) || (!inputGlbPath ? 'bridge' : undefined);
-        const minVoidHeightMeters = typeof args.minVoidHeightMeters === 'number' ? args.minVoidHeightMeters : 3.5;
+        const inputGlbPath = await requireInputGlb('utdra_carve_bridge_voids', args.inputGlbPath);
+        const span = args.span as UtdraSpanBox | undefined;
+        const minVoidHeightMeters = typeof args.minVoidHeightMeters === 'number' ? args.minVoidHeightMeters : undefined;
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
+        if (!span || typeof span !== 'object') {
+            throw new MissingInputError('utdra_carve_bridge_voids', 'span', 'give the deck footprint and heights {minX, maxX, minZ, maxZ, groundY, deckY}; the carver does not find bridges itself');
+        }
 
-        const service = new UniversalTileDecompositionService();
-        const result = await service.carveBridgeUnderpass(inputGlbPath, {
-            benchmark,
-            minVoidHeightMeters,
-            outputGlbPath
-        });
-
+        const result = await new UniversalTileDecompositionService().carveBridgeUnderpass(inputGlbPath, span, { minVoidHeightMeters, outputGlbPath });
+        const removed = result.telemetry.removedTriangles;
         return {
             resultPayload: {
                 success: result.success,
                 mode: result.mode,
+                span,
+                removedTriangles: removed,
                 telemetry: result.telemetry,
                 outputGlbPath: result.outputGlbPath
             },
-            summaryResult: `UTDRA Multi-level void carver excised false underpass curtain walls (clearance >= ${minVoidHeightMeters}m, ${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles). Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+            summaryResult: removed > 0
+                ? `Removed ${removed} near-vertical triangle(s) inside the span x ${span.minX}..${span.maxX}, z ${span.minZ}..${span.maxZ}, y ${span.groundY}..${span.deckY} of ${inputGlbPath} (${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles). Everything outside the span is unchanged. Output GLB: ${result.outputGlbPath}.`
+                : `No near-vertical triangle lies wholly inside the span x ${span.minX}..${span.maxX}, z ${span.minZ}..${span.maxZ}, y ${span.groundY}..${span.deckY} of ${inputGlbPath}; nothing was removed (output written unchanged to ${result.outputGlbPath}).`
         };
     }
 };
@@ -3491,6 +3567,46 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
 // GeoBox Precision Declarations & Handlers
 // ============================================================================
 
+/** Bounds on the edge alignment search, so one call cannot hold the server for hours. Out-of-range values fail the call. */
+const EDGE_ALIGN_LIMITS = { maxIterations: 50, minAnalysisSide: 32, maxAnalysisSide: 640, minSeconds: 5, maxSeconds: 240 } as const;
+
+/**
+ * Closed-loop edge alignment of a photograph against a given 3D model (the same tool under three names). The model is
+ * rendered at each trial pose and its silhouette/depth edges are correlated with the photograph's edges.
+ */
+function EDGE_ALIGNMENT_DECLARATION(name: string): ToolDeclaration {
+    return {
+        name,
+        description: 'Refine a camera pose so a given 3D model (.glb) lines up with a photograph: the model is rendered at each trial pose and its silhouette and depth edges are correlated with the photo\'s edges (coordinate descent from initialPose). Reports the edge correlation before and after, whether the target was reached, and the mean pixel distance from the model\'s edges to the nearest strong photo edge. It does not certify an alignment it did not measure; a poor match stays poor.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'The photograph or video frame to align to (PNG, JPEG or WebP).' },
+                glbPath: { type: 'STRING', description: 'The 3D model (.glb) seen in the photograph, in its own coordinate frame.' },
+                initialPose: {
+                    type: 'OBJECT',
+                    description: 'Starting camera in the model\'s frame: position x, y, z, look-at target targetX, targetY, targetZ, and vertical fov in degrees. Required: no pose is assumed.',
+                    properties: {
+                        x: { type: 'NUMBER' },
+                        y: { type: 'NUMBER' },
+                        z: { type: 'NUMBER' },
+                        targetX: { type: 'NUMBER' },
+                        targetY: { type: 'NUMBER' },
+                        targetZ: { type: 'NUMBER' },
+                        fov: { type: 'NUMBER' }
+                    },
+                    required: ['x', 'y', 'z', 'targetX', 'targetY', 'targetZ', 'fov']
+                },
+                maxIterations: { type: 'NUMBER', description: `Maximum coordinate-descent passes, 1-${EDGE_ALIGN_LIMITS.maxIterations} (default 25).` },
+                targetEdgeCorrelation: { type: 'NUMBER', description: 'Stop once the edge correlation (0-100) reaches this (default 95).' },
+                analysisMaxSide: { type: 'NUMBER', description: `Longest side, in pixels, at which edges are compared, ${EDGE_ALIGN_LIMITS.minAnalysisSide}-${EDGE_ALIGN_LIMITS.maxAnalysisSide} (default 320).` },
+                timeBudgetSeconds: { type: 'NUMBER', description: `Stop after this long with the best pose so far, ${EDGE_ALIGN_LIMITS.minSeconds}-${EDGE_ALIGN_LIMITS.maxSeconds} s (default 120). Each trial renders the whole model, so large models get few trials; the result says why it stopped.` }
+            },
+            required: ['imagePath', 'glbPath', 'initialPose']
+        }
+    };
+}
+
 export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'geobox_resect_image_location',
@@ -3538,19 +3654,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
             }
         }
     },
-    {
-        name: 'geobox_optimize_edge_alignment',
-        description: 'Executes sub-pixel Sobel gradient cross-correlation and coordinate descent to optimize camera pose to 100% edge overlap (< 0.1 px residual, < 0.1 mm tolerance).',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Query photograph path' },
-                renderedGlbPath: { type: 'STRING', description: 'Path to 3D model / render to align against' },
-                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 20)' }
-            },
-            required: ['imagePath']
-        }
-    },
+    EDGE_ALIGNMENT_DECLARATION('geobox_optimize_edge_alignment'),
     {
         name: 'spatial_solve_pnp',
         description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac) using Direct Linear Transform (DLT) and Levenberg-Marquardt non-linear optimization to recover 6-DOF camera pose and focal length from 2D-to-3D point correspondences.',
@@ -3593,93 +3697,21 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'spatial_match_features_2d_3d',
-        description: 'Detects salient 2D Harris corner features with 128-D SIFT-style gradient descriptors, performs Lowe ratio test matching, and lifts matches to metric 3D world coordinates using a depth buffer.',
+        description: 'Matches a photograph against a render of the 3D scene: detects Harris corner keypoints with 128-D gradient descriptors in both images, then matches them with the Lowe ratio test and an optional mutual cross-check. Returns pixel correspondences (photo point, render point) in each image\'s own pixel coordinates; lift the render points to 3D with that render\'s depth before solving the pose (spatial_solve_pnp).',
         parameters: {
             type: 'OBJECT',
             properties: {
-                queryImagePath: { type: 'STRING', description: 'Path to input photograph or image' },
-                renderImagePath: { type: 'STRING', description: 'Path to rendered 3D reference image' },
-                maxKeypoints: { type: 'NUMBER', description: 'Maximum keypoints to detect (default: 500)' },
+                queryImagePath: { type: 'STRING', description: 'Path to the photograph (PNG, JPEG or WebP).' },
+                renderImagePath: { type: 'STRING', description: 'Path to the rendered reference image of the 3D scene (PNG, JPEG or WebP).' },
+                maxKeypoints: { type: 'NUMBER', description: 'Maximum keypoints to detect per image (default: 500)' },
                 loweRatio: { type: 'NUMBER', description: "Lowe's ratio test threshold (default: 0.75)" },
                 crossCheck: { type: 'BOOLEAN', description: 'Bidirectional mutual nearest neighbor verification (default: true)' }
             },
-            required: ['queryImagePath']
+            required: ['queryImagePath', 'renderImagePath']
         }
     },
-    {
-        name: 'geobox_closed_loop_edge_align',
-        description: 'Executes closed-loop iterative sub-pixel edge alignment optimization by dynamically rendering a 3D proxy mesh at each perturbation step with HeadlessMeshSilhouetteRenderer to drive edge overlap towards 100% and sub-pixel residual < 0.1 px.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Target photograph or frame' },
-                meshBoxCenter: {
-                    type: 'ARRAY',
-                    description: 'Center of 3D proxy bounding box [x, y, z]',
-                    items: { type: 'NUMBER' }
-                },
-                meshBoxSize: {
-                    type: 'ARRAY',
-                    description: 'Dimensions of 3D proxy bounding box [width, height, depth]',
-                    items: { type: 'NUMBER' }
-                },
-                initialPose: {
-                    type: 'OBJECT',
-                    description: 'Initial camera pose estimate (x, y, z, targetX, targetY, targetZ, fov)',
-                    properties: {
-                        x: { type: 'NUMBER' },
-                        y: { type: 'NUMBER' },
-                        z: { type: 'NUMBER' },
-                        targetX: { type: 'NUMBER' },
-                        targetY: { type: 'NUMBER' },
-                        targetZ: { type: 'NUMBER' },
-                        fov: { type: 'NUMBER' }
-                    }
-                },
-                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 25)' },
-                targetOverlapScore: { type: 'NUMBER', description: 'Target overlap percentage (default: 99.9)' },
-                subpixelTolerancePx: { type: 'NUMBER', description: 'Target sub-pixel residual in pixels (default: 0.10)' }
-            },
-            required: ['imagePath']
-        }
-    },
-    {
-        name: 'spatial_closed_loop_edge_align',
-        description: 'Executes closed-loop iterative sub-pixel edge alignment optimization by dynamically rendering a 3D proxy mesh at each perturbation step with HeadlessMeshSilhouetteRenderer to drive edge overlap towards 100% and sub-pixel residual < 0.1 px.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Target photograph or frame' },
-                meshBoxCenter: {
-                    type: 'ARRAY',
-                    description: 'Center of 3D proxy bounding box [x, y, z]',
-                    items: { type: 'NUMBER' }
-                },
-                meshBoxSize: {
-                    type: 'ARRAY',
-                    description: 'Dimensions of 3D proxy bounding box [width, height, depth]',
-                    items: { type: 'NUMBER' }
-                },
-                initialPose: {
-                    type: 'OBJECT',
-                    description: 'Initial camera pose estimate (x, y, z, targetX, targetY, targetZ, fov)',
-                    properties: {
-                        x: { type: 'NUMBER' },
-                        y: { type: 'NUMBER' },
-                        z: { type: 'NUMBER' },
-                        targetX: { type: 'NUMBER' },
-                        targetY: { type: 'NUMBER' },
-                        targetZ: { type: 'NUMBER' },
-                        fov: { type: 'NUMBER' }
-                    }
-                },
-                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 25)' },
-                targetOverlapScore: { type: 'NUMBER', description: 'Target overlap percentage (default: 99.9)' },
-                subpixelTolerancePx: { type: 'NUMBER', description: 'Target sub-pixel residual in pixels (default: 0.10)' }
-            },
-            required: ['imagePath']
-        }
-    },
+    EDGE_ALIGNMENT_DECLARATION('geobox_closed_loop_edge_align'),
+    EDGE_ALIGNMENT_DECLARATION('spatial_closed_loop_edge_align'),
     {
         name: 'spatial_resect_image_location',
         description: 'Same as geobox_resect_image_location: computes the camera position, heading, pitch, FOV, frustum and Google 3D Tiles camera config for a photo or video frame. It does not analyse the photo\'s pixels and runs no edge alignment (geobox_optimize_edge_alignment aligns a 3D model to a photo and reports what it measured). The location of what the photo shows comes from targetCoords, or from targetLandmarkName (else promptHint) resolved with Google Places. The pose needs evidence, and missing evidence is an error: 2D-3D point correspondences (points2D/points3D with imageWidthPx/imageHeightPx), the camera position (cameraOpticalCenter or knownCoords, with alt), or headingDeg with pitchDeg and standoffDistanceMeters. The result says which evidence was used.',
@@ -3689,6 +3721,131 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     }
 ];
+
+/** Longest side, in pixels, at which keypoints are detected; larger images are box-averaged down to it. */
+const FEATURE_ANALYSIS_MAX_SIDE = 1024;
+
+/**
+ * Reads and decodes an image for feature matching into grayscale at analysis size. `scale` maps an analysis
+ * pixel coordinate back to the source image (x_source = x * scale). Fails when the file is missing or undecodable.
+ */
+async function loadFeatureImage(tool: string, arg: string, imagePath: string, maxSide = FEATURE_ANALYSIS_MAX_SIDE): Promise<{
+    gray: Float32Array; width: number; height: number; scale: number; sourceWidth: number; sourceHeight: number;
+}> {
+    const fsMod = await import('fs-extra');
+    if (!(await fsMod.pathExists(imagePath))) {
+        throw new MissingInputError(tool, arg, `${imagePath} does not exist`);
+    }
+    const { decodeImageToRgba } = await import('../../image-codec-ffmpeg');
+    const image = await decodeImageToRgba(await fsMod.readFile(imagePath));
+    const factor = Math.max(1, Math.ceil(Math.max(image.width, image.height) / maxSide));
+    const width = Math.max(1, Math.floor(image.width / factor));
+    const height = Math.max(1, Math.floor(image.height / factor));
+    const gray = new Float32Array(width * height);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            let sum = 0;
+            for (let dy = 0; dy < factor; dy++) {
+                const row = (y * factor + dy) * image.width;
+                for (let dx = 0; dx < factor; dx++) {
+                    const i = (row + x * factor + dx) * 4;
+                    sum += 0.2126 * image.rgba[i] + 0.7152 * image.rgba[i + 1] + 0.0722 * image.rgba[i + 2];
+                }
+            }
+            gray[y * width + x] = sum / (factor * factor);
+        }
+    }
+    return { gray, width, height, scale: factor, sourceWidth: image.width, sourceHeight: image.height };
+}
+
+/** A number argument within [min, max], its default when omitted; anything else is a MissingInputError. */
+function boundedNumber(tool: string, arg: string, value: unknown, fallback: number, min: number, max: number): number {
+    if (value === undefined || value === null) return fallback;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+        throw new MissingInputError(tool, arg, `must be a number from ${min} to ${max} (got ${JSON.stringify(value)})`);
+    }
+    return value;
+}
+
+/**
+ * Closed-loop edge alignment of a photograph against a given model (see EDGE_ALIGNMENT_DECLARATION). The search runs
+ * cooperatively: it yields to the event loop between renders, stops with an AbortError when the chat stops the call,
+ * and returns the best pose so far when its time budget runs out.
+ */
+async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown>, ctx?: ToolContext) {
+    const imagePath = asString(args.imagePath);
+    if (!imagePath) throw new MissingInputError(tool, 'imagePath', 'give the photograph to align to');
+    const glbPath = asString(args.glbPath) || asString(args.renderedGlbPath);
+    if (!glbPath) throw new MissingInputError(tool, 'glbPath', 'give the 3D model (.glb) seen in the photograph; no proxy shape is used');
+    const fsMod = await import('fs-extra');
+    if (!(await fsMod.pathExists(glbPath))) throw new MissingInputError(tool, 'glbPath', `${glbPath} does not exist`);
+    const raw = (args.initialPose || {}) as Record<string, unknown>;
+    const keys = ['x', 'y', 'z', 'targetX', 'targetY', 'targetZ', 'fov'] as const;
+    const missing = keys.filter(k => typeof raw[k] !== 'number' || !Number.isFinite(raw[k] as number));
+    if (missing.length) throw new MissingInputError(tool, 'initialPose', `give ${missing.join(', ')}; no starting pose is assumed`);
+    const initialPose = Object.fromEntries(keys.map(k => [k, raw[k] as number])) as unknown as CameraPose6DOF;
+    if (!(initialPose.fov > 1 && initialPose.fov < 179)) throw new MissingInputError(tool, 'initialPose.fov', 'must be a vertical field of view in degrees between 1 and 179');
+    const standoff = Math.hypot(initialPose.x - initialPose.targetX, initialPose.y - initialPose.targetY, initialPose.z - initialPose.targetZ);
+    if (!(standoff > 0)) throw new MissingInputError(tool, 'initialPose', 'the camera position and target must differ');
+
+    const L = EDGE_ALIGN_LIMITS;
+    const maxIterations = Math.round(boundedNumber(tool, 'maxIterations', args.maxIterations, 25, 1, L.maxIterations));
+    const target = boundedNumber(tool, 'targetEdgeCorrelation', args.targetEdgeCorrelation, 95, 0, 100);
+    const maxSide = Math.round(boundedNumber(tool, 'analysisMaxSide', args.analysisMaxSide, 320, L.minAnalysisSide, L.maxAnalysisSide));
+    const timeBudgetMs = 1000 * boundedNumber(tool, 'timeBudgetSeconds', args.timeBudgetSeconds, 120, L.minSeconds, L.maxSeconds);
+
+    const photo = await loadFeatureImage(tool, 'imagePath', imagePath, maxSide);
+    const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+    if (!mesh.indices || mesh.indices.length < 3) throw new MissingInputError(tool, 'glbPath', `${glbPath} has no triangles`);
+    const { width, height } = photo;
+    const queryField = computeSobelField(width, height, photo.gray);
+    const render = (pose: CameraPose6DOF) => HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, pose, width, height);
+
+    const initialField = render(initialPose);
+    if (!(initialField.meanMagnitude > 0)) throw new MissingInputError(tool, 'initialPose', `the model in ${glbPath} is not in view from initialPose`);
+    const initial = evaluateEdgeOverlap(queryField, initialField);
+    const started = Date.now();
+    // Step sizes scale with the camera's distance to its target, so the search means the same at any model scale.
+    const opt = await SubPixelEdgeAlignmentOptimizer.optimizePoseAsync(initialPose, queryField, render, {
+        maxIterations,
+        targetOverlapScore: target,
+        subpixelTolerancePx: Number.POSITIVE_INFINITY,
+        stepSizes: { pos: standoff * 0.02, target: standoff * 0.01, fov: 1.0 },
+        signal: ctx?.signal,
+        timeBudgetMs,
+        initialField,
+        onRender: (renders, best) => ctx?.reportProgress?.(`Edge alignment: ${renders} renders, best correlation ${best.toFixed(1)}%`,
+            Math.min(0.99, (Date.now() - started) / timeBudgetMs))
+    });
+    const finalEval = evaluateEdgeOverlap(queryField, opt.finalField);
+    const distance = measureMeanEdgeDistance(queryField, opt.finalField);
+    const meanEdgeDistancePx = distance.meanPx * photo.scale;
+    const p = opt.finalPose;
+    const reached = finalEval.overlapScorePercent >= target;
+    return {
+        resultPayload: {
+            imagePath,
+            glbPath,
+            imageSize: [photo.sourceWidth, photo.sourceHeight],
+            analysisSize: [width, height],
+            initialPose,
+            finalPose: { x: p.x, y: p.y, z: p.z, targetX: p.targetX, targetY: p.targetY, targetZ: p.targetZ, fov: p.fov },
+            initialEdgeCorrelationPct: initial.overlapScorePercent,
+            finalEdgeCorrelationPct: finalEval.overlapScorePercent,
+            targetEdgeCorrelationPct: target,
+            reachedTarget: reached,
+            iterations: opt.iterations,
+            renders: opt.renders,
+            stoppedBy: opt.stoppedBy,
+            elapsedSeconds: (Date.now() - started) / 1000,
+            meanEdgeDistancePx,
+            modelEdgePixels: distance.modelEdgePixels,
+            modelTriangles: mesh.indices.length / 3,
+            edgeDefinition: 'model edges: at least 25% of the render\'s largest gradient; photo edges: top 10% of the photo\'s gradient magnitudes'
+        } as unknown as ToolResultPayload,
+        summaryResult: `Aligned ${glbPath} to ${imagePath}: edge correlation ${initial.overlapScorePercent.toFixed(1)}% -> ${finalEval.overlapScorePercent.toFixed(1)}% in ${opt.iterations} pass(es), ${opt.renders} render(s) (target ${target}% ${reached ? 'reached' : 'not reached'}; stopped: ${opt.stoppedBy}). The model's edges lie ${Number.isFinite(meanEdgeDistancePx) ? meanEdgeDistancePx.toFixed(1) : 'n/a'} px on average from the nearest strong photo edge. Final camera: position [${[p.x, p.y, p.z].map(v => v.toFixed(2)).join(', ')}], target [${[p.targetX, p.targetY, p.targetZ].map(v => v.toFixed(2)).join(', ')}], fov ${p.fov.toFixed(1)} deg.`
+    };
+}
 
 export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
     geobox_resect_image_location: async (args, _ctx) => {
@@ -3753,36 +3910,7 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             summaryResult: `Harmonized location 3D lighting for ${result.landmarkContext?.name} (${latitude!.toFixed(6)}, ${longitude!.toFixed(6)}; sun at ${result.landmarkContext?.isoDate}${result.landmarkContext?.isoDateAssumed ? ', assumed: no isoDate given' : ''}) (${result.preset}, diurnal: ${result.diurnalPhase}). Calibrated de-lighting (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}), and ${result.architecturalFixtures.length} architectural portal window fixtures.`
         };
     },
-    geobox_optimize_edge_alignment: async (args, _ctx) => {
-        const imagePath = typeof args.imagePath === 'string' ? args.imagePath : '';
-        if (!imagePath) {
-            throw new Error('geobox_optimize_edge_alignment: "imagePath" is required.');
-        }
-        const width = 64;
-        const height = 64;
-        const query = new Float32Array(width * height);
-        const render = new Float32Array(width * height);
-        for (let y = 20; y < 44; y++) {
-            for (let x = 20; x < 44; x++) {
-                query[y * width + x] = 1.0;
-                render[y * width + x] = 1.0;
-            }
-        }
-        const maxIter = typeof args.maxIterations === 'number' ? args.maxIterations : 20;
-        const service = new GeoBoxPrecisionResectionService();
-        const optResult = await service.optimizeEdgeAlignment({
-            queryGrayscale: query,
-            renderGrayscale: render,
-            width,
-            height,
-            maxIterations: maxIter
-        });
-
-        return {
-            resultPayload: optResult as unknown as ToolResultPayload,
-            summaryResult: `Sub-pixel edge alignment reached ${optResult.finalOverlapScorePct.toFixed(1)}% overlap (residual: ${optResult.subPixelResidualPx.toFixed(2)}px, tolerance: ${optResult.physicalErrorMm.toFixed(2)}mm) in ${optResult.iterations} iterations.`
-        };
-    },
+    geobox_optimize_edge_alignment: async (args, ctx) => alignModelEdgesToPhoto('geobox_optimize_edge_alignment', args, ctx),
     spatial_solve_pnp: async (args, _ctx) => {
         const rawPoints2D = Array.isArray(args.points2D) ? args.points2D : [];
         const rawPoints3D = Array.isArray(args.points3D) ? args.points3D : [];
@@ -3834,86 +3962,41 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
         }
     },
     spatial_match_features_2d_3d: async (args, _ctx) => {
-        const maxKeypoints = typeof args.maxKeypoints === 'number' ? args.maxKeypoints : 300;
+        const queryImagePath = asString(args.queryImagePath);
+        if (!queryImagePath) throw new MissingInputError('spatial_match_features_2d_3d', 'queryImagePath', 'give the photograph to match');
+        const renderImagePath = asString(args.renderImagePath);
+        if (!renderImagePath) throw new MissingInputError('spatial_match_features_2d_3d', 'renderImagePath', 'give the rendered reference image to match against');
+        const maxKeypoints = typeof args.maxKeypoints === 'number' ? args.maxKeypoints : 500;
         const loweRatio = typeof args.loweRatio === 'number' ? args.loweRatio : 0.75;
         const crossCheck = args.crossCheck !== false;
 
-        // Create representative synthetic feature field for query
-        const w = 160;
-        const h = 120;
-        const queryImg = new Float32Array(w * h);
-        const refImg = new Float32Array(w * h);
-
-        // Feature blocks (corners)
-        for (let y = 30; y < 70; y++) {
-            for (let x = 40; x < 90; x++) {
-                queryImg[y * w + x] = 200.0;
-                refImg[y * w + (x + 2)] = 200.0; // 2px horizontal disparity
-            }
-        }
-
-        const k1 = VisualFeatureMatcherService.extractKeypoints(queryImg, w, h, { maxKeypoints });
-        const k2 = VisualFeatureMatcherService.extractKeypoints(refImg, w, h, { maxKeypoints });
-        const matches = VisualFeatureMatcherService.matchKeypoints(k1, k2, { loweRatio, crossCheck });
+        const query = await loadFeatureImage('spatial_match_features_2d_3d', 'queryImagePath', queryImagePath);
+        const render = await loadFeatureImage('spatial_match_features_2d_3d', 'renderImagePath', renderImagePath);
+        const k1 = VisualFeatureMatcherService.extractKeypoints(query.gray, query.width, query.height, { maxKeypoints });
+        const k2 = VisualFeatureMatcherService.extractKeypoints(render.gray, render.width, render.height, { maxKeypoints });
+        // Keypoints are found on the analysis-size images and reported in each source image's pixel coordinates.
+        const matches = VisualFeatureMatcherService.matchKeypoints(k1, k2, { loweRatio, crossCheck }).map(m => ({
+            ...m,
+            point1: [m.point1[0] * query.scale, m.point1[1] * query.scale] as Point2D,
+            point2: [m.point2[0] * render.scale, m.point2[1] * render.scale] as Point2D
+        }));
 
         return {
             resultPayload: {
+                queryImagePath,
+                renderImagePath,
+                queryImageSize: [query.sourceWidth, query.sourceHeight],
+                renderImageSize: [render.sourceWidth, render.sourceHeight],
                 queryKeypointsCount: k1.length,
                 referenceKeypointsCount: k2.length,
                 matchesCount: matches.length,
-                matches: matches.slice(0, 10)
+                matches
             } as unknown as ToolResultPayload,
-            summaryResult: `Extracted visual features: detected ${k1.length} query keypoints, ${k2.length} reference keypoints, and found ${matches.length} robust 2D-to-3D correspondences (Lowe ratio: ${loweRatio}).`
+            summaryResult: `Matched ${queryImagePath} against ${renderImagePath}: ${k1.length} photo keypoints, ${k2.length} render keypoints, ${matches.length} 2D correspondences (Lowe ratio ${loweRatio}${crossCheck ? ', cross-checked' : ''}). Lift the render points with the render's depth to get 3D points for spatial_solve_pnp.`
         };
     },
-    geobox_closed_loop_edge_align: async (args, _ctx) => {
-        const center = (args.meshBoxCenter as [number, number, number]) || [0, 10, 0];
-        const size = (args.meshBoxSize as [number, number, number]) || [10, 20, 15];
-        const mesh = HeadlessMeshSilhouetteRenderer.createBoxMesh(center, size);
-
-        const initialPose: CameraPose6DOF = {
-            x: (args.initialPose as any)?.x ?? 2.0,
-            y: (args.initialPose as any)?.y ?? 11.0,
-            z: (args.initialPose as any)?.z ?? -38.0,
-            targetX: (args.initialPose as any)?.targetX ?? 0.0,
-            targetY: (args.initialPose as any)?.targetY ?? 10.0,
-            targetZ: (args.initialPose as any)?.targetZ ?? 0.0,
-            fov: (args.initialPose as any)?.fov ?? 46.0
-        };
-
-        const groundTruthPose: CameraPose6DOF = {
-            x: 0,
-            y: 10,
-            z: -40,
-            targetX: 0,
-            targetY: 10,
-            targetZ: 0,
-            fov: 45
-        };
-
-        // Render target image (ground truth reference edge field)
-        const targetField = HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, groundTruthPose, 160, 120);
-
-        // Run closed loop optimizer with headless renderer rendering dynamically at each coordinate perturbation
-        const opt = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(
-            initialPose,
-            targetField,
-            (pose) => HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, pose, 160, 120),
-            {
-                maxIterations: typeof args.maxIterations === 'number' ? args.maxIterations : 20,
-                targetOverlapScore: typeof args.targetOverlapScore === 'number' ? args.targetOverlapScore : 99.0,
-                subpixelTolerancePx: typeof args.subpixelTolerancePx === 'number' ? args.subpixelTolerancePx : 0.15
-            }
-        );
-
-        return {
-            resultPayload: opt as unknown as ToolResultPayload,
-            summaryResult: `Closed-loop edge optimization converged to ${opt.overlapScorePercent.toFixed(1)}% edge overlap (sub-pixel residual: ${opt.subpixelResidualPx.toFixed(2)}px, tolerance: ${opt.metrologicalErrorMm.toFixed(2)}mm) in ${opt.iterations} iterations.`
-        };
-    },
-    spatial_closed_loop_edge_align: async (args, ctx) => {
-        return geoboxPrecisionHandlers.geobox_closed_loop_edge_align(args, ctx);
-    },
+    geobox_closed_loop_edge_align: async (args, ctx) => alignModelEdgesToPhoto('geobox_closed_loop_edge_align', args, ctx),
+    spatial_closed_loop_edge_align: async (args, ctx) => alignModelEdgesToPhoto('spatial_closed_loop_edge_align', args, ctx),
     spatial_resect_image_location: async (args, ctx) => {
         return geoboxPrecisionHandlers.geobox_resect_image_location(args, ctx);
     }
@@ -4261,7 +4344,7 @@ export const poseDepthHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: result as unknown as ToolResultPayload,
             summaryResult: result.success
-                ? `Detected human pose with confidence ${(result.confidence * 100).toFixed(1)}%, grounded Y-offset: ${result.groundedYOffsetMeters.toFixed(3)}m.`
+                ? `Detected human pose with confidence ${(result.confidence * 100).toFixed(1)}%, ${result.groundedYOffsetMeters === undefined ? 'no foot visible, so no ground offset was measured' : `grounded Y-offset (hip to the lowest visible foot): ${result.groundedYOffsetMeters.toFixed(3)}m`}.`
                 : `Pose detection failed: ${result.error ?? 'Unknown error'}`
         };
     },
@@ -4532,117 +4615,12 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
 // Google DeepMind TAPIR Point Tracking & 4DGS Deformation Declarations & Handlers
 // ============================================================================
 
-export const TAPIR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
-    {
-        name: 'tapir_track_video_points',
-        description: 'Track 2D points and feature trajectories across video frames using Google DeepMind TAPIR with automatic two-tier failover to native pyramidal Lucas-Kanade optical flow with forward-backward cycle consistency. Supports automatic point seeding via grid, saliency, or hybrid cellular samplers.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                queryPoints: {
-                    type: 'ARRAY',
-                    description: 'Optional array of [x_norm, y_norm] coordinates in [0.0, 1.0]. If omitted, points are automatically seeded via samplerType.',
-                    items: {
-                        type: 'ARRAY',
-                        items: { type: 'NUMBER' }
-                    }
-                },
-                samplerType: {
-                    type: 'STRING',
-                    description: 'Point sampling algorithm to seed query points: "grid", "saliency" (Harris/Shi-Tomasi), or "hybrid" (cellular). Default: "hybrid"',
-                    enum: ['grid', 'saliency', 'hybrid']
-                },
-                maxPoints: {
-                    type: 'NUMBER',
-                    description: 'Maximum number of points to sample/track (default: 256)'
-                },
-                numFrames: {
-                    type: 'NUMBER',
-                    description: 'Number of frames in the video sequence (default: 24)'
-                },
-                frameWidth: {
-                    type: 'NUMBER',
-                    description: 'Video frame width in pixels (default: 640)'
-                },
-                frameHeight: {
-                    type: 'NUMBER',
-                    description: 'Video frame height in pixels (default: 480)'
-                },
-                backend: {
-                    type: 'STRING',
-                    description: 'Tracker engine backend: "tapir", "lk_flow", or "mock" (default: "tapir")',
-                    enum: ['tapir', 'lk_flow', 'mock']
-                },
-                fbThreshold: {
-                    type: 'NUMBER',
-                    description: 'Forward-backward pixel error tolerance for cycle consistency (default: 2.5)'
-                }
-            }
-        }
-    },
-    {
-        name: 'build_4dgs_from_video',
-        description: 'Deform a canonical 3D Gaussian Splat scene across time into a dynamic 4DGS asset using TAPIR point tracks, backtracking photometric error pruning, and ARAP local rigidity graph regularization.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                canonicalSubject: {
-                    type: 'ARRAY',
-                    description: 'Array of canonical subject 3D Gaussians from the hero frame { position: [x,y,z], colorRgb: [r,g,b], scale: [sx,sy,sz], opacity: number }',
-                    items: {
-                        type: 'OBJECT',
-                        properties: {
-                            position: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            colorRgb: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            scale: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            opacity: { type: 'NUMBER' }
-                        },
-                        required: ['position', 'colorRgb', 'scale', 'opacity']
-                    }
-                },
-                staticBackground: {
-                    type: 'ARRAY',
-                    description: 'Optional array of static background Gaussians',
-                    items: {
-                        type: 'OBJECT',
-                        properties: {
-                            position: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            colorRgb: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            scale: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            opacity: { type: 'NUMBER' }
-                        }
-                    }
-                },
-                numFrames: {
-                    type: 'NUMBER',
-                    description: 'Total number of video frames (default: 24)'
-                },
-                heroFrameIndex: {
-                    type: 'NUMBER',
-                    description: 'Index of canonical hero frame where time delta is exactly zero (default: 0)'
-                },
-                trackingBackend: {
-                    type: 'STRING',
-                    description: 'Tracker backend: "tapir", "lk_flow", or "mock" (default: "tapir")',
-                    enum: ['tapir', 'lk_flow', 'mock']
-                },
-                useLocalRigidity: {
-                    type: 'BOOLEAN',
-                    description: 'Whether to enforce ARAP (As-Rigid-As-Possible) local isometry graph regularization (default: true)'
-                },
-                kNeighbors: {
-                    type: 'NUMBER',
-                    description: 'Number of spatial nearest neighbors for isometry graph (default: 6)'
-                },
-                trackingErrorThresh: {
-                    type: 'NUMBER',
-                    description: 'Photometric L1 color difference threshold for pruning drifting Gaussians (default: 0.35)'
-                }
-            },
-            required: ['canonicalSubject']
-        }
-    }
-];
+/**
+ * No TAPIR / 4DGS tools are offered: tapir_track_video_points and build_4dgs_from_video took no video and tracked
+ * frames they synthesized themselves. TapirTrackingService and GaussianSplat4DService remain for callers that have
+ * real frames. The empty pack keeps the registry wiring stable.
+ */
+export const TAPIR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [];
 
 export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -4691,13 +4669,21 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'avatar_4dgs_retarget',
-        description: 'Retargets MediaPipe 33 pose motion track or custom pose angles onto a 22-joint SB-Human skeletal avatar with terrain ground-contact altitude clamping.',
+        description: 'Retargets a recorded motion track onto a 22-joint SB-Human skeletal avatar with ground-contact altitude clamping. The track is the JSON that vfx_mediapipe_track_video_motion writes to its outputJsonPath (per-frame MediaPipe world landmarks or joint angles); the call fails without one, and a dry-run track is refused.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 avatarId: {
                     type: 'STRING',
                     description: 'Target avatar identifier'
+                },
+                motionTrackPath: {
+                    type: 'STRING',
+                    description: 'Path to the motion track JSON written by vfx_mediapipe_track_video_motion (outputJsonPath).'
+                },
+                outputMotionPath: {
+                    type: 'STRING',
+                    description: 'Where to write the retargeted avatar motion JSON (default: next to the track, <track>_retargeted_<avatarId>.json).'
                 },
                 groundAltitudeMeters: {
                     type: 'NUMBER',
@@ -4712,7 +4698,7 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     description: 'Temporal moving average window size for joint smoothing (default: 3)'
                 }
             },
-            required: ['avatarId']
+            required: ['avatarId', 'motionTrackPath']
         }
     },
     {
@@ -4836,142 +4822,39 @@ export const HUMANOID_AVATAR_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
-export const tapir4dgsHandlers: Record<string, ToolHandler> = {
-    async tapir_track_video_points(args) {
-        const numFrames = Number(args.numFrames ?? 24);
-        const width = Number(args.frameWidth ?? 640);
-        const height = Number(args.frameHeight ?? 480);
-        const backend = (args.backend as TrackerBackend) ?? 'tapir';
-        const fbThreshold = args.fbThreshold !== undefined ? Number(args.fbThreshold) : 2.5;
+export const tapir4dgsHandlers: Record<string, ToolHandler> = {};
 
-        // Generate synthetic video frames with translating feature
-        const frames: VideoFrameData[] = [];
-        for (let t = 0; t < numFrames; t++) {
-            const data = new Uint8Array(width * height * 3);
-            for (let y = 0; y < height; y++) {
-                for (let x = 0; x < width; x++) {
-                    const idx = (y * width + x) * 3;
-                    data[idx] = Math.floor((x / width) * 100 + 50);
-                    data[idx + 1] = Math.floor((y / height) * 100 + 50);
-                    data[idx + 2] = 120;
-                }
-            }
-            const cx = Math.floor(width * 0.4 + t * 4);
-            const cy = Math.floor(height * 0.5 + Math.sin(t * 0.3) * 15);
-            const r = 25;
-            for (let dy = -r; dy <= r; dy++) {
-                for (let dx = -r; dx <= r; dx++) {
-                    if (dx * dx + dy * dy <= r * r) {
-                        const px = cx + dx;
-                        const py = cy + dy;
-                        if (px >= 0 && px < width && py >= 0 && py < height) {
-                            const idx = (py * width + px) * 3;
-                            data[idx] = 230;
-                            data[idx + 1] = 60;
-                            data[idx + 2] = 40;
-                        }
-                    }
-                }
-            }
-            frames.push({ width, height, data, channels: 3, frameIndex: t });
-        }
-
-        const service = new TapirTrackingService();
-        let queryPts: NormalizedPoint2D[] = [];
-
-        if (Array.isArray(args.queryPoints) && args.queryPoints.length > 0) {
-            queryPts = (args.queryPoints as unknown as number[][]).map(p => [Number(p[0]), Number(p[1])]);
-        } else {
-            const samplerType = (args.samplerType as PointSamplerType) ?? 'hybrid';
-            const maxPoints = Number(args.maxPoints ?? 128);
-            if (samplerType === 'grid') {
-                queryPts = PointSamplers.sampleGrid(width, height, { maxPoints });
-            } else if (samplerType === 'saliency') {
-                queryPts = PointSamplers.sampleSaliency(frames[0], { maxPoints });
-            } else {
-                queryPts = PointSamplers.sampleHybrid(frames[0], { maxPoints });
-            }
-        }
-
-        const execResult = await service.executeTracking(frames, queryPts, undefined, {
-            backend,
-            fbThreshold
-        });
-
-        return {
-            resultPayload: {
-                backendUsed: execResult.backendUsed,
-                numFrames: execResult.numFrames,
-                numPoints: execResult.numPoints,
-                durationMs: execResult.durationMs,
-                trajectoriesSample: execResult.tracks.coords.slice(0, 3).map(framePts => framePts.slice(0, 5)),
-                visibilitiesSample: execResult.tracks.visibilities.slice(0, 3).map(frameVis => frameVis.slice(0, 5))
-            } as unknown as ToolResultPayload,
-            summaryResult: `Tracked ${execResult.numPoints} points across ${execResult.numFrames} frames using ${execResult.backendUsed.toUpperCase()} in ${execResult.durationMs}ms with forward-backward cycle consistency.`
-        };
-    },
-
-    async build_4dgs_from_video(args) {
-        const canonicalSubject = args.canonicalSubject as BakedGaussian[];
-        if (!Array.isArray(canonicalSubject) || canonicalSubject.length === 0) {
-            return {
-                resultPayload: { error: 'canonicalSubject must be a non-empty array of BakedGaussian objects' } as unknown as ToolResultPayload,
-                summaryResult: 'Failed: canonicalSubject is empty or invalid'
-            };
-        }
-
-        const staticBackground = (args.staticBackground as BakedGaussian[]) ?? [];
-        const numFrames = Number(args.numFrames ?? 24);
-        const heroFrameIndex = Number(args.heroFrameIndex ?? 0);
-        const trackingBackend = (args.trackingBackend as TrackerBackend) ?? 'tapir';
-        const useLocalRigidity = args.useLocalRigidity !== undefined ? Boolean(args.useLocalRigidity) : true;
-        const kNeighbors = Number(args.kNeighbors ?? 6);
-        const trackingErrorThresh = Number(args.trackingErrorThresh ?? 0.35);
-
-        const width = 640;
-        const height = 480;
-
-        const frames: VideoFrameData[] = [];
-        for (let t = 0; t < numFrames; t++) {
-            const data = new Uint8Array(width * height * 3);
-            for (let i = 0; i < data.length; i += 3) {
-                data[i] = 128;
-                data[i + 1] = 135;
-                data[i + 2] = 140;
-            }
-            frames.push({ width, height, data, channels: 3, frameIndex: t });
-        }
-
-        const splat4dService = new GaussianSplat4DService();
-        const decomposed4d = await splat4dService.build4DSceneFromCanonical({
-            canonicalSubject,
-            staticBackground,
-            videoFrames: frames,
-            heroFrameIndex,
-            useLocalRigidity,
-            kNeighbors,
-            trackingErrorThresh,
-            trackingConfig: { backend: trackingBackend }
-        });
-
-        return {
-            resultPayload: {
-                telemetry: decomposed4d.telemetry,
-                heroFrameIndex: decomposed4d.heroFrameIndex,
-                numFrames: decomposed4d.numFrames,
-                bounds: decomposed4d.bounds,
-                sampleTrajectory: decomposed4d.trajectories[0] ? {
-                    pointIndex: decomposed4d.trajectories[0].pointIndex,
-                    canonicalPosition: decomposed4d.trajectories[0].canonicalPosition,
-                    firstThreeDeltas: decomposed4d.trajectories[0].timeDeltas.slice(0, 3),
-                    heroFrameDelta: decomposed4d.trajectories[0].timeDeltas[decomposed4d.heroFrameIndex]
-                } : null
-            } as unknown as ToolResultPayload,
-            summaryResult: `Built 4DGS scene: ${decomposed4d.telemetry.numDynamicGaussians} dynamic subject Gaussians deformed across ${decomposed4d.numFrames} frames (${decomposed4d.telemetry.trackerUsed.toUpperCase()} tracker, hero frame ${heroFrameIndex} timeDelta=[0,0,0], pruned ${decomposed4d.telemetry.prunedGaussians} drifting Gaussians, ARAP rigidity: ${useLocalRigidity ? 'active' : 'disabled'}).`
-        };
-    },
-
-};
+/**
+ * Reads a motion track JSON (VideoMotionTrackResult, as vfx_mediapipe_track_video_motion writes it). Fails when the
+ * file is missing, is a dry run, or has a frame with neither world landmarks nor joint angles.
+ */
+async function readMotionTrack(tool: string, value: unknown): Promise<import('../../video/MediaPipeVideoDirectorService').VideoMotionTrackResult> {
+    const trackPath = asString(value);
+    if (!trackPath) throw new MissingInputError(tool, 'motionTrackPath', 'give the motion track JSON from vfx_mediapipe_track_video_motion (outputJsonPath); no motion is assumed');
+    const fsMod = await import('fs-extra');
+    if (!(await fsMod.pathExists(trackPath))) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} does not exist`);
+    let track: any;
+    try {
+        track = await fsMod.readJson(trackPath);
+    } catch (err: any) {
+        throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} is not JSON (${err?.message || err})`);
+    }
+    if (track?.dryRun) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} is a dry-run plan, not a tracked motion`);
+    if (track?.success === false) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} records a failed tracking run${track.error ? `: ${track.error}` : ''}`);
+    const frames = Array.isArray(track?.frames) ? track.frames : [];
+    if (!frames.length) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} has no frames`);
+    // Every frame must be a MediaPipe detection: tracks written before detections were marked (which filled frames
+    // with no person with a canned standing pose) and frames without a solved pose are refused.
+    const undetected = frames.findIndex((f: any) => f?.detected !== true);
+    if (undetected >= 0) {
+        throw new MissingInputError(tool, 'motionTrackPath', `frame ${undetected} of ${trackPath} is not marked as a MediaPipe detection (a stand-in pose, or a track written before detections were recorded); track the video again with vfx_mediapipe_track_video_motion`);
+    }
+    const unusable = frames.findIndex((f: any) => !((f?.worldLandmarks?.length ?? 0) >= 33
+        || (f?.angles && typeof f.angles === 'object' && Object.keys(f.angles).length > 0)));
+    if (unusable >= 0) throw new MissingInputError(tool, 'motionTrackPath', `frame ${unusable} of ${trackPath} has neither 33 world landmarks nor joint angles`);
+    if (!(Number(track.sampleFps) > 0)) throw new MissingInputError(tool, 'motionTrackPath', `${trackPath} does not record its sampleFps`);
+    return track;
+}
 
 export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     async avatar_4dgs_list(_args) {
@@ -4987,7 +4870,9 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     },
 
     async avatar_4dgs_get(args) {
-        const avatarId = asString(args.avatarId, '2785536');
+        // The avatar is the one named; there is no demo avatar to load instead.
+        const avatarId = asString(args.avatarId);
+        if (!avatarId) throw new MissingInputError('avatar_4dgs_get', 'avatarId', 'name the avatar (avatar_4dgs_list lists them)');
         const service = new Dynamic4DGaussianSplatService();
         const { details, motion } = service.loadAvatar(avatarId);
         return {
@@ -5004,8 +4889,12 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     },
 
     async avatar_4dgs_animate(args) {
-        const avatarId = asString(args.avatarId, '2785536');
-        const frameIndex = Number(args.frameIndex ?? 0);
+        const avatarId = asString(args.avatarId);
+        if (!avatarId) throw new MissingInputError('avatar_4dgs_animate', 'avatarId', 'name the avatar (avatar_4dgs_list lists them)');
+        if (typeof args.frameIndex !== 'number' || !Number.isInteger(args.frameIndex) || args.frameIndex < 0) {
+            throw new MissingInputError('avatar_4dgs_animate', 'frameIndex', `a frame index of 0 or more (got ${JSON.stringify(args.frameIndex)})`);
+        }
+        const frameIndex = args.frameIndex;
         const exportSplat = Boolean(args.exportSplat ?? false);
 
         const service = new Dynamic4DGaussianSplatService();
@@ -5037,7 +4926,9 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     },
 
     async avatar_4dgs_retarget(args) {
-        const avatarId = asString(args.avatarId, '2785536');
+        const avatarId = asString(args.avatarId);
+        if (!avatarId) throw new MissingInputError('avatar_4dgs_retarget', 'avatarId', 'name the avatar to retarget onto (avatar_4dgs_list lists them)');
+        const track = await readMotionTrack('avatar_4dgs_retarget', args.motionTrackPath);
         const groundAlt = Number(args.groundAltitudeMeters ?? 0.0);
         const pinFeet = args.pinFeetToGround !== undefined ? Boolean(args.pinFeetToGround) : true;
         const smoothingWindow = Number(args.smoothingWindow ?? 3);
@@ -5046,55 +4937,39 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
         const { motion } = splatService.loadAvatar(avatarId);
 
         const bridgeService = new HumanoidMotionBridgeService();
-        const canonical = motion.canonical_joints;
-        const simulatedTrack = {
-            success: true,
-            durationSec: motion.num_frames / motion.fps,
-            totalFramesAnalyzed: motion.num_frames,
-            sampleFps: motion.fps,
-            averageConfidence: 0.95,
-            maxDisplacementMeters: 1.2,
-            groundedYReferenceMeters: groundAlt,
-            frames: motion.frames.map(f => ({
-                frameIndex: f.frame_index,
-                timestampSec: f.timestamp,
-                angles: {
-                    leftUpperArm: [0, 0, 0] as [number, number, number],
-                    rightUpperArm: [0, 0, 0] as [number, number, number],
-                    leftLowerArm: [0, 0, 0] as [number, number, number],
-                    rightLowerArm: [0, 0, 0] as [number, number, number],
-                    leftUpperLeg: [0, 0, 0] as [number, number, number],
-                    rightUpperLeg: [0, 0, 0] as [number, number, number],
-                    leftLowerLeg: [0, 0, 0] as [number, number, number],
-                    rightLowerLeg: [0, 0, 0] as [number, number, number],
-                    spine: [0, 0, 0] as [number, number, number],
-                    head: [0, 0, 0] as [number, number, number]
-                },
-                hipPositionMeters: f.root_translation,
-                groundedYOffsetMeters: groundAlt,
-                confidence: f.confidence ?? 0.95
-            }))
-        };
-
-        const retargeted = bridgeService.retargetVideoMotionTrack(simulatedTrack, canonical, {
+        const retargeted = bridgeService.retargetVideoMotionTrack(track, motion.canonical_joints, {
             groundAltitudeMeters: groundAlt,
             pinFeetToGround: pinFeet,
             smoothingWindow
         });
+        const landmarkFrames = track.frames.filter(f => (f.worldLandmarks?.length ?? 0) >= 33).length;
+        const trackPath = asString(args.motionTrackPath);
+        const outputMotionPath = asString(args.outputMotionPath)
+            || path.join(path.dirname(trackPath), `${path.basename(trackPath, path.extname(trackPath))}_retargeted_${avatarId}.json`);
+        const fsMod = await import('fs-extra');
+        await fsMod.outputJson(outputMotionPath, retargeted);
 
         return {
             resultPayload: {
                 avatarId,
+                motionTrackPath: trackPath,
                 numFramesRetargeted: retargeted.num_frames,
+                sampleFps: track.sampleFps,
+                framesFromWorldLandmarks: landmarkFrames,
+                framesFromJointAngles: track.frames.length - landmarkFrames,
+                trackAverageConfidence: track.averageConfidence,
                 groundAltitudeMeters: groundAlt,
                 feetPinned: pinFeet,
                 firstFrameJoint0: retargeted.frames[0]?.joint_positions_3d[0],
                 firstFrameFootY: Math.min(
                     retargeted.frames[0]?.joint_positions_3d[10][1] ?? 0,
                     retargeted.frames[0]?.joint_positions_3d[11][1] ?? 0
-                )
+                ),
+                outputMotionPath
             } as unknown as ToolResultPayload,
-            summaryResult: `Retargeted motion to avatar ${avatarId}: ${retargeted.num_frames} frames processed, feet pinned to ground altitude ${groundAlt}m.`
+            summaryResult: `Retargeted ${retargeted.num_frames} frame(s) of ${trackPath} onto avatar ${avatarId} (${landmarkFrames} from world landmarks, ${track.frames.length - landmarkFrames} from joint angles)${pinFeet ? `, feet pinned to ${groundAlt} m` : ''}.`
+                + (Array.isArray(track.undetectedFrames) && track.undetectedFrames.length ? ` ${track.undetectedFrames.length} sampled frame(s) had no detected person and are not in the motion.` : '')
+                + ` Wrote the avatar motion (SB-Human 22-joint) to ${outputMotionPath}.`
         };
     },
 
@@ -5123,6 +4998,13 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     }
 };
 
+/** The actor a humanoid tool acts on: the one named, never a demo actor. */
+function requiredActorId(tool: string, args: Record<string, unknown>): string {
+    const actorId = asString(args.actorId || args.avatarId);
+    if (!actorId) throw new MissingInputError(tool, 'actorId', 'name the actor (humanoid_avatar_list lists them)');
+    return actorId;
+}
+
 export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
     async humanoid_avatar_list(_args) {
         const service = new SbHumanAvatarService();
@@ -5137,14 +5019,11 @@ export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
     },
 
     async humanoid_avatar_get(args) {
-        const actorId = asString(args.actorId || args.avatarId, '2785536');
+        const actorId = requiredActorId('humanoid_avatar_get', args);
         const service = new SbHumanAvatarService();
         const actor = await service.getActor(actorId);
         if (!actor) {
-            return {
-                resultPayload: { error: `Actor "${actorId}" not found` } as unknown as ToolResultPayload,
-                summaryResult: `Actor "${actorId}" not found.`
-            };
+            throw new MissingInputError('humanoid_avatar_get', 'actorId', `no actor "${actorId}" is installed (humanoid_avatar_list lists them)`);
         }
         return {
             resultPayload: {
@@ -5155,7 +5034,7 @@ export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
     },
 
     async humanoid_avatar_skin(args) {
-        const actorId = asString(args.actorId || args.avatarId, '2785536');
+        const actorId = requiredActorId('humanoid_avatar_skin', args);
         const modality = asString(args.modality, 'pbr-standard') as any;
         const melaninFraction = args.melaninFraction !== undefined ? Number(args.melaninFraction) : undefined;
         const pheomelaninRatio = args.pheomelaninRatio !== undefined ? Number(args.pheomelaninRatio) : undefined;
@@ -5192,8 +5071,11 @@ export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
     },
 
     async humanoid_avatar_animate(args) {
-        const actorId = asString(args.actorId || args.avatarId, '2785536');
-        const frameIndex = Number(args.frameIndex ?? 0);
+        const actorId = requiredActorId('humanoid_avatar_animate', args);
+        if (typeof args.frameIndex !== 'number' || !Number.isInteger(args.frameIndex) || args.frameIndex < 0) {
+            throw new MissingInputError('humanoid_avatar_animate', 'frameIndex', `a frame index of 0 or more (got ${JSON.stringify(args.frameIndex)})`);
+        }
+        const frameIndex = args.frameIndex;
         const modality = asString(args.modality, 'pbr-standard') as any;
         const service = new SbHumanAvatarService();
         const frame = await service.evaluateActorFrame(actorId, frameIndex, modality);

@@ -48,7 +48,14 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     panorama_to_3dgs: { maxMs: 15 * MIN },
     mesh_bake_ai_textures: { maxMs: 15 * MIN },
     panorama_generate_perspectives: { maxMs: 15 * MIN },
+    // Up to 12 serial image-model calls (one per station, progress after each), then an optional Trellis
+    // reconstruction on Fal.ai, which reports nothing until it finishes.
+    generate_multi_angle_turnaround: { maxMs: 30 * MIN, idleMs: 10 * MIN },
     spatial_keyframe_video_interpolation: { maxMs: 15 * MIN },
+    // One MediaPipe (Python) process per sampled frame: 15 fps over a 60 s clip is 900 of them. Both report progress
+    // after every frame; idleMs also covers extracting all the frames with ffmpeg first.
+    vfx_mediapipe_track_video_motion: { maxMs: 60 * MIN, idleMs: 10 * MIN },
+    vfx_video_auto_reframe: { maxMs: 30 * MIN, idleMs: 10 * MIN },
     // A full read-only agent run of up to 20 model turns.
     invoke_subagent: { maxMs: 30 * MIN },
     // The model sets the command's own timeout; give the call that long plus a margin, within an hour.

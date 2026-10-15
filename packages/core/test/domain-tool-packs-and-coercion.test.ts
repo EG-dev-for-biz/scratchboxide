@@ -43,7 +43,7 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
             expect(CORE_WORKSPACE_PACK.toolNames).toContain('workspace_read_file');
             expect(CORE_WORKSPACE_PACK.toolNames).toContain('mount_canvas_primitive');
             expect(GEOSPATIAL_3D_PACK.toolNames).toContain('google_3d_tiles_get_clay');
-            expect(GEOSPATIAL_3D_PACK.toolNames).toContain('utdra_decompose_tile');
+            expect(GEOSPATIAL_3D_PACK.toolNames).toContain('utdra_probe_tile');
             expect(MESH_SURFACE_PACK.toolNames).toContain('mesh_apply_deformers');
             expect(MESH_SURFACE_PACK.toolNames).toContain('algorithmic_uv_unwrap_rewrap');
             expect(VFX_VIDEO_PACK.toolNames).toContain('vfx_visual_critic_audit');

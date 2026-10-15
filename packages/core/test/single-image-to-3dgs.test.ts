@@ -13,6 +13,17 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { spatialHandlers } from '../src/node/gemini/tools/spatial-tools';
 import { encodePng } from '../src/node/texture-processing';
+import { requirePythonModules, withReason } from './helpers/requirements';
+
+// Depth comes from the depth sidecar (Depth Anything V2 Metric). Here it runs under a Python with torch and numpy,
+// with test/helpers/depth-sidecar-stubs standing in for Pillow and for the model (a constant planar depth).
+const PYTHON = process.env.SCRATCHBOX_PYTHON || 'python3';
+const torchPython = requirePythonModules(PYTHON, ['torch', 'numpy']);
+const STUB_ENV: Record<string, string> = {
+    SCRATCHBOX_DEPTH_PYTHON: PYTHON,
+    PYTHONPATH: path.join(__dirname, 'helpers/depth-sidecar-stubs'),
+    STUB_DEPTH_METERS: '6'
+};
 
 /**
  * Writes a small photo-like PNG (sky gradient over textured ground with a lit block) as the input.
@@ -46,12 +57,14 @@ function writeFixtureImage(file: string, width = 320, height = 240): void {
     fs.outputFileSync(file, encodePng(width, height, rgba));
 }
 
-describe('Single Image to 3DGS Pipeline Tool', () => {
+describe.skipIf(!torchPython.ok)(withReason('Single Image to 3DGS Pipeline Tool', torchPython), () => {
     let workDir = '';
     let testImgPath = '';
     let testOutDir = '';
+    const savedEnv: Record<string, string | undefined> = {};
 
     beforeAll(() => {
+        for (const [k, v] of Object.entries(STUB_ENV)) { savedEnv[k] = process.env[k]; process.env[k] = v; }
         workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-single-image-3dgs-'));
         testImgPath = path.join(workDir, 'input', 'scene_2_photorealistic_final.png');
         testOutDir = path.join(workDir, 'temp_test_splats');
@@ -59,6 +72,7 @@ describe('Single Image to 3DGS Pipeline Tool', () => {
     });
 
     afterAll(async () => {
+        for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         await fs.remove(workDir);
     });
 

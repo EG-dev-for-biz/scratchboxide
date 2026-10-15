@@ -111,10 +111,10 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 
 ### Universal Tile Decomposition & Mesh Engineering (UTDRA / ULDRA)
 - **`UniversalTileDecompositionService`** (`packages/core/src/node/3d-engine/universal-tile-decomposition-service.ts`):
-  - `probeTile`: Non-destructive classification into 9 macro-geographic domains (`UrbanHighRiseCore`, `SuburbanResidential`, `CivilInfrastructure`, `MountainAlpineCanyon`, etc.).
-  - `decomposeTile`: Full pipeline rectification of facades, spires, and road grades.
-  - `carveBridgeVoids`: Excises photogrammetric curtain walls beneath spans while ensuring $\ge 3.5\text{m}$ clearance.
-  - `sliceElevation`: Sutherland-Hodgman analytical planar slicing preserving building envelopes.
+  - `probeTile`: Measures a given tile (bounds, relief, surface area by slope band, wall orientation, vertex-colour green index). It classifies nothing and reports no confidence.
+  - `sliceElevation`: Keeps the part above an elevation, clipping straddling triangles (Sutherland-Hodgman).
+  - `carveBridgeUnderpass`: Removes the near-vertical triangles inside a span box the caller gives (deck footprint, ground and deck heights); it does not find bridges itself.
+  - Outputs keep the input's own material; GLBs the native reader would misread (transforms, several materials, textures) are refused.
 - **`NativeMeshReshaperService`** (`packages/core/src/node/3d-engine/native-mesh-reshaper-service.ts`): C++20 Astro engine deformation runner (taper, twist, bend, bulge, squash, shear, FFD tensor lattices, sculpt brushes).
 - **`FieldAlignedQuadRemeshService`** (`packages/core/src/node/3d-engine/field-remesh-service.ts`): 4-RoSy directional cross-field calculation and quad-dominant remeshing.
 - **`PhotorealTileCleanupService`** (`packages/core/src/node/3d-engine/tile-cleanup-service.ts`): Decimates coplanar triangles, repairs non-manifold seams, and removes floating geometry.
@@ -220,27 +220,27 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `survey_render_station`: Headless renders station blockouts.
 - `survey_beautify_station`: AI-beautifies station render.
 - `survey_beautify_to_splats`: Directly reconstructs beautified stations into splats.
-- `survey_beautify_to_texture`: Inverse projects beautified views to texture atlas.
+- `survey_beautify_to_texture`: Inverse projects beautified views into the mesh's own UV atlas (a mesh without TEXCOORD_0 is refused before any station image is generated; NOAA de-lighting only with the stations' anchor coordinates and a given isoDate; the result says whether it ran).
 
 ### 4. Panoramas & Zenith Reconstruction (`spatial-tools.ts`)
-- `panorama_heal_seam`: Eliminates horizontal $360^\circ$ seam lines.
-- `panorama_inpaint`: Inpaints ground tripod occlusions.
+- `panorama_heal_seam`: Heals the 360 wrap-around seam with an image model (fails when no model answers; refuses an answer that would be enlarged more than `maxModelUpscale`, default 2x).
+- `panorama_inpaint`: Inpaints ground tripod occlusions with an image model (same answer checks as the seam heal).
 - `panorama_generate_360`: Generates complete spherical panoramas.
 - `panorama_generate_4k`: Synthesizes 4K monumental environments.
 - `panorama_reproject_zenith`: Solves zenith polar distortion.
 - `panorama_extract_zenith`: Extracts rectilinear top-down patch.
 - `panorama_generate_perspectives`: Extracts multiple rectilinear cameras.
 - `panorama_audit_quality`: Evaluates seams, resolution, and dynamic range.
-- `location_generate_3dgs`: End-to-end location 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tiles synthesis with implicit Nano Banana restyling.
-- `panorama_to_3dgs`: Projects equirectangular panorama into spherical Gaussian splats.
+- `location_generate_3dgs`: End-to-end location 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tiles synthesis with implicit Nano Banana restyling, rendered from the caller's clay GLB or a fresh Google 3D Tiles clay extraction (a failed extraction fails the call).
+- `panorama_to_3dgs`: Projects an equirectangular panorama into Gaussian splats using Depth Anything V2 Metric depth (the depth sidecar fails rather than invent depth or an eye height).
+- `single_image_to_3dgs`: Lifts a photo into Gaussian splats along pinhole rays at the depth the Depth Anything V2 Metric sidecar measures; fails when the model cannot run, and says when the field of view was assumed.
 - `splat_to_3dtiles`: Converts Gaussian splat cloud (.splat or .spz) into OGC 3D Tiles 1.1 tileset.
 - `survey_beautify_to_splats`: Runs full survey synthesis to beautified splat tileset.
 
 ### 5. Universal Tile Decomposition & Rectification (`spatial-tools.ts`)
-- `utdra_probe_tile`: Non-destructive domain probe (relief, planarity, verticality).
-- `utdra_decompose_tile`: Full geometric shaft rectification.
-- `utdra_slice_elevation`: Sutherland-Hodgman analytical planar slicing.
-- `utdra_carve_bridge_voids`: Multi-level void carving beneath bridges.
+- `utdra_probe_tile`: Measurements only (bounds, relief, area by slope band, wall orientation); no classification or confidence.
+- `utdra_slice_elevation`: Keeps the part above an elevation, clipping straddling triangles (Sutherland-Hodgman).
+- `utdra_carve_bridge_voids`: Removes near-vertical triangles inside a caller-given span box. (`utdra_decompose_tile`, its domain classifier and its "rectification" are removed.)
 
 ### 6. WebXR Metric Alignment (`spatial-tools.ts`)
 - `webxr_geospatial_align_coordinates`: Bidirectional WGS-84 $\leftrightarrow$ WebXR metric coords.
@@ -251,10 +251,10 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `geobox_resect_image_location`: Full autonomous 6-DOF photograph-to-tile resection.
 - `geobox_resect_camera_pose`: Resects camera position and attitude.
 - `geobox_harmonize_location_lighting`: De-lights photogrammetry and matches photograph atmosphere.
-- `geobox_optimize_edge_alignment`: Closed-loop iterative edge alignment.
+- `geobox_optimize_edge_alignment`: Same as `spatial_closed_loop_edge_align`.
 - `spatial_solve_pnp`: Analytical DLT + Levenberg-Marquardt pose solver.
 - `spatial_match_features_2d_3d`: 2D-to-3D keypoint matcher.
-- `spatial_closed_loop_edge_align`: Offscreen software silhouette edge matcher.
+- `spatial_closed_loop_edge_align` / `geobox_closed_loop_edge_align`: Refines a camera pose so a given model (`glbPath`) lines up with a given photograph (`imagePath`), from a required `initialPose`; reports edge correlation before/after, the mean edge distance in pixels, the renders made and why it stopped. It yields between renders, stops on the chat's Stop, and has bounded limits (`maxIterations` 1-50, `analysisMaxSide` 32-640, `timeBudgetSeconds` 5-240, default 120).
 - `spatial_resect_image_location`: High-level resection alias.
 - `optics_configure_lens_distortion`: Configures Brown-Conrady coefficients.
 - `optics_export_lens_distortion`: Exports lens profiles to OpenCV/Nuke format.
@@ -264,12 +264,11 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `gemini_estimate_scene_depth`: Monocular relative metric depth estimation.
 - `configure_physical_camera`: Configures sensor gate, aperture, and focal length.
 - `camera_track_focus_target`: Tracks dynamic focal distance on moving subjects.
-- `tapir_track_video_points`: Tracks 2D/3D feature trajectories across video.
-- `build_4dgs_from_video`: Reconstructs dynamic 4D Gaussian splats.
+- (No point-tracking or 4DGS-build tools: `tapir_track_video_points` and `build_4dgs_from_video` took no video and are removed. `TapirTrackingService` and `GaussianSplat4DService` remain for code that has real frames.)
 - `avatar_4dgs_list`: Catalogs registered 4D avatars.
 - `avatar_4dgs_get`: Fetches avatar manifest and skeleton.
 - `avatar_4dgs_animate`: Drives avatar with novel motion frames.
-- `avatar_4dgs_retarget`: Retargets motion from external video plates.
+- `avatar_4dgs_retarget`: Retargets a recorded motion track (the JSON `vfx_mediapipe_track_video_motion` writes to `outputJsonPath`) onto an avatar and writes the avatar motion JSON; fails without a track.
 - `performer_4d_create_from_video`: End-to-end video-to-4D performer pipeline.
 
 ### 9. Atmospheric Scattering & Solar Ephemeris (`atmosphere-tools.ts`)
@@ -280,8 +279,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `atmosphere_harmonize_location_3d`: Harmonizes 3D objects with physical skies.
 
 ### 10. Native C++20 Mesh Reshaping (`mesh-shaping-tools.ts`)
-- `mesh_reshape_via_prompt`: Deforms 3D meshes using natural language instructions.
-- `mesh_apply_deformers`: Applies parametric taper, twist, bend, bulge, and FFD lattices.
+- `mesh_apply_deformers`: Applies explicit taper, twist, bend, shear, bulge, sculpt, FFD lattice, subdivide, repair and weathering operations to a given GLB; positions and sizes are fractions of the mesh's measured bounding box. A GLB with node transforms, instanced meshes, non-triangle primitives, encodings the native reader cannot decode, several materials or textures is refused, because the reader uses raw vertex positions and the writer writes one material and no textures (the UTDRA tools refuse such tiles too); the output keeps the input's own material. (`mesh_reshape_via_prompt` and its keyword parser, and the tile restructure tools with their closed style/primitive taxonomy, are removed.)
 
 ### 11. VFX, Video & Prompt Formatting (`vfx-video-tools.ts`)
 - `build_beautify_prompt`: Verbatim AI Beautify prompt template.
@@ -300,17 +298,15 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `vfx_composite_patch`: Composites generative patches into plates.
 - `vfx_composite_timeline`: Headless timeline track compositor.
 - `vfx_mediapipe_track_video_motion`: Tracks video motion trajectories.
-- `vfx_video_auto_reframe`: Dynamic 9:16 portrait re-framing.
-- `vfx_visual_critic_audit`: Evaluates media against 8-Dimension Visual Fidelity Rubric.
+- `vfx_video_auto_reframe`: Re-frames to any aspect ratio with one static crop at the tracked person's average position (no dry run).
+- `vfx_visual_critic_audit`: A Gemini vision model scores the 8-Dimension Visual Fidelity Rubric from an FFmpeg contact sheet, with MediaPipe limb-length stability as measured evidence; passes only when every dimension passes, and fails (no score) when the sheet, the tracking or the vision model fails.
 
 ### 12. Algorithmic UVs, PBR & Color Transfer (`algorithmic-uv-tools.ts` & `nano-banana-tools.ts`)
 - `algorithmic_uv_unwrap_rewrap`: Algorithmic UV unwrapping and repack.
 - `uv_analyze_texel_density`: Analyzes texel density across submeshes.
 - `pbr_material_decompose`: Decodes an image file (`inputImagePath`) and writes albedo, glTF normal and ORM PNGs computed from its pixels.
 - `atlas_maxrects_pack`: Packs textures into unified atlas.
-- `nano_banana_extract_color_palette`: Two-step palette extraction.
-- `nano_banana_apply_color_palette`: Two-step palette application.
-- `nano_banana_transfer_color`: End-to-end photographic color transfer.
+- `nano_banana_apply_color_palette`: Builds the palette application prompt from a complete palette the caller read from the reference (temperatures and contrast in the caller's own words). The extract and transfer tools, which returned a stock palette for any image, are removed.
 
 ### 13. Botany & Tree Synthesis (`botanical-tree-tools.ts`)
 - `botanical_synthesize_tree`: Grows one standalone SB-Veggie tree (space colonisation, studio clay) to the height and crown spread given; a location's trees are measured and rebuilt by `google_3d_tiles_get_clay`.
@@ -473,7 +469,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 2. **`scratchbox_math.hpp`**: SIMD-accelerated 3D vector, matrix, and quaternion math.
 3. **`scratchbox_geometry.hpp`**: Half-edge mesh topology, winged-edge structures, and manifold connectivity.
 4. **`scratchbox_sdf.hpp`**: Signed Distance Field primitives, smooth CSG min/max/subtraction blending.
-5. **`scratchbox_utdra.hpp`**: Universal Tile Decomposition & Rectification kernel.
+5. **`scratchbox_utdra.hpp`**: Tile measurements, Sutherland-Hodgman elevation slicer and span-box curtain carver.
 6. **`scratchbox_visual_hull.hpp`**: High-performance multi-camera silhouette voxel carving.
 7. **`scratchbox_4dgs_humanoid.hpp`**: Dynamic 4D Gaussian Splatting with 4-bone partition-of-unity LBS.
 8. **`scratchbox_skinning.hpp`**: SIMD linear blend skinning and dual quaternion skinning.
@@ -626,7 +622,7 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
 ### Stage 1: Plate Ingestion & Optical Calibration
 1. **Lens Undistortion & Metrology**: Live-action footage is ingested. `VfxLensInterchangeService` and `LensDistortionEffect` solve or extract Brown-Conrady coefficients ($k_1, k_2, p_1, p_2$), linearizing barrel/pincushion distortion.
 2. **6-DOF Camera Resection**: `VisualFeatureMatcherService` detects Harris/FAST corners, unprojects 2D features against 3D surface depth, and `SpatialPoseEstimatorService.solvePnPRansac` solves analytical camera extrinsics and focal breathing.
-3. **Sub-Pixel Edge Alignment**: `SubPixelEdgeAlignmentOptimizer` connects to `HeadlessMeshSilhouetteRenderer` to run iterative coordinate descent in $<5\text{ms}$ per pose, ensuring sub-pixel registration ($< 0.05\text{ px RMS}$, $\ge 98\%$ edge correlation).
+3. **Edge Alignment**: `SubPixelEdgeAlignmentOptimizer` renders the model's silhouette with `HeadlessMeshSilhouetteRenderer` at each candidate pose and searches the pose that raises the edge overlap with the photo; it reports the overlap before and after and the measured mean edge distance (chamfer, px), with no guaranteed residual.
 
 ### Stage 2: Physical Sky, Solar Ephemeris & Lighting Inversion
 1. **NOAASolar Ephemeris**: `calculateNOAASolarPosition` computes sun elevation and azimuth from real-world GPS coordinates and timestamps.
@@ -635,7 +631,7 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
 
 ### Stage 3: Real-World Set Extension & Volumetric Massing
 1. **Leaf LOD 3D Tiles**: `Google3DTileBlockoutPipelineService` downloads high-fidelity geometry without preset boundaries.
-2. **UTDRA Rectification**: `UniversalTileDecompositionService` rectifies tilted facades, carves viaduct voids ($\ge 3.5\text{m}$ clearance), and slices terrain cleanly without dollhouse seams.
+2. **UTDRA edits**: `UniversalTileDecompositionService` measures the tile, slices below-ground geometry at a given elevation, and removes curtain-wall triangles inside a span box the caller gives (deck footprint and heights in the tile's coordinates); it does not find bridges itself.
 3. **Procedural Set Dressing**: `TileVegetationService` (SB-Veggie) rebuilds the trees measured in the location's own photo tiles, while `UniversalArchiBridgeService` (SB-Archi) snaps classical architectural colonnades and entablatures to real-world ground datum planes.
 
 ### Stage 4: 4D Dynamic Performer & Character Integration

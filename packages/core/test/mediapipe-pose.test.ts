@@ -125,32 +125,54 @@ describe('MediaPipePoseService (3D Metric Pose Landmarker & Kinematics)', () => 
         expect(groundedY).toBeCloseTo(0.92, 2);
     });
 
-    it('should synthesize standard heuristic poses cleanly across presets', () => {
-        const neutral = service.synthesizeHeuristicPose('neutral_standing');
-        expect(neutral.success).toBe(true);
-        expect(neutral.groundedYOffsetMeters).toBeCloseTo(0.85, 2);
+    it('measures the ground offset only from visible feet: none without a visible foot, and no floor clamp', () => {
+        // Waist-up framing: every foot landmark is out of view.
+        const waistUp = createMockHumanLandmarks(true).map((lm, i) => [
+            MEDIAPIPE_LANDMARK_INDEX.LEFT_ANKLE, MEDIAPIPE_LANDMARK_INDEX.RIGHT_ANKLE, MEDIAPIPE_LANDMARK_INDEX.LEFT_HEEL,
+            MEDIAPIPE_LANDMARK_INDEX.RIGHT_HEEL, MEDIAPIPE_LANDMARK_INDEX.LEFT_FOOT_INDEX, MEDIAPIPE_LANDMARK_INDEX.RIGHT_FOOT_INDEX
+        ].includes(i) ? { ...lm, visibility: 0.05 } : lm);
+        expect(service.computeGroundedYOffset(waistUp)).toBeUndefined();
 
-        const tPose = service.synthesizeHeuristicPose('t_pose');
-        // In T-pose, arms are elevated 90 degrees (pi/2 radians)
-        expect(tPose.angles.leftUpperArm[2]).toBeCloseTo(Math.PI / 2, 2);
-        expect(tPose.angles.rightUpperArm[2]).toBeCloseTo(-Math.PI / 2, 2);
-
-        const walking = service.synthesizeHeuristicPose('walking');
-        // One leg forward, one leg back
-        expect(walking.angles.leftUpperLeg[0]).toBeGreaterThan(0);
-        expect(walking.angles.rightUpperLeg[0]).toBeLessThan(0);
+        // A crouch puts the feet 0.3 m below the hips: reported as measured, not raised to a minimum.
+        const crouch = createMockHumanLandmarks(true).map((lm, i) => [
+            MEDIAPIPE_LANDMARK_INDEX.LEFT_ANKLE, MEDIAPIPE_LANDMARK_INDEX.RIGHT_ANKLE, MEDIAPIPE_LANDMARK_INDEX.LEFT_HEEL,
+            MEDIAPIPE_LANDMARK_INDEX.RIGHT_HEEL, MEDIAPIPE_LANDMARK_INDEX.LEFT_FOOT_INDEX, MEDIAPIPE_LANDMARK_INDEX.RIGHT_FOOT_INDEX
+        ].includes(i) ? { ...lm, y: 0.3 } : lm);
+        expect(service.computeGroundedYOffset(crouch)).toBeCloseTo(0.3, 5);
     });
 
-    it('should gracefully fallback to valid heuristic pose on arbitrary image input when Python is absent', async () => {
-        const dummyBuffer = Buffer.from('fake-image-bytes-for-unit-test');
-        const output = await service.estimatePoseFromImage({
-            image: dummyBuffer
-        });
+    it('offers no canned preset poses (they were a stand-in for a detection in dry runs)', () => {
+        expect((service as any).synthesizeHeuristicPose).toBeUndefined();
+    });
 
-        expect(output.success).toBe(true);
-        expect(output.personIndex).toBe(0);
-        expect(output.confidence).toBeGreaterThan(0.7);
-        expect(output.angles).toBeDefined();
-        expect(output.groundedYOffsetMeters).toBeGreaterThan(0.5);
+    it('fails instead of returning a canned standing pose when detection cannot run or finds nobody', async () => {
+        const fs = await import('fs');
+        const os = await import('os');
+        const path = await import('path');
+        const { GeneratorFailedError, MissingInputError } = await import('../src/common/errors/pipeline-errors');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-pose-'));
+
+        // The review's probe: arbitrary bytes. The bridge cannot produce a detection, and no heuristic pose comes back.
+        const missingScript = new MediaPipePoseService({ scriptPath: path.join(dir, 'no_such_bridge.py') });
+        const unavailable = await missingScript.estimatePoseFromImage({ image: Buffer.from('fake-image-bytes-for-unit-test') }).catch(e => e);
+        expect(unavailable).toBeInstanceOf(GeneratorFailedError);
+        expect(unavailable.message).toContain('no_such_bridge.py does not exist');
+
+        // A bridge that runs and finds no person.
+        const nobody = path.join(dir, 'nobody.py');
+        fs.writeFileSync(nobody, 'import sys, json\nsys.stdin.buffer.read()\nprint(json.dumps({"poses": []}))\n');
+        const noPerson = await new MediaPipePoseService({ scriptPath: nobody }).estimatePoseFromImage({ image: Buffer.from('x') }).catch(e => e);
+        expect(noPerson).toBeInstanceOf(MissingInputError);
+        expect(noPerson.message).toContain('MediaPipe found no person');
+
+        // A bridge that detects a person: the angles are solved from its landmarks, which come back with the pose.
+        const lms = createMockHumanLandmarks(true);
+        const found = path.join(dir, 'found.py');
+        fs.writeFileSync(found, `import sys, json\nsys.stdin.buffer.read()\nprint(json.dumps({"poses": [{"world": ${JSON.stringify(lms)}, "image": ${JSON.stringify(lms)}}]}))\n`);
+        const pose = await new MediaPipePoseService({ scriptPath: found }).estimatePoseFromImage({ image: Buffer.from('x') });
+        expect(pose.success).toBe(true);
+        expect(pose.worldLandmarks).toHaveLength(33);
+        expect(pose.angles).toEqual(service.landmarksToPose(lms, lms).angles);
+        fs.rmSync(dir, { recursive: true, force: true });
     });
 });

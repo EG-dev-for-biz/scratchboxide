@@ -7,105 +7,92 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import * as fs from 'fs-extra';
 import { NativeMeshReshaperService, MeshDeformationOp } from '../../3d-engine/native-mesh-reshaper-service';
 import * as path from 'path';
 import { TileRestyleService, type TileRestyleField, type TileRestyleForm, type TileRestyleSurface } from '../../3d-engine/tile-restyle-service';
 import { resolveWithinRoot } from '../../security/path-guard';
+import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import type { CanvasArtifact, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
-import type { ToolDeclaration, ToolHandler } from './types';
+import type { ToolDeclaration, ToolHandler, ToolParameterSchema } from './types';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
 }
 
+const INPUT_GLB_PARAMETER: ToolParameterSchema = {
+    type: 'STRING',
+    description: 'Path to the input binary glTF 2.0 (.glb) mesh (required; the tool fails rather than deform a stand-in mesh).'
+};
+
+/** The mesh to process must exist on disk; nothing is substituted for a missing one. */
+async function requireInputGlb(tool: string, value: unknown): Promise<string> {
+    const inputGlbPath = asString(value);
+    if (!inputGlbPath) {
+        throw new MissingInputError(tool, 'inputGlbPath', 'give the path of the .glb to process; no stand-in mesh is used');
+    }
+    if (!(await fs.pathExists(inputGlbPath))) {
+        throw new MissingInputError(tool, 'inputGlbPath', `${inputGlbPath} does not exist`);
+    }
+    return inputGlbPath;
+}
+
+const fmt = (v: [number, number, number]) => `[${v.map(n => Number(n.toFixed(3))).join(', ')}]`;
+
 export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
-        name: 'mesh_reshape_via_prompt',
-        description: 'Reshape, sculpt, and deform a 3D mesh (.glb) from a natural language prompt using the native Scratchbox C++20 Astro 3D engine (taper, twist, bend, bulge, FFD Bernstein lattice, digital sculpt strokes, and subdivision).',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                prompt: {
-                    type: 'STRING',
-                    description: 'Natural language description of desired deformations (e.g., "taper top by 40% and twist 45 degrees along Y", "bend 30 degrees towards X", "sculpt clay stroke along spine", "smooth surface").'
-                },
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path to input binary glTF 2.0 (.glb) mesh. If omitted, uses specified benchmark.'
-                },
-                outputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path where reshaped binary glTF 2.0 (.glb) will be written. Defaults to reshaped_<timestamp>.glb.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Synthetic benchmark mesh to use if inputGlbPath is not supplied: "cylinder", "cube", or "sculpture". Defaults to "cylinder".'
-                }
-            },
-            required: ['prompt']
-        }
-    },
-    {
         name: 'mesh_apply_deformers',
-        description: 'Apply an explicit parametric sequence of 3D deformations (taper, twist, bend, bulge, shear, FFD lattice, sculpt brushes, loop subdivision) via native C++20 engine.',
+        description: 'Deform a given 3D mesh (.glb) with an explicit, ordered list of operations in the native C++20 engine. You choose every operation and value from what the user asked for; nothing is inferred or applied by default, and an operation with a missing or out-of-range parameter fails the call. Positions and sizes are fractions of the mesh\'s measured bounding box (as it stands before each operation), so they mean the same on a small prop and a 60 m tower: range [start, end] = fractions of the extent along axis (0 = min, 1 = max); center [u, v, w] = fractions of the box along X, Y, Z; radius and strength = fractions of the box diagonal. '
+            + 'Per type: taper {axis, factor (cross-section scale at the range end, >0), range, power? (default 1)}; twist {axis, angleDeg, range}; bend {axis (length direction), secondaryAxis (direction the far end curves toward), angleDeg (total over the extent; the min end stays fixed)}; shear {axis, secondaryAxis, factor (the far end moves factor x the extent along axis)}; bulge {center, radius, strength (negative pinches), power? (default 2)}; sculpt {sculptBrush, center, radius, strength (a 0..1 blend for smooth and flatten), direction (grab, clay, flatten)}; lattice {latticeDimensions [2..8 each], latticeOffsets [{i, j, k, offset: fractions of the box size}]}; subdivide {subdivideIterations 1..3}; repair {}; weathering {weatheringIntensity (vertex colour variation), weatheringScale (noise cycles across the mesh)}. The result reports the measured input bounds.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 operations: {
                     type: 'ARRAY',
-                    description: 'Array of parametric deformation operations to execute in order on the mesh.',
+                    description: 'Deformations to apply, in order. Each one is explicit; see the tool description for the parameters each type needs.',
                     items: {
                         type: 'OBJECT',
                         properties: {
-                            type: {
-                                type: 'STRING',
-                                description: 'Deformation type: "taper", "twist", "bend", "bulge", "shear", "lattice", "sculpt", "subdivide", "repair", or "weathering".'
+                            type: { type: 'STRING', description: 'taper, twist, bend, shear, bulge, sculpt, lattice, subdivide, repair or weathering.' },
+                            axis: { type: 'STRING', description: '"X", "Y" or "Z".' },
+                            secondaryAxis: { type: 'STRING', description: '"X", "Y" or "Z", different from axis (bend, shear).' },
+                            factor: { type: 'NUMBER', description: 'Taper: cross-section scale at the range end (>0). Shear: slope.' },
+                            angleDeg: { type: 'NUMBER', description: 'Twist or bend angle in degrees.' },
+                            range: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[start, end], fractions of the extent along axis, 0 <= start < end <= 1 (taper, twist).' },
+                            power: { type: 'NUMBER', description: 'Optional curve exponent (taper, default 1; bulge falloff, default 2).' },
+                            center: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[u, v, w], fractions of the bounding box along X, Y, Z (bulge, sculpt).' },
+                            radius: { type: 'NUMBER', description: 'Fraction of the bounding-box diagonal (bulge, sculpt).' },
+                            strength: { type: 'NUMBER', description: 'Displacement as a fraction of the bounding-box diagonal; a 0..1 blend for the smooth and flatten brushes.' },
+                            direction: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Stroke direction [x, y, z] (sculpt grab, clay, flatten).' },
+                            sculptBrush: { type: 'STRING', description: 'grab, clay, inflate, flatten, pinch, crease or smooth.' },
+                            latticeDimensions: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[nx, ny, nz], each 2..8.' },
+                            latticeOffsets: {
+                                type: 'ARRAY',
+                                description: 'Control point moves: { i, j, k, offset: [dx, dy, dz] as fractions of the box size }.',
+                                items: {
+                                    type: 'OBJECT',
+                                    properties: {
+                                        i: { type: 'NUMBER' },
+                                        j: { type: 'NUMBER' },
+                                        k: { type: 'NUMBER' },
+                                        offset: { type: 'ARRAY', items: { type: 'NUMBER' } }
+                                    }
+                                }
                             },
-                            axis: {
-                                type: 'STRING',
-                                description: 'Primary axis: "X", "Y", or "Z".'
-                            },
-                            secondaryAxis: {
-                                type: 'STRING',
-                                description: 'Secondary axis for bend/shear: "X", "Y", or "Z".'
-                            },
-                            factor: {
-                                type: 'NUMBER',
-                                description: 'Scale factor for taper or shear.'
-                            },
-                            angleDeg: {
-                                type: 'NUMBER',
-                                description: 'Deformation angle in degrees for twist or bend.'
-                            },
-                            radius: {
-                                type: 'NUMBER',
-                                description: 'Effect radius for bulge, bend, or sculpt.'
-                            },
-                            strength: {
-                                type: 'NUMBER',
-                                description: 'Deformation magnitude for bulge or sculpt strokes.'
-                            },
-                            sculptBrush: {
-                                type: 'STRING',
-                                description: 'Sculpt brush: "grab", "clay", "inflate", "flatten", "pinch", "crease", or "smooth".'
-                            }
-                        }
+                            subdivideIterations: { type: 'NUMBER', description: '1, 2 or 3.' },
+                            weatheringIntensity: { type: 'NUMBER', description: 'Vertex colour variation amplitude.' },
+                            weatheringScale: { type: 'NUMBER', description: 'Noise cycles across the mesh (> 0).' }
+                        },
+                        required: ['type']
                     }
                 },
-                inputGlbPath: {
-                    type: 'STRING',
-                    description: 'Optional path to input binary glTF 2.0 (.glb) mesh.'
-                },
+                inputGlbPath: INPUT_GLB_PARAMETER,
                 outputGlbPath: {
                     type: 'STRING',
-                    description: 'Optional path where reshaped binary glTF 2.0 (.glb) will be written.'
-                },
-                benchmark: {
-                    type: 'STRING',
-                    description: 'Synthetic benchmark mesh: "cylinder", "cube", or "sculpture".'
+                    description: 'Optional path where the deformed binary glTF 2.0 (.glb) is written.'
                 }
             },
-            required: ['operations']
+            required: ['operations', 'inputGlbPath']
         }
     },
     {
@@ -204,55 +191,28 @@ const reshaperService = new NativeMeshReshaperService();
 const tileRestyleService = new TileRestyleService();
 
 export const meshShapingHandlers: Record<string, ToolHandler> = {
-    mesh_reshape_via_prompt: async (args, _ctx) => {
-        const prompt = asString(args.prompt);
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
-        const outputGlbPath = asString(args.outputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as 'cylinder' | 'cube' | 'sculpture') || 'cylinder';
-
-        const result = await reshaperService.reshapeMesh({
-            prompt,
-            inputGlbPath,
-            outputGlbPath,
-            benchmark
-        });
-
-        return {
-            status: result.success ? 'completed' : 'failed',
-            resultPayload: {
-                status: result.success ? 'success' : 'failed',
-                success: result.success,
-                outputGlbPath: result.outputGlbPath,
-                telemetry: result.telemetry,
-                operationsApplied: result.operationsApplied
-            },
-            summaryResult: `Successfully reshaped mesh via native C++20 engine in ${result.telemetry.processingTimeMs.toFixed(2)}ms (${result.telemetry.outputVertices} vertices, ${result.telemetry.outputTriangles} triangles, ${result.operationsApplied.length} operations applied). GLB written to: ${result.outputGlbPath}`
-        };
-    },
-
     mesh_apply_deformers: async (args, _ctx) => {
-        const rawOps = Array.isArray(args.operations) ? (args.operations as MeshDeformationOp[]) : [];
-        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        const operations = Array.isArray(args.operations) ? (args.operations as MeshDeformationOp[]) : [];
+        if (operations.length === 0) {
+            throw new MissingInputError('mesh_apply_deformers', 'operations', 'give at least one deformation operation; none is chosen for you');
+        }
+        const inputGlbPath = await requireInputGlb('mesh_apply_deformers', args.inputGlbPath);
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
-        const benchmark = (asString(args.benchmark) as 'cylinder' | 'cube' | 'sculpture') || 'cylinder';
 
-        const result = await reshaperService.reshapeMesh({
-            operations: rawOps,
-            inputGlbPath,
-            outputGlbPath,
-            benchmark
-        });
+        // Invalid operations, a failed native run, or a run that reports no output all throw (typed errors).
+        const result = await reshaperService.reshapeMesh({ operations, inputGlbPath, outputGlbPath });
+        const t = result.telemetry;
 
         return {
-            status: result.success ? 'completed' : 'failed',
+            status: 'completed',
             resultPayload: {
-                status: result.success ? 'success' : 'failed',
-                success: result.success,
+                status: 'success',
+                success: true,
                 outputGlbPath: result.outputGlbPath,
-                telemetry: result.telemetry,
+                telemetry: t,
                 operationsApplied: result.operationsApplied
             },
-            summaryResult: `Parametric mesh deformations executed in ${result.telemetry.processingTimeMs.toFixed(2)}ms (${result.telemetry.outputVertices} vertices, ${result.telemetry.outputTriangles} triangles, ${result.operationsApplied.length} operations applied). Output: ${result.outputGlbPath}`
+            summaryResult: `Applied ${t.operationsCount} deformation(s) to ${inputGlbPath} (measured bounds ${fmt(t.inputBoundsMin)} to ${fmt(t.inputBoundsMax)}) in ${t.processingTimeMs.toFixed(1)} ms: ${t.outputVertices} vertices, ${t.outputTriangles} triangles. Output: ${result.outputGlbPath}`
         };
     },
 

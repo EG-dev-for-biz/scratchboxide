@@ -1105,13 +1105,16 @@ export class AlgorithmicUvEngine {
     return Math.max(epsilon, Math.min(1.8, total));
   }
 
-  /** Sun vector used by solar inverse de-lighting: `sunVector` when given, else NOAA ephemeris at the configured site and time. */
+  /**
+   * Sun vector used by solar inverse de-lighting: `sunVector` when given, else the NOAA ephemeris at the caller's
+   * latitude, longitude and UTC timestampIso. No place or date is assumed: without them this throws.
+   */
   public static resolveSolarSunVector(cfg: SolarDelightingConfig = {}): [number, number, number] {
     if (cfg.sunVector) return cfg.sunVector;
-    const lat = cfg.latitude ?? 40.74844;
-    const lng = cfg.longitude ?? -73.98566;
-    const date = cfg.timestampIso ? new Date(cfg.timestampIso) : new Date('2024-06-21T14:30:00Z');
-    const pos = calculateNOAASolarPosition(date, lat, lng);
+    if (!Number.isFinite(cfg.latitude) || !Number.isFinite(cfg.longitude) || !cfg.timestampIso || Number.isNaN(Date.parse(cfg.timestampIso))) {
+      throw new Error(`Solar de-lighting needs solarDelighting.sunVector, or latitude, longitude and a UTC timestampIso (got ${cfg.latitude}, ${cfg.longitude}, ${JSON.stringify(cfg.timestampIso)})`);
+    }
+    const pos = calculateNOAASolarPosition(new Date(cfg.timestampIso), cfg.latitude!, cfg.longitude!);
     const sun = calculateENUSunVector(pos.altitudeRad, pos.azimuthRad);
     return [sun.x, sun.y, sun.z];
   }
@@ -1758,6 +1761,7 @@ export class AlgorithmicUvEngine {
     // 1b. Solar Inverse De-Lighting via NOAA Ephemeris & Ramamoorthi SH9 Irradiance
     if (options.enableSolarInverseDelighting) {
       const cfg = options.solarDelighting || {};
+      // The sun is the one given (a vector, or a place and time for the NOAA ephemeris); no place or date is assumed.
       const sunVec = this.resolveSolarSunVector(cfg);
 
       const skyShCoeffs: [number, number, number][] = cfg.skyShCoeffs ?? [
