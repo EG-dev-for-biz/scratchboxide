@@ -1,5 +1,14 @@
 # Omnispatial Photogrammetric Rectification & Ground-Truth Invariants Pipeline
 
+> **Superseded (2026-10-15): do not follow the steps below.** `PhotogrammetricTerrainHarmonizerService` (`harmonizeGlb`,
+> `fitOrientedBoundingEnvelope`), the `harmonize_photogrammetric_district` tool and `scripts/integrate_colosseum_botanical_trees*`
+> are deleted: they flattened canopy and placed trees from hand-written or seeded-random stands (species, positions,
+> heights) instead of measuring them. A location's trees are now measured in its photo tiles and rebuilt as SB-Veggie
+> trees by `TileVegetationService` (`packages/core/src/node/3d-engine/tile-vegetation-service.ts`, native
+> `scratchbox_tile_vegetation.hpp` / `scripts/tile_vegetation.cpp`) through `google_3d_tiles_get_clay`
+> (`location-clay-pipeline.ts`); a single tree of given measurements comes from `botanical_synthesize_tree`. This record
+> is kept as history only.
+
 ## Problem Statement
 When restructuring raw aerial photogrammetric 3D tiles (such as Google Photorealistic 3D Tiles) into high-fidelity PBR architectural assets, automated processing frequently introduces severe visual and geometric regressions:
 1. **Geometric Intrusion & Facade Slicing**: Attempting to superimpose arbitrary synthetic vector road spline quads with fixed elevations causes the synthetic road to slice directly through historic monuments (e.g. cutting through Colosseum arcades) and protrude off the edge of the tile as floating diving boards.
@@ -85,7 +94,7 @@ When restructuring raw aerial photogrammetric 3D tiles (such as Google Photoreal
 ## Automation Pointers
 
 - Execution scripts:
-  - `node scripts/integrate_colosseum_botanical_trees_v4.cjs` (botanical DTM flattening and conifer instancing).
+  - (deleted, see the note at the top) `node scripts/integrate_colosseum_botanical_trees_v4.cjs` (botanical DTM flattening and conifer instancing).
   - `node scripts/apply_omnispatial_complete_overhaul.cjs` (curtain wall excision, polar HSV solar de-lighting, PBR map generation).
   - `node scripts/capture_master_verified_plates.cjs` (headless Chrome CDP automated multi-angle verification).
 - Target Master Asset: `public/models/colosseum_stage3_master_pbr.glb`
