@@ -36,7 +36,8 @@ import { SpatialAssetVaultService } from '../src/node/spatial/SpatialAssetVaultS
 import { GoogleSolarService } from '../src/browser/generative-canvas/services/google-solar-service';
 import { Scene3DWorldLens } from '../src/browser/generative-canvas/lenses/Scene3DWorldLens';
 import { GeoCameraMatchmovePipelineService } from '../src/node/spatial/GeoCameraMatchmovePipelineService';
-import { preferSavedMapsKey, saveMapsKeySetting, MAPS_KEY_STORE_ACCOUNT, MAPS_KEY_STORE_SERVICE } from '../src/node/spatial/maps-key-settings';
+import { mapsKeyStatus, preferSavedMapsKey, saveMapsKeySetting, MAPS_KEY_STORE_ACCOUNT, MAPS_KEY_STORE_SERVICE } from '../src/node/spatial/maps-key-settings';
+import { syncSavedMapsKeyToServer } from '../src/browser/generative-canvas/settings/maps-key-sync';
 import { encodePng } from '../src/node/texture-processing';
 
 const savedEnv = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
@@ -311,5 +312,69 @@ describe('the Maps key saved in Settings reaches the server', () => {
         vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         expect(preferSavedMapsKey(store as any)).toBe(true);
         expect(process.env.GOOGLE_MAPS_API_KEY).toBe('saved-key');
+        return saveMapsKeySetting('', store as any); // leave no Settings key applied for the next test
+    });
+
+    it('clearing the Settings key puts back the key it replaced from the environment or a secrets file', async () => {
+        const store = memoryStore();
+        process.env.GOOGLE_MAPS_API_KEY = 'secrets-file-key';
+        GoogleMapsService.getInstance().setApiKey('secrets-file-key');
+        expect(await saveMapsKeySetting('settings-key', store as any)).toEqual({ configured: true });
+        expect(process.env.GOOGLE_MAPS_API_KEY).toBe('settings-key');
+        expect(await saveMapsKeySetting('another-settings-key', store as any)).toEqual({ configured: true });
+
+        expect(await saveMapsKeySetting('', store as any)).toEqual({ configured: true });
+        expect(process.env.GOOGLE_MAPS_API_KEY).toBe('secrets-file-key');
+        expect(GoogleMapsService.getInstance().getApiKey()).toBe('secrets-file-key');
+        expect(store.data.size).toBe(0);
+    });
+
+    it('reports whether a key is saved in Settings, never the key', async () => {
+        const store = memoryStore();
+        expect(mapsKeyStatus(store as any)).toEqual({ configured: false, savedInSettings: false });
+        await saveMapsKeySetting('settings-key', store as any);
+        const status = mapsKeyStatus(store as any);
+        expect(status).toEqual({ configured: true, savedInSettings: true });
+        expect(JSON.stringify(status)).not.toContain('settings-key');
+        await saveMapsKeySetting('', store as any);
+    });
+});
+
+describe('a Maps key Settings kept only in the window reaches the server', () => {
+    /** A fake /api/geo/maps-key: GET answers `status`, POST answers `post` (default success); every request is recorded. */
+    function server(status: Record<string, unknown> | number, post: number = 200) {
+        const calls: Array<{ method: string; body?: any }> = [];
+        const impl = (async (url: any, init?: any) => {
+            expect(String(url)).toBe('/api/geo/maps-key');
+            const method = init?.method || 'GET';
+            calls.push({ method, ...(init?.body ? { body: JSON.parse(init.body) } : {}) });
+            if (method === 'GET') {
+                return typeof status === 'number'
+                    ? new Response('{}', { status })
+                    : new Response(JSON.stringify(status), { status: 200 });
+            }
+            return new Response(JSON.stringify(post === 200 ? { success: true, configured: true } : { success: false, error: 'key store is read-only' }), { status: post });
+        }) as typeof fetch;
+        return { impl, calls };
+    }
+
+    it('sends the window\'s key when the server has no Settings key (even with a secrets-file key)', async () => {
+        const fake = server({ configured: true, savedInSettings: false });
+        expect(await syncSavedMapsKeyToServer('  window-key  ', fake.impl)).toBeUndefined();
+        expect(fake.calls).toEqual([{ method: 'GET' }, { method: 'POST', body: { apiKey: 'window-key' } }]);
+    });
+
+    it('sends nothing when the server already has a Settings key, or the window has none', async () => {
+        const saved = server({ configured: true, savedInSettings: true });
+        expect(await syncSavedMapsKeyToServer('window-key', saved.impl)).toBeUndefined();
+        expect(saved.calls).toEqual([{ method: 'GET' }]);
+        const none = server({ configured: false, savedInSettings: false });
+        expect(await syncSavedMapsKeyToServer('', none.impl)).toBeUndefined();
+        expect(none.calls).toEqual([]);
+    });
+
+    it('says why the key did not reach the server', async () => {
+        expect(await syncSavedMapsKeyToServer('window-key', server(503).impl)).toMatch(/could not be sent to the server \(checking the server's key returned HTTP 503\).*Save the key again/);
+        expect(await syncSavedMapsKeyToServer('window-key', server({ savedInSettings: false }, 500).impl)).toMatch(/could not be sent to the server \(key store is read-only\)/);
     });
 });

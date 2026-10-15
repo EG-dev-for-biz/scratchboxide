@@ -21,6 +21,7 @@ import { StudioSettingsTab, UserMemoryCategory } from '../canvas-types';
 import { GeminiClient } from '../gemini-client';
 import { GoogleDriveService } from '../google-drive-service';
 import { GoogleMapsService } from '../services/google-maps-service';
+import { syncSavedMapsKeyToServer } from './maps-key-sync';
 import { UserMemoriesClient } from '../user-memories-client';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 import { SettingsSetters, SettingsState } from './settingsReducer';
@@ -103,7 +104,14 @@ export function useSettingsHandlers(deps: UseSettingsHandlersDeps) {
         const unsubscribeMaps = GoogleMapsService.getInstance().subscribe(state => {
             setMapsState(state);
         });
+        // This runs when the studio mounts (the modal is mounted closed). A key Settings saved before the server kept
+        // one lives only in this window: send it, so chat place lookups and 3D Tiles use it too.
+        let disposed = false;
+        syncSavedMapsKeyToServer(GoogleMapsService.getInstance().getStoredSettingsKey()).then(problem => {
+            if (problem && !disposed) setMapsFeedback({ message: problem, error: true });
+        });
         return () => {
+            disposed = true;
             unsubscribeGdrive();
             unsubscribeMaps();
         };
@@ -169,23 +177,28 @@ export function useSettingsHandlers(deps: UseSettingsHandlersDeps) {
         GoogleMapsService.getInstance().setApiKey(trimmed);
         // The chat tools that look places up and fetch 3D Tiles run on the server: the key must reach it too.
         let serverError: string | undefined;
+        let serverHasKey = false;
         try {
             const res = await fetch('/api/geo/maps-key', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
                 body: JSON.stringify({ apiKey: trimmed })
             });
+            const body = await res.json().catch(() => ({}));
             if (!res.ok) {
-                const body = await res.json().catch(() => ({}));
                 serverError = body?.error || `HTTP ${res.status}`;
+            } else {
+                serverHasKey = body?.configured === true;
             }
         } catch (err: any) {
             serverError = err?.message || String(err);
         }
         if (serverError) {
-            setMapsFeedback({ message: `Saved in this window only: the server did not take the key (${serverError}), so chat place lookups and 3D Tiles will not use it.`, error: true });
+            setMapsFeedback({ message: `${trimmed ? 'Saved' : 'Cleared'} in this window only: the server did not take the change (${serverError}), so chat place lookups and 3D Tiles do not follow it.`, error: true });
         } else if (trimmed) {
             setMapsFeedback({ message: 'Google Maps API key saved (Settings and the chat tools use it).' });
+        } else if (serverHasKey) {
+            setMapsFeedback({ message: 'Settings key cleared. The chat tools now use the Maps key from the server\'s environment or secrets file.' });
         } else {
             setMapsFeedback({ message: 'Google Maps API key cleared. Place lookups (Places API (New)) and Google 3D Tiles need a key.' });
         }

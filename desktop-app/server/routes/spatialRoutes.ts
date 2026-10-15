@@ -21,7 +21,7 @@ import {
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
 import { getGoogle3DTilesClay } from '../../../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService';
 import { LocationUnresolvedError } from '../../../packages/core/src/common/errors/pipeline-errors';
-import { saveMapsKeySetting } from '../../../packages/core/src/node/spatial/maps-key-settings';
+import { mapsKeyStatus, saveMapsKeySetting } from '../../../packages/core/src/node/spatial/maps-key-settings';
 import { geoidUndulation } from '../../../packages/core/src/node/spatial/egm96-geoid';
 
 export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService): Router {
@@ -519,9 +519,18 @@ export function createGeoRouter(): Router {
             res.status(500).json({ error: err?.message || String(err) });
         }
     });
+    /** Whether the server has a Maps key and whether one is saved in Settings: { configured, savedInSettings }. Never the key. */
+    router.get('/maps-key', (_req: Request, res: Response) => {
+        try {
+            res.json(mapsKeyStatus());
+        } catch (err: any) {
+            res.status(500).json({ error: err?.message || String(err) });
+        }
+    });
     /**
      * The Google Maps key saved in Settings: the chat tools (Places lookups, 3D Tiles) run here, so the key the user
-     * saves must reach this process. Body { apiKey }; an empty key clears it. The key is never echoed back.
+     * saves must reach this process. Body { apiKey }; an empty key clears it and puts back the environment's or secrets
+     * file's key, if any. The key is never echoed back.
      */
     router.post('/maps-key', async (req: Request, res: Response) => {
         const apiKey = req.body?.apiKey;

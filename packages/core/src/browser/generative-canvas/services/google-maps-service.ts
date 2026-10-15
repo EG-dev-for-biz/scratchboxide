@@ -319,6 +319,21 @@ export class GoogleMapsService {
         return this.state.apiKey;
     }
 
+    /**
+     * The key Settings saved in this window's storage, not one compiled into the bundle or read from the environment;
+     * '' when there is none. The server keeps its own copy of the Settings key (see maps-key-sync.ts).
+     */
+    public getStoredSettingsKey(): string {
+        if (typeof window === 'undefined' || !window.localStorage) return '';
+        try {
+            return (window.localStorage.getItem(STORAGE_KEY) ||
+                window.localStorage.getItem('GOOGLE_MAPS_API_KEY') ||
+                window.localStorage.getItem('sb_google_maps_key') || '').trim();
+        } catch {
+            return '';
+        }
+    }
+
     public hasApiKey(): boolean {
         return Boolean(this.state.apiKey && this.state.apiKey.trim().length > 0);
     }
