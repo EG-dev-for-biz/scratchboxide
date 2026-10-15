@@ -141,12 +141,26 @@ async function fetchGoogle3DTilesObject(queryOrCoords, options = {}) {
     if (!mod || !mod.getGoogle3DTilesFullTexture) {
         throw new Error('getGoogle3DTilesFullTexture service is not available in @scratchbox/core');
     }
-    const defaultGlbPath = path.join(PUBLIC_DIR, 'models', 'colosseum_rome_textured.glb');
-    return await mod.getGoogle3DTilesFullTexture(queryOrCoords, {
-        outputGlbPath: options.outputGlbPath || defaultGlbPath,
-        offlineMock: typeof options.offlineMock === 'boolean' ? options.offlineMock : true,
+    if (!options.outputGlbPath) {
+        throw new Error('fetchGoogle3DTilesObject needs an outputGlbPath for this extraction');
+    }
+    // Real Google 3D Tiles for this place or an error: no default model, no offline mock.
+    const tileObj = await mod.getGoogle3DTilesFullTexture(queryOrCoords, {
+        outputGlbPath: options.outputGlbPath,
         apiKey: options.apiKey
     });
+    if (!tileObj || !tileObj.success || tileObj.mock) {
+        throw new Error(tileObj?.error || 'The Google 3D Tiles extraction returned no tiles for this place.');
+    }
+    return tileObj;
+}
+
+/** A file name for a fresh extraction, keyed by the place it is for and the time it was made. */
+function extractionGlbName(target, mode) {
+    const key = typeof target === 'object'
+        ? `${Number(target.lat).toFixed(5)}_${Number(target.lng).toFixed(5)}`
+        : String(target).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'place';
+    return `tiles_${key}_${mode}_${Date.now()}.glb`;
 }
 
 function getFfmpegBin() {
@@ -154,54 +168,6 @@ function getFfmpegBin() {
     if (fs.existsSync('/opt/homebrew/bin/ffmpeg')) return '/opt/homebrew/bin/ffmpeg';
     if (fs.existsSync('/usr/local/bin/ffmpeg')) return '/usr/local/bin/ffmpeg';
     return 'ffmpeg';
-}
-
-function haversineDistanceKm(lat1, lon1, lat2, lon2) {
-    const R = 6371.0;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function resolveDynamicModelByProximity(lat, lng, hint = '') {
-    const modelsDir = path.join(PUBLIC_DIR, 'models');
-    const q = (hint || '').toLowerCase();
-
-    // Known geodetic centroids of pre-captured high-quality models in public/models
-    const GEO_MODELS = [
-        { file: 'nyc_empire_state_building_pbr_enhanced.glb', lat: 40.74844, lng: -73.98566, keys: ['empire', 'esb', '350 5th', '34th st', '34th street'] },
-        { file: 'google_tiles_textured_area.glb', lat: 40.76449, lng: -73.97444, keys: ['plaza', 'central park south', 'grand army plaza'] },
-        { file: 'colosseum_rome_textured.glb', lat: 41.89021, lng: 12.49223, keys: ['colosseum', 'colosseo', 'rome', 'flavian'] },
-        { file: 'washington_square_arch_nyc_universal_pbr.glb', lat: 40.73082, lng: -73.99733, keys: ['washington square', 'arch'] },
-        { file: 'red_rocks_amphitheatre.glb', lat: 39.6654, lng: -105.2057, keys: ['red rocks', 'amphitheatre'] },
-        { file: 'eiffel_tower_textured.glb', lat: 48.85837, lng: 2.29448, keys: ['eiffel', 'paris'] },
-        { file: 'sydney_opera_house_textured.glb', lat: -33.85678, lng: 151.2153, keys: ['sydney', 'opera'] }
-    ];
-
-    let best = null;
-    let minDist = 3.0; // within 3 km
-    for (const m of GEO_MODELS) {
-        if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
-            const d = haversineDistanceKm(lat, lng, m.lat, m.lng);
-            if (d < minDist) {
-                minDist = d;
-                best = m.file;
-            }
-        }
-        if (q && m.keys.some(k => q.includes(k))) {
-            if (!best || minDist > 10.0) {
-                best = m.file;
-            }
-        }
-    }
-
-    if (best && fs.existsSync(path.join(modelsDir, best))) {
-        return best;
-    }
-    return null;
 }
 
 function extractVideoFrame(videoPath, timeSec, outPath) {
@@ -357,78 +323,51 @@ const server = http.createServer(async (req, res) => {
             const queryHint = payload.hint || payload.query || payload.text || '';
             const result = await executePythonResection(savedImagePath, queryHint);
 
-            // Ingest 3D Object Mesh or Live Google 3D Tiles of resected landmark
+            // The resected place's own 3D model: the one the resection named, or Google 3D Tiles extracted fresh at its
+            // centre. Without a centre, or when the extraction fails, there is none and the response says why; no
+            // default landmark, model looked up by proximity or keyword, or synthetic tile stands in.
             let threeDObject = null;
-            try {
-                const targetAnchor = {
-                    lat: result.google_map_tiles_3d?.center?.lat || 41.89030,
-                    lng: result.google_map_tiles_3d?.center?.lng || 12.49165,
-                    elevation: result.google_map_tiles_3d?.center?.altitude || 26.0
-                };
-                let outputGlbName = null;
-                if (result.google_map_tiles_3d?.three_d_object_model_url) {
-                    const candidateName = path.basename(result.google_map_tiles_3d.three_d_object_model_url);
-                    if (fs.existsSync(path.join(PUBLIC_DIR, 'models', candidateName))) {
-                        outputGlbName = candidateName;
-                    }
-                }
-                if (!outputGlbName) {
-                    outputGlbName = resolveDynamicModelByProximity(targetAnchor.lat, targetAnchor.lng, queryHint);
-                }
-
-                // If no pre-cached GLB exists for this location, synthesize an authentic 3D tile model dynamically
-                if (!outputGlbName || !fs.existsSync(path.join(PUBLIC_DIR, 'models', outputGlbName))) {
-                    const lmRaw = result.stage2_places?.landmark_name || queryHint || 'location';
-                    const cleanStem = lmRaw.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 32);
-                    outputGlbName = `${cleanStem}_textured.glb`;
-                    const dynamicGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
-                    if (!fs.existsSync(dynamicGlbPath)) {
-                        try {
-                            const { Google3DTileCrawlerBaker } = await import('../packages/core/dist/node/spatial/Google3DTileCrawlerBaker.js');
-                            const originAlt = { lat: targetAnchor.lat, lng: targetAnchor.lng, alt: targetAnchor.elevation || 15.0 };
-                            const syntheticTile = Google3DTileCrawlerBaker.createSyntheticGeodeticTile(originAlt, 200);
-                            const merged = Google3DTileCrawlerBaker.mergeTileMeshes([syntheticTile], originAlt);
-                            fs.writeFileSync(dynamicGlbPath, merged.glbBuffer);
-                            console.log(`[Resection API] Dynamically generated 3D Tile GLB for "${cleanStem}" (${merged.glbBuffer.length} bytes)`);
-                        } catch (bakeErr) {
-                            console.warn('[Resection API] Could not generate dynamic tile mesh:', bakeErr.message);
-                        }
-                    }
-                }
-
-                if (outputGlbName && fs.existsSync(path.join(PUBLIC_DIR, 'models', outputGlbName))) {
-                    const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
-                    const tileObj = await fetchGoogle3DTilesObject(targetAnchor, {
-                        outputGlbPath,
-                        offlineMock: true
-                    });
+            let threeDObjectError = null;
+            const center = result.google_map_tiles_3d?.center;
+            if (typeof center?.lat !== 'number' || typeof center?.lng !== 'number') {
+                threeDObjectError = 'The resection reported no map centre, so no 3D tiles were fetched.';
+            } else {
+                const targetAnchor = { lat: center.lat, lng: center.lng, ...(typeof center.altitude === 'number' ? { elevation: center.altitude } : {}) };
+                const namedModel = result.google_map_tiles_3d?.three_d_object_model_url
+                    ? path.basename(result.google_map_tiles_3d.three_d_object_model_url)
+                    : null;
+                if (namedModel && fs.existsSync(path.join(PUBLIC_DIR, 'models', namedModel))) {
                     threeDObject = {
-                        service: 'getGoogle3DTilesFullTexture',
-                        mode: tileObj.mode,
-                        glbUrl: '/models/' + outputGlbName,
-                        glbPath: outputGlbPath,
+                        service: 'geobox_resection',
+                        glbUrl: '/models/' + namedModel,
+                        glbPath: path.join(PUBLIC_DIR, 'models', namedModel),
                         hasLocalGlb: true,
-                        mesh: tileObj.mesh,
-                        quality: tileObj.quality,
-                        render: tileObj.render,
-                        manifest: tileObj.manifest
+                        geoAnchor: targetAnchor
                     };
                 } else {
-                    threeDObject = {
-                        service: 'google_maps_3d_tiles',
-                        mode: 'tiles',
-                        hasLocalGlb: false,
-                        glbUrl: null,
-                        geoAnchor: targetAnchor,
-                        message: 'Streaming real-world 3D Tiles live via Google Maps 3D Platform'
-                    };
-                    if (result.google_map_tiles_3d) {
-                        result.google_map_tiles_3d.three_d_object_model_url = null;
-                        result.google_map_tiles_3d.has_local_glb = false;
+                    try {
+                        const outputGlbName = extractionGlbName(targetAnchor, 'textured');
+                        const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
+                        const tileObj = await fetchGoogle3DTilesObject(targetAnchor, { outputGlbPath });
+                        threeDObject = {
+                            service: 'getGoogle3DTilesFullTexture',
+                            mode: tileObj.mode,
+                            glbUrl: '/models/' + path.basename(tileObj.glbPath),
+                            glbPath: tileObj.glbPath,
+                            hasLocalGlb: true,
+                            geoAnchor: tileObj.geoAnchor,
+                            mesh: tileObj.mesh,
+                            quality: tileObj.quality,
+                            manifest: tileObj.manifest
+                        };
+                    } catch (tileErr) {
+                        threeDObjectError = `Google 3D Tiles extraction failed: ${tileErr.message}`;
                     }
                 }
-            } catch (tileErr) {
-                console.warn('[Resection API] 3D Tile resolution warning:', tileErr.message);
+            }
+            if (!threeDObject && result.google_map_tiles_3d) {
+                result.google_map_tiles_3d.three_d_object_model_url = null;
+                result.google_map_tiles_3d.has_local_glb = false;
             }
 
             result.three_d_object = threeDObject;
@@ -446,6 +385,7 @@ const server = http.createServer(async (req, res) => {
                 video_metadata: result.video_metadata || null,
                 google_map_tiles_3d: result.google_map_tiles_3d || null,
                 three_d_object: threeDObject,
+                three_d_object_error: threeDObjectError,
                 result: result
             }));
             return;
@@ -635,33 +575,18 @@ const server = http.createServer(async (req, res) => {
                 mode = searchParams.get('mode') || 'full-texture';
             }
 
+            // The place the caller named (or its coordinates), or a 400: no default landmark or elevation.
             let target = queryParam;
-            if (latParam !== null && lngParam !== null) {
-                target = {
-                    lat: latParam,
-                    lng: lngParam,
-                    elevation: altParam !== null ? altParam : 25.0
-                };
+            if (latParam !== null && lngParam !== null && !isNaN(latParam) && !isNaN(lngParam)) {
+                target = { lat: latParam, lng: lngParam, ...(altParam !== null && !isNaN(altParam) ? { elevation: altParam } : {}) };
             } else if (!target) {
-                // Default Colosseum landmark anchor
-                target = {
-                    lat: 41.89030,
-                    lng: 12.49165,
-                    elevation: 26.0
-                };
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Name a place (query) or give lat and lng.' }));
+                return;
             }
 
-            const outputGlbName = resolveDynamicModelByProximity(
-                typeof target === 'object' ? target.lat : null,
-                typeof target === 'object' ? target.lng : null,
-                queryParam
-            );
-            const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
-
-            const tileObj = await fetchGoogle3DTilesObject(target, {
-                outputGlbPath,
-                offlineMock: true
-            });
+            const outputGlbPath = path.join(PUBLIC_DIR, 'models', extractionGlbName(target, 'textured'));
+            const tileObj = await fetchGoogle3DTilesObject(target, { outputGlbPath });
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({

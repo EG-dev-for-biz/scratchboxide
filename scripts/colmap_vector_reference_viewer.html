@@ -730,9 +730,8 @@
       }
 
       try {
-        // ?mock=1 uses the offline synthetic clay mesh (no Google tiles fetch) for UI development
-        const mock = new URLSearchParams(location.search).get('mock') === '1';
-        const data = await surveyPost('/clay', { anchor: { lat: anchor.lat, lng: anchor.lng, elevationMeters: anchor.elevationMeters, headingDeg: anchor.headingDeg, formattedAddress: anchor.formattedAddress }, options: mock ? { offlineMock: true } : undefined });
+        // Real Google 3D Tiles or the server's error: /clay accepts no offline mock.
+        const data = await surveyPost('/clay', { anchor: { lat: anchor.lat, lng: anchor.lng, elevationMeters: anchor.elevationMeters, headingDeg: anchor.headingDeg, formattedAddress: anchor.formattedAddress } });
         if (!data.glbUrl) throw new Error('Clay GLB is not under the public directory; cannot stream it to the viewer');
 
         currentClayMetadata = data;

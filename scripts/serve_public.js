@@ -284,92 +284,45 @@ const server = http.createServer((req, res) => {
                     } catch {}
                 }
                 q = (q || '').trim();
-                if (!q) q = 'San Francisco Ferry Building';
+                const fail = (status, error) => {
+                    res.writeHead(status, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, query: q, error }));
+                };
+                if (!q) {
+                    fail(400, 'Name a place, an address or "lat, lng" (query or q).');
+                    return;
+                }
 
-                const lower = q.toLowerCase();
-                let glbFile = 'sf_ferry_raw.glb';
-                let landmarkName = 'San Francisco Ferry Building';
-                let lat = 37.7955;
-                let lng = -122.3937;
-                let vertexCount = 28004;
-                let triangleCount = 13920;
-                let reliefDeltaY = 191.2;
-
-                if (lower.includes('colosseum') || lower.includes('rome') || lower.includes('amphitheat')) {
-                    glbFile = 'colosseum_clay.glb';
-                    landmarkName = 'Colosseum, Rome';
-                    lat = 41.8902;
-                    lng = 12.4922;
-                    vertexCount = 234679;
-                    triangleCount = 170802;
-                    reliefDeltaY = 84.12;
-                } else if (lower.includes('empire') || lower.includes('esb') || lower.includes('state building')) {
-                    glbFile = 'esb_clay.glb';
-                    landmarkName = 'Empire State Building, New York';
-                    lat = 40.7484;
-                    lng = -73.9857;
-                    vertexCount = 28004;
-                    triangleCount = 13920;
-                    reliefDeltaY = 443.95;
-                } else if (lower.includes('ferry') || lower.includes('san francisco') || lower.includes('embarcadero')) {
-                    glbFile = 'sf_ferry_raw.glb';
-                    landmarkName = 'San Francisco Ferry Building';
-                    lat = 37.7955;
-                    lng = -122.3937;
-                    vertexCount = 28004;
-                    triangleCount = 13920;
-                    reliefDeltaY = 191.2;
-                } else if (lower.includes('washington') || lower.includes('arch') || lower.includes('greenwich')) {
-                    glbFile = 'washington_square_arch_nyc_raw.glb';
-                    landmarkName = 'Washington Square Arch, NYC';
-                    lat = 40.7308;
-                    lng = -73.9973;
-                    vertexCount = 14200;
-                    triangleCount = 8900;
-                    reliefDeltaY = 23.4;
-                } else if (lower.includes('eiffel') || lower.includes('paris') || lower.includes('champ')) {
-                    glbFile = 'eiffel_tower_paris_clay.glb';
-                    landmarkName = 'Eiffel Tower, Paris';
-                    lat = 48.8584;
-                    lng = 2.2945;
-                    vertexCount = 85200;
-                    triangleCount = 62100;
-                    reliefDeltaY = 324.0;
-                } else if (lower.includes('venice') || lower.includes('beach') || lower.includes('boardwalk')) {
-                    glbFile = 'venice_beach_test_clay.glb';
-                    landmarkName = 'Venice Beach Boardwalk, CA';
-                    lat = 33.9850;
-                    lng = -118.4695;
-                    vertexCount = 38400;
-                    triangleCount = 24100;
-                    reliefDeltaY = 12.5;
-                } else {
-                    try {
-                        const { getGoogle3DTilesClay } = require(path.resolve(__dirname, '../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService'));
-                        const targetGlb = path.resolve(__dirname, '../public/models', `tile_${Date.now()}.glb`);
-                        const result = await getGoogle3DTilesClay(q, {
-                            outputGlbPath: targetGlb,
-                            offlineMock: !process.env.GOOGLE_MAPS_API_KEY
-                        });
-                        if (result && result.success && fs.existsSync(result.glbPath)) {
-                            glbFile = path.basename(result.glbPath);
-                            landmarkName = result.resolvedAddress || q;
-                            lat = result.geoAnchor?.lat || lat;
-                            lng = result.geoAnchor?.lng || lng;
-                            vertexCount = result.mesh?.vertexCount || vertexCount;
-                            triangleCount = result.mesh?.triangleCount || triangleCount;
-                        }
-                    } catch {}
+                // The place is resolved and extracted by the tile service (Google Places + Photorealistic 3D Tiles), or
+                // the request fails with why: no place table, default place, canned GLB or offline mock stands in.
+                let getGoogle3DTilesClay;
+                try {
+                    ({ getGoogle3DTilesClay } = require(path.resolve(__dirname, '../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService')));
+                } catch (err) {
+                    fail(501, `Google 3D Tiles extraction is not available in this server (run it under a TypeScript loader): ${err?.message || err}`);
+                    return;
+                }
+                const targetGlb = path.resolve(__dirname, '../public/models', `tile_${Date.now()}.glb`);
+                let result;
+                try {
+                    result = await getGoogle3DTilesClay(q, { outputGlbPath: targetGlb });
+                } catch (err) {
+                    fail(502, err?.message || String(err));
+                    return;
+                }
+                if (!result || !result.success || result.mock || !result.glbPath || !fs.existsSync(result.glbPath)) {
+                    fail(502, result?.error || (result?.mock ? 'The extraction returned placeholder tiles, not Google 3D Tiles.' : 'The extraction wrote no GLB.'));
+                    return;
                 }
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     success: true,
                     query: q,
-                    landmarkName,
-                    glbUrl: `/models/${glbFile}`,
-                    mesh: { vertexCount, triangleCount, reliefDeltaY },
-                    geoAnchor: { lat, lng, landmarkName }
+                    landmarkName: result.resolvedAddress,
+                    glbUrl: `/models/${path.basename(result.glbPath)}`,
+                    mesh: { vertexCount: result.mesh?.vertexCount, triangleCount: result.mesh?.triangleCount },
+                    geoAnchor: result.geoAnchor
                 }));
             } catch (err) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });

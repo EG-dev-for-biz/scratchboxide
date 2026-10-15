@@ -746,9 +746,8 @@
 
             try {
                 const res = await fetch(`/api/3d/tiles/query?q=${encodeURIComponent(q)}`);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
-                if (!data.success) throw new Error(data.error);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
 
                 activeCustomGlbUrl = data.glbUrl;
                 activeLandmarkName = data.landmarkName || q;

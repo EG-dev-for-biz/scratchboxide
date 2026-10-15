@@ -349,9 +349,12 @@ const server = http.createServer(async (req, res) => {
                             fs.mkdirSync(exportDir, { recursive: true });
                             const key = typeof query === 'string' ? query.toLowerCase().replace(/[^a-z0-9]+/g, '_') : `${query.lat.toFixed(4)}_${query.lng.toFixed(4)}`;
                             const outGlbPath = path.resolve(exportDir, `${key}_clay.glb`);
-                            const result = await tilesMod.getGoogle3DTilesClay(query, { ...(options || {}), outputGlbPath: outGlbPath, apiKey, offlineMock: (options && options.offlineMock) || !apiKey });
+                            // Real tiles or an error: without a key the extraction fails (LocationUnresolvedError), never mocks.
+                            const { offlineMock: _ignored, ...extractionOptions } = options || {};
+                            const result = await tilesMod.getGoogle3DTilesClay(query, { ...extractionOptions, outputGlbPath: outGlbPath, apiKey: apiKey || undefined });
                             if (!result.success) throw new Error(result.error || 'Clay ingestion failed');
-                            return { glbPath: result.glbPath, glbUrl: `/data/colmap_vector_export/${path.basename(result.glbPath)}`, mesh: result.mesh, geoAnchor: result.geoAnchor, quality: result.quality, mode: result.mode };
+                            if (result.mock) throw new Error('Clay ingestion produced placeholder (mock) tiles, not Google 3D Tiles');
+                            return { glbPath: result.glbPath, glbUrl: `/data/colmap_vector_export/${path.basename(result.glbPath)}`, mesh: result.mesh, geoAnchor: result.geoAnchor, resolvedAddress: result.resolvedAddress, quality: result.quality, mode: result.mode, mock: result.mock === true };
                         }
                     });
                     // Beautify jobs on this dev server use the offline recolour generator unless
@@ -396,7 +399,6 @@ const server = http.createServer(async (req, res) => {
         const lat = parseFloat(urlObj.searchParams.get('lat'));
         const lng = parseFloat(urlObj.searchParams.get('lng'));
         const query = urlObj.searchParams.get('query');
-        const offlineMock = urlObj.searchParams.get('offlineMock') === 'true';
 
         (async () => {
             try {
@@ -417,7 +419,9 @@ const server = http.createServer(async (req, res) => {
                 } else if (query) {
                     queryAnchor = query;
                 } else {
-                    queryAnchor = { lat: -33.8568, lng: 151.2153 };
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Give lat and lng, or a query naming the place.' }));
+                    return;
                 }
                 
                 const exportDir = path.resolve(ROOT, 'public/data/colmap_vector_export');
@@ -430,15 +434,19 @@ const server = http.createServer(async (req, res) => {
                     : `${lat.toFixed(4)}_${lng.toFixed(4)}`;
                 const outGlbPath = path.resolve(exportDir, `${cacheKey}_clay.glb`);
 
+                // Real tiles or an error: no offline mock and no default place.
                 const result = await getGoogle3DTilesClay(queryAnchor, {
                     outputGlbPath: outGlbPath,
-                    apiKey,
-                    offlineMock: true
+                    apiKey: apiKey || undefined
                 });
+                if (!result.success || result.mock) {
+                    throw new Error(result.error || 'Clay ingestion produced placeholder (mock) tiles, not Google 3D Tiles');
+                }
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
-                    success: result.success,
+                    success: true,
+                    resolvedAddress: result.resolvedAddress,
                     mode: result.mode,
                     geoAnchor: result.geoAnchor,
                     glbUrl: `/data/colmap_vector_export/${path.basename(result.glbPath)}`,

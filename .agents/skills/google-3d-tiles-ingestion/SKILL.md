@@ -195,8 +195,7 @@ const blockoutResult: TileClayBlockoutRunnerResult = await runTileClayBlockoutRu
       "clayPreset": { "type": "STRING", "description": "'studio-grey' | 'warm-clay' | 'alabaster'" },
       "outputVideoPath": { "type": "STRING", "description": "Destination path for <VIDEO_REF_0> MP4" },
       "outputGlbPath": { "type": "STRING", "description": "Destination path for .glb massing" },
-      "firstFramePngPath": { "type": "STRING", "description": "Destination path for Frame 0 PNG" },
-      "mockExecution": { "type": "BOOLEAN", "description": "Optional offline mock mode" }
+      "firstFramePngPath": { "type": "STRING", "description": "Destination path for Frame 0 PNG" }
     },
     "required": ["query"]
   }
