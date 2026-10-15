@@ -27,6 +27,7 @@ import { groundDatumBadge, projectRoutePoint } from '../src/browser/generative-c
 import { DEFAULT_METERS_PER_SCENE_UNIT } from '../src/common/coordinate/GeoFrame';
 import { fromInput, generatorErrorForScene, generatorRunFailure, generatorRequestFailure } from '../src/browser/generative-canvas/primitives/scene3d/generatorRun';
 import { ViewportNotice, resolveViewportNotice } from '../src/browser/generative-canvas/primitives/scene3d/ViewportNotice';
+import { createRendererStack } from '../src/browser/generative-canvas/primitives/scene3d/createRendererStack';
 import { VectorRoadmapHUD, copyTextToClipboard } from '../src/browser/generative-canvas/primitives/scene3d/VectorRoadmapHUD';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { decodePng } from '../src/node/texture-processing';
@@ -137,6 +138,35 @@ describe('content failures are shown in the viewport', () => {
         expect(generatorRunFailure('cpp', 500, { error: 'clang++ not found' })?.message).toContain('clang++ not found');
         expect(generatorRunFailure('cpp', 502, null)?.message).toContain('HTTP 502');
         expect(generatorRequestFailure('python', new TypeError('Failed to fetch')).message).toContain('Failed to fetch');
+    });
+
+    it('when WebGL cannot start, createRendererStack throws instead of returning a stand-in 2D canvas', () => {
+        // The viewport's catch around createRendererStack shows the WebGL error; it never ran while the stack drew
+        // "3D Viewport Ready" on a 2D canvas and returned a renderer that did nothing.
+        const appended: any[] = [];
+        const drawn: string[] = [];
+        const canvas = () => ({
+            style: {},
+            addEventListener() {},
+            removeEventListener() {},
+            setAttribute() {},
+            getContext: (kind: string) => kind === '2d'
+                ? { fillRect() {}, fillText: (t: string) => drawn.push(t), set fillStyle(_v: any) {}, set font(_v: any) {}, set textAlign(_v: any) {} }
+                : null
+        });
+        const savedDocument = (globalThis as any).document;
+        const savedWindow = (globalThis as any).window;
+        (globalThis as any).document = { createElement: () => canvas(), createElementNS: () => canvas() };
+        (globalThis as any).window = { devicePixelRatio: 1 };
+        try {
+            const container: any = { clientWidth: 400, clientHeight: 300, appendChild: (c: any) => appended.push(c), contains: () => false, removeChild() {} };
+            expect(() => createRendererStack({ container })).toThrow(/WebGL/i);
+            expect(appended).toEqual([]);
+            expect(drawn).toEqual([]);
+        } finally {
+            (globalThis as any).document = savedDocument;
+            (globalThis as any).window = savedWindow;
+        }
     });
 
     it('a WebGL failure shows the error alone, with no stand-in drawing', () => {

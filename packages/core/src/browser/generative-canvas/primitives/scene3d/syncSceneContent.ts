@@ -95,11 +95,19 @@ export interface UndrawableSceneObject {
 /**
  * The declared objects the viewport would skip without a word: neither a model or splat file the loader draws,
  * nor a placeholder or a tiles object. A scene that holds them says so instead of looking empty or complete.
+ *
+ * The placeholder URIs are exempt only in scenes the app opened or restored (the default). Objects the model sends
+ * (a mount payload: `appPlaceholdersExempt: false`) are the model's content, so an `internal:sunlight` there is
+ * reported like any other URI the loader cannot read rather than dropped while the mount reports success.
  */
-export function undrawableSceneObjects(scene: Pick<Scene3DData, 'objects'>): UndrawableSceneObject[] {
+export function undrawableSceneObjects(
+    scene: Pick<Scene3DData, 'objects'>,
+    options: { appPlaceholdersExempt?: boolean } = {}
+): UndrawableSceneObject[] {
     if (!Array.isArray(scene.objects)) return [];
+    const exempt = options.appPlaceholdersExempt !== false;
     return scene.objects
-        .filter(o => !isPlaceholderObject(o) && !isTilesObject(o) && !isDrawableSceneObject(o))
+        .filter(o => !(exempt && isPlaceholderObject(o)) && !isTilesObject(o) && !isDrawableSceneObject(o))
         .map((o, i) => {
             const uri = o?.content?.durableUri;
             return {

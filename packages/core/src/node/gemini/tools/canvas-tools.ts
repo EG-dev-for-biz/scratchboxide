@@ -375,8 +375,9 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 : applyClayFirstPassBaseline(payload as any, prompt);
 
             // Objects the viewport would skip (internal:plane, an image, an .obj) would be reported as mounted while
-            // nothing of them is drawn.
-            const undrawable = undrawableSceneObjects(payload as Scene3DData);
+            // nothing of them is drawn. Every object here is one the model sent, so the app's own placeholder URIs
+            // (internal:mesh, internal:grid, internal:sunlight) are not exempt either.
+            const undrawable = undrawableSceneObjects(payload as Scene3DData, { appPlaceholdersExempt: false });
             if (undrawable.length > 0) {
                 const error = `${undrawable.length === 1 ? 'An object' : `${undrawable.length} objects`} in payload.objects cannot be drawn: ${undrawable.map(o => `${o.id} (${o.reason})`).join('; ')}. Each object's content.durableUri must be a .glb / .gltf model or a .splat / .spz splat the app serves; build geometry with a Python script (payload.script) or execute_3d_python_script. Nothing was mounted.`;
                 return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };

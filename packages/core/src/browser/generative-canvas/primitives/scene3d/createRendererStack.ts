@@ -24,7 +24,7 @@ export interface CreateRendererStackOptions {
  * mount; per-slice content (atmosphere, tiles, meshes, shaders) is synchronised separately by
  * mutating the returned scene.
  *
- * @throws when WebGL is unavailable (the caller falls back to the 2D canvas).
+ * @throws when WebGL is unavailable: the caller shows the error in the viewport. There is no stand-in canvas.
  */
 export function createRendererStack(options: CreateRendererStackOptions): RendererStack {
     const { container } = options;
@@ -57,56 +57,24 @@ export function createRendererStack(options: CreateRendererStackOptions): Render
         renderer.domElement.style.height = '100%';
         renderer.domElement.style.display = 'block';
         container.appendChild(renderer.domElement);
-    } catch {
+    } catch (first) {
+        // One retry without antialiasing and without failing on a major performance caveat (software or blocklisted
+        // GPUs). If that cannot get a WebGL context either, the error goes to the caller: nothing stands in for it.
         try {
             renderer = instantiateRenderer({
                 antialias: false,
                 failIfMajorPerformanceCaveat: false
             });
-            renderer.setSize(width, height);
-            renderer.domElement.style.width = '100%';
-            renderer.domElement.style.height = '100%';
-            renderer.domElement.style.display = 'block';
-            container.appendChild(renderer.domElement);
         } catch (e) {
-            console.warn('[3D Renderer] WebGL unavailable:', e);
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            canvas.style.width = '100%';
-            canvas.style.height = '100%';
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                ctx.fillStyle = '#0a0e17';
-                ctx.fillRect(0, 0, width, height);
-                ctx.fillStyle = '#64748b';
-                ctx.font = '14px system-ui';
-                ctx.textAlign = 'center';
-                ctx.fillText('3D Viewport Ready', width / 2, height / 2);
-            }
-            container.appendChild(canvas);
-            renderer = {
-                domElement: canvas,
-                setSize: () => {},
-                setPixelRatio: () => {},
-                render: () => {},
-                dispose: () => {},
-                getRenderTarget: () => null,
-                setRenderTarget: () => {},
-                clear: () => {},
-                clearColor: () => {},
-                clearDepth: () => {},
-                clearStencil: () => {},
-                setClearColor: () => {},
-                getClearColor: () => new THREE.Color(),
-                getClearAlpha: () => 1,
-                resetState: () => {},
-                shadowMap: { enabled: false, type: 0 },
-                toneMapping: 0,
-                toneMappingExposure: 1.0,
-                capabilities: { isWebGL2: false, maxTextures: 16 }
-            } as unknown as THREE.WebGLRenderer;
+            const reason = e instanceof Error ? e.message : String(e);
+            const firstReason = first instanceof Error ? first.message : String(first);
+            throw new Error(reason === firstReason ? reason : `${reason} (first attempt: ${firstReason})`);
         }
+        renderer.setSize(width, height);
+        renderer.domElement.style.width = '100%';
+        renderer.domElement.style.height = '100%';
+        renderer.domElement.style.display = 'block';
+        container.appendChild(renderer.domElement);
     }
 
     // Grid colours are re-tinted and visibility toggled by syncAtmosphere.

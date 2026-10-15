@@ -62,6 +62,20 @@ describe('a new 4D Scene opens empty, with nothing to report', () => {
         ]);
     });
 
+    it('a mount that sends one of the app\'s placeholder URIs fails and names it, instead of dropping it', async () => {
+        const res = await mount({
+            primitiveType: '3d-scene',
+            payload: { objects: [
+                { id: 'hut', content: { type: '3d-scene', durableUri: '/models/hut.glb' } },
+                { id: 'sun', content: { type: '3d-scene', durableUri: 'internal:sunlight' } }
+            ] }
+        });
+        expect(res.status).toBe('failed');
+        expect(res.resultPayload.error).toContain('sun (internal:sunlight is not a .glb, .gltf, .splat or .spz file)');
+        // A saved scene still treats the app's own seeds as placeholders.
+        expect(undrawableSceneObjects({ objects: [grid, light] as any })).toEqual([]);
+    });
+
     it.skipIf(!htmlScreenshotChrome.ok)(withReason('screenshots the new scene\'s viewport notice', htmlScreenshotChrome), async () => {
         const notices = resolveViewportNotice({
             webglError: null, generatorError: null, tilesError: null, contentKind: 'empty',

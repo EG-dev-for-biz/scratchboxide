@@ -296,12 +296,12 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
                                         : (d.title || activeArtifact.title || 'Interactive 3D Scene Workspace')
                                 };
                             }
+                            // No 3D scene yet: an empty one in the neutral studio, the same as a new 4D Scene workspace
+                            // (newEmptySceneArtifact). The viewport says "No geometry"; nothing describes content it lacks.
                             return {
-                                title: 'Interactive 4D Scene Workspace',
-                                subtitle: 'WebGL viewport with procedural topography, real-time wave solvers, and simulated WASM linear memory heap.',
+                                title: '4D Scene',
                                 objects: [],
-                                camera: { position: [15, 12, 15], target: [0, 0, 0] },
-                                environment: { skybox: 'cyberpunk', lighting: 'shaded', ground: true }
+                                environment: { skybox: 'studio', lighting: 'studio', ground: false }
                             };
                         })()}
                         onUpdate={updatedData => {
@@ -311,8 +311,8 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
                                 const newArt: CanvasArtifact = {
                                     id: activeArtifact?.id || `art-3d-${Date.now()}`,
                                     type: '3d-scene',
-                                    title: updatedData.title || 'Interactive 3D Scene Workspace',
-                                    summary: updatedData.subtitle || 'Interactive 3D spatial canvas viewport',
+                                    title: updatedData.title || '4D Scene',
+                                    summary: updatedData.subtitle || '',
                                     version: 1,
                                     createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                                     data: updatedData
