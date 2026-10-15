@@ -7,10 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect, afterAll } from 'vitest';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { describe, it, expect } from 'vitest';
 import { GeminiService } from '../src/node/gemini-service';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
@@ -20,10 +17,6 @@ import { requireAsset, withReason } from './helpers/requirements';
 const colosseumGroundedGlb = requireAsset('public/models/colosseum_grounded.glb');
 
 describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
-    // Mock-mode tile ingestion writes a GLB; keep it out of the repo (default output is public/models/).
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-google-3d-tiles-agent-tools-'));
-    afterAll(() => fs.rmSync(outDir, { recursive: true, force: true }));
-
     it('exposes google_3d_tiles_get_full_texture and google_3d_tiles_get_clay in Gemini tool declarations', () => {
         const geminiService = new GeminiService();
         const request: GeminiGenerateRequest = {
@@ -52,50 +45,15 @@ describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
         expect(clayTool.description).toMatch(/studio grey clay|3D GLB/i);
     });
 
-    it('executes google_3d_tiles_get_full_texture via tool registry in mock mode', async () => {
+    it('offers the model no mock mode for google_3d_tiles_get_full_texture or google_3d_tiles_get_clay', () => {
+        // Mock mode returned synthetic placeholder tiles that were mounted as Google 3D Tiles; the handlers now also
+        // refuse a mock extraction result (tile-tools-do-what-was-asked.test.ts covers that with a stubbed extraction).
         const registry = createDefaultToolRegistry();
-        const outcome = await registry.dispatch(
-            'google_3d_tiles_get_full_texture',
-            {
-                query: '40.748400, -73.985700',
-                mockExecution: true,
-                outputGlbPath: path.join(outDir, 'full_texture.glb')
-            },
-            {} as any
-        );
-
-        expect(outcome.exec.status).toBe('completed');
-        const payload: any = outcome.resultPayload;
-        expect(payload.success).toBe(true);
-        expect(payload.mode).toBe('full-texture');
-        expect(payload.glbPath).toBeDefined();
-        const mesh = payload.mesh;
-        expect(mesh.vertexCount).toBeGreaterThan(0);
-        expect(mesh.triangleCount).toBeGreaterThan(0);
-        expect(outcome.exec.summaryResult).toMatch(/Google 3D Tiles ingested in full texture/i);
-    });
-
-    it('executes google_3d_tiles_get_clay via tool registry in mock mode', async () => {
-        const registry = createDefaultToolRegistry();
-        const outcome = await registry.dispatch(
-            'google_3d_tiles_get_clay',
-            {
-                query: '40.748400, -73.985700',
-                mockExecution: true,
-                outputGlbPath: path.join(outDir, 'clay.glb')
-            },
-            {} as any
-        );
-
-        expect(outcome.exec.status).toBe('completed');
-        const payload: any = outcome.resultPayload;
-        expect(payload.success).toBe(true);
-        expect(payload.mode).toBe('clay');
-        expect(payload.glbPath).toBeDefined();
-        const mesh = payload.mesh;
-        expect(mesh.vertexCount).toBeGreaterThan(0);
-        expect(mesh.triangleCount).toBeGreaterThan(0);
-        expect(outcome.exec.summaryResult).toMatch(/Google 3D Tiles ingested in studio grey clay/i);
+        for (const name of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay']) {
+            const props = (registry.get(name)!.declaration.parameters as any).properties;
+            expect(props.mockExecution).toBeUndefined();
+            expect(props.query).toBeDefined();
+        }
     });
 
     it('TaskCapabilityResolver routes real-world 3D tiles queries to Tier 1 native engine and points to 3D tiles APIs', () => {
