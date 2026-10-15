@@ -1820,14 +1820,16 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'mesh_bake_ai_textures',
-        description: 'Generates 6 cardinal orthogonal viewpoints of a 3D model, beautifies each view, and bakes them onto the mesh UV texture atlas.',
+        description: 'Texture a mesh from its six axis-aligned views: each view is rendered from the mesh, restyled by an image model to the style prompt (six image-model calls), and projected back onto the mesh\'s existing UVs (TEXCOORD_0) with depth occlusion into a base colour texture. Writes a textured copy of the GLB (the input is not changed) and reports which model made the views, any view that could not be used, and how much of the surface no view saw (that part keeps the mesh\'s own colour). A GLB without UVs is refused.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Input GLB mesh model path.' },
+                glbPath: { type: 'STRING', description: 'Input GLB mesh with UVs (TEXCOORD_0).' },
                 stylePrompt: { type: 'STRING', description: 'Style or material prompt (e.g. "medieval weathered cobblestone").' },
-                width: { type: 'NUMBER', description: 'Baking render resolution per view.' },
-                height: { type: 'NUMBER', description: 'Baking render resolution per view.' }
+                width: { type: 'NUMBER', description: 'Render and image size per view in pixels (default 512).' },
+                height: { type: 'NUMBER', description: 'Render and image size per view in pixels (default 512).' },
+                resolution: { type: 'NUMBER', description: 'Texture size per primitive (default: its current base colour texture size, else 1024).' },
+                outGlbPath: { type: 'STRING', description: 'Where to write the textured GLB (default: public/models/baked_<name>_<time>.glb in the workspace).' }
             },
             required: ['glbPath', 'stylePrompt']
         }
@@ -1962,11 +1964,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 /**
- * Station image generator for the survey beautify tools: Nano Banana / Gemini image via the
- * workspace's Google media credentials. SCRATCHBOX_STATION_IMAGE_GENERATOR=mock swaps in a
- * geometry-preserving recolour (for offline runs and CI).
- */
-/**
  * Adapts the (fraction, message) progress callbacks of the survey services to the chat's progress report. Once the
  * chat has stopped the call (Stop or its time limit), the next report throws, so the pipeline ends at its next
  * checkpoint (the next station) instead of generating and billing the rest in the background.
@@ -1980,21 +1977,12 @@ function chatProgress(ctx: ToolContext | undefined): (fraction: number, message?
     };
 }
 
+/**
+ * Station image generator for the survey, AI render, bake, keyframe and location tools: Nano Banana / Gemini image
+ * models via the workspace's Google media credentials. There is no stand-in generator: without credentials the first
+ * generation fails with the credential error.
+ */
 async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
-    if (process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR === 'mock') {
-        const { decodePng, encodePng } = await import('../../texture-processing');
-        return {
-            name: 'mock-recolour',
-            async generate(a) {
-                const b = decodePng(a.blockoutPng); const out = Buffer.alloc(b.rgba.length);
-                for (let i = 0; i < b.rgba.length; i += 4) {
-                    const r = b.rgba[i], g = b.rgba[i + 1], bl = b.rgba[i + 2]; const sky = bl > 170 && r < 140;
-                    out[i] = sky ? 135 : Math.min(255, r * 1.1 + 15); out[i + 1] = sky ? 170 : g * 0.95; out[i + 2] = sky ? 215 : bl * 0.75; out[i + 3] = 255;
-                }
-                return encodePng(b.width, b.height, out);
-            }
-        };
-    }
     const { createGoogleStationImageGenerator } = await import('../../spatial/BeautifyStationService');
     const { GoogleMediaGenerationService } = await import('../../google-media-generation-service');
     const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
@@ -2259,32 +2247,44 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const stylePrompt = asString(args.stylePrompt);
         const width = typeof args.width === 'number' ? args.width : 512;
         const height = typeof args.height === 'number' ? args.height : 512;
-
-        if (!glbPath) throw new Error('mesh_bake_ai_textures: "glbPath" argument is required.');
-        if (!stylePrompt) throw new Error('mesh_bake_ai_textures: "stylePrompt" argument is required.');
+        if (!glbPath) throw new MissingInputError('mesh_bake_ai_textures', 'glbPath');
+        if (!stylePrompt) throw new MissingInputError('mesh_bake_ai_textures', 'stylePrompt');
 
         const { MeshAiTextureBakingService } = await import('../../spatial/MeshAiTextureBakingService');
-        const { HeadlessMeshSilhouetteRenderer } = await import('../../spatial/HeadlessMeshSilhouetteRenderer');
-
+        const workspaceRoot = ctx.workspaceRoot || process.cwd();
+        const outGlbPath = asString(args.outGlbPath)
+            || path.join(workspaceRoot, 'public', 'models', `baked_${path.basename(glbPath, path.extname(glbPath))}_${Date.now()}.glb`);
         const generator = await resolveStationImageGenerator(ctx);
-        const service = new MeshAiTextureBakingService({ generator, workspaceRoot: ctx.workspaceRoot });
-        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
-
+        const service = new MeshAiTextureBakingService({ generator, workspaceRoot });
         const result = await service.bakeMeshTexturesWithAi({
-            mesh,
+            glbPath,
             stylePrompt,
             width,
-            height
+            height,
+            outGlbPath,
+            resolution: typeof args.resolution === 'number' ? args.resolution : undefined,
+            signal: ctx.signal,
+            onProgress: (message, fraction) => ctx.reportProgress?.(message, fraction)
         });
 
-        const imageSources = Array.from(new Set(result.views.map(v => v.imageSource)));
+        const covered = result.metrics.coveredMeshTexels;
+        const unseen = covered > 0 ? (result.unobservedTexels / covered) * 100 : 0;
         return {
             resultPayload: {
-                bakedViewsCount: result.views.length,
+                outGlbPath: result.outGlbPath,
+                bakedViews: result.views.map(v => v.name),
+                rejectedViews: result.rejectedViews,
                 stylePrompt,
-                imageSources
+                coveredMeshTexels: covered,
+                unobservedTexels: result.unobservedTexels,
+                stationContributions: result.metrics.stationContributions,
+                modelsUsed: result.modelsUsed,
+                imageSources: result.imageSources
             },
-            summaryResult: `Restyled ${result.views.length} orthogonal views of ${glbPath} to match "${stylePrompt}". ${imageSources.join(' ')}`
+            summaryResult: `Textured ${glbPath} from ${result.views.length} restyled view(s) (${result.views.map(v => v.name).join(', ')}) to match "${stylePrompt}" -> ${result.outGlbPath}. `
+                + `${unseen.toFixed(1)}% of the surface was seen by no view and keeps the mesh's own colour.`
+                + (result.rejectedViews.length ? ` Left out: ${result.rejectedViews.map(v => `${v.name} (${v.reason})`).join('; ')}.` : '')
+                + ` ${result.imageSources.join(' ')}`
         };
     },
     panorama_audit_quality: async (args, _ctx) => {
@@ -2913,7 +2913,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const { SurveyTextureUnprojector } = await import('../../spatial/SurveyTextureUnprojector');
 
         const glbPath = asString(args.glbPath);
-        const locationName = asString(args.locationName) || 'Target Location';
+        const locationName = asString(args.locationName);
+        if (!locationName) throw new MissingInputError('survey_beautify_to_texture', 'locationName', 'the stations are generated for a named place; no placeholder name is used');
         const resolution = typeof args.resolution === 'number' ? args.resolution : 4096;
         const outGlbPath = asString(args.outGlbPath) || pathMod.join(process.cwd(), `public/models/survey_pbr_${Date.now()}.glb`);
 
@@ -2953,15 +2954,21 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 stationContributions: result.metrics.stationContributions,
                 durationMs: result.metrics.durationMs,
                 modelsUsed: result.modelsUsed,
-                imageSources: result.imageSources
+                imageSources: result.imageSources,
+                rejectedStations: result.rejectedStations,
+                unobservedTexels: result.unobservedTexels
             } as unknown as ToolResultPayload,
-            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) with NOAA solar de-lighting and PBR maps -> ${result.outGlbPath}. ${result.imageSources.join(' ')}`
+            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) with NOAA solar de-lighting and PBR maps -> ${result.outGlbPath}.`
+                + (result.rejectedStations.length ? ` Left out ${result.rejectedStations.length} station(s) whose image failed geometry QC (${result.rejectedStations.map(r => `${r.stationId}: ${r.reason}`).join('; ')}).` : '')
+                + (result.unobservedTexels > 0 && result.metrics.coveredMeshTexels > 0 ? ` ${((result.unobservedTexels / result.metrics.coveredMeshTexels) * 100).toFixed(1)}% of the mesh's texels were seen by no station and keep the mesh's own colour.` : '')
+                + ` ${result.imageSources.join(' ')}`
         };
     },
 
     location_generate_3dgs: async (args, ctx) => {
         const { Location3DGaussianSplatService } = await import('../../spatial/Location3DGaussianSplatService');
         const service = new Location3DGaussianSplatService({ workspaceRoot: ctx?.workspaceRoot || process.cwd() });
+        // The service throws when the survey pipeline fails; a failed run is never reported as a built splat world.
         const res = await service.generate({
             location: asString(args.location),
             lat: typeof args.lat === 'number' ? args.lat : undefined,
@@ -2990,11 +2997,14 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 tilesetPath: res.tilesetPath,
                 splatCount: res.splatCount,
                 stationCount: res.stationCount,
+                acceptedStations: res.acceptedStations,
                 cropBox: res.cropBox,
                 scene3DData: res.scene3DData,
-                durationMs: res.durationMs
+                durationMs: res.durationMs,
+                modelsUsed: res.modelsUsed,
+                imageSources: res.imageSources
             } as unknown as ToolResultPayload,
-            summaryResult: `Generated photorealistic 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats across ${res.stationCount} stations in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}`
+            summaryResult: `Generated a 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats from ${res.acceptedStations}/${res.stationCount} accepted station image(s) in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}. ${res.imageSources.join(' ')}`
         };
     },
 

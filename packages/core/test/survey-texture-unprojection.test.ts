@@ -18,7 +18,8 @@ import {
     type SurveyTexturePipelineRequest
 } from '../src/node/spatial/SurveyTextureUnprojector';
 import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
-import { decodePng, encodePng } from '../src/node/texture-processing';
+import { decodePng, encodePng, resampleRgba } from '../src/node/texture-processing';
+import { GeneratorFailedError } from '../src/common/errors/pipeline-errors';
 import type { GeodeticAnchor, ColmapCameraPose } from '../src/common/spatial/colmap-vector-reference-types';
 import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 
@@ -448,13 +449,12 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
             name: 'mock-draft-generator',
             async generate(args) {
                 capturedAspectRatio = args.aspectRatio || '';
+                // A geometry-preserving restyle (the blockout, warmed): it passes the edge QC like a faithful model.
                 const b = decodePng(args.blockoutPng);
-                const out = Buffer.alloc(b.rgba.length);
+                const out = Buffer.from(b.rgba);
                 for (let i = 0; i < out.length; i += 4) {
-                    out[i] = 210;
-                    out[i + 1] = 200;
-                    out[i + 2] = 180;
-                    out[i + 3] = 255;
+                    out[i] = Math.min(255, Math.round(out[i] * 1.1));
+                    out[i + 2] = Math.round(out[i + 2] * 0.85);
                 }
                 return encodePng(b.width, b.height, out);
             }
@@ -490,17 +490,16 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
         const stSouth = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
 
-        // Mock generator returning 1024x1024 plate regardless of requested dimensions (e.g. 512x288)
+        // Mock generator answering at twice the requested size (1024x576 for 512x288), as models answer at their own size
         let generatedWidth = 0;
         let generatedHeight = 0;
         const mockMismatchedGen: StationImageGenerator = {
             name: 'mock-mismatched-generator',
-            async generate() {
-                generatedWidth = 1024;
-                generatedHeight = 1024;
-                const buf = Buffer.alloc(1024 * 1024 * 4);
-                buf.fill(200);
-                return encodePng(1024, 1024, buf);
+            async generate(args) {
+                const b = decodePng(args.blockoutPng);
+                generatedWidth = b.width * 2;
+                generatedHeight = b.height * 2;
+                return encodePng(generatedWidth, generatedHeight, resampleRgba(b.rgba, b.width, b.height, generatedWidth, generatedHeight));
             }
         };
 
@@ -522,6 +521,7 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
 
         expect(result.success).toBe(true);
         expect(generatedWidth).toBe(1024);
+        expect(generatedHeight).toBe(576);
         expect(result.metrics.directlyPaintedTexels).toBeGreaterThan(0);
         expect(fs.existsSync(outResampledGlbPath)).toBe(true);
     });
@@ -614,6 +614,65 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         ).rejects.toThrow(/fidelity.*disagrees/i);
     });
 
+    it('leaves out a station whose image fails geometry QC, keeps the mesh\'s own colour where nothing was seen, and fails when no station passes', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stSouth = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
+        const stNorth = stationFromLookAt(2, [0, 0, -25], [0, 0, 0], optics, ANCHOR);
+        // The first call is restyled faithfully (the blockout itself); every later call comes back as a flat magenta
+        // image that moved every edge, so it fails geometry QC.
+        let call = 0;
+        const mixed: StationImageGenerator = {
+            name: 'qc-mix-gen',
+            async generate(args) {
+                call++;
+                const b = decodePng(args.blockoutPng);
+                if (call === 1) return encodePng(b.width, b.height, b.rgba);
+                const flat = Buffer.alloc(b.rgba.length, 255);
+                for (let i = 0; i < flat.length; i += 4) { flat[i] = 255; flat[i + 1] = 0; flat[i + 2] = 255; }
+                return encodePng(b.width, b.height, flat);
+            }
+        };
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath,
+            anchor: ANCHOR,
+            stations: [stSouth, stNorth],
+            generator: mixed,
+            beautifyContext: { locationName: 'QC Synthetic Cube' },
+            options: { resolution: 256, draft: true, radianceEqualization: { enabled: false }, skipPbrDecomposition: true }
+        });
+        expect(result.rejectedStations.map(r => r.stationId)).toEqual([2]);
+        expect(result.metrics.stationContributions.map(c => c.stationId)).toEqual([1]);
+        // No magenta from the rejected image anywhere in the atlas.
+        const atlas = decodePng(result.albedoPng);
+        let magenta = 0;
+        for (let i = 0; i < atlas.rgba.length; i += 4) if (atlas.rgba[i] > 240 && atlas.rgba[i + 1] < 20 && atlas.rgba[i + 2] > 240) magenta++;
+        expect(magenta).toBe(0);
+        // The back of the cube was seen by no accepted station; it keeps the mesh's own colour, not invented limestone.
+        expect(result.unobservedTexels).toBeGreaterThan(0);
+        let limestone = 0;
+        for (let i = 0; i < atlas.rgba.length; i += 4) if (atlas.rgba[i] === 210 && atlas.rgba[i + 1] === 205 && atlas.rgba[i + 2] === 195) limestone++;
+        expect(limestone).toBe(0);
+        // This cube has no material, so its own colour is glTF's default white.
+        let white = 0;
+        for (let i = 0; i < atlas.rgba.length; i += 4) if (atlas.rgba[i] === 255 && atlas.rgba[i + 1] === 255 && atlas.rgba[i + 2] === 255) white++;
+        expect(white).toBeGreaterThan(0);
+
+        call = 1; // every following call answers with the flat image
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath,
+            anchor: ANCHOR,
+            stations: [stNorth],
+            generator: mixed,
+            beautifyContext: { locationName: 'QC Synthetic Cube' },
+            options: { resolution: 128, draft: true }
+        })).rejects.toBeInstanceOf(GeneratorFailedError);
+
+        // And the stations are generated for a named place: no placeholder name.
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath, anchor: ANCHOR, stations: [stSouth], generator: mixed, options: { resolution: 128, draft: true }
+        })).rejects.toThrow('needs locationName');
+    });
+
     it('chains stations by passing previousAccepted reference', async () => {
         const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
         const st1 = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
@@ -638,6 +697,7 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
             anchor: ANCHOR,
             stations: [st1, st2],
             generator: mockChainingGen,
+            beautifyContext: { locationName: 'Chained Synthetic Cube' },
             options: {
                 resolution: 512,
                 draft: true
@@ -671,6 +731,7 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
             anchor: ANCHOR,
             stations: [stSouth, stNorth],
             generator: mockGen,
+            beautifyContext: { locationName: 'Multi-Submesh Synthetic Building' },
             options: {
                 resolution: 512,
                 draft: true,

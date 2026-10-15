@@ -10,6 +10,7 @@
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { SurveySplatPipelineService } from './SurveySplatPipelineService';
+import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
 import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngine';
 import {
     createDefaultStationImageGenerator,
@@ -74,7 +75,12 @@ export interface Location3DGSResult {
     scene3DData: Scene3DData;
     cropBox: { min: [number, number, number]; max: [number, number, number] };
     durationMs: number;
-    error?: string;
+    /** Stations whose generated image passed geometry QC and was baked into splats. */
+    acceptedStations: number;
+    /** Image models that made the station images. */
+    modelsUsed: string[];
+    /** One line per distinct station image source: the model that answered and, when another was asked for, why. */
+    imageSources: string[];
 }
 
 /**
@@ -238,35 +244,16 @@ export class Location3DGaussianSplatService {
         const outDir = path.isAbsolute(resolvedOutDir) ? resolvedOutDir : path.resolve(root, resolvedOutDir);
         await fs.ensureDir(outDir);
 
-        // 2. Resolve image generator (Nano Banana / Google media generation or procedural mock)
+        // 2. Resolve the image generator (Nano Banana / Google media generation). There is no stand-in: an injected
+        //    generator is the only other source, and every result says which model made the station images.
         let generator = req.generator;
         if (!generator) {
-            if (process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR === 'mock') {
-                const { decodePng, encodePng } = await import('../texture-processing');
-                generator = {
-                    name: 'mock-recolour',
-                    async generate(a) {
-                        const b = decodePng(a.blockoutPng);
-                        const out = Buffer.alloc(b.rgba.length);
-                        for (let i = 0; i < b.rgba.length; i += 4) {
-                            const r = b.rgba[i], g = b.rgba[i + 1], bl = b.rgba[i + 2];
-                            const isSky = bl > 170 && r < 140;
-                            out[i] = isSky ? 135 : Math.min(255, r * 1.1 + 15);
-                            out[i + 1] = isSky ? 170 : g * 0.95;
-                            out[i + 2] = isSky ? 215 : bl * 0.75;
-                            out[i + 3] = 255;
-                        }
-                        return encodePng(b.width, b.height, out);
-                    }
-                };
-            } else {
-                const isDraft = req.draft === true || req.fidelity === 'draft';
-                generator = createDefaultStationImageGenerator({
-                    workspaceRoot: root,
-                    fidelity: isDraft ? 'draft' : (req.fidelity || 'production'),
-                    imageSize: isDraft ? '1K' : '2K'
-                });
-            }
+            const isDraftGenerator = req.draft === true || req.fidelity === 'draft';
+            generator = createDefaultStationImageGenerator({
+                workspaceRoot: root,
+                fidelity: isDraftGenerator ? 'draft' : (req.fidelity || 'production'),
+                imageSize: isDraftGenerator ? '1K' : '2K'
+            });
         }
 
         const isDraft = req.draft === true || req.fidelity === 'draft';
@@ -310,6 +297,14 @@ export class Location3DGaussianSplatService {
             draft: isDraft
         }, (p, message) => progressReporter(0.1 + 0.85 * Math.max(0, Math.min(1, p)), message));
 
+        if (!pipelineResult.success) {
+            throw new GeneratorFailedError('survey splat pipeline', `the 3DGS pipeline for ${beautifyContext.locationName} failed: ${(pipelineResult as any).error || 'no error was reported'}`);
+        }
+        const accepted = pipelineResult.stations.filter(st => st.accepted);
+        if (accepted.length === 0 || !(pipelineResult.fusedSplatCount > 0)) {
+            throw new GeneratorFailedError('survey splat pipeline', `the 3DGS pipeline for ${beautifyContext.locationName} produced no splats (${accepted.length}/${pipelineResult.stations.length} station images accepted)`);
+        }
+
         const { scene3DData, splatMediaObject } = SurveySplatPipelineService.toScene3DData(
             pipelineResult,
             anchor,
@@ -319,9 +314,7 @@ export class Location3DGaussianSplatService {
         const splatUrl = splatMediaObject.content.durableUri || SurveySplatPipelineService.toWebUrl(pipelineResult.fusedSplatPath);
         const tilesetUrl = SurveySplatPipelineService.toWebUrl(pipelineResult.tilesetPath);
 
-        if (pipelineResult.success) {
-            progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
-        }
+        progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
 
         return {
             success: pipelineResult.success,
@@ -334,10 +327,12 @@ export class Location3DGaussianSplatService {
             metaPath: pipelineResult.metaPath,
             splatCount: pipelineResult.fusedSplatCount,
             stationCount: pipelineResult.stations.length,
+            acceptedStations: accepted.length,
             scene3DData,
             cropBox: pipelineResult.cropBox,
             durationMs: Date.now() - t0,
-            error: (pipelineResult as any).error
+            modelsUsed: Array.from(new Set(pipelineResult.stations.map(st => st.modelUsed).filter((m): m is string => !!m))),
+            imageSources: Array.from(new Set(pipelineResult.stations.map(st => st.imageSource).filter((m): m is string => !!m)))
         };
     }
 }

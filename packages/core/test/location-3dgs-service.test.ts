@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import {
@@ -18,14 +18,20 @@ import {
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { ToolRegistry } from '../src/node/gemini/tool-registry';
 import { SPATIAL_TOOL_DECLARATIONS, spatialHandlers } from '../src/node/gemini/tools/spatial-tools';
+import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
+import { SurveySplatPipelineService } from '../src/node/spatial/SurveySplatPipelineService';
+import { fakeImageModelClient } from './helpers/fake-image-model';
 
 const OUT_TEST_DIR = path.resolve(process.cwd(), 'build/test_location_3dgs_service');
 
 describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () => {
     beforeAll(async () => {
-        process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR = 'mock';
+        // Station images come from a fake image-model client (it echoes the blockout, recoloured); no real model is
+        // called, and production code has no stand-in generator.
+        vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(fakeImageModelClient([], { modelVersion: 'gemini-3.1-flash-image' }) as any);
         await fs.emptyDir(OUT_TEST_DIR);
     });
+    afterAll(() => vi.restoreAllMocks());
 
     describe('1. Service Facade & generateLocation3DGS', () => {
         it('instantiates Location3DGaussianSplatService and exposes generateLocation3DGS', () => {
@@ -133,7 +139,23 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
             expect(payload.success).toBe(true);
             expect(payload.splatUrl).toBeDefined();
             expect(payload.scene3DData).toBeDefined();
+            expect(payload.modelsUsed).toEqual(['gemini-3.1-flash-image']);
+            expect(res.summaryResult).toContain('gemini-3.1-flash-image');
         }, 120000);
+
+        it('fails the tool when the survey pipeline fails, instead of reporting a built splat world', async () => {
+            const run = vi.spyOn(SurveySplatPipelineService.prototype, 'run').mockResolvedValue({
+                success: false, stations: [], fusedSplatPath: '/splats/x.splat', fusedSplatCount: 0, tilesetPath: '/splats/tileset.json',
+                metaPath: '/splats/x.meta.json', cropBox: { min: [0, 0, 0], max: [0, 0, 0] }, durationMs: 1200, error: 'station_to_splats baker crashed'
+            } as any);
+            try {
+                await expect(spatialHandlers.location_generate_3dgs({
+                    location: 'Grand Army Plaza', cameraCount: 3, width: 320, bakeStride: 2, outDir: path.join(OUT_TEST_DIR, 'gap_failed')
+                }, { workspaceRoot: process.cwd() } as any)).rejects.toThrow(/failed: station_to_splats baker crashed/);
+            } finally {
+                run.mockRestore();
+            }
+        });
     });
 
     describe('3. TaskCapabilityResolver Integration', () => {

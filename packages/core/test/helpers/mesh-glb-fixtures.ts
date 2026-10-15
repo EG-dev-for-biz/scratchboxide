@@ -24,6 +24,8 @@ export interface FixtureMesh {
     normals?: number[];
     /** Per-vertex RGBA in 0..1. */
     colors?: number[];
+    /** Per-vertex UV (TEXCOORD_0). */
+    uvs?: number[];
 }
 
 type V3 = [number, number, number];
@@ -110,6 +112,9 @@ export function writeFixtureGlb(file: string, mesh: FixtureMesh): string {
     if (mesh.colors) {
         attributes.COLOR_0 = add(Buffer.from(new Float32Array(mesh.colors).buffer), 34962, { componentType: 5126, count: vertexCount, type: 'VEC4' });
     }
+    if (mesh.uvs) {
+        attributes.TEXCOORD_0 = add(Buffer.from(new Float32Array(mesh.uvs).buffer), 34962, { componentType: 5126, count: vertexCount, type: 'VEC2' });
+    }
     const indices = add(Buffer.from(new Uint32Array(mesh.indices).buffer), 34963, { componentType: 5125, count: mesh.indices.length, type: 'SCALAR' });
     const bin = Buffer.concat(views);
     const doc = {
@@ -183,6 +188,37 @@ export function cylinderMesh(radius = 1, height = 4, radialSegments = 24, height
         }
     }
     return b.mesh(false);
+}
+
+/**
+ * A cube of edge `size` centred at the origin with UVs: each face is its own chart in a 3 x 2 grid of the UV square
+ * (with a margin), so a texture can be painted face by face. No vertex colours.
+ */
+export function uvCubeMesh(size = 2): FixtureMesh {
+    const h = size / 2;
+    const faces: Array<{ n: V3; corners: [V3, V3, V3, V3] }> = [
+        { n: [0, 0, 1], corners: [[-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]] },
+        { n: [0, 0, -1], corners: [[h, -h, -h], [-h, -h, -h], [-h, h, -h], [h, h, -h]] },
+        { n: [-1, 0, 0], corners: [[-h, -h, -h], [-h, -h, h], [-h, h, h], [-h, h, -h]] },
+        { n: [1, 0, 0], corners: [[h, -h, h], [h, -h, -h], [h, h, -h], [h, h, h]] },
+        { n: [0, 1, 0], corners: [[-h, h, h], [h, h, h], [h, h, -h], [-h, h, -h]] },
+        { n: [0, -1, 0], corners: [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]] }
+    ];
+    const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
+    const margin = 0.02;
+    faces.forEach((face, f) => {
+        const u0 = (f % 3) / 3 + margin, v0 = Math.floor(f / 3) / 2 + margin;
+        const u1 = (f % 3 + 1) / 3 - margin, v1 = (Math.floor(f / 3) + 1) / 2 - margin;
+        const faceUvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
+        const base = positions.length / 3;
+        face.corners.forEach((c, k) => {
+            positions.push(...c);
+            normals.push(...face.n);
+            uvs.push(...faceUvs[k]);
+        });
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    });
+    return { positions, indices, normals, uvs };
 }
 
 /** Lofted vase-like body (12 rings of 16 points, 6 tall), the former "sculpture" benchmark. */

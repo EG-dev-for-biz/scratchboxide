@@ -14,7 +14,7 @@ import { stationToPinhole, cameraBasis, type PinholeIntrinsics } from '../../com
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH, solarAtUtcInstant } from './SurveyStationRenderService';
 import { BeautifyStationService, describeStationImageSource, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
-import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { AlgorithmicUvEngine, type PbrDecompositionOptions, type PbrDecompositionResult } from './AlgorithmicUvEngine';
 import { MaxRectsAtlasPacker, type TextureItem } from './TextureAtlasPacker';
@@ -108,7 +108,10 @@ export interface SurveyTextureUnprojectorOptions {
     angleWeightExponent?: number;
     /** Number of gutter dilation bleed pixels to prevent edge fringing. Default 4. */
     edgeBleedPixels?: number;
-    /** Default stone fallback color if a surface is never observed. Default limestone [210, 205, 195]. */
+    /**
+     * sRGB colour for texels no station observes. When unset, processGlbWithSurveyStations keeps the mesh's own
+     * colour there (its base colour texture or factor); a direct unprojectPrimitiveToAtlas call leaves them transparent.
+     */
     defaultColor?: [number, number, number];
     /** Solar ephemeris coordinates and timestamp for NOAA inverse de-lighting. */
     solarDelighting?: {
@@ -160,6 +163,16 @@ export interface SurveyTextureUnprojectorOptions {
     /** Conservative per-triangle camera culling (behind-plane in 'face' mode, frustum). Result-preserving speed-up. Default false. */
     perTriangleCameraCulling?: boolean;
 }
+
+/** A station whose generated image failed geometry QC: it is not painted into the texture. */
+export interface RejectedStation {
+    stationId: number;
+    reason: string;
+    imageSource: string;
+}
+
+/** What unobserved texels are filled with: one sRGB colour, or a same-UV-space RGBA image at the atlas size. */
+export type UnobservedTexelFill = { rgb: [number, number, number] } | { rgba: Buffer | Uint8Array };
 
 export interface StationContribution {
     stationId: number;
@@ -215,6 +228,10 @@ export interface SurveyTextureResult {
     modelsUsed: string[];
     /** One line per distinct plate source: the model that answered and, when it was not the requested one, why. */
     imageSources: string[];
+    /** Stations whose image failed geometry QC and were left out of the texture. */
+    rejectedStations: RejectedStation[];
+    /** Covered texels no station observed; they keep the mesh's own colour. */
+    unobservedTexels: number;
 }
 
 export interface SurveyTexturePipelineRequest {
@@ -337,12 +354,14 @@ export class SurveyTextureUnprojector {
             });
         }
 
-        // 1. Prepare station plates (render blockouts + depth + beautified RGBA)
+        // 1. Prepare station plates (render blockouts + depth + beautified RGBA). Stations whose image fails geometry
+        //    QC are left out: an image that moved the geometry would be painted onto the wrong surfaces.
         let plates: StationPlate[] = [];
+        let rejectedStations: RejectedStation[] = [];
         if (request.precomputedPlates && request.precomputedPlates.length > 0) {
             plates = request.precomputedPlates;
         } else {
-            plates = await this.renderAndBeautifyStations(
+            const prepared = await this.renderAndBeautifyStations(
                 glbBuffer,
                 request.stations,
                 request.beautifyContext,
@@ -350,9 +369,15 @@ export class SurveyTextureUnprojector {
                 options,
                 request
             );
+            plates = prepared.plates;
+            rejectedStations = prepared.rejected;
         }
 
         if (plates.length === 0) {
+            if (rejectedStations.length > 0) {
+                throw new GeneratorFailedError('image model', `every station image failed geometry QC, so nothing can be painted: `
+                    + rejectedStations.map(r => `station ${r.stationId}: ${r.reason} (${r.imageSource})`).join('; '));
+            }
             throw new Error('SurveyTextureUnprojector: No valid station plates available for unprojection');
         }
 
@@ -380,7 +405,8 @@ export class SurveyTextureUnprojector {
             }
             console.log(`[SurveyTextureUnprojector] Submesh ${i + 1}/${primitives.length}: ${prim.indices.length / 3} tris, target res ${primW}x${primH}...`);
             const subT0 = performance.now();
-            const sub = await this.unprojectPrimitiveToAtlas(prim, i, preparedCameras, options, primW, primH);
+            const fill = options.defaultColor ? { rgb: options.defaultColor } : await this.primitiveOwnColor(prim, glbJson, glbBin, primW, primH);
+            const sub = await this.unprojectPrimitiveToAtlas(prim, i, preparedCameras, options, primW, primH, fill);
             console.log(`[SurveyTextureUnprojector] Submesh ${i + 1}/${primitives.length} finished in ${((performance.now() - subT0) / 1000).toFixed(2)}s`);
             submeshResults.push(sub);
             // The bake is synchronous per submesh; yield so a Stop (an I/O event) can land between submeshes.
@@ -450,8 +476,41 @@ export class SurveyTextureUnprojector {
             pbrResult: primarySub.pbrResult,
             submeshes: submeshResults,
             modelsUsed: Array.from(new Set(plates.map(p => p.modelUsed).filter((m): m is string => !!m))),
-            imageSources: Array.from(new Set(plates.map(p => p.imageSource).filter((m): m is string => !!m)))
+            imageSources: Array.from(new Set(plates.map(p => p.imageSource).filter((m): m is string => !!m))),
+            rejectedStations,
+            unobservedTexels: totalCoveredTexels - totalPaintedTexels
         };
+    }
+
+    /**
+     * The colour a primitive already has, as an atlas-sized fill for texels no station sees: its base colour texture
+     * resampled into the atlas's UV space, or its base colour factor, or white (glTF's default material).
+     */
+    public static async primitiveOwnColor(prim: MeshPrimitiveData, glbJson: any, glbBin: Buffer, atlasW: number, atlasH: number): Promise<UnobservedTexelFill> {
+        const material = prim.materialIndex === undefined ? undefined : glbJson.materials?.[prim.materialIndex];
+        const pbr = material?.pbrMetallicRoughness || {};
+        const toSrgb8 = (c: number) => {
+            const v = Math.max(0, Math.min(1, Number.isFinite(c) ? c : 1));
+            return Math.round(255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055));
+        };
+        const factor: number[] = Array.isArray(pbr.baseColorFactor) ? pbr.baseColorFactor : [1, 1, 1, 1];
+        const texIdx = pbr.baseColorTexture?.index;
+        const image = texIdx === undefined ? undefined : glbJson.images?.[glbJson.textures?.[texIdx]?.source];
+        const view = image?.bufferView === undefined ? undefined : glbJson.bufferViews?.[image.bufferView];
+        if (view) {
+            const { decodeImageToRgba } = await import('../image-codec-ffmpeg');
+            const offset = view.byteOffset || 0;
+            const decoded = await decodeImageToRgba(glbBin.subarray(offset, offset + view.byteLength));
+            const rgba = resampleRgba(decoded.rgba, decoded.width, decoded.height, atlasW, atlasH);
+            // The texture is multiplied by the base colour factor in linear light, as the viewer does.
+            if (factor.slice(0, 3).some(f => Math.abs(f - 1) > 1e-6)) {
+                for (let i = 0; i < rgba.length; i += 4) {
+                    for (let k = 0; k < 3; k++) rgba[i + k] = toSrgb8(SRGB_TO_LINEAR_LUT[rgba[i + k]] * factor[k]);
+                }
+            }
+            return { rgba };
+        }
+        return { rgb: [toSrgb8(factor[0]), toSrgb8(factor[1]), toSrgb8(factor[2])] };
     }
 
     /**
@@ -464,7 +523,9 @@ export class SurveyTextureUnprojector {
         preparedCameras: PreparedCamera[],
         options: SurveyTextureUnprojectorOptions,
         resolution: number,
-        atlasHeight?: number
+        atlasHeight?: number,
+        /** What texels no station observes are filled with (default: options.defaultColor, else left transparent). */
+        unobservedFill?: UnobservedTexelFill
     ): Promise<SubmeshTextureResult> {
         const atlasW = resolution;
         const atlasH = atlasHeight !== undefined && atlasHeight > 0 ? atlasHeight : resolution;
@@ -487,7 +548,7 @@ export class SurveyTextureUnprojector {
         const atlasColorSqSum = new Float32Array(totalTexels);
         const atlasObsCount = new Uint16Array(totalTexels);
 
-        const defaultCol = options.defaultColor || [210, 205, 195];
+        const fill: UnobservedTexelFill | undefined = unobservedFill ?? (options.defaultColor ? { rgb: options.defaultColor } : undefined);
         const minCosIncidence = options.minCosIncidence ?? 0.08;
         const angleExp = options.angleWeightExponent ?? 2.0;
         const depthTol = options.depthTolerance ?? 0.20;
@@ -756,13 +817,22 @@ export class SurveyTextureUnprojector {
             }
         }
 
-        for (let i = 0; i < totalTexels; i++) {
-            if (atlasCoverage[i] === 1 && atlasBestScore[i] === 0 && (!useMultiBlend || atlasWeight[i] === 0)) {
-                const pIdx = i * 4;
-                atlasRgba[pIdx] = defaultCol[0];
-                atlasRgba[pIdx + 1] = defaultCol[1];
-                atlasRgba[pIdx + 2] = defaultCol[2];
-                atlasRgba[pIdx + 3] = 255;
+        // Texels no station saw keep the surface's own colour (never an invented one).
+        if (fill) {
+            for (let i = 0; i < totalTexels; i++) {
+                if (atlasCoverage[i] === 1 && atlasBestScore[i] === 0 && (!useMultiBlend || atlasWeight[i] === 0)) {
+                    const pIdx = i * 4;
+                    if ('rgb' in fill) {
+                        atlasRgba[pIdx] = fill.rgb[0];
+                        atlasRgba[pIdx + 1] = fill.rgb[1];
+                        atlasRgba[pIdx + 2] = fill.rgb[2];
+                    } else {
+                        atlasRgba[pIdx] = fill.rgba[pIdx];
+                        atlasRgba[pIdx + 1] = fill.rgba[pIdx + 1];
+                        atlasRgba[pIdx + 2] = fill.rgba[pIdx + 2];
+                    }
+                    atlasRgba[pIdx + 3] = 255;
+                }
             }
         }
 
@@ -1298,7 +1368,10 @@ export class SurveyTextureUnprojector {
         generator?: StationImageGenerator,
         options?: SurveyTextureUnprojectorOptions,
         progress: Pick<SurveyTexturePipelineRequest, 'onProgress' | 'signal'> = {}
-    ): Promise<StationPlate[]> {
+    ): Promise<{ plates: StationPlate[]; rejected: RejectedStation[] }> {
+        if (!beautifyContext?.locationName) {
+            throw new MissingInputError('survey_beautify_to_texture', 'locationName', 'the stations are generated for a named place; no placeholder name is used');
+        }
         const renderService = new SurveyStationRenderService();
         await renderService.loadMesh(glbBuffer);
 
@@ -1306,6 +1379,7 @@ export class SurveyTextureUnprojector {
         const defaultW = isDraft ? 768 : 1280;
         const baseW = options?.renderWidth || (options?.resolution ? Math.min(defaultW, options.resolution) : defaultW);
         const plates: StationPlate[] = [];
+        const rejected: RejectedStation[] = [];
         let previousAccepted: BeautifyStationResult | undefined;
 
         for (const [stationIndex, st] of stations.entries()) {
@@ -1338,7 +1412,7 @@ export class SurveyTextureUnprojector {
                 const beautifyService = new BeautifyStationService(renderService, generator);
                 const bRes = await beautifyService.beautify(
                     st,
-                    beautifyContext || { locationName: 'Target Location' },
+                    beautifyContext,
                     {
                         width: stationW,
                         height: stationH,
@@ -1348,9 +1422,13 @@ export class SurveyTextureUnprojector {
                         signal: progress.signal
                     }
                 );
-                if (bRes.accepted) {
-                    previousAccepted = bRes;
+                if (!bRes.accepted) {
+                    // The image moved the geometry beyond tolerance: painting it at the blockout pose would put its
+                    // pixels on the wrong surfaces, so the station is left out and reported.
+                    rejected.push({ stationId: st.id, reason: bRes.qc?.reason || 'failed geometry QC', imageSource: describeStationImageSource(bRes) });
+                    continue;
                 }
+                previousAccepted = bRes;
                 if (bRes.image.width !== stationW || bRes.image.height !== stationH) {
                     stationRgba = resampleRgba(bRes.image.rgba, bRes.image.width, bRes.image.height, stationW, stationH);
                 } else {
@@ -1379,7 +1457,7 @@ export class SurveyTextureUnprojector {
             console.log(`[SurveyTextureUnprojector] Radiance equalized anchored to station ${eqRes.anchorStationId} (${eqRes.stationsEqualized} plates processed)`);
         }
 
-        return plates;
+        return { plates, rejected };
     }
 
     /**
