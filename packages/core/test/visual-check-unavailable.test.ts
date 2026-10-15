@@ -127,6 +127,34 @@ describe('VisualVerificationService.verifyVisual', () => {
     });
 });
 
+describe('the self-correction loop reports a repair only when something changed', () => {
+    const app: CanvasArtifact = {
+        id: 'art-app', type: 'live-code-sandbox', title: 'App', summary: '', version: 1, createdAt: 'now',
+        data: { title: 'App', files: [{ id: 'f', name: 'App.tsx', language: 'react', content: 'export default () => <div/>;', isEntry: true }] } as any
+    };
+    const failing = (visualFixes: unknown) => new VisualVerificationService(visionClient(async () => ({
+        text: JSON.stringify({ pass: false, fidelityScore: 40, critique: 'Off', issues: ['x'], strengths: [], visualFixes })
+    })));
+
+    it('a patch for a file the app does not have changes nothing, bumps no version and stops the loop', async () => {
+        const service = failing({ codePatches: [{ file: 'Missing.tsx', fullCode: 'boom' }] });
+        const result = await service.runVisualSelfCorrectionLoop({ artifact: app, targetPrompt: 'an app', captureFrame: () => FRAME, maxIterations: 3 });
+        expect(result.repaired).toBe(false);
+        expect(result.iterations).toBe(1);
+        expect(result.artifact.version).toBe(1);
+        expect((result.artifact.data as any).files[0].content).toBe('export default () => <div/>;');
+        expect(service.applyVisualAutoRepair(app, { status: 'verified', pass: false, fidelityScore: 40, critique: '', issues: [], strengths: [], visualFixes: { codePatches: [{ file: 'App.tsx', search: 'not in the file', replace: 'x' }], cssFixes: 'body { color: red }' } } as any)).toBe(app);
+    });
+
+    it('a patch that applies is a repair and a new version', async () => {
+        const service = failing({ codePatches: [{ file: 'App.tsx', fullCode: 'export default () => <main/>;' }] });
+        const result = await service.runVisualSelfCorrectionLoop({ artifact: app, targetPrompt: 'an app', captureFrame: () => FRAME, maxIterations: 1 });
+        expect(result.repaired).toBe(true);
+        expect(result.artifact.version).toBe(2);
+        expect((result.artifact.data as any).files[0].content).toBe('export default () => <main/>;');
+    });
+});
+
 describe('the background check in the chat', () => {
     const artifact: CanvasArtifact = { id: 'art-1', type: '3d-scene', title: 'Telescope', summary: '', version: 1, createdAt: 'now', data: SCENE };
 

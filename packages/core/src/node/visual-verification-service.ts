@@ -532,6 +532,12 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
             };
         }
 
+        // Directives that change nothing (a patch for a file the artifact does not have, a search string that does
+        // not occur, CSS with no stylesheet to add it to, values the scene already has) are no repair: the artifact
+        // is returned as it was, with no new version.
+        if (JSON.stringify(updatedArtifact.data) === JSON.stringify(artifact.data)) {
+            return artifact;
+        }
         return updatedArtifact;
     }
 
@@ -574,10 +580,14 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
                 break;
             }
 
-            if (audit.visualFixes || audit.operatorDispatches) {
-                currentArtifact = this.applyVisualAutoRepair(currentArtifact, audit);
-                repaired = true;
+            // Repaired only when a directive changed the artifact; when none did, the next frame would be the same
+            // one, so the loop stops instead of auditing it again.
+            const next = this.applyVisualAutoRepair(currentArtifact, audit);
+            if (next === currentArtifact) {
+                break;
             }
+            currentArtifact = next;
+            repaired = true;
         }
 
         return {
