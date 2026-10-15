@@ -20,13 +20,17 @@ export interface SlopeMaterialStop {
     metalness: number;
 }
 
-/** Continuous slope measurements of a surface, from its vertex normals (+Y up). */
+/**
+ * Continuous slope measurements of a surface, from its vertex normals in world (scene) space with +Y up: a mesh's
+ * normals go through its own transform and its whole parent chain, so a Z-up asset under a reorienting parent, or a
+ * Google 3D Tiles mesh in its ECEF-based frame, is measured as it stands in the scene.
+ */
 export interface SurfaceSlopeMetrics {
-    /** Slope of the mean normal, in degrees (0 = level). */
+    /** The slope, in degrees, whose cosine is the normals' mean world-up component (0 = level). */
     meanSlopeDeg: number;
-    /** Fraction of normals within ~18 degrees of vertical (Ny >= 0.95). */
+    /** Fraction of normals within ~18 degrees of vertical (world Ny >= 0.95). */
     planarityRatio: number;
-    /** Fraction of normals steeper than ~41 degrees (Ny < 0.75). */
+    /** Fraction of normals steeper than ~41 degrees (world Ny < 0.75). */
     steepnessRatio: number;
     vertexCount: number;
 }
@@ -38,11 +42,14 @@ export interface SlopeMaterialResult {
     }>;
 }
 
-/** Measures a mesh's or geometry's surface slope from its normals (computing them when it has none). */
+/**
+ * Measures a mesh's or geometry's surface slope from its normals (computing them when it has none). A mesh is
+ * measured in world space (its matrixWorld, with the parent chain brought up to date first); a bare geometry has no
+ * placement and is measured in its own coordinates.
+ */
 export function measureSurfaceSlope(meshOrGeometry: THREE.Mesh | THREE.BufferGeometry): SurfaceSlopeMetrics {
-    const geom = (meshOrGeometry as THREE.Mesh).isMesh
-        ? (meshOrGeometry as THREE.Mesh).geometry
-        : (meshOrGeometry as THREE.BufferGeometry);
+    const mesh = (meshOrGeometry as THREE.Mesh).isMesh ? (meshOrGeometry as THREE.Mesh) : undefined;
+    const geom = mesh ? mesh.geometry : (meshOrGeometry as THREE.BufferGeometry);
     if (!geom.attributes.normal) {
         geom.computeVertexNormals();
     }
@@ -50,11 +57,19 @@ export function measureSurfaceSlope(meshOrGeometry: THREE.Mesh | THREE.BufferGeo
     if (!normals || normals.count === 0) {
         throw new Error('measureSurfaceSlope: the surface has no vertices to measure');
     }
+    let normalMatrix: THREE.Matrix3 | undefined;
+    if (mesh) {
+        mesh.updateWorldMatrix(true, false);
+        normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+    }
+    const n = new THREE.Vector3();
     let flatCount = 0;
     let steepCount = 0;
     let totalNy = 0;
     for (let i = 0; i < normals.count; i++) {
-        const ny = Math.max(-1.0, Math.min(1.0, normals.getY(i)));
+        n.fromBufferAttribute(normals, i);
+        if (normalMatrix) n.applyMatrix3(normalMatrix).normalize();
+        const ny = Math.max(-1.0, Math.min(1.0, n.y));
         totalNy += ny;
         if (ny >= 0.95) flatCount++;
         else if (ny < 0.75) steepCount++;
@@ -107,8 +122,8 @@ export function materialAtSlope(sortedStops: SlopeMaterialStop[], slopeDeg: numb
 
 export class SbTerrainGroundEngine {
     /**
-     * Gives each mesh the material the slope ramp assigns to its measured mean slope, in place: the meshes keep their
-     * place in the scene graph, geometry and transform. The ramp is checked before any mesh changes.
+     * Gives each mesh the material the slope ramp assigns to its mean slope, measured in world space, in place: the
+     * meshes keep their place in the scene graph, geometry and transform. The ramp is checked before any mesh changes.
      */
     public applySlopeMaterials(meshes: THREE.Mesh[], options: { stops: SlopeMaterialStop[] }): SlopeMaterialResult {
         const stops = validateSlopeStops(options?.stops);

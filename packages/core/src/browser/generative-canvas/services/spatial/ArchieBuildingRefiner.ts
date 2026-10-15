@@ -24,13 +24,16 @@ export interface ArchieMaterialParameters {
 }
 
 export interface ArchieBuildingRefineOptions {
-    /** Maximum abs(Ny) to treat as vertical facade. Default: 0.38 (steep walls). */
+    /** Maximum abs(world-up component) of a normal to treat as vertical facade. Default: 0.38 (steep walls). */
     maxFacadeNormalY?: number;
     /** Depth of extruded grounding plinth in meters. Default: 2.5m. */
     plinthDepth?: number;
     /** Horizontal perimeter collar padding for plinth in meters. Default: 0.3m. */
     plinthPadding?: number;
-    /** Ground datum level Y in the mesh's own coordinates. If omitted, uses the geometry's bbox min.y. */
+    /**
+     * Ground datum: the world (scene) Y the plinth's top sits at. If omitted, the building's lowest point in world
+     * space. A bare geometry has no placement, so its own coordinates are its world.
+     */
     groundDatumY?: number;
     /** The building's material. Required unless customBuildingMaterial is given. */
     material?: ArchieMaterialParameters;
@@ -80,18 +83,28 @@ export function createArchieMaterial(params: ArchieMaterialParameters | undefine
     });
 }
 
+/** The world-up (Y) component of normal `i`, through `normalMatrix` (world space) when given. */
+function worldNormalY(normals: THREE.BufferAttribute | THREE.InterleavedBufferAttribute, i: number, normalMatrix: THREE.Matrix3 | undefined, scratch: THREE.Vector3): number {
+    scratch.fromBufferAttribute(normals, i);
+    if (normalMatrix) scratch.applyMatrix3(normalMatrix).normalize();
+    return scratch.y;
+}
+
 /**
  * Bilateral Planar Facade Normal Smoothing:
  *
- * Projects normals of steep vertical facade surfaces (|Ny| < maxFacadeNormalY) strictly
- * into the horizontal (X, Z) plane while normalizing them.
- * This completely eliminates photogrammetric scanning ripples and warping artifacts
- * on vertical walls while keeping horizontal roof decks (|Ny| >= 0.70) and pitched
- * roofs/cornices undisturbed.
+ * Projects normals of steep vertical facade surfaces (|world Ny| < maxFacadeNormalY) strictly into the horizontal
+ * world plane while normalizing them. This eliminates photogrammetric scanning ripples and warping artifacts on
+ * vertical walls while keeping horizontal roof decks and pitched roofs/cornices undisturbed.
+ *
+ * "Vertical" and "horizontal" are the scene's (+Y up): with `matrixWorld` (the mesh's world matrix, parent chain
+ * included) the normals are taken into world space, smoothed there, and written back in the geometry's own frame,
+ * so a Z-up asset under a reorienting parent or a tile mesh in an ECEF-based frame is smoothed as it stands.
+ * Without it the geometry's own coordinates are taken as world.
  */
 export function smoothFacadeNormals(
     geometry: THREE.BufferGeometry,
-    options?: { maxFacadeNormalY?: number; inPlace?: boolean }
+    options?: { maxFacadeNormalY?: number; inPlace?: boolean; matrixWorld?: THREE.Matrix4 }
 ): THREE.BufferGeometry {
     const maxNy = options?.maxFacadeNormalY ?? 0.38;
     const geom = options?.inPlace ? geometry : geometry.clone();
@@ -100,33 +113,38 @@ export function smoothFacadeNormals(
         geom.computeVertexNormals();
     }
 
-    const normals = geom.attributes.normal.array as Float32Array;
-    const count = normals.length / 3;
+    const normals = geom.attributes.normal;
+    // Local -> world for normals is the normal matrix; world -> local is the transpose of the upper 3x3.
+    const toWorld = options?.matrixWorld ? new THREE.Matrix3().getNormalMatrix(options.matrixWorld) : undefined;
+    const toLocal = options?.matrixWorld ? new THREE.Matrix3().setFromMatrix4(options.matrixWorld).transpose() : undefined;
+    const n = new THREE.Vector3();
 
-    for (let i = 0; i < count; i++) {
-        const idx = i * 3;
-        const nx = normals[idx];
-        const ny = normals[idx + 1];
-        const nz = normals[idx + 2];
-
-        if (Math.abs(ny) < maxNy) {
-            // Project strictly into horizontal XZ plane
-            const horizLen = Math.hypot(nx, nz);
+    for (let i = 0; i < normals.count; i++) {
+        if (Math.abs(worldNormalY(normals, i, toWorld, n)) < maxNy) {
+            // Project strictly into the horizontal world plane
+            const horizLen = Math.hypot(n.x, n.z);
             if (horizLen > 1e-4) {
-                normals[idx] = nx / horizLen;
-                normals[idx + 1] = 0.0;
-                normals[idx + 2] = nz / horizLen;
+                n.set(n.x / horizLen, 0.0, n.z / horizLen);
+                if (toLocal) n.applyMatrix3(toLocal).normalize();
+                normals.setXYZ(i, n.x, n.y, n.z);
             }
         }
     }
 
-    geom.attributes.normal.needsUpdate = true;
+    normals.needsUpdate = true;
     return geom;
 }
 
 /**
  * Generates a solid, watertight perimeter plinth box beneath the building base.
  * Seals floating building geometry and subterranean photogrammetric voids.
+ *
+ * The plinth stands on the scene's ground: level in world space (+Y up), under the building's lowest world point (or
+ * groundDatumY), covering its world footprint, with its sides along the building's own heading (its local X axis
+ * laid flat). With `matrixWorld` (the building mesh's world matrix) the plinth's vertices are written in the
+ * building's own frame, so the plinth placed beside the building, with the same transform, stands under it in the
+ * scene. Without it the geometry's own coordinates are taken as world. The footprint in metres is in
+ * `userData.plinthFootprintMeters`.
  */
 export function generateWatertightPlinth(
     geometry: THREE.BufferGeometry,
@@ -137,35 +155,55 @@ export function generateWatertightPlinth(
         /** The plinth's material (no stock stone is assumed). */
         material: THREE.Material;
         name?: string;
+        /** The building mesh's world matrix (its parent chain included). */
+        matrixWorld?: THREE.Matrix4;
     }
 ): THREE.Mesh {
     if (!options?.material) throw new Error('generateWatertightPlinth needs the plinth material');
     const plinthDepth = options.plinthDepth ?? 2.5;
     const plinthPadding = options.plinthPadding ?? 0.3;
+    const positions = geometry.getAttribute('position');
+    if (!positions || positions.count === 0) throw new Error('generateWatertightPlinth: the building geometry has no vertices');
+    const toWorld = options.matrixWorld ?? new THREE.Matrix4();
+    if (Math.abs(toWorld.determinant()) < 1e-12) throw new Error('generateWatertightPlinth: the building\'s world matrix is singular (a zero scale)');
 
-    if (!geometry.boundingBox) {
-        geometry.computeBoundingBox();
+    // The plinth's frame: world up, and the building's local X (else Z) axis laid flat as its heading.
+    const up = new THREE.Vector3(0, 1, 0);
+    const linear = new THREE.Matrix3().setFromMatrix4(toWorld);
+    const heading = new THREE.Vector3(1, 0, 0).applyMatrix3(linear).setY(0);
+    if (heading.lengthSq() < 1e-12) heading.set(0, 0, 1).applyMatrix3(linear).setY(0);
+    heading.normalize();
+    const across = new THREE.Vector3().crossVectors(heading, up).normalize();
+
+    // The building's extent in that frame, in world metres.
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    const p = new THREE.Vector3();
+    for (let i = 0; i < positions.count; i++) {
+        p.fromBufferAttribute(positions, i).applyMatrix4(toWorld);
+        const a = p.dot(heading), y = p.y, b = p.dot(across);
+        min.set(Math.min(min.x, a), Math.min(min.y, y), Math.min(min.z, b));
+        max.set(Math.max(max.x, a), Math.max(max.y, y), Math.max(max.z, b));
     }
-    const bbox = geometry.boundingBox || new THREE.Box3();
-    const size = new THREE.Vector3();
-    bbox.getSize(size);
-    const center = new THREE.Vector3();
-    bbox.getCenter(center);
 
-    const baseMinY = options.groundDatumY !== undefined ? options.groundDatumY : bbox.min.y;
+    const baseMinY = options.groundDatumY !== undefined ? options.groundDatumY : min.y;
 
-    const plinthW = Math.max(0.5, size.x + plinthPadding * 2);
-    const plinthD = Math.max(0.5, size.z + plinthPadding * 2);
+    const plinthW = Math.max(0.5, max.x - min.x + plinthPadding * 2);
+    const plinthD = Math.max(0.5, max.z - min.z + plinthPadding * 2);
     const plinthH = Math.max(0.5, plinthDepth);
 
+    // Its top sits 0.1 m into the building base to guarantee zero seam.
+    const centre = new THREE.Vector3()
+        .addScaledVector(heading, (min.x + max.x) / 2)
+        .addScaledVector(up, baseMinY - plinthH * 0.5 + 0.1)
+        .addScaledVector(across, (min.z + max.z) / 2);
     const plinthGeom = new THREE.BoxGeometry(plinthW, plinthH, plinthD);
+    plinthGeom.applyMatrix4(new THREE.Matrix4().makeBasis(heading, up, across).setPosition(centre));
+    if (options.matrixWorld) plinthGeom.applyMatrix4(toWorld.clone().invert());
+
     const plinthMesh = new THREE.Mesh(plinthGeom, options.material);
     plinthMesh.name = options.name || 'archie_watertight_plinth';
-
-    // Position plinth so its top aligns slightly into the building base to guarantee zero seam
-    const plinthCenterY = baseMinY - plinthH * 0.5 + 0.1;
-    plinthMesh.position.set(center.x, plinthCenterY, center.z);
-
+    plinthMesh.userData.plinthFootprintMeters = { width: plinthW, length: plinthD };
     return plinthMesh;
 }
 
@@ -185,6 +223,9 @@ export class ArchieBuildingRefiner {
         const isMesh = (meshOrGeometry as THREE.Mesh).isMesh;
         const sourceMesh = isMesh ? (meshOrGeometry as THREE.Mesh) : null;
         const rawGeom = isMesh ? (meshOrGeometry as THREE.Mesh).geometry : (meshOrGeometry as THREE.BufferGeometry);
+        // Up is the scene's: the source's world matrix (parent chain included) takes its geometry into world space.
+        sourceMesh?.updateWorldMatrix(true, false);
+        const matrixWorld = sourceMesh ? sourceMesh.matrixWorld.clone() : undefined;
 
         const maxNy = options.maxFacadeNormalY ?? 0.38;
         const plinthDepth = options.plinthDepth ?? 2.5;
@@ -196,16 +237,18 @@ export class ArchieBuildingRefiner {
         const plinthMaterial = options.customPlinthMaterial
             || (options.plinthMaterial ? createArchieMaterial(options.plinthMaterial, 'the plinth material') : buildingMaterial);
 
-        // 1. Bilateral planar facade normal smoothing
-        const smoothedGeom = smoothFacadeNormals(rawGeom, { maxFacadeNormalY: maxNy });
+        // 1. Bilateral planar facade normal smoothing (vertical in world space)
+        const smoothedGeom = smoothFacadeNormals(rawGeom, { maxFacadeNormalY: maxNy, matrixWorld });
 
-        // Count smoothed vs preserved vertices for telemetry
+        // Count smoothed vs preserved vertices for telemetry (world-horizontal normals are facades)
         let smoothedCount = 0;
         let preservedCount = 0;
         const normals = smoothedGeom.getAttribute('normal');
         if (normals) {
+            const toWorld = matrixWorld ? new THREE.Matrix3().getNormalMatrix(matrixWorld) : undefined;
+            const n = new THREE.Vector3();
             for (let i = 0; i < normals.count; i++) {
-                if (Math.abs(normals.getY(i)) < 1e-4) {
+                if (Math.abs(worldNormalY(normals, i, toWorld, n)) < 1e-4) {
                     smoothedCount++;
                 } else {
                     preservedCount++;
@@ -217,23 +260,26 @@ export class ArchieBuildingRefiner {
         const refinedMesh = new THREE.Mesh(smoothedGeom, buildingMaterial);
         refinedMesh.name = `archie_refined_${namePrefix}`;
 
-        // 4. Create watertight grounding plinth (in the same coordinates, under the geometry's base)
+        // 4. Create watertight grounding plinth (level in world space under the building's base, written in the
+        //    geometry's own frame)
         const plinthMesh = generateWatertightPlinth(smoothedGeom, {
             plinthDepth,
             plinthPadding,
             groundDatumY: options.groundDatumY,
             material: plinthMaterial,
-            name: `archie_plinth_${namePrefix}`
+            name: `archie_plinth_${namePrefix}`,
+            matrixWorld
         });
 
-        // 5. Wrap into a group that takes the source mesh's local transform (position, rotation and scale), so the
-        //    building and its plinth stay where the source was once the group replaces it under the same parent.
+        // 5. Wrap into a group that takes the source mesh's local transform (its matrix, which the world matrix above
+        //    was built from), so the building and its plinth stay where the source was once the group replaces it
+        //    under the same parent.
         const group = new THREE.Group();
         group.name = `archie_building_group_${namePrefix}`;
         if (sourceMesh) {
-            group.position.copy(sourceMesh.position);
-            group.quaternion.copy(sourceMesh.quaternion);
-            group.scale.copy(sourceMesh.scale);
+            group.matrix.copy(sourceMesh.matrix);
+            group.matrix.decompose(group.position, group.quaternion, group.scale);
+            group.matrixAutoUpdate = sourceMesh.matrixAutoUpdate;
         }
         group.add(refinedMesh);
         group.add(plinthMesh);
@@ -243,9 +289,7 @@ export class ArchieBuildingRefiner {
         const indexAttr = smoothedGeom.getIndex();
         const triangleCount = indexAttr ? indexAttr.count / 3 : vertexCount / 3;
 
-        const plinthBbox = new THREE.Box3().setFromObject(plinthMesh);
-        const plinthSize = new THREE.Vector3();
-        plinthBbox.getSize(plinthSize);
+        const footprint = plinthMesh.userData.plinthFootprintMeters as { width: number; length: number };
 
         return {
             group,
@@ -257,8 +301,8 @@ export class ArchieBuildingRefiner {
                 facadeVerticesSmoothed: smoothedCount,
                 preservedRoofVertices: preservedCount,
                 plinthDepthMeters: plinthDepth,
-                plinthWidthMeters: plinthSize.x,
-                plinthLengthMeters: plinthSize.z
+                plinthWidthMeters: footprint.width,
+                plinthLengthMeters: footprint.length
             }
         };
     }

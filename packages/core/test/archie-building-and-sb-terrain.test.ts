@@ -338,3 +338,117 @@ describe('SB-Terrain slope materials (Universal)', () => {
         expect((ground.material as THREE.MeshStandardMaterial).roughness).toBeCloseTo(0.4, 6);
     });
 });
+
+describe('Slope and building refinement work in world space (+Y up), through the whole parent chain', () => {
+    /** A parent that turns a Z-up asset upright, as a reorienting GLB root or a tiles frame does. */
+    const zUpParent = () => {
+        const parent = new THREE.Group();
+        parent.name = 'z_up_root';
+        parent.rotation.x = -Math.PI / 2;
+        parent.position.set(50, 3, -20);
+        return parent;
+    };
+
+    it('a ground built in its local XY plane under an X-rotated parent measures level, and a locally "flat" one vertical', async () => {
+        const { DirectDispatchOperatorEngine } = await import('../src/browser/generative-canvas/services/direct-dispatch-operator-engine');
+        const engine = new DirectDispatchOperatorEngine();
+        const scene = new THREE.Scene();
+        engine.attachThreeScene(scene);
+        const parent = zUpParent();
+        scene.add(parent);
+        // The review's probe P1: PlaneGeometry lies in XY (normals +Z); the parent turns +Z into world +Y.
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 20, 4, 4));
+        ground.name = 'z_up_ground';
+        parent.add(ground);
+        // Level in its own frame (normals +Y) is a wall in the world once the parent turns it.
+        const wallGeom = new THREE.PlaneGeometry(20, 20, 4, 4);
+        wallGeom.rotateX(-Math.PI / 2);
+        const wall = new THREE.Mesh(wallGeom);
+        wall.name = 'z_up_wall';
+        parent.add(wall);
+
+        const level = measureSurfaceSlope(ground);
+        expect(level.meanSlopeDeg).toBeCloseTo(0, 4);
+        expect(level.planarityRatio).toBe(1);
+        expect(level.steepnessRatio).toBe(0);
+        expect(measureSurfaceSlope(wall).meanSlopeDeg).toBeCloseTo(90, 4);
+
+        const res = engine.dispatch('sb_apply_slope_materials', { targetMeshId: 'z_up_ground', stops: RAMP });
+        expect(res.success).toBe(true);
+        expect(res.data.meshes[0].meanSlopeDeg).toBeCloseTo(0, 4);
+        // The level end of the ramp (roughness 0.4), not the steep end (1.0) it got from local +Y.
+        expect((ground.material as THREE.MeshStandardMaterial).roughness).toBeCloseTo(0.4, 6);
+        expect(ground.parent).toBe(parent);
+    });
+
+    it('a building standing along local +Z under an X-rotated parent gets vertical facades and a level plinth beneath it', async () => {
+        const { DirectDispatchOperatorEngine } = await import('../src/browser/generative-canvas/services/direct-dispatch-operator-engine');
+        const engine = new DirectDispatchOperatorEngine();
+        const scene = new THREE.Scene();
+        engine.attachThreeScene(scene);
+        const parent = zUpParent();
+        scene.add(parent);
+        // The review's probe P1b: an 18 m building along local +Z (world up), 12 x 12 m footprint.
+        const geom = new THREE.BoxGeometry(12, 12, 18);
+        geom.translate(0, 0, 9);
+        // Scanner noise on the four facades: a small tilt towards local +Z, which is world up.
+        const normals = geom.getAttribute('normal');
+        for (let i = 0; i < normals.count; i++) {
+            if (Math.abs(normals.getZ(i)) < 0.5) {
+                const n = new THREE.Vector3(normals.getX(i), normals.getY(i), 0.2).normalize();
+                normals.setXYZ(i, n.x, n.y, n.z);
+            }
+        }
+        const building = new THREE.Mesh(geom, new THREE.MeshStandardMaterial());
+        building.name = 'z_up_building';
+        building.position.set(4, -6, 0);
+        building.rotation.z = 0.3;
+        parent.add(building);
+        scene.updateMatrixWorld(true);
+        const before = new THREE.Box3().setFromObject(building);
+        expect(before.max.y - before.min.y).toBeCloseTo(18, 4);
+
+        const res = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'z_up_building', material: SANDSTONE, plinthDepth: 2.0, plinthPadding: 0.3 });
+        expect(res.success).toBe(true);
+        scene.updateMatrixWorld(true);
+        const refined = scene.getObjectByName('archie_refined_z_up_building') as THREE.Mesh;
+        const plinth = scene.getObjectByName('archie_plinth_z_up_building') as THREE.Mesh;
+        expect(refined.parent?.parent).toBe(parent);
+
+        // The building did not move.
+        const after = new THREE.Box3().setFromObject(refined);
+        expect(after.min.distanceTo(before.min)).toBeLessThan(1e-6);
+        expect(after.max.distanceTo(before.max)).toBeLessThan(1e-6);
+
+        // The plinth lies under the building (it was a vertical slab against one facade): its top 0.1 m into the
+        // base, 2 m deep, and its footprint covering the building's.
+        const base = new THREE.Box3().setFromObject(plinth);
+        expect(base.max.y).toBeCloseTo(before.min.y + 0.1, 4);
+        expect(base.min.y).toBeCloseTo(before.min.y + 0.1 - 2.0, 4);
+        expect(base.min.x).toBeLessThanOrEqual(before.min.x);
+        expect(base.max.x).toBeGreaterThanOrEqual(before.max.x);
+        expect(base.min.z).toBeLessThanOrEqual(before.min.z);
+        expect(base.max.z).toBeGreaterThanOrEqual(before.max.z);
+        // Sides along the building's heading: 12 m + 2 x 0.3 m square.
+        expect(res.data.buildings[0].metrics.plinthWidthMeters).toBeCloseTo(12.6, 4);
+        expect(res.data.buildings[0].metrics.plinthLengthMeters).toBeCloseTo(12.6, 4);
+
+        // Facade normals are horizontal in the world; the roof's still points up.
+        const toWorld = new THREE.Matrix3().getNormalMatrix(refined.matrixWorld);
+        const out = refined.geometry.getAttribute('normal');
+        let facades = 0, roof = 0;
+        for (let i = 0; i < out.count; i++) {
+            const n = new THREE.Vector3().fromBufferAttribute(out, i).applyMatrix3(toWorld).normalize();
+            if (Math.abs(n.y) < 0.5) {
+                facades++;
+                expect(Math.abs(n.y)).toBeLessThan(1e-4);
+            } else if (n.y > 0.5) {
+                roof++;
+                expect(n.y).toBeCloseTo(1, 5);
+            }
+        }
+        expect(facades).toBe(16);
+        expect(roof).toBe(4);
+        expect(res.data.buildings[0].metrics.facadeVerticesSmoothed).toBe(16);
+    });
+});

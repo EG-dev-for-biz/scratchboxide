@@ -1026,7 +1026,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_refine_building_structure',
         category: 'mesh_edit',
-        description: 'Refines the scanned building mesh(es) named by targetMeshId in the live viewport: planar facade normal smoothing, a grounding plinth, and the PBR material given as material { color: [r, g, b] sRGB 0..1, roughness 0..1, metalness 0..1 } (required; plinthMaterial is optional and defaults to the same material). Every mesh with that name or id is refined in place, under its own parent with its own transform. Fails when no such mesh is in the scene; it never picks a mesh by name keywords or builds a stand-in.',
+        description: 'Refines the scanned building mesh(es) named by targetMeshId in the live viewport: planar facade normal smoothing and a level grounding plinth under the building (both in scene space, +Y up, through the mesh\'s whole parent chain), and the PBR material given as material { color: [r, g, b] sRGB 0..1, roughness 0..1, metalness 0..1 } (required; plinthMaterial is optional and defaults to the same material). Every mesh with that name or id is refined in place, under its own parent with its own transform. Fails when no such mesh is in the scene; it never picks a mesh by name keywords or builds a stand-in.',
         execute: (ctx, params: {
             targetMeshId?: string;
             material?: ArchieMaterialParameters;

@@ -582,7 +582,7 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_apply_slope_materials',
         category: 'materials_pbr',
-        description: 'Gives the terrain mesh(es) named by targetMeshId in the live viewport a PBR material by their measured slope: stops is a ramp of { slopeDeg, color: [r, g, b] sRGB 0..1, roughness 0..1, metalness 0..1 } that you choose for this ground, interpolated linearly between stops. Each mesh keeps its place, geometry and transform; the result reports its measured slope and the material it got. Fails when the mesh is not in the scene or the ramp is invalid; it never picks meshes by name keywords or builds demo terrain.',
+        description: 'Gives the terrain mesh(es) named by targetMeshId in the live viewport a PBR material by their slope, measured in scene space (+Y up) through each mesh\'s whole parent chain: stops is a ramp of { slopeDeg, color: [r, g, b] sRGB 0..1, roughness 0..1, metalness 0..1 } that you choose for this ground, interpolated linearly between stops. Each mesh keeps its place, geometry and transform; the result reports its measured slope and the material it got. Fails when the mesh is not in the scene or the ramp is invalid; it never picks meshes by name keywords or builds demo terrain.',
         execute: (ctx, params: {
             targetMeshId?: string;
             stops?: SlopeMaterialStop[];
