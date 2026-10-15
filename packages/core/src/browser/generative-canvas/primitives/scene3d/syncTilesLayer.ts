@@ -10,13 +10,27 @@
 import { GooglePhotorealistic3DTilesLayer } from '../../services/GooglePhotorealistic3DTilesLayer';
 import { TerrainManager } from '../../services/TerrainManager';
 import type { RendererStack, Scene3DRenderMode, TilesLayerHandle } from './types';
-import type { GroundTileMode } from '../../canvas-types';
+import type { GroundTileMode, Scene3DData } from '../../canvas-types';
 
 export interface TilesLayerInput {
     has3DTiles: boolean;
-    geoAnchor?: { lat: number; lng: number; elevation?: number; geoidUndulationMeters?: number } | null;
+    /** Numbers, or numeric strings as some saved scenes hold them. */
+    geoAnchor?: { lat: number | string; lng: number | string; elevation?: number | string; geoidUndulationMeters?: number } | null;
     renderMode: Scene3DRenderMode;
     groundTileMode?: GroundTileMode;
+}
+
+/**
+ * Where live tiles are placed for a scene: its active geoAnchor, else the anchor of the map-3d object that asks for
+ * them. The known geoid undulation travels with it so the tile heights need no lookup. Null when neither has one.
+ */
+export function liveTilesAnchor(scene: Pick<Scene3DData, 'geoAnchor' | 'objects'>): TilesLayerInput['geoAnchor'] {
+    const a = scene.geoAnchor;
+    if (a && a.active !== false) {
+        return { lat: a.lat, lng: a.lng, elevation: a.elevation, geoidUndulationMeters: a.geoidUndulationMeters };
+    }
+    const g = scene.objects?.find(o => o.content?.type === 'map-3d' && o.space?.geoAnchor)?.space?.geoAnchor;
+    return g ? { lat: g.lat, lng: g.lng, elevation: g.alt } : null;
 }
 
 export interface TilesLayerCallbacks {
@@ -43,12 +57,29 @@ async function fetchGeoidUndulationFromServer(lat: number, lng: number): Promise
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+/** A finite number from a number or a numeric string; undefined otherwise (never a default). */
+function toFiniteNumber(v: unknown): number | undefined {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+    if (typeof v === 'string' && v.trim() !== '') {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+    }
+    return undefined;
+}
+
+/** Ground below the origin is re-measured until it sits within this distance of y = 0. */
+const GROUND_TOLERANCE_M = 0.25;
+/** Each finer level of detail can move the measured ground; stop re-placing after this many corrections. */
+const MAX_GROUND_CORRECTIONS = 12;
+
 /**
  * Creates (or tears down) the Google Photorealistic 3D Tiles layer and the TerrainManager used for ground snapping.
  *
  * The layer is placed only at the scene's geoAnchor, and only once the geoid undulation there is known: the tiles are
  * in ellipsoid heights while the anchor elevation is above sea level, and the offset between them varies by up to
- * ~190 m worldwide. A missing anchor or a failed lookup is reported through onError and no tiles are shown.
+ * ~190 m worldwide. A missing, non-numeric, out-of-range or (0, 0) anchor, or a failed lookup, is reported through
+ * onError and no tiles are shown. When the anchor has no elevation, none is assumed: the ground under the origin is
+ * measured on the loaded tiles and the layer is re-placed so that ground sits at y = 0.
  * A scene-local TerrainManager always exists so callers have something to sample ground height from.
  */
 export function syncTilesLayer(
@@ -82,24 +113,53 @@ export function syncTilesLayer(
     if (!input.has3DTiles || isSuppressed) return handle;
 
     const anchor = input.geoAnchor;
-    if (!anchor || !Number.isFinite(anchor.lat) || !Number.isFinite(anchor.lng)) {
+    if (!anchor) {
         callbacks.onError?.('Live 3D Tiles need the scene\'s geoAnchor (lat/lng), and this scene has none, so no tiles are shown.');
         return handle;
     }
-    const origin = { lat: anchor.lat, lng: anchor.lng, alt: anchor.elevation ?? 0 };
+    const lat = toFiniteNumber(anchor.lat);
+    const lng = toFiniteNumber(anchor.lng);
+    if (lat === undefined || lng === undefined) {
+        callbacks.onError?.(`Live 3D Tiles are not shown: the scene's geoAnchor lat/lng are not numbers (lat ${JSON.stringify(anchor.lat)}, lng ${JSON.stringify(anchor.lng)}).`);
+        return handle;
+    }
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        callbacks.onError?.(`Live 3D Tiles are not shown: the scene's geoAnchor ${lat}, ${lng} is outside the valid latitude/longitude range.`);
+        return handle;
+    }
+    if (lat === 0 && lng === 0) {
+        callbacks.onError?.('Live 3D Tiles are not shown: the scene\'s geoAnchor is 0, 0, which is an unset location, not a place.');
+        return handle;
+    }
+    const elevation = toFiniteNumber(anchor.elevation);
+    // With no elevation the layer starts at sea level and is re-placed on the measured ground (see measureGround).
+    const origin = { lat, lng, alt: elevation ?? 0 };
     const isClay = mode === 'photoreal-clay' || (mode !== 'photoreal-textured' && input.renderMode === 'clay');
     const createLayer = deps.createLayer ?? (options => new GooglePhotorealistic3DTilesLayer(options));
+
+    let groundCorrections = 0;
+    const measureGround = (layer: any, geoidHeight: number) => {
+        if (elevation !== undefined || groundCorrections >= MAX_GROUND_CORRECTIONS || typeof layer.sampleGroundHeight !== 'function') return;
+        const h = layer.sampleGroundHeight(0, 0);
+        if (typeof h !== 'number' || !Number.isFinite(h) || Math.abs(h) <= GROUND_TOLERANCE_M) return;
+        origin.alt += h;
+        groundCorrections++;
+        layer.updateOrigin?.({ ...origin }, geoidHeight);
+    };
 
     const place = (geoidHeight: number) => {
         if (disposed) return;
         try {
-            const layer = createLayer({ origin, renderMode: isClay ? 'clay' : 'textured', clayPreset: 'studio-grey', geoidHeight });
+            const layer = createLayer({ origin: { ...origin }, renderMode: isClay ? 'clay' : 'textured', clayPreset: 'studio-grey', geoidHeight });
             tilesLayer = layer;
             handle.tilesLayer = layer;
             scene.add(layer.group);
             const terrainManager: TerrainManager = layer.getTerrainManager(scene);
             handle.terrainManager = terrainManager;
-            layer.onTileLoaded = () => callbacks.onTileLoaded?.(terrainManager);
+            layer.onTileLoaded = () => {
+                measureGround(layer, geoidHeight);
+                callbacks.onTileLoaded?.(terrainManager);
+            };
             callbacks.onLayerReady?.(layer, terrainManager);
         } catch (err) {
             callbacks.onError?.(`Google 3D Tiles could not start: ${errorText(err)}`);

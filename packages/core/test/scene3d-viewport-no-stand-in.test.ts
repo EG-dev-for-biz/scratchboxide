@@ -21,8 +21,8 @@ import * as THREE from 'three';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Scene3DPrimitive, captureSceneScreenshot } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent } from '../src/browser/generative-canvas/primitives/scene3d/syncSceneContent';
-import { syncTilesLayer } from '../src/browser/generative-canvas/primitives/scene3d/syncTilesLayer';
-import { generatorRunFailure, generatorRequestFailure } from '../src/browser/generative-canvas/primitives/scene3d/generatorRun';
+import { liveTilesAnchor, syncTilesLayer } from '../src/browser/generative-canvas/primitives/scene3d/syncTilesLayer';
+import { fromInput, generatorErrorForScene, generatorRunFailure, generatorRequestFailure } from '../src/browser/generative-canvas/primitives/scene3d/generatorRun';
 import { ViewportNotice, resolveViewportNotice } from '../src/browser/generative-canvas/primitives/scene3d/ViewportNotice';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { decodePng } from '../src/node/texture-processing';
@@ -143,6 +143,31 @@ describe('content failures are shown in the viewport', () => {
         expect(html).not.toContain('<canvas');
     });
 
+    it('a build failure stays only while the scene still holds that source and no model for it', () => {
+        const SRC = 'import scratchbox as sb\nsb.broken()';
+        const err = fromInput(generatorRunFailure('python', 200, { success: false, stderr: "NameError: name 'x' is not defined" })!, 'source', SRC);
+        // Still the failing version: shown.
+        expect(generatorErrorForScene(err, { pythonGenerator: { sourceCode: SRC } })).toBe(err);
+        // The follow-up fixed the script and brought its model, the same source now has a model, or the generator is gone.
+        expect(generatorErrorForScene(err, { pythonGenerator: { sourceCode: 'import scratchbox as sb\nsb.fixed()', glbBase64: 'Z2xURg==' } })).toBeNull();
+        expect(generatorErrorForScene(err, { pythonGenerator: { sourceCode: SRC, glbBase64: 'Z2xURg==' } })).toBeNull();
+        expect(generatorErrorForScene(err, {})).toBeNull();
+    });
+
+    it('an unreadable model error stays only while the scene still holds that model', () => {
+        const err = fromInput({ engine: 'python', message: 'The generated model (GLB) could not be read: bad magic' }, 'glb', 'AAAA');
+        expect(generatorErrorForScene(err, { pythonGenerator: { glbBase64: 'AAAA' } })).toBe(err);
+        expect(generatorErrorForScene(err, { pythonGenerator: { glbBase64: 'Z2xURg==' } })).toBeNull();
+    });
+
+    it('the viewport keeps no old "Model build failed" panel over a later version that has its model', () => {
+        // Same artifact, same component: v1 failed to build, v2 arrives with a model. The panel is derived from v2.
+        const err = fromInput(generatorRunFailure('python', 200, { success: false, stderr: 'NameError' })!, 'source', 'v1');
+        const v2 = { pythonGenerator: { sourceCode: 'v2', glbBase64: 'Z2xURg==' } };
+        const notices = resolveViewportNotice({ webglError: null, generatorError: generatorErrorForScene(err, v2), tilesError: null, contentKind: 'objects' });
+        expect(notices).toEqual([]);
+    });
+
     const failureNotices = () => resolveViewportNotice({
         webglError: null,
         generatorError: generatorRunFailure('python', 200, { success: false, stderr: 'RuntimeError: create_loft needs at least two profiles' }),
@@ -204,6 +229,64 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
         expect(created).toBe(0);
         expect(errors).toEqual([expect.stringContaining('HTTP 500')]);
         expect(errors[0]).toContain('51.50550, -0.07540');
+    });
+
+    it('rejects a 0, 0 anchor and non-numeric coordinates, each with its own reason', () => {
+        for (const [geoAnchor, reason] of [
+            [{ lat: 0, lng: 0 }, '0, 0'],
+            [{ lat: 'forty', lng: '-73.98' }, 'not numbers'],
+            [{ lat: 95, lng: 10 }, 'outside the valid']
+        ] as const) {
+            const errors: string[] = [];
+            let created = 0;
+            syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: geoAnchor as any, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
+                { onError: m => errors.push(m) }, { createLayer: () => { created++; return fakeLayer(); }, fetchGeoidUndulation: async () => 0 });
+            expect(created).toBe(0);
+            expect(errors).toEqual([expect.stringContaining(reason)]);
+            expect(errors[0]).not.toContain('has none');
+        }
+    });
+
+    it('reads numeric-string coordinates as the numbers they are', async () => {
+        const options: any[] = [];
+        syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: { lat: '40.7484', lng: '-73.9857', elevation: '10' }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
+            { onError: m => { throw new Error(m); } }, { createLayer: o => { options.push(o); return fakeLayer(); }, fetchGeoidUndulation: async () => -32.5 });
+        await new Promise(r => setTimeout(r, 0));
+        expect(options[0].origin).toEqual({ lat: 40.7484, lng: -73.9857, alt: 10 });
+    });
+
+    it('with no elevation, assumes none: it measures the ground on the loaded tiles and re-places the layer there', async () => {
+        // Denver: ground about 1609 m above sea level. Starting at sea level, the ground first samples 1609 m up.
+        let groundY = 1609.3;
+        const origins: any[] = [];
+        const layer: any = {
+            ...fakeLayer(),
+            sampleGroundHeight: () => groundY,
+            updateOrigin: (o: any, geoid: number) => { origins.push({ ...o, geoid }); groundY -= o.alt - (origins.length > 1 ? origins[origins.length - 2].alt : 0); }
+        };
+        const options: any[] = [];
+        syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: { lat: 39.7392, lng: -104.9903 }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
+            { onError: m => { throw new Error(m); } }, { createLayer: o => { options.push(o); return layer; }, fetchGeoidUndulation: async () => -16.9 });
+        await new Promise(r => setTimeout(r, 0));
+        expect(options[0].origin.alt).toBe(0);
+        layer.onTileLoaded();
+        expect(origins).toEqual([{ lat: 39.7392, lng: -104.9903, alt: 1609.3, geoid: -16.9 }]);
+        // Once the ground is at y = 0 (within tolerance) nothing more is moved.
+        layer.onTileLoaded();
+        expect(origins).toHaveLength(1);
+    });
+
+    it('takes the anchor from a map-3d object when the scene has none, with its known geoid height', () => {
+        expect(liveTilesAnchor({ objects: [{ id: 'm', content: { type: 'map-3d', durableUri: 'x', mimeType: 'x' }, space: { geoAnchor: { lat: 37.7955, lng: -122.3937, alt: 4 } } } as any] }))
+            .toEqual({ lat: 37.7955, lng: -122.3937, elevation: 4 });
+        expect(liveTilesAnchor({ geoAnchor: { lat: 51.5, lng: -0.07, elevation: 12, geoidUndulationMeters: 45.6, active: true } }))
+            .toEqual({ lat: 51.5, lng: -0.07, elevation: 12, geoidUndulationMeters: 45.6 });
+        expect(liveTilesAnchor({ geoAnchor: { lat: 51.5, lng: -0.07, active: false } })).toBeNull();
+    });
+
+    it('a scene whose anchor is set to draw no tiles is empty and says so', () => {
+        const html = render({ title: 'Ferry Building', geoAnchor: { lat: 37.7955, lng: -122.3937, active: true }, groundTileMode: 'none' } as any);
+        expect(noticeKinds(html)).toEqual(['empty']);
     });
 
     it('places the layer at the anchor with the looked-up undulation', async () => {

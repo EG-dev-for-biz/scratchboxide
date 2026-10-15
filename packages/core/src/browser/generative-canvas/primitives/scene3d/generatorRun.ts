@@ -11,6 +11,33 @@
 export interface GeneratorRunError {
     engine: 'python' | 'cpp';
     message: string;
+    /**
+     * What failed: the generator source that did not build, or the model (GLB) that could not be read. The error
+     * belongs to that input only; once the scene's generator or model changes it no longer applies.
+     */
+    origin?: { kind: 'source' | 'glb'; value: string };
+}
+
+type GeneratorFields = { pythonGenerator?: { sourceCode?: string; glbBase64?: string }; cppGenerator?: { sourceCode?: string; glbBase64?: string } };
+
+/**
+ * The error to show for the scene as it is now, or null. A build error stands while the scene still holds the
+ * same source and no model for it; an unreadable-model error while it still holds that model. A follow-up that
+ * fixes the script, brings a model or drops the generator therefore never leaves an old failure over a new model.
+ */
+export function generatorErrorForScene(error: GeneratorRunError | null, scene: GeneratorFields): GeneratorRunError | null {
+    if (!error || !error.origin) return error;
+    if (error.origin.kind === 'source') {
+        const gen = error.engine === 'python' ? scene.pythonGenerator : scene.cppGenerator;
+        return gen?.sourceCode === error.origin.value && !gen?.glbBase64 ? error : null;
+    }
+    const glb = scene.pythonGenerator?.glbBase64 || scene.cppGenerator?.glbBase64;
+    return glb === error.origin.value ? error : null;
+}
+
+/** Ties an error to the input it came from (see generatorErrorForScene). */
+export function fromInput(error: GeneratorRunError, kind: 'source' | 'glb', value: string): GeneratorRunError {
+    return { ...error, origin: { kind, value } };
 }
 
 const ENGINE_LABEL: Record<GeneratorRunError['engine'], string> = {

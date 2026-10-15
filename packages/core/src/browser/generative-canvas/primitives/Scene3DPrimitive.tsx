@@ -127,13 +127,13 @@ import {
 import type { ArticulatedAircraftComponents } from '../services/mesh/aircraft';
 import { useLatest } from '../hooks/useLatest';
 import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize } from './scene3d/createRendererStack';
-import { syncTilesLayer } from './scene3d/syncTilesLayer';
+import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
 import { syncAtmosphere } from './scene3d/syncAtmosphere';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
-import { generatorRequestFailure, generatorRunFailure } from './scene3d/generatorRun';
+import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRunFailure, type GeneratorRunError } from './scene3d/generatorRun';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
 import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCustomMeshes';
@@ -1086,7 +1086,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [elevation, setElevation] = React.useState<string>('15.2');
     const [scriptError, setScriptError] = React.useState<string | null>(null);
     // Failures of the scene's own content sources, shown in the viewport (never swapped for other geometry).
-    const [generatorError, setGeneratorError] = React.useState<{ engine: 'python' | 'cpp'; message: string } | null>(null);
+    const [generatorError, setGeneratorError] = React.useState<GeneratorRunError | null>(null);
     const [tilesError, setTilesError] = React.useState<string | null>(null);
     const [sceneBudget, setSceneBudget] = React.useState<SceneBudgetTelemetry | null>(null);
 
@@ -1832,12 +1832,14 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         })
     ), [sceneData.objects]);
 
+    const tilesAnchor = React.useMemo(() => liveTilesAnchor(sceneData), [sceneData.geoAnchor, sceneData.objects]);
+
     const tilesInput = React.useMemo<TilesLayerInput>(() => ({
         has3DTiles: !hasExplicit3DTileObject && has3DTiles && (effectiveGroundTileMode === 'photoreal-textured' || effectiveGroundTileMode === 'photoreal-clay'),
-        geoAnchor: sceneData.geoAnchor ? { lat: sceneData.geoAnchor.lat, lng: sceneData.geoAnchor.lng, elevation: sceneData.geoAnchor.elevation } : null,
+        geoAnchor: tilesAnchor,
         renderMode,
         groundTileMode: hasExplicit3DTileObject ? 'none' : effectiveGroundTileMode
-    }), [hasExplicit3DTileObject, has3DTiles, sceneData.geoAnchor, renderMode, effectiveGroundTileMode]);
+    }), [hasExplicit3DTileObject, has3DTiles, tilesAnchor, renderMode, effectiveGroundTileMode]);
     const tilesFingerprint = React.useMemo(() => JSON.stringify(tilesInput), [tilesInput]);
     const tilesInputRef = useLatest(tilesInput);
 
@@ -1874,13 +1876,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const hasActiveScript = !!(activeScript && activeScript.trim().length > 0);
     const contentInput = React.useMemo<SceneContentInput>(() => ({
         hasActiveScript,
-        has3DTiles,
+        // Live tiles count as content only when they are actually drawn: an anchor whose ground mode suppresses
+        // them ('none', the vector modes) draws nothing, so such a scene can still be empty.
+        has3DTiles: tilesInput.has3DTiles,
         hasCustomMeshes: Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0,
         hasNonFallbackObjects: hasNonFallbackObjectContent(sceneData),
         hasCppGenerator: !!sceneData.cppGenerator?.glbBase64 || !!(sceneData.cppGenerator?.sourceCode && sceneData.cppGenerator.sourceCode.trim().length > 0),
         hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64 || !!(sceneData.pythonGenerator?.sourceCode && sceneData.pythonGenerator.sourceCode.trim().length > 0)
     }), [
-        hasActiveScript, has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.splatUrl, sceneData.splatTilesetUrl,
+        hasActiveScript, tilesInput.has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.splatUrl, sceneData.splatTilesetUrl,
         sceneData.cppGenerator?.glbBase64, sceneData.cppGenerator?.sourceCode,
         sceneData.pythonGenerator?.glbBase64, sceneData.pythonGenerator?.sourceCode
     ]);
@@ -2514,13 +2518,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 if (isCancelled) return;
                 const failure = generatorRunFailure('python', res.status, resData);
                 if (failure) {
-                    setGeneratorError(failure);
+                    setGeneratorError(fromInput(failure, 'source', pyGen.sourceCode!));
                     return;
                 }
                 adopt({ glbBase64: resData.glbBase64, glbPath: resData.glbPath, lastCompiledTimeMs: Date.now() });
             })
             .catch(err => {
-                if (!isCancelled) setGeneratorError(generatorRequestFailure('python', err));
+                if (!isCancelled) setGeneratorError(fromInput(generatorRequestFailure('python', err), 'source', pyGen.sourceCode!));
             });
         return () => { isCancelled = true; };
     }, [sceneData.pythonGenerator?.sourceCode]);
@@ -2542,7 +2546,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 if (isCancelled) return;
                 const failure = generatorRunFailure('cpp', status, resData);
                 if (failure) {
-                    setGeneratorError(failure);
+                    setGeneratorError(fromInput(failure, 'source', cppGen.sourceCode!));
                     return;
                 }
                 setSceneData(prev => ({
@@ -2559,7 +2563,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 }));
             })
             .catch(err => {
-                if (!isCancelled) setGeneratorError(generatorRequestFailure('cpp', err));
+                if (!isCancelled) setGeneratorError(fromInput(generatorRequestFailure('cpp', err), 'source', cppGen.sourceCode!));
             });
         return () => { isCancelled = true; };
     }, [sceneData.cppGenerator?.sourceCode]);
@@ -2570,10 +2574,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const glbBase64 = sceneData.pythonGenerator?.glbBase64 || sceneData.cppGenerator?.glbBase64;
         if (!stack || !glbBase64) return;
         const engine = sceneData.pythonGenerator?.glbBase64 ? 'python' : 'cpp';
-        const reportUnreadable = (err: unknown) => setGeneratorError({
+        const reportUnreadable = (err: unknown) => setGeneratorError(fromInput({
             engine,
             message: `The generated model (GLB) could not be read: ${err instanceof Error ? err.message : String(err)}`
-        });
+        }, 'glb', glbBase64));
         try {
             const b64 = glbBase64;
             const binaryStr = typeof atob === 'function' ? atob(b64) : Buffer.from(b64, 'base64').toString('binary');
@@ -3517,13 +3521,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         return badges;
     }, [sceneData.features, sceneData.customScript, sceneData.code]);
 
+    // Only an error about the scene's current generator source or model; a later version that fixed it clears it.
+    const currentGeneratorError = generatorErrorForScene(generatorError, sceneData);
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
-        generatorError,
+        generatorError: currentGeneratorError,
         tilesError,
         contentKind: sceneContentKind,
         hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh
-    }), [webglError, generatorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh]);
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;
