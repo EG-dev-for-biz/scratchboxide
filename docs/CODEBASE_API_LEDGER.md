@@ -313,8 +313,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `nano_banana_transfer_color`: End-to-end photographic color transfer.
 
 ### 13. Botany & Tree Synthesis (`botanical-tree-tools.ts`)
-- `botanical_synthesize_tree`: Synthesizes 1:1 metric parametric botanical trees.
-- `botanical_query_separator_trees`: Identifies and replaces trees in photogrammetry.
+- `botanical_synthesize_tree`: Grows one standalone SB-Veggie tree (space colonisation, studio clay) to the height and crown spread given; a location's trees are measured and rebuilt by `google_3d_tiles_get_clay`.
 
 ### 14. Codebase Lenses, Browser & Canvas Primitives (`lens-browser-tools.ts` & `canvas-tools.ts`)
 - `lens_project`: Projects file contents into interactive stage models.
