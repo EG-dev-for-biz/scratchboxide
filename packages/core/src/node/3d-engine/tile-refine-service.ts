@@ -36,7 +36,10 @@ export interface TileRefineRequest {
     anchor?: { x: number; z: number } | [number, number];
     /** Relief region of interest: the anchor's footprint grown by this many metres; < 0 = whole tile (default 60). */
     roiRadius?: number;
-    /** Photometric facade relief (default true). */
+    /**
+     * Photometric facade relief (default true): window recesses and shadowed bands read from the photo texture. Its
+     * depths are inferred, not measured; the outputs label them (_RELIEF_HEIGHT per vertex, asset.extras).
+     */
     relief?: boolean;
     /**
      * Facade flatten: vertices within `band` metres of a detected wall plane move onto it (default on, band 0.10).
@@ -501,6 +504,16 @@ export function summarizeTileRefineStats(stats: Record<string, any>): Record<str
             movedVertices: stats.flatten.movedVertices,
             displacementMax_m: stats.flatten.displacement_m?.max,
             guardSettled: stats.flatten.guardSettled
+        } : undefined,
+        relief: stats.relief?.enabled ? {
+            provenance: stats.relief.provenance ?? (stats.relief.regionsTreated ? 'inferred' : 'none'),
+            facadesTreated: stats.relief.regionsTreated,
+            recessArea_m2: stats.relief.recessArea_m2,
+            proudArea_m2: stats.relief.proudArea_m2,
+            heightMin_m: stats.relief.heightMin_m,
+            heightMax_m: stats.relief.heightMax_m,
+            latticesRejected: stats.relief.latticesRejected,
+            proudClampedDropped: stats.relief.proudClampedDropped
         } : undefined,
         rectifyFlips: stats.rectify?.flips,
         reliefFlips: stats.relief?.flips,
