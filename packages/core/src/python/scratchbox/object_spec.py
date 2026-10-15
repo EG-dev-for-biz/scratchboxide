@@ -594,8 +594,11 @@ def _ellipse_perimeter(a, b):
     return math.pi * (a + b) * (1 + 3 * h / (10 + math.sqrt(4 - 3 * h)))
 
 
-def _rmf_frames(points, closed, up_hint):
-    """Tangents and rotation-minimising normals (double reflection, Wang et al. 2008) along sampled points."""
+def _rmf_frames(points, closed, up_hint, field="sweep.controlPoints"):
+    """
+    Tangents and rotation-minimising normals (double reflection, Wang et al. 2008) along sampled points. `field` names
+    the spec field the points come from, for the error when the curve reverses on itself and has no direction.
+    """
     n = len(points)
     tangents = []
     for i in range(n):
@@ -604,7 +607,10 @@ def _rmf_frames(points, closed, up_hint):
         else:
             prev = points[i - 1] if i > 0 else points[i]
             nxt = points[i + 1] if i + 1 < n else points[i]
-        tangents.append(_unit(_sub(nxt, prev), "sweep carrier tangent"))
+        if _length(_sub(nxt, prev)) < _EPS:
+            raise SpecError("%s: the curve turns straight back on itself near [%s], so it has no direction there; "
+                            "move the points so the curve does not reverse" % (field, ", ".join("%.3g" % x for x in points[i])))
+        tangents.append(_unit(_sub(nxt, prev)))
     t0 = tangents[0]
     ref = up_hint if abs(_dot(up_hint, t0)) < 0.999 else (0.0, 0.0, 1.0)
     normals = [_unit(_sub(ref, _mul(t0, _dot(ref, t0))))]
@@ -906,7 +912,13 @@ def _relief_offsets(surface, relief_ops):
         segments = []
         for curve in rel["curves"]:
             for (ua, va), (ub, vb) in zip(curve, curve[1:]):
-                segments.append((ua * surface.length, va, ub * surface.length, vb))
+                # Pieces of at most a quarter turn: the same straight line in (s, v), but each sample then measures
+                # only the few pieces near it, instead of every wrap of a long spiral.
+                pieces = max(1, int(math.ceil(abs(vb - va) / 0.25)))
+                for k in range(pieces):
+                    a, b = k / float(pieces), (k + 1) / float(pieces)
+                    segments.append(((ua + (ub - ua) * a) * surface.length, va + (vb - va) * a,
+                                     (ua + (ub - ua) * b) * surface.length, va + (vb - va) * b))
         for i, u in enumerate(surface.us):
             if surface.pole[i]:
                 continue
@@ -922,8 +934,9 @@ def _relief_offsets(surface, relief_ops):
                     ya, yb = va * circ, vb * circ
                     lo = min(ya, yb) - half
                     hi = max(ya, yb) + half
-                    k_lo = int(math.floor((lo - y) / circ))
-                    k_hi = int(math.ceil((hi - y) / circ))
+                    # Only wraps that put the sample within half a width of the segment's v span can be near it.
+                    k_lo = int(math.ceil((lo - y) / circ))
+                    k_hi = int(math.floor((hi - y) / circ))
                     for k in range(k_lo, k_hi + 1):
                         d = _segment_distance(s, y + k * circ, sa, ya, sb, yb)
                         if best is None or d < best:
@@ -1234,6 +1247,11 @@ def build_meshes(spec):
     if build_problems:
         raise SpecError(build_problems)
 
+    # Every copy repeats its part's mesh, so the triangle total is known before any copy is made.
+    predicted_tris = sum(len(meshes[pid].triangles) * n for pid, n in counts.items() if pid in meshes)
+    if predicted_tris > MAX_TRIANGLES:
+        raise SpecError("the spec builds %d triangles (limit %d); use fewer copies or fewer parts" % (predicted_tris, MAX_TRIANGLES))
+
     def emit(pid):
         """[(owner id, _MeshData)] for a part and everything attached to it, after replicate and mirror."""
         part = by_id[pid]
@@ -1254,7 +1272,10 @@ def build_meshes(spec):
                     fn = (lambda a, l: lambda p: _add(_add(centre, _rotate(_sub(p, centre), axis, a)), l))(angle, lift)
                     pieces.extend((owner, mesh.transformed(fn)) for owner, mesh in base)
             else:
-                pieces.extend(_path_copies(rep["path"], base))
+                try:
+                    pieces.extend(_path_copies(rep["path"], base))
+                except SpecError as err:
+                    raise _naming_part(pid, err)
         else:
             pieces = [(pid, part_mesh(pid))]
             for child in children.get(pid, []):
@@ -1302,7 +1323,7 @@ def _path_copies(path, base):
     pieces = []
     if path["orientToPath"]:
         # Frames along the dense path, then copy k turns the first frame onto frame k.
-        tangents, normals = _rmf_frames(dense, False, (0.0, 1.0, 0.0))
+        tangents, normals = _rmf_frames(dense, False, (0.0, 1.0, 0.0), "replicate.path.points")
         frames = []
         for k in range(count):
             s = acc[-1] * k / (count - 1)
