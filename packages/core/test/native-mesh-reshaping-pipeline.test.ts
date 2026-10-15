@@ -193,6 +193,37 @@ describe('Agent tools and routing', () => {
         expect(rawMeshReadIssues(fs.readFileSync(identity))).toEqual({ geometry: [], content: [] });
     });
 
+    it('refuses a rigged, morphed or animated GLB, or one with extra attribute sets, instead of returning it static and stripped', async () => {
+        const rigged = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'rigged.glb'), cylinderMesh(1, 4)), g => {
+            const prim = g.meshes[0].primitives[0];
+            // Accessor indices only matter to the JSON-level check: the GLB is refused before the native reader runs.
+            prim.attributes.JOINTS_0 = prim.attributes.POSITION;
+            prim.attributes.WEIGHTS_0 = prim.attributes.NORMAL;
+            prim.attributes.TEXCOORD_1 = prim.attributes.NORMAL;
+            prim.targets = [{ POSITION: prim.attributes.POSITION }];
+            g.meshes[0].weights = [0];
+            g.skins = [{ joints: [0] }];
+            g.nodes[0].skin = 0;
+            g.animations = [{ channels: [], samplers: [] }];
+        });
+        const issues = rawMeshReadIssues(fs.readFileSync(rigged));
+        expect(issues.geometry).toEqual([]);
+        expect(issues.content.join('\n')).toContain('JOINTS_0 (1 primitive), WEIGHTS_0 (1 primitive), TEXCOORD_1 (1 primitive), which the native writer does not write');
+        expect(issues.content.join('\n')).toContain('1 primitive(s) have morph targets');
+        expect(issues.content.join('\n')).toContain('1 skin(s) (a rig with joints)');
+        expect(issues.content.join('\n')).toContain('1 animation(s)');
+        await expect(meshShapingHandlers.mesh_apply_deformers({ inputGlbPath: rigged, outputGlbPath: path.join(WORK, 'rigged_out.glb'), operations: [{ type: 'taper', axis: 'Y', factor: 0.5, range: [0, 1] }] }, {} as any))
+            .rejects.toThrow(/cannot be reshaped faithfully: .*1 skin\(s\)/);
+        expect(fs.existsSync(path.join(WORK, 'rigged_out.glb'))).toBe(false);
+
+        // A mesh shown with non-zero morph weights is not its base shape, which is all the reader sees.
+        const posed = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'posed.glb'), cylinderMesh(1, 4)), g => {
+            g.meshes[0].primitives[0].targets = [{ POSITION: g.meshes[0].primitives[0].attributes.POSITION }];
+            g.meshes[0].weights = [0.6];
+        });
+        expect(rawMeshReadIssues(fs.readFileSync(posed)).geometry).toContain('mesh 0 is shown with morph target weights [0.6], and the reader reads only its base shape');
+    });
+
     it('keeps the input\'s own clay material on the output instead of the native writer\'s stock material', async () => {
         const clay = { name: 'studio_clay', pbrMetallicRoughness: { baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 } };
         const inputGlbPath = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'clay_in.glb'), cylinderMesh(1, 4)), g => {

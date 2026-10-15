@@ -83,7 +83,11 @@ export interface RawMeshReadIssues {
      * accessors, unreadable component types, a corrupt file): measured bounds and output would be wrong.
      */
     geometry: string[];
-    /** Content the native writer cannot carry over (textures, several materials): the output would silently lose it. */
+    /**
+     * Content the native writer cannot carry over (textures, several materials, vertex attributes beyond POSITION,
+     * NORMAL, TANGENT, TEXCOORD_0 and COLOR_0, morph targets, skins, animations, cameras, lights): the output would
+     * silently lose it.
+     */
     content: string[];
 }
 
@@ -108,13 +112,16 @@ function parseGlbJson(glb: Buffer): { json: any; jsonEnd: number } | { error: st
 /** Accessor component types the native reader decodes as values; it reads 5123 colours and UVs unnormalised and skips signed types. */
 const READER_FLOAT_ATTRIBUTES = ['POSITION', 'NORMAL', 'TANGENT'];
 const READER_UNORM_ATTRIBUTES = ['TEXCOORD_0', 'COLOR_0'];
+/** The vertex attributes GlbWriter writes; any other (JOINTS_n, WEIGHTS_n, TEXCOORD_1, COLOR_1, _CUSTOM) is lost. */
+const WRITER_ATTRIBUTES = ['POSITION', 'NORMAL', 'TANGENT', 'TEXCOORD_0', 'COLOR_0'];
 
 /**
  * The native pipelines read a GLB with GlbReader, which merges every primitive's raw vertex data into one triangle
  * list (ignoring node transforms, instancing and primitive modes, and decoding only float and unsigned-byte
  * attributes) and write it with GlbWriter, which writes one primitive with one material and no textures. This lists
  * what that would get wrong for `glb`, so callers can refuse the input instead of returning a moved, rescaled,
- * scrambled or stripped mesh as done. A file that cannot be parsed is reported as a geometry issue.
+ * scrambled or stripped mesh (a rigged or animated one returned static) as done. A file that cannot be parsed is
+ * reported as a geometry issue.
  */
 export function rawMeshReadIssues(glb: Buffer): RawMeshReadIssues {
     const parsed = parseGlbJson(glb);
@@ -176,6 +183,38 @@ export function rawMeshReadIssues(glb: Buffer): RawMeshReadIssues {
     }
     const textures = Array.isArray(json.textures) ? json.textures.length : 0;
     if (textures > 0) content.push(`it has ${textures} texture(s), which the native writer does not carry over`);
+
+    // Vertex attributes, morph targets, rigs, animations, cameras and lights the writer has no place for.
+    const dropped = new Map<string, number>();
+    let morphPrimitives = 0;
+    meshes.forEach((mesh, m) => {
+        const prims: any[] = Array.isArray(mesh?.primitives) ? mesh.primitives : [];
+        for (const prim of prims) {
+            for (const semantic of Object.keys(prim?.attributes || {})) {
+                if (!WRITER_ATTRIBUTES.includes(semantic)) dropped.set(semantic, (dropped.get(semantic) || 0) + 1);
+            }
+            if (Array.isArray(prim?.targets) && prim.targets.length > 0) morphPrimitives++;
+        }
+        const weights: unknown[] = Array.isArray(mesh?.weights) ? mesh.weights : [];
+        if (weights.some(w => Number(w) !== 0)) {
+            geometry.push(`mesh ${m} is shown with morph target weights [${weights.join(', ')}], and the reader reads only its base shape`);
+        }
+    });
+    nodes.forEach((node, index) => {
+        if (Array.isArray(node?.weights) && node.weights.some((w: unknown) => Number(w) !== 0) && node.mesh !== undefined) {
+            geometry.push(`node ${node.name ? `"${node.name}"` : index} shows its mesh with morph target weights [${node.weights.join(', ')}], and the reader reads only the base shape`);
+        }
+    });
+    if (dropped.size > 0) {
+        content.push(`its primitives carry ${[...dropped].map(([semantic, count]) => `${semantic} (${count} primitive${count === 1 ? '' : 's'})`).join(', ')}, which the native writer does not write (it writes ${WRITER_ATTRIBUTES.join(', ')})`);
+    }
+    if (morphPrimitives > 0) content.push(`${morphPrimitives} primitive(s) have morph targets, which the native writer does not write`);
+    const count = (key: string) => (Array.isArray(json[key]) ? json[key].length : 0);
+    if (count('skins') > 0) content.push(`it has ${count('skins')} skin(s) (a rig with joints), which the native writer does not write`);
+    if (count('animations') > 0) content.push(`it has ${count('animations')} animation(s), which the native writer does not write`);
+    if (count('cameras') > 0) content.push(`it has ${count('cameras')} camera(s), which the native writer does not write`);
+    const lights = json.extensions?.KHR_lights_punctual?.lights;
+    if (Array.isArray(lights) && lights.length > 0) content.push(`it has ${lights.length} light(s), which the native writer does not write`);
     return { geometry, content };
 }
 
