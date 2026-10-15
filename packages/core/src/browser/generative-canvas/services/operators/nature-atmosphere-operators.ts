@@ -18,7 +18,7 @@ import {
 } from '../atmosphere';
 import {
     SbTerrainGroundEngine,
-    type TerrainLayerMode
+    type SlopeMaterialStop
 } from '../spatial/SbTerrainGroundEngine';
 import { findViewportMeshes } from './mesh-edit-operators';
 
@@ -580,35 +580,24 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
         }
     },
     {
-        name: 'sb_classify_terrain_materials',
+        name: 'sb_apply_slope_materials',
         category: 'materials_pbr',
-        description: 'Classifies the terrain mesh(es) named by targetMeshId in the live viewport by slope into rock, grass and pavement material groups (procedural bump maps). Fails when the mesh is not in the scene; it never picks meshes by name keywords or builds demo terrain.',
+        description: 'Gives the terrain mesh(es) named by targetMeshId in the live viewport a PBR material by their measured slope: stops is a ramp of { slopeDeg, color: [r, g, b] sRGB 0..1, roughness 0..1, metalness 0..1 } that you choose for this ground, interpolated linearly between stops. Each mesh keeps its place, geometry and transform; the result reports its measured slope and the material it got. Fails when the mesh is not in the scene or the ramp is invalid; it never picks meshes by name keywords or builds demo terrain.',
         execute: (ctx, params: {
             targetMeshId?: string;
-            layer?: TerrainLayerMode;
-            rockSlopeThresholdDeg?: number;
-            pavementMaxSlopeDeg?: number;
+            stops?: SlopeMaterialStop[];
         }) => {
             // The terrain is the mesh(es) the caller names in the live viewport; nothing is picked by name keywords
             // and no demo planes are built when none is found.
-            const meshesToProcess = findViewportMeshes(ctx.getThreeScene(), params.targetMeshId, 'sb_classify_terrain_materials');
-            const result = new SbTerrainGroundEngine().classifyAndRenderTerrain(meshesToProcess, {
-                rockSlopeThresholdDeg: params.rockSlopeThresholdDeg,
-                pavementMaxSlopeDeg: params.pavementMaxSlopeDeg,
-                initialLayer: params.layer || 'all'
-            });
-            for (const m of meshesToProcess) {
-                m.parent?.remove(m);
-            }
-            ctx.getThreeScene()!.add(result.terrainGroup);
+            const meshes = findViewportMeshes(ctx.getThreeScene(), params.targetMeshId, 'sb_apply_slope_materials');
+            const result = new SbTerrainGroundEngine().applySlopeMaterials(meshes, { stops: params.stops as SlopeMaterialStop[] });
 
-            ctx.recordState(`SB-Terrain: Classify Materials (Layer: ${params.layer || 'all'})`);
+            ctx.recordState(`SB-Terrain: Slope Materials (${result.meshes.length} mesh${result.meshes.length === 1 ? '' : 'es'} named ${params.targetMeshId})`);
 
             return {
                 success: true,
                 targetMeshId: params.targetMeshId,
-                layer: params.layer || 'all',
-                metrics: result.metrics
+                meshes: result.meshes
             };
         }
     },

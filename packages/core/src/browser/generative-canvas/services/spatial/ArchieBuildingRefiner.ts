@@ -10,19 +10,18 @@
  *    wrinkles on vertical walls while preserving roofs & architectural cornices).
  * 2. Watertight grounding plinths (extruding solid perimeter bases below ground
  *    datum to seal open cavities and floating building geometry).
- * 3. Photoreal architectural PBR materials across canonical global archetypes
- *    (Roman ochre, Travertine limestone, Imperial brick, Metro bronze/granite).
+ * 3. The PBR material the caller gives as continuous values (sRGB colour, roughness, metalness): no named
+ *    palette or archetype list, so any material on any planet can be described.
  ********************************************************************************/
 
 import * as THREE from 'three';
 
-export type ArchieBuildingPalette =
-    | 'roman_ochre'
-    | 'roman_ochre_deep'
-    | 'limestone'
-    | 'imperial_brick'
-    | 'metro_bronze'
-    | 'granite';
+/** A PBR material as continuous values: sRGB colour channels in [0, 1], roughness and metalness in [0, 1]. */
+export interface ArchieMaterialParameters {
+    color: [number, number, number];
+    roughness: number;
+    metalness: number;
+}
 
 export interface ArchieBuildingRefineOptions {
     /** Maximum abs(Ny) to treat as vertical facade. Default: 0.38 (steep walls). */
@@ -31,10 +30,12 @@ export interface ArchieBuildingRefineOptions {
     plinthDepth?: number;
     /** Horizontal perimeter collar padding for plinth in meters. Default: 0.3m. */
     plinthPadding?: number;
-    /** Ground datum level Y in meters. If omitted, uses building bbox min.y. */
+    /** Ground datum level Y in the mesh's own coordinates. If omitted, uses the geometry's bbox min.y. */
     groundDatumY?: number;
-    /** Material palette style. Required unless customBuildingMaterial is given; an unknown palette is an error. */
-    palette?: ArchieBuildingPalette;
+    /** The building's material. Required unless customBuildingMaterial is given. */
+    material?: ArchieMaterialParameters;
+    /** The plinth's material; when omitted the plinth takes the building's material. */
+    plinthMaterial?: ArchieMaterialParameters;
     /** Custom PBR material override for building body. */
     customBuildingMaterial?: THREE.Material;
     /** Custom PBR material override for foundation plinth. */
@@ -44,7 +45,10 @@ export interface ArchieBuildingRefineOptions {
 }
 
 export interface ArchieRefinedBuildingResult {
-    /** Root group containing refined building mesh and grounding plinth. */
+    /**
+     * Root group containing refined building mesh and grounding plinth. It carries the source mesh's own local
+     * transform, so put it under the source's parent to keep the building where it was.
+     */
     group: THREE.Group;
     /** Refined building mesh with smoothed facade normals and assigned PBR material. */
     refinedMesh: THREE.Mesh;
@@ -62,50 +66,19 @@ export interface ArchieRefinedBuildingResult {
     };
 }
 
-/** Pre-configured architectural PBR material presets */
-export const ARCHIE_BUILDING_PALETTES: Record<ArchieBuildingPalette, {
-    color: number;
-    roughness: number;
-    metalness: number;
-    name: string;
-}> = {
-    roman_ochre: {
-        color: 0xc47e45,
-        roughness: 0.85,
-        metalness: 0.02,
-        name: 'Roman Terracotta Ochre'
-    },
-    roman_ochre_deep: {
-        color: 0xba693a,
-        roughness: 0.86,
-        metalness: 0.02,
-        name: 'Deep Roman Ochre'
-    },
-    limestone: {
-        color: 0xeae5db,
-        roughness: 0.82,
-        metalness: 0.03,
-        name: 'Travertine / Indiana Limestone'
-    },
-    imperial_brick: {
-        color: 0xa75a38,
-        roughness: 0.90,
-        metalness: 0.03,
-        name: 'Roman Imperial Brick'
-    },
-    metro_bronze: {
-        color: 0x2b303a,
-        roughness: 0.50,
-        metalness: 0.65,
-        name: 'Patinated Metro Bronze / Architectural Metal'
-    },
-    granite: {
-        color: 0x33363a,
-        roughness: 0.78,
-        metalness: 0.05,
-        name: 'Charcoal Granite'
+/** Checks a material given as continuous values and builds it; anything out of range is an error, never replaced. */
+export function createArchieMaterial(params: ArchieMaterialParameters | undefined, what: string): THREE.MeshStandardMaterial {
+    const unit = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+    if (!params || !Array.isArray(params.color) || params.color.length !== 3 || !params.color.every(unit) || !unit(params.roughness) || !unit(params.metalness)) {
+        throw new Error(`ArchieBuildingRefiner: ${what} needs { color: [r, g, b] in 0..1 (sRGB), roughness: 0..1, metalness: 0..1 } (got ${JSON.stringify(params)})`);
     }
-};
+    return new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setRGB(params.color[0], params.color[1], params.color[2], THREE.SRGBColorSpace),
+        roughness: params.roughness,
+        metalness: params.metalness,
+        side: THREE.DoubleSide
+    });
+}
 
 /**
  * Bilateral Planar Facade Normal Smoothing:
@@ -157,16 +130,18 @@ export function smoothFacadeNormals(
  */
 export function generateWatertightPlinth(
     geometry: THREE.BufferGeometry,
-    options?: {
+    options: {
         plinthDepth?: number;
         plinthPadding?: number;
         groundDatumY?: number;
-        material?: THREE.Material;
+        /** The plinth's material (no stock stone is assumed). */
+        material: THREE.Material;
         name?: string;
     }
 ): THREE.Mesh {
-    const plinthDepth = options?.plinthDepth ?? 2.5;
-    const plinthPadding = options?.plinthPadding ?? 0.3;
+    if (!options?.material) throw new Error('generateWatertightPlinth needs the plinth material');
+    const plinthDepth = options.plinthDepth ?? 2.5;
+    const plinthPadding = options.plinthPadding ?? 0.3;
 
     if (!geometry.boundingBox) {
         geometry.computeBoundingBox();
@@ -177,22 +152,15 @@ export function generateWatertightPlinth(
     const center = new THREE.Vector3();
     bbox.getCenter(center);
 
-    const baseMinY = options?.groundDatumY !== undefined ? options.groundDatumY : bbox.min.y;
+    const baseMinY = options.groundDatumY !== undefined ? options.groundDatumY : bbox.min.y;
 
     const plinthW = Math.max(0.5, size.x + plinthPadding * 2);
     const plinthD = Math.max(0.5, size.z + plinthPadding * 2);
     const plinthH = Math.max(0.5, plinthDepth);
 
     const plinthGeom = new THREE.BoxGeometry(plinthW, plinthH, plinthD);
-    const plinthMaterial = options?.material || new THREE.MeshStandardMaterial({
-        color: ARCHIE_BUILDING_PALETTES.limestone.color,
-        roughness: ARCHIE_BUILDING_PALETTES.limestone.roughness,
-        metalness: ARCHIE_BUILDING_PALETTES.limestone.metalness,
-        side: THREE.DoubleSide
-    });
-
-    const plinthMesh = new THREE.Mesh(plinthGeom, plinthMaterial);
-    plinthMesh.name = options?.name || 'archie_watertight_plinth';
+    const plinthMesh = new THREE.Mesh(plinthGeom, options.material);
+    plinthMesh.name = options.name || 'archie_watertight_plinth';
 
     // Position plinth so its top aligns slightly into the building base to guarantee zero seam
     const plinthCenterY = baseMinY - plinthH * 0.5 + 0.1;
@@ -221,8 +189,12 @@ export class ArchieBuildingRefiner {
         const maxNy = options.maxFacadeNormalY ?? 0.38;
         const plinthDepth = options.plinthDepth ?? 2.5;
         const plinthPadding = options.plinthPadding ?? 0.3;
-        const paletteKey = options.palette;
         const namePrefix = options.namePrefix || (sourceMesh?.name || 'building');
+
+        // The materials asked for, checked before any geometry is built: a missing or out-of-range one is an error.
+        const buildingMaterial = options.customBuildingMaterial || createArchieMaterial(options.material, 'the building material');
+        const plinthMaterial = options.customPlinthMaterial
+            || (options.plinthMaterial ? createArchieMaterial(options.plinthMaterial, 'the plinth material') : buildingMaterial);
 
         // 1. Bilateral planar facade normal smoothing
         const smoothedGeom = smoothFacadeNormals(rawGeom, { maxFacadeNormalY: maxNy });
@@ -241,37 +213,11 @@ export class ArchieBuildingRefiner {
             }
         }
 
-        // 2. Resolve PBR Materials
-        // The material is the one asked for: an unknown or missing palette is an error, never another palette.
-        const paletteDef = paletteKey ? ARCHIE_BUILDING_PALETTES[paletteKey] : undefined;
-        if (!options.customBuildingMaterial && !paletteDef) {
-            throw new Error(`ArchieBuildingRefiner: ${paletteKey ? `unknown palette '${paletteKey}'` : 'no palette given'}; `
-                + `give one of ${Object.keys(ARCHIE_BUILDING_PALETTES).join(', ')} or a customBuildingMaterial`);
-        }
-        const buildingMaterial = options.customBuildingMaterial || new THREE.MeshStandardMaterial({
-            color: paletteDef!.color,
-            roughness: paletteDef!.roughness,
-            metalness: paletteDef!.metalness,
-            side: THREE.DoubleSide
-        });
-
-        const plinthMaterial = options.customPlinthMaterial || new THREE.MeshStandardMaterial({
-            color: ARCHIE_BUILDING_PALETTES.limestone.color,
-            roughness: ARCHIE_BUILDING_PALETTES.limestone.roughness,
-            metalness: ARCHIE_BUILDING_PALETTES.limestone.metalness,
-            side: THREE.DoubleSide
-        });
-
-        // 3. Create refined building mesh
+        // 3. Create refined building mesh (in the geometry's own coordinates)
         const refinedMesh = new THREE.Mesh(smoothedGeom, buildingMaterial);
         refinedMesh.name = `archie_refined_${namePrefix}`;
-        if (sourceMesh) {
-            refinedMesh.position.copy(sourceMesh.position);
-            refinedMesh.quaternion.copy(sourceMesh.quaternion);
-            refinedMesh.scale.copy(sourceMesh.scale);
-        }
 
-        // 4. Create watertight grounding plinth
+        // 4. Create watertight grounding plinth (in the same coordinates, under the geometry's base)
         const plinthMesh = generateWatertightPlinth(smoothedGeom, {
             plinthDepth,
             plinthPadding,
@@ -279,13 +225,16 @@ export class ArchieBuildingRefiner {
             material: plinthMaterial,
             name: `archie_plinth_${namePrefix}`
         });
-        if (sourceMesh) {
-            plinthMesh.position.add(sourceMesh.position);
-        }
 
-        // 5. Wrap into cohesive group
+        // 5. Wrap into a group that takes the source mesh's local transform (position, rotation and scale), so the
+        //    building and its plinth stay where the source was once the group replaces it under the same parent.
         const group = new THREE.Group();
         group.name = `archie_building_group_${namePrefix}`;
+        if (sourceMesh) {
+            group.position.copy(sourceMesh.position);
+            group.quaternion.copy(sourceMesh.quaternion);
+            group.scale.copy(sourceMesh.scale);
+        }
         group.add(refinedMesh);
         group.add(plinthMesh);
 

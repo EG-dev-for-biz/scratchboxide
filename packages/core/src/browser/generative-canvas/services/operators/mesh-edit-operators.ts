@@ -24,7 +24,7 @@ import {
 import type { ClayPresetId } from '../TileClayProcessor';
 import {
     ArchieBuildingRefiner,
-    type ArchieBuildingPalette
+    type ArchieMaterialParameters
 } from '../spatial/ArchieBuildingRefiner';
 
 /**
@@ -1026,38 +1026,53 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_refine_building_structure',
         category: 'mesh_edit',
-        description: 'Refines the scanned building mesh named by targetMeshId in the live viewport: planar facade normal smoothing, a grounding plinth, and the PBR material of the given palette (required). Fails when the mesh is not in the scene; it never picks a mesh by name keywords or builds a stand-in.',
+        description: 'Refines the scanned building mesh(es) named by targetMeshId in the live viewport: planar facade normal smoothing, a grounding plinth, and the PBR material given as material { color: [r, g, b] sRGB 0..1, roughness 0..1, metalness 0..1 } (required; plinthMaterial is optional and defaults to the same material). Every mesh with that name or id is refined in place, under its own parent with its own transform. Fails when no such mesh is in the scene; it never picks a mesh by name keywords or builds a stand-in.',
         execute: (ctx, params: {
             targetMeshId?: string;
-            palette?: ArchieBuildingPalette;
+            material?: ArchieMaterialParameters;
+            plinthMaterial?: ArchieMaterialParameters;
             plinthDepth?: number;
             plinthPadding?: number;
             maxFacadeNormalY?: number;
             groundDatumY?: number;
         }) => {
-            // The building is the mesh the caller names in the live viewport; no mesh is guessed from its name and
-            // no demo building is built when none is found.
-            const targetMesh = findViewportMeshes(ctx.getThreeScene(), params.targetMeshId, 'sb_refine_building_structure')[0];
-            const result = new ArchieBuildingRefiner().refineBuilding(targetMesh, {
-                palette: params.palette,
-                plinthDepth: params.plinthDepth ?? 2.5,
-                plinthPadding: params.plinthPadding ?? 0.3,
-                maxFacadeNormalY: params.maxFacadeNormalY ?? 0.38,
-                groundDatumY: params.groundDatumY
-            });
+            // The buildings are the meshes the caller names in the live viewport; no mesh is guessed from its name
+            // and no demo building is built when none is found.
+            const targets = findViewportMeshes(ctx.getThreeScene(), params.targetMeshId, 'sb_refine_building_structure');
+            const refiner = new ArchieBuildingRefiner();
+            // Every target is refined before the scene changes, so a bad material leaves the scene untouched.
+            const refined = targets.map(target => ({
+                target,
+                result: refiner.refineBuilding(target, {
+                    material: params.material,
+                    plinthMaterial: params.plinthMaterial,
+                    plinthDepth: params.plinthDepth ?? 2.5,
+                    plinthPadding: params.plinthPadding ?? 0.3,
+                    maxFacadeNormalY: params.maxFacadeNormalY ?? 0.38,
+                    groundDatumY: params.groundDatumY
+                })
+            }));
             const threeScene = ctx.getThreeScene()!;
-            targetMesh.parent?.remove(targetMesh);
-            threeScene.add(result.group);
+            for (const { target, result } of refined) {
+                // The refined group carries the target's local transform: it replaces the target under the same parent.
+                const parent = target.parent ?? threeScene;
+                parent.add(result.group);
+                parent.remove(target);
+            }
 
-            ctx.recordState(`Archie: Refine Building Structure (${params.palette})`);
+            ctx.recordState(`Archie: Refine Building Structure (${refined.length} mesh${refined.length === 1 ? '' : 'es'} named ${params.targetMeshId})`);
 
             return {
                 success: true,
                 targetMeshId: params.targetMeshId,
-                palette: params.palette,
-                metrics: result.metrics,
-                refinedMeshName: result.refinedMesh.name,
-                plinthMeshName: result.plinthMesh.name
+                material: params.material,
+                refinedCount: refined.length,
+                buildings: refined.map(({ result }) => ({
+                    refinedMeshName: result.refinedMesh.name,
+                    plinthMeshName: result.plinthMesh.name,
+                    parentName: result.group.parent?.name,
+                    metrics: result.metrics
+                }))
             };
         }
     }

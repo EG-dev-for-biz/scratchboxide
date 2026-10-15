@@ -1,8 +1,9 @@
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * Test suite for Universal Archie Building Structure Refinement &
- * SB-Terrain Multi-Material Ground Engine.
+ * Test suite for Universal Archie Building Structure Refinement and SB-Terrain slope materials. Materials are
+ * continuous values the caller gives (no named palettes or surface classes), and the operators edit the named
+ * scene meshes in place, keeping their parents' transforms.
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
@@ -11,18 +12,24 @@ import {
     ArchieBuildingRefiner,
     smoothFacadeNormals,
     generateWatertightPlinth,
-    type ArchieBuildingRefineOptions,
+    type ArchieMaterialParameters,
     type ArchieRefinedBuildingResult
 } from '../src/browser/generative-canvas/services/spatial/ArchieBuildingRefiner';
 import {
     SbTerrainGroundEngine,
-    classifyTerrainSurfaceType,
-    createProceduralRockStrataTexture,
-    createProceduralGrassTexture,
-    createProceduralCobblestoneTexture,
-    type TerrainSurfaceType,
-    type SbTerrainClassificationResult
+    measureSurfaceSlope,
+    materialAtSlope,
+    validateSlopeStops,
+    type SlopeMaterialStop
 } from '../src/browser/generative-canvas/services/spatial/SbTerrainGroundEngine';
+
+/** A weathered sandstone, as continuous values (any material the caller chooses is described the same way). */
+const SANDSTONE: ArchieMaterialParameters = { color: [0.78, 0.62, 0.45], roughness: 0.86, metalness: 0.02 };
+/** A slope ramp chosen for one kind of ground: level -> 0.2 roughness dark, steep -> rough light. */
+const RAMP: SlopeMaterialStop[] = [
+    { slopeDeg: 0, color: [0.2, 0.2, 0.22], roughness: 0.4, metalness: 0.1 },
+    { slopeDeg: 60, color: [0.8, 0.7, 0.6], roughness: 1.0, metalness: 0.0 }
+];
 
 describe('Archie Authentic Building Structure Refinement (Universal)', () => {
 
@@ -84,10 +91,13 @@ describe('Archie Authentic Building Structure Refinement (Universal)', () => {
         // Translate building so base is at Y = 5
         buildingGeom.translate(20, 15, -30); // Y ranges from 5 to 25
 
+        const plinthMaterial = new THREE.MeshStandardMaterial();
         const plinthMesh = generateWatertightPlinth(buildingGeom, {
             plinthDepth: 3.0,
-            plinthPadding: 0.4
+            plinthPadding: 0.4,
+            material: plinthMaterial
         });
+        expect(plinthMesh.material).toBe(plinthMaterial);
 
         expect(plinthMesh).toBeInstanceOf(THREE.Mesh);
         const plinthBbox = new THREE.Box3().setFromObject(plinthMesh);
@@ -112,7 +122,7 @@ describe('Archie Authentic Building Structure Refinement (Universal)', () => {
 
         const refiner = new ArchieBuildingRefiner();
         const result: ArchieRefinedBuildingResult = refiner.refineBuilding(buildingMesh, {
-            palette: 'roman_ochre',
+            material: SANDSTONE,
             plinthDepth: 2.0,
             plinthPadding: 0.3
         });
@@ -124,138 +134,106 @@ describe('Archie Authentic Building Structure Refinement (Universal)', () => {
         expect(result.metrics.plinthDepthMeters).toBe(2.0);
         expect(result.metrics.facadeVerticesSmoothed).toBeGreaterThan(0);
 
-        // Check assigned material has realistic PBR properties
+        // The material is exactly the one given; the plinth takes it too when none is given for the plinth.
         const mat = result.refinedMesh.material as THREE.MeshStandardMaterial;
         expect(mat.isMeshStandardMaterial).toBe(true);
-        expect(mat.roughness).toBeGreaterThan(0.7);
-        expect(mat.metalness).toBeLessThan(0.1);
+        expect(mat.roughness).toBe(0.86);
+        expect(mat.metalness).toBe(0.02);
+        expect(mat.color.getHexString(THREE.SRGBColorSpace)).toBe(new THREE.Color().setRGB(0.78, 0.62, 0.45, THREE.SRGBColorSpace).getHexString(THREE.SRGBColorSpace));
+        expect(result.plinthMesh.material).toBe(mat);
     });
 
-    it('ArchieBuildingRefiner supports arbitrary global architecture palettes (Limestone, Brick, Granite)', () => {
+    it('ArchieBuildingRefiner takes any material as continuous values, and refuses a missing or out-of-range one', () => {
         const refiner = new ArchieBuildingRefiner();
         const geom = new THREE.BoxGeometry(10, 10, 10);
         geom.translate(0, 5, 0);
+        // A material no list would have: bioluminescent fungal stone (whatever the scene calls for).
+        const fungal = refiner.refineBuilding(geom, { material: { color: [0.1, 0.9, 0.7], roughness: 0.33, metalness: 0.0 }, plinthMaterial: { color: [0.05, 0.05, 0.08], roughness: 0.95, metalness: 0.0 } });
+        expect((fungal.refinedMesh.material as THREE.MeshStandardMaterial).roughness).toBe(0.33);
+        expect((fungal.plinthMesh.material as THREE.MeshStandardMaterial).roughness).toBe(0.95);
 
-        const limestoneResult = refiner.refineBuilding(geom, { palette: 'limestone' });
-        expect((limestoneResult.refinedMesh.material as THREE.MeshStandardMaterial).roughness).toBeCloseTo(0.82, 2);
+        expect(() => refiner.refineBuilding(geom, {})).toThrow(/the building material needs \{ color: \[r, g, b\] in 0\.\.1/);
+        expect(() => refiner.refineBuilding(geom, { material: { color: [1.2, 0.5, 0.5], roughness: 0.5, metalness: 0 } })).toThrow(/the building material needs/);
+        expect(() => refiner.refineBuilding(geom, { material: SANDSTONE, plinthMaterial: { color: [0.5, 0.5, 0.5], roughness: -1, metalness: 0 } })).toThrow(/the plinth material needs/);
+        expect(() => refiner.refineBuilding(geom, { palette: 'limestone' } as any)).toThrow(/the building material needs/);
+    });
 
-        const brickResult = refiner.refineBuilding(geom, { palette: 'imperial_brick' });
-        expect((brickResult.refinedMesh.material as THREE.MeshStandardMaterial).roughness).toBeCloseTo(0.90, 2);
+    it('the refined group takes the source mesh\'s own transform, so the building stays where it was under its parent', () => {
+        const parent = new THREE.Group();
+        parent.position.set(500, 20, -300);
+        parent.rotation.y = Math.PI / 3;
+        const geom = new THREE.BoxGeometry(12, 18, 12);
+        geom.translate(0, 9, 0);
+        const source = new THREE.Mesh(geom, new THREE.MeshStandardMaterial());
+        source.position.set(10, 0, 4);
+        source.rotation.y = 0.4;
+        source.scale.set(2, 2, 2);
+        parent.add(source);
+        parent.updateMatrixWorld(true);
+        const before = new THREE.Box3().setFromObject(source);
 
-        const bronzeResult = refiner.refineBuilding(geom, { palette: 'metro_bronze' });
-        expect((bronzeResult.refinedMesh.material as THREE.MeshStandardMaterial).metalness).toBeCloseTo(0.65, 2);
+        const result = new ArchieBuildingRefiner().refineBuilding(source, { material: SANDSTONE });
+        parent.add(result.group);
+        parent.remove(source);
+        parent.updateMatrixWorld(true);
+        const after = new THREE.Box3().setFromObject(result.refinedMesh);
+        expect(after.min.distanceTo(before.min)).toBeLessThan(1e-6);
+        expect(after.max.distanceTo(before.max)).toBeLessThan(1e-6);
+        // The plinth sits under the building's base in the same frame.
+        const plinth = new THREE.Box3().setFromObject(result.plinthMesh);
+        expect(plinth.max.y).toBeLessThan(before.min.y + 1);
     });
 });
 
-describe('SB-Terrain Multi-Material Ground Engine (Universal)', () => {
+describe('SB-Terrain slope materials (Universal)', () => {
+    const tilted = (deg: number, name: string) => {
+        const geom = new THREE.PlaneGeometry(20, 20, 4, 4);
+        geom.rotateX(-Math.PI / 2 + THREE.MathUtils.degToRad(deg));
+        const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial());
+        mesh.name = name;
+        return mesh;
+    };
 
-    it('classifyTerrainSurfaceType: classifies arbitrary surface by slope, planarity and relief', () => {
-        // Flat plaza / street (horizontal normals Ny ~ 1.0, slope 0 deg)
-        const flatGeom = new THREE.PlaneGeometry(10, 10, 4, 4);
-        flatGeom.rotateX(-Math.PI / 2); // points strictly +Y (slope 0°)
-        const flatType = classifyTerrainSurfaceType(flatGeom);
-        expect(flatType).toBe('pavement');
-
-        // Steep cliff / rock scarp (slope 45° > 32° threshold)
-        const cliffGeom = new THREE.PlaneGeometry(10, 10, 4, 4);
-        cliffGeom.rotateX(-Math.PI / 2 + Math.PI / 4); // tilted 45° from horizontal
-        const cliffType = classifyTerrainSurfaceType(cliffGeom, { rockSlopeThresholdDeg: 32 });
-        expect(cliffType).toBe('rock');
-
-        // Gentle slope / lawn (slope ~ 20°, between 10° and 32°)
-        const lawnGeom = new THREE.PlaneGeometry(10, 10, 4, 4);
-        lawnGeom.rotateX(-Math.PI / 2 + Math.PI / 9); // tilted 20° from horizontal
-        const lawnType = classifyTerrainSurfaceType(lawnGeom);
-        expect(lawnType).toBe('grass');
-    });
-
-    it('generates procedural bump textures for rock strata, grass soil, and cobblestone pavers', () => {
-        const rockTex = createProceduralRockStrataTexture();
-        expect(rockTex).toBeDefined();
-        expect(rockTex.wrapS).toBe(THREE.RepeatWrapping);
-        expect(rockTex.wrapT).toBe(THREE.RepeatWrapping);
-
-        const grassTex = createProceduralGrassTexture();
-        expect(grassTex).toBeDefined();
-        expect(grassTex.wrapS).toBe(THREE.RepeatWrapping);
-
-        const cobblestoneTex = createProceduralCobblestoneTexture();
-        expect(cobblestoneTex).toBeDefined();
-        expect(cobblestoneTex.wrapS).toBe(THREE.RepeatWrapping);
-    });
-
-    it('SbTerrainGroundEngine: processes a collection of arbitrary ground submeshes into 3 distinct material systems', () => {
-        const engine = new SbTerrainGroundEngine();
-
-        // Create 3 synthetic ground submeshes
-        // 1. Flat plaza (pavement)
-        const pavementGeom = new THREE.PlaneGeometry(20, 20, 4, 4);
-        pavementGeom.rotateX(-Math.PI / 2);
-        const pavementMesh = new THREE.Mesh(pavementGeom);
-        pavementMesh.name = 'district_plaza_01';
-
-        // 2. Grassy mound (grass: 20 deg slope from ground)
-        const grassGeom = new THREE.PlaneGeometry(20, 20, 4, 4);
-        grassGeom.rotateX(-Math.PI / 2 + Math.PI / 9);
-        const grassMesh = new THREE.Mesh(grassGeom);
-        grassMesh.name = 'park_lawn_02';
-
-        // 3. Steep rock scarp (rock: 60 deg slope from ground)
-        const rockGeom = new THREE.PlaneGeometry(20, 20, 4, 4);
-        rockGeom.rotateX(-Math.PI / 2 + Math.PI / 3);
-        const rockMesh = new THREE.Mesh(rockGeom);
-        rockMesh.name = 'bedrock_escarpment_03';
-
-        const result: SbTerrainClassificationResult = engine.classifyAndRenderTerrain([
-            pavementMesh,
-            grassMesh,
-            rockMesh
-        ]);
-
-        expect(result.terrainGroup).toBeInstanceOf(THREE.Group);
-        expect(result.rocksGroup.children.length).toBe(1);
-        expect(result.grassGroup.children.length).toBe(1);
-        expect(result.pavementGroup.children.length).toBe(1);
-        expect(result.metrics.totalSubmeshes).toBe(3);
-        expect(result.metrics.rockCount).toBe(1);
-        expect(result.metrics.grassCount).toBe(1);
-        expect(result.metrics.pavementCount).toBe(1);
-
-        // Verify layer filtering controls
-        engine.setLayer('rocks');
-        expect(result.rocksGroup.visible).toBe(true);
-        expect(result.grassGroup.visible).toBe(false);
-        expect(result.pavementGroup.visible).toBe(false);
-
-        engine.setLayer('grass');
-        expect(result.rocksGroup.visible).toBe(false);
-        expect(result.grassGroup.visible).toBe(true);
-        expect(result.pavementGroup.visible).toBe(false);
-
-        engine.setLayer('all');
-        expect(result.rocksGroup.visible).toBe(true);
-        expect(result.grassGroup.visible).toBe(true);
-        expect(result.pavementGroup.visible).toBe(true);
-    });
-
-    it('works on arbitrary worldwide complex terrain groups with automatic submesh segmentation', () => {
-        const engine = new SbTerrainGroundEngine();
-        const terrainRoot = new THREE.Group();
-
-        // 10 varied submeshes
-        for (let i = 0; i < 10; i++) {
-            const geom = new THREE.PlaneGeometry(10, 10, 2, 2);
-            // tilt varying between 0 and 60 degrees
-            const tilt = (i / 10) * (Math.PI / 3);
-            geom.rotateX(-tilt);
-            const m = new THREE.Mesh(geom);
-            m.name = `terrain_chunk_${i}`;
-            terrainRoot.add(m);
+    it('measures slope as continuous values, with no surface class', () => {
+        for (const deg of [0, 17, 45, 72]) {
+            const m = measureSurfaceSlope(tilted(deg, `s${deg}`));
+            expect(m.meanSlopeDeg).toBeCloseTo(deg, 3);
+            expect(Object.keys(m).sort()).toEqual(['meanSlopeDeg', 'planarityRatio', 'steepnessRatio', 'vertexCount']);
         }
+        expect(measureSurfaceSlope(tilted(0, 'flat')).planarityRatio).toBe(1);
+        expect(measureSurfaceSlope(tilted(72, 'steep')).steepnessRatio).toBe(1);
+    });
 
-        const result = engine.classifyAndRenderTerrain(terrainRoot);
-        expect(result.metrics.totalSubmeshes).toBe(10);
-        expect(result.metrics.rockCount + result.metrics.grassCount + result.metrics.pavementCount).toBe(10);
+    it('interpolates the caller\'s ramp linearly between stops and holds the end stops beyond them', () => {
+        const stops = validateSlopeStops(RAMP);
+        const mid = materialAtSlope(stops, 30);
+        [0.5, 0.45, 0.41].forEach((c, i) => expect(mid.color[i]).toBeCloseTo(c, 9));
+        expect(mid.roughness).toBeCloseTo(0.7, 9);
+        expect(mid.metalness).toBeCloseTo(0.05, 9);
+        expect(materialAtSlope(stops, -5).roughness).toBe(0.4);
+        expect(materialAtSlope(stops, 85).roughness).toBe(1.0);
+        expect(() => validateSlopeStops([])).toThrow(/at least one stop/);
+        expect(() => validateSlopeStops([{ slopeDeg: 10, color: [0.5, 0.5], roughness: 0.5, metalness: 0 } as any])).toThrow(/stop 0 must be/);
+    });
+
+    it('applySlopeMaterials gives each mesh its slope\'s material in place, keeping its parent and transform', () => {
+        const root = new THREE.Group();
+        root.position.set(0, 100, 0);
+        const level = tilted(0, 'chunk_level');
+        const steep = tilted(60, 'chunk_steep');
+        steep.position.set(30, 0, 0);
+        root.add(level, steep);
+        const result = new SbTerrainGroundEngine().applySlopeMaterials([level, steep], { stops: RAMP });
+        expect(result.meshes.map(m => m.name)).toEqual(['chunk_level', 'chunk_steep']);
+        expect((level.material as THREE.MeshStandardMaterial).roughness).toBeCloseTo(0.4, 6);
+        expect((steep.material as THREE.MeshStandardMaterial).roughness).toBeCloseTo(1.0, 3);
+        expect(level.parent).toBe(root);
+        expect(steep.position.x).toBe(30);
+
+        // An invalid ramp changes nothing.
+        const untouched = level.material;
+        expect(() => new SbTerrainGroundEngine().applySlopeMaterials([level], { stops: [] })).toThrow(/at least one stop/);
+        expect(level.material).toBe(untouched);
     });
 
     it('In-App Gemini Agent Tools: archie_refine_building_structure and sb_terrain_classify_materials are not offered (they refined a demo box and three demo planes, never the scene)', async () => {
@@ -270,72 +248,88 @@ describe('SB-Terrain Multi-Material Ground Engine (Universal)', () => {
         // The canvas operators below act on the live scene's own meshes and stay available.
     });
 
-    it('ArchieBuildingRefiner refuses a missing or unknown palette instead of painting Roman ochre', () => {
-        const refiner = new ArchieBuildingRefiner();
-        const geom = new THREE.BoxGeometry(10, 10, 10);
-        expect(() => refiner.refineBuilding(geom, {})).toThrow(/no palette given; give one of .*limestone/);
-        expect(() => refiner.refineBuilding(geom, { palette: 'gothic_obsidian' as any })).toThrow(/unknown palette 'gothic_obsidian'/);
-    });
-
-    it('Direct-Dispatch Canvas Operators edit the mesh named in the live scene, and fail (adding nothing) when it is not there', async () => {
+    it('Direct-Dispatch Canvas Operators edit the meshes named in the live scene in place, and fail (adding nothing) when they are not there', async () => {
         const { DirectDispatchOperatorEngine } = await import('../src/browser/generative-canvas/services/direct-dispatch-operator-engine');
 
         // The review's probe: an empty scene. Both operators used to build a demo box / demo planes and succeed.
         const empty = new DirectDispatchOperatorEngine();
         const emptyScene = new THREE.Scene();
         empty.attachThreeScene(emptyScene);
-        const refineEmpty = empty.dispatch('sb_refine_building_structure', { palette: 'limestone', plinthDepth: 2.0 });
+        const refineEmpty = empty.dispatch('sb_refine_building_structure', { material: SANDSTONE, plinthDepth: 2.0 });
         expect(refineEmpty.success).toBe(false);
         expect(refineEmpty.error).toContain('needs targetMeshId');
-        const terrainEmpty = empty.dispatch('sb_classify_terrain_materials', { targetMeshId: 'ground', layer: 'rocks' });
+        const terrainEmpty = empty.dispatch('sb_apply_slope_materials', { targetMeshId: 'ground', stops: RAMP });
         expect(terrainEmpty.success).toBe(false);
         expect(terrainEmpty.error).toContain("no mesh named or with id 'ground'");
         expect(emptyScene.children.length).toBe(0);
+        // The old classifier, with its closed rock/grass/pavement classes, is gone.
+        expect(empty.dispatch('sb_classify_terrain_materials', { targetMeshId: 'ground' }).success).toBe(false);
 
         // No viewport attached (the server-side dispatch): nothing to edit, so it fails.
-        const headless = new DirectDispatchOperatorEngine().dispatch('sb_refine_building_structure', { targetMeshId: 'palazzo', palette: 'limestone' });
+        const headless = new DirectDispatchOperatorEngine().dispatch('sb_refine_building_structure', { targetMeshId: 'palazzo', material: SANDSTONE });
         expect(headless.success).toBe(false);
         expect(headless.error).toContain('no viewport is attached');
 
-        // A scene with a building named something that matches no keyword, and a ground mesh.
+        // A scene whose tiles sit under a rotated, translated tiles group: two buildings share a name, plus a ground mesh.
         const engine = new DirectDispatchOperatorEngine();
         const scene = new THREE.Scene();
         engine.attachThreeScene(scene);
-        const buildingGeom = new THREE.BoxGeometry(12, 18, 12);
-        buildingGeom.translate(0, 9, 0);
-        const building = new THREE.Mesh(buildingGeom, new THREE.MeshStandardMaterial());
-        building.name = 'tile_mesh_0042';
-        scene.add(building);
+        const tiles = new THREE.Group();
+        tiles.name = 'tiles_root';
+        tiles.position.set(-200, 5, 80);
+        tiles.rotation.y = 0.7;
+        scene.add(tiles);
+        const makeBuilding = (x: number) => {
+            const g = new THREE.BoxGeometry(12, 18, 12);
+            g.translate(0, 9, 0);
+            const b = new THREE.Mesh(g, new THREE.MeshStandardMaterial());
+            b.name = 'tile_mesh_0042';
+            b.position.set(x, 0, 0);
+            tiles.add(b);
+            return b;
+        };
+        const buildings = [makeBuilding(0), makeBuilding(40)];
         const groundGeom = new THREE.PlaneGeometry(20, 20, 4, 4);
         groundGeom.rotateX(-Math.PI / 2);
         const ground = new THREE.Mesh(groundGeom);
         ground.name = 'tile_mesh_0043';
-        scene.add(ground);
+        tiles.add(ground);
+        scene.updateMatrixWorld(true);
+        const worldBoxes = buildings.map(b => new THREE.Box3().setFromObject(b));
 
         // A keyword-named decoy is not picked when the named mesh is missing.
         const decoy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
         decoy.name = 'building_decoy';
         scene.add(decoy);
-        const missing = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_9999', palette: 'limestone' });
+        const missing = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_9999', material: SANDSTONE });
         expect(missing.success).toBe(false);
         expect(missing.error).toContain("'tile_mesh_0042'");
         expect(scene.getObjectByName('building_decoy')).toBe(decoy);
 
-        const noPalette = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_0042' });
-        expect(noPalette.success).toBe(false);
-        expect(noPalette.error).toContain('no palette given');
+        const noMaterial = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_0042' });
+        expect(noMaterial.success).toBe(false);
+        expect(noMaterial.error).toContain('the building material needs');
+        expect(tiles.children.filter(c => c.name === 'tile_mesh_0042')).toHaveLength(2);
 
-        const refineRes = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_0042', palette: 'limestone', plinthDepth: 2.0 });
+        const refineRes = engine.dispatch('sb_refine_building_structure', { targetMeshId: 'tile_mesh_0042', material: SANDSTONE, plinthDepth: 2.0 });
         expect(refineRes.success).toBe(true);
-        expect(refineRes.data.palette).toBe('limestone');
-        expect(refineRes.data.metrics.vertexCount).toBe(buildingGeom.getAttribute('position').count);
+        expect(refineRes.data.refinedCount).toBe(2);
+        expect(refineRes.data.buildings.every((b: any) => b.parentName === 'tiles_root')).toBe(true);
         expect(scene.getObjectByName('tile_mesh_0042')).toBeUndefined();
-        expect(scene.getObjectByName('archie_refined_tile_mesh_0042')).toBeDefined();
+        scene.updateMatrixWorld(true);
+        const refined = tiles.children.filter(c => c.name === 'archie_building_group_tile_mesh_0042').map(g => g.getObjectByName('archie_refined_tile_mesh_0042')!);
+        expect(refined).toHaveLength(2);
+        refined.forEach((mesh, i) => {
+            const box = new THREE.Box3().setFromObject(mesh);
+            expect(box.min.distanceTo(worldBoxes[i].min)).toBeLessThan(1e-6);
+            expect(box.max.distanceTo(worldBoxes[i].max)).toBeLessThan(1e-6);
+        });
 
-        const terrainRes = engine.dispatch('sb_classify_terrain_materials', { targetMeshId: 'tile_mesh_0043', layer: 'rocks' });
+        const terrainRes = engine.dispatch('sb_apply_slope_materials', { targetMeshId: 'tile_mesh_0043', stops: RAMP });
         expect(terrainRes.success).toBe(true);
-        expect(terrainRes.data.layer).toBe('rocks');
-        expect(terrainRes.data.metrics.totalSubmeshes).toBe(1);
-        expect(terrainRes.data.metrics.pavementCount).toBe(1);
+        expect(terrainRes.data.meshes).toHaveLength(1);
+        expect(terrainRes.data.meshes[0].meanSlopeDeg).toBeCloseTo(0, 4);
+        expect(ground.parent).toBe(tiles);
+        expect((ground.material as THREE.MeshStandardMaterial).roughness).toBeCloseTo(0.4, 6);
     });
 });
