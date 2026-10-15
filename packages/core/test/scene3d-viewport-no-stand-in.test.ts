@@ -22,6 +22,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Scene3DPrimitive, captureSceneScreenshot } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { classifySceneContent, hasNonFallbackObjectContent, syncSceneContent } from '../src/browser/generative-canvas/primitives/scene3d/syncSceneContent';
 import { liveTilesAnchor, syncTilesLayer } from '../src/browser/generative-canvas/primitives/scene3d/syncTilesLayer';
+import { groundDatumBadge, projectRoutePoint } from '../src/browser/generative-canvas/primitives/scene3d/geoAnchorLabels';
+import { DEFAULT_METERS_PER_SCENE_UNIT } from '../src/common/coordinate/GeoFrame';
 import { fromInput, generatorErrorForScene, generatorRunFailure, generatorRequestFailure } from '../src/browser/generative-canvas/primitives/scene3d/generatorRun';
 import { ViewportNotice, resolveViewportNotice } from '../src/browser/generative-canvas/primitives/scene3d/ViewportNotice';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
@@ -308,5 +310,52 @@ describe('frame capture reports a missing frame instead of a 1x1 image', () => {
         const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mNk+M9Qz8DAwMTAwAAAEAEDAT4qV4QAAAAASUVORK5CYII=';
         expect(captureSceneScreenshot({ domElement: { toDataURL: () => png }, render: () => {} } as any, new THREE.Scene(), new THREE.PerspectiveCamera())).toBe(png);
         expect(captureSceneScreenshot({ domElement: { toDataURL: () => { throw new Error('tainted'); } } } as any)).toBeNull();
+    });
+});
+
+describe('the viewport uses the scene\'s own anchor and route, with no default place or elevation', () => {
+    it('a route pin is placed by its offset from the scene\'s anchor, and not at all without coordinates', () => {
+        // San Francisco (37.79, -122.40) and 15.2 m used to stand in for a missing anchor, pin or elevation.
+        expect(projectRoutePoint({ lat: '', lng: '' }, { lat: 37.792, lng: -122.405 })).toBeNull();
+        expect(projectRoutePoint({ lat: 51.5007, lng: -0.1246 }, { lat: '', lng: '' })).toBeNull();
+        expect(projectRoutePoint({ lat: 51.5007, lng: -0.1246 }, { lat: 'abc', lng: -0.12 })).toBeNull();
+        expect(projectRoutePoint({ lat: 51.5007, lng: -0.1246 }, { lat: 120, lng: -0.12 })).toBeNull();
+        const origin = projectRoutePoint({ lat: 51.5007, lng: -0.1246 }, { lat: 51.5007, lng: -0.1246 })!;
+        expect(Math.abs(origin.x)).toBeLessThan(1e-6);
+        expect(Math.abs(origin.z)).toBeLessThan(1e-6);
+        // 10 m east is +x in scene units (GeoFrame's default scale, ~2.18 m per unit); numeric strings as saved scenes hold them.
+        const east = projectRoutePoint({ lat: '51.5007', lng: '-0.1246' }, { lat: 51.5007, lng: -0.1246 + 10 / (111320 * Math.cos(51.5007 * Math.PI / 180)) })!;
+        expect(east.x).toBeCloseTo(10 / DEFAULT_METERS_PER_SCENE_UNIT, 1);
+        expect(Math.abs(east.z)).toBeLessThan(0.05);
+    });
+
+    it('the ground-datum badge states only the source and datum the anchor records', () => {
+        const bare = groundDatumBadge({ lat: 39.7392, lng: -104.9903, elevation: 1609.3 })!;
+        expect(bare.text).toBe('1609.3 m');
+        expect(bare.title).toContain('source: not recorded, vertical datum: not recorded');
+        expect(bare.title).not.toMatch(/Google Elevation API|EGM96|MSL/);
+        const recorded = groundDatumBadge({ lat: '39.7392', lng: '-104.9903', elevation: '1609.3', elevationSource: 'google_elevation', datum: 'MSL_EGM96', landmarkName: 'Denver' })!;
+        expect(recorded.text).toBe('1609.3 m MSL_EGM96');
+        expect(recorded.title).toBe('Ground datum: Denver (39.7392°, -104.9903°) · ground elevation 1609.3 m [source: google_elevation, vertical datum: MSL_EGM96]');
+        expect(groundDatumBadge({ lat: 39.7, lng: -104.9 })).toBeNull();
+    });
+
+    it('a scene with an anchor but no elevation shows no elevation badge', () => {
+        const html = render({ title: 'Denver', geoAnchor: { lat: 39.7392, lng: -104.9903, active: true } as any });
+        expect(html).not.toContain('sb-ground-datum-badge');
+        expect(html).not.toContain('15.2');
+        const withElevation = render({ title: 'Denver', geoAnchor: { lat: 39.7392, lng: -104.9903, elevation: 1609.3, active: true } as any });
+        expect(withElevation).toContain('data-testid="sb-ground-datum-badge"');
+        expect(withElevation).toContain('source: not recorded');
+        expect(withElevation).not.toContain('Google Elevation API');
+    });
+
+    it('a workspace placeholder object does not hide the real objects beside it', () => {
+        const placeholder = { id: 'p', content: { type: '3d-model', durableUri: 'internal:mesh', mimeType: 'model/gltf-binary' } };
+        const real = { id: 'a', content: { type: '3d-model', durableUri: '/models/a.glb', mimeType: 'model/gltf-binary' } };
+        expect(hasNonFallbackObjectContent({ objects: [placeholder, real] as any })).toBe(true);
+        expect(hasNonFallbackObjectContent({ objects: [placeholder] as any })).toBe(false);
+        expect(noticeKinds(render({ title: 'Opened file', objects: [placeholder, real] as any }))).toEqual([]);
+        expect(noticeKinds(render({ title: 'Opened file', objects: [placeholder] as any }))).toEqual(['empty']);
     });
 });

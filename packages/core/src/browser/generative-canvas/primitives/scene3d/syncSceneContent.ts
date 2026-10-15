@@ -41,10 +41,13 @@ export interface SceneContentFactories {
     } | null;
 }
 
-/** True when the scene loads content of its own (objects other than the `internal:mesh` placeholder, or a splat). */
+/**
+ * True when the scene loads content of its own: any object other than the `internal:mesh` placeholder (which a
+ * workspace file opening seeds next to real objects), or a splat. A placeholder never hides the real objects beside it.
+ */
 export function hasNonFallbackObjectContent(scene: Pick<Scene3DData, 'objects' | 'splatUrl' | 'splatTilesetUrl'>): boolean {
     if (scene.splatUrl || scene.splatTilesetUrl) return true;
-    return Array.isArray(scene.objects) && scene.objects.length > 0 && !scene.objects.some(o => o.content?.durableUri === 'internal:mesh');
+    return Array.isArray(scene.objects) && scene.objects.some(o => o?.content?.durableUri !== 'internal:mesh');
 }
 
 /**

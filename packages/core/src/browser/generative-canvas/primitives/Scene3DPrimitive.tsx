@@ -9,7 +9,6 @@
 
 import * as React from 'react';
 import * as THREE from 'three';
-import { GeoFrame } from '../../../common/coordinate/GeoFrame';
 import type {
     CanvasArtifact,
     Media4DObject,
@@ -128,6 +127,7 @@ import type { ArticulatedAircraftComponents } from '../services/mesh/aircraft';
 import { useLatest } from '../hooks/useLatest';
 import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize } from './scene3d/createRendererStack';
 import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
+import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
 import { syncAtmosphere } from './scene3d/syncAtmosphere';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
@@ -1081,9 +1081,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
     const [worldBranch, setWorldBranch] = React.useState<string>(data?.worldBranch || 'earth/main');
     const [hasGeoCoordinates, setHasGeoCoordinates] = React.useState<boolean>(false);
-    const [lat, setLat] = React.useState<string>('37.7900');
-    const [lng, setLng] = React.useState<string>('-122.4000');
-    const [elevation, setElevation] = React.useState<string>('15.2');
+    // The scene's anchor as last synced from its data: empty until the scene has one (no default place).
+    const [lat, setLat] = React.useState<string>('');
+    const [lng, setLng] = React.useState<string>('');
     const [scriptError, setScriptError] = React.useState<string | null>(null);
     // Failures of the scene's own content sources, shown in the viewport (never swapped for other geometry).
     const [generatorError, setGeneratorError] = React.useState<GeneratorRunError | null>(null);
@@ -1148,10 +1148,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const selectedObjectRef = React.useRef<THREE.Object3D | null>(null);
 
     // Geospatial Pinning and Drone Routing states
-    const [pinALat, setPinALat] = React.useState<string>('37.7920');
-    const [pinALng, setPinALng] = React.useState<string>('-122.4050');
-    const [pinBLat, setPinBLat] = React.useState<string>('37.7980');
-    const [pinBLng, setPinBLng] = React.useState<string>('-122.3950');
+    // Drone-route pins come only from the scene's droneRoute; without them no route is drawn.
+    const [pinALat, setPinALat] = React.useState<string>('');
+    const [pinALng, setPinALng] = React.useState<string>('');
+    const [pinBLat, setPinBLat] = React.useState<string>('');
+    const [pinBLng, setPinBLng] = React.useState<string>('');
     const [isRoutingActive, setIsRoutingActive] = React.useState<boolean>(false);
 
     // High-performance animation refs for routing
@@ -1183,20 +1184,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [generatedContentRadius, setGeneratedContentRadius] = React.useState<number | null>(null);
     const [isWasmActive, setIsWasmActive] = React.useState<boolean>(false);
 
-    // 3D Map Tile Ingestion & Clay REST States
-    const [isMapTileModalOpen, setIsMapTileModalOpen] = React.useState<boolean>(false);
-    const [mapTileQuery, setMapTileQuery] = React.useState<string>('San Francisco Ferry Building');
-    const [mapTileLat, setMapTileLat] = React.useState<string>('37.7955');
-    const [mapTileLng, setMapTileLng] = React.useState<string>('-122.3937');
-    const [mapTileElevation, setMapTileElevation] = React.useState<string>('3.5');
-    const [mapTileRadius, setMapTileRadius] = React.useState<number>(160);
-    const [mapTileZoom, setMapTileZoom] = React.useState<number>(17);
-    const [mapTileClayPreset, setMapTileClayPreset] = React.useState<ClayPresetId>('warm-clay');
-    const [mapTileIncludeTerrain, setMapTileIncludeTerrain] = React.useState<boolean>(true);
-    const [mapTileIncludeBuildings, setMapTileIncludeBuildings] = React.useState<boolean>(true);
-    const [mapTileDetailLevel, setMapTileDetailLevel] = React.useState<'low' | 'medium' | 'high'>('high');
-    const [isIngestingTile, setIsIngestingTile] = React.useState<boolean>(false);
-    const [mapTileStatusMsg, setMapTileStatusMsg] = React.useState<string | null>(null);
 
     // Vector ROADMAP Reference & Cloud-Based Map Styling States
     const [isVectorRoadmapHUDOpen, setIsVectorRoadmapHUDOpen] = React.useState<boolean>(false);
@@ -1572,7 +1559,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             if (effectiveWorldBranch) setWorldBranch(effectiveWorldBranch);
             if (data.renderMode) setRenderMode(data.renderMode);
             if (data.clayPreset) {
-                setMapTileClayPreset(data.clayPreset as any);
                 if (threeSceneRef.current) {
                     TileClayProcessor.applyClayMaterial(threeSceneRef.current, data.clayPreset as any);
                 }
@@ -1583,37 +1569,28 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             if (data.transformMode) setTransformMode(data.transformMode);
             if (data.transformSpace) setTransformSpace(data.transformSpace);
 
+            // The anchor (and route) of this scene only: nothing carries over from a previous scene.
             if (data.geoAnchor && data.geoAnchor.lat !== undefined && data.geoAnchor.lng !== undefined) {
                 setHasGeoCoordinates(data.geoAnchor.active !== false);
                 setLat(String(data.geoAnchor.lat));
                 setLng(String(data.geoAnchor.lng));
-                if (data.geoAnchor.elevation !== undefined) {
-                    setElevation(String(data.geoAnchor.elevation));
-                }
             } else if (data.geoAnchor && data.geoAnchor.active === false) {
                 setHasGeoCoordinates(false);
             } else {
                 const geoObj = data.objects?.find(o => o.space?.geoAnchor && o.space.geoAnchor.lat !== undefined && o.space.geoAnchor.lng !== undefined);
-                if (geoObj?.space?.geoAnchor) {
-                    setHasGeoCoordinates(true);
-                    setLat(String(geoObj.space.geoAnchor.lat));
-                    setLng(String(geoObj.space.geoAnchor.lng));
-                    if (geoObj.space.geoAnchor.alt !== undefined) {
-                        setElevation(String(geoObj.space.geoAnchor.alt));
-                    }
-                }
+                setHasGeoCoordinates(!!geoObj?.space?.geoAnchor);
+                setLat(geoObj?.space?.geoAnchor ? String(geoObj.space.geoAnchor.lat) : '');
+                setLng(geoObj?.space?.geoAnchor ? String(geoObj.space.geoAnchor.lng) : '');
             }
 
-            if (data.droneRoute?.pinA && data.droneRoute?.pinB) {
-                if (data.droneRoute.pinA.lat !== undefined) setPinALat(String(data.droneRoute.pinA.lat));
-                if (data.droneRoute.pinA.lng !== undefined) setPinALng(String(data.droneRoute.pinA.lng));
-                if (data.droneRoute.pinB.lat !== undefined) setPinBLat(String(data.droneRoute.pinB.lat));
-                if (data.droneRoute.pinB.lng !== undefined) setPinBLng(String(data.droneRoute.pinB.lng));
-                if (data.droneRoute.active !== undefined) {
-                    setIsRoutingActive(data.droneRoute.active);
-                    if (data.droneRoute.active) setIsPlaying(true);
-                }
-            }
+            const route = data.droneRoute;
+            const pinText = (v: unknown) => (v === undefined || v === null ? '' : String(v));
+            setPinALat(pinText(route?.pinA?.lat));
+            setPinALng(pinText(route?.pinA?.lng));
+            setPinBLat(pinText(route?.pinB?.lat));
+            setPinBLng(pinText(route?.pinB?.lng));
+            setIsRoutingActive(!!(route?.pinA && route?.pinB && route.active));
+            if (route?.pinA && route?.pinB && route.active) setIsPlaying(true);
 
             if (data.wasmPhysics?.waveActive) {
                 handleWasmSynthesize();
@@ -1651,20 +1628,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---------------------------------------------------------
     // Geospatial Routing Projection & Spline Logic
     // ---------------------------------------------------------
-    const projectCoords = React.useCallback((latitude: number, longitude: number) => {
-        const refLat = parseFloat(lat) || 37.7900;
-        const refLng = parseFloat(lng) || -122.4000;
-        const refAlt = parseFloat(elevation) || 15.2;
-
-        const geoFrame = new GeoFrame({ lat: refLat, lng: refLng, alt: refAlt });
-        const [x, , z] = geoFrame.toScene({ lat: latitude, lng: longitude, alt: refAlt });
-        
-        const clampedX = Math.max(-20, Math.min(20, x));
-        const clampedZ = Math.max(-20, Math.min(20, z));
-        const clampedY = 0;
-        
-        return new THREE.Vector3(clampedX, clampedY, clampedZ);
-    }, [lat, lng, elevation]);
+    // A route pin on the ground plane, offset from the scene's anchor; null when either has no coordinates.
+    const projectCoords = React.useCallback((latitude: unknown, longitude: unknown): THREE.Vector3 | null => {
+        const p = projectRoutePoint({ lat, lng }, { lat: latitude, lng: longitude });
+        return p ? new THREE.Vector3(p.x, 0, p.z) : null;
+    }, [lat, lng]);
 
     const updatePinsAndRoute = React.useCallback(() => {
         if (!threeSceneRef.current || !geoGroupRef.current) return;
@@ -1677,13 +1645,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
         if (!hasGeoCoordinates || !isRoutingActive) return;
 
-        const latA = parseFloat(pinALat) || 37.7920;
-        const lngA = parseFloat(pinALng) || -122.4050;
-        const latB = parseFloat(pinBLat) || 37.7980;
-        const lngB = parseFloat(pinBLng) || -122.3950;
-
-        const pinAPos = projectCoords(latA, lngA);
-        const pinBPos = projectCoords(latB, lngB);
+        const pinAPos = projectCoords(pinALat, pinALng);
+        const pinBPos = projectCoords(pinBLat, pinBLng);
+        if (!pinAPos || !pinBPos) return;
 
         // Pin A & Pin B
         const pinA = createPinMesh(0x00ff88);
@@ -1783,7 +1747,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const cameraModeRef = useLatest(cameraMode);
     const hasGeoCoordinatesRef = useLatest(hasGeoCoordinates);
     const isWasmActiveRef = useLatest(isWasmActive);
-    const elevationRef = useLatest(elevation);
     const projectCoordsRef = useLatest(projectCoords);
     const selectObjectRef = useLatest(selectObject);
     const mutateSceneDataRef = useLatest(mutateSceneData);
@@ -2072,12 +2035,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 }
 
                 // 8. Drone flight telemetry
-                if (hasGeoCoordinatesRef.current && isRoutingActiveRef.current && droneMeshRef.current) {
+                const pinAPos = droneMeshRef.current ? projectCoordsRef.current(pinALatRef.current, pinALngRef.current) : null;
+                const pinBPos = droneMeshRef.current ? projectCoordsRef.current(pinBLatRef.current, pinBLngRef.current) : null;
+                if (hasGeoCoordinatesRef.current && isRoutingActiveRef.current && droneMeshRef.current && pinAPos && pinBPos) {
                     const progress = currentTimeMsRef.current / durationMsRef.current;
                     const tNorm = Math.max(0, Math.min(1, progress));
-                    const project = projectCoordsRef.current;
-                    const pinAPos = project(parseFloat(pinALatRef.current) || 37.7920, parseFloat(pinALngRef.current) || -122.4050);
-                    const pinBPos = project(parseFloat(pinBLatRef.current) || 37.7980, parseFloat(pinBLngRef.current) || -122.3950);
                     const ppx = pinAPos.x + tNorm * (pinBPos.x - pinAPos.x);
                     const ppz = pinAPos.z + tNorm * (pinBPos.z - pinAPos.z);
                     const heightArc = Math.sin(tNorm * Math.PI) * 4.0;
@@ -3262,83 +3224,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         return () => clearInterval(timer);
     }, [refreshSceneBudget]);
 
-    const handleImport3DMapTile = React.useCallback(async () => {
-        setIsIngestingTile(true);
-        setMapTileStatusMsg('Resolving coordinates & synthesizing 3D map tile...');
-
-        try {
-            const tileService = Google3DTileService.getInstance();
-            const result = await tileService.ingestTileRegion({
-                query: mapTileQuery,
-                lat: parseFloat(mapTileLat) || undefined,
-                lng: parseFloat(mapTileLng) || undefined,
-                elevation: parseFloat(mapTileElevation) || 0,
-                radiusMeters: mapTileRadius,
-                zoom: mapTileZoom,
-                clayPreset: mapTileClayPreset,
-                includeTerrain: mapTileIncludeTerrain,
-                includeBuildings: mapTileIncludeBuildings,
-                detailLevel: mapTileDetailLevel
-            });
-
-            if (threeSceneRef.current) {
-                threeSceneRef.current.add(result.mesh);
-            }
-
-            mutateSceneData(prev => {
-                const nextCustomMeshes = [...(prev.customMeshes || [])];
-                if (result.customMeshDefinition) {
-                    nextCustomMeshes.push(result.customMeshDefinition);
-                }
-                if (result.buildingMeshes && result.buildingMeshes.length > 0) {
-                    nextCustomMeshes.push(...result.buildingMeshes);
-                }
-                const nextObjects = [...(prev.objects || []), result.media4DObject];
-                return {
-                    ...prev,
-                    customMeshes: nextCustomMeshes,
-                    objects: nextObjects,
-                    geoAnchor: {
-                        lat: result.geoAnchor.lat,
-                        lng: result.geoAnchor.lng,
-                        elevation: result.geoAnchor.elevation,
-                        elevationSource: (result.geoAnchor as any).elevationSource || 'google_elevation',
-                        datum: (result.geoAnchor as any).datum || 'MSL_EGM96',
-                        active: true,
-                        landmarkName: result.geoAnchor.landmarkName
-                    }
-                };
-            }, { operator: 'sb_import_3d_tile', params: { query: mapTileQuery, lat: mapTileLat, lng: mapTileLng } });
-
-            // Select the newly imported tile
-            selectObject(result.mesh);
-
-            // Frame camera around the tile
-            if (threeCameraRef.current) {
-                cameraRotationRef.current = {
-                    theta: Math.PI / 4,
-                    phi: Math.PI / 3,
-                    distance: Math.max(15, Math.min(250, mapTileRadius * 1.5))
-                };
-                threeCameraRef.current.position.set(mapTileRadius * 1.2, result.stats.elevationSpanMeters * 1.2 + 30, mapTileRadius * 1.2);
-                threeCameraRef.current.lookAt(new THREE.Vector3(0, result.stats.elevationSpanMeters * 0.3, 0));
-            }
-
-            refreshEntities();
-            setMapTileStatusMsg(`✓ Synced ${result.stats.buildingCount} buildings (${result.stats.vertexCount} verts)`);
-            setTimeout(() => {
-                setIsMapTileModalOpen(false);
-                setMapTileStatusMsg(null);
-            }, 1200);
-        } catch (err: any) {
-            setMapTileStatusMsg(`Error: ${err?.message || String(err)}`);
-        } finally {
-            setIsIngestingTile(false);
-        }
-    }, [mapTileQuery, mapTileLat, mapTileLng, mapTileElevation, mapTileRadius, mapTileZoom, mapTileClayPreset, mapTileIncludeTerrain, mapTileIncludeBuildings, mapTileDetailLevel, mutateSceneData, refreshEntities, selectObject]);
-
     const handleApplyClayPresetToScene = React.useCallback((preset: ClayPresetId) => {
-        setMapTileClayPreset(preset);
         if (threeSceneRef.current) {
             TileClayProcessor.applyClayMaterial(threeSceneRef.current, preset);
         }
@@ -3914,15 +3800,19 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     <span>3D Scene</span>
                 </div>
-                {sceneData.geoAnchor && sceneData.geoAnchor.active !== false && sceneData.geoAnchor.elevation !== undefined && (
-                    <div
-                        className="sb-3d-minimal-badge flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#121216]/80 backdrop-blur-md border border-cyan-500/30 text-[10px] font-mono text-cyan-300 shadow-md"
-                        title={`Real-World Ground Datum: ${sceneData.geoAnchor.landmarkName || 'Geospatial Anchor'} (${sceneData.geoAnchor.lat.toFixed(4)}°, ${sceneData.geoAnchor.lng.toFixed(4)}°) · Ground Elevation: ${sceneData.geoAnchor.elevation.toFixed(1)}m MSL [${sceneData.geoAnchor.elevationSource || 'Google Elevation API'}, Datum: ${sceneData.geoAnchor.datum || 'EGM96'}]`}
-                    >
-                        <span className="text-cyan-400">🌐</span>
-                        <span>{sceneData.geoAnchor.elevation.toFixed(1)}m MSL</span>
-                    </div>
-                )}
+                {(() => {
+                    const badge = sceneData.geoAnchor && sceneData.geoAnchor.active !== false ? groundDatumBadge(sceneData.geoAnchor) : null;
+                    return badge && (
+                        <div
+                            data-testid="sb-ground-datum-badge"
+                            className="sb-3d-minimal-badge flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#121216]/80 backdrop-blur-md border border-cyan-500/30 text-[10px] font-mono text-cyan-300 shadow-md"
+                            title={badge.title}
+                        >
+                            <span className="text-cyan-400">🌐</span>
+                            <span>{badge.text}</span>
+                        </div>
+                    );
+                })()}
                 {scriptError && (
                     <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-950/70 border border-amber-500/40 text-[10px] text-amber-200 shrink-0">
                         <span className="text-amber-400">⚠</span>
