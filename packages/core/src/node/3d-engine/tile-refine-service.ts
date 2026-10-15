@@ -515,6 +515,13 @@ export function summarizeTileRefineStats(stats: Record<string, any>): Record<str
             latticesRejected: stats.relief.latticesRejected,
             proudClampedDropped: stats.relief.proudClampedDropped
         } : undefined,
+        proudFeatures: stats.proudFeatures ? {
+            features: stats.proudFeatures.features,
+            removed: stats.proudFeatures.removed,
+            removedArea_m2: stats.proudFeatures.removedArea_m2,
+            retainedVolumeShare: stats.proudFeatures.retainedVolumeShare,
+            blocksKept: stats.rectify?.proudBlocks?.blocks
+        } : undefined,
         rectifyFlips: stats.rectify?.flips,
         reliefFlips: stats.relief?.flips,
         openEdges: stats.openEdges?.final

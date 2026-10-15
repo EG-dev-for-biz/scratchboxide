@@ -156,7 +156,7 @@ describe('TileRefineService', () => {
         expect(fs.readFileSync(flatOff.clayGlb, 'utf8')).toContain('--no-flatten');
     });
 
-    it('summarizes relief with its provenance, and leaves it out when relief is off', () => {
+    it('summarizes relief with its provenance (left out when relief is off) and the proud-feature audit', () => {
         const on = summarizeTileRefineStats({
             relief: { enabled: true, provenance: 'inferred', regionsTreated: 3, recessArea_m2: 41.5, proudArea_m2: 2, heightMin_m: -0.2, heightMax_m: 0.1, latticesRejected: 1, proudClampedDropped: 2 }
         });
@@ -164,6 +164,11 @@ describe('TileRefineService', () => {
             provenance: 'inferred', facadesTreated: 3, recessArea_m2: 41.5, proudArea_m2: 2, heightMin_m: -0.2, heightMax_m: 0.1, latticesRejected: 1, proudClampedDropped: 2
         });
         expect(summarizeTileRefineStats({ relief: { enabled: false } }).relief).toBeUndefined();
+        const audited = summarizeTileRefineStats({
+            proudFeatures: { features: 22, removed: 3, removedArea_m2: 2.0, retainedVolumeShare: 0.87, largestRemoved: [] },
+            rectify: { proudBlocks: { blocks: 6 } }
+        });
+        expect(audited.proudFeatures).toEqual({ features: 22, removed: 3, removedArea_m2: 2.0, retainedVolumeShare: 0.87, blocksKept: 6 });
     });
 
     it('kills a hung run at the timeout and leaves no cache entry', async () => {
