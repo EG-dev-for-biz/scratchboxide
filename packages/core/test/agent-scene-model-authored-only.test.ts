@@ -329,15 +329,15 @@ describe('a splat scene holds only the splat the model sent', () => {
         expect(composed.meshes).toEqual([]);
     });
 
-    it('adds no landmark splat file the model did not send', async () => {
-        const data = await mountSplat({ sceneType: 'gaussian_splat' });
-        expect(data.splatUrl).toBeUndefined();
-        expect(data.splatTilesetUrl).toBeUndefined();
-        expect(data.splatOptions).toBeUndefined();
-        expect(data.worldBranch).toBeUndefined();
-        expect(data.objects).toEqual([]);
-        expect(JSON.stringify(data)).not.toContain('colosseum_splat');
-        expect(composedFallbackContent(data).madeUpSplats).toBe(0);
+    it('adds no landmark splat file the model did not send: a splat scene without one has nothing to mount', async () => {
+        const res: any = await canvasHandlers.mount_canvas_primitive(
+            { primitiveType: '3d-scene', title: 'Colosseum — 3D Gaussian Splat', payload: { sceneType: 'gaussian_splat' } },
+            { request: { prompt: PROMPT, chatHistory: [] } } as any
+        );
+        expect(res.status).toBe('failed');
+        expect(res.resultPayload.error).toContain('has no content to draw');
+        expect(res.resultPayload.artifact).toBeUndefined();
+        expect(JSON.stringify(res)).not.toContain('colosseum_splat');
     });
 
     it('keeps the worldBranch and sceneType the model sent', async () => {

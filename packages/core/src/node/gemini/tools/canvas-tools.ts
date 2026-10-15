@@ -23,6 +23,24 @@ function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
 }
 
+/**
+ * Whether a 3d-scene declares anything for the viewport to draw: objects (other than the `internal:mesh`
+ * placeholder), a splat, a generator's model or script, a live three.js script, or a geoAnchor for live tiles.
+ * A scene with none of these would mount as an empty "No geometry" viewport.
+ */
+export function sceneDeclaresContent(scene: Partial<Scene3DData>): boolean {
+    const finite = (v: unknown) => v !== null && v !== '' && Number.isFinite(Number(v));
+    const anchor = scene.geoAnchor;
+    return !!(
+        (Array.isArray(scene.objects) && scene.objects.some(o => o?.content?.durableUri !== 'internal:mesh'))
+        || scene.splatUrl || scene.splatTilesetUrl
+        || scene.pythonGenerator?.glbBase64 || scene.pythonGenerator?.glbPath || scene.pythonGenerator?.sourceCode?.trim()
+        || scene.cppGenerator?.glbBase64 || scene.cppGenerator?.glbPath
+        || (scene.customScript || scene.code || '').trim()
+        || (anchor && anchor.active !== false && finite(anchor.lat) && finite(anchor.lng))
+    );
+}
+
 export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'mount_canvas_primitive',
@@ -44,7 +62,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 payload: {
                     type: 'OBJECT',
-                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted.'
+                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A mount replaces the canvas, so the scene must declare something to draw (objects, a script, a generator GLB, a splat, a customScript or a geoAnchor for live tiles); payload.customMeshes (client-side primitive meshes) are refused. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted.'
                 }
             },
             required: ['primitiveType', 'title', 'payload']
@@ -250,6 +268,13 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         } else if (primitiveType === '3d-scene') {
             const p = payload as any;
 
+            // Client-side primitive meshes (box, sphere, cylinder ...) are not scene geometry (AGENTS.md Tier-0 ban).
+            // They used to be dropped without a word while the mount reported success.
+            if (Array.isArray(p.customMeshes) && p.customMeshes.length > 0) {
+                const error = `payload.customMeshes (${p.customMeshes.length}) cannot be mounted: client-side primitive meshes are not used for scene geometry. Build the geometry with a Python script (payload.script, import scratchbox as sb) or execute_3d_python_script and mount the model it writes. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+
             // Geometry comes only from the model's payload. The prompt synthesizer's template generators drew
             // a domed tower and trees the model never asked for between the objects it placed.
             const pythonScript = p.pythonGenerator?.sourceCode || p.script || p.pythonScript || p.python;
@@ -322,7 +347,7 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 ...p,
                 title,
                 subtitle: summary,
-                customMeshes: [], // STRICT TIER-0 JS PRIMITIVE BAN: No fake mock arrays.
+                customMeshes: [],
                 objects: Array.isArray(p.objects) ? p.objects : [],
                 features: { ...(p.features || {}) },
                 cppGenerator: cppGen,
@@ -333,6 +358,13 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             payload = active3D
                 ? keepOpenSceneRenderMode(payload as any, active3D.renderMode)
                 : applyClayFirstPassBaseline(payload as any, prompt);
+
+            // A mount replaces the canvas: a scene that declares nothing to draw would be an empty viewport
+            // reported as mounted.
+            if (!sceneDeclaresContent(payload as Scene3DData)) {
+                const error = 'The 3d-scene payload has no content to draw: send objects, a Python script (payload.script), a generator GLB, a splat (splatUrl), a customScript, or a geoAnchor {lat, lng} for live 3D tiles. To change the open scene (camera, lighting, materials), use scene_3d_dispatch_operators. Nothing was mounted.';
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
         }
 
         const artifactId = `art-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -436,9 +468,11 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         const activeArtifact = _ctx?.request?.activeArtifact;
         const currentData: Scene3DData = (activeArtifact && activeArtifact.type === '3d-scene' && activeArtifact.data)
             ? (activeArtifact.data as Scene3DData)
+            // With no scene open, operators start from an empty first pass: grey clay in a studio, like every first scene.
             : {
                 title: '3D Scene',
-                renderMode: 'pbr',
+                renderMode: 'clay',
+                environment: { skybox: 'studio', lighting: 'studio' },
                 customMeshes: [],
                 objects: []
             };

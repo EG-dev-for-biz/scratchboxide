@@ -354,6 +354,37 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
         }
     });
 
+    it('customMeshes the model sent are refused with a reason, not dropped while the mount reports success', async () => {
+        const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { customMeshes: [{ id: 'm', type: 'box' }], cppGenerator: { glbBase64: 'Z2xURg==' } } }, ctx);
+        expect(res.status).toBe('failed');
+        expect(res.resultPayload.error).toContain('payload.customMeshes (1) cannot be mounted');
+        expect(res.resultPayload.artifact).toBeUndefined();
+        // An empty list is no request for meshes.
+        const ok: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { customMeshes: [], cppGenerator: { glbBase64: 'Z2xURg==' } } }, ctx);
+        expect(ok.resultPayload.status).toBe('success');
+    });
+
+    it('a scene that declares nothing to draw fails instead of mounting an empty viewport', async () => {
+        for (const payload of [{}, { camera: { position: [0, 2, 5] } }, { objects: [] }, { geoAnchor: { lat: 'x', lng: 2 } },
+            { objects: [{ id: 'p', content: { type: '3d-model', durableUri: 'internal:mesh' } }] }]) {
+            const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload }, ctx);
+            expect(res.status, JSON.stringify(payload)).toBe('failed');
+            expect(res.resultPayload.error).toContain('has no content to draw');
+            expect(res.summaryResult).not.toContain('Mounted');
+        }
+        for (const payload of [{ objects: [{ id: 'a', content: { type: '3d-model', durableUri: '/models/a.glb' } }] }, { geoAnchor: { lat: 51.5, lng: -0.12 } },
+            { splatUrl: '/models/a.splat' }, { customScript: 'scene.add(x)' }]) {
+            const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload }, ctx);
+            expect(res.resultPayload.status, JSON.stringify(payload)).toBe('success');
+        }
+    });
+
+    it('operators dispatched with no scene open start from a clay first pass', async () => {
+        const res: any = await canvasHandlers.scene_3d_dispatch_operators({ commands: [] }, { request: { prompt: 'add a key light' } } as any);
+        expect(res.resultPayload.artifact.data.renderMode).toBe('clay');
+        expect(res.resultPayload.artifact.data.environment).toMatchObject({ skybox: 'studio', lighting: 'studio' });
+    });
+
     it('a document mount holds the model\'s sections or markdown, and an empty one fails', async () => {
         const empty: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: 'markdown-document', title: 'Quarterly Revenue Review', payload: { title: 'Quarterly Revenue Review', sections: [] } }, ctx);
         expect(empty.status).toBe('failed');

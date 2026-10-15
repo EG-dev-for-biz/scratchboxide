@@ -289,7 +289,7 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         const mountRes = await registry.dispatch('mount_canvas_primitive', {
             primitiveType: '3d-scene',
             title: 'Interactive 3D Stage',
-            payload: { sceneId: 'stage-roma-01' }
+            payload: { sceneId: 'stage-roma-01', objects: [{ id: 'stage', content: { type: '3d-model', durableUri: '/models/stage-roma-01.glb', mimeType: 'model/gltf-binary' } }] }
         }, mockContext);
         expect(mountRes.exec.status).toBe('completed');
         expect((mountRes.resultPayload as any).artifactId).toBeDefined();
