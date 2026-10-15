@@ -15,9 +15,11 @@
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as zlib from 'zlib';
 
 export type V3 = [number, number, number];
-export interface Chunk { positions: number[]; indices: number[] }
+/** A primitive; with `uvs` and `image` it is textured by that entry of writeGlb's `images`. */
+export interface Chunk { positions: number[]; indices: number[]; uvs?: number[]; image?: number }
 
 /** A planar quad from corner o along u and v, split into nu x nv cells (two triangles each, normal u x v). */
 export function quad(o: V3, u: V3, v: V3, nu: number, nv: number): Chunk {
@@ -36,14 +38,31 @@ export function quad(o: V3, u: V3, v: V3, nu: number, nv: number): Chunk {
 /** An upward-facing horizontal rectangle. */
 export const flat = (x0: number, x1: number, z0: number, z1: number, y: number, n = 4) => quad([x0, y, z1], [x1 - x0, 0, 0], [0, 0, z0 - z1], n, n);
 
-export function writeGlb(file: string, chunks: Chunk[]): void {
+/** An 8-bit RGB PNG. */
+export function encodePng(width: number, height: number, rgb: Uint8Array): Buffer {
+    const raw = Buffer.alloc((width * 3 + 1) * height);
+    for (let y = 0; y < height; y++) Buffer.from(rgb.buffer, rgb.byteOffset + y * width * 3, width * 3).copy(raw, y * (width * 3 + 1) + 1);
+    const crcTable = new Uint32Array(256).map((_, i) => { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+    const crc = (b: Buffer) => { let c = 0xffffffff; for (const x of b) c = crcTable[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+    const chunk = (type: string, data: Buffer) => {
+        const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+        const body = Buffer.concat([Buffer.from(type), data]);
+        const c = Buffer.alloc(4); c.writeUInt32BE(crc(body));
+        return Buffer.concat([len, body, c]);
+    };
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 2;
+    return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+/** Writes the chunks as one mesh; `images` (PNG bytes) texture the chunks that name one, the rest are plain grey. */
+export function writeGlb(file: string, chunks: Chunk[], images: Buffer[] = []): void {
     const parts: Buffer[] = [];
     let offset = 0;
     const bufferViews: object[] = [], accessors: object[] = [], primitives: object[] = [];
-    const push = (b: Buffer, target: number) => {
+    const push = (b: Buffer, target?: number) => {
         const pad = (4 - (b.length % 4)) % 4;
         parts.push(b, Buffer.alloc(pad));
-        bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: b.length, target });
+        bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: b.length, ...(target ? { target } : {}) });
         offset += b.length + pad;
         return bufferViews.length - 1;
     };
@@ -52,12 +71,26 @@ export function writeGlb(file: string, chunks: Chunk[]): void {
         ch.positions.forEach((v, i) => { min[i % 3] = Math.min(min[i % 3], Math.fround(v)); max[i % 3] = Math.max(max[i % 3], Math.fround(v)); });
         const pv = push(Buffer.from(new Float32Array(ch.positions).buffer), 34962);
         accessors.push({ bufferView: pv, componentType: 5126, count: ch.positions.length / 3, type: 'VEC3', min, max });
+        const attributes: Record<string, number> = { POSITION: accessors.length - 1 };
+        const textured = ch.uvs !== undefined && ch.image !== undefined;
+        if (textured) {
+            const tv = push(Buffer.from(new Float32Array(ch.uvs!).buffer), 34962);
+            accessors.push({ bufferView: tv, componentType: 5126, count: ch.uvs!.length / 2, type: 'VEC2' });
+            attributes.TEXCOORD_0 = accessors.length - 1;
+        }
         const iv = push(Buffer.from(new Uint32Array(ch.indices).buffer), 34963);
         accessors.push({ bufferView: iv, componentType: 5125, count: ch.indices.length, type: 'SCALAR' });
-        primitives.push({ attributes: { POSITION: accessors.length - 2 }, indices: accessors.length - 1, mode: 4 });
+        primitives.push({ attributes, indices: accessors.length - 1, mode: 4, ...(images.length ? { material: textured ? ch.image! + 1 : 0 } : {}) });
     }
+    const imageViews = images.map(im => push(im));
     const bin = Buffer.concat(parts);
-    const doc = { asset: { version: '2.0' }, buffers: [{ byteLength: bin.length }], bufferViews, accessors, meshes: [{ primitives }], nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }], scene: 0 };
+    const textures = images.length ? {
+        images: imageViews.map(bufferView => ({ bufferView, mimeType: 'image/png' })),
+        samplers: [{ magFilter: 9729, minFilter: 9729 }],
+        textures: images.map((_, i) => ({ source: i, sampler: 0 })),
+        materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.7, 0.7, 0.7, 1] } }, ...images.map((_, i) => ({ pbrMetallicRoughness: { baseColorTexture: { index: i } } }))]
+    } : {};
+    const doc = { asset: { version: '2.0' }, buffers: [{ byteLength: bin.length }], bufferViews, accessors, meshes: [{ primitives }], nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }], scene: 0, ...textures };
     let js = Buffer.from(JSON.stringify(doc));
     js = Buffer.concat([js, Buffer.alloc((4 - (js.length % 4)) % 4, 0x20)]);
     const header = Buffer.alloc(12); header.write('glTF', 0); header.writeUInt32LE(2, 4); header.writeUInt32LE(12 + 8 + js.length + 8 + bin.length, 8);

@@ -29,8 +29,14 @@
  *       - structural lines: luminance steps consistent across the facade width (row / column
  *         gradient profiles), with the cast-shadow band width measured on the dark side.
  *  4. Relief field: recessed cells / strips (depth from contrast, only where evidence is strong)
- *     and proud bands above shadowed lines (depth = shadow width x shadow slope), all clamped
- *     to |dh| <= maxDepth.
+ *     and proud bands above shadowed lines (depth = shadow width x shadow slope), all within
+ *     |dh| <= maxDepth. A lattice (cells or strips) is kept only where it repeats: its features
+ *     must be confirmed at minLatticeConfirmation of the sites it was tested at. A proud band whose
+ *     shadow-derived depth exceeds maxDepth is dropped rather than clamped (the clamp is not a
+ *     measurement).
+ *     Every depth here is inferred from the photo, not measured: the written GLBs carry it per vertex
+ *     (_RELIEF_HEIGHT, metres along the facade normal, 0 = the scan's own surface) and say so in
+ *     asset.extras.scratchbox.relief.
  *  5. Re-tessellation: each treated region's triangles are clipped by the feature lines
  *     (axis-aligned in (s, t)), so geometry edges fall exactly on window borders and cornices.
  *     Every new vertex is computed canonically from the original edge or parent triangle,
@@ -110,6 +116,7 @@ struct ReliefParams {
     double minPitch{0.8};
     double maxPitch{8.0};
     double minPeriodicity{0.15};     // normalized autocorrelation of the chosen peak
+    double minLatticeConfirmation{0.4};  // cells / strips are kept only when confirmed at this share of the sites tested
     double minProminence{0.08};      // peak height above the preceding dip
     double minTemplateContrast{0.015};
     double darkRunMinDepth{0.15};    // a dark band of the folded profile dips at least this share of its contrast below mid level
@@ -208,7 +215,11 @@ struct FacadeAnalysis {
     DarkCell cell;
     std::string pattern{"none"};   // diagnostic only
     int cellsTested{0}, cellsAccepted{0};
-    int stripsTested{0}, stripRuns{0};
+    int stripsTested{0}, stripRuns{0}, stripsConfirmed{0};  // confirmed: tested strip sites with at least one run
+    double latticeConfirmation{-1};  // accepted / tested sites of the lattice (-1: no lattice tested)
+    bool latticeRejected{false};     // below minLatticeConfirmation: its features were dropped
+    int latticeFeaturesDropped{0};
+    int proudClampedDropped{0};      // shadowed bands whose inferred depth exceeded maxDepth
     std::vector<StructuralLine> lines;
     std::vector<ReliefFeature> features;
     double meanLuminance{0};
@@ -260,6 +271,7 @@ struct ReliefResult {
     double minHeight{0}, maxHeight{0}, meanRecess{0}, meanProud{0};
     size_t recessedVertices{0}, proudVertices{0};
     double recessArea{0}, proudArea{0};
+    size_t latticesRejected{0}, latticeFeaturesDropped{0}, proudClampedDropped{0};
     std::vector<std::pair<std::string, double>> timingsMs;
 };
 
@@ -1174,6 +1186,7 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
             v.acrossRange(q0, q1, ix0, ix1);
             if (x1 < x0 || cx1 < cx0) continue;
             ++fa.stripsTested;
+            const int runsBefore = fa.stripRuns;
             std::vector<double> con(static_cast<size_t>(v.H), 0.0);
             std::vector<uint8_t> valid(static_cast<size_t>(v.H), 0);
             for (int y = 0; y < v.H; ++y) {
@@ -1218,6 +1231,7 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
                 ++fa.stripRuns;
                 fa.features.push_back(detail::makeFeature("dark-strip", s0, s1, t0, t1, -depthFor(contrast), contrast, p.jambWidth));
             }
+            if (fa.stripRuns > runsBefore) ++fa.stripsConfirmed;
         }
     };
     detail::View viewT = detail::makeView(o, false);  // rows = constant t
@@ -1236,6 +1250,22 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
         for (const auto& r : fa.cell.runsT) runStrips(getViewS(), r.first, r.second, Pt, gap);
     }
 
+    // 4c. A lattice is a repeating pattern: confirmed at too few of its sites, its features are coincidental dark spots
+    //     (ornament, stains, shadows) and are dropped. Lines along the dropped cells stay explained by them.
+    std::vector<ReliefFeature> rejectedLattice;
+    {
+        const int tested = fa.cellsTested + fa.stripsTested;
+        const int confirmed = fa.cellsAccepted + fa.stripsConfirmed;
+        if (tested > 0) {
+            fa.latticeConfirmation = static_cast<double>(confirmed) / tested;
+            if (fa.latticeConfirmation < p.minLatticeConfirmation && !fa.features.empty()) {
+                fa.latticeRejected = true;
+                fa.latticeFeaturesDropped = static_cast<int>(fa.features.size());
+                rejectedLattice.swap(fa.features);
+            }
+        }
+    }
+
     // 5. Structural lines and shadowed proud bands
     const int span = std::max(1, static_cast<int>(std::lround(texel / px)));
     const int maxBandPx = std::max(2, static_cast<int>(std::lround(p.maxBandHeight / px)));
@@ -1251,6 +1281,9 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
     auto nearCellEdge = [&](double t) {
         for (size_t k = 0; k < recessCount; ++k) {
             if (std::abs(t - fa.features[k].t0) <= exclTol || std::abs(t - fa.features[k].t1) <= exclTol) return true;
+        }
+        for (const auto& f : rejectedLattice) {
+            if (std::abs(t - f.t0) <= exclTol || std::abs(t - f.t1) <= exclTol) return true;
         }
         return false;
     };
@@ -1283,9 +1316,13 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
             const bool darkAfter = lc.step < 0;
             const bool admissible = axis == 's' || darkAfter;  // after = downwards for 't' lines
             double wpx = admissible ? detail::shadowBandWidth(v, lc, darkAfter, span, maxBandPx, p.minShadowContrast) : 0.0;
-            if (wpx > 0) {
+            if (wpx > 0 && wpx * px * p.shadowSlope > p.maxDepth) {
+                // the shadow says only "deeper than the clamp": no depth to give it
                 L.shadowWidth = wpx * px;
-                L.proudDepth = std::min(p.maxDepth, L.shadowWidth * p.shadowSlope);
+                ++fa.proudClampedDropped;
+            } else if (wpx > 0) {
+                L.shadowWidth = wpx * px;
+                L.proudDepth = L.shadowWidth * p.shadowSlope;
                 // proud element on the bright side, up to the neighbouring line or a band height
                 double bandPx = std::clamp(std::max(wpx, 2.0), 2.0, static_cast<double>(maxBandPx));
                 const int dirBright = darkAfter ? -1 : +1;
@@ -1979,7 +2016,7 @@ private:
             rep.analysis = analyzeOrthophoto(o, rep.texel, p_, innerThreads);
             analysed[oi] = 1;
             R.features = rep.analysis.features;
-            if (R.features.empty()) rep.skipReason = "no photometric relief evidence";
+            if (R.features.empty()) rep.skipReason = rep.analysis.latticeRejected ? "lattice not confirmed" : "no photometric relief evidence";
             if (!keep.empty() && static_cast<int>(oi) < debugMax_) keep[oi] = std::move(o);
         };
         if (threads_ <= 1 || order.size() < 2) {
@@ -1998,6 +2035,10 @@ private:
         int debugWritten = 0;
         for (size_t oi = 0; oi < order.size(); ++oi) {
             if (analysed[oi]) ++result_.regionsAnalysed;
+            const auto& an = reps[oi].analysis;
+            if (an.latticeRejected) ++result_.latticesRejected;
+            result_.latticeFeaturesDropped += static_cast<size_t>(an.latticeFeaturesDropped);
+            result_.proudClampedDropped += static_cast<size_t>(an.proudClampedDropped);
             if (analysed[oi] && !debugDir_.empty() && debugWritten < debugMax_) {
                 writeDebug(reps[oi], keep[oi]);
                 ++debugWritten;
@@ -2781,7 +2822,7 @@ public:
 };
 
 struct PackedPrimitive {
-    std::vector<float> pos, nrm, uv;
+    std::vector<float> pos, nrm, uv, relief;  // relief: the position's inferred displacement (ReliefMesh::heights)
     std::vector<uint32_t> indices;
     float mn[3]{1e30f, 1e30f, 1e30f}, mx[3]{-1e30f, -1e30f, -1e30f};
 };
@@ -2822,6 +2863,7 @@ inline void packCorner(PackedPrimitive& prim, std::unordered_map<CornerKey, uint
         prim.nrm.push_back(n[c]);
     }
     if (withUv) { prim.uv.push_back(uv[0]); prim.uv.push_back(uv[1]); }
+    prim.relief.push_back(p < m.heights.size() ? m.heights[p] : 0.0f);
     map.emplace(k, id);
     prim.indices.push_back(id);
 }
@@ -2847,6 +2889,30 @@ inline std::string fmt(double v) {
     s.precision(9);
     s << v;
     return s.str();
+}
+
+/** ",\"_RELIEF_HEIGHT\":<accessor>" when the primitive has a displaced vertex, else "" (the scan's own surface only). */
+inline std::string reliefAttribute(GlbBuilder& g, const PackedPrimitive& p) {
+    if (p.relief.size() != p.pos.size() / 3 || std::all_of(p.relief.begin(), p.relief.end(), [](float h) { return h == 0.0f; })) return "";
+    const int a = g.addAccessor(g.addView(p.relief.data(), p.relief.size() * 4, 34962), 5126, p.relief.size(), "SCALAR");
+    return ",\"_RELIEF_HEIGHT\":" + std::to_string(a);
+}
+
+/** asset.extras labelling inferred relief ("" when nothing was displaced). */
+inline std::string reliefAssetExtras(const ReliefMesh& m) {
+    std::vector<uint8_t> used(m.positions.size(), 0);
+    for (const auto& t : m.triangles) for (uint32_t q : t.p) if (q < used.size()) used[q] = 1;
+    size_t n = 0;
+    double mx = 0;
+    for (size_t i = 0; i < m.heights.size() && i < used.size(); ++i) {
+        if (!used[i] || m.heights[i] == 0.0f) continue;
+        ++n;
+        mx = std::max(mx, std::abs(static_cast<double>(m.heights[i])));
+    }
+    if (!n) return "";
+    return ",\"extras\":{\"scratchbox\":{\"relief\":{\"provenance\":\"inferred\",\"source\":\"photo texture: window contrast and cast-shadow width\","
+           "\"attribute\":\"_RELIEF_HEIGHT\",\"units\":\"m along the facade normal; 0 = scan surface\",\"displacedVertices\":" + std::to_string(n) +
+           ",\"maxAbsHeight_m\":" + fmt(mx) + "}}}";
 }
 
 } // namespace detail
@@ -2900,13 +2966,14 @@ inline std::vector<uint8_t> PhotometricRelief::writeTexturedGlb(const gltf::Gltf
         if (p.indices.empty()) continue;
         int aPos, aNrm, aUv, aIdx;
         detail::addPrimitiveBuffers(g, p, true, aPos, aNrm, aUv, aIdx);
+        const std::string reliefAttr = detail::reliefAttribute(g, p);
         meshes.push_back("{\"name\":\"relief_m" + std::to_string(mi) + "\",\"primitives\":[{\"attributes\":{\"POSITION\":" + std::to_string(aPos) +
-                         ",\"NORMAL\":" + std::to_string(aNrm) + ",\"TEXCOORD_0\":" + std::to_string(aUv) + "},\"indices\":" + std::to_string(aIdx) +
+                         ",\"NORMAL\":" + std::to_string(aNrm) + ",\"TEXCOORD_0\":" + std::to_string(aUv) + reliefAttr + "},\"indices\":" + std::to_string(aIdx) +
                          ",\"material\":" + std::to_string(mi) + ",\"mode\":4}]}");
         nodes.push_back("{\"name\":\"relief_m" + std::to_string(mi) + "\",\"mesh\":" + std::to_string(meshes.size() - 1) + "}");
         children.push_back(std::to_string(nodes.size()));
     }
-    std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox photometric relief\"},";
+    std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox photometric relief\"" + detail::reliefAssetExtras(mesh) + "},";
     if (anyUnlit) json += "\"extensionsUsed\":[\"KHR_materials_unlit\"],";
     json += "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"name\":\"PhotometricRelief\",\"children\":[" + detail::GlbBuilder::join(children) + "]}";
     if (!nodes.empty()) json += "," + detail::GlbBuilder::join(nodes);
@@ -2929,9 +2996,10 @@ inline std::vector<uint8_t> PhotometricRelief::writeClayGlb(const ReliefMesh& me
     detail::GlbBuilder g;
     int aPos, aNrm, aUv, aIdx;
     detail::addPrimitiveBuffers(g, prim, false, aPos, aNrm, aUv, aIdx);
-    std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox photometric relief\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],";
+    const std::string reliefAttr = detail::reliefAttribute(g, prim);
+    std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox photometric relief\"" + detail::reliefAssetExtras(mesh) + "},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],";
     json += "\"nodes\":[{\"name\":\"" + name + "\",\"mesh\":0}],\"meshes\":[{\"name\":\"" + name + "\",\"primitives\":[{\"attributes\":{\"POSITION\":" +
-            std::to_string(aPos) + ",\"NORMAL\":" + std::to_string(aNrm) + "},\"indices\":" + std::to_string(aIdx) + ",\"material\":0,\"mode\":4}]}],";
+            std::to_string(aPos) + ",\"NORMAL\":" + std::to_string(aNrm) + reliefAttr + "},\"indices\":" + std::to_string(aIdx) + ",\"material\":0,\"mode\":4}]}],";
     json += "\"materials\":[{\"name\":\"Mat_StudioGreyClay\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.55,0.57,0.6,1],\"metallicFactor\":0,\"roughnessFactor\":0.85},\"doubleSided\":false}],";
     json += "\"accessors\":[" + detail::GlbBuilder::join(g.accessors) + "],\"bufferViews\":[" + detail::GlbBuilder::join(g.views) + "]";
     while (g.bin.size() % 4) g.bin.push_back(0);
@@ -2949,7 +3017,7 @@ inline std::string PhotometricRelief::statsJson(const ReliefResult& r, const Rel
       << ", \"planeAngleDeg\": " << fmt(p.planeAngleDeg) << ", \"planeOffset\": " << fmt(p.planeOffset) << ", \"pixel\": " << fmt(p.pixel)
       << ", \"minPitch\": " << fmt(p.minPitch) << ", \"maxPitch\": " << fmt(p.maxPitch) << ", \"recessMin\": " << fmt(p.recessMin) << ", \"recessMax\": " << fmt(p.recessMax)
       << ", \"contrastLo\": " << fmt(p.contrastLo) << ", \"contrastHi\": " << fmt(p.contrastHi) << ", \"shadowSlope\": " << fmt(p.shadowSlope)
-      << ", \"maxBandHeight\": " << fmt(p.maxBandHeight) << ", \"jambWidth\": " << fmt(p.jambWidth) << "},\n";
+      << ", \"maxBandHeight\": " << fmt(p.maxBandHeight) << ", \"jambWidth\": " << fmt(p.jambWidth) << ", \"minLatticeConfirmation\": " << fmt(p.minLatticeConfirmation) << "},\n";
     s << "  \"input\": {\"triangles\": " << r.inputTriangles << ", \"vertices\": " << r.inputVertices << ", \"weldedVertices\": " << r.weldedVertices << "},\n";
     s << "  \"output\": {\"triangles\": " << r.mesh.triangles.size() << ", \"positions\": " << r.mesh.positions.size() << ", \"insertedBorderVertices\": "
       << r.insertedBorderVertices << ", \"borderPolygonsPatched\": " << r.borderPolygonsPatched << "},\n";
@@ -2957,7 +3025,8 @@ inline std::string PhotometricRelief::statsJson(const ReliefResult& r, const Rel
       << ", \"internalSeamEdges\": " << r.internalSeamEdges << ", \"analysed\": " << r.regionsAnalysed << ", \"treated\": " << r.regionsTreated << "},\n";
     s << "  \"relief\": {\"minHeight\": " << fmt(r.minHeight) << ", \"maxHeight\": " << fmt(r.maxHeight) << ", \"meanRecess\": " << fmt(r.meanRecess)
       << ", \"meanProud\": " << fmt(r.meanProud) << ", \"recessedVertices\": " << r.recessedVertices << ", \"proudVertices\": " << r.proudVertices
-      << ", \"recessArea\": " << fmt(r.recessArea) << ", \"proudArea\": " << fmt(r.proudArea) << "},\n";
+      << ", \"recessArea\": " << fmt(r.recessArea) << ", \"proudArea\": " << fmt(r.proudArea) << ", \"provenance\": \"inferred\""
+      << ", \"latticesRejected\": " << r.latticesRejected << ", \"latticeFeaturesDropped\": " << r.latticeFeaturesDropped << ", \"proudClampedDropped\": " << r.proudClampedDropped << "},\n";
     s << "  \"timingsMs\": {";
     for (size_t i = 0; i < r.timingsMs.size(); ++i) s << (i ? ", " : "") << "\"" << r.timingsMs[i].first << "\": " << fmt(r.timingsMs[i].second);
     s << "},\n  \"facades\": [";
@@ -2984,7 +3053,9 @@ inline std::string PhotometricRelief::statsJson(const ReliefResult& r, const Rel
         };
         s << ", \"runsS\": " << runs(a.cell.runsS) << ", \"runsT\": " << runs(a.cell.runsT) << "}"
           << ", \"pattern\": \"" << a.pattern << "\", \"cellsTested\": " << a.cellsTested << ", \"cellsAccepted\": " << a.cellsAccepted
-          << ", \"stripsTested\": " << a.stripsTested << ", \"stripRuns\": " << a.stripRuns
+          << ", \"stripsTested\": " << a.stripsTested << ", \"stripRuns\": " << a.stripRuns << ", \"stripsConfirmed\": " << a.stripsConfirmed
+          << ", \"latticeConfirmation\": " << fmt(a.latticeConfirmation) << ", \"latticeRejected\": " << (a.latticeRejected ? "true" : "false")
+          << ", \"latticeFeaturesDropped\": " << a.latticeFeaturesDropped << ", \"proudClampedDropped\": " << a.proudClampedDropped
           << ", \"sLines\": " << f.sLines << ", \"tLines\": " << f.tLines
           << ", \"minHeight\": " << fmt(f.minHeight) << ", \"maxHeight\": " << fmt(f.maxHeight) << ", \"recessArea\": " << fmt(f.recessArea) << ", \"proudArea\": " << fmt(f.proudArea);
         size_t nRecess = 0, nProud = 0;

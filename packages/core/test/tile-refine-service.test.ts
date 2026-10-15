@@ -18,7 +18,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { TileRefineService, TileRefineError } from '../src/node/3d-engine/tile-refine-service';
+import { TileRefineService, TileRefineError, summarizeTileRefineStats } from '../src/node/3d-engine/tile-refine-service';
 import { PathTraversalError } from '../src/node/security/path-guard';
 
 const REPO = path.resolve(__dirname, '../../..');
@@ -154,6 +154,16 @@ describe('TileRefineService', () => {
         expect(flatOff.cached).toBe(false);
         expect(flatOff.cacheKey).not.toBe(plain.cacheKey);
         expect(fs.readFileSync(flatOff.clayGlb, 'utf8')).toContain('--no-flatten');
+    });
+
+    it('summarizes relief with its provenance, and leaves it out when relief is off', () => {
+        const on = summarizeTileRefineStats({
+            relief: { enabled: true, provenance: 'inferred', regionsTreated: 3, recessArea_m2: 41.5, proudArea_m2: 2, heightMin_m: -0.2, heightMax_m: 0.1, latticesRejected: 1, proudClampedDropped: 2 }
+        });
+        expect(on.relief).toEqual({
+            provenance: 'inferred', facadesTreated: 3, recessArea_m2: 41.5, proudArea_m2: 2, heightMin_m: -0.2, heightMax_m: 0.1, latticesRejected: 1, proudClampedDropped: 2
+        });
+        expect(summarizeTileRefineStats({ relief: { enabled: false } }).relief).toBeUndefined();
     });
 
     it('kills a hung run at the timeout and leaves no cache entry', async () => {

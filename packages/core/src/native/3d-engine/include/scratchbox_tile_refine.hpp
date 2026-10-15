@@ -2831,22 +2831,26 @@ private:
            << ", \"regionsTreated\": " << relief.regionsTreated << ", \"candidateTriangles\": " << relief.candidateTriangles
            << ", \"heightMin_m\": " << num(hMin) << ", \"heightMax_m\": " << num(hMax) << ", \"absHeightDisplaced_m\": " << dist(Distribution::of(absH))
            << ", \"meanRecess_m\": " << num(relief.meanRecess) << ", \"meanProud_m\": " << num(relief.meanProud) << ", \"recessArea_m2\": " << num(relief.recessArea)
-           << ", \"proudArea_m2\": " << num(relief.proudArea) << ", \"insertedBorderVertices\": " << relief.insertedBorderVertices << ", \"earClipFallbacks\": " << relief.earClipFallbacks << ", \"earClipUnfilled\": " << relief.earClipUnfilled
+           << ", \"proudArea_m2\": " << num(relief.proudArea) << ", \"provenance\": \"" << (relief.regionsTreated ? "inferred" : "none") << "\""
+           << ", \"latticesRejected\": " << relief.latticesRejected << ", \"latticeFeaturesDropped\": " << relief.latticeFeaturesDropped
+           << ", \"proudClampedDropped\": " << relief.proudClampedDropped << ", \"insertedBorderVertices\": " << relief.insertedBorderVertices << ", \"earClipFallbacks\": " << relief.earClipFallbacks << ", \"earClipUnfilled\": " << relief.earClipUnfilled
            << ", \"outputTriangles\": " << m.triangles.size() << ", \"flips\": " << flips << ", \"revealFacesTiltedPastParentPlane\": " << revealsPastParent
            << ", \"flipChecked\": " << checked << ", \"facades\": [";
         if (std::getenv("SB_DEBUG_FACADES"))
             for (const auto& f : relief.facades)
-                std::fprintf(stderr, "facade %d area %.0f c (%.1f %.1f %.1f) n (%.2f %.2f %.2f) %s pattern %s pS %.2f(%.2f) pT %.2f(%.2f) cells %d/%d strips %d/%d lines %zu features %zu %s\n",
+                std::fprintf(stderr, "facade %d area %.0f c (%.1f %.1f %.1f) n (%.2f %.2f %.2f) %s pattern %s pS %.2f(%.2f) pT %.2f(%.2f) cells %d/%d strips %d(%d)/%d confirmed %.2f%s clampDropped %d lines %zu features %zu %s\n",
                              f.id, f.area, f.centroid.x, f.centroid.y, f.centroid.z, f.normal.x, f.normal.y, f.normal.z, f.treated ? "TREATED" : "skipped",
                              f.analysis.pattern.c_str(), f.analysis.periodS.pitch, f.analysis.periodS.periodicity, f.analysis.periodT.pitch, f.analysis.periodT.periodicity,
-                             f.analysis.cellsAccepted, f.analysis.cellsTested, f.analysis.stripRuns, f.analysis.stripsTested, f.analysis.lines.size(), f.analysis.features.size(), f.skipReason.c_str());
+                             f.analysis.cellsAccepted, f.analysis.cellsTested, f.analysis.stripsConfirmed, f.analysis.stripRuns, f.analysis.stripsTested,
+                             f.analysis.latticeConfirmation, f.analysis.latticeRejected ? " REJECTED" : "", f.analysis.proudClampedDropped,
+                             f.analysis.lines.size(), f.analysis.features.size(), f.skipReason.c_str());
         std::vector<const photometric_relief::FacadeReport*> treated;
         for (const auto& f : relief.facades) if (f.treated) treated.push_back(&f);
         std::sort(treated.begin(), treated.end(), [](auto* a, auto* b) { return a->area > b->area; });
         for (size_t i = 0; i < std::min<size_t>(8, treated.size()); ++i) {
             const auto& f = *treated[i];
             js << (i ? "," : "") << "{\"id\": " << f.id << ", \"area_m2\": " << num(f.area) << ", \"pattern\": \"" << jsonEscape(f.analysis.pattern)
-               << "\", \"features\": " << f.analysis.features.size() << ", \"minHeight_m\": " << num(f.minHeight) << ", \"maxHeight_m\": " << num(f.maxHeight)
+               << "\", \"latticeConfirmation\": " << num(f.analysis.latticeConfirmation) << ", \"features\": " << f.analysis.features.size() << ", \"minHeight_m\": " << num(f.minHeight) << ", \"maxHeight_m\": " << num(f.maxHeight)
                << ", \"centroid\": " << vec(V3{f.centroid.x, f.centroid.y, f.centroid.z}) << "}";
         }
         js << "]},\n";
