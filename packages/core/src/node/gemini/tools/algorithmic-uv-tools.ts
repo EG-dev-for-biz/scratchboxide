@@ -26,7 +26,7 @@ function asNumber(val: unknown, fallback?: number): number | undefined {
 export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'algorithmic_uv_unwrap_rewrap',
-        description: 'Process any 3D model / scene (.glb) with the Algorithmic UV Unwrap & Rewrap Engine. In "preserve-100-lock" mode, preserves 100% geometry and UV topology (0.000 mm vertex drift) with continuous 3D coordinate interpolation, analytical travertine/limestone cavitation pores, calcite tooth, road marking protection, and road/foliage protection. In "conformal-reparameterize" mode, performs Tutte harmonic parameterization, MaxRects bin packing (85-92% fill), and Poisson gradient-domain texture baking. Supports Adaptive Domain biophysical contracts and 1D spatial autocorrelation periodicity induction.',
+        description: 'Decode every embedded baseColor texture of a .glb (JPEG, PNG or WebP) and compute PBR maps from its pixels. Geometry and UVs are not modified. Writes a tangent-space normal map and an ORM texture (R = ambient occlusion, G = roughness, B = metalness) as PNG and attaches them to each material\'s empty normalTexture, metallicRoughnessTexture and occlusionTexture slots (KHR_materials_unlit is removed from those materials so the maps are shaded). Optional albedo de-lighting rewrites the baseColor image itself. Reports decoded image sizes and texel counts; any texture that cannot be decoded fails the call.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -36,7 +36,7 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 mode: {
                     type: 'STRING',
-                    description: 'Engine mode: "preserve-100-lock" (bit-for-bit geometry/UV lock with micro-detail enhancement) or "conformal-reparameterize" (harmonic unwrap + MaxRects atlas repacking). Defaults to "preserve-100-lock".'
+                    description: 'Engine mode. Only "preserve-100-lock" (geometry and UVs untouched) is implemented; "conformal-reparameterize" fails because no UV reparameterization exists. Defaults to "preserve-100-lock".'
                 },
                 lithologyProfile: {
                     type: 'STRING',
@@ -44,39 +44,31 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 biophysicalContract: {
                     type: 'OBJECT',
-                    description: 'Continuous biophysical material contract (roughness, metalness, normalStrength, cavitationDepthPower, strataFrequency, laplacianBurnishFactor, laplacianCavityGritFactor, toksvigVarianceScale, hbaoRadius, hbaoIntensity, subsurfaceAlbedo).'
+                    description: 'Continuous material contract read by the passes: roughness, metalness, normalStrength, laplacianBurnishFactor, laplacianCavityGritFactor, toksvigVarianceScale, hbaoRadius, hbaoIntensity.'
                 },
                 autoInducePeriodicity: {
                     type: 'BOOLEAN',
-                    description: 'Whether to auto-induce architectural unit cell periodicity (lambda_x, lambda_y) via 1D spatial autocorrelation of texture scanlines (default: false).'
-                },
-                enableCavitation: {
-                    type: 'BOOLEAN',
-                    description: 'Whether to synthesize analytical non-linear travertine cavitation pores on stone architecture (default: auto from lithology/contract).'
-                },
-                enableCalciteStrata: {
-                    type: 'BOOLEAN',
-                    description: 'Whether to synthesize horizontal calcite bedding strata and crystalline grain (default: auto from lithology/contract).'
+                    description: 'Measure texture periodicity (in pixels) by 1D autocorrelation of the largest decoded baseColor image; when a period is found, KHR_texture_transform tiling is enabled at microDetailScale (default: false).'
                 },
                 enableAlbedoDeLighting: {
                     type: 'BOOLEAN',
-                    description: 'Whether to apply bilateral Intrinsic Image Decomposition to separate diffuse albedo from directional sun shadows (default: false).'
+                    description: 'Whether to divide each baseColor texel by a bilateral-filtered luminance shading estimate and write the result back as the baseColor image (default: false).'
                 },
                 enableHeightStratifiedDeLighting: {
                     type: 'BOOLEAN',
-                    description: 'Whether to apply height-stratified shadow lift to brighten deep street canyon floors (default: false).'
+                    description: 'With enableAlbedoDeLighting, additionally lift shading in proportion to the configured canyon elevation (default: false; no effect without enableAlbedoDeLighting).'
                 },
                 enableMicroDetailTiling: {
                     type: 'BOOLEAN',
-                    description: 'Whether to inject KHR_texture_transform for camera-distance scale invariance (default: false).'
+                    description: 'Whether to add KHR_texture_transform scale [microDetailScale, microDetailScale] to every texture slot of every material (default: false).'
                 },
                 microDetailScale: {
                     type: 'NUMBER',
-                    description: 'Micro-detail UV tiling factor (default: 32.0, or auto-induced from autocorrelation).'
+                    description: 'UV tiling factor used by enableMicroDetailTiling / autoInducePeriodicity (default: 32.0).'
                 },
                 generateNormalMaps: {
                     type: 'BOOLEAN',
-                    description: 'Whether to synthesize tangent-space normal maps (default: true).'
+                    description: 'Whether to compute a tangent-space normal map from baseColor luminance and attach it as normalTexture (default: true).'
                 },
                 enableMultiFrequencyNormals: {
                     type: 'BOOLEAN',
@@ -84,7 +76,7 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 generateRoughnessMaps: {
                     type: 'BOOLEAN',
-                    description: 'Whether to generate semantic physical GGX roughness maps (default: true).'
+                    description: 'Whether to compute a roughness map and attach the ORM texture as metallicRoughnessTexture (default: true).'
                 },
                 enableBiophysicalRoughness: {
                     type: 'BOOLEAN',
@@ -96,7 +88,7 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 generateAoMaps: {
                     type: 'BOOLEAN',
-                    description: 'Whether to bake analytical sky-dome ambient occlusion (default: true).'
+                    description: 'Whether to compute an ambient occlusion map and attach the ORM texture as occlusionTexture (default: true).'
                 },
                 enableHbaoMicroCavity: {
                     type: 'BOOLEAN',
@@ -112,7 +104,7 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'uv_analyze_texel_density',
-        description: 'Measure real-world metric texel density across all submeshes of a 3D model (.glb), calculating world-space triangle area vs UV area (texels per square meter) and detecting texel density variance.',
+        description: 'Measure real-world metric texel density across all submeshes of a 3D model (.glb), calculating world-space triangle area vs UV area at the real size of each primitive\'s baseColor image (texels per linear meter) and detecting texel density variance.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -122,7 +114,7 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 defaultTexSize: {
                     type: 'NUMBER',
-                    description: 'Default chart texture resolution in pixels (default: 512).'
+                    description: 'Texture resolution in pixels assumed only for primitives without a readable embedded baseColor image (default: 512).'
                 }
             },
             required: ['inputGlbPath']
@@ -233,12 +225,6 @@ export const algorithmicUvHandlers: Record<string, ToolHandler> = {
             autoInducePeriodicity,
             enableMicroDetailTiling: asBoolean(args.enableMicroDetailTiling, false),
             microDetailScale: asNumber(args.microDetailScale, 32.0),
-            detailSynthesis: {
-                lithologyProfile,
-                biophysicalContract,
-                enableCavitation: args.enableCavitation !== undefined ? asBoolean(args.enableCavitation, true) : undefined,
-                enableCalciteStrata: args.enableCalciteStrata !== undefined ? asBoolean(args.enableCalciteStrata, true) : undefined
-            },
             pbrDecomposition: {
                 biophysicalContract,
                 enableAlbedoDeLighting: asBoolean(args.enableAlbedoDeLighting, false),
@@ -254,13 +240,34 @@ export const algorithmicUvHandlers: Record<string, ToolHandler> = {
             }
         });
 
-        const inducedSummary = result.inducedSpatialProfile?.isPeriodic
-            ? ` Auto-induced unit cell: ${result.inducedSpatialProfile.dominantPeriodPxX}x${result.inducedSpatialProfile.dominantPeriodPxY}px (${result.inducedSpatialProfile.physicalModuleWidthMeters}x${result.inducedSpatialProfile.physicalModuleHeightMeters}m, repeat ${result.inducedSpatialProfile.recommendedRepeatX}x${result.inducedSpatialProfile.recommendedRepeatY}).`
-            : '';
+        const { outputGlbBuffer, ...payload } = result;
+        const failed = result.images.filter(r => r.status === 'failed');
+        const a = result.attachments;
+        const parts: string[] = [];
+        parts.push(failed.length > 0
+            ? `Algorithmic UV engine FAILED on ${failed.length} of ${result.images.length} baseColor textures (${failed.slice(0, 5).map(r => `${r.imageIndex !== undefined ? `image ${r.imageIndex}` : `texture ${r.textureIndex}`}: ${r.error}`).join('; ')}${failed.length > 5 ? '; ...' : ''}).`
+            : `Algorithmic UV engine completed in ${result.executionTimeMs.toFixed(0)} ms.`);
+        parts.push(`Decoded ${result.imagesProcessed} baseColor images, ${result.texelsProcessed.toLocaleString()} texels.`);
+        if (result.imagesProcessed > 0) {
+            parts.push(`Attached ${a.normalTextures} normal, ${a.metallicRoughnessTextures} metallicRoughness and ${a.occlusionTextures} occlusion textures; baseColor rewritten (de-lit) on ${result.images.filter(r => r.albedoRewritten).length} images${a.unlitRemoved > 0 ? `; KHR_materials_unlit removed from ${a.unlitRemoved} materials` : ''}.`);
+        }
+        parts.push(`Geometry unchanged: ${result.submeshesProcessed} meshes, ${result.trianglesProcessed} triangles.`);
+        if (result.texelDensityMetrics && result.texelDensityMetrics.meanTexelsPerMeter > 0) {
+            parts.push(`Texel density: mean ${result.texelDensityMetrics.meanTexelsPerMeter} texels/m (range ${result.texelDensityMetrics.minTexelsPerMeter}-${result.texelDensityMetrics.maxTexelsPerMeter}).`);
+        }
+        if (result.inducedSpatialProfile) {
+            const p = result.inducedSpatialProfile;
+            parts.push(p.isPeriodic
+                ? `Measured texture period ${p.dominantPeriodPxX}x${p.dominantPeriodPxY} px on image ${p.sourceImageIndex}.`
+                : `No texture periodicity found on image ${p.sourceImageIndex}.`);
+        }
+        if (result.microDetailTilingInjected) parts.push(`KHR_texture_transform tiling x${asNumber(args.microDetailScale, 32.0)} applied.`);
+        parts.push(`Output: ${result.outputGlbPath ?? 'buffer'} (${(outputGlbBuffer!.length / 1e6).toFixed(1)} MB).`);
 
         return {
-            resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Algorithmic UV Unwrap & Rewrap Engine completed in ${result.executionTimeMs.toFixed(1)}ms. Mode: ${result.mode}, lithology: ${result.lithologyProfile}, submeshes: ${result.submeshesProcessed}, triangles: ${result.trianglesProcessed}, texels: ${result.texelsProcessed.toLocaleString()} (stone: ${result.stoneTexelsCount.toLocaleString()}, road: ${result.roadTexelsCount.toLocaleString()}, markings: ${result.roadMarkingTexelsCount?.toLocaleString() || '0'}, foliage: ${result.foliageTexelsCount.toLocaleString()}). Density: ${result.texelDensityMetrics?.meanTexelsPerMeter.toFixed(1)} tex/m².${inducedSummary} Output: ${result.outputGlbPath || 'buffer'}.`
+            resultPayload: { ...payload, outputGlbBytes: outputGlbBuffer!.length } as unknown as ToolResultPayload,
+            status: result.success ? 'completed' : 'failed',
+            summaryResult: parts.join(' ')
         };
     },
 
@@ -284,7 +291,7 @@ export const algorithmicUvHandlers: Record<string, ToolHandler> = {
                 inputGlbPath,
                 metrics
             } as unknown as ToolResultPayload,
-            summaryResult: `Texel Density Analysis complete: Mean ${metrics.meanTexelsPerMeter} texels/m², Range [${metrics.minTexelsPerMeter} - ${metrics.maxTexelsPerMeter}], Variance Ratio ${metrics.varianceRatio}x across ${metrics.totalWorldAreaSqMeters} m² world area (${metrics.normalizedChartsCount} charts).`
+            summaryResult: `Texel Density Analysis complete: Mean ${metrics.meanTexelsPerMeter} texels/m, Range [${metrics.minTexelsPerMeter} - ${metrics.maxTexelsPerMeter}], Variance Ratio ${metrics.varianceRatio}x across ${metrics.totalWorldAreaSqMeters} m² world area (${metrics.normalizedChartsCount} charts).`
         };
     },
 
