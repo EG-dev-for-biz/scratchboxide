@@ -25,7 +25,8 @@ import * as THREE from 'three';
 import { createObjectReferenceHandlers, OBJECT_REFERENCE_TOOL_DECLARATIONS, yawForHeading } from '../src/node/gemini/tools/object-reference-tools';
 import { generatorFileIsObject } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
-import { glbToTriangleSoup } from '../src/node/3d-engine/part-connectivity';
+import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
+import { renderReviewViews } from '../src/node/3d-engine/visual-review';
 import { REFERENCE_IMAGE_MODEL, schemaInstruction, type ChatModelSource, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, type ObjectBuildSpec } from '../src/common/spatial/object-build-spec';
 import { NativePythonRunnerService, type PythonExecutionResult } from '../src/node/3d-engine/native-python-runner-service';
@@ -38,6 +39,7 @@ import { REPO_ROOT } from './helpers/requirements';
 const CHAT_MODEL = 'gemini-4-argon';
 const FALLBACK_MODEL = 'gemini-3.8-flash';
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-object-ref-'));
+const SCREENSHOT_DIR = path.join(REPO_ROOT, 'test-results/screenshots');
 const MODELS_DIR = path.join(TMP, 'models');
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
@@ -651,6 +653,35 @@ describe('build_3d_object_from_reference', () => {
                 expect(data.camera.target[2]).toBeCloseTo(placement.sceneZ, 3);
                 expect(data.camera.target[1]).toBeGreaterThan(box.min.y);
                 expect(data.camera.target[1]).toBeLessThan(box.max.y);
+                if (order === 'object first') {
+                    // Screenshot: the seated object on the staged surface, cropped to 3 m around it and 2 m above and
+                    // below (tiles the crop squashes to nothing, or another level, would stretch the framing).
+                    const tileSoup = glbToTriangleSoup(fs.readFileSync(path.join(MODELS_DIR, path.basename(tileUri))))!;
+                    const crop = new Float32Array(tileSoup.positions);
+                    for (let i = 0; i < crop.length; i += 3) {
+                        crop[i] = Math.min(placement.sceneX + 1.5, Math.max(placement.sceneX - 1.5, crop[i]));
+                        crop[i + 2] = Math.min(placement.sceneZ + 1.5, Math.max(placement.sceneZ - 1.5, crop[i + 2]));
+                    }
+                    const at = (k: number) => new THREE.Vector3(crop[k * 3], crop[k * 3 + 1], crop[k * 3 + 2]);
+                    const cropPositions: number[] = [];
+                    for (let t = 0; t < tileSoup.indices.length; t += 3) {
+                        const [a, b, c] = [at(tileSoup.indices[t]), at(tileSoup.indices[t + 1]), at(tileSoup.indices[t + 2])];
+                        const nearSurface = [a, b, c].every(p => Math.abs(p.y - placement.surfaceYMeters) < 2);
+                        if (nearSurface && b.clone().sub(a).cross(c.clone().sub(a)).length() > 1e-6) cropPositions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+                    }
+                    const heroSoup = glbToTriangleSoup(fs.readFileSync(String(out.resultPayload.glbPath)))!;
+                    model.updateMatrixWorld(true);
+                    const v = new THREE.Vector3();
+                    const placed = new Float32Array(heroSoup.positions.length);
+                    for (let i = 0; i < placed.length; i += 3) {
+                        v.set(heroSoup.positions[i], heroSoup.positions[i + 1], heroSoup.positions[i + 2]).applyMatrix4(model.matrixWorld);
+                        placed.set([v.x, v.y, v.z], i);
+                    }
+                    const scene3 = mergeTriangleSoups([{ positions: Float32Array.from(cropPositions), indices: Uint32Array.from({ length: cropPositions.length / 3 }, (_, i) => i) }, { positions: placed, indices: heroSoup.indices }]);
+                    const [view] = renderReviewViews(scene3, 512, { views: [{ label: 'three-quarter view', azimuthDeg: 35, elevationDeg: 22 }] });
+                    fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+                    fs.writeFileSync(path.join(SCREENSHOT_DIR, `object_reference_placed_e${placementArgs.eastMeters}_n${placementArgs.northMeters}.png`), view.png);
+                }
             }
         }
     }, 180_000);
