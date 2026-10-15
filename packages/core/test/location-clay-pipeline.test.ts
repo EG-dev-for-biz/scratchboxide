@@ -18,7 +18,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runLocationClayPipeline, describeLocationClay, locationPublishBase, glbMeshCounts, type LocationClayDeps } from '../src/node/3d-engine/location-clay-pipeline';
+import { runLocationClayPipeline, describeLocationClay, describeTreeOutcome, locationPublishBase, glbMeshCounts, type LocationClayDeps } from '../src/node/3d-engine/location-clay-pipeline';
 import { TileExtractionError } from '../src/common/errors/pipeline-errors';
 import { SCENE_TREE_TRIANGLE_CAP, TileVegetationService, type TileVegetationPlantRequest, type TileVegetationStripRequest } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService, type TileRefineRequest, type TileRefineResult } from '../src/node/3d-engine/tile-refine-service';
@@ -267,8 +267,11 @@ describe('runLocationClayPipeline', () => {
         const r = await runLocationClayPipeline({ rawTilePath: shifted, workspaceRoot: root, isolate: true, trees: true, flavour: 'clay', publishBase: 'iso' },
             deps(refineStub({ clayGlb: patch })));
         expect(r.isolate).toBe(true);
-        expect(r.trees).toMatchObject({ measured: 3, count: 1, notOnStructure: 2 });
-        expect(describeLocationClay(r, 'clay')).toContain('Left out: 2 measured trees not standing on the isolated structure.');
+        // what the request is about is the structure: measured counts the trees standing on it, and the summary (and the
+        // artifact summary, which carries only the outcome) says how many in the district do not
+        expect(r.trees).toMatchObject({ measured: 1, count: 1, notOnStructure: 2, onIsolatedStructure: true, keptAsScanned: [] });
+        expect(r.trees!.outcome).toBe('1 of 1 trees on the isolated structure rebuilt as SB-Veggie; 0 left as scanned; 2 measured trees in the extracted district do not stand on it');
+        expect(describeLocationClay(r, 'clay')).toContain(` ${r.trees!.outcome}.`);
         // the canopy reported for the trees is the planted tree's own measured crown, not the district's
         const measured = JSON.parse(fs.readFileSync(r.trees!.crownsJson, 'utf8')).crowns.filter((c: any) => c.status === 'tree');
         const plantedCrown = measured.reduce((best: any, c: any) => (Math.hypot(c.stem[0], c.stem[1]) < Math.hypot(best.stem[0], best.stem[1]) ? c : best));
@@ -284,11 +287,33 @@ describe('runLocationClayPipeline', () => {
         fs.writeFileSync(away, buildSyntheticTile({ halfSize: 3, spacing: 1, trees: [] }));
         const none = await runLocationClayPipeline({ rawTilePath: shifted, workspaceRoot: root, isolate: true, trees: true, flavour: 'clay', publishBase: 'iso_none' },
             deps(refineStub({ clayGlb: shiftPatch(away, 40, 40) })));
-        expect(none.trees).toMatchObject({ measured: 3, count: 0, notOnStructure: 3 });
+        expect(none.trees).toMatchObject({ measured: 0, count: 0, notOnStructure: 3 });
+        expect(none.trees!.outcome).toBe('none of the 3 measured trees in the extracted district stands on the isolated structure, so no trees were added to it');
         const text = describeLocationClay(none, 'clay');
-        expect(text).toContain('The photo tiles show 3 measured trees, none standing on the isolated structure, so no trees were added to it.');
+        expect(text).toContain('The photo tiles show 3 measured trees in the extracted district, none standing on the isolated structure, so no trees were added to it.');
         expect(text).not.toContain('no crown that measures as a tree');
-        expect(text).not.toContain('Left out');
+    });
+
+    it('isolate: names only the trees kept as scanned that stand on the isolated structure', async () => {
+        // the strip keeps the two lower crowns as scanned (no measured surface above a crown base at 99 % of their
+        // height); only the one at the origin stands on the 12 m patch, and only it is named
+        const patch = path.join(root, 'isolated_patch_kept.glb');
+        fs.writeFileSync(patch, buildSyntheticTile({ halfSize: 6, spacing: 1, trees: [] }));
+        const shifted = path.join(root, 'shifted_district_kept.glb');
+        fs.writeFileSync(shifted, buildSyntheticTile({ ...SPEC, trees: SPEC.trees.map(t => ({ ...t, x: t.x + 12, z: t.z + 10 })), building: undefined }));
+        const kept: LocationClayDeps = {
+            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.99 } }), plant: req => vegetation.plant(req) },
+            refine: refineStub({ clayGlb: patch }).refine
+        };
+        const r = await runLocationClayPipeline({ rawTilePath: shifted, workspaceRoot: root, isolate: true, trees: true, flavour: 'clay', publishBase: 'iso_kept' }, kept);
+        const crowns = JSON.parse(fs.readFileSync(r.trees!.crownsJson, 'utf8')).crowns;
+        const onPatch = crowns.filter((c: any) => (c.status === 'tree' || c.status === 'not_regrowable') && Math.abs(c.stem[0]) < 6 && Math.abs(c.stem[1]) < 6);
+        expect(onPatch).toHaveLength(1);
+        expect(onPatch[0].status).toBe('not_regrowable');
+        expect(r.trees!.keptAsScanned.map(k => k.crownId)).toEqual([onPatch[0].id]);
+        expect(r.trees).toMatchObject({ measured: 1, count: 0, notRegrowable: 1, notOnStructure: 2 });
+        expect(r.trees!.outcome).toMatch(new RegExp(`^0 of 1 trees on the isolated structure rebuilt as SB-Veggie; 1 left as scanned: crown ${onPatch[0].id} \\(.*; 2 measured trees in the extracted district do not stand on it$`));
+        for (const c of crowns.filter((k: any) => k.id !== onPatch[0].id)) expect(r.trees!.outcome).not.toContain(`crown ${c.id} (`);
     });
 
     it('publishes under names tile_refine accepts, whatever the extraction was called', async () => {
@@ -372,6 +397,25 @@ describe('runLocationClayPipeline', () => {
         };
         const text = describeLocationClay({ ...base, trees } as any, 'clay');
         expect(text).toContain('Kept as scanned: 2 crowns with no ground measurable around them (no surface gentle enough to stand on, such as a steep slope).');
+        // crowns hanging below the level patches measured around them (canopy tops) with nothing standable under them
+        const hanging = describeLocationClay({ ...base, trees: { ...trees, noMeasuredGround: 3, hangingBelowSupport: 2, supportedUnderStem: 5 } } as any, 'clay');
+        expect(hanging).toContain('Kept as scanned: 3 crowns with no ground measurable for them: 1 with no surface gentle enough to stand on around it, such as a steep slope; 2 hanging below the level surfaces measured around them (canopy tops, not ground) with nothing standable under their stems.');
+        expect(hanging).toContain('5 crowns stand on the ground the scan has under their stems, not on the level surfaces measured around them: those were canopy tops (their crowns hung below them, or nothing standable lay between them and the ground).');
+    });
+
+    it('names, by crown, a tree kept as scanned with the side closed beside it, and rebuilt trees short of their crown or off the mounted ground', () => {
+        const outcome = describeTreeOutcome({
+            count: 2, measured: 3,
+            keptAsScanned: [{ crownId: 230, reasonCode: 'crown_not_reached', reason: "the regrown tree's leaves reach 47% of its measured crown surface", areaM2: 84.25, heightM: 5.87, closedSide: { areaM2: 284.7, topY: 9.48, bottomY: -0.53 } }],
+            shortOfCrown: [{ crownId: 12, crownSurfaceReached: 0.776, budget: 120, reason: 'within its budget of 120 triangles its 5 leaf masses reach 77.6% of its measured crown surface' }],
+            offGround: [{ crownId: 40, gapM: 0.8 }, { crownId: 41, gapM: -2.25 }, { crownId: 42, gapM: null }, { crownId: 43, gapM: 17.7 }],
+            groundToleranceM: 0.5
+        });
+        expect(outcome).toBe("2 of 3 trees rebuilt as SB-Veggie; 1 left as scanned: crown 230 (84 m², 5.9 m tall), the regrown tree's leaves reach 47% of its measured crown surface; "
+            + 'where the trees beside it were taken out, its side was closed down to their ground with 285 m² of clay wall from 9.5 m down to -0.5 m (not in the scan); '
+            + '1 rebuilt tree does not fill its measured crown within its budget: crown 12, within its budget of 120 triangles its 5 leaf masses reach 77.6% of its measured crown surface; '
+            + '4 rebuilt trees stand more than 0.5 m off the mounted model at their trunk bases, measured under each stem: '
+            + 'crown 42 (no mounted surface under its stem), crown 43 (17.7 m above it), crown 41 (2.3 m under it), crown 40 (0.8 m above it)');
     });
 
     it('a stopped request stops only itself: another request sharing the same native run still gets its result', async () => {

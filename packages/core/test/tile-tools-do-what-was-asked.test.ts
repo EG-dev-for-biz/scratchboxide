@@ -459,7 +459,11 @@ describe('a location request returns remeshed geometry', () => {
     });
 
     /** Stand-ins for the native tile_vegetation stages (exercised for real in tile-vegetation.test.ts). */
-    const fakeVegetation = (opts: { trees: number; canopyAreaM2?: number; removed?: number; fail?: 'strip' | 'plant' | 'plant_explicit'; notRegrowable?: number }) => {
+    const fakeVegetation = (opts: {
+        trees: number; canopyAreaM2?: number; removed?: number; fail?: 'strip' | 'plant' | 'plant_explicit'; notRegrowable?: number;
+        /** what plant measured: trees short of their crown, trunks off the mounted model, kept trees off an isolated structure */
+        shortOfCrown?: any[]; offGround?: any[]; keptNotOnSupportMesh?: number[]; keptSkirt?: boolean;
+    }) => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tile-veg-'));
         scratch.push(dir);
         const crowns = path.join(dir, 'crowns.json');
@@ -468,7 +472,8 @@ describe('a location request returns remeshed geometry', () => {
         // measured trees the strip could not regrow: left in the scan with their reason
         const kept = Array.from({ length: opts.notRegrowable ?? 0 }, (_, i) => ({
             id: 50 + i, status: 'not_regrowable', areaM2: 479, apexAboveSupport: 3.6515,
-            regrowth: { reasonCode: 'crown_not_reached', reason: "the regrown tree's leaves reach 89% of its measured crown surface (162 of 182 samples within 1.4 m; 90% needed)", colonisation: '193 of 215 attractors reached in 52 iterations, stopped: no_attractor_within_perception' }
+            regrowth: { reasonCode: 'crown_not_reached', reason: "the regrown tree's leaves reach 89% of its measured crown surface (162 of 182 samples within 1.4 m; 90% needed)", colonisation: '193 of 215 attractors reached in 52 iterations, stopped: no_attractor_within_perception' },
+            ...(opts.keptSkirt ? { keptSkirt: { areaM2: 329.4, topY: 9.48, bottomY: -0.53 } } : {})
         }));
         fs.writeFileSync(crowns, JSON.stringify({ version: 1, crowns: [...list, ...kept, { id: 97, status: 'cut_at_boundary_removed', areaM2: 30 }, { id: 98, status: 'cut_at_boundary' }, { id: 99, status: 'below_min_height' }] }));
         const strip = vi.spyOn(TileVegetationService.prototype, 'strip').mockImplementation(async () => {
@@ -490,7 +495,9 @@ describe('a location request returns remeshed geometry', () => {
                 stats: {
                     trees: opts.trees, triangles: 21_000, triangleBudget: req.triangleBudget ?? 23_500, triangleBudgetSource: req.triangleBudget !== undefined ? 'explicit' : 'crown_targets', targetTriangles: 23_500,
                     skipped: [], inferred: { crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016, shellDepth: 0.8 },
-                    perTree: list.map(c => ({ crownId: c.id }))
+                    shortOfCrown: opts.shortOfCrown ?? [], groundTolerance: 0.5, offGround: opts.offGround ?? [],
+                    ...(req.supportMeshPath ? { keptOnSupportMesh: kept.map(k => k.id).filter(id => !(opts.keptNotOnSupportMesh ?? []).includes(id)), keptNotOnSupportMesh: opts.keptNotOnSupportMesh ?? [] } : {}),
+                    perTree: list.map(c => ({ crownId: c.id, crownSurfaceReached: 0.97 }))
                 },
                 published: { path: `public/models/${req.publishAs}`, url: `/models/${req.publishAs}` }
             } as any;
@@ -737,6 +744,52 @@ describe('a location request returns remeshed geometry', () => {
         expect(payload.artifact.summary).toContain(said);
         const trees = payload.artifact.data.objects[1];
         expect(trees.content.metadata).toMatchObject({ treeCount: 3, treesLeftAsScanned: 1 });
+    });
+
+    it('google_3d_tiles_get_clay says, in the artifact summary too, the side closed beside a tree kept as scanned and every rebuilt tree short of its crown or off the mounted ground', async () => {
+        serveTiles();
+        fakeRefine();
+        const veg = fakeVegetation({
+            trees: 3, notRegrowable: 1, keptSkirt: true,
+            shortOfCrown: [{ crownId: 1, budget: 120, ownBudget: 812, neededTriangles: 334, crownSurfaceReached: 0.776, reason: 'within its budget of 120 triangles its 5 leaf masses reach 77.6% of its measured crown surface (164 of 211 samples within 1.8 m; 90% needed; 5 of the 14 masses that reach it fit)' }],
+            offGround: [{ crownId: 2, gapM: 17.7 }]
+        });
+        const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_short.glb');
+        const payload: any = outcome.resultPayload;
+        expect(outcome.exec.status).toBe('completed');
+        // every trunk base is measured against the model that is mounted
+        expect(veg.plant.mock.calls[0][0].groundMeshPath).toBe(path.join(remeshDir, 'clay.glb'));
+        expect(payload.trees.keptAsScanned[0].closedSide).toEqual({ areaM2: 329.4, topY: 9.48, bottomY: -0.53 });
+        expect(payload.trees.shortOfCrown).toHaveLength(1);
+        expect(payload.trees.offGround).toEqual([{ crownId: 2, gapM: 17.7 }]);
+        for (const part of [
+            'where the trees beside it were taken out, its side was closed down to their ground with 329 m² of clay wall from 9.5 m down to -0.5 m (not in the scan)',
+            '1 rebuilt tree does not fill its measured crown within its budget: crown 1, within its budget of 120 triangles its 5 leaf masses reach 77.6% of its measured crown surface',
+            '1 rebuilt tree stands more than 0.5 m off the mounted model at its trunk base, measured under each stem: crown 2 (17.7 m above it)'
+        ]) {
+            expect(payload.trees.outcome).toContain(part);
+            expect(payload.artifact.summary).toContain(part);
+            expect(outcome.exec.summaryResult).toContain(part);
+        }
+        // a tree short of its crown is not said to fill it
+        expect(outcome.exec.summaryResult).toContain('The rebuilt trees (space colonisation, studio clay) are grown into 330 m² of measured crown, 220 m² of it by trees whose leaves fill their crown');
+    });
+
+    it('google_3d_tiles_get_clay with isolate names only the trees on the isolated structure, in the artifact summary too', async () => {
+        serveTiles();
+        fakeRefine();
+        // crowns 50 and 51 are kept as scanned; only 51 stands on the structure; all 3 rebuilt trees stand on it
+        fakeVegetation({ trees: 3, notRegrowable: 2, keptNotOnSupportMesh: [50] });
+        const outcome = await ask('google_3d_tiles_get_clay', { isolate: true }, 'clay_isolate_kept.glb');
+        const payload: any = outcome.resultPayload;
+        expect(outcome.exec.status).toBe('completed');
+        expect(payload.trees).toMatchObject({ measured: 4, count: 3, notRegrowable: 1, notOnStructure: 1, onIsolatedStructure: true });
+        expect(payload.trees.keptAsScanned.map((k: any) => k.crownId)).toEqual([51]);
+        const said = '3 of 4 trees on the isolated structure rebuilt as SB-Veggie; 1 left as scanned: crown 51';
+        expect(payload.trees.outcome.startsWith(said)).toBe(true);
+        expect(payload.trees.outcome.endsWith('; 1 measured tree in the extracted district does not stand on it')).toBe(true);
+        expect(payload.artifact.summary).toContain(payload.trees.outcome);
+        expect(payload.artifact.summary).not.toContain('crown 50');
     });
 
     it('both extraction tools fail with a typed missing-input error when no place is given', async () => {
