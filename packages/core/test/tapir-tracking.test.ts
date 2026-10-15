@@ -16,6 +16,10 @@ import {
 import type { VideoFrameData } from '../src/common/tracking/tapir-tracking-protocol';
 import { TapirTrackingService } from '../src/node/spatial/TapirTrackingService';
 import { tapir4dgsHandlers, TAPIR_4DGS_TOOL_DECLARATIONS } from '../src/node/gemini/tools/spatial-tools';
+import { GeneratorFailedError } from '../src/common/errors/pipeline-errors';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 function createSyntheticVideo(
     numFrames: number = 5,
@@ -144,16 +148,47 @@ describe('SyntheticTracker & TapirTrackingService', () => {
         expect(tracks.coords[1][0][1]).toBeCloseTo(0.495, 3);
     });
 
-    it('falls back seamlessly to Lucas-Kanade when TAPIR checkpoint is not present', async () => {
+    it('fails when TAPIR cannot run instead of switching to optical flow on its own', async () => {
         const frames = createSyntheticVideo(3, 60, 40);
-        const service = new TapirTrackingService();
-        const result = await service.executeTracking(frames, [[0.3, 0.4]]);
+        const noBridge = new TapirTrackingService({ scriptPath: path.join(os.tmpdir(), 'no-such-run_tapir.py') });
+        await expect(noBridge.executeTracking(frames, [[0.3, 0.4]])).rejects.toBeInstanceOf(GeneratorFailedError);
+        await expect(noBridge.executeTracking(frames, [[0.3, 0.4]])).rejects.toThrow("choose backend 'lk_flow' explicitly");
 
-        expect(result.backendUsed).toBe('lk_flow');
-        expect(result.numFrames).toBe(3);
-        expect(result.numPoints).toBe(1);
-        expect(result.tracks.coords.length).toBe(3);
-        expect(result.tracks.visibilities.length).toBe(3);
+        // The real bridge has no TAPIR checkpoint here (and maybe no torch/numpy): it says so, and so does the service.
+        const realBridge = new TapirTrackingService({ scriptPath: path.resolve(__dirname, '../../../scripts/run_tapir.py'), timeoutMs: 60_000 });
+        await expect(realBridge.executeTracking(frames, [[0.3, 0.4]])).rejects.toThrow(/TAPIR tracking failed/);
+
+        // Optical flow only when asked for, and labelled as such.
+        const lk = await noBridge.executeTracking(frames, [[0.3, 0.4]], undefined, { backend: 'lk_flow' });
+        expect(lk.backendUsed).toBe('lk_flow');
+        expect(lk.tracks.coords.length).toBe(3);
+        await expect(noBridge.executeTracking(frames, [[0.3, 0.4]], undefined, { backend: 'farneback' as any })).rejects.toThrow('unknown tracker backend');
+    });
+
+    it('sends the frames to the TAPIR bridge and returns its tracks', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tapir-bridge-'));
+        try {
+            // A stand-in bridge with TAPIR's contract: it reads the raw frames it is sent and reports what it saw.
+            const bridge = path.join(dir, 'echo_bridge.py');
+            fs.writeFileSync(bridge, [
+                'import json, sys',
+                'req = json.loads(sys.stdin.read())',
+                'raw = open(req["framesPath"], "rb").read()',
+                'T, H, W = req["numFrames"], req["height"], req["width"]',
+                'assert len(raw) == T * H * W * 3, len(raw)',
+                'first = raw[0:3]',
+                'coords = [[[p[0], p[1]] for p in req["queryPoints"]] for _ in range(T)]',
+                'print(json.dumps({"success": True, "coords": coords, "visibilities": [[1.0] * len(req["queryPoints"]) for _ in range(T)], "firstPixel": list(first)}))'
+            ].join('\n'));
+            const frames = createSyntheticVideo(4, 30, 20);
+            const service = new TapirTrackingService({ scriptPath: bridge, pythonBinary: process.env.PYTHON_BIN || 'python3' });
+            const result = await service.executeTracking(frames, [[0.25, 0.5], [0.75, 0.5]]);
+            expect(result.backendUsed).toBe('tapir');
+            expect(result.tracks.coords.length).toBe(4);
+            expect(result.tracks.coords[3][1]).toEqual([0.75, 0.5]);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 
     it('supports sampleAndTrack automatic pipeline', async () => {
@@ -174,5 +209,6 @@ describe('Gemini Agent Tool: tapir_track_video_points', () => {
     it('is not offered: it tracked frames it synthesized itself and took no video', () => {
         expect(tapir4dgsHandlers.tapir_track_video_points).toBeUndefined();
         expect(TAPIR_4DGS_TOOL_DECLARATIONS.map(d => d.name)).not.toContain('tapir_track_video_points');
+        expect(TAPIR_4DGS_TOOL_DECLARATIONS).toEqual([]);
     });
 });

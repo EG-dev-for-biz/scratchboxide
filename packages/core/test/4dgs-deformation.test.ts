@@ -11,7 +11,8 @@ import { describe, it, expect } from 'vitest';
 import { GaussianSplat4DService } from '../src/node/3d-engine/gaussian-splat-4d-service';
 import type { BakedGaussian } from '../src/common/geospatial-4d-protocol';
 import type { VideoFrameData } from '../src/common/tracking/tapir-tracking-protocol';
-import { tapir4dgsHandlers } from '../src/node/gemini/tools/spatial-tools';
+import { tapir4dgsHandlers, TAPIR_4DGS_TOOL_DECLARATIONS } from '../src/node/gemini/tools/spatial-tools';
+import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 
 function createDummyGaussian(
     x: number,
@@ -173,21 +174,9 @@ describe('GaussianSplat4DService.build4DSceneFromCanonical', () => {
 });
 
 describe('Gemini Agent Tool: build_4dgs_from_video', () => {
-    it('executes 4DGS deformation tool handler and returns decomposed scene telemetry', async () => {
-        const subject: BakedGaussian[] = [
-            createDummyGaussian(0.0, 0.0, 2.0)
-        ];
-
-        const res = await tapir4dgsHandlers.build_4dgs_from_video({
-            canonicalSubject: subject,
-            numFrames: 4,
-            heroFrameIndex: 0,
-            trackingBackend: 'mock',
-            useLocalRigidity: true
-        });
-
-        expect(res.summaryResult).toContain('Built 4DGS scene: 1 dynamic subject Gaussians deformed across 4 frames');
-        expect(res.summaryResult).toContain('hero frame 0 timeDelta=[0,0,0]');
-        expect((res.resultPayload as any).telemetry.numDynamicGaussians).toBe(1);
+    it('is not offered: it took no video and "tracked" flat grey frames it made itself', () => {
+        expect(tapir4dgsHandlers.build_4dgs_from_video).toBeUndefined();
+        expect(TAPIR_4DGS_TOOL_DECLARATIONS.map(d => d.name)).not.toContain('build_4dgs_from_video');
+        expect(createDefaultToolRegistry().has('build_4dgs_from_video')).toBe(false);
     });
 });

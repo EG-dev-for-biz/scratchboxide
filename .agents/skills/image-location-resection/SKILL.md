@@ -177,19 +177,21 @@ Extracts salient 2D Harris/FAST corners with 128-D descriptors, runs bidirection
 }
 ```
 
-### 3. `spatial_closed_loop_edge_align` (or `geobox_closed_loop_edge_align`)
-Executes closed-loop iterative sub-pixel edge alignment optimization by dynamically rendering a 3D proxy mesh or Google 3D tile at each perturbation step with `HeadlessMeshSilhouetteRenderer`:
+### 3. `spatial_closed_loop_edge_align` (or `geobox_closed_loop_edge_align`, `geobox_optimize_edge_alignment`)
+Refines a camera pose so a given model lines up with a given photograph: the model is rendered at each trial pose with
+`HeadlessMeshSilhouetteRenderer` and its silhouette/depth edges are correlated with the photo's edges. The photograph,
+the model and the starting pose are all required (no proxy box, no default pose). It reports the edge correlation
+before and after, whether the target was reached, and the mean pixel distance from the model's edges to the nearest
+strong photo edge:
 ```json
 {
   "name": "spatial_closed_loop_edge_align",
   "parameters": {
     "imagePath": "public/test_images/storefront.jpg",
-    "meshBoxCenter": [0, 10, 0],
-    "meshBoxSize": [10, 20, 15],
+    "glbPath": "public/models/storefront_block_raw_tiles.glb",
     "initialPose": { "x": 2, "y": 11, "z": -38, "targetX": 0, "targetY": 10, "targetZ": 0, "fov": 46 },
     "maxIterations": 25,
-    "targetOverlapScore": 99.0,
-    "subpixelTolerancePx": 0.10
+    "targetEdgeCorrelation": 95
   }
 }
 ```

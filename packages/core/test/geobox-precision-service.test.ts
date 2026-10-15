@@ -192,7 +192,7 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
         expect((outcome.resultPayload as any).edgeAlignment.overlapScorePct).toBe(100.0);
     });
 
-    it('dispatches geobox_optimize_edge_alignment via tool registry', async () => {
+    it('geobox_optimize_edge_alignment needs the model and starting pose: it no longer aligns two synthetic squares', async () => {
         const registry = createDefaultToolRegistry();
         const outcome = await registry.dispatch(
             'geobox_optimize_edge_alignment',
@@ -203,9 +203,8 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
             {} as any
         );
 
-        expect(outcome.exec.status).toBe('completed');
-        expect(outcome.exec.summaryResult).toContain('Sub-pixel edge alignment reached 100.0% overlap');
-        expect((outcome.resultPayload as any).finalOverlapScorePct).toBe(100.0);
+        expect(outcome.exec.status).toBe('failed');
+        expect(String((outcome.resultPayload as any).error)).toContain('needs glbPath');
     });
 
     it('refuses to invent a camera pose when only the target location is known', async () => {

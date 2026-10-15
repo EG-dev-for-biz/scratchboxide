@@ -40,6 +40,8 @@ import {
 } from '../../spatial/GeoBoxPrecisionResectionService';
 import {
     SubPixelEdgeAlignmentOptimizer,
+    computeSobelField,
+    evaluateEdgeOverlap,
     type CameraPose6DOF
 } from '../../spatial/SubPixelEdgeAlignmentOptimizer';
 import {
@@ -67,7 +69,6 @@ import type {
     PhysicalCameraConfig,
     SensorFormatPreset
 } from '../../../common/optics/physical-camera-protocol';
-import { GaussianSplat4DService } from '../../3d-engine/gaussian-splat-4d-service';
 import { Dynamic4DGaussianSplatService } from '../../3d-engine/Dynamic4DGaussianSplatService';
 import { HumanoidMotionBridgeService } from '../../spatial/HumanoidMotionBridgeService';
 import { VideoTo4DPerformerPipelineService } from '../../spatial/VideoTo4DPerformerPipelineService';
@@ -84,11 +85,6 @@ import { MapsImageryGroundingService } from '../../spatial/MapsImageryGroundingS
 import { createStreetViewGroundingImageService, GROUNDING_ASPECT_RATIOS, StreetViewGroundingImageService, type GooglePano, type GroundingAspectRatio } from '../../spatial/StreetViewGroundingImageService';
 import { GeminiClient } from '../gemini-client';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
-import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
-import type {
-    TrackerBackend,
-    VideoFrameData
-} from '../../../common/tracking/tapir-tracking-protocol';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolParameterSchema, ToolResultPayload } from './types';
 
 function asString(val: unknown, fallback = ''): string {
@@ -3599,6 +3595,42 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
 // GeoBox Precision Declarations & Handlers
 // ============================================================================
 
+/**
+ * Closed-loop edge alignment of a photograph against a given 3D model (the same tool under three names). The model is
+ * rendered at each trial pose and its silhouette/depth edges are correlated with the photograph's edges.
+ */
+function EDGE_ALIGNMENT_DECLARATION(name: string): ToolDeclaration {
+    return {
+        name,
+        description: 'Refine a camera pose so a given 3D model (.glb) lines up with a photograph: the model is rendered at each trial pose and its silhouette and depth edges are correlated with the photo\'s edges (coordinate descent from initialPose). Reports the edge correlation before and after, whether the target was reached, and the mean pixel distance from the model\'s edges to the nearest strong photo edge. It does not certify an alignment it did not measure; a poor match stays poor.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'The photograph or video frame to align to (PNG, JPEG or WebP).' },
+                glbPath: { type: 'STRING', description: 'The 3D model (.glb) seen in the photograph, in its own coordinate frame.' },
+                initialPose: {
+                    type: 'OBJECT',
+                    description: 'Starting camera in the model\'s frame: position x, y, z, look-at target targetX, targetY, targetZ, and vertical fov in degrees. Required: no pose is assumed.',
+                    properties: {
+                        x: { type: 'NUMBER' },
+                        y: { type: 'NUMBER' },
+                        z: { type: 'NUMBER' },
+                        targetX: { type: 'NUMBER' },
+                        targetY: { type: 'NUMBER' },
+                        targetZ: { type: 'NUMBER' },
+                        fov: { type: 'NUMBER' }
+                    },
+                    required: ['x', 'y', 'z', 'targetX', 'targetY', 'targetZ', 'fov']
+                },
+                maxIterations: { type: 'NUMBER', description: 'Maximum coordinate-descent passes (default 25).' },
+                targetEdgeCorrelation: { type: 'NUMBER', description: 'Stop once the edge correlation (0-100) reaches this (default 95).' },
+                analysisMaxSide: { type: 'NUMBER', description: 'Longest side, in pixels, at which edges are compared (default 320).' }
+            },
+            required: ['imagePath', 'glbPath', 'initialPose']
+        }
+    };
+}
+
 export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'geobox_resect_image_location',
@@ -3678,19 +3710,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
             }
         }
     },
-    {
-        name: 'geobox_optimize_edge_alignment',
-        description: 'Executes sub-pixel Sobel gradient cross-correlation and coordinate descent to optimize camera pose to 100% edge overlap (< 0.1 px residual, < 0.1 mm tolerance).',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Query photograph path' },
-                renderedGlbPath: { type: 'STRING', description: 'Path to 3D model / render to align against' },
-                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 20)' }
-            },
-            required: ['imagePath']
-        }
-    },
+    EDGE_ALIGNMENT_DECLARATION('geobox_optimize_edge_alignment'),
     {
         name: 'spatial_solve_pnp',
         description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac) using Direct Linear Transform (DLT) and Levenberg-Marquardt non-linear optimization to recover 6-DOF camera pose and focal length from 2D-to-3D point correspondences.',
@@ -3746,80 +3766,8 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
             required: ['queryImagePath', 'renderImagePath']
         }
     },
-    {
-        name: 'geobox_closed_loop_edge_align',
-        description: 'Executes closed-loop iterative sub-pixel edge alignment optimization by dynamically rendering a 3D proxy mesh at each perturbation step with HeadlessMeshSilhouetteRenderer to drive edge overlap towards 100% and sub-pixel residual < 0.1 px.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Target photograph or frame' },
-                meshBoxCenter: {
-                    type: 'ARRAY',
-                    description: 'Center of 3D proxy bounding box [x, y, z]',
-                    items: { type: 'NUMBER' }
-                },
-                meshBoxSize: {
-                    type: 'ARRAY',
-                    description: 'Dimensions of 3D proxy bounding box [width, height, depth]',
-                    items: { type: 'NUMBER' }
-                },
-                initialPose: {
-                    type: 'OBJECT',
-                    description: 'Initial camera pose estimate (x, y, z, targetX, targetY, targetZ, fov)',
-                    properties: {
-                        x: { type: 'NUMBER' },
-                        y: { type: 'NUMBER' },
-                        z: { type: 'NUMBER' },
-                        targetX: { type: 'NUMBER' },
-                        targetY: { type: 'NUMBER' },
-                        targetZ: { type: 'NUMBER' },
-                        fov: { type: 'NUMBER' }
-                    }
-                },
-                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 25)' },
-                targetOverlapScore: { type: 'NUMBER', description: 'Target overlap percentage (default: 99.9)' },
-                subpixelTolerancePx: { type: 'NUMBER', description: 'Target sub-pixel residual in pixels (default: 0.10)' }
-            },
-            required: ['imagePath']
-        }
-    },
-    {
-        name: 'spatial_closed_loop_edge_align',
-        description: 'Executes closed-loop iterative sub-pixel edge alignment optimization by dynamically rendering a 3D proxy mesh at each perturbation step with HeadlessMeshSilhouetteRenderer to drive edge overlap towards 100% and sub-pixel residual < 0.1 px.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Target photograph or frame' },
-                meshBoxCenter: {
-                    type: 'ARRAY',
-                    description: 'Center of 3D proxy bounding box [x, y, z]',
-                    items: { type: 'NUMBER' }
-                },
-                meshBoxSize: {
-                    type: 'ARRAY',
-                    description: 'Dimensions of 3D proxy bounding box [width, height, depth]',
-                    items: { type: 'NUMBER' }
-                },
-                initialPose: {
-                    type: 'OBJECT',
-                    description: 'Initial camera pose estimate (x, y, z, targetX, targetY, targetZ, fov)',
-                    properties: {
-                        x: { type: 'NUMBER' },
-                        y: { type: 'NUMBER' },
-                        z: { type: 'NUMBER' },
-                        targetX: { type: 'NUMBER' },
-                        targetY: { type: 'NUMBER' },
-                        targetZ: { type: 'NUMBER' },
-                        fov: { type: 'NUMBER' }
-                    }
-                },
-                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 25)' },
-                targetOverlapScore: { type: 'NUMBER', description: 'Target overlap percentage (default: 99.9)' },
-                subpixelTolerancePx: { type: 'NUMBER', description: 'Target sub-pixel residual in pixels (default: 0.10)' }
-            },
-            required: ['imagePath']
-        }
-    },
+    EDGE_ALIGNMENT_DECLARATION('geobox_closed_loop_edge_align'),
+    EDGE_ALIGNMENT_DECLARATION('spatial_closed_loop_edge_align'),
     {
         name: 'spatial_resect_image_location',
         description: 'Resects 6-DOF camera optical center (lat, lng, elevation), 3-axis attitude (heading, pitch, roll), standoff distance, FOV, 100% sub-pixel edge alignment, and 3D Tiles configuration from an input photograph or video.',
@@ -3853,7 +3801,7 @@ const FEATURE_ANALYSIS_MAX_SIDE = 1024;
  * Reads and decodes an image for feature matching into grayscale at analysis size. `scale` maps an analysis
  * pixel coordinate back to the source image (x_source = x * scale). Fails when the file is missing or undecodable.
  */
-async function loadFeatureImage(tool: string, arg: string, imagePath: string): Promise<{
+async function loadFeatureImage(tool: string, arg: string, imagePath: string, maxSide = FEATURE_ANALYSIS_MAX_SIDE): Promise<{
     gray: Float32Array; width: number; height: number; scale: number; sourceWidth: number; sourceHeight: number;
 }> {
     const fsMod = await import('fs-extra');
@@ -3862,7 +3810,7 @@ async function loadFeatureImage(tool: string, arg: string, imagePath: string): P
     }
     const { decodeImageToRgba } = await import('../../image-codec-ffmpeg');
     const image = await decodeImageToRgba(await fsMod.readFile(imagePath));
-    const factor = Math.max(1, Math.ceil(Math.max(image.width, image.height) / FEATURE_ANALYSIS_MAX_SIDE));
+    const factor = Math.max(1, Math.ceil(Math.max(image.width, image.height) / maxSide));
     const width = Math.max(1, Math.floor(image.width / factor));
     const height = Math.max(1, Math.floor(image.height / factor));
     const gray = new Float32Array(width * height);
@@ -3880,6 +3828,111 @@ async function loadFeatureImage(tool: string, arg: string, imagePath: string): P
         }
     }
     return { gray, width, height, scale: factor, sourceWidth: image.width, sourceHeight: image.height };
+}
+
+/**
+ * Mean distance (in analysis pixels) from each edge pixel of the rendered model to the nearest strong edge of the
+ * photograph. A model edge pixel has at least a quarter of the render's largest gradient (its silhouette and depth
+ * steps, not the gentle shading inside); a strong photo edge is in the top 10% of the photo's gradient magnitudes.
+ * Two-pass chamfer distance transform.
+ */
+function meanEdgeDistance(photo: Float32Array, model: Float32Array, width: number, height: number): { meanPx: number; modelEdgePixels: number } {
+    const nonZero = Array.from(photo).filter(v => v > 0).sort((a, b) => a - b);
+    const threshold = nonZero.length ? nonZero[Math.floor(nonZero.length * 0.9)] : Infinity;
+    let modelMax = 0;
+    for (let i = 0; i < model.length; i++) modelMax = Math.max(modelMax, model[i]);
+    const modelThreshold = modelMax * 0.25;
+    const INF = 1e9;
+    const dist = new Float32Array(width * height);
+    for (let i = 0; i < dist.length; i++) dist[i] = photo[i] >= threshold && photo[i] > 0 ? 0 : INF;
+    const D = Math.SQRT2;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        if (x > 0) dist[i] = Math.min(dist[i], dist[i - 1] + 1);
+        if (y > 0) {
+            dist[i] = Math.min(dist[i], dist[i - width] + 1);
+            if (x > 0) dist[i] = Math.min(dist[i], dist[i - width - 1] + D);
+            if (x < width - 1) dist[i] = Math.min(dist[i], dist[i - width + 1] + D);
+        }
+    }
+    for (let y = height - 1; y >= 0; y--) for (let x = width - 1; x >= 0; x--) {
+        const i = y * width + x;
+        if (x < width - 1) dist[i] = Math.min(dist[i], dist[i + 1] + 1);
+        if (y < height - 1) {
+            dist[i] = Math.min(dist[i], dist[i + width] + 1);
+            if (x < width - 1) dist[i] = Math.min(dist[i], dist[i + width + 1] + D);
+            if (x > 0) dist[i] = Math.min(dist[i], dist[i + width - 1] + D);
+        }
+    }
+    let sum = 0, count = 0;
+    for (let i = 0; i < model.length; i++) {
+        if (model[i] > 0 && model[i] >= modelThreshold && dist[i] < INF) { sum += dist[i]; count++; }
+    }
+    return { meanPx: count ? sum / count : NaN, modelEdgePixels: count };
+}
+
+/** Closed-loop edge alignment of a photograph against a given model (see EDGE_ALIGNMENT_DECLARATION). */
+async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown>) {
+    const imagePath = asString(args.imagePath);
+    if (!imagePath) throw new MissingInputError(tool, 'imagePath', 'give the photograph to align to');
+    const glbPath = asString(args.glbPath) || asString(args.renderedGlbPath);
+    if (!glbPath) throw new MissingInputError(tool, 'glbPath', 'give the 3D model (.glb) seen in the photograph; no proxy shape is used');
+    const fsMod = await import('fs-extra');
+    if (!(await fsMod.pathExists(glbPath))) throw new MissingInputError(tool, 'glbPath', `${glbPath} does not exist`);
+    const raw = (args.initialPose || {}) as Record<string, unknown>;
+    const keys = ['x', 'y', 'z', 'targetX', 'targetY', 'targetZ', 'fov'] as const;
+    const missing = keys.filter(k => typeof raw[k] !== 'number' || !Number.isFinite(raw[k] as number));
+    if (missing.length) throw new MissingInputError(tool, 'initialPose', `give ${missing.join(', ')}; no starting pose is assumed`);
+    const initialPose = Object.fromEntries(keys.map(k => [k, raw[k] as number])) as unknown as CameraPose6DOF;
+    if (!(initialPose.fov > 1 && initialPose.fov < 179)) throw new MissingInputError(tool, 'initialPose.fov', 'must be a vertical field of view in degrees between 1 and 179');
+    const standoff = Math.hypot(initialPose.x - initialPose.targetX, initialPose.y - initialPose.targetY, initialPose.z - initialPose.targetZ);
+    if (!(standoff > 0)) throw new MissingInputError(tool, 'initialPose', 'the camera position and target must differ');
+
+    const maxIterations = typeof args.maxIterations === 'number' ? args.maxIterations : 25;
+    const target = typeof args.targetEdgeCorrelation === 'number' ? args.targetEdgeCorrelation : 95;
+    const maxSide = typeof args.analysisMaxSide === 'number' && args.analysisMaxSide >= 32 ? Math.round(args.analysisMaxSide) : 320;
+
+    const photo = await loadFeatureImage(tool, 'imagePath', imagePath, maxSide);
+    const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+    if (!mesh.indices || mesh.indices.length < 3) throw new MissingInputError(tool, 'glbPath', `${glbPath} has no triangles`);
+    const { width, height } = photo;
+    const queryField = computeSobelField(width, height, photo.gray);
+    const render = (pose: CameraPose6DOF) => HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, pose, width, height);
+
+    const initialField = render(initialPose);
+    if (!(initialField.meanMagnitude > 0)) throw new MissingInputError(tool, 'initialPose', `the model in ${glbPath} is not in view from initialPose`);
+    const initial = evaluateEdgeOverlap(queryField, initialField);
+    // Step sizes scale with the camera's distance to its target, so the search means the same at any model scale.
+    const opt = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(initialPose, queryField, render, {
+        maxIterations,
+        targetOverlapScore: target,
+        subpixelTolerancePx: Number.POSITIVE_INFINITY,
+        stepSizes: { pos: standoff * 0.02, target: standoff * 0.01, fov: 1.0 }
+    });
+    const finalField = render(opt.finalPose);
+    const finalEval = evaluateEdgeOverlap(queryField, finalField);
+    const distance = meanEdgeDistance(queryField.magnitudes, finalField.magnitudes, width, height);
+    const meanEdgeDistancePx = distance.meanPx * photo.scale;
+    const p = opt.finalPose;
+    return {
+        resultPayload: {
+            imagePath,
+            glbPath,
+            imageSize: [photo.sourceWidth, photo.sourceHeight],
+            analysisSize: [width, height],
+            initialPose,
+            finalPose: { x: p.x, y: p.y, z: p.z, targetX: p.targetX, targetY: p.targetY, targetZ: p.targetZ, fov: p.fov },
+            initialEdgeCorrelationPct: initial.overlapScorePercent,
+            finalEdgeCorrelationPct: finalEval.overlapScorePercent,
+            targetEdgeCorrelationPct: target,
+            reachedTarget: finalEval.overlapScorePercent >= target,
+            iterations: opt.iterations,
+            meanEdgeDistancePx,
+            modelEdgePixels: distance.modelEdgePixels,
+            edgeDefinition: 'model edges: at least 25% of the render\'s largest gradient; photo edges: top 10% of the photo\'s gradient magnitudes'
+        } as unknown as ToolResultPayload,
+        summaryResult: `Aligned ${glbPath} to ${imagePath}: edge correlation ${initial.overlapScorePercent.toFixed(1)}% -> ${finalEval.overlapScorePercent.toFixed(1)}% in ${opt.iterations} pass(es) (target ${target}% ${finalEval.overlapScorePercent >= target ? 'reached' : 'not reached'}). The model's edges lie ${Number.isFinite(meanEdgeDistancePx) ? meanEdgeDistancePx.toFixed(1) : 'n/a'} px on average from the nearest strong photo edge. Final camera: position [${[p.x, p.y, p.z].map(v => v.toFixed(2)).join(', ')}], target [${[p.targetX, p.targetY, p.targetZ].map(v => v.toFixed(2)).join(', ')}], fov ${p.fov.toFixed(1)} deg.`
+    };
 }
 
 export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
@@ -3931,36 +3984,7 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             summaryResult: `Harmonized location 3D lighting for ${result.landmarkContext?.name || 'landmark'} (${result.preset}, diurnal: ${result.diurnalPhase}). Calibrated de-lighting (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}), and ${result.architecturalFixtures.length} architectural portal window fixtures.`
         };
     },
-    geobox_optimize_edge_alignment: async (args, _ctx) => {
-        const imagePath = typeof args.imagePath === 'string' ? args.imagePath : '';
-        if (!imagePath) {
-            throw new Error('geobox_optimize_edge_alignment: "imagePath" is required.');
-        }
-        const width = 64;
-        const height = 64;
-        const query = new Float32Array(width * height);
-        const render = new Float32Array(width * height);
-        for (let y = 20; y < 44; y++) {
-            for (let x = 20; x < 44; x++) {
-                query[y * width + x] = 1.0;
-                render[y * width + x] = 1.0;
-            }
-        }
-        const maxIter = typeof args.maxIterations === 'number' ? args.maxIterations : 20;
-        const service = new GeoBoxPrecisionResectionService();
-        const optResult = await service.optimizeEdgeAlignment({
-            queryGrayscale: query,
-            renderGrayscale: render,
-            width,
-            height,
-            maxIterations: maxIter
-        });
-
-        return {
-            resultPayload: optResult as unknown as ToolResultPayload,
-            summaryResult: `Sub-pixel edge alignment reached ${optResult.finalOverlapScorePct.toFixed(1)}% overlap (residual: ${optResult.subPixelResidualPx.toFixed(2)}px, tolerance: ${optResult.physicalErrorMm.toFixed(2)}mm) in ${optResult.iterations} iterations.`
-        };
-    },
+    geobox_optimize_edge_alignment: async (args, _ctx) => alignModelEdgesToPhoto('geobox_optimize_edge_alignment', args),
     spatial_solve_pnp: async (args, _ctx) => {
         const rawPoints2D = Array.isArray(args.points2D) ? args.points2D : [];
         const rawPoints3D = Array.isArray(args.points3D) ? args.points3D : [];
@@ -4045,54 +4069,8 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             summaryResult: `Matched ${queryImagePath} against ${renderImagePath}: ${k1.length} photo keypoints, ${k2.length} render keypoints, ${matches.length} 2D correspondences (Lowe ratio ${loweRatio}${crossCheck ? ', cross-checked' : ''}). Lift the render points with the render's depth to get 3D points for spatial_solve_pnp.`
         };
     },
-    geobox_closed_loop_edge_align: async (args, _ctx) => {
-        const center = (args.meshBoxCenter as [number, number, number]) || [0, 10, 0];
-        const size = (args.meshBoxSize as [number, number, number]) || [10, 20, 15];
-        const mesh = HeadlessMeshSilhouetteRenderer.createBoxMesh(center, size);
-
-        const initialPose: CameraPose6DOF = {
-            x: (args.initialPose as any)?.x ?? 2.0,
-            y: (args.initialPose as any)?.y ?? 11.0,
-            z: (args.initialPose as any)?.z ?? -38.0,
-            targetX: (args.initialPose as any)?.targetX ?? 0.0,
-            targetY: (args.initialPose as any)?.targetY ?? 10.0,
-            targetZ: (args.initialPose as any)?.targetZ ?? 0.0,
-            fov: (args.initialPose as any)?.fov ?? 46.0
-        };
-
-        const groundTruthPose: CameraPose6DOF = {
-            x: 0,
-            y: 10,
-            z: -40,
-            targetX: 0,
-            targetY: 10,
-            targetZ: 0,
-            fov: 45
-        };
-
-        // Render target image (ground truth reference edge field)
-        const targetField = HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, groundTruthPose, 160, 120);
-
-        // Run closed loop optimizer with headless renderer rendering dynamically at each coordinate perturbation
-        const opt = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(
-            initialPose,
-            targetField,
-            (pose) => HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, pose, 160, 120),
-            {
-                maxIterations: typeof args.maxIterations === 'number' ? args.maxIterations : 20,
-                targetOverlapScore: typeof args.targetOverlapScore === 'number' ? args.targetOverlapScore : 99.0,
-                subpixelTolerancePx: typeof args.subpixelTolerancePx === 'number' ? args.subpixelTolerancePx : 0.15
-            }
-        );
-
-        return {
-            resultPayload: opt as unknown as ToolResultPayload,
-            summaryResult: `Closed-loop edge optimization converged to ${opt.overlapScorePercent.toFixed(1)}% edge overlap (sub-pixel residual: ${opt.subpixelResidualPx.toFixed(2)}px, tolerance: ${opt.metrologicalErrorMm.toFixed(2)}mm) in ${opt.iterations} iterations.`
-        };
-    },
-    spatial_closed_loop_edge_align: async (args, ctx) => {
-        return geoboxPrecisionHandlers.geobox_closed_loop_edge_align(args, ctx);
-    },
+    geobox_closed_loop_edge_align: async (args, _ctx) => alignModelEdgesToPhoto('geobox_closed_loop_edge_align', args),
+    spatial_closed_loop_edge_align: async (args, _ctx) => alignModelEdgesToPhoto('spatial_closed_loop_edge_align', args),
     spatial_resect_image_location: async (args, ctx) => {
         return geoboxPrecisionHandlers.geobox_resect_image_location(args, ctx);
     }
@@ -4711,70 +4689,12 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
 // Google DeepMind TAPIR Point Tracking & 4DGS Deformation Declarations & Handlers
 // ============================================================================
 
-export const TAPIR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
-    {
-        name: 'build_4dgs_from_video',
-        description: 'Deform a canonical 3D Gaussian Splat scene across time into a dynamic 4DGS asset using TAPIR point tracks, backtracking photometric error pruning, and ARAP local rigidity graph regularization.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                canonicalSubject: {
-                    type: 'ARRAY',
-                    description: 'Array of canonical subject 3D Gaussians from the hero frame { position: [x,y,z], colorRgb: [r,g,b], scale: [sx,sy,sz], opacity: number }',
-                    items: {
-                        type: 'OBJECT',
-                        properties: {
-                            position: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            colorRgb: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            scale: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            opacity: { type: 'NUMBER' }
-                        },
-                        required: ['position', 'colorRgb', 'scale', 'opacity']
-                    }
-                },
-                staticBackground: {
-                    type: 'ARRAY',
-                    description: 'Optional array of static background Gaussians',
-                    items: {
-                        type: 'OBJECT',
-                        properties: {
-                            position: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            colorRgb: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            scale: { type: 'ARRAY', items: { type: 'NUMBER' } },
-                            opacity: { type: 'NUMBER' }
-                        }
-                    }
-                },
-                numFrames: {
-                    type: 'NUMBER',
-                    description: 'Total number of video frames (default: 24)'
-                },
-                heroFrameIndex: {
-                    type: 'NUMBER',
-                    description: 'Index of canonical hero frame where time delta is exactly zero (default: 0)'
-                },
-                trackingBackend: {
-                    type: 'STRING',
-                    description: 'Tracker backend: "tapir", "lk_flow", or "mock" (default: "tapir")',
-                    enum: ['tapir', 'lk_flow', 'mock']
-                },
-                useLocalRigidity: {
-                    type: 'BOOLEAN',
-                    description: 'Whether to enforce ARAP (As-Rigid-As-Possible) local isometry graph regularization (default: true)'
-                },
-                kNeighbors: {
-                    type: 'NUMBER',
-                    description: 'Number of spatial nearest neighbors for isometry graph (default: 6)'
-                },
-                trackingErrorThresh: {
-                    type: 'NUMBER',
-                    description: 'Photometric L1 color difference threshold for pruning drifting Gaussians (default: 0.35)'
-                }
-            },
-            required: ['canonicalSubject']
-        }
-    }
-];
+/**
+ * No TAPIR / 4DGS tools are offered: tapir_track_video_points and build_4dgs_from_video took no video and tracked
+ * frames they synthesized themselves. TapirTrackingService and GaussianSplat4DService remain for callers that have
+ * real frames. The empty pack keeps the registry wiring stable.
+ */
+export const TAPIR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [];
 
 export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -4968,68 +4888,7 @@ export const HUMANOID_AVATAR_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
-export const tapir4dgsHandlers: Record<string, ToolHandler> = {
-    async build_4dgs_from_video(args) {
-        const canonicalSubject = args.canonicalSubject as BakedGaussian[];
-        if (!Array.isArray(canonicalSubject) || canonicalSubject.length === 0) {
-            return {
-                resultPayload: { error: 'canonicalSubject must be a non-empty array of BakedGaussian objects' } as unknown as ToolResultPayload,
-                summaryResult: 'Failed: canonicalSubject is empty or invalid'
-            };
-        }
-
-        const staticBackground = (args.staticBackground as BakedGaussian[]) ?? [];
-        const numFrames = Number(args.numFrames ?? 24);
-        const heroFrameIndex = Number(args.heroFrameIndex ?? 0);
-        const trackingBackend = (args.trackingBackend as TrackerBackend) ?? 'tapir';
-        const useLocalRigidity = args.useLocalRigidity !== undefined ? Boolean(args.useLocalRigidity) : true;
-        const kNeighbors = Number(args.kNeighbors ?? 6);
-        const trackingErrorThresh = Number(args.trackingErrorThresh ?? 0.35);
-
-        const width = 640;
-        const height = 480;
-
-        const frames: VideoFrameData[] = [];
-        for (let t = 0; t < numFrames; t++) {
-            const data = new Uint8Array(width * height * 3);
-            for (let i = 0; i < data.length; i += 3) {
-                data[i] = 128;
-                data[i + 1] = 135;
-                data[i + 2] = 140;
-            }
-            frames.push({ width, height, data, channels: 3, frameIndex: t });
-        }
-
-        const splat4dService = new GaussianSplat4DService();
-        const decomposed4d = await splat4dService.build4DSceneFromCanonical({
-            canonicalSubject,
-            staticBackground,
-            videoFrames: frames,
-            heroFrameIndex,
-            useLocalRigidity,
-            kNeighbors,
-            trackingErrorThresh,
-            trackingConfig: { backend: trackingBackend }
-        });
-
-        return {
-            resultPayload: {
-                telemetry: decomposed4d.telemetry,
-                heroFrameIndex: decomposed4d.heroFrameIndex,
-                numFrames: decomposed4d.numFrames,
-                bounds: decomposed4d.bounds,
-                sampleTrajectory: decomposed4d.trajectories[0] ? {
-                    pointIndex: decomposed4d.trajectories[0].pointIndex,
-                    canonicalPosition: decomposed4d.trajectories[0].canonicalPosition,
-                    firstThreeDeltas: decomposed4d.trajectories[0].timeDeltas.slice(0, 3),
-                    heroFrameDelta: decomposed4d.trajectories[0].timeDeltas[decomposed4d.heroFrameIndex]
-                } : null
-            } as unknown as ToolResultPayload,
-            summaryResult: `Built 4DGS scene: ${decomposed4d.telemetry.numDynamicGaussians} dynamic subject Gaussians deformed across ${decomposed4d.numFrames} frames (${decomposed4d.telemetry.trackerUsed.toUpperCase()} tracker, hero frame ${heroFrameIndex} timeDelta=[0,0,0], pruned ${decomposed4d.telemetry.prunedGaussians} drifting Gaussians, ARAP rigidity: ${useLocalRigidity ? 'active' : 'disabled'}).`
-        };
-    },
-
-};
+export const tapir4dgsHandlers: Record<string, ToolHandler> = {};
 
 export const avatar4dgsHandlers: Record<string, ToolHandler> = {
     async avatar_4dgs_list(_args) {
