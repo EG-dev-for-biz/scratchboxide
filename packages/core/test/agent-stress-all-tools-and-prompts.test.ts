@@ -388,24 +388,13 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             expect((res.resultPayload as any).telemetry.outputVertices).toBeGreaterThan(0);
         });
 
-        it('executes tile_restructure_via_prompt for architectural terraforming', async () => {
-            const res = await registry.dispatch('tile_restructure_via_prompt', {
-                prompt: 'flatten ground foundation and preserve upper architectural crown',
-                benchmark: 'hillside_monument'
+        it('tile_restyle refuses clearly when no 3D scene with a tile is open', async () => {
+            const res = await registry.dispatch('tile_restyle', {
+                fields: [{ center: [0, 0], radiusMeters: 20, terraceStepMeters: 2 }]
             }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).success).toBe(true);
-        });
-
-        it('executes tile_apply_terraforming_and_primitives with foundational leveling', async () => {
-            const res = await registry.dispatch('tile_apply_terraforming_and_primitives', {
-                terraforming: [
-                    { type: 'plateau_level', targetElevation: 0.0, radius: 25.0 }
-                ],
-                benchmark: 'city_district'
-            }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).success).toBe(true);
+            expect(res.exec.status).toBe('failed');
+            expect((res.resultPayload as any).success).toBe(false);
+            expect((res.resultPayload as any).error).toMatch(/open 3D scene/);
         });
     });
 

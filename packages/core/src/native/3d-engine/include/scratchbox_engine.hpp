@@ -94,7 +94,6 @@
 #include "scratchbox_botanical_texture.hpp"
 #include "scratchbox_infiniti.hpp"
 #include "scratchbox_infinigen.hpp"
-#include "scratchbox_tile_restructurer.hpp"
 #include "scratchbox_displacement.hpp"
 #include "scratchbox_processing.hpp"
 #include "scratchbox_carrier.hpp"

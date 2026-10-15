@@ -65,6 +65,24 @@ export interface FallbackResult {
     executionPlanCard?: ExecutionPlanCardData;
 }
 
+/**
+ * Restyling a real tile ("turn this into…", "restyle it as…") runs on the model through the
+ * tile_restyle tool. Offline there is nothing honest to do but say so and leave the scene as is.
+ * Returns null when the request is not a restyle of an open tile.
+ */
+export function synthesizeTileRestyleUnavailable(text: string, activeArtifact: CanvasArtifact | null | undefined): FallbackResult | null {
+    if (activeArtifact?.type !== '3d-scene') return null;
+    const scene = activeArtifact.data as Scene3DData | undefined;
+    const hasTile = (scene?.objects || []).some(o => /\.glb$/i.test(o.content?.durableUri || ''));
+    if (!hasTile) return null;
+    const isRestyle = /\b(?:restyl\w*|restructur\w*|reimagin\w*|redesign\w*|transform\s+(?:this|it|the\s+\w+)|turn\s+(?:this|it|the\s+\w+)\s+into|convert\s+(?:this|it|the\s+\w+)\s+into|make\s+(?:this|it|the\s+\w+)\s+(?:look\s+)?(?:like|into))\b/i.test(text);
+    if (!isRestyle) return null;
+    return {
+        chatResponse: 'Restyling this tile runs on the model, which is not reachable right now, so the scene is unchanged. ' +
+            'Try again once you are back online and I will reshape the tile and add new geometry while keeping its photo textures.'
+    };
+}
+
 export interface FallbackClassification {
     lower: string;
     docContentExtract: string | undefined;

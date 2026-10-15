@@ -74,7 +74,8 @@ import {
     synthesizeSandboxFallback,
     synthesizeVideoTimelineFallback,
     synthesizeQuestionCardFallback,
-    synthesizeExecutionPlanFallback
+    synthesizeExecutionPlanFallback,
+    synthesizeTileRestyleUnavailable
 } from './sendMessageFallbacks';
 
 type Setter<T> = (value: T | ((prev: T) => T)) => void;
@@ -796,6 +797,10 @@ function selectLocalFallback(d: SendMessageDeps, ctx: GenerationContext): Fallba
     }
     if (d.aiInteractionMode === 'plan') {
         return synthesizeExecutionPlanFallback(effectiveFallbackText, activeArtifact);
+    }
+    const restyleUnavailable = synthesizeTileRestyleUnavailable(effectiveFallbackText, activeArtifact);
+    if (restyleUnavailable) {
+        return restyleUnavailable;
     }
     const isAmbiguousSpatialQuery = /(?:3d\s*(?:plate|model|asset|object|reconstruct|mesh)|make.*3d|build.*3d)/i.test(effectiveFallbackText) &&
         !/three\.js|react|kanban|doc|video|nle|spec/i.test(effectiveFallbackText) &&
