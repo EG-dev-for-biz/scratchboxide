@@ -1773,7 +1773,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Input GLB mesh model.' },
+                glbPath: { type: 'STRING', description: 'Input GLB mesh model. Every primitive must have its own UVs (TEXCOORD_0): the texture is baked into them, and a mesh without UVs is refused before any station image is generated.' },
                 stationsJsonPath: { type: 'STRING', description: 'Stations JSON (with anchor) from survey_synthesize_stations.' },
                 locationName: { type: 'STRING', description: 'Location name for prompts.' },
                 moodPromptContext: { type: 'STRING', description: 'Mood/lighting sentence(s), identical for all stations.' },

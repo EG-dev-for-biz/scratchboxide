@@ -324,6 +324,9 @@ export class SurveyTextureUnprojector {
     ): Promise<SurveyTextureResult> {
         const startTime = performance.now();
         const glbBuffer = await fs.readFile(request.glbPath);
+        // The texture is baked into the mesh's own UVs, so a mesh without them is refused before any station image
+        // is generated: UVs made up here would not be in the written GLB, and the texture could not show.
+        this.requireOwnUvs(glbBuffer, request.glbPath);
         const options = request.options || {};
         const isDraft = options.draft === true;
         const defaultResolution = options.resolution;
@@ -1508,8 +1511,35 @@ export class SurveyTextureUnprojector {
     }
 
     /**
-     * Loads mesh primitives from GLB. If the mesh lacks UVs, automatically generates
-     * box/planar unwrap and packs them with MaxRectsAtlasPacker. Positions and normals must be floats; UVs may be
+     * Refuses a GLB with a triangle primitive that has no TEXCOORD_0: the bake paints into the mesh's own UVs and
+     * writes no new ones, so a texture baked for such a primitive could not be shown. Throws MissingInputError.
+     */
+    public static requireOwnUvs(glbBuffer: Buffer, label: string): void {
+        let json: any;
+        try {
+            json = AlgorithmicUvEngine.parseGlb(glbBuffer).json;
+        } catch (err: any) {
+            throw new MissingInputError('survey_beautify_to_texture', 'glbPath', `${label} is not a readable GLB (${err?.message || err})`);
+        }
+        let primitives = 0;
+        (json.meshes || []).forEach((mesh: any, meshIndex: number) => {
+            (mesh.primitives || []).forEach((prim: any, primIndex: number) => {
+                if (!prim.attributes || prim.attributes.POSITION === undefined) return;
+                primitives++;
+                if (prim.attributes.TEXCOORD_0 === undefined) {
+                    throw new MissingInputError('survey_beautify_to_texture', 'a GLB with UVs',
+                        `${label} mesh ${meshIndex} primitive ${primIndex} has no TEXCOORD_0, so a texture baked for it would have no UVs to show through (unwrap the mesh first)`);
+                }
+            });
+        });
+        if (primitives === 0) {
+            throw new MissingInputError('survey_beautify_to_texture', 'a GLB with a mesh', `${label} has no primitive with POSITION to texture`);
+        }
+    }
+
+    /**
+     * Loads mesh primitives from GLB. If the mesh lacks UVs, generates a box/planar unwrap in memory (packed with
+     * MaxRectsAtlasPacker) for callers that only need geometry; processGlbWithSurveyStations refuses such meshes. Positions and normals must be floats; UVs may be
      * floats or normalized integers. Index accessors are read by their own type and checked against the vertex
      * count. An accessor this reader cannot decode throws MissingInputError.
      */
@@ -1681,31 +1711,45 @@ export class SurveyTextureUnprojector {
             if (v > b.maxV) b.maxV = v;
         }
 
-        // Pack the 6 charts using MaxRectsAtlasPacker
-        const packer = new MaxRectsAtlasPacker({
-            maxWidth: atlasResolution,
-            maxHeight: atlasResolution,
-            padding: 8,
-            allowRotation: false
-        });
-
-        const activeCharts: number[] = [];
+        // Pack the charts with MaxRectsAtlasPacker at their metric proportions, scaled so they fill the atlas. The
+        // packer falls back to shelf packing when the charts do not fit, which can place them outside its atlas; such
+        // a layout is never used: the charts are packed smaller until every one lies inside.
+        const activeCharts: Array<{ chart: number; wMeters: number; hMeters: number }> = [];
         for (let c = 0; c < 6; c++) {
             const b = chartBounds[c];
-            const wMeters = Math.max(0.1, b.maxU - b.minU);
-            const hMeters = Math.max(0.1, b.maxV - b.minV);
             if (b.minU !== Infinity) {
-                activeCharts.push(c);
-                packer.addTexture({
-                    id: c,
-                    width: Math.max(64, Math.round(wMeters * 30)),
-                    height: Math.max(64, Math.round(hMeters * 30)),
-                    data: new Uint8Array(64 * 64 * 4)
-                });
+                activeCharts.push({ chart: c, wMeters: Math.max(0.1, b.maxU - b.minU), hMeters: Math.max(0.1, b.maxV - b.minV) });
             }
         }
-
-        const packed = packer.pack();
+        const metricArea = activeCharts.reduce((sum, a) => sum + a.wMeters * a.hMeters, 0);
+        let texelsPerMeter = metricArea > 0 ? Math.sqrt((0.6 * atlasResolution * atlasResolution) / metricArea) : 1;
+        let packed: ReturnType<MaxRectsAtlasPacker['pack']> | undefined;
+        for (let attempt = 0; attempt < 32 && !packed; attempt++) {
+            const packer = new MaxRectsAtlasPacker({
+                maxWidth: atlasResolution,
+                maxHeight: atlasResolution,
+                padding: 8,
+                allowRotation: false
+            });
+            for (const a of activeCharts) {
+                packer.addTexture({
+                    id: a.chart,
+                    width: Math.max(1, Math.round(a.wMeters * texelsPerMeter)),
+                    height: Math.max(1, Math.round(a.hMeters * texelsPerMeter))
+                });
+            }
+            const attemptResult = packer.pack();
+            const inside = attemptResult.width <= atlasResolution && attemptResult.height <= atlasResolution
+                && activeCharts.every(a => {
+                    const r = attemptResult.rects.get(a.chart);
+                    return !!r && r.x >= 0 && r.y >= 0 && r.x + r.width <= attemptResult.width && r.y + r.height <= attemptResult.height;
+                });
+            if (inside) packed = attemptResult;
+            else texelsPerMeter *= 0.8;
+        }
+        if (!packed) {
+            throw new GeneratorFailedError('uv unwrap', `the ${activeCharts.length} box-projection charts could not be packed into a ${atlasResolution}px atlas`);
+        }
 
         // Assign UV coordinates into the packed rects
         for (let i = 0; i < vertCount; i++) {

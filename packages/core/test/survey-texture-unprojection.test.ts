@@ -19,7 +19,8 @@ import {
 } from '../src/node/spatial/SurveyTextureUnprojector';
 import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
 import { decodePng, encodePng, resampleRgba } from '../src/node/texture-processing';
-import { GeneratorFailedError } from '../src/common/errors/pipeline-errors';
+import { GeneratorFailedError, MissingInputError } from '../src/common/errors/pipeline-errors';
+import { uvCubeMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
 import type { GeodeticAnchor, ColmapCameraPose } from '../src/common/spatial/colmap-vector-reference-types';
 import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 
@@ -887,4 +888,56 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         await fs.copyFile(outEsbGlbPath, testGlbPath);
         await fs.writeFile(testAlbedoPath, result.albedoPng);
     }, 180000);
+});
+
+describe('SurveyTextureUnprojector: a mesh without its own UVs', () => {
+    /** The review's probe mesh: a 10 m box with POSITION (and normals) but no TEXCOORD_0. */
+    const uvlessBox = (file: string) => writeFixtureGlb(path.join(TEST_DIR, file), { ...uvCubeMesh(10), uvs: undefined });
+
+    it('is refused before any station image is generated, instead of reporting a texture that cannot show', async () => {
+        const glbPath = uvlessBox('uvless_box.glb');
+        const outGlbPath = path.join(TEST_DIR, 'uvless_box_textured.glb');
+        let calls = 0;
+        const gen: StationImageGenerator = { name: 'echo', async generate(a) { calls++; return a.blockoutPng; } };
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        for (const resolution of [1024, 512]) {
+            const err = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+                glbPath, anchor: ANCHOR, generator: gen, beautifyContext: { locationName: 'UV-less box' },
+                stations: [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR), stationFromLookAt(2, [25, 0, 0], [0, 0, 0], optics, ANCHOR)],
+                options: { resolution, renderWidth: 256, renderHeight: 144, draft: true, outGlbPath }
+            }).catch(e => e);
+            expect(err).toBeInstanceOf(MissingInputError);
+            expect(err.message).toContain('mesh 0 primitive 0 has no TEXCOORD_0');
+        }
+        expect(calls).toBe(0);
+        expect(fs.existsSync(outGlbPath)).toBe(false);
+        // A precomputed-plate run (the mesh bake's path) is refused the same way.
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath, stations: [], precomputedPlates: [{} as StationPlate], options: { resolution: 512 }
+        })).rejects.toThrow(/has no TEXCOORD_0/);
+    });
+
+    it('loads the box at a small atlas without crashing: the generated charts are packed inside the atlas', () => {
+        const glb = fs.readFileSync(uvlessBox('uvless_box_load.glb'));
+        for (const resolution of [512, 256, 64]) {
+            // At 512 this threw RangeError (offset is out of bounds) in the packer's shelf fallback.
+            const { primitives } = SurveyTextureUnprojector.loadMeshPrimitives(glb, resolution);
+            const uvs = primitives[0].uvs;
+            expect(uvs.length).toBe(24 * 2);
+            expect(Array.from(uvs).every(v => v >= 0 && v <= 1)).toBe(true);
+            // The six faces land in six separate atlas rectangles.
+            const boxes = Array.from({ length: 6 }, (_, f) => {
+                const us = [0, 1, 2, 3].map(k => uvs[(f * 4 + k) * 2]);
+                const vs = [0, 1, 2, 3].map(k => uvs[(f * 4 + k) * 2 + 1]);
+                return { u0: Math.min(...us), u1: Math.max(...us), v0: Math.min(...vs), v1: Math.max(...vs) };
+            });
+            for (let a = 0; a < 6; a++) {
+                expect(boxes[a].u1 - boxes[a].u0).toBeGreaterThan(0);
+                for (let b = a + 1; b < 6; b++) {
+                    const overlap = boxes[a].u0 < boxes[b].u1 && boxes[b].u0 < boxes[a].u1 && boxes[a].v0 < boxes[b].v1 && boxes[b].v0 < boxes[a].v1;
+                    expect(overlap).toBe(false);
+                }
+            }
+        }
+    });
 });
