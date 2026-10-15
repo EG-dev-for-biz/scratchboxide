@@ -27,6 +27,7 @@ import {
     buildToolDeclarations
 } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
 
 describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
 
@@ -90,26 +91,33 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             expect(palette.contrastProfile).toBe('cinematic');
         });
 
-        it('parses unstructured Markdown text with hex codes as heuristic fallback', () => {
-            const markdownText = `
-                Extracted colors from reference scene:
-                The background is filled with rich blue #1E3A8A and deep navy #0F172A.
-                The accents feature glowing amber #F59E0B and gold #EAB308.
-                Shadows have cool blue undertones while highlights show warm afternoon sun.
-                Atmospheric lighting is moody with rich natural contrast.
-            `;
-
-            const palette = parseExtractedPalette(markdownText);
-            expect(palette.primaryTones.length).toBeGreaterThan(0);
-            expect(palette.shadowProfile.temperature).toBe('cool');
-            expect(palette.highlightProfile.temperature).toBe('warm');
+        it('keeps a temperature in the model\'s own words instead of forcing it into warm/cool/neutral', () => {
+            const palette = parseExtractedPalette(JSON.stringify({
+                primaryTones: [{ name: 'Basalt', hex: '2B2D30' }],
+                accentTones: [{ name: 'Sodium Lamp', hex: '#f5a623' }],
+                shadowProfile: { tone: 'Blue-black', temperature: 'cool-neutral' },
+                highlightProfile: { tone: 'Sodium glare', temperature: '2000K' },
+                lightingAtmosphere: 'Night street under sodium lamps'
+            }));
+            expect(palette.shadowProfile.temperature).toBe('cool-neutral');
+            expect(palette.highlightProfile.temperature).toBe('2000K');
+            expect(palette.primaryTones[0].hex).toBe('#2B2D30');
+            expect(palette.accentTones[0].hex).toBe('#F5A623');
+            expect(palette.contrastProfile).toBeUndefined();
+            expect(buildApplyPalettePrompt({ palette })).toContain('Sodium glare (2000K temperature)');
         });
 
-        it('returns fallback palette on empty or invalid text', () => {
-            const fallback = parseExtractedPalette('');
-            expect(fallback.primaryTones.length).toBeGreaterThan(0);
-            expect(fallback.shadowProfile).toBeDefined();
-            expect(fallback.highlightProfile).toBeDefined();
+        it('refuses prose, an empty answer or an incomplete palette instead of guessing colours or using stock ones', () => {
+            const prose = `The background is rich blue #1E3A8A and deep navy #0F172A; accents glow amber #F59E0B.
+                Shadows have cool blue undertones while highlights show warm afternoon sun.`;
+            expect(() => parseExtractedPalette(prose)).toThrow(MissingInputError);
+            expect(() => parseExtractedPalette('')).toThrow('the answer is empty');
+            expect(() => parseExtractedPalette('```json\n{"primaryTones":[{"name":"A","hex":"#111111"}],"accentTones":[],"shadowProfile":{"tone":"x","temperature":"cool"},"highlightProfile":{"tone":"y","temperature":"warm"},"lightingAtmosphere":"z"}\n```'))
+                .toThrow('palette.accentTones');
+            expect(() => parseExtractedPalette(JSON.stringify({
+                primaryTones: [{ name: 'A', hex: '#111111' }], accentTones: [{ name: 'B', hex: '#222222' }],
+                shadowProfile: { tone: 'x' }, highlightProfile: { tone: 'y', temperature: 'warm' }, lightingAtmosphere: 'z'
+            }))).toThrow('palette.shadowProfile');
         });
     });
 
@@ -178,6 +186,17 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             expect(prompt).toContain('Apply low-contrast muted grading');
             expect(prompt).toContain('Apply a saturation scaling factor of 1.25x');
         });
+
+        it('adds no ratio or contrast of its own: without them the prompt keeps the target\'s ratio, and other curve names are used as written', () => {
+            const plain = buildApplyPalettePrompt({ palette: { ...testPalette, contrastProfile: undefined } });
+            expect(plain).toContain('Keep the target image\'s own aspect ratio.');
+            expect(plain).not.toContain('16:9');
+            expect(plain).not.toContain('contrast curve');
+            expect(plain).not.toContain('contrast grading');
+            const own = buildApplyPalettePrompt({ palette: testPalette, contrastCurve: 'bleach-bypass' });
+            expect(own).toContain('Apply bleach-bypass contrast grading.');
+            expect(() => buildApplyPalettePrompt({ palette: { ...testPalette, primaryTones: [] } })).toThrow('palette.primaryTones');
+        });
     });
 
     describe('Markdown Palette Formatting', () => {
@@ -196,15 +215,26 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             expect(md).toContain('| **Primary Base** | Deep Indigo | `#312E81` |');
             expect(md).toContain('| **Accent** | Amber Glow | `#F59E0B` |');
             expect(md).toContain('`#1E1B4B`');
-            expect(md).toContain('COOL');
+            expect(md).toContain('| Shadow / AO | cool |');
+            expect(md).not.toContain('Contrast Profile');
         });
     });
 
     describe('End-to-End Orchestration (executeTwoStepColorTransfer)', () => {
-        it('orchestrates complete transfer plan with telemetry', () => {
+        const readPalette = JSON.stringify({
+            primaryTones: [{ name: 'Harbour Grey', hex: '#5B6670' }],
+            accentTones: [{ name: 'Buoy Orange', hex: '#E8590C' }],
+            shadowProfile: { tone: 'Slate shadow', temperature: 'cool' },
+            highlightProfile: { tone: 'Hazy sun', temperature: 'neutral-warm' },
+            lightingAtmosphere: 'Hazy coastal afternoon'
+        });
+
+        it('builds the plan from the palette the extraction model read, and refuses to plan without one', () => {
+            expect(() => executeTwoStepColorTransfer({ referenceImage: 'a.jpg', targetImage: 'b.png' } as any)).toThrow(MissingInputError);
             const plan = executeTwoStepColorTransfer({
                 referenceImage: 'models/reference_look.jpg',
                 targetImage: 'models/target_mesh_render.png',
+                extractedPalette: '```json\n' + readPalette + '\n```',
                 preserveSkinTones: true,
                 contrastCurve: 'cinematic',
                 aspectRatio: '16:9'
@@ -212,7 +242,8 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
 
             expect(plan.success).toBe(true);
             expect(plan.phase1ExtractionPrompt).toContain('Analyze this image and extract its complete color palette');
-            expect(plan.extractedPalette.primaryTones.length).toBeGreaterThan(0);
+            expect(plan.extractedPalette.primaryTones.map(t => t.hex)).toEqual(['#5B6670']);
+            expect(plan.phase2ApplicationPrompt).toContain('Buoy Orange (#E8590C');
             expect(plan.phase2ApplicationPrompt).toContain('GLOBAL COLOR OVERRIDE');
             expect(plan.phase2ApplicationPrompt).toContain('CRITICAL GEOMETRY & STRUCTURAL LOCKING');
             expect(plan.phase2ApplicationPrompt).toContain('EXCEPTION FOR HUMAN SUBJECTS');
@@ -298,6 +329,19 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             }, {} as any);
             expect(noAccents.exec.status).toBe('failed');
             expect(noAccents.resultPayload.error).toContain('palette.accentTones');
+        });
+
+        it('accepts a temperature outside warm/cool/neutral, and adds no ratio or contrast the caller did not give', async () => {
+            const registry = createDefaultToolRegistry();
+            const outcome = await registry.dispatch('nano_banana_apply_color_palette', {
+                targetImageUrl: 'https://example.com/target.jpg',
+                palette: { ...completePalette, shadowProfile: { tone: 'Blue-grey shadow', temperature: '5600K' } }
+            }, {} as any);
+            expect(outcome.exec.status).toBe('completed');
+            const prompt = (outcome.resultPayload as any).applicationPrompt as string;
+            expect(prompt).toContain('Blue-grey shadow (5600K temperature)');
+            expect(prompt).toContain('Keep the target image\'s own aspect ratio.');
+            expect(prompt).not.toContain('cinematic contrast');
         });
 
         it('buildToolDeclarations includes the palette application tool on color transfer prompts', () => {

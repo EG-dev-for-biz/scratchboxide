@@ -10,16 +10,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import {
-    NanoBananaColorService,
-    buildExtractPalettePrompt,
-    buildApplyPalettePrompt,
-    parseExtractedPalette,
-    formatPaletteAsMarkdown,
-    executeTwoStepColorTransfer,
-    type ExtractedColorPalette,
-    type ColorTransferPlan
-} from '../../browser/generative-canvas/services/nano-banana-color-service';
+import { decodeImageToRgba, encodeRgbaToJpeg, encodeRgbaToPng, resolveFfmpegPath } from '../image-codec-ffmpeg';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 
 export interface ImageColorTransferRequest {
     /**
@@ -33,16 +25,7 @@ export interface ImageColorTransferRequest {
     targetImage: string | Buffer;
 
     /**
-     * Execution mode:
-     * - 'plan-only': Generates the exact two-step multimodal prompts and color plan.
-     * - 'local-cielab': Runs instant offline Reinhard CIELAB statistical color harmonization (0ms network, 100% geometry lock).
-     * - 'execute': Alias of 'local-cielab' that reports telemetry mode 'execute'.
-     * Defaults to 'local-cielab'.
-     */
-    mode?: 'execute' | 'plan-only' | 'local-cielab';
-
-    /**
-     * Contrast curve to apply: 'natural' | 'cinematic' | 'high-contrast' | 'muted'.
+     * Optional contrast curve applied after the transfer: 'cinematic' (S-curve) or 'high-contrast'. None by default.
      */
     contrastCurve?: 'natural' | 'cinematic' | 'high-contrast' | 'muted';
 
@@ -63,19 +46,25 @@ export interface ImageColorTransferRequest {
     outputPath?: string;
 }
 
+/** Mean and standard deviation of an image in CIELAB, as measured by the transfer. */
+export interface LabStatistics {
+    mean: [number, number, number];
+    std: [number, number, number];
+}
+
 export interface ImageColorTransferResult {
     success: boolean;
-    palette: ExtractedColorPalette;
-    plan: ColorTransferPlan;
     outputImagePath?: string;
-    outputBuffer?: Buffer;
+    outputBuffer: Buffer;
+    /** The measured colour statistics the transfer mapped between (reference onto target). */
+    referenceStatistics: LabStatistics;
+    targetStatistics: LabStatistics;
     telemetry: {
         executionTimeMs: number;
-        mode: 'execute' | 'plan-only' | 'local-cielab';
+        mode: 'local-cielab';
         preservedGeometry: boolean;
-        dimensions?: { width: number; height: number };
+        dimensions: { width: number; height: number };
     };
-    error?: string;
 }
 
 export interface LocalCielabOptions {
@@ -86,86 +75,47 @@ export interface LocalCielabOptions {
 }
 
 /**
- * 2D Image-to-Image Color Transfer Service
- * 
- * Implements the Nano Banana Method 2 ("Extract-then-Apply") architecture for 2D images,
- * providing both multimodal prompt-driven harmonization and high-speed offline
- * Reinhard CIELAB statistical color transfer with 100% bit-for-bit geometry locking.
- * 
- * Cleanly decoupled from 3D map tile texture recoloring (`GlbTextureRecolorService`).
+ * 2D image-to-image colour transfer: Reinhard et al. statistical transfer in CIELAB, computed from the two images'
+ * own pixels with every pixel staying where it is. No palette is invented: the result reports the statistics it
+ * measured. (Prompt-based transfer with an image model is the Nano Banana Method 2 plan in nano-banana-color-service,
+ * which needs the palette a model read from the reference.)
  */
 export class ImageColorTransferService {
 
     /**
-     * Primary entry point for 2D image-to-image color transfer.
+     * Transfers the reference image's colour statistics onto the target image. Throws when an image cannot be read
+     * or decoded.
      */
     static async transferColor(request: ImageColorTransferRequest): Promise<ImageColorTransferResult> {
         const startTime = Date.now();
-        const mode = request.mode || 'local-cielab';
+        const targetBuf = await this.resolveImageBuffer(request.targetImage, 'targetImage');
+        const refBuf = await this.resolveImageBuffer(request.referenceImage, 'referenceImage');
 
-        // 1. Build two-step color transfer plan
-        const plan = executeTwoStepColorTransfer({
-            referenceImage: typeof request.referenceImage === 'string' ? request.referenceImage : 'reference_image.jpg',
-            targetImage: typeof request.targetImage === 'string' ? request.targetImage : 'target_image.jpg',
-            contrastCurve: request.contrastCurve || 'cinematic',
-            preserveSkinTones: request.preserveSkinTones ?? true
+        const transfer = await this.transferColorLocalCielabWithStats(targetBuf, refBuf, {
+            preserveSkinTones: request.preserveSkinTones ?? true,
+            contrastCurve: request.contrastCurve,
+            outputFormat: request.outputFormat || 'jpg'
         });
 
-        if (mode === 'plan-only') {
-            return {
-                success: true,
-                palette: plan.extractedPalette,
-                plan,
-                telemetry: {
-                    executionTimeMs: Date.now() - startTime,
-                    mode: 'plan-only',
-                    preservedGeometry: true
-                }
-            };
+        const outPath = request.outputPath;
+        if (outPath) {
+            fs.mkdirSync(path.dirname(outPath), { recursive: true });
+            fs.writeFileSync(outPath, transfer.buffer);
         }
 
-        try {
-            const targetBuf = await this.resolveImageBuffer(request.targetImage);
-            const refBuf = await this.resolveImageBuffer(request.referenceImage);
-
-            const recoloredBuf = await this.transferColorLocalCielab(targetBuf, refBuf, {
-                preserveSkinTones: request.preserveSkinTones ?? true,
-                contrastCurve: request.contrastCurve || 'cinematic',
-                outputFormat: request.outputFormat || 'jpg'
-            });
-
-            let outPath = request.outputPath;
-            if (outPath) {
-                const dir = path.dirname(outPath);
-                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-                fs.writeFileSync(outPath, recoloredBuf);
+        return {
+            success: true,
+            outputImagePath: outPath,
+            outputBuffer: transfer.buffer,
+            referenceStatistics: transfer.reference,
+            targetStatistics: transfer.target,
+            telemetry: {
+                executionTimeMs: Date.now() - startTime,
+                mode: 'local-cielab',
+                preservedGeometry: true,
+                dimensions: { width: transfer.width, height: transfer.height }
             }
-
-            return {
-                success: true,
-                palette: plan.extractedPalette,
-                plan,
-                outputImagePath: outPath,
-                outputBuffer: recoloredBuf,
-                telemetry: {
-                    executionTimeMs: Date.now() - startTime,
-                    mode,
-                    preservedGeometry: true
-                }
-            };
-        } catch (err: any) {
-            return {
-                success: false,
-                palette: plan.extractedPalette,
-                plan,
-                telemetry: {
-                    executionTimeMs: Date.now() - startTime,
-                    mode,
-                    preservedGeometry: false
-                },
-                error: err.message
-            };
-        }
+        };
     }
 
     /**
@@ -177,12 +127,22 @@ export class ImageColorTransferService {
         referenceImage: string | Buffer,
         options: LocalCielabOptions = {}
     ): Promise<Buffer> {
-        const targetBuf = await this.resolveImageBuffer(targetImage);
-        const refBuf = await this.resolveImageBuffer(referenceImage);
+        return (await this.transferColorLocalCielabWithStats(targetImage, referenceImage, options)).buffer;
+    }
 
-        // Decode both images to raw RGBA
-        const targetRgba = await this.decodeImageToRgba(targetBuf);
-        const refRgba = await this.decodeImageToRgba(refBuf);
+    private static async transferColorLocalCielabWithStats(
+        targetImage: string | Buffer,
+        referenceImage: string | Buffer,
+        options: LocalCielabOptions = {}
+    ): Promise<{ buffer: Buffer; width: number; height: number; reference: LabStatistics; target: LabStatistics }> {
+        const targetBuf = await this.resolveImageBuffer(targetImage, 'targetImage');
+        const refBuf = await this.resolveImageBuffer(referenceImage, 'referenceImage');
+
+        // Decode both images to raw RGBA at their real sizes (the shared codec reads the size from the file)
+        const targetDecoded = await decodeImageToRgba(targetBuf);
+        const refDecoded = await decodeImageToRgba(refBuf);
+        const targetRgba = { data: targetDecoded.rgba, width: targetDecoded.width, height: targetDecoded.height };
+        const refRgba = { data: refDecoded.rgba, width: refDecoded.width, height: refDecoded.height };
 
         const tPixels = targetRgba.width * targetRgba.height;
         const rPixels = refRgba.width * refRgba.height;
@@ -300,18 +260,14 @@ export class ImageColorTransferService {
         }
 
         // Encode back to image
-        return this.encodeRgbaToImage(outRgba, targetRgba.width, targetRgba.height, options.outputFormat || 'jpg');
-    }
-
-    /**
-     * Extracts structured color palette from reference image.
-     */
-    static async extractPalette(reference: string | Buffer): Promise<ExtractedColorPalette> {
-        const plan = executeTwoStepColorTransfer({
-            referenceImage: typeof reference === 'string' ? reference : 'ref.jpg',
-            targetImage: 'target.jpg'
-        });
-        return plan.extractedPalette;
+        const buffer = await this.encodeRgbaToImage(outRgba, targetRgba.width, targetRgba.height, options.outputFormat || 'jpg');
+        return {
+            buffer,
+            width: targetRgba.width,
+            height: targetRgba.height,
+            reference: { mean: [rMeanL, rMeanA, rMeanB], std: [rStdL, rStdA, rStdB] },
+            target: { mean: [tMeanL, tMeanA, tMeanB], std: [tStdL, tStdA, tStdB] }
+        };
     }
 
     // =========================================================================
@@ -369,7 +325,7 @@ export class ImageColorTransferService {
         return [Math.max(0, Math.min(255, r)), Math.max(0, Math.min(255, g)), Math.max(0, Math.min(255, b))];
     }
 
-    private static async resolveImageBuffer(img: string | Buffer): Promise<Buffer> {
+    private static async resolveImageBuffer(img: string | Buffer, arg: string): Promise<Buffer> {
         if (Buffer.isBuffer(img)) return img;
         if (typeof img === 'string') {
             if (img.startsWith('data:image/')) {
@@ -379,47 +335,23 @@ export class ImageColorTransferService {
             if (fs.existsSync(img)) {
                 return fs.readFileSync(img);
             }
+            throw new MissingInputError('image colour transfer', arg, `${img} is not a readable image file or data URI`);
         }
-        throw new Error(`Unable to resolve image source: ${typeof img}`);
+        throw new MissingInputError('image colour transfer', arg, 'give a path, a data URI or the image bytes');
     }
 
-    private static decodeImageToRgba(buf: Buffer): Promise<{ data: Buffer; width: number; height: number }> {
+    private static async encodeRgbaToImage(rgba: Buffer, width: number, height: number, format: string): Promise<Buffer> {
+        if (format === 'png') return encodeRgbaToPng(rgba, width, height);
+        if (format !== 'webp') return encodeRgbaToJpeg(rgba, width, height);
         return new Promise((resolve, reject) => {
-            const dims = this.parseImageDimensions(buf);
-            const ffmpeg = spawn('ffmpeg', [
-                '-hide_banner', '-loglevel', 'error',
-                '-i', 'pipe:0',
-                '-f', 'rawvideo',
-                '-pix_fmt', 'rgba',
-                'pipe:1'
-            ]);
-
-            const chunks: Buffer[] = [];
-            ffmpeg.stdout.on('data', chunk => chunks.push(chunk));
-            ffmpeg.stderr.on('data', () => {});
-            ffmpeg.on('close', code => {
-                if (code !== 0) return reject(new Error(`ffmpeg decode failed with code ${code}`));
-                const data = Buffer.concat(chunks);
-                resolve({ data, width: dims.width, height: dims.height });
-            });
-            ffmpeg.on('error', reject);
-            ffmpeg.stdin.end(buf);
-        });
-    }
-
-    private static encodeRgbaToImage(rgba: Buffer, width: number, height: number, format: string): Promise<Buffer> {
-        return new Promise((resolve, reject) => {
-            const codec = format === 'png' ? 'png' : (format === 'webp' ? 'libwebp' : 'mjpeg');
-            const ext = format === 'png' ? 'png' : (format === 'webp' ? 'webp' : 'mjpeg');
-
-            const ffmpeg = spawn('ffmpeg', [
+            const ffmpeg = spawn(resolveFfmpegPath(), [
                 '-hide_banner', '-loglevel', 'error',
                 '-f', 'rawvideo',
                 '-pix_fmt', 'rgba',
                 '-s', `${width}x${height}`,
                 '-i', 'pipe:0',
-                '-c:v', codec,
-                '-f', ext,
+                '-c:v', 'libwebp',
+                '-f', 'webp',
                 'pipe:1'
             ]);
 
@@ -427,35 +359,12 @@ export class ImageColorTransferService {
             ffmpeg.stdout.on('data', chunk => chunks.push(chunk));
             ffmpeg.stderr.on('data', () => {});
             ffmpeg.on('close', code => {
-                if (code !== 0) return reject(new Error(`ffmpeg encode failed with code ${code}`));
+                if (code !== 0) return reject(new Error(`ffmpeg WebP encode failed with code ${code}`));
                 resolve(Buffer.concat(chunks));
             });
-            ffmpeg.on('error', reject);
+            ffmpeg.on('error', err => reject(new Error(`WebP output needs ffmpeg (${err.message})`)));
             ffmpeg.stdin.end(rgba);
         });
-    }
-
-    private static parseImageDimensions(buf: Buffer): { width: number; height: number } {
-        // PNG
-        if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504E47) {
-            return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
-        }
-        // JPEG
-        if (buf.length > 4 && buf[0] === 0xFF && buf[1] === 0xD8) {
-            let offset = 2;
-            while (offset < buf.length - 8) {
-                if (buf[offset] !== 0xFF) { offset++; continue; }
-                const marker = buf[offset + 1];
-                if (marker === 0xC0 || marker === 0xC2) {
-                    const height = buf.readUInt16BE(offset + 5);
-                    const width = buf.readUInt16BE(offset + 7);
-                    return { width, height };
-                }
-                const len = buf.readUInt16BE(offset + 2);
-                offset += 2 + len;
-            }
-        }
-        return { width: 512, height: 512 };
     }
 }
 

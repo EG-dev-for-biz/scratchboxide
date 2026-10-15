@@ -9,6 +9,7 @@
 
 import {
     buildApplyPalettePrompt,
+    validateExtractedPalette,
     type ExtractedColorPalette
 } from '../../../browser/generative-canvas/services/nano-banana-color-service';
 import { MissingInputError } from '../../../common/errors/pipeline-errors';
@@ -24,16 +25,13 @@ function asBoolean(val: unknown, defaultVal = false): boolean {
     return defaultVal;
 }
 
-const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
-const TEMPERATURES = ['warm', 'cool', 'neutral'];
-
 /**
- * The palette exactly as the caller gave it (an object or its JSON text). Every part the application prompt
- * maps is required: the prompt builder would otherwise fill gaps with its own stock colors.
+ * The palette exactly as the caller gave it (an object or its JSON text). Every part the application prompt maps is
+ * required; temperatures and contrast are the caller's own words. Nothing is filled in.
  */
 function requireCompletePalette(raw: unknown): ExtractedColorPalette {
     const tool = 'nano_banana_apply_color_palette';
-    let palette: any = raw;
+    let palette: unknown = raw;
     if (typeof raw === 'string') {
         try {
             palette = JSON.parse(raw);
@@ -41,26 +39,7 @@ function requireCompletePalette(raw: unknown): ExtractedColorPalette {
             throw new MissingInputError(tool, 'palette', 'give the palette as a JSON object (primaryTones, accentTones, shadowProfile, highlightProfile, lightingAtmosphere), not free text');
         }
     }
-    if (!palette || typeof palette !== 'object') {
-        throw new MissingInputError(tool, 'palette', 'give the palette as a JSON object');
-    }
-    const tones = (list: unknown, key: string) => {
-        if (!Array.isArray(list) || list.length === 0 || !list.every(t => t && typeof t.name === 'string' && HEX_COLOR.test(String(t.hex)))) {
-            throw new MissingInputError(tool, `palette.${key}`, 'needs at least one { name, hex: "#RRGGBB" } tone');
-        }
-    };
-    tones(palette.primaryTones, 'primaryTones');
-    tones(palette.accentTones, 'accentTones');
-    for (const key of ['shadowProfile', 'highlightProfile']) {
-        const profile = palette[key];
-        if (!profile || typeof profile.tone !== 'string' || !TEMPERATURES.includes(profile.temperature)) {
-            throw new MissingInputError(tool, `palette.${key}`, 'needs { tone, temperature: "warm" | "cool" | "neutral" }');
-        }
-    }
-    if (typeof palette.lightingAtmosphere !== 'string' || !palette.lightingAtmosphere.trim()) {
-        throw new MissingInputError(tool, 'palette.lightingAtmosphere', 'needs a sentence describing the lighting');
-    }
-    return { rawSummary: '', ...palette } as ExtractedColorPalette;
+    return validateExtractedPalette(palette, tool);
 }
 
 export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -76,7 +55,7 @@ export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 palette: {
                     type: 'OBJECT',
-                    description: 'Complete palette object: primaryTones and accentTones ([{ name, hex: "#RRGGBB", role? }], at least one each), shadowProfile and highlightProfile ({ tone, temperature: "warm" | "cool" | "neutral", hex? }) and lightingAtmosphere (sentence).'
+                    description: 'Complete palette object: primaryTones and accentTones ([{ name, hex: "#RRGGBB", role? }], at least one each), shadowProfile and highlightProfile ({ tone, temperature, hex? }, the temperature in your own words, e.g. "cool", "warm-neutral", "5600K"), lightingAtmosphere (sentence) and optionally contrastProfile.'
                 },
                 preserveSkinTones: {
                     type: 'BOOLEAN',
@@ -84,11 +63,11 @@ export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 contrastCurve: {
                     type: 'STRING',
-                    description: 'Contrast grading curve to apply: "cinematic", "natural", "high-contrast", or "muted". Defaults to "cinematic".'
+                    description: 'Optional contrast grading in your own words ("cinematic", "natural", "high-contrast" and "muted" have written-out directives). When omitted the palette\'s contrastProfile is used; with neither, no contrast directive is added.'
                 },
                 aspectRatio: {
                     type: 'STRING',
-                    description: 'Aspect ratio of the output canvas (e.g. "16:9", "1:1", "4:3", "9:16"). Defaults to "16:9".'
+                    description: 'Optional aspect ratio of the output canvas (e.g. "16:9"). When omitted the prompt asks to keep the target image\'s own aspect ratio.'
                 },
                 targetFocusArea: {
                     type: 'STRING',
@@ -114,8 +93,8 @@ export const nanoBananaHandlers: Record<string, ToolHandler> = {
         const palette = requireCompletePalette(args.palette);
 
         const preserveSkinTones = asBoolean(args.preserveSkinTones, false);
-        const contrastCurve = (asString(args.contrastCurve) || 'cinematic') as 'natural' | 'cinematic' | 'high-contrast' | 'muted';
-        const aspectRatio = asString(args.aspectRatio) || '16:9';
+        const contrastCurve = asString(args.contrastCurve) || undefined;
+        const aspectRatio = asString(args.aspectRatio) || undefined;
         const targetFocusArea = asString(args.targetFocusArea) || undefined;
         const customInstructions = asString(args.customInstructions) || undefined;
 

@@ -7,6 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { MissingInputError } from '../../../common/errors/pipeline-errors';
+
 export interface ExtractedColorTone {
     name: string;
     hex: string;
@@ -14,12 +16,19 @@ export interface ExtractedColorTone {
     percentage?: number;
 }
 
+/**
+ * A shadow or highlight read from a reference. `temperature` is the model's own words ("warm", "cool-neutral",
+ * "5600K", ...): it is quoted into the prompt as given, never mapped onto a fixed set.
+ */
 export interface ShadowHighlightProfile {
     tone: string;
-    temperature: 'warm' | 'cool' | 'neutral';
+    temperature: 'warm' | 'cool' | 'neutral' | (string & {});
     hex?: string;
     description?: string;
 }
+
+/** Contrast curve names with a written directive; any other description is used as given. */
+export type ContrastCurve = 'natural' | 'cinematic' | 'high-contrast' | 'muted' | (string & {});
 
 export interface ExtractedColorPalette {
     primaryTones: ExtractedColorTone[];
@@ -27,7 +36,7 @@ export interface ExtractedColorPalette {
     shadowProfile: ShadowHighlightProfile;
     highlightProfile: ShadowHighlightProfile;
     lightingAtmosphere: string;
-    contrastProfile?: 'natural' | 'cinematic' | 'high-contrast' | 'muted';
+    contrastProfile?: ContrastCurve;
     rawSummary: string;
 }
 
@@ -41,10 +50,12 @@ export interface ExtractPalettePromptOptions {
 export interface ApplyPaletteOptions {
     targetImageUrl?: string;
     targetImagePath?: string;
+    /** The palette read from the reference: an object, or the extraction model's answer (its JSON block is parsed). */
     palette: ExtractedColorPalette | string;
     preserveSkinTones?: boolean;
-    contrastCurve?: 'natural' | 'cinematic' | 'high-contrast' | 'muted';
+    contrastCurve?: ContrastCurve;
     saturationMultiplier?: number;
+    /** The output canvas ratio; when omitted the prompt asks to keep the target image's own aspect ratio. */
     aspectRatio?: string;
     targetFocusArea?: string;
     customInstructions?: string;
@@ -53,8 +64,13 @@ export interface ApplyPaletteOptions {
 export interface TwoStepColorTransferOptions {
     referenceImage: string;
     targetImage: string;
+    /**
+     * Phase 1's result: the palette the extraction model read from the reference (object or its raw answer). Required:
+     * the plan never makes one up.
+     */
+    extractedPalette: ExtractedColorPalette | string;
     preserveSkinTones?: boolean;
-    contrastCurve?: 'natural' | 'cinematic' | 'high-contrast' | 'muted';
+    contrastCurve?: ContrastCurve;
     aspectRatio?: string;
     targetFocusArea?: string;
     customInstructions?: string;
@@ -70,9 +86,9 @@ export interface ColorTransferPlan {
     telemetry: {
         referenceImage: string;
         targetImage: string;
-        aspectRatio: string;
+        aspectRatio?: string;
         preserveSkinTones: boolean;
-        contrastCurve: string;
+        contrastCurve?: string;
         geometryLocked: boolean;
         globalColorOverride: boolean;
         timestamp: string;
@@ -96,94 +112,94 @@ export function buildExtractPalettePrompt(options: ExtractPalettePromptOptions =
         'Provide a structured breakdown adhering strictly to the following schema:',
         '1. PRIMARY_TONES: Dominant base colors (color names, approximate 6-digit #HEX codes, estimated coverage %, and surface roles).',
         '2. ACCENT_TONES: Secondary and accent colors (color names, approximate 6-digit #HEX codes, and focal roles).',
-        '3. SHADOW_PROFILE: Shadow tone hue, temperature (warm, cool, or neutral), and approximate #HEX.',
-        '4. HIGHLIGHT_PROFILE: Highlight tone hue, temperature (warm, cool, or neutral), and approximate #HEX.',
+        '3. SHADOW_PROFILE: Shadow tone hue, its colour temperature in your own words (e.g. warm, cool, neutral, cool-neutral, or a Kelvin value), and approximate #HEX.',
+        '4. HIGHLIGHT_PROFILE: Highlight tone hue, its colour temperature in your own words (e.g. warm, cool, neutral, cool-neutral, or a Kelvin value), and approximate #HEX.',
         '5. LIGHTING_ATMOSPHERE: Atmospheric lighting mood, dynamic range, and key contrast characteristics.',
         'Output clean structured JSON enclosed in ```json ``` with keys: primaryTones, accentTones, shadowProfile, highlightProfile, lightingAtmosphere, and rawSummary.'
     ].join(' ');
 }
 
+const HEX_COLOR = /^#?[0-9a-fA-F]{6}$/;
+
 /**
- * Parse model extraction response into a typed ExtractedColorPalette.
- * Handles JSON blocks, key-value markdown, or fallback heuristic parsing.
+ * Checks that a palette is complete and normalises hex codes ("#RRGGBB"). Every part the application prompt maps is
+ * required (at least one primary and one accent tone, shadow and highlight tone and temperature, the lighting
+ * sentence); a missing part is a MissingInputError naming it. Nothing is filled in.
  */
-export function parseExtractedPalette(analysisText: string): ExtractedColorPalette {
-    if (!analysisText || typeof analysisText !== 'string') {
-        return createFallbackPalette('Neutral daylight palette with balanced shadows');
+export function validateExtractedPalette(raw: unknown, context = 'palette'): ExtractedColorPalette {
+    if (!raw || typeof raw !== 'object') {
+        throw new MissingInputError(context, 'palette', 'give the palette as a JSON object (primaryTones, accentTones, shadowProfile, highlightProfile, lightingAtmosphere)');
     }
-
-    // 1. Try extracting structured JSON
-    const jsonMatch = analysisText.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || analysisText.match(/\{[\s\S]*"primaryTones"[\s\S]*\}/);
-    if (jsonMatch) {
-        try {
-            const rawJson = jsonMatch[1] ? jsonMatch[1].trim() : jsonMatch[0].trim();
-            const parsed = JSON.parse(rawJson);
-            if (parsed && typeof parsed === 'object') {
-                return {
-                    primaryTones: Array.isArray(parsed.primaryTones) ? parsed.primaryTones.map(normalizeTone) : [],
-                    accentTones: Array.isArray(parsed.accentTones) ? parsed.accentTones.map(normalizeTone) : [],
-                    shadowProfile: normalizeShadowHighlight(parsed.shadowProfile, 'cool', '#1A2332'),
-                    highlightProfile: normalizeShadowHighlight(parsed.highlightProfile, 'warm', '#FFF5E6'),
-                    lightingAtmosphere: typeof parsed.lightingAtmosphere === 'string' ? parsed.lightingAtmosphere : 'Balanced natural illumination',
-                    contrastProfile: parsed.contrastProfile || 'cinematic',
-                    rawSummary: typeof parsed.rawSummary === 'string' ? parsed.rawSummary : analysisText.slice(0, 300)
-                };
-            }
-        } catch {
-            // Fall through to regex parsing
+    const p = raw as any;
+    const tones = (list: unknown, key: string): ExtractedColorTone[] => {
+        if (!Array.isArray(list) || list.length === 0) {
+            throw new MissingInputError(context, `palette.${key}`, 'needs at least one { name, hex: "#RRGGBB" } tone');
         }
-    }
-
-    // 2. Heuristic extraction from Markdown / text
-    const hexMatches = analysisText.match(/#[0-9a-fA-F]{6}\b/g) || [];
-    const primaryTones: ExtractedColorTone[] = [];
-    const accentTones: ExtractedColorTone[] = [];
-
-    if (hexMatches.length > 0) {
-        hexMatches.slice(0, 3).forEach((hex, idx) => {
-            primaryTones.push({
-                name: `Dominant Tone ${idx + 1}`,
-                hex: hex.toUpperCase(),
-                role: idx === 0 ? 'Background & Ambient' : 'Base Surface'
-            });
+        return list.map((t: any, i: number) => {
+            if (!t || typeof t.name !== 'string' || !t.name.trim() || typeof t.hex !== 'string' || !HEX_COLOR.test(t.hex.trim())) {
+                throw new MissingInputError(context, `palette.${key}[${i}]`, 'needs a name and a hex colour "#RRGGBB"');
+            }
+            const hex = t.hex.trim().toUpperCase();
+            return {
+                name: t.name.trim(),
+                hex: hex.startsWith('#') ? hex : `#${hex}`,
+                ...(typeof t.role === 'string' && t.role.trim() ? { role: t.role.trim() } : {}),
+                ...(typeof t.percentage === 'number' ? { percentage: t.percentage } : {})
+            };
         });
-        hexMatches.slice(3, 6).forEach((hex, idx) => {
-            accentTones.push({
-                name: `Accent Tone ${idx + 1}`,
-                hex: hex.toUpperCase(),
-                role: 'Focal Accent'
-            });
-        });
+    };
+    const profile = (value: any, key: string): ShadowHighlightProfile => {
+        if (!value || typeof value.tone !== 'string' || !value.tone.trim() || typeof value.temperature !== 'string' || !value.temperature.trim()) {
+            throw new MissingInputError(context, `palette.${key}`, 'needs { tone, temperature } (temperature in your own words, e.g. "cool", "warm-neutral", "5600K")');
+        }
+        if (value.hex !== undefined && (typeof value.hex !== 'string' || !HEX_COLOR.test(value.hex.trim()))) {
+            throw new MissingInputError(context, `palette.${key}.hex`, 'must be "#RRGGBB" when given');
+        }
+        const hex = typeof value.hex === 'string' ? value.hex.trim().toUpperCase() : undefined;
+        return {
+            tone: value.tone.trim(),
+            temperature: value.temperature.trim(),
+            ...(hex ? { hex: hex.startsWith('#') ? hex : `#${hex}` } : {}),
+            ...(typeof value.description === 'string' ? { description: value.description } : {})
+        };
+    };
+    const primaryTones = tones(p.primaryTones, 'primaryTones');
+    const accentTones = tones(p.accentTones, 'accentTones');
+    const shadowProfile = profile(p.shadowProfile, 'shadowProfile');
+    const highlightProfile = profile(p.highlightProfile, 'highlightProfile');
+    if (typeof p.lightingAtmosphere !== 'string' || !p.lightingAtmosphere.trim()) {
+        throw new MissingInputError(context, 'palette.lightingAtmosphere', 'needs a sentence describing the lighting');
     }
-
-    if (primaryTones.length === 0) {
-        primaryTones.push({ name: 'Midnight Navy', hex: '#0F172A', role: 'Dominant Deep' });
-        primaryTones.push({ name: 'Warm Amber', hex: '#D97706', role: 'Midtone Light' });
-    }
-    if (accentTones.length === 0) {
-        accentTones.push({ name: 'Electric Cyan', hex: '#06B6D4', role: 'Specular Highlight' });
-    }
-
-    const isCoolShadow = /cool|cyan|blue|teal|indigo|cold/i.test(analysisText);
-    const isWarmHighlight = /warm|amber|golden|sunlight|yellow|candle/i.test(analysisText);
-
     return {
         primaryTones,
         accentTones,
-        shadowProfile: {
-            tone: isCoolShadow ? 'Cool deep undertone' : 'Neutral shadow',
-            temperature: isCoolShadow ? 'cool' : 'neutral',
-            hex: hexMatches[hexMatches.length - 1] || (isCoolShadow ? '#0F172A' : '#1E1E1E')
-        },
-        highlightProfile: {
-            tone: isWarmHighlight ? 'Warm ambient glow' : 'Crisp daylight highlight',
-            temperature: isWarmHighlight ? 'warm' : 'neutral',
-            hex: hexMatches[0] || (isWarmHighlight ? '#FEF08A' : '#F8FAFC')
-        },
-        lightingAtmosphere: extractSentence(analysisText, /lighting|atmosphere|mood|contrast|tone/i) || 'Cinematic natural atmosphere with balanced dynamic range',
-        contrastProfile: /high contrast|chiaroscuro/i.test(analysisText) ? 'high-contrast' : (/muted|pastel|soft/i.test(analysisText) ? 'muted' : 'cinematic'),
-        rawSummary: analysisText.slice(0, 300)
+        shadowProfile,
+        highlightProfile,
+        lightingAtmosphere: p.lightingAtmosphere.trim(),
+        ...(typeof p.contrastProfile === 'string' && p.contrastProfile.trim() ? { contrastProfile: p.contrastProfile.trim() } : {}),
+        rawSummary: typeof p.rawSummary === 'string' ? p.rawSummary : ''
     };
+}
+
+/**
+ * Parses the extraction model's answer: the JSON object in it (a ```json block or a bare object) must hold a complete
+ * palette. An answer without one, or with parts missing, is a MissingInputError; no colours are guessed from the
+ * prose and no stock palette stands in.
+ */
+export function parseExtractedPalette(analysisText: string): ExtractedColorPalette {
+    if (!analysisText || typeof analysisText !== 'string' || !analysisText.trim()) {
+        throw new MissingInputError('palette extraction', 'the model\'s answer', 'the answer is empty');
+    }
+    const block = analysisText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    const candidate = block ? block[1] : analysisText.slice(analysisText.indexOf('{'), analysisText.lastIndexOf('}') + 1);
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(candidate.trim());
+    } catch {
+        throw new MissingInputError('palette extraction', 'a JSON palette', 'the answer holds no parseable JSON object; ask the model again for the structured palette');
+    }
+    const palette = validateExtractedPalette(parsed, 'palette extraction');
+    return { ...palette, rawSummary: palette.rawSummary || analysisText.slice(0, 300) };
 }
 
 /**
@@ -197,25 +213,18 @@ export function parseExtractedPalette(analysisText: string): ExtractedColorPalet
 export function buildApplyPalettePrompt(options: ApplyPaletteOptions): string {
     const paletteObj = typeof options.palette === 'string'
         ? parseExtractedPalette(options.palette)
-        : options.palette;
+        : validateExtractedPalette(options.palette, 'buildApplyPalettePrompt');
 
-    const aspectRatio = options.aspectRatio || '16:9';
-    const contrastCurve = options.contrastCurve || paletteObj.contrastProfile || 'cinematic';
+    const contrastCurve = options.contrastCurve || paletteObj.contrastProfile;
     const targetArea = options.targetFocusArea ? `specifically targeting the ${options.targetFocusArea}` : 'globally across all image layers';
 
-    // Format primary colors
-    const primaryStr = paletteObj.primaryTones.length > 0
-        ? paletteObj.primaryTones.map(t => `${t.name} (${t.hex}${t.role ? ` - ${t.role}` : ''})`).join(', ')
-        : 'Deep Navy (#0F172A), Warm Amber (#D97706)';
+    const primaryStr = paletteObj.primaryTones.map(t => `${t.name} (${t.hex}${t.role ? ` - ${t.role}` : ''})`).join(', ');
+    const accentStr = paletteObj.accentTones.map(t => `${t.name} (${t.hex}${t.role ? ` - ${t.role}` : ''})`).join(', ');
 
-    // Format accents
-    const accentStr = paletteObj.accentTones.length > 0
-        ? paletteObj.accentTones.map(t => `${t.name} (${t.hex}${t.role ? ` - ${t.role}` : ''})`).join(', ')
-        : 'Electric Cyan (#06B6D4), Pale Gold (#FDE047)';
-
-    // Shadow & highlight directives
-    const shadowDesc = `${paletteObj.shadowProfile.tone} (${paletteObj.shadowProfile.temperature} temperature, ${paletteObj.shadowProfile.hex || 'deep tone'})`;
-    const highlightDesc = `${paletteObj.highlightProfile.tone} (${paletteObj.highlightProfile.temperature} temperature, ${paletteObj.highlightProfile.hex || 'luminous tone'})`;
+    // Shadow & highlight directives, in the palette's own words
+    const describe = (p: ShadowHighlightProfile) => `${p.tone} (${p.temperature} temperature${p.hex ? `, ${p.hex}` : ''})`;
+    const shadowDesc = describe(paletteObj.shadowProfile);
+    const highlightDesc = describe(paletteObj.highlightProfile);
 
     // Skin tones rule
     const skinToneRule = options.preserveSkinTones
@@ -227,15 +236,20 @@ export function buildApplyPalettePrompt(options: ApplyPaletteOptions): string {
         ? ` Apply a saturation scaling factor of ${options.saturationMultiplier.toFixed(2)}x to the transferred color grade.`
         : '';
 
-    // Contrast directive
+    // Contrast directive: written-out wording for the named curves, the caller's own words otherwise, none when unset
     const contrastDirectives: Record<string, string> = {
         cinematic: 'Apply cinematic contrast curve with soft highlight rolloff and rich deep blacks.',
         natural: 'Apply natural linear contrast with unclipped highlights and true midtone fidelity.',
         'high-contrast': 'Apply dramatic high-contrast grading with sharp delineation between light and shadow.',
         muted: 'Apply low-contrast muted grading with lifted shadows and soft filmic pastel midtones.'
     };
-    const contrastStr = contrastDirectives[contrastCurve] || contrastDirectives.cinematic;
+    const contrastStr = contrastCurve
+        ? ` ${Object.prototype.hasOwnProperty.call(contrastDirectives, contrastCurve) ? contrastDirectives[contrastCurve] : `Apply ${contrastCurve} contrast grading.`}`
+        : '';
 
+    const canvas = options.aspectRatio
+        ? `Canvas Aspect Ratio: Strictly maintain ${options.aspectRatio}.`
+        : 'Canvas Aspect Ratio: Keep the target image\'s own aspect ratio.';
     const custom = options.customInstructions ? ` ${options.customInstructions.trim()}` : '';
 
     return [
@@ -249,8 +263,8 @@ export function buildApplyPalettePrompt(options: ApplyPaletteOptions): string {
         `- Accent & Specular Tones: Map ${accentStr} strictly to key focal accents, dynamic specular highlights, and active elements.`,
         `- Shadows: Map dark regions and ambient occlusion to ${shadowDesc}.`,
         `- Highlights: Map direct illumination and illuminated surfaces to ${highlightDesc}.`,
-        `- Atmosphere & Contrast: ${paletteObj.lightingAtmosphere}. ${contrastStr}.${saturationDirective}`,
-        `Canvas Aspect Ratio: Strictly maintain ${aspectRatio}.${skinToneRule}${custom}`,
+        `- Atmosphere & Contrast: ${paletteObj.lightingAtmosphere}.${contrastStr}${saturationDirective}`,
+        `${canvas}${skinToneRule}${custom}`,
         'Harmonized color grading, professional master color grading, clean artifact-free rendering.'
     ].join(' ');
 }
@@ -264,56 +278,39 @@ export function formatPaletteAsMarkdown(palette: ExtractedColorPalette): string 
     lines.push('### 🎨 Extracted Nano Banana Color Palette & Lighting DNA');
     lines.push('');
     lines.push(`**Atmospheric Mood:** ${palette.lightingAtmosphere}`);
-    lines.push(`**Contrast Profile:** \`${palette.contrastProfile || 'cinematic'}\``);
+    if (palette.contrastProfile) lines.push(`**Contrast Profile:** \`${palette.contrastProfile}\``);
     lines.push('');
     lines.push('| Category | Tone Name | HEX Code | Role | Temperature |');
     lines.push('| :--- | :--- | :--- | :--- | :--- |');
 
     for (const tone of palette.primaryTones) {
-        lines.push(`| **Primary Base** | ${tone.name} | \`${tone.hex}\` | ${tone.role || 'Ambient Fill'} | Midtone |`);
+        lines.push(`| **Primary Base** | ${tone.name} | \`${tone.hex}\` | ${tone.role || '—'} | — |`);
     }
     for (const tone of palette.accentTones) {
-        lines.push(`| **Accent** | ${tone.name} | \`${tone.hex}\` | ${tone.role || 'Focal Element'} | Vibrant |`);
+        lines.push(`| **Accent** | ${tone.name} | \`${tone.hex}\` | ${tone.role || '—'} | — |`);
     }
-    lines.push(`| **Shadow Profile** | ${palette.shadowProfile.tone} | \`${palette.shadowProfile.hex || 'N/A'}\` | Shadow / AO | ${palette.shadowProfile.temperature.toUpperCase()} |`);
-    lines.push(`| **Highlight Profile** | ${palette.highlightProfile.tone} | \`${palette.highlightProfile.hex || 'N/A'}\` | Direct Illumination | ${palette.highlightProfile.temperature.toUpperCase()} |`);
+    lines.push(`| **Shadow Profile** | ${palette.shadowProfile.tone} | \`${palette.shadowProfile.hex || '—'}\` | Shadow / AO | ${palette.shadowProfile.temperature} |`);
+    lines.push(`| **Highlight Profile** | ${palette.highlightProfile.tone} | \`${palette.highlightProfile.hex || '—'}\` | Direct Illumination | ${palette.highlightProfile.temperature} |`);
 
     return lines.join('\n');
 }
 
 /**
- * Executes Method 2 end-to-end: compiles Phase 1 extraction and Phase 2 application plans.
+ * Method 2 as a plan: the Phase 1 extraction prompt for the reference, and the Phase 2 application prompt built from
+ * the palette the extraction model actually read (options.extractedPalette). Without that palette there is no plan.
  */
 export function executeTwoStepColorTransfer(options: TwoStepColorTransferOptions): ColorTransferPlan {
+    if (options?.extractedPalette === undefined || options.extractedPalette === null || options.extractedPalette === '') {
+        throw new MissingInputError('executeTwoStepColorTransfer', 'extractedPalette',
+            'run the Phase 1 prompt on the reference image with an image-understanding model and pass its palette; none is made up');
+    }
     const phase1Prompt = buildExtractPalettePrompt({
         referenceImageUrl: options.referenceImage,
         focusArea: options.focusArea
     });
-
-    // Synthesize structured extracted palette
-    const extractedPalette: ExtractedColorPalette = {
-        primaryTones: [
-            { name: 'Cinematic Slate', hex: '#1E293B', role: 'Ambient Environment', percentage: 45 },
-            { name: 'Warm Terracotta', hex: '#D97706', role: 'Architectural Midtone', percentage: 35 }
-        ],
-        accentTones: [
-            { name: 'Luminous Gold', hex: '#F59E0B', role: 'Key Light Reflection', percentage: 12 },
-            { name: 'Electric Azure', hex: '#0284C7', role: 'Specular Rim Accent', percentage: 8 }
-        ],
-        shadowProfile: {
-            tone: 'Deep Prussian Blue shadow hue',
-            temperature: 'cool',
-            hex: '#0F172A'
-        },
-        highlightProfile: {
-            tone: 'Golden amber raking sunlight',
-            temperature: 'warm',
-            hex: '#FEF3C7'
-        },
-        lightingAtmosphere: 'Dusk golden-hour lighting with rich warm sunlight highlights and cool cinematic slate shadows',
-        contrastProfile: options.contrastCurve || 'cinematic',
-        rawSummary: 'Extracted dual-temperature palette with warm amber highlights and cool slate shadows.'
-    };
+    const extractedPalette = typeof options.extractedPalette === 'string'
+        ? parseExtractedPalette(options.extractedPalette)
+        : validateExtractedPalette(options.extractedPalette, 'executeTwoStepColorTransfer');
 
     const phase2Prompt = buildApplyPalettePrompt({
         targetImageUrl: options.targetImage,
@@ -325,20 +322,18 @@ export function executeTwoStepColorTransfer(options: TwoStepColorTransferOptions
         customInstructions: options.customInstructions
     });
 
-    const markdownSwatches = formatPaletteAsMarkdown(extractedPalette);
-
     return {
         success: true,
         phase1ExtractionPrompt: phase1Prompt,
         extractedPalette,
         phase2ApplicationPrompt: phase2Prompt,
-        markdownSwatches,
+        markdownSwatches: formatPaletteAsMarkdown(extractedPalette),
         telemetry: {
             referenceImage: options.referenceImage,
             targetImage: options.targetImage,
-            aspectRatio: options.aspectRatio || '16:9',
+            aspectRatio: options.aspectRatio,
             preserveSkinTones: !!options.preserveSkinTones,
-            contrastCurve: options.contrastCurve || 'cinematic',
+            contrastCurve: options.contrastCurve || extractedPalette.contrastProfile,
             geometryLocked: true,
             globalColorOverride: true,
             timestamp: new Date().toISOString()
@@ -352,59 +347,8 @@ export function executeTwoStepColorTransfer(options: TwoStepColorTransferOptions
 export class NanoBananaColorService {
     static readonly buildExtractPalettePrompt = buildExtractPalettePrompt;
     static readonly parseExtractedPalette = parseExtractedPalette;
+    static readonly validateExtractedPalette = validateExtractedPalette;
     static readonly buildApplyPalettePrompt = buildApplyPalettePrompt;
     static readonly formatPaletteAsMarkdown = formatPaletteAsMarkdown;
     static readonly transferColor = executeTwoStepColorTransfer;
-}
-
-// Helpers
-function normalizeTone(raw: any): ExtractedColorTone {
-    return {
-        name: typeof raw?.name === 'string' ? raw.name : 'Color Tone',
-        hex: typeof raw?.hex === 'string' ? (raw.hex.startsWith('#') ? raw.hex.toUpperCase() : `#${raw.hex.toUpperCase()}`) : '#888888',
-        role: typeof raw?.role === 'string' ? raw.role : undefined,
-        percentage: typeof raw?.percentage === 'number' ? raw.percentage : undefined
-    };
-}
-
-function normalizeShadowHighlight(raw: any, defaultTemp: 'warm' | 'cool' | 'neutral', defaultHex: string): ShadowHighlightProfile {
-    const temp = raw?.temperature === 'warm' || raw?.temperature === 'cool' || raw?.temperature === 'neutral'
-        ? raw.temperature
-        : defaultTemp;
-    const hex = typeof raw?.hex === 'string'
-        ? (raw.hex.startsWith('#') ? raw.hex.toUpperCase() : `#${raw.hex.toUpperCase()}`)
-        : defaultHex;
-    return {
-        tone: typeof raw?.tone === 'string' ? raw.tone : `${temp} tone`,
-        temperature: temp,
-        hex,
-        description: typeof raw?.description === 'string' ? raw.description : undefined
-    };
-}
-
-function createFallbackPalette(summary: string): ExtractedColorPalette {
-    return {
-        primaryTones: [
-            { name: 'Primary Slate', hex: '#334155', role: 'Dominant Background' },
-            { name: 'Warm Sand', hex: '#CBD5E1', role: 'Midtone Fill' }
-        ],
-        accentTones: [
-            { name: 'Vibrant Amber', hex: '#F59E0B', role: 'Specular Accent' }
-        ],
-        shadowProfile: { tone: 'Cool charcoal shadow', temperature: 'cool', hex: '#0F172A' },
-        highlightProfile: { tone: 'Warm ivory highlight', temperature: 'warm', hex: '#FFFBEB' },
-        lightingAtmosphere: 'Natural balanced daylight with soft ambient rolloff',
-        contrastProfile: 'natural',
-        rawSummary: summary
-    };
-}
-
-function extractSentence(text: string, regex: RegExp): string | undefined {
-    const sentences = text.split(/[.\n]+/);
-    for (const s of sentences) {
-        if (regex.test(s) && s.trim().length > 10) {
-            return s.trim();
-        }
-    }
-    return undefined;
 }
