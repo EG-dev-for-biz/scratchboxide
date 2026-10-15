@@ -488,24 +488,7 @@ export class GeminiClient {
     }
 
     /**
-     * Direct non-streaming request to Vertex AI or AI Studio REST endpoint.
-     * Used by lightweight services such as FIM completion and ⌘K quick edit.
-     */
-    async fetchVertexOrAistudio(
-        model: string,
-        contents: unknown[],
-        systemInstruction?: string,
-        generationConfig?: {
-            temperature?: number;
-            maxOutputTokens?: number;
-            stopSequences?: string[];
-        }
-    ): Promise<VertexGenerateContentJson> {
-        return (await this.requestGenerateContent(model, contents, systemInstruction, generationConfig)).json;
-    }
-
-    /**
-     * Non-streaming `generateContent` on the same credential rule as chat: the Vertex service account when one is
+     * Non-streaming `generateContent` (FIM, quick edit, vision estimators) on the same credential rule as chat: the Vertex service account when one is
      * configured, the Gemini API key when there is none or it cannot issue a token (reported in `credentialNote`).
      * A request Vertex answers with an error fails with that error; it is not re-sent with the API key.
      */
