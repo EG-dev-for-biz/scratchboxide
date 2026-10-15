@@ -115,7 +115,7 @@
 
     const tiles = new TilesRenderer();
     const auth = new GoogleCloudAuthPlugin({
-      apiToken: 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4',
+      apiToken: '' /* key removed: this recorded runner page held a committed Map Tiles key; the live runner injects the key at run time */,
       autoRefreshToken: true,
       useRecommendedSettings: false
     });
