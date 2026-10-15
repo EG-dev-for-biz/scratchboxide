@@ -84,62 +84,24 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
             expect(timeline.tracks.some(t => t.type === "audio")).toBe(true);
         });
 
-        it("synthesizes adaptive 3D scene with PBR materials and spatial geometry", () => {
-            const scene = synthesizeAdaptive3DScene("astrophysics", "Exoplanet Transit System", "Deep space planetary orbital system");
-            expect(scene.renderMode).toBe("pbr");
-            expect(scene.environment?.skybox).toBe("deep_space");
-            expect(scene.customMeshes?.length).toBeGreaterThanOrEqual(2);
-            expect(scene.features?.pbrMaterials).toBe(true);
-        });
-
-        it("synthesizes adaptive 3D scenes across diverse domains with 70-20-10 hierarchy", () => {
-            // Technology / Quantum / Robotics
-            const techScene = synthesizeAdaptive3DScene("technology", "Quantum Fusion Reactor", "Magnetic confinement plasma fusion thruster");
-            expect(techScene.renderMode).toBe("pbr");
-            expect(techScene.environment?.skybox).toBe("studio");
-            expect(techScene.features?.cinematic3PointLighting).toBe(true);
-            expect(techScene.customMeshes?.some(m => m.tier === "primary")).toBe(true);
-            expect(techScene.customMeshes?.some(m => m.tier === "secondary")).toBe(true);
-            expect(techScene.customMeshes?.some(m => m.tier === "tertiary")).toBe(true);
-            expect(techScene.customMeshes?.some(m => m.material.preset === "titanium_grade5")).toBe(true);
-
-            // History / Archaeology
-            const histScene = synthesizeAdaptive3DScene("history", "Babylonian Ziggurat Excavation", "Ancient Mesopotamian temple complex ruins");
-            expect(histScene.environment?.skybox).toBe("golden_hour");
-            expect(histScene.customMeshes?.some(m => m.material.preset === "weathered_limestone")).toBe(true);
-
-            // Geology / Terrain
-            const geoScene = synthesizeAdaptive3DScene("geology", "Alpine Glacial Massif", "Matterhorn alpine mountain peak ridge");
-            expect(geoScene.environment?.skybox).toBe("realistic-sky");
-            expect(geoScene.customMeshes?.some(m => m.material.preset === "granite")).toBe(true);
-
-            // Infrastructure
-            const infraScene = synthesizeAdaptive3DScene("infrastructure", "Spanning Viaduct Overpass", "Reinforced concrete highway interchange");
-            expect(infraScene.environment?.skybox).toBe("overcast");
-            expect(infraScene.customMeshes?.some(m => m.material.preset === "weathered_concrete")).toBe(true);
-
-            // Open-Ended Novel Domain
-            const openScene = synthesizeAdaptive3DScene("general", "Brewing Science Fermentation Column", "Bioreactor column with feedback sensors");
-            expect(openScene.sceneType).toBe("adaptive");
-            expect(openScene.customMeshes?.length).toBeGreaterThanOrEqual(3);
-        });
-
-        it("establishes hierarchical scene graph parenting across adaptive domain assemblies", () => {
-            const techScene = synthesizeAdaptive3DScene("technology", "Tokamak Fusion Reactor", "Magnetic confinement torus and core");
-            const primaryTech = techScene.customMeshes?.find(m => m.tier === "primary" && m.id === "tech-primary-chassis");
-            const secondaryTech = techScene.customMeshes?.find(m => m.id === "tech-secondary-ring");
-            const tertiaryTech = techScene.customMeshes?.find(m => m.id === "tech-tertiary-emitter");
-            expect(primaryTech).toBeDefined();
-            expect(secondaryTech?.parentId).toBe(primaryTech?.id);
-            expect(tertiaryTech?.parentId).toBe(primaryTech?.id);
-
-            const geoScene = synthesizeAdaptive3DScene("geology", "Alpine Massif", "Granite buttress and summit horn");
-            const primaryGeo = geoScene.customMeshes?.find(m => m.id === "geo-massif-primary");
-            const secondaryGeo = geoScene.customMeshes?.find(m => m.id === "geo-scree-secondary");
-            const tertiaryGeo = geoScene.customMeshes?.find(m => m.id === "geo-summit-tertiary");
-            expect(primaryGeo).toBeDefined();
-            expect(secondaryGeo?.parentId).toBe(primaryGeo?.id);
-            expect(tertiaryGeo?.parentId).toBe(primaryGeo?.id);
+        it("returns an empty studio scene for any topic: no primitive stand-ins, no generator, no sky picked from words", () => {
+            // Geometry comes only from a tool that builds what was asked; Three.js primitives named after prompt words
+            // (and a skybox picked from them) are what this used to return.
+            for (const [domain, title, prompt] of [
+                ["astrophysics", "Exoplanet Transit System", "Deep space planetary orbital system"],
+                ["technology", "Quantum Fusion Reactor", "Magnetic confinement plasma fusion thruster"],
+                ["history", "Babylonian Ziggurat Excavation", "Ancient Mesopotamian temple complex ruins"],
+                ["botanical", "English Rose Blossom", "a beautiful blooming rose in a garden with petals and foliage"],
+                ["general", "Brewing Fermentation Bioreactor", "industrial fermentation column with cooling jacket and monitoring telemetry"]
+            ]) {
+                const scene = synthesizeAdaptive3DScene(domain, title, prompt);
+                expect(scene.title).toBe(title);
+                expect(scene.customMeshes).toEqual([]);
+                expect(scene.pythonGenerator).toBeUndefined();
+                expect(scene.cppGenerator).toBeUndefined();
+                expect(scene.environment).toEqual({ skybox: "studio", lighting: "studio", ground: false });
+                expect(scene.subtitle).toBe("Nothing has been built in this scene yet.");
+            }
         });
 
         it("enforces Structured Types When Needed over presets in classifySceneContent", () => {
@@ -212,10 +174,9 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
     });
 
     describe("Subsystem 1 & 2: Procedural 3D & Video Timeline Integration", () => {
-        it("synthesizes contextual 3D scene for space prompt", () => {
-            const scene = synthesizeContextual3DScene("Exoplanetary Keplerian orbital mechanics simulation");
-            expect(scene.environment?.skybox).toBe("deep_space");
-            expect(scene.customMeshes?.length).toBeGreaterThanOrEqual(1);
+        it("fails a topic no template or generator builds instead of mounting an empty scene or primitive stand-ins", () => {
+            expect(() => synthesizeContextual3DScene("Exoplanetary Keplerian orbital mechanics simulation"))
+                .toThrow(/^No 3D scene was built for "Exoplanetary Keplerian orbital mechanics simulation"/);
         });
 
         it("synthesizes contextual video tracks for prompt", () => {
@@ -342,64 +303,5 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
             expect(graph.title).toContain("Autonomous Crop");
         });
 
-        it("synthesizes anatomical botanical 3D scene with stem, foliage, calyx, stamen, and radial petals", () => {
-            const flowerScene = synthesizeAdaptive3DScene(
-                "botanical",
-                "English Rose Blossom",
-                "a beautiful blooming rose in a garden with petals and foliage"
-            );
-            expect(flowerScene.customMeshes.length).toBeGreaterThanOrEqual(10); // soil + stem + 2 leaves + calyx + stamen + 6 petals
-            const stem = flowerScene.customMeshes.find(m => m.id === "botanical-stem-primary");
-            expect(stem).toBeDefined();
-            expect(stem?.type).toBe("cylinder");
-
-            const petals = flowerScene.customMeshes.filter(m => m.id.startsWith("botanical-petal-"));
-            expect(petals.length).toBe(6);
-            petals.forEach(p => {
-                expect(p.parentId).toBe("botanical-stem-primary");
-                expect(p.material?.roughness).toBeLessThanOrEqual(0.4);
-            });
-
-            const stamen = flowerScene.customMeshes.find(m => m.id === "botanical-pollen-core");
-            expect(stamen).toBeDefined();
-            expect(stamen?.type).toBe("sphere");
-            expect(stamen?.material?.emissive).toBeDefined();
-        });
-
-        it("synthesizes entity-aware open-ended 3D scene without static 4-primitive fallback", () => {
-            // Vertical bioreactor column
-            const columnScene = synthesizeAdaptive3DScene(
-                "general",
-                "Brewing Fermentation Bioreactor",
-                "industrial fermentation column with cooling jacket and monitoring telemetry"
-            );
-            expect(columnScene.customMeshes.length).toBeGreaterThanOrEqual(4);
-            const columnPrimary = columnScene.customMeshes.find(m => m.id === "adaptive-primary-core");
-            expect(columnPrimary).toBeDefined();
-            expect(columnPrimary?.type).toBe("cylinder");
-            expect(columnPrimary?.name).toContain("Bioreactor Primary Column");
-
-            // Planar chassis
-            const chassisScene = synthesizeAdaptive3DScene(
-                "general",
-                "Autonomous Rover Platform",
-                "heavy duty industrial flatbed chassis platform with telemetry subframe"
-            );
-            const chassisPrimary = chassisScene.customMeshes.find(m => m.id === "adaptive-primary-core");
-            expect(chassisPrimary).toBeDefined();
-            expect(chassisPrimary?.type).toBe("box");
-            expect(chassisPrimary?.name).toContain("Chassis Platform");
-
-            // Spherical sensor orb
-            const orbScene = synthesizeAdaptive3DScene(
-                "general",
-                "Environmental Telemetry Orb",
-                "spherical atmospheric probe sensor core with gimbal ring"
-            );
-            const orbPrimary = orbScene.customMeshes.find(m => m.id === "adaptive-primary-core");
-            expect(orbPrimary).toBeDefined();
-            expect(orbPrimary?.type).toBe("sphere");
-            expect(orbPrimary?.name).toContain("Spherical Core");
-        });
     });
 });

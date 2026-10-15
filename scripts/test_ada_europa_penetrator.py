@@ -230,23 +230,17 @@ def create_europa_penetrator_contract():
             {
                 "id": "fastener_ring_bow",
                 "distributionMode": "POLAR_RING",
-                "guidePoints": [[0.0, 0.0, 2.10], [0.0, 0.0, 1.0]],
+                "guidePoints": [[0.0, 0.0, 2.10], [0.0, 0.0, 1.0], [0.015, 0.0, 2.10]],
                 "pitchMeters": 0.07,
-                "seedGeometry": {
-                    "shape": "CYLINDRICAL_FASTENER",
-                    "dimensions": [0.015, 0.012, 0.006]
-                }
+                "seedGeometry": sb.create_cylinder(radius=0.015, height=0.006, segments=12)
             },
             # Midship Bulkhead Fastener Ring
             {
                 "id": "fastener_ring_mid",
                 "distributionMode": "POLAR_RING",
-                "guidePoints": [[0.0, 0.12, 0.45], [0.0, 0.0, 1.0]],
+                "guidePoints": [[0.0, 0.12, 0.45], [0.0, 0.0, 1.0], [0.018, 0.12, 0.45]],
                 "pitchMeters": 0.08,
-                "seedGeometry": {
-                    "shape": "CYLINDRICAL_FASTENER",
-                    "dimensions": [0.018, 0.014, 0.007]
-                }
+                "seedGeometry": sb.create_cylinder(radius=0.018, height=0.007, segments=12)
             },
             # Hydrothermal Sampling Louver Array - Port Flank
             {
@@ -254,11 +248,7 @@ def create_europa_penetrator_contract():
                 "distributionMode": "CURVE_1D",
                 "guidePoints": [[-1.25, 0.25, -0.40], [-1.25, 0.25, 0.40]],
                 "pitchMeters": 0.06,
-                "seedGeometry": {
-                    "shape": "ANGLED_LOUVER_VANE",
-                    "dimensions": [0.04, 0.006, 0.22],
-                    "tiltAngleDeg": 40.0
-                }
+                "seedGeometry": sb.create_beveled_box((0.04, 0.006, 0.22), bevel=0.002).rotate_x(40.0)
             },
             # Hydrothermal Sampling Louver Array - Starboard Flank
             {
@@ -266,11 +256,7 @@ def create_europa_penetrator_contract():
                 "distributionMode": "CURVE_1D",
                 "guidePoints": [[1.25, 0.25, -0.40], [1.25, 0.25, 0.40]],
                 "pitchMeters": 0.06,
-                "seedGeometry": {
-                    "shape": "ANGLED_LOUVER_VANE",
-                    "dimensions": [0.04, 0.006, 0.22],
-                    "tiltAngleDeg": -40.0
-                }
+                "seedGeometry": sb.create_beveled_box((0.04, 0.006, 0.22), bevel=0.002).rotate_x(-40.0)
             },
             # Ice Anchor Gripper Carbide Teeth - Fore Port Pad
             {
@@ -278,10 +264,7 @@ def create_europa_penetrator_contract():
                 "distributionMode": "CURVE_1D",
                 "guidePoints": [[-1.55, -0.92, 2.15], [-1.65, -0.92, 2.45]],
                 "pitchMeters": 0.04,
-                "seedGeometry": {
-                    "shape": "TRIANGULAR_TOOTH",
-                    "dimensions": [0.018, 0.025, 0.018]
-                }
+                "seedGeometry": sb.create_cone(0.018, 0.025, segments=8)
             },
             # Ice Anchor Gripper Carbide Teeth - Fore Starboard Pad
             {
@@ -289,10 +272,7 @@ def create_europa_penetrator_contract():
                 "distributionMode": "CURVE_1D",
                 "guidePoints": [[1.55, -0.92, 2.15], [1.65, -0.92, 2.45]],
                 "pitchMeters": 0.04,
-                "seedGeometry": {
-                    "shape": "TRIANGULAR_TOOTH",
-                    "dimensions": [0.018, 0.025, 0.018]
-                }
+                "seedGeometry": sb.create_cone(0.018, 0.025, segments=8)
             }
         ],
 

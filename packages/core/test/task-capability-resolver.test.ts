@@ -41,21 +41,38 @@ describe('TaskCapabilityResolver', () => {
     });
 
     describe('Native resolution', () => {
-        it('resolves procedural 3D terrain natively via C++20 Scratchbox Engine', () => {
+        it('resolves general 3D natively and leaves the choice of 3D tool to the agent', () => {
             const res = TaskCapabilityResolver.resolveTaskCapability(
                 'Create a procedural mountain terrain with FastNoise3D and Marching Cubes SDFs'
             );
 
             expect(res.canSolveNatively).toBe(true);
             expect(res.tier1Assessment.canSolveNatively).toBe(true);
-            expect(res.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
+            expect(res.tier1Assessment.primaryNativeEngine).toBe('python-3d-engine');
             expect(res.tier1Assessment.nativeCapabilitiesUsed).toEqual(
                 expect.arrayContaining([
-                    expect.stringContaining('Scratchbox C++20 3D Engine'),
-                    expect.stringContaining('NativeCppCompilerService')
+                    expect.stringContaining('google_3d_tiles_get_clay'),
+                    expect.stringContaining('build_3d_object_from_reference'),
+                    expect.stringContaining('execute_3d_python_script')
                 ])
             );
-            expect(res.tier1Assessment.suggestedNativeAction?.primitiveType).toBe('3d-scene');
+            // No steering: the old suggestion named a C++ agent that the agent cannot call.
+            expect(res.tier1Assessment.suggestedNativeAction).toBeUndefined();
+        });
+
+        it('never points at tools that do not exist (generate_image, LongRunning3DGeneratorAgent)', () => {
+            for (const prompt of [
+                'build a 3d model of a vintage brass telescope on a tripod',
+                'use nano banana to make a 3d object of a teapot',
+                'make me a hand-carved wooden chess knight',
+                'an abstract sculpture of intertwined ribbons'
+            ]) {
+                const res = TaskCapabilityResolver.resolveTaskCapability(prompt);
+                const action = JSON.stringify(res.suggestedNativeAction ?? {});
+                expect(action).not.toContain('generate_image');
+                expect(action).not.toContain('LongRunning3DGeneratorAgent');
+                expect(action).not.toContain('generate_local_sf3d_organic_prop');
+            }
         });
 
         it('resolves VFX plate matchmoving and solar ephemeris natively via VfxPlateMatchmoveService', () => {
@@ -108,7 +125,7 @@ describe('TaskCapabilityResolver', () => {
 
             expect(res.canSolveNatively).toBe(true);
             expect(res.tier1Assessment.canSolveNatively).toBe(true);
-            expect(res.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
+            expect(res.tier1Assessment.primaryNativeEngine).toBe('python-3d-engine');
         });
 
         it('resolves procedural buildings and architecture via Python 3D engine (Blender mental model)', () => {

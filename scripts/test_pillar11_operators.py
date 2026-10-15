@@ -80,7 +80,7 @@ def test_pillar11_operators():
         distribution_mode="POLAR_RING",
         guide_points=[(0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 0.2, 0.0)],
         pitch_meters=0.08,
-        seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": [0.015, 0.01, 0.005]}
+        seed_geometry=sb.create_cylinder(radius=0.015, height=0.005)
     )
     print(f"  [3A] Polar Fastener Ring: {fastener_ring.vertex_count} vertices, {fastener_ring.triangle_count} tris")
     assert fastener_ring.vertex_count > 0
@@ -90,7 +90,7 @@ def test_pillar11_operators():
         distribution_mode="CURVE_1D",
         guide_points=[(0.0, 0.0, 0.0), (0.0, 0.4, 0.0)],
         pitch_meters=0.05,
-        seed_geometry={"shape": "ANGLED_LOUVER_VANE", "dimensions": [0.25, 0.008, 0.04], "tiltAngleDeg": 35.0}
+        seed_geometry=sb.create_beveled_box((0.25, 0.008, 0.04), bevel=0.002).rotate_x(35.0)
     )
     print(f"  [3B] Louver Bay Replicator: {louver_bay.vertex_count} vertices, {louver_bay.triangle_count} tris")
     assert louver_bay.vertex_count > 0
@@ -153,7 +153,7 @@ def test_pillar11_operators():
                 "distributionMode": "POLAR_RING",
                 "guidePoints": [(0.0, 0.3, 1.55), (0.0, 0.0, 1.0), (0.0, 0.48, 1.55)],
                 "pitchMeters": 0.06,
-                "seedGeometry": {"shape": "CYLINDRICAL_FASTENER", "dimensions": [0.012, 0.008, 0.004]}
+                "seedGeometry": sb.create_cylinder(radius=0.012, height=0.004)
             }
         ]
     }

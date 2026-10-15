@@ -122,7 +122,7 @@ bolts = sb.replicate_metric_array(
     distribution_mode="POLAR_RING",
     guide_points=[(0.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.15, 0.0, 0.0)],
     pitch_meters=0.157,          # about 6 bolts on a 0.15 m radius
-    seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.012, 0.03)}
+    seed_geometry=sb.create_cylinder(radius=0.012, height=0.03, segments=12)   # any mesh built around the origin
 )
 flange.append(bolts)             # the 3 cm bolts pass through the 2 cm flange
 
@@ -311,7 +311,7 @@ louvers = sb.replicate_metric_array(
     distribution_mode="CURVE_1D",
     guide_points=[(0.0, hood_y, vane_z[0]), (0.0, hood_y, vane_z[-1] + 0.06)],
     pitch_meters=0.06,
-    seed_geometry={"shape": "ANGLED_LOUVER_VANE", "dimensions": (0.4, 0.015, 0.04), "tiltAngleDeg": 20.0}
+    seed_geometry=sb.create_beveled_box((0.4, 0.015, 0.04), bevel=0.002).rotate_x(20.0)   # one tilted vane, copied
 )
 add(louvers, "Hood_Louvers")
 

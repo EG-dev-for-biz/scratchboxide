@@ -77,11 +77,12 @@ scene.add_mesh(box)
         expect(report.passed).toBe(true);
     }, 180_000);
 
-    it('builds replicate_metric_array fasteners at their requested height (not 2 m rods)', async () => {
+    it('builds replicate_metric_array copies at the seed mesh\'s own size (not 2 m rods)', async () => {
         const res = await NativePythonRunnerService.getInstance().runScript(`
 import json, scratchbox as sb
+seed = sb.create_cylinder(radius=0.012, height=0.03)
 bolts = sb.replicate_metric_array(distribution_mode="CURVE_1D", guide_points=[(0, 0, 0), (0.5, 0, 0)], pitch_meters=0.1,
-                                  seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.012, 0.03)})
+                                  seed_geometry=seed)
 b = bolts.bounds
 print(json.dumps({"height": b.max.y - b.min.y}))
 `);

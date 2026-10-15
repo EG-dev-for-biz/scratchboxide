@@ -11,13 +11,13 @@ import { describe, it, expect } from 'vitest';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 
 describe('3D Scene vs Discrete Object Capability Policy', () => {
-    it('resolves 3D scenes, urban blocks, and architectural footprints natively in the C++ engine', () => {
+    it('resolves 3D scenes, urban blocks, and architectural footprints natively, leaving the tool choice to the agent', () => {
         const res = TaskCapabilityResolver.resolveTaskCapability(
             'Remesh noisy Google Maps 3D tile with building footprint vector map and create urban architectural district'
         );
 
         expect(res.tier1Assessment.canSolveNatively).toBe(true);
-        expect(res.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
+        expect(res.tier1Assessment.suggestedNativeAction?.serviceOrTool ?? '').not.toContain('LongRunning3DGeneratorAgent');
     });
 
     it('reports neural image-to-3D prop reconstruction as not natively solvable', () => {

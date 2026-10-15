@@ -157,7 +157,8 @@ export class TaskCapabilityResolver {
 
         const isAnalyticalGroomSplat = /groom|hair\s*strand|fur(?:ry)?(?:\s+(?:creature|star|sphere|monster|animal|surface))?|biophysical\s*(?:hair|groom)|volumetric\s*fur|analytical\s*splat|splat[\s\w-]{0,30}groom|harmonic\s*(?:star|creature)|marschner/i.test(lower);
 
-        const isLocalSf3DOrganicProp = /(?:local\s*)?(?:sf3d|stable[\s-]fast[\s-]3d)|(?:small\s*)?organic\s*(?:prop|object|asset|geometry|mesh)|(?:no[_-]?pbr|clay[\s-]mode)[\s\w-]{0,30}(?:prop|object|organic|sf3d)|(?:mushroom|coral|shell|seashell|fruit|rock|stone\s*pebble|statuette|ornament|biomorphic)[\s\w-]{0,30}(?:from\s+(?:image|photo)|to\s+3d|mesh|local)/i.test(lower);
+        // Neural image-to-3D runs only when the user names it (AGENTS.md); object requests go to the model's own choice.
+        const isLocalSf3DOrganicProp = /\b(?:sf3d|stable[\s-]fast[\s-]3d)\b/i.test(lower);
 
         const isNeuralImageTo3D = !isAnalyticalGroomSplat && !isLocalSf3DOrganicProp && !isSceneOrEnvironment && ((/image-to-3d|photo\s+to\s+3d|picture\s+to\s+mesh|2d\s+to\s+3d|trellis|triposr|sv3d|crm|hunyuan3d/i.test(lower) &&
             !/point\s*correspondence|keypoint|pnp|solvepnp|feature\s*match|optical\s*center|resect/i.test(lower)) ||
@@ -601,21 +602,15 @@ export class TaskCapabilityResolver {
                     details: 'Synthesize procedural Python script using import scratchbox as sb, invoke execute_3d_python_script or mount 3d-scene with pythonGenerator, and stream binary .glb into the Three.js canvas.'
                 };
             } else {
+                // Which 3D tool fits (a place, an object, or a script) is the model's decision under the system
+                // instruction's 3D policy, so nothing is suggested here.
                 canSolveNatively = true;
-                primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('Scratchbox C++20 3D Engine (scratchbox_engine.hpp)');
-                nativeCapabilities.push('NativeCppCompilerService (Apple Clang -std=c++20 -O3)');
-                nativeCapabilities.push('SIMD Vector Math, Signed Distance Fields (SDFs), Marching Cubes');
-                nativeCapabilities.push('FastNoise3D (Perlin, FBM, Worley Cellular)');
+                primaryNativeEngine = 'python-3d-engine';
+                nativeCapabilities.push('Real-world places: google_3d_tiles_get_clay (geocoded, remeshed Google 3D Tiles in studio grey clay)');
+                nativeCapabilities.push('Objects and abstract forms: build_3d_object_from_reference (internal Nano Banana Lite reference, Gemini vision build spec, native Python build in clay)');
+                nativeCapabilities.push('Model-written procedural scripts: execute_3d_python_script (import scratchbox as sb)');
                 nativeCapabilities.push('Binary glTF 2.0 (.glb) streaming to Three.js viewport');
-                nativeCapabilities.push('Google Photorealistic 3D Tiles & Cesium Ingestion');
-                rationale = 'Native Scratchbox C++20 3D engine compiles procedural geometry, terrain biomes, SDFs, and architectural landmarks with Apple Clang, streaming binary .glb chunks into the Three.js viewport.';
-                suggestedNativeAction = {
-                    primitiveType: '3d-scene',
-                    serviceOrTool: 'NativeCppCompilerService & LongRunning3DGeneratorAgent',
-                    targetService: 'NativeCppCompilerService',
-                    details: 'Synthesize world_generator.cpp, compile via Clang, and stream binary .glb into 3d-scene primitive.'
-                };
+                rationale = 'Native 3D tools cover places, objects and scripts; the agent picks the one the request calls for.';
             }
         } else if (domain === 'generative') {
             const isGooglePanoramaOrInpaint = /360\s*panorama|4k\s*panorama|monumental\s*panorama|equirectangular|seam\s*heal|nadir|zenith|polar\s*pinch|panorama_heal_seam|panorama_inpaint|panorama_generate_360|panorama_reproject_zenith|panorama_generate_4k/i.test(lower) ||
@@ -702,17 +697,12 @@ export class TaskCapabilityResolver {
                     details: 'Invoke build_beautify_prompt with locationName, coords, heading, and styleSuffix.'
                 };
             } else {
-                // If standard text-to-image or multimodal reasoning
+                // Text prompts and multimodal understanding; there is no generic image tool to point at, so the
+                // model chooses among the tools it is offered.
                 canSolveNatively = true;
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('Google Gemini 3.8 / 2.5 Multimodal Reasoning');
-                nativeCapabilities.push('Imagen Generative Image Synthesis (generate_image)');
-                rationale = 'Native Google generative models (Gemini & Imagen) can handle standard text prompts, multimodal image understanding, and 2D asset synthesis.';
-                suggestedNativeAction = {
-                    serviceOrTool: 'generate_image or Gemini multimodal analysis',
-                    targetTool: 'generate_image',
-                    details: 'Generate image asset or perform vision analysis natively.'
-                };
+                rationale = 'Native Google models handle text prompts and multimodal image understanding.';
             }
         } else if (domain === 'code') {
             canSolveNatively = true;

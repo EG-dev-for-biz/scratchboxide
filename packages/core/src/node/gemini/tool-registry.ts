@@ -96,9 +96,14 @@ import {
     PBR_MATERIAL_TOOL_DECLARATIONS,
     pbrMaterialHandlers,
     LOCAL_SF3D_TOOL_DECLARATIONS,
+    LOCAL_SF3D_OFFERED_BY_DEFAULT,
     localSf3DHandlers,
     TURNAROUND_TOOL_DECLARATIONS,
-    turnaroundHandlers
+    turnaroundHandlers,
+    OBJECT_REFERENCE_TOOL_DECLARATIONS,
+    objectReferenceHandlers,
+    SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
+    sbScriptGuideHandlers
 } from './tools';
 
 interface ToolRegistration {
@@ -106,6 +111,12 @@ interface ToolRegistration {
     group: ToolGroup;
     declaration: ToolDeclaration;
     handler: ToolHandler;
+    /** False for tools that run only when a request names them; they stay dispatchable but are not offered by group. */
+    offeredByDefault: boolean;
+}
+
+export interface ToolRegistrationOptions {
+    offeredByDefault?: boolean;
 }
 
 interface GroupPresentation {
@@ -144,6 +155,8 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('archie_')) return `Archie Architecture: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('sb_terrain_')) return `SB-Terrain Engine: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             if (name === 'execute_3d_python_script') return 'Python 3D Engine: Execute Procedural Script';
+            if (name === 'build_3d_object_from_reference') return '3D Object: Build from Internal Reference';
+            if (name === 'read_sb_script_guide') return 'Python 3D Engine: Read Script Guide';
             return `Workspace Action: ${name}`;
         },
         cardTitle: (name, _status) => {
@@ -151,6 +164,8 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'ask_user_question') return 'User: Clarify Choice';
             if (name === 'present_execution_plan') return 'Plan: Review & Confirm';
             if (name === 'execute_3d_python_script') return 'Python 3D: Execute Script';
+            if (name === 'build_3d_object_from_reference') return '3D Object: Build';
+            if (name === 'read_sb_script_guide') return 'Python 3D: Script Guide';
             if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR';
             if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -171,6 +186,8 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'ask_user_question') return 'Ask user clarifying question with structured choices';
             if (name === 'present_execution_plan') return 'Present execution plan card for confirmation';
             if (name === 'execute_3d_python_script') return 'Execute procedural 3D Python script with Scratchbox C++20 engine';
+            if (name === 'build_3d_object_from_reference') return 'Draw an internal reference, read it into a build spec and build the object natively in clay';
+            if (name === 'read_sb_script_guide') return 'Read the rules for writing an sb Python script';
             if (name.startsWith('location_')) return `Synthesize real-world location 3D Gaussian Splats: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return 'Recolor 3D tile GLB with material segmentation and PBR normal/roughness synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -324,8 +341,8 @@ export class ToolRegistry {
     private readonly tools = new Map<string, ToolRegistration>();
     private fallback?: ToolFallbackHandler;
 
-    register(name: string, declaration: ToolDeclaration, handler: ToolHandler, group: ToolGroup = inferToolGroup(name)): this {
-        this.tools.set(name, { name, group, declaration: { ...declaration, name }, handler });
+    register(name: string, declaration: ToolDeclaration, handler: ToolHandler, group: ToolGroup = inferToolGroup(name), options: ToolRegistrationOptions = {}): this {
+        this.tools.set(name, { name, group, declaration: { ...declaration, name }, handler, offeredByDefault: options.offeredByDefault !== false });
         return this;
     }
 
@@ -350,11 +367,11 @@ export class ToolRegistry {
         return Array.from(this.tools.values()).filter(t => !group || t.group === group).map(t => t.name);
     }
 
-    /** Declarations for the given groups (all groups when omitted), in registration order. */
+    /** Declarations offered by default for the given groups (all groups when omitted), in registration order. */
     declarations(groups?: ToolGroup[]): ToolDeclaration[] {
         const wanted = groups ? new Set(groups) : undefined;
         return Array.from(this.tools.values())
-            .filter(t => !wanted || wanted.has(t.group))
+            .filter(t => t.offeredByDefault && (!wanted || wanted.has(t.group)))
             .map(t => sanitizeToolDeclaration(t.declaration));
     }
 
@@ -653,6 +670,12 @@ export function createDefaultToolRegistry(): ToolRegistry {
     for (const decl of PYTHON_3D_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, python3DHandlers[decl.name], 'workspace');
     }
+    for (const decl of OBJECT_REFERENCE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, objectReferenceHandlers[decl.name], 'workspace');
+    }
+    for (const decl of SB_SCRIPT_GUIDE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, sbScriptGuideHandlers[decl.name], 'workspace');
+    }
     // Declared in DEFAULT_TOOL_DECLARATIONS; without these the agent is offered tools it cannot dispatch.
     for (const decl of IMAGE_TO_PBR_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, imageToPbrHandlers[decl.name], 'workspace');
@@ -661,7 +684,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
         registry.register(decl.name, decl, pbrMaterialHandlers[decl.name], 'workspace');
     }
     for (const decl of LOCAL_SF3D_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, localSf3DHandlers[decl.name], 'workspace');
+        registry.register(decl.name, decl, localSf3DHandlers[decl.name], 'workspace', { offeredByDefault: LOCAL_SF3D_OFFERED_BY_DEFAULT });
     }
     for (const decl of TURNAROUND_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, turnaroundHandlers[decl.name], 'workspace');

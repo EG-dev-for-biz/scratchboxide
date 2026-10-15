@@ -551,14 +551,13 @@ def revolve_harmonic_solid(
     Generates smooth flanges, nozzles, lenses, fluted drills, spiral augers, cooling fins, and cogwheels.
     """
     if not profile_curve or len(profile_curve) < 2:
-        profile_curve = [(0.0, 0.1), (0.2, 0.1), (0.35, 0.06), (0.4, 0.0)]
-        
+        raise ValueError("revolve_harmonic_solid needs profile_curve: at least two (axial, radius) points")
+
     axis_v = sbm.Vec3(axis[0], axis[1], axis[2])
     axis_len = axis_v.length()
     if axis_len < 1e-6:
-        axis_v = sbm.Vec3(0.0, 1.0, 0.0)
-    else:
-        axis_v = axis_v * (1.0 / axis_len)
+        raise ValueError("revolve_harmonic_solid needs a non-zero axis")
+    axis_v = axis_v * (1.0 / axis_len)
         
     anchor_v = sbm.Vec3(anchor_point[0], anchor_point[1], anchor_point[2])
     
@@ -599,72 +598,66 @@ def replicate_metric_array(
     distribution_mode: str = "CURVE_1D",
     guide_points: Optional[List[Tuple[float, float, float]]] = None,
     pitch_meters: float = 0.1,
-    seed_geometry: Optional[Dict[str, Any]] = None,
+    seed_geometry: Any = None,
     color: Tuple[float, float, float, float] = CLAY_BASE
 ) -> Any:
     """
     Operator 3: Affine Metric Replicator (Pillar 11).
-    Replicates micro-geometry seed instances along a 1D curve, polar ring, or 2D grid
-    at continuous metric pitch p.
-    Generates fastener circles, louver bays, debris grilles, gripper teeth, and treads.
+    Copies seed_geometry, any mesh built around the origin, to points at metric pitch p:
+      CURVE_1D    along the polyline guide_points
+      POLAR_RING  round the ring given as guide_points = [centre, axis normal, a point on the ring]
+    The seed is arbitrary geometry (a fastener, vane, tooth or anything else), so no shape is named here.
+    color is kept for call compatibility; copies keep the seed's own material.
     """
+    if seed_geometry is None or not hasattr(seed_geometry, "vertex_count"):
+        raise TypeError("replicate_metric_array copies a seed mesh: pass seed_geometry=<sb Mesh built around the origin>")
+    if not guide_points:
+        raise ValueError("replicate_metric_array needs guide_points")
+    if not pitch_meters or pitch_meters <= 0:
+        raise ValueError("replicate_metric_array needs a positive pitch_meters")
     mesh = sbg.Mesh("metric_replicator")
-    if not guide_points or len(guide_points) < 1:
-        return mesh
-        
-    seed = seed_geometry or {}
-    shape = seed.get("shape", "CYLINDRICAL_FASTENER")
-    dims = seed.get("dimensions", (0.01, 0.01, 0.005))
-    tilt_deg = float(seed.get("tiltAngleDeg", 0.0))
-    
+
+    def place_copy(pos):
+        copy = sbg.Mesh("replica")
+        copy.append(seed_geometry)
+        copy.translate(pos.x, pos.y, pos.z)
+        mesh.append(copy)
+
     if distribution_mode == "POLAR_RING":
-        center = guide_points[0]
-        normal = guide_points[1] if len(guide_points) > 1 else (0.0, 0.0, 1.0)
-        radius = float(dims[0]) if len(guide_points) <= 2 else math.dist(center, guide_points[2])
-        if radius < 1e-4:
-            radius = 0.1
-        circumference = 2.0 * math.pi * radius
-        count = max(3, int(round(circumference / max(0.01, pitch_meters))))
-        
-        n_v = sbm.Vec3(normal[0], normal[1], normal[2]).normalized()
-        up = sbm.Vec3(0.0, 1.0, 0.0) if abs(n_v.y) < 0.9 else sbm.Vec3(1.0, 0.0, 0.0)
-        u_v = n_v.cross(up).normalized()
-        v_v = n_v.cross(u_v).normalized()
+        if len(guide_points) < 3:
+            raise ValueError("POLAR_RING needs guide_points = [centre, axis normal, a point on the ring]")
+        center, normal, on_ring = guide_points[0], guide_points[1], guide_points[2]
+        radius = math.dist(center, on_ring)
+        if radius < 1e-6:
+            raise ValueError("POLAR_RING ring point coincides with its centre")
+        n_v = sbm.Vec3(normal[0], normal[1], normal[2])
+        if n_v.length() < 1e-9:
+            raise ValueError("POLAR_RING axis normal has zero length")
+        n_v = n_v.normalized()
         c_v = sbm.Vec3(center[0], center[1], center[2])
-        
+        first = sbm.Vec3(on_ring[0], on_ring[1], on_ring[2]) - c_v
+        u_v = (first - n_v * first.dot(n_v)).normalized()
+        v_v = n_v.cross(u_v).normalized()
+        count = max(1, int(round(2.0 * math.pi * radius / pitch_meters)))
         for i in range(count):
             th = i * 2.0 * math.pi / count
-            pos = c_v + (u_v * (radius * math.cos(th))) + (v_v * (radius * math.sin(th)))
-            fastener = _get_sb().create_cylinder(radius=dims[0], height=dims[2] if len(dims) > 2 else dims[1], segments=12, color=color)
-            fastener.translate(pos.x, pos.y, pos.z)
-            mesh.append(fastener)
-            
+            place_copy(c_v + (u_v * (radius * math.cos(th))) + (v_v * (radius * math.sin(th))))
     elif distribution_mode == "CURVE_1D":
         points = [sbm.Vec3(p[0], p[1], p[2]) for p in guide_points]
+        if len(points) < 2:
+            raise ValueError("CURVE_1D needs at least two guide_points")
         for i in range(len(points) - 1):
             seg_vec = points[i + 1] - points[i]
             seg_len = seg_vec.length()
-            if seg_len < 1e-4:
+            if seg_len < 1e-9:
                 continue
             seg_dir = seg_vec * (1.0 / seg_len)
-            count = max(1, int(round(seg_len / max(0.01, pitch_meters))))
+            count = max(1, int(round(seg_len / pitch_meters)))
             step = seg_len / count
             for j in range(count):
-                pos = points[i] + (seg_dir * (j * step))
-                if shape == "ANGLED_LOUVER_VANE":
-                    vane = _get_sb().create_beveled_box(dims, bevel=0.002, color=color)
-                    vane.rotate_x(tilt_deg)
-                    vane.translate(pos.x, pos.y, pos.z)
-                    mesh.append(vane)
-                elif shape == "TRIANGULAR_TOOTH":
-                    tooth = _get_sb().create_cone(dims[0], dims[1], segments=8, color=color)
-                    tooth.translate(pos.x, pos.y, pos.z)
-                    mesh.append(tooth)
-                else:
-                    rivet = _get_sb().create_cylinder(radius=dims[0], height=dims[1], segments=10, color=color)
-                    rivet.translate(pos.x, pos.y, pos.z)
-                    mesh.append(rivet)
-                    
+                place_copy(points[i] + (seg_dir * (j * step)))
+    else:
+        raise ValueError("distribution_mode must be CURVE_1D or POLAR_RING, not %r" % (distribution_mode,))
     return mesh
 
 
@@ -854,11 +847,18 @@ class AdaptiveHeroObjectSynthesizer:
             master_mesh.append(rev_mesh)
 
         # Operator 3: Affine Metric Replicators
-        for rep in contract.get("metricReplications", []):
+        for index, rep in enumerate(contract.get("metricReplications", [])):
             mode = str(rep.get("distributionMode", "CURVE_1D"))
             pts = [tuple(p) for p in rep.get("guidePoints", [])]
             pitch = float(rep.get("pitchMeters", 0.1))
-            seed = rep.get("seedGeometry", {})
+            seed = rep.get("seedGeometry")
+            if not hasattr(seed, "vertex_count"):
+                # A contract from JSON can only name a seed shape, and named seed shapes are no longer built.
+                raise ValueError(
+                    f"AdaptiveHeroObjectSynthesizer cannot build metricReplications[{index}]: its seedGeometry {seed!r} "
+                    "is not a mesh, and named seed shapes are no longer built (replicate_metric_array copies a seed mesh). "
+                    "Build objects with sb.object_spec.build instead."
+                )
             col = tuple(rep.get("colorRgba", CLAY_BASE))
             rep_mesh = replicate_metric_array(
                 distribution_mode=mode,

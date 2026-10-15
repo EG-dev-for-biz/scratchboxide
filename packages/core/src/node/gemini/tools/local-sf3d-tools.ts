@@ -22,10 +22,17 @@ function asNumber(val: unknown, fallback?: number): number | undefined {
     return typeof val === 'number' && !isNaN(val) ? val : fallback;
 }
 
+/**
+ * Neural image-to-3D (Stable Fast 3D) runs only when the user asks for SF3D by name on an image they supply
+ * (AGENTS.md: no neural reconstruction unless asked). It is registered but not offered by default; the capability
+ * resolver adds it to a request that names it. Objects asked for in words go to build_3d_object_from_reference.
+ */
+export const LOCAL_SF3D_OFFERED_BY_DEFAULT = false;
+
 export const LOCAL_SF3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'generate_local_sf3d_organic_prop',
-        description: 'Generate high-speed, 100% local 3D organic props and small objects (mushrooms, coral, fruits, rocks, shells, bones, statuettes, ornaments, biomorphic flora) from a single 2D image using local Stable Fast 3D (SF3D) with no_pbr geometry extraction. Runs locally on desktop (Apple Silicon Metal/MPS, CUDA, or CPU) in < 500ms, bypassing texture baking for pure 18% Studio Grey Clay geometry with metric scale grounding and flat contact planes.',
+        description: 'Reconstruct a mesh from an image file the user supplies with local Stable Fast 3D (SF3D), in no_pbr clay mode, on Apple Silicon MPS, CUDA or CPU. Use it only when the user explicitly asks for SF3D / Stable Fast 3D on their own image; never to build an object described in words (use build_3d_object_from_reference) and never as a substitute when another tool fails.',
         parameters: {
             type: 'OBJECT',
             properties: {

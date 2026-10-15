@@ -1427,6 +1427,9 @@ class _ValidationModule:
 
 validation = _ValidationModule()
 
+# Build specs read from reference images (build_3d_object_from_reference): sb.object_spec.build(spec) -> Scene
+from . import object_spec
+
 __all__ = [
     "AdaptiveHeroObjectSynthesizer",
     "create_panelized_loft",

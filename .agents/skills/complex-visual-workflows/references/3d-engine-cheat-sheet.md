@@ -54,7 +54,7 @@ spine = sb.sweep_curve_profile(path=spine_path, profile_dimensions=(0.12, 0.12),
 # 3. Operator 3: Affine Metric Replicator (Fasteners, Louvers, Vanes) along the same path.
 # The fasteners are centred on the spine's own path, so they sit inside it by construction.
 spine.append(sb.replicate_metric_array(distribution_mode="CURVE_1D", guide_points=spine_path, pitch_meters=0.18,
-                                       seed_geometry={"shape": "CYLINDRICAL_FASTENER", "dimensions": (0.015, 0.04)}))
+                                       seed_geometry=sb.create_cylinder(radius=0.015, height=0.04, segments=10)))
 add(spine, "chassis_spine", 0.0)
 
 # 4. Operator 2: Harmonic Solid of Revolution (Rims, Flanges, Thrusters)

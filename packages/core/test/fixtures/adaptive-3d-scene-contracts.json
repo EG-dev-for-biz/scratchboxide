@@ -1,0 +1,490 @@
+{
+  "outpost": {
+    "id": "fixture_outpost",
+    "subject": "brutalist arctic outpost in glacial valley with conifer trees",
+    "narrativeContext": "Procedural spatial world synthesized via Adaptive Domain Architecture",
+    "terrain": {
+      "topology": "continuous_heightfield",
+      "peakHeight": 49.33333333333333,
+      "peakPosition": [
+        0,
+        -62
+      ],
+      "sharpnessExponent": 1.5666666666666667,
+      "ridgeCount": 5,
+      "valleyFloorElevation": 0,
+      "screeNoiseAmplitude": 1.2666666666666666,
+      "gridSize": 120,
+      "gridSpacing": 1.25,
+      "snowLineElevation": 4,
+      "rockColor": [
+        0.24,
+        0.25,
+        0.28
+      ],
+      "snowColor": [
+        0.92,
+        0.94,
+        0.98
+      ]
+    },
+    "architecture": {
+      "structures": [
+        {
+          "id": "structure_primary",
+          "name": "Primary Edifice",
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotationYDeg": 0,
+          "dimensions": {
+            "width": 12,
+            "depth": 10,
+            "floorCount": 3,
+            "floorHeight": 3.4
+          },
+          "fenestration": {
+            "bayWidth": 3.2,
+            "windowRecess": 0.35,
+            "sillHeight": 0.85,
+            "headerHeight": 2.85,
+            "mullionProfile": true
+          },
+          "glazing": {
+            "color": [
+              0.18,
+              0.22,
+              0.26
+            ],
+            "roughness": 0.1,
+            "metalness": 0.8,
+            "emissiveColor": [
+              1,
+              0.65,
+              0.2
+            ],
+            "emissiveIntensity": 2.2
+          },
+          "parapet": {
+            "height": 1.2,
+            "copingWidth": 0.35
+          },
+          "rooftopMechanicals": false,
+          "features": []
+        }
+      ]
+    },
+    "botany": {
+      "forestPatches": [
+        {
+          "species": "procedural_conifer",
+          "archetype": "conifer",
+          "density": 26.666666666666664,
+          "elevationMin": 0,
+          "elevationMax": 8,
+          "maxSlopeDeg": 35,
+          "exclusionRadius": 14.399999999999999,
+          "exclusionCenter": [
+            0,
+            0
+          ],
+          "envelopeNormalFactor": 0.85,
+          "foliageColor": [
+            0.22,
+            0.42,
+            0.25
+          ],
+          "biomeStratification": {
+            "canopyRatio": 0.7,
+            "understoryRatio": 0.2,
+            "groundShrubRatio": 0.1
+          }
+        }
+      ]
+    },
+    "relations": [
+      {
+        "subjectId": "plinth",
+        "predicate": "SUPPORTED_BY",
+        "targetId": "terrain",
+        "parameters": {
+          "offsetNormal": 0,
+          "faceAlignment": "ground"
+        }
+      },
+      {
+        "subjectId": "structure_primary",
+        "predicate": "SUPPORTED_BY",
+        "targetId": "plinth",
+        "parameters": {
+          "offsetNormal": 0,
+          "faceAlignment": "top"
+        }
+      }
+    ],
+    "sceneGraph": {
+      "terrain": {
+        "envelope": {
+          "width": 150,
+          "depth": 150
+        },
+        "reliefMeters": 49.33333333333333,
+        "sharpness": 1.5666666666666667
+      },
+      "entities": [
+        {
+          "id": "plinth",
+          "name": "Foundation Plinth",
+          "grammarType": "architectural_edifice",
+          "tier": "primary",
+          "massingDimensions": [
+            18,
+            1.8,
+            16
+          ],
+          "materialProfile": {
+            "roughness": 0.85,
+            "metalness": 0.05,
+            "baseTone": [
+              0.26,
+              0.27,
+              0.3
+            ]
+          }
+        },
+        {
+          "id": "structure_primary",
+          "name": "Primary Edifice",
+          "grammarType": "architectural_edifice",
+          "tier": "primary",
+          "massingDimensions": [
+            12,
+            10.2,
+            10
+          ],
+          "materialProfile": {
+            "roughness": 0.65,
+            "metalness": 0.15,
+            "baseTone": [
+              0.48,
+              0.5,
+              0.53
+            ]
+          }
+        }
+      ],
+      "relations": [
+        {
+          "subjectId": "plinth",
+          "predicate": "SUPPORTED_BY",
+          "targetId": "terrain",
+          "parameters": {
+            "offsetNormal": 0,
+            "faceAlignment": "ground"
+          }
+        },
+        {
+          "subjectId": "structure_primary",
+          "predicate": "SUPPORTED_BY",
+          "targetId": "plinth",
+          "parameters": {
+            "offsetNormal": 0,
+            "faceAlignment": "top"
+          }
+        }
+      ]
+    }
+  },
+  "entourage": {
+    "id": "fixture_outpost_entourage",
+    "subject": "arctic outpost in glacial valley with an engineer surveyor standing at the observation point",
+    "narrativeContext": "Procedural spatial world synthesized via Adaptive Domain Architecture",
+    "terrain": {
+      "topology": "continuous_heightfield",
+      "peakHeight": 49.33333333333333,
+      "peakPosition": [
+        0,
+        -62
+      ],
+      "sharpnessExponent": 1.5666666666666667,
+      "ridgeCount": 5,
+      "valleyFloorElevation": 0,
+      "screeNoiseAmplitude": 1.2666666666666666,
+      "gridSize": 120,
+      "gridSpacing": 1.25,
+      "snowLineElevation": 4,
+      "rockColor": [
+        0.24,
+        0.25,
+        0.28
+      ],
+      "snowColor": [
+        0.92,
+        0.94,
+        0.98
+      ]
+    },
+    "architecture": {
+      "structures": [
+        {
+          "id": "structure_primary",
+          "name": "Primary Edifice",
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotationYDeg": 0,
+          "dimensions": {
+            "width": 12,
+            "depth": 10,
+            "floorCount": 3,
+            "floorHeight": 3.4
+          },
+          "fenestration": {
+            "bayWidth": 3.2,
+            "windowRecess": 0.35,
+            "sillHeight": 0.85,
+            "headerHeight": 2.85,
+            "mullionProfile": true
+          },
+          "glazing": {
+            "color": [
+              0.18,
+              0.22,
+              0.26
+            ],
+            "roughness": 0.1,
+            "metalness": 0.8,
+            "emissiveColor": [
+              1,
+              0.65,
+              0.2
+            ],
+            "emissiveIntensity": 2.2
+          },
+          "parapet": {
+            "height": 1.2,
+            "copingWidth": 0.35
+          },
+          "rooftopMechanicals": false,
+          "features": []
+        }
+      ]
+    },
+    "botany": {
+      "forestPatches": [
+        {
+          "species": "procedural_conifer",
+          "archetype": "conifer",
+          "density": 16,
+          "elevationMin": 0,
+          "elevationMax": 8,
+          "maxSlopeDeg": 35,
+          "exclusionRadius": 14.399999999999999,
+          "exclusionCenter": [
+            0,
+            0
+          ],
+          "envelopeNormalFactor": 0.85,
+          "foliageColor": [
+            0.22,
+            0.42,
+            0.25
+          ],
+          "biomeStratification": {
+            "canopyRatio": 0.7,
+            "understoryRatio": 0.2,
+            "groundShrubRatio": 0.1
+          }
+        }
+      ]
+    },
+    "relations": [
+      {
+        "subjectId": "plinth",
+        "predicate": "SUPPORTED_BY",
+        "targetId": "terrain",
+        "parameters": {
+          "offsetNormal": 0,
+          "faceAlignment": "ground"
+        }
+      },
+      {
+        "subjectId": "structure_primary",
+        "predicate": "SUPPORTED_BY",
+        "targetId": "plinth",
+        "parameters": {
+          "offsetNormal": 0,
+          "faceAlignment": "top"
+        }
+      },
+      {
+        "subjectId": "character_entourage_0",
+        "predicate": "SUPPORTED_BY",
+        "targetId": "plinth",
+        "parameters": {
+          "faceAlignment": "top",
+          "clearanceMeters": 0
+        }
+      }
+    ],
+    "sceneGraph": {
+      "terrain": {
+        "envelope": {
+          "width": 150,
+          "depth": 150
+        },
+        "reliefMeters": 49.33333333333333,
+        "sharpness": 1.5666666666666667
+      },
+      "entities": [
+        {
+          "id": "plinth",
+          "name": "Foundation Plinth",
+          "grammarType": "architectural_edifice",
+          "tier": "primary",
+          "massingDimensions": [
+            18,
+            1.8,
+            16
+          ],
+          "materialProfile": {
+            "roughness": 0.85,
+            "metalness": 0.05,
+            "baseTone": [
+              0.26,
+              0.27,
+              0.3
+            ]
+          }
+        },
+        {
+          "id": "structure_primary",
+          "name": "Primary Edifice",
+          "grammarType": "architectural_edifice",
+          "tier": "primary",
+          "massingDimensions": [
+            12,
+            10.2,
+            10
+          ],
+          "materialProfile": {
+            "roughness": 0.65,
+            "metalness": 0.15,
+            "baseTone": [
+              0.48,
+              0.5,
+              0.53
+            ]
+          }
+        },
+        {
+          "id": "character_entourage_0",
+          "name": "Scale Entourage Figure",
+          "grammarType": "kinetic_articulation",
+          "tier": "tertiary",
+          "massingDimensions": [
+            0.55,
+            1.76,
+            0.35
+          ],
+          "materialProfile": {
+            "roughness": 0.85,
+            "metalness": 0,
+            "baseTone": [
+              0.55,
+              0.57,
+              0.6
+            ]
+          }
+        }
+      ],
+      "relations": [
+        {
+          "subjectId": "plinth",
+          "predicate": "SUPPORTED_BY",
+          "targetId": "terrain",
+          "parameters": {
+            "offsetNormal": 0,
+            "faceAlignment": "ground"
+          }
+        },
+        {
+          "subjectId": "structure_primary",
+          "predicate": "SUPPORTED_BY",
+          "targetId": "plinth",
+          "parameters": {
+            "offsetNormal": 0,
+            "faceAlignment": "top"
+          }
+        },
+        {
+          "subjectId": "character_entourage_0",
+          "predicate": "SUPPORTED_BY",
+          "targetId": "plinth",
+          "parameters": {
+            "faceAlignment": "top",
+            "clearanceMeters": 0
+          }
+        }
+      ]
+    },
+    "characters": [
+      {
+        "id": "character_entourage_0",
+        "name": "Scale Entourage Figure",
+        "role": "engineer",
+        "targetHeightMeters": 1.76,
+        "genderBeta": 0,
+        "poseArchetype": "standing_survey",
+        "position": [
+          5.04,
+          0,
+          6.7
+        ],
+        "facingAngleDeg": -25,
+        "groundOffsetMeters": 0,
+        "clayMaterial": {
+          "roughness": 0.85,
+          "metalness": 0,
+          "color": [
+            0.55,
+            0.57,
+            0.6
+          ]
+        }
+      }
+    ],
+    "entourage": {
+      "characters": [
+        {
+          "id": "character_entourage_0",
+          "name": "Scale Entourage Figure",
+          "role": "engineer",
+          "targetHeightMeters": 1.76,
+          "genderBeta": 0,
+          "poseArchetype": "standing_survey",
+          "position": [
+            5.04,
+            0,
+            6.7
+          ],
+          "facingAngleDeg": -25,
+          "groundOffsetMeters": 0,
+          "clayMaterial": {
+            "roughness": 0.85,
+            "metalness": 0,
+            "color": [
+              0.55,
+              0.57,
+              0.6
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

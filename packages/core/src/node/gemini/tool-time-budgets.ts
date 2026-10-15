@@ -39,6 +39,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     google_3d_tiles_clay_blockout_runner: { maxMs: 60 * MIN },
     // With a location it ingests 3D Tiles (above) before running the script.
     execute_3d_python_script: { maxMs: 45 * MIN },
+    // Image, vision and native build calls with up to two revision passes; with a location it first stages on 3D
+    // Tiles (above), which can go a long time between progress reports.
+    build_3d_object_from_reference: { maxMs: 50 * MIN },
     // The first call compiles the native binary (up to 10 min) before the run (up to 5 min).
     tile_refine: { maxMs: 16 * MIN },
     // Several serial image-model calls each.

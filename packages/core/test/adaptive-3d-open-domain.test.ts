@@ -50,86 +50,25 @@ describe('Adaptive Domain Architecture (ADA) - Open-Domain 3D Scene Synthesis', 
             expect(scene.cppGenerator?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
         });
 
-        it('synthesizes open-domain subterranean architectural structure', () => {
-            const prompt = 'Subterranean hyperloop terminal with ferroconcrete caissons and vacuum transit tubes';
-            const scene = synthesizeContextual3DScene(prompt);
-
-            expect(scene).toBeDefined();
-            expect(scene.title).toMatch(/Subterranean|Hyperloop|Terminal/i);
-            expect(scene.customMeshes).toBeDefined();
-            expect(scene.customMeshes!.length).toBeGreaterThanOrEqual(3);
-            expect(scene.customMeshes!.some(m => m.tier === 'primary')).toBe(true);
-            expect(scene.customMeshes!.some(m => m.tier === 'secondary')).toBe(true);
-
-            // Biophysical PBR materials
-            const hasPbr = scene.customMeshes!.some(m => typeof m.material?.roughness === 'number' && typeof m.material?.metalness === 'number');
-            expect(hasPbr).toBe(true);
+        it('fails prompts no template or generator builds, never mounting an empty scene or primitive stand-ins named after their words', () => {
+            for (const prompt of [
+                'Subterranean hyperloop terminal with ferroconcrete caissons and vacuum transit tubes',
+                'Quantum computing cryogenic dilution refrigerator with gold-plated thermal stages',
+                'rocketship',
+                '3d scene of a karate dojo'
+            ]) {
+                let error: any;
+                try {
+                    synthesizeContextual3DScene(prompt);
+                } catch (err) {
+                    error = err;
+                }
+                expect(error?.name, prompt).toBe('NoSceneBuiltError');
+                expect(error.code).toBe('NO_SCENE_BUILT');
+                expect(error.message).toContain(`No 3D scene was built for "${prompt}"`);
+            }
         });
 
-        it('synthesizes open-domain quantum technology apparatus', () => {
-            const prompt = 'Quantum computing cryogenic dilution refrigerator with gold-plated thermal stages';
-            const scene = synthesizeContextual3DScene(prompt);
-
-            expect(scene).toBeDefined();
-            expect(scene.title).toMatch(/Quantum|Cryogenic|Refrigerator/i);
-            expect(scene.customMeshes!.length).toBeGreaterThanOrEqual(3);
-            
-            // Material cues check: gold-plated thermal stages mapped to high metalness / gold preset
-            const goldStage = scene.customMeshes!.find(m => m.name.toLowerCase().includes('stage') || m.name.toLowerCase().includes('gold') || m.name.toLowerCase().includes('torus') || m.name.toLowerCase().includes('flange') || m.name.toLowerCase().includes('gimbal'));
-            expect(goldStage).toBeDefined();
-        });
-
-        it('synthesizes aerodynamic rocketship with cylindrical fuselage, payload nosecone, 4 delta fins, and bell nozzle', () => {
-            const prompt = 'rocketship';
-            const scene = synthesizeContextual3DScene(prompt);
-
-            expect(scene).toBeDefined();
-            expect(scene.title).toMatch(/rocketship|rocket/i);
-            expect(scene.customMeshes).toBeDefined();
-            expect(scene.customMeshes!.length).toBeGreaterThanOrEqual(6);
-
-            // 1. Primary Cylindrical Booster Body
-            const body = scene.customMeshes!.find(m => m.tier === 'primary' && m.type === 'cylinder');
-            expect(body).toBeDefined();
-
-            // 2. Conical Nosecone
-            const nosecone = scene.customMeshes!.find(m => m.type === 'cone' && m.name.toLowerCase().includes('nosecone'));
-            expect(nosecone).toBeDefined();
-
-            // 3. Four Symmetrical Stabilizer Delta Fins
-            const fins = scene.customMeshes!.filter(m => m.id.includes('fin') || m.name.toLowerCase().includes('fin'));
-            expect(fins.length).toBe(4);
-
-            // 4. Propulsion Engine Bell Nozzle
-            const nozzle = scene.customMeshes!.find(m => m.id.includes('nozzle') || m.name.toLowerCase().includes('nozzle') || m.name.toLowerCase().includes('engine'));
-            expect(nozzle).toBeDefined();
-            expect(nozzle!.material?.emissiveIntensity).toBeGreaterThan(1.0);
-        });
-
-        it('synthesizes traditional karate dojo with hinoki platform, tatami mat, perimeter pillars, and kamiza wall', () => {
-            const prompt = '3d scene of a karate dojo';
-            const scene = synthesizeContextual3DScene(prompt);
-
-            expect(scene).toBeDefined();
-            expect(scene.title).toMatch(/karate dojo|dojo/i);
-            expect(scene.customMeshes).toBeDefined();
-
-            // 1. Hinoki Platform
-            const platform = scene.customMeshes!.find(m => m.tier === 'primary' && m.name.toLowerCase().includes('platform'));
-            expect(platform).toBeDefined();
-
-            // 2. Tatami Mat
-            const tatami = scene.customMeshes!.find(m => m.name.toLowerCase().includes('tatami'));
-            expect(tatami).toBeDefined();
-
-            // 3. Perimeter Pillars
-            const pillars = scene.customMeshes!.filter(m => m.name.toLowerCase().includes('pillar') || m.name.toLowerCase().includes('column'));
-            expect(pillars.length).toBeGreaterThanOrEqual(4);
-
-            // 4. Kamiza Honor Wall
-            const kamiza = scene.customMeshes!.find(m => m.name.toLowerCase().includes('kamiza'));
-            expect(kamiza).toBeDefined();
-        });
     });
 
     describe('2. Canonical Specialized Archetypes (Selective Routing)', () => {
