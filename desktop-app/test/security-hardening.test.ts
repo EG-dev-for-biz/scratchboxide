@@ -264,14 +264,14 @@ describe('serve_public.js origin / host / path hardening', () => {
         assert.ok(!fs.existsSync(path.resolve(REPO_ROOT, 'public', '../../../tmp/sb_pwn')));
     });
 
-    test('restructure inputGlb outside public/ is rejected', async () => {
+    test('the tile restructure route is gone (the feature was a keyword-driven taxonomy and is deleted)', async () => {
         const res = await rawRequest(port, {
             method: 'POST',
             path: '/api/3d/tiles/restructure',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ inputGlb: '../package.json' })
         });
-        assert.strictEqual(res.status, 400);
+        assert.strictEqual(res.status, 404);
     });
 
     test('404 page escapes the reflected request path', async () => {

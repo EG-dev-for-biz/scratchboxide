@@ -89,7 +89,8 @@ describe('Only model failures are reported as a model being unavailable', () => 
         }).catch(e => e);
         expect(failure).toBeInstanceOf(Error);
         expect(failure).not.toBeInstanceOf(MediaModelUnavailableError);
-        expect(failure.message).toContain('ENOSPC');
+        expect(failure.message).toBe('ENOSPC: no space left on device');
+        expect(failure.mediaError).toBeUndefined(); // not classified as a model error (it would be 'transient')
         expect(asked).toEqual(['veo-a']);
     });
 
