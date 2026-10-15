@@ -21,7 +21,6 @@ import { DEFAULT_ACTIVE_USER_NAME,
 } from '../canvas-types';
 import {
     detectDocumentTheme,
-    generateMotivatedLocationSection,
     generateMotivatedEditorialImageSection,
     generateMotivatedVideoSection,
     generateMotivatedSvgSection,
@@ -64,20 +63,31 @@ export { NANO_BANANA_STYLES };
  * What a finished media job writes onto a document section: the generated asset, credited to the model that
  * actually made it (and the requested model when another one in the fallback list answered).
  */
-export function sectionMediaFromJob(job: MediaGenerationJob, assetUrl: string, isVideo: boolean, requestedModel?: string): Partial<MarkdownSection> {
+export function sectionMediaFromJob(job: MediaGenerationJob, assetUrl: string, isVideo: boolean): Partial<MarkdownSection> {
+    // The model the job reports as having answered. Whether it was the requested one is the job's to say (its
+    // result names skipped models and why); nothing is inferred here by comparing model id strings.
     const modelUsed = job.result?.modelUsed || job.modelUsed;
-    const attribution = !modelUsed
-        ? undefined
-        : requestedModel && modelUsed !== requestedModel
-            ? `Generated with ${modelUsed} (requested ${requestedModel}, which did not answer)`
-            : `Generated with ${modelUsed}`;
     return {
         imageUrl: assetUrl,
         thumbnailUrl: assetUrl,
         videoUrl: isVideo ? assetUrl : undefined,
-        attribution,
+        attribution: modelUsed ? `Generated with ${modelUsed}` : undefined,
         mediaError: undefined
     };
+}
+
+/** "37.7749° N, 122.4194° W": hemisphere letters follow the signs of the coordinates. */
+export function formatCoordinates(coordinates: { lat: number; lng: number }): string {
+    const { lat, lng } = coordinates;
+    return `${Math.abs(lat).toFixed(4)}° ${lat < 0 ? 'S' : 'N'}, ${Math.abs(lng).toFixed(4)}° ${lng < 0 ? 'W' : 'E'}`;
+}
+
+/**
+ * A new location section: no place, coordinates, photo or attribution until the user (or the model) gives them.
+ * A stock photo with default coordinates would be presented as the document's location.
+ */
+export function newLocationSection(id: string): MarkdownSection {
+    return { id, type: 'location-image' };
 }
 
 /** What a failed generation writes onto a document section: the error, and no change to its image. */
@@ -748,7 +758,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 intervalMs: 2000,
                 onComplete: done => {
                     handleUpdateSection(section.id, {
-                        ...sectionMediaFromJob(done, client.contentUrl(job.id, wsPath), isVideo, modelPriority[0]),
+                        ...sectionMediaFromJob(done, client.contentUrl(job.id, wsPath), isVideo),
                         stylePreset: styleLabel,
                         visualPrompt: activePrompt
                     });
@@ -798,8 +808,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 break;
             }
             case 'location-image':
-                newSec = generateMotivatedLocationSection(theme, undefined, doc.title);
-                newSec.id = id;
+                newSec = newLocationSection(id);
                 break;
             case 'editorial-image':
             case 'image':
@@ -969,7 +978,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
             } else if (sec.type === 'paragraph') {
                 md += `${sec.content}\n\n`;
             } else if (sec.type === 'location-image') {
-                md += `> 📍 **Location**: ${sec.locationName || 'Location'}${sec.coordinates ? ` (${sec.coordinates.lat}° N, ${sec.coordinates.lng}° W)` : ''}\n`;
+                md += `> 📍 **Location**: ${sec.locationName || 'Location'}${sec.coordinates ? ` (${formatCoordinates(sec.coordinates)})` : ''}\n`;
                 if (sec.imageUrl) md += `> ![](${sec.imageUrl})\n`;
                 if (sec.caption) md += `> _${sec.caption}_\n\n`;
             } else if (sec.type === 'editorial-image' || sec.type === 'image') {
@@ -1363,10 +1372,11 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                     // Only the section's own image: no stock photo or drawn stand-in when it has none or it fails to load.
                     const currentImgUrl = section.imageUrl || section.thumbnailUrl || '';
                     const imageBroken = !!currentImgUrl && brokenMedia[section.id] === currentImgUrl;
-                    const displayTitle = section.locationName || section.imageTitle || 'Geographic Landmark';
+                    // Labels come from the section's own fields; an unnamed location says so instead of borrowing a category.
+                    const displayTitle = section.locationName || section.imageTitle || 'Untitled location';
                     const displayCaption = section.caption || '';
-                    const displayDateTag = section.dateTag || (section.locationName ? section.locationName.split(',')[0] : 'Historical Landmark');
-                    const displayAttribution = section.attribution || (section.coordinates ? `Historical Landmark • ${section.coordinates.lat.toFixed(4)}° N, ${Math.abs(section.coordinates.lng).toFixed(4)}° W` : 'Historical Landmark');
+                    const displayDateTag = section.dateTag || (section.locationName ? section.locationName.split(',')[0] : undefined);
+                    const displayAttribution = section.attribution || (section.coordinates ? formatCoordinates(section.coordinates) : '');
 
                     return (
                         <figure className="sb-editorial-image-card sb-doc-editorial-image-card sb-doc-location-card group">

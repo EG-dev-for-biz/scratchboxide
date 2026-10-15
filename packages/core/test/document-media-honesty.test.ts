@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MarkdownDocumentPrimitive, SectionMediaNotice, sectionMediaFailure, sectionMediaFromJob } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
+import { MarkdownDocumentPrimitive, SectionMediaNotice, formatCoordinates, newLocationSection, sectionMediaFailure, sectionMediaFromJob } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
 import { synthesizeContextualNanoBananaPrompt } from '../src/browser/generative-canvas/nano-banana-service';
 import * as nanoBanana from '../src/browser/generative-canvas/nano-banana-service';
 import { generateMotivatedEditorialImageSection, generateMotivatedVideoSection } from '../src/browser/generative-canvas/document-synthesis-engine';
@@ -34,13 +34,14 @@ const job = (modelUsed: string): MediaGenerationJob => ({
 });
 
 describe('document image sections', () => {
-    it('credits a generated image to the model that actually made it', () => {
-        expect(sectionMediaFromJob(job('gemini-3-pro-image'), '/media/job-1', false, 'gemini-3-pro-image')).toEqual({
+    it('credits a generated image to the model that actually made it, and claims no fallback it cannot see', () => {
+        expect(sectionMediaFromJob(job('gemini-3-pro-image'), '/media/job-1', false)).toEqual({
             imageUrl: '/media/job-1', thumbnailUrl: '/media/job-1', videoUrl: undefined,
             attribution: 'Generated with gemini-3-pro-image', mediaError: undefined
         });
-        expect(sectionMediaFromJob(job('gemini-3.1-flash-image'), '/media/job-1', false, 'gemini-3-pro-image').attribution)
-            .toBe('Generated with gemini-3.1-flash-image (requested gemini-3-pro-image, which did not answer)');
+        // A versioned id from the API is the same model; nothing compares it to a requested id string.
+        expect(sectionMediaFromJob(job('gemini-3.1-flash-image-preview'), '/media/job-1', false).attribution)
+            .toBe('Generated with gemini-3.1-flash-image-preview');
     });
 
     it('a failed job records the job\'s error and changes no image', () => {
@@ -76,6 +77,28 @@ describe('document image sections', () => {
         const html = renderToStaticMarkup(React.createElement(MarkdownDocumentPrimitive, { data: docWith({ mediaError: 'Image generation failed: 503 UNAVAILABLE' }) }));
         expect(html).toContain('data-testid="sb-doc-media-error"');
         expect(html).toContain('Image generation failed: 503 UNAVAILABLE');
+    });
+
+    it('a new location section has no place, coordinates, photo or credit until someone gives them', () => {
+        const sec = newLocationSection('loc-1');
+        expect(sec).toEqual({ id: 'loc-1', type: 'location-image' });
+        const html = renderToStaticMarkup(React.createElement(MarkdownDocumentPrimitive, { data: { title: 'Quarterly Revenue Review', sections: [sec] } }));
+        expect(html).toContain('data-testid="sb-doc-media-missing"');
+        expect(html).toContain('Untitled location');
+        expect(html).not.toContain('unsplash');
+        expect(html).not.toContain('San Francisco');
+        expect(html).not.toContain('Historical Landmark');
+        expect(html).not.toMatch(/<img[^>]+sb-location-image-element/);
+    });
+
+    it('location coordinates name the hemisphere their sign puts them in', () => {
+        expect(formatCoordinates({ lat: 37.7749, lng: -122.4194 })).toBe('37.7749° N, 122.4194° W');
+        expect(formatCoordinates({ lat: -33.8568, lng: 151.2153 })).toBe('33.8568° S, 151.2153° E');
+        const html = renderToStaticMarkup(React.createElement(MarkdownDocumentPrimitive, {
+            data: { title: 'Trip', sections: [{ id: 'l', type: 'location-image', locationName: 'Sydney Opera House', coordinates: { lat: -33.8568, lng: 151.2153 } } as any] }
+        }));
+        expect(html).toContain('33.8568° S, 151.2153° E');
+        expect(html).not.toContain('Historical Landmark');
     });
 
     it.skipIf(!htmlScreenshotChrome.ok)(withReason('screenshots the failed-generation notice', htmlScreenshotChrome), async () => {

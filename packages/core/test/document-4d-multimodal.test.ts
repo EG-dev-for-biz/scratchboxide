@@ -222,28 +222,12 @@ async function run4DMultimodalDocumentTests() {
         primitiveSource.includes('aria-label={`Zoom location image: ${displayTitle}`}'),
         'Location Zoom control has a descriptive title-specific aria-label'
     );
+    // A location image that is missing or fails to load shows the section's media notice, never a drawn stand-in.
+    assert.ok(!primitiveSource.includes('getLocationFallbackSvg'), 'No drawn location fallback image remains');
     assert.ok(
-        primitiveSource.includes('getLocationFallbackSvg(displayTitle, displayDateTag, displayAttribution, doc.title)'),
-        'Location image failures use the dedicated location fallback helper'
+        primitiveSource.includes('<SectionMediaNotice kind="image" error={section.mediaError}'),
+        'Location cards show the media notice for a missing, failed or unreadable image'
     );
-    assert.ok(primitiveSource.includes('export function getLocationFallbackSvg'), 'Location fallback helper is exported for focused validation');
-    assert.ok(primitiveSource.includes('<tspan'), 'Location fallback wraps long locator titles with SVG tspans');
-    assert.ok(primitiveSource.includes('slice(0, 2)'), 'Location fallback clamps locator titles to two lines');
-    assert.ok(primitiveSource.includes('slice(0, 42)'), 'Location fallback constrains long context labels');
-    assert.ok(primitiveSource.includes('slice(0, 74)'), 'Location fallback constrains long location metadata');
-    const { getLocationFallbackSvg } = await import('../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive');
-    const longFallbackSvg = decodeURIComponent(getLocationFallbackSvg(
-        'Washington Crossing the Delaware at the Historic Pennsylvania River Landing with an Intentionally Long Locator Title',
-        'An intentionally long historical context label that must remain compact and constrained',
-        'Historical Landmark • 40.2968° N, 74.8682° W • Additional archival provenance that must be restrained',
-        'The Pivotal Year: 1776'
-    ));
-    assert.strictEqual((longFallbackSvg.match(/<tspan/g) || []).length, 2, 'Long locator titles are clamped to two wrapped SVG lines');
-    assert.ok(longFallbackSvg.includes('#241b14'), 'Historical location fallback uses the restrained warm historical variant');
-    assert.ok(!longFallbackSvg.includes('intentionally long historical context label that must remain compact and constrained'.toUpperCase()), 'Long context labels are clamped');
-    assert.ok(!longFallbackSvg.includes('Additional archival provenance that must be restrained'), 'Long location metadata is clamped');
-    const infrastructureFallbackSvg = decodeURIComponent(getLocationFallbackSvg('Ashburn Edge PoP', 'Network location', '39.0438° N', 'Zero-trust security'));
-    assert.ok(infrastructureFallbackSvg.includes('#101c26'), 'Infrastructure locations use the restrained cool locator variant');
 
     assert.ok(unifiedCss.includes('.sb-doc-location-card .sb-location-media-frame'), 'Location viewport sizing is scoped to location cards');
     assert.ok(unifiedCss.includes('aspect-ratio: 16 / 9'), 'Location viewport has a stable 16:9 aspect ratio');
