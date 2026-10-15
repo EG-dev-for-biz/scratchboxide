@@ -54,19 +54,22 @@ describe('Adaptive Domain Architecture (ADA) - Open-Domain 3D Scene Synthesis', 
             expect(scene.cppGenerator?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
         });
 
-        it('leaves prompts no generator built as empty studio scenes, never primitive stand-ins named after their words', () => {
+        it('fails prompts no template or generator builds, never mounting an empty scene or primitive stand-ins named after their words', () => {
             for (const prompt of [
                 'Subterranean hyperloop terminal with ferroconcrete caissons and vacuum transit tubes',
                 'Quantum computing cryogenic dilution refrigerator with gold-plated thermal stages',
                 'rocketship',
                 '3d scene of a karate dojo'
             ]) {
-                const scene = synthesizeContextual3DScene(prompt);
-                expect(scene, prompt).toBeDefined();
-                expect(scene.customMeshes ?? [], prompt).toEqual([]);
-                expect(scene.pythonGenerator, prompt).toBeUndefined();
-                expect(scene.cppGenerator, prompt).toBeUndefined();
-                expect(scene.environment?.skybox, prompt).toBe('studio');
+                let error: any;
+                try {
+                    synthesizeContextual3DScene(prompt);
+                } catch (err) {
+                    error = err;
+                }
+                expect(error?.name, prompt).toBe('NoSceneBuiltError');
+                expect(error.code).toBe('NO_SCENE_BUILT');
+                expect(error.message).toContain(`No 3D scene was built for "${prompt}"`);
             }
         });
 

@@ -5,7 +5,7 @@ import {
     synthesizeChatFallback
 } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { detect3DSceneTheme } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
-import type { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
+import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('3D Intent Classification & Vehicle Synthesis', () => {
     it('classifies "build me a 3d car" as 3D request, NOT sandbox or chat', () => {
@@ -66,27 +66,6 @@ describe('3D Intent Classification & Vehicle Synthesis', () => {
         // Verify C++ source attached
         expect(sceneData.cppGenerator?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
         expect(sceneData.cppGenerator?.sourceCode).toContain('ScratchboxMesh vehicle');
-    });
-
-    it('creates a fresh 3D scene when requested even if an existing 3D scene is active', () => {
-        const existingArtifact: CanvasArtifact = {
-            id: 'art-existing-cyberpunk',
-            type: '3d-scene',
-            title: '🪐 Cyberpunk 2088 Motion Teaser',
-            summary: 'Existing cyberpunk scene',
-            version: 1,
-            createdAt: '12:00 PM',
-            data: {
-                title: 'Cyberpunk',
-                customMeshes: [{ id: 'cube', type: 'box', position: [0, 0, 0], scale: [1, 1, 1], material: { color: '#00ffcc' } }]
-            } as Scene3DData
-        };
-
-        const fallback = synthesize3DFallback('build a 3d scene', 'build a 3d scene', existingArtifact, [], undefined);
-        expect(fallback.artifact).toBeDefined();
-        // Crucial: Must have generated a new artifact ID instead of mutating the existing one
-        expect(fallback.artifact?.id).not.toBe('art-existing-cyberpunk');
-        expect(fallback.artifact?.title).not.toContain('Cyberpunk');
     });
 
     it('safety delegates in synthesizeChatFallback if user prompt asks for 3D car', () => {

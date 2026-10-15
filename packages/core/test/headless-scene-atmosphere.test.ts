@@ -25,14 +25,11 @@ describe('Headless Scene Atmosphere Architecture', () => {
         expect(glassScene.environment?.skybox).toBe('studio');
         expect(glassScene.environment?.ground).toBe(false);
 
-        // Robotic arm / lab scene
-        const robotScene = synthesizeContextual3DScene('robotic arm picking up a silicon wafer in a sterile lab');
-        expect(robotScene.features?.atmosphericScattering).toBeUndefined();
-        expect(robotScene.environment?.skybox).not.toBe('realistic-sky');
+        // Robotic arm / lab scene: no template fits, so nothing is built and the step fails (no scene, no atmosphere).
+        expect(() => synthesizeContextual3DScene('robotic arm picking up a silicon wafer in a sterile lab')).toThrow(/^No 3D scene was built/);
 
-        // Physics demo scene
-        const physicsScene = synthesizeContextual3DScene('simulate double pendulum chaotic trajectory');
-        expect(physicsScene.features?.atmosphericScattering).toBeUndefined();
+        // Physics demo scene: likewise not built.
+        expect(() => synthesizeContextual3DScene('simulate double pendulum chaotic trajectory')).toThrow(/^No 3D scene was built/);
     });
 
     it('enables physical atmospheric scattering when explicitly requested headlessly', () => {

@@ -180,12 +180,9 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
     });
 
     describe("Subsystem 1 & 2: Procedural 3D & Video Timeline Integration", () => {
-        it("leaves a topic no template or generator built empty, in the studio, instead of drawing primitive stand-ins", () => {
-            const scene = synthesizeContextual3DScene("Exoplanetary Keplerian orbital mechanics simulation");
-            expect(scene.environment?.skybox).toBe("studio");
-            expect(scene.customMeshes ?? []).toEqual([]);
-            expect(scene.pythonGenerator).toBeUndefined();
-            expect(scene.cppGenerator).toBeUndefined();
+        it("fails a topic no template or generator builds instead of mounting an empty scene or primitive stand-ins", () => {
+            expect(() => synthesizeContextual3DScene("Exoplanetary Keplerian orbital mechanics simulation"))
+                .toThrow(/^No 3D scene was built for "Exoplanetary Keplerian orbital mechanics simulation"/);
         });
 
         it("synthesizes contextual video tracks for prompt", () => {

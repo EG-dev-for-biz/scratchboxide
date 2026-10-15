@@ -13,6 +13,7 @@ import {
     Scene3DData,
     Media4DObject
 } from './canvas-types';
+import { NoSceneBuiltError } from './services/adaptive-domain-engine';
 import {
     classifyDomain,
     synthesizeAdaptive3DScene
@@ -4305,21 +4306,9 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
         };
     }
 
-    // Default General Procedural Spatial Scene - Adaptively Synthesized
-    const generalTitle = prompt.length > 3 ? `3D Scene: ${prompt.slice(0, 50)}` : 'Interactive 3D Spatial Scene';
-    const domain = classifyDomain(prompt);
-    const adaptiveScene = synthesizeAdaptive3DScene(domain, generalTitle, prompt);
-    return {
-        ...adaptiveScene,
-        timeline: {
-            currentTimeMs: 0,
-            durationMs: 15000,
-            isPlaying: true,
-            speed: 1.0,
-            playbackSpeed: 1.0,
-            isLooping: true
-        }
-    };
+    // No template applies, and nothing here builds geometry from words: fail rather than mount an empty scene titled
+    // after the prompt (the morph from a document reaches here too).
+    throw new NoSceneBuiltError(prompt.trim().slice(0, 120) || 'an unnamed scene');
 }
 // =======================================================================
 // Procedural Scene Builders (Zero-Primitive Stubs)

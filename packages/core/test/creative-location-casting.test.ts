@@ -136,7 +136,9 @@ async function runCreativeLocationCastingTests(): Promise<void> {
     {
         // Prompts that name no real-world location stay in the grey clay void (AGENTS.md):
         // the synthesizer never casts them onto an unrelated Earth location.
-        for (const prompt of ['bullet going through glass', 'black background product pedestal with soft spotlight']) {
+        // A prompt no template fits builds nothing and fails (NoSceneBuiltError): there is no scene to anchor.
+        assert.throws(() => synthesizeContextual3DScene('black background product pedestal with soft spotlight'), /^NoSceneBuiltError: No 3D scene was built/);
+        for (const prompt of ['bullet going through glass']) {
             const scene = synthesizeContextual3DScene(prompt);
             assert.strictEqual(scene.geoAnchor, undefined, `"${prompt}" names no place and must not be geo-anchored`);
             // No keyword-picked hero script with invented vertex counts is attached any more.

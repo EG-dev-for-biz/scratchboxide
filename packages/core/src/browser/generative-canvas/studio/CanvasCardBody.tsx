@@ -406,7 +406,7 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
 
 /** Scrollable body of the canvas card: the bento matrix or the single active primitive surface. */
 export const CanvasCardBody: React.FC<ArtifactStageProps> = props => {
-    const { activeArtifact, setActiveArtifact, artifactHistory, activeWorkspace, layoutMode, stageLayoutMode, setStageLayoutMode, handleUpdateArtifact, handleMorphArtifact, handleOpenInAppBrowser, handleSurfaceAiPrompt } = props;
+    const { activeArtifact, setActiveArtifact, artifactHistory, activeWorkspace, layoutMode, stageLayoutMode, setStageLayoutMode, handleUpdateArtifact, handleMorphArtifact, handleOpenInAppBrowser, handleSurfaceAiPrompt, showToast } = props;
     return (
         <div className="sb-document-card-body sb-surface-main-viewport" style={{
             flex: 1,
@@ -432,7 +432,15 @@ export const CanvasCardBody: React.FC<ArtifactStageProps> = props => {
                     }}
                     onUpdateArtifact={handleUpdateArtifact}
                     onMorphArtifact={(artifact, targetType) => {
-                        const morphed = morphArtifact(artifact, targetType);
+                        // A morph that cannot make what was asked (such as a 3D scene from a document no template
+                        // fits) fails with its reason, shown here, instead of opening a stand-in.
+                        let morphed: ReturnType<typeof morphArtifact>;
+                        try {
+                            morphed = morphArtifact(artifact, targetType);
+                        } catch (err) {
+                            showToast(`Could not turn "${artifact.title}" into a ${targetType}: ${err instanceof Error ? err.message : String(err)}`, '⚠️');
+                            return;
+                        }
                         handleMorphArtifact(morphed);
                     }}
                     onPromptAction={promptText => handleSurfaceAiPrompt(promptText)}

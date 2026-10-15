@@ -612,11 +612,25 @@ export function synthesizeAdaptiveVideoTimeline(
 // ============================================================================
 
 /**
- * An empty 3D scene for a topic, in the neutral studio environment: no geometry, no generator and no atmosphere.
- * Geometry comes only from a tool or generator that builds what was asked (build_3d_object_from_reference,
- * execute_3d_python_script, google_3d_tiles_get_clay), never from a template picked by words in the prompt: the
- * primitive stand-ins this used to return (spheres, boxes and cylinders named after prompt words) were drawn as Three.js
- * primitives, and the skyboxes it chose from prompt words were uninvited. The viewport shows an empty scene as such.
+ * Thrown where a 3D scene was asked for from words alone and nothing builds one: the step fails instead of mounting an
+ * empty or template scene in its place. Geometry comes only from a tool that builds what was asked
+ * (build_3d_object_from_reference, execute_3d_python_script, google_3d_tiles_get_clay).
+ */
+export class NoSceneBuiltError extends Error {
+    readonly code = 'NO_SCENE_BUILT';
+    constructor(readonly request: string) {
+        super(`No 3D scene was built for "${request}": nothing here builds geometry from these words, and no empty or template scene stands in for one. Ask for it in chat: build_3d_object_from_reference builds one object or form, execute_3d_python_script builds a scene from a script, and google_3d_tiles_get_clay brings in a real place.`);
+        this.name = 'NoSceneBuiltError';
+    }
+}
+
+/**
+ * An empty 3D scene shell for a topic, in the neutral studio environment: no geometry, no generator and no atmosphere.
+ * It is never a result: its one remaining caller (applyCreativeLocationCasting) only looks in it for a generator to
+ * borrow and finds none, and a step that was asked for a scene it cannot build throws NoSceneBuiltError instead
+ * (synthesizeContextual3DScene does, for a prompt no template matches). The primitive stand-ins this used to return
+ * (spheres, boxes and cylinders named after prompt words) were drawn as Three.js primitives, and the skyboxes it chose
+ * from prompt words were uninvited.
  */
 export function synthesizeAdaptive3DScene(
     domainOrTopic: DomainCategory | string,

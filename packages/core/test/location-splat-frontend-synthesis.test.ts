@@ -104,13 +104,10 @@ describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
         });
 
         it('a named place with no coordinates offline gets no invented anchor or stand-in splat', () => {
-            // Grand Army Plaza is not in the offline registry; it needs online geocoding to be placed.
-            const scene = synthesizeContextual3DScene('Create a gaussian splat of Grand Army Plaza');
-            const data = scene as Scene3DData;
-
-            expect(data.title).toContain('Grand Army Plaza');
-            expect(data.geoAnchor).toBeUndefined();
-            expect(data.splatUrl).toBeUndefined();
+            // Grand Army Plaza is not in the offline registry; it needs online geocoding to be placed. No template scene
+            // stands in: the step fails, so nothing is anchored and no splat is mounted.
+            expect(() => synthesizeContextual3DScene('Create a gaussian splat of Grand Army Plaza'))
+                .toThrow(/^No 3D scene was built for "Create a gaussian splat of Grand Army Plaza"/);
         });
     });
 
