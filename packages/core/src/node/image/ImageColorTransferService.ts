@@ -24,10 +24,8 @@ export interface ImageColorTransferRequest {
      */
     targetImage: string | Buffer;
 
-    /**
-     * Optional contrast curve applied after the transfer: 'cinematic' (S-curve) or 'high-contrast'. None by default.
-     */
-    contrastCurve?: 'natural' | 'cinematic' | 'high-contrast' | 'muted';
+    /** Contrast curve applied to L* after the transfer (see CONTRAST_CURVES); 'natural' (the default) applies none. */
+    contrastCurve?: ContrastCurve;
 
     /**
      * Whether to detect and protect human skin tones from extreme color grading tinting.
@@ -64,12 +62,42 @@ export interface ImageColorTransferResult {
         mode: 'local-cielab';
         preservedGeometry: boolean;
         dimensions: { width: number; height: number };
+        /** The contrast curve applied after the transfer ('natural' = none). */
+        contrastCurve: ContrastCurve;
     };
+}
+
+/**
+ * The contrast curves the transfer can apply to L* (0-100), each a fixed tone curve:
+ * - natural: none (L* as transferred)
+ * - cinematic: S-curve (smoothstep-like) that deepens shadows and lifts highlights
+ * - high-contrast: power 1.25 on normalised L*
+ * - muted: L* pulled 30% of the way toward mid-grey (50), lowering contrast
+ * Any other value is refused rather than ignored.
+ */
+export const CONTRAST_CURVES = ['natural', 'cinematic', 'high-contrast', 'muted'] as const;
+export type ContrastCurve = typeof CONTRAST_CURVES[number];
+
+/** The curve to apply, or a MissingInputError for a value no curve exists for. */
+function resolveContrastCurve(value: unknown): ContrastCurve {
+    if (value === undefined || value === null || value === '') return 'natural';
+    if ((CONTRAST_CURVES as readonly unknown[]).includes(value)) return value as ContrastCurve;
+    throw new MissingInputError('color transfer', 'contrastCurve', `"${String(value)}" is not one of ${CONTRAST_CURVES.join(', ')}`);
+}
+
+function applyContrastCurve(L: number, curve: ContrastCurve): number {
+    const n = Math.max(0, Math.min(100, L)) / 100.0;
+    switch (curve) {
+        case 'cinematic': return (n < 0.5 ? 2 * n * n : 1 - 2 * (1 - n) * (1 - n)) * 100.0;
+        case 'high-contrast': return Math.pow(n, 1.25) * 100.0;
+        case 'muted': return 50 + (n * 100.0 - 50) * 0.7;
+        default: return L;
+    }
 }
 
 export interface LocalCielabOptions {
     preserveSkinTones?: boolean;
-    contrastCurve?: 'natural' | 'cinematic' | 'high-contrast' | 'muted';
+    contrastCurve?: ContrastCurve;
     intensity?: number; // 0.0 (no change) to 1.0 (full transfer), default 1.0
     outputFormat?: 'png' | 'jpg' | 'webp';
 }
@@ -88,12 +116,13 @@ export class ImageColorTransferService {
      */
     static async transferColor(request: ImageColorTransferRequest): Promise<ImageColorTransferResult> {
         const startTime = Date.now();
+        const contrastCurve = resolveContrastCurve(request.contrastCurve);
         const targetBuf = await this.resolveImageBuffer(request.targetImage, 'targetImage');
         const refBuf = await this.resolveImageBuffer(request.referenceImage, 'referenceImage');
 
         const transfer = await this.transferColorLocalCielabWithStats(targetBuf, refBuf, {
             preserveSkinTones: request.preserveSkinTones ?? true,
-            contrastCurve: request.contrastCurve,
+            contrastCurve,
             outputFormat: request.outputFormat || 'jpg'
         });
 
@@ -113,7 +142,8 @@ export class ImageColorTransferService {
                 executionTimeMs: Date.now() - startTime,
                 mode: 'local-cielab',
                 preservedGeometry: true,
-                dimensions: { width: transfer.width, height: transfer.height }
+                dimensions: { width: transfer.width, height: transfer.height },
+                contrastCurve
             }
         };
     }
@@ -135,6 +165,7 @@ export class ImageColorTransferService {
         referenceImage: string | Buffer,
         options: LocalCielabOptions = {}
     ): Promise<{ buffer: Buffer; width: number; height: number; reference: LabStatistics; target: LabStatistics }> {
+        const contrastCurve = resolveContrastCurve(options.contrastCurve);
         const targetBuf = await this.resolveImageBuffer(targetImage, 'targetImage');
         const refBuf = await this.resolveImageBuffer(referenceImage, 'referenceImage');
 
@@ -229,14 +260,7 @@ export class ImageColorTransferService {
             let newA = (origA - tMeanA) * scaleA + rMeanA;
             let newB = (origB - tMeanB) * scaleB + rMeanB;
 
-            // Optional contrast curve modification
-            if (options.contrastCurve === 'cinematic') {
-                const normL = Math.max(0, Math.min(100, newL)) / 100.0;
-                const sL = normL < 0.5 ? 2 * normL * normL : 1 - 2 * (1 - normL) * (1 - normL);
-                newL = sL * 100.0;
-            } else if (options.contrastCurve === 'high-contrast') {
-                newL = Math.pow(Math.max(0, Math.min(100, newL)) / 100.0, 1.25) * 100.0;
-            }
+            newL = applyContrastCurve(newL, contrastCurve);
 
             // Skin tone detection in CIELAB
             let skinWeight = 0;

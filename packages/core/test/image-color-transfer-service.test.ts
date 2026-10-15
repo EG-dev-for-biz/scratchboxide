@@ -58,6 +58,26 @@ describe('ImageColorTransferService (2D image-to-image colour transfer)', () => 
         expect(result).not.toHaveProperty('plan');
     });
 
+    it('applies the contrast curve it was asked for, says which, and refuses one it does not have', async () => {
+        const run = (contrastCurve?: any) => transferImageColor({
+            referenceImage: ramp(64, 16), targetImage: ramp(64, 16), outputFormat: 'png', preserveSkinTones: false, contrastCurve
+        });
+        const lumaSpread = (png: Buffer) => {
+            const img = decodePng(png);
+            const at = (x: number) => img.rgba[(8 * img.width + x) * 4];
+            return at(img.width - 2) - at(1);
+        };
+        const natural = await run();
+        const muted = await run('muted');
+        const strong = await run('cinematic');
+        expect(natural.telemetry.contrastCurve).toBe('natural');
+        expect(muted.telemetry.contrastCurve).toBe('muted');
+        // Muted lowers contrast, the S-curve raises it, relative to no curve.
+        expect(lumaSpread(muted.outputBuffer)).toBeLessThan(lumaSpread(natural.outputBuffer) - 10);
+        expect(lumaSpread(strong.outputBuffer)).toBeGreaterThan(lumaSpread(natural.outputBuffer));
+        await expect(run('dreamy')).rejects.toThrow(/contrastCurve: "dreamy" is not one of natural, cinematic, high-contrast, muted/);
+    });
+
     it('has no canned palette: extractPalette is gone and an unreadable input fails', async () => {
         expect((ImageColorTransferService as any).extractPalette).toBeUndefined();
         await expect(ImageColorTransferService.transferColor({ referenceImage: 'sunset_rome.jpg', targetImage: 'colosseum_noon.jpg' }))

@@ -373,6 +373,8 @@ export {
 export {
     ImageColorTransferService,
     transferImageColor,
+    CONTRAST_CURVES,
+    type ContrastCurve,
     type ImageColorTransferRequest,
     type ImageColorTransferResult,
     type LocalCielabOptions
