@@ -87,6 +87,8 @@ export interface LocationClayTrees {
     cutCanopyRemovedM2: number;
     /** Roof or ground vegetation lower than the minimum tree height: kept as scanned. */
     belowMinHeight: number;
+    /** Crowns with no standable surface around them (ground too steep, or all canopy): their ground is not measured, so they are kept as scanned. */
+    noMeasuredGround: number;
     /** Isolate requests: measured trees that do not stand on the isolated structure. */
     notOnStructure: number;
     /** Canopy patches smaller than a crown can be measured from: they stay as scanned unless they hung on a removed tree. */
@@ -249,6 +251,7 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
             cutRemoved: count('cut_at_boundary_removed'),
             cutCanopyRemovedM2: Number(st.cutCanopyRemovedM2 ?? 0),
             belowMinHeight: count('below_min_height'),
+            noMeasuredGround: count('no_measured_ground'),
             notOnStructure: 0,
             smallCanopyPatches: Number(st.crowns?.tooSmall ?? 0),
             canopyTakenWithTreesM2: Number(st.drape?.canopyTakenWithTreesM2 ?? 0),
@@ -346,6 +349,7 @@ export function describeLocationClay(result: LocationClayResult | undefined, fla
         const kept: string[] = [];
         if (t.cutAtBoundary) kept.push(`${plural(t.cutAtBoundary, 'crown')} cut by the extraction boundary (${t.cutAtBoundary === 1 ? 'its top lies' : 'their tops lie'} outside it)`);
         if (t.belowMinHeight) kept.push(`${plural(t.belowMinHeight, 'low planting')} (under the minimum tree height)`);
+        if (t.noMeasuredGround) kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable around ${t.noMeasuredGround === 1 ? 'it' : 'them'} (no surface gentle enough to stand on, such as a steep slope)`);
         if (t.smallCanopyPatches) kept.push(`${plural(t.smallCanopyPatches, 'canopy patch', 'canopy patches')} too small to measure as a crown`);
         let notes = kept.length ? ` Kept as scanned: ${kept.join(', ')}.` : '';
         if (t.cutRemoved) notes += ` Taken out with the trees ${t.cutRemoved === 1 ? 'it was' : 'they were'} joined to, and not rebuilt (${t.cutRemoved === 1 ? 'its trunk lies' : 'their trunks lie'} outside the extraction): ${plural(t.cutRemoved, 'cut crown')}, ${Math.round(t.cutCanopyRemovedM2)} m² of canopy.`;
@@ -377,12 +381,18 @@ export function describeLocationClay(result: LocationClayResult | undefined, fla
 function describeGroundClosing(t: LocationClayTrees): string {
     const area = t.strip.skirtAreaM2 ?? {};
     const tallest = t.strip.skirtMaxHeightM ?? {};
-    const walls = Number(area.onWalls ?? 0) + Number(area.onLevelSurfaces ?? 0) + Number(area.onOther ?? 0);
-    const wallsTallest = Math.max(Number(tallest.onWalls ?? 0), Number(tallest.onLevelSurfaces ?? 0), Number(tallest.onOther ?? 0));
-    const low = Number(area.onKeptCanopy ?? 0);
+    // Each kind of surface the closing hung a skirt on is named for what it is: only skirts on walls are walls.
+    const kinds: Array<[keyof typeof area, string]> = [
+        ['onWalls', 'walls and building sides the trees hid were continued straight down to that ground'],
+        ['onLevelSurfaces', 'the edges of level surfaces left standing over it were closed down to it'],
+        ['onKeptCanopy', 'the sides of plantings kept as scanned were closed down to it'],
+        ['onOther', 'the edges of other surfaces left standing over it were closed down to it']
+    ];
     const parts: string[] = [];
-    if (walls >= 1) parts.push(`walls and building sides the trees hid were continued straight down to that ground (${Math.round(walls).toLocaleString()} m², up to ${wallsTallest.toFixed(1)} m tall; not in the scan)`);
-    if (low >= 1) parts.push(`the sides of plantings kept as scanned were closed down to it (${Math.round(low).toLocaleString()} m², up to ${Number(tallest.onKeptCanopy ?? 0).toFixed(1)} m)`);
+    for (const [key, what] of kinds) {
+        const m2 = Number(area[key] ?? 0);
+        if (m2 >= 1) parts.push(`${what} (${Math.round(m2).toLocaleString()} m², up to ${Number(tallest[key] ?? 0).toFixed(1)} m tall; not in the scan)`);
+    }
     if (!(t.strip.removedTriangles! > 0)) return '';
     return ` Where trees were taken out, the ground was rebuilt on the surface they stood on${parts.length ? `; ${parts.join('; ')}` : ''}.`;
 }

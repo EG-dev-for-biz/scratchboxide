@@ -289,8 +289,22 @@ describe('runLocationClayPipeline', () => {
             ms: { strip: 1, plant: 1 }, url: '/models/x_trees.glb'
         };
         const text = describeLocationClay({ ...base, trees } as any, 'clay');
-        expect(text).toContain('walls and building sides the trees hid were continued straight down to that ground (520 m², up to 26.3 m tall; not in the scan)');
-        expect(text).toContain('the sides of plantings kept as scanned were closed down to it (3 m², up to 2.5 m)');
+        // each skirt is named for what it hangs on: only the ones on walls are called walls
+        expect(text).toContain('walls and building sides the trees hid were continued straight down to that ground (120 m², up to 18.0 m tall; not in the scan)');
+        expect(text).toContain('the edges of other surfaces left standing over it were closed down to it (400 m², up to 26.3 m tall; not in the scan)');
+        expect(text).toContain('the sides of plantings kept as scanned were closed down to it (3 m², up to 2.5 m tall; not in the scan)');
+        expect(text).not.toContain('level surfaces left standing');
+    });
+
+    it('reports crowns kept as scanned because no ground could be measured around them', () => {
+        const base = { url: '/models/x_refined_clay.glb', glbPath: 'x', isolate: false, mounted: { vertices: 4, triangles: 2 }, remesh: { publishAs: 'x', ms: 1000, cached: false, stats: {} }, timingsMs: { remesh: 1, total: 1 } };
+        const trees = {
+            measured: 0, count: 0, triangles: 0, triangleBudget: 0, canopyAreaM2: 40, measuredTreeCanopyAreaM2: 0, treeCanopyAreaM2: 0, reachingBoundary: 0,
+            cutAtBoundary: 0, cutRemoved: 0, cutCanopyRemovedM2: 0, belowMinHeight: 0, noMeasuredGround: 2, notOnStructure: 0, smallCanopyPatches: 0, canopyTakenWithTreesM2: 0, crownsJson: 'c', inferred: {},
+            strip: { removedTriangles: 0 }, ms: { strip: 1, plant: 1 }
+        };
+        const text = describeLocationClay({ ...base, trees } as any, 'clay');
+        expect(text).toContain('Kept as scanned: 2 crowns with no ground measurable around them (no surface gentle enough to stand on, such as a steep slope).');
     });
 
     it('a stopped request stops only itself: another request sharing the same native run still gets its result', async () => {

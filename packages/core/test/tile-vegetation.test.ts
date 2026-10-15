@@ -515,6 +515,35 @@ describe('tile_vegetation strip where no level paving surrounds the trees: a hil
         fs.writeFileSync(path.join(SHOTS, 'synthetic_hillside_raw_aerial.png'), renderClayPng([{ positions: x.before.positions, indices: x.before.indices }], { kind: 'aerial', width: 960, height: 640, bearingDeg: 200, elevationDeg: 35 }));
     });
 
+    // A street on a grade: the ground the trees stood on is rebuilt on the grade, not in level steps. (Ground counted as
+    // level whenever most samples were within ~14 degrees left caps up to 0.75 m off a 2-14 degree slope.)
+    it.each([5, 12])('rebuilds the ground on a %i degree grade on the grade, without steps', async (deg) => {
+        const slope = Math.tan(deg * Math.PI / 180);
+        const x = await stripAndCheck(`grade_${deg}.glb`, { halfSize: 30, spacing: 0.75, trees: HILL_TREES, building: HILL_BUILDING, slope, anchor: ANCHOR }, px => slope * px);
+        expectGroundRebuilt(x, HILL_TREES);
+    });
+
+    it('keeps crowns as scanned on ground too steep to stand on, instead of rebuilding them on a guessed ground', async () => {
+        // 34 degrees: no surface around the crowns is standable, so their ground is not measured. The terrain model (an
+        // opening of the scan) reads metres low there; taking it as the ground dug pits and grew trees twice as tall.
+        const slope = Math.tan(34 * Math.PI / 180);
+        fs.writeFileSync(path.join(work, 'steep.glb'), buildSyntheticTile({ halfSize: 30, spacing: 0.75, trees: HILL_TREES, slope, anchor: ANCHOR }));
+        const r = await svc.strip({ tilePath: 'steep.glb' });
+        const cs = JSON.parse(fs.readFileSync(r.crownsJson, 'utf8')).crowns;
+        expect(cs.length).toBeGreaterThan(0);
+        for (const c of cs) {
+            expect(c.status).toBe('no_measured_ground');
+            expect(c.supportSource).toBe('none');
+            expect(c.supportY).toBeNull();
+        }
+        expect(r.stats.crowns.noMeasuredGround).toBe(cs.length);
+        expect(r.stats.crowns.tree).toBe(0);
+        expect(r.stats.triangles).toMatchObject({ removed: 0, cap: 0, skirt: 0 });
+        const before = readGlbTriangles(fs.readFileSync(path.join(work, 'steep.glb')));
+        const after = readGlbTriangles(fs.readFileSync(r.devegetatedGlb));
+        expect(after.indices.length).toBe(before.indices.length);
+    });
+
     it('measures the trees on a level lawn (green, so no paving) against the lawn', async () => {
         const x = await stripAndCheck('lawn.glb', { halfSize: 30, spacing: 0.75, trees: HILL_TREES, groundRgb: LAWN_RGB, anchor: ANCHOR }, () => 0);
         expectGroundRebuilt(x, HILL_TREES);

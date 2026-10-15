@@ -392,9 +392,9 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         const clay = readGlbTriangles(fs.readFileSync(clayFile));
         const grown = readGlbTriangles(fs.readFileSync(treesFile));
         expect(grown.nodeRanges).toHaveLength(trees.length);
-        // the summary the model relays says what closing the ground added (walls continued down behind the trees)
+        // the summary the model relays says what closing the ground added, named by what each skirt hangs on
         const text = describeLocationClay(pipeline, 'clay');
-        expect(text).toMatch(/walls and building sides the trees hid were continued straight down to that ground \([\d,]+ m², up to [\d.]+ m tall; not in the scan\)/);
+        expect(text).toMatch(/(walls and building sides the trees hid were continued straight down to that ground|the edges of (level|other) surfaces left standing over it were closed down to it) \([\d,]+ m², up to [\d.]+ m tall; not in the scan\)/);
         expect(text).toContain(`Taken out with the trees`);
         if (fs.existsSync(REPORT)) fs.writeFileSync(REPORT, JSON.stringify({ ...JSON.parse(fs.readFileSync(REPORT, 'utf8')), summary: text }, null, 2));
 

@@ -548,7 +548,8 @@ describe('a location request returns remeshed geometry', () => {
         expect(summary).toContain('Kept as scanned: 1 crown cut by the extraction boundary (its top lies outside it), 1 low planting');
         expect(summary).toContain('Taken out with the trees it was joined to, and not rebuilt (its trunk lies outside the extraction): 1 cut crown, 30 m² of canopy.');
         // what closing the ground added is said, not hidden in the payload
-        expect(summary).toContain('walls and building sides the trees hid were continued straight down to that ground (120 m², up to 12.5 m tall; not in the scan)');
+        expect(summary).toContain('walls and building sides the trees hid were continued straight down to that ground (80 m², up to 12.5 m tall; not in the scan)');
+        expect(summary).toContain('the edges of other surfaces left standing over it were closed down to it (40 m², up to 6.0 m tall; not in the scan)');
     });
 
     it('google_3d_tiles_get_clay reports zero trees when no crown measures as a tree, and mounts only the tiles', async () => {

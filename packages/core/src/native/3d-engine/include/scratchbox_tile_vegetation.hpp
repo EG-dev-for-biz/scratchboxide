@@ -541,15 +541,15 @@ struct StripParams {
 
 struct CrownRecord {
     int id{0};
-    // tree | below_min_height | cut_at_boundary (kept as scanned) | cut_at_boundary_removed (taken with the trees it
-    // joins, not replanted)
+    // tree | below_min_height | no_measured_ground (no standable surface around it, kept as scanned) | cut_at_boundary
+    // (kept as scanned) | cut_at_boundary_removed (taken with the trees it joins, not replanted)
     std::string status;
     bool reachesBoundary{false};     // a tree whose crown runs to the extraction's edge: measured (and rebuilt) up to it
     Vec3 apex;
     double stemX{0}, stemZ{0};
     double supportY{0};              // the support surface's height at the stem
     double tiltX{0}, tiltZ{0};       // its gradient (dy/dx, dy/dz) around the crown
-    std::string supportSource;       // surrounding_surface | terrain_model
+    std::string supportSource;       // surrounding_surface | none (no standable surface around it: not measured)
     double terrainY{0};
     double apexAboveSupport{0};
     double areaM2{0};
@@ -580,7 +580,7 @@ struct StripStats {
     size_t drapeSheets{0};           // planar sheets of the drape taken with the trees (not walls: nothing planar at their top)
     double drapeSheetAreaM2{0};
     double canopyAreaM2{0}, treeCanopyAreaM2{0};
-    size_t crownsTree{0}, crownsLow{0}, crownsCut{0}, crownsCutRemoved{0}, crownsTooSmall{0};
+    size_t crownsTree{0}, crownsLow{0}, crownsCut{0}, crownsCutRemoved{0}, crownsTooSmall{0}, crownsNoGround{0};
     size_t treesReachingBoundary{0}; // trees whose crown runs to the extraction's edge (their apex is inside it)
     double cutCanopyRemovedM2{0};    // canopy of cut crowns taken with the trees it joined (not replanted)
     std::array<double, 3> greenDispersionQuartiles{}, otherDispersionQuartiles{};
@@ -1261,27 +1261,23 @@ private:
                     lo = i;
                 }
             }
-            // That surface may slope (a hillside, a steep street). When most of the cluster's samples lie on level surfaces
-            // (within ~14 degrees, as the support grids count level) it is level: steps between level surfaces (curbs,
-            // stairs, a raised plaza within supportStep) are not a slope. Otherwise its gradient is the median gradient of
-            // the planar surfaces the samples lie on. Its height at the stem is the median of the samples with that slope
-            // taken out (on level ground, the median of the cluster).
-            size_t levelSamples = 0;
+            // That surface may slope (a hillside, a street on a grade). Its gradient is the median gradient of the planar
+            // surfaces the samples lie on, whatever the grade: steps between level surfaces (curbs, stairs, a raised plaza
+            // within supportStep) have no gradient themselves, so they do not tilt it. (Calling a surface level whenever
+            // most samples were within ~14 degrees left the cap of a 2-14 degree street in steps up to 0.75 m off it.)
+            // Its height at the stem is the median of the samples with that slope taken out.
             std::vector<double> gx, gz;
             gx.reserve(bestN);
             gz.reserve(bestN);
             for (size_t i = bestLo; i < bestLo + bestN; ++i) {
                 const Vec3& n = samples[i].n;
-                if (n.y >= kLevelNormalY) ++levelSamples;
                 gx.push_back(-static_cast<double>(n.x) / n.y);
                 gz.push_back(-static_cast<double>(n.z) / n.y);
             }
-            if (2 * levelSamples < bestN) {
-                std::nth_element(gx.begin(), gx.begin() + static_cast<long>(bestN / 2), gx.end());
-                std::nth_element(gz.begin(), gz.begin() + static_cast<long>(bestN / 2), gz.end());
-                rec.tiltX = gx[bestN / 2];
-                rec.tiltZ = gz[bestN / 2];
-            }
+            std::nth_element(gx.begin(), gx.begin() + static_cast<long>(bestN / 2), gx.end());
+            std::nth_element(gz.begin(), gz.begin() + static_cast<long>(bestN / 2), gz.end());
+            rec.tiltX = gx[bestN / 2];
+            rec.tiltZ = gz[bestN / 2];
             clampTilt(rec);
             std::vector<double> level;
             level.reserve(bestN);
@@ -1289,19 +1285,22 @@ private:
             std::nth_element(level.begin(), level.begin() + static_cast<long>(bestN / 2), level.end());
             rec.supportY = level[bestN / 2];
             rec.supportSource = "surrounding_surface";
-        } else {
-            // nothing standable around it within supportSearch (steeper ground, all canopy): the terrain model, with
-            // its slope at the stem
-            const double d = P.terrainCell;
-            rec.supportY = rec.terrainY;
-            rec.tiltX = (dtm.sample(rec.stemX + d, rec.stemZ) - dtm.sample(rec.stemX - d, rec.stemZ)) / (2 * d);
-            rec.tiltZ = (dtm.sample(rec.stemX, rec.stemZ + d) - dtm.sample(rec.stemX, rec.stemZ - d)) / (2 * d);
-            if (!std::isfinite(rec.tiltX) || !std::isfinite(rec.tiltZ)) rec.tiltX = rec.tiltZ = 0;
-            rec.supportSource = "terrain_model";
         }
-        rec.supportY = std::min(rec.supportY, static_cast<double>(rec.apex.y));
-        rec.apexAboveSupport = rec.apex.y - rec.supportY;
-        w.support = rec.supportY;
+        // Nothing standable around it within supportSearch (ground steeper than the standable limit, or all canopy): the
+        // ground it stands on is not measured. The terrain model is a morphological opening of the scan and reads low on
+        // slopes, convex ground and near the extraction's edge, so it is not taken as that ground: the crown is kept as
+        // scanned and reported (status no_measured_ground), and nothing is removed, capped or planted for it.
+        const bool groundMeasured = !samples.empty();
+        if (groundMeasured) {
+            rec.supportY = std::min(rec.supportY, static_cast<double>(rec.apex.y));
+            rec.apexAboveSupport = rec.apex.y - rec.supportY;
+        } else {
+            rec.supportY = std::numeric_limits<double>::quiet_NaN();
+            rec.apexAboveSupport = std::numeric_limits<double>::quiet_NaN();
+            rec.supportSource = "none";
+        }
+        // (the work record keeps a number for the drape checks that may look at a kept crown's surroundings)
+        w.support = groundMeasured ? rec.supportY : rec.terrainY;
         w.tiltX = rec.tiltX;
         w.tiltZ = rec.tiltZ;
         w.stemX = rec.stemX;
@@ -1310,6 +1309,7 @@ private:
 
         rec.reachesBoundary = w.reachesBoundary;
         if (w.cut) { rec.status = "cut_at_boundary"; ++R.stats.crownsCut; }
+        else if (!groundMeasured) { rec.status = "no_measured_ground"; ++R.stats.crownsNoGround; }
         else if (rec.apexAboveSupport < P.minTreeHeight) { rec.status = "below_min_height"; ++R.stats.crownsLow; }
         else {
             rec.status = "tree";
@@ -2348,6 +2348,7 @@ private:
             if (rec.status == "below_min_height") { cr = 255; cg = 140; cb = 0; }
             if (rec.status == "cut_at_boundary") { cr = 255; cg = 0; cb = 255; }
             if (rec.status == "cut_at_boundary_removed") { cr = 40; cg = 90; cb = 255; }
+            if (rec.status == "no_measured_ground") { cr = 255; cg = 255; cb = 0; }
             for (int dk = -2; dk <= 2; ++dk) {
                 for (int di = -2; di <= 2; ++di) {
                     if (!g.in(ai + di, ak + dk)) continue;
@@ -2417,7 +2418,8 @@ inline std::string stripStatsJson(const StripResult& r) {
       << ", \"fragmentsTaken\": " << st.fragmentsTaken << ", \"fragmentAreaTakenM2\": " << json::num(st.fragmentAreaTakenM2) << "},\n";
     s << "  \"canopyAreaM2\": " << json::num(st.canopyAreaM2) << ",\n  \"treeCanopyAreaM2\": " << json::num(st.treeCanopyAreaM2) << ",\n";
     s << "  \"crowns\": {\"tree\": " << st.crownsTree << ", \"treesReachingBoundary\": " << st.treesReachingBoundary << ", \"belowMinHeight\": " << st.crownsLow
-      << ", \"cutAtBoundary\": " << st.crownsCut << ", \"cutAtBoundaryRemoved\": " << st.crownsCutRemoved << ", \"tooSmall\": " << st.crownsTooSmall << "},\n";
+      << ", \"cutAtBoundary\": " << st.crownsCut << ", \"cutAtBoundaryRemoved\": " << st.crownsCutRemoved << ", \"tooSmall\": " << st.crownsTooSmall
+      << ", \"noMeasuredGround\": " << st.crownsNoGround << "},\n";
     s << "  \"cutCanopyRemovedM2\": " << json::num(st.cutCanopyRemovedM2) << ",\n";
     auto q3 = [](const std::array<double, 3>& q) { return "[" + json::num(q[0]) + ", " + json::num(q[1]) + ", " + json::num(q[2]) + "]"; };
     s << "  \"dispersionQuartiles\": {\"green\": " << q3(st.greenDispersionQuartiles) << ", \"other\": " << q3(st.otherDispersionQuartiles) << "},\n";
