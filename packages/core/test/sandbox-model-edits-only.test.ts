@@ -128,6 +128,15 @@ describe('a quick edit the model did not finish is not an edit', () => {
         const done = serviceAnswering({ content: { parts: [{ text: 'const b = 1;' }] }, finishReason: 'STOP' });
         expect(await done.service.quickEdit({ originalCode: 'const a = 1;', instruction: 'rename', fileName: 'a.ts' })).toMatchObject({ success: true, proposedCode: 'const b = 1;', modelUsed: 'gemini-3.8-flash' });
     });
+
+    it('a prompt blocked before any reply says it was blocked, not that the model wrote no code', async () => {
+        const client = {
+            getStatus: async () => ({ connected: true, authMethod: 'service-account', activeModel: 'gemini-3.8-flash' }),
+            requestGenerateContent: async () => ({ json: { promptFeedback: { blockReason: 'SAFETY' } }, credential: 'vertex' as const })
+        };
+        const res = await new QuickEditService(client as any).quickEdit({ originalCode: 'const a = 1;', instruction: 'rename', fileName: 'a.ts' });
+        expect(res).toMatchObject({ success: false, proposedCode: 'const a = 1;', error: 'gemini-3.8-flash blocked this edit request (block reason: SAFETY), so the file was not changed.' });
+    });
 });
 
 describe('a model edit lands in the file it was made for, as the files are when it arrives', () => {

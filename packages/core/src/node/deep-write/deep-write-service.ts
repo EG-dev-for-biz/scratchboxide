@@ -162,6 +162,9 @@ export class DeepWriteService {
                 suspended.historyContext,
                 feedback
             );
+            if (res.modelNote) {
+                suspended.onEvent({ type: 'research_thinking', sessionId, thinking: res.modelNote });
+            }
 
             if (res.success) {
                 suspended.historyContext[activeStage.id] = res.output;
@@ -292,6 +295,10 @@ export class DeepWriteService {
 
             // Normal sequential stage run
             const res = await this.dagPlanner.executeStage(plan, stage, historyContext);
+            if (res.modelNote) {
+                // The stage ran on another model or credential than requested: said, not hidden.
+                onEvent({ type: 'research_thinking', sessionId, thinking: res.modelNote });
+            }
             if (!res.success) {
                 onEvent({
                     type: 'error',

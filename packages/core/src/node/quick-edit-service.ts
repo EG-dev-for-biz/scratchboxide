@@ -92,6 +92,11 @@ export class QuickEditService {
 
             // A reply the model did not finish (cut off at the token limit, blocked, ...) is not an edit: written into
             // the file it would replace the rest of the file with nothing.
+            // A prompt blocked before any candidate comes back with only promptFeedback.blockReason.
+            const blockReason = json?.promptFeedback?.blockReason;
+            if (blockReason && !json?.candidates?.length) {
+                return { success: false, proposedCode: originalCode, additions: 0, deletions: 0, error: `${model} blocked this edit request (block reason: ${blockReason}), so the file was not changed.`, ...answeredWith };
+            }
             const finishReason = json?.candidates?.[0]?.finishReason;
             if (finishReason && finishReason !== 'STOP') {
                 const why = finishReason === 'MAX_TOKENS'

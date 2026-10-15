@@ -10,6 +10,8 @@ import type { GeminiService } from '../gemini-service';
 import { DynamicAgentStage, DiscoveredGoalPlan } from '../../common/deep-write/deep-write-protocol';
 import { CodebasePatternEngine } from '../codebase-pattern-engine';
 import { ProjectContextGraphService } from '../project-context-graph-service';
+import type { ModelAnswerProvenance } from '../../common/gemini-protocol';
+import { describeHelperProvenance } from '../gemini/streaming';
 
 /**
  * Runs the stages of a deep-write plan with the model. (It used to also plan 3D scenes by matching prompt words to
@@ -54,6 +56,10 @@ export class DynamicDagPlanner {
             artifacts?: Array<{ type: string; title: string; data: any }>;
         };
         error?: string;
+        /** Which model and credential answered the stage. */
+        modelProvenance?: ModelAnswerProvenance;
+        /** Set when the stage was not answered by the requested model or by the service account: what answered and why. */
+        modelNote?: string;
     }> {
         // Incorporate codebase patterns & conventions
         let patternPrompt = '';
@@ -126,8 +132,10 @@ You MUST respond with a single valid JSON object containing no markdown wrapping
         }
 
         let accumulatedText = '';
+        let modelProvenance: ModelAnswerProvenance | undefined;
+        let streamError: string | undefined;
         try {
-            await this.geminiService.streamGenerate(
+            const response = await this.geminiService.streamGenerate(
                 {
                     prompt: `Execute stage "${stage.id}" within the global goal plan. Respond with your structured stage JSON output.`,
                     systemInstruction,
@@ -139,15 +147,24 @@ You MUST respond with a single valid JSON object containing no markdown wrapping
                     if (event.text) {
                         accumulatedText += event.text;
                     }
+                    if (event.modelProvenance) modelProvenance = event.modelProvenance;
+                    if (event.type === 'error' && event.error) streamError = event.error;
                 }
             );
+            modelProvenance = response?.modelProvenance ?? modelProvenance;
         } catch (err: any) {
             console.error(`[DynamicDagPlanner] Failed to execute stage ${stage.id}:`, err);
+            const failedProvenance = (err as { modelProvenance?: ModelAnswerProvenance })?.modelProvenance ?? modelProvenance;
             return {
                 success: false,
                 output: { description: '', content: '' },
-                error: err.message || 'Error occurred during dynamic stage execution.'
+                error: err.message || 'Error occurred during dynamic stage execution.',
+                ...this.provenanceFields(stage, failedProvenance)
             };
+        }
+        const answered = this.provenanceFields(stage, modelProvenance);
+        if (streamError && !accumulatedText.trim()) {
+            return { success: false, output: { description: '', content: '' }, error: `Stage "${stage.name}" failed: ${streamError}`, ...answered };
         }
 
         const cleaned = accumulatedText.trim();
@@ -166,7 +183,8 @@ You MUST respond with a single valid JSON object containing no markdown wrapping
             const result = JSON.parse(jsonStr);
             return {
                 success: true,
-                output: result
+                output: result,
+                ...answered
             };
         } catch (parseErr: any) {
             // The stage's files come only from its JSON; a reply that is not JSON produced none, so the stage failed.
@@ -174,8 +192,16 @@ You MUST respond with a single valid JSON object containing no markdown wrapping
             return {
                 success: false,
                 output: { description: '', content: accumulatedText },
-                error: `Stage "${stage.name}" did not return its stage JSON (${parseErr?.message || 'not JSON'})${excerpt ? `; the reply began: ${excerpt}` : '; the reply was empty'}.`
+                error: `Stage "${stage.name}" did not return its stage JSON (${parseErr?.message || 'not JSON'})${excerpt ? `; the reply began: ${excerpt}` : '; the reply was empty'}.`,
+                ...answered
             };
         }
+    }
+
+    /** The stage's provenance, and a note when another model or the API key answered it (the fallback is kept, not hidden). */
+    private provenanceFields(stage: DynamicAgentStage, p: ModelAnswerProvenance | undefined): { modelProvenance?: ModelAnswerProvenance; modelNote?: string } {
+        if (!p) return {};
+        const note = describeHelperProvenance(`Stage "${stage.name}"`, p);
+        return { modelProvenance: p, ...(note ? { modelNote: note } : {}) };
     }
 }

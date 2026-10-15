@@ -77,6 +77,32 @@ describe('deep-write stages', () => {
         expect(json).toEqual({ success: true, output: { description: 'Surveyed', content: '# Site', files: { 'src/main.ts': 'export {};' } } });
     });
 
+    it('a stage another model answered says so; one the requested model answered carries only its provenance', async () => {
+        const answeredBy = (provenance: Record<string, unknown>) => new DynamicDagPlanner({
+            streamGenerate: async (_req: unknown, onEvent: (e: any) => void) => {
+                onEvent({ text: '{"description":"Surveyed","content":"# Site"}' });
+                onEvent({ type: 'done', modelProvenance: provenance });
+                return { modelProvenance: provenance };
+            }
+        } as any);
+        const fellBack = await answeredBy({ requestedModel: 'gemini-3.8-flash', modelUsed: 'gemini-2.5-flash', fallbackReason: 'gemini-3.8-flash: 404 not found', credential: 'vertex' })
+            .executeStage(plan(['markdown-document']), stage, {});
+        expect(fellBack.success).toBe(true);
+        expect(fellBack.modelNote).toBe('Stage "Survey" answered by gemini-2.5-flash — gemini-3.8-flash: 404 not found');
+        const asAsked = await answeredBy({ requestedModel: 'gemini-3.8-flash', modelUsed: 'gemini-3.8-flash', credential: 'vertex' })
+            .executeStage(plan(['markdown-document']), stage, {});
+        expect(asAsked.modelNote).toBeUndefined();
+        expect(asAsked.modelProvenance?.modelUsed).toBe('gemini-3.8-flash');
+    });
+
+    it('a stream error is the stage\'s error, not "the reply was empty"', async () => {
+        const failing = new DynamicDagPlanner({
+            streamGenerate: async (_req: unknown, onEvent: (e: any) => void) => { onEvent({ type: 'error', error: 'quota exhausted' }); return {}; }
+        } as any);
+        const res = await failing.executeStage(plan(['markdown-document']), stage, {});
+        expect(res).toMatchObject({ success: false, error: 'Stage "Survey" failed: quota exhausted' });
+    });
+
     it('the keyword-themed 3D planner (template C++ scene per theme word) is gone from the planner and the facade', () => {
         for (const name of ['generate3DPlanDAG', 'executeAutonomous3DWorkflow', 'execute3DStageWithVerification', 'inspectAndReasonScene']) {
             expect((DynamicDagPlanner.prototype as any)[name]).toBeUndefined();

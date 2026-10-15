@@ -105,6 +105,8 @@ export interface VertexGenerateContentJson {
     }>;
     groundingMetadata?: GroundingMetadata;
     usageMetadata?: GenerateContentResponseUsageMetadata;
+    /** Set when the prompt itself was blocked; then there are no candidates. */
+    promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
 }
 
 /**
