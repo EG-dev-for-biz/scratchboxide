@@ -189,6 +189,19 @@ describe('sb script guide', () => {
         expect(plan).not.toContain(SB_PYTHON_SCRIPT_GUIDE);
     });
 
+    it('is left out for an object build\'s scene, whose script is generated from its spec', async () => {
+        // build_3d_object_from_reference keeps the script it ran, but the object changes through specJson.
+        const objectScene = {
+            id: 'o', type: '3d-scene', title: 'Vase',
+            data: { title: 'Vase', objectBuild: { spec: { subject: 'vase', parts: [] } }, pythonGenerator: { sourceCode: 'import scratchbox as sb\nsb.object_spec.build(SPEC)\n' } }
+        };
+        expect(scriptingInPlay({ activeArtifact: objectScene as any })).toBe(false);
+        const followUp = await buildSystemInstruction({ prompt: 'make it taller', mode: 'agent', activeArtifact: objectScene } as any);
+        const unrelated = await buildSystemInstruction({ prompt: 'refactor the login handler', mode: 'agent' } as GeminiGenerateRequest);
+        expect(followUp).not.toContain(SB_PYTHON_SCRIPT_GUIDE);
+        expect(followUp.length).toBe(unrelated.length);
+    });
+
     it('keeps the unrelated agent instruction at least the guide\'s size smaller than before', async () => {
         const unrelated = await buildSystemInstruction({ prompt: 'refactor the login handler', mode: 'agent' } as GeminiGenerateRequest);
         const scripted = await buildSystemInstruction({ prompt: 'refactor the login handler', mode: 'agent', activeArtifact: SCRIPT_SCENE } as any);

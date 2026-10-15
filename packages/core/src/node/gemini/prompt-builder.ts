@@ -668,12 +668,15 @@ FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stac
 
 /**
  * True while the active canvas artifact is a 3D scene a script built (it carries pythonGenerator source), so the
- * agent is editing that script. Decided from the scene's state, never from words in the prompt.
+ * agent is editing that script. A scene build_3d_object_from_reference built (it carries objectBuild) also keeps the
+ * script it ran, but that script is generated from the spec and the object changes through specJson, so it does not
+ * count. Decided from the scene's state, never from words in the prompt.
  */
 export function scriptingInPlay(request: Pick<GeminiGenerateRequest, 'activeArtifact'>): boolean {
     const artifact = request.activeArtifact;
-    const source = (artifact?.data as { pythonGenerator?: { sourceCode?: unknown } } | undefined)?.pythonGenerator?.sourceCode;
-    return artifact?.type === '3d-scene' && typeof source === 'string' && source.trim().length > 0;
+    const data = artifact?.data as { pythonGenerator?: { sourceCode?: unknown }; objectBuild?: unknown } | undefined;
+    const source = data?.pythonGenerator?.sourceCode;
+    return artifact?.type === '3d-scene' && typeof source === 'string' && source.trim().length > 0 && !data?.objectBuild;
 }
 
 /**
