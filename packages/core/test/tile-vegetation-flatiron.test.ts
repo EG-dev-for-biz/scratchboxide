@@ -25,7 +25,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { TileVegetationService, type TileVegetationStripResult } from '../src/node/3d-engine/tile-vegetation-service';
+import { SCENE_TREE_TRIANGLE_CAP, TileVegetationService, type TileVegetationStripResult } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService } from '../src/node/3d-engine/tile-refine-service';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../src/node/3d-engine/location-clay-pipeline';
 import { decodePng, encodePng } from '../src/node/texture-processing';
@@ -349,7 +349,12 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         // - canopy that stays never stands over a hole: cut canopy joined to a removed tree went with it, and the only
         //   canopy a skirt closes is a low planting (under 3 m above what it stands on, beside a cap within the 1.5 m band);
         expect(strip.stats.crowns.cutAtBoundaryRemoved).toBeGreaterThanOrEqual(1);
-        expect(strip.stats.skirts.maxHeightByHangM.onKeptCanopy).toBeLessThanOrEqual(5);
+        //   a tree kept as scanned because no regrown tree fills its crown is canopy that stays too: where trees beside
+        //   it were removed, its side is closed down to their ground, never taller than its top above that ground
+        const keptTrees = crownsDoc.crowns.filter((c: any) => c.status === 'not_regrowable');
+        const keptTreeSide = Math.max(0, ...keptTrees.map((k: any) => k.apex[1] - Math.min(k.supportY, ...trees
+            .filter((c: any) => Math.hypot(c.stem[0] - k.stem[0], c.stem[1] - k.stem[1]) < 20).map((c: any) => c.supportY))));
+        expect(strip.stats.skirts.maxHeightByHangM.onKeptCanopy).toBeLessThanOrEqual(Math.max(5, keptTreeSide));
         // - no tall skirt anywhere near a crown that stays cut (where the previous strip hung 20-30 m curtains);
         const skirt = outTris.nodeRanges.find(r => r.name === 'vegetation_removed_skirt')!;
         const keptCut = crownsDoc.crowns.filter((c: any) => c.status === 'cut_at_boundary');
@@ -385,8 +390,11 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
 
     it('runs the whole location pipeline: remeshed clay plus SB-Veggie trees within budget, with screenshots', () => {
         expect(pipeline.trees!.count).toBe(trees.length);
+        expect(pipeline.trees!.measured).toBe(trees.length + pipeline.trees!.notRegrowable);
         expect(pipeline.trees!.triangles).toBeLessThanOrEqual(pipeline.trees!.triangleBudget);
-        expect(pipeline.trees!.triangleBudget).toBe(Math.floor(pipeline.remesh.triangles! * 0.5));
+        // sized from the measured crowns, within the scene's cap (not from the remeshed tile)
+        expect(pipeline.trees!.triangleBudgetSource).toMatch(/^crown_targets/);
+        expect(pipeline.trees!.triangleBudget).toBe(Math.min(pipeline.trees!.targetTriangles!, SCENE_TREE_TRIANGLE_CAP));
         const clayFile = path.join(root, 'public', pipeline.url);
         const treesFile = path.join(root, 'public', pipeline.trees!.url!);
         const clay = readGlbTriangles(fs.readFileSync(clayFile));

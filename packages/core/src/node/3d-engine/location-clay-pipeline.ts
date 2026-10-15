@@ -132,8 +132,8 @@ export interface LocationClayTrees {
         openEdges?: { before: number; after: number };
         /**
          * Where the removal left something standing over the rebuilt ground (a wall the tree hid, the side of a low
-         * planting kept as scanned), it is continued straight down to that ground: area (m²) and tallest (m), by what
-         * it continues.
+         * planting or a tree kept as scanned), it is continued straight down to that ground: area (m²) and tallest (m),
+         * by what it continues.
          */
         skirtAreaM2?: Record<string, number>;
         skirtMaxHeightM?: Record<string, number>;
@@ -457,7 +457,7 @@ function describeGroundClosing(t: LocationClayTrees): string {
     const kinds: Array<[keyof typeof area, string]> = [
         ['onWalls', 'walls and building sides the trees hid were continued straight down to that ground'],
         ['onLevelSurfaces', 'the edges of level surfaces left standing over it were closed down to it'],
-        ['onKeptCanopy', 'the sides of plantings kept as scanned were closed down to it'],
+        ['onKeptCanopy', 'the sides of plantings and trees kept as scanned were closed down to it'],
         ['onOther', 'the edges of other surfaces left standing over it were closed down to it']
     ];
     const parts: string[] = [];

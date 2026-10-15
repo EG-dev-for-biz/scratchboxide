@@ -359,7 +359,7 @@ describe('runLocationClayPipeline', () => {
         // each skirt is named for what it hangs on: only the ones on walls are called walls
         expect(text).toContain('walls and building sides the trees hid were continued straight down to that ground (120 m², up to 18.0 m tall; not in the scan)');
         expect(text).toContain('the edges of other surfaces left standing over it were closed down to it (400 m², up to 26.3 m tall; not in the scan)');
-        expect(text).toContain('the sides of plantings kept as scanned were closed down to it (3 m², up to 2.5 m tall; not in the scan)');
+        expect(text).toContain('the sides of plantings and trees kept as scanned were closed down to it (3 m², up to 2.5 m tall; not in the scan)');
         expect(text).not.toContain('level surfaces left standing');
     });
 

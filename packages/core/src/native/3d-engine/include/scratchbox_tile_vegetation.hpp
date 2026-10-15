@@ -31,7 +31,7 @@
  *   on (level paving or roof, or ground that slopes: a hillside's slope is measured from the surfaces around the
  *   crown): every hole loop is lowered onto that surface and capped there, so no cap face climbs to where the tree
  *   was and no hole opens; a tile with no tree is left as it is, whatever its ground. Where the hole edge stands off
- *   that surface (a wall or building side the tree hid, the side of a low planting that stays) a vertical skirt
+ *   that surface (a wall or building side the tree hid, the side of a low planting or a tree that stays) a vertical skirt
  *   continues it down, and its area and height are reported by what it continues. Lower roof vegetation stays in the
  *   scan untouched. Writes the devegetated tile (textures kept; cap and skirt are untextured primitives of their own),
  *   and a crown list with apex, stem, support (height and slope), footprint, sector radii and voxel samples of the
