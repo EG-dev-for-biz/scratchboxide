@@ -14,10 +14,14 @@
 #include "scratchbox_geometry.hpp"
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <random>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
+#include <limits>
+#include <queue>
 
 namespace scratchbox {
 namespace nature {
@@ -1048,6 +1052,33 @@ struct SpaceColonizationConfig {
     float triangleBudget{0.0f};
     float woodBudgetShare{0.4f};         // share of the budget the wood may use; foliage takes the rest
 
+    // Measured crowns (customAttractors). The trunk stops at clearTrunkHeight, or just above the lowest attractor; when
+    // the crown starts higher than that by more than perceptionRadius, no attractor can see the trunk and nothing grows.
+    // With trunkSeeksCrown the trunk keeps growing from there towards the nearest attractor until one lies within
+    // perceptionRadius of its tip (and its forward cone), so colonisation starts where the measured crown begins.
+    bool trunkSeeksCrown{false};
+    // Measured crowns (customAttractors). Leaf nodes are the tips and the twigs thinner than kTwigRadiusShare of the
+    // trunk (at the budgeted meshing's pruning radius, more). With leavesOnCrownBranches every branch node that came
+    // within the kill reach of an attractor (a branch that grew through the measured crown) is a leaf node too, at any
+    // budget. At the budgets trees are meshed within, the pruning makes most of those nodes leaf nodes anyway, so the
+    // delivered leaf masses barely change; what it changes is the leaf nodes counted at the finest pruning
+    // (foliageAnchors), which tile regrowth counts to judge whether a tree grew into its crown.
+    bool leavesOnCrownBranches{false};
+    // Colonisation stops once this many iterations in a row reached no attractor (0: it runs to maxIterations). The
+    // attractors left by then are ones no branch converges on (a node that keeps sprouting towards an attractor it never
+    // reaches), so further iterations only add nodes.
+    int stallIterations{0};
+    // Budgeted meshing (triangleBudget > 0) of a measured crown: the crown surface the scan measured. Leaf masses go
+    // first, on the grown tree's leaf nodes, where they bring every one of these points within foliageSurfaceReach of
+    // a leaf mass (fewest masses first), and the masses the budget has left fill the rest of the tree; without it every
+    // leaf mass is the centroid of the leaf nodes in one voxel. TreeBudgetReport::surfaceMasses says how many went on
+    // the surface; what the delivered foliage reaches is measured on the mesh (scratchbox_tile_vegetation.hpp).
+    std::vector<Vec3> foliageSurface;
+    float foliageSurfaceReach{0.0f};
+    // ... and the crown's measured top, when it is higher than the highest of those points (they are voxel means of the
+    // measured surface; its highest cell lies above them): the leaf masses may rise to it
+    float foliageTop{std::numeric_limits<float>::quiet_NaN()};
+
     static SpaceColonizationConfig fromBlobTelemetry(const BotanicalBlobTelemetry& tel) {
         SpaceColonizationConfig cfg;
         cfg.customAttractors = tel.conformalAttractors;
@@ -1097,17 +1128,37 @@ struct TreeBudgetReport {
     size_t foliageClumps{0};
     float clumpSpacing{0.0f};       // voxel size the foliage clumps were gathered at (m)
     int trianglesPerClump{0};
+    size_t surfaceMassesNeeded{0};  // leaf masses it takes to bring every surface point the leaf nodes can reach within reach
+    size_t surfaceMasses{0};        // ... how many the budget held (the first ones in the foliage mesh)
+    size_t surfacePointsCovered{0}; // ... and the surface points those bring within reach (by their inner balls)
+};
+
+/** How colonisation went (growSkeleton). `stop` is a diagnostic label; nothing branches on it. */
+struct ColonizationReport {
+    int iterations{0};              // colonisation iterations run
+    std::string stop;               // all_attractors_reached | no_attractor_within_perception | stalled | iteration_cap | (string)
+    size_t attractors{0};           // attractors at the start
+    size_t attractorsReached{0};    // attractors a node came within the kill radius of
+    int trunkNodes{0};              // nodes from the root to the crown break (the scaffold limbs start there)
+    float trunkTopY{0.0f};
+    int trunkSeekSteps{0};          // trunk steps grown past clearTrunkHeight to reach the crown (trunkSeeksCrown)
 };
 
 class SpaceColonizationTreeGenerator {
 public:
     /**
      * Grows the branch skeleton (attractors, trunk, scaffold limbs, colonisation, da Vinci radii, root flare).
-     * `rng` is seeded by the caller and keeps its state for the meshing that follows.
+     * `rng` is seeded by the caller and keeps its state for the meshing that follows. `report` (optional) says how the
+     * colonisation went. Each attractor keeps its nearest seeing node as nodes are added (through a grid over the
+     * attractors), which picks the node a scan over every node would (the nearest, ties to the lowest id): the skeleton is
+     * the one the plain O(attractors x nodes) search per iteration grows.
      */
-    static std::vector<ColonizationNode> growSkeleton(const SpaceColonizationConfig& cfg, std::mt19937& rng) {
+    static std::vector<ColonizationNode> growSkeleton(const SpaceColonizationConfig& cfg, std::mt19937& rng, ColonizationReport* report = nullptr) {
         std::uniform_real_distribution<float> distMinus1To1(-1.0f, 1.0f);
         std::uniform_real_distribution<float> dist0To1(0.0f, 1.0f);
+        ColonizationReport localReport;
+        ColonizationReport& rep = report ? *report : localReport;
+        rep = ColonizationReport{};
 
         // 1. Gather or scatter attractor points inside crown envelope
         std::vector<Vec3> attractors;
@@ -1130,6 +1181,7 @@ public:
                 }
             }
         }
+        rep.attractors = attractors.size();
 
         // 2. Initialize tree with base root and grow trunk upward toward crown
         std::vector<ColonizationNode> nodes;
@@ -1180,6 +1232,51 @@ public:
             nodes.push_back(nextNode);
         }
 
+        float perceptionSq = cfg.perceptionRadius * cfg.perceptionRadius;
+        // what a node sees: an attractor within the perception radius, ahead of it or to the side (the forward cone:
+        // dot >= -0.2 * length prevents 180-degree backward turns)
+        auto sees = [&](const ColonizationNode& node, const Vec3& attr, float& d2) {
+            const Vec3 toAttr = attr - node.position;
+            d2 = toAttr.lengthSquared();
+            return d2 < perceptionSq && toAttr.dot(node.growthDir) >= -0.20f * std::sqrt(d2);
+        };
+
+        // The measured crown may begin higher (or further out) than the trunk stopped: grow on towards the nearest
+        // attractor until one is in sight, never downwards, at most as many steps as that attractor is away.
+        if (cfg.trunkSeeksCrown && !cfg.isShrub && !cfg.customAttractors.empty() && !attractors.empty() && cfg.branchStepLength > 0.0f) {
+            auto inSight = [&]() {
+                float d2 = 0.0f;
+                for (const auto& a : attractors) if (sees(nodes.back(), a, d2)) return true;
+                return false;
+            };
+            float nearestD = 1e30f;
+            for (const auto& a : attractors) nearestD = std::min(nearestD, (a - nodes.back().position).length());
+            const int maxSteps = static_cast<int>(std::ceil(nearestD / cfg.branchStepLength)) + 2;
+            while (!inSight() && rep.trunkSeekSteps < maxSteps) {
+                const Vec3 tip = nodes.back().position;
+                Vec3 nearest = attractors.front();
+                float best = 1e30f;
+                for (const auto& a : attractors) {
+                    const float d2 = (a - tip).lengthSquared();
+                    if (d2 < best) { best = d2; nearest = a; }
+                }
+                Vec3 dir = nearest - tip;
+                if (dir.y < 0.0f) dir.y = 0.0f;
+                if (dir.lengthSquared() < 1e-12f) break;
+                dir = dir.normalized();
+                ColonizationNode nextNode;
+                nextNode.id = static_cast<int>(nodes.size());
+                nextNode.parentId = nodes.back().id;
+                nextNode.position = tip + dir * cfg.branchStepLength;
+                nextNode.growthDir = dir;
+                nodes.back().children.push_back(nextNode.id);
+                nodes.push_back(nextNode);
+                ++rep.trunkSeekSteps;
+            }
+        }
+        rep.trunkNodes = static_cast<int>(nodes.size());
+        rep.trunkTopY = nodes.back().position.y;
+
         if (cfg.isShrub) {
             int baseNodeId = nodes.back().id;
             // Sprout 4 basal outward radial shoots angled ~35-50 degrees
@@ -1214,43 +1311,94 @@ public:
         }
 
         // 3. Iterative Space Colonization Growth
-        float perceptionSq = cfg.perceptionRadius * cfg.perceptionRadius;
-        float killSq = cfg.killRadius * cfg.killRadius;
+        // Each attractor keeps the nearest node that sees it. Only nodes added since can change that (an older node was
+        // already compared), and only they can come within the kill reach of an attractor still alive, so each new node
+        // is compared with the attractors in the 27 grid cells around it (cell size >= the perception radius and the kill
+        // reach). Ties keep the lower node id, as a scan over every node in id order would: the skeleton is the one the
+        // plain O(attractors x nodes) search per iteration grows.
+        const float effectiveKill = cfg.killRadius * 1.25f;
+        const float effectiveKillSq = effectiveKill * effectiveKill;
+        const float gridCell = std::max({cfg.perceptionRadius, effectiveKill, 1e-3f});
+        auto cellOf = [&](const Vec3& p) {
+            return std::array<int64_t, 3>{static_cast<int64_t>(std::floor(p.x / gridCell)), static_cast<int64_t>(std::floor(p.y / gridCell)),
+                                          static_cast<int64_t>(std::floor(p.z / gridCell))};
+        };
+        auto packKey = [](int64_t a, int64_t b, int64_t c) {
+            return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
+        };
+        const size_t A = attractors.size();
+        std::unordered_map<uint64_t, std::vector<uint32_t>> attractorGrid;
+        for (uint32_t i = 0; i < A; ++i) {
+            const auto k = cellOf(attractors[i]);
+            attractorGrid[packKey(k[0], k[1], k[2])].push_back(i);
+        }
+        std::vector<uint8_t> alive(A, 1);
+        std::vector<float> bestD2(A, perceptionSq);
+        std::vector<int> bestNode(A, -1);
+        size_t aliveCount = A;
+        auto forAttractorsNear = [&](const Vec3& p, auto&& visit) {
+            const auto k = cellOf(p);
+            for (int64_t dz = -1; dz <= 1; ++dz) {
+                for (int64_t dy = -1; dy <= 1; ++dy) {
+                    for (int64_t dx = -1; dx <= 1; ++dx) {
+                        auto it = attractorGrid.find(packKey(k[0] + dx, k[1] + dy, k[2] + dz));
+                        if (it == attractorGrid.end()) continue;
+                        for (uint32_t i : it->second) {
+                            if (alive[i]) visit(i);
+                        }
+                    }
+                }
+            }
+        };
+        // nearest seeing node per attractor, over the nodes from `from` on (in id order: a tie keeps the earlier node)
+        auto compareNodes = [&](size_t from) {
+            for (size_t n = from; n < nodes.size(); ++n) {
+                const ColonizationNode& node = nodes[n];
+                forAttractorsNear(node.position, [&](uint32_t i) {
+                    float d2 = 0.0f;
+                    if (sees(node, attractors[i], d2) && d2 < bestD2[i]) {
+                        bestD2[i] = d2;
+                        bestNode[i] = node.id;
+                    }
+                });
+            }
+        };
+        // attractors within the kill reach of the nodes from `from` on die; returns how many
+        auto killNear = [&](size_t from) {
+            size_t killed = 0;
+            for (size_t n = from; n < nodes.size(); ++n) {
+                const Vec3 p = nodes[n].position;
+                forAttractorsNear(p, [&](uint32_t i) {
+                    if ((attractors[i] - p).lengthSquared() < effectiveKillSq) {
+                        alive[i] = 0;
+                        ++killed;
+                    }
+                });
+            }
+            aliveCount -= killed;
+            return killed;
+        };
+        compareNodes(0);
+        size_t killChecked = 0;  // nodes from here on have not been kill-checked yet (the first check takes the trunk too)
 
+        rep.stop = "iteration_cap";
+        int sinceReached = 0;
         for (int iter = 0; iter < cfg.maxIterations; ++iter) {
-            if (attractors.empty()) break;
+            if (aliveCount == 0) { rep.stop = "all_attractors_reached"; break; }
 
             // Map each node to accumulated attraction direction and count
             std::unordered_map<int, Vec3> nodeAttractionDir;
             std::unordered_map<int, int> nodeAttractionCount;
 
-            // Find closest tree node for each attractor
-            for (const auto& attr : attractors) {
-                float bestDistSq = perceptionSq;
-                int bestNode = -1;
-
-                for (const auto& node : nodes) {
-                    Vec3 toAttr = attr - node.position;
-                    float d2 = toAttr.lengthSquared();
-                    if (d2 < bestDistSq) {
-                        // Forward perception cone: node only sees attractors ahead or laterally
-                        // (dot product >= -0.2 * length prevents 180-degree backward turns)
-                        float toAttrLen = std::sqrt(d2);
-                        if (toAttr.dot(node.growthDir) >= -0.20f * toAttrLen) {
-                            bestDistSq = d2;
-                            bestNode = node.id;
-                        }
-                    }
-                }
-
-                if (bestNode >= 0) {
-                    Vec3 dir = (attr - nodes[bestNode].position).normalized();
-                    nodeAttractionDir[bestNode] += dir;
-                    nodeAttractionCount[bestNode]++;
-                }
+            // Each attractor pulls its nearest seeing node (in attractor order, as the sums are taken)
+            for (size_t i = 0; i < A; ++i) {
+                if (!alive[i] || bestNode[i] < 0) continue;
+                Vec3 dir = (attractors[i] - nodes[bestNode[i]].position).normalized();
+                nodeAttractionDir[bestNode[i]] += dir;
+                nodeAttractionCount[bestNode[i]]++;
             }
 
-            if (nodeAttractionDir.empty()) break;
+            if (nodeAttractionDir.empty()) { rep.stop = "no_attractor_within_perception"; break; }
 
             // Sprout new nodes
             std::vector<ColonizationNode> newNodes;
@@ -1297,31 +1445,24 @@ public:
                 newNodes.push_back(child);
             }
 
+            const size_t firstNew = nodes.size();
             for (const auto& n : newNodes) {
                 nodes[n.parentId].children.push_back(n.id);
                 nodes.push_back(n);
             }
+            rep.iterations = iter + 1;
 
             if (newNodes.empty()) break;
 
-            // Prune attractors inside kill radius of any node
-            float effectiveKillSq = (cfg.killRadius * 1.25f) * (cfg.killRadius * 1.25f);
-            std::vector<Vec3> remainingAttractors;
-            remainingAttractors.reserve(attractors.size());
-            for (const auto& attr : attractors) {
-                bool killed = false;
-                for (const auto& node : nodes) {
-                    if ((attr - node.position).lengthSquared() < effectiveKillSq) {
-                        killed = true;
-                        break;
-                    }
-                }
-                if (!killed) {
-                    remainingAttractors.push_back(attr);
-                }
-            }
-            attractors = std::move(remainingAttractors);
+            // Prune attractors inside kill radius of any node, then let the survivors see the new nodes
+            const size_t killed = killNear(killChecked);
+            killChecked = nodes.size();
+            compareNodes(firstNew);
+            sinceReached = killed > 0 ? 0 : sinceReached + 1;
+            if (cfg.stallIterations > 0 && sinceReached >= cfg.stallIterations) { rep.stop = "stalled"; break; }
         }
+        if (aliveCount == 0) rep.stop = "all_attractors_reached";
+        rep.attractorsReached = A - aliveCount;
 
         // 4. Propagate Branch Radii via Leonardo da Vinci's Rule: r_parent^p = sum(r_child^p)
         for (int i = static_cast<int>(nodes.size()) - 1; i >= 0; --i) {
@@ -1353,6 +1494,91 @@ public:
         return nodes;
     }
 
+    /**
+     * Meshes a skeleton growSkeleton grew from `cfg` within cfg.triangleBudget (> 0): the same meshes
+     * generateTreeComponents gives for that budget, without growing the skeleton again.
+     */
+    static std::pair<geometry::Mesh, geometry::Mesh> meshGrownSkeleton(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& nodes, TreeBudgetReport* report = nullptr) {
+        geometry::Mesh woodMesh("Tree_Wood");
+        woodMesh.material = geometry::PbrMaterial::roughWood();
+        woodMesh.material.name = "PBR_Redwood_Bark";
+        woodMesh.material.roughnessFactor = 0.92f;
+        woodMesh.material.metallicFactor = 0.02f;
+        geometry::Mesh foliageMesh("Tree_Foliage");
+        foliageMesh.material.name = "PBR_Canopy_Foliage";
+        foliageMesh.material.roughnessFactor = 0.58f;
+        foliageMesh.material.metallicFactor = 0.01f;
+        foliageMesh.material.doubleSided = true;
+        foliageMesh.material.alphaMode = "MASK";
+        foliageMesh.material.alphaCutoff = 0.45f;
+        TreeBudgetReport local;
+        if (cfg.triangleBudget > 0.0f) meshWithinBudget(cfg, nodes, woodMesh, foliageMesh, report ? *report : local);
+        for (const auto& v : woodMesh.vertices) woodMesh.bounds.expand(v);
+        for (const auto& v : foliageMesh.vertices) foliageMesh.bounds.expand(v);
+        return {woodMesh, foliageMesh};
+    }
+
+    /** Share of the trunk radius below which a branch carries leaves at any budget (budgeted meshing). */
+    static constexpr float kTwigRadiusShare = 0.12f;
+
+    /**
+     * The leaf nodes the budgeted meshing has at any budget: every tip, and every twig thinner than kTwigRadiusShare of
+     * the trunk, above the crown break (rootAnchor.y + 0.85 clearTrunkHeight), and with leavesOnCrownBranches every
+     * branch node that grew through the measured crown. A smaller budget prunes more wood, so it has these and more.
+     * The leaf masses sit on (or between) leaf nodes and are kept inside the crown, so they need not cover every leaf
+     * node: what the delivered masses reach is measured on the mesh (scratchbox_tile_vegetation.hpp measureFoliage).
+     */
+    static std::vector<Vec3> foliageAnchors(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g) {
+        std::vector<Vec3> pts;
+        if (g.size() < 2) return pts;
+        const std::vector<uint8_t> leafy = leafyNodes(cfg, g, kTwigRadiusShare * trunkReferenceRadius(cfg, g));
+        for (size_t i = 0; i < g.size(); ++i) {
+            if (leafy[i]) pts.push_back(g[i].position);
+        }
+        return pts;
+    }
+
+    /**
+     * Nodes that carry leaves at a twig radius: above the crown break, every tip and every twig thinner than
+     * `twigRadius` (in `radii`, the meshing's scaled radii, when given; else the skeleton's own), and with
+     * leavesOnCrownBranches every node within the kill reach of an attractor.
+     */
+    static std::vector<uint8_t> leafyNodes(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g, float twigRadius,
+                                           const std::vector<float>* radii = nullptr) {
+        std::vector<uint8_t> leafy(g.size(), 0);
+        const float crownBottom = cfg.rootAnchor.y + cfg.clearTrunkHeight * 0.85f;
+        for (size_t i = 0; i < g.size(); ++i) {
+            if (g[i].position.y < crownBottom) continue;
+            const float r = radii ? (*radii)[i] : g[i].radius;
+            if (g[i].children.empty() || r < twigRadius) leafy[i] = 1;
+        }
+        if (!cfg.leavesOnCrownBranches || cfg.customAttractors.empty()) return leafy;
+        const float reach = std::max(1e-3f, cfg.killRadius * 1.25f);
+        const float reachSq = reach * reach;
+        auto pack = [&](const Vec3& p, int dx, int dy, int dz) {
+            const int64_t a = static_cast<int64_t>(std::floor(p.x / reach)) + dx, b = static_cast<int64_t>(std::floor(p.y / reach)) + dy, c = static_cast<int64_t>(std::floor(p.z / reach)) + dz;
+            return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
+        };
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+        for (uint32_t i = 0; i < cfg.customAttractors.size(); ++i) grid[pack(cfg.customAttractors[i], 0, 0, 0)].push_back(i);
+        for (size_t i = 0; i < g.size(); ++i) {
+            if (leafy[i] || g[i].position.y < crownBottom) continue;
+            const Vec3 p = g[i].position;
+            for (int dz = -1; dz <= 1 && !leafy[i]; ++dz) {
+                for (int dy = -1; dy <= 1 && !leafy[i]; ++dy) {
+                    for (int dx = -1; dx <= 1 && !leafy[i]; ++dx) {
+                        auto it = grid.find(pack(p, dx, dy, dz));
+                        if (it == grid.end()) continue;
+                        for (uint32_t a : it->second) {
+                            if ((cfg.customAttractors[a] - p).lengthSquared() < reachSq) { leafy[i] = 1; break; }
+                        }
+                    }
+                }
+            }
+        }
+        return leafy;
+    }
+
     static std::pair<geometry::Mesh, geometry::Mesh> generateTreeComponents(const SpaceColonizationConfig& cfg, TreeBudgetReport* report = nullptr) {
         geometry::Mesh woodMesh("Tree_Wood");
         woodMesh.material = geometry::PbrMaterial::roughWood();
@@ -1372,13 +1598,7 @@ public:
 
         const std::vector<ColonizationNode> nodes = growSkeleton(cfg, rng);
 
-        if (cfg.triangleBudget > 0.0f) {
-            TreeBudgetReport local;
-            meshWithinBudget(cfg, nodes, woodMesh, foliageMesh, report ? *report : local);
-            for (const auto& v : woodMesh.vertices) woodMesh.bounds.expand(v);
-            for (const auto& v : foliageMesh.vertices) foliageMesh.bounds.expand(v);
-            return {woodMesh, foliageMesh};
-        }
+        if (cfg.triangleBudget > 0.0f) return meshGrownSkeleton(cfg, nodes, report);
 
         // 5. Build Branch Cylinder Meshes
         for (const auto& node : nodes) {
@@ -1632,12 +1852,224 @@ private:
         }
     }
 
+    /** Trunk radius reference: the first trunk node above the root flare (or the last one before the crown break). */
+    static float trunkReferenceRadius(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g) {
+        float trunkRef = g[0].radius;
+        size_t n = 0;
+        while (g[n].children.size() == 1) {
+            n = static_cast<size_t>(g[n].children[0]);
+            trunkRef = g[n].radius;
+            if (g[n].position.y >= cfg.rootAnchor.y + cfg.rootFlareHeight) break;
+        }
+        return trunkRef;
+    }
+
+    // Leaf masses (budgeted meshing): a unit icosphere squashed in y by kLeafSquash, each vertex moved radially by
+    // 1 -+ kLeafJitterAmp / 2 of the mass's size.
+    static constexpr float kLeafJitterAmp = 0.48f;
+    static constexpr float kLeafSquash = 0.82f;
+    static constexpr float kLeafJitterMax = 1.0f + 0.5f * kLeafJitterAmp;
+    static constexpr float kLeafJitterMin = 1.0f - 0.5f * kLeafJitterAmp;
+    static constexpr int kFootprintSectors = 16;
+
+    /**
+     * Where a tree's leaf masses may go: all of each mass inside its crown, so a coarse budget does not grow the tree
+     * past the crown it was fitted to. With a measured surface (cfg.foliageSurface) the crown is its footprint (the
+     * farthest surface point from the trunk in each of 16 sectors, a mass kept within its centre's sector's) up to its
+     * highest surface point (or cfg.foliageTop); without one, an elliptic cylinder of radii crownExtents.x/z around
+     * crownCenter up to crownCenter.y + crownExtents.y. Its bottom is crownCenter.y - crownExtents.y either way, and a
+     * mass is never larger than the crown's smallest extent.
+     */
+    struct LeafEnvelope {
+        bool measured{false};
+        std::array<float, kFootprintSectors> footprint{};
+        Vec3 axis{0, 0, 0}, center{0, 0, 0}, extents{1, 1, 1};
+        float top{0}, bottom{0}, sizeCap{1};
+
+        static int sector(float dx, float dz) {
+            return static_cast<int>(std::floor((std::atan2(dz, dx) + math::PI) / math::TWO_PI * kFootprintSectors)) & (kFootprintSectors - 1);
+        }
+        static LeafEnvelope of(const SpaceColonizationConfig& cfg) {
+            LeafEnvelope e;
+            e.axis = cfg.rootAnchor;
+            e.center = cfg.crownCenter;
+            e.extents = cfg.crownExtents;
+            e.bottom = cfg.crownCenter.y - cfg.crownExtents.y;
+            e.top = cfg.crownCenter.y + cfg.crownExtents.y;
+            e.sizeCap = std::max(1e-3f, std::min({cfg.crownExtents.x, cfg.crownExtents.y / kLeafSquash, cfg.crownExtents.z}) / kLeafJitterMax);
+            e.measured = !cfg.foliageSurface.empty() && cfg.foliageSurfaceReach > 0.0f;
+            if (!e.measured) return e;
+            e.top = -std::numeric_limits<float>::infinity();
+            for (const auto& s : cfg.foliageSurface) {
+                const float dx = s.x - e.axis.x, dz = s.z - e.axis.z;
+                float& f = e.footprint[static_cast<size_t>(sector(dx, dz))];
+                f = std::max(f, std::sqrt(dx * dx + dz * dz));
+                e.top = std::max(e.top, s.y);
+            }
+            if (std::isfinite(cfg.foliageTop)) e.top = std::max(e.top, cfg.foliageTop);
+            // a sector with no surface point takes its neighbours' (the footprint is measured; a gap in it is not a hole)
+            for (int pass = 0; pass < 2; ++pass) {
+                for (int s = 0; s < kFootprintSectors; ++s) {
+                    float& f = e.footprint[static_cast<size_t>(s)];
+                    if (f > 0.0f) continue;
+                    const float a = e.footprint[static_cast<size_t>((s + kFootprintSectors - 1) % kFootprintSectors)];
+                    const float b = e.footprint[static_cast<size_t>((s + 1) % kFootprintSectors)];
+                    if (a > 0.0f || b > 0.0f) f = (a > 0.0f && b > 0.0f) ? 0.5f * (a + b) : std::max(a, b);
+                }
+            }
+            return e;
+        }
+        /** A centre for a mass of this size, moved in from the crown's edge (towards its axis) until all of it is inside. */
+        Vec3 keepIn(Vec3 c, float size) const {
+            const float reachH = size * kLeafJitterMax, reachV = size * kLeafSquash * kLeafJitterMax;
+            c.y = std::clamp(c.y, bottom + reachV, std::max(bottom + reachV, top - reachV));
+            if (measured) {
+                const float dx = c.x - axis.x, dz = c.z - axis.z;
+                const float limit = std::max(0.0f, footprint[static_cast<size_t>(sector(dx, dz))] - reachH);
+                const float r = std::sqrt(dx * dx + dz * dz);
+                if (r > limit) {
+                    const float k = r > 1e-6f ? limit / r : 0.0f;
+                    c.x = axis.x + dx * k;
+                    c.z = axis.z + dz * k;
+                }
+                return c;
+            }
+            const float ax = std::max(1e-3f, extents.x - reachH), az = std::max(1e-3f, extents.z - reachH);
+            const float dx = c.x - center.x, dz = c.z - center.z;
+            const float q = std::sqrt((dx * dx) / (ax * ax) + (dz * dz) / (az * az));
+            if (q > 1.0f) {
+                c.x = center.x + dx / q;
+                c.z = center.z + dz / q;
+            }
+            return c;
+        }
+    };
+
+    /** The size of a leaf mass: 0.85..1.15 of its nominal size (drawn for its place ci in the mesh), never over sizeCap. */
+    static float leafMassSize(const SpaceColonizationConfig& cfg, const LeafEnvelope& env, size_t ci, float nominal) {
+        return std::min(env.sizeCap, nominal * (0.85f + 0.3f * hashUnit(cfg.seed ^ 0xA5A5A5A5u, static_cast<uint32_t>(ci), 0u)));
+    }
+
+    /**
+     * Nominal size of the leaf masses on a measured surface (see surfaceMassCentres). Kept inside the crown, a mass of
+     * size s sits up to 1.24 s in from its side and 1.02 s down from its top, so 1.6 s from a point on its upper edge,
+     * which its inner ball (0.49 s) and the reach must span: 0.6 of the reach leaves a third of the reach to spare.
+     */
+    static float surfaceMassNominal(const SpaceColonizationConfig& cfg, const LeafEnvelope& env) {
+        return std::min(env.sizeCap, 0.6f * cfg.foliageSurfaceReach);
+    }
+
+    /**
+     * The leaf masses that bring the measured crown surface (cfg.foliageSurface) within cfg.foliageSurfaceReach, in the
+     * order they go into the mesh, each with the surface points it newly brings within reach.
+     *
+     * A mass of size s is a star around its centre whose faces all lie beyond the planes of the unit sphere's faces
+     * scaled by kLeafJitterMin (squashed by kLeafSquash), so it holds the ball of radius
+     *   inner(s) = kLeafSquash * kLeafJitterMin * (nearest face plane of the 20-face unit icosphere, 0.79) * s,
+     * and a point within inner + reach of its centre lies inside it or within reach of it (finer masses hold a larger
+     * ball). These masses are smaller than the reach (surfaceMassNominal): kept inside the crown, a larger one sits too
+     * far in from its edge and top to reach the surface points there. Candidate centres are the leaf nodes `pts` (one
+     * per cell of a fifth of that cover radius), each moved into the crown as the largest such mass is. The first mass
+     * goes on the candidate nearest the crown's highest point, when one reaches it; the rest go, greedily, where they
+     * bring the most points not yet within reach (ties to the lower candidate), until every point a candidate reaches is.
+     */
+    static std::vector<std::pair<Vec3, size_t>> surfaceMassCentres(const SpaceColonizationConfig& cfg, const LeafEnvelope& env, const std::vector<Vec3>& pts) {
+        std::vector<std::pair<Vec3, size_t>> out;
+        if (!env.measured || pts.empty()) return out;
+        std::vector<Vec3> sphere;
+        std::vector<uint32_t> sphereTris;
+        unitIcosphere(0, sphere, sphereTris);
+        float facePlane = 1.0f;
+        for (size_t t = 0; t + 2 < sphereTris.size(); t += 3) {
+            const Vec3 a = sphere[sphereTris[t]], b = sphere[sphereTris[t + 1]], c = sphere[sphereTris[t + 2]];
+            facePlane = std::min(facePlane, std::abs((b - a).cross(c - a).normalized().dot(a)));
+        }
+        const float nominal = surfaceMassNominal(cfg, env);
+        const float sizeLo = std::min(env.sizeCap, 0.85f * nominal), sizeHi = std::min(env.sizeCap, 1.15f * nominal);
+        const float cover = kLeafSquash * kLeafJitterMin * facePlane * sizeLo + cfg.foliageSurfaceReach;
+        const std::vector<Vec3>& S = cfg.foliageSurface;
+        auto key3 = [](const Vec3& p, float cell, int dx, int dy, int dz) {
+            const int64_t a = static_cast<int64_t>(std::floor(p.x / cell)) + dx, b = static_cast<int64_t>(std::floor(p.y / cell)) + dy, c = static_cast<int64_t>(std::floor(p.z / cell)) + dz;
+            return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
+        };
+        std::vector<Vec3> cand;
+        {
+            std::unordered_map<uint64_t, uint8_t> taken;
+            const float cc = std::max(1e-3f, 0.2f * cover);
+            for (const auto& p : pts) {
+                if (taken.emplace(key3(p, cc, 0, 0, 0), 1).second) cand.push_back(env.keepIn(p, sizeHi));
+            }
+        }
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+        for (uint32_t i = 0; i < S.size(); ++i) grid[key3(S[i], cover, 0, 0, 0)].push_back(i);
+        std::vector<std::vector<uint32_t>> reaches(cand.size());
+        const float cover2 = cover * cover;
+        for (size_t k = 0; k < cand.size(); ++k) {
+            for (int dz = -1; dz <= 1; ++dz) {
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        auto it = grid.find(key3(cand[k], cover, dx, dy, dz));
+                        if (it == grid.end()) continue;
+                        for (uint32_t i : it->second) if ((S[i] - cand[k]).lengthSquared() <= cover2) reaches[k].push_back(i);
+                    }
+                }
+            }
+        }
+        std::vector<uint8_t> reached(S.size(), 0);
+        // the crown's highest point first (the tree's height is what a budget must never cut): the candidate nearest it
+        {
+            size_t apex = 0;
+            for (size_t i = 1; i < S.size(); ++i) if (S[i].y > S[apex].y) apex = i;
+            long best = -1;
+            float bestD2 = std::numeric_limits<float>::infinity();
+            for (size_t k = 0; k < cand.size(); ++k) {
+                const float d2 = (cand[k] - S[apex]).lengthSquared();
+                if (d2 <= cover2 && d2 < bestD2) { bestD2 = d2; best = static_cast<long>(k); }
+            }
+            if (best >= 0) {
+                for (uint32_t i : reaches[static_cast<size_t>(best)]) reached[i] = 1;
+                out.push_back({cand[static_cast<size_t>(best)], reaches[static_cast<size_t>(best)].size()});
+            }
+        }
+        // then lazy greedy (a candidate's gain only falls as points are reached)
+        auto worse = [](const std::pair<size_t, uint32_t>& a, const std::pair<size_t, uint32_t>& b) { return a.first < b.first || (a.first == b.first && a.second > b.second); };
+        std::priority_queue<std::pair<size_t, uint32_t>, std::vector<std::pair<size_t, uint32_t>>, decltype(worse)> heap(worse);
+        for (uint32_t k = 0; k < cand.size(); ++k) if (!reaches[k].empty()) heap.push({reaches[k].size(), k});
+        while (!heap.empty()) {
+            const auto [gain, k] = heap.top();
+            heap.pop();
+            size_t now = 0;
+            for (uint32_t i : reaches[k]) now += reached[i] ? 0 : 1;
+            if (now == 0) continue;
+            if (now < gain) { heap.push({now, k}); continue; }
+            for (uint32_t i : reaches[k]) reached[i] = 1;
+            out.push_back({cand[k], now});
+        }
+        return out;
+    }
+
+public:
+    /**
+     * How many leaf masses the budgeted meshing puts on cfg.foliageSurface before any other: as many as it takes to bring
+     * every surface point the tree's leaf nodes can reach within cfg.foliageSurfaceReach (0 without a surface). The
+     * meshing holds them all when its foliage (the budget less the wood, at least 1 - woodBudgetShare of it) holds that
+     * many 20-triangle masses. Counted from the leaf nodes every budget has (foliageAnchors).
+     */
+    static size_t surfaceMassesNeeded(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g) {
+        const LeafEnvelope env = LeafEnvelope::of(cfg);
+        return surfaceMassCentres(cfg, env, foliageAnchors(cfg, g)).size();
+    }
+
+private:
     /**
      * Meshes a grown skeleton within cfg.triangleBudget. Wood: chains of single-child nodes are simplified
      * (Douglas-Peucker, tolerance a fraction of the local radius), each kept segment is a tube whose side count grows
      * with sqrt(radius), and segments that start thinner than a bisected radius are pruned; the trunk chain is always
-     * kept. Foliage: the pruned twigs (and the remaining tips) are gathered into voxels whose size is the smallest
-     * that fits the remaining budget, and each voxel becomes one irregular leaf mass that overlaps its neighbours.
+     * kept. Foliage: the leaf nodes (the pruned twigs, the remaining tips, and with leavesOnCrownBranches the branches
+     * that grew through the measured crown) carry the leaf masses. With a measured surface the first masses go where
+     * they bring it within reach (surfaceMassCentres), as many as the budget holds; the rest of the leaf nodes are
+     * gathered into voxels, the smallest that fit the masses left, each voxel one mass at its nodes' centroid. Every
+     * mass is kept inside the crown (LeafEnvelope).
      */
     static void meshWithinBudget(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g,
                                  geometry::Mesh& wood, geometry::Mesh& foliage, TreeBudgetReport& rep) {
@@ -1648,16 +2080,7 @@ private:
         const size_t budget = static_cast<size_t>(std::max(0.0f, cfg.triangleBudget));
         auto node = [&](int i) -> const ColonizationNode& { return g[static_cast<size_t>(i)]; };
 
-        // Trunk radius reference: the first trunk node above the root flare (or the last one before the crown break).
-        float trunkRef = g[0].radius;
-        {
-            int n = 0;
-            while (node(n).children.size() == 1) {
-                n = node(n).children[0];
-                trunkRef = node(n).radius;
-                if (node(n).position.y >= cfg.rootAnchor.y + cfg.rootFlareHeight) break;
-            }
-        }
+        const float trunkRef = trunkReferenceRadius(cfg, g);
         const float scale = (cfg.baseRadius > 0.0f && trunkRef > 1e-6f) ? cfg.baseRadius / trunkRef : 1.0f;
         std::vector<float> radius(N);
         for (size_t i = 0; i < N; ++i) radius[i] = g[i].radius * scale;
@@ -1760,27 +2183,33 @@ private:
         rep.woodTriangles = wood.indices.size() / 3;
         rep.prunedBelowRadius = rMin;
 
-        // Foliage: twigs thinner than the pruning radius (or than a small share of the trunk) and every tip.
-        const float crownBottom = cfg.rootAnchor.y + cfg.clearTrunkHeight * 0.85f;
-        const float twigRadius = std::max(rMin, 0.12f * rRef);
+        // Foliage: twigs thinner than the pruning radius (or than a small share of the trunk) and every tip above the
+        // crown break (and, with leavesOnCrownBranches, the branches that grew through the measured crown).
+        const float twigRadius = std::max(rMin, kTwigRadiusShare * rRef);
         std::vector<Vec3> pts;
+        const std::vector<uint8_t> leafy = leafyNodes(cfg, g, twigRadius, &radius);
         for (size_t i = 0; i < N; ++i) {
-            if (g[i].position.y < crownBottom) continue;
-            if (g[i].children.empty() || radius[i] < twigRadius) pts.push_back(g[i].position);
+            if (leafy[i]) pts.push_back(g[i].position);
         }
         const size_t foliageBudget = budget > rep.woodTriangles ? budget - rep.woodTriangles : 0;
         if (pts.empty() || foliageBudget < 20) return;
-        const int level = foliageBudget / 80 >= 24 ? 1 : 0;
+        const LeafEnvelope env = LeafEnvelope::of(cfg);
+        // the masses that bring the measured surface within reach, all of them (the budget may hold fewer)
+        const std::vector<std::pair<Vec3, size_t>> surface = surfaceMassCentres(cfg, env, pts);
+        rep.surfaceMassesNeeded = surface.size();
+        // finer masses (80 triangles) once the budget holds at least 24 of them, and every surface mass
+        const int level = foliageBudget / 80 >= std::max<size_t>(24, surface.size()) ? 1 : 0;
         std::vector<Vec3> sphere;
         std::vector<uint32_t> sphereTris;
         unitIcosphere(level, sphere, sphereTris);
         const size_t tpc = sphereTris.size() / 3;
+        const size_t massesHeld = foliageBudget / tpc;
 
         struct Cell { Vec3 sum{0, 0, 0}; uint32_t n{0}; };
-        auto gather = [&](float v, std::vector<Cell>& out) {
+        auto gather = [&](const std::vector<Vec3>& from, float v, std::vector<Cell>& out) {
             std::unordered_map<uint64_t, size_t> index;
             out.clear();
-            for (const auto& p : pts) {
+            for (const auto& p : from) {
                 const int64_t a = static_cast<int64_t>(std::floor(p.x / v));
                 const int64_t b = static_cast<int64_t>(std::floor(p.y / v));
                 const int64_t c = static_cast<int64_t>(std::floor(p.z / v));
@@ -1795,49 +2224,75 @@ private:
                 }
             }
         };
+        if (massesHeld == 0) return;
+        // the masses' nominal size: the smallest voxel at which all the leaf nodes gather into no more masses than the
+        // budget holds (masses of 0.62 of it overlap their neighbours), no larger than the tree
         std::vector<Cell> cells;
         float v = std::max(0.15f, 0.012f * treeHeight);
-        gather(v, cells);
-        for (int it = 0; it < 400 && cells.size() * tpc > foliageBudget; ++it) {
+        gather(pts, v, cells);
+        for (int it = 0; it < 400 && cells.size() > massesHeld && v < 2.0f * treeHeight; ++it) {
             v *= 1.08f;
-            gather(v, cells);
+            gather(pts, v, cells);
         }
-        if (cells.size() * tpc > foliageBudget) return;
         rep.clumpSpacing = v;
         rep.trianglesPerClump = static_cast<int>(tpc);
         const float clumpRadius = 0.62f * v;
-        // Leaf masses stay inside the crown (an elliptic cylinder of radii crownExtents.x/z around crownCenter, between
-        // crownCenter.y -+ crownExtents.y): a clump is never larger than the crown and is moved in from its edge, so a
-        // coarse budget does not grow the tree past the crown it was fitted to.
-        const float jitterMax = 1.24f, squash = 0.82f;
-        const Vec3 envLo = cfg.crownCenter - cfg.crownExtents, envHi = cfg.crownCenter + cfg.crownExtents;
-        const float sizeCap = std::max(1e-3f, std::min({cfg.crownExtents.x, cfg.crownExtents.y / squash, cfg.crownExtents.z}) / jitterMax);
-        for (size_t ci = 0; ci < cells.size(); ++ci) {
-            Vec3 center = cells[ci].sum / static_cast<float>(cells[ci].n);
-            const float size = std::min(sizeCap, clumpRadius * (0.85f + 0.3f * hashUnit(cfg.seed ^ 0xA5A5A5A5u, static_cast<uint32_t>(ci), 0u)));
-            const Vec3 reach(size * jitterMax, size * squash * jitterMax, size * jitterMax);
-            center.y = std::clamp(center.y, envLo.y + reach.y, std::max(envLo.y + reach.y, envHi.y - reach.y));
-            {
-                const float ax = std::max(1e-3f, cfg.crownExtents.x - reach.x), az = std::max(1e-3f, cfg.crownExtents.z - reach.z);
-                const float dx = center.x - cfg.crownCenter.x, dz = center.z - cfg.crownCenter.z;
-                const float q = std::sqrt((dx * dx) / (ax * ax) + (dz * dz) / (az * az));
-                if (q > 1.0f) {
-                    center.x = cfg.crownCenter.x + dx / q;
-                    center.z = cfg.crownCenter.z + dz / q;
+
+        struct Mass { Vec3 center; float size; };
+        std::vector<Mass> masses;
+        // the surface masses (their centres were moved into the crown for the largest size they may be drawn)
+        const float surfaceNominal = surfaceMassNominal(cfg, env);
+        for (size_t k = 0; k < surface.size() && masses.size() < massesHeld; ++k) {
+            masses.push_back({surface[k].first, leafMassSize(cfg, env, masses.size(), surfaceNominal)});
+            rep.surfacePointsCovered += surface[k].second;
+        }
+        rep.surfaceMasses = masses.size();
+        // the masses left: the leaf nodes no surface mass holds, a mass at the centroid of those in each voxel (the voxel
+        // grown until they fit), kept inside the crown
+        const size_t left = massesHeld - masses.size();
+        if (left > 0) {
+            std::vector<Vec3> rest;
+            if (masses.empty()) {
+                rest = pts;
+            } else {
+                for (const auto& p : pts) {
+                    bool held = false;
+                    for (const auto& m : masses) {
+                        const float hold = m.size * kLeafJitterMax;
+                        if ((p - m.center).lengthSquared() <= hold * hold) { held = true; break; }
+                    }
+                    if (!held) rest.push_back(p);
                 }
             }
+            if (!rest.empty()) {
+                float w = v;
+                gather(rest, w, cells);
+                for (int it = 0; it < 400 && cells.size() > left; ++it) {
+                    w *= 1.08f;
+                    gather(rest, w, cells);
+                }
+                if (cells.size() <= left) {
+                    for (const auto& c : cells) {
+                        const float size = leafMassSize(cfg, env, masses.size(), clumpRadius);
+                        masses.push_back({env.keepIn(c.sum / static_cast<float>(c.n), size), size});
+                    }
+                }
+            }
+        }
+
+        for (size_t ci = 0; ci < masses.size(); ++ci) {
             const uint32_t base = static_cast<uint32_t>(foliage.vertices.size());
             for (size_t k = 0; k < sphere.size(); ++k) {
-                const float jitter = 1.0f + 0.48f * (hashUnit(cfg.seed, static_cast<uint32_t>(ci), static_cast<uint32_t>(k)) - 0.5f);
+                const float jitter = 1.0f + kLeafJitterAmp * (hashUnit(cfg.seed, static_cast<uint32_t>(ci), static_cast<uint32_t>(k)) - 0.5f);
                 const Vec3 d = sphere[k];
-                foliage.vertices.push_back(center + Vec3(d.x, d.y * squash, d.z) * (size * jitter));
-                foliage.normals.push_back(Vec3(d.x, d.y / squash, d.z).normalized());
+                foliage.vertices.push_back(masses[ci].center + Vec3(d.x, d.y * kLeafSquash, d.z) * (masses[ci].size * jitter));
+                foliage.normals.push_back(Vec3(d.x, d.y / kLeafSquash, d.z).normalized());
                 foliage.uvs.push_back(Vec2(0.5f + 0.5f * d.x, 0.5f + 0.5f * d.z));
                 foliage.vertexColors.push_back(cfg.leafColor);
             }
             for (uint32_t idx : sphereTris) foliage.indices.push_back(base + idx);
         }
-        rep.foliageClumps = cells.size();
+        rep.foliageClumps = masses.size();
         rep.foliageTriangles = foliage.indices.size() / 3;
     }
 };

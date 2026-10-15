@@ -13,32 +13,41 @@
 /**
  * Trees in a photogrammetric tile, measured and rebuilt.
  *
- * strip: reads a photo-textured tile (x = east, y = up, z = south, metres) and measures where its tree crowns are,
- *   from three continuous kinds of evidence per triangle: photo chroma (normalised excess green ExG and ExG - ExR over
+ * strip: reads a photo-textured tile (x = east, y = up, z = south, metres) and measures where its tree crowns are, from
+ *   three continuous kinds of evidence per triangle: photo chroma (normalised excess green ExG and ExG - ExR over
  *   texture samples, with a dark-pixel guard), local roughness (area-weighted normal dispersion over welded neighbours
  *   within a radius) and height above the terrain model. Crowns are local maxima of the canopy height model with a
  *   window that grows with height, grown by a marker-controlled watershed with a climb limit. Each crown is measured
  *   against the surface it stands on (roof or ground): the surface it touches around its footprint, reached through
- *   other canopy when it touches none. Crowns at least minTreeHeight above that surface are trees; a tree whose crown
- *   runs to the extraction's edge is still a tree when its apex (its local-maximum window) lies inside, and is measured
- *   up to the edge. A crown whose apex window reaches the edge is cut: its top and trunk may lie outside. Each tree goes
- *   with the scanned drape around it (the photogrammetric curtain from crown to ground, planar or not, out to
- *   drapeReach) and with pieces of its scan left hanging in the air beside it, never with walls, roofs, paving or
- *   crowns that stay. Cut canopy stays as scanned unless its side would be left standing over a hole: then it goes with
- *   the trees it joins, is reported, and is not replanted. The ground under a tree is rebuilt on the surface it stood
- *   on (level paving or roof, or ground that slopes: a hillside's slope is measured from the surfaces around the
- *   crown): every hole loop is lowered onto that surface and capped there, so no cap face climbs to where the tree
- *   was and no hole opens; a tile with no tree is left as it is, whatever its ground. Where the hole edge stands off
- *   that surface (a wall or building side the tree hid, the side of a low planting that stays) a vertical skirt
- *   continues it down, and its area and height are reported by what it continues. Lower roof vegetation stays in the
- *   scan untouched. Writes the devegetated tile (textures kept; cap and skirt are untextured primitives of their own),
- *   and a crown list with apex, stem, support (height and slope), footprint, sector radii and voxel samples of the
- *   crown surface, in the tile frame and as lat/lng (the list stays in the cache; plant writes no geodetic data).
+ *   other canopy when it touches none. Where that surface is contradicted by the scan (much of the crown hangs below
+ *   it, or under the stem the scan has nothing standable between the crown and the ground where the terrain model has
+ *   it: in a continuous canopy the nearest level patches can be flat canopy tops), the crown stands on what the scan
+ *   has under its stem below it, and with nothing there its ground is not measured. Crowns at least minTreeHeight above
+ *   that surface are trees; a tree whose crown runs to the extraction's edge is still a tree when its apex (its
+ *   local-maximum window) lies inside, and is measured up to the edge. A crown whose apex window reaches the edge is
+ *   cut: its top and trunk may lie outside. Every tree is then regrown (growCrown) and meshed within its own budget
+ *   before anything is removed: a tree the regrown SB-Veggie tree's delivered leaves do not fill stays as scanned
+ *   (not_regrowable, with the reason), like a crown with no measured ground. Each tree that is removed goes with the
+ *   scanned drape around it (the photogrammetric curtain from crown to ground, planar or not, out to drapeReach) and
+ *   with pieces of its scan left hanging in the air beside it, never with walls, roofs, paving or crowns that stay. Cut
+ *   canopy stays as scanned unless its side would be left standing over a hole: then it goes with the trees it joins,
+ *   is reported, and is not replanted. The ground under a tree is rebuilt on the surface it stood on (level paving or
+ *   roof, or ground that slopes: a hillside's slope is measured from the surfaces around the crown): every hole loop is
+ *   lowered onto that surface and capped there, so no cap face climbs to where the tree was and no hole opens; a tile
+ *   with no tree is left as it is, whatever its ground. Where the hole edge stands off that surface (a wall or building
+ *   side the tree hid, the side of a low planting or a tree that stays) a vertical skirt continues it down, and its
+ *   area and height are reported by what it continues (and, on a crown that stays, on that crown). Lower roof
+ *   vegetation stays in the scan untouched. Writes the devegetated tile (textures kept; cap and skirt are untextured
+ *   primitives of their own), and a crown list with apex, stem, support (height, slope and where it was measured),
+ *   footprint, sector radii and voxel samples of the crown surface, in the tile frame and as lat/lng (the list stays in
+ *   the cache; plant writes no geodetic data).
  *
  * plant: grows one SB-Veggie tree per measured crown with the space-colonisation generator
- *   (nature::SpaceColonizationTreeGenerator), attracted to the crown's own measured samples, meshed within a
- *   per-tree share of a total triangle budget, in studio clay. What the scan does not observe (crown base, trunk
- *   radius) comes from explicit ratios and is reported as inferred.
+ *   (nature::SpaceColonizationTreeGenerator), attracted to the crown's own measured samples (the same trees strip
+ *   grew), meshed in studio clay within its share of the caller's triangle budget or, without one, its own budget
+ *   within a scene cap. Each tree's delivered leaf masses are measured against its measured crown, and each trunk base
+ *   against the model the trees are mounted on when one is given; shortfalls are reported by crown. What the scan does
+ *   not observe (crown base, trunk radius) comes from explicit ratios and is reported as inferred.
  *
  * Every failure is a VegetationError with a code; nothing is substituted.
  */
@@ -500,6 +509,440 @@ inline size_t delaunayFlips(const std::vector<Vec3>& p, std::vector<uint32_t>& t
 } // namespace detail
 
 // ============================================================================================
+// regrowth: one SB-Veggie tree grown into one measured crown
+// ============================================================================================
+//
+// strip grows every crown it measures as a tree before it removes anything, meshes it within its own budget, and keeps
+// as scanned (status not_regrowable, with the reason) each crown the regrown tree's delivered leaves do not fill; plant
+// grows the same trees again, from the same crown values, parameters and seed, and meshes them within the budget it is
+// given, measuring what each delivers. Both run growCrown, so what strip removed plant rebuilds.
+
+/** How a measured crown is regrown. What the scan does not observe (crown base, trunk radius) is inferred from ratios. */
+struct GrowthParams {
+    double crownBaseRatio{0.35};        // crown base = support + ratio * (apex - support): not observed, inferred
+    double trunkRadiusPerHeight{0.016}; // trunk radius = ratio * height: not observed, inferred
+    double shellDepth{0.8};             // share of each surface sample's height above the crown base the crown fills
+    double minSurfaceReached{0.9};      // share of the measured crown surface the regrown tree's leaves must reach
+    uint64_t seed{0};                   // mixed with each crown id
+};
+
+/** A measured crown, as crowns.json carries it (strip writes these values at full precision, so plant reads them back exactly). */
+struct CrownShape {
+    int id{0};
+    Vec3 apex;
+    double stemX{0}, stemZ{0}, supportY{0}, areaM2{0};
+    std::array<double, 16> sectorRadii{};
+    std::vector<Vec3> samples;
+};
+
+/** One crown regrown: the skeleton, how it was grown, and whether it fills the measured crown (and if not, why not). */
+struct CrownGrowth {
+    uint32_t seed{0};
+    double heightAboveSupport{0}, crownBaseY{0}, trunkRadius{0};
+    double attractorSpacing{0};         // voxel of the attractor cloud (m)
+    nature::SpaceColonizationConfig cfg;
+    std::vector<nature::ColonizationNode> skeleton;
+    nature::ColonizationReport colonisation;
+    size_t surfaceSamples{0};           // measured crown surface samples above the crown base
+    size_t surfaceReached{0};           // ... with a leaf anchor of the regrown tree within reachRadius
+    double reachRadius{0};              // a node reaches what lies within its kill reach; a sample, one voxel or sample spacing beyond (m)
+    double leafTopY{-std::numeric_limits<double>::infinity()};
+    std::string failureCode;            // diagnostic label (an open string): empty when the tree fills its crown
+    std::string failure;                // why the regrown tree is not the measured one, in words
+    std::string colonisationSummary;    // how colonisation went, in words (attractors reached, iterations, why it stopped)
+    std::vector<Vec3> surface;          // the measured surface samples above the crown base (what the leaves must reach)
+    size_t surfaceMassesNeeded{0};      // leaf masses the meshing needs to bring all of it it can within reachRadius
+    bool ok() const { return failure.empty(); }
+    double surfaceShare() const { return surfaceSamples ? static_cast<double>(surfaceReached) / static_cast<double>(surfaceSamples) : 0.0; }
+};
+
+namespace detail {
+
+inline uint32_t crownSeed(uint64_t seed, int crownId) {
+    return static_cast<uint32_t>(mix64(seed ^ mix64(static_cast<uint64_t>(crownId) + 0x5BD1E995ull)) & 0xFFFFFFFFull);
+}
+
+/** Runs fn(i) for i in [0, n) on a pool of threads taking the next index as each finishes (crowns differ in cost). */
+inline void forEachIndex(size_t n, int threads, const std::function<void(size_t)>& fn) {
+    int T = threads > 0 ? threads : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    T = static_cast<int>(std::min<size_t>(static_cast<size_t>(T), std::max<size_t>(1, n)));
+    std::atomic<size_t> next{0};
+    auto worker = [&]() {
+        for (size_t i = next.fetch_add(1); i < n; i = next.fetch_add(1)) fn(i);
+    };
+    if (T <= 1) { worker(); return; }
+    std::vector<std::thread> pool;
+    for (int t = 0; t < T; ++t) pool.emplace_back(worker);
+    for (auto& th : pool) th.join();
+}
+
+inline std::string fixed(double v, int digits) {
+    std::ostringstream s;
+    s.setf(std::ios::fixed);
+    s.precision(digits);
+    s << v;
+    return s.str();
+}
+
+} // namespace detail
+
+/**
+ * Grows one SB-Veggie tree (space colonisation) into a measured crown and checks that it fills it.
+ *
+ * Attractors are the crown volume under the measured surface: each surface sample above the (inferred) crown base and,
+ * below it, layers down by shellDepth of its height above the crown base, on a voxel grid scaled to the crown (fine
+ * enough for its width and its depth, never finer than the measurement's sample spacing calls for). Every growth
+ * distance follows from the crown and that spacing: the step from the tree's height, the kill radius from the step and
+ * the attractor spacing, the perception radius from the step and the attractor spacing plus the kill reach (a node that
+ * reached an attractor must still see across the gap to its neighbours); the trunk grows on past the inferred crown
+ * base until the measured crown is in sight (a tall crown seen only from above can begin well above it), and
+ * colonisation stops when it has reached every attractor, sees none, or has reached none for as many iterations as it
+ * takes to cross the perception radius twice.
+ *
+ * The tree grew into its crown when its leaf nodes (foliageAnchors: the tips, twigs and branches through the crown the
+ * meshing has at any budget) lie within reachRadius of at least minSurfaceReached of the measured surface samples above
+ * the crown base, and reach the apex height to within reachRadius. That is the skeleton; what its meshed leaves reach
+ * within a budget is measured on the mesh (meshCrown), and strip removes a tree only when both do.
+ */
+inline CrownGrowth growCrown(const CrownShape& c, const GrowthParams& G, double sampleSpacing) {
+    CrownGrowth g;
+    g.seed = detail::crownSeed(G.seed, c.id);
+    const double support = c.supportY;
+    const double H = std::max(0.5, static_cast<double>(c.apex.y) - support);
+    g.heightAboveSupport = H;
+    g.crownBaseY = support + G.crownBaseRatio * H;
+    g.trunkRadius = G.trunkRadiusPerHeight * H;
+    double radius = 0;
+    for (double r : c.sectorRadii) radius += r / 16.0;
+    const double spacing = sampleSpacing > 0 ? sampleSpacing : 0.7;
+    const double depth = static_cast<double>(c.apex.y) - g.crownBaseY;
+    // attractor voxel: fine enough for the crown's width and depth (a wide flat crown needs fine layers), no finer than
+    // 0.6 of the sample spacing, no coarser than 2.3 of it
+    const double voxel = std::clamp(std::min(radius / 6.0, depth / 4.0), 0.6 * spacing, 2.3 * spacing);
+    g.attractorSpacing = voxel;
+    std::vector<Vec3> attractors;
+    std::unordered_map<uint64_t, size_t> occupied;
+    auto addAttractor = [&](double x, double y, double z) {
+        const int64_t a = static_cast<int64_t>(std::floor(x / voxel)), b = static_cast<int64_t>(std::floor(y / voxel)), d = static_cast<int64_t>(std::floor(z / voxel));
+        const uint64_t key = (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(d & 0x1FFFFF);
+        if (occupied.emplace(key, attractors.size()).second) attractors.push_back(Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+    };
+    std::vector<Vec3> surface;
+    for (size_t k = 0; k < c.samples.size(); ++k) {
+        const Vec3 s = c.samples[k];
+        // the scan drapes the crown's edge down towards the ground; below the crown base it is not crown
+        if (s.y < g.crownBaseY) continue;
+        surface.push_back(s);
+        addAttractor(s.x, s.y, s.z);
+        const double bottom = s.y - std::max(0.0, static_cast<double>(s.y) - g.crownBaseY) * G.shellDepth;
+        int layer = 1;
+        for (double y = s.y - voxel; y >= bottom; y -= voxel, ++layer) {
+            const double jx = (detail::hashUnit(g.seed, k, static_cast<uint64_t>(layer) * 3) - 0.5) * voxel;
+            const double jy = (detail::hashUnit(g.seed, k, static_cast<uint64_t>(layer) * 3 + 1) - 0.5) * voxel;
+            const double jz = (detail::hashUnit(g.seed, k, static_cast<uint64_t>(layer) * 3 + 2) - 0.5) * voxel;
+            addAttractor(s.x + jx, y + jy, s.z + jz);
+        }
+    }
+    g.surfaceSamples = surface.size();
+    if (attractors.size() < 3) {
+        g.failureCode = "no_crown_above_base";
+        g.failure = (surface.empty() ? "none of its " + std::to_string(c.samples.size()) + " measured surface samples lies"
+                                     : "only " + std::to_string(surface.size()) + " of its " + std::to_string(c.samples.size()) + " measured surface samples lie") +
+                    " above its inferred crown base at " + detail::fixed(g.crownBaseY - support, 1) + " m above its ground, too few to grow a crown into";
+        return g;
+    }
+    Vec3 lo(1e9f, 1e9f, 1e9f), hi(-1e9f, -1e9f, -1e9f);
+    for (const auto& a : attractors) { lo.x = std::min(lo.x, a.x); lo.y = std::min(lo.y, a.y); lo.z = std::min(lo.z, a.z); hi.x = std::max(hi.x, a.x); hi.y = std::max(hi.y, a.y); hi.z = std::max(hi.z, a.z); }
+    nature::SpaceColonizationConfig& cfg = g.cfg;
+    cfg.customAttractors = attractors;
+    cfg.attractorCount = static_cast<int>(attractors.size());
+    cfg.rootAnchor = Vec3(static_cast<float>(c.stemX), static_cast<float>(support), static_cast<float>(c.stemZ));
+    cfg.crownCenter = (lo + hi) * 0.5f;
+    cfg.crownExtents = Vec3(std::max(0.5f, (hi.x - lo.x) * 0.5f), std::max(0.5f, (hi.y - lo.y) * 0.5f), std::max(0.5f, (hi.z - lo.z) * 0.5f));
+    cfg.clearTrunkHeight = static_cast<float>(g.crownBaseY - support);
+    cfg.baseRadius = static_cast<float>(g.trunkRadius);
+    const double step = std::clamp(H / 40.0, 0.2, 0.6);
+    cfg.branchStepLength = static_cast<float>(step);
+    // A node that reaches an attractor (comes within the kill reach, 1.25 x the kill radius, of it) must still see the
+    // attractors next to that one: the gap between neighbouring attractors (the link) plus the kill reach. With the
+    // link alone, a branch that reached an attractor could lose sight of the ones beyond it and colonisation stop with
+    // reachable attractors left, on some seeds and not others (Central Park crown 1139: 21 attractors stranded inside
+    // one connected cloud with the tile's seed, none with five other seeds).
+    cfg.killRadius = static_cast<float>(std::max(1.6 * step, 0.9 * g.attractorSpacing));
+    cfg.perceptionRadius = static_cast<float>(std::max(5.5 * step, 3.0 * g.attractorSpacing) + 1.25 * cfg.killRadius);
+    // long enough to cross the crown three times over (height plus its widest reach)
+    double widest = 0;
+    for (double r : c.sectorRadii) widest = std::max(widest, r);
+    cfg.maxIterations = static_cast<int>(std::ceil(3.0 * (H + widest) / step));
+    cfg.stallIterations = static_cast<int>(std::ceil(2.0 * cfg.perceptionRadius / step)) + 2;
+    cfg.trunkSeeksCrown = true;
+    cfg.leavesOnCrownBranches = true;
+    cfg.rootFlareHeight = static_cast<float>(std::min(0.8, 0.06 * H));
+    cfg.seed = g.seed;
+    std::mt19937 rng(cfg.seed);
+    g.skeleton = nature::SpaceColonizationTreeGenerator::growSkeleton(cfg, rng, &g.colonisation);
+
+    // does it fill the measured crown? leaves (tips, twigs, branches through the crown) near the measured surface, up to
+    // the apex: a node reaches
+    // the attractors within its kill reach, and a surface sample lies within one voxel (or one sample spacing) of one
+    g.reachRadius = 1.25 * cfg.killRadius + std::max(voxel, spacing);
+    const std::vector<Vec3> leaves = nature::SpaceColonizationTreeGenerator::foliageAnchors(cfg, g.skeleton);
+    for (const auto& p : leaves) g.leafTopY = std::max(g.leafTopY, static_cast<double>(p.y));
+    {
+        const double cell = g.reachRadius;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+        auto key = [&](int64_t a, int64_t b, int64_t d) { return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(d & 0x1FFFFF); };
+        for (uint32_t i = 0; i < leaves.size(); ++i) {
+            grid[key(static_cast<int64_t>(std::floor(leaves[i].x / cell)), static_cast<int64_t>(std::floor(leaves[i].y / cell)), static_cast<int64_t>(std::floor(leaves[i].z / cell)))].push_back(i);
+        }
+        const double r2 = g.reachRadius * g.reachRadius;
+        for (const auto& s : surface) {
+            const int64_t a = static_cast<int64_t>(std::floor(s.x / cell)), b = static_cast<int64_t>(std::floor(s.y / cell)), d = static_cast<int64_t>(std::floor(s.z / cell));
+            bool reached = false;
+            for (int64_t dz = -1; dz <= 1 && !reached; ++dz) {
+                for (int64_t dy = -1; dy <= 1 && !reached; ++dy) {
+                    for (int64_t dx = -1; dx <= 1 && !reached; ++dx) {
+                        auto it = grid.find(key(a + dx, b + dy, d + dz));
+                        if (it == grid.end()) continue;
+                        for (uint32_t i : it->second) {
+                            if (static_cast<double>((leaves[i] - s).lengthSquared()) <= r2) { reached = true; break; }
+                        }
+                    }
+                }
+            }
+            g.surfaceReached += reached ? 1 : 0;
+        }
+    }
+    const auto& col = g.colonisation;
+    g.colonisationSummary = std::to_string(col.attractorsReached) + " of " + std::to_string(col.attractors) + " attractors reached in " +
+                            std::to_string(col.iterations) + " iterations, stopped: " + col.stop;
+    // the meshing puts its first leaf masses where they bring this surface within the same reach (meshCrown)
+    g.surface = std::move(surface);
+    cfg.foliageSurface = g.surface;
+    cfg.foliageSurfaceReach = static_cast<float>(g.reachRadius);
+    cfg.foliageTop = c.apex.y;
+    g.surfaceMassesNeeded = nature::SpaceColonizationTreeGenerator::surfaceMassesNeeded(cfg, g.skeleton);
+    if (g.surfaceShare() < G.minSurfaceReached) {
+        g.failureCode = "crown_not_reached";
+        g.failure = "the regrown tree's leaves reach " + detail::fixed(100.0 * g.surfaceShare(), 0) + "% of its measured crown surface (" +
+                    std::to_string(g.surfaceReached) + " of " + std::to_string(g.surfaceSamples) + " samples within " + detail::fixed(g.reachRadius, 1) +
+                    " m; " + detail::fixed(100.0 * G.minSurfaceReached, 0) + "% needed)";
+    } else if (g.leafTopY + g.reachRadius < static_cast<double>(c.apex.y)) {
+        g.failureCode = "apex_not_reached";
+        g.failure = "the regrown tree's leaves reach " + detail::fixed(g.leafTopY - support, 1) + " m above its ground, short of its measured " +
+                    detail::fixed(H, 1) + " m";
+    }
+    return g;
+}
+
+/** A crown as crowns.json carries it (plant). */
+inline CrownShape crownShapeFromJson(const io::GlbJsonValue& c) {
+    CrownShape s;
+    s.id = c["id"].asInt(-1);
+    s.apex = Vec3(static_cast<float>(c["apex"][0].num), static_cast<float>(c["apex"][1].num), static_cast<float>(c["apex"][2].num));
+    s.stemX = c["stem"][0].num;
+    s.stemZ = c["stem"][1].num;
+    s.supportY = c["supportY"].num;
+    s.areaM2 = c["areaM2"].num;
+    const auto& radii = c["sectorRadii"].arr;
+    for (size_t k = 0; k < 16 && k < radii.size(); ++k) s.sectorRadii[k] = radii[k].num;
+    s.samples.reserve(c["samples"].arr.size());
+    for (const auto& v : c["samples"].arr) s.samples.push_back(Vec3(static_cast<float>(v[0].num), static_cast<float>(v[1].num), static_cast<float>(v[2].num)));
+    return s;
+}
+
+// ============================================================================================
+// meshing a regrown tree within a budget, and what its delivered leaves reach
+// ============================================================================================
+
+struct PlantParams {
+    // Total triangles all trees may use together (> 0): the caller's own budget, spread over the trees (see plant). 0: the
+    // budget comes from the measured trees: each tree's own budget (crownOwnBudget), all of them within sceneTriangleCap
+    // (the caller's viewport cap for the trees of one scene; tile-vegetation-service.ts SCENE_TREE_TRIANGLE_CAP says why
+    // it is what it is).
+    double triangleBudget{0};
+    double sceneTriangleCap{0};
+    double minTrianglesPerTree{120};
+    // A tree's target: about one 20-triangle leaf mass per 3 m x 3 m of its crown envelope (the measured footprint
+    // plus the side, mean radius x 2 pi x crown depth), with the wood's 40 % on top: 20 / 9 / 0.6 = 3.7, rounded to 4.
+    double trianglesPerCrownM2{4.0};
+    GrowthParams growth;             // the measurement's own (crowns.json "growth") when it recorded them
+    double woodShare{0.4};
+    double supportTolerance{0.3};    // isolate: the trunk base must hit the support mesh within this (m)
+    double groundTolerance{0.5};     // with a ground mesh: a trunk base further than this from it is reported (m)
+    int threads{0};
+};
+
+/** The triangles a crown's size asks for (see PlantParams::trianglesPerCrownM2), never fewer than minTrianglesPerTree. */
+inline size_t crownTriangleTarget(const CrownShape& c, const PlantParams& P) {
+    double r = 0;
+    for (double v : c.sectorRadii) r += v / 16.0;
+    const double depth = std::max(0.0, (1.0 - P.growth.crownBaseRatio) * (static_cast<double>(c.apex.y) - c.supportY));
+    const double envelope = std::max(0.0, c.areaM2) + 2.0 * M_PI * r * depth;
+    return static_cast<size_t>(std::max(P.minTrianglesPerTree, std::ceil(P.trianglesPerCrownM2 * envelope)));
+}
+
+/** Triangles a tree's budget needs for its foliage (at least 1 - woodShare of it) to hold `masses` 20-triangle leaf masses. */
+inline size_t trianglesForLeafMasses(size_t masses, double woodShare) {
+    return static_cast<size_t>(std::ceil(20.0 * static_cast<double>(masses) / std::max(0.05, 1.0 - woodShare)));
+}
+
+/**
+ * The triangles a regrown tree is meshed within when no budget is given (its own budget): its crown's target, and never
+ * fewer than its leaf masses on the measured surface need (CrownGrowth::surfaceMassesNeeded). strip checks every tree it
+ * removes at this budget, so plant, given no budget and room under its cap, delivers the tree strip checked.
+ */
+inline size_t crownOwnBudget(const CrownShape& c, const CrownGrowth& g, const PlantParams& P) {
+    return std::max(crownTriangleTarget(c, P), std::max(static_cast<size_t>(std::ceil(P.minTrianglesPerTree)), trianglesForLeafMasses(g.surfaceMassesNeeded, P.woodShare)));
+}
+
+/** What a meshed tree's leaf masses reach of its measured crown surface, and how high they go. */
+struct FoliageReach {
+    size_t samples{0}, reached{0};
+    double topY{-std::numeric_limits<double>::infinity()};
+    double share() const { return samples ? static_cast<double>(reached) / static_cast<double>(samples) : 0.0; }
+};
+
+namespace detail {
+
+/** Distance from p to triangle abc (closest point, Ericson). */
+inline double pointTriangleDistance(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c) {
+    const Vec3 ab = b - a, ac = c - a, ap = p - a;
+    const float d1 = ab.dot(ap), d2 = ac.dot(ap);
+    if (d1 <= 0 && d2 <= 0) return (p - a).length();
+    const Vec3 bp = p - b;
+    const float d3 = ab.dot(bp), d4 = ac.dot(bp);
+    if (d3 >= 0 && d4 <= d3) return (p - b).length();
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) return (p - (a + ab * (d1 / (d1 - d3)))).length();
+    const Vec3 cp = p - c;
+    const float d5 = ab.dot(cp), d6 = ac.dot(cp);
+    if (d6 >= 0 && d5 <= d6) return (p - c).length();
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) return (p - (a + ac * (d2 / (d2 - d6)))).length();
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) return (p - (b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))))).length();
+    const float den = 1.0f / (va + vb + vc);
+    return (p - (a + ab * (vb * den) + ac * (vc * den))).length();
+}
+
+/** Ray o + t d (t > 0) against triangle abc: t at the hit, or -1. */
+inline double rayTriangle(const Vec3& o, const Vec3& d, const Vec3& a, const Vec3& b, const Vec3& c) {
+    const Vec3 e1 = b - a, e2 = c - a, pv = d.cross(e2);
+    const float det = e1.dot(pv);
+    if (std::abs(det) < 1e-12f) return -1;
+    const float inv = 1.0f / det;
+    const Vec3 tv = o - a;
+    const float u = tv.dot(pv) * inv;
+    if (u < -1e-6f || u > 1.0f + 1e-6f) return -1;
+    const Vec3 qv = tv.cross(e1);
+    const float v = d.dot(qv) * inv;
+    if (v < -1e-6f || u + v > 1.0f + 1e-6f) return -1;
+    const float t = e2.dot(qv) * inv;
+    return t > 0 ? t : -1;
+}
+
+} // namespace detail
+
+/**
+ * Measures delivered foliage: `foliage` holds `masses` leaf masses of equal vertex and triangle count, one after the
+ * other (as the budgeted meshing writes them; each a star around its vertices' centroid). A surface sample is reached
+ * when it lies inside a mass (along the ray from that centroid) or within `reach` of one of its triangles.
+ */
+inline FoliageReach measureFoliage(const geometry::Mesh& foliage, size_t masses, const std::vector<Vec3>& surface, double reach) {
+    FoliageReach out;
+    out.samples = surface.size();
+    if (masses == 0 || foliage.vertices.empty() || foliage.vertices.size() % masses != 0 || foliage.indices.size() % (3 * masses) != 0) return out;
+    const size_t vpc = foliage.vertices.size() / masses, tpc = foliage.indices.size() / 3 / masses;
+    std::vector<Vec3> centre(masses);
+    std::vector<float> extent(masses, 0.0f);
+    float largest = 0.0f;
+    for (size_t k = 0; k < masses; ++k) {
+        Vec3 c(0, 0, 0);
+        for (size_t v = 0; v < vpc; ++v) c += foliage.vertices[k * vpc + v];
+        centre[k] = c / static_cast<float>(vpc);
+        for (size_t v = 0; v < vpc; ++v) {
+            const Vec3& p = foliage.vertices[k * vpc + v];
+            extent[k] = std::max(extent[k], (p - centre[k]).length());
+            out.topY = std::max(out.topY, static_cast<double>(p.y));
+        }
+        largest = std::max(largest, extent[k]);
+    }
+    const double cell = std::max(1e-3, static_cast<double>(largest) + reach);
+    auto key = [&](const Vec3& p, int dx, int dy, int dz) {
+        const int64_t a = static_cast<int64_t>(std::floor(p.x / cell)) + dx, b = static_cast<int64_t>(std::floor(p.y / cell)) + dy, c = static_cast<int64_t>(std::floor(p.z / cell)) + dz;
+        return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
+    };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+    for (uint32_t k = 0; k < masses; ++k) grid[key(centre[k], 0, 0, 0)].push_back(k);
+    for (const auto& s : surface) {
+        bool reached = false;
+        for (int dz = -1; dz <= 1 && !reached; ++dz) {
+            for (int dy = -1; dy <= 1 && !reached; ++dy) {
+                for (int dx = -1; dx <= 1 && !reached; ++dx) {
+                    auto it = grid.find(key(s, dx, dy, dz));
+                    if (it == grid.end()) continue;
+                    for (uint32_t k : it->second) {
+                        if (static_cast<double>((s - centre[k]).length()) > static_cast<double>(extent[k]) + reach) continue;
+                        double nearest = std::numeric_limits<double>::infinity(), along = -1.0;
+                        for (size_t t = 0; t < tpc; ++t) {
+                            const uint32_t* id = &foliage.indices[(k * tpc + t) * 3];
+                            const Vec3 &a = foliage.vertices[id[0]], &b = foliage.vertices[id[1]], &c = foliage.vertices[id[2]];
+                            nearest = std::min(nearest, detail::pointTriangleDistance(s, a, b, c));
+                            along = std::max(along, detail::rayTriangle(centre[k], s - centre[k], a, b, c));
+                        }
+                        if (nearest <= reach || along >= 1.0) { reached = true; break; }
+                    }
+                }
+            }
+        }
+        out.reached += reached ? 1 : 0;
+    }
+    return out;
+}
+
+/** A regrown tree meshed within a budget, and what its delivered leaves reach of its measured crown. */
+struct MeshedCrown {
+    geometry::Mesh wood, foliage;
+    nature::TreeBudgetReport report;
+    FoliageReach reach;
+    /** Its leaves reach minSurfaceReached of the measured crown surface, and the apex height to within the reach. */
+    bool fills(const CrownGrowth& g, const CrownShape& c, double minSurfaceReached) const {
+        return reach.share() >= minSurfaceReached && reach.topY + g.reachRadius >= static_cast<double>(c.apex.y);
+    }
+    /** Why it does not (empty when it does). */
+    std::string shortfall(const CrownGrowth& g, const CrownShape& c, double minSurfaceReached, size_t budget) const {
+        std::ostringstream m;
+        if (foliage.indices.empty()) {
+            m << "its budget of " << budget << " triangles holds its wood (" << report.woodTriangles << " triangles) and no leaves";
+        } else if (reach.share() < minSurfaceReached) {
+            m << "within its budget of " << budget << " triangles its " << report.foliageClumps << (report.foliageClumps == 1 ? " leaf mass reaches " : " leaf masses reach ")
+              << detail::fixed(std::floor(1000.0 * reach.share()) / 10.0, 1)
+              << "% of its measured crown surface (" << reach.reached << " of " << reach.samples << " samples within " << detail::fixed(g.reachRadius, 1) << " m; "
+              << detail::fixed(100.0 * minSurfaceReached, 0) << "% needed; " << report.surfaceMasses << " of the " << report.surfaceMassesNeeded
+              << " masses that reach it fit)";
+        } else if (reach.topY + g.reachRadius < static_cast<double>(c.apex.y)) {
+            m << "within its budget of " << budget << " triangles its leaves reach " << detail::fixed(reach.topY - c.supportY, 1) << " m above its ground, "
+              << detail::fixed(static_cast<double>(c.apex.y) - reach.topY, 1) << " m short of its measured " << detail::fixed(static_cast<double>(c.apex.y) - c.supportY, 1) << " m";
+        }
+        return m.str();
+    }
+};
+
+/** Meshes a regrown tree (growCrown) within `budget` triangles and measures what its delivered leaves reach. */
+inline MeshedCrown meshCrown(const CrownGrowth& g, size_t budget, double woodShare) {
+    MeshedCrown m;
+    nature::SpaceColonizationConfig cfg = g.cfg;
+    cfg.triangleBudget = static_cast<float>(budget);
+    cfg.woodBudgetShare = static_cast<float>(woodShare);
+    auto [wood, foliage] = nature::SpaceColonizationTreeGenerator::meshGrownSkeleton(cfg, g.skeleton, &m.report);
+    m.wood = std::move(wood);
+    m.foliage = std::move(foliage);
+    m.reach = measureFoliage(m.foliage, m.report.foliageClumps, g.surface, g.reachRadius);
+    return m;
+}
+
+// ============================================================================================
 // strip
 // ============================================================================================
 
@@ -526,6 +969,12 @@ struct StripParams {
     double climbLimit{1.0};          // a crown never grows more than this far up into a neighbour (m)
     double supportStep{1.0};         // height gap separating candidate support surfaces (m)
     double supportSearch{25.0};      // how far to look through canopy for a surface to stand on (m)
+    // A crown more of whose measured surface than this share lies over supportStep below the surface measured around it
+    // hangs below that surface: it is not what the tree stands on (in a continuous canopy the nearest level patches can be
+    // flat canopy tops), so its ground is not measured and it is kept as scanned (no_measured_ground).
+    double maxCrownBelowSupport{0.1};
+    // A standable surface under a crown's stem within this of the terrain model is the ground (m).
+    double groundTerrainBand{2.0};
     double footprintDilation{1.0};   // everything under the apex this far beyond the crown footprint goes with the tree (m)
     double drapeReach{10.0};          // the scanned drape connected to a tree goes with it out to this far from its crown (m)
     double clearance{0.3};           // removal stops this high above the support (m)
@@ -536,20 +985,24 @@ struct StripParams {
     double capGrid{1.5};             // spacing of interior cap points (m)
     double seamGap{1.0};             // hole boundaries broken by an open tile seam are joined across gaps up to this (m)
     double sampleSpacing{0.7};       // voxel size of the crown surface samples (m)
+    GrowthParams growth;             // how each tree crown is regrown before anything is removed (see growCrown)
     int threads{0};
 };
 
 struct CrownRecord {
     int id{0};
-    // tree | below_min_height | no_measured_ground (no standable surface around it, kept as scanned) | cut_at_boundary
-    // (kept as scanned) | cut_at_boundary_removed (taken with the trees it joins, not replanted)
+    // tree | below_min_height | no_measured_ground (no standable surface around it, or one its own crown hangs below:
+    // kept as scanned) | not_regrowable (a tree the regrown SB-Veggie tree does not fill, kept as scanned) |
+    // cut_at_boundary (kept as scanned) | cut_at_boundary_removed (taken with the trees it joins, not replanted)
     std::string status;
+    std::string groundReasonCode, groundReason;  // no_measured_ground: why (diagnostic label, and in words)
     bool reachesBoundary{false};     // a tree whose crown runs to the extraction's edge: measured (and rebuilt) up to it
     Vec3 apex;
     double stemX{0}, stemZ{0};
     double supportY{0};              // the support surface's height at the stem
     double tiltX{0}, tiltZ{0};       // its gradient (dy/dx, dy/dz) around the crown
-    std::string supportSource;       // surrounding_surface | none (no standable surface around it: not measured)
+    std::string supportSource;       // surrounding_surface | under_stem | none (no standable surface around it: not measured)
+    std::string supportNote;         // under_stem: why the surrounding surface was not taken
     double terrainY{0};
     double apexAboveSupport{0};
     double areaM2{0};
@@ -558,6 +1011,18 @@ struct CrownRecord {
     int cells{0};
     bool hasGeodetic{false};
     TileFrame::Geodetic apexGeo{}, stemGeo{};
+    // the regrowth check (trees and not_regrowable crowns): how much of the measured surface the regrown leaves reach
+    bool regrowthChecked{false};
+    double regrowthSurfaceShare{0}, regrowthReachM{0}, regrowthLeafTopY{0};
+    size_t regrowthSurfaceSamples{0}, regrowthSurfaceReached{0};
+    std::string regrowthFailureCode, regrowthFailure, regrowthColonisation;
+    // ... and the tree meshed within its own budget (crownOwnBudget): what its delivered leaf masses reach
+    bool regrowthMeshed{false};
+    size_t regrowthBudget{0}, regrowthLeafMasses{0}, regrowthSurfaceMasses{0}, regrowthSurfaceMassesNeeded{0}, regrowthLeavesReached{0};
+    double regrowthLeavesShare{0}, regrowthLeavesTopY{0};
+    // a crown kept as scanned beside removed trees: its side over their rebuilt ground, closed down to it (skirt triangles
+    // hung on its canopy, not in the scan)
+    double keptSkirtAreaM2{0}, keptSkirtTopY{-std::numeric_limits<double>::infinity()}, keptSkirtBottomY{std::numeric_limits<double>::infinity()};
 };
 
 struct StripStats {
@@ -581,6 +1046,9 @@ struct StripStats {
     double drapeSheetAreaM2{0};
     double canopyAreaM2{0}, treeCanopyAreaM2{0};
     size_t crownsTree{0}, crownsLow{0}, crownsCut{0}, crownsCutRemoved{0}, crownsTooSmall{0}, crownsNoGround{0};
+    size_t crownsNotRegrowable{0};   // trees the regrown SB-Veggie tree does not fill: kept as scanned (see growCrown)
+    size_t crownsHangingBelowSupport{0}; // of crownsNoGround: those whose crown hangs below the surface measured around it
+    size_t crownsSupportedUnderStem{0};  // trees whose crown hangs below the surface measured around it, standing on the scan under their stem
     size_t treesReachingBoundary{0}; // trees whose crown runs to the extraction's edge (their apex is inside it)
     double cutCanopyRemovedM2{0};    // canopy of cut crowns taken with the trees it joined (not replanted)
     std::array<double, 3> greenDispersionQuartiles{}, otherDispersionQuartiles{};
@@ -613,6 +1081,58 @@ inline void sampleTexture(const gltf::SceneMaterial& m, const texture::ImageBuff
     const size_t o = img.getIndex(x, y);
     for (int c = 0; c < 3; ++c) rgb[c] = img.data[o + static_cast<size_t>(std::min(c, img.channels - 1))] / 255.0;
 }
+
+/** Heights at which a vertical line through (x, z) meets a mesh. */
+struct VerticalProbe {
+    double x0{0}, z0{0}, cell{2.0};
+    int nx{0}, nz{0};
+    std::vector<std::vector<uint32_t>> buckets;
+    const std::vector<Vec3>* p{nullptr};
+    const std::vector<uint32_t>* idx{nullptr};
+
+    void build(const std::vector<Vec3>& positions, const std::vector<uint32_t>& indices) {
+        p = &positions;
+        idx = &indices;
+        double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
+        for (const auto& v : positions) { minX = std::min(minX, static_cast<double>(v.x)); maxX = std::max(maxX, static_cast<double>(v.x)); minZ = std::min(minZ, static_cast<double>(v.z)); maxZ = std::max(maxZ, static_cast<double>(v.z)); }
+        x0 = minX; z0 = minZ;
+        nx = std::max(1, static_cast<int>(std::ceil((maxX - minX) / cell)) + 1);
+        nz = std::max(1, static_cast<int>(std::ceil((maxZ - minZ) / cell)) + 1);
+        buckets.assign(static_cast<size_t>(nx) * static_cast<size_t>(nz), {});
+        for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+            const Vec3 &a = positions[indices[t]], &b = positions[indices[t + 1]], &c = positions[indices[t + 2]];
+            const int i0 = std::clamp(static_cast<int>(std::floor((std::min({a.x, b.x, c.x}) - x0) / cell)), 0, nx - 1);
+            const int i1 = std::clamp(static_cast<int>(std::floor((std::max({a.x, b.x, c.x}) - x0) / cell)), 0, nx - 1);
+            const int k0 = std::clamp(static_cast<int>(std::floor((std::min({a.z, b.z, c.z}) - z0) / cell)), 0, nz - 1);
+            const int k1 = std::clamp(static_cast<int>(std::floor((std::max({a.z, b.z, c.z}) - z0) / cell)), 0, nz - 1);
+            for (int k = k0; k <= k1; ++k) for (int i = i0; i <= i1; ++i) buckets[static_cast<size_t>(k) * static_cast<size_t>(nx) + static_cast<size_t>(i)].push_back(static_cast<uint32_t>(t / 3));
+        }
+    }
+
+    std::vector<double> heightsAt(double x, double z) const {
+        std::vector<double> out;
+        for (const auto& h : hitsAt(x, z)) out.push_back(h.first);
+        return out;
+    }
+
+    /** Each surface the vertical line meets: its height and the triangle (index / 3 into the indices). */
+    std::vector<std::pair<double, uint32_t>> hitsAt(double x, double z) const {
+        std::vector<std::pair<double, uint32_t>> out;
+        const int i = static_cast<int>(std::floor((x - x0) / cell)), k = static_cast<int>(std::floor((z - z0) / cell));
+        if (i < 0 || k < 0 || i >= nx || k >= nz) return out;
+        for (uint32_t t : buckets[static_cast<size_t>(k) * static_cast<size_t>(nx) + static_cast<size_t>(i)]) {
+            const Vec3 &A = (*p)[(*idx)[3 * t]], &B = (*p)[(*idx)[3 * t + 1]], &C = (*p)[(*idx)[3 * t + 2]];
+            const double d = (static_cast<double>(B.x) - A.x) * (static_cast<double>(C.z) - A.z) - (static_cast<double>(C.x) - A.x) * (static_cast<double>(B.z) - A.z);
+            if (std::abs(d) < 1e-12) continue;
+            const double w1 = ((x - A.x) * (C.z - A.z) - (C.x - A.x) * (z - A.z)) / d;
+            const double w2 = ((B.x - A.x) * (z - A.z) - (x - A.x) * (B.z - A.z)) / d;
+            const double w0 = 1 - w1 - w2;
+            if (w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9) continue;
+            out.emplace_back(w0 * A.y + w1 * B.y + w2 * C.y, t);
+        }
+        return out;
+    }
+};
 
 } // namespace detail
 
@@ -652,6 +1172,7 @@ private:
     std::vector<uint32_t> adjStart, adj; // CSR triangle adjacency across welded edges
     height_field::SurfaceModel surf;
     height_field::Grid dtm;
+    detail::VerticalProbe weldProbe;   // the welded scan under a vertical line (built when a crown's support needs it)
     StripResult R;
     Clock::time_point t0;
 
@@ -706,6 +1227,8 @@ private:
         lap("height_fields");
         segmentCrowns();
         lap("crowns");
+        checkRegrowth();
+        lap("regrowth");
         removeAndCap();
         lap("remove_and_cap");
         writeDevegetated();
@@ -1166,6 +1689,70 @@ private:
         }
     }
 
+    /**
+     * Grows every crown measured as a tree (growCrown, from the values crowns.json carries, so plant grows the same tree)
+     * and meshes it within its own budget (crownOwnBudget: what plant gives it without a budget of the caller's) before
+     * anything is removed. A crown the regrown tree's leaf nodes, or its delivered leaf masses, do not fill is not that
+     * tree: it stays as scanned (status not_regrowable, with the reason), exactly as a crown with no measured ground
+     * does, and nothing is removed, capped or planted for it.
+     */
+    void checkRegrowth() {
+        std::vector<size_t> trees;
+        for (size_t i = 0; i < R.crowns.size(); ++i) {
+            if (R.crowns[i].status == "tree") trees.push_back(i);
+        }
+        detail::forEachIndex(trees.size(), P.threads, [&](size_t k) {
+            CrownRecord& rec = R.crowns[trees[k]];
+            CrownShape shape;
+            shape.id = rec.id;
+            shape.apex = rec.apex;
+            shape.stemX = rec.stemX;
+            shape.stemZ = rec.stemZ;
+            shape.supportY = rec.supportY;
+            shape.areaM2 = rec.areaM2;
+            shape.sectorRadii = rec.sectorRadii;
+            shape.samples = rec.samples;
+            const CrownGrowth g = growCrown(shape, P.growth, P.sampleSpacing);
+            rec.regrowthChecked = true;
+            rec.regrowthSurfaceSamples = g.surfaceSamples;
+            rec.regrowthSurfaceReached = g.surfaceReached;
+            rec.regrowthSurfaceShare = g.surfaceShare();
+            rec.regrowthReachM = g.reachRadius;
+            rec.regrowthLeafTopY = g.leafTopY;
+            rec.regrowthFailureCode = g.failureCode;
+            rec.regrowthFailure = g.failure;
+            rec.regrowthColonisation = g.colonisationSummary;
+            rec.regrowthSurfaceMassesNeeded = g.surfaceMassesNeeded;
+            if (!g.ok()) return;
+            // the tree as plant delivers it without a budget of the caller's: meshed within its own budget, its leaf masses
+            // must reach the crown as its leaf nodes do
+            PlantParams sizing;
+            sizing.growth = P.growth;
+            const size_t budget = crownOwnBudget(shape, g, sizing);
+            const MeshedCrown m = meshCrown(g, budget, sizing.woodShare);
+            rec.regrowthMeshed = true;
+            rec.regrowthBudget = budget;
+            rec.regrowthLeafMasses = m.report.foliageClumps;
+            rec.regrowthSurfaceMasses = m.report.surfaceMasses;
+            rec.regrowthLeavesReached = m.reach.reached;
+            rec.regrowthLeavesShare = m.reach.share();
+            rec.regrowthLeavesTopY = m.reach.topY;
+            if (!m.fills(g, shape, P.growth.minSurfaceReached)) {
+                rec.regrowthFailureCode = "leaves_short_of_crown";
+                rec.regrowthFailure = "the regrown tree's leaves reach its crown, but " + m.shortfall(g, shape, P.growth.minSurfaceReached, budget);
+            }
+        });
+        for (size_t i : trees) {
+            CrownRecord& rec = R.crowns[i];
+            if (rec.regrowthFailure.empty()) continue;
+            rec.status = "not_regrowable";
+            --R.stats.crownsTree;
+            ++R.stats.crownsNotRegrowable;
+            R.stats.treeCanopyAreaM2 -= rec.areaM2;
+            if (rec.reachesBoundary) --R.stats.treesReachingBoundary;
+        }
+    }
+
     bool removedStatus(const std::string& status) const { return status == "tree" || status == "cut_at_boundary_removed"; }
     /** Crowns the strip removes: the trees (replanted) and the cut canopy joined to them (not replanted). */
     bool removesCrown(size_t m) const {
@@ -1286,38 +1873,6 @@ private:
             rec.supportY = level[bestN / 2];
             rec.supportSource = "surrounding_surface";
         }
-        // Nothing standable around it within supportSearch (ground steeper than the standable limit, or all canopy): the
-        // ground it stands on is not measured. The terrain model is a morphological opening of the scan and reads low on
-        // slopes, convex ground and near the extraction's edge, so it is not taken as that ground: the crown is kept as
-        // scanned and reported (status no_measured_ground), and nothing is removed, capped or planted for it.
-        const bool groundMeasured = !samples.empty();
-        if (groundMeasured) {
-            rec.supportY = std::min(rec.supportY, static_cast<double>(rec.apex.y));
-            rec.apexAboveSupport = rec.apex.y - rec.supportY;
-        } else {
-            rec.supportY = std::numeric_limits<double>::quiet_NaN();
-            rec.apexAboveSupport = std::numeric_limits<double>::quiet_NaN();
-            rec.supportSource = "none";
-        }
-        // (the work record keeps a number for the drape checks that may look at a kept crown's surroundings)
-        w.support = groundMeasured ? rec.supportY : rec.terrainY;
-        w.tiltX = rec.tiltX;
-        w.tiltZ = rec.tiltZ;
-        w.stemX = rec.stemX;
-        w.stemZ = rec.stemZ;
-        w.supportSource = rec.supportSource;
-
-        rec.reachesBoundary = w.reachesBoundary;
-        if (w.cut) { rec.status = "cut_at_boundary"; ++R.stats.crownsCut; }
-        else if (!groundMeasured) { rec.status = "no_measured_ground"; ++R.stats.crownsNoGround; }
-        else if (rec.apexAboveSupport < P.minTreeHeight) { rec.status = "below_min_height"; ++R.stats.crownsLow; }
-        else {
-            rec.status = "tree";
-            ++R.stats.crownsTree;
-            R.stats.treeCanopyAreaM2 += rec.areaM2;
-            if (w.reachesBoundary) ++R.stats.treesReachingBoundary;
-        }
-
         // sector radii (16 sectors around the stem) and voxel samples of the crown surface
         rec.sectorRadii.fill(0.0);
         std::unordered_map<uint64_t, std::pair<Vec3, int>> vox;
@@ -1347,6 +1902,95 @@ private:
         for (const auto& [key, slot] : vox) ordered.emplace_back(key, slot.first / static_cast<float>(slot.second));
         std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         for (const auto& kv : ordered) rec.samples.push_back(kv.second);
+
+        // Nothing standable around it within supportSearch (ground steeper than the standable limit, or all canopy): the
+        // ground it stands on is not measured. The terrain model is a morphological opening of the scan and reads low on
+        // slopes, convex ground and near the extraction's edge, so it is not taken as that ground: the crown is kept as
+        // scanned and reported (status no_measured_ground), and nothing is removed, capped or planted for it.
+        bool groundMeasured = !samples.empty();
+        if (!groundMeasured) {
+            rec.groundReasonCode = "no_standable_surface";
+            rec.groundReason = "no surface gentle enough to stand on within " + detail::fixed(P.supportSearch, 0) + " m of it";
+        } else {
+            rec.supportY = std::min(rec.supportY, static_cast<double>(rec.apex.y));
+            // A crown does not hang below the ground it stands on. When much of it does, the surfaces measured around it
+            // are not that ground (in a continuous canopy the nearest level patches can be flat canopy tops): the tree stands
+            // on what the scan has under its stem below its crown (the highest standable surface there, the first the
+            // trunk meets going down), and with nothing there its ground is not measured and it stays as scanned.
+            float lowest = std::numeric_limits<float>::infinity();
+            size_t below = 0;
+            for (const auto& smp : rec.samples) {
+                lowest = std::min(lowest, smp.y);
+                below += smp.y < rec.supportY - P.supportStep ? 1 : 0;
+            }
+            const double hangs = rec.samples.empty() ? 0.0 : static_cast<double>(below) / static_cast<double>(rec.samples.size());
+            // the standable surfaces the scan has under the stem, below everything the crown's surface measures: hits
+            // (ascending) and, merged where they lie within supportStep of each other, surfaces
+            if (!weldProbe.p) weldProbe.build(weldPos, wtri);
+            std::vector<std::pair<double, uint32_t>> under;
+            for (const auto& hit : weldProbe.hitsAt(rec.stemX, rec.stemZ)) {
+                if (std::abs(normal[hit.second].y) >= kStandableNormalY && hit.first < static_cast<double>(lowest)) under.push_back(hit);
+            }
+            std::sort(under.begin(), under.end());
+            size_t surfacesUnder = 0;
+            for (size_t i = 0; i < under.size(); ++i) surfacesUnder += (i == 0 || under[i].first - under[i - 1].first > P.supportStep) ? 1 : 0;
+            auto standOn = [&](const std::pair<double, uint32_t>& hit, const std::string& why) {
+                Vec3 n = normal[hit.second];
+                if (n.y < 0) n = n * -1.0f;
+                rec.supportY = hit.first;
+                rec.tiltX = -static_cast<double>(n.x) / n.y;
+                rec.tiltZ = -static_cast<double>(n.z) / n.y;
+                clampTilt(rec);
+                rec.supportSource = "under_stem";
+                rec.supportNote = why + "; it stands on the standable surface the scan has under its stem, below its crown, at " + detail::fixed(hit.first, 1) + " m";
+                ++R.stats.crownsSupportedUnderStem;
+            };
+            if (hangs > P.maxCrownBelowSupport) {
+                // the highest of them: the first the trunk meets going down
+                const std::string why = detail::fixed(100.0 * hangs, 0) + "% of its measured crown lies more than " + detail::fixed(P.supportStep, 1) +
+                                        " m below the surface measured around it (at " + detail::fixed(rec.supportY, 1) + " m; its crown reaches down to " +
+                                        detail::fixed(lowest, 1) + " m), so that surface is not its ground";
+                if (!under.empty()) {
+                    standOn(under.back(), why);
+                } else {
+                    groundMeasured = false;
+                    rec.groundReasonCode = "crown_below_support";
+                    rec.groundReason = why + ", and the scan has no standable surface under its stem below its crown";
+                    ++R.stats.crownsHangingBelowSupport;
+                }
+            } else if (surfacesUnder == 1 && std::abs(under.back().first - rec.terrainY) <= P.groundTerrainBand && under.back().first < rec.supportY - P.supportBand) {
+                // Its crown sits on the surfaces around it, but under its stem the scan has one standable surface below the
+                // crown, the ground (where the terrain model has it), and nothing between: those surfaces were canopy
+                // tops around it, not a roof or terrace it stands on (a roof would lie between).
+                standOn(under.back(), "the surfaces around it stand at " + detail::fixed(rec.supportY, 1) + " m, but under its stem the scan has nothing standable between its crown and the ground (the terrain model reads " +
+                                      detail::fixed(rec.terrainY, 1) + " m there)");
+            }
+        }
+        if (groundMeasured) {
+            rec.apexAboveSupport = rec.apex.y - rec.supportY;
+        } else {
+            rec.supportY = std::numeric_limits<double>::quiet_NaN();
+            rec.apexAboveSupport = std::numeric_limits<double>::quiet_NaN();
+            rec.supportSource = "none";
+        }
+        // (the work record keeps a number for the drape checks that may look at a kept crown's surroundings)
+        w.support = groundMeasured ? rec.supportY : rec.terrainY;
+        w.tiltX = rec.tiltX;
+        w.tiltZ = rec.tiltZ;
+        w.stemX = rec.stemX;
+        w.stemZ = rec.stemZ;
+        w.supportSource = rec.supportSource;
+
+        rec.reachesBoundary = w.reachesBoundary;
+        if (w.cut) { rec.status = "cut_at_boundary"; ++R.stats.crownsCut; }
+        else if (!groundMeasured) { rec.status = "no_measured_ground"; ++R.stats.crownsNoGround; }
+        else if (rec.apexAboveSupport < P.minTreeHeight) { rec.status = "below_min_height"; ++R.stats.crownsLow; }
+        else {
+            rec.status = "tree";
+            ++R.stats.crownsTree;
+            R.stats.treeCanopyAreaM2 += rec.areaM2;
+            if (w.reachesBoundary) ++R.stats.treesReachingBoundary;
+        }
         if (R.frame.known) {
             rec.hasGeodetic = true;
             rec.apexGeo = R.frame.toGeodetic(rec.apex.x, rec.apex.y, rec.apex.z);
@@ -2005,12 +2649,25 @@ private:
                 const bool onCanopy = !isArchitecture(t) && c >= 0 && keptCell[static_cast<size_t>(c)];
                 double& bucket = wall ? R.stats.skirtAreaOnWallsM2 : level ? R.stats.skirtAreaOnLevelSurfacesM2 : onCanopy ? R.stats.skirtAreaOnKeptCanopyM2 : R.stats.skirtAreaOnOtherM2;
                 double& tallest = wall ? R.stats.skirtMaxOnWallsM : level ? R.stats.skirtMaxOnLevelSurfacesM : onCanopy ? R.stats.skirtMaxOnKeptCanopyM : R.stats.skirtMaxOnOtherM;
+                // canopy that stays: the crown it belongs to carries the skirt on its record (a tree kept as scanned beside
+                // removed trees has its side closed down to their ground, and says so)
+                CrownRecord* keptCrown = nullptr;
+                if (onCanopy && keptOwner[static_cast<size_t>(c)] >= 0) {
+                    const int ri = work[static_cast<size_t>(keptOwner[static_cast<size_t>(c)])].recordIndex;
+                    if (ri >= 0) keptCrown = &R.crowns[static_cast<size_t>(ri)];
+                }
                 for (size_t k = before; k < capIsSkirt.size(); ++k) {
                     const Vec3 &a = capPos[capTris[3 * k]], &b = capPos[capTris[3 * k + 1]], &cc = capPos[capTris[3 * k + 2]];
-                    bucket += 0.5 * static_cast<double>((b - a).cross(cc - a).length());
+                    const double area = 0.5 * static_cast<double>((b - a).cross(cc - a).length());
+                    bucket += area;
                     const double span = static_cast<double>(std::max({a.y, b.y, cc.y}) - std::min({a.y, b.y, cc.y}));
                     tallest = std::max(tallest, span);
                     R.stats.skirtMaxHeightM = std::max(R.stats.skirtMaxHeightM, span);
+                    if (keptCrown) {
+                        keptCrown->keptSkirtAreaM2 += area;
+                        keptCrown->keptSkirtTopY = std::max(keptCrown->keptSkirtTopY, static_cast<double>(std::max({a.y, b.y, cc.y})));
+                        keptCrown->keptSkirtBottomY = std::min(keptCrown->keptSkirtBottomY, static_cast<double>(std::min({a.y, b.y, cc.y})));
+                    }
                 }
             }
             std::vector<uint32_t> poly;
@@ -2349,6 +3006,7 @@ private:
             if (rec.status == "cut_at_boundary") { cr = 255; cg = 0; cb = 255; }
             if (rec.status == "cut_at_boundary_removed") { cr = 40; cg = 90; cb = 255; }
             if (rec.status == "no_measured_ground") { cr = 255; cg = 255; cb = 0; }
+            if (rec.status == "not_regrowable") { cr = 255; cg = 255; cb = 255; }
             for (int dk = -2; dk <= 2; ++dk) {
                 for (int di = -2; di <= 2; ++di) {
                     if (!g.in(ai + di, ak + dk)) continue;
@@ -2373,15 +3031,21 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
     auto v3 = [](const Vec3& v) { return "[" + json::num(v.x) + "," + json::num(v.y) + "," + json::num(v.z) + "]"; };
     s << "{\n\"version\":1,\n\"frame\":" << r.frame.extrasJson << ",\n";
     s << "\"params\":{\"cell\":" << json::num(P.cell) << ",\"minTreeHeight\":" << json::num(P.minTreeHeight) << ",\"minCrownArea\":" << json::num(P.minCrownArea)
-      << ",\"sampleSpacing\":" << json::num(P.sampleSpacing) << "},\n\"crowns\":[";
+      << ",\"sampleSpacing\":" << json::numPrecise(P.sampleSpacing) << "},\n";
+    // how the trees were regrown to decide which to remove: plant grows them again with exactly these
+    char seedHex[17];
+    std::snprintf(seedHex, sizeof(seedHex), "%016llx", static_cast<unsigned long long>(P.growth.seed));
+    s << "\"growth\":{\"seed\":" << json::str(seedHex) << ",\"crownBaseRatio\":" << json::numPrecise(P.growth.crownBaseRatio)
+      << ",\"trunkRadiusPerHeight\":" << json::numPrecise(P.growth.trunkRadiusPerHeight) << ",\"shellDepth\":" << json::numPrecise(P.growth.shellDepth)
+      << ",\"minSurfaceReached\":" << json::numPrecise(P.growth.minSurfaceReached) << "},\n\"crowns\":[";
     for (size_t i = 0; i < r.crowns.size(); ++i) {
         const auto& c = r.crowns[i];
         s << (i ? ",\n" : "\n") << "{\"id\":" << c.id << ",\"status\":" << json::str(c.status) << ",\"reachesBoundary\":" << (c.reachesBoundary ? "true" : "false") << ",\"apex\":" << v3(c.apex)
-          << ",\"stem\":[" << json::num(c.stemX) << "," << json::num(c.stemZ) << "],\"supportY\":" << json::num(c.supportY)
+          << ",\"stem\":[" << json::numPrecise(c.stemX) << "," << json::numPrecise(c.stemZ) << "],\"supportY\":" << json::numPrecise(c.supportY)
           << ",\"supportTilt\":[" << json::num(c.tiltX) << "," << json::num(c.tiltZ) << "]"
-          << ",\"supportSource\":" << json::str(c.supportSource) << ",\"terrainY\":" << json::num(c.terrainY)
-          << ",\"apexAboveSupport\":" << json::num(c.apexAboveSupport) << ",\"areaM2\":" << json::num(c.areaM2) << ",\"sectorRadii\":[";
-        for (size_t k = 0; k < 16; ++k) s << (k ? "," : "") << json::num(c.sectorRadii[k]);
+          << ",\"supportSource\":" << json::str(c.supportSource) << (c.supportNote.empty() ? std::string() : ",\"supportNote\":" + json::str(c.supportNote)) << ",\"terrainY\":" << json::num(c.terrainY)
+          << ",\"apexAboveSupport\":" << json::num(c.apexAboveSupport) << ",\"areaM2\":" << json::numPrecise(c.areaM2) << ",\"sectorRadii\":[";
+        for (size_t k = 0; k < 16; ++k) s << (k ? "," : "") << json::numPrecise(c.sectorRadii[k]);
         s << "],\"footprint\":[";
         for (size_t k = 0; k < 16; ++k) {
             const double ang = -M_PI + (k + 0.5) * (2 * M_PI / 16.0);
@@ -2391,6 +3055,25 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
         if (c.hasGeodetic) {
             s << ",\"apexLatLng\":[" << json::numPrecise(c.apexGeo.lat) << "," << json::numPrecise(c.apexGeo.lng) << "],\"apexEllipsoidalHeightM\":" << json::num(c.apexGeo.h)
               << ",\"stemLatLng\":[" << json::numPrecise(c.stemGeo.lat) << "," << json::numPrecise(c.stemGeo.lng) << "]";
+        }
+        if (c.regrowthChecked) {
+            // what growing the tree into this crown gave (see growCrown); a not_regrowable crown says why it stays as scanned
+            s << ",\"regrowth\":{\"surfaceSamples\":" << c.regrowthSurfaceSamples << ",\"surfaceReached\":" << c.regrowthSurfaceReached
+              << ",\"surfaceShare\":" << json::num(c.regrowthSurfaceShare) << ",\"reachM\":" << json::num(c.regrowthReachM)
+              << ",\"leafTopY\":" << json::num(c.regrowthLeafTopY);
+            s << ",\"surfaceMassesNeeded\":" << c.regrowthSurfaceMassesNeeded;
+            if (c.regrowthMeshed) {
+                // the tree meshed within its own budget: what its delivered leaf masses reach (see meshCrown)
+                s << ",\"ownBudget\":" << c.regrowthBudget << ",\"leaves\":{\"masses\":" << c.regrowthLeafMasses << ",\"surfaceMasses\":" << c.regrowthSurfaceMasses
+                  << ",\"surfaceReached\":" << c.regrowthLeavesReached << ",\"surfaceShare\":" << json::num(c.regrowthLeavesShare) << ",\"topY\":" << json::num(c.regrowthLeavesTopY) << "}";
+            }
+            if (!c.regrowthFailure.empty()) s << ",\"reasonCode\":" << json::str(c.regrowthFailureCode) << ",\"reason\":" << json::str(c.regrowthFailure);
+            s << ",\"colonisation\":" << json::str(c.regrowthColonisation) << "}";
+        }
+        if (!c.groundReason.empty()) s << ",\"ground\":{\"reasonCode\":" << json::str(c.groundReasonCode) << ",\"reason\":" << json::str(c.groundReason) << "}";
+        if (c.keptSkirtAreaM2 > 0) {
+            // kept as scanned, its side over rebuilt ground closed down to it: not in the scan
+            s << ",\"keptSkirt\":{\"areaM2\":" << json::num(c.keptSkirtAreaM2) << ",\"topY\":" << json::num(c.keptSkirtTopY) << ",\"bottomY\":" << json::num(c.keptSkirtBottomY) << "}";
         }
         s << ",\"samples\":[";
         for (size_t k = 0; k < c.samples.size(); ++k) s << (k ? "," : "") << v3(c.samples[k]);
@@ -2419,7 +3102,34 @@ inline std::string stripStatsJson(const StripResult& r) {
     s << "  \"canopyAreaM2\": " << json::num(st.canopyAreaM2) << ",\n  \"treeCanopyAreaM2\": " << json::num(st.treeCanopyAreaM2) << ",\n";
     s << "  \"crowns\": {\"tree\": " << st.crownsTree << ", \"treesReachingBoundary\": " << st.treesReachingBoundary << ", \"belowMinHeight\": " << st.crownsLow
       << ", \"cutAtBoundary\": " << st.crownsCut << ", \"cutAtBoundaryRemoved\": " << st.crownsCutRemoved << ", \"tooSmall\": " << st.crownsTooSmall
-      << ", \"noMeasuredGround\": " << st.crownsNoGround << "},\n";
+      << ", \"noMeasuredGround\": " << st.crownsNoGround << ", \"hangingBelowSupport\": " << st.crownsHangingBelowSupport << ", \"supportedUnderStem\": " << st.crownsSupportedUnderStem
+      << ", \"notRegrowable\": " << st.crownsNotRegrowable << "},\n";
+    // trees the regrown SB-Veggie tree does not fill, kept as scanned, each with the reason
+    auto keptSkirt = [](const CrownRecord& c) {
+        if (!(c.keptSkirtAreaM2 > 0)) return std::string();
+        return ", \"keptSkirt\": {\"areaM2\": " + json::num(c.keptSkirtAreaM2) + ", \"topY\": " + json::num(c.keptSkirtTopY) + ", \"bottomY\": " + json::num(c.keptSkirtBottomY) + "}";
+    };
+    s << "  \"notRegrowable\": [";
+    {
+        size_t n = 0;
+        for (const auto& c : r.crowns) {
+            if (c.status != "not_regrowable") continue;
+            s << (n++ ? ", " : "") << "{\"crownId\": " << c.id << ", \"reasonCode\": " << json::str(c.regrowthFailureCode) << ", \"reason\": " << json::str(c.regrowthFailure)
+              << ", \"colonisation\": " << json::str(c.regrowthColonisation) << ", \"areaM2\": " << json::num(c.areaM2) << ", \"heightM\": " << json::num(c.apexAboveSupport) << keptSkirt(c) << "}";
+        }
+    }
+    s << "],\n";
+    // trees whose crown hangs below the surface measured around them: their ground is not measured, kept as scanned
+    s << "  \"hangingBelowSupport\": [";
+    {
+        size_t n = 0;
+        for (const auto& c : r.crowns) {
+            if (c.status != "no_measured_ground" || c.groundReasonCode != "crown_below_support") continue;
+            s << (n++ ? ", " : "") << "{\"crownId\": " << c.id << ", \"reason\": " << json::str(c.groundReason) << ", \"areaM2\": " << json::num(c.areaM2)
+              << ", \"apexY\": " << json::num(c.apex.y) << keptSkirt(c) << "}";
+        }
+    }
+    s << "],\n";
     s << "  \"cutCanopyRemovedM2\": " << json::num(st.cutCanopyRemovedM2) << ",\n";
     auto q3 = [](const std::array<double, 3>& q) { return "[" + json::num(q[0]) + ", " + json::num(q[1]) + ", " + json::num(q[2]) + "]"; };
     s << "  \"dispersionQuartiles\": {\"green\": " << q3(st.greenDispersionQuartiles) << ", \"other\": " << q3(st.otherDispersionQuartiles) << "},\n";
@@ -2436,34 +3146,40 @@ inline std::string stripStatsJson(const StripResult& r) {
 // plant
 // ============================================================================================
 
-struct PlantParams {
-    double triangleBudget{0};        // total triangles for all trees (required, > 0)
-    double minTrianglesPerTree{120};
-    double crownBaseRatio{0.35};     // crown base = support + ratio * (apex - support): not observed, inferred
-    double trunkRadiusPerHeight{0.016}; // trunk radius = ratio * height: not observed, inferred
-    double woodShare{0.4};
-    double shellDepth{0.8};          // share of each surface sample's height above the crown base that the crown fills
-    uint64_t seed{0};
-    double supportTolerance{0.3};    // isolate: the trunk base must hit the support mesh within this (m)
-    int threads{0};
-};
 
 struct PlantedTree {
     int crownId{0};
     uint32_t seed{0};
-    size_t budget{0};
+    size_t target{0};                // triangles this crown's size asks for (crownTriangleTarget)
+    size_t needed{0};                // triangles its leaf masses on the measured surface need (trianglesForLeafMasses)
+    size_t ownBudget{0};             // its own budget: the larger of the two (crownOwnBudget)
+    size_t budget{0};                // triangles it was given
     nature::TreeBudgetReport report;
+    nature::ColonizationReport colonisation;
     geometry::Mesh wood, foliage;
     double heightAboveSupport{0}, crownBaseY{0}, trunkRadius{0};
+    double grownShare{0}, reachRadius{0};  // the grown skeleton's leaf nodes: share of the measured surface within reach
+    FoliageReach leaves;             // the delivered leaf masses: what they reach of the measured surface, and how high
+    std::string shortOfCrown;        // why its delivered leaves do not fill its crown within its budget (empty: they do)
+    bool groundChecked{false};
+    double groundGapM{std::numeric_limits<double>::quiet_NaN()};  // trunk base minus the nearest ground-mesh surface at its stem (NaN: none there)
+    bool offGround{false};           // ... further than groundTolerance from it, or no surface there
     const io::GlbJsonValue* crown{nullptr};
 };
 
 struct PlantResult {
     std::vector<PlantedTree> trees;
     std::vector<std::pair<int, std::string>> skipped;  // crown id, reason
+    std::vector<int> keptOnSupport, keptNotOnSupport;  // with a support mesh: trees kept as scanned on it, and not on it
     size_t triangles{0};
+    double triangleBudget{0};        // what all trees were given together
+    std::string budgetSource;        // explicit | crown_targets | crown_targets_capped (a label; nothing branches on it)
+    size_t targetTriangles{0};       // sum of the trees' own budgets (what they ask for without a budget)
+    size_t neededTriangles{0};       // sum of what their leaf masses on the measured surface need
+    size_t shortOfCrown{0};          // trees whose delivered leaves do not fill their crown within their budget
+    bool groundChecked{false};
+    size_t offGround{0};             // trees whose trunk base is not on the ground mesh (within groundTolerance)
     double ms{0};
-    std::vector<uint8_t> glb;
 };
 
 namespace detail {
@@ -2472,183 +3188,218 @@ inline Vec3 vec3Of(const io::GlbJsonValue& v) {
     return Vec3(static_cast<float>(v[0].num), static_cast<float>(v[1].num), static_cast<float>(v[2].num));
 }
 
-/** Heights at which a vertical line through (x, z) meets a mesh. */
-struct VerticalProbe {
-    double x0{0}, z0{0}, cell{2.0};
-    int nx{0}, nz{0};
-    std::vector<std::vector<uint32_t>> buckets;
-    const std::vector<Vec3>* p{nullptr};
-    const std::vector<uint32_t>* idx{nullptr};
 
-    void build(const std::vector<Vec3>& positions, const std::vector<uint32_t>& indices) {
-        p = &positions;
-        idx = &indices;
-        double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
-        for (const auto& v : positions) { minX = std::min(minX, static_cast<double>(v.x)); maxX = std::max(maxX, static_cast<double>(v.x)); minZ = std::min(minZ, static_cast<double>(v.z)); maxZ = std::max(maxZ, static_cast<double>(v.z)); }
-        x0 = minX; z0 = minZ;
-        nx = std::max(1, static_cast<int>(std::ceil((maxX - minX) / cell)) + 1);
-        nz = std::max(1, static_cast<int>(std::ceil((maxZ - minZ) / cell)) + 1);
-        buckets.assign(static_cast<size_t>(nx) * static_cast<size_t>(nz), {});
-        for (size_t t = 0; t + 2 < indices.size(); t += 3) {
-            const Vec3 &a = positions[indices[t]], &b = positions[indices[t + 1]], &c = positions[indices[t + 2]];
-            const int i0 = std::clamp(static_cast<int>(std::floor((std::min({a.x, b.x, c.x}) - x0) / cell)), 0, nx - 1);
-            const int i1 = std::clamp(static_cast<int>(std::floor((std::max({a.x, b.x, c.x}) - x0) / cell)), 0, nx - 1);
-            const int k0 = std::clamp(static_cast<int>(std::floor((std::min({a.z, b.z, c.z}) - z0) / cell)), 0, nz - 1);
-            const int k1 = std::clamp(static_cast<int>(std::floor((std::max({a.z, b.z, c.z}) - z0) / cell)), 0, nz - 1);
-            for (int k = k0; k <= k1; ++k) for (int i = i0; i <= i1; ++i) buckets[static_cast<size_t>(k) * static_cast<size_t>(nx) + static_cast<size_t>(i)].push_back(static_cast<uint32_t>(t / 3));
-        }
+inline std::string thousands(double v) {
+    std::string d = std::to_string(static_cast<long long>(std::llround(v)));
+    std::string o;
+    const size_t lead = d.size() % 3 == 0 ? 3 : d.size() % 3;
+    for (size_t i = 0; i < d.size(); ++i) {
+        if (i >= lead && i > 0 && (i - lead) % 3 == 0) o += ',';
+        o += d[i];
     }
-
-    std::vector<double> heightsAt(double x, double z) const {
-        std::vector<double> out;
-        const int i = static_cast<int>(std::floor((x - x0) / cell)), k = static_cast<int>(std::floor((z - z0) / cell));
-        if (i < 0 || k < 0 || i >= nx || k >= nz) return out;
-        for (uint32_t t : buckets[static_cast<size_t>(k) * static_cast<size_t>(nx) + static_cast<size_t>(i)]) {
-            const Vec3 &A = (*p)[(*idx)[3 * t]], &B = (*p)[(*idx)[3 * t + 1]], &C = (*p)[(*idx)[3 * t + 2]];
-            const double d = (static_cast<double>(B.x) - A.x) * (static_cast<double>(C.z) - A.z) - (static_cast<double>(C.x) - A.x) * (static_cast<double>(B.z) - A.z);
-            if (std::abs(d) < 1e-12) continue;
-            const double w1 = ((x - A.x) * (C.z - A.z) - (C.x - A.x) * (z - A.z)) / d;
-            const double w2 = ((B.x - A.x) * (z - A.z) - (x - A.x) * (B.z - A.z)) / d;
-            const double w0 = 1 - w1 - w2;
-            if (w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9) continue;
-            out.push_back(w0 * A.y + w1 * B.y + w2 * C.y);
-        }
-        return out;
-    }
-};
+    return o;
+}
 
 } // namespace detail
 
 /**
- * Grows one tree per crown with status "tree". `supportMesh` (optional, isolate requests) keeps only crowns whose
- * trunk base lies on that mesh within supportTolerance of the measured support.
+ * Grows one tree per crown with status "tree" (growCrown, the same trees strip grew to decide what to remove) and meshes
+ * each within its share of the triangle budget. `supportMesh` (optional, isolate requests) keeps only crowns whose trunk
+ * base lies on that mesh within supportTolerance of the measured support. `groundMesh` (optional: the model the trees
+ * are mounted on) is probed under every stem: a trunk base further than groundTolerance from its surfaces there, or with
+ * none there, is reported (offGround), never moved.
+ *
+ * Budget: each tree has its own budget (crownOwnBudget: its crown's target, and at least what its leaf masses on the
+ * measured surface need). Without a budget of the caller's, each tree gets its own, all within sceneTriangleCap; the
+ * call fails only when minTrianglesPerTree for every tree exceeds that cap. An explicit triangleBudget (which fails when
+ * it cannot give each tree minTrianglesPerTree) or a cap below the trees' own budgets is spread so that the trees get
+ * what their leaf masses need first, and the rest in proportion to what they ask beyond it.
+ *
+ * Every tree's delivered leaf masses are measured against its crown (meshCrown); a tree whose leaves do not fill it
+ * within the budget it was given is reported (shortOfCrown, with why), not substituted. A crown that does not regrow
+ * into its measured crown at all fails the call, naming each: a crown strip removed is one it regrew with these
+ * parameters and seed, so this means plant was given others.
  */
 inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P,
-                         const std::vector<Vec3>* supportPositions = nullptr, const std::vector<uint32_t>* supportIndices = nullptr) {
+                         const std::vector<Vec3>* supportPositions = nullptr, const std::vector<uint32_t>* supportIndices = nullptr,
+                         const std::vector<Vec3>* groundPositions = nullptr, const std::vector<uint32_t>* groundIndices = nullptr) {
     const auto t0 = std::chrono::steady_clock::now();
-    if (!(P.triangleBudget > 0)) throw VegetationError("bad_request", "plant needs a triangle budget greater than 0");
+    if (!(P.triangleBudget > 0) && !(P.sceneTriangleCap > 0)) throw VegetationError("bad_request", "plant needs a triangle budget, or a scene triangle cap to size one from the crowns, greater than 0");
+    if (!(P.minTrianglesPerTree >= 1)) throw VegetationError("bad_request", "minTrianglesPerTree must be at least 1");
     const auto& crowns = crownsDoc["crowns"];
     if (crowns.type != io::GlbJsonValue::Array) throw VegetationError("bad_input", "crowns.json has no crowns array");
+    const auto& params = crownsDoc["params"];
+    const double sampleSpacing = params.type == io::GlbJsonValue::Object && params.has("sampleSpacing") && params["sampleSpacing"].type == io::GlbJsonValue::Number ? params["sampleSpacing"].num : 0.7;
     detail::VerticalProbe probe;
     if (supportPositions && supportIndices) {
         if (supportIndices->empty()) throw VegetationError("bad_input", "the support mesh has no triangles");
         probe.build(*supportPositions, *supportIndices);
     }
+    detail::VerticalProbe ground;
+    if (groundPositions && groundIndices) {
+        if (groundIndices->empty()) throw VegetationError("bad_input", "the ground mesh has no triangles");
+        ground.build(*groundPositions, *groundIndices);
+    }
     PlantResult R;
     std::vector<const io::GlbJsonValue*> chosen;
+    auto onSupport = [&](const io::GlbJsonValue& c) {
+        const double sx = c["stem"][0].num, sz = c["stem"][1].num, sy = c["supportY"].num;
+        bool on = false;
+        for (double h : probe.heightsAt(sx, sz)) on = on || std::abs(h - sy) <= P.supportTolerance;
+        return on;
+    };
     for (const auto& c : crowns.arr) {
-        if (c["status"].asString() != "tree") continue;
         const int id = c["id"].asInt(-1);
+        // trees kept as scanned (not_regrowable): with a support mesh, say which stand on it, so an isolate request
+        // names only those
+        if (probe.p && c["status"].asString() == "not_regrowable") (onSupport(c) ? R.keptOnSupport : R.keptNotOnSupport).push_back(id);
+        if (c["status"].asString() != "tree") continue;
         if (c["samples"].arr.size() < 3) throw VegetationError("bad_input", "crown " + std::to_string(id) + " has fewer than 3 surface samples");
-        if (probe.p) {
-            const double sx = c["stem"][0].num, sz = c["stem"][1].num, sy = c["supportY"].num;
-            bool on = false;
-            for (double h : probe.heightsAt(sx, sz)) on = on || std::abs(h - sy) <= P.supportTolerance;
-            if (!on) { R.skipped.emplace_back(id, "not_on_support_mesh"); continue; }
-        }
+        if (probe.p && !onSupport(c)) { R.skipped.emplace_back(id, "not_on_support_mesh"); continue; }
         chosen.push_back(&c);
     }
     const size_t n = chosen.size();
-    if (n > 0 && P.triangleBudget < P.minTrianglesPerTree * static_cast<double>(n)) {
-        std::ostringstream m;
-        m << "a triangle budget of " << static_cast<size_t>(P.triangleBudget) << " cannot hold " << n << " trees at " << static_cast<size_t>(P.minTrianglesPerTree)
-          << " triangles each (they need at least " << static_cast<size_t>(std::ceil(P.minTrianglesPerTree * static_cast<double>(n))) << ")";
-        throw VegetationError("budget_too_small", m.str());
-    }
-    double areaSum = 0;
-    for (const auto* c : chosen) areaSum += std::max(0.0, (*c)["areaM2"].num);
-    const double spare = P.triangleBudget - P.minTrianglesPerTree * static_cast<double>(n);
-    R.trees.resize(n);
-    std::atomic<size_t> next{0};
+    std::vector<CrownShape> shapes(n);
+    for (size_t i = 0; i < n; ++i) shapes[i] = crownShapeFromJson(*chosen[i]);
+
+    // grow every tree first: its own budget depends on what its leaf masses need
+    std::vector<CrownGrowth> grown(n);
     std::vector<std::string> errors(n);
-    auto worker = [&]() {
-        while (true) {
-            const size_t i = next.fetch_add(1);
-            if (i >= n) return;
-            const auto& c = *chosen[i];
-            PlantedTree& tr = R.trees[i];
-            try {
-                tr.crown = chosen[i];
-                tr.crownId = c["id"].asInt(-1);
-                const double share = areaSum > 0 ? std::max(0.0, c["areaM2"].num) / areaSum : 1.0 / static_cast<double>(n);
-                tr.budget = static_cast<size_t>(std::floor(P.minTrianglesPerTree + spare * share));
-                tr.seed = static_cast<uint32_t>(detail::mix64(P.seed ^ detail::mix64(static_cast<uint64_t>(tr.crownId) + 0x5BD1E995ull)) & 0xFFFFFFFFull);
-                const Vec3 apex = detail::vec3Of(c["apex"]);
-                const double stemX = c["stem"][0].num, stemZ = c["stem"][1].num, support = c["supportY"].num;
-                const double H = std::max(0.5, static_cast<double>(apex.y) - support);
-                tr.heightAboveSupport = H;
-                tr.crownBaseY = support + P.crownBaseRatio * H;
-                tr.trunkRadius = P.trunkRadiusPerHeight * H;
-                // attractors: the crown volume under the measured surface, from each surface sample down by shellDepth
-                // of its height above the (inferred) crown base, on a voxel grid scaled to the crown
-                double radius = 0;
-                for (const auto& r : c["sectorRadii"].arr) radius += r.num / 16.0;
-                // attractor spacing: fine enough for the crown's width and for its depth (a wide flat crown needs fine layers)
-                const double voxel = std::clamp(std::min(radius / 6.0, (static_cast<double>(apex.y) - tr.crownBaseY) / 4.0), 0.4, 1.6);
-                std::vector<Vec3> attractors;
-                std::unordered_map<uint64_t, size_t> occupied;
-                auto addAttractor = [&](double x, double y, double z) {
-                    const int64_t a = static_cast<int64_t>(std::floor(x / voxel)), b = static_cast<int64_t>(std::floor(y / voxel)), d = static_cast<int64_t>(std::floor(z / voxel));
-                    const uint64_t key = (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(d & 0x1FFFFF);
-                    if (occupied.emplace(key, attractors.size()).second) attractors.push_back(Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
-                };
-                const auto& samples = c["samples"].arr;
-                for (size_t k = 0; k < samples.size(); ++k) {
-                    const Vec3 s = detail::vec3Of(samples[k]);
-                    // the scan drapes the crown's edge down towards the ground; below the crown base it is not crown
-                    if (s.y < tr.crownBaseY) continue;
-                    addAttractor(s.x, s.y, s.z);
-                    const double bottom = s.y - std::max(0.0, static_cast<double>(s.y) - tr.crownBaseY) * P.shellDepth;
-                    int layer = 1;
-                    for (double y = s.y - voxel; y >= bottom; y -= voxel, ++layer) {
-                        const double jx = (detail::hashUnit(tr.seed, k, static_cast<uint64_t>(layer) * 3) - 0.5) * voxel;
-                        const double jy = (detail::hashUnit(tr.seed, k, static_cast<uint64_t>(layer) * 3 + 1) - 0.5) * voxel;
-                        const double jz = (detail::hashUnit(tr.seed, k, static_cast<uint64_t>(layer) * 3 + 2) - 0.5) * voxel;
-                        addAttractor(s.x + jx, y + jy, s.z + jz);
-                    }
-                }
-                if (attractors.size() < 3) throw VegetationError("plant_failed", "crown " + std::to_string(tr.crownId) + " has no measured surface above its crown base");
-                Vec3 lo(1e9f, 1e9f, 1e9f), hi(-1e9f, -1e9f, -1e9f);
-                for (const auto& a : attractors) { lo.x = std::min(lo.x, a.x); lo.y = std::min(lo.y, a.y); lo.z = std::min(lo.z, a.z); hi.x = std::max(hi.x, a.x); hi.y = std::max(hi.y, a.y); hi.z = std::max(hi.z, a.z); }
-                nature::SpaceColonizationConfig cfg;
-                cfg.customAttractors = attractors;
-                cfg.attractorCount = static_cast<int>(attractors.size());
-                cfg.rootAnchor = Vec3(static_cast<float>(stemX), static_cast<float>(support), static_cast<float>(stemZ));
-                cfg.crownCenter = (lo + hi) * 0.5f;
-                cfg.crownExtents = Vec3(std::max(0.5f, (hi.x - lo.x) * 0.5f), std::max(0.5f, (hi.y - lo.y) * 0.5f), std::max(0.5f, (hi.z - lo.z) * 0.5f));
-                cfg.clearTrunkHeight = static_cast<float>(tr.crownBaseY - support);
-                cfg.baseRadius = static_cast<float>(tr.trunkRadius);
-                const float step = static_cast<float>(std::clamp(H / 40.0, 0.2, 0.6));
-                cfg.branchStepLength = step;
-                cfg.perceptionRadius = static_cast<float>(std::max(5.5 * step, 3.0 * voxel));
-                cfg.killRadius = static_cast<float>(std::max(1.6 * step, 0.9 * voxel));
-                cfg.maxIterations = static_cast<int>(std::min(400.0, std::ceil(3.0 * (H + radius) / step)));
-                cfg.rootFlareHeight = static_cast<float>(std::min(0.8, 0.06 * H));
-                cfg.seed = tr.seed;
-                cfg.triangleBudget = static_cast<float>(tr.budget);
-                cfg.woodBudgetShare = static_cast<float>(P.woodShare);
-                auto [wood, foliage] = nature::SpaceColonizationTreeGenerator::generateTreeComponents(cfg, &tr.report);
-                tr.wood = std::move(wood);
-                tr.foliage = std::move(foliage);
-                // a tree that never grew into its measured crown is not the tree that was measured
-                float top = -std::numeric_limits<float>::infinity();
-                for (const auto& v : tr.foliage.vertices) top = std::max(top, v.y);
-                if (tr.foliage.indices.empty() || top < tr.crownBaseY + 0.35 * (apex.y - tr.crownBaseY)) {
-                    throw VegetationError("plant_failed", "crown " + std::to_string(tr.crownId) + " did not grow into its measured crown");
-                }
-            } catch (const std::exception& e) {
-                errors[i] = e.what();
+    detail::forEachIndex(n, P.threads, [&](size_t i) {
+        try {
+            grown[i] = growCrown(shapes[i], P.growth, sampleSpacing);
+            if (!grown[i].ok()) errors[i] = "crown " + std::to_string(shapes[i].id) + ": " + grown[i].failure + " (colonisation: " + grown[i].colonisationSummary + ")";
+        } catch (const std::exception& e) {
+            errors[i] = "crown " + std::to_string(shapes[i].id) + ": " + e.what();
+        }
+    });
+    {
+        std::vector<std::string> failed;
+        for (size_t i = 0; i < n; ++i) if (!errors[i].empty()) failed.push_back(errors[i]);
+        if (!failed.empty()) {
+            std::ostringstream m;
+            m << failed.size() << " of " << n << " trees did not regrow into their measured crowns: ";
+            for (size_t k = 0; k < failed.size(); ++k) m << (k ? "; " : "") << failed[k];
+            const auto& growth = crownsDoc["growth"];
+            if (growth.type == io::GlbJsonValue::Object && growth["seed"].type == io::GlbJsonValue::String) {
+                char seedHex[17];
+                std::snprintf(seedHex, sizeof(seedHex), "%016llx", static_cast<unsigned long long>(P.growth.seed));
+                if (growth["seed"].str != seedHex) m << " (the measurement kept every tree it could not regrow with seed " << growth["seed"].str << " as scanned; these were planted with seed " << seedHex << ")";
             }
+            throw VegetationError("plant_failed", m.str());
+        }
+    }
+
+    const double minEach = std::ceil(P.minTrianglesPerTree);
+    std::vector<double> own(n), need(n);
+    double ownSum = 0, needSum = 0;
+    for (size_t i = 0; i < n; ++i) {
+        own[i] = static_cast<double>(crownOwnBudget(shapes[i], grown[i], P));
+        need[i] = std::min(own[i], std::max(minEach, static_cast<double>(trianglesForLeafMasses(grown[i].surfaceMassesNeeded, P.woodShare))));
+        ownSum += own[i];
+        needSum += need[i];
+    }
+    R.targetTriangles = static_cast<size_t>(ownSum);
+    R.neededTriangles = static_cast<size_t>(needSum);
+    const double minTotal = minEach * static_cast<double>(n);
+    double total;
+    if (P.triangleBudget > 0) {
+        if (n > 0 && P.triangleBudget < minTotal) {
+            std::ostringstream m;
+            m << "a triangle budget of " << detail::thousands(P.triangleBudget) << " cannot hold " << detail::thousands(static_cast<double>(n)) << " trees at "
+              << detail::thousands(minEach) << " triangles each (they need at least " << detail::thousands(minTotal) << ")";
+            throw VegetationError("budget_too_small", m.str());
+        }
+        total = P.triangleBudget;
+        R.budgetSource = "explicit";
+    } else {
+        if (n > 0 && minTotal > P.sceneTriangleCap) {
+            std::ostringstream m;
+            m << "the " << detail::thousands(static_cast<double>(n)) << " measured trees need at least " << detail::thousands(minTotal) << " triangles at "
+              << detail::thousands(minEach) << " each, more than the scene's cap of " << detail::thousands(P.sceneTriangleCap) << " triangles for trees";
+            throw VegetationError("budget_too_small", m.str());
+        }
+        total = std::min(ownSum, P.sceneTriangleCap);
+        R.budgetSource = ownSum > P.sceneTriangleCap ? "crown_targets_capped" : "crown_targets";
+    }
+    R.triangleBudget = total;
+    // per-tree budgets: their own, plus a share of any budget beyond them; under them, first what their leaf masses need,
+    // then the rest in proportion to what each asks beyond that; under even that, the minimum plus a share of the rest in
+    // proportion to what each one's leaf masses need beyond the minimum
+    std::vector<size_t> budgets(n);
+    auto spread = [&](const std::vector<double>& base, const std::vector<double>& upTo, double baseSum) {
+        double extra = 0;
+        for (size_t i = 0; i < n; ++i) extra += upTo[i] - base[i];
+        for (size_t i = 0; i < n; ++i) {
+            const double share = extra > 0 ? (upTo[i] - base[i]) / extra : 1.0 / static_cast<double>(n);
+            budgets[i] = static_cast<size_t>(std::floor(base[i] + (total - baseSum) * share));
         }
     };
-    int threads = P.threads > 0 ? P.threads : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-    threads = static_cast<int>(std::min<size_t>(static_cast<size_t>(threads), std::max<size_t>(1, n)));
-    std::vector<std::thread> pool;
-    for (int t = 0; t < threads; ++t) pool.emplace_back(worker);
-    for (auto& th : pool) th.join();
-    for (size_t i = 0; i < n; ++i) if (!errors[i].empty()) throw VegetationError("plant_failed", errors[i]);
-    for (const auto& tr : R.trees) R.triangles += (tr.wood.indices.size() + tr.foliage.indices.size()) / 3;
-    if (static_cast<double>(R.triangles) > P.triangleBudget) throw VegetationError("budget_exceeded", "trees used " + std::to_string(R.triangles) + " triangles, over the budget");
+    if (total >= ownSum) {
+        for (size_t i = 0; i < n; ++i) budgets[i] = static_cast<size_t>(own[i] + std::floor((total - ownSum) * own[i] / std::max(1.0, ownSum)));
+    } else if (total >= needSum) {
+        spread(need, own, needSum);
+    } else {
+        spread(std::vector<double>(n, minEach), need, minTotal);
+    }
+
+    R.trees.resize(n);
+    errors.assign(n, "");
+    detail::forEachIndex(n, P.threads, [&](size_t i) {
+        PlantedTree& tr = R.trees[i];
+        try {
+            const CrownGrowth& g = grown[i];
+            tr.crown = chosen[i];
+            tr.crownId = shapes[i].id;
+            tr.target = crownTriangleTarget(shapes[i], P);
+            tr.needed = static_cast<size_t>(need[i]);
+            tr.ownBudget = static_cast<size_t>(own[i]);
+            tr.budget = budgets[i];
+            tr.seed = g.seed;
+            tr.heightAboveSupport = g.heightAboveSupport;
+            tr.crownBaseY = g.crownBaseY;
+            tr.trunkRadius = g.trunkRadius;
+            tr.grownShare = g.surfaceShare();
+            tr.reachRadius = g.reachRadius;
+            tr.colonisation = g.colonisation;
+            MeshedCrown m = meshCrown(g, tr.budget, P.woodShare);
+            tr.report = m.report;
+            tr.leaves = m.reach;
+            if (m.foliage.indices.empty()) {
+                errors[i] = "crown " + std::to_string(tr.crownId) + ": " + m.shortfall(g, shapes[i], P.growth.minSurfaceReached, tr.budget);
+                return;
+            }
+            tr.shortOfCrown = m.shortfall(g, shapes[i], P.growth.minSurfaceReached, tr.budget);
+            tr.wood = std::move(m.wood);
+            tr.foliage = std::move(m.foliage);
+            if (ground.p) {
+                tr.groundChecked = true;
+                double best = std::numeric_limits<double>::infinity();
+                for (double h : ground.heightsAt(shapes[i].stemX, shapes[i].stemZ)) {
+                    if (std::abs(shapes[i].supportY - h) < std::abs(best)) best = shapes[i].supportY - h;
+                }
+                if (std::isfinite(best)) tr.groundGapM = best;
+                tr.offGround = !std::isfinite(best) || std::abs(best) > P.groundTolerance;
+            }
+        } catch (const std::exception& e) {
+            errors[i] = "crown " + std::to_string(tr.crownId) + ": " + e.what();
+        }
+    });
+    std::vector<std::string> failed;
+    for (size_t i = 0; i < n; ++i) if (!errors[i].empty()) failed.push_back(errors[i]);
+    if (!failed.empty()) {
+        std::ostringstream m;
+        m << failed.size() << " of " << n << " trees could not be meshed: ";
+        for (size_t k = 0; k < failed.size(); ++k) m << (k ? "; " : "") << failed[k];
+        throw VegetationError("plant_failed", m.str());
+    }
+    for (const auto& tr : R.trees) {
+        R.triangles += (tr.wood.indices.size() + tr.foliage.indices.size()) / 3;
+        R.shortOfCrown += tr.shortOfCrown.empty() ? 0 : 1;
+        R.offGround += tr.offGround ? 1 : 0;
+    }
+    R.groundChecked = ground.p != nullptr;
+    if (static_cast<double>(R.triangles) > total) throw VegetationError("budget_exceeded", "trees used " + std::to_string(R.triangles) + " triangles, over the budget of " + std::to_string(static_cast<size_t>(total)));
     R.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     return R;
 }
@@ -2685,11 +3436,23 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
            << ",\"supportY\":" << json::num(c["supportY"].num) << ",\"supportSource\":" << json::write(c["supportSource"])
            << ",\"heightAboveSupportM\":" << json::num(tr.heightAboveSupport) << ",\"crownAreaM2\":" << json::num(c["areaM2"].num)
            << ",\"sectorRadiiM\":" << json::write(c["sectorRadii"]);
-        ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::num(P.crownBaseRatio)
-           << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(P.trunkRadiusPerHeight) << "}"
-           << ",\"triangles\":" << (tr.wood.indices.size() + tr.foliage.indices.size()) / 3 << ",\"triangleBudget\":" << tr.budget
+        ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::num(P.growth.crownBaseRatio)
+           << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(P.growth.trunkRadiusPerHeight) << "}"
+           // measured on the delivered leaf masses (this mesh): the share of the crown's surface samples above its crown
+           // base inside one or within reachM of one, and how far their top lies below the apex; grownSurfaceReached is
+           // the same share for the grown skeleton's leaf nodes
+           << ",\"crownSurfaceReached\":" << json::num(tr.leaves.share()) << ",\"crownSurfaceSamples\":" << tr.leaves.samples
+           << ",\"reachM\":" << json::num(tr.reachRadius) << ",\"leavesBelowApexM\":" << json::num(static_cast<double>(c["apex"][1].num) - tr.leaves.topY)
+           << ",\"grownSurfaceReached\":" << json::num(tr.grownShare);
+        if (!tr.shortOfCrown.empty()) ex << ",\"shortOfCrown\":" << json::str(tr.shortOfCrown);
+        if (tr.groundChecked) {
+            ex << ",\"groundGapM\":";
+            if (std::isfinite(tr.groundGapM)) ex << json::num(tr.groundGapM); else ex << "null";
+        }
+        ex << ",\"triangles\":" << (tr.wood.indices.size() + tr.foliage.indices.size()) / 3 << ",\"triangleBudget\":" << tr.budget << ",\"ownBudget\":" << tr.ownBudget
            << ",\"woodTriangles\":" << tr.report.woodTriangles << ",\"foliageTriangles\":" << tr.report.foliageTriangles
-           << ",\"foliageClumps\":" << tr.report.foliageClumps << ",\"seed\":" << tr.seed << "}";
+           << ",\"foliageClumps\":" << tr.report.foliageClumps << ",\"surfaceMasses\":" << tr.report.surfaceMasses << ",\"surfaceMassesNeeded\":" << tr.report.surfaceMassesNeeded
+           << ",\"seed\":" << tr.seed << "}";
         nodes.push_back("{\"name\":" + json::str(name) + ",\"mesh\":" + std::to_string(meshes.size() - 1) + ",\"extras\":" + ex.str() + "}");
         children.push_back(std::to_string(nodes.size()));
     }
@@ -2716,7 +3479,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
         extras += "\"label\":" + json::write(crownsDoc["label"]) + ",";
     }
     extras += "\"sbVeggie\":{\"trees\":" + std::to_string(R.trees.size()) + ",\"triangles\":" + std::to_string(R.triangles) +
-              ",\"triangleBudget\":" + std::to_string(static_cast<size_t>(P.triangleBudget)) + ",\"generator\":\"space colonisation\"}}";
+              ",\"triangleBudget\":" + std::to_string(static_cast<size_t>(R.triangleBudget)) + ",\"shortOfCrown\":" + std::to_string(R.shortOfCrown) +
+              (R.groundChecked ? ",\"offGround\":" + std::to_string(R.offGround) : std::string()) + ",\"generator\":\"space colonisation\"}}";
     j += ",\"extras\":" + extras + "}";
     return gb.finish(j);
 }

@@ -10,8 +10,13 @@
 /**
  * CLI for the tile vegetation pipeline (scratchbox_tile_vegetation.hpp). Two subcommands:
  *
- *   strip  photo-textured tile GLB -> devegetated tile GLB (trees removed, holes closed) + crowns.json + stats JSON
- *   plant  crowns.json -> SB-Veggie trees GLB (one node per measured crown, studio clay, within a triangle budget)
+ *   strip  photo-textured tile GLB -> devegetated tile GLB (trees removed, holes closed) + crowns.json + stats JSON.
+ *          Every tree crown is regrown first (with --seed and the growth ratios); one the regrown tree does not fill is
+ *          kept as scanned (status not_regrowable, with the reason) instead of being removed.
+ *   plant  crowns.json -> SB-Veggie trees GLB (one node per measured crown, studio clay), within the caller's
+ *          --triangle-budget, or sized from the crowns under --scene-triangle-cap. Every tree's delivered leaf masses are
+ *          measured against its crown; one that does not fill it within its budget is reported (shortOfCrown), and with
+ *          --ground-mesh every trunk base is measured against the model the trees are mounted on (offGround).
  *
  * Every flag is a continuous metric quantity. Errors exit non-zero with "ERROR <code>: <message>" on stderr.
  *
@@ -45,13 +50,21 @@ static void usage() {
         "    --roughness-radius M (1) --roughness-min V (0.015) --planar-angle DEG (10) --planar-offset M (0.12) --planar-area M2 (6)\n"
         "    --canopy-min-height M (2) --min-tree-height M (3) --min-crown-area M2 (4)\n"
         "    --window-base M (0.6) --window-slope V (0.11) --window-min M (1.5) --window-max M (4.5) --climb-limit M (1)\n"
-        "    --support-step M (1) --support-search M (25) --footprint-dilation M (1) --drape-reach M (10) --clearance M (0.3) --support-band M (1.5)\n"
+        "    --support-step M (1) --support-search M (25) --max-crown-below-support V (0.1) --ground-terrain-band M (2)\n"
+        "    --footprint-dilation M (1) --drape-reach M (10) --clearance M (0.3) --support-band M (1.5)\n"
         "    --skirt-min M (0.3) --fragment-max-area M2 (300) --cap-grid M (1.5) --seam-gap M (1) --sample-spacing M (0.7) --threads N\n"
-        "  tile_vegetation plant --crowns <crowns.json> --out <trees.glb> --stats <stats.json> --triangle-budget N [options]\n"
+        "    regrowth (white apex: a tree the regrown tree does not fill, kept as scanned):\n"
+        "    --seed HEX (0) --crown-base-ratio V (0.35) --trunk-radius-per-height V (0.016) --shell-depth V (0.8) --min-surface-reached V (0.9)\n"
+        "  tile_vegetation plant --crowns <crowns.json> --out <trees.glb> --stats <stats.json> (--triangle-budget N | --scene-triangle-cap N) [options]\n"
+        "    --triangle-budget N       total triangles all trees may use (the caller's own budget)\n"
+        "    --scene-triangle-cap N    no budget given: each tree gets a target from its crown, all within this cap\n"
         "    --seed HEX                seed (hex, up to 16 digits) mixed with each crown id\n"
         "    --support-mesh PATH       keep only crowns whose trunk base lies on this mesh (isolate requests)\n"
-        "    --support-tolerance M (0.3) --min-triangles-per-tree N (120)\n"
-        "    --crown-base-ratio V (0.35) --trunk-radius-per-height V (0.016) --wood-share V (0.4) --shell-depth V (0.8)\n"
+        "    --ground-mesh PATH        measure every trunk base against this mesh (the model the trees are mounted on)\n"
+        "    --support-tolerance M (0.3) --ground-tolerance M (0.5) --min-triangles-per-tree N (120) --triangles-per-crown-m2 V (4) --wood-share V (0.4)\n"
+        "    --crown-base-ratio V --trunk-radius-per-height V --shell-depth V --min-surface-reached V\n"
+        "                              (default: what crowns.json recorded as its growth, else 0.35, 0.016, 0.8, 0.9;\n"
+        "                              a value other than the recorded one is refused)\n"
         "    --threads N\n";
 }
 
@@ -80,6 +93,27 @@ struct Args {
         return v;
     }
 };
+
+static uint64_t parseSeed(const Args& a) {
+    if (!a.has("seed")) return 0;
+    const std::string s = a.str("seed");
+    if (s.empty() || s.size() > 16 || s.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) {
+        throw VegetationError("bad_request", "--seed must be 1-16 hex digits");
+    }
+    return std::stoull(s, nullptr, 16);
+}
+
+/** Growth ratios from flags over `G`; each must be a share in its range. */
+static void readGrowthFlags(const Args& a, GrowthParams& G) {
+    G.crownBaseRatio = a.num("crown-base-ratio", G.crownBaseRatio);
+    G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight);
+    G.shellDepth = a.num("shell-depth", G.shellDepth);
+    G.minSurfaceReached = a.num("min-surface-reached", G.minSurfaceReached);
+    if (G.crownBaseRatio < 0 || G.crownBaseRatio >= 1) throw VegetationError("bad_request", "--crown-base-ratio must be in [0, 1)");
+    if (!(G.trunkRadiusPerHeight > 0)) throw VegetationError("bad_request", "--trunk-radius-per-height must be > 0");
+    if (G.shellDepth < 0 || G.shellDepth > 1) throw VegetationError("bad_request", "--shell-depth must be in [0, 1]");
+    if (G.minSurfaceReached < 0 || G.minSurfaceReached > 1) throw VegetationError("bad_request", "--min-surface-reached must be in [0, 1]");
+}
 
 static Args parseArgs(int argc, char** argv, int from) {
     Args a;
@@ -119,6 +153,9 @@ static int runStrip(const Args& a) {
     P.climbLimit = a.num("climb-limit", P.climbLimit);
     P.supportStep = a.num("support-step", P.supportStep);
     P.supportSearch = a.num("support-search", P.supportSearch);
+    P.maxCrownBelowSupport = a.num("max-crown-below-support", P.maxCrownBelowSupport);
+    P.groundTerrainBand = a.num("ground-terrain-band", P.groundTerrainBand);
+    if (P.maxCrownBelowSupport < 0 || P.maxCrownBelowSupport > 1) throw VegetationError("bad_request", "--max-crown-below-support must be in [0, 1]");
     P.footprintDilation = a.num("footprint-dilation", P.footprintDilation);
     P.drapeReach = a.num("drape-reach", P.drapeReach);
     P.clearance = a.num("clearance", P.clearance);
@@ -129,6 +166,8 @@ static int runStrip(const Args& a) {
     P.seamGap = a.num("seam-gap", P.seamGap);
     P.sampleSpacing = a.num("sample-spacing", P.sampleSpacing);
     P.threads = static_cast<int>(a.num("threads", 0));
+    readGrowthFlags(a, P.growth);
+    P.growth.seed = parseSeed(a);
     if (P.cell <= 0 || P.terrainCell <= 0 || P.sampleSpacing <= 0 || P.capGrid <= 0) throw VegetationError("bad_request", "cell sizes and spacings must be > 0");
 
     const auto glb = readFileBytes(a.str("input"));
@@ -167,45 +206,66 @@ static int runStrip(const Args& a) {
 }
 
 static int runPlant(const Args& a) {
-    for (const char* req : {"crowns", "out", "stats", "triangle-budget"}) {
+    for (const char* req : {"crowns", "out", "stats"}) {
         if (!a.has(req)) throw VegetationError("bad_request", std::string("plant needs --") + req);
     }
+    if (a.has("triangle-budget") == a.has("scene-triangle-cap")) throw VegetationError("bad_request", "plant needs exactly one of --triangle-budget and --scene-triangle-cap");
     PlantParams P;
     P.triangleBudget = a.num("triangle-budget", 0);
+    P.sceneTriangleCap = a.num("scene-triangle-cap", 0);
+    if (a.has("triangle-budget") && !(P.triangleBudget > 0)) throw VegetationError("bad_request", "--triangle-budget must be > 0");
+    if (a.has("scene-triangle-cap") && !(P.sceneTriangleCap > 0)) throw VegetationError("bad_request", "--scene-triangle-cap must be > 0");
     P.minTrianglesPerTree = a.num("min-triangles-per-tree", P.minTrianglesPerTree);
-    P.crownBaseRatio = a.num("crown-base-ratio", P.crownBaseRatio);
-    P.trunkRadiusPerHeight = a.num("trunk-radius-per-height", P.trunkRadiusPerHeight);
+    P.trianglesPerCrownM2 = a.num("triangles-per-crown-m2", P.trianglesPerCrownM2);
     P.woodShare = a.num("wood-share", P.woodShare);
-    P.shellDepth = a.num("shell-depth", P.shellDepth);
     P.supportTolerance = a.num("support-tolerance", P.supportTolerance);
+    P.groundTolerance = a.num("ground-tolerance", P.groundTolerance);
+    if (!(P.groundTolerance >= 0)) throw VegetationError("bad_request", "--ground-tolerance must be >= 0");
     P.threads = static_cast<int>(a.num("threads", 0));
-    if (a.has("seed")) {
-        const std::string s = a.str("seed");
-        if (s.empty() || s.size() > 16 || s.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) {
-            throw VegetationError("bad_request", "--seed must be 1-16 hex digits");
-        }
-        P.seed = std::stoull(s, nullptr, 16);
-    }
-    if (P.crownBaseRatio < 0 || P.crownBaseRatio >= 1) throw VegetationError("bad_request", "--crown-base-ratio must be in [0, 1)");
     if (P.woodShare < 0 || P.woodShare > 1) throw VegetationError("bad_request", "--wood-share must be in [0, 1]");
+    if (!(P.minTrianglesPerTree >= 1)) throw VegetationError("bad_request", "--min-triangles-per-tree must be at least 1");
+    if (P.trianglesPerCrownM2 < 0) throw VegetationError("bad_request", "--triangles-per-crown-m2 must be >= 0");
 
     const auto bytes = readFileBytes(a.str("crowns"));
     const std::string text(bytes.begin(), bytes.end());
     const io::GlbJsonValue doc = json::parse(text);
     if (doc.type != io::GlbJsonValue::Object) throw VegetationError("bad_input", "crowns.json is not a JSON object");
 
-    std::vector<Vec3> supportPos;
-    std::vector<uint32_t> supportIdx;
-    const bool withSupport = a.has("support-mesh");
-    if (withSupport) {
-        const auto glb = readFileBytes(a.str("support-mesh"));
-        auto scene = gltf::GlbSceneReader::parse(glb.data(), glb.size());
-        if (!scene.ok) throw VegetationError("bad_input", "cannot read the support mesh: " + scene.error);
-        supportPos.reserve(scene.mesh.vertices.size());
-        for (const auto& v : scene.mesh.vertices) supportPos.push_back(v.position);
-        supportIdx = scene.mesh.indices;
+    // The growth ratios the measurement regrew its trees with (crowns.json "growth") decided which crowns it removed;
+    // planting with others could leave a removed tree unrebuilt, so another value is refused.
+    const auto& recorded = doc["growth"];
+    if (recorded.type == io::GlbJsonValue::Object) {
+        const std::pair<const char*, double*> fields[] = {{"crownBaseRatio", &P.growth.crownBaseRatio}, {"trunkRadiusPerHeight", &P.growth.trunkRadiusPerHeight},
+                                                          {"shellDepth", &P.growth.shellDepth}, {"minSurfaceReached", &P.growth.minSurfaceReached}};
+        for (const auto& [name, field] : fields) {
+            if (recorded[name].type == io::GlbJsonValue::Number) *field = recorded[name].num;
+        }
+        const std::pair<const char*, const char*> flags[] = {{"crown-base-ratio", "crownBaseRatio"}, {"trunk-radius-per-height", "trunkRadiusPerHeight"},
+                                                             {"shell-depth", "shellDepth"}, {"min-surface-reached", "minSurfaceReached"}};
+        for (const auto& [flag, name] : flags) {
+            if (a.has(flag) && recorded[name].type == io::GlbJsonValue::Number && a.num(flag, 0) != recorded[name].num) {
+                throw VegetationError("bad_request", std::string("--") + flag + " " + a.str(flag) + " differs from the " + json::num(recorded[name].num) +
+                                      " the measurement regrew its trees with to decide which to remove; plant with that value, or measure again with this one");
+            }
+        }
     }
-    PlantResult r = plant(doc, P, withSupport ? &supportPos : nullptr, withSupport ? &supportIdx : nullptr);
+    readGrowthFlags(a, P.growth);
+    P.growth.seed = parseSeed(a);
+
+    auto readMesh = [](const std::string& path, const char* what, std::vector<Vec3>& positions, std::vector<uint32_t>& indices) {
+        const auto glb = readFileBytes(path);
+        auto scene = gltf::GlbSceneReader::parse(glb.data(), glb.size());
+        if (!scene.ok) throw VegetationError("bad_input", std::string("cannot read the ") + what + ": " + scene.error);
+        positions.reserve(scene.mesh.vertices.size());
+        for (const auto& v : scene.mesh.vertices) positions.push_back(v.position);
+        indices = scene.mesh.indices;
+    };
+    std::vector<Vec3> supportPos, groundPos;
+    std::vector<uint32_t> supportIdx, groundIdx;
+    const bool withSupport = a.has("support-mesh"), withGround = a.has("ground-mesh");
+    if (withSupport) readMesh(a.str("support-mesh"), "support mesh", supportPos, supportIdx);
+    if (withGround) readMesh(a.str("ground-mesh"), "ground mesh", groundPos, groundIdx);
+    PlantResult r = plant(doc, P, withSupport ? &supportPos : nullptr, withSupport ? &supportIdx : nullptr, withGround ? &groundPos : nullptr, withGround ? &groundIdx : nullptr);
     const auto glb = writeTreesGlb(r, doc, P);
     if (!writeFile(a.str("out"), glb.data(), glb.size())) throw VegetationError("io", "cannot write " + a.str("out"));
 
@@ -213,11 +273,41 @@ static int runPlant(const Args& a) {
     size_t wood = 0, foliage = 0;
     for (const auto& t : r.trees) { wood += t.report.woodTriangles; foliage += t.report.foliageTriangles; }
     s << "{\n  \"ok\": true,\n  \"trees\": " << r.trees.size() << ",\n  \"triangles\": " << r.triangles << ",\n  \"triangleBudget\": "
-      << static_cast<size_t>(P.triangleBudget) << ",\n  \"woodTriangles\": " << wood << ",\n  \"foliageTriangles\": " << foliage
-      << ",\n  \"skipped\": [";
+      << static_cast<size_t>(r.triangleBudget) << ",\n  \"triangleBudgetSource\": " << json::str(r.budgetSource) << ",\n  \"targetTriangles\": " << r.targetTriangles
+      << ",\n  \"sceneTriangleCap\": " << static_cast<size_t>(P.sceneTriangleCap) << ",\n  \"minTrianglesPerTree\": " << json::num(P.minTrianglesPerTree)
+      << ",\n  \"neededTriangles\": " << r.neededTriangles << ",\n  \"woodTriangles\": " << wood << ",\n  \"foliageTriangles\": " << foliage << ",\n  \"skipped\": [";
     for (size_t i = 0; i < r.skipped.size(); ++i) s << (i ? ", " : "") << "{\"crownId\": " << r.skipped[i].first << ", \"reason\": " << json::str(r.skipped[i].second) << "}";
-    s << "],\n  \"inferred\": {\"crownBaseRatio\": " << json::num(P.crownBaseRatio) << ", \"trunkRadiusPerHeight\": " << json::num(P.trunkRadiusPerHeight)
-      << ", \"shellDepth\": " << json::num(P.shellDepth) << "},\n  \"perTree\": [";
+    s << "]";
+    if (withSupport) {
+        // trees kept as scanned (not_regrowable), by whether they stand on the support mesh
+        auto ids = [](const std::vector<int>& v) { std::string o; for (size_t i = 0; i < v.size(); ++i) o += (i ? ", " : "") + std::to_string(v[i]); return o; };
+        s << ",\n  \"keptOnSupportMesh\": [" << ids(r.keptOnSupport) << "],\n  \"keptNotOnSupportMesh\": [" << ids(r.keptNotOnSupport) << "]";
+    }
+    s << ",\n  \"inferred\": {\"crownBaseRatio\": " << json::num(P.growth.crownBaseRatio) << ", \"trunkRadiusPerHeight\": " << json::num(P.growth.trunkRadiusPerHeight)
+      << ", \"shellDepth\": " << json::num(P.growth.shellDepth) << "},\n  \"minSurfaceReached\": " << json::num(P.growth.minSurfaceReached);
+    // trees whose delivered leaves do not fill their crown within their budget, each with why (they are planted as grown)
+    s << ",\n  \"shortOfCrown\": [";
+    {
+        size_t k = 0;
+        for (const auto& t : r.trees) {
+            if (t.shortOfCrown.empty()) continue;
+            s << (k++ ? ", " : "") << "{\"crownId\": " << t.crownId << ", \"budget\": " << t.budget << ", \"ownBudget\": " << t.ownBudget << ", \"neededTriangles\": " << t.needed
+              << ", \"crownSurfaceReached\": " << json::num(t.leaves.share()) << ", \"reason\": " << json::str(t.shortOfCrown) << "}";
+        }
+    }
+    s << "]";
+    // with a ground mesh: trunk bases further than groundTolerance from it at their stem (gapM: base minus the nearest
+    // surface there, null when it has none there)
+    if (r.groundChecked) {
+        s << ",\n  \"groundTolerance\": " << json::num(P.groundTolerance) << ",\n  \"offGround\": [";
+        size_t k = 0;
+        for (const auto& t : r.trees) {
+            if (!t.offGround) continue;
+            s << (k++ ? ", " : "") << "{\"crownId\": " << t.crownId << ", \"gapM\": " << (std::isfinite(t.groundGapM) ? json::num(t.groundGapM) : std::string("null")) << "}";
+        }
+        s << "]";
+    }
+    s << ",\n  \"perTree\": [";
     for (size_t i = 0; i < r.trees.size(); ++i) {
         const auto& t = r.trees[i];
         // bounds of what was grown (measured from the meshes, not echoed from the crown)
@@ -229,8 +319,15 @@ static int runPlant(const Args& a) {
             }
         }
         s << (i ? ",\n    " : "\n    ") << "{\"crownId\": " << t.crownId << ", \"heightAboveSupportM\": " << json::num(t.heightAboveSupport)
-          << ", \"budget\": " << t.budget << ", \"triangles\": " << (t.wood.indices.size() + t.foliage.indices.size()) / 3
+          << ", \"target\": " << t.target << ", \"neededTriangles\": " << t.needed << ", \"ownBudget\": " << t.ownBudget << ", \"budget\": " << t.budget
+          << ", \"triangles\": " << (t.wood.indices.size() + t.foliage.indices.size()) / 3
           << ", \"wood\": " << t.report.woodTriangles << ", \"foliage\": " << t.report.foliageTriangles << ", \"clumps\": " << t.report.foliageClumps
+          << ", \"surfaceMasses\": " << t.report.surfaceMasses << ", \"surfaceMassesNeeded\": " << t.report.surfaceMassesNeeded
+          << ", \"crownSurfaceReached\": " << json::num(t.leaves.share()) << ", \"grownSurfaceReached\": " << json::num(t.grownShare)
+          << ", \"leavesBelowApexM\": " << json::num(static_cast<double>((*t.crown)["apex"][1].num) - t.leaves.topY) << ", \"reachM\": " << json::num(t.reachRadius);
+        if (t.groundChecked) s << ", \"groundGapM\": " << (std::isfinite(t.groundGapM) ? json::num(t.groundGapM) : std::string("null"));
+        s << ", \"colonisation\": {\"iterations\": " << t.colonisation.iterations
+          << ", \"stop\": " << json::str(t.colonisation.stop) << ", \"trunkSeekSteps\": " << t.colonisation.trunkSeekSteps << "}"
           << ", \"bounds\": [[" << json::num(lo.x) << "," << json::num(lo.y) << "," << json::num(lo.z) << "],[" << json::num(hi.x) << "," << json::num(hi.y) << "," << json::num(hi.z) << "]]"
           << ", \"seed\": " << t.seed << "}";
     }

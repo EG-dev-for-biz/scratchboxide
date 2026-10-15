@@ -25,10 +25,11 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { TileVegetationService, type TileVegetationStripResult } from '../src/node/3d-engine/tile-vegetation-service';
+import { SCENE_TREE_TRIANGLE_CAP, TileVegetationService, type TileVegetationStripResult } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService } from '../src/node/3d-engine/tile-refine-service';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../src/node/3d-engine/location-clay-pipeline';
 import { decodePng, encodePng } from '../src/node/texture-processing';
+import { crownSurfaceAboveBase, foliageReach, readTreeFoliage } from './helpers/foliage-reach';
 import { readGlbTriangles, renderClayPng, type GlbTriangles } from './helpers/clay-glb-render';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
@@ -349,7 +350,30 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         // - canopy that stays never stands over a hole: cut canopy joined to a removed tree went with it, and the only
         //   canopy a skirt closes is a low planting (under 3 m above what it stands on, beside a cap within the 1.5 m band);
         expect(strip.stats.crowns.cutAtBoundaryRemoved).toBeGreaterThanOrEqual(1);
-        expect(strip.stats.skirts.maxHeightByHangM.onKeptCanopy).toBeLessThanOrEqual(5);
+        //   the skirts on canopy that stays are reported on the crown they close: a low planting's are under 5 m tall
+        const keptCanopy = crownsDoc.crowns.filter((c: any) => c.keptSkirt);
+        for (const c of keptCanopy.filter((k: any) => k.status === 'below_min_height')) expect(c.keptSkirt.topY - c.keptSkirt.bottomY).toBeLessThanOrEqual(5);
+        //   a tree kept as scanned because no regrown tree fills its crown is canopy that stays too: where trees beside
+        //   it were removed, its side is closed down to their ground. That wall is not in the scan: it is reported on the
+        //   tree, as the skirt measured along its footprint here (1.5 m out) has it, and the summary names it with the tree
+        const keptTrees = crownsDoc.crowns.filter((c: any) => c.status === 'not_regrowable');
+        const skirtNode = outTris.nodeRanges.find(r => r.name === 'vegetation_removed_skirt')!;
+        const keptSides: any[] = [];
+        for (const k of keptTrees.filter((c: any) => c.keptSkirt)) {
+            let area = 0, top = -Infinity, bottom = Infinity;
+            for (let f = skirtNode.firstTriangle; f < skirtNode.firstTriangle + skirtNode.triangleCount; f++) {
+                const p = [0, 1, 2].map(j => { const o = outTris.indices[3 * f + j] * 3; return [outTris.positions[o], outTris.positions[o + 1], outTris.positions[o + 2]]; });
+                if (!insideFootprint(k, (p[0][0] + p[1][0] + p[2][0]) / 3, (p[0][2] + p[1][2] + p[2][2]) / 3, 1.5)) continue;
+                const u = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]], w = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+                area += 0.5 * Math.hypot(u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]);
+                for (const q of p) { top = Math.max(top, q[1]); bottom = Math.min(bottom, q[1]); }
+            }
+            expect(area).toBeGreaterThanOrEqual(k.keptSkirt.areaM2 - 0.5);
+            expect(area).toBeLessThanOrEqual(1.1 * k.keptSkirt.areaM2);
+            expect(Math.abs(top - k.keptSkirt.topY)).toBeLessThan(0.01);
+            expect(Math.abs(bottom - k.keptSkirt.bottomY)).toBeLessThan(0.01);
+            keptSides.push({ crownId: k.id, reportedM2: k.keptSkirt.areaM2, measuredM2: area, topY: top, bottomY: bottom });
+        }
         // - no tall skirt anywhere near a crown that stays cut (where the previous strip hung 20-30 m curtains);
         const skirt = outTris.nodeRanges.find(r => r.name === 'vegetation_removed_skirt')!;
         const keptCut = crownsDoc.crowns.filter((c: any) => c.status === 'cut_at_boundary');
@@ -377,7 +401,7 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         const wallReport = {
             openedCells: openedCells.length, openedAtExtractionEdge: openedAtEdge, coveredCells: before.size, largestOpenRun: largest, capMaxRiseM: capRise,
             rawSteepInTreeFootprintsM2: rawSteep.areaM2, outSteepInTreeFootprintsM2: outSteep.areaM2, skirtSteepInTreeFootprintsM2: skirtSteep.areaM2,
-            skirtsTallerThan5m: tallSkirts, tallSkirtsNearKeptCutCrowns: tallNearKeptCut, skirts: strip.stats.skirts, drape: strip.stats.drape,
+            skirtsTallerThan5m: tallSkirts, tallSkirtsNearKeptCutCrowns: tallNearKeptCut, skirts: strip.stats.skirts, keptTreeSides: keptSides, drape: strip.stats.drape,
             crowns: strip.stats.crowns, cutCanopyRemovedM2: strip.stats.cutCanopyRemovedM2, treeCanopyAreaM2: strip.stats.treeCanopyAreaM2
         };
         if (fs.existsSync(REPORT)) fs.writeFileSync(REPORT, JSON.stringify({ ...JSON.parse(fs.readFileSync(REPORT, 'utf8')), walls: wallReport }, null, 2));
@@ -385,13 +409,33 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
 
     it('runs the whole location pipeline: remeshed clay plus SB-Veggie trees within budget, with screenshots', () => {
         expect(pipeline.trees!.count).toBe(trees.length);
+        expect(pipeline.trees!.measured).toBe(trees.length + pipeline.trees!.notRegrowable);
         expect(pipeline.trees!.triangles).toBeLessThanOrEqual(pipeline.trees!.triangleBudget);
-        expect(pipeline.trees!.triangleBudget).toBe(Math.floor(pipeline.remesh.triangles! * 0.5));
+        // sized from the measured crowns, within the scene's cap (not from the remeshed tile)
+        expect(pipeline.trees!.triangleBudgetSource).toMatch(/^crown_targets/);
+        expect(pipeline.trees!.triangleBudget).toBe(Math.min(pipeline.trees!.targetTriangles!, SCENE_TREE_TRIANGLE_CAP));
         const clayFile = path.join(root, 'public', pipeline.url);
         const treesFile = path.join(root, 'public', pipeline.trees!.url!);
         const clay = readGlbTriangles(fs.readFileSync(clayFile));
         const grown = readGlbTriangles(fs.readFileSync(treesFile));
         expect(grown.nodeRanges).toHaveLength(trees.length);
+        // every tree's delivered leaves fill its crown at its own budget (measured on the trees GLB, against crowns.json)
+        const byId = new Map<number, any>(crownsDoc.crowns.map((c: any) => [c.id, c]));
+        for (const f of readTreeFoliage(fs.readFileSync(treesFile))) {
+            const c = byId.get(f.crownId);
+            const d = foliageReach(f, f.extras.foliageClumps, crownSurfaceAboveBase(c, crownsDoc.growth.crownBaseRatio), f.extras.reachM);
+            expect(d.share).toBeGreaterThanOrEqual(0.9);
+            expect(d.topY + f.extras.reachM).toBeGreaterThanOrEqual(c.apex[1]);
+        }
+        expect(pipeline.trees!.shortOfCrown).toEqual([]);
+        // a tree kept as scanned is named with the side the removal beside it closed
+        for (const k of pipeline.trees!.keptAsScanned) {
+            const c = byId.get(k.crownId);
+            if (!c.keptSkirt) continue;
+            expect(k.closedSide).toEqual({ areaM2: c.keptSkirt.areaM2, topY: c.keptSkirt.topY, bottomY: c.keptSkirt.bottomY });
+            expect(pipeline.trees!.outcome).toContain(`crown ${k.crownId} (`);
+            expect(pipeline.trees!.outcome).toContain(`its side was closed down to their ground with ${Math.round(c.keptSkirt.areaM2).toLocaleString()} m² of clay wall`);
+        }
         // the summary the model relays says what closing the ground added, named by what each skirt hangs on
         const text = describeLocationClay(pipeline, 'clay');
         expect(text).toMatch(/(walls and building sides the trees hid were continued straight down to that ground|the edges of (level|other) surfaces left standing over it were closed down to it) \([\d,]+ m², up to [\d.]+ m tall; not in the scan\)/);

@@ -190,11 +190,11 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 trees: {
                     type: 'BOOLEAN',
-                    description: 'Rebuild the trees measured in the photo tiles as SB-Veggie clay trees (default true): each tree crown found in the photogrammetry is taken out of the remeshed ground and regrown in its measured place, height and spread, within a triangle budget. Low roof plantings, and crowns cut by the extraction edge (their tops outside it), stay as scanned unless a cut crown is joined to a removed tree, when it goes with it unrebuilt; the result says how many of each, and what was added to close the ground. Set false only when the user asks for no trees. Needs remesh (raw tiles keep their scanned trees).'
+                    description: 'Rebuild the trees measured in the photo tiles as SB-Veggie clay trees (default true): each tree crown found in the photogrammetry is regrown in its measured place, height and spread, and taken out of the remeshed ground, within a triangle budget. A tree whose regrown SB-Veggie tree would not fill its measured crown is not taken out: it stays as scanned, and the result names it with the reason ("N of M trees rebuilt as SB-Veggie; K left as scanned: ..."). The result also names, by crown, any rebuilt tree whose leaves do not fill its crown within the budget and any whose trunk does not meet the mounted ground. Low roof plantings, and crowns cut by the extraction edge (their tops outside it), stay as scanned unless a cut crown is joined to a removed tree, when it goes with it unrebuilt; the result says how many of each, and what was added to close the ground. Set false only when the user asks for no trees. Needs remesh (raw tiles keep their scanned trees).'
                 },
                 treeTriangleBudget: {
                     type: 'NUMBER',
-                    description: 'Total triangles all rebuilt trees together may use (default: half the remeshed tile\'s triangles). Set it when the user gives a budget, or when a call failed because the budget could not hold the measured trees (the error says how many they need).'
+                    description: 'Total triangles all rebuilt trees together may use. Default: sized from the measured trees, a budget per tree that grows with its crown and covers the leaf masses its measured crown needs (never under 120 triangles), all within a cap of 1,500,000 triangles for the trees of a scene. A budget too small for the leaves of a tree to fill its crown is reported for that tree. Set it when the user gives a budget, or when a call failed because the measured trees need more than the cap (the error says how many they need; a smaller radiusMeters also has fewer trees).'
                 },
                 isolate: {
                     type: 'BOOLEAN',
@@ -560,6 +560,8 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
                 generator: 'space colonisation from the measured crowns',
                 resolvedAddress: place,
                 treeCount: t.count,
+                // measured trees left in the scan (the regrown tree would not fill their crown): not in this model
+                treesLeftAsScanned: t.notRegrowable,
                 triangleCount: t.triangles,
                 // the measured crowns these trees were grown into
                 canopyAreaM2: t.treeCanopyAreaM2,
@@ -587,7 +589,7 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
             version: (prevArtifact.version || 1) + 1,
             title: `${prevArtifact.title || '3D Scene'} — Staged at ${place}`,
             summary: flavour === 'clay'
-                ? `Staged active 3D asset at ${place} with Google 3D Tiles in studio grey clay (${counts})${t?.count ? ` and ${t.count} SB-Veggie trees rebuilt from the measured crowns` : ''}. Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`
+                ? `Staged active 3D asset at ${place} with Google 3D Tiles in studio grey clay (${counts})${t?.measured || t?.notOnStructure ? `; ${t.outcome}` : ''}. Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`
                 : `Staged active 3D asset at ${place} with Google 3D Tiles full photogrammetric textures (${counts}).`,
             data: {
                 ...prevData,
@@ -603,7 +605,7 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
             type: '3d-scene',
             title: flavour === 'clay' ? `${place} (Studio Grey Clay 3D Tiles)` : `${place} (Photorealistic 3D Tiles)`,
             summary: flavour === 'clay'
-                ? `Google 3D Tiles for ${place} in Studio Grey Clay (${counts})${t?.count ? ` with ${t.count} SB-Veggie trees rebuilt from the measured crowns` : ''}. Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`
+                ? `Google 3D Tiles for ${place} in Studio Grey Clay (${counts})${t?.measured || t?.notOnStructure ? `; ${t.outcome}` : ''}. Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`
                 : `Google 3D Tiles in full photogrammetric texture for ${place} (${counts}). Shared metric coordinate frame: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.`,
             version: 1,
             data: {
