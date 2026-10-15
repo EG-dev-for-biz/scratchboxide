@@ -13,11 +13,13 @@
  *      The image stays a Buffer in this process: it is never written to disk, the media store, public/ or the chat.
  *   2. Build spec: the model chat runs on (the request's model, else the chat's default, walking the chat's own
  *      fallback list on "model not found" and saying so) reads the reference into an ObjectBuildSpec, on the chat's
- *      credentials. A spec the validator or the interpreter cannot build gets one corrective re-ask quoting every
- *      problem, then the call fails.
- *   3. Build: sb.object_spec.build(spec) runs in the native Python engine and writes a GLB.
+ *      credentials. A spec the validator or the interpreter cannot build, or whose build runs past its time limit,
+ *      gets one corrective re-ask quoting every problem, then the call fails.
+ *   3. Build: sb.object_spec.build(spec) runs in the native Python engine and writes a GLB, within BUILD_TIMEOUT_MS
+ *      (a run past it is stopped and reported as having run out of time).
  *   4. Checks: every part the spec lists is built and touches its parent, the piece count equals expectedBodies, and
- *      the vision model compares a clay render with the reference. Problems and high-confidence differences go back
+ *      the vision model compares a clay render with the reference. The contact analysis runs in slices, so the
+ *      server keeps answering and a stop ends it. Problems and high-confidence differences go back
  *      for up to two revision passes. The result is the last build that passed every check; a revision that fails
  *      is reported as such, and differences still present are listed verbatim. A build that never passed every
  *      check is rejected, never mounted.
@@ -40,11 +42,12 @@ import { classifyMediaGenerationError } from '../../common/media-generation-prot
 import { GeminiClient, errorMessage, isModelNotFoundError } from '../gemini/gemini-client';
 import { NativePythonRunnerService, type PythonExecutionOptions, type PythonExecutionResult } from './native-python-runner-service';
 import {
-    analyzePartConnectivity,
+    analyzePartConnectivityAsync,
     glbToNamedTriangleSoups,
     mergeTriangleSoups,
     type ContactGraph,
     type FloatingPart,
+    type PartConnectivityReport,
     type TriangleSoup
 } from './part-connectivity';
 import { renderReviewViews } from './visual-review';
@@ -57,6 +60,8 @@ export const MAX_REVISION_PASSES = 2;
 export const MAX_TRANSIENT_RETRIES = 2;
 /** Image models sometimes finish with no image part; the same model is asked this many times in all. */
 export const EMPTY_IMAGE_ATTEMPTS = 3;
+/** How long one native build of a spec may run before it is stopped. */
+export const BUILD_TIMEOUT_MS = 120_000;
 
 export type ObjectBuildStage = 'credentials' | 'reference-image' | 'build-spec' | 'build' | 'checks';
 
@@ -105,6 +110,8 @@ export interface ReferenceObjectBuilderDeps {
     /** Where the build script and GLB are written (the runner's build/3d-python by default). */
     outputDir?: string;
     sleep?: (ms: number) => Promise<void>;
+    /** Time limit for one native build (BUILD_TIMEOUT_MS by default). */
+    buildTimeoutMs?: number;
 }
 
 export interface ReferenceDifference {
@@ -354,6 +361,8 @@ async function callModel(
         try {
             return await client.models.generateContent(params);
         } catch (err) {
+            // A stop aborts the request in flight: report the stop, not a model failure.
+            throwIfAborted(signal, stage);
             const classified = classifyMediaGenerationError(err, params.model);
             const retryable = classified.code === 'transient' || classified.code === 'quota';
             if (retryable && attempt < MAX_TRANSIENT_RETRIES && !signal?.aborted) {
@@ -551,15 +560,42 @@ interface NativeBuild {
     buildMs: number;
 }
 
-/** Runs the spec's script. A SpecError comes back as problems for the model; any other failure throws. */
-async function runBuild(spec: ObjectBuildSpec, deps: ReferenceObjectBuilderDeps, signal?: AbortSignal): Promise<NativeBuild | { specProblems: string[] }> {
+/** What the model and the user are told when a build runs past its time limit. */
+export function buildTimeoutProblem(timeoutMs: number): string {
+    return `The build did not finish within ${Math.round(timeoutMs / 1000)} s, so it was stopped: the spec is too heavy to build in that time. Use fewer parts, copies or relief curves, or smaller ones.`;
+}
+
+/** A spec the build rejected: the interpreter's SpecError problems, or the time limit. */
+interface RejectedBuild {
+    specProblems: string[];
+    timedOut?: boolean;
+}
+
+/**
+ * Runs the spec's script. A SpecError, or a run past the time limit, comes back as problems for the model; any other
+ * failure throws.
+ */
+async function runBuild(spec: ObjectBuildSpec, deps: ReferenceObjectBuilderDeps, signal?: AbortSignal): Promise<NativeBuild | RejectedBuild> {
     throwIfAborted(signal, 'build');
     const sourceCode = buildObjectSpecScript(spec);
     const runPython = deps.runPython ?? ((script: string, options: PythonExecutionOptions) => NativePythonRunnerService.getInstance().runScript(script, options));
+    const timeoutMs = deps.buildTimeoutMs ?? BUILD_TIMEOUT_MS;
+    // The time limit is a signal of its own, so a run it ends is known to have timed out (the runner's own timeout,
+    // set later as a backstop, reports only a failed command). A stop kills the Python process the same way.
+    const limit = new AbortController();
+    const timer = setTimeout(() => limit.abort(), timeoutMs);
+    const runSignal = signal ? AbortSignal.any([signal, limit.signal]) : limit.signal;
     const started = Date.now();
-    // A stop kills the Python process rather than waiting for it to finish.
-    const result = await runPython(sourceCode, { timeoutMs: 120_000, ...(deps.outputDir ? { outputDir: deps.outputDir } : {}), ...(signal ? { signal } : {}) });
+    let result: PythonExecutionResult;
+    try {
+        result = await runPython(sourceCode, { timeoutMs: timeoutMs + 30_000, ...(deps.outputDir ? { outputDir: deps.outputDir } : {}), signal: runSignal });
+    } finally {
+        clearTimeout(timer);
+    }
     throwIfAborted(signal, 'build');
+    if (!result.success && limit.signal.aborted) {
+        return { specProblems: [buildTimeoutProblem(timeoutMs)], timedOut: true };
+    }
     if (!result.success) {
         const stderr = result.stderr || result.errorDetails || '';
         const specProblems = interpreterSpecProblems(stderr);
@@ -587,14 +623,16 @@ interface BuildableSpec {
  * interpreter's).
  */
 async function requestBuildableSpec(vision: VisionModel, contents: Content[], deps: ReferenceObjectBuilderDeps, signal?: AbortSignal): Promise<BuildableSpec> {
-    const attempt = async (reply: JsonReply): Promise<{ build?: NativeBuild; spec?: ObjectBuildSpec; problems: string[]; from: 'build-spec' | 'build' }> => {
+    type Attempt = { build?: NativeBuild; spec?: ObjectBuildSpec; problems: string[]; from: 'build-spec' | 'build'; timedOut?: boolean };
+    const attempt = async (reply: JsonReply): Promise<Attempt> => {
         const errors = reply.parseError ? [reply.parseError] : validateObjectBuildSpec(reply.value);
         if (errors.length) return { problems: errors, from: 'build-spec' };
         const spec = reply.value as ObjectBuildSpec;
         const built = await runBuild(spec, deps, signal);
-        if ('specProblems' in built) return { problems: built.specProblems, from: 'build' };
+        if ('specProblems' in built) return { problems: built.specProblems, from: 'build', ...(built.timedOut ? { timedOut: true } : {}) };
         return { build: built, spec, problems: [], from: 'build' };
     };
+    const finder = (a: Attempt) => a.timedOut ? 'the build ran out of time' : a.from === 'build' ? 'the interpreter found' : 'the validator found';
 
     const first = await callJson(vision, contents, OBJECT_BUILD_SPEC_JSON_SCHEMA, 'build-spec', signal);
     const one = await attempt(first);
@@ -609,8 +647,8 @@ async function requestBuildableSpec(vision: VisionModel, contents: Content[], de
     if (two.build && two.spec) return { spec: two.spec, build: two.build, specRequests: 2, correctedProblems: one.problems };
     const errors = two.problems;
     throw new ReferenceObjectBuildError(two.from,
-        `${vision.current} did not produce a buildable spec after one correction (${two.from === 'build' ? 'the interpreter' : 'the validator'} found: ${errors.slice(0, 8).join('; ')}${errors.length > 8 ? `; and ${errors.length - 8} more` : ''})`,
-        { model: vision.current, errors, firstErrors: one.problems });
+        `${vision.current} did not produce a buildable spec after one correction (${finder(two)}: ${errors.slice(0, 8).join('; ')}${errors.length > 8 ? `; and ${errors.length - 8} more` : ''})`,
+        { model: vision.current, errors, firstErrors: one.problems, ...(two.timedOut ? { timedOut: true, timeoutMs: deps.buildTimeoutMs ?? BUILD_TIMEOUT_MS } : {}) });
 }
 
 function soupBounds(soup: TriangleSoup): { min: Vec3; max: Vec3 } {
@@ -641,12 +679,20 @@ function reachesParent(childPieces: Set<number>, parentPieces: Set<number>, grap
     return [...childPieces].every(p => reached.has(p));
 }
 
+const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve));
+
 /**
  * Measures what was modelled: every sweep and revolve part the spec lists has real geometry, every child touches
  * its parent, and the whole build is as many pieces as expectedBodies. One contact analysis of the whole build
- * answers all three, whatever the number of parts. Part ids pair parts with their meshes only.
+ * answers all three, whatever the number of parts. Part ids pair parts with their meshes only. The analysis runs in
+ * short slices so the server keeps answering while it measures, and a stop ends it at the next slice.
  */
-export function measureBuild(spec: ObjectBuildSpec, glb: Buffer): Omit<ObjectBuildChecks, 'differences'> & { soup: TriangleSoup; partBounds: PartBounds } {
+export async function measureBuild(
+    spec: ObjectBuildSpec,
+    glb: Buffer,
+    options: { signal?: AbortSignal } = {}
+): Promise<Omit<ObjectBuildChecks, 'differences'> & { soup: TriangleSoup; partBounds: PartBounds }> {
+    throwIfAborted(options.signal, 'checks');
     const named = glbToNamedTriangleSoups(glb);
     const meshes = named ? [...named].filter(([, s]) => s.indices.length > 0) : [];
     if (meshes.length === 0) {
@@ -660,7 +706,14 @@ export function measureBuild(spec: ObjectBuildSpec, glb: Buffer): Omit<ObjectBui
         triangleRange.set(id, [first, first + s.indices.length / 3]);
         first += s.indices.length / 3;
     }
-    const whole = analyzePartConnectivity(soup, { withGraph: true });
+    await yieldToEventLoop();
+    let whole: PartConnectivityReport;
+    try {
+        whole = await analyzePartConnectivityAsync(soup, { withGraph: true, signal: options.signal });
+    } catch (err) {
+        throwIfAborted(options.signal, 'checks');
+        throw err;
+    }
     const { min, max } = soupBounds(soup);
 
     const parts: PartBuildCheck[] = spec.parts.filter(p => p.sweep || p.revolve).map(p => {
@@ -734,8 +787,8 @@ async function checkBuild(
     vision: VisionModel,
     reference: ReferenceImage
 ): Promise<CheckedPass> {
-    throwIfAborted(input.signal, 'checks');
-    const { soup, partBounds, ...measured } = measureBuild(spec, build.glb);
+    input.reportProgress?.(`Checking pass ${pass}: every part built and attached`);
+    const { soup, partBounds, ...measured } = await measureBuild(spec, build.glb, { signal: input.signal });
     throwIfAborted(input.signal, 'checks');
     const render = renderReviewViews(soup, 512, { views: THREE_QUARTER_VIEW })[0].png;
     input.reportProgress?.(`Comparing the clay build (pass ${pass}) with the reference`);
@@ -845,11 +898,12 @@ export async function buildObjectFromSpec(
     input.reportProgress?.('Building the spec natively', 0.2);
     const built = await runBuild(valid, deps, input.signal);
     if ('specProblems' in built) {
-        throw new ReferenceObjectBuildError('build', `The spec cannot be built (the interpreter found: ${built.specProblems.join('; ')})`, { errors: built.specProblems });
+        throw new ReferenceObjectBuildError('build',
+            `The spec cannot be built (${built.timedOut ? 'the build ran out of time' : 'the interpreter found'}: ${built.specProblems.join('; ')})`,
+            { errors: built.specProblems, ...(built.timedOut ? { timedOut: true, timeoutMs: deps.buildTimeoutMs ?? BUILD_TIMEOUT_MS } : {}) });
     }
-    throwIfAborted(input.signal, 'checks');
     input.reportProgress?.('Checking that every part is built and attached', 0.8);
-    const { soup: _soup, partBounds, ...measured } = measureBuild(valid, built.glb);
+    const { soup: _soup, partBounds, ...measured } = await measureBuild(valid, built.glb, { signal: input.signal });
     const problems = describeProblems({ ...measured, differences: [] }, valid, partBounds);
     if (!passedEveryCheck(measured)) {
         throw new ReferenceObjectBuildError('checks', `The build does not pass its checks, so nothing was mounted: ${problems.join(' ')}`,

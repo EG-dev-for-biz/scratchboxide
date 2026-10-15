@@ -53,6 +53,10 @@ export interface ContactGraph {
 }
 
 const MAX_TRIANGLES = 600_000;
+/** Floating groups reported (and measured), largest first. */
+const REPORTED_GROUPS = 12;
+/** Upper bound on triangle entries in the embedding test's 2D grid (memory), reached by coarsening the grid. */
+const MAX_RAY_GRID_ENTRIES = 12_000_000;
 
 // ---------------------------------------------------------------------------
 // GLB -> world-space triangle soup
@@ -228,63 +232,68 @@ export function mergeTriangleSoups(soups: TriangleSoup[]): TriangleSoup {
 }
 
 // ---------------------------------------------------------------------------
-// Geometry helpers
+// Geometry helpers (scalar, reading the soup in place: the analysis calls them millions of times)
 // ---------------------------------------------------------------------------
 
-function closestPointDistanceSq(p: Vec3, a: Vec3, b: Vec3, c: Vec3): number {
-    // Ericson, Real-Time Collision Detection 5.1.5
-    const ab = sub(b, a), ac = sub(c, a), ap = sub(p, a);
-    const d1 = dot(ab, ap), d2 = dot(ac, ap);
-    if (d1 <= 0 && d2 <= 0) return distSq(p, a);
-    const bp = sub(p, b);
-    const d3 = dot(ab, bp), d4 = dot(ac, bp);
-    if (d3 >= 0 && d4 <= d3) return distSq(p, b);
+/** Squared distance from (px, py, pz) to triangle t of the soup (Ericson, Real-Time Collision Detection 5.1.5). */
+function closestDistSq(P: Float32Array, I: Uint32Array, t: number, px: number, py: number, pz: number): number {
+    const ia = I[t * 3] * 3, ib = I[t * 3 + 1] * 3, ic = I[t * 3 + 2] * 3;
+    const ax = P[ia], ay = P[ia + 1], az = P[ia + 2];
+    const abx = P[ib] - ax, aby = P[ib + 1] - ay, abz = P[ib + 2] - az;
+    const acx = P[ic] - ax, acy = P[ic + 1] - ay, acz = P[ic + 2] - az;
+    const apx = px - ax, apy = py - ay, apz = pz - az;
+    const d1 = abx * apx + aby * apy + abz * apz, d2 = acx * apx + acy * apy + acz * apz;
+    if (d1 <= 0 && d2 <= 0) return apx * apx + apy * apy + apz * apz;
+    const bpx = px - P[ib], bpy = py - P[ib + 1], bpz = pz - P[ib + 2];
+    const d3 = abx * bpx + aby * bpy + abz * bpz, d4 = acx * bpx + acy * bpy + acz * bpz;
+    if (d3 >= 0 && d4 <= d3) return bpx * bpx + bpy * bpy + bpz * bpz;
     const vc = d1 * d4 - d3 * d2;
     if (vc <= 0 && d1 >= 0 && d3 <= 0) {
         const v = d1 / (d1 - d3);
-        return distSq(p, add(a, scale(ab, v)));
+        return lengthSq(apx - v * abx, apy - v * aby, apz - v * abz);
     }
-    const cp = sub(p, c);
-    const d5 = dot(ab, cp), d6 = dot(ac, cp);
-    if (d6 >= 0 && d5 <= d6) return distSq(p, c);
+    const cpx = px - P[ic], cpy = py - P[ic + 1], cpz = pz - P[ic + 2];
+    const d5 = abx * cpx + aby * cpy + abz * cpz, d6 = acx * cpx + acy * cpy + acz * cpz;
+    if (d6 >= 0 && d5 <= d6) return cpx * cpx + cpy * cpy + cpz * cpz;
     const vb = d5 * d2 - d1 * d6;
     if (vb <= 0 && d2 >= 0 && d6 <= 0) {
         const w = d2 / (d2 - d6);
-        return distSq(p, add(a, scale(ac, w)));
+        return lengthSq(apx - w * acx, apy - w * acy, apz - w * acz);
     }
     const va = d3 * d6 - d5 * d4;
     if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
         const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return distSq(p, add(b, scale(sub(c, b), w)));
+        return lengthSq(bpx - w * (P[ic] - P[ib]), bpy - w * (P[ic + 1] - P[ib + 1]), bpz - w * (P[ic + 2] - P[ib + 2]));
     }
     const denom = 1 / (va + vb + vc);
     const v = vb * denom, w = vc * denom;
-    return distSq(p, add(a, add(scale(ab, v), scale(ac, w))));
+    return lengthSq(apx - v * abx - w * acx, apy - v * aby - w * acy, apz - v * abz - w * acz);
 }
 
-/** Möller–Trumbore along a fixed skewed direction; returns true for a hit at t > 0. */
+/** Möller–Trumbore along a fixed skewed direction; true for a hit at t > 0. */
 const RAY_DIR: Vec3 = normalize([1, 0.1234, 0.0567]);
-function rayHitsTriangle(o: Vec3, a: Vec3, b: Vec3, c: Vec3): boolean {
-    const e1 = sub(b, a), e2 = sub(c, a);
-    const h = cross(RAY_DIR, e2);
-    const det = dot(e1, h);
+function rayHitsTriangle(P: Float32Array, I: Uint32Array, t: number, ox: number, oy: number, oz: number): boolean {
+    const [rx, ry, rz] = RAY_DIR;
+    const ia = I[t * 3] * 3, ib = I[t * 3 + 1] * 3, ic = I[t * 3 + 2] * 3;
+    const ax = P[ia], ay = P[ia + 1], az = P[ia + 2];
+    const e1x = P[ib] - ax, e1y = P[ib + 1] - ay, e1z = P[ib + 2] - az;
+    const e2x = P[ic] - ax, e2y = P[ic + 1] - ay, e2z = P[ic + 2] - az;
+    const hx = ry * e2z - rz * e2y, hy = rz * e2x - rx * e2z, hz = rx * e2y - ry * e2x;
+    const det = e1x * hx + e1y * hy + e1z * hz;
     if (Math.abs(det) < 1e-12) return false;
     const f = 1 / det;
-    const s = sub(o, a);
-    const u = f * dot(s, h);
+    const sx = ox - ax, sy = oy - ay, sz = oz - az;
+    const u = f * (sx * hx + sy * hy + sz * hz);
     if (u < 0 || u > 1) return false;
-    const q = cross(s, e1);
-    const v = f * dot(RAY_DIR, q);
+    const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+    const v = f * (rx * qx + ry * qy + rz * qz);
     if (v < 0 || u + v > 1) return false;
-    return f * dot(e2, q) > 1e-9;
+    return f * (e2x * qx + e2y * qy + e2z * qz) > 1e-9;
 }
 
-function sub(a: Vec3, b: Vec3): Vec3 { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
-function add(a: Vec3, b: Vec3): Vec3 { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
-function scale(a: Vec3, s: number): Vec3 { return [a[0] * s, a[1] * s, a[2] * s]; }
+function lengthSq(x: number, y: number, z: number): number { return x * x + y * y + z * z; }
 function dot(a: Vec3, b: Vec3): number { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 function cross(a: Vec3, b: Vec3): Vec3 { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
-function distSq(a: Vec3, b: Vec3): number { const d = sub(a, b); return dot(d, d); }
 function normalize(a: Vec3): Vec3 { const l = Math.hypot(a[0], a[1], a[2]); return [a[0] / l, a[1] / l, a[2] / l]; }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +312,58 @@ function cellGrid(min: Vec3, max: Vec3, step: number): { cell: (value: number, a
     };
 }
 
+/**
+ * Triangle lists per cell in one flat array (cell c holds triangles[start[c]..start[c + 1]]). The triangles are given
+ * piece by piece, so each cell lists a piece's triangles together and `runEnd[j]` jumps past every triangle of the
+ * piece at j: a piece the query point belongs to, or is already joined to, is skipped in one step however many of its
+ * triangles share the cell.
+ */
+interface PieceSortedCells {
+    start: Int32Array;
+    triangles: Int32Array;
+    runEnd: Int32Array;
+}
+
+/** Undefined when the lists would hold more than `maxEntries` entries. */
+function* pieceSortedCells(
+    byPiece: Int32Array,
+    cellsOf: (t: number, visit: (cell: number) => void) => void,
+    triPart: Int32Array,
+    spend: (cost: number) => boolean,
+    /** The number of cells when known; otherwise cellsOf numbers cells from 0 as it meets them. */
+    knownCellCount?: number,
+    maxEntries = Infinity
+): Generator<void, PieceSortedCells | undefined, void> {
+    const counts: number[] | Int32Array = knownCellCount !== undefined ? new Int32Array(knownCellCount) : [];
+    let entries = 0;
+    for (let i = 0; i < byPiece.length; i++) {
+        const before = entries;
+        cellsOf(byPiece[i], c => { counts[c] = (counts[c] ?? 0) + 1; entries++; });
+        if (entries > maxEntries) return undefined;
+        if (spend(1 + entries - before)) yield;
+    }
+    const cellCount = knownCellCount ?? counts.length;
+    const start = new Int32Array(cellCount + 1);
+    for (let c = 0; c < cellCount; c++) start[c + 1] = start[c] + (counts[c] ?? 0);
+    const triangles = new Int32Array(start[cellCount]);
+    const fill = start.slice(0, cellCount);
+    for (let i = 0; i < byPiece.length; i++) {
+        const t = byPiece[i];
+        let visits = 1;
+        cellsOf(t, c => { triangles[fill[c]++] = t; visits++; });
+        if (spend(visits)) yield;
+    }
+    const runEnd = new Int32Array(triangles.length);
+    for (let c = 0; c < cellCount; c++) {
+        const from = start[c], to = start[c + 1];
+        if (spend((to - from) >> 3)) yield;
+        for (let j = to - 1; j >= from; j--) {
+            runEnd[j] = j + 1 < to && triPart[triangles[j + 1]] === triPart[triangles[j]] ? runEnd[j + 1] : j + 1;
+        }
+    }
+    return { start, triangles, runEnd };
+}
+
 interface Part {
     triangles: number[];
     vertices: number[];
@@ -310,18 +371,78 @@ interface Part {
     max: Vec3;
 }
 
-export function analyzePartConnectivity(soup: TriangleSoup, options: { toleranceMeters?: number; withGraph?: boolean } = {}): PartConnectivityReport {
-    const triCount = soup.indices.length / 3;
-    const vertexCount = soup.positions.length / 3;
+export interface PartConnectivityOptions {
+    toleranceMeters?: number;
+    withGraph?: boolean;
+}
+
+/** Thrown by analyzePartConnectivityAsync when its signal is aborted. */
+export class ConnectivityAnalysisAbortedError extends Error {
+    constructor() {
+        super('The part connectivity analysis was stopped.');
+        this.name = 'ConnectivityAnalysisAbortedError';
+    }
+}
+
+/** Units of work (about one triangle or vertex test each) between the analysis's yield points. */
+const WORK_PER_YIELD = 20_000;
+
+/** Synchronous analysis (scripts' structural check, tests). Large models are better measured with the async form. */
+export function analyzePartConnectivity(soup: TriangleSoup, options: PartConnectivityOptions = {}): PartConnectivityReport {
+    const steps = analysisSteps(soup, options);
+    for (;;) {
+        const step = steps.next();
+        if (step.done) return step.value;
+    }
+}
+
+/**
+ * The same analysis, giving the event loop back every `sliceMs` (about 20 ms) so a server stays responsive while a
+ * large model is measured, and stopping with ConnectivityAnalysisAbortedError as soon as `signal` is aborted.
+ */
+export async function analyzePartConnectivityAsync(
+    soup: TriangleSoup,
+    options: PartConnectivityOptions & { signal?: AbortSignal; sliceMs?: number } = {}
+): Promise<PartConnectivityReport> {
+    const sliceMs = options.sliceMs ?? 20;
+    const steps = analysisSteps(soup, options);
+    let sliceStart = Date.now();
+    for (;;) {
+        if (options.signal?.aborted) throw new ConnectivityAnalysisAbortedError();
+        const step = steps.next();
+        if (step.done) return step.value;
+        if (Date.now() - sliceStart >= sliceMs) {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            sliceStart = Date.now();
+        }
+    }
+}
+
+/**
+ * The analysis as a generator that yields about every WORK_PER_YIELD units of work, so callers decide whether to run
+ * it straight through or in slices. Proximity uses a 3D grid and embedding casts one ray per sample against a 2D grid
+ * of triangles seen along the ray; both grids keep each cell's triangles grouped by piece, so pieces that need no
+ * test are skipped whole. Only the reported floating groups are measured.
+ */
+function* analysisSteps(soup: TriangleSoup, options: PartConnectivityOptions): Generator<void, PartConnectivityReport, void> {
+    const P = soup.positions, I = soup.indices;
+    const triCount = I.length / 3;
+    const vertexCount = P.length / 3;
     if (triCount === 0) {
         return { passed: true, partCount: 0, attachedPartCount: 0, structureCount: 0, toleranceMeters: 0, floatingParts: [] };
     }
+    let work = 0;
+    /** Adds `cost` units of work; true when a yield point is due. */
+    const spend = (cost: number): boolean => {
+        work += cost;
+        if (work < WORK_PER_YIELD) return false;
+        work = 0;
+        return true;
+    };
 
-    const point = (i: number): Vec3 => [soup.positions[i * 3], soup.positions[i * 3 + 1], soup.positions[i * 3 + 2]];
-    let gMin: Vec3 = [Infinity, Infinity, Infinity], gMax: Vec3 = [-Infinity, -Infinity, -Infinity];
-    for (let i = 0; i < vertexCount; i++) {
-        const p = point(i);
-        for (let k = 0; k < 3; k++) { gMin[k] = Math.min(gMin[k], p[k]); gMax[k] = Math.max(gMax[k], p[k]); }
+    const gMin: Vec3 = [Infinity, Infinity, Infinity], gMax: Vec3 = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < vertexCount * 3; i += 3) {
+        for (let k = 0; k < 3; k++) { gMin[k] = Math.min(gMin[k], P[i + k]); gMax[k] = Math.max(gMax[k], P[i + k]); }
     }
     const diagonal = Math.hypot(gMax[0] - gMin[0], gMax[1] - gMin[1], gMax[2] - gMin[2]);
     const tolerance = options.toleranceMeters ?? Math.max(0.002, diagonal * 0.002);
@@ -333,119 +454,217 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
     // rounding alone splits coincident points that straddle a cell boundary (e.g. box faces).
     // At most 1e5 weld cells along any axis keeps the integer cell keys exact.
     const weldStep = Math.max(1e-6, tolerance * 0.05, Math.max(gMax[0] - gMin[0], gMax[1] - gMin[1], gMax[2] - gMin[2]) / 1e5);
-    const weldGrid = cellGrid(gMin, gMax, weldStep);
+    const weldStepSq = weldStep * weldStep;
+    // Cells twice the weld distance across: a point's weld sphere then reaches at most one neighbour per axis.
+    const weldCell = weldStep * 2;
+    const weldGrid = cellGrid(gMin, gMax, weldCell);
     const weldCells = new Map<number, number[]>();
-    const weldPositions: Vec3[] = [];
+    const weldPositions = new Float64Array(vertexCount * 3);
+    let weldCount = 0;
     const welded = new Int32Array(vertexCount);
+    const weldIn = (key: number, x: number, y: number, z: number): number => {
+        const list = weldCells.get(key);
+        if (!list) return -1;
+        for (const c of list) {
+            if (lengthSq(weldPositions[c * 3] - x, weldPositions[c * 3 + 1] - y, weldPositions[c * 3 + 2] - z) <= weldStepSq) return c;
+        }
+        return -1;
+    };
+    // The point's own cell first (where a coincident vertex almost always is), then the neighbour on the near side of
+    // each axis.
+    const nearSide = (value: number, axis: number) => (((value - gMin[axis]) / weldCell) % 1 < 0.5 ? -1 : 1);
     for (let i = 0; i < vertexCount; i++) {
-        const p = point(i);
-        const cx = weldGrid.cell(p[0], 0), cy = weldGrid.cell(p[1], 1), cz = weldGrid.cell(p[2], 2);
-        let id = -1;
-        for (let dx = -1; dx <= 1 && id < 0; dx++) for (let dy = -1; dy <= 1 && id < 0; dy++) for (let dz = -1; dz <= 1 && id < 0; dz++) {
-            const list = weldCells.get(weldGrid.key(cx + dx, cy + dy, cz + dz));
-            if (!list) continue;
-            for (const candidate of list) {
-                if (distSq(weldPositions[candidate], p) <= weldStep * weldStep) { id = candidate; break; }
-            }
+        if (spend(4)) yield;
+        const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+        const cx = weldGrid.cell(x, 0), cy = weldGrid.cell(y, 1), cz = weldGrid.cell(z, 2);
+        const own = weldGrid.key(cx, cy, cz);
+        const sx = nearSide(x, 0), sy = nearSide(y, 1), sz = nearSide(z, 2);
+        let id = weldIn(own, x, y, z);
+        for (let n = 1; n < 8 && id < 0; n++) {
+            id = weldIn(weldGrid.key(cx + (n & 1 ? sx : 0), cy + (n & 2 ? sy : 0), cz + (n & 4 ? sz : 0)), x, y, z);
         }
         if (id < 0) {
-            id = weldPositions.length;
-            weldPositions.push(p);
-            const key = weldGrid.key(cx, cy, cz);
-            const list = weldCells.get(key);
-            if (list) list.push(id); else weldCells.set(key, [id]);
+            id = weldCount++;
+            weldPositions[id * 3] = x; weldPositions[id * 3 + 1] = y; weldPositions[id * 3 + 2] = z;
+            const list = weldCells.get(own);
+            if (list) list.push(id); else weldCells.set(own, [id]);
         }
         welded[i] = id;
     }
-    const parent = new Int32Array(weldPositions.length).map((_, i) => i);
+    const parent = new Int32Array(weldCount).map((_, i) => i);
     const find = (x: number): number => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
     const union = (a: number, b: number) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
     for (let t = 0; t < triCount; t++) {
-        union(welded[soup.indices[t * 3]], welded[soup.indices[t * 3 + 1]]);
-        union(welded[soup.indices[t * 3]], welded[soup.indices[t * 3 + 2]]);
+        if (spend(2)) yield;
+        union(welded[I[t * 3]], welded[I[t * 3 + 1]]);
+        union(welded[I[t * 3]], welded[I[t * 3 + 2]]);
     }
 
-    const partOfRoot = new Map<number, number>();
+    // A vertex index belongs to exactly one part (every triangle using it is joined through it), so each part's
+    // vertices are listed once, in the order first met.
+    const partOfRoot = new Int32Array(weldCount).fill(-1);
     const parts: Part[] = [];
     const triPart = new Int32Array(triCount);
+    const listed = new Uint8Array(vertexCount);
     for (let t = 0; t < triCount; t++) {
-        const root = find(welded[soup.indices[t * 3]]);
-        let pi = partOfRoot.get(root);
-        if (pi === undefined) {
-            pi = parts.length;
-            partOfRoot.set(root, pi);
+        if (spend(3)) yield;
+        const root = find(welded[I[t * 3]]);
+        let pi = partOfRoot[root];
+        if (pi < 0) {
+            pi = partOfRoot[root] = parts.length;
             parts.push({ triangles: [], vertices: [], min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] });
         }
         triPart[t] = pi;
         const part = parts[pi];
         part.triangles.push(t);
         for (let k = 0; k < 3; k++) {
-            const v = soup.indices[t * 3 + k];
+            const v = I[t * 3 + k];
+            if (listed[v]) continue;
+            listed[v] = 1;
             part.vertices.push(v);
-            const p = point(v);
-            for (let a = 0; a < 3; a++) { part.min[a] = Math.min(part.min[a], p[a]); part.max[a] = Math.max(part.max[a], p[a]); }
+            for (let a = 0; a < 3; a++) { part.min[a] = Math.min(part.min[a], P[v * 3 + a]); part.max[a] = Math.max(part.max[a], P[v * 3 + a]); }
         }
     }
-    for (const part of parts) part.vertices = Array.from(new Set(part.vertices));
 
     // 2. Spatial grid of triangles for proximity queries.
     const cell = Math.max(tolerance * 4, diagonal / 96);
     const triGrid = cellGrid(gMin, gMax, cell);
-    const grid = new Map<number, number[]>();
-    for (let t = 0; t < triCount; t++) {
-        const [a, b, c] = [point(soup.indices[t * 3]), point(soup.indices[t * 3 + 1]), point(soup.indices[t * 3 + 2])];
-        const lo = [0, 1, 2].map(k => triGrid.cell(Math.min(a[k], b[k], c[k]) - tolerance, k));
-        const hi = [0, 1, 2].map(k => triGrid.cell(Math.max(a[k], b[k], c[k]) + tolerance, k));
+    const cellIndex = new Map<number, number>();
+    const triCells = (t: number, visit: (cell: number) => void) => {
+        const ia = I[t * 3] * 3, ib = I[t * 3 + 1] * 3, ic = I[t * 3 + 2] * 3;
+        const lo = [0, 1, 2].map(k => triGrid.cell(Math.min(P[ia + k], P[ib + k], P[ic + k]) - tolerance, k));
+        const hi = [0, 1, 2].map(k => triGrid.cell(Math.max(P[ia + k], P[ib + k], P[ic + k]) + tolerance, k));
         for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) {
             const key = triGrid.key(x, y, z);
-            const list = grid.get(key);
-            if (list) list.push(t); else grid.set(key, [t]);
+            let c = cellIndex.get(key);
+            if (c === undefined) cellIndex.set(key, c = cellIndex.size);
+            visit(c);
         }
-    }
-    const triangle = (t: number): [Vec3, Vec3, Vec3] => [point(soup.indices[t * 3]), point(soup.indices[t * 3 + 1]), point(soup.indices[t * 3 + 2])];
+    };
+    const allByPiece = new Int32Array(triCount);
+    let filled = 0;
+    for (const part of parts) for (const t of part.triangles) allByPiece[filled++] = t;
+    const grid = (yield* pieceSortedCells(allByPiece, triCells, triPart, spend))!;
 
-    // 3. Contact graph between parts (surface proximity), plus ground contact.
+    // 3. Contact graph between parts (surface proximity).
     const adjacency: Set<number>[] = parts.map(() => new Set<number>());
     const link = (a: number, b: number) => { adjacency[a].add(b); adjacency[b].add(a); };
     const tolSq = tolerance * tolerance;
-    parts.forEach((part, pi) => {
-        for (const v of part.vertices) {
-            const p = point(v);
-            const list = grid.get(triGrid.key(triGrid.cell(p[0], 0), triGrid.cell(p[1], 1), triGrid.cell(p[2], 2)));
-            if (!list) continue;
-            for (const t of list) {
-                const qi = triPart[t];
-                if (qi === pi || adjacency[pi].has(qi)) continue;
-                const [a, b, c] = triangle(t);
-                if (closestPointDistanceSq(p, a, b, c) <= tolSq) link(pi, qi);
+    for (let pi = 0; pi < parts.length; pi++) {
+        const near = adjacency[pi];
+        for (const v of parts[pi].vertices) {
+            const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+            const c = cellIndex.get(triGrid.key(triGrid.cell(x, 0), triGrid.cell(y, 1), triGrid.cell(z, 2)));
+            let cost = 1;
+            if (c !== undefined) {
+                for (let j = grid.start[c]; j < grid.start[c + 1];) {
+                    const qi = triPart[grid.triangles[j]];
+                    const end = grid.runEnd[j];
+                    cost++;
+                    if (qi !== pi && !near.has(qi)) {
+                        for (let k = j; k < end; k++) {
+                            cost++;
+                            if (closestDistSq(P, I, grid.triangles[k], x, y, z) <= tolSq) { link(pi, qi); break; }
+                        }
+                    }
+                    j = end;
+                }
+            }
+            if (spend(cost)) yield;
+        }
+    }
+
+    // 4. Embedding: a part with a vertex inside another (closed) part counts as attached. Only parts whose boxes
+    // overlap a part they are not yet joined to can gain a link here, so only they take part (a sweep along x finds
+    // them). Each of their sample vertices casts one ray along RAY_DIR and counts its crossings with each such part (an
+    // odd count means inside it). Only triangles whose projection along the ray covers the sample's projection can be
+    // crossed, so those triangles are binned on a 2D grid in the plane across the ray.
+    const candidate = new Uint8Array(parts.length);
+    let candidateTriangles = 0;
+    const byMinX = parts.map((_, i) => i).sort((a, b) => parts[a].min[0] - parts[b].min[0]);
+    for (let i = 0; i < byMinX.length; i++) {
+        const pa = byMinX[i], a = parts[pa];
+        for (let j = i + 1; j < byMinX.length; j++) {
+            const pb = byMinX[j], b = parts[pb];
+            if (b.min[0] > a.max[0] + tolerance) break;
+            if (spend(1)) yield;
+            if (b.min[1] > a.max[1] + tolerance || a.min[1] > b.max[1] + tolerance || b.min[2] > a.max[2] + tolerance || a.min[2] > b.max[2] + tolerance) continue;
+            if (adjacency[pa].has(pb)) continue;
+            for (const pc of [pa, pb]) {
+                if (!candidate[pc]) { candidate[pc] = 1; candidateTriangles += parts[pc].triangles.length; }
             }
         }
-    });
+    }
+    if (candidateTriangles > 0) {
+        const tested = new Int32Array(candidateTriangles);
+        let n = 0;
+        for (let pi = 0; pi < parts.length; pi++) if (candidate[pi]) for (const t of parts[pi].triangles) tested[n++] = t;
+        const axisU = normalize(cross(RAY_DIR, [0, 1, 0]));
+        const axisV = cross(RAY_DIR, axisU);
+        const pu = new Float64Array(vertexCount), pv = new Float64Array(vertexCount);
+        let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+        for (let i = 0; i < vertexCount; i++) {
+            if (spend(1)) yield;
+            const p: Vec3 = [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]];
+            pu[i] = dot(p, axisU); pv[i] = dot(p, axisV);
+            uMin = Math.min(uMin, pu[i]); uMax = Math.max(uMax, pu[i]); vMin = Math.min(vMin, pv[i]); vMax = Math.max(vMax, pv[i]);
+        }
+        const span = Math.max(uMax - uMin, vMax - vMin, 1e-9);
+        // About one triangle per cell, coarser when large triangles would put too many entries in the grid.
+        let side = Math.min(1024, Math.max(8, Math.ceil(Math.sqrt(candidateTriangles))));
+        let binSize = span / side;
+        const bin = (value: number, min: number) => Math.min(side - 1, Math.max(0, Math.floor((value - min) / binSize)));
+        const triBins = (t: number, visit: (cell: number) => void) => {
+            const a = I[t * 3], b = I[t * 3 + 1], c = I[t * 3 + 2];
+            const u0 = bin(Math.min(pu[a], pu[b], pu[c]), uMin), u1 = bin(Math.max(pu[a], pu[b], pu[c]), uMin);
+            const v0 = bin(Math.min(pv[a], pv[b], pv[c]), vMin), v1 = bin(Math.max(pv[a], pv[b], pv[c]), vMin);
+            for (let u = u0; u <= u1; u++) for (let v = v0; v <= v1; v++) visit(u * side + v);
+        };
+        let bins: PieceSortedCells | undefined;
+        while (!(bins = yield* pieceSortedCells(tested, triBins, triPart, spend, side * side, side > 8 ? MAX_RAY_GRID_ENTRIES : Infinity))) {
+            side = Math.max(8, Math.floor(side / 2));
+            binSize = span / side;
+        }
 
-    // 4. Embedding: a part with a vertex inside another (closed) part counts as attached.
-    const boxesOverlap = (a: Part, b: Part) => [0, 1, 2].every(k => a.min[k] <= b.max[k] + tolerance && b.min[k] <= a.max[k] + tolerance);
-    const isInside = (p: Vec3, part: Part) => {
-        let hits = 0;
-        for (const t of part.triangles) { const [a, b, c] = triangle(t); if (rayHitsTriangle(p, a, b, c)) hits++; }
-        return hits % 2 === 1;
-    };
-    parts.forEach((part, pi) => {
-        parts.forEach((other, qi) => {
-            if (qi === pi || adjacency[pi].has(qi) || !boxesOverlap(part, other)) return;
+        for (let pi = 0; pi < parts.length; pi++) {
+            if (!candidate[pi]) continue;
+            const part = parts[pi];
+            const near = adjacency[pi];
             const step = Math.max(1, Math.floor(part.vertices.length / 48));
             for (let i = 0; i < part.vertices.length; i += step) {
-                if (isInside(point(part.vertices[i]), other)) { link(pi, qi); return; }
+                const vi = part.vertices[i];
+                const x = P[vi * 3], y = P[vi * 3 + 1], z = P[vi * 3 + 2];
+                const k = bin(pu[vi], uMin) * side + bin(pv[vi], vMin);
+                let cost = 1;
+                for (let j = bins.start[k]; j < bins.start[k + 1];) {
+                    const qi = triPart[bins.triangles[j]];
+                    const end = bins.runEnd[j];
+                    cost++;
+                    const q = parts[qi];
+                    // A point outside a part's box cannot be inside the part.
+                    const inBox = x > q.min[0] && x < q.max[0] && y > q.min[1] && y < q.max[1] && z > q.min[2] && z < q.max[2];
+                    if (inBox && qi !== pi && !near.has(qi)) {
+                        let inside = false;
+                        for (let m = j; m < end; m++) {
+                            if (rayHitsTriangle(P, I, bins.triangles[m], x, y, z)) inside = !inside;
+                        }
+                        cost += end - j;
+                        if (inside) link(pi, qi);
+                    }
+                    j = end;
+                }
+                if (spend(cost)) yield;
             }
-        });
-    });
+        }
+    }
 
     // 5. Structures are groups of parts joined by contact. The ground does not join them: a leg that
     // stands on the floor but never reaches the seat is a separate structure, not an attached part.
     const groundY = gMin[1];
     const structureOf = new Int32Array(parts.length).fill(-1);
     const structures: number[][] = [];
-    parts.forEach((_, pi) => {
-        if (structureOf[pi] >= 0) return;
+    for (let pi = 0; pi < parts.length; pi++) {
+        if (structureOf[pi] >= 0) continue;
         const members: number[] = [];
         const stack = [pi];
         structureOf[pi] = structures.length;
@@ -455,37 +674,42 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
             for (const qi of adjacency[cur]) if (structureOf[qi] < 0) { structureOf[qi] = structures.length; stack.push(qi); }
         }
         structures.push(members);
-    });
+    }
     const trianglesIn = (members: number[]) => members.reduce((n, pi) => n + parts[pi].triangles.length, 0);
     const mainIndex = structures.reduce((best, members, i) => (trianglesIn(members) > trianglesIn(structures[best]) ? i : best), 0);
     const attached = new Set<number>(structures[mainIndex]);
     const mainTriangles = structures[mainIndex].flatMap(pi => parts[pi].triangles);
-    const groups = structures.filter((_, i) => i !== mainIndex);
+    // Only the largest groups are reported, so only they are measured.
+    const groups = structures.filter((_, i) => i !== mainIndex)
+        .map(members => ({ members, triangleCount: trianglesIn(members) }))
+        .sort((a, b) => b.triangleCount - a.triangleCount)
+        .slice(0, REPORTED_GROUPS);
 
-    // 6. Report every other structure with its real gap to the main structure.
+    // 6. Report the largest other structures with their real gap to the main structure.
     const SEARCH_RADIUS = 0.5;
-    const floatingParts: FloatingPart[] = groups.map(members => {
+    const floatingParts: FloatingPart[] = [];
+    for (const { members, triangleCount } of groups) {
         const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
-        let triangleCount = 0;
-        const samples: Vec3[] = [];
+        const samples: number[] = [];
         for (const pi of members) {
             const part = parts[pi];
-            triangleCount += part.triangles.length;
             for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], part.min[k]); max[k] = Math.max(max[k], part.max[k]); }
             const step = Math.max(1, Math.floor(part.vertices.length / 64));
-            for (let i = 0; i < part.vertices.length; i += step) samples.push(point(part.vertices[i]));
+            for (let i = 0; i < part.vertices.length; i += step) samples.push(part.vertices[i]);
         }
         let best = Infinity;
         const sampleStep = Math.max(1, Math.ceil((samples.length * mainTriangles.length) / 4_000_000));
         for (let s = 0; s < samples.length; s += sampleStep) {
+            const v = samples[s];
+            const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
             for (const t of mainTriangles) {
-                const [a, b, c] = triangle(t);
-                const d = closestPointDistanceSq(samples[s], a, b, c);
+                const d = closestDistSq(P, I, t, x, y, z);
                 if (d < best) best = d; // degenerate triangles yield NaN; skip them
             }
+            if (spend(mainTriangles.length)) yield;
         }
         const gap = Math.sqrt(best);
-        return {
+        floatingParts.push({
             part: members[0],
             partCount: members.length,
             triangleCount,
@@ -493,16 +717,16 @@ export function analyzePartConnectivity(soup: TriangleSoup, options: { tolerance
             center: [0, 1, 2].map(k => +((min[k] + max[k]) / 2).toFixed(3)) as Vec3,
             size: [0, 1, 2].map(k => +(max[k] - min[k]).toFixed(3)) as Vec3,
             gapMeters: Number.isFinite(gap) ? +Math.min(gap, SEARCH_RADIUS).toFixed(3) : SEARCH_RADIUS
-        };
-    }).sort((a, b) => b.triangleCount - a.triangleCount);
+        });
+    }
 
     return {
-        passed: floatingParts.length === 0,
+        passed: structures.length === 1,
         partCount: parts.length,
         attachedPartCount: attached.size,
         structureCount: structures.length,
         toleranceMeters: +tolerance.toFixed(4),
-        floatingParts: floatingParts.slice(0, 12),
+        floatingParts,
         ...(options.withGraph ? { graph: { trianglePiece: triPart, touching: adjacency.map(s => [...s]) } } : {})
     };
 }

@@ -162,6 +162,7 @@ function ctx(model: string | null = CHAT_MODEL): ToolContext {
 function handlerWith(client: GenerateContentClient | undefined, extra: {
     runPython?: (script: string, options: any) => Promise<PythonExecutionResult>;
     stageAtLocation?: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolHandlerOutcome>;
+    buildTimeoutMs?: number;
 } = {}) {
     const pythonRuns: string[] = [];
     const runPython = extra.runPython ?? ((script: string, options: any) => NativePythonRunnerService.getInstance().runScript(script, options));
@@ -170,7 +171,8 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
             chat: chatSource(client),
             runPython: async (script, options) => { pythonRuns.push(script); return runPython(script, options); },
             outputDir: path.join(TMP, 'build'),
-            sleep: async () => undefined
+            sleep: async () => undefined,
+            ...(extra.buildTimeoutMs ? { buildTimeoutMs: extra.buildTimeoutMs } : {})
         },
         stageAtLocation: extra.stageAtLocation,
         publicModelsDir: MODELS_DIR
@@ -778,11 +780,51 @@ describe('build_3d_object_from_reference', () => {
             }
         });
         const out = await run({ request: 'a fluted vase' }, { ...ctx(), signal: controller.signal });
-        expect(seen).toBe(controller.signal);
+        // The runner gets a signal that the stop (or the build's time limit) aborts.
+        expect(seen?.aborted).toBe(true);
         expect(out.status).toBe('failed');
         expect(out.resultPayload).toMatchObject({ status: 'failed', stage: 'build', aborted: true, error: 'Stopped by the user.' });
         expect(client.calls.filter(isComparisonCall)).toHaveLength(0);
     });
+
+    it('reports a stop during a model call as a stop, not as a model failure', async () => {
+        const controller = new AbortController();
+        const client: GenerateContentClient = {
+            models: {
+                generateContent: (params: any) => new Promise((_, reject) => {
+                    const signal: AbortSignal | undefined = params.config?.abortSignal;
+                    const abort = () => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
+                    if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort);
+                })
+            }
+        };
+        setTimeout(() => controller.abort(), 50);
+        const out = await handlerWith(client).run({ request: 'a fluted vase' }, { ...ctx(), signal: controller.signal });
+        expect(out.status).toBe('failed');
+        expect(out.resultPayload).toMatchObject({ status: 'failed', stage: 'reference-image', aborted: true, error: 'Stopped by the user.' });
+        expect(out.resultPayload.code).toBeUndefined();
+    });
+
+    it('says a build ran out of time, re-asks once quoting the limit, and fails naming it', async () => {
+        // A runner that only ends when its signal is aborted, like a build that never finishes in time.
+        const hang = (_script: string, options: any) => new Promise<PythonExecutionResult>(resolve => {
+            options.signal.addEventListener('abort', () => resolve({ success: false, exitCode: 1, stdout: '', stderr: 'Command failed: python scene.py', executionTimeMs: 1000, errorDetails: 'Command failed: python scene.py' }));
+        });
+        const given = await handlerWith(fakeClient({}), { runPython: hang, buildTimeoutMs: 1000 }).run({ request: 'the vase', specJson: JSON.stringify(VASE) });
+        expect(given.status).toBe('failed');
+        expect(given.resultPayload).toMatchObject({ stage: 'build', timedOut: true, timeoutMs: 1000 });
+        expect(String(given.resultPayload.error)).toContain('The build did not finish within 1 s, so it was stopped');
+        expect(String(given.resultPayload.error)).not.toContain('Command failed');
+
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const fresh = await handlerWith(client, { runPython: hang, buildTimeoutMs: 1000 }).run({ request: 'a fluted vase' });
+        expect(fresh.status).toBe('failed');
+        expect(fresh.resultPayload).toMatchObject({ stage: 'build', timedOut: true });
+        expect(String(fresh.resultPayload.error)).toContain('the build ran out of time: The build did not finish within 1 s');
+        const specCalls = client.calls.filter(isSpecCall);
+        expect(specCalls).toHaveLength(2);
+        expect(askedText(specCalls[1])).toContain('The build did not finish within 1 s, so it was stopped');
+    }, 60_000);
 
     it('the Python runner kills the script when its signal aborts', async () => {
         const controller = new AbortController();

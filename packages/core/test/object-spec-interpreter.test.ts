@@ -18,11 +18,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
-import { analyzePartConnectivity, glbToTriangleSoup } from '../src/node/3d-engine/part-connectivity';
+import { analyzePartConnectivity, analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, glbToNamedTriangleSoups, glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
 import { extractGlbAnalysis } from '../src/node/gemini/tools/python-3d-tools';
 import { buildObjectSpecScript, validateObjectBuildSpec, type ObjectBuildSpec } from '../src/common/spatial/object-build-spec';
-import { interpreterSpecProblems, measureBuild, passedEveryCheck } from '../src/node/3d-engine/reference-object-builder';
+import { interpreterSpecProblems, measureBuild, passedEveryCheck, ReferenceObjectBuildError } from '../src/node/3d-engine/reference-object-builder';
 import { REPO_ROOT } from './helpers/requirements';
 
 const SCREENSHOT_DIR = path.join(REPO_ROOT, 'test-results/screenshots');
@@ -210,21 +210,21 @@ describe('sb.object_spec interpreter', () => {
             ]
         };
         const joined = await build('checks_joined', vase);
-        const ok = measureBuild(vase, joined.glb);
+        const ok = await measureBuild(vase, joined.glb);
         expect(ok.parts.map(p => [p.id, p.built, p.touchesParent])).toEqual([['vase', true, undefined], ['knob', true, true], ['spout', true, true]]);
         expect(ok.parts.every(p => p.triangles > 0 && Math.max(...p.sizeMeters) > 0.01)).toBe(true);
         expect(passedEveryCheck(ok)).toBe(true);
 
         // Lift the knob off the vase and count it as a second piece: the piece count matches, the attachment does not.
         const lifted: ObjectBuildSpec = { ...vase, expectedBodies: 2, parts: vase.parts.map(p => p.id === 'knob' ? { ...p, attach: { u: 1, angleDeg: 0, normalOffsetMeters: 0.2 } } : p) };
-        const apart = measureBuild(lifted, (await build('checks_lifted', lifted)).glb);
+        const apart = await measureBuild(lifted, (await build('checks_lifted', lifted)).glb);
         expect(apart.connectivity.passed).toBe(true);
         expect(apart.detachedParts).toEqual([{ id: 'knob', parentId: 'vase' }]);
         expect(passedEveryCheck(apart)).toBe(false);
 
         // Spread the replicated spouts off the body: copy 0 still touches, the others float, so the spout is detached.
         const spread: ObjectBuildSpec = { ...vase, parts: vase.parts.map(p => p.id === 'spouts' ? { ...p, replicate: { seedPartId: 'spout', ring: { centerMeters: [0.6, 0, 0], axisDirection: [0, 1, 0], count: 3, spanDeg: 360, risePerCopyMeters: 0 } } } : p) };
-        const floating = measureBuild(spread, (await build('checks_spread', spread)).glb);
+        const floating = await measureBuild(spread, (await build('checks_spread', spread)).glb);
         expect(floating.detachedParts.map(d => d.id)).toEqual(['spout']);
     }, 180_000);
 
@@ -241,7 +241,7 @@ describe('sb.object_spec interpreter', () => {
         };
         const { glb } = await build('checks_many_parts', post);
         const started = Date.now();
-        const checks = measureBuild(post, glb);
+        const checks = await measureBuild(post, glb);
         const ms = Date.now() - started;
         expect(checks.parts).toHaveLength(41);
         expect(checks.parts.filter(p => p.built)).toHaveLength(41);
@@ -250,6 +250,68 @@ describe('sb.object_spec interpreter', () => {
         // One analysis of the whole build, not one per child: well inside the time a single pass may take.
         expect(ms).toBeLessThan(60_000);
     }, 180_000);
+
+    it('measures in slices that give the event loop back, stops when asked, and agrees with the straight-through run', async () => {
+        const vase: ObjectBuildSpec = {
+            subject: 'vase', observations: [], boundingMeters: [0.36, 0.66, 0.36], expectedBodies: 1,
+            parts: [
+                { id: 'vase', label: 'vase', revolve: revolve([[0, 0], [0, 0.12], [0.2, 0.18], [0.45, 0.1], [0.6, 0.14]], { smoothing: 0.8, lobeCount: 10, lobeDepthRatio: 0.15, helixPitchMeters: 0.9 }) },
+                { id: 'knob', label: 'knob', parentId: 'vase', attach: { u: 1, angleDeg: 0, normalOffsetMeters: -0.01 }, revolve: revolve([[-0.02, 0], [-0.02, 0.03], [0.04, 0.025], [0.06, 0]]) }
+            ]
+        };
+        const { glb } = await build('checks_sliced', vase);
+        const soup = mergeTriangleSoups([...glbToNamedTriangleSoups(glb)!.values()].filter(s => s.indices.length > 0));
+        let turns = 0, done = false;
+        const tick = () => { turns++; if (!done) setImmediate(tick); };
+        setImmediate(tick);
+        const sliced = await analyzePartConnectivityAsync(soup, { withGraph: true, sliceMs: 0 });
+        done = true;
+        expect(turns).toBeGreaterThan(5);
+        const straight = analyzePartConnectivity(soup, { withGraph: true });
+        expect({ ...sliced, graph: sliced.graph!.touching }).toEqual({ ...straight, graph: straight.graph!.touching });
+
+        const stop = new AbortController();
+        setImmediate(() => stop.abort());
+        await expect(analyzePartConnectivityAsync(soup, { signal: stop.signal, sliceMs: 0 })).rejects.toBeInstanceOf(ConnectivityAnalysisAbortedError);
+        const stopped = await measureBuild(vase, glb, { signal: stop.signal }).catch(err => err);
+        expect(stopped).toBeInstanceOf(ReferenceObjectBuildError);
+        expect(stopped).toMatchObject({ stage: 'checks', message: 'Stopped by the user.', details: { aborted: true } });
+    }, 180_000);
+
+    it('measures a 444k-triangle build of 1,230 overlapping pieces in seconds without holding the event loop', async () => {
+        // A spec that passes the validator: nested rings (36 x 35) of a wide, thin sweep. The earlier analysis spent
+        // minutes on it in one synchronous block (a ray test against every triangle of every overlapping piece).
+        const ribbons: ObjectBuildSpec = {
+            subject: 'nested ribbon rings', observations: [], boundingMeters: [1, 1, 1], expectedBodies: 1,
+            parts: [
+                { id: 'p0', label: 'stem', sweep: { controlPoints: [[-0.382, 0.2235, -0.1309], [-0.4799, 0.5014, 0.0488], [-0.7745, 0.5499, -0.0963]], closedLoop: false, smoothing: 0.4373, profile: [{ t: 0.302, widthMeters: 0.0005, heightMeters: 0.0843, exponent: 0.5 }, { t: 0.899, widthMeters: 0.0005, heightMeters: 0.14, exponent: 4 }] } },
+                { id: 'p1', label: 'ribbon', parentId: 'p0', attach: { u: 1, angleDeg: 90, normalOffsetMeters: -0.005 }, sweep: { controlPoints: [[0, 0, 0], [0.2045, -0.0372, 0.0649]], closedLoop: false, smoothing: 0.625, profile: [{ t: 0.217, widthMeters: 0.3, heightMeters: 0.0005, exponent: 4 }, { t: 0.283, widthMeters: 0.0005, heightMeters: 0.0967, exponent: 4 }, { t: 0.654, widthMeters: 0.0005, heightMeters: 0.116, exponent: 2 }, { t: 0.941, widthMeters: 0.0005, heightMeters: 0.1499, exponent: 12 }] } },
+                { id: 'p2', label: 'groove', relief: { targetPartId: 'p0', curves: [[[0.624, 0.9], [0.131, 1.684], [0.718, -1.656], [0.145, 0.347]]], widthMeters: 0.0042, depthMeters: -0.0042, sharpness: 0.046 } },
+                { id: 'p3', label: 'inner ring', replicate: { seedPartId: 'p1', ring: { centerMeters: [-0.0589, -0.1934, -0.1418], axisDirection: [-0.9619, 0.8002, -0.7394], count: 36, spanDeg: 180, risePerCopyMeters: 0 } } },
+                { id: 'p4', label: 'outer ring', replicate: { seedPartId: 'p3', ring: { centerMeters: [-0.0027, 0.1568, 0.0805], axisDirection: [0, 1, 0], count: 35, spanDeg: 180, risePerCopyMeters: 0.00554 } } }
+            ]
+        };
+        expect(validateObjectBuildSpec(ribbons)).toEqual([]);
+        const res = await NativePythonRunnerService.getInstance().runScript(buildObjectSpecScript(ribbons), { outputDir: OUT_DIR, timeoutMs: 300_000 });
+        expect(res.exitCode, res.stderr).toBe(0);
+        const soup = glbToTriangleSoup(fs.readFileSync(res.glbPath!))!;
+        fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+        fs.writeFileSync(path.join(SCREENSHOT_DIR, 'object_spec_checks_heavy_rings.png'), renderReviewViews(soup, 512, { views: [{ label: 'three-quarter view', azimuthDeg: 35, elevationDeg: 22 }] })[0].png);
+        let last = Date.now(), longestGap = 0;
+        const beat = setInterval(() => { const now = Date.now(); longestGap = Math.max(longestGap, now - last); last = now; }, 10);
+        await new Promise(resolve => setTimeout(resolve, 30));
+        const started = Date.now();
+        const report = await analyzePartConnectivityAsync(soup, { withGraph: true });
+        const ms = Date.now() - started;
+        await new Promise(resolve => setTimeout(resolve, 30));
+        clearInterval(beat);
+        expect(soup.indices.length / 3).toBeGreaterThan(400_000);
+        expect(report.partCount).toBeGreaterThan(1000);
+        expect(report.skippedReason).toBeUndefined();
+        // Generous bounds for a loaded test machine: the earlier analysis took 380 s and blocked for all of it.
+        expect(ms).toBeLessThan(150_000);
+        expect(longestGap).toBeLessThan(3_000);
+    }, 400_000);
 
     it('raises on an invalid spec instead of guessing, naming the field', async () => {
         const res = await NativePythonRunnerService.getInstance().runScript([
