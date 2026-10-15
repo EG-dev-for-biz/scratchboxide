@@ -73,10 +73,7 @@ import {
     resolveModeForArtifact,
     computeArtifactDiff
 } from '../src/browser/generative-canvas/guardrails-service';
-import {
-    buildSandboxSrcDoc,
-    generateLocalComments
-} from '../src/browser/generative-canvas/primitives/LiveCodeSandboxPrimitive';
+import { buildSandboxSrcDoc } from '../src/browser/generative-canvas/primitives/LiveCodeSandboxPrimitive';
 
 async function runLiveCodeSandboxTests() {
     console.log('🧪 Running Live Code Sandbox & UI Playground Test Suite...');
@@ -260,13 +257,8 @@ async function runLiveCodeSandboxTests() {
     assert.strictEqual(vibecodeSandboxData.chatMessages?.[0].sender, 'user');
     console.log('  ✓ Test 9 Passed: Integrated AI Vibecoding Chat state and message stream contracts verified');
 
-    // Test 10: Inline Code Comments - Local JSDoc generator
-    const sampleInputCode = `export default function calculateTax(income, rate) {\n  return income * rate;\n}\n\nexport class UserController {\n  constructor() {}\n}`;
-    const outputWithJsdoc = generateLocalComments(sampleInputCode);
-    assert.ok(outputWithJsdoc.includes('@file Scratchbox Sandbox Module'), 'Should prepend file header JSDoc');
-    assert.ok(outputWithJsdoc.includes('* calculateTax component or handler function.'), 'Should add JSDoc for function');
-    assert.ok(outputWithJsdoc.includes('* UserController custom controller class.'), 'Should add JSDoc for class');
-    console.log('  ✓ Test 10 Passed: Local JSDoc/Comment generation parses functions/classes and inserts formatted comments');
+    // Test 10 (local JSDoc generator) removed: comments come from the model as a quick-edit diff
+    // (see sandbox-model-edits-only.test.ts), never from a local pattern-matching generator.
 
     // Test 11: Dynamic Spec Injector - Sync sandbox files to markdown documents
     const mockSandboxWithApi = {
