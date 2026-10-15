@@ -541,18 +541,55 @@ async function cachedSampler(file: string, place: SamplerPlace, signal: AbortSig
     return sampler;
 }
 
-/** Reads every staged GLB model (from the cache when unchanged), in slices so the event loop keeps running. */
+/**
+ * A layer the viewport draws where its spatial3d puts it, without seating it: the tiles and anything else marked as
+ * environment (the rebuilt trees, vector worlds), as Scene3DPrimitive's isEnvironmentDef tells them apart.
+ */
+function isEnvironmentLayer(o: any): boolean {
+    const meta = o?.content?.metadata || {};
+    const source = String(meta.source || '').toLowerCase();
+    return meta.role === 'environment' || meta.isGround === true || source.includes('google3dtiles') || source.includes('googlevectortile');
+}
+
+/** A built object this tool placed: its recorded seat is where the viewport stands it. */
+function hasRecordedSeat(o: any): boolean {
+    return isBuiltObject(o) && typeof o?.content?.metadata?.objectBuild?.placement?.surfaceYMeters === 'number';
+}
+
+/**
+ * Reads every staged GLB model (from the cache when unchanged), in slices so the event loop keeps running. Each model
+ * stands where the viewport draws it: environment layers at their spatial3d; a built object on its recorded seat; and
+ * any other model (an object built in a studio void and then staged, a script's hero) the way the viewport seats it,
+ * its lowest point on the highest surface under its origin (raised by a non-zero spatial3d.y), not at its raw height.
+ */
 async function loadSurfaces(objects: any[], modelsDirs: string[], signal: AbortSignal | undefined): Promise<StagedSurface[]> {
-    const surfaces: StagedSurface[] = [];
-    for (const o of objects.filter(o => isGlbUri(glbUriOf(o)))) {
+    const models = objects.filter(o => isGlbUri(glbUriOf(o)));
+    const byObject = new Map<any, StagedSurface>();
+    const load = async (o: any, place: SamplerPlace): Promise<StagedSurface> => {
         if (signal?.aborted) throw new PlacementStoppedError();
         const file = modelFile(glbUriOf(o), modelsDirs);
         if (!file) throw new PlacementError(`could not read the staged model ${glbUriOf(o)} to place the object (looked in ${modelsDirs.join(', ')})`);
-        const sampler = await cachedSampler(file, placedAt(o), signal);
+        const sampler = await cachedSampler(file, place, signal);
         if (!sampler) throw new PlacementError(`the staged model ${glbUriOf(o)} is not a readable GLB`);
-        surfaces.push({ object: o, ground: isGroundLayer(o), sampler });
+        return { object: o, ground: isGroundLayer(o), sampler };
+    };
+    const seatedByViewport = (o: any) => !isEnvironmentLayer(o) && !hasRecordedSeat(o);
+    for (const o of models.filter(o => !seatedByViewport(o))) byObject.set(o, await load(o, placedAt(o)));
+    const fixed = [...byObject.values()];
+    for (const o of models.filter(seatedByViewport)) {
+        const s = o?.space?.spatial3d || {};
+        const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : 0;
+        const x = num(s.x), z = num(s.z);
+        let top: number | undefined;
+        for (const layer of fixed) {
+            const y = layer.sampler.heightAt(x, z);
+            if (y !== undefined && (top === undefined || y > top)) top = y;
+        }
+        // Nothing under it: the viewport leaves it where its spatial3d puts it.
+        const place: SamplerPlace = top === undefined ? placedAt(o) : { x, y: top + num(s.y), z, yawDeg: num(s.yaw), seatBase: true };
+        byObject.set(o, await load(o, place));
     }
-    return surfaces;
+    return models.map(o => byObject.get(o)!);
 }
 
 /** What the viewport would seat an object on at (x, z): the ground under it, and any other layer above that ground. */
@@ -1055,8 +1092,15 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             const bodiesNote = checks.connectivity.bodies === 1 ? 'one connected piece' : `${checks.connectivity.bodies} separate pieces as intended`;
             const place = staged ? String(staged.payload.resolvedAddress || location) : undefined;
             const tiles = staged ? describeStagedTiles(objectsOf(staged.artifact), staged.reused ? undefined : (staged.payload.remesh as { ok?: boolean } | undefined)?.ok === true ? true : undefined) : '';
+            // With addToActiveScene the object joins the place the active scene shows, whatever words the call used for
+            // it: that place is recorded (the scene's own location query, else its resolved address), so a later call
+            // naming another place does not reuse these tiles as that place.
+            const activeWhere = (ctx.request?.activeArtifact as { data?: any } | undefined)?.data?.objectBuild?.location;
+            const recordedQuery = staged && addToActiveScene && staged.reused
+                ? (typeof activeWhere?.query === 'string' && activeWhere.query ? activeWhere.query : String(staged.payload.resolvedAddress || location))
+                : location;
             const where = staged && placement
-                ? { query: location, resolvedAddress: staged.payload.resolvedAddress, geoAnchor: staged.payload.geoAnchor, staging: staged.reused ? 'reused from the active scene' : 'staged' }
+                ? { query: recordedQuery, resolvedAddress: staged.payload.resolvedAddress, geoAnchor: staged.payload.geoAnchor, staging: staged.reused ? 'reused from the active scene' : 'staged' }
                 : undefined;
             const keptBuilt = (site?.kept || []).filter(isBuiltObject);
             const usedIds = new Set((site?.kept || []).map(o => String(o?.id)));
@@ -1180,6 +1224,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             const placeLine = staged && placement && site
                 ? [
                     `${staged.reused ? `Reused the ${tiles} already staged at ${place} in the active scene (no new geocode or extraction)` : `Staged at ${place} on ${tiles}`}, ${placement.eastMeters} m east and ${placement.northMeters} m north of the anchor, facing ${placement.headingDeg} degrees, resting on the ground surface of the tiles there, ${placement.surfaceYMeters} m above the anchor's street level${placement.surfaceYMeters > 3 ? ' (likely a roof or raised structure)' : ''}; nothing else staged there rises above that spot${fitSpacing !== undefined ? `, and nothing staged there passes through the object (checked every ${+fitSpacing.toFixed(2)} m across its footprint)` : ''}.`,
+                    recordedQuery !== location ? `It was added to the place the active scene shows (addToActiveScene), so "${location}" was not geocoded; the object is recorded at "${recordedQuery}".` : '',
                     site.replaced ? `It replaces ${named(site.replaced)}.` : '',
                     keptBuilt.length ? `Kept ${keptBuilt.length === 1 ? 'the object' : `the ${keptBuilt.length} objects`} built there earlier: ${keptBuilt.map(named).join(', ')}.` : '',
                     site.notReused ? `The active scene's staging there could not be reused (${site.notReused.reason}), so the place was staged afresh and the objects built there earlier are not in this scene: ${site.notReused.objects.map(named).join(', ')}.` : '',
@@ -1187,7 +1232,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 ].filter(Boolean).join(' ')
                 : 'Shown in a studio grey clay void.';
             const editLine = staged && placement
-                ? `This object's id is ${heroId}. To change it, edit its spec (data.objectBuild.spec, also in its metadata.objectBuild) and call build_3d_object_from_reference with specJson set to the edited spec, this location and placement, and replaceObjectId "${heroId}".`
+                ? `This object's id is ${heroId}. To change it, edit its spec (data.objectBuild.spec, also in its metadata.objectBuild) and call build_3d_object_from_reference with specJson set to the edited spec, location "${recordedQuery}", this placement, and replaceObjectId "${heroId}".`
                 : 'To change it, edit data.objectBuild.spec and call build_3d_object_from_reference with specJson set to the edited spec.';
             const [howBuilt, ...builtLines] = built.lines;
             const summary = [

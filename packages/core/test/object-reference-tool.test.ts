@@ -865,7 +865,7 @@ describe('build_3d_object_from_reference', () => {
         const distance = Math.hypot(...[0, 1, 2].map(k => artifact.data.camera.position[k] - artifact.data.camera.target[k]));
         expect(distance).toBeLessThan(5);
         expect(out.summaryResult).toContain('12 m east and 8 m north of the anchor, facing 90 degrees');
-        expect(out.summaryResult).toContain(`call build_3d_object_from_reference with specJson set to the edited spec, this location and placement, and replaceObjectId "${out.resultPayload.objectId}"`);
+        expect(out.summaryResult).toContain(`call build_3d_object_from_reference with specJson set to the edited spec, location "Union Square, San Francisco", this placement, and replaceObjectId "${out.resultPayload.objectId}"`);
     }, 180_000);
 
     it('is drawn by the viewport where the placement says, whichever of the object and the tiles loads first', async () => {
@@ -1325,6 +1325,44 @@ describe('build_3d_object_from_reference', () => {
         expect(stageArgs).toHaveLength(1);
     }, 300_000);
 
+    it('checks an object staged without a recorded seat (a studio build, then staged) where the viewport seats it', async () => {
+        // google_3d_tiles_get_clay with stageIntoActiveScene keeps the studio object at spatial3d y 0; the viewport stands
+        // it on the highest surface under it. Checked at its raw height, a second drum whose rim runs into it passed.
+        const { run } = handlerWith(fakeClient({}), { stageAtLocation: async () => { throw new Error('the active scene is reused; nothing is staged'); } });
+        const studio = await run({ request: 'a wide low drum', specJson: JSON.stringify(DRUM) });
+        expect(studio.status, String(studio.resultPayload.error)).toBe('completed');
+        const studioScene = studio.resultPayload.artifact as any;
+        const firstId = String(studioScene.data.objects[0].id);
+        const tileUri = writeStagedTiles(); // ground at 1.5 m, a 10 m roof at 20 m over the anchor
+        const tile = { id: 'tile-clay-1', content: { type: '3d-model', durableUri: tileUri, metadata: { source: 'Google3DTilesClay', role: 'environment', isGround: true, resolvedAddress: 'Flatiron Building, New York', remeshed: true } }, space: { spatial3d: { x: 0, y: 0, z: 0 } } };
+        const staged = { ...studioScene, data: { ...studioScene.data, geoAnchor: { lat: 40.741, lng: -73.989 }, objects: [...studioScene.data.objects, tile] } };
+        const onStaged: ToolContext = { ...ctx(), request: { ...ctx().request, activeArtifact: staged } as any };
+        const second = await run({ request: 'another drum next to it', specJson: JSON.stringify(DRUM), location: 'Flatiron Building', placement: { eastMeters: 1.2, northMeters: 0, headingDeg: 0 }, addToActiveScene: true }, onStaged);
+        expect(second.status).toBe('failed');
+        expect(second.resultPayload.stage).toBe('placement');
+        const hits = second.resultPayload.intersects as Array<{ id: string; ground: boolean }>;
+        expect(hits.map(h => h.id)).toEqual([firstId]);
+    }, 300_000);
+
+    it('addToActiveScene records the place the active scene shows, not another place the call named', async () => {
+        const { run } = handlerWith(fakeClient({}), { stageAtLocation: async () => { throw new Error('the active scene is reused; nothing is staged'); } });
+        const tile = { id: 'tile-clay-9', content: { type: '3d-model', durableUri: writeStagedTiles(), metadata: { source: 'Google3DTilesClay', role: 'environment', isGround: true, resolvedAddress: 'Flatiron Building, 175 5th Ave, New York', remeshed: true } }, space: { spatial3d: { x: 0, y: 0, z: 0 } } };
+        const scene = { id: 'a', type: '3d-scene', title: 'Flatiron (clay)', data: { geoAnchor: { lat: 40.741, lng: -73.989 }, objects: [tile] } };
+        const out = await run({ request: 'a drum', specJson: JSON.stringify(DRUM), location: 'Times Square, New York', placement: { eastMeters: 20, northMeters: 0, headingDeg: 0 }, addToActiveScene: true },
+            { ...ctx(), request: { ...ctx().request, activeArtifact: scene } as any });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const recorded = (out.resultPayload.artifact as any).data.objectBuild.location;
+        expect(recorded.query).toBe('Flatiron Building, 175 5th Ave, New York');
+        expect(out.summaryResult).toContain('It was added to the place the active scene shows (addToActiveScene), so "Times Square, New York" was not geocoded; the object is recorded at "Flatiron Building, 175 5th Ave, New York".');
+        // A later call for Times Square without addToActiveScene does not reuse the Flatiron tiles as Times Square.
+        const stageCalls: unknown[] = [];
+        const later = await handlerWith(fakeClient({}), { stageAtLocation: async (args) => { stageCalls.push(args); throw new Error('no tiles in this test'); } })
+            .run({ request: 'a drum', specJson: JSON.stringify(DRUM), location: 'Times Square, New York', placement: { eastMeters: 25, northMeters: 5, headingDeg: 0 } },
+                { ...ctx(), request: { ...ctx().request, activeArtifact: out.resultPayload.artifact } as any });
+        expect(later.status).toBe('failed');
+        expect(stageCalls).toEqual([{ query: 'Times Square, New York' }]);
+    }, 300_000);
+
     it('adds to a scene google_3d_tiles_get_clay staged when asked to, without staging the place again', async () => {
         const stageArgs: unknown[] = [];
         const staging = stagedScene(writeStagedTiles(), writeStagedTrees());
@@ -1350,7 +1388,8 @@ describe('build_3d_object_from_reference', () => {
         const data = (added.resultPayload.artifact as any).data;
         expect(data.objects.map((o: any) => o.id)).toEqual(['tile-clay-1', 'tile-trees-1', added.resultPayload.objectId]);
         expect(data.geoAnchor).toEqual(tilesOnly.data.geoAnchor);
-        expect(data.objectBuild.location).toEqual({ query: location, resolvedAddress: 'Washington Square, New York, NY 10012, USA', geoAnchor: tilesOnly.data.geoAnchor, staging: 'reused from the active scene' });
+        // The object is recorded at the place the scene shows (its resolved address), not at the words of this call.
+        expect(data.objectBuild.location).toEqual({ query: 'Washington Square, New York, NY 10012, USA', resolvedAddress: 'Washington Square, New York, NY 10012, USA', geoAnchor: tilesOnly.data.geoAnchor, staging: 'reused from the active scene' });
         expect(added.summaryResult).toContain('Reused the remeshed Google 3D Tiles in clay already staged at Washington Square, New York, NY 10012, USA in the active scene (no new geocode or extraction)');
         expect((added.resultPayload.artifact as any).title).toBe('fluted vase with a knob at Washington Square, New York, NY 10012, USA');
 
