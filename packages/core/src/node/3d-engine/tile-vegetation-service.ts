@@ -101,11 +101,11 @@ export interface TileVegetationPlantParams {
  * tree's own budget grows with its crown (and is never less than its leaf masses on the measured surface need), and the
  * budgets are scaled down to fit under this cap, what the leaf masses need first (never below the per-tree minimum of
  * 120). 1.5 million triangles: the trees model is written as positions, normals and 32-bit indices, about 33 bytes a
- * triangle (Central Park at a 250 m radius: 1,026 trees, 1.42 million triangles, 47 MB), so at the cap it stays near
+ * triangle (Central Park at a 250 m radius: 1,043 trees, 1.43 million triangles, 47 MB), so at the cap it stays near
  * 50 MB, about the size of the photo-textured extraction of a 250 m radius it was measured in (41 MB there); with the
  * remeshed tile (0.1-1 million triangles) the scene stays under about 2.5 million triangles, which a WebGL viewport draws
  * at interactive rates on integrated GPUs. At 120 triangles a tree the cap holds 12,500 trees, over ten times what a
- * 250 m radius of dense park holds (1,026 in Central Park).
+ * 250 m radius of dense park holds (1,043 in Central Park).
  */
 export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
 
