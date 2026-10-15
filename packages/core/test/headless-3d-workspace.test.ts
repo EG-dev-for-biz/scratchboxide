@@ -142,7 +142,10 @@ async function runHeadless3DWorkspaceTests() {
     const systemPrompt = await (geminiService as any).buildSystemInstruction({ prompt: 'build a 3d scene of a plane' });
     assert.ok(systemPrompt.includes('"3d-scene"'), 'System prompt must include 3d-scene primitive');
     assert.ok(systemPrompt.includes('Scene3DData'), 'System prompt must document Scene3DData schema');
-    assert.ok(systemPrompt.includes('earth/flight-corridor'), 'System prompt must include flight corridor branch');
+    // The schema example teaches objects the viewport loads, not an internal:plane aircraft at a default place.
+    assert.ok(systemPrompt.includes('Every object must be a file the viewport loads'), 'System prompt must say scene objects are loadable files');
+    assert.ok(!systemPrompt.includes('internal:plane'), 'System prompt must not teach internal:plane objects');
+    assert.ok(!systemPrompt.includes('San Francisco Bay Airspace'), 'System prompt must not teach a default geoAnchor');
 
     // A prose reply builds no scene from the prompt's words (no keyword-picked aircraft).
     const planeArtifact = (geminiService as any).parseOrSynthesizeArtifact(

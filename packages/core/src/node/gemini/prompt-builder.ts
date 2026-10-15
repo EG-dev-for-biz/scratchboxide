@@ -269,79 +269,28 @@ export const CANVAS_PRIMITIVES_SPECIFICATION = `
         - \`features.controlSurfaces\`: Articulated flight controls (differential ailerons, pitch elevators, yaw rudder, wing flaps)
         - \`features.terrainBiomes\`: Procedural multi-biome fractal terrain (alpine, canyon, coastal, desert, cyberpunk)
    - Data structure (Scene3DData): {
-       "title": "3D Flight Simulation: Jet Aircraft",
-       "subtitle": "Interactive spatial 3D aircraft visualization",
-       "worldBranch": string (e.g. "earth/flight-corridor", "orbital/deep-space", "nature/alpine", or custom thematic domain),
-       "renderMode": "pbr" | "shaded" | "solid" | "wireframe",
+       "title": string (what the scene shows),
+       "subtitle": string (optional),
+       "renderMode": "clay" | "pbr" | "shaded" | "solid" | "wireframe" (a first scene is "clay"),
        "cameraMode": "orbit" | "fps",
-       "animation": "flight" | "orbit" | "idle",
-       "timeline": {
-         "currentTimeMs": 0,
-         "durationMs": 10000,
-         "isPlaying": true,
-         "speed": 1.0,
-         "isLooping": true
-       },
-       "camera": {
-         "position": [15, 12, 20],
-         "target": [0, 2, 0],
-         "fov": 45
-       },
-       "environment": {
-         "skybox": string (e.g. "realistic-sky", "deep_space", "sunset", "studio", "nebula", or custom atmosphere),
-         "lighting": string (e.g. "daylight", "golden_hour", "studio_rim", "cinematic", "shaded"),
-         "ground": true
-       },
-       "features": {
-         "godRays": true,
-         "atmosphericScattering": true,
-         "contrails": true,
-         "controlSurfaces": true,
-         "terrainBiomes": { "biomeType": "alpine" }
-       },
-       "customMeshes": [
-         {
-           "id": "mesh-id-1",
-           "name": "Component_Name",
-           "type": "box" | "cylinder" | "cone" | "sphere",
-           "position": [0, 1.2, 0],
-           "rotation": [0, 0, 0],
-           "scale": [1.5, 0.5, 2.0],
-           "material": {
-             "color": "#dc2626",
-             "metalness": 0.85,
-             "roughness": 0.18,
-             "clearcoat": 1.0,
-             "emissive": "#ffffff",
-             "emissiveIntensity": 2.5
-           }
-         }
-       ],
-       "customScript": "// Optional custom Three.js executable scene setup or animation hook\\n// context: { scene, camera, renderer, THREE, deltaMs, time, aircraft }\\n",
-       "geoAnchor": {
-         "lat": 37.7900,
-         "lng": -122.4000,
-         "elevation": 150.0,
-         "active": true,
-         "landmarkName": "San Francisco Bay Airspace"
-       },
+       "camera": { "position": [x, y, z], "target": [x, y, z], "fov": 45 } (optional: the viewport frames the models itself),
+       "environment": { "skybox": "studio", "lighting": "studio", "ground": false } (the neutral studio; sky, sun and atmosphere only when the user asks for them),
+       "features": { ... } (only the passes the user asked for),
        "objects": [
          {
-           "id": "obj-aircraft-1",
+           "id": "object-id",
            "content": {
-             "type": "3d-scene",
-             "durableUri": "internal:plane",
-             "mimeType": "model/procedural-aircraft",
-             "metadata": { "dims": { "width": 12, "height": 4, "depth": 14 } }
+             "type": "3d-model",
+             "durableUri": the .glb / .gltf model or .splat / .spz file a tool returned (for example a script's GLB from execute_3d_python_script),
+             "mimeType": "model/gltf-binary"
            },
-           "space": {
-             "spatial3d": { "x": 0, "y": 3, "z": 0, "pitch": 0, "yaw": 0, "roll": 0 }
-           },
-           "time": { "startMs": 0, "durationMs": 10000 },
-           "lineage": { "version": 1 }
+           "space": { "spatial3d": { "x": 0, "y": 0, "z": 0, "pitch": 0, "yaw": 0, "roll": 0 } }
          }
-       ]
+       ],
+       "geoAnchor": only the anchor a location tool returned (google_3d_tiles_get_clay reports it); never coordinates from memory,
+       "timeline": { "currentTimeMs": 0, "durationMs": 10000, "isPlaying": true, "speed": 1.0, "isLooping": true } (only when the scene animates)
      }
+     Every object must be a file the viewport loads: an internal: URI or a client-side primitive (customMeshes) is not drawn, and a mount that sends one fails.
 
 12. "video-timeline" (or "video-editor", "video-nle", "timeline"):
     - Multi-track non-linear video editing timeline (NLE) with WebGL real-time compositor, playhead scrubbing, multi-track sequencing (A-roll, B-roll, overlay VFX, dialogue, score), clip trimming, smart razor splitting, ripple delete, ASC-CDL color grading, and audio mixer.
@@ -455,7 +404,7 @@ export const SPATIAL_INTENT_POLICY = `
 Decide from the meaning of the request, not from particular words, which case applies, then call that tool:
 - One specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) with no real place: call build_3d_object_from_reference with the request in the user's words plus any details from the conversation (and dimensionsHintMeters when they give a size). It draws an internal reference, reads it into a build spec and builds that one object natively in clay.
 - An imagined environment, a landscape, or a scene of several objects (anything that is neither one object nor a real place): write an sb Python script and run it with execute_3d_python_script. Call read_sb_script_guide before writing the script unless its rules ("WRITING SB PYTHON SCRIPTS") are already in these instructions.
-- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place and returns its Google 3D Tiles remeshed in studio grey clay; tell the user what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
+- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place with Google Places and returns its Google 3D Tiles remeshed in studio grey clay, with the trees measured in the tiles regrown in place as SB-Veggie clay trees (pass trees: false only when the user asks for no trees); tell the user the address it resolved and what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
 - One object at a real-world place: call build_3d_object_from_reference with location set to the place and placement set to where the object stands relative to the place's geocoded anchor (metres east and north of it, and the compass heading its front faces), worked out from what the user said, such as in front of an entrance or across a square. The anchor is often the middle of a building, so an object meant to stand beside it needs an offset. When the active scene already shows that place (google_3d_tiles_get_clay staged it, or objects were built there), pass addToActiveScene: true so the object joins that scene instead of the place being staged again.
 - Several objects at a real-world place: call build_3d_object_from_reference once per object, each with the same location and its own placement. While the active scene is an object build staged at that location, each call adds its object beside the objects already there. Leave room for each object's whole size: a placement under a tree crown or on top of another object fails before anything is built, and an object that would pass through a crown, a trunk, another object or a wall fails after its build; both name spots where it fits, and the second returns the spec to rebuild there with specJson.
 Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. Do not build real places with scripts.
