@@ -1211,6 +1211,7 @@ export {
 
 export {
   AdaptiveUvOrchestrator,
+  AdaptivePbrImageProcessingError,
   type AdaptiveUvStrategy,
   type TextureDomain,
   type SeamAdjustmentStrategy,
