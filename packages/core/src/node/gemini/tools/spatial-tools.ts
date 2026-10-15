@@ -379,7 +379,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'spatial_separate_3d_objects',
-        description: 'Separates an arbitrary real-world 3D mesh (Google 3D Tiles, photogrammetry, CAD) into discrete spatial entities with tight PCA Oriented Bounding Boxes (OBBs), semantic categorization, and automatic downstream generator routing (SB-Archi, SB-Veggie, Archie-Building, SB-Terrain).',
+        description: 'Separates an arbitrary real-world 3D mesh (Google 3D Tiles, photogrammetry, CAD) into discrete spatial entities with tight PCA Oriented Bounding Boxes (OBBs), geometric categorization, and downstream generator routing (SB-Archi, Archie-Building, SB-Terrain). It reads geometry only, so it names no trees; google_3d_tiles_get_clay measures and rebuilds the trees of a location from its photo tiles.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -389,12 +389,12 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 granularity: {
                     type: 'STRING',
-                    description: 'Separation granularity mode: "macro" (default), "detailed", "total", or "trees"',
-                    enum: ['macro', 'detailed', 'total', 'trees', 'all']
+                    description: 'Separation granularity mode: "macro" (default), "detailed", "total" or "all"',
+                    enum: ['macro', 'detailed', 'total', 'all']
                 },
                 autoDetectSemanticCategories: {
                     type: 'BOOLEAN',
-                    description: 'Whether to automatically classify entities into monuments, foliage, architecture, terrain, and ruins (default: true)'
+                    description: 'Whether to automatically classify entities into monuments, architecture, terrain and ruins (default: true)'
                 },
                 geoAnchor: {
                     type: 'OBJECT',

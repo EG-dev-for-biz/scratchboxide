@@ -5,9 +5,10 @@
  * Decomposes continuous real-world 3D triangle soups (Google 3D Tiles, photogrammetry)
  * at the vertex and surface-normal level into discrete semantic entities:
  * 1. Terrain Ground Apron & Plaza Datum
- * 2. Individual Botanical Trees (Crown Apex & Radial Watershed Clustering)
- * 3. Discrete Architectural Buildings & Facade Envelopes
- * 4. Urban Infrastructure & Ground-level Props
+ * 2. Discrete Architectural Buildings & Facade Envelopes
+ * 3. Urban Infrastructure & Ground-level Props
+ * It does not separate trees: from geometry alone a crown cannot be told from facade relief or a rooftop unit. Trees
+ * are measured from the photo tiles (tile_vegetation, through google_3d_tiles_get_clay).
  ********************************************************************************/
 
 import {
@@ -31,10 +32,8 @@ export interface SubmeshGeometryInput {
 }
 
 export interface VertexClusteringOptions {
-  granularity?: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
+  granularity?: 'macro' | 'detailed' | 'total' | 'all';
   minVerticesPerEntity?: number;
-  treeApexMinHeightMeters?: number;
-  treeApexMaxHeightMeters?: number;
   buildingMinHeightMeters?: number;
   gridCellSizeMeters?: number;
   focalInterestBounds?: {
@@ -72,14 +71,6 @@ export interface DecomposedCluster {
   roughness: number;
   metalness: number;
   routingRecommendation?: DownstreamGeneratorRouting;
-  treeMetadata?: {
-    species: 'pinus_pinea' | 'quercus_ilex' | 'cupressus_sempervirens' | 'olea_europaea' | 'laurus_nobilis';
-    scientificName: string;
-    canopyHeightMeters: number;
-    crownDiameterMeters: number;
-    crownVolumeM3: number;
-    groundElevationMeters: number;
-  };
   buildingMetadata?: {
     heightMeters: number;
     footprintM2: number;
@@ -113,7 +104,7 @@ interface VertexRecord {
   v?: number;
   vertexIndex: number;
   submeshIndex: number;
-  tag: 'unassigned' | 'terrain' | 'tree' | 'landmark' | 'building' | 'vehicle' | 'prop';
+  tag: 'unassigned' | 'terrain' | 'landmark' | 'building' | 'vehicle' | 'prop';
 }
 
 export class UniversalVertexSpatialClusteringEngine {
@@ -130,7 +121,10 @@ export class UniversalVertexSpatialClusteringEngine {
     const totalHeight = Math.max(1.0, overallMax[1] - overallMin[1]);
     const totalWidth = Math.max(1.0, overallMax[0] - overallMin[0]);
     const totalDepth = Math.max(1.0, overallMax[2] - overallMin[2]);
-    const granularity = options?.granularity || 'detailed';
+    const granularity: string = options?.granularity || 'detailed';
+    if (granularity === 'trees') {
+      throw new Error("UniversalVertexSpatialClusteringEngine: granularity 'trees' has been removed. Geometry alone cannot tell a tree crown from facade relief or a rooftop unit, so this engine names no trees; google_3d_tiles_get_clay measures a location's trees from its photo tiles (colour, roughness and height above the ground) and rebuilds them as SB-Veggie trees.");
+    }
 
     // 1. Gather all vertices with computed/extracted surface normals
     const allVertices: VertexRecord[] = [];
@@ -250,7 +244,7 @@ export class UniversalVertexSpatialClusteringEngine {
       }
     }
 
-    if (terrainVerts.length > 0 && granularity !== 'trees') {
+    if (terrainVerts.length > 0) {
       const submeshSet = new Set(terrainVerts.map(v => v.submeshIndex));
       clusters.push({
         id: 'sep-terrain-ground-datum',
@@ -286,7 +280,7 @@ export class UniversalVertexSpatialClusteringEngine {
              h >= focalMinH && h <= focalMaxH;
     });
 
-    if (landmarkCandidates.length >= 25 && granularity !== 'trees') {
+    if (landmarkCandidates.length >= 25) {
       for (const v of landmarkCandidates) v.tag = 'landmark';
       const submeshSet = new Set(landmarkCandidates.map(v => v.submeshIndex));
 
@@ -336,167 +330,9 @@ export class UniversalVertexSpatialClusteringEngine {
       });
     }
 
-    // 5. Stage 2: Tree Apex Detection & Radial Canopy Extraction
-    const treeApexMinH = options?.treeApexMinHeightMeters ?? 2.8;
-    const treeApexMaxH = options?.treeApexMaxHeightMeters ?? 36.0;
-    const cellSize = options?.gridCellSizeMeters ?? 2.8;
-
-    // Build 2D spatial elevation grid for remaining candidate vertices
-    const grid = new Map<string, {
-      maxElevation: number;
-      apexVertex: VertexRecord;
-      points: VertexRecord[];
-      gx: number;
-      gz: number;
-    }>();
-
-    for (const v of allVertices) {
-      if (v.tag !== 'unassigned') continue;
-      const h = v.y - groundDatumY;
-      if (h >= treeApexMinH && h <= treeApexMaxH) {
-        const gx = Math.floor(v.x / cellSize);
-        const gz = Math.floor(v.z / cellSize);
-        const key = `${gx}_${gz}`;
-
-        let cell = grid.get(key);
-        if (!cell) {
-          cell = { maxElevation: v.y, apexVertex: v, points: [], gx, gz };
-          grid.set(key, cell);
-        } else if (v.y > cell.maxElevation) {
-          cell.maxElevation = v.y;
-          cell.apexVertex = v;
-        }
-        cell.points.push(v);
-      }
-    }
-
-    // Identify local maxima (Tree Apex Candidates)
-    const apexCells: {
-      apexVertex: VertexRecord;
-      points: VertexRecord[];
-      gx: number;
-      gz: number;
-      elevation: number;
-    }[] = [];
-
-    grid.forEach((cell, key) => {
-      let isPeak = true;
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dz = -1; dz <= 1; dz++) {
-          if (dx === 0 && dz === 0) continue;
-          const neighborKey = `${cell.gx + dx}_${cell.gz + dz}`;
-          const neighbor = grid.get(neighborKey);
-          if (neighbor && neighbor.maxElevation > cell.maxElevation) {
-            isPeak = false;
-            break;
-          }
-        }
-        if (!isPeak) break;
-      }
-
-      // Check that cell points have organic normal variance (not a flat horizontal rooftop)
-      if (isPeak && cell.points.length >= 4) {
-        const meanNy = cell.points.reduce((acc, p) => acc + p.ny, 0) / cell.points.length;
-        // Flat roofs have meanNy close to 1.0; foliage has organic scattered normals
-        const hasOrganicVariance = meanNy < 0.92;
-        if (hasOrganicVariance) {
-          apexCells.push({
-            apexVertex: cell.apexVertex,
-            points: cell.points,
-            gx: cell.gx,
-            gz: cell.gz,
-            elevation: cell.maxElevation
-          });
-        }
-      }
-    });
-
-    // Radial canopy watershed clustering from each apex
-    let treeCounter = 1;
-    for (const apex of apexCells) {
-      const hApex = apex.elevation - groundDatumY;
-      const crownRadius = Math.min(10.0, Math.max(2.2, hApex * 0.55));
-      const crownBaseY = Math.max(groundDatumY + 1.2, apex.elevation - hApex * 0.85);
-      const treePoints: VertexRecord[] = [];
-      const submeshSet = new Set<number>();
-
-      const radiusCells = Math.ceil(crownRadius / cellSize);
-      for (let dx = -radiusCells; dx <= radiusCells; dx++) {
-        for (let dz = -radiusCells; dz <= radiusCells; dz++) {
-          const cellKey = `${apex.gx + dx}_${apex.gz + dz}`;
-          const c = grid.get(cellKey);
-          if (!c) continue;
-          for (const v of c.points) {
-            if (v.tag !== 'unassigned') continue;
-            const dist2D = Math.hypot(v.x - apex.apexVertex.x, v.z - apex.apexVertex.z);
-            if (dist2D <= crownRadius && v.y >= crownBaseY && v.y <= apex.elevation + 0.5) {
-              v.tag = 'tree';
-              treePoints.push(v);
-              submeshSet.add(v.submeshIndex);
-            }
-          }
-        }
-      }
-
-      if (treePoints.length >= 8) {
-        let minX = Infinity, maxX = -Infinity;
-        let minZ = Infinity, maxZ = -Infinity;
-        for (const p of treePoints) {
-          if (p.x < minX) minX = p.x;
-          if (p.x > maxX) maxX = p.x;
-          if (p.z < minZ) minZ = p.z;
-          if (p.z > maxZ) maxZ = p.z;
-        }
-
-        const crownDiam = Math.max(2.0, Math.max(maxX - minX, maxZ - minZ));
-        const canopyH = Math.max(3.0, apex.elevation - crownBaseY);
-        const crownVol = (Math.PI / 6) * Math.pow(crownDiam, 2) * canopyH;
-        const aspectRatio = canopyH / crownDiam;
-
-        let species: 'pinus_pinea' | 'quercus_ilex' | 'cupressus_sempervirens' = 'quercus_ilex';
-        let scientificName = 'Quercus ilex';
-        let commonName = 'Mediterranean Holm Oak';
-
-        if (aspectRatio > 2.0) {
-          species = 'cupressus_sempervirens';
-          scientificName = 'Cupressus sempervirens';
-          commonName = 'Italian Columnar Cypress';
-        } else if (aspectRatio < 0.90 && crownDiam >= 7.0) {
-          species = 'pinus_pinea';
-          scientificName = 'Pinus pinea';
-          commonName = 'Italian Stone Pine';
-        }
-
-        clusters.push({
-          id: `fol-tree-${String(treeCounter).padStart(3, '0')}`,
-          name: `${commonName} #${treeCounter}`,
-          category: 'foliage_trees',
-          submeshIndices: Array.from(submeshSet),
-          extractedVertices: treePoints.map(v => [v.x, v.y, v.z]),
-          vertexIndices: treePoints.map(v => v.vertexIndex),
-          vertexSubmeshIndices: treePoints.map(v => v.submeshIndex),
-          colorHex: '#22c55e',
-          prompt: `Photorealistic mature ${scientificName} (${commonName}) botanical tree with detailed canopy, crown diameter ${crownDiam.toFixed(1)}m, height ${canopyH.toFixed(1)}m`,
-          roughness: 0.74,
-          metalness: 0.0,
-          routingRecommendation: 'sb-veggie',
-          treeMetadata: {
-            species,
-            scientificName,
-            canopyHeightMeters: canopyH,
-            crownDiameterMeters: crownDiam,
-            crownVolumeM3: crownVol,
-            groundElevationMeters: groundDatumY
-          }
-        });
-
-        treeCounter++;
-      }
-    }
-
-    if (granularity === 'trees') {
-      return clusters;
-    }
+    // 5. No tree stage. Local height peaks with scattered normals are as often facade relief, cornices or rooftop
+    //    units as crowns (on the Flatiron extraction such a stage named 359 peaks trees, among them 30 m facades, and
+    //    gave each a species from its aspect ratio); nothing here can tell them apart, so nothing is called a tree.
 
     // 6. Stage 2.5: Ground-Level Vehicle & Car Extraction
     // Detects parked cars, delivery vans, SUVs, and passenger vehicles along street corridors

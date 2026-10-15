@@ -104,7 +104,7 @@ export interface UniversalSeparatedScene {
   overallBoundingBox: BoundingBox3DMetric;
   overallOrientedBoundingBox?: OrientedBoundingBox3D;
   objects: UniversalSeparatedObject[];
-  granularityMode: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
+  granularityMode: 'macro' | 'detailed' | 'total' | 'all';
   timestamp: string;
   sourceAssetPath?: string;
   geoAnchor?: {
@@ -122,7 +122,7 @@ export interface UniversalSeparatedScene {
 export interface UniversalSeparationOptions {
   glbPath?: string;
   glbBuffer?: Buffer;
-  granularity?: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
+  granularity?: 'macro' | 'detailed' | 'total' | 'all';
   autoDetectSemanticCategories?: boolean;
   enableVertexClustering?: boolean;
   minVerticesPerEntity?: number;
@@ -496,7 +496,6 @@ export class Universal3DObjectSeparationService {
 
     // Groups
     const terrainIndices: number[] = [];
-    const foliageIndices: number[] = [];
     const monumentIndices: number[] = [];
     const architectureIndices: number[] = [];
     const ruinIndices: number[] = [];
@@ -512,10 +511,8 @@ export class Universal3DObjectSeparationService {
       if (h < 6.0 && horizontalFootprint > overallBox.dimensions[0] * 0.25) {
         terrainIndices.push(idx);
       }
-      // Heuristic 2: Foliage - elevated, moderate height (4-25m), localized crown aspect ratio
-      else if (h >= 4.0 && h <= 25.0 && w / (h || 1) < 1.8 && relativeElevation > 0.15 && sm.count < 3000) {
-        foliageIndices.push(idx);
-      }
+      // (No vegetation heuristic: a bounding box cannot tell a crown from a kiosk or a rooftop unit. Trees are measured
+      // from the photo tiles by tile_vegetation, through google_3d_tiles_get_clay.)
       // Heuristic 3: Ruin - low crumbling structure
       else if (h >= 1.0 && h <= 8.0 && relativeElevation < 0.25) {
         ruinIndices.push(idx);
@@ -531,7 +528,7 @@ export class Universal3DObjectSeparationService {
     }
 
     // Only categories the heuristics actually found are reported: a submesh is never moved into a category (terrain,
-    // monument, foliage) just so that category exists, and an empty category is not given the whole model's box.
+    // monument) just so that category exists, and an empty category is not given the whole model's box.
     const clustersConfig = [
       {
         id: 'sep-monument-core',
@@ -542,16 +539,6 @@ export class Universal3DObjectSeparationService {
         prompt: 'Watertight architectural monument facade with classical masonry and relief details',
         roughness: 0.85,
         metalness: 0.02
-      },
-      {
-        id: 'sep-foliage-canopy',
-        name: 'Vegetation Canopy & Botanical Trees',
-        category: 'foliage' as UniversalSpatialCategory,
-        indices: foliageIndices,
-        colorHex: '#22c55e',
-        prompt: 'Photorealistic botanical canopy with organic branching and needle/leaf foliage',
-        roughness: 0.72,
-        metalness: 0.0
       },
       {
         id: 'sep-terrain-ground',

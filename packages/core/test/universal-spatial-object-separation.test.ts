@@ -101,17 +101,14 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     });
 
     // Only categories the geometry supports are reported; nothing is moved into a category so that it exists. This
-    // model's submeshes measure as monument, foliage, architecture and ruin; none is broad and low enough for terrain.
+    // model's submeshes measure as monument, architecture and ruin; none is broad and low enough for terrain. Nothing
+    // is called vegetation: a bounding box cannot tell a crown from a kiosk.
     const categories = new Set(scene.objects.map(o => o.category));
     expect(categories.has('monument') || categories.has('colosseum_architecture')).toBe(true);
     expect(categories.has('terrain')).toBe(false);
+    expect(categories.has('foliage')).toBe(false);
+    expect(categories.has('foliage_trees')).toBe(false);
     for (const obj of scene.objects) expect(obj.submeshIndices.length).toBeGreaterThan(0);
-
-    // Verify foliage routing metadata
-    const foliageObjs = scene.objects.filter(o => o.category === 'foliage' || o.category === 'foliage_trees');
-    for (const fol of foliageObjs) {
-      expect(fol.routingRecommendation).toBe('sb-veggie');
-    }
 
     // Verify monument routing metadata
     const monumentObjs = scene.objects.filter(o => o.category === 'monument' || o.category === 'colosseum_architecture');
@@ -125,6 +122,31 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     for (const ter of terrainObjs) {
       expect(ter.routingRecommendation).toBe('sb-terrain');
     }
+  });
+
+  it('names no trees from geometry alone: no tree stage, no species, and granularity "trees" fails with the reason', async () => {
+    // vertex-level clustering on a real mesh: local height peaks with scattered normals are facade relief, cornices and
+    // rooftop units as often as crowns, so none of them is called a tree or given a species
+    const scene = Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'detailed', autoDetectSemanticCategories: true });
+    expect(scene.objects.length).toBeGreaterThan(0);
+    for (const obj of scene.objects) {
+      expect(['foliage', 'foliage_trees']).not.toContain(obj.category);
+      expect(obj.routingRecommendation).not.toBe('sb-veggie');
+      expect((obj as any).treeMetadata).toBeUndefined();
+      expect(`${obj.name} ${obj.trellisPrompt}`).not.toMatch(/oak|pine|cypress|botanical/i);
+    }
+    expect(() => Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'trees' as any }))
+      .toThrow("granularity 'trees' has been removed");
+
+    // through the agent tool the model sees the same: the call fails with the reason, and the declaration no longer
+    // offers the mode
+    const { createDefaultToolRegistry } = await import('../src/node/gemini/tool-registry');
+    const registry = createDefaultToolRegistry();
+    const decl = registry.declarations().find((d: any) => d.name === 'spatial_separate_3d_objects') as any;
+    expect(decl.parameters.properties.granularity.enum).not.toContain('trees');
+    const out: any = await registry.dispatch('spatial_separate_3d_objects', { glbPath: colosseumModelPath, granularity: 'trees' }, {} as any);
+    expect(out.exec.status).toBe('failed');
+    expect(JSON.stringify(out)).toContain('google_3d_tiles_get_clay measures');
   });
 
   it('synthesizes canonical Scene3DData with Media4DObject contracts', async () => {
@@ -147,7 +169,7 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     }
   });
 
-  it.skipIf(!archRaw.ok)(withReason('performs vertex-level Tree Apex & Facade clustering on raw Google 3D Tile (Washington Square Arch)', archRaw), async () => {
+  it.skipIf(!archRaw.ok)(withReason('performs vertex-level facade and terrain clustering on raw Google 3D Tile (Washington Square Arch), naming no trees', archRaw), async () => {
     const archPath = path.join(REPO_ROOT, ARCH_RAW);
 
     const scene = Universal3DObjectSeparationService.separate3DMesh(archPath, {
@@ -157,32 +179,13 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
 
     expect(scene).toBeDefined();
     expect(scene.totalVertices).toBe(4277);
-    expect(scene.objects.length).toBeGreaterThanOrEqual(25);
+    expect(scene.objects.length).toBeGreaterThan(0);
 
-    // Verify categories breakdown
+    // Verify categories breakdown: geometry alone names no trees (they are measured from the photo tiles elsewhere)
     const categories = new Set(scene.objects.map(o => o.category));
     expect(categories.has('terrain')).toBe(true);
-    expect(categories.has('foliage_trees')).toBe(true);
+    expect(categories.has('foliage_trees')).toBe(false);
     expect(categories.has('monument') || categories.has('architecture')).toBe(true);
-
-    // Verify individual trees
-    const treeEntities = scene.objects.filter(o => o.category === 'foliage_trees');
-    expect(treeEntities.length).toBeGreaterThanOrEqual(15);
-
-    for (const tree of treeEntities) {
-      expect(tree.orientedBoundingBox).toBeDefined();
-      expect(tree.orientedBoundingBox.dimensions[0]).toBeGreaterThan(0);
-      expect(tree.orientedBoundingBox.dimensions[1]).toBeGreaterThan(0);
-      expect(tree.orientedBoundingBox.dimensions[2]).toBeGreaterThan(0);
-      expect(tree.routingRecommendation).toBe('sb-veggie');
-
-      // Verify botanical metadata
-      expect(tree.treeMetadata).toBeDefined();
-      expect(['quercus_ilex', 'pinus_pinea', 'cupressus_sempervirens', 'olea_europaea', 'laurus_nobilis']).toContain(tree.treeMetadata.species);
-      expect(tree.treeMetadata.canopyHeightMeters).toBeGreaterThan(0);
-      expect(tree.treeMetadata.crownDiameterMeters).toBeGreaterThan(0);
-      expect(tree.treeMetadata.crownVolumeM3).toBeGreaterThan(0);
-    }
 
     // Verify terrain ground apron
     const terrainEntity = scene.objects.find(o => o.category === 'terrain');
@@ -212,7 +215,7 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     expect(scene).toBeDefined();
     expect(scene.totalVertices).toBe(295217);
     expect(scene.totalSubmeshes).toBe(94);
-    expect(scene.objects.length).toBeGreaterThanOrEqual(180);
+    expect(scene.objects.length).toBeGreaterThan(0);
 
     // 1. Primary Landmark Verification
     const landmarks = scene.objects.filter(o => o.category === 'landmark');
@@ -237,11 +240,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       expect(v.routingRecommendation).toBe('sb-vehicle');
     }
 
-    // 3. Botanical Trees Verification
-    const trees = scene.objects.filter(o => o.category === 'foliage_trees');
-    expect(trees.length).toBeGreaterThanOrEqual(150);
-    const oaks = trees.filter(t => t.treeMetadata?.species === 'quercus_ilex');
-    expect(oaks.length).toBeGreaterThan(50);
+    // 3. No trees from geometry alone (no species either)
+    expect(scene.objects.filter(o => o.category === 'foliage_trees')).toHaveLength(0);
   });
 
   it.skipIf(!archHq.ok)(withReason('verifies BoundingBoxComparisonService metrology and GoogleTileAlignmentOptimizer asset docking contracts on separated entities', archHq), async () => {
@@ -369,7 +369,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     // Verify materials have dedicated part categories in extras
     const categories = parsed.json.materials.map((m: any) => m.extras?.category);
     expect(categories).toContain('landmark');
-    expect(categories.some((c: string) => c === 'foliage_trees' || c === 'architecture' || c === 'terrain')).toBe(true);
+    expect(categories.some((c: string) => c === 'architecture' || c === 'terrain')).toBe(true);
+    expect(categories).not.toContain('foliage_trees');
 
     // Verify each primitive has local OBB-conformal UV coordinates (TEXCOORD_0)
     for (const prim of parsed.json.meshes[0].primitives) {
