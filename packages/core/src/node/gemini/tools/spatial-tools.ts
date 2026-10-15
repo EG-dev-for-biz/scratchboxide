@@ -2616,10 +2616,12 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 activePoses: synthesisRes.activePoses,
                 eyeHeight,
                 eyeHeightInferred: depthRes.eyeHeightInferred,
+                floorFitApplied: depthRes.floorFitApplied,
+                depthScaleCorrection: depthRes.scaleCorrection,
                 depthModel: depthRes.modelUsed,
                 metaPath: synthesisRes.metaPath
             } as unknown as ToolResultPayload,
-            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Capture height ${eyeHeight.toFixed(2)} m (${depthRes.eyeHeightInferred ? 'inferred from metric floor' : 'supplied'}), depth: ${depthRes.modelUsed}. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
+            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Capture height ${eyeHeight.toFixed(2)} m (${depthRes.eyeHeightInferred ? 'measured from the metric floor' : 'supplied'}), depth: ${depthRes.modelUsed}${depthRes.floorFitApplied ? (depthRes.scaleCorrection !== 1 ? `, rescaled ${depthRes.scaleCorrection.toFixed(3)}x to the floor` : '') : ' at the model\'s own scale (too few floor pixels to fit)'}. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
         };
     },
 
@@ -2632,7 +2634,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             throw new Error(`single_image_to_3dgs: input image does not exist: ${inputImagePath}`);
         }
 
-        const fovGiven = typeof args.fovDegrees === 'number' && args.fovDegrees > 1 && args.fovDegrees < 179;
+        const fovGiven = args.fovDegrees !== undefined && args.fovDegrees !== null;
+        if (fovGiven && !(typeof args.fovDegrees === 'number' && args.fovDegrees > 1 && args.fovDegrees < 179)) {
+            throw new MissingInputError('single_image_to_3dgs', 'fovDegrees', `must be a vertical field of view between 1 and 179 degrees (got ${JSON.stringify(args.fovDegrees)})`);
+        }
         const fovDegrees = fovGiven ? (args.fovDegrees as number) : 65.0;
         const sceneType = args.sceneType === 'indoor' ? 'indoor' : 'outdoor';
         const stride = typeof args.stride === 'number' ? Math.max(1, Math.round(args.stride)) : 2;

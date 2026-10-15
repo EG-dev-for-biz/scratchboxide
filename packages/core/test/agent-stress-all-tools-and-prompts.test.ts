@@ -21,6 +21,7 @@ import type { ToolContext } from '../src/node/gemini/tools/types';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
 import { encodePng } from '../src/node/texture-processing';
 import { requireAssets, withReason } from './helpers/requirements';
+import { skyscraperMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
 
 const avatar2785536 = requireAssets(
     ['models/performer_4dgs/demos/2785536/human_4dgs.ply', 'models/performer_4dgs/demos/2785536/motion.json'],
@@ -85,9 +86,12 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
     const testDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-agent-tools-')));
     // Any textured GLB exercises the UV rewrap tool; a generated quad replaces the gitignored Colosseum test GLB.
     const existingGlbPath = path.join(testDir, 'textured_quad.glb');
+    // The native mesh and UTDRA writers carry no textures, so those tools refuse a textured GLB: give them clay.
+    const clayGlbPath = path.join(testDir, 'clay_tower.glb');
 
     beforeAll(() => {
         writeTexturedQuadGlb(existingGlbPath);
+        writeFixtureGlb(clayGlbPath, skyscraperMesh(10, 15, 20));
 
         registry = createDefaultToolRegistry();
 
@@ -322,7 +326,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
 
         it('executes utdra_decompose_tile with non-destructive classification', async () => {
             const res = await registry.dispatch('utdra_decompose_tile', {
-                inputGlbPath: existingGlbPath,
+                inputGlbPath: clayGlbPath,
                 outputGlbPath: path.join(testDir, 'utdra_decomposed.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
@@ -333,7 +337,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
         it('executes utdra_slice_elevation with Sutherland-Hodgman clipping', async () => {
             const res = await registry.dispatch('utdra_slice_elevation', {
                 cutoffY: 0.5,
-                inputGlbPath: existingGlbPath,
+                inputGlbPath: clayGlbPath,
                 outputGlbPath: path.join(testDir, 'utdra_sliced.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
@@ -344,11 +348,20 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
         it('executes utdra_carve_bridge_voids', async () => {
             const res = await registry.dispatch('utdra_carve_bridge_voids', {
                 minVoidHeightMeters: 3.5,
-                inputGlbPath: existingGlbPath,
+                inputGlbPath: clayGlbPath,
                 outputGlbPath: path.join(testDir, 'utdra_carved.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).success).toBe(true);
+        });
+
+        it('refuses a textured tile for a UTDRA step that writes a tile (the native writer would drop its textures)', async () => {
+            const res = await registry.dispatch('utdra_decompose_tile', {
+                inputGlbPath: existingGlbPath,
+                outputGlbPath: path.join(testDir, 'utdra_textured.glb')
+            }, mockContext);
+            expect(res.exec.status).toBe('failed');
+            expect(String((res.resultPayload as any).error)).toContain('texture(s), which the native writer does not carry over');
         });
 
         it('fails a UTDRA call that names no tile instead of processing a benchmark mesh', async () => {
@@ -380,7 +393,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                     { type: 'taper', axis: 'y', factor: 0.65, range: [0, 1] },
                     { type: 'twist', axis: 'y', angleDeg: 20, range: [0.5, 1] }
                 ],
-                inputGlbPath: existingGlbPath,
+                inputGlbPath: clayGlbPath,
                 outputGlbPath: path.join(testDir, 'mesh_deformed.glb')
             }, mockContext);
             expect(res.exec.status).toBe('completed');
