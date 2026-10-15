@@ -1761,6 +1761,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 lat: { type: 'NUMBER', description: 'Geodetic latitude in degrees (optional if named landmark).' },
                 lng: { type: 'NUMBER', description: 'Geodetic longitude in degrees (optional if named landmark).' },
                 elevation: { type: 'NUMBER', description: 'Elevation in meters above sea level.' },
+                glbPath: { type: 'STRING', description: 'Optional: the clay GLB of this place already extracted (e.g. by google_3d_tiles_get_clay). Without it the place\'s Google 3D Tiles are extracted fresh in clay; a failed extraction fails the call.' },
                 stylePreset: { type: 'STRING', description: 'Era or visual style preset (e.g. "cinematic-film", "oil-painting").' },
                 mood: { type: 'STRING', description: 'Diurnal lighting mood ("dawn", "golden-hour", "midday", "dusk", "night").' },
                 cameraCount: { type: 'NUMBER', description: 'Number of survey camera stations (default: 6-12).' },
@@ -3016,6 +3017,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             lat: typeof args.lat === 'number' ? args.lat : undefined,
             lng: typeof args.lng === 'number' ? args.lng : undefined,
             elevation: typeof args.elevation === 'number' ? args.elevation : undefined,
+            glbPath: asString(args.glbPath) || undefined,
             stylePreset: asString(args.stylePreset) || undefined,
             mood: asString(args.mood) as any,
             cameraCount: typeof args.cameraCount === 'number' ? args.cameraCount : undefined,
@@ -3040,13 +3042,14 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 splatCount: res.splatCount,
                 stationCount: res.stationCount,
                 acceptedStations: res.acceptedStations,
+                glbPath: res.glbPath,
                 cropBox: res.cropBox,
                 scene3DData: res.scene3DData,
                 durationMs: res.durationMs,
                 modelsUsed: res.modelsUsed,
                 imageSources: res.imageSources
             } as unknown as ToolResultPayload,
-            summaryResult: `Generated a 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats from ${res.acceptedStations}/${res.stationCount} accepted station image(s) in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}. ${res.imageSources.join(' ')}`
+            summaryResult: `Generated a 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats from ${res.acceptedStations}/${res.stationCount} accepted station image(s) of the clay tiles ${res.glbPath} in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}. ${res.imageSources.join(' ')}`
         };
     },
 
