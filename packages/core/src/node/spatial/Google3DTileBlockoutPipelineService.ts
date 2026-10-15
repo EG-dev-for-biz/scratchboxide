@@ -2420,10 +2420,13 @@ export class Google3DTileBlockoutPipelineService {
 
     const isTextured = mode === 'full-texture';
     const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
-    // A mock run's placeholder GLB never lands next to real extractions, where later lookups would take it for one.
-    const canonicalModelsDir = options?.offlineMock
-      ? path.join(offlineMockOutputRoot(), 'public/models')
-      : path.resolve(repoRoot, 'public/models');
+    // The caller's outputDir, else public/models. A mock run's placeholder GLB never lands next to real extractions,
+    // where later lookups would take it for one.
+    const canonicalModelsDir = options?.outputDir
+      ? path.resolve(options.outputDir)
+      : options?.offlineMock
+        ? path.join(offlineMockOutputRoot(), 'public/models')
+        : path.resolve(repoRoot, 'public/models');
     const radiusMeters = options?.radiusMeters || 250;
     // The default file is keyed by where and how much was extracted, not by the place's name: two places Google
     // names alike ("Park Avenue" in New York and in Winter Park) must not overwrite each other's model.

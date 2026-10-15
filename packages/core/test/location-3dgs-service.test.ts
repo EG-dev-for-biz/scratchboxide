@@ -62,7 +62,9 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
             const [anchor, mode, options] = extraction.mock.calls[0] as any[];
             expect(mode).toBe('clay');
             expect([anchor.lat, anchor.lng, anchor.elevation]).toEqual([41.8902, 12.4922, 22.0]);
-            expect(path.basename(options.outputGlbPath)).toBe('rome_colosseum_clay.glb');
+            // Named by fetch3DObject from the place, radius and mode: not by the request text ("rome_colosseum_clay.glb")
+            expect(options.outputGlbPath).toBeUndefined();
+            expect(options.outputDir).toMatch(/public[\\/]models$/);
 
             expect(result.success).toBe(true);
             expect(result.locationName).toContain('Colosseum');

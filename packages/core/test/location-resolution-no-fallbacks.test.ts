@@ -443,6 +443,32 @@ describe('GeospatialTileExtractionBridge: every call extracts fresh tiles', () =
             fs.rmSync(outputDir, { recursive: true, force: true });
         }
     });
+
+    it('names its files by the resolved place, radius and mode, never by the query text', async () => {
+        // The files used to be named by the first 40 characters of the text, so places described alike (or one place
+        // in clay and in full texture) overwrote each other's <slug>_tiles.glb and manifest.
+        const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-bridge-names-'));
+        try {
+            const label = 'The intersection of Fifth Avenue and Broadway';
+            const bridge = GeospatialTileExtractionBridge.getInstance();
+            const newYork = await bridge.ingestAndExtract({ lat: 40.7411, lng: -73.9897, elevation: 12, landmarkName: label }, { mode: 'clay', mockExecution: true, outputDir });
+            const rome = await bridge.ingestAndExtract({ lat: 41.8902, lng: 12.4922, elevation: 22, landmarkName: label }, { mode: 'clay', mockExecution: true, outputDir });
+            const newYorkTextured = await bridge.ingestAndExtract({ lat: 40.7411, lng: -73.9897, elevation: 12, landmarkName: label }, { mode: 'full_texture', mockExecution: true, outputDir });
+            const glbs = [newYork.glbPath, rome.glbPath, newYorkTextured.glbPath];
+            const manifests = [newYork.manifestPath, rome.manifestPath, newYorkTextured.manifestPath];
+            expect(new Set(glbs).size).toBe(3);
+            expect(new Set(manifests).size).toBe(3);
+            expect(path.basename(newYork.glbPath)).toMatch(/40\.74110_-73\.98970_r\d+_clay\.glb$/);
+            expect(path.basename(newYorkTextured.glbPath)).toMatch(/40\.74110_-73\.98970_r\d+_textured\.glb$/);
+            for (const r of [newYork, rome, newYorkTextured]) {
+                expect(path.dirname(r.glbPath)).toBe(outputDir);
+                expect(r.manifestPath).toBe(r.glbPath.replace(/\.glb$/, '_manifest.json'));
+                expect(JSON.parse(fs.readFileSync(r.manifestPath, 'utf8')).tileGlbPath).toBe(r.glbPath);
+            }
+        } finally {
+            fs.rmSync(outputDir, { recursive: true, force: true });
+        }
+    });
 });
 
 describe('template scenes never stand in a place or an object build', () => {

@@ -20,15 +20,18 @@ import { Google3DTileCrawlerBaker } from '../../src/node/spatial/Google3DTileCra
  */
 export function injectTileExtraction() {
     return vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'fetch3DObject').mockImplementation(
-        async (query: string | GeoAnchor, mode: 'full-texture' | 'clay', options?: { outputGlbPath?: string; radiusMeters?: number }) => {
-            if (typeof query !== 'object' || !options?.outputGlbPath) {
-                throw new Error('injectTileExtraction expects explicit coordinates and an outputGlbPath');
+        async (query: string | GeoAnchor, mode: 'full-texture' | 'clay', options?: { outputGlbPath?: string; outputDir?: string; radiusMeters?: number }) => {
+            if (typeof query !== 'object' || !(options?.outputGlbPath || options?.outputDir)) {
+                throw new Error('injectTileExtraction expects explicit coordinates and an outputGlbPath or outputDir');
             }
+            // Without an explicit path the file is named like fetch3DObject's default: by place, radius and mode.
+            const outputGlbPath = options.outputGlbPath
+                ?? path.join(options.outputDir!, `${query.lat.toFixed(5)}_${query.lng.toFixed(5)}_r${Math.round(options.radiusMeters ?? 250)}_${mode === 'clay' ? 'clay' : 'textured'}.glb`);
             const origin = { lat: query.lat, lng: query.lng, alt: query.elevation ?? 0 };
             const tile = Google3DTileCrawlerBaker.createSyntheticGeodeticTile(origin, options.radiusMeters ?? 200);
             const glbBuffer = Google3DTileCrawlerBaker.mergeTileMeshes([tile], origin).glbBuffer;
-            fs.mkdirSync(path.dirname(options.outputGlbPath), { recursive: true });
-            fs.writeFileSync(options.outputGlbPath, glbBuffer);
+            fs.mkdirSync(path.dirname(outputGlbPath), { recursive: true });
+            fs.writeFileSync(outputGlbPath, glbBuffer);
             return {
                 success: true,
                 mock: true,
@@ -36,7 +39,7 @@ export function injectTileExtraction() {
                 geoAnchor: { ...query },
                 resolvedAddress: query.landmarkName,
                 glbBuffer,
-                glbPath: options.outputGlbPath
+                glbPath: outputGlbPath
             } as any;
         }
     );

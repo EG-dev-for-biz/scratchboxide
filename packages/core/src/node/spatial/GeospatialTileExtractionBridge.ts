@@ -91,25 +91,18 @@ export class GeospatialTileExtractionBridge {
       mockExecution?: boolean;
     } = {}
   ): Promise<LocationExtractionResult> {
+    // Files are named by fetch3DObject from the resolved place (lat, lng), the radius and the mode, never by the
+    // query text: two places described alike, or one place in clay and in full texture, never share a file.
     const outputDir = options.outputDir
-      || (options.mockExecution
-        ? fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-location-extract-mock-'))
-        : path.resolve(process.cwd(), 'public/models'));
-    if (!fs.existsSync(outputDir)) {
+      || (options.mockExecution ? fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-location-extract-mock-')) : undefined);
+    if (outputDir && !fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
-
-    const querySlug = typeof queryOrCoords === 'string'
-      ? queryOrCoords
-      : `${queryOrCoords.landmarkName || 'geo'}_${queryOrCoords.lat.toFixed(4)}_${queryOrCoords.lng.toFixed(4)}`;
-    const safeSlug = querySlug.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40);
-    const tileGlbPath = path.join(outputDir, `${safeSlug}_tiles.glb`);
-    const manifestPath = path.join(outputDir, `${safeSlug}_manifest.json`);
 
     // 1. Fetch 3D tiles (using full texture or studio grey clay)
     const fetchTiles = options.mode === 'clay' ? getGoogle3DTilesClay : getGoogle3DTilesFullTexture;
     const tileResult = await fetchTiles(queryOrCoords, {
-      outputGlbPath: tileGlbPath,
+      ...(outputDir ? { outputDir } : {}),
       offlineMock: options.mockExecution
     });
 
@@ -187,6 +180,7 @@ export class GeospatialTileExtractionBridge {
       }))
     };
 
+    const manifestPath = tileResult.glbPath.replace(/(\.glb)?$/i, '_manifest.json');
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
     return {

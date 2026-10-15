@@ -148,7 +148,6 @@ export class Location3DGaussianSplatService {
         }, root);
 
         const anchor = preset.anchor;
-        const sanitizedName = (req.location || anchor.formattedAddress || 'location').toLowerCase().replace(/[^a-z0-9]+/g, '_');
         // The survey renders the place's own clay tiles: a GLB the caller passed, else a fresh extraction at the
         // resolved anchor. A failed extraction fails the call; no other model is picked by name or substituted.
         let glbPath: string;
@@ -161,7 +160,9 @@ export class Location3DGaussianSplatService {
             progressReporter(0.04, `Extracting Google 3D Tiles in clay at ${anchor.formattedAddress}...`);
             const extraction = await getGoogle3DTilesClay(
                 { lat: anchor.lat, lng: anchor.lng, elevation: anchor.elevationMeters, landmarkName: anchor.formattedAddress },
-                { radiusMeters: preset.cropRadius || 75, outputGlbPath: path.resolve(root, `public/models/${sanitizedName}_clay.glb`) }
+                // Named by the resolved place and radius (not the request text), so two places described alike never
+                // overwrite each other's tiles.
+                { radiusMeters: preset.cropRadius || 75, outputDir: path.resolve(root, 'public/models') }
             );
             glbPath = extraction.glbPath;
         }
