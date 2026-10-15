@@ -233,6 +233,80 @@ describe('Native 3D Engine AI Render & Keyframing Suite', () => {
             fs.rmSync(dir, { recursive: true, force: true });
         });
 
+        it('bakes a valid GLB with byte indices and normalized-short UVs onto the same triangles it rendered', async () => {
+            const fs = await import('fs');
+            const os = await import('os');
+            const path = await import('path');
+            const { writeEncodedPrimitivesGlb, uvCubeMesh, readGlbJson } = await import('./helpers/mesh-glb-fixtures');
+            const { encodePng, decodePng } = await import('../src/node/texture-processing');
+            const { AlgorithmicUvEngine } = await import('../src/node/spatial/AlgorithmicUvEngine');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-bake-u8-'));
+            // UNSIGNED_BYTE indices first in the buffer and UNSIGNED_SHORT normalized UVs: valid glTF that the
+            // unprojector used to read as 32-bit indices (so nothing was painted while the bake reported success).
+            const glbPath = writeEncodedPrimitivesGlb(path.join(dir, 'cube_u8.glb'), [{ mesh: uvCubeMesh(2), indexType: 5121, uvEncoding: 'unorm16' }]);
+            const colors: Array<[number, number, number]> = [[176, 120, 60], [40, 90, 200], [30, 160, 70], [200, 40, 40], [230, 210, 40], [120, 40, 160]];
+            let call = 0;
+            const generate = vi.fn(async (a: { width: number; height: number }) => {
+                const c = colors[call++];
+                const rgba = Buffer.alloc(a.width * a.height * 4);
+                for (let i = 0; i < a.width * a.height; i++) { rgba[i * 4] = c[0]; rgba[i * 4 + 1] = c[1]; rgba[i * 4 + 2] = c[2]; rgba[i * 4 + 3] = 255; }
+                return { png: encodePng(a.width, a.height, rgba), modelUsed: 'gemini-3.1-flash-image' };
+            });
+            const service = new MeshAiTextureBakingService({ generator: { name: 'test-colours', generate }, workspaceRoot: dir });
+            const outGlbPath = path.join(dir, 'cube_u8_baked.glb');
+            const result = await service.bakeMeshTexturesWithAi({ glbPath, stylePrompt: 'glazed tile', width: 64, height: 64, outGlbPath, resolution: 96 });
+            expect(result.metrics.directlyPaintedTexels).toBeGreaterThan(0);
+            expect(result.unobservedTexels).toBeLessThan(result.metrics.coveredMeshTexels * 0.05);
+            const gltf = readGlbJson(outGlbPath);
+            const texIndex = gltf.materials[gltf.meshes[0].primitives[0].material].pbrMetallicRoughness.baseColorTexture.index;
+            const { json, bin } = AlgorithmicUvEngine.parseGlb(fs.readFileSync(outGlbPath));
+            const view = json.bufferViews[json.images[json.textures[texIndex].source].bufferView];
+            const atlas = decodePng(bin.subarray(view.byteOffset || 0, (view.byteOffset || 0) + view.byteLength));
+            const chartColor = (cell: number) => {
+                const x = Math.round(((cell % 3) + 0.5) / 3 * (atlas.width - 1)), y = Math.round((Math.floor(cell / 3) + 0.5) / 2 * (atlas.height - 1));
+                return Array.from(atlas.rgba.subarray((y * atlas.width + x) * 4, (y * atlas.width + x) * 4 + 3));
+            };
+            expect(chartColor(0)).toEqual(colors[0]); // +Z face, Front view
+            expect(chartColor(3)).toEqual(colors[3]); // +X face, Right view
+            const shots = path.resolve(__dirname, '../../../test-results/screenshots');
+            fs.mkdirSync(shots, { recursive: true });
+            fs.writeFileSync(path.join(shots, 'mesh_bake_ai_textures_u8_index_atlas.png'), encodePng(atlas.width, atlas.height, atlas.rgba));
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
+
+        it('fails, writing nothing, when a primitive is hidden from every view, and refuses UVs it cannot decode before any model call', async () => {
+            const fs = await import('fs');
+            const os = await import('os');
+            const path = await import('path');
+            const { writeEncodedPrimitivesGlb, uvCubeMesh } = await import('./helpers/mesh-glb-fixtures');
+            const { encodePng } = await import('../src/node/texture-processing');
+            const { GeneratorFailedError, MissingInputError } = await import('../src/common/errors/pipeline-errors');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-bake-hidden-'));
+            const flat = vi.fn(async (a: { width: number; height: number }) => {
+                const rgba = Buffer.alloc(a.width * a.height * 4, 200);
+                return { png: encodePng(a.width, a.height, rgba), modelUsed: 'gemini-3.1-flash-image' };
+            });
+            // A small cube sealed inside a larger one: no axis view sees it, so its texture cannot be painted.
+            const nested = writeEncodedPrimitivesGlb(path.join(dir, 'nested.glb'), [{ mesh: uvCubeMesh(2) }, { mesh: uvCubeMesh(0.5) }]);
+            const outGlbPath = path.join(dir, 'nested_baked.glb');
+            const service = new MeshAiTextureBakingService({ generator: { name: 'flat', generate: flat }, workspaceRoot: dir });
+            const error = await service.bakeMeshTexturesWithAi({ glbPath: nested, stylePrompt: 'bronze', width: 64, height: 64, outGlbPath, resolution: 64 }).catch(e => e);
+            expect(error).toBeInstanceOf(GeneratorFailedError);
+            expect(error.message).toContain('1 of 2 primitives');
+            expect(error.message).toContain('primitive 1 (hidden from every view)');
+            expect(fs.existsSync(outGlbPath)).toBe(false);
+
+            // Integer UVs that are not normalized are not texture coordinates this reader can place: refused up front.
+            const rawUv = writeEncodedPrimitivesGlb(path.join(dir, 'raw_uv.glb'), [{ mesh: uvCubeMesh(2), uvEncoding: 'uint16' }]);
+            const never = vi.fn();
+            const refused = await new MeshAiTextureBakingService({ generator: { name: 'never', generate: never }, workspaceRoot: dir })
+                .bakeMeshTexturesWithAi({ glbPath: rawUv, stylePrompt: 'bronze', outGlbPath: path.join(dir, 'raw_out.glb') }).catch(e => e);
+            expect(refused).toBeInstanceOf(MissingInputError);
+            expect(refused.message).toContain('TEXCOORD_0 uses component type 5123');
+            expect(never).not.toHaveBeenCalled();
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
+
         it('refuses a mesh with no UVs instead of reporting views it never projected', async () => {
             const fs = await import('fs');
             const os = await import('os');

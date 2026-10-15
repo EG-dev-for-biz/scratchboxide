@@ -1461,17 +1461,60 @@ export class SurveyTextureUnprojector {
     }
 
     /**
+     * Reads accessor `index` as `components` floats per element, decoding its declared component type: float as is,
+     * normalized integers to [0, 1] (unsigned) or [-1, 1] (signed), honouring byteStride. What it cannot decode
+     * faithfully (sparse accessors, no buffer view, integers that are not normalized, a component type
+     * `allowFloatOnly` excludes) throws MissingInputError naming `what`, so a mesh is never read as garbage.
+     */
+    private static readFloatAccessor(json: any, bin: Buffer, index: number, components: number, what: string, allowFloatOnly = false): Float32Array {
+        const acc = json.accessors?.[index];
+        if (!acc) throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${what} names accessor ${index}, which the file does not define`);
+        if (acc.sparse) throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${what} is a sparse accessor, which this reader does not decode`);
+        if (acc.bufferView === undefined) throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${what} has no buffer view`);
+        const sizes: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5126: 4 };
+        const size = sizes[acc.componentType];
+        const floatType = acc.componentType === 5126;
+        if (!size || (!floatType && (allowFloatOnly || acc.normalized !== true))) {
+            throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB',
+                `${what} uses component type ${acc.componentType}${acc.normalized ? ' (normalized)' : ''}, which this reader does not decode${allowFloatOnly ? ' (floats only)' : ' (floats or normalized integers)'}`);
+        }
+        const view = json.bufferViews[acc.bufferView];
+        const offset = (view.byteOffset || 0) + (acc.byteOffset || 0);
+        const stride = view.byteStride || size * components;
+        const dv = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
+        const out = new Float32Array(acc.count * components);
+        if (offset + (acc.count - 1) * stride + size * components > bin.byteLength && acc.count > 0) {
+            throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${what} reads past the end of the binary chunk`);
+        }
+        for (let i = 0; i < acc.count; i++) {
+            const base = offset + i * stride;
+            for (let c = 0; c < components; c++) {
+                const at = base + c * size;
+                switch (acc.componentType) {
+                    case 5126: out[i * components + c] = dv.getFloat32(at, true); break;
+                    case 5121: out[i * components + c] = dv.getUint8(at) / 255; break;
+                    case 5123: out[i * components + c] = dv.getUint16(at, true) / 65535; break;
+                    case 5120: out[i * components + c] = Math.max(dv.getInt8(at) / 127, -1); break;
+                    case 5122: out[i * components + c] = Math.max(dv.getInt16(at, true) / 32767, -1); break;
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
      * Loads mesh primitives from GLB. If the mesh lacks UVs, automatically generates
-     * box/planar unwrap and packs them with MaxRectsAtlasPacker.
+     * box/planar unwrap and packs them with MaxRectsAtlasPacker. Positions and normals must be floats; UVs may be
+     * floats or normalized integers. Index accessors are read by their own type and checked against the vertex
+     * count. An accessor this reader cannot decode throws MissingInputError.
      */
     public static loadMeshPrimitives(
         glbBuffer: Buffer,
         targetResolution: number = 4096,
-        loadOptions?: {
+        _loadOptions?: {
             /**
-             * Decode UNSIGNED_BYTE (5121) index accessors correctly. The legacy path reads every
-             * non-UNSIGNED_SHORT accessor as UNSIGNED_INT, which corrupts uint8-indexed primitives
-             * (Google 3D Tiles use them for small chunks). Opt-in to keep legacy results unchanged.
+             * No longer changes anything: UNSIGNED_BYTE (5121) index accessors are always decoded as bytes (reading
+             * them as UNSIGNED_INT corrupted the uint8-indexed chunks of Google 3D Tiles). Kept for existing callers.
              */
             decodeAllIndexTypes?: boolean;
         }
@@ -1479,89 +1522,62 @@ export class SurveyTextureUnprojector {
         const { json, bin } = AlgorithmicUvEngine.parseGlb(glbBuffer);
         const primitives: MeshPrimitiveData[] = [];
 
-        for (const mesh of json.meshes || []) {
-            for (const prim of mesh.primitives || []) {
-                if (prim.attributes && prim.attributes.POSITION !== undefined) {
-                    const posAcc = json.accessors[prim.attributes.POSITION];
-                    const posView = json.bufferViews[posAcc.bufferView];
-                    const posOffset = (posView.byteOffset || 0) + (posAcc.byteOffset || 0);
-                    const posStride = posView.byteStride ? posView.byteStride / 4 : 3;
-                    const rawPositions = new Float32Array(bin.buffer, bin.byteOffset + posOffset, posAcc.count * posStride);
+        (json.meshes || []).forEach((mesh: any, meshIndex: number) => {
+            (mesh.primitives || []).forEach((prim: any, primIndex: number) => {
+                if (!prim.attributes || prim.attributes.POSITION === undefined) return;
+                const where = `mesh ${meshIndex} primitive ${primIndex}`;
+                const positions = this.readFloatAccessor(json, bin, prim.attributes.POSITION, 3, `${where} POSITION`, true);
+                const vertexCount = positions.length / 3;
 
-                    // Compact positions
-                    const positions = new Float32Array(posAcc.count * 3);
-                    for (let i = 0; i < posAcc.count; i++) {
-                        positions[i * 3] = rawPositions[i * posStride];
-                        positions[i * 3 + 1] = rawPositions[i * posStride + 1];
-                        positions[i * 3 + 2] = rawPositions[i * posStride + 2];
+                // Indices
+                let indices: Uint32Array;
+                if (prim.indices !== undefined) {
+                    const indAcc = json.accessors[prim.indices];
+                    const indView = indAcc?.bufferView === undefined ? undefined : json.bufferViews[indAcc.bufferView];
+                    if (!indAcc || !indView || indAcc.sparse) {
+                        throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${where} indices are missing, sparse or have no buffer view`);
                     }
-
-                    // Indices
-                    let indices: Uint32Array;
-                    if (prim.indices !== undefined) {
-                        const indAcc = json.accessors[prim.indices];
-                        const indView = json.bufferViews[indAcc.bufferView];
-                        const indOffset = (indView.byteOffset || 0) + (indAcc.byteOffset || 0);
-                        if (indAcc.componentType === 5123) { // UNSIGNED_SHORT
-                            const rawInd = new Uint16Array(bin.buffer, bin.byteOffset + indOffset, indAcc.count);
-                            indices = new Uint32Array(rawInd);
-                        } else if (loadOptions?.decodeAllIndexTypes === true && indAcc.componentType === 5121) { // UNSIGNED_BYTE
-                            indices = new Uint32Array(new Uint8Array(bin.buffer, bin.byteOffset + indOffset, indAcc.count));
-                        } else {
-                            indices = new Uint32Array(bin.buffer, bin.byteOffset + indOffset, indAcc.count);
+                    const indOffset = (indView.byteOffset || 0) + (indAcc.byteOffset || 0);
+                    const bytes = { 5121: 1, 5123: 2, 5125: 4 }[indAcc.componentType as 5121 | 5123 | 5125];
+                    if (!bytes) {
+                        throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${where} indices use component type ${indAcc.componentType}`);
+                    }
+                    if (indOffset + indAcc.count * bytes > bin.byteLength) {
+                        throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${where} indices read past the end of the binary chunk`);
+                    }
+                    // Copied out of the chunk, so an index view at any byte offset is read by its own width.
+                    const raw = bin.buffer.slice(bin.byteOffset + indOffset, bin.byteOffset + indOffset + indAcc.count * bytes);
+                    indices = bytes === 1 ? new Uint32Array(new Uint8Array(raw)) : bytes === 2 ? new Uint32Array(new Uint16Array(raw)) : new Uint32Array(raw);
+                    for (let i = 0; i < indices.length; i++) {
+                        if (indices[i] >= vertexCount) {
+                            throw new MissingInputError('SurveyTextureUnprojector', 'a readable GLB', `${where} index ${indices[i]} is past its ${vertexCount} vertices`);
                         }
-                    } else {
-                        indices = new Uint32Array(posAcc.count);
-                        for (let i = 0; i < posAcc.count; i++) indices[i] = i;
                     }
-
-                    // Normals
-                    let normals: Float32Array;
-                    if (prim.attributes.NORMAL !== undefined) {
-                        const normAcc = json.accessors[prim.attributes.NORMAL];
-                        const normView = json.bufferViews[normAcc.bufferView];
-                        const normOffset = (normView.byteOffset || 0) + (normAcc.byteOffset || 0);
-                        const normStride = normView.byteStride ? normView.byteStride / 4 : 3;
-                        const rawNorm = new Float32Array(bin.buffer, bin.byteOffset + normOffset, normAcc.count * normStride);
-                        normals = new Float32Array(normAcc.count * 3);
-                        for (let i = 0; i < normAcc.count; i++) {
-                            normals[i * 3] = rawNorm[i * normStride];
-                            normals[i * 3 + 1] = rawNorm[i * normStride + 1];
-                            normals[i * 3 + 2] = rawNorm[i * normStride + 2];
-                        }
-                    } else {
-                        // Calculate vertex normals from faces
-                        normals = this.calculateMeshNormals(positions, indices);
-                    }
-
-                    // UVs
-                    let uvs: Float32Array;
-                    if (prim.attributes.TEXCOORD_0 !== undefined) {
-                        const uvAcc = json.accessors[prim.attributes.TEXCOORD_0];
-                        const uvView = json.bufferViews[uvAcc.bufferView];
-                        const uvOffset = (uvView.byteOffset || 0) + (uvAcc.byteOffset || 0);
-                        const uvStride = uvView.byteStride ? uvView.byteStride / 4 : 2;
-                        const rawUvs = new Float32Array(bin.buffer, bin.byteOffset + uvOffset, uvAcc.count * uvStride);
-                        uvs = new Float32Array(uvAcc.count * 2);
-                        for (let i = 0; i < uvAcc.count; i++) {
-                            uvs[i * 2] = rawUvs[i * uvStride];
-                            uvs[i * 2 + 1] = rawUvs[i * uvStride + 1];
-                        }
-                    } else {
-                        // Synthesize box UV unwrap packed with MaxRects
-                        uvs = this.generateBoxUvs(positions, normals, indices, targetResolution);
-                    }
-
-                    primitives.push({
-                        positions,
-                        normals,
-                        uvs,
-                        indices,
-                        materialIndex: prim.material
-                    });
+                } else {
+                    indices = new Uint32Array(vertexCount);
+                    for (let i = 0; i < vertexCount; i++) indices[i] = i;
                 }
-            }
-        }
+
+                // Normals
+                const normals = prim.attributes.NORMAL !== undefined
+                    ? this.readFloatAccessor(json, bin, prim.attributes.NORMAL, 3, `${where} NORMAL`, true)
+                    : this.calculateMeshNormals(positions, indices);
+
+                // UVs (floats, or normalized integers decoded to [0, 1])
+                const uvs = prim.attributes.TEXCOORD_0 !== undefined
+                    ? this.readFloatAccessor(json, bin, prim.attributes.TEXCOORD_0, 2, `${where} TEXCOORD_0`)
+                    // Synthesize box UV unwrap packed with MaxRects
+                    : this.generateBoxUvs(positions, normals, indices, targetResolution);
+
+                primitives.push({
+                    positions,
+                    normals,
+                    uvs,
+                    indices,
+                    materialIndex: prim.material
+                });
+            });
+        });
 
         return { primitives, glbJson: json, glbBin: bin };
     }

@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as fs from 'fs-extra';
+import * as path from 'path';
 import { RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 import { NativeAiRenderEngineService } from './NativeAiRenderEngineService';
@@ -61,7 +62,7 @@ export interface MeshAiTextureBakeResult {
     views: BakedView[];
     rejectedViews: RejectedBakeView[];
     metrics: UnprojectionMetrics;
-    /** Texels of the mesh no view saw; they keep the mesh's own colour. */
+    /** Texels of painted primitives that no view saw; they keep the mesh's own colour. */
     unobservedTexels: number;
     imageSources: string[];
     modelsUsed: string[];
@@ -178,8 +179,9 @@ export class MeshAiTextureBakingService {
      * Textures a mesh from its six axis-aligned views: each view is rendered from the mesh (clay and depth), restyled
      * by the image model to the style prompt, and projected back onto the mesh's own UVs with depth occlusion
      * (SurveyTextureUnprojector). The textured copy is written to outGlbPath. A view whose image comes back at another
-     * aspect ratio is left out and reported; texels no view sees keep the mesh's own colour. Throws MissingInputError
-     * for a GLB without UVs, and GeneratorFailedError when no view could be projected.
+     * aspect ratio is left out and reported; texels of a painted primitive that no view sees keep the mesh's own
+     * colour. Throws MissingInputError for a GLB without UVs (or with accessors the reader cannot decode), and
+     * GeneratorFailedError, writing nothing, when no view could be projected or any primitive was painted by no view.
      */
     public async bakeMeshTexturesWithAi(request: MeshAiTextureBakeRequest): Promise<MeshAiTextureBakeResult> {
         const width = request.width || 512;
@@ -257,6 +259,8 @@ export class MeshAiTextureBakingService {
 
         request.onProgress?.('Projecting the views onto the mesh UVs', 0.85);
         const diagonal = MeshAiTextureBakingService.diagonal(mesh);
+        // The unprojector reads the GLB with the same loader the render mesh came from, so the views are projected
+        // onto exactly the triangles they were rendered from. Nothing is written until every primitive is painted.
         const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
             glbPath: request.glbPath,
             stations: [],
@@ -265,11 +269,24 @@ export class MeshAiTextureBakingService {
                 resolution: request.resolution,
                 // Occlusion tolerance scaled to the object (the survey default of 20 cm suits buildings, not props).
                 depthTolerance: Math.max(1e-4, diagonal * 0.01),
-                skipPbrDecomposition: true,
-                outGlbPath: request.outGlbPath
+                skipPbrDecomposition: true
             },
             signal: request.signal
         });
+        const submeshes = result.submeshes || [];
+        const unpainted = submeshes.filter(sub => !(sub.metrics.directlyPaintedTexels > 0));
+        if (submeshes.length === 0 || unpainted.length > 0) {
+            const viewNames = views.map(v => v.name).join(', ');
+            const detail = submeshes.length === 0
+                ? `${request.glbPath} has no primitive the unprojector could read`
+                : unpainted.length === submeshes.length
+                    ? `no texel of ${request.glbPath} was painted by the ${views.length} projected view(s) (${viewNames})`
+                    : `${unpainted.length} of ${submeshes.length} primitives of ${request.glbPath} were painted by none of the ${views.length} projected view(s) (${viewNames}): `
+                        + unpainted.map(sub => `primitive ${sub.primitiveIndex} (${sub.metrics.coveredMeshTexels > 0 ? 'hidden from every view' : 'its UVs cover no texel of the atlas'})`).join(', ');
+            throw new GeneratorFailedError('texture bake', `${detail}; the textured copy was not written`);
+        }
+        await fs.ensureDir(path.dirname(request.outGlbPath));
+        await fs.writeFile(request.outGlbPath, result.glbBuffer);
         return {
             outGlbPath: request.outGlbPath,
             views,
@@ -298,7 +315,18 @@ export class MeshAiTextureBakingService {
             throw new MissingInputError('mesh_bake_ai_textures', 'a GLB with UVs',
                 `${label} ${prims.length === 0 ? 'has no primitives' : `primitive ${missing} has no TEXCOORD_0`}; a texture needs UVs to be painted onto (unwrap the mesh first)`);
         }
-        const { primitives } = SurveyTextureUnprojector.loadMeshPrimitives(glbBuffer, 1024, { decodeAllIndexTypes: true });
+        const notTriangles = prims.findIndex(p => (p?.mode ?? 4) !== 4);
+        if (notTriangles >= 0) {
+            throw new MissingInputError('mesh_bake_ai_textures', 'a triangle mesh', `${label} primitive ${notTriangles} has primitive mode ${prims[notTriangles].mode} (not a triangle list), which cannot be textured from views`);
+        }
+        let primitives: ReturnType<typeof SurveyTextureUnprojector.loadMeshPrimitives>['primitives'];
+        try {
+            // The loader the unprojector uses, so render and projection see the same triangles.
+            primitives = SurveyTextureUnprojector.loadMeshPrimitives(glbBuffer, 1024).primitives;
+        } catch (err: any) {
+            if (!(err instanceof MissingInputError)) throw err;
+            throw new MissingInputError('mesh_bake_ai_textures', 'glbPath', `${label} cannot be read faithfully: ${err.message}`);
+        }
         const vertices: number[] = [];
         const indices: number[] = [];
         primitives.forEach((prim, i) => {
@@ -311,7 +339,8 @@ export class MeshAiTextureBakingService {
                 throw new MissingInputError('mesh_bake_ai_textures', 'a GLB with UVs', `${label} primitive ${i} has UVs that cover no area; a texture cannot be painted onto them (unwrap the mesh first)`);
             }
             const base = vertices.length / 3;
-            vertices.push(...prim.positions);
+            // A loop, not push(...positions): a large primitive would exceed the argument limit.
+            for (let k = 0; k < prim.positions.length; k++) vertices.push(prim.positions[k]);
             for (const idx of prim.indices) indices.push(base + idx);
         });
         return { vertices: new Float32Array(vertices), indices: new Uint32Array(indices) };

@@ -1826,7 +1826,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'mesh_bake_ai_textures',
-        description: 'Texture a mesh from its six axis-aligned views: each view is rendered from the mesh, restyled by an image model to the style prompt (six image-model calls), and projected back onto the mesh\'s existing UVs (TEXCOORD_0) with depth occlusion into a base colour texture. Writes a textured copy of the GLB (the input is not changed) and reports which model made the views, any view that could not be used, and how much of the surface no view saw (that part keeps the mesh\'s own colour). A GLB without UVs is refused.',
+        description: 'Texture a mesh from its six axis-aligned views: each view is rendered from the mesh, restyled by an image model to the style prompt (six image-model calls), and projected back onto the mesh\'s existing UVs (TEXCOORD_0) with depth occlusion into a base colour texture. Writes a textured copy of the GLB (the input is not changed) and reports which model made the views, any view that could not be used, and how much of the surface no view saw (those texels keep the mesh\'s own colour). A GLB without UVs, or with accessors that cannot be read, is refused; the bake fails, writing nothing, when any primitive is painted by none of the views.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -2298,7 +2298,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 imageSources: result.imageSources
             },
             summaryResult: `Textured ${glbPath} from ${result.views.length} restyled view(s) (${result.views.map(v => v.name).join(', ')}) to match "${stylePrompt}" -> ${result.outGlbPath}. `
-                + `${unseen.toFixed(1)}% of the surface was seen by no view and keeps the mesh's own colour.`
+                + `Every primitive was painted; ${unseen.toFixed(1)}% of the covered texels were seen by no view and keep the mesh's own colour.`
                 + (result.rejectedViews.length ? ` Left out: ${result.rejectedViews.map(v => `${v.name} (${v.reason})`).join('; ')}.` : '')
                 + ` ${result.imageSources.join(' ')}`
         };

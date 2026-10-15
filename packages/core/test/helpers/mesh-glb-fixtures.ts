@@ -350,3 +350,82 @@ export function rewriteGlbJson(file: string, mutate: (gltf: any) => void): strin
     fs.writeFileSync(file, Buffer.concat([header, jsonHeader, json, binChunk]));
     return file;
 }
+
+/** How one primitive of {@link writeEncodedPrimitivesGlb} stores its indices and UVs. */
+export interface EncodedPrimitive {
+    mesh: FixtureMesh;
+    /** 5121 UNSIGNED_BYTE, 5123 UNSIGNED_SHORT or 5125 UNSIGNED_INT (default 5125). */
+    indexType?: 5121 | 5123 | 5125;
+    /** TEXCOORD_0 as floats (default), normalized UNSIGNED_SHORT, or integers that are not normalized. */
+    uvEncoding?: 'float' | 'unorm16' | 'uint16';
+}
+
+/**
+ * Writes several primitives (one mesh, one node, no transform) with the given index and UV encodings: valid glTF 2.0
+ * that a reader must decode by each accessor's declared type. Index data comes first in the buffer, so a byte index
+ * view starts at an offset a 32-bit read would misinterpret.
+ */
+export function writeEncodedPrimitivesGlb(file: string, primitives: EncodedPrimitive[]): string {
+    const views: Buffer[] = [];
+    const bufferViews: object[] = [];
+    const accessors: object[] = [];
+    let offset = 0;
+    const add = (bytes: Buffer, target: number, accessor: object) => {
+        const pad = (4 - (bytes.length % 4)) % 4;
+        views.push(bytes, Buffer.alloc(pad));
+        bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: bytes.length, target });
+        accessors.push({ bufferView: bufferViews.length - 1, ...accessor });
+        offset += bytes.length + pad;
+        return accessors.length - 1;
+    };
+    const indexAccessors = primitives.map(({ mesh, indexType = 5125 }) => {
+        const bytes = indexType === 5121 ? Buffer.from(new Uint8Array(mesh.indices))
+            : indexType === 5123 ? Buffer.from(new Uint16Array(mesh.indices).buffer) : Buffer.from(new Uint32Array(mesh.indices).buffer);
+        return add(bytes, 34963, { componentType: indexType, count: mesh.indices.length, type: 'SCALAR' });
+    });
+    const gltfPrimitives = primitives.map(({ mesh, uvEncoding = 'float' }, i) => {
+        const vertexCount = mesh.positions.length / 3;
+        const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+        for (let k = 0; k < mesh.positions.length; k++) {
+            min[k % 3] = Math.min(min[k % 3], Math.fround(mesh.positions[k]));
+            max[k % 3] = Math.max(max[k % 3], Math.fround(mesh.positions[k]));
+        }
+        const attributes: Record<string, number> = {
+            POSITION: add(Buffer.from(new Float32Array(mesh.positions).buffer), 34962, { componentType: 5126, count: vertexCount, type: 'VEC3', min, max }),
+            NORMAL: add(Buffer.from(new Float32Array(mesh.normals ?? computeVertexNormals(mesh.positions, mesh.indices)).buffer), 34962, { componentType: 5126, count: vertexCount, type: 'VEC3' })
+        };
+        if (mesh.uvs) {
+            attributes.TEXCOORD_0 = uvEncoding === 'float'
+                ? add(Buffer.from(new Float32Array(mesh.uvs).buffer), 34962, { componentType: 5126, count: vertexCount, type: 'VEC2' })
+                : add(Buffer.from(new Uint16Array(mesh.uvs.map(v => Math.round(v * 65535))).buffer), 34962,
+                    { componentType: 5123, normalized: uvEncoding === 'unorm16', count: vertexCount, type: 'VEC2' });
+        }
+        return { attributes, indices: indexAccessors[i], mode: 4 };
+    });
+    const bin = Buffer.concat(views);
+    const doc = {
+        asset: { version: '2.0', generator: 'scratchbox test fixture' },
+        buffers: [{ byteLength: bin.length }],
+        bufferViews,
+        accessors,
+        meshes: [{ primitives: gltfPrimitives }],
+        nodes: [{ mesh: 0 }],
+        scenes: [{ nodes: [0] }],
+        scene: 0
+    };
+    let json = Buffer.from(JSON.stringify(doc), 'utf8');
+    json = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(0x46546c67, 0);
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + json.length + 8 + bin.length, 8);
+    const jsonHeader = Buffer.alloc(8);
+    jsonHeader.writeUInt32LE(json.length, 0);
+    jsonHeader.writeUInt32LE(0x4e4f534a, 4);
+    const binHeader = Buffer.alloc(8);
+    binHeader.writeUInt32LE(bin.length, 0);
+    binHeader.writeUInt32LE(0x004e4942, 4);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, Buffer.concat([header, jsonHeader, json, binHeader, bin]));
+    return file;
+}
