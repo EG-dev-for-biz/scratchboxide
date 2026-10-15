@@ -7,7 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import {
@@ -22,12 +23,16 @@ import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
 import { injectTileExtraction } from './helpers/inject-tile-extraction';
 
 const OUT_TEST_DIR = path.resolve(process.cwd(), 'build/test_location_3dgs_service');
+// The injected extraction writes a synthetic tile under <workspace>/public/models; a temp workspace keeps those
+// fixtures out of the checkout's public/models, where the app would serve them.
+const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-location-3dgs-'));
 
 describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () => {
     beforeAll(async () => {
         process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR = 'mock';
         await fs.emptyDir(OUT_TEST_DIR);
     });
+    afterAll(() => fs.removeSync(WORKSPACE));
     // The service extracts the place's clay tiles fresh; here that extraction is injected (no network).
     let extraction: ReturnType<typeof injectTileExtraction> | undefined;
     afterEach(() => extraction?.mockRestore());
@@ -41,7 +46,7 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
         });
 
         it('synthesizes location 3DGS for a landmark given with its coordinates (Rome Colosseum)', async () => {
-            const service = new Location3DGaussianSplatService();
+            const service = new Location3DGaussianSplatService({ workspaceRoot: WORKSPACE });
             const request: Location3DGSRequest = {
                 location: 'Rome Colosseum',
                 lat: 41.8902,
@@ -64,7 +69,7 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
             expect([anchor.lat, anchor.lng, anchor.elevation]).toEqual([41.8902, 12.4922, 22.0]);
             // Named by fetch3DObject from the place, radius and mode: not by the request text ("rome_colosseum_clay.glb")
             expect(options.outputGlbPath).toBeUndefined();
-            expect(options.outputDir).toMatch(/public[\\/]models$/);
+            expect(options.outputDir).toBe(path.join(WORKSPACE, 'public/models'));
 
             expect(result.success).toBe(true);
             expect(result.locationName).toContain('Colosseum');
@@ -93,7 +98,8 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
                 width: 320,
                 bakeStride: 2,
                 outDir: path.join(OUT_TEST_DIR, 'custom_site'),
-                forceRebake: true
+                forceRebake: true,
+                workspaceRoot: WORKSPACE
             });
 
             expect(result.success).toBe(true);
@@ -143,7 +149,7 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
                 bakeStride: 2,
                 outDir: path.join(OUT_TEST_DIR, 'gap_tool'),
                 forceRebake: true
-            }, { workspaceRoot: process.cwd() } as any);
+            }, { workspaceRoot: WORKSPACE } as any);
 
             expect(res).toBeDefined();
             expect(res.summaryResult).toContain('Grand Army Plaza');
