@@ -220,18 +220,16 @@ export type {
     SbRigResult
 } from './node/3d-engine/sb-rig-service';
 export {
-    NativeTileRestructurerService,
-    TileRestructurerService,
-    restructureTileMesh,
-    TileStyle,
-    RestructureMaterialMode,
-    TerraformingOp,
-    PrimitiveGraft,
-    TileRestructureConfig,
-    TileRestructureTelemetry,
-    TileRestructureOptions,
-    TileRestructureResult
-} from './node/3d-engine/native-tile-restructurer-service';
+    TileRestyleService,
+    appendGlbScene
+} from './node/3d-engine/tile-restyle-service';
+export type {
+    TileRestyleField,
+    TileRestyleForm,
+    TileRestyleSurface,
+    TileRestyleRequest,
+    TileRestyleResult
+} from './node/3d-engine/tile-restyle-service';
 export {
     NativeTilePathTracerService,
     TileShadingMode,
