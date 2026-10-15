@@ -11,7 +11,6 @@ import { HeadlessMeshSilhouetteRenderer, RenderMesh3D } from './HeadlessMeshSilh
 import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 import { encodePng } from '../texture-processing';
 import { createDefaultStationImageGenerator, describeStationImageSource, toStationImageAnswer, StationImageGenerator } from './BeautifyStationService';
-import { buildBlockoutNanoBananaPrompt } from '../../browser/generative-canvas/services/video/omniVideoPromptService';
 import { nearestImageAspectRatio } from '../../common/media-generation-protocol';
 
 export interface RenderPasses {
@@ -26,6 +25,20 @@ export interface RenderPasses {
 export interface NativeAiRenderEngineServiceOptions {
     generator?: StationImageGenerator;
     workspaceRoot?: string;
+}
+
+/**
+ * The restyle prompt for a render of a mesh: the subject the caller describes, the frame's aspect ratio and the
+ * framing rules. A mesh render has no place, heading or coordinates, so the prompt names none (it is not a
+ * photograph of a real location, and must not be told it is one).
+ */
+export function buildMeshRenderRestylePrompt(subject: string, aspectRatio: string, styleSuffix = ''): string {
+    return `Transform this 3D clay rendering into a photorealistic image of: ${subject}. `
+        + `CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. `
+        + '(2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. '
+        + '(3) Every part of the subject must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. '
+        + '(4) Do not invent or add objects or features that are not visible in the reference. '
+        + `Add realistic materials, surface texture, lighting and fine detail.${styleSuffix}`;
 }
 
 export class NativeAiRenderEngineService {
@@ -177,29 +190,18 @@ export class NativeAiRenderEngineService {
             bgColor: request.bgColor
         });
 
-        // 2. Synthesize Nano Banana prompt using blockout details
-        const beautifyPrompt = buildBlockoutNanoBananaPrompt({
-            locationName: request.prompt,
-            heading: request.pose.fov, // Use fov as virtual heading/sensor context
-            aspectRatio: nearestImageAspectRatio(width, height),
-            styleSuffix: request.stylePreset ? ` Style: ${request.stylePreset}.` : ''
-        });
+        // 2. The restyle prompt: the caller's subject and the frame, with no invented place, coordinates or heading
+        const aspectRatio = nearestImageAspectRatio(width, height);
+        const beautifyPrompt = buildMeshRenderRestylePrompt(request.prompt, aspectRatio, request.stylePreset ? ` Style: ${request.stylePreset}.` : '');
 
-        // 3. Call generator with blockout PNG and synthesized prompt
+        // 3. Call generator with blockout PNG and the prompt
         const answer = toStationImageAnswer(await this.generator.generate({
-            stationId: 1,
             prompt: beautifyPrompt,
             blockoutPng: passes.clay,
-            depthPng: passes.mist,
-            visualPrompt: beautifyPrompt,
-            beautify: {
-                locationName: request.prompt,
-                styleSuffix: request.stylePreset || ''
-            },
-            aspectRatio: nearestImageAspectRatio(width, height),
+            aspectRatio,
             width,
             height
-        } as any));
+        }));
 
         return {
             image: answer.png,

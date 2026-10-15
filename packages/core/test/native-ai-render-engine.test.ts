@@ -78,6 +78,18 @@ describe('Native 3D Engine AI Render & Keyframing Suite', () => {
         });
     });
 
+    describe('1a. Restyle prompt of a mesh render', () => {
+        it('names the subject and the frame, never a place, coordinates or a heading the render does not have', async () => {
+            const prompts: string[] = [];
+            const generator = { name: 'record', generate: vi.fn(async (a: { prompt: string }) => { prompts.push(a.prompt); return Buffer.from('frame'); }) };
+            await new NativeAiRenderEngineService({ generator }).renderAiBeautyFrame({ mesh: testMesh, pose: { ...testPose, fov: 50 }, prompt: 'a weathered bronze lantern', width: 64, height: 48 });
+            expect(prompts[0]).toContain('a weathered bronze lantern');
+            expect(prompts[0]).toContain('exactly 4:3 aspect ratio');
+            // It used to put every render at the Empire State Building's coordinates, "facing" the camera's fov.
+            expect(prompts[0]).not.toMatch(/40\.7484|-73\.985|real location|coordinates|facing|earth\.google/);
+        });
+    });
+
     describe('1b. spatial_ai_render_scene tool', () => {
         it('writes the frame into the workspace it was called for, not the server\'s working directory', async () => {
             const fs = await import('fs');
