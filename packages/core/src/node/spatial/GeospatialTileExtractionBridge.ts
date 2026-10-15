@@ -89,6 +89,8 @@ export class GeospatialTileExtractionBridge {
       outputDir?: string;
       mode?: 'full_texture' | 'clay';
       mockExecution?: boolean;
+      /** Stops the tile extraction (see fetch3DObject). */
+      signal?: AbortSignal;
     } = {}
   ): Promise<LocationExtractionResult> {
     // Files are named by fetch3DObject from the resolved place (lat, lng), the radius and the mode, never by the
@@ -103,6 +105,7 @@ export class GeospatialTileExtractionBridge {
     const fetchTiles = options.mode === 'clay' ? getGoogle3DTilesClay : getGoogle3DTilesFullTexture;
     const tileResult = await fetchTiles(queryOrCoords, {
       ...(outputDir ? { outputDir } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       offlineMock: options.mockExecution
     });
 

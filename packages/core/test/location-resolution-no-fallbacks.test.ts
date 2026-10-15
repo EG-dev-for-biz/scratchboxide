@@ -313,6 +313,35 @@ describe('fetch3DObject: the leaf crawler or a typed failure, never the headless
         }
     });
 
+    it('a stopped extraction aborts its requests and writes no GLB', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-crawl-stop-'));
+        try {
+            // Already stopped: nothing is requested.
+            const stopped = new AbortController();
+            stopped.abort();
+            const collect = vi.spyOn(GoogleTileDistrictCrawler.prototype, 'collectLeafTiles');
+            await expect(getGoogle3DTilesClay({ ...anchor, elevation: 12 }, { apiKey: 'k', outputDir: root, signal: stopped.signal })).rejects.toMatchObject({ name: 'AbortError' });
+            expect(collect).not.toHaveBeenCalled();
+            collect.mockRestore();
+
+            // Stopped while the tiles download: the pending tile request sees the signal, and nothing is written.
+            const controller = new AbortController();
+            const seenSignals: Array<AbortSignal | undefined> = [];
+            const tileFetch = (async (_url: any, init?: RequestInit) => {
+                seenSignals.push(init?.signal ?? undefined);
+                controller.abort();
+                throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+            }) as typeof fetch;
+            const err = await getGoogle3DTilesClay({ ...anchor, elevation: 12 }, { apiKey: 'k', outputDir: root, signal: controller.signal, fetchImpl: tileFetch }).catch(e => e);
+            expect(err.name).toBe('AbortError');
+            expect(err).not.toBeInstanceOf(TileExtractionError); // a stop is not reported as a failed crawl
+            expect(seenSignals[0]).toBe(controller.signal);
+            expect(fs.readdirSync(root)).toEqual([]);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it('without a Maps key it throws instead of switching to the blockout runner', async () => {
         const runSpy = vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'run');
         const err = await getGoogle3DTilesClay(anchor).catch(e => e);
@@ -350,6 +379,14 @@ describe('execute_3d_python_script: a requested place is extracted or the call f
         expect(outcome.summaryResult).toMatch(/could not be staged; the script was not run/);
         expect(outcome.summaryResult).not.toMatch(/Staged in/);
         expect(runSpy).not.toHaveBeenCalled();
+    });
+
+    it('a stopped chat stops the place extraction: the call\'s abort signal reaches the tile extraction', async () => {
+        const controller = new AbortController();
+        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract').mockRejectedValue(Object.assign(new Error('stopped'), { name: 'AbortError' }));
+        const outcome = await python3DHandlers.execute_3d_python_script({ script, location: 'Flatiron Building, New York' }, { signal: controller.signal });
+        expect(outcome.status).toBe('failed');
+        expect((extractSpy.mock.calls[0][1] as any).signal).toBe(controller.signal);
     });
 
     it('an unsuccessful or mock extraction result also fails the call', async () => {

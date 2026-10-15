@@ -264,6 +264,8 @@ export interface Google3DTilesQueryOptions {
   maxLeaves?: number;
   /** Injected for tests: used for the Places lookup and the tile requests. Defaults to the global fetch. */
   fetchImpl?: typeof fetch;
+  /** Stops the extraction (fetch3DObject): pending Places and tile requests are aborted and no GLB is written. */
+  signal?: AbortSignal;
 }
 
 export interface TileClayBlockoutRunnerRequest {
@@ -2423,8 +2425,21 @@ export class Google3DTileBlockoutPipelineService {
     mode: 'full-texture' | 'clay',
     options?: Google3DTilesQueryOptions
   ): Promise<Google3DTile3DObjectResult> {
-    const geoAnchor = await this.resolveAddress(queryOrCoords, options?.apiKey, options?.fetchImpl);
+    // A stop aborts every request this extraction makes and is checked between stages, so a stopped chat does not
+    // leave tile downloads or the GLB write running.
+    const signal = options?.signal;
+    const stopIfAborted = () => {
+      if (signal?.aborted) throw extractionStopped(signal);
+    };
+    const baseFetch = options?.fetchImpl ?? fetch;
+    const fetchImpl: typeof fetch | undefined = signal
+      ? (((input: any, init?: RequestInit) => baseFetch(input, { ...(init || {}), signal })) as typeof fetch)
+      : options?.fetchImpl;
+
+    stopIfAborted();
+    const geoAnchor = await this.resolveAddress(queryOrCoords, options?.apiKey, fetchImpl);
     const resolvedAddress = geoAnchor.formattedAddress ?? formatCoordinates(geoAnchor.lat, geoAnchor.lng);
+    stopIfAborted();
 
     const isTextured = mode === 'full-texture';
     const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
@@ -2456,7 +2471,7 @@ export class Google3DTileBlockoutPipelineService {
     }
 
     const cacheDir = path.join(process.cwd(), '.scratchbox', 'tiles_cache', 'leaves');
-    const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir, fetchImpl: options?.fetchImpl });
+    const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir, fetchImpl });
     // Only seeds the local frame; the ground height is measured from the tile geometry below.
     const anchor = {
       lat: geoAnchor.lat,
@@ -2468,10 +2483,12 @@ export class Google3DTileBlockoutPipelineService {
     try {
       collected = await crawler.collectLeafTiles(anchor, radiusMeters);
     } catch (err) {
+      stopIfAborted();
       // A radius that selects too many leaves is the caller's to fix; it keeps its own type.
       if (err instanceof DistrictTooLargeError) throw err;
       throw new TileExtractionError('crawl', err);
     }
+    stopIfAborted();
     const { leaves, session } = collected;
     if (!leaves || leaves.length === 0) {
       throw new TileExtractionError('crawl', `no Photorealistic 3D Tiles coverage at ${formatCoordinates(geoAnchor.lat, geoAnchor.lng)} (${resolvedAddress})`);
@@ -2501,8 +2518,10 @@ export class Google3DTileBlockoutPipelineService {
     try {
       buffers = await crawler.downloadLeaves(leafSubset, session);
     } catch (err) {
+      stopIfAborted();
       throw new TileExtractionError('download', err);
     }
+    stopIfAborted();
 
     let parsed: ReturnType<typeof GoogleTileDistrictCrawler.parseLeafGlbPrimitives>;
     let district: ReturnType<typeof GoogleTileDistrictCrawler.buildDistrictGlb>;
@@ -2667,6 +2686,13 @@ export async function runGoogle3DTilesPipeline(
     request.ffmpegPath
   );
   return service.run(request);
+}
+
+/** The error a stopped extraction rejects with: the signal's own reason, else an AbortError. */
+function extractionStopped(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : Object.assign(new Error('Google 3D Tiles extraction was stopped'), { name: 'AbortError' });
 }
 
 /** Per-call temp root for offline-mock placeholder outputs that were not given an explicit path. */

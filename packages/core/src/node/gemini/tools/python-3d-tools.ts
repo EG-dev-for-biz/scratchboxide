@@ -307,7 +307,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         try {
             locationRequest = readLocationRequest(args);
             if (locationRequest) {
-                extraction = await GeospatialTileExtractionBridge.getInstance().ingestAndExtract(locationRequest.target, { mode: 'clay' });
+                extraction = await GeospatialTileExtractionBridge.getInstance().ingestAndExtract(locationRequest.target, { mode: 'clay', ...(_ctx?.signal ? { signal: _ctx.signal } : {}) });
                 if (!extraction.success || extraction.mock) {
                     throw new TileExtractionError('crawl', extraction.error || `no Google 3D Tiles were extracted for "${locationRequest.label}"`);
                 }
