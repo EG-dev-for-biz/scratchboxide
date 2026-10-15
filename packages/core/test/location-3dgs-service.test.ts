@@ -16,7 +16,7 @@ import {
     type Location3DGSRequest
 } from '../src/node/spatial/Location3DGaussianSplatService';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
-import { ToolRegistry } from '../src/node/gemini/tool-registry';
+import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { SPATIAL_TOOL_DECLARATIONS, spatialHandlers } from '../src/node/gemini/tools/spatial-tools';
 import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
 import { injectTileExtraction } from './helpers/inject-tile-extraction';
@@ -156,11 +156,23 @@ describe('Location3DGaussianSplatService (Canonical Location 3DGS Service)', () 
     });
 
     describe('3. TaskCapabilityResolver Integration', () => {
-        it('resolves location 3dgs prompt to recommend location_generate_3dgs', () => {
-            const res = TaskCapabilityResolver.resolveTaskCapability('Make a 3dgs of the Colosseum');
-            expect(res.canSolveNatively).toBe(true);
-            expect(res.canSolveNatively).toBe(true);
-            expect(res.suggestedNativeAction?.serviceOrTool).toContain('location_generate_3dgs');
+        it('recommends location_generate_3dgs when the request says it is about a real place', () => {
+            for (const prompt of ['Make a 3dgs of this landmark: the Colosseum', 'Gaussian splat survey of the location at 41.89, 12.49', 'Real-world 3DGS of Times Square']) {
+                const res = TaskCapabilityResolver.resolveTaskCapability(prompt);
+                expect(res.canSolveNatively, prompt).toBe(true);
+                expect(res.suggestedNativeAction?.serviceOrTool, prompt).toContain('location_generate_3dgs');
+            }
+        });
+
+        it('does not decide from place names or "splat of <anything>": the model decides, with the tool still offered', () => {
+            // A list of landmark names (colosseum|rome|eiffel|tower|...) and any "of <word>" used to steer every splat
+            // request to the location pipeline, e.g. a splat of a cat or a toy tower.
+            for (const prompt of ['Make a 3dgs of my cat', 'Gaussian splat of a toy tower', 'Make a 3dgs of the Colosseum']) {
+                const res = TaskCapabilityResolver.resolveTaskCapability(prompt);
+                expect(res.suggestedNativeAction?.targetTool, prompt).not.toBe('location_generate_3dgs');
+            }
+            const offered = createDefaultToolRegistry().declarations(['workspace']).map(d => d.name);
+            expect(offered).toContain('location_generate_3dgs');
         });
     });
 });

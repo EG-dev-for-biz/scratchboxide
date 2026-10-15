@@ -18,9 +18,10 @@ import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types'
 describe('Location 3DGS & Nano Banana Restyling Frontend Integration', () => {
     describe('1. TaskCapabilityResolver for 3DGS Location Requests (Implicit Nano Banana)', () => {
         it('resolves location Gaussian splat prompt natively WITHOUT the user invoking nano banana', () => {
-            // User does NOT mention "nano banana" - it should be assumed because of our pipeline
+            // User does NOT mention "nano banana" - it should be assumed because of our pipeline. The request says it
+            // is about a real place; the resolver no longer recognises place names ("Colosseum") from a list.
             const result = TaskCapabilityResolver.resolveTaskCapability(
-                'Make a gaussian splat of the Colosseum'
+                'Make a gaussian splat of this landmark, the Colosseum'
             );
 
             expect(result.canSolveNatively).toBe(true);
