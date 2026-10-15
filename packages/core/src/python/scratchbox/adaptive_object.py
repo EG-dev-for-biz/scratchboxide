@@ -847,11 +847,18 @@ class AdaptiveHeroObjectSynthesizer:
             master_mesh.append(rev_mesh)
 
         # Operator 3: Affine Metric Replicators
-        for rep in contract.get("metricReplications", []):
+        for index, rep in enumerate(contract.get("metricReplications", [])):
             mode = str(rep.get("distributionMode", "CURVE_1D"))
             pts = [tuple(p) for p in rep.get("guidePoints", [])]
             pitch = float(rep.get("pitchMeters", 0.1))
-            seed = rep.get("seedGeometry", {})
+            seed = rep.get("seedGeometry")
+            if not hasattr(seed, "vertex_count"):
+                # A contract from JSON can only name a seed shape, and named seed shapes are no longer built.
+                raise ValueError(
+                    f"AdaptiveHeroObjectSynthesizer cannot build metricReplications[{index}]: its seedGeometry {seed!r} "
+                    "is not a mesh, and named seed shapes are no longer built (replicate_metric_array copies a seed mesh). "
+                    "Build objects with sb.object_spec.build instead."
+                )
             col = tuple(rep.get("colorRgba", CLAY_BASE))
             rep_mesh = replicate_metric_array(
                 distribution_mode=mode,
