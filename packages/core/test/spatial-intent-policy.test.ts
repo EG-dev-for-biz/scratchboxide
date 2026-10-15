@@ -180,13 +180,23 @@ describe('3D intent policy', () => {
         expect(description).toContain('Several objects at one real place take one call each with the same location');
         const params = OBJECT_REFERENCE_TOOL_DECLARATIONS[0].parameters!.properties!;
         expect(params.placement.required).toEqual(['eastMeters', 'northMeters', 'headingDeg']);
+        // The model says when an object joins the place the active scene already shows; nothing guesses it from names.
+        expect(params.addToActiveScene.type).toBe('BOOLEAN');
+        expect(description).toContain('pass addToActiveScene: true to add it there without staging the place again');
+        expect(description).toContain('a build that would pass through a crown, a trunk, another object or a wall of the tiles fails with its spec and the nearest spots where it fits');
+        expect(SPATIAL_INTENT_POLICY).toMatch(/One object at a real-world place:[^\n]*When the active scene already shows that place[^\n]*pass addToActiveScene: true/);
     });
 
     it('sends objects at a place on an active scene to the reference builder with a placement', () => {
         const text = userText({ prompt: 'put a bench here', activeArtifact: PLAIN_SCENE as any });
         expect(text).toContain('To build an object at a place, call build_3d_object_from_reference with location and placement.');
-        expect(text).toContain('except another object at the place this scene\'s objects were built at: build_3d_object_from_reference with that same location adds it to this scene.');
+        expect(text).toContain('except an object at the real place this scene shows: build_3d_object_from_reference with that location, a placement and addToActiveScene: true adds it to this scene (no new staging).');
         expect(text).not.toContain('execute_3d_python_script({ location');
+        // A plinth goes under an object through the tool that built it; a mesh neither tool built is said to be out of
+        // reach instead of being swapped for a script's own geometry (each script run opens a new scene).
+        expect(text).toContain('When a script built the scene (its pythonGenerator holds the script), write one script that builds that geometry again from the script plus the plinth');
+        expect(text).toContain('Neither tool can load a mesh it did not build (an imported, scanned or generated model): say so instead of rebuilding a different object.');
+        expect(text).not.toContain('set the hero asset on it with sb.layout');
     });
 });
 
