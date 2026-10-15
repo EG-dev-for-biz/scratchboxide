@@ -135,7 +135,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
   - Parametric synthesis of tree species (Pine, Cypress, Oak, Birch, Palm, Olive).
   - Phenological seasonal states (spring bud, summer lush, autumn senescent, winter bare).
   - Inverse parameter fitting from 3D point clouds and photographs.
-- **`UniversalBotanicalBridgeService`** (`packages/core/src/node/spatial/UniversalBotanicalBridgeService.ts`): Real-world spatial anchoring of procedural vegetation.
+- **`TileVegetationService`** (`packages/core/src/node/3d-engine/tile-vegetation-service.ts`): Measures tree crowns in photo-textured Google 3D Tiles (strip: removes them and closes the ground) and regrows one SB-Veggie space-colonisation tree per measured crown within a triangle budget (plant); orchestrated with tile_refine by `runLocationClayPipeline` (`location-clay-pipeline.ts`).
 - **`SbArchiService`** (`packages/core/src/node/3d-engine/sb-archi-service.ts`):
   - Classical architectural order generator (Doric, Ionic, Corinthian, Tuscan, Composite).
   - Monumental structural inversion (Arch of Constantine, Colosseum arches, entablatures, peristyles).
@@ -638,7 +638,7 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
 ### Stage 3: Real-World Set Extension & Volumetric Massing
 1. **Leaf LOD 3D Tiles**: `Google3DTileBlockoutPipelineService` downloads high-fidelity geometry without preset boundaries.
 2. **UTDRA Rectification**: `UniversalTileDecompositionService` rectifies tilted facades, carves viaduct voids ($\ge 3.5\text{m}$ clearance), and slices terrain cleanly without dollhouse seams.
-3. **Procedural Set Dressing**: `UniversalBotanicalBridgeService` (SB-Veggie) scatters biologically accurate trees, while `UniversalArchiBridgeService` (SB-Archi) snaps classical architectural colonnades and entablatures to real-world ground datum planes.
+3. **Procedural Set Dressing**: `TileVegetationService` (SB-Veggie) rebuilds the trees measured in the location's own photo tiles, while `UniversalArchiBridgeService` (SB-Archi) snaps classical architectural colonnades and entablatures to real-world ground datum planes.
 
 ### Stage 4: 4D Dynamic Performer & Character Integration
 1. **Google Veo 2 Closed-Loop Orbital Video Conditioning**: When synthesizing a dynamic character or performer from casual video, `VideoTo4DPerformerPipelineService` conditions on `<FIRST_FRAME>` and `<LAST_FRAME>` latents using Google Veo 2 (`veo-2.0-generate-001`) to produce seamless 360° orbital camera trajectories (72 frames, $\Delta\theta = 5.0^\circ$) with Zero-COLMAP analytical extrinsics.

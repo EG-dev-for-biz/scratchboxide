@@ -82,7 +82,7 @@ Scratchbox IDE contains production-grade C++20 and TypeScript systems that direc
 | :--- | :--- | :--- |
 | **Volumetric Lighting** | `#include "scratchbox_volumetrics.hpp"` (`marchVolumetrics`, `henyeyGreensteinPhase`, `dualLobePhase`) | `VolumetricGodRays.ts`, `volumetric-participating-media.ts`, `AtmosphereService.ts` |
 | **Subsurface Scattering** | `#include "scratchbox_sss.hpp"` (`evaluateThinWallTransmission`, `PROFILE_GREEN_LEAF`) | Custom Three.js shader chunks injecting dual-sided backface transmission |
-| **Botanical Growth** | `#include "scratchbox_nature.hpp"` (`SpaceColonizationTreeGenerator`, `DetailedLeafGenerator`, `GrassClumpGenerator`, `IvyGrowthGenerator`) | `SbVeggieService`, `UniversalBotanicalBridgeService` |
+| **Botanical Growth** | `#include "scratchbox_nature.hpp"` (`SpaceColonizationTreeGenerator`, `DetailedLeafGenerator`, `GrassClumpGenerator`, `IvyGrowthGenerator`) | `TileVegetationService` (measured location trees: strip / plant), `SbVeggieService` |
 | **Procedural Textures** | `#include "scratchbox_botanical_texture.hpp"` & `"scratchbox_pbr_texture_expert.hpp"` | Multi-layer Worley F1/F2 rhytidome, normal maps, and packed ORM textures |
 | **Multi-Mesh glTF** | `#include "scratchbox_io.hpp"` (`GlbWriter::serializeMultiMeshToGlb`) | Dedicated submesh PBR material binding |
 
