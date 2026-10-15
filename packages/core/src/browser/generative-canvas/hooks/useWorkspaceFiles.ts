@@ -49,297 +49,38 @@ export interface UseWorkspaceFilesDeps {
 export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
     const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, handleSendMessage, isGenerating, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, setShowComposerWorkspaceMenu, setShowNewWorkspaceMenu, showComposerWorkspaceMenu, showNewWorkspaceMenu, showToast } = deps;
 
-    const getMockFileContent = (filePath: string, fileName: string): string => {
-        if (fileName.endsWith('.tsx') || fileName.endsWith('.ts')) {
-            return `import React from 'react';\n\n// Mock content loaded from ${filePath}\nexport default function ${fileName.split('.')[0]}() {\n    return (\n        <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl text-center space-y-4">\n            <h2 className="text-xl font-semibold text-blue-400">${fileName}</h2>\n            <p className="text-zinc-400">Successfully loaded file from path: <code>\${filePath}</code></p>\n        </div>\n    );\n}`;
-        }
-        if (fileName.endsWith('.css')) {
-            return `/* Mock styles loaded from ${filePath} */\n.file-container {\n    padding: 24px;\n    background-color: var(--sb-surface-glass);\n}`;
-        }
-        if (fileName.endsWith('.md')) {
-            return `# ${fileName.split('.')[0]}\n\nThis is a mock markdown specification document representing **${fileName}**.\n\n## Section 1: Overview\n- Path: \`${filePath}\`\n- Loaded: Yes\n- Integration: Unified Click Routing`;
-        }
-        return `// File: ${fileName}\n// Path: ${filePath}\nconsole.log("${fileName} successfully initialized");`;
-    };
-
-
     const handleFileClick = async (filePath: string, fileName: string) => {
-        const ext = fileName.split('.').pop() || '';
-
-        // Attempt to fetch real file contents from disk
+        // The file's own contents from disk, or the reason they could not be read: nothing stands in for them.
         let realContent: string | null = null;
+        let readError = '';
         try {
             const rootParam = activeWorkspace.path ? `&root=${encodeURIComponent(activeWorkspace.path)}` : '';
             const res = await fetch(`/workspace/file-content?path=${encodeURIComponent(filePath)}${rootParam}`);
-            if (res.ok) {
-                const data = await res.json();
-                if (data.success && typeof data.content === 'string') {
-                    realContent = data.content;
-                }
-            }
-        } catch {
-            // Graceful fallback to mock content
-        }
-        
-        let targetLayoutMode: StudioLayoutMode;
-        let artifactType: PrimitiveType;
-        
-        if (ext === '3d' || fileName === 'Scene3DPrimitive.tsx') {
-            targetLayoutMode = '3d';
-            artifactType = '3d-scene';
-        } else if (ext === 'otio' || ext === 'edl' || fileName === 'VideoTimelinePrimitive.tsx') {
-            targetLayoutMode = 'video';
-            artifactType = 'video-timeline';
-        } else if (ext === 'md' || fileName === 'MarkdownDocumentPrimitive.tsx') {
-            targetLayoutMode = 'document';
-            artifactType = 'markdown-document';
-        } else if (ext === 'json' || fileName === 'KanbanBoardPrimitive.tsx') {
-            targetLayoutMode = 'kanban';
-            artifactType = 'kanban-board';
-        } else if (ext === 'automation' || fileName === 'NodeGraphPrimitive.tsx') {
-            targetLayoutMode = 'automation';
-            artifactType = 'node-graph';
-        } else if (['tsx', 'ts', 'js', 'css'].includes(ext)) {
-            targetLayoutMode = 'code';
-            artifactType = 'live-code-sandbox';
-        } else {
-            targetLayoutMode = 'code';
-            artifactType = 'live-code-sandbox';
-        }
-
-        setLayoutMode(targetLayoutMode);
-
-        if (artifactType === 'live-code-sandbox') {
-            let currentSandbox: LiveCodeSandboxData;
-            let currentArtifactId = `art-sandbox-${Date.now()}`;
-            
-            if (activeArtifact && activeArtifact.type === 'live-code-sandbox') {
-                currentSandbox = { ...(activeArtifact.data as LiveCodeSandboxData) };
-                currentArtifactId = activeArtifact.id;
+            const data = res.ok ? await res.json().catch(() => null) : null;
+            if (data?.success && typeof data.content === 'string') {
+                realContent = data.content;
             } else {
-                currentSandbox = {
-                    title: 'Interactive React 19 UI Playground',
-                    subtitle: 'Multi-tab live code runner with hot reload & runtime console',
-                    template: 'react',
-                    files: [],
-                    dependencies: {
-                        'lucide-react': '^0.468.0',
-                        'canvas-confetti': '^1.9.3'
-                    },
-                    viewportMode: 'desktop'
-                };
+                readError = data?.error || (res.ok ? 'the server sent no file contents' : `HTTP ${res.status}`);
             }
-
-            const normalizedPath = filePath;
-            let fileId = `file-${fileName.replace(/[^a-zA-Z0-9]/g, '-')}`;
-            const existingFile = currentSandbox.files.find(f => f.path === normalizedPath || f.name === fileName);
-            
-            if (existingFile) {
-                fileId = existingFile.id;
-                if (realContent !== null) {
-                    existingFile.content = realContent;
-                }
-                currentSandbox.activeFileId = fileId;
-            } else {
-                const loadedContent = realContent !== null ? realContent : getMockFileContent(normalizedPath, fileName);
-                const newTab: CodeFileTab = {
-                    id: fileId,
-                    name: fileName,
-                    language: ext === 'tsx' ? 'react' : ext === 'ts' ? 'typescript' : ext === 'css' ? 'css' : 'javascript',
-                    content: loadedContent,
-                    path: normalizedPath,
-                    isEntry: currentSandbox.files.length === 0
-                };
-                currentSandbox.files = [...currentSandbox.files, newTab];
-                currentSandbox.activeFileId = fileId;
-            }
-
-            const updatedArtifact: CanvasArtifact = {
-                id: currentArtifactId,
-                type: 'live-code-sandbox',
-                title: fileName,
-                summary: `Editing ${fileName}`,
-                version: (activeArtifact?.id === currentArtifactId ? activeArtifact.version : 0) + 1,
-                createdAt: new Date().toLocaleTimeString(),
-                data: currentSandbox
-            };
-
-            setActiveArtifact(updatedArtifact);
-            setArtifactHistory(prev => {
-                const filtered = prev.filter(a => a.id !== updatedArtifact.id);
-                return [updatedArtifact, ...filtered];
-            });
-            setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, activeArtifact: updatedArtifact } : s));
-
-        } else if (artifactType === 'markdown-document') {
-            const markdownSource = realContent !== null ? realContent : getMockFileContent(filePath, fileName);
-            const sections = markdownSource.split('\n\n').map((para, idx) => {
-                if (para.startsWith('# ')) {
-                    return { id: `sec-${idx}`, type: 'heading' as const, level: 1 as const, content: para.replace(/^#+\s*/, '') };
-                } else if (para.startsWith('## ') || para.startsWith('### ')) {
-                    return { id: `sec-${idx}`, type: 'heading' as const, level: 2 as const, content: para.replace(/^#+\s*/, '') };
-                } else if (para.startsWith('- [ ] ') || para.startsWith('- [x] ')) {
-                    const done = para.startsWith('- [x] ');
-                    const text = para.replace(/- \[[x ]\] /, '');
-                    return { id: `sec-${idx}`, type: 'checklist' as const, checklistItems: [{ id: `item-${idx}`, text, done }] };
-                } else {
-                    return { id: `sec-${idx}`, type: 'paragraph' as const, content: para };
-                }
-            });
-
-            const docData: MarkdownDocumentData = {
-                title: fileName,
-                subtitle: `Viewing project specification at ${filePath}`,
-                author: getActiveUserName(),
-                lastUpdated: 'Just now',
-                tags: ['Specification', 'Documentation'],
-                sections: sections.length > 0 ? sections : [{ id: 'sec-1', type: 'paragraph', content: markdownSource }]
-            };
-
-            const updatedArtifact: CanvasArtifact = {
-                id: `art-doc-${Date.now()}`,
-                type: 'markdown-document',
-                title: fileName,
-                summary: `Viewing document ${fileName}`,
-                version: 1,
-                createdAt: new Date().toLocaleTimeString(),
-                data: docData
-            };
-
-            setActiveArtifact(updatedArtifact);
-            setArtifactHistory(prev => {
-                const filtered = prev.filter(a => a.id !== updatedArtifact.id);
-                return [updatedArtifact, ...filtered];
-            });
-            setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, activeArtifact: updatedArtifact } : s));
-
-        } else if (artifactType === 'kanban-board') {
-            const kanbanData: KanbanBoardData = {
-                title: fileName,
-                subtitle: `Delivery board representing ${filePath}`,
-                columns: [
-                    {
-                        id: 'todo',
-                        title: 'To Do',
-                        color: 'blue',
-                        cards: [
-                            { id: 'c1', title: `Setup workflow for ${fileName}`, description: `Initialize sprint card matching current folder.`, priority: 'medium' }
-                        ]
-                    },
-                    {
-                        id: 'in_progress',
-                        title: 'In Progress',
-                        color: 'amber',
-                        cards: [
-                            { id: 'c2', title: `Implementing file ${fileName}`, description: 'Active work tracking.', priority: 'high' }
-                        ]
-                    },
-                    {
-                        id: 'done',
-                        title: 'Done',
-                        color: 'emerald',
-                        cards: []
-                    }
-                ]
-            };
-
-            const updatedArtifact: CanvasArtifact = {
-                id: `art-kanban-${Date.now()}`,
-                type: 'kanban-board',
-                title: fileName,
-                summary: `Sprint board ${fileName}`,
-                version: 1,
-                createdAt: new Date().toLocaleTimeString(),
-                data: kanbanData
-            };
-
-            setActiveArtifact(updatedArtifact);
-            setArtifactHistory(prev => {
-                const filtered = prev.filter(a => a.id !== updatedArtifact.id);
-                return [updatedArtifact, ...filtered];
-            });
-            setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, activeArtifact: updatedArtifact } : s));
-
-        } else if (artifactType === 'node-graph') {
-            const graphData: NodeGraphData = {
-                title: fileName,
-                subtitle: `Automation canvas node graph at ${filePath}`,
-                nodes: [
-                    { id: 'n1', label: fileName, subtitle: 'Active File', category: 'input', x: 200, y: 150, status: 'completed' },
-                    { id: 'n2', label: 'AI Processor', subtitle: 'Gemini 3.8 Flash', category: 'ai', x: 450, y: 150, status: 'running' }
-                ],
-                edges: [
-                    { id: 'e1', source: 'n1', target: 'n2', style: 'animated', color: 'indigo' }
-                ]
-            };
-
-            const updatedArtifact: CanvasArtifact = {
-                id: `art-graph-${Date.now()}`,
-                type: 'node-graph',
-                title: fileName,
-                summary: `Workflow graph ${fileName}`,
-                version: 1,
-                createdAt: new Date().toLocaleTimeString(),
-                data: graphData
-            };
-
-            setActiveArtifact(updatedArtifact);
-            setArtifactHistory(prev => {
-                const filtered = prev.filter(a => a.id !== updatedArtifact.id);
-                return [updatedArtifact, ...filtered];
-            });
-            setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, activeArtifact: updatedArtifact } : s));
-
-        } else if (artifactType === '3d-scene') {
-            const sceneData: Scene3DData = {
-                title: fileName,
-                subtitle: `Spatial coordinate scene from ${filePath}`,
-                objects: [
-                    {
-                        id: 'obj-mesh-1',
-                        content: {
-                            type: '3d-scene',
-                            durableUri: 'internal:mesh',
-                            mimeType: 'model/gltf-binary',
-                            metadata: { dims: { width: 5, height: 5, depth: 5 } }
-                        },
-                        space: {
-                            spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 45, roll: 0 }
-                        },
-                        time: { startMs: 0, durationMs: 0 },
-                        lineage: { version: 1 }
-                    }
-                ],
-                camera: {
-                    position: [10, 10, 10],
-                    target: [0, 0, 0]
-                },
-                environment: {
-                    skybox: 'cyberpunk',
-                    lighting: 'shaded',
-                    ground: true
-                }
-            };
-
-            const updatedArtifact: CanvasArtifact = {
-                id: `art-3d-${Date.now()}`,
-                type: '3d-scene',
-                title: fileName,
-                summary: `3D spatial scene ${fileName}`,
-                version: 1,
-                createdAt: new Date().toLocaleTimeString(),
-                data: sceneData
-            };
-
-            setActiveArtifact(updatedArtifact);
-            setArtifactHistory(prev => {
-                const filtered = prev.filter(a => a.id !== updatedArtifact.id);
-                return [updatedArtifact, ...filtered];
-            });
-            setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, activeArtifact: updatedArtifact } : s));
+        } catch (err: any) {
+            readError = err?.message || String(err);
+        }
+        if (realContent === null) {
+            showToast(`Could not open ${fileName}: ${readError}`, '⚠️');
+            return;
         }
 
-        showToast(`Loaded "${fileName}" in ${targetLayoutMode === 'code' ? 'Code Sandbox' : targetLayoutMode + ' view'}`);
+        const opened = artifactForOpenedFile(filePath, fileName, realContent, activeArtifact);
+        setLayoutMode(opened.layoutMode);
+        const updatedArtifact = opened.artifact;
+        setActiveArtifact(updatedArtifact);
+        setArtifactHistory(prev => {
+            const filtered = prev.filter(a => a.id !== updatedArtifact.id);
+            return [updatedArtifact, ...filtered];
+        });
+        setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, activeArtifact: updatedArtifact } : s));
+
+        showToast(`Loaded "${fileName}" in ${opened.layoutMode === 'code' ? 'Code Sandbox' : opened.layoutMode + ' view'}`);
     };
 
 
@@ -362,6 +103,113 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
     }, [showNewWorkspaceMenu, showComposerWorkspaceMenu]);
 
     return { handleFileClick, handleSurfaceAiPrompt };
+}
+
+/** A JSON object parsed from a file's text, or undefined when the text is not one. */
+function jsonObjectOf(text: string): Record<string, any> | undefined {
+    try {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * The canvas artifact a file opened from the explorer shows, built from the file's contents only. A Markdown file is
+ * a document; a .json, .automation or .3d file whose JSON is a kanban board, node graph or 3D scene opens as that
+ * primitive; anything else opens as text in the code sandbox. Nothing is added that the file does not hold: no
+ * template cards, nodes, meshes, sky, tags or placeholder content (a file that cannot be read is not opened).
+ */
+export function artifactForOpenedFile(
+    filePath: string,
+    fileName: string,
+    content: string,
+    activeArtifact?: CanvasArtifact | null,
+    now: number = Date.now()
+): { layoutMode: StudioLayoutMode; artifact: CanvasArtifact } {
+    const ext = (fileName.split('.').pop() || '').toLowerCase();
+    const createdAt = new Date(now).toLocaleTimeString();
+    const json = ['json', 'automation', '3d'].includes(ext) ? jsonObjectOf(content) : undefined;
+
+    if (ext === 'md') {
+        const sections = content.split('\n\n').map((para, idx) => {
+            if (para.startsWith('# ')) {
+                return { id: `sec-${idx}`, type: 'heading' as const, level: 1 as const, content: para.replace(/^#+\s*/, '') };
+            } else if (para.startsWith('## ') || para.startsWith('### ')) {
+                return { id: `sec-${idx}`, type: 'heading' as const, level: 2 as const, content: para.replace(/^#+\s*/, '') };
+            } else if (para.startsWith('- [ ] ') || para.startsWith('- [x] ')) {
+                const done = para.startsWith('- [x] ');
+                const text = para.replace(/- \[[x ]\] /, '');
+                return { id: `sec-${idx}`, type: 'checklist' as const, checklistItems: [{ id: `item-${idx}`, text, done }] };
+            }
+            return { id: `sec-${idx}`, type: 'paragraph' as const, content: para };
+        });
+        const docData: MarkdownDocumentData = {
+            title: fileName,
+            subtitle: filePath,
+            author: getActiveUserName(),
+            lastUpdated: 'Just now',
+            tags: [],
+            sections: sections.length > 0 ? sections : [{ id: 'sec-1', type: 'paragraph', content }]
+        };
+        return {
+            layoutMode: 'document',
+            artifact: { id: `art-doc-${now}`, type: 'markdown-document', title: fileName, summary: filePath, version: 1, createdAt, data: docData }
+        };
+    }
+    if (json && Array.isArray(json.columns)) {
+        return {
+            layoutMode: 'kanban',
+            artifact: { id: `art-kanban-${now}`, type: 'kanban-board', title: json.title || fileName, summary: filePath, version: 1, createdAt, data: { title: fileName, ...json } as KanbanBoardData }
+        };
+    }
+    if (json && Array.isArray(json.nodes)) {
+        return {
+            layoutMode: 'automation',
+            artifact: { id: `art-graph-${now}`, type: 'node-graph', title: json.title || fileName, summary: filePath, version: 1, createdAt, data: { title: fileName, edges: [], ...json, nodes: json.nodes } as NodeGraphData }
+        };
+    }
+    if (json && ext === '3d') {
+        return {
+            layoutMode: '3d',
+            artifact: { id: `art-3d-${now}`, type: '3d-scene', title: json.title || fileName, summary: filePath, version: 1, createdAt, data: { title: fileName, ...json } as Scene3DData }
+        };
+    }
+
+    // Text in the code sandbox: added as a tab to the open sandbox, or a new sandbox holding only this file.
+    const open = activeArtifact?.type === 'live-code-sandbox' ? activeArtifact : undefined;
+    const sandbox: LiveCodeSandboxData = open
+        ? { ...(open.data as LiveCodeSandboxData), files: [...((open.data as LiveCodeSandboxData).files || [])] }
+        : { title: fileName, template: 'react', files: [], viewportMode: 'desktop' };
+    const existing = sandbox.files.findIndex(f => f.path === filePath || f.name === fileName);
+    let fileId = `file-${fileName.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    if (existing >= 0) {
+        fileId = sandbox.files[existing].id;
+        sandbox.files[existing] = { ...sandbox.files[existing], content };
+    } else {
+        sandbox.files.push({
+            id: fileId,
+            name: fileName,
+            language: ext === 'tsx' ? 'react' : ext === 'ts' ? 'typescript' : ext === 'css' ? 'css' : ext === 'json' ? 'json' : 'javascript',
+            content,
+            path: filePath,
+            isEntry: sandbox.files.length === 0
+        } as CodeFileTab);
+    }
+    sandbox.activeFileId = fileId;
+    return {
+        layoutMode: 'code',
+        artifact: {
+            id: open?.id || `art-sandbox-${now}`,
+            type: 'live-code-sandbox',
+            title: fileName,
+            summary: `Editing ${fileName}`,
+            version: (open?.version || 0) + 1,
+            createdAt,
+            data: sandbox
+        }
+    };
 }
 
 /** Creates a new workspace file of the given type as a fresh canvas + chat session. */

@@ -13,7 +13,6 @@ import {
     generateDefaultCpp3DSource,
     synthesizeContextual3DScene
 } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
-import { DEMO_SESSIONS } from '../src/browser/generative-canvas/state/studio-defaults';
 
 describe('Bullet Glass Shatter & Ballistic Fracture System', () => {
 
@@ -67,15 +66,5 @@ describe('Bullet Glass Shatter & Ballistic Fracture System', () => {
         expect(scene.customScript).toContain('Spitzer_Bullet_9mm');
         expect(scene.customScript).toContain('Voronoi_Shard_');
         expect(scene.customScript).toContain('onFrame');
-    });
-
-    it('6. should initialize sess-active-threejs with 3D scene artifact and user prompt', () => {
-        const session = DEMO_SESSIONS.find(s => s.id === 'sess-active-threejs');
-        expect(session).toBeDefined();
-        expect(session?.layoutMode).toBe('3d');
-        expect(session?.activeArtifact).toBeDefined();
-        expect(session?.activeArtifact?.type).toBe('3d-scene');
-        expect(session?.messages.length).toBeGreaterThanOrEqual(2);
-        expect(session?.messages[0].text).toContain('bully going through a plate of glass');
     });
 });

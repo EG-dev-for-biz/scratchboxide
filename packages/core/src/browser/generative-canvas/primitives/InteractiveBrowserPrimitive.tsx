@@ -131,18 +131,14 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
     const [consoleLogs, setConsoleLogs] = React.useState<BrowserConsoleLogItem[]>(() => {
         if (data.consoleLogs && data.consoleLogs.length > 0) return data.consoleLogs;
         return [
-            { type: 'info', text: `Session initialized for ${data.url || 'https://example.com'}`, timestamp: new Date().toLocaleTimeString() },
-            { type: 'log', text: 'Chromium Web Gateway active. Live X-Frame bypass and AI agent control enabled.', timestamp: new Date().toLocaleTimeString() }
+            { type: 'info', text: `Session initialized for ${data.url || 'https://example.com'}`, timestamp: new Date().toLocaleTimeString() }
         ];
     });
 
-    // Mock network requests
-    const [networkRequests, setNetworkRequests] = React.useState<Array<{ id: string; url: string; method: string; status: number; durationMs: number; type: string }>>(() => {
-        return (data as any).networkRequests || [
-            { id: 'req-1', url: data.url || 'https://example.com', method: 'GET', status: 200, durationMs: 42, type: 'document' },
-            { id: 'req-2', url: '/styles/bundle.css', method: 'GET', status: 200, durationMs: 14, type: 'stylesheet' },
-            { id: 'req-3', url: '/scripts/runtime.js', method: 'GET', status: 200, durationMs: 28, type: 'script' }
-        ];
+    // Network requests a browser tool recorded for this page (data.networkRequests). The preview iframe's own requests
+    // are not visible here, so none are made up: no stand-in list and no entry with an invented status or timing.
+    const [networkRequests] = React.useState<Array<{ id: string; url: string; method: string; status: number; durationMs: number; type: string }>>(() => {
+        return Array.isArray((data as any).networkRequests) ? (data as any).networkRequests : [];
     });
 
     // Copy notification
@@ -550,17 +546,6 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
             setHistory(newHistory);
             setHistoryIndex(newIndex);
         }
-
-        // Mock network request log
-        const newReq = {
-            id: `req-${Date.now()}`,
-            url: normalized,
-            method: 'GET',
-            status: 200,
-            durationMs: Math.floor(Math.random() * 80) + 20,
-            type: 'document'
-        };
-        setNetworkRequests(prev => [newReq, ...prev.slice(0, 15)]);
 
         emitUpdate({
             url: normalized,
@@ -1234,10 +1219,15 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
                                         </tr>
                                     </thead>
                                     <tbody>
+                                        {networkRequests.length === 0 && (
+                                            <tr>
+                                                <td colSpan={4}>No requests recorded. The preview frame's own network requests are not visible to the canvas.</td>
+                                            </tr>
+                                        )}
                                         {networkRequests.map(req => (
                                             <tr key={req.id}>
                                                 <td className="sb-req-url">{req.url}</td>
-                                                <td><span className="sb-status-200">{req.status} OK</span></td>
+                                                <td><span className={req.status >= 200 && req.status < 400 ? 'sb-status-200' : undefined}>{req.status}</span></td>
                                                 <td><span className="sb-req-type">{req.type}</span></td>
                                                 <td>{req.durationMs}ms</td>
                                             </tr>

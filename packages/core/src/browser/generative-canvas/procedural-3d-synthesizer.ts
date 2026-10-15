@@ -3505,62 +3505,8 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
         };
     }
 
-    if (theme === 'flight') {
-        const title = '3D Aircraft & Spatial Flight Corridor';
-        const subtitle = 'Aerodynamic flight simulation with dynamic control surface kinematics, contrails, and atmospheric scattering.';
-        return {
-            title,
-            subtitle,
-            worldBranch: 'earth/flight-corridor',
-            sceneType: 'flight',
-            renderMode: 'pbr',
-            cameraMode: 'orbit',
-            animation: 'flight',
-            timeline: {
-                currentTimeMs: 0,
-                durationMs: 10000,
-                isPlaying: true,
-                speed: 1.0,
-                playbackSpeed: 1.0,
-                isLooping: true
-            },
-            camera: {
-                position: [15, 12, 20],
-                target: [0, 2, 0],
-                fov: 45
-            },
-            environment: {
-                skybox: hasAtmosphere ? 'realistic-sky' : 'studio',
-                lighting: 'daylight',
-                ground: true
-            },
-            features: {
-                controlSurfaces: true,
-                contrails: true,
-                ...(hasGodRays ? { godRays: true } : {}),
-                ...(hasAtmosphere ? {
-                    atmosphericScattering: buildHeadlessAtmosphere({
-                        aerialPerspectiveEnabled: hasHazeOrFogRequested,
-                        inscatteringIntensity: hasHazeOrFogRequested ? 1.0 : 0.0
-                    })
-                } : {})
-            },
-            objects: [
-                {
-                    id: 'obj-aircraft-1',
-                    content: {
-                        type: '3d-scene',
-                        durableUri: 'internal:plane',
-                        mimeType: 'model/procedural-aircraft',
-                        metadata: { dims: { width: 12, height: 4, depth: 14 } }
-                    },
-                    space: { spatial3d: { x: 0, y: 3.5, z: 0, pitch: 0, yaw: 0, roll: 0 } },
-                    time: { startMs: 0, durationMs: 10000 },
-                    lineage: { version: 1 }
-                }
-            ]
-        };
-    }
+    // No 'flight' template: it drew an internal:plane object the viewport cannot load. A prompt whose theme is
+    // flight reaches the end of this function and fails with NoSceneBuiltError like any other unbuilt scene.
 
     if (theme === 'universal_scene') {
         const title = 'Universal Photorealistic 3D Scene Assembly';

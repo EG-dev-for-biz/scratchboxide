@@ -953,15 +953,14 @@ export function morphSandboxToScene3D(sandbox: LiveCodeSandboxData, context?: an
     const appFile = files.find(f => f.name === 'App.tsx' || f.name.endsWith('.tsx'));
     const sceneFile = files.find(f => f.name === 'scene.ts');
     const customScriptFile = files.find(f => f.name === 'customScript.ts' || f.name === 'customScript.js' || f.name === 'script.ts');
-    const aircraftFile = files.find(f => f.name === 'aircraft.ts');
     const cppFile = files.find(f => f.name.endsWith('.cpp') || f.name === 'world_generator.cpp' || f.language === 'cpp');
 
     const state = getSandboxRuntimeState(sandbox, context);
 
-    const rawTitle = sandbox?.title?.replace(/\s*-\s*Live 3D Sandbox|\s*-\s*Sandbox/i, '') || '3D Jet Flight Simulation';
+    const rawTitle = sandbox?.title?.replace(/\s*-\s*Live 3D Sandbox|\s*-\s*Sandbox/i, '') || 'Sandbox Scene';
+    // The sky the sandbox's code or runtime state sets, else the neutral studio (no sky is assumed).
     const skyboxMatch = (appFile?.content || sceneFile?.content || '').match(/skybox:\s*['"]([^'"]+)['"]/);
-    const extractedSkybox = (state?.skybox as string) || (skyboxMatch ? skyboxMatch[1] : ((sceneFile?.content || appFile?.content || '').includes('isSunset = true') ? 'sunset' : 'realistic-sky'));
-    const isAirplane = (aircraftFile !== undefined) || /plane|jet|aircraft|flight|aviation/i.test(rawTitle);
+    const extractedSkybox = (state?.skybox as string) || (skyboxMatch ? skyboxMatch[1] : 'studio');
 
     const customScript = customScriptFile?.content || undefined;
 
@@ -971,13 +970,13 @@ export function morphSandboxToScene3D(sandbox: LiveCodeSandboxData, context?: an
         sourceCode: cppFile.content
     } : undefined;
 
+    // The scene holds what the sandbox's files hold (its custom script and C++ generator) and nothing picked from
+    // words in its title: no aircraft or mesh placeholder objects, flight corridor, or playing timeline.
     return {
         title: rawTitle,
-        subtitle: sandbox?.subtitle || 'Interactive procedural 3D spatial simulation',
-        worldBranch: isAirplane ? 'earth/flight-corridor' : 'earth/cyberpunk',
+        subtitle: sandbox?.subtitle,
         renderMode: (state?.renderMode as any) || 'pbr',
         cameraMode: 'orbit',
-        animation: isAirplane ? 'flight' : 'orbit',
         camera: {
             position: [15, 12, 20],
             target: [0, 2, 0],
@@ -985,50 +984,12 @@ export function morphSandboxToScene3D(sandbox: LiveCodeSandboxData, context?: an
         },
         environment: {
             skybox: extractedSkybox,
-            lighting: (state?.lighting as any) || 'daylight',
-            ground: true
+            lighting: (state?.lighting as any) || 'studio',
+            ground: false
         },
         customScript,
         cppGenerator,
-        timeline: {
-            currentTimeMs: 0,
-            durationMs: 10000,
-            isPlaying: true,
-            playbackSpeed: 1.0,
-            speed: 1.0,
-            isLooping: true
-        },
-        objects: isAirplane ? [
-            {
-                id: 'obj-aircraft-1',
-                content: {
-                    type: '3d-scene',
-                    durableUri: 'internal:plane',
-                    mimeType: 'model/procedural-aircraft',
-                    metadata: { dims: { width: 12, height: 4, depth: 14 } }
-                },
-                space: {
-                    spatial3d: { x: 0, y: 3.5, z: 0, pitch: 0, yaw: 0, roll: 0 }
-                },
-                time: { startMs: 0, durationMs: 10000 },
-                lineage: { version: 1 }
-            }
-        ] : [
-            {
-                id: 'obj-mesh-1',
-                content: {
-                    type: '3d-scene',
-                    durableUri: 'internal:mesh',
-                    mimeType: 'model/gltf-binary',
-                    metadata: { dims: { width: 5, height: 5, depth: 5 } }
-                },
-                space: {
-                    spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 45, roll: 0 }
-                },
-                time: { startMs: 0, durationMs: 0 },
-                lineage: { version: 1 }
-            }
-        ]
+        objects: []
     };
 }
 
