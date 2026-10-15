@@ -288,3 +288,23 @@ export function forestMesh(): FixtureMesh {
     }
     return b.mesh(false);
 }
+
+/** Rewrites the JSON chunk of a GLB in place (e.g. to add a node transform or a texture), keeping its binary chunk. */
+export function rewriteGlbJson(file: string, mutate: (gltf: any) => void): string {
+    const buf = fs.readFileSync(file);
+    const jsonLen = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.toString('utf8', 20, 20 + jsonLen));
+    mutate(gltf);
+    const binChunk = buf.subarray(20 + jsonLen);
+    let json = Buffer.from(JSON.stringify(gltf), 'utf8');
+    json = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(0x46546c67, 0);
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + json.length + binChunk.length, 8);
+    const jsonHeader = Buffer.alloc(8);
+    jsonHeader.writeUInt32LE(json.length, 0);
+    jsonHeader.writeUInt32LE(0x4e4f534a, 4);
+    fs.writeFileSync(file, Buffer.concat([header, jsonHeader, json, binChunk]));
+    return file;
+}

@@ -15,7 +15,7 @@ import { GeminiService } from '../src/node/gemini-service';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { UTDRA_TOOL_DECLARATIONS } from '../src/node/gemini/tools/spatial-tools';
-import { bridgeWithCurtainMesh, skyscraperMesh, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
+import { bridgeWithCurtainMesh, rewriteGlbJson, skyscraperMesh, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
 
 // Test inputs: synthetic tiles written to GLB files, which the tools read like any tile (they never build one).
@@ -87,6 +87,22 @@ describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
             expect(decl.parameters.required, decl.name).toContain('inputGlbPath');
             expect(Object.keys(decl.parameters.properties || {}), decl.name).not.toContain('benchmark');
         }
+    });
+
+    it('refuses a tile whose node transforms the native reader would ignore, or whose textures a written tile would lose', async () => {
+        const registry = createDefaultToolRegistry();
+        const moved = rewriteGlbJson(writeFixtureGlb(path.join(fixtureDir, 'moved.glb'), skyscraperMesh()), g => { g.nodes[0].translation = [500, 0, 0]; });
+        const probeMoved = await registry.dispatch('utdra_probe_tile', { inputGlbPath: moved }, {} as any);
+        expect(probeMoved.exec.status).toBe('failed');
+        expect(String((probeMoved.resultPayload as any).error)).toContain('places its mesh with translation [500,0,0]');
+
+        const textured = rewriteGlbJson(writeFixtureGlb(path.join(fixtureDir, 'textured.glb'), skyscraperMesh()), g => {
+            g.images = [{ uri: 'data:image/png;base64,AA==' }];
+            g.textures = [{ source: 0 }];
+        });
+        const decompose = await registry.dispatch('utdra_decompose_tile', { inputGlbPath: textured, mode: 'full' }, {} as any);
+        expect(decompose.exec.status).toBe('failed');
+        expect(String((decompose.resultPayload as any).error)).toContain('texture(s), which the native writer does not carry over');
     });
 
     it('executes utdra_probe_tile via tool registry', async () => {

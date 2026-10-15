@@ -75,3 +75,49 @@ export function parseTelemetryLine(stdout: string, what: string): Map<string, st
     }
     return values;
 }
+
+/** What the native GLB reader would get wrong about a GLB, by consequence. */
+export interface RawMeshReadIssues {
+    /** Placement the reader ignores (node transforms, instanced meshes): measured bounds and output would be wrong. */
+    geometry: string[];
+    /** Content the native writer cannot carry over (textures): the output would silently lose it. */
+    content: string[];
+}
+
+const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+/**
+ * The native pipelines read a GLB with GlbReader, which merges every mesh's raw vertex positions (ignoring node
+ * transforms and instancing) and write it with GlbWriter, which carries no textures. This lists what that would get
+ * wrong for `glb`, so callers can refuse the input instead of returning a moved, rescaled or untextured mesh as done.
+ */
+export function rawMeshReadIssues(glb: Buffer): RawMeshReadIssues {
+    if (glb.length < 20 || glb.toString('utf8', 0, 4) !== 'glTF') {
+        return { geometry: ['it is not a binary glTF (.glb) file'], content: [] };
+    }
+    const json = JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+    const nodes: any[] = Array.isArray(json.nodes) ? json.nodes : [];
+    const geometry: string[] = [];
+    const hasMesh = (index: number, seen = new Set<number>()): boolean => {
+        if (seen.has(index) || !nodes[index]) return false;
+        seen.add(index);
+        return nodes[index].mesh !== undefined || (nodes[index].children || []).some((c: number) => hasMesh(c, seen));
+    };
+    const near = (a: unknown, b: number[]) => Array.isArray(a) && a.length === b.length && a.every((v, i) => Math.abs(Number(v) - b[i]) < 1e-9);
+    nodes.forEach((node, index) => {
+        const moved = (node.matrix !== undefined && !near(node.matrix, IDENTITY_MATRIX))
+            || (node.translation !== undefined && !near(node.translation, [0, 0, 0]))
+            || (node.rotation !== undefined && !near(node.rotation, [0, 0, 0, 1]))
+            || (node.scale !== undefined && !near(node.scale, [1, 1, 1]));
+        if (moved && hasMesh(index)) {
+            const parts = ['matrix', 'translation', 'rotation', 'scale'].filter(k => node[k] !== undefined).map(k => `${k} ${JSON.stringify(node[k])}`);
+            geometry.push(`node ${node.name ? `"${node.name}"` : index} places its mesh with ${parts.join(', ')}`);
+        }
+    });
+    const uses = new Map<number, number>();
+    for (const node of nodes) if (node.mesh !== undefined) uses.set(node.mesh, (uses.get(node.mesh) || 0) + 1);
+    for (const [mesh, count] of uses) if (count > 1) geometry.push(`mesh ${mesh} is instanced by ${count} nodes`);
+    const textures = Array.isArray(json.textures) ? json.textures.length : 0;
+    const content = textures > 0 ? [`it has ${textures} texture(s), which the native writer does not carry over`] : [];
+    return { geometry, content };
+}

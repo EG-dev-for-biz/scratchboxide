@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { NativeCppCompilerService } from './native-compiler-service';
-import { ensurePipelineBinary, parseTelemetryLine, runPipelineBinary } from './native-pipeline-binary';
+import { ensurePipelineBinary, parseTelemetryLine, rawMeshReadIssues, runPipelineBinary } from './native-pipeline-binary';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 
 export type MeshDeformationAxis = 'X' | 'Y' | 'Z';
@@ -175,6 +175,15 @@ export class NativeMeshReshaperService {
         }
         if (options.inputGlbPath && !fs.existsSync(options.inputGlbPath)) {
             throw new MissingInputError('mesh reshaping', 'inputGlbPath', `${options.inputGlbPath} does not exist`);
+        }
+        // The native reader ignores node transforms and the writer drops textures: refuse such a GLB rather than
+        // return it moved, rescaled or untextured with "completed".
+        const glbBytes = options.inputGlbBuffer || fs.readFileSync(options.inputGlbPath!);
+        const issues = rawMeshReadIssues(glbBytes);
+        if (issues.geometry.length || issues.content.length) {
+            throw new MissingInputError('mesh reshaping', 'inputGlbPath',
+                `${options.inputGlbPath || 'the given GLB'} cannot be reshaped faithfully: ${[...issues.geometry, ...issues.content].join('; ')}. `
+                + 'Bake node transforms into the vertices and use an untextured (clay) mesh.');
         }
 
         const bin = await this.ensureBinary();

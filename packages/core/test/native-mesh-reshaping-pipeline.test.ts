@@ -27,7 +27,8 @@ import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { resolveTaskCapability } from '../src/node/agent/task-capability-resolver';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
-import { cylinderMesh, readGlbPositions, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
+import { cylinderMesh, readGlbPositions, rewriteGlbJson, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
+import { rawMeshReadIssues } from '../src/node/3d-engine/native-pipeline-binary';
 
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-mesh-reshape-'));
 const SHOTS = path.resolve(__dirname, '../../../test-results/screenshots');
@@ -162,6 +163,34 @@ describe('Agent tools and routing', () => {
             .rejects.toThrow('does not exist');
         await expect(meshShapingHandlers.mesh_apply_deformers({ operations: [], inputGlbPath }, {} as any))
             .rejects.toThrow('mesh_apply_deformers needs operations');
+    });
+
+    it('refuses a GLB the native reader would misplace or the writer would strip, instead of returning it moved or untextured', async () => {
+        const moved = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'moved.glb'), cylinderMesh(1, 4)), g => {
+            g.nodes[0].translation = [100, 0, 50];
+            g.nodes[0].scale = [10, 10, 10];
+        });
+        const issues = rawMeshReadIssues(fs.readFileSync(moved));
+        expect(issues.geometry[0]).toContain('places its mesh with translation [100,0,50], scale [10,10,10]');
+        await expect(meshShapingHandlers.mesh_apply_deformers({ inputGlbPath: moved, operations: [{ type: 'repair' }] }, {} as any))
+            .rejects.toThrow(/cannot be reshaped faithfully: node 0 places its mesh with translation \[100,0,50\]/);
+
+        const textured = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'textured.glb'), cylinderMesh(1, 4)), g => {
+            g.images = [{ uri: 'data:image/png;base64,AA==' }];
+            g.textures = [{ source: 0 }];
+            g.materials = [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }];
+        });
+        await expect(meshShapingHandlers.mesh_apply_deformers({ inputGlbPath: textured, operations: [{ type: 'repair' }] }, {} as any))
+            .rejects.toThrow(/1 texture\(s\), which the native writer does not carry over/);
+
+        const instanced = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'instanced.glb'), cylinderMesh(1, 4)), g => {
+            g.nodes.push({ mesh: 0 });
+            g.scenes[0].nodes.push(1);
+        });
+        expect(rawMeshReadIssues(fs.readFileSync(instanced)).geometry).toContain('mesh 0 is instanced by 2 nodes');
+        // A plain GLB, and an explicit identity transform, read faithfully.
+        const identity = rewriteGlbJson(writeFixtureGlb(path.join(WORK, 'identity.glb'), cylinderMesh(1, 4)), g => { g.nodes[0].translation = [0, 0, 0]; });
+        expect(rawMeshReadIssues(fs.readFileSync(identity))).toEqual({ geometry: [], content: [] });
     });
 
     it('routes mesh deformation requests to mesh_apply_deformers', () => {

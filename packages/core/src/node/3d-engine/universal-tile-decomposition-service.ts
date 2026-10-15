@@ -12,7 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from './native-compiler-service';
-import { ensurePipelineBinary, parseTelemetryLine, runPipelineBinary } from './native-pipeline-binary';
+import { ensurePipelineBinary, parseTelemetryLine, rawMeshReadIssues, runPipelineBinary } from './native-pipeline-binary';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 
 export type GeographicDomain =
@@ -124,6 +124,14 @@ export class UniversalTileDecompositionService {
             throw new MissingInputError('UTDRA', 'inputGlbPath', `${inputGlbPath} does not exist`);
         }
         const mode = options.mode ?? 'full';
+        // The native reader ignores node transforms (so measurements and output would be misplaced) and the writer
+        // drops textures (so a written tile would come back untextured): refuse such a tile instead.
+        const issues = rawMeshReadIssues(fs.readFileSync(inputGlbPath));
+        const blocking = [...issues.geometry, ...(mode === 'probe' ? [] : issues.content)];
+        if (blocking.length) {
+            throw new MissingInputError('UTDRA', 'inputGlbPath',
+                `${inputGlbPath} cannot be processed faithfully: ${blocking.join('; ')}. Use a tile with baked transforms and no textures (the clay extraction).`);
+        }
         if (mode === 'slicer' && (typeof options.sliceElevationCutoff !== 'number' || !Number.isFinite(options.sliceElevationCutoff))) {
             throw new MissingInputError('UTDRA', 'sliceElevationCutoff', 'the elevation to slice at is required');
         }
