@@ -102,11 +102,11 @@ Coordinated motion analysis extracting articulated 3D kinematic telemetry:
 - Streams motion data directly into the native C++20 Astro 3D engine for character driving, physics ragdolls, or WebGL playback.
 
 ### 14. `vfx_video_auto_reframe`
-Intelligent subject-aware camera reframing:
-- Analyzes video frames with MediaPipe to detect and track human subjects (face or body center).
-- Calculates target aspect ratio crop boxes (`9:16`, `1:1`, `4:5`, or custom) with rule-of-thirds composition bias.
-- Generates smooth Catmull-Rom spline camera trajectory pan waypoints.
-- Compiles into an FFmpeg single-pass hardware-accelerated `crop=w:h:x:y` render with `-movflags +faststart`.
+Subject-aware reframing:
+- Samples frames and runs MediaPipe on each to find the person (the nose for `focusMode: 'face'`, the middle of the shoulders and hips otherwise).
+- Calculates target aspect ratio crop boxes (`9:16`, `1:1`, `4:5`, or custom) with a rule-of-thirds bias, one waypoint per frame where the person was found; frames with nobody are left out and listed.
+- Renders one crop at the waypoints' average position with FFmpeg (`crop=w:h:x:y`).
+- Fails when MediaPipe cannot run, or finds nobody in any sampled frame; it never centres the crop in place of a detection. `focusMode: 'center'` crops the frame centre on purpose, without tracking.
 
 ### 15. `vfx_visual_critic_audit`
 Autonomous visual quality gate auditing against the 8-Dimension Visual Fidelity Rubric:
