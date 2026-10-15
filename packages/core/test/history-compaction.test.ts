@@ -29,3 +29,13 @@ test('a failed summary still drops older turns and says so', async () => {
     assert.match(out[0].text, /8 earlier messages were dropped/);
     assert.strictEqual(out.length, 13);
 });
+
+test('a failed or empty summary is reported to the caller, so the reply can say older turns were left out', async () => {
+    const history = Array.from({ length: 20 }, (_, i) => msg(i, 1000));
+    const failures: Array<{ dropped: number; error: string }> = [];
+    const report = (dropped: number, error: unknown) => failures.push({ dropped, error: error instanceof Error ? error.message : String(error) });
+    await compactChatHistory(history, async () => { throw new Error('quota'); }, 5_000, 12, report);
+    await compactChatHistory(history, async () => '   ', 5_000, 12, report);
+    await compactChatHistory(history, async () => '- kept', 5_000, 12, report);
+    assert.deepStrictEqual(failures, [{ dropped: 8, error: 'quota' }, { dropped: 8, error: 'the summary came back empty' }]);
+});

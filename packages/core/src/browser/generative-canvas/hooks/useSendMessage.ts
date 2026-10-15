@@ -479,6 +479,12 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 if (event.modelProvenance) {
                     progress.modelProvenance = event.modelProvenance;
                 }
+                if (event.type === 'status' && event.modelProvenance && event.text) {
+                    // The fallback list moved on mid-turn ("X is not available (…); trying Y"): shown as it happens,
+                    // not only on the finished reply.
+                    const text = event.text;
+                    updateSteps(prev => [...prev, { id: `model-${Date.now()}-${prev.length}`, title: text, status: 'completed', kind: 'context' }]);
+                }
                 if (event.artifact) {
                     // Mounted exactly as the backend sent it: words in the prompt never swap in a template
                     // artifact or switch on playback the model did not set.

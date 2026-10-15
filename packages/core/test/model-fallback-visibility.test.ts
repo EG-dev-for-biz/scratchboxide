@@ -23,7 +23,7 @@ import { GeminiClient, summarizeModelError } from '../src/node/gemini/gemini-cli
 import type { GeminiStreamEvent, ModelAnswerProvenance } from '../src/common/gemini-protocol';
 import { MessageNotices, describeModelProvenance } from '../src/browser/generative-canvas/chat/MessageNotices';
 import { useSendMessage, type SendMessageDeps, type UseSendMessageResult } from '../src/browser/generative-canvas/hooks/useSendMessage';
-import { GeminiClient as BrowserGeminiClient } from '../src/browser/generative-canvas/gemini-client';
+import { GeminiClient as BrowserGeminiClient, ChatRequestError } from '../src/browser/generative-canvas/gemini-client';
 import { WorkspaceConfigClient, type FullWorkspaceConfig } from '../src/browser/generative-canvas/workspace-config-client';
 import type { ProjectArtifactController } from '../src/browser/generative-canvas/project-artifact-controller';
 import type { ProjectItem } from '../src/browser/generative-canvas/ProjectsModal';
@@ -250,6 +250,94 @@ describe('server: which model and credential answered', () => {
     });
 });
 
+describe('server: a turn that fails still says which model and credential it was on', () => {
+    const toolCallSse = (text: string) => `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }, { functionCall: { name: 'update_task_list', args: { tasks: [{ title: 'Check the plan', status: 'in_progress' }] } } }] }, finishReason: 'STOP' }] })}\ndata: [DONE]`;
+
+    it('a fallback model that answered, then failed mid-turn: the thrown error carries its provenance', async () => {
+        let flashCalls = 0;
+        const { service } = serviceWith({
+            'gemini-4-argon': () => ({ ok: false, status: 404, body: NOT_FOUND }),
+            'gemini-3.8-flash': () => (++flashCalls === 1
+                ? { ok: true, status: 200, body: toolCallSse('Checking the plan. ') }
+                : { ok: false, status: 503, body: '{"error":{"code":503,"message":"The model is overloaded."}}' })
+        });
+        const events: GeminiStreamEvent[] = [];
+        const err = await service.streamGenerate({ prompt: 'Plan it', model: 'gemini-4-argon', mode: 'agent' } as any, e => events.push(e)).then(() => null, e => e as Error & { modelProvenance?: ModelAnswerProvenance });
+        expect(flashCalls).toBe(2);
+        expect(err?.message).toContain('AI request failed (503)');
+        expect(err?.modelProvenance).toEqual({
+            requestedModel: 'gemini-4-argon',
+            modelUsed: 'gemini-3.8-flash',
+            fallbackReason: expect.stringMatching(/^gemini-4-argon unavailable: 404: /) as unknown as string,
+            credential: 'vertex'
+        });
+        // The status line that says another model is being asked carries that model's provenance, so a reply stopped
+        // or cut short from then on keeps it.
+        const fallbackStatus = events.find(e => e.type === 'status' && e.text?.includes('trying gemini-3.8-flash'));
+        expect(fallbackStatus?.modelProvenance).toMatchObject({ requestedModel: 'gemini-4-argon', modelUsed: 'gemini-3.8-flash' });
+    });
+
+    it('a fallback model that answers with an HTTP 500: the error names it and the skipped model', async () => {
+        const { service } = serviceWith({
+            'gemini-4-argon': () => ({ ok: false, status: 404, body: NOT_FOUND }),
+            'gemini-3.8-flash': () => ({ ok: false, status: 500, body: '{"error":{"code":500,"message":"Internal error"}}' })
+        });
+        const err = await service.streamGenerate({ prompt: 'hi', model: 'gemini-4-argon', mode: 'ask' } as any, () => {}).then(() => null, e => e as Error & { modelProvenance?: ModelAnswerProvenance });
+        expect(err?.message).toContain('AI request failed (500)');
+        expect(err?.modelProvenance).toMatchObject({ requestedModel: 'gemini-4-argon', modelUsed: 'gemini-3.8-flash', fallbackReason: expect.stringContaining('gemini-4-argon unavailable: 404') });
+        expect(err?.modelProvenance?.noModelAnswered).toBeUndefined();
+        expect(describeModelProvenance(err!.modelProvenance!).notice).toContain('Answered by gemini-3.8-flash — gemini-4-argon unavailable: 404');
+    });
+
+    it('the API key refusing after a Vertex token failure: the error says the key answered and why', async () => {
+        process.env.GEMINI_API_KEY = 'test-key-not-real';
+        const { service, urls } = serviceWith({ 'gemini-3.8-flash': () => ({ ok: false, status: 400, body: '{"error":{"code":400,"message":"API key not valid."}}' }) }, { tokenFails: true });
+        const err = await service.streamGenerate({ prompt: 'hi', model: 'gemini-3.8-flash', mode: 'ask' } as any, () => {}).then(() => null, e => e as Error & { modelProvenance?: ModelAnswerProvenance });
+        expect(urls[0]).toContain('generativelanguage.googleapis.com');
+        expect(err?.message).toContain('API key not valid');
+        expect(err?.modelProvenance).toMatchObject({
+            credential: 'api-key',
+            credentialNote: expect.stringContaining('Vertex AI service account could not get an access token (invalid_grant: Invalid JWT Signature.)')
+        });
+        expect(describeModelProvenance(err!.modelProvenance!).notice).toContain('Answered with the Gemini API key — the Vertex AI service account could not get an access token');
+    });
+
+    it('when no model in the list answered, the error is not labelled as answered by one', async () => {
+        const { service } = serviceWith({});
+        (globalThis as any).fetch = async () => ({ ok: false, status: 404, text: async () => JSON.stringify({ error: { code: 404, message: 'model not found' } }), json: async () => ({}), body: null });
+        const err = await service.streamGenerate({ prompt: 'hi', model: 'gemini-x', mode: 'ask' } as any, () => {}).then(() => null, e => e as Error & { modelProvenance?: ModelAnswerProvenance });
+        expect(err?.modelProvenance?.noModelAnswered).toBe(true);
+        const described = describeModelProvenance(err!.modelProvenance!);
+        expect(described.label).toBe('No model answered · Vertex AI');
+        expect(described.notice).toBeUndefined();
+    });
+
+    it('a skill preprocessing failure is named on the reply, not only in an event the chat does not show', async () => {
+        const { service } = serviceWith({
+            'gemini-3.1-flash-lite': () => ({ ok: false, status: 400, body: 'INVALID_ARGUMENT: bad skills' }),
+            'gemini-3.8-flash': () => ({ ok: true, status: 200, body: sse('Done.') })
+        });
+        (service as any).preferredSubagentModel = 'gemini-3.1-flash-lite';
+        const response = await service.streamGenerate({
+            prompt: 'Plan it', model: 'gemini-3.8-flash', mode: 'ask', enableSubagentPreprocess: true,
+            attachedSkills: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]
+        } as any, () => {});
+        expect(response.modelProvenance?.helperNotes).toEqual([expect.stringMatching(/^Skill preprocessing failed \(.*400.*\); answered without it$/)]);
+        expect(describeModelProvenance(response.modelProvenance!).notice).toContain('Skill preprocessing failed');
+    });
+
+    it('older turns left out because their summary failed are named on the reply', async () => {
+        const { service } = serviceWith({
+            'gemini-3.5-flash-lite': () => ({ ok: false, status: 500, body: 'summary backend down' }),
+            'gemini-3.8-flash': () => ({ ok: true, status: 200, body: sse('Continuing.') })
+        });
+        const big = 'x'.repeat(40_000);
+        const chatHistory = Array.from({ length: 24 }, (_, i) => ({ role: i % 2 ? 'model' : 'user', text: `turn ${i} ${big}` }));
+        const response = await service.streamGenerate({ prompt: 'Go on', model: 'gemini-3.8-flash', mode: 'ask', chatHistory } as any, () => {});
+        expect(response.modelProvenance?.helperNotes).toEqual([expect.stringMatching(/^12 earlier messages were left out of the context: summarizing them with gemini-3\.5-flash-lite failed \(.*500/)]);
+    });
+});
+
 describe('chat: the reply carries and shows which model answered', () => {
     const provenance: ModelAnswerProvenance = {
         requestedModel: 'gemini-4-argon',
@@ -288,6 +376,21 @@ describe('chat: the reply carries and shows which model answered', () => {
         const saved = await sendOne('How tall is the arch?');
         expect(saved.text).toContain('The model returned an empty reply');
         expect(saved.modelProvenance).toEqual(provenance);
+        const html = renderToStaticMarkup(React.createElement(MessageNotices, { message: saved }));
+        expect(html).toContain('Answered by gemini-3.8-flash — gemini-4-argon unavailable: 404');
+    });
+
+    it('a fallback announced mid-turn is shown as a step and kept on a reply cut short by a dropped connection', async () => {
+        vi.spyOn(WorkspaceConfigClient.getInstance(), 'fetchWorkspaceConfig').mockResolvedValue({ workspaceRoot: '/tmp/ws', rules: [], customSkills: [], customMcpServers: [] } as FullWorkspaceConfig);
+        const flashProvenance: ModelAnswerProvenance = { ...provenance, fallbackReason: 'gemini-4-argon unavailable: 404: Publisher Model was not found' };
+        vi.spyOn(BrowserGeminiClient.getInstance(), 'streamGenerate').mockImplementation(async (_request, onEvent) => {
+            onEvent({ type: 'status', text: 'gemini-4-argon is not available (404: Publisher Model was not found); trying gemini-3.8-flash.', modelProvenance: flashProvenance });
+            onEvent({ type: 'delta', text: 'Checking the plan. ' });
+            throw new ChatRequestError('The connection dropped mid-reply: socket hang up', 'unreachable');
+        });
+        const saved = await sendOne('Plan it');
+        expect(saved.modelProvenance).toEqual(flashProvenance);
+        expect(saved.steps?.map(st => st.title)).toContain('gemini-4-argon is not available (404: Publisher Model was not found); trying gemini-3.8-flash.');
         const html = renderToStaticMarkup(React.createElement(MessageNotices, { message: saved }));
         expect(html).toContain('Answered by gemini-3.8-flash — gemini-4-argon unavailable: 404');
     });

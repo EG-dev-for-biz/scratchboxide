@@ -16,16 +16,21 @@ export const HISTORY_KEEP_RECENT = 12;
 
 export type HistorySummarizer = (transcript: string) => Promise<string>;
 
+/** Called when the older turns could not be summarized and are left out: how many, and why. */
+export type HistorySummaryFailure = (droppedMessages: number, error: unknown) => void;
+
 /**
  * Keep the whole conversation while it fits the budget. Past that, summarize everything but the
  * most recent messages into a single leading turn, so long sessions keep their decisions and facts
- * without overflowing the model's context.
+ * without overflowing the model's context. When the summary fails (or is empty) the older turns are
+ * left out, and `onSummaryFailed` is told so the reply can say it.
  */
 export async function compactChatHistory(
     history: HistoryMessage[] | undefined,
     summarize: HistorySummarizer,
     budgetChars = HISTORY_VERBATIM_BUDGET_CHARS,
-    keepRecent = HISTORY_KEEP_RECENT
+    keepRecent = HISTORY_KEEP_RECENT,
+    onSummaryFailed?: HistorySummaryFailure
 ): Promise<HistoryMessage[]> {
     const messages = (history || []).filter(m => m.text && m.text.trim());
     const total = messages.reduce((n, m) => n + m.text.length, 0);
@@ -43,9 +48,10 @@ export async function compactChatHistory(
     let summary: string;
     try {
         summary = (await summarize(transcript)).trim();
+        if (!summary) onSummaryFailed?.(older.length, new Error('the summary came back empty'));
     } catch (err) {
-        console.warn('[Gemini] History summarization failed; dropping older turns', err);
         summary = '';
+        onSummaryFailed?.(older.length, err);
     }
 
     const lead: HistoryMessage = {

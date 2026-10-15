@@ -146,7 +146,9 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
                 safeEndSse(res);
                 return;
             }
-            safeWriteSse(res, `data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`, controller.signal);
+            // A failed turn still says which model and credential it was on (a fallback model, the API key).
+            const failure = { type: 'error', error: err.message || 'Streaming failed', ...(err?.modelProvenance ? { modelProvenance: err.modelProvenance } : {}) };
+            safeWriteSse(res, `data: ${JSON.stringify(failure)}\n\n`, controller.signal);
             safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);
             safeEndSse(res);
         }

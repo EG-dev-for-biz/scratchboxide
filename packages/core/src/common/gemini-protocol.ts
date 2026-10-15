@@ -250,6 +250,11 @@ export interface ModelAnswerProvenance {
      * service account, each saying which model and credential answered instead and why.
      */
     helperNotes?: string[];
+    /**
+     * Set on a failed turn when no model in the list was available (each answered "not found"); modelUsed is then
+     * the last model tried, not one that answered.
+     */
+    noModelAnswered?: boolean;
 }
 
 /** One item of the agent's visible checklist (`update_task_list`). */

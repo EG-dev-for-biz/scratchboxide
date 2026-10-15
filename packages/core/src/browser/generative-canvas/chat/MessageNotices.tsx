@@ -27,6 +27,15 @@ const CREDENTIAL_LABEL: Record<ModelAnswerProvenance['credential'], string> = {
 /** "Answered by X — Y unavailable: <reason>" when the fallback list moved on; the model and credential always. */
 export function describeModelProvenance(p: ModelAnswerProvenance): ProvenanceDescription {
     const notices: string[] = [];
+    if (p.noModelAnswered) {
+        // The reply's error names every model tried and why; only the credential and helper calls are added here.
+        if (p.credentialNote) notices.push(`Tried with the ${CREDENTIAL_LABEL['api-key']} — ${p.credentialNote}`);
+        for (const note of p.helperNotes || []) notices.push(note);
+        return {
+            label: `No model answered · ${CREDENTIAL_LABEL[p.credential]}`,
+            notice: notices.length > 0 ? notices.join('. ') : undefined
+        };
+    }
     if (p.modelUsed !== p.requestedModel) {
         notices.push(`Answered by ${p.modelUsed} — ${p.fallbackReason || `${p.requestedModel} unavailable`}`);
     }

@@ -210,9 +210,30 @@ export function describeHelperProvenance(role: string, p: ModelAnswerProvenance 
     return parts.length > 0 ? `${role} ${parts.join('; ')}` : undefined;
 }
 
-/** Adds which model and credential answered to the turn's closing events (`done`, `error`). */
-function withProvenance(onEvent: StreamEventSink, provenance: ModelAnswerProvenance): StreamEventSink {
-    return event => onEvent(event.type === 'done' || event.type === 'error' ? { ...event, modelProvenance: provenance } : event);
+/**
+ * Adds which model and credential answered to the turn's closing events (`done`, `error`). Read when the event is
+ * sent, so helper notes added during the turn (history summary) are on it.
+ */
+function withProvenance(onEvent: StreamEventSink, provenance: () => ModelAnswerProvenance): StreamEventSink {
+    return event => onEvent(event.type === 'done' || event.type === 'error' ? { ...event, modelProvenance: provenance() } : event);
+}
+
+/** A turn's error that says which model and credential it came from (forwarded on the stream's error event). */
+export type ErrorWithProvenance = Error & { modelProvenance?: ModelAnswerProvenance };
+
+/** The provenance attached to a turn's thrown error, if any. */
+export function provenanceOfError(err: unknown): ModelAnswerProvenance | undefined {
+    return err && typeof err === 'object' ? (err as ErrorWithProvenance).modelProvenance : undefined;
+}
+
+/** State shared by the attempts of one turn (one attempt per model in the fallback list). */
+interface TurnAttemptState {
+    /** Set once a model streamed anything: a later "not found" ends the turn instead of replaying it. */
+    modelResponded: boolean;
+    /** The model of the attempt running now (or that failed last). */
+    currentModel?: string;
+    /** Helper calls of the turn that fell back or failed (shown on the reply). */
+    helperNotes: string[];
 }
 
 /**
@@ -321,13 +342,16 @@ export class StreamingEngine {
                     onEvent({ type: 'status', text: note });
                 }
             } catch (err) {
-                // Preprocessing is advisory; the turn goes on without it, and says so.
-                onEvent({ type: 'subagent_done', text: `Skill preprocessing failed (${summarizeModelError(err)}); the main model answers without it.` });
+                // Preprocessing is advisory; the turn goes on without it, and the reply says so.
+                const note = `Skill preprocessing failed (${summarizeModelError(err)}); answered without it`;
+                helperNotes.push(note);
+                onEvent({ type: 'subagent_done', text: `${note}.` });
+                onEvent({ type: 'status', text: `${note}.` });
             }
         }
 
         throwIfAborted(signal);
-        const attempt = { modelResponded: false };
+        const attempt: TurnAttemptState = { modelResponded: false, helperNotes };
         // The fallback list stays, but every turn starts from the requested (or configured) model again: a model that
         // answered once is not made the default for later turns. Each skipped model is reported with its reason.
         const candidates = this.client.getModelCandidates(request.model);
@@ -343,21 +367,41 @@ export class StreamingEngine {
             ...(credentialNote ? { credentialNote } : {}),
             ...(helperNotes.length > 0 ? { helperNotes } : {})
         });
-        const response = await this.client.withModelFallback(
-            candidates,
-            targetModel => this.executeVertexGeneration(targetModel, auth, request, withProvenance(onEvent, provenanceFor(targetModel)), signal, attempt),
-            {
-                onFallback: (model, reason, nextModel) => {
-                    skipped.push({ model, reason });
-                    onEvent({ type: 'status', text: `${model} is not available (${reason}); trying ${nextModel}.` });
+        let response: GeminiGenerateResponse;
+        try {
+            response = await this.client.withModelFallback(
+                candidates,
+                targetModel => {
+                    attempt.currentModel = targetModel;
+                    return this.executeVertexGeneration(targetModel, auth, request, withProvenance(onEvent, () => provenanceFor(targetModel)), signal, attempt);
                 },
-                // Partial output may already have been streamed; never replay a turn.
-                retryTransient: false,
-                // A missing model fails its first request. Once a model has answered, tools may have run (some for
-                // many minutes): a later "not found" must end the turn, not replay it on the next model.
-                canFallback: () => !attempt.modelResponded
+                {
+                    onFallback: (model, reason, nextModel) => {
+                        skipped.push({ model, reason });
+                        // The status carries the provenance of the model now asked, so a reply stopped or cut short
+                        // from here on still says that another model is answering, and why.
+                        onEvent({ type: 'status', text: `${model} is not available (${reason}); trying ${nextModel}.`, modelProvenance: provenanceFor(nextModel) });
+                    },
+                    // Partial output may already have been streamed; never replay a turn.
+                    retryTransient: false,
+                    // A missing model fails its first request. Once a model has answered, tools may have run (some for
+                    // many minutes): a later "not found" must end the turn, not replay it on the next model.
+                    canFallback: () => !attempt.modelResponded
+                }
+            );
+        } catch (err) {
+            // A turn that fails (an HTTP error from a fallback model, a dropped stream, the API key refusing after a
+            // token failure) still says which model and credential it was on; the route forwards this on its error event.
+            if (err instanceof Error && !provenanceOfError(err)) {
+                const everyModelUnavailable = !attempt.modelResponded && skipped.length === candidates.length - 1 && isModelNotFoundError((err as Error & { cause?: unknown }).cause ?? err);
+                const last = attempt.currentModel || candidates[0];
+                (err as ErrorWithProvenance).modelProvenance = {
+                    ...provenanceFor(last),
+                    ...(everyModelUnavailable ? { noModelAnswered: true } : {})
+                };
             }
-        );
+            throw err;
+        }
         return { ...response, modelProvenance: provenanceFor(response.modelUsed) };
     }
 
@@ -534,13 +578,19 @@ export class StreamingEngine {
         request: GeminiGenerateRequest,
         onEvent: StreamEventSink,
         signal?: AbortSignal,
-        attempt: { modelResponded: boolean } = { modelResponded: false }
+        attempt: TurnAttemptState = { modelResponded: false, helperNotes: [] }
     ): Promise<GeminiGenerateResponse> {
         const url = auth.type === 'vertex'
             ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
             : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
 
         const systemInstructionText = await buildSystemInstruction(request, this.promptServices());
+        // The summary of older turns is a helper call: when the API key answered it, or it failed and the older
+        // turns were dropped, the reply says so (helperNotes), not only a passing status line.
+        const addHelperNote = (note: string) => {
+            if (!attempt.helperNotes.includes(note)) attempt.helperNotes.push(note);
+            onEvent({ type: 'status', text: `${note}.` });
+        };
         request.chatHistory = await compactChatHistory(request.chatHistory, transcript =>
             this.client.generateContent({
                 model: DEFAULT_SUBAGENT_MODEL,
@@ -550,10 +600,13 @@ export class StreamingEngine {
                 maxOutputTokens: 8192
             }).then(r => {
                 if (r.credentialNote) {
-                    onEvent({ type: 'status', text: `Earlier messages were summarized with the Gemini API key: ${r.credentialNote}.` });
+                    addHelperNote(`Earlier messages were summarized by ${DEFAULT_SUBAGENT_MODEL} with the Gemini API key — ${r.credentialNote}`);
                 }
                 return r.text;
-            })
+            }),
+            undefined,
+            undefined,
+            (dropped, error) => addHelperNote(`${dropped} earlier message${dropped === 1 ? ' was' : 's were'} left out of the context: summarizing them with ${DEFAULT_SUBAGENT_MODEL} failed (${summarizeModelError(error)})`)
         );
         const contents = buildContents(request);
         const tools = this.buildToolDeclarations(request);
