@@ -31,7 +31,6 @@ import { FimCompletionService } from './fim-completion-service';
 import { QuickEditService } from './quick-edit-service';
 import {
     CanvasArtifact,
-    MarkdownDocumentData,
     MarkdownSection,
     McpExecutionState,
     Scene3DData
@@ -100,7 +99,6 @@ import {
     extractDocumentTitle,
     markdownStringToSections,
     parseOrSynthesizeArtifact,
-    synthesizeComprehensiveDocument,
     withOpenArtifactRule
 } from './gemini/artifact-synthesis';
 
@@ -586,11 +584,6 @@ export class GeminiService {
     /** Extract a rich, specific document title from prompt context, avoiding generic strings. */
     public extractDocumentTitle(prompt: string, fallback: string = 'Strategic Specification & Notes'): string {
         return extractDocumentTitle(prompt, fallback);
-    }
-
-    /** Synthesize a comprehensive, executive document hierarchy for any topic. */
-    public synthesizeComprehensiveDocument(prompt: string, customTitle?: string): MarkdownDocumentData {
-        return synthesizeComprehensiveDocument(prompt, customTitle);
     }
 
     /** The canvas artifact the model wrote in its reply (primitive tag or JSON envelope), or undefined. */

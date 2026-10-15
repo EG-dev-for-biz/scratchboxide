@@ -20,7 +20,6 @@ import type {
     Scene3DData
 } from '../../browser/generative-canvas/canvas-types';
 import { normalizePrimitiveType } from '../../browser/generative-canvas/canvas-types';
-import { synthesizeComprehensiveDocument as synthesizeDocumentFromEngine } from '../../browser/generative-canvas/document-synthesis-engine';
 import type { VideoTimelineData } from '../../browser/generative-canvas/services/video/videoTypes';
 import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
 import { applyClayFirstPassBaseline } from './scene3d-clay-baseline';
@@ -536,13 +535,6 @@ export function extractDocumentTitle(prompt: string, fallback: string = UNTITLED
         return cleanPrompt.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').slice(0, 75);
     }
     return fallback && fallback !== 'Markdown Document' ? fallback : UNTITLED_DOCUMENT_TITLE;
-}
-
-/**
- * Synthesize a comprehensive, executive document hierarchy for any topic with rich 4D capabilities.
- */
-export function synthesizeComprehensiveDocument(prompt: string, customTitle?: string): MarkdownDocumentData {
-    return synthesizeDocumentFromEngine(prompt, customTitle || extractDocumentTitle(prompt));
 }
 
 /**

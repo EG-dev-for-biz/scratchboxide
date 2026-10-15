@@ -50,7 +50,6 @@ const PUBLIC_METHODS_BEFORE_SPLIT = [
     'saveCredentialsDirectly',
     'startDeepResearchSession',
     'streamGenerate',
-    'synthesizeComprehensiveDocument',
     'synthesizeSpeech',
     'verifyVisual'
 ];
