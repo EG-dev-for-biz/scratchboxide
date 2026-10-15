@@ -111,25 +111,46 @@ describe('3D intent policy', () => {
     });
 
     it('changes a built object by rebuilding its edited spec where it stands, not with a script', () => {
-        expect(SPATIAL_INTENT_POLICY).toMatch(/To change an object that build_3d_object_from_reference built[^\n]*specJson[^\n]*same location and placement/);
+        expect(SPATIAL_INTENT_POLICY).toMatch(/To change an object that build_3d_object_from_reference built[^\n]*specJson[^\n]*same location and placement[^\n]*replaceObjectId set to its id/);
         expect(SPATIAL_INTENT_POLICY).not.toContain('editing SPEC');
         expect(SPATIAL_INTENT_POLICY).not.toContain('supporting geometry such as a plinth');
         const params = OBJECT_REFERENCE_TOOL_DECLARATIONS[0].parameters!.properties!;
         expect(params.specJson.type).toBe('STRING');
-        expect(OBJECT_REFERENCE_TOOL_DECLARATIONS[0].description).toContain('pass the same location and placement to keep it where it stood');
+        expect(OBJECT_REFERENCE_TOOL_DECLARATIONS[0].description).toContain('at a place, pass the same location, its placement (or a new one to move it) and replaceObjectId set to that object\'s id');
+        expect(params.replaceObjectId.type).toBe('STRING');
     });
 
-    it('gives a follow-up turn the active object build\'s whole spec, decided from the scene, not the words', () => {
+    it('gives a follow-up turn every built object\'s id, placement and whole spec, decided from the scene, not the words', () => {
         const spec = { subject: 'vase', observations: [], boundingMeters: [0.3, 0.6, 0.3], expectedBodies: 1, parts: [{ id: 'body', label: 'body', revolve: { meridian: Array.from({ length: 400 }, (_, i) => [i / 400, 0.1]) } }] };
-        const staged = { id: 'o', type: '3d-scene', title: 'Vase at Union Square', data: { title: 'Vase', objects: [], objectBuild: { spec, location: { query: 'Union Square, San Francisco' }, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90, sceneX: 12, sceneZ: -8, yawDeg: 90, surfaceYMeters: 1.5 } } } };
+        const placement = { eastMeters: 12, northMeters: 8, headingDeg: 90, surfaceYMeters: 1.5 };
+        const hero = (id: string, record: Record<string, unknown>) => ({
+            id, content: { type: '3d-model', durableUri: `/models/${id}.glb`, metadata: { role: 'hero', description: 'vase', source: 'build_3d_object_from_reference', objectBuild: record } },
+            space: { spatial3d: { x: 12, y: 0, z: -8, yaw: 90 } }
+        });
+        const tiles = { id: 'tile-clay-1', content: { type: '3d-model', durableUri: '/models/t.glb', metadata: { source: 'Google3DTilesClay', role: 'environment', isGround: true } } };
+        const staged = {
+            id: 'o', type: '3d-scene', title: 'Vase at Union Square',
+            data: { title: 'Vase', objects: [tiles, hero('hero-1', { spec, placement })], objectBuild: { spec, objectId: 'hero-1', location: { query: 'Union Square, San Francisco' }, placement } }
+        };
         const forTaller = userText({ prompt: 'make it taller', activeArtifact: staged as any });
         const forOther = userText({ prompt: 'what is this?', activeArtifact: staged as any });
         expect(forTaller.replace('make it taller', '')).toBe(forOther.replace('what is this?', ''));
         expect(forTaller).toContain(`Spec: ${JSON.stringify(spec)}]`);
-        expect(forTaller).toContain('at location "Union Square, San Francisco" with placement {"eastMeters":12,"northMeters":8,"headingDeg":90}');
-        expect(forTaller).toContain('pass the whole spec as specJson to build_3d_object_from_reference, with the same location and placement');
+        expect(forTaller).toContain('build_3d_object_from_reference built this scene\'s object at location "Union Square, San Francisco"');
+        expect(forTaller).toContain('- "vase", id "hero-1" with placement {"eastMeters":12,"northMeters":8,"headingDeg":90}. Spec: ');
+        expect(forTaller).toContain('pass the whole spec as specJson to build_3d_object_from_reference, with location "Union Square, San Francisco", its placement (unless the user moves it) and replaceObjectId set to its id');
+        expect(forTaller).toContain('To add another object at this place, call build_3d_object_from_reference with location "Union Square, San Francisco" and a placement clear of these; they are kept.');
         expect(forTaller).toContain('add the plinth as parts of that object\'s spec and rebuild it with build_3d_object_from_reference (specJson)');
-        expect(activeObjectBuildContext({ ...staged.data, objectBuild: { spec } } as any)).toContain('in a studio void');
+        // Two objects at the place: both are listed.
+        const two = { ...staged.data, objects: [...staged.data.objects, hero('hero-2', { spec: { ...spec, subject: 'bench' }, placement: { ...placement, eastMeters: 20 } })] };
+        const both = activeObjectBuildContext(two as any);
+        expect(both).toContain('built these 2 objects in this scene');
+        expect(both).toContain('id "hero-1"');
+        expect(both).toContain('id "hero-2" with placement {"eastMeters":20,"northMeters":8,"headingDeg":90}');
+        // A studio void object changes through its spec alone.
+        const studio = activeObjectBuildContext({ objects: [hero('hero-3', { spec })], objectBuild: { spec } } as any);
+        expect(studio).toContain('in a studio void');
+        expect(studio).not.toContain('replaceObjectId');
         expect(userText({ prompt: 'make it taller', activeArtifact: PLAIN_SCENE as any })).not.toContain('Active object build');
     });
 
@@ -141,6 +162,7 @@ describe('3D intent policy', () => {
         expect(SPATIAL_INTENT_POLICY).toMatch(/A real-world place[^\n]*call google_3d_tiles_get_clay/);
         expect(SPATIAL_INTENT_POLICY).toContain('isolate: true');
         expect(SPATIAL_INTENT_POLICY).toMatch(/One object at a real-world place: call build_3d_object_from_reference with location[^\n]*placement/);
+        expect(SPATIAL_INTENT_POLICY).toMatch(/Several objects at a real-world place: call build_3d_object_from_reference once per object, each with the same location and its own placement[^\n]*adds its object beside the objects already there/);
         expect(SPATIAL_INTENT_POLICY).toContain('Never supply coordinates from memory');
     });
 
@@ -153,8 +175,9 @@ describe('3D intent policy', () => {
         const description = OBJECT_REFERENCE_TOOL_DECLARATIONS[0].description;
         expect(description).not.toContain('anything to build that is not a real-world place');
         expect(description).toContain('Build one specific object or an abstract form');
-        expect(description).toMatch(/imagined environment, a landscape or several objects, write a script for execute_3d_python_script/);
-        expect(description).toContain('for a real place, use google_3d_tiles_get_clay');
+        expect(description).toMatch(/imagined environment, a landscape or several objects with no real place, write a script for execute_3d_python_script/);
+        expect(description).toContain('for a real place alone, use google_3d_tiles_get_clay');
+        expect(description).toContain('Several objects at one real place take one call each with the same location');
         const params = OBJECT_REFERENCE_TOOL_DECLARATIONS[0].parameters!.properties!;
         expect(params.placement.required).toEqual(['eastMeters', 'northMeters', 'headingDeg']);
     });
@@ -162,6 +185,7 @@ describe('3D intent policy', () => {
     it('sends objects at a place on an active scene to the reference builder with a placement', () => {
         const text = userText({ prompt: 'put a bench here', activeArtifact: PLAIN_SCENE as any });
         expect(text).toContain('To build an object at a place, call build_3d_object_from_reference with location and placement.');
+        expect(text).toContain('except another object at the place this scene\'s objects were built at: build_3d_object_from_reference with that same location adds it to this scene.');
         expect(text).not.toContain('execute_3d_python_script({ location');
     });
 });

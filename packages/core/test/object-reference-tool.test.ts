@@ -17,7 +17,7 @@
  * rules put it; the native build is real; and the reference image never reaches the payload or the disk.
  */
 
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -27,7 +27,8 @@ import { generatorFileIsObject } from '../src/browser/generative-canvas/primitiv
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
-import { REFERENCE_IMAGE_MODEL, schemaInstruction, type ChatModelSource, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
+import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, schemaInstruction, type ChatModelSource, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
+import { activeObjectBuildContext } from '../src/node/gemini/prompt-builder';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, type ObjectBuildSpec } from '../src/common/spatial/object-build-spec';
 import { NativePythonRunnerService, type PythonExecutionResult } from '../src/node/3d-engine/native-python-runner-service';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
@@ -108,6 +109,8 @@ function fakeClient(opts: {
     specs?: string[];
     differences?: string[];
     unserved?: string[];
+    /** Every comparison call throws this (spec and image calls are answered as usual). */
+    comparisonError?: Error;
 }): GenerateContentClient & { calls: Call[] } {
     const images = [...(opts.image ?? [() => imageResponse()])];
     const specs = [...(opts.specs ?? [])];
@@ -126,6 +129,7 @@ function fakeClient(opts: {
                 }
                 // Spec requests carry the spec schema; comparisons carry the differences schema.
                 const isSpec = askedText(call).includes(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
+                if (!isSpec && opts.comparisonError) throw opts.comparisonError;
                 const queue = isSpec ? specs : diffs;
                 const text = queue.length > 1 ? queue.shift()! : (queue[0] ?? (isSpec ? '' : NO_DIFFERENCES));
                 return { candidates: [{ content: { parts: [{ text }] } }], modelVersion: params.model } as any;
@@ -163,6 +167,7 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
     runPython?: (script: string, options: any) => Promise<PythonExecutionResult>;
     stageAtLocation?: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolHandlerOutcome>;
     buildTimeoutMs?: number;
+    prepareEngine?: () => Promise<string | null>;
 } = {}) {
     const pythonRuns: string[] = [];
     const runPython = extra.runPython ?? ((script: string, options: any) => NativePythonRunnerService.getInstance().runScript(script, options));
@@ -172,7 +177,8 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
             runPython: async (script, options) => { pythonRuns.push(script); return runPython(script, options); },
             outputDir: path.join(TMP, 'build'),
             sleep: async () => undefined,
-            ...(extra.buildTimeoutMs ? { buildTimeoutMs: extra.buildTimeoutMs } : {})
+            ...(extra.buildTimeoutMs ? { buildTimeoutMs: extra.buildTimeoutMs } : {}),
+            ...(extra.prepareEngine ? { prepareEngine: extra.prepareEngine } : {})
         },
         stageAtLocation: extra.stageAtLocation,
         publicModelsDir: MODELS_DIR
@@ -240,7 +246,10 @@ function writeStagedTiles(): string {
     return '/models/staged_tiles_test.glb';
 }
 
-/** A trees layer as the clay staging adds it: one crown whose top is 9 m up over x 3..9, z -7..-1, and a trunk. */
+/**
+ * A trees layer as the clay staging adds it (google_3d_tiles_get_clay with trees: SB-Veggie, role 'environment',
+ * layer 'vegetation', not ground): one crown whose top is 9 m up over x 3..9, z -7..-1, and a trunk.
+ */
 function writeStagedTrees(): string {
     const quad = (x0: number, x1: number, z0: number, z1: number, y: number, base: number) => ({
         p: [x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1],
@@ -254,7 +263,7 @@ function writeStagedTrees(): string {
 
 function stagedScene(tileUri: string, treesUri?: string): (args: Record<string, unknown>, c: ToolContext) => Promise<ToolHandlerOutcome> {
     const tile = { id: 'tile-clay-1', content: { type: '3d-model', durableUri: tileUri, metadata: { source: 'Google3DTilesClay', role: 'environment', isGround: true } } };
-    const trees = treesUri ? [{ id: 'tile-trees-1', content: { type: '3d-model', durableUri: treesUri, metadata: { source: 'SB-Veggie', role: 'vegetation' } } }] : [];
+    const trees = treesUri ? [{ id: 'tile-trees-1', content: { type: '3d-model', durableUri: treesUri, metadata: { source: 'SB-Veggie', role: 'environment', layer: 'vegetation' } }, space: { spatial3d: { x: 0, y: 0, z: 0 } } }] : [];
     return async () => ({
         status: 'completed',
         resultPayload: {
@@ -262,6 +271,52 @@ function stagedScene(tileUri: string, treesUri?: string): (args: Record<string, 
             remesh: { ok: true }, artifact: { id: 'a', type: '3d-scene', title: 'Union Square', data: { renderMode: 'clay', environment: { skybox: 'studio', lighting: 'studio', ground: false }, objects: [tile, ...trees], geoAnchor: { lat: 37.788, lng: -122.4075 } } }
         }
     });
+}
+
+function meshFromFile(file: string): THREE.Mesh {
+    const soup = glbToTriangleSoup(fs.readFileSync(file))!;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(soup.positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(soup.indices, 1));
+    return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+}
+
+/**
+ * Attaches a scene's GLB objects in `order` (ids) and seats them with the real TerrainManager by Scene3DPrimitive's
+ * settleOnGround rules: a hero with y 0 snaps onto the highest surface under it when it attaches, and an environment
+ * layer (role 'environment' or isGround) attaching re-seats every attached hero. Returns each object's world bounds.
+ */
+function seatLikeViewport(objects: any[], order: string[]): Map<string, THREE.Box3> {
+    const scene = new THREE.Scene();
+    const terrain = new TerrainManager({ scene });
+    const isEnvironment = (o: any) => o.content.metadata.role === 'environment' || !!o.content.metadata.isGround;
+    const models = new Map<string, THREE.Object3D>();
+    for (const id of order) {
+        const def = objects.find(o => o.id === id);
+        const model = meshFromFile(path.join(MODELS_DIR, path.basename(def.content.durableUri)));
+        const s = def.space?.spatial3d || {};
+        model.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
+        model.rotation.y = ((s.yaw ?? 0) * Math.PI) / 180;
+        scene.add(model);
+        models.set(id, model);
+        if (isEnvironment(def)) {
+            for (const [otherId, other] of models) {
+                const otherDef = objects.find(o => o.id === otherId);
+                if (otherId === id || isEnvironment(otherDef)) continue;
+                const os = otherDef.space?.spatial3d || {};
+                terrain.snapObjectToGround(other, os.y !== undefined && os.y !== 0 ? os.y : 0);
+            }
+        } else if (!s.y) {
+            terrain.snapObjectToGround(model, 0);
+        }
+    }
+    return new Map([...models].map(([id, m]) => [id, new THREE.Box3().setFromObject(m)]));
+}
+
+/** Every order the objects can attach in (they load in parallel, so any can finish first). */
+function loadOrders(ids: string[]): string[][] {
+    if (ids.length <= 1) return [ids];
+    return ids.flatMap((id, i) => loadOrders([...ids.slice(0, i), ...ids.slice(i + 1)]).map(rest => [id, ...rest]));
 }
 
 describe('build_3d_object_from_reference', () => {
@@ -545,21 +600,123 @@ describe('build_3d_object_from_reference', () => {
         expect(out.summaryResult).toContain('Revision pass 3 failed (checks:');
     }, 180_000);
 
-    it('re-asks once for a malformed comparison, and fails the check when it stays malformed', async () => {
+    it('re-asks once for a malformed comparison, and keeps a build that passed every check, unchecked and said so, when it stays malformed', async () => {
         const fixed = fakeClient({ specs: [JSON.stringify(VASE)], differences: ['{"differences": [{"problem": "knob a little small", "confidence": "medium"}]}', NO_DIFFERENCES] });
         const ok = await handlerWith(fixed).run({ request: 'a fluted vase with a knob on top' });
         expect(ok.status, String(ok.resultPayload.error)).toBe('completed');
         const comparisons = fixed.calls.filter(isComparisonCall);
         expect(comparisons).toHaveLength(2);
         expect(askedText(comparisons[1])).toContain('confidence "high" or "low"');
+        expect(ok.resultPayload.comparisonFailed).toBeUndefined();
 
+        // Pass 1 passed every measured check; the comparison stays malformed: the build is returned, not thrown away.
         const broken = fakeClient({ specs: [JSON.stringify(VASE)], differences: ['{"differences": [{"problem": "x", "confidence": "medium"}]}'] });
         const out = await handlerWith(broken).run({ request: 'a fluted vase with a knob on top' });
-        expect(out.status).toBe('failed');
-        expect(out.resultPayload.stage).toBe('checks');
-        expect(String(out.resultPayload.error)).toContain('did not return a usable comparison');
-        expect(out.resultPayload.artifact).toBeUndefined();
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.resultPass).toBe(1);
+        expect(build.comparisonFailed).toMatchObject({ pass: 1, unverifiedDifferences: [] });
+        expect(build.comparisonFailed.reason).toContain('did not return a usable comparison');
+        expect(build.passes[0]).toMatchObject({ outcome: 'built', passedChecks: true });
+        expect(build.passes[0].comparisonError).toContain('did not return a usable comparison');
+        expect(build.remainingDifferences).toEqual([]);
+        expect(out.summaryResult).toContain('The clay render of pass 1 could not be compared with the reference (');
+        expect(out.summaryResult).toContain('so how closely it matches the reference is unchecked');
+        expect(out.summaryResult).not.toContain('matched the reference with no high-confidence differences');
+        // Nothing was left to fix, so no revision was asked for.
+        expect(broken.calls.filter(c => askedText(c).includes('Return the complete corrected build spec'))).toHaveLength(0);
     }, 180_000);
+
+    it('keeps a build that passed every check when the comparison model keeps failing, and says which differences are unverified', async () => {
+        const unavailable = fakeClient({ specs: [JSON.stringify(VASE)], comparisonError: httpError(503, 'The service is currently unavailable.') });
+        const out = await handlerWith(unavailable).run({ request: 'a fluted vase with a knob on top' });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        expect(out.resultPayload.comparisonFailed).toMatchObject({ pass: 1 });
+        expect(String((out.resultPayload.comparisonFailed as any).reason)).toContain('503');
+        expect(out.resultPayload.artifact).toBeDefined();
+
+        // Pass 2 fixes what pass 1's comparison found, but its own comparison cannot be had: pass 2 is the result,
+        // and the differences it was asked to fix are listed as unverified.
+        const taller = 'The body should be taller.';
+        const revisedUnchecked = fakeClient({ specs: [JSON.stringify(VASE), JSON.stringify(VASE)], differences: [highDifference(taller), '{"differences": [{"problem": "x", "confidence": "medium"}]}'] });
+        const revised = await handlerWith(revisedUnchecked).run({ request: 'a tall fluted vase' });
+        expect(revised.status, String(revised.resultPayload.error)).toBe('completed');
+        const build = (revised.resultPayload.artifact as any).data.objectBuild;
+        expect(build.resultPass).toBe(2);
+        expect(build.revisionFailed).toBeUndefined();
+        expect(build.comparisonFailed).toMatchObject({ pass: 2, unverifiedDifferences: [{ problem: taller, confidence: 'high' }] });
+        expect(revised.summaryResult).toContain(`Pass 2 was asked to fix these differences pass 1 had; whether it did is unknown: "${taller}"`);
+    }, 180_000);
+
+    it('names the model that read the spec, and the chat model it stood in for, when the build then fails', async () => {
+        const client = fakeClient({ unserved: [CHAT_MODEL], specs: ['not json'] });
+        const out = await handlerWith(client).run({ request: 'a fluted vase' }, ctx(CHAT_MODEL));
+        expect(out.status).toBe('failed');
+        expect(out.resultPayload.stage).toBe('build-spec');
+        expect(String(out.resultPayload.error)).toContain(`${FALLBACK_MODEL} did not produce a buildable spec after one correction`);
+        expect(String(out.resultPayload.error)).toContain(`(The spec was read by ${FALLBACK_MODEL} because the chat's model ${CHAT_MODEL} is not served: ${CHAT_MODEL}: `);
+        expect(out.resultPayload.visionModel).toMatchObject({ requested: CHAT_MODEL, used: FALLBACK_MODEL, source: 'request', skipped: [{ model: CHAT_MODEL }] });
+        expect(String((out.resultPayload.visionModel as any).skipped[0].reason)).toContain('404');
+
+        // With the chat's own model serving, the failure still names it, and says nothing was skipped.
+        const served = fakeClient({ specs: ['not json'] });
+        const plain = await handlerWith(served).run({ request: 'a fluted vase' }, ctx(null));
+        expect(plain.resultPayload.visionModel).toMatchObject({ requested: CHAT_MODEL, used: CHAT_MODEL, source: 'chat-default', skipped: [] });
+        expect(String(plain.resultPayload.error)).not.toContain('The spec was read by');
+    }, 60_000);
+
+    it('starts the build time limit once the engine is ready, and fails at the engine stage when it cannot be built', async () => {
+        // An engine rebuild that takes longer than the build limit: the build still gets its whole limit afterwards.
+        let aborted: boolean | undefined;
+        const slowEngine = handlerWith(fakeClient({}), {
+            buildTimeoutMs: 1000,
+            prepareEngine: () => new Promise(resolve => setTimeout(() => resolve(null), 1500)),
+            runPython: async (_script, options) => {
+                aborted = options.signal.aborted;
+                await new Promise(resolve => setTimeout(resolve, 300));
+                return { success: false, exitCode: 1, stdout: '', stderr: 'Traceback\nscratchbox.object_spec.SpecError: 1 problem\n- part "vase" revolve: too thin', executionTimeMs: 300, errorDetails: '' };
+            }
+        });
+        const spec = await slowEngine.run({ request: 'the vase', specJson: JSON.stringify(VASE) });
+        expect(aborted).toBe(false);
+        expect(spec.resultPayload).toMatchObject({ stage: 'build', errors: ['part "vase" revolve: too thin'] });
+        expect(spec.resultPayload.timedOut).toBeUndefined();
+
+        // A failed engine build is its own stage: no spec is blamed, no re-ask is spent and Python never runs.
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const broken = handlerWith(client, { prepareEngine: async () => 'Failed to build scratchbox_native: cmake exited 2' });
+        const out = await broken.run({ request: 'a fluted vase' });
+        expect(out.status).toBe('failed');
+        expect(out.resultPayload).toMatchObject({ stage: 'engine', engineError: 'Failed to build scratchbox_native: cmake exited 2' });
+        expect(String(out.resultPayload.error)).toContain('The native engine could not be built, so no spec can be built');
+        expect(client.calls.filter(isSpecCall)).toHaveLength(1);
+        expect(broken.pythonRuns).toHaveLength(0);
+    }, 60_000);
+
+    it('with the real runner, waits for a slow native module before arming the time limit', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        await runner.ensureNativeModule();
+        const real = runner.ensureNativeModule.bind(runner);
+        const progress: string[] = [];
+        const fresh = vi.spyOn(runner, 'isNativeModuleFresh').mockReturnValue(false);
+        // The rebuild a merged engine change sets off: 8 s here, against a 6 s build limit that the build itself
+        // (a couple of seconds) stays well inside. Armed before the wait, the limit would stop it. Later calls (the
+        // runner's own, before it starts Python) find the module built, as they do once a rebuild has finished.
+        const slow = vi.spyOn(runner, 'ensureNativeModule')
+            .mockImplementationOnce(async () => { await new Promise(resolve => setTimeout(resolve, 8000)); return real(); })
+            .mockImplementation(real);
+        try {
+            const started = Date.now();
+            const built = await buildObjectFromSpec(VASE, { reportProgress: m => progress.push(m) }, { buildTimeoutMs: 6000, outputDir: path.join(TMP, 'build') });
+            expect(Date.now() - started).toBeGreaterThan(8000);
+            expect(built.glb.toString('utf8', 0, 4)).toBe('glTF');
+            expect(built.buildMs).toBeLessThan(6000);
+            expect(progress).toContain('Building the native engine after an engine change (a cold build takes a few minutes)');
+        } finally {
+            slow.mockRestore();
+            fresh.mockRestore();
+        }
+    }, 120_000);
 
     it('rejects a build that never passes its checks and mounts nothing', async () => {
         const client = fakeClient({ specs: [JSON.stringify(DETACHED)] });
@@ -605,7 +762,7 @@ describe('build_3d_object_from_reference', () => {
         const hero = artifact.data.objects[1];
         expect(hero.space.spatial3d).toEqual({ x: 12, y: 0, z: -8, yaw: 90 });
         const placement = artifact.data.objectBuild.placement;
-        expect(placement).toEqual({ eastMeters: 12, northMeters: 8, headingDeg: 90, sceneX: 12, sceneZ: -8, yawDeg: 90, surfaceYMeters: 1.5 });
+        expect(placement).toEqual({ eastMeters: 12, northMeters: 8, headingDeg: 90, sceneX: 12, sceneZ: -8, yawDeg: 90, surfaceYMeters: 1.5, restsOn: { id: 'tile-clay-1', source: 'Google3DTilesClay' } });
         expect(artifact.data.objectBuild.location).toEqual({ query: 'Union Square, San Francisco', resolvedAddress: 'Union Square, San Francisco, CA', geoAnchor: { lat: 37.788, lng: -122.4075 }, staging: 'staged' });
         // The camera looks at the object's middle, from close by, not at the whole district.
         const size = artifact.data.objectBuild.checks.builtBoundingMeters;
@@ -615,7 +772,7 @@ describe('build_3d_object_from_reference', () => {
         const distance = Math.hypot(...[0, 1, 2].map(k => artifact.data.camera.position[k] - artifact.data.camera.target[k]));
         expect(distance).toBeLessThan(5);
         expect(out.summaryResult).toContain('12 m east and 8 m north of the anchor, facing 90 degrees');
-        expect(out.summaryResult).toContain('call build_3d_object_from_reference with specJson set to the edited spec, and with this location and placement');
+        expect(out.summaryResult).toContain(`call build_3d_object_from_reference with specJson set to the edited spec, this location and placement, and replaceObjectId "${out.resultPayload.objectId}"`);
     }, 180_000);
 
     it('is drawn by the viewport where the placement says, whichever of the object and the tiles loads first', async () => {
@@ -839,25 +996,42 @@ describe('build_3d_object_from_reference', () => {
         expect(askedText(specCalls[1])).toContain('The build did not finish within 1 s, so it was stopped');
     }, 60_000);
 
-    it('stands the object on the ground of the tiles, not on staged trees above the spot, and says what is above', async () => {
+    it('fails before any model call when the spot is under a staged tree crown, and names clear spots the viewport seats it on the ground at', async () => {
         const client = fakeClient({ specs: [JSON.stringify(VASE)] });
-        const out = await handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles(), writeStagedTrees()) })
-            .run({ request: 'a fluted vase under the tree', location: 'Union Square, San Francisco', placement: { eastMeters: 6, northMeters: 4, headingDeg: 0 } });
+        const handler = handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles(), writeStagedTrees()) });
+        const location = 'Union Square, San Francisco';
+        const under = await handler.run({ request: 'a fluted vase under the tree', location, placement: { eastMeters: 6, northMeters: 4, headingDeg: 0 } });
+        expect(under.status).toBe('failed');
+        expect(under.resultPayload.stage).toBe('placement');
+        expect(client.calls).toHaveLength(0);
+        const error = String(under.resultPayload.error);
+        expect(error).toContain('the highest surface is the vegetation layer tile-trees-1 (SB-Veggie), 9 m up, above the ground there at 1.5 m');
+        expect(error).toContain('so the object would be drawn on top of that, not on the ground');
+        expect(under.resultPayload.coveredBy).toEqual({ id: 'tile-trees-1', topYMeters: 9 });
+        const spots = under.resultPayload.clearSpots as Array<{ eastMeters: number; northMeters: number; distanceMeters: number }>;
+        expect(spots.length).toBeGreaterThan(0);
+        // The crown covers east 3..9, north 1..7, and the roof over the anchor (east and north -5..5) is not the street
+        // level of the spot: every suggested spot is clear of the crown and on the street.
+        for (const s of spots) {
+            expect(s.eastMeters < 3 || s.eastMeters > 9 || s.northMeters < 1 || s.northMeters > 7, JSON.stringify(s)).toBe(true);
+            expect(Math.abs(s.eastMeters) > 5 || Math.abs(s.northMeters) > 5, JSON.stringify(s)).toBe(true);
+        }
+        expect(error).toContain(`the nearest clear spots are ${spots[0].eastMeters} m east, ${spots[0].northMeters} m north`);
+
+        // At the first clear spot it builds, and the viewport seats it on the ground there in every load order.
+        const out = await handler.run({ request: 'a fluted vase beside the tree', location, placement: { eastMeters: spots[0].eastMeters, northMeters: spots[0].northMeters, headingDeg: 0 } });
         expect(out.status, String(out.resultPayload.error)).toBe('completed');
         const data = (out.resultPayload.artifact as any).data;
-        expect(data.objects.map((o: any) => o.content.metadata.role)).toEqual(['environment', 'vegetation', 'hero']);
-        expect(data.objectBuild.placement).toMatchObject({
-            sceneX: 6, sceneZ: -4, surfaceYMeters: 1.5,
-            overheadLayers: [{ id: 'tile-trees-1', role: 'vegetation', source: 'SB-Veggie', topYMeters: 9 }]
-        });
-        expect(data.camera.target[1]).toBeLessThan(3);
-        expect(out.summaryResult).toContain('resting on the ground surface of the tiles there, 1.5 m above');
-        expect(out.summaryResult).toContain('the vegetation layer (SB-Veggie) reaches 9 m there: the object stands on the ground beneath, not on it.');
-        expect(out.summaryResult).not.toContain('likely a roof');
-        // Clear of the crown, nothing is reported above it.
-        const open = await handlerWith(fakeClient({ specs: [JSON.stringify(VASE)] }), { stageAtLocation: stagedScene(writeStagedTiles(), writeStagedTrees()) })
-            .run({ request: 'a fluted vase', location: 'Union Square, San Francisco', placement: { eastMeters: 20, northMeters: 4, headingDeg: 0 } });
-        expect((open.resultPayload.artifact as any).data.objectBuild.placement.overheadLayers).toBeUndefined();
+        expect(data.objects.map((o: any) => o.content.metadata.source)).toEqual(['Google3DTilesClay', 'SB-Veggie', 'build_3d_object_from_reference']);
+        expect(data.objectBuild.placement).toMatchObject({ surfaceYMeters: 1.5, restsOn: { id: 'tile-clay-1', source: 'Google3DTilesClay' } });
+        expect(out.summaryResult).toContain('resting on the ground surface of the tiles there, 1.5 m above the anchor\'s street level; nothing else staged there rises above that spot.');
+        const heroId = String(out.resultPayload.objectId);
+        for (const order of loadOrders(data.objects.map((o: any) => o.id))) {
+            const box = seatLikeViewport(data.objects, order).get(heroId)!;
+            expect(box.min.y, order.join(' > ')).toBeCloseTo(1.5, 3);
+            expect(data.camera.target[1]).toBeGreaterThan(box.min.y);
+            expect(data.camera.target[1]).toBeLessThan(box.max.y);
+        }
     }, 180_000);
 
     it('builds a given spec before staging, so a spec that cannot be built makes no staging call', async () => {
@@ -877,35 +1051,110 @@ describe('build_3d_object_from_reference', () => {
         expect(stageArgs).toEqual([{ query: 'Union Square, San Francisco' }]);
     }, 180_000);
 
-    it('reuses the active scene\'s staging for an edit at the same place instead of extracting it again', async () => {
+    it('adds a second object at a staged place beside the first, keeps both, and replaces one only when asked', async () => {
         const stageArgs: unknown[] = [];
         const staging = stagedScene(writeStagedTiles(), writeStagedTrees());
-        const { run } = handlerWith(fakeClient({ specs: [JSON.stringify(VASE)] }), { stageAtLocation: async (args, c) => { stageArgs.push(args); return staging(args, c); } });
-        const where = { location: 'Union Square, San Francisco', placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } };
-        const first = await run({ request: 'a fluted vase', ...where });
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const { run } = handlerWith(client, { stageAtLocation: async (args, c) => { stageArgs.push(args); return staging(args, c); } });
+        const location = 'Union Square, San Francisco';
+        const onScene = (artifact: any): ToolContext => ({ ...ctx(), request: { ...ctx().request, activeArtifact: artifact } as any });
+        const first = await run({ request: 'a fluted vase', location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } });
         expect(first.status, String(first.resultPayload.error)).toBe('completed');
-        expect(stageArgs).toHaveLength(1);
-        const scene = first.resultPayload.artifact as any;
+        const vaseId = String(first.resultPayload.objectId);
+        const firstScene = first.resultPayload.artifact as any;
+        expect(firstScene.data.objects.find((o: any) => o.id === vaseId).content.metadata.objectBuild).toEqual({
+            spec: VASE, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90, surfaceYMeters: 1.5 }
+        });
 
-        // Move it and make it taller: the edit stands on the tiles already staged in the active scene.
+        // A different object at another spot of the same place: the staging is reused and the vase is kept.
+        const second = await run({ request: 'a roulette wheel', specJson: JSON.stringify(ROULETTE), location, placement: { eastMeters: 20, northMeters: 8, headingDeg: 0 } }, onScene(firstScene));
+        expect(second.status, String(second.resultPayload.error)).toBe('completed');
+        expect(stageArgs).toHaveLength(1);
+        const wheelId = String(second.resultPayload.objectId);
+        const scene2 = second.resultPayload.artifact as any;
+        expect(scene2.data.objects.map((o: any) => o.id)).toEqual(['tile-clay-1', 'tile-trees-1', vaseId, wheelId]);
+        expect(scene2.data.objects[2]).toEqual(firstScene.data.objects[2]);
+        expect(scene2.data.objects[3].content.metadata.objectBuild.spec).toEqual(ROULETTE);
+        expect(scene2.data.objectBuild).toMatchObject({ objectId: wheelId, keptObjectIds: [vaseId], location: { staging: 'reused from the active scene' } });
+        expect(scene2.title).toBe('fluted vase with a knob, roulette wheel at Union Square, San Francisco, CA');
+        expect(second.summaryResult).toContain(`Kept the object built there earlier: "fluted vase with a knob" (${vaseId}).`);
+        // Both stand on the ground where their placements say, in every load order.
+        for (const order of loadOrders(scene2.data.objects.map((o: any) => o.id))) {
+            const boxes = seatLikeViewport(scene2.data.objects, order);
+            for (const [id, x, z] of [[vaseId, 12, -8], [wheelId, 20, -8]] as const) {
+                const box = boxes.get(id)!;
+                expect(box.min.y, `${id} ${order.join(' > ')}`).toBeCloseTo(1.5, 3);
+                expect((box.min.x + box.max.x) / 2).toBeCloseTo(x, 1);
+                expect((box.min.z + box.max.z) / 2).toBeCloseTo(z, 1);
+            }
+        }
+        // The next turn sees both, each with its id, placement and whole spec.
+        const context = activeObjectBuildContext(scene2.data);
+        expect(context).toContain(`build_3d_object_from_reference built these 2 objects in this scene at location "${location}"`);
+        expect(context).toContain(`id "${vaseId}" with placement {"eastMeters":12,"northMeters":8,"headingDeg":90}. Spec: ${JSON.stringify(VASE)}`);
+        expect(context).toContain(`id "${wheelId}" with placement {"eastMeters":20,"northMeters":8,"headingDeg":0}. Spec: ${JSON.stringify(ROULETTE)}`);
+
+        // Editing the vase where it stands needs replaceObjectId: without it the spot is the vase's own.
         const taller: ObjectBuildSpec = { ...VASE, boundingMeters: [0.36, 0.86, 0.36] };
-        const onScene = (c: ToolContext): ToolContext => ({ ...c, request: { ...c.request, activeArtifact: scene } as any });
-        const moved = await run({ request: 'move it', specJson: JSON.stringify(taller), location: where.location, placement: { eastMeters: -10, northMeters: 3, headingDeg: 0 } }, onScene(ctx()));
-        expect(moved.status, String(moved.resultPayload.error)).toBe('completed');
+        const clash = await run({ request: 'make the vase taller', specJson: JSON.stringify(taller), location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } }, onScene(scene2));
+        expect(clash.status).toBe('failed');
+        expect(clash.resultPayload.stage).toBe('placement');
+        expect(String(clash.resultPayload.error)).toContain(`the highest surface is "fluted vase with a knob" (${vaseId}), an object built there earlier`);
+        expect(String(clash.resultPayload.error)).toContain(`To replace that object instead, pass replaceObjectId "${vaseId}".`);
+        const edited = await run({ request: 'make the vase taller', specJson: JSON.stringify(taller), location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 }, replaceObjectId: vaseId }, onScene(scene2));
+        expect(edited.status, String(edited.resultPayload.error)).toBe('completed');
+        const scene3 = edited.resultPayload.artifact as any;
+        expect(scene3.data.objects.map((o: any) => o.id)).toEqual(['tile-clay-1', 'tile-trees-1', wheelId, edited.resultPayload.objectId]);
+        expect(edited.resultPayload.replacedObjectId).toBe(vaseId);
+        expect(edited.summaryResult).toContain(`It replaces "fluted vase with a knob" (${vaseId}).`);
+        expect(edited.summaryResult).toContain(`Kept the object built there earlier: "roulette wheel" (${wheelId}).`);
         expect(stageArgs).toHaveLength(1);
-        const data = (moved.resultPayload.artifact as any).data;
-        // The staged layers carry over once; the earlier object is replaced, not kept beside the new one.
-        expect(data.objects.map((o: any) => o.content.metadata.role)).toEqual(['environment', 'vegetation', 'hero']);
-        expect(data.objects.filter((o: any) => o.content.metadata.source === 'build_3d_object_from_reference')).toHaveLength(1);
-        expect(data.objectBuild.location).toEqual({ query: where.location, resolvedAddress: 'Union Square, San Francisco, CA', geoAnchor: { lat: 37.788, lng: -122.4075 }, staging: 'reused from the active scene' });
-        expect(data.objectBuild.placement).toMatchObject({ sceneX: -10, sceneZ: -3, surfaceYMeters: 1.5 });
-        expect(data.geoAnchor).toEqual({ lat: 37.788, lng: -122.4075 });
-        expect(moved.summaryResult).toContain('Reused the remeshed Google 3D Tiles in clay already staged at Union Square, San Francisco, CA in the active scene (no new geocode or extraction)');
 
-        // Another place is staged afresh.
-        const elsewhere = await run({ request: 'move it', specJson: JSON.stringify(taller), location: 'Dolores Park, San Francisco', placement: where.placement }, onScene(ctx()));
+        // An id that is not one of the objects built there fails before anything is built.
+        const unknown = await run({ request: 'swap it', specJson: JSON.stringify(VASE), location, placement: { eastMeters: 0, northMeters: 30, headingDeg: 0 }, replaceObjectId: 'hero-nope' }, onScene(scene3));
+        expect(unknown.resultPayload.stage).toBe('placement');
+        expect(String(unknown.resultPayload.error)).toContain(`replaceObjectId "hero-nope" is not an object build_3d_object_from_reference built in the active scene; the objects it built there are "roulette wheel" (${wheelId}), "fluted vase with a knob" (${edited.resultPayload.objectId})`);
+        // replaceObjectId is for objects at a place.
+        const studio = await run({ request: 'swap it', specJson: JSON.stringify(VASE), replaceObjectId: wheelId }, onScene(scene3));
+        expect(String(studio.resultPayload.error)).toContain('replaceObjectId replaces an object staged at a place');
+
+        // An object whose own spot is clear but whose footprint (0.4 m round) would cover the base of the vase, 0.3 m
+        // away, fails after its build, with its spec to rebuild elsewhere.
+        const editedId = String(edited.resultPayload.objectId);
+        const wide = await run({ request: 'a roulette wheel by the vase', specJson: JSON.stringify(ROULETTE), location, placement: { eastMeters: 12.3, northMeters: 8, headingDeg: 0 } }, onScene(scene3));
+        expect(wide.status).toBe('failed');
+        expect(wide.resultPayload.stage).toBe('placement');
+        expect(wide.resultPayload.coversBasesOf).toEqual([editedId]);
+        expect(String(wide.resultPayload.error)).toContain(`"roulette wheel" as built would stand over the base of "fluted vase with a knob" (${editedId}), an object built there earlier, 0.3 m away`);
+        expect(wide.resultPayload.spec).toEqual(ROULETTE);
+
+        // Another place is staged afresh, as a scene of its own.
+        const elsewhere = await run({ request: 'move it', specJson: JSON.stringify(taller), location: 'Dolores Park, San Francisco', placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } }, onScene(scene3));
         expect(elsewhere.status, String(elsewhere.resultPayload.error)).toBe('completed');
-        expect(stageArgs).toEqual([{ query: where.location }, { query: 'Dolores Park, San Francisco' }]);
+        expect(stageArgs).toEqual([{ query: location }, { query: 'Dolores Park, San Francisco' }]);
+        expect((elsewhere.resultPayload.artifact as any).data.objects.filter((o: any) => o.content.metadata.source === 'build_3d_object_from_reference')).toHaveLength(1);
+    }, 300_000);
+
+    it('stages afresh, and says which objects it did not carry over, when the active scene\'s staging cannot be read', async () => {
+        const stageArgs: unknown[] = [];
+        const staging = stagedScene(writeStagedTiles());
+        const { run } = handlerWith(fakeClient({}), { stageAtLocation: async (args, c) => { stageArgs.push(args); return staging(args, c); } });
+        const location = 'Union Square, San Francisco';
+        const first = await run({ request: 'the vase', specJson: JSON.stringify(VASE), location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } });
+        expect(first.status, String(first.resultPayload.error)).toBe('completed');
+        const vaseId = String(first.resultPayload.objectId);
+        // A client-supplied scene whose staged model URI has a malformed percent escape.
+        const scene = JSON.parse(JSON.stringify(first.resultPayload.artifact));
+        scene.data.objects[0].content.durableUri = '/models/100%_plaza.glb';
+        const onScene: ToolContext = { ...ctx(), request: { ...ctx().request, activeArtifact: scene } as any };
+        const out = await run({ request: 'a roulette wheel', specJson: JSON.stringify(ROULETTE), location, placement: { eastMeters: 20, northMeters: 8, headingDeg: 0 } }, onScene);
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        expect(stageArgs).toHaveLength(2);
+        expect(out.summaryResult).toContain(`The active scene's staging there could not be reused (the staged model /models/100%_plaza.glb can no longer be read), so the place was staged afresh and the objects built there earlier are not in this scene: "fluted vase with a knob" (${vaseId}).`);
+        expect((out.resultPayload.artifact as any).data.objectBuild.notCarriedOver).toEqual({ reason: 'the staged model /models/100%_plaza.glb can no longer be read', objectIds: [vaseId] });
+        const replacing = await run({ request: 'swap it', specJson: JSON.stringify(ROULETTE), location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 0 }, replaceObjectId: vaseId }, onScene);
+        expect(replacing.resultPayload.stage).toBe('placement');
+        expect(String(replacing.resultPayload.error)).toContain('the staged model /models/100%_plaza.glb can no longer be read, so there is nothing there to replace');
     }, 180_000);
 
     it('the Python runner kills the script when its signal aborts', async () => {

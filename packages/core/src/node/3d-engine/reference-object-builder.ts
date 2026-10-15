@@ -16,13 +16,18 @@
  *      credentials. A spec the validator or the interpreter cannot build, or whose build runs past its time limit,
  *      gets one corrective re-ask quoting every problem, then the call fails.
  *   3. Build: sb.object_spec.build(spec) runs in the native Python engine and writes a GLB, within BUILD_TIMEOUT_MS
- *      (a run past it is stopped and reported as having run out of time).
+ *      (a run past it is stopped and reported as having run out of time). The time limit starts once the engine's
+ *      native module is ready: a rebuild after an engine change is waited for first, and a failed one is its own
+ *      stage ('engine'), never blamed on the spec.
  *   4. Checks: every part the spec lists is built and touches its parent, the piece count equals expectedBodies, and
  *      the vision model compares a clay render with the reference. The contact analysis runs in slices, so the
  *      server keeps answering and a stop ends it. Problems and high-confidence differences go back
  *      for up to two revision passes. The result is the last build that passed every check; a revision that fails
- *      is reported as such, and differences still present are listed verbatim. A build that never passed every
- *      check is rejected, never mounted.
+ *      is reported as such, and differences still present are listed verbatim. A comparison that cannot be had
+ *      (a malformed answer twice, or a model error) leaves that pass measured but not compared, and the result says
+ *      so; it never discards a build that passed every check. A build that never passed every check is rejected,
+ *      never mounted. A failure after the vision model was chosen names that model, and the chat's model it
+ *      stands in for when they differ.
  * buildObjectFromSpec builds a given spec (an edit of an earlier one) through stages 3 and 4 only, with no model call:
  * it fails with every problem listed instead of revising. A stop kills the Python process and ends the build at the
  * stage it reached. Nothing here reads part labels or ids for meaning: ids only pair spec parts with their meshes.
@@ -63,7 +68,7 @@ export const EMPTY_IMAGE_ATTEMPTS = 3;
 /** How long one native build of a spec may run before it is stopped. */
 export const BUILD_TIMEOUT_MS = 120_000;
 
-export type ObjectBuildStage = 'credentials' | 'reference-image' | 'build-spec' | 'build' | 'checks';
+export type ObjectBuildStage = 'credentials' | 'reference-image' | 'build-spec' | 'engine' | 'build' | 'checks';
 
 export class ReferenceObjectBuildError extends Error {
     constructor(
@@ -110,8 +115,14 @@ export interface ReferenceObjectBuilderDeps {
     /** Where the build script and GLB are written (the runner's build/3d-python by default). */
     outputDir?: string;
     sleep?: (ms: number) => Promise<void>;
-    /** Time limit for one native build (BUILD_TIMEOUT_MS by default). */
+    /** Time limit for one native build (BUILD_TIMEOUT_MS by default), counted once the engine is ready. */
     buildTimeoutMs?: number;
+    /**
+     * Makes the engine's native module ready before a build's time limit starts, rebuilding it after an engine change;
+     * resolves to null when ready or to the build error. Defaults to the Python runner's ensureNativeModule when
+     * runPython is not injected, and to nothing when it is.
+     */
+    prepareEngine?: () => Promise<string | null>;
 }
 
 export interface ReferenceDifference {
@@ -174,6 +185,8 @@ export interface ObjectBuildPass {
     /** True when every part is built and connected as the spec says. */
     passedChecks?: boolean;
     highConfidenceDifferences?: number;
+    /** Why the clay render of this pass could not be compared with the reference, when it could not. */
+    comparisonError?: string;
     /** Problems sent back to the vision model after this pass; empty when nothing was left to fix. */
     problems?: string[];
     /** Why the pass failed, when it did. */
@@ -203,6 +216,17 @@ export interface RevisionFailure {
     reason: string;
 }
 
+/** The returned pass's clay render could not be compared with the reference. */
+export interface ComparisonFailure {
+    pass: number;
+    reason: string;
+    /**
+     * High-confidence differences the pass before it had, which this pass was asked to fix: whether it did is
+     * unknown. Empty for pass 1.
+     */
+    unverifiedDifferences: ReferenceDifference[];
+}
+
 export interface ReferenceObjectBuildResult {
     spec: ObjectBuildSpec;
     sourceCode: string;
@@ -216,8 +240,10 @@ export interface ReferenceObjectBuildResult {
     resultPass: number;
     /** Set when a later revision failed and this result is an earlier pass. */
     revisionFailed?: RevisionFailure;
+    /** Set when the returned pass could not be compared with the reference: its remaining differences are unknown. */
+    comparisonFailed?: ComparisonFailure;
     checks: ObjectBuildChecks;
-    /** High-confidence differences still present in the returned build, as the vision model wrote them. */
+    /** High-confidence differences still present in the returned build, as the vision model wrote them (none known when comparisonFailed is set). */
     remainingDifferences: ReferenceDifference[];
     /** Other problems still present in the returned build (such as its size disagreeing with boundingMeters). */
     openProblems: string[];
@@ -425,6 +451,8 @@ export function schemaInstruction(schema: Record<string, unknown>): string {
 class VisionModel {
     private model?: string;
     private answeredVersion?: string;
+    /** True once any model was asked. */
+    private asked = false;
     readonly skipped: Array<{ model: string; reason: string }> = [];
 
     constructor(
@@ -444,7 +472,29 @@ class VisionModel {
         return { requested: this.candidates[0], used, answered: this.answeredVersion ?? used, source: this.source, skipped: [...this.skipped] };
     }
 
+    /**
+     * A failure after a model was asked, naming that model and, when it is not the chat's own, the chat's model it
+     * stands in for and why that one was skipped. A stop is left as it is.
+     */
+    annotate(err: unknown): unknown {
+        if (!(err instanceof ReferenceObjectBuildError) || !this.asked || err.details.aborted) return err;
+        const requested = this.candidates[0];
+        const chatModel = `the chat's ${this.source === 'chat-default' ? 'default ' : ''}model ${requested}`;
+        // "None of the chat's models is served" already lists every skipped model.
+        const note = this.skipped.length && !Array.isArray(err.details.skipped)
+            ? ` (The spec was ${this.model ? 'read by' : 'asked of'} ${this.model ?? this.current} because ${chatModel} is not served: ${this.skipped.map(s => `${s.model}: ${s.reason}`).join('; ')}.)`
+            : '';
+        const visionModel = {
+            requested,
+            source: this.source,
+            ...(this.model ? { used: this.model, answered: this.answeredVersion ?? this.model } : { asked: this.current ?? null, answered: null }),
+            skipped: [...this.skipped]
+        };
+        return new ReferenceObjectBuildError(err.stage, err.message + note, { ...err.details, visionModel });
+    }
+
     async generate(params: Omit<GenerateContentParameters, 'model'>, stage: ObjectBuildStage): Promise<GenerateContentResponse> {
+        this.asked = true;
         if (this.model) return callModel(this.client, { ...params, model: this.model }, stage, this.deps, this.signal);
         for (let i = this.skipped.length; i < this.candidates.length; i++) {
             const model = this.candidates[i];
@@ -571,13 +621,55 @@ interface RejectedBuild {
     timedOut?: boolean;
 }
 
+/** Resolves with `work`, or throws the stop as soon as `signal` aborts (the work itself may run on, shared with others). */
+async function untilStopped<T>(work: Promise<T>, signal: AbortSignal | undefined, stage: ObjectBuildStage): Promise<T> {
+    if (!signal) return work;
+    throwIfAborted(signal, stage);
+    let onAbort: (() => void) | undefined;
+    const stopped = new Promise<never>((_, reject) => {
+        onAbort = () => reject(new ReferenceObjectBuildError(stage, 'Stopped by the user.', { aborted: true }));
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+        return await Promise.race([work, stopped]);
+    } finally {
+        signal.removeEventListener('abort', onAbort!);
+    }
+}
+
+/**
+ * Makes the engine's native module ready before a build's time limit starts: after an engine change the first build
+ * waits for the rebuild (a cold build takes minutes), which is not the spec's time. A rebuild that fails is the
+ * 'engine' stage's error.
+ */
+async function prepareEngine(deps: ReferenceObjectBuilderDeps, signal: AbortSignal | undefined, reportProgress?: (message: string) => void): Promise<void> {
+    let prepare = deps.prepareEngine;
+    if (!prepare && !deps.runPython) {
+        const runner = NativePythonRunnerService.getInstance();
+        if (!runner.isNativeModuleFresh()) reportProgress?.('Building the native engine after an engine change (a cold build takes a few minutes)');
+        prepare = () => runner.ensureNativeModule();
+    }
+    if (!prepare) return;
+    const error = await untilStopped(prepare(), signal, 'engine');
+    if (error) {
+        throw new ReferenceObjectBuildError('engine', `The native engine could not be built, so no spec can be built: ${error}`, { engineError: error });
+    }
+}
+
 /**
  * Runs the spec's script. A SpecError, or a run past the time limit, comes back as problems for the model; any other
  * failure throws.
  */
-async function runBuild(spec: ObjectBuildSpec, deps: ReferenceObjectBuilderDeps, signal?: AbortSignal): Promise<NativeBuild | RejectedBuild> {
+async function runBuild(
+    spec: ObjectBuildSpec,
+    deps: ReferenceObjectBuilderDeps,
+    signal?: AbortSignal,
+    reportProgress?: (message: string) => void
+): Promise<NativeBuild | RejectedBuild> {
     throwIfAborted(signal, 'build');
     const sourceCode = buildObjectSpecScript(spec);
+    await prepareEngine(deps, signal, reportProgress);
+    throwIfAborted(signal, 'build');
     const runPython = deps.runPython ?? ((script: string, options: PythonExecutionOptions) => NativePythonRunnerService.getInstance().runScript(script, options));
     const timeoutMs = deps.buildTimeoutMs ?? BUILD_TIMEOUT_MS;
     // The time limit is a signal of its own, so a run it ends is known to have timed out (the runner's own timeout,
@@ -622,13 +714,19 @@ interface BuildableSpec {
  * quotes all of them; a spec that still cannot be built fails (build-spec for validator problems, build for the
  * interpreter's).
  */
-async function requestBuildableSpec(vision: VisionModel, contents: Content[], deps: ReferenceObjectBuilderDeps, signal?: AbortSignal): Promise<BuildableSpec> {
+async function requestBuildableSpec(
+    vision: VisionModel,
+    contents: Content[],
+    deps: ReferenceObjectBuilderDeps,
+    signal?: AbortSignal,
+    reportProgress?: (message: string) => void
+): Promise<BuildableSpec> {
     type Attempt = { build?: NativeBuild; spec?: ObjectBuildSpec; problems: string[]; from: 'build-spec' | 'build'; timedOut?: boolean };
     const attempt = async (reply: JsonReply): Promise<Attempt> => {
         const errors = reply.parseError ? [reply.parseError] : validateObjectBuildSpec(reply.value);
         if (errors.length) return { problems: errors, from: 'build-spec' };
         const spec = reply.value as ObjectBuildSpec;
-        const built = await runBuild(spec, deps, signal);
+        const built = await runBuild(spec, deps, signal, reportProgress);
         if ('specProblems' in built) return { problems: built.specProblems, from: 'build', ...(built.timedOut ? { timedOut: true } : {}) };
         return { build: built, spec, problems: [], from: 'build' };
     };
@@ -777,8 +875,15 @@ interface CheckedPass {
     partBounds: PartBounds;
     /** What is left to fix after this pass (empty when nothing is). */
     problems: string[];
+    /** Why the comparison with the reference could not be had; the pass is then measured but not compared. */
+    comparisonError?: string;
 }
 
+/**
+ * Measures a pass and compares its clay render with the reference. A comparison that cannot be had leaves the pass
+ * measured but not compared (its differences unknown), so a build that passed every check is never thrown away for
+ * it; a stop still ends the build.
+ */
 async function checkBuild(
     pass: number,
     spec: ObjectBuildSpec,
@@ -792,9 +897,20 @@ async function checkBuild(
     throwIfAborted(input.signal, 'checks');
     const render = renderReviewViews(soup, 512, { views: THREE_QUARTER_VIEW })[0].png;
     input.reportProgress?.(`Comparing the clay build (pass ${pass}) with the reference`);
-    const differences = await compareToReference(vision, input.request, reference, render, spec, input.signal);
+    let differences: ReferenceDifference[] = [];
+    let comparisonError: string | undefined;
+    try {
+        differences = await compareToReference(vision, input.request, reference, render, spec, input.signal);
+    } catch (err) {
+        if (!(err instanceof ReferenceObjectBuildError) || err.details.aborted || input.signal?.aborted) throw err;
+        comparisonError = err.message;
+    }
     const checks: ObjectBuildChecks = { ...measured, differences };
-    return { pass, spec, build, render, checks, partBounds, problems: describeProblems(checks, spec, partBounds) };
+    return {
+        pass, spec, build, render, checks, partBounds,
+        problems: describeProblems(checks, spec, partBounds),
+        ...(comparisonError ? { comparisonError } : {})
+    };
 }
 
 /** World-space bounds of each part's mesh, by part id. */
@@ -861,7 +977,9 @@ function passRecord(checked: CheckedPass, source: ObjectBuildPass['source'], req
         bodies: c.connectivity.bodies,
         expectedBodies: c.connectivity.expectedBodies,
         passedChecks: passedEveryCheck(c),
-        highConfidenceDifferences: c.differences.filter(d => d.confidence === 'high').length,
+        ...(checked.comparisonError
+            ? { comparisonError: checked.comparisonError }
+            : { highConfidenceDifferences: c.differences.filter(d => d.confidence === 'high').length }),
         problems: checked.problems,
         buildMs: checked.build.buildMs
     };
@@ -896,7 +1014,7 @@ export async function buildObjectFromSpec(
     }
     const valid = spec as ObjectBuildSpec;
     input.reportProgress?.('Building the spec natively', 0.2);
-    const built = await runBuild(valid, deps, input.signal);
+    const built = await runBuild(valid, deps, input.signal, input.reportProgress);
     if ('specProblems' in built) {
         throw new ReferenceObjectBuildError('build',
             `The spec cannot be built (${built.timedOut ? 'the build ran out of time' : 'the interpreter found'}: ${built.specProblems.join('; ')})`,
@@ -941,9 +1059,10 @@ export async function buildObjectFromReference(
         const firstSpec = await requestBuildableSpec(vision, [{
             role: 'user',
             parts: [imagePart(reference.data, reference.mimeType), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters) }]
-        }], deps, input.signal);
+        }], deps, input.signal, progress);
         let current = await checkBuild(1, firstSpec.spec, firstSpec.build, input, vision, reference);
         const passes: ObjectBuildPass[] = [passRecord(current, 'reference', firstSpec)];
+        const checkedPasses = new Map<number, CheckedPass>([[1, current]]);
         let accepted: CheckedPass | undefined = passedEveryCheck(current.checks) ? current : undefined;
         let revisionFailed: RevisionFailure | undefined;
 
@@ -960,14 +1079,16 @@ export async function buildObjectFromReference(
                         imagePart(current.render, 'image/png'),
                         { text: buildRevisionPrompt(input.request, current.spec, current.problems, input.dimensionsHintMeters) }
                     ]
-                }], deps, input.signal);
+                }], deps, input.signal, progress);
                 const checked = await checkBuild(pass, revised.spec, revised.build, input, vision, reference);
                 passes.push(passRecord(checked, 'revision', revised));
+                checkedPasses.set(pass, checked);
                 current = checked;
                 if (passedEveryCheck(checked.checks)) accepted = checked;
             } catch (err) {
-                // A stop or an unexpected fault ends the build; a revision that cannot be built or checked ends the
-                // revisions, and the result says so.
+                // A stop or an unexpected fault ends the build; a revision that cannot be built or measured ends the
+                // revisions, and the result says so. (A comparison that cannot be had does not: checkBuild keeps the
+                // pass, measured but not compared.)
                 if (!(err instanceof ReferenceObjectBuildError) || err.details.aborted || input.signal?.aborted) throw err;
                 revisionFailed = { pass, stage: err.stage, reason: err.message };
                 passes.push({ pass, source: 'revision', outcome: 'failed', ...(Array.isArray(err.details.firstErrors) ? { specRequests: 2 } : {}), error: err.message });
@@ -990,6 +1111,14 @@ export async function buildObjectFromReference(
                 `No build passed every check, so nothing was mounted: ${why}pass ${current.pass} still has these problems: ${current.problems.join(' ')}`,
                 { passes, lastPass: last, connectivity: current.checks.connectivity, missingParts: current.checks.missingParts, detachedParts: current.checks.detachedParts, spec: current.spec });
         }
+        // The returned pass could not be compared: say so, and which differences it was asked to fix are unchecked.
+        const comparisonFailed: ComparisonFailure | undefined = accepted.comparisonError
+            ? {
+                pass: accepted.pass,
+                reason: accepted.comparisonError,
+                unverifiedDifferences: (checkedPasses.get(accepted.pass - 1)?.checks.differences || []).filter(d => d.confidence === 'high')
+            }
+            : undefined;
         return {
             spec: accepted.spec,
             sourceCode: accepted.build.sourceCode,
@@ -1001,10 +1130,13 @@ export async function buildObjectFromReference(
             passes,
             resultPass: accepted.pass,
             ...(revisionFailed ? { revisionFailed } : {}),
+            ...(comparisonFailed ? { comparisonFailed } : {}),
             checks: accepted.checks,
             remainingDifferences: accepted.checks.differences.filter(d => d.confidence === 'high'),
             openProblems: accepted.problems.filter(p => !accepted!.checks.differences.some(d => d.confidence === 'high' && differenceProblem(d) === p))
         };
+    } catch (err) {
+        throw vision.annotate(err);
     } finally {
         // The reference only ever lived in memory; drop it so nothing outlives the call.
         generated = undefined;

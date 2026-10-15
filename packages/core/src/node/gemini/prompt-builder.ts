@@ -17,6 +17,7 @@ import type { ConversationDiffMemoryService } from '../conversation-diff-memory-
 import type { UserMemoriesService } from '../user-memories-service';
 import type { WorkspaceConfigService } from '../workspace-config-service';
 import { isReadOnlyMode } from './tool-permissions';
+import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatial/object-build-spec';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -456,8 +457,9 @@ Decide from the meaning of the request, not from particular words, which case ap
 - An imagined environment, a landscape, or a scene of several objects (anything that is neither one object nor a real place): write an sb Python script and run it with execute_3d_python_script. Call read_sb_script_guide before writing the script unless its rules ("WRITING SB PYTHON SCRIPTS") are already in these instructions.
 - A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place and returns its Google 3D Tiles remeshed in studio grey clay; tell the user what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
 - One object at a real-world place: call build_3d_object_from_reference with location set to the place and placement set to where the object stands relative to the place's geocoded anchor (metres east and north of it, and the compass heading its front faces), worked out from what the user said, such as in front of an entrance or across a square. The anchor is often the middle of a building, so an object meant to stand beside it needs an offset.
+- Several objects at a real-world place: call build_3d_object_from_reference once per object, each with the same location and its own placement. While the active scene is an object build staged at that location, each call adds its object beside the objects already there. A placement under a tree crown or on top of another object fails before anything is built and names clear spots nearby.
 Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. Do not build real places with scripts.
-To change an object that build_3d_object_from_reference built (its shape or size, or a base or plinth under it, added as parts), call build_3d_object_from_reference again with specJson set to its spec (data.objectBuild.spec) with the change made, and with the same location and placement when it stands at a place; that rebuilds the spec as given, keeps it where it stood, and draws no new reference. execute_3d_python_script changes scenes a script built.
+To change an object that build_3d_object_from_reference built (its shape or size, or a base or plinth under it, added as parts), call build_3d_object_from_reference again with specJson set to that object's spec with the change made, and, when it stands at a place, with the same location and placement (or a new placement to move it) and replaceObjectId set to its id; that rebuilds the spec as given, keeps it where it stood, and draws no new reference. execute_3d_python_script changes scenes a script built.
 New objects and places start in studio grey clay with studio lighting and no ground. After building one, offer follow-ups in two groups instead of doing them: staging and environments (a real-world place, a plinth or cyclorama, atmosphere and sun position, or the studio void), then textures and materials (PBR, 2DGS surfels, 3DGS splats, algorithmic micro-texture).
 When one of these tools fails, report its error; do not substitute another tool's output.`;
 
@@ -929,19 +931,30 @@ If a task needs a capability that is not available natively (e.g. neural image-t
 }
 
 /**
- * The spec of the object in the active scene, when build_3d_object_from_reference built it, so a follow-up turn can
- * change that object: earlier tool results are not in the chat history. Decided from the scene's state, never from
- * words in the prompt. The spec is given whole, since a cut-off spec cannot be edited and rebuilt.
+ * Every object build_3d_object_from_reference built in the active scene, each with its id, placement and whole spec,
+ * so a follow-up turn can change one of them or add another at the same place: earlier tool results are not in the
+ * chat history. Decided from the scene's state, never from words in the prompt. Specs are given whole, since a cut-off
+ * spec cannot be edited and rebuilt.
  */
 export function activeObjectBuildContext(sceneData: Scene3DData | undefined): string {
-    const build = (sceneData as { objectBuild?: { spec?: unknown; location?: { query?: unknown }; placement?: Record<string, unknown> } } | undefined)?.objectBuild;
-    if (!build?.spec || typeof build.spec !== 'object') return '';
-    const query = typeof build.location?.query === 'string' ? build.location.query : undefined;
-    const p = build.placement;
-    const where = query && p
-        ? ` at location "${query}" with placement ${JSON.stringify({ eastMeters: p.eastMeters, northMeters: p.northMeters, headingDeg: p.headingDeg })}`
-        : ' in a studio void';
-    return `\n[Active object build: build_3d_object_from_reference built this scene's object${where}. To change the object, make the change in this spec and pass the whole spec as specJson to build_3d_object_from_reference${query ? ', with the same location and placement unless the user moves it' : ''}. Spec: ${JSON.stringify(build.spec)}]`;
+    const data = sceneData as { objects?: unknown; objectBuild?: { location?: { query?: unknown } } } | undefined;
+    const built = (Array.isArray(data?.objects) ? data!.objects as any[] : []).filter(o => {
+        const meta = o?.content?.metadata;
+        return meta?.source === OBJECT_BUILD_SOURCE && meta.objectBuild?.spec && typeof meta.objectBuild.spec === 'object';
+    });
+    if (built.length === 0) return '';
+    const query = typeof data?.objectBuild?.location?.query === 'string' ? data.objectBuild.location.query : undefined;
+    const lines = built.map(o => {
+        const record = o.content.metadata.objectBuild as BuiltObjectRecord;
+        const p = record.placement;
+        const at = query && p ? ` with placement ${JSON.stringify({ eastMeters: p.eastMeters, northMeters: p.northMeters, headingDeg: p.headingDeg })}` : '';
+        return `- "${o.content.metadata.description || record.spec.subject}", id "${o.id}"${at}. Spec: ${JSON.stringify(record.spec)}`;
+    });
+    const how = query
+        ? `To change one, make the change in its spec and pass the whole spec as specJson to build_3d_object_from_reference, with location "${query}", its placement (unless the user moves it) and replaceObjectId set to its id. To add another object at this place, call build_3d_object_from_reference with location "${query}" and a placement clear of these; they are kept.`
+        : 'To change it, make the change in its spec and pass the whole spec as specJson to build_3d_object_from_reference.';
+    const which = built.length === 1 ? 'this scene\'s object' : `these ${built.length} objects in this scene`;
+    return `\n[Active object build: build_3d_object_from_reference built ${which}${query ? ` at location "${query}"` : ' in a studio void'}. ${how}\n${lines.join('\n')}]`;
 }
 
 /**
@@ -968,7 +981,7 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
         // Context about the active scene whatever the request says, not an assumed intent: the request decides whether
         // to change the scene or start anew.
         userPrompt += `\n\n[ACTIVE 3D SCENE: "${request.activeArtifact?.title || '3D Scene'}" is on the canvas.
-1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one.
+1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one, except another object at the place this scene's objects were built at: build_3d_object_from_reference with that same location adds it to this scene.
 2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To build an object at a place, call build_3d_object_from_reference with location and placement.
 3. To stage the active scene on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal): when its object was built by build_3d_object_from_reference, add the plinth as parts of that object's spec and rebuild it with build_3d_object_from_reference (specJson); otherwise call execute_3d_python_script to build the plinth and set the hero asset on it with sb.layout.
 4. Do not replace the scene with a Markdown document unless the user asks for a document, and offer further steps (such as materials and textures) as follow-ups.]`;
