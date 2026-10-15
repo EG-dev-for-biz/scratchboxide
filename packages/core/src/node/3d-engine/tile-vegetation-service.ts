@@ -16,8 +16,8 @@
  *   budget, as one GLB in the tile frame.
  *
  * Paths are confined to the workspace root. The binary is built with clang++ on first use and rebuilt when one of
- * its sources (clang's -MMD list) is newer; a failed build is an error, never an older binary. It runs through
- * execFile (no shell) with a timeout. Results are cached under
+ * its sources (clang's -MMD list) is newer, once across processes (native-build); a failed build is an error, never an
+ * older binary. It runs through execFile (no shell) with a timeout. Results are cached under
  * <root>/.scratchbox/cache/tile_vegetation/<sha256(binary + inputs + params)>/.
  */
 
@@ -26,6 +26,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveWithinRoot } from '../security/path-guard';
+import { buildNativeIfStale } from './native-build';
 
 /** Continuous strip parameters (metres, ratios); every one maps to a CLI flag of the same name in kebab case. */
 export interface TileVegetationStripParams {
@@ -180,21 +181,6 @@ function fileSha256(file: string): string {
     return h.digest('hex');
 }
 
-function mtimeMs(file: string): number {
-    try {
-        return fs.statSync(file).mtimeMs;
-    } catch {
-        return Number.POSITIVE_INFINITY;
-    }
-}
-
-function readDepFile(file: string): string[] {
-    const text = fs.readFileSync(file, 'utf8').replace(/\\\r?\n/g, ' ');
-    const colon = text.indexOf(': ');
-    if (colon < 0) return [];
-    return text.slice(colon + 2).split(/(?<!\\)\s+/).filter(Boolean).map(p => p.replace(/\\ /g, ' '));
-}
-
 function kebab(name: string): string {
     return name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
 }
@@ -288,34 +274,19 @@ export class TileVegetationService {
     }
 
     private async buildIfStale(): Promise<string> {
-        const bin = path.join(this.repoRoot, BINARY);
-        const depFile = `${bin}.d`;
         const source = path.join(this.repoRoot, CLI_SOURCE);
-        const include = path.join(this.repoRoot, INCLUDE_DIR);
         if (!fs.existsSync(source)) throw new TileVegetationError('not_found', `tile_vegetation source not found: ${source}`);
-        const deps = fs.existsSync(depFile)
-            ? readDepFile(depFile)
-            : [source, ...fs.readdirSync(include).filter(f => f.endsWith('.hpp') || f.endsWith('.h')).map(f => path.join(include, f))];
-        const binTime = fs.existsSync(bin) ? fs.statSync(bin).mtimeMs : -1;
-        const stale = binTime < 0 || !fs.existsSync(depFile) || deps.some(d => mtimeMs(d) > binTime);
-        if (!stale) return bin;
-
-        fs.mkdirSync(path.dirname(bin), { recursive: true });
-        const tag = `${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
-        const tmpBin = `${bin}.tmp-${tag}`;
-        const tmpDep = `${depFile}.tmp-${tag}`;
-        const args = ['-std=c++20', '-O3', '-pthread'];
-        if (process.env.SCRATCHBOX_NATIVE_ARCH === '1') args.push('-march=native');
-        args.push('-I', include, source, '-o', tmpBin, '-MMD', '-MF', tmpDep, '-lz');
         try {
-            await runFile(process.env.CXX || 'clang++', args, 600_000);
-            fs.renameSync(tmpBin, bin);
-            fs.renameSync(tmpDep, depFile);
-            return bin;
+            return await buildNativeIfStale({
+                source,
+                binary: path.join(this.repoRoot, BINARY),
+                includeDir: path.join(this.repoRoot, INCLUDE_DIR),
+                flags: ['-pthread'],
+                libs: ['-lz'],
+                timeoutMs: 600_000
+            });
         } catch (err) {
-            for (const f of [tmpBin, tmpDep]) fs.rmSync(f, { force: true });
-            const detail = err instanceof TileVegetationError ? err.detail : String(err);
-            throw new TileVegetationError('build_failed', 'could not build tile_vegetation', detail);
+            throw new TileVegetationError('build_failed', 'could not build tile_vegetation', (err as Error).message);
         }
     }
 

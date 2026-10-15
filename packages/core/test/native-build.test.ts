@@ -8,11 +8,12 @@
  ********************************************************************************/
 
 /**
- * native-build (used by SbVeggieService and BotanicalVegetationService) on a tiny real C++ program compiled with the
- * real clang++ through a logging wrapper: a binary is rebuilt only when a file it was compiled from changes (not when
- * an unrelated header in the include directory does), concurrent builds compile once, a lock left by a dead process
- * is taken over, temp files a killed build left behind are removed, and a failed build throws without keeping a
- * stale binary in use.
+ * native-build (used by SbVeggieService, BotanicalVegetationService and TileVegetationService) on a tiny real C++
+ * program compiled with the real clang++ through a logging wrapper: a binary is rebuilt only when a file it was
+ * compiled from changes (not when an unrelated header in the include directory does), concurrent builds compile once
+ * (two TileVegetationService instances, as two processes would, too), a lock left by a dead process is taken over but
+ * a fresh one that cannot be read yet is not, a build never removes a lock it does not hold, temp files a killed build
+ * left behind are removed, and a failed build throws without keeping a stale binary in use.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -21,6 +22,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { buildNativeIfStale, nativeBinaryIsFresh } from '../src/node/3d-engine/native-build';
+import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
 
 let dir: string;
 let log: string;
@@ -44,7 +46,8 @@ beforeAll(() => {
     // a compiler wrapper that logs every compile, so the test can count them
     log = path.join(dir, 'compiles.log');
     const wrapper = path.join(dir, 'cxx.sh');
-    fs.writeFileSync(wrapper, `#!/bin/sh\necho "$$" >> "${log}"\nexec ${savedCxx || 'clang++'} "$@"\n`);
+    // NB_SWAP_LOCK: while compiling, another process takes the lock over (its holder record replaces the file)
+    fs.writeFileSync(wrapper, `#!/bin/sh\necho "$$" >> "${log}"\nif [ -n "$NB_SWAP_LOCK" ]; then printf '%s' "$NB_SWAP_HOLDER" > "$NB_SWAP_LOCK"; fi\nexec ${savedCxx || 'clang++'} "$@"\n`);
     fs.chmodSync(wrapper, 0o755);
     process.env.CXX = wrapper;
 });
@@ -96,6 +99,62 @@ describe('buildNativeIfStale', () => {
         expect(execFileSync(binary, { encoding: 'utf8' }).trim()).toBe('44');
         expect(fs.readdirSync(path.dirname(binary)).filter(f => f.includes('.tmp-'))).toEqual([]);
         expect(fs.existsSync(`${binary}.lock`)).toBe(false);
+    }, 300_000);
+
+    it('does not take over a fresh lock it cannot read yet, and builds once it is released', async () => {
+        const { binary } = spec();
+        // a lock another process has just created (its holder record not readable yet)
+        fs.writeFileSync(`${binary}.lock`, '');
+        fs.writeFileSync(path.join(dir, 'include', 'used.hpp'), 'inline int answer() { return 45; }\n');
+        touchLater(path.join(dir, 'include', 'used.hpp'), 240);
+        const before = compiles();
+        const build = buildNativeIfStale(spec());
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        expect(compiles()).toBe(before);
+        expect(fs.existsSync(`${binary}.lock`)).toBe(true);
+        fs.rmSync(`${binary}.lock`);
+        await build;
+        expect(compiles()).toBe(before + 1);
+        expect(execFileSync(binary, { encoding: 'utf8' }).trim()).toBe('45');
+    }, 300_000);
+
+    it('never removes a lock another process holds when it finishes', async () => {
+        const { binary } = spec();
+        const other = JSON.stringify({ pid: process.ppid, at: Date.now(), token: 'another-process' });
+        fs.writeFileSync(path.join(dir, 'include', 'used.hpp'), 'inline int answer() { return 46; }\n');
+        touchLater(path.join(dir, 'include', 'used.hpp'), 300);
+        process.env.NB_SWAP_LOCK = `${binary}.lock`;
+        process.env.NB_SWAP_HOLDER = other;
+        try {
+            await buildNativeIfStale(spec());
+        } finally {
+            delete process.env.NB_SWAP_LOCK;
+            delete process.env.NB_SWAP_HOLDER;
+        }
+        expect(execFileSync(binary, { encoding: 'utf8' }).trim()).toBe('46');
+        expect(fs.readFileSync(`${binary}.lock`, 'utf8')).toBe(other);
+        fs.rmSync(`${binary}.lock`);
+    }, 300_000);
+
+    it('TileVegetationService builds through it: two services (as two processes) compile once, and a killed build\'s temp is removed', async () => {
+        const repo = path.join(dir, 'repo');
+        const include = path.join(repo, 'packages', 'core', 'src', 'native', '3d-engine', 'include');
+        fs.mkdirSync(include, { recursive: true });
+        fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+        fs.mkdirSync(path.join(repo, 'build', '3d-native'), { recursive: true });
+        fs.writeFileSync(path.join(include, 'tv.hpp'), 'inline int tv() { return 7; }\n');
+        fs.writeFileSync(path.join(repo, 'scripts', 'tile_vegetation.cpp'), '#include "tv.hpp"\n#include <cstdio>\nint main() { std::printf("%d\\n", tv()); return 0; }\n');
+        const orphan = path.join(repo, 'build', '3d-native', `tile_vegetation.tmp-${2 ** 22 + 4321}.deadbeef`);
+        fs.writeFileSync(orphan, 'partial');
+        const before = compiles();
+        const a = new TileVegetationService({ workspaceRoot: dir, repoRoot: repo, cacheDir: 'cache_a' });
+        const b = new TileVegetationService({ workspaceRoot: dir, repoRoot: repo, cacheDir: 'cache_b' });
+        const [binA, binB] = await Promise.all([a.ensureBinary(), b.ensureBinary()]);
+        expect(binA).toBe(binB);
+        expect(compiles()).toBe(before + 1);
+        expect(execFileSync(binA, { encoding: 'utf8' }).trim()).toBe('7');
+        expect(fs.existsSync(orphan)).toBe(false);
+        expect(fs.existsSync(`${binA}.lock`)).toBe(false);
     }, 300_000);
 
     it('fails with the compiler output when the source does not compile, and keeps no lock or temp file', async () => {
