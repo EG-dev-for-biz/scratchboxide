@@ -232,14 +232,15 @@ export class GeoCameraMatchmovePipelineService {
     if (typeof coords !== 'object' || coords === null || !Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) {
       throw new Error('resolveLandmarkAnchor needs explicit coordinates; use geocodeLandmarkAnchor(name) to look up a place name.');
     }
+    // Only what was given: no 0 m ground and no "typical" roofline or street heights are filled in.
     return {
       lat: coords.lat,
       lng: coords.lng,
-      elevation: coords.elevation ?? 0,
+      ...(Number.isFinite(coords.elevation) ? { elevation: coords.elevation } : {}),
       landmarkName: coords.landmarkName ?? `Geo Location (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`,
       headingDeg: coords.headingDeg ?? 0,
-      typicalRooflineAltM: coords.typicalRooflineAltM ?? 70.0,
-      typicalStreetAltM: coords.typicalStreetAltM ?? 10.0
+      ...(coords.typicalRooflineAltM !== undefined ? { typicalRooflineAltM: coords.typicalRooflineAltM } : {}),
+      ...(coords.typicalStreetAltM !== undefined ? { typicalStreetAltM: coords.typicalStreetAltM } : {})
     };
   }
 
@@ -1078,7 +1079,7 @@ export class GeoCameraMatchmovePipelineService {
     // 2. Resolve Geodetic Anchor
     const anchor = this.resolveLandmarkAnchor(request.geoAnchor);
     const headingDeg = request.headingDeg ?? anchor.headingDeg;
-    console.log(`📍 Geodetic Anchor: lat=${anchor.lat.toFixed(6)}, lng=${anchor.lng.toFixed(6)}, elev=${anchor.elevation}m (${anchor.landmarkName})`);
+    console.log(`📍 Geodetic Anchor: lat=${anchor.lat.toFixed(6)}, lng=${anchor.lng.toFixed(6)}, elev=${anchor.elevation !== undefined ? `${anchor.elevation}m` : 'not given'} (${anchor.landmarkName})`);
     console.log(`🧭 Heading / Grid Angle: ${headingDeg.toFixed(1)}°`);
 
     // 3. Solve Camera Trajectory

@@ -34,7 +34,8 @@ async function main() {
         }
     }
 
-    const location = getArg('--location') || requestPayload.location || requestPayload.activeModel || 'colosseum';
+    // No default place: without a location (or anchor in the job) resolveSurveyPreset fails and the job says why.
+    const location = getArg('--location') || requestPayload.location || requestPayload.activeModel;
     const sigmaScale = parseFloat(getArg('--sigma-scale') || requestPayload.sigmaScale || '0.5');
     const voxelSizeMeters = parseFloat(getArg('--voxel-size') || requestPayload.voxelSizeMeters || '0.05');
     const forceRebake = hasFlag('--force-rebake') || requestPayload.forceRebake !== false;
@@ -46,15 +47,6 @@ async function main() {
     const cameraCount = getArg('--camera-count') ? parseInt(getArg('--camera-count')!, 10) : requestPayload.cameraCount;
 
     const workspaceRoot = process.cwd();
-    const preset = resolveSurveyPreset({
-        location,
-        sigmaScale,
-        voxelSizeMeters,
-        cropRadius,
-        surveyPreset,
-        cameraCount,
-        ...requestPayload
-    }, workspaceRoot);
 
     const updateJob = (status: 'running' | 'done' | 'error', progress: number, message?: string, result?: any, error?: string) => {
         if (!jobFile) return;
@@ -72,6 +64,24 @@ async function main() {
             fs.writeFileSync(jobFile, JSON.stringify(updated, null, 2), 'utf8');
         } catch {}
     };
+
+    let preset: Awaited<ReturnType<typeof resolveSurveyPreset>>;
+    try {
+        preset = await resolveSurveyPreset({
+            location,
+            sigmaScale,
+            voxelSizeMeters,
+            cropRadius,
+            surveyPreset,
+            cameraCount,
+            ...requestPayload
+        }, workspaceRoot);
+    } catch (err: any) {
+        const message = err?.message || String(err);
+        console.error('[SurveyPipeline] Could not resolve the survey location:', message);
+        updateJob('error', 1.0, message, null, message);
+        process.exit(1);
+    }
 
     updateJob('running', 0.05, `Initializing survey pipeline for ${preset.beautify.locationName}...`);
 

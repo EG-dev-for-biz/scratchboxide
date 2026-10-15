@@ -20,10 +20,16 @@ import {
   Entity4D,
   GeoAnchorDeploymentContract
 } from '../src/common/geospatial-4d-protocol';
-import {
-  ESB_GOOGLE_GEODETIC_ANCHOR,
-  GoogleVectorMappingService
-} from '../src/browser/generative-canvas/services/google-vector-mapping-service';
+import { GoogleVectorMappingService } from '../src/browser/generative-canvas/services/google-vector-mapping-service';
+
+/** A surveyed test anchor (Empire State Building): test data only; the service has no built-in places. */
+const ESB_GOOGLE_GEODETIC_ANCHOR = {
+  lat: 40.7484405,
+  lng: -73.9856644,
+  elevation: 18.53,
+  placeId: 'ChIJh9828XNZwokR_3A0K2N46j8',
+  formattedAddress: 'Empire State Building, 20 W 34th St, New York, NY 10001, USA'
+};
 
 describe('WebXRGeospatialAnchorBridge (Geodetic GPS <-> WebXR Metric Space)', () => {
   let bridge: WebXRGeospatialAnchorBridge;
@@ -257,7 +263,18 @@ describe('WebXRGeospatialAnchorBridge (Geodetic GPS <-> WebXR Metric Space)', ()
   });
 
   it('7. should project road corridors and parcel geofences into WebXR lines and extruded meshes', () => {
-    const midtownData = GoogleVectorMappingService.generateCanonicalMidtownMapping();
+    // Vector data comes from the caller (the service has no built-in Midtown dataset): two streets and one building.
+    const at = (dx: number, dy: number): [number, number] => [ESB_GOOGLE_GEODETIC_ANCHOR.lng + dx, ESB_GOOGLE_GEODETIC_ANCHOR.lat + dy];
+    const midtownData = GoogleVectorMappingService.ingestGeoJsonFeatures({
+      type: 'FeatureCollection',
+      features: [
+        { type: 'Feature', geometry: { type: 'LineString', coordinates: [at(-0.001, 0), at(0.001, 0)] }, properties: { name: 'W 34th St', width: 18, lanes: 4 } },
+        { type: 'Feature', geometry: { type: 'LineString', coordinates: [at(0, -0.001), at(0, 0.001)] }, properties: { name: '5th Ave', width: 30, lanes: 5 } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[at(-0.0002, -0.0002), at(0.0002, -0.0002), at(0.0002, 0.0002), at(-0.0002, 0.0002), at(-0.0002, -0.0002)]] }, properties: { name: 'Tower', height: 443.2 } }
+      ]
+    }, ESB_GOOGLE_GEODETIC_ANCHOR) as { roads: any[]; parcels: any[] };
+    expect(midtownData.roads).toHaveLength(2);
+    expect(midtownData.parcels).toHaveLength(1);
 
     // Project road corridors
     const roadLines = bridge.projectRoadCorridorsToWebXR(midtownData.roads);

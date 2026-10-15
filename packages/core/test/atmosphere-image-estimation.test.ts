@@ -1,4 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { encodePng } from '../src/node/texture-processing';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
 import {
     fitPlanckianKelvinTemperature,
     computeSkyAtmosphereMetrics,
@@ -136,54 +141,72 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
         });
     });
 
-    describe('AtmosphereImageEstimationService.estimateFromImage with Landmark & NOAA Ephemeris', () => {
-        it('should ground Rome Colosseum afternoon lighting with NOAA solar position', async () => {
+    describe('AtmosphereImageEstimationService.estimateFromImage: the photo\'s pixels or an error', () => {
+        it('estimates from the pixels and grounds the sun with NOAA ephemeris at the given coordinates', async () => {
+            const sky = skyImage(80, 80);
             const result = await AtmosphereImageEstimationService.estimateFromImage({
-                promptHint: 'Colosseum Rome sunny afternoon',
+                pixels: sky.pixels,
+                width: sky.width,
+                height: sky.height,
                 knownCoords: { lat: 41.8902, lng: 12.4922 },
                 timestampIso: '2026-09-28T15:30:00Z',
                 cameraHeadingDeg: 108.0,
                 cameraPitchDeg: 6.0
             });
 
-            expect(result.landmarkHint).toContain('Colosseum');
+            expect(result.landmarkHint).toBeUndefined();
             expect(result.diurnalPhase.toLowerCase()).toBe('afternoon');
-            expect(result.kelvinTemperature).toBeGreaterThanOrEqual(5000);
-            expect(result.kelvinTemperature).toBeLessThanOrEqual(5800);
             expect(result.sunElevation).toBeGreaterThan(25);
             expect(result.sunAzimuth).toBeGreaterThan(100);
             expect(result.sunAzimuth).toBeLessThan(260);
-            expect(result.confidence).toBeGreaterThan(0.8);
+        });
+
+        it('never synthesizes an estimate without pixels, and never maps a hint to a landmark', async () => {
+            // It used to place any photo at the Colosseum (or a regex-matched landmark) with constant "measured" metrics.
+            await expect(AtmosphereImageEstimationService.estimateFromImage({ promptHint: 'Colosseum Rome sunny afternoon', imagePath: 'unread.jpg' }))
+                .rejects.toThrow(MissingInputError);
+            const sky = skyImage(80, 80);
+            const hinted = AtmosphereImageEstimationService.estimateFromPixels({ pixels: sky.pixels, width: sky.width, height: sky.height, promptHint: 'Eiffel Tower, Paris', timestampIso: '2026-09-28T15:30:00Z' });
+            expect((hinted.suggestedAtmosphereConfig as any).latitude).toBeUndefined();
         });
     });
 
     describe('In-App Gemini Tool Handler: atmosphere_estimate_from_image', () => {
-        it('should execute atmosphere_estimate_from_image handler and return structured result', async () => {
+        it('decodes the photograph it is given and estimates from it', async () => {
             const handler = atmosphereHandlers.atmosphere_estimate_from_image;
-            expect(handler).toBeDefined();
+            const sky = skyImage(96, 72);
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-atmo-'));
+            const imagePath = path.join(dir, 'plaza.png');
+            fs.writeFileSync(imagePath, encodePng(sky.width, sky.height, Buffer.from(sky.pixels)));
+            try {
+                const execution = await handler({
+                    imagePath,
+                    latitude: 41.8902,
+                    longitude: 12.4922,
+                    isoDate: '2026-09-28T15:30:00Z',
+                    cameraHeadingDeg: 108.0
+                }, {} as any);
+                const payload = execution.resultPayload as any;
+                expect(payload.diurnalPhase.toLowerCase()).toBe('afternoon');
+                expect(execution.summaryResult).toContain('Estimated physical atmosphere matching image');
+                expect(execution.summaryResult).toContain(`${payload.kelvinTemperature}K`);
 
-            const execution = await handler({
-                promptHint: 'Piazza del Colosseo Rome afternoon',
-                latitude: 41.8902,
-                longitude: 12.4922,
-                isoDate: '2026-09-28T15:30:00Z',
-                cameraHeadingDeg: 108.0
-            }, {} as any);
-
-            expect(execution.resultPayload).toBeDefined();
-            const payload = execution.resultPayload as any;
-            expect(payload.diurnalPhase.toLowerCase()).toBe('afternoon');
-            expect(payload.kelvinTemperature).toBeGreaterThan(5000);
-            expect(execution.summaryResult).toContain('Estimated physical atmosphere matching image');
-            expect(execution.summaryResult).toContain(`${payload.kelvinTemperature}K`);
+                await expect(handler({ promptHint: 'Piazza del Colosseo Rome afternoon', latitude: 41.8902, longitude: 12.4922 }, {} as any)).rejects.toThrow(MissingInputError);
+                await expect(handler({ imagePath: path.join(dir, 'missing.png') }, {} as any)).rejects.toThrow(/does not exist/);
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
         });
     });
 
     describe('AtmosphereService Facade Integration', () => {
         it('should accept and apply atmospheric estimation result seamlessly', async () => {
             const atmosphereService = new AtmosphereService();
+            const sky = skyImage(80, 80);
             const estimation = await AtmosphereImageEstimationService.estimateFromImage({
-                promptHint: 'Colosseum Rome afternoon',
+                pixels: sky.pixels,
+                width: sky.width,
+                height: sky.height,
                 knownCoords: { lat: 41.8902, lng: 12.4922 }
             });
 
@@ -196,3 +219,18 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
         });
     });
 });
+
+/** A clear afternoon sky over warm stone with a sun disc at the upper right (RGBA8). */
+function skyImage(width: number, height: number): { pixels: Uint8Array; width: number; height: number } {
+    const pixels = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const i = (y * width + x) * 4;
+            const sky = y < height * 0.38;
+            const sun = Math.hypot(x - width * 0.7, y - height * 0.1) < Math.max(3, width * 0.05);
+            const rgb = sun ? [255, 245, 210] : sky ? [120, 180, 240] : [170, 150, 110];
+            pixels[i] = rgb[0]; pixels[i + 1] = rgb[1]; pixels[i + 2] = rgb[2]; pixels[i + 3] = 255;
+        }
+    }
+    return { pixels, width, height };
+}

@@ -18,6 +18,7 @@ import {
 } from '../../../common/spatial/colmap-vector-reference-types';
 import { GoogleElevationService } from './google-elevation-service';
 import { GoogleMapsService } from './google-maps-service';
+import { MissingInputError } from '../../../common/errors/pipeline-errors';
 
 /**
  * Universal, Zero-Preset Processing Pipeline for
@@ -56,17 +57,10 @@ export class ColmapVectorPipeline {
         throw new Error(`Zero-Preset Error: Invalid longitude ${lng}. Must be a valid number in [-180, 180].`);
       }
 
-      let groundElevation = elevationMeters ?? 0;
-      if (options?.fetchElevation || request.fetchElevation) {
-        try {
-          const elevResult = await this.sampleElevation(lat, lng, apiKey);
-          if (elevResult !== undefined) {
-            groundElevation = elevResult;
-          }
-        } catch (e) {
-          console.warn(`[ColmapVectorPipeline] Ground elevation sample failed for (${lat}, ${lng}), using default:`, e);
-        }
-      }
+      // The stated ground elevation, else the Elevation API's (when asked for); never a default.
+      const groundElevation = typeof elevationMeters === 'number' && Number.isFinite(elevationMeters)
+        ? elevationMeters
+        : await this.requireElevation(lat, lng, apiKey, !!(options?.fetchElevation || request.fetchElevation));
 
       return {
         lat,
@@ -86,15 +80,7 @@ export class ColmapVectorPipeline {
       }
 
       const geocoded = await this.geocodeAddress(request.query.trim(), apiKey);
-      let groundElevation = 0;
-      if (options?.fetchElevation || request.fetchElevation) {
-        try {
-          const elev = await this.sampleElevation(geocoded.lat, geocoded.lng, apiKey);
-          if (elev !== undefined) groundElevation = elev;
-        } catch {
-          // preserve 0 on failure
-        }
-      }
+      const groundElevation = await this.requireElevation(geocoded.lat, geocoded.lng, apiKey, !!(options?.fetchElevation || request.fetchElevation));
 
       return {
         lat: geocoded.lat,
@@ -113,36 +99,39 @@ export class ColmapVectorPipeline {
   }
 
   /**
-   * Samples ground elevation ASL via Google Elevation API proxy or service.
+   * Ground elevation ASL from the Elevation API (the local proxy, else GoogleElevationService). Without
+   * fetchElevation, or when both fail, this throws: the survey's heights are not built on an invented 0 m.
    */
-  private async sampleElevation(lat: number, lng: number, apiKey?: string): Promise<number | undefined> {
-    try {
-      // 1. Try local server proxy if running in browser or Node
-      const proxyUrl = `/api/elevation?locations=${lat},${lng}${apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''}`;
-      if (typeof fetch !== 'undefined') {
+  private async requireElevation(lat: number, lng: number, apiKey: string | undefined, fetchElevation: boolean): Promise<number> {
+    const where = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    if (!fetchElevation) {
+      throw new MissingInputError('ColmapVectorPipeline', 'anchor.elevationMeters', `no ground elevation was given for ${where}; give elevationMeters or set fetchElevation`);
+    }
+    const failures: string[] = [];
+    if (typeof fetch !== 'undefined') {
+      try {
+        const proxyUrl = `/api/elevation?locations=${lat},${lng}${apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''}`;
         const resp = await fetch(proxyUrl);
         if (resp.ok) {
           const data = await resp.json();
-          if (data.results && data.results.length > 0) {
+          if (data.results && data.results.length > 0 && typeof data.results[0].elevation === 'number') {
             return data.results[0].elevation;
           }
+          failures.push('the elevation proxy returned no result');
+        } else {
+          failures.push(`the elevation proxy returned HTTP ${resp.status}`);
         }
+      } catch (err) {
+        failures.push(`the elevation proxy failed (${err instanceof Error ? err.message : String(err)})`);
       }
-    } catch {
-      // Fallback to GoogleElevationService singleton
     }
-
     try {
-      const elevService = GoogleElevationService.getInstance();
-      const results = await elevService.getElevationForLocations([{ lat, lng }]);
-      if (results.length > 0) {
-        return results[0].elevation;
-      }
-    } catch {
-      // Ignore fallback errors
+      const results = await GoogleElevationService.getInstance().getElevationForLocations([{ lat, lng }]);
+      return results[0].elevation;
+    } catch (err) {
+      failures.push(`the Elevation API failed (${err instanceof Error ? err.message : String(err)})`);
     }
-
-    return undefined;
+    throw new MissingInputError('ColmapVectorPipeline', 'anchor.elevationMeters', `the ground elevation at ${where} is unknown: ${failures.join('; ')}`);
   }
 
   /**

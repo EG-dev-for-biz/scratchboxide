@@ -17,7 +17,7 @@ async function main() {
     console.log('🏛️ Rebaking Colosseum Survey 3DGS centered at monument centroid [-43.42, 24.0, 62.54]...');
 
     const workspaceRoot = process.cwd();
-    const preset = resolveSurveyPreset({
+    const preset = await resolveSurveyPreset({
         location: 'Rome Colosseum',
         surveyPattern: 'geographic-3dtiles-survey',
         cameraCount: 24,

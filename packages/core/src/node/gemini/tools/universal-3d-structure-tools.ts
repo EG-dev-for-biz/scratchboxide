@@ -343,6 +343,9 @@ export const universal3DStructureHandlers: Record<string, ToolHandler> = {
             }
             case 'geojson': {
                 const geoJson = structure.toGeoJson();
+                if (!geoJson) {
+                    throw new Error('GeoJSON export needs the structure\'s geodetic anchor; this structure has none (no default place is used).');
+                }
                 formatDetails = {
                     featureCount: geoJson.features.length,
                     anchor: structure.anchor

@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { getSolarPosition } from '../../common/coordinate/solarPosition';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 
 export interface ShadowDeductionInput {
   candidateLat: number;
@@ -120,23 +121,14 @@ export class ChronoSpatialDeductionEngine {
     },
     roughCoordinates?: { lat: number; lng: number }
   ): string {
-    // Determine candidate coordinates
-    let lat = roughCoordinates?.lat ?? 37.7940; // Default SF Financial District
-    let lng = roughCoordinates?.lng ?? -122.4010;
-
-    // Perform S2 mapping / landmark coordinate resolution
-    let resolvedPlace = "Unresolved Geohash Region";
-    if (visualReport.buildingLandmarks?.some(l => l.toLowerCase().includes("ferry building"))) {
-      lat = 37.7955;
-      lng = -122.3937;
-      resolvedPlace = "Ferry Building, San Francisco, CA";
-    } else if (visualReport.buildingLandmarks?.some(l => l.toLowerCase().includes("coit tower"))) {
-      lat = 37.8024;
-      lng = -122.4058;
-      resolvedPlace = "Coit Tower, San Francisco, CA";
-    } else if (roughCoordinates) {
-      resolvedPlace = `Coordinate Grid Region [Lat ${lat.toFixed(4)}, Lng ${lng.toFixed(4)}]`;
+    // The candidate location is the one given: landmark names in the report are not matched to places, and
+    // there is no default city.
+    if (!roughCoordinates) {
+      throw new MissingInputError('generateDeductionReport', 'roughCoordinates', 'the inverse-solar search starts from the candidate location; none is assumed');
     }
+    const lat = roughCoordinates.lat;
+    const lng = roughCoordinates.lng;
+    const resolvedPlace = `Coordinate Grid Region [Lat ${lat.toFixed(4)}, Lng ${lng.toFixed(4)}]`;
 
     // Convert clock shadow direction to degrees (12 o'clock = 0 deg, 3 o'clock = 90 deg, etc.)
     const shadowClock = visualReport.shadowDirectionClockHand ?? 12;

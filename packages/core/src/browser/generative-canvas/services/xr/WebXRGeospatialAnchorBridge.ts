@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { LocalTangentPlane, LatLngAlt, Vec3 } from '../../../../common/coordinate/LocalTangentPlane';
 import { GeoFrame } from '../../../../common/coordinate/GeoFrame';
+import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 import {
   GeoAnchorDeploymentContract,
   ARPlacementEntity,
@@ -108,13 +109,8 @@ export class WebXRGeospatialAnchorBridge {
         geoidHeight: options.origin.geoidHeight ?? options.geoidHeight ?? 0
       };
     } else {
-      // Default to ESB coordinates as fallback origin
-      this.originAnchor = {
-        lat: 40.7484405,
-        lng: -73.9856644,
-        alt: 18.53,
-        geoidHeight: 0
-      };
+      // No default origin: WebXR content is placed relative to a real anchor the caller gives.
+      throw new MissingInputError('WebXRGeospatialAnchorBridge', 'origin or contract', 'no default geodetic origin is used');
     }
 
     this.ltp = new LocalTangentPlane(

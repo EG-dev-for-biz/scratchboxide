@@ -31,18 +31,28 @@ export function resolveMapsApiKey(explicit?: string): string {
 }
 
 /**
- * Why a Places API (New) request was refused, for the error the user sees. A 403 / PERMISSION_DENIED means the
- * key cannot call Places API (New) (the API is not enabled in the key's project, or the key's API restrictions
- * leave it out), which only the key's owner can fix, so the message says exactly that.
+ * Why a Places API (New) request was refused, for the error the user sees. Google's own message is always included.
+ * A 403 / PERMISSION_DENIED has several causes that only the key's owner can fix; the structured reason Google
+ * returns in error.details picks the advice, and without one every cause is listed (it is not always the API).
  */
 function describePlacesRefusal(operation: string, status: number, body: any): string {
     const apiStatus = typeof body?.error?.status === 'string' ? body.error.status : '';
     const message = typeof body?.error?.message === 'string' ? body.error.message : '';
     const base = `${operation} returned HTTP ${status}${apiStatus ? ` ${apiStatus}` : ''}${message ? `: ${message}` : ''}`;
-    if (status === 403 || apiStatus === 'PERMISSION_DENIED') {
-        return `${base}. This Maps key cannot call "Places API (New)" (places.googleapis.com): enable "Places API (New)" for the key's Google Cloud project, and if the key has API restrictions, add "Places API (New)" to them.`;
-    }
-    return base;
+    if (status !== 403 && apiStatus !== 'PERMISSION_DENIED') return base;
+    const details: any[] = Array.isArray(body?.error?.details) ? body.error.details : [];
+    const reason: string = details.map(d => (typeof d?.reason === 'string' ? d.reason : '')).find(Boolean) || '';
+    const advice: Record<string, string> = {
+        SERVICE_DISABLED: 'enable "Places API (New)" (places.googleapis.com) in the key\'s Google Cloud project',
+        API_KEY_SERVICE_BLOCKED: 'the key\'s API restrictions leave out "Places API (New)"; add it to them',
+        BILLING_DISABLED: 'enable billing on the key\'s Google Cloud project',
+        API_KEY_HTTP_REFERRER_BLOCKED: 'the key only allows certain websites (HTTP referrers), so this caller is blocked; use a key whose application restrictions allow it',
+        API_KEY_IP_ADDRESS_BLOCKED: 'the key only allows certain IP addresses, so this caller is blocked; allow this machine\'s address or use another key',
+        API_KEY_ANDROID_APP_BLOCKED: 'the key is restricted to Android apps; use a key whose application restrictions allow this caller',
+        API_KEY_IOS_APP_BLOCKED: 'the key is restricted to iOS apps; use a key whose application restrictions allow this caller'
+    };
+    const fix = advice[reason] || 'check that "Places API (New)" (places.googleapis.com) is enabled in the key\'s Google Cloud project and allowed by the key\'s API restrictions, that billing is enabled, and that the key\'s application restrictions (websites, IP addresses) allow this caller';
+    return `${base}. Google refused this Maps key${reason ? ` (${reason})` : ''}: ${fix}.`;
 }
 
 export interface GeocodeOptions {
@@ -156,30 +166,6 @@ export const GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE = {
 export const STATIC_MAPS_NO_LABELS_STYLES: string[] = [
     'feature:all|element:labels|visibility:off'
 ];
-
-export interface GoogleMapsVectorPathBConfig {
-    mapId: string;
-    styleId: string;
-    styleName: string;
-    mapType: 'vector';
-    center: { lat: number; lng: number; elevation?: number };
-    gridBearingDegrees: number;
-    colmapSurveyCount: number;
-    internalUsageAttributionIds: string[];
-}
-
-export const GOOGLE_MAPS_PATH_B_VECTOR_CONFIG: GoogleMapsVectorPathBConfig = {
-    mapId: 'ad80a8568eeae7445909ba9f',
-    styleId: '171afbfed80e6143e663574d',
-    styleName: 'Vector1',
-    mapType: 'vector',
-    center: { lat: 40.7484405, lng: -73.9856644, elevation: 15.0 },
-    gridBearingDegrees: 29.0,
-    colmapSurveyCount: 15,
-    internalUsageAttributionIds: ['gmp_git_agentskills_v1']
-};
-
-
 
 export interface EmbedMapOptions {
     mode?: 'place' | 'view' | 'directions' | 'streetview' | 'search';

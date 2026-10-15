@@ -8,6 +8,8 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 
 /**
@@ -23,5 +25,16 @@ describe('model-facing tool declarations', () => {
             .filter(d => Object.prototype.hasOwnProperty.call((d.parameters as any)?.properties ?? {}, 'mockExecution'))
             .map(d => d.name);
         expect(offenders).toEqual([]);
+    });
+
+    it('the blockout runner and recolour handlers ignore an undeclared mockExecution argument', () => {
+        // A model that sent mockExecution: true got placeholder MP4/PNG files reported as "Clay Blockout Runner completed".
+        const source = fs.readFileSync(path.resolve(__dirname, '../src/node/gemini/tools/spatial-tools.ts'), 'utf8');
+        for (const handler of ['google_3d_tiles_clay_blockout_runner', 'google_3d_tiles_recolor_glb']) {
+            const start = source.indexOf(`    ${handler}: async (args`);
+            expect(start, handler).toBeGreaterThan(0);
+            const body = source.slice(start, source.indexOf('\n    },\n', start));
+            expect(body, handler).not.toMatch(/mockExecution|offlineMock/);
+        }
     });
 });

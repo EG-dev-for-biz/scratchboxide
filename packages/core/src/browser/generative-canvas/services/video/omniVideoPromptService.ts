@@ -478,14 +478,15 @@ export interface BlockoutNanoBananaPromptOptions {
  * into a photorealistic photograph before it becomes <IMAGE_REF_0> in the Omni pipeline.
  */
 export function buildBlockoutNanoBananaPrompt(options: BlockoutNanoBananaPromptOptions): string {
-    const coordsStr = options.coordinates
-        ? `${options.coordinates.lat.toFixed(6)}, ${options.coordinates.lng.toFixed(6)}`
-        : '40.748400, -73.985700';
-    const heading = options.heading !== undefined ? Math.round(options.heading) : 0;
-    const earthUrl = options.earthUrl || (options.coordinates
-        ? `https://earth.google.com/web/@${options.coordinates.lat},${options.coordinates.lng}`
-        : 'https://earth.google.com/web/@40.7484,-73.9857');
     const aspectRatio = options.aspectRatio || '16:9';
+    if (!options.coordinates) {
+        // No place was given (e.g. a clay render of an object): the prompt says nothing about a location. It used
+        // to put every such render at the Empire State Building's coordinates and call it "a real location".
+        return `Transform this 3D clay rendering of ${options.locationName} into a photorealistic photograph. ${options.moodPromptContext ? `${options.moodPromptContext.trimEnd()} ` : ''}CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every part of the subject must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add objects or features that are not visible in the reference. Add realistic textures, materials, natural lighting, and fine detail to make this look like a real photograph taken from this exact vantage point.${options.subjectDistanceHint || ''}${options.styleSuffix || ''}`;
+    }
+    const coordsStr = `${options.coordinates.lat.toFixed(6)}, ${options.coordinates.lng.toFixed(6)}`;
+    const heading = options.heading !== undefined ? Math.round(options.heading) : 0;
+    const earthUrl = options.earthUrl || `https://earth.google.com/web/@${options.coordinates.lat},${options.coordinates.lng}`;
     // In accordance with style neutrality directive: extra injections into the prompt
     // should only happen in {styleSuffix}, and remain empty unless explicitly prompted by the user.
     const moodPromptContext = options.moodPromptContext !== undefined

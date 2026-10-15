@@ -9,7 +9,7 @@
 
 import * as path from 'path';
 import * as THREE from 'three';
-import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, runTileClayBlockoutRunner, type Google3DTile3DObjectResult } from '../../spatial/Google3DTileBlockoutPipelineService';
+import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, runTileClayBlockoutRunner, geocode3DTilesAddress, type Google3DTile3DObjectResult } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { recolor3DTilesGlb } from '../../spatial/GlbTextureRecolorService';
 import {
     healPanoramaSeam,
@@ -77,6 +77,7 @@ import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisSer
 import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
 import { Splat3DTilesService } from '../../spatial/Splat3DTilesService';
 import { SurveyApi } from '../../spatial/survey-router';
+import { readCoordinateArgs } from '../../../common/coordinate/parse-coordinates';
 import {
     ArchieBuildingRefiner,
     type ArchieBuildingPalette
@@ -134,7 +135,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 query: {
                     type: 'STRING',
-                    description: 'Geographic coordinate string (e.g. "40.748400, -73.985700") or physical address (e.g. "Midtown Manhattan, coordinates: 40.748400, -73.985700")'
+                    description: 'The place as the user wrote it: a place name or address (resolved with Google Places; the result reports the address it resolved), or only a "latitude, longitude" pair such as "40.748400, -73.985700". When the user gave coordinates, pass just the coordinates: text that mixes a name and numbers is looked up as a name.'
                 },
                 outputGlbPath: {
                     type: 'STRING',
@@ -184,7 +185,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 query: {
                     type: 'STRING',
-                    description: 'Geographic coordinate string (e.g. "40.748400, -73.985700") or physical address (e.g. "Midtown Manhattan, coordinates: 40.748400, -73.985700")'
+                    description: 'The place as the user wrote it: a place name or address (resolved with Google Places; the result reports the address it resolved), or only a "latitude, longitude" pair such as "40.748400, -73.985700". When the user gave coordinates, pass just the coordinates: text that mixes a name and numbers is looked up as a name.'
                 },
                 outputGlbPath: {
                     type: 'STRING',
@@ -234,7 +235,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 query: {
                     type: 'STRING',
-                    description: 'Geographic coordinate string (e.g. "40.748400, -73.985700") or physical address (e.g. "Midtown Manhattan, coordinates: 40.748400, -73.985700")'
+                    description: 'The place as the user wrote it: a place name or address (resolved with Google Places; the result reports the address it resolved), or only a "latitude, longitude" pair such as "40.748400, -73.985700". When the user gave coordinates, pass just the coordinates: text that mixes a name and numbers is looked up as a name.'
                 },
                 trajectoryPreset: {
                     type: 'STRING',
@@ -905,7 +906,6 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         const outputVideoPath = asString(args.outputVideoPath) || undefined;
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
         const firstFramePngPath = asString(args.firstFramePngPath) || undefined;
-        const offlineMock = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
         const atomicBuildingIntegrity = typeof args.atomicBuildingIntegrity === 'boolean' ? args.atomicBuildingIntegrity : undefined;
         const enforceZeroBuildingClipping = typeof args.enforceZeroBuildingClipping === 'boolean' ? args.enforceZeroBuildingClipping : undefined;
         const zenithAltitudeMeters = typeof args.zenithAltitudeMeters === 'number' ? args.zenithAltitudeMeters : undefined;
@@ -917,7 +917,6 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
             outputVideoPath,
             outputGlbPath,
             firstFramePngPath,
-            offlineMock,
             atomicBuildingIntegrity,
             enforceZeroBuildingClipping,
             zenithAltitudeMeters
@@ -958,7 +957,6 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         const generateRoughnessMaps = typeof args.generatePbrRoughness === 'boolean' ? args.generatePbrRoughness : true;
         const normalStrength = typeof args.normalStrength === 'number' ? args.normalStrength : 2.0;
         const shadowLift = typeof args.shadowLift === 'number' ? args.shadowLift : 0.7;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
 
         const result = await recolor3DTilesGlb({
             inputGlb: inputGlbPath,
@@ -975,8 +973,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 normalStrength,
                 generateRoughnessMaps
             },
-            shadowLift,
-            mockExecution
+            shadowLift
         });
 
         return {
@@ -1648,6 +1645,10 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             type: 'OBJECT',
             properties: {
                 glbPath: { type: 'STRING', description: 'Path to target 3D model (.glb) to analyze and survey.' },
+                latitude: { type: 'NUMBER', description: 'Latitude (degrees) of the model\'s origin; stations get WGS-84 coordinates from it.' },
+                longitude: { type: 'NUMBER', description: 'Longitude (degrees) of the model\'s origin.' },
+                elevationMeters: { type: 'NUMBER', description: 'Ground elevation above sea level (metres) at the model\'s origin.' },
+                headingDeg: { type: 'NUMBER', description: 'Heading of the model\'s -Z axis, degrees clockwise from north (default 0).' },
                 cameraBudget: { type: 'NUMBER', description: 'Maximum number of camera stations to synthesize (default: 40).' },
                 targetResolutionMm: { type: 'NUMBER', description: 'Desired Ground Sampling Distance in mm/pixel (e.g. 2.0 mm for tactile travertine pores). Auto-calculates optimal standoff.' },
                 mode: { type: 'STRING', description: "Survey mode: 'facade-perimeter' (default), 'interior-cavity', 'multitier-complete', or 'inspection-macro'." },
@@ -1658,7 +1659,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 cropRadius: { type: 'NUMBER', description: 'Radius in meters around focusCentroid to isolate target structure (default: 120-140m).' },
                 outJsonPath: { type: 'STRING', description: 'Optional path to persist the synthesized stations JSON.' }
             },
-            required: ['glbPath']
+            required: ['glbPath', 'latitude', 'longitude', 'elevationMeters']
         }
     },
     {
@@ -1669,7 +1670,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 latitude: { type: 'NUMBER', description: 'Anchor latitude (degrees).' },
                 longitude: { type: 'NUMBER', description: 'Anchor longitude (degrees).' },
-                elevationMeters: { type: 'NUMBER', description: 'Anchor ground elevation ASL (metres, default 0).' },
+                elevationMeters: { type: 'NUMBER', description: 'Anchor ground elevation ASL (metres). Required: no elevation is assumed.' },
                 headingDeg: { type: 'NUMBER', description: 'Anchor / corridor heading, degrees clockwise from north (default 0).' },
                 pattern: { type: 'STRING', description: "'orbital-multi-tier' | 'facade-lawnmower' | 'street-corridor' | 'nadir-grid'" },
                 radiusMeters: { type: 'NUMBER', description: 'Orbit radius / facade standoff / corridor scale (metres).' },
@@ -1682,7 +1683,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 rankMaxCount: { type: 'NUMBER', description: 'If set, also return the ids of the best stations for beautify.' },
                 outJsonPath: { type: 'STRING', description: 'Optional path to write the stations JSON.' }
             },
-            required: ['latitude', 'longitude', 'pattern', 'radiusMeters', 'cameraCount']
+            required: ['latitude', 'longitude', 'elevationMeters', 'pattern', 'radiusMeters', 'cameraCount']
         }
     },
     {
@@ -1910,8 +1911,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
         parameters: {
             type: 'OBJECT',
             properties: {
-                latitude: { type: 'NUMBER', description: 'Geodetic latitude of target center location (e.g. 40.7484 for Empire State Building).' },
-                longitude: { type: 'NUMBER', description: 'Geodetic longitude of target center location (e.g. -73.9857).' },
+                latitude: { type: 'NUMBER', description: 'Geodetic latitude of the target center, in degrees.' },
+                longitude: { type: 'NUMBER', description: 'Geodetic longitude of the target center, in degrees.' },
                 zoom: { type: 'NUMBER', description: 'Vector tile zoom level (default: 16).' },
                 radiusTiles: { type: 'NUMBER', description: 'Neighbor tile radius around center (default: 1 for a 3x3 tile grid).' },
                 style: { type: 'STRING', description: 'Material styling mode (default: "studio_clay" for 18% Studio Grey Clay).' },
@@ -1942,8 +1943,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
         parameters: {
             type: 'OBJECT',
             properties: {
-                latitude: { type: 'NUMBER', description: 'Target geodetic latitude (e.g. 40.7484 for Empire State Building).' },
-                longitude: { type: 'NUMBER', description: 'Target geodetic longitude (e.g. -73.9857).' },
+                latitude: { type: 'NUMBER', description: 'Target geodetic latitude, in degrees.' },
+                longitude: { type: 'NUMBER', description: 'Target geodetic longitude, in degrees.' },
                 elevation: { type: 'NUMBER', description: 'Anchor ground elevation in meters ASL/MSL (default: 0.0).' },
                 radiusMeters: { type: 'NUMBER', description: 'Search radius in meters (default: 250).' },
                 layers: {
@@ -2761,6 +2762,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const api = new SurveyApi({ workspaceRoot: process.cwd() });
         const res = await api.planAdaptive({
             glbPath: asString(args.glbPath),
+            anchor: { lat: args.latitude, lng: args.longitude, elevationMeters: args.elevationMeters, headingDeg: typeof args.headingDeg === 'number' ? args.headingDeg : 0 },
             cameraBudget: typeof args.cameraBudget === 'number' ? args.cameraBudget : undefined,
             targetResolutionMm: typeof args.targetResolutionMm === 'number' ? args.targetResolutionMm : undefined,
             mode: asString(args.mode) as any,
@@ -2803,7 +2805,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
     survey_synthesize_stations: async (args, _ctx) => {
         const api = new SurveyApi({ workspaceRoot: process.cwd() });
         const res = await api.synthesize({
-            anchor: { lat: args.latitude, lng: args.longitude, elevationMeters: typeof args.elevationMeters === 'number' ? args.elevationMeters : 0, headingDeg: typeof args.headingDeg === 'number' ? args.headingDeg : 0 },
+            anchor: { lat: args.latitude, lng: args.longitude, elevationMeters: args.elevationMeters, headingDeg: typeof args.headingDeg === 'number' ? args.headingDeg : 0 },
             config: {
                 type: asString(args.pattern), targetRadiusMeters: args.radiusMeters, cameraCount: args.cameraCount,
                 focalLengthMm: typeof args.focalLengthMm === 'number' ? args.focalLengthMm : 35,
@@ -3668,50 +3670,18 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
 export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'geobox_resect_image_location',
-        description: 'Resects the 6-DOF camera optical center, geodetic coordinates, landmark identification, compass heading, pitch, standoff distance, FOV, and certified 100% sub-pixel edge alignment from an input photograph or video plate.',
+        description: 'Computes where a photograph was taken from: the camera\'s latitude, longitude and altitude, compass heading, pitch, standoff distance, horizontal FOV (from the lens), view frustum and a Google 3D Tiles camera config. It does not analyse the photo\'s pixels and runs no edge alignment (geobox_optimize_edge_alignment aligns a 3D model to a photo and reports what it measured). The location of what the photo shows comes from targetCoords, or from targetLandmarkName (else promptHint) resolved with Google Places. The pose needs evidence, and missing evidence is an error: 2D-3D point correspondences (points2D/points3D with imageWidthPx/imageHeightPx), the camera position (cameraOpticalCenter or knownCoords, with alt), or headingDeg with pitchDeg and standoffDistanceMeters. The result says which evidence was used.',
         parameters: {
             type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Path to source photograph or frame' },
-                videoPath: { type: 'STRING', description: 'Optional path to input video' },
-                promptHint: { type: 'STRING', description: 'Optional context, landmark name, or street hint' },
-                targetLandmarkName: { type: 'STRING', description: 'Optional explicit landmark name' },
-                knownCoords: {
-                    type: 'OBJECT',
-                    description: 'Optional known geodetic coordinates (lat, lng, alt)',
-                    properties: {
-                        lat: { type: 'NUMBER' },
-                        lng: { type: 'NUMBER' },
-                        alt: { type: 'NUMBER' }
-                    }
-                },
-                optimizeTo100Percent: { type: 'BOOLEAN', description: 'Whether to optimize edge overlap to 100% (default: true)' },
-                sensorFocalMm: { type: 'NUMBER', description: 'Lens focal length in mm (default: 26.0)' }
-            }
+            properties: geoboxResectionProperties()
         }
     },
     {
         name: 'geobox_resect_camera_pose',
-        description: 'Resects the millimeter-accurate 6-DOF camera optical center, geodetic coordinates, compass heading, pitch, and FOV from any photo or video first-frame, returning Google 3D Tiles and glTF configurations.',
+        description: 'Same as geobox_resect_image_location: computes the camera position, heading, pitch, FOV, frustum and Google 3D Tiles camera config for a photo or video frame. It does not analyse the photo\'s pixels and runs no edge alignment (geobox_optimize_edge_alignment aligns a 3D model to a photo and reports what it measured). The location of what the photo shows comes from targetCoords, or from targetLandmarkName (else promptHint) resolved with Google Places. The pose needs evidence, and missing evidence is an error: 2D-3D point correspondences (points2D/points3D with imageWidthPx/imageHeightPx), the camera position (cameraOpticalCenter or knownCoords, with alt), or headingDeg with pitchDeg and standoffDistanceMeters. The result says which evidence was used.',
         parameters: {
             type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Path to source photograph or frame' },
-                videoPath: { type: 'STRING', description: 'Optional path to input video' },
-                promptHint: { type: 'STRING', description: 'Optional context, landmark name, or street hint' },
-                targetLandmarkName: { type: 'STRING', description: 'Optional explicit landmark name' },
-                knownCoords: {
-                    type: 'OBJECT',
-                    description: 'Optional known geodetic coordinates (lat, lng, alt)',
-                    properties: {
-                        lat: { type: 'NUMBER' },
-                        lng: { type: 'NUMBER' },
-                        alt: { type: 'NUMBER' }
-                    }
-                },
-                optimizeTo100Percent: { type: 'BOOLEAN', description: 'Whether to optimize edge overlap to 100% (default: true)' },
-                sensorFocalMm: { type: 'NUMBER', description: 'Lens focal length in mm (default: 26.0)' }
-            }
+            properties: geoboxResectionProperties()
         }
     },
     {
@@ -3888,26 +3858,10 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'spatial_resect_image_location',
-        description: 'Resects 6-DOF camera optical center (lat, lng, elevation), 3-axis attitude (heading, pitch, roll), standoff distance, FOV, 100% sub-pixel edge alignment, and 3D Tiles configuration from an input photograph or video.',
+        description: 'Same as geobox_resect_image_location: computes the camera position, heading, pitch, FOV, frustum and Google 3D Tiles camera config for a photo or video frame. It does not analyse the photo\'s pixels and runs no edge alignment (geobox_optimize_edge_alignment aligns a 3D model to a photo and reports what it measured). The location of what the photo shows comes from targetCoords, or from targetLandmarkName (else promptHint) resolved with Google Places. The pose needs evidence, and missing evidence is an error: 2D-3D point correspondences (points2D/points3D with imageWidthPx/imageHeightPx), the camera position (cameraOpticalCenter or knownCoords, with alt), or headingDeg with pitchDeg and standoffDistanceMeters. The result says which evidence was used.',
         parameters: {
             type: 'OBJECT',
-            properties: {
-                imagePath: { type: 'STRING', description: 'Absolute path or URI of the query image' },
-                videoPath: { type: 'STRING', description: 'Optional path to video file if extracting keyframe' },
-                promptHint: { type: 'STRING', description: 'Optional prompt text hinting at landmark or location' },
-                targetLandmarkName: { type: 'STRING', description: 'Optional explicit landmark or location name' },
-                knownCoords: {
-                    type: 'OBJECT',
-                    description: 'Optional ground-truth coordinates if known',
-                    properties: {
-                        lat: { type: 'NUMBER' },
-                        lng: { type: 'NUMBER' },
-                        alt: { type: 'NUMBER' }
-                    }
-                },
-                optimizeTo100Percent: { type: 'BOOLEAN', description: 'Whether to optimize edge overlap to 100% (default: true)' },
-                sensorFocalMm: { type: 'NUMBER', description: 'Lens focal length in mm (default: 26.0)' }
-            }
+            properties: geoboxResectionProperties()
         }
     }
 ];
@@ -3930,26 +3884,40 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             glbPath: typeof args.glbPath === 'string' ? args.glbPath : undefined,
             points2D: Array.isArray(args.points2D) ? args.points2D : undefined,
             points3D: Array.isArray(args.points3D) ? args.points3D : undefined,
-            optimizeTo100Percent: args.optimizeTo100Percent !== false,
-            sensorFocalMm: typeof args.sensorFocalMm === 'number' ? args.sensorFocalMm : 26.0
+            imageWidthPx: typeof args.imageWidthPx === 'number' ? args.imageWidthPx : undefined,
+            imageHeightPx: typeof args.imageHeightPx === 'number' ? args.imageHeightPx : undefined,
+            sensorFocalMm: typeof args.sensorFocalMm === 'number' ? args.sensorFocalMm : undefined,
+            sensorWidthMm: typeof args.sensorWidthMm === 'number' ? args.sensorWidthMm : undefined
         };
 
         const result = await service.resectImageLocation(request);
+        const located = result.landmark.resolvedFrom === 'google_places' ? 'resolved with Google Places' : `from ${result.landmark.resolvedFrom}`;
         return {
             resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Resected 6-DOF camera pose. Resected image location for ${result.landmark.name} at (${result.cameraOpticalCenter.lat.toFixed(6)}, ${result.cameraOpticalCenter.lng.toFixed(6)}, alt: ${result.cameraOpticalCenter.elevationMslMeters.toFixed(1)}m) with heading ${result.cameraAttitude.headingDeg.toFixed(1)}°, pitch ${result.cameraAttitude.pitchDeg.toFixed(1)}°, and ${result.edgeAlignment.overlapScorePct.toFixed(1)}% edge overlap (${result.edgeAlignment.physicalDeltaMm.toFixed(2)}mm tolerance).`
+            summaryResult: `Camera pose for ${result.landmark.name} (${located}): camera at (${result.cameraOpticalCenter.lat.toFixed(6)}, ${result.cameraOpticalCenter.lng.toFixed(6)}, ${result.cameraOpticalCenter.elevationMslMeters.toFixed(1)} m), heading ${result.cameraAttitude.headingDeg.toFixed(1)}°, pitch ${result.cameraAttitude.pitchDeg.toFixed(1)}°, ${result.cameraOpticalCenter.standoffDistanceMeters.toFixed(1)} m from the target, horizontal FOV ${result.googleMapTiles3DConfig.fov}°. Pose from ${result.poseSource}. The photo's pixels were not analysed and no edge alignment was run.`
         };
     },
     geobox_resect_camera_pose: async (args, ctx) => {
         return geoboxPrecisionHandlers.geobox_resect_image_location(args, ctx);
     },
     geobox_harmonize_location_lighting: async (args, _ctx) => {
+        // The sun needs coordinates: the given ones, else the landmark name resolved with Google Places.
+        const landmarkName = typeof args.landmarkName === 'string' && args.landmarkName.trim() ? args.landmarkName.trim() : undefined;
+        let latitude = typeof args.latitude === 'number' ? args.latitude : undefined;
+        let longitude = typeof args.longitude === 'number' ? args.longitude : undefined;
+        let resolvedName = landmarkName;
+        if ((latitude === undefined || longitude === undefined) && landmarkName) {
+            const place = await geocode3DTilesAddress(landmarkName);
+            latitude = place.lat;
+            longitude = place.lng;
+            resolvedName = place.formattedAddress || place.landmarkName || landmarkName;
+        }
         const result = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
             imagePath: typeof args.imagePath === 'string' ? args.imagePath : undefined,
-            landmarkName: typeof args.landmarkName === 'string' ? args.landmarkName : undefined,
+            landmarkName: resolvedName,
             preset: typeof args.preset === 'string' ? (args.preset as any) : undefined,
-            latitude: typeof args.latitude === 'number' ? args.latitude : undefined,
-            longitude: typeof args.longitude === 'number' ? args.longitude : undefined,
+            latitude,
+            longitude,
             isoDate: typeof args.isoDate === 'string' ? args.isoDate : undefined,
             stoneType: typeof args.stoneType === 'string' ? (args.stoneType as any) : undefined,
             enableArchitecturalBacklighting: args.enableArchitecturalBacklighting !== false,
@@ -3958,7 +3926,7 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
 
         return {
             resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Harmonized location 3D lighting for ${result.landmarkContext?.name || 'landmark'} (${result.preset}, diurnal: ${result.diurnalPhase}). Calibrated de-lighting (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}), and ${result.architecturalFixtures.length} architectural portal window fixtures.`
+            summaryResult: `Harmonized location 3D lighting for ${result.landmarkContext?.name} (${latitude!.toFixed(6)}, ${longitude!.toFixed(6)}; sun at ${result.landmarkContext?.isoDate}${result.landmarkContext?.isoDateAssumed ? ', assumed: no isoDate given' : ''}) (${result.preset}, diurnal: ${result.diurnalPhase}). Calibrated de-lighting (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}), and ${result.architecturalFixtures.length} architectural portal window fixtures.`
         };
     },
     geobox_optimize_edge_alignment: async (args, _ctx) => {
@@ -5618,8 +5586,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
         };
     },
     stage_3d_vector_world: async (args, _ctx) => {
-        const latitude = typeof args.latitude === 'number' ? args.latitude : 40.7484;
-        const longitude = typeof args.longitude === 'number' ? args.longitude : -73.9857;
+        const { lat: latitude, lng: longitude } = readCoordinateArgs('stage_3d_vector_world', args.latitude, args.longitude);
         const zoom = typeof args.zoom === 'number' ? args.zoom : 16;
         const radiusTiles = typeof args.radiusTiles === 'number' ? args.radiusTiles : 1;
         const style = asString(args.style) || 'studio_clay';
@@ -5689,7 +5656,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                     data: {
                         ...prevData,
                         groundTileMode: 'vector-world-clay',
-                        geoAnchor: { lat: latitude, lng: longitude, elevation: 10, active: true },
+                        geoAnchor: { lat: latitude, lng: longitude, active: true },
                         objects: [...prevObjects, vectorWorldObj]
                     }
                 };
@@ -5749,7 +5716,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                     data: {
                         ...prevData,
                         groundTileMode: 'vector-world-clay',
-                        geoAnchor: { lat: latitude, lng: longitude, elevation: 10, active: true },
+                        geoAnchor: { lat: latitude, lng: longitude, active: true },
                         objects: [...prevObjects, vectorWorldObj]
                     }
                 };
@@ -5765,8 +5732,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
         }
     },
     query_spatial_vector_data: async (args, _ctx) => {
-        const latitude = typeof args.latitude === 'number' ? args.latitude : 40.7484;
-        const longitude = typeof args.longitude === 'number' ? args.longitude : -73.9857;
+        const { lat: latitude, lng: longitude } = readCoordinateArgs('query_spatial_vector_data', args.latitude, args.longitude);
         const elevation = typeof args.elevation === 'number' ? args.elevation : 0.0;
         const radiusMeters = typeof args.radiusMeters === 'number' ? args.radiusMeters : 250;
         const queryType = asString(args.queryType) || 'overview';
@@ -6026,4 +5992,37 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
 export const SPATIAL_TOOL_DECLARATIONS = PANORAMA_TOOL_DECLARATIONS;
 export const spatialHandlers = panoramaHandlers;
 
-
+/** Parameters shared by the camera-resection tools (geobox_resect_image_location and its aliases). */
+function geoboxResectionProperties(): NonNullable<NonNullable<ToolDeclaration['parameters']>['properties']> {
+    const point = (description: string) => ({
+        type: 'OBJECT' as const,
+        description,
+        properties: { lat: { type: 'NUMBER' as const }, lng: { type: 'NUMBER' as const }, alt: { type: 'NUMBER' as const } }
+    });
+    return {
+        imagePath: { type: 'STRING', description: 'Path of the photograph or frame (recorded with the result; its pixels are not analysed).' },
+        videoPath: { type: 'STRING', description: 'Optional path of the video the frame comes from.' },
+        targetLandmarkName: { type: 'STRING', description: 'Name or address of what the photo shows, as the user wrote it; resolved with Google Places (the result reports the address it resolved).' },
+        promptHint: { type: 'STRING', description: 'Optional place text, looked up only when there is no targetLandmarkName, targetCoords or camera position.' },
+        targetCoords: point('Coordinates of what the photo shows; alt is the ground altitude in metres (looked up with the Elevation API when omitted).'),
+        cameraOpticalCenter: point('The camera position, with alt in metres above mean sea level.'),
+        knownCoords: point('The camera position (same as cameraOpticalCenter), with alt in metres above mean sea level.'),
+        headingDeg: { type: 'NUMBER', description: 'Camera compass heading in degrees clockwise from north.' },
+        pitchDeg: { type: 'NUMBER', description: 'Camera pitch in degrees above the horizon (negative looks down).' },
+        standoffDistanceMeters: { type: 'NUMBER', description: 'Distance in metres from the camera to the target, needed with headingDeg when there is no camera position.' },
+        points2D: {
+            type: 'ARRAY',
+            description: 'Pixel coordinates in the photo, matched one-to-one with points3D (at least 4).',
+            items: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' } } }
+        },
+        points3D: {
+            type: 'ARRAY',
+            description: 'East-north-up metres relative to the target, matched one-to-one with points2D.',
+            items: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, z: { type: 'NUMBER' } } }
+        },
+        imageWidthPx: { type: 'NUMBER', description: 'Photo width in pixels (required with points2D).' },
+        imageHeightPx: { type: 'NUMBER', description: 'Photo height in pixels (required with points2D).' },
+        sensorFocalMm: { type: 'NUMBER', description: 'Lens focal length in mm, 35 mm equivalent (26 mm is assumed, and said so, when omitted).' },
+        sensorWidthMm: { type: 'NUMBER', description: 'Sensor width in mm (default 36, full frame).' }
+    };
+}

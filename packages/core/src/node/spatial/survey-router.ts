@@ -19,7 +19,6 @@ import { GoogleMapsService } from '../../browser/generative-canvas/services/goog
 import { geocode3DTilesAddress, type GeoAnchor } from './Google3DTileBlockoutPipelineService';
 import { MissingInputError } from '../../common/errors/pipeline-errors';
 import { assertUsableCoordinates } from '../../common/coordinate/parse-coordinates';
-import { extractLocationAndEraFromContext } from '../../browser/generative-canvas/services/location-beautify-service';
 
 /**
  * Framework-agnostic handlers for the Survey Synthesis API, mounted by the desktop server at
@@ -120,7 +119,6 @@ export async function resolveSurveyPreset(
 
     const locName = rawLoc || anchor.formattedAddress || `${anchor.lat.toFixed(6)}, ${anchor.lng.toFixed(6)}`;
     const sanitizedName = locName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-    const extractedEra = extractLocationAndEraFromContext(locName);
     const radius = args?.cropRadius ?? 75.0;
 
     const stations = args?.stations && args.stations.length ? args.stations : engine.synthesize(anchor, {
@@ -142,8 +140,7 @@ export async function resolveSurveyPreset(
         stations,
         beautify: {
             locationName: locName,
-            architecturalStyle: extractedEra.eraContext || `${locName} architectural structure`,
-            stylePreset: extractedEra.stylePreset,
+            // No style or era is read off the place name (no keyword table): only what the caller passes in beautify.
             // In accordance with style neutrality directive: extra injections into the prompt
             // should only happen in {styleSuffix}, and remain empty unless explicitly prompted by the user.
             moodPromptContext: args?.beautify?.moodPromptContext || '',
@@ -331,11 +328,12 @@ export class SurveyApi {
         };
     }
 
-    /** POST /plan-adaptive { glbPath, anchor?, cameraBudget?, mode?, focalLengthMm?, targetResolutionMm?, standoffMeters?, minGroundClearanceMeters? } */
+    /** POST /plan-adaptive { glbPath, anchor, cameraBudget?, mode?, focalLengthMm?, targetResolutionMm?, standoffMeters?, minGroundClearanceMeters? } */
     async planAdaptive(body: any) {
         if (!body?.glbPath) throw new Error('glbPath is required for adaptive survey rig planning');
         const absGlb = this.resolveGlb(body.glbPath);
-        const anchor = body?.anchor ? SurveyApi.anchorFrom(body) : undefined;
+        // Stations carry WGS-84 coordinates, so the model's location is required (no default place).
+        const anchor = SurveyApi.anchorFrom(body);
         const result = AdaptiveSurveyRigService.planRig(absGlb, {
             anchor,
             cameraBudget: body?.cameraBudget,
@@ -348,9 +346,7 @@ export class SurveyApi {
             renderHeight: body?.renderHeight,
             focusCentroid: body?.focusCentroid
         });
-        // GeoJSON needs a real anchor; without one the poses stay local (no Null Island footprint).
-        const geoAnchor = (result.poses[0] as any)?.metadata?.anchor || anchor;
-        const geoJson = geoAnchor ? this.engine.toGeoJson(result.poses, geoAnchor) : undefined;
+        const geoJson = this.engine.toGeoJson(result.poses, anchor);
         return {
             success: true,
             ...result,

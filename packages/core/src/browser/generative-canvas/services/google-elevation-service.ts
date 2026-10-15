@@ -48,28 +48,6 @@ export interface GoogleElevationPathSample extends GoogleElevationResult {
   slopePercentage?: number;
 }
 
-export interface ElevationBenchmark {
-  name: string;
-  lat: number;
-  lng: number;
-  elevation: number;
-}
-
-// Known Midtown Manhattan high-fidelity survey benchmarks for offline / local fallback
-export const MIDTOWN_ELEVATION_BENCHMARKS: ElevationBenchmark[] = [
-  { name: 'Empire State Building Base', lat: 40.7484405, lng: -73.9856644, elevation: 18.53 },
-  { name: '5th Ave & 30th St', lat: 40.7450, lng: -73.9875, elevation: 14.98 },
-  { name: '5th Ave & 34th St', lat: 40.74844, lng: -73.98566, elevation: 18.53 },
-  { name: '5th Ave & 37th St', lat: 40.7500, lng: -73.98375, elevation: 21.46 },
-  { name: '5th Ave & 40th St (NYPL)', lat: 40.7520, lng: -73.98225, elevation: 25.00 },
-  { name: '5th Ave & 42nd St', lat: 40.7530, lng: -73.9815, elevation: 23.71 },
-  { name: 'Herald Sq (6th Ave & 34th St)', lat: 40.74955, lng: -73.9879, elevation: 15.27 },
-  { name: 'Penn Station (7th Ave & 34th St)', lat: 40.7505, lng: -73.9910, elevation: 14.26 },
-  { name: 'Park Ave & 34th St', lat: 40.7472, lng: -73.9810, elevation: 22.39 },
-  { name: 'Broadway & 32nd St (Greeley Sq)', lat: 40.7482, lng: -73.9888, elevation: 15.10 },
-  { name: 'Bryant Park Lawn', lat: 40.7536, lng: -73.9832, elevation: 24.80 }
-];
-
 export interface GoogleElevationServiceOptions {
   apiKey?: string;
   proxyBaseUrl?: string;
@@ -176,35 +154,6 @@ export class GoogleElevationService {
   }
 
   /**
-   * Fallback: compute elevation via Inverse Distance Weighting (IDW) interpolation
-   * across known high-accuracy benchmarks.
-   */
-  public interpolateOfflineElevation(lat: number, lng: number): number {
-    let weightSum = 0;
-    let elevationSum = 0;
-    const power = 2.0;
-
-    for (const b of MIDTOWN_ELEVATION_BENCHMARKS) {
-      const dLat = (b.lat - lat) * 111000;
-      const dLng = (b.lng - lng) * 85000;
-      const dist = Math.sqrt(dLat * dLat + dLng * dLng);
-
-      if (dist < 1.0) {
-        return b.elevation;
-      }
-
-      const w = 1.0 / Math.pow(dist, power);
-      weightSum += w;
-      elevationSum += b.elevation * w;
-    }
-
-    if (weightSum > 0) {
-      return Number((elevationSum / weightSum).toFixed(2));
-    }
-    return 18.53;
-  }
-
-  /**
    * Fetch single elevation for a coordinate.
    */
   public async getElevation(lat: number, lng: number): Promise<number> {
@@ -212,16 +161,9 @@ export class GoogleElevationService {
       throw new Error(`Invalid coordinate bounds: lat=${lat}, lng=${lng}`);
     }
 
-    try {
-      const results = await this.getElevationForCoordinates([{ lat, lng }]);
-      if (results && results.length > 0) {
-        return results[0].elevation;
-      }
-    } catch {
-      // Fall through to offline interpolation
-    }
-
-    return this.interpolateOfflineElevation(lat, lng);
+    // The Elevation API's answer or an error: no height is interpolated from a table of other places.
+    const results = await this.getElevationForCoordinates([{ lat, lng }]);
+    return results[0].elevation;
   }
 
   /**
@@ -264,11 +206,10 @@ export class GoogleElevationService {
       const chunk = missing.slice(i, i + this.maxBatchSize);
       const chunkResults = await this.queryCoordinateChunk(chunk);
       chunk.forEach((m, idx) => {
-        const res = chunkResults[idx] || {
-          elevation: this.interpolateOfflineElevation(m.lat, m.lng),
-          location: { lat: m.lat, lng: m.lng },
-          resolution: 76.4
-        };
+        const res = chunkResults[idx];
+        if (!res || typeof res.elevation !== 'number') {
+          throw new Error(`The Elevation API gave no elevation for ${m.lat.toFixed(6)}, ${m.lng.toFixed(6)}`);
+        }
         this.setCacheEntry(m.lat, m.lng, res);
         results[m.index] = res;
       });
@@ -319,18 +260,15 @@ export class GoogleElevationService {
           if (json.status === 'OK' && json.results) {
             return json.results;
           }
-        } else {
-          throw new Error(`Elevation API request failed with HTTP ${res.status}: ${res.statusText}`);
+          throw new Error(`Elevation API returned ${json.status}${(json as any).error_message ? `: ${(json as any).error_message}` : ''}`);
         }
+        throw new Error(`Elevation API request failed with HTTP ${res.status}: ${res.statusText}`);
       }
     }
 
-    // 3. Fallback to IDW interpolation
-    return chunk.map(c => ({
-      elevation: this.interpolateOfflineElevation(c.lat, c.lng),
-      location: { lat: c.lat, lng: c.lng },
-      resolution: 76.4
-    }));
+    // No height is interpolated from survey points elsewhere (the old Midtown Manhattan table answered for any
+    // coordinate on Earth).
+    throw new Error('No elevation source: the elevation proxy gave no answer and no Google Maps API key is set');
   }
 
   /**
@@ -383,19 +321,8 @@ export class GoogleElevationService {
       }
     }
 
-    // 3. If still empty, sample along path with offline interpolation
     if (rawResults.length === 0) {
-      rawResults = [];
-      for (let s = 0; s < safeSamples; s++) {
-        const t = s / (safeSamples - 1);
-        const lat = path[0].lat + (path[path.length - 1].lat - path[0].lat) * t;
-        const lng = path[0].lng + (path[path.length - 1].lng - path[0].lng) * t;
-        rawResults.push({
-          elevation: this.interpolateOfflineElevation(lat, lng),
-          location: { lat, lng },
-          resolution: 76.4
-        });
-      }
+      throw new Error('The Elevation API gave no path profile (no proxy answer and no Google Maps API key, or the request failed)');
     }
 
     // Calculate distance and slope along samples

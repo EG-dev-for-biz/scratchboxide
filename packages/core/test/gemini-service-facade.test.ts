@@ -45,7 +45,6 @@ const PUBLIC_METHODS_BEFORE_SPLIT = [
     'markdownStringToSections',
     'pingMcpServer',
     'plan3DAutonomousWorkflow',
-    'queryMapsGrounding',
     'run3DVisualSelfCorrectionLoop',
     'saveCredentialsDirectly',
     'startDeepResearchSession',

@@ -114,17 +114,6 @@ export interface LocationCoordinates {
     elevationM?: number;
 }
 
-export interface ExtractedLocationEra {
-    locationName: string;
-    coordinates: LocationCoordinates;
-    heading: number;
-    altitudeM: number;
-    eraContext: string;
-    theme: DocumentTheme;
-    stylePreset: string;
-    visualPrompt: string;
-}
-
 export interface LocationBeautifyContext {
     locationName: string;
     coordinates: LocationCoordinates;
@@ -149,104 +138,6 @@ const MOOD_LIGHTING_DIRECTIVES: Record<LocationMood, string> = {
 
 export function googleEarthUrl(lat: number, lng: number, heading = 0, tilt = 45): string {
     return `https://earth.google.com/web/@${lat.toFixed(6)},${lng.toFixed(6)},0a,400d,35y,${Math.round(heading)}h,${Math.round(tilt)}t,0r`;
-}
-
-/**
- * Extract key location coordinates, camera vantage, and historical era directives from paper text.
- */
-export function extractLocationAndEraFromContext(prompt: string, title?: string): ExtractedLocationEra {
-    const combined = `${prompt} ${title || ''}`.toLowerCase();
-    const theme = detectDocumentTheme(prompt, title);
-
-    if (theme === '1776-revolution' || combined.includes('1776') || combined.includes('declaration of independence') || combined.includes('continental congress') || combined.includes('philadelphia')) {
-        return {
-            locationName: 'Independence Hall (Pennsylvania State House), Philadelphia',
-            coordinates: { lat: 39.9489, lng: -75.1500, elevationM: 12 },
-            heading: 45,
-            altitudeM: 220,
-            eraContext: 'July 1776 American Revolutionary period, Georgian colonial red brick architecture, white cupola tower, cobblestone Chestnut Street, horse-drawn carriages, iron railings, gas lamps, no modern vehicles, no asphalt, no electric wires, no antennas, no modern buildings in background',
-            theme: '1776-revolution',
-            stylePreset: 'oil-painting',
-            visualPrompt: 'Authentic 1776 Georgian colonial red brick facade of Independence Hall Philadelphia with white wooden clock tower, cobblestone street, and Revolutionary era citizens in period attire.'
-        };
-    }
-
-    if (combined.includes('rome') || combined.includes('colosseum') || combined.includes('gladiator') || combined.includes('roman')) {
-        return {
-            locationName: 'The Flavian Amphitheatre (Colosseum), Rome',
-            coordinates: { lat: 41.8902, lng: 12.4922, elevationM: 24 },
-            heading: 30,
-            altitudeM: 280,
-            eraContext: 'Roman Empire antiquity (80 AD), pristine complete travertine marble multi-tier arcade facades, imperial Roman velvet banners, paved Roman stone roads, toga-clad citizens and Roman legionaries, no modern asphalt, no motor vehicles, no modern tourists, no steel scaffolding',
-            theme: 'history-antiquity' as DocumentTheme,
-            stylePreset: 'oil-painting',
-            visualPrompt: 'Imperial Rome 80 AD, the Colosseum in complete pristine travertine glory under golden Mediterranean sunlight with Roman banners.'
-        };
-    }
-
-    if (combined.includes('1920') || combined.includes('art deco') || combined.includes('chrysler') || combined.includes('roaring twenties')) {
-        return {
-            locationName: 'Chrysler Building & 42nd Street, Manhattan',
-            coordinates: { lat: 40.7516, lng: -73.9755, elevationM: 30 },
-            heading: 60,
-            altitudeM: 350,
-            eraContext: '1920s Roaring Twenties Art Deco era, newly constructed gleaming stainless steel sunburst spire, vintage 1920s Ford Model T and Duesenberg automobiles on rainy asphalt, steam rising from manholes, pedestrians in tailored wool overcoats and fedoras, no modern neon, no modern plastic or digital screens',
-            theme: 'general-architecture',
-            stylePreset: 'cinematic-film',
-            visualPrompt: '1920s Manhattan Art Deco skyscraper streetscape with vintage automobiles and classic period fedoras under dramatic film lighting.'
-        };
-    }
-
-    if (theme === 'auth-zerotrust-security' || combined.includes('security') || combined.includes('data center') || combined.includes('zero trust')) {
-        return {
-            locationName: 'Edge Data Center Corridor & Fiber Infrastructure, Ashburn VA',
-            coordinates: { lat: 39.0438, lng: -77.4874, elevationM: 85 },
-            heading: 90,
-            altitudeM: 300,
-            eraContext: 'contemporary ultra-secure cloud datacenter, reinforced architectural glass and dark titanium panels, biometric security perimeters, fiber optic conduits, subterranean power cooling grids, pristine modern industrial engineering',
-            theme: 'auth-zerotrust-security',
-            stylePreset: 'architectural',
-            visualPrompt: 'High-security modern enterprise cloud datacenter campus with glass facades and illuminated fiber network topology.'
-        };
-    }
-
-    if (combined.includes('tokyo') || combined.includes('shibuya') || combined.includes('shinjuku') || combined.includes('cyberpunk')) {
-        return {
-            locationName: 'Shinjuku & Shibuya Urban Architecture, Tokyo',
-            coordinates: { lat: 35.6595, lng: 139.7005, elevationM: 35 },
-            heading: 120,
-            altitudeM: 400,
-            eraContext: 'modern Tokyo high-density metropolis, pristine architectural glass and steel skyscrapers, elevated transit lines, clean urban street grid with illuminated architectural lighting',
-            theme: 'general-architecture',
-            stylePreset: 'modern-editorial',
-            visualPrompt: 'Vibrant modern Tokyo architectural skyline with high-density glass towers and streamlined transit arteries.'
-        };
-    }
-
-    if (combined.includes('san francisco') || combined.includes('sf') || combined.includes('coit tower') || combined.includes('ferry building') || combined.includes('salesforce')) {
-        return {
-            locationName: 'San Francisco Financial District & Embarcadero',
-            coordinates: { lat: 37.7900, lng: -122.4000, elevationM: 15 },
-            heading: 45,
-            altitudeM: 350,
-            eraContext: 'contemporary San Francisco bay coastal architecture, steep hill grids, historic waterfront piers juxtaposed against modern high-rise architecture under golden bay sunlight',
-            theme: 'general-architecture',
-            stylePreset: 'modern-editorial',
-            visualPrompt: 'San Francisco architectural skyline and waterfront Embarcadero under coastal California golden hour light.'
-        };
-    }
-
-    // Generic architectural default
-    return {
-        locationName: title || 'Executive Architectural Landmark',
-        coordinates: { lat: 37.7749, lng: -122.4194, elevationM: 20 },
-        heading: 0,
-        altitudeM: 250,
-        eraContext: 'contemporary architectural presentation, clean geometric lines, natural material textures, authentic daylighting and atmospheric perspective',
-        theme: 'general-architecture',
-        stylePreset: 'modern-editorial',
-        visualPrompt: `Authentic architectural photograph of ${title || 'the location'} with realistic textures and refined daylighting.`
-    };
 }
 
 export interface GeodeticCoordinate {
@@ -686,27 +577,31 @@ export function beautifyLocationSection(
     section: MarkdownSection,
     options: BeautifySectionOptions = {}
 ): MarkdownSection {
-    const lat = section.coordinates?.lat || 39.9489;
-    const lng = section.coordinates?.lng || -75.1500;
-    const heading = (section.coordinates as any)?.heading || 45;
+    // The place, era and style are only what the section and caller give: no keyword table maps words to a place,
+    // coordinates or period, and a section without coordinates keeps its prompt instead of getting invented ones.
+    const coordinates = section.coordinates && Number.isFinite(section.coordinates.lat) && Number.isFinite(section.coordinates.lng)
+        ? section.coordinates
+        : undefined;
+    const locContext = {
+        locationName: section.locationName || options.docTitle || 'the location',
+        theme: detectDocumentTheme(section.locationName || '', options.docTitle)
+    };
 
-    const locContext = extractLocationAndEraFromContext(
-        `${section.locationName || ''} ${options.docTitle || ''} ${options.eraOverride || ''}`
-    );
-
-    const eraContext = options.eraOverride || locContext.eraContext;
-    const styleId = options.styleId || locContext.stylePreset || 'cinematic-film';
+    const eraContext = options.eraOverride || '';
+    const styleId = options.styleId || 'cinematic-film';
     const styleObj = getNanoBananaStyle(styleId);
 
-    const beautifyPrompt = buildLocationBeautifyPrompt({
-        locationName: section.locationName || locContext.locationName,
-        coordinates: { lat, lng },
-        heading,
-        aspectRatio: '16:9',
-        eraContext,
-        stylePreset: styleId,
-        mood: options.mood || 'golden-hour'
-    });
+    const beautifyPrompt = coordinates
+        ? buildLocationBeautifyPrompt({
+            locationName: locContext.locationName,
+            coordinates: { lat: coordinates.lat, lng: coordinates.lng },
+            ...(typeof (coordinates as any).heading === 'number' ? { heading: (coordinates as any).heading } : {}),
+            aspectRatio: '16:9',
+            eraContext,
+            stylePreset: styleId,
+            mood: options.mood || 'golden-hour'
+        })
+        : section.visualPrompt;
 
     const curated = lookupCuratedNanoBananaImage(locContext.theme, section.locationName || options.docTitle, styleId);
 

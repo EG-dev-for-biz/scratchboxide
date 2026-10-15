@@ -2424,16 +2424,16 @@ export class Google3DTileBlockoutPipelineService {
     const canonicalModelsDir = options?.offlineMock
       ? path.join(offlineMockOutputRoot(), 'public/models')
       : path.resolve(repoRoot, 'public/models');
-    const sanitizedName = (geoAnchor.landmarkName || (typeof queryOrCoords === 'string' ? queryOrCoords : 'district')).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const defaultGlbName = `${sanitizedName}_${isTextured ? 'textured' : 'clay'}.glb`;
-    const completeGlbName = `${sanitizedName}_${isTextured ? 'textured' : 'clay'}_complete.glb`;
-    const resolvedDefaultName = fs.existsSync(path.join(canonicalModelsDir, completeGlbName))
-      ? completeGlbName
-      : defaultGlbName;
+    const radiusMeters = options?.radiusMeters || 250;
+    // The default file is keyed by where and how much was extracted, not by the place's name: two places Google
+    // names alike ("Park Avenue" in New York and in Winter Park) must not overwrite each other's model.
+    const nameSlug = (geoAnchor.landmarkName || (typeof queryOrCoords === 'string' ? queryOrCoords : 'district')).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'district';
+    const placeKey = `${geoAnchor.lat.toFixed(5)}_${geoAnchor.lng.toFixed(5)}_r${Math.round(radiusMeters)}`;
+    const defaultGlbName = `${nameSlug}_${placeKey}_${isTextured ? 'textured' : 'clay'}.glb`;
 
     const outputGlbPath = options?.outputGlbPath
       ? (path.isAbsolute(options.outputGlbPath) ? options.outputGlbPath : path.resolve(canonicalModelsDir, path.basename(options.outputGlbPath)))
-      : path.join(canonicalModelsDir, resolvedDefaultName);
+      : path.join(canonicalModelsDir, defaultGlbName);
 
     if (options?.offlineMock) {
       return this.fetchOfflineMock(geoAnchor, resolvedAddress, mode, outputGlbPath, options);
@@ -2444,7 +2444,6 @@ export class Google3DTileBlockoutPipelineService {
       throw new TileExtractionError('crawl', 'no Google Maps API key is configured, so Photorealistic 3D Tiles cannot be downloaded (add the key in Settings)');
     }
 
-    const radiusMeters = options?.radiusMeters || 250;
     const cacheDir = path.join(process.cwd(), '.scratchbox', 'tiles_cache', 'leaves');
     const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir, fetchImpl: options?.fetchImpl });
     // Only seeds the local frame; the ground height is measured from the tile geometry below.

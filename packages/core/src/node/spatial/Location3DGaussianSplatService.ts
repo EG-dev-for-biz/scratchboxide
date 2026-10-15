@@ -217,7 +217,6 @@ export class Location3DGaussianSplatService {
                 const isDraft = req.draft === true || req.fidelity === 'draft';
                 generator = createDefaultStationImageGenerator({
                     workspaceRoot: root,
-                    allowProceduralGenerator: true,
                     fidelity: isDraft ? 'draft' : (req.fidelity || 'production'),
                     imageSize: isDraft ? '1K' : '2K'
                 });

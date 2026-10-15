@@ -18,17 +18,7 @@ import {
 import { kelvinToRGB, blackbodyKelvinToLinearRgb } from './kelvin';
 import { calculateNOAASolarPosition, getSunVectorFromAngles } from './solar-position';
 import { classifyDiurnalPhase, computeDiurnalLightingProfile } from './diurnal-lighting';
-
-/**
- * Common reference landmark coordinates for solar ephemeris grounding.
- */
-export const WELL_KNOWN_ATMOSPHERE_LANDMARKS: Record<string, { lat: number; lng: number; defaultHeading: number; name: string }> = {
-    colosseum: { lat: 41.8902, lng: 12.4922, defaultHeading: 334.0, name: 'Colosseum, Rome' },
-    eiffel: { lat: 48.8584, lng: 2.2945, defaultHeading: 140.0, name: 'Eiffel Tower, Paris' },
-    sydney_opera: { lat: -33.8568, lng: 151.2153, defaultHeading: 350.0, name: 'Sydney Opera House' },
-    brandenburg: { lat: 52.5163, lng: 13.3777, defaultHeading: 86.0, name: 'Brandenburg Gate, Berlin' },
-    statue_of_liberty: { lat: 40.6892, lng: -74.0445, defaultHeading: 50.0, name: 'Statue of Liberty, New York' }
-};
+import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 
 /**
  * Fits correlated color temperature (CCT in Kelvin) from RGB chromaticity using McCamy's approximation.
@@ -259,7 +249,8 @@ export class AtmosphereImageEstimationService {
         }
 
         // 4. NOAA Solar Ephemeris Grounding (if coordinates provided or resolvable)
-        const coords = options.knownCoords || this.resolveCoordsFromHint(options.promptHint);
+        // Coordinates only as given: a hint is never matched against a landmark table.
+        const coords = options.knownCoords;
         if (coords) {
             if (options.timestampIso) {
                 const ephem = calculateNOAASolarPosition(new Date(options.timestampIso), coords.lat, coords.lng);
@@ -387,103 +378,8 @@ export class AtmosphereImageEstimationService {
             });
         }
 
-        // If pixels are not provided directly, synthesize calibrated photometric profile
-        // using image path / landmark hints and geographical NOAA ephemeris
-        const landmarkKey = this.resolveLandmarkKeyFromRequest(request);
-        const landmark = WELL_KNOWN_ATMOSPHERE_LANDMARKS[landmarkKey] || WELL_KNOWN_ATMOSPHERE_LANDMARKS['colosseum'];
-        const coords = request.knownCoords || { lat: landmark.lat, lng: landmark.lng };
-
-        const testDate = request.timestampIso
-            ? new Date(request.timestampIso)
-            : new Date('2026-06-21T13:30:00Z'); // Default mid-afternoon Mediterranean sun
-
-        const ephemeris = calculateNOAASolarPosition(testDate, coords.lat, coords.lng);
-        const sunElevation = ephemeris.elevationDeg > 0 ? ephemeris.elevationDeg : 48.2;
-        const sunAzimuth = ephemeris.azimuthDeg || landmark.defaultHeading || 214.5;
-
-        const diurnalProfile = computeDiurnalLightingProfile(sunElevation);
-        const diurnalPhase = classifyDiurnalPhase(sunElevation);
-        const kelvin = diurnalProfile.kelvinTemperature || 5450;
-
-        const sunVec = getSunVectorFromAngles(sunElevation, sunAzimuth);
-        const solarVector: [number, number, number] = [sunVec.x, sunVec.y, sunVec.z];
-        const sunColor = kelvinToRGB(kelvin);
-
-        const suggestedAtmosphereConfig: AtmosphericScatteringConfig = {
-            enabled: true,
-            rayleigh: 2.4,
-            mie: 0.0048,
-            turbidity: 2.6,
-            sunElevation: Number(sunElevation.toFixed(2)),
-            sunAzimuth: Number(sunAzimuth.toFixed(2)),
-            sunPosition: [sunVec.x * 100, sunVec.y * 100, sunVec.z * 100],
-            kelvinTemperature: kelvin,
-            cloudCoverage: 0.12,
-            cloudDensity: 0.8,
-            cloudAltitude: 140.0,
-            volumetricClouds: true,
-            aerialPerspectiveEnabled: true,
-            aerialPerspectiveRange: 12000,
-            aerialPerspectiveExtinctionRange: 12000,
-            inscatteringIntensity: 0.65,
-            cloudShadowsEnabled: true,
-            cloudShadowIntensity: 0.25,
-            cloudShadowScale: 200.0,
-            latitude: coords.lat,
-            longitude: coords.lng
-        };
-
-        return {
-            success: true,
-            landmarkHint: landmark.name,
-            sunElevation: Number(sunElevation.toFixed(2)),
-            sunAzimuth: Number(sunAzimuth.toFixed(2)),
-            solarVector,
-            diurnalPhase,
-            kelvinTemperature: kelvin,
-            sunColorRgb: [sunColor.r, sunColor.g, sunColor.b],
-            ambientColorRgb: [0.65, 0.75, 0.88],
-            turbidity: 2.6,
-            rayleigh: 2.4,
-            rayleighScattering: 2.4,
-            mie: 0.0048,
-            cloudCoverage: 0.12,
-            cloudDensity: 0.8,
-            aerialPerspectiveRange: 12000,
-            aerialPerspectiveExtinctionRange: 12000,
-            inscatteringIntensity: 0.65,
-            confidence: 0.98,
-            confidenceScore: 0.98,
-            photometricMetrics: {
-                skyMeanLuminance: 0.72,
-                skyChromaticity: [0.48, 0.65, 0.92],
-                skyGradientRatio: 1.62,
-                groundMeanLuminance: 0.38,
-                contrastRatio: 1.89,
-                estimatedGlareLocus: [640, 280]
-            },
-            suggestedAtmosphereConfig
-        };
-    }
-
-    private static resolveLandmarkKeyFromRequest(request: ImageAtmosphereRequest): string {
-        const text = `${request.promptHint || ''} ${request.imagePath || ''}`.toLowerCase();
-        if (/colosseum|rome|roma|colosseo/i.test(text)) return 'colosseum';
-        if (/eiffel|paris|trocadero/i.test(text)) return 'eiffel';
-        if (/sydney|opera/i.test(text)) return 'sydney_opera';
-        if (/brandenburg|berlin/i.test(text)) return 'brandenburg';
-        if (/statue|liberty|manhattan|new york/i.test(text)) return 'statue_of_liberty';
-        return 'colosseum';
-    }
-
-    private static resolveCoordsFromHint(hint?: string): { lat: number; lng: number } | undefined {
-        if (!hint) return undefined;
-        const lower = hint.toLowerCase();
-        for (const [key, val] of Object.entries(WELL_KNOWN_ATMOSPHERE_LANDMARKS)) {
-            if (lower.includes(key) || lower.includes(val.name.toLowerCase())) {
-                return { lat: val.lat, lng: val.lng };
-            }
-        }
-        return undefined;
+        // Without the image's pixels there is nothing to estimate from: no profile is synthesized from a landmark
+        // table (which used to put any unrecognised photo at the Colosseum with constant "measured" metrics).
+        throw new MissingInputError('atmosphere_estimate_from_image', 'the image pixels', request.imagePath ? `${request.imagePath} was not decoded` : 'give imagePath (or pixels with width and height)');
     }
 }

@@ -10,7 +10,6 @@ import { test } from 'vitest';
 
 import * as assert from 'assert';
 import {
-    extractLocationAndEraFromContext,
     buildLocationBeautifyPrompt,
     buildBeautifyPrompt,
     BeautifyPromptOptions,
@@ -25,38 +24,20 @@ async function runAiBeautifyPipelineTests() {
     console.log('🧪 Running AI Beautify & 3D Tile Era Restyling Pipeline Test Suite...\n');
 
     // -------------------------------------------------------------
-    // Test 1: Contextual Location & Historical Era Extraction
+    // Test 1: No place, era or coordinates are read off words
     // -------------------------------------------------------------
-    console.log('  Testing Location & Historical Era Extraction from Document Prompts...');
+    console.log('  Testing that restyling never maps words to a place...');
 
-    // 1.1 Historical 1776 Revolution Context
-    const loc1776 = extractLocationAndEraFromContext('let\'s write a paper about 1776 and the Declaration of Independence');
-    assert.strictEqual(loc1776.theme, '1776-revolution');
-    assert.ok(loc1776.locationName.includes('Independence Hall') || loc1776.locationName.includes('Philadelphia'));
-    assert.ok(Math.abs(loc1776.coordinates.lat - 39.9489) < 0.01, 'Latitude should match Philadelphia Independence Hall');
-    assert.ok(Math.abs(loc1776.coordinates.lng - (-75.1500)) < 0.01, 'Longitude should match Philadelphia Independence Hall');
-    assert.ok(loc1776.eraContext.toLowerCase().includes('1776') || loc1776.eraContext.toLowerCase().includes('colonial'), 'Era context must capture 1776/colonial');
-    assert.ok(loc1776.eraContext.includes('no modern cars') || loc1776.eraContext.includes('no modern'), 'Must include negative constraints for modern objects');
+    // extractLocationAndEraFromContext mapped substrings to places ("sf" inside "Transfer" gave San Francisco,
+    // "Rome" inside "Romanian" gave 80 AD Rome) with a San Francisco default. It is gone.
+    const beautifyModule: Record<string, unknown> = await import('../src/browser/generative-canvas/services/location-beautify-service');
+    assert.strictEqual(beautifyModule.extractLocationAndEraFromContext, undefined);
+    const placeless: MarkdownSection = { id: 'sec-loc-0', type: 'location-image', locationName: 'Waste Transfer Station, Hartford', visualPrompt: 'existing prompt' };
+    const placelessRestyle = beautifyLocationSection(placeless, { styleId: 'cinematic-film', docTitle: 'Romanian Athenaeum essay' });
+    assert.strictEqual(placelessRestyle.visualPrompt, 'existing prompt', 'without coordinates the prompt is not rebuilt around invented ones');
+    assert.strictEqual(placelessRestyle.locationName, 'Waste Transfer Station, Hartford');
 
-    // 1.2 Ancient Rome / Colosseum Context
-    const locRome = extractLocationAndEraFromContext('historical analysis of gladiator battles and architecture in the Roman Colosseum');
-    assert.ok(locRome.locationName.includes('Colosseum') || locRome.locationName.includes('Rome'));
-    assert.ok(Math.abs(locRome.coordinates.lat - 41.8902) < 0.01, 'Latitude should match Roman Colosseum');
-    assert.ok(locRome.eraContext.toLowerCase().includes('roman') || locRome.eraContext.toLowerCase().includes('antiquity'));
-
-    // 1.3 1920s Art Deco Manhattan Context
-    const loc1920s = extractLocationAndEraFromContext('essay on 1920s Roaring Twenties architecture in Manhattan Chrysler building');
-    assert.ok(loc1920s.locationName.includes('Chrysler') || loc1920s.locationName.includes('Manhattan'));
-    assert.ok(Math.abs(loc1920s.coordinates.lat - 40.7516) < 0.01);
-    assert.ok(loc1920s.eraContext.includes('1920s') || loc1920s.eraContext.includes('Art Deco'));
-
-    // 1.4 Zero-Trust Security Datacenter Context
-    const locSecurity = extractLocationAndEraFromContext('technical specification for zero-trust identity infrastructure and edge server corridors');
-    assert.strictEqual(locSecurity.theme, 'auth-zerotrust-security');
-    assert.ok(locSecurity.locationName.includes('Data Center') || locSecurity.locationName.includes('Corridor'));
-    assert.ok(locSecurity.eraContext.toLowerCase().includes('modern') || locSecurity.eraContext.toLowerCase().includes('cloud') || locSecurity.eraContext.toLowerCase().includes('zero-trust'));
-
-    console.log('  ✓ Test 1 Passed: Context-aware location coordinates and era styling successfully extracted');
+    console.log('  ✓ Test 1 Passed: no keyword place or era table');
 
     // -------------------------------------------------------------
     // Test 2: AI Beautify Prompt Construction with Non-Negotiable 3D Framing
