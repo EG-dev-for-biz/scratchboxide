@@ -25,6 +25,7 @@ import { Google360PanoramaPipelineService } from '../src/node/spatial/Google360P
 import { MultiPerspectivePanoramaSynthesisService } from '../src/node/spatial/MultiPerspectivePanoramaSynthesisService';
 import { MultiAngleTurnaroundService } from '../src/node/spatial/MultiAngleTurnaroundService';
 import { decodePng, encodePng } from '../src/node/texture-processing';
+import { resolveToolTimeBudget } from '../src/node/gemini/tool-time-budgets';
 
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-media-scope-'));
 afterAll(() => fs.removeSync(WORK));
@@ -133,6 +134,58 @@ describe('Only model failures are reported as a model being unavailable', () => 
     });
 });
 
+describe('A stopped request asks no further model', () => {
+    it('generateImageWithModels with a stopped signal calls no model and is not reported as a model failure', async () => {
+        const asked: string[] = [];
+        const client = { models: { generateContent: async ({ model }: { model: string }) => { asked.push(model); throw notServed(model); } } };
+        const controller = new AbortController();
+        controller.abort();
+        const stopped = await generateImageWithModels(client, { models: ['a', 'b'], contents: [], signal: controller.signal }).catch(e => e);
+        expect(stopped.name).toBe('AbortError');
+        expect(stopped).not.toBeInstanceOf(MediaModelUnavailableError);
+        expect(asked).toEqual([]);
+
+        // Stopped while the first model is answering: the next model in the list is not asked.
+        const during = new AbortController();
+        const midAsked: string[] = [];
+        const midClient = { models: { generateContent: async (req: any) => {
+            midAsked.push(req.model);
+            expect(req.config.abortSignal).toBe(during.signal);
+            during.abort();
+            throw Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+        } } };
+        const midStop = await generateImageWithModels(midClient, { models: ['a', 'b'], contents: [], signal: during.signal }).catch(e => e);
+        expect(midStop.name).toBe('AbortError');
+        expect(midStop).not.toBeInstanceOf(MediaModelUnavailableError);
+        expect(midAsked).toEqual(['a']);
+    });
+
+    it('a stopped turnaround captures no further station and never reaches Trellis', async () => {
+        const fake = recordingImageClient([64, 64]);
+        const controller = new AbortController();
+        let trellisCalls = 0;
+        const service = new MultiAngleTurnaroundService({
+            createClient: async () => fake.client,
+            trellis: { generate3DFromImages: async () => { trellisCalls++; throw new Error('not reached'); } }
+        });
+        const outputDir = path.join(WORK, 'stopped-turnaround');
+        const progress: string[] = [];
+        const stopped = await service.execute({
+            subject: 'a brass sextant', rigPreset: 'dcc-ortho-4', outputDir, downstreamTarget: 'trellis-fal', signal: controller.signal,
+            onProgress: (_f, message) => { progress.push(message); controller.abort(); }
+        }).catch(e => e);
+        expect(stopped.name).toBe('AbortError');
+        expect(fake.requests).toHaveLength(1);
+        expect(progress).toHaveLength(1);
+        expect(fs.readdirSync(outputDir)).toHaveLength(1);
+        expect(trellisCalls).toBe(0);
+    });
+
+    it('the turnaround tool has a time budget for its serial model calls', () => {
+        expect(resolveToolTimeBudget('generate_multi_angle_turnaround', {}, 5 * 60_000)).toEqual({ maxMs: 30 * 60_000, idleMs: 10 * 60_000 });
+    });
+});
+
 describe('A 360 rig stitches only views that were generated', () => {
     it('refuses a subset of the surrounding views before calling any model', async () => {
         const calls: any[] = [];
@@ -169,7 +222,7 @@ describe('A 360 rig stitches only views that were generated', () => {
 
 describe('Panorama edits are sent at a ratio the model accepts and checked before blending', () => {
     it('a 2:1 seam heal goes out on a 21:9 canvas that repeats the panorama\'s left edge, with a matching mask', async () => {
-        const fake = recordingImageClient([84, 36]); // the 21:9 answer size, scaled down
+        const fake = recordingImageClient([224, 96]); // a 21:9 answer, 1.33x smaller than the 299x128 canvas
         const service = new Google360PanoramaPipelineService(credentialsFor(fake.client));
         const result = await service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(256, 128), seamWidth: 32 });
 
@@ -187,9 +240,33 @@ describe('Panorama edits are sent at a ratio the model accepts and checked befor
         expect(at(sent, sent.width - 1, 10)).toBe(at(sent, sent.width - 1 - 256, 10));
         expect(req.contents[0].text).toContain('21:9');
 
-        expect(result.modelImage).toEqual({ requestedAspectRatio: '21:9', width: 84, height: 36 });
-        expect(result.summary).toContain('The model answered at 84x36 for a 21:9 request.');
+        expect(result.modelImage).toEqual({ requestedAspectRatio: '21:9', width: 224, height: 96, resampledWidth: 299, resampledHeight: 128 });
+        expect(result.summary).toContain('The model answered at 224x96 for a 21:9 request; it was resampled to 299x128 (1.33x larger).');
         expect(decodePng(result.outputBuffer).width).toBe(256);
+    });
+
+    it('refuses an answer that would have to be enlarged more than maxModelUpscale, and says how far it was enlarged when allowed', async () => {
+        const small = recordingImageClient([84, 36]); // 21:9, but 7x smaller than the 597x256 canvas
+        const service = new Google360PanoramaPipelineService(credentialsFor(small.client));
+        const outputImagePath = path.join(WORK, 'soft_heal.png');
+        const refused = await service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(512, 256), outputImagePath }).catch(e => e);
+        expect(refused).toBeInstanceOf(MediaModelUnavailableError);
+        expect(refused.message).toContain('the model answered at 84x36, which would have to be enlarged 7.11x to the 597x256 canvas (more than the allowed 2x');
+        expect(fs.existsSync(outputImagePath)).toBe(false);
+        const inpaintRefused = await service.inpaintPanorama({ inputImageBuffer: columnCodedPanorama(512, 256), nadirOnly: true }).catch(e => e);
+        expect(inpaintRefused.message).toContain('enlarged 7.11x');
+
+        const allowed = await service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(512, 256), maxModelUpscale: 8 });
+        expect(allowed.summary).toContain('resampled to 597x256 (7.11x larger)');
+        await expect(service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(512, 256), maxModelUpscale: 0.5 })).rejects.toThrow(MissingInputError);
+    });
+
+    it('a generated panorama says it was resampled from the model\'s 21:9 answer to 2:1, squeezing it horizontally', async () => {
+        const fake = recordingImageClient([420, 180]);
+        const service = new Google360PanoramaPipelineService(credentialsFor(fake.client));
+        const result = await service.generate360Panorama({ prompt: 'salt flats at dawn', width: 256, height: 128, healSeam: false });
+        expect(fake.requests[0].config.imageConfig).toEqual({ aspectRatio: '21:9' });
+        expect(result.summary).toContain('The model answered at 420x180 for a 21:9 request; it was resampled to 256x128 (1.41x smaller, squeezed 14% horizontally).');
     });
 
     it('refuses an answer at another aspect ratio instead of stretching it onto the panorama', async () => {

@@ -113,7 +113,10 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
             downstreamTarget,
             metricDimensions,
             outputDir,
-            model
+            model,
+            // Stop (or the tool time limit) ends the capture before the next station or the Trellis upload.
+            signal: ctx.signal,
+            onProgress: (fraction, message) => ctx.reportProgress?.(message, fraction)
         });
 
         const downstreamSummary = result.downstreamGlb

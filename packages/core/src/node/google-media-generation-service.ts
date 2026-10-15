@@ -50,6 +50,16 @@ export interface ImageModelRequest {
     models: string[];
     contents: any[];
     imageConfig?: { aspectRatio?: string; imageSize?: string };
+    /**
+     * Ends the request with an AbortError (never a model failure): checked before every model call and passed to the
+     * SDK, so a stopped caller does not go on to ask, and bill, the next model.
+     */
+    signal?: AbortSignal;
+}
+
+/** The error a stopped media request ends with: not a model failure, so it is not classified or relabelled. */
+export function mediaRequestAborted(): Error {
+    return Object.assign(new Error('The media request was stopped before it finished'), { name: 'AbortError' });
 }
 
 /** The image a model produced, which model produced it, and the models skipped before it (with reasons). */
@@ -152,12 +162,14 @@ export async function generateImageWithModels(client: any, request: ImageModelRe
         try {
             // Image models sometimes finish (STOP) with no image part; ask again before giving up on the model.
             for (let attempt = 0; attempt < EMPTY_IMAGE_RESPONSE_ATTEMPTS && !imagePart; attempt++) {
+                if (request.signal?.aborted) throw mediaRequestAborted();
                 response = await modelCall(() => client.models.generateContent({
                     model,
                     contents: request.contents,
                     config: {
                         responseModalities: ['TEXT', 'IMAGE'],
-                        ...(request.imageConfig ? { imageConfig: request.imageConfig } : {})
+                        ...(request.imageConfig ? { imageConfig: request.imageConfig } : {}),
+                        ...(request.signal ? { abortSignal: request.signal } : {})
                     }
                 }));
                 if (response?.promptFeedback?.blockReason) {
@@ -173,6 +185,7 @@ export async function generateImageWithModels(client: any, request: ImageModelRe
                     : 'Image generation returned no image'));
             }
         } catch (error) {
+            if (request.signal?.aborted) throw mediaRequestAborted();
             if (!(error instanceof ModelCallFailure)) throw error;
             const classified = classifyMediaGenerationError(error.original, model);
             if (classified.code === 'unsupported') {

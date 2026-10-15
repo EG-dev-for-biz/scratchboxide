@@ -1046,6 +1046,12 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
 // ============================================================================
 
 /** The `model` parameter of the panorama image tools: one named model, or the default list when omitted. */
+/** The `maxModelUpscale` parameter of the panorama edit tools. */
+const PANORAMA_MAX_UPSCALE_PARAMETER: ToolParameterSchema = {
+    type: 'NUMBER',
+    description: 'Largest factor (>= 1, default 2) the model\'s answer may be enlarged by to cover the panorama. Image models answer at about 1.5 megapixels, so a larger panorama would get a soft, enlarged band; such an answer is refused unless this is raised. The result states how far the answer was enlarged.'
+};
+
 const PANORAMA_IMAGE_MODEL_PARAMETER: ToolParameterSchema = {
     type: 'STRING',
     description: 'Image model id. When given, only that model is used; omit it to try the default image models in order. The result names the model that answered and, if it was not the first, why each earlier one was skipped.'
@@ -1208,7 +1214,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional output file path to write the healed seamless panorama.'
                 },
-                model: PANORAMA_IMAGE_MODEL_PARAMETER
+                model: PANORAMA_IMAGE_MODEL_PARAMETER,
+                maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER
             },
             required: ['inputImagePath']
         }
@@ -1255,7 +1262,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional output file path to write the inpainted panorama.'
                 },
-                model: PANORAMA_IMAGE_MODEL_PARAMETER
+                model: PANORAMA_IMAGE_MODEL_PARAMETER,
+                maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER
             },
             required: ['inputImagePath']
         }
@@ -2316,7 +2324,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             prompt,
             seamWidth,
             outputImagePath,
-            model
+            model,
+            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined
         });
 
         return {
@@ -2358,7 +2367,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             inpaintBothPolar,
             prompt,
             outputImagePath,
-            model
+            model,
+            maxModelUpscale: typeof args.maxModelUpscale === 'number' ? args.maxModelUpscale : undefined
         });
 
         return {

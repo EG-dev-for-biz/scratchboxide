@@ -12,7 +12,7 @@ import * as path from 'path';
 import { IMAGE_MODEL_PRIORITY, SkippedMediaModel, describeModelUsed, resolveImageModelId, resolveRequestedModels } from '../../common/media-generation-protocol';
 import { GeneratorFailedError, MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
-import { generateImageWithModels, withMediaFailureContext } from '../google-media-generation-service';
+import { generateImageWithModels, mediaRequestAborted, withMediaFailureContext } from '../google-media-generation-service';
 import { FalTrellisService, type FalTrellisMultiInput, type FalTrellisResult } from './FalTrellisService';
 
 /** Image models a turnaround tries when none is named: Nano Banana Lite first, then the standard image list. */
@@ -71,6 +71,13 @@ export interface MultiAngleCaptureOptions {
     };
     /** Image model id. When given, only that model is used; otherwise TURNAROUND_DEFAULT_MODELS, in order. */
     model?: string;
+    /**
+     * Stops the capture with an AbortError: checked before every station and before Trellis, and passed to each
+     * image-model call, so nothing more is generated (or billed) after the caller has stopped.
+     */
+    signal?: AbortSignal;
+    /** Progress after each captured station (fraction 0..1). */
+    onProgress?: (fraction: number, message: string) => void;
 }
 
 /** Injected collaborators (tests pass fakes; production uses Google Gen AI credentials and Fal.ai). */
@@ -324,7 +331,11 @@ export class MultiAngleTurnaroundService {
         let modelUsed: string | undefined;
         let skippedModels: SkippedMediaModel[] = [];
 
+        const stopIfAborted = () => {
+            if (options.signal?.aborted) throw mediaRequestAborted();
+        };
         for (const station of stations) {
+            stopIfAborted();
             const { positive, negative } = MultiAngleTurnaroundService.buildPrompt(
                 options.subject,
                 station,
@@ -338,7 +349,7 @@ export class MultiAngleTurnaroundService {
             ];
             let answer;
             try {
-                answer = await generateImageWithModels(client, { models, contents, imageConfig: { aspectRatio: '1:1' } });
+                answer = await generateImageWithModels(client, { models, contents, imageConfig: { aspectRatio: '1:1' }, signal: options.signal });
             } catch (err) {
                 // Model failures gain the station name; any other error (a bug, a local failure) propagates as it is.
                 throw withMediaFailureContext(err, `station ${station.label}`);
@@ -365,12 +376,14 @@ export class MultiAngleTurnaroundService {
                 generatedBy: answer.modelUsed,
                 buffer: answer.data
             });
+            options.onProgress?.(capturedViews.length / stations.length, `Captured station ${station.label} (${capturedViews.length}/${stations.length}) with ${answer.modelUsed}`);
         }
 
         let downstreamGlb: MultiAngleCaptureResult['downstreamGlb'] = undefined;
 
         // Downstream Trellis Execution (Fal.ai), only when asked for
         if (options.downstreamTarget === 'trellis-fal' || options.downstreamTarget === 'trellis') {
+            stopIfAborted();
             const glbPath = path.join(outputDir, `trellis_${path.basename(outputDir)}_${Date.now()}.glb`);
             const trellis = this.deps.trellis || new FalTrellisService();
             const falResult = await trellis.generate3DFromImages({

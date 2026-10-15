@@ -46,7 +46,7 @@ function fakeImageClient(calls: string[], color: [number, number, number], optio
                 if (options.served && !options.served.includes(model)) {
                     throw Object.assign(new Error(`models/${model} is not found`), { status: 404 });
                 }
-                const w = 84, h = 36;
+                const w = 224, h = 96; // 21:9, about 1.3x smaller than the 299x128 edit canvas of a 256x128 panorama
                 const rgba = Buffer.alloc(w * h * 4);
                 for (let i = 0; i < w * h; i++) {
                     rgba[i * 4] = color[0]; rgba[i * 4 + 1] = color[1]; rgba[i * 4 + 2] = color[2]; rgba[i * 4 + 3] = 255;

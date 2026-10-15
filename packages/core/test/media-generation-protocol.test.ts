@@ -115,6 +115,13 @@ test('the model note names the model that answered and why each earlier one was 
 
 test('only "model not served" moves on to another model; an option a model rejects is an invalid request', () => {
     assert.strictEqual(classifyMediaGenerationError({ status: 400, message: 'imageSize 4K is not supported' }).code, 'invalid_request');
-    assert.strictEqual(classifyMediaGenerationError({ status: 400, message: 'Model gemini-x is not supported for generateContent' }).code, 'unsupported');
+    // A 400 is the request's fault whatever its wording; only a 404 (or, with no status at all, the wording) means
+    // the model is not served.
+    assert.strictEqual(classifyMediaGenerationError({ status: 400, message: 'The model a is not supported for image editing with a mask' }).code, 'invalid_request');
+    assert.strictEqual(classifyMediaGenerationError({ status: 404, message: 'models/gemini-x is not found for API version v1beta, or is not supported for generateContent' }).code, 'unsupported');
+    assert.strictEqual(classifyMediaGenerationError({ message: 'Model gemini-x is not supported for generateContent' }).code, 'unsupported');
     assert.strictEqual(classifyMediaGenerationError({ status: 404, message: 'Not Found' }).code, 'unsupported');
+    // "rai" is a word, not a substring: a constraint error is not a safety block.
+    assert.strictEqual(classifyMediaGenerationError({ status: 400, message: 'Invalid argument: constraint violated' }).code, 'invalid_request');
+    assert.strictEqual(classifyMediaGenerationError({ message: 'Blocked by RAI filter' }).code, 'safety_filtered');
 });

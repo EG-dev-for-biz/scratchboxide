@@ -364,16 +364,20 @@ export function classifyMediaGenerationError(error: unknown, model?: string): Me
     if (status === 429 || /quota|resource exhausted|rate limit/.test(lower)) {
         return { code: 'quota', message, retryable: true, model, status };
     }
-    if (/safety|blocked|rai|responsible ai|prohibited content/.test(lower)) {
+    if (/safety|blocked|\brai\b|responsible ai|prohibited content/.test(lower)) {
         return { code: 'safety_filtered', message, retryable: false, model, status };
     }
-    // Only "this model is not served" moves on to the next model; a request option a model does not support is
-    // an invalid request, not a reason to substitute another model.
-    if (status === 404 || /model.+not (found|supported)|unsupported model/.test(lower)) {
+    // Only "this model is not served" moves on to the next model. A 400 is an invalid request whatever its text says
+    // (e.g. "model X is not supported for image editing with a mask"): the request is wrong, so substituting another
+    // model would not answer it. The message is consulted only when the error carries no status.
+    if (status === 404) {
         return { code: 'unsupported', message, retryable: false, model, status };
     }
     if (status === 400 || /invalid argument|bad request/.test(lower)) {
         return { code: 'invalid_request', message, retryable: false, model, status };
+    }
+    if (!status && /model.+not (found|supported)|unsupported model/.test(lower)) {
+        return { code: 'unsupported', message, retryable: false, model, status };
     }
     if (!status || status >= 500 || /timeout|temporar|unavailable|network|fetch failed/.test(lower)) {
         return { code: 'transient', message, retryable: true, model, status };
