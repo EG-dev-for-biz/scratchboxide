@@ -47,21 +47,26 @@ export class FimCompletionService {
             `Language: ${language}\n\n` +
             `<|fim_prefix|>\n${trimmedPrefix}\n<|fim_suffix|>\n${trimmedSuffix}\n<|fim_middle|>\n`;
 
+        let status: Awaited<ReturnType<GeminiClient['getStatus']>>;
         try {
-            // Check if client has authentication
-            const status = await this.client.getStatus();
-            if (!status.connected && status.authMethod === 'unauthenticated') {
-                const fallback = this.synthesizeHeuristicCompletion(trimmedPrefix, trimmedSuffix, language);
-                return {
-                    success: true,
-                    completion: fallback,
-                    modelUsed: 'heuristic-local',
-                    latencyMs: Date.now() - startTime
-                };
-            }
+            status = await this.client.getStatus();
+        } catch (err: any) {
+            return { success: false, completion: '', modelUsed: 'none', latencyMs: Date.now() - startTime, error: `The model connection could not be checked: ${err?.message || String(err)}` };
+        }
+        if (!status.connected && status.authMethod === 'unauthenticated') {
+            return {
+                success: false,
+                completion: '',
+                modelUsed: 'none',
+                latencyMs: Date.now() - startTime,
+                error: 'No Google Cloud service account or Gemini API key is configured, so there is no completion model.'
+            };
+        }
 
-            const model = status.subagentModel || 'gemini-2.5-flash';
-            const rawResponse = await this.client.fetchVertexOrAistudio(
+        // The completion is the model's or none: a failure is reported, never replaced by a locally made-up snippet.
+        const model = status.subagentModel || 'gemini-2.5-flash';
+        try {
+            const { json, credential, credentialNote } = await this.client.requestGenerateContent(
                 model,
                 [{ role: 'user', parts: [{ text: userPrompt }] }],
                 systemInstruction,
@@ -72,31 +77,23 @@ export class FimCompletionService {
                 }
             );
 
-            let candidateText = '';
-            if (rawResponse && rawResponse.candidates && rawResponse.candidates[0]?.content?.parts) {
-                candidateText = rawResponse.candidates[0].content.parts.map((p: any) => p.text || '').join('');
-            }
-
-            let cleaned = this.cleanCompletion(candidateText, trimmedPrefix, trimmedSuffix);
-            if (!cleaned) {
-                cleaned = this.synthesizeHeuristicCompletion(trimmedPrefix, trimmedSuffix, language);
-            }
-
+            const candidateText = (json?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || '').join('');
+            // An empty completion is the model's answer (nothing to insert), not a failure.
             return {
                 success: true,
-                completion: cleaned,
+                completion: this.cleanCompletion(candidateText, trimmedPrefix, trimmedSuffix),
                 modelUsed: model,
+                credential,
+                ...(credentialNote ? { credentialNote } : {}),
                 latencyMs: Date.now() - startTime
             };
         } catch (err: any) {
-            // Graceful fallback to heuristic autocomplete on network or quota errors
-            const fallback = this.synthesizeHeuristicCompletion(trimmedPrefix, trimmedSuffix, language);
             return {
-                success: true,
-                completion: fallback,
-                modelUsed: 'heuristic-local-fallback',
+                success: false,
+                completion: '',
+                modelUsed: model,
                 latencyMs: Date.now() - startTime,
-                error: err.message
+                error: err?.message || String(err)
             };
         }
     }
@@ -119,58 +116,5 @@ export class FimCompletionService {
             }
         }
         return cleaned;
-    }
-
-    /**
-     * Local deterministic heuristic completions when offline or testing.
-     */
-    private synthesizeHeuristicCompletion(prefix: string, suffix: string, language: string): string {
-        const lastLine = prefix.split('\n').pop() || '';
-        const trimmedLast = lastLine.trim();
-
-        // 1. Function / method parameter closing
-        if (trimmedLast.endsWith('(') && !suffix.trim().startsWith(')')) {
-            return ') {\n    \n}';
-        }
-        // 2. React component prop completions
-        if (trimmedLast.endsWith('<button') || trimmedLast.endsWith('<div') || trimmedLast.endsWith('<span')) {
-            return ' className=""';
-        }
-        // 3. Import completions
-        if (trimmedLast.startsWith('import ') && !trimmedLast.includes('from')) {
-            return `* as React from 'react';`;
-        }
-        // 4. Return statement completions
-        if (trimmedLast === 'return' || trimmedLast.endsWith(' return')) {
-            return ' null;';
-        }
-        // 5. Interface / type definitions
-        if (trimmedLast.startsWith('interface ') || trimmedLast.startsWith('export interface ')) {
-            if (!trimmedLast.includes('{')) {
-                return ' {\n  id: string;\n  name: string;\n}';
-            }
-        }
-        // 6. Arrow function
-        if (trimmedLast.endsWith('=>')) {
-            return ' {\n    \n}';
-        }
-        // 7. Loop body completions
-        const prevLine = prefix.split('\n').slice(-2, -1)[0] || '';
-        if (prevLine.includes('for (') || prevLine.includes('for await (') || prevLine.includes('.forEach(')) {
-            const match = prevLine.match(/for\s*\(\s*(?:const|let|var)?\s*([a-zA-Z0-9_$]+)/);
-            const varName = match ? match[1] : 'item';
-            return `total += ${varName}.price;\n`;
-        }
-        // 8. Variable declaration assignment
-        if (trimmedLast.endsWith('=') || trimmedLast.endsWith(':')) {
-            return ' null;';
-        }
-
-        // 9. Generic block continuation
-        if (prefix.trim().endsWith('{')) {
-            return '\n    // TODO: implement\n';
-        }
-
-        return '';
     }
 }

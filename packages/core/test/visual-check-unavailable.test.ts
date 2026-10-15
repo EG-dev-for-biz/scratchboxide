@@ -56,6 +56,17 @@ describe('VisualVerificationService.verifyVisual', () => {
         expect(calls[0].config.responseMimeType).toBe('application/json');
     });
 
+    it('records which credential the vision model was called with, and shows it', async () => {
+        const viaKey: VisionModelClient = { ...visionClient(async () => ({ text: JSON.stringify({ fidelityScore: 91, critique: 'Clean massing', issues: [], strengths: [] }) })), genAIClientCredential: () => 'api-key' };
+        const audit = await new VisualVerificationService(viaKey).verifyVisual(REQUEST);
+        expect(audit).toMatchObject({ status: 'verified', credential: 'api-key', modelUsed: 'gemini-3.8-flash' });
+        expect(describeVisualCheck(audit).text).toBe('Visual check (gemini-3.8-flash · Gemini API key): 91/100 — Clean massing');
+        const failing: VisionModelClient = { ...visionClient(async () => { throw new Error('403 PERMISSION_DENIED'); }), genAIClientCredential: () => 'vertex' };
+        const down = await new VisualVerificationService(failing).verifyVisual(REQUEST);
+        expect(down).toMatchObject({ status: 'unavailable', credential: 'vertex' });
+        expect(describeVisualCheck(down).text).toBe('Visual check unavailable (gemini-3.8-flash · Vertex AI): gemini-3.8-flash could not inspect the frame: 403 PERMISSION_DENIED');
+    });
+
     it('a failed call (404 from the endpoint) is unavailable: no score, no critique, no fixes', async () => {
         const service = new VisualVerificationService(visionClient(async () => {
             throw new Error('[404 Not Found] Publisher Model `projects/p/locations/us-central1/publishers/google/models/gemini-3.8-flash` was not found');

@@ -77,6 +77,8 @@ export interface SubagentResponse {
     data?: Record<string, any>;
     groundingMetadata?: GroundingMetadata;
     modelUsed: string;
+    /** Which model and credential answered, and why when not the requested model or the service account. */
+    modelProvenance?: ModelAnswerProvenance;
     error?: string;
 }
 
@@ -243,6 +245,11 @@ export interface ModelAnswerProvenance {
     credential: 'vertex' | 'api-key';
     /** Set when a service account is configured but the API key answered: why Vertex was not used. */
     credentialNote?: string;
+    /**
+     * Calls made for this turn by other models (skill preprocessing) that did not run on the requested model or the
+     * service account, each saying which model and credential answered instead and why.
+     */
+    helperNotes?: string[];
 }
 
 /** One item of the agent's visible checklist (`update_task_list`). */
@@ -358,6 +365,10 @@ export interface FimCompletionResponse {
     success: boolean;
     completion: string;
     modelUsed: string;
+    /** The credential that answered: 'vertex' (service account) or 'api-key' (Gemini API key). */
+    credential?: 'vertex' | 'api-key';
+    /** Set when a service account is configured but the API key answered: why. */
+    credentialNote?: string;
     latencyMs?: number;
     error?: string;
 }
@@ -382,6 +393,10 @@ export interface QuickEditResponse {
     additions?: number;
     deletions?: number;
     modelUsed?: string;
+    /** The credential that answered: 'vertex' (service account) or 'api-key' (Gemini API key). */
+    credential?: 'vertex' | 'api-key';
+    /** Set when a service account is configured but the API key answered: why. */
+    credentialNote?: string;
     error?: string;
 }
 

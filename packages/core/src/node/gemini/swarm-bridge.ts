@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 import type { Content, Part } from '@google/genai';
-import type { SubagentRequest, SubagentResponse } from '../../common/gemini-protocol';
+import type { ModelAnswerProvenance, SubagentRequest, SubagentResponse } from '../../common/gemini-protocol';
 import type { Scene3DData } from '../../browser/generative-canvas/canvas-types';
 import {
     SubagentPoolService,
@@ -20,7 +20,7 @@ import {
     type Autonomous3DPlanResult,
     type Autonomous3DStageDAG
 } from '../deep-write/dynamic-dag-planner';
-import { GeminiClient, resolveFetch, type VertexGenerateContentJson } from './gemini-client';
+import { GeminiClient, resolveFetch, summarizeModelError, type VertexGenerateContentJson } from './gemini-client';
 
 /** The host object `DynamicDagPlanner` expects (structurally the GeminiService facade). */
 export type DynamicDagPlannerHost = NonNullable<ConstructorParameters<typeof DynamicDagPlanner>[0]>;
@@ -92,23 +92,33 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
 
     /** Execute a subagent background task against the lite model tier with fallbacks. */
     async executeSubagentTask(request: SubagentRequest): Promise<SubagentResponse> {
+        // The chat credential rule: Vertex when a service account is configured; the Gemini API key when there is
+        // none, or when one is configured but cannot issue a token. The second case is recorded (credentialNote).
         let auth: { type: 'vertex'; token: string; projectId: string } | { type: 'api-key'; apiKey: string };
+        let credentialNote: string | undefined;
+        const serviceAccountConfigured = this.client.isAuthenticated();
         try {
             const { token, projectId } = await this.client.getAccessToken();
             auth = { type: 'vertex', token, projectId };
-        } catch {
+        } catch (err) {
+            if (serviceAccountConfigured) {
+                credentialNote = `the Vertex AI service account could not get an access token (${summarizeModelError(err)})`;
+            }
             const apiKey = await this.client.resolveApiKey();
             if (apiKey) {
                 auth = { type: 'api-key', apiKey };
             } else {
-                throw new Error('No Google Cloud service account or Gemini API key configured.');
+                throw new Error(credentialNote
+                    ? `No Gemini API key is configured, and ${credentialNote}.`
+                    : 'No Google Cloud service account or Gemini API key configured.');
             }
         }
 
         const candidates = this.getSubagentModelCandidates(request.model);
         const fetchFn = resolveFetch();
+        const skipped: string[] = [];
 
-        return this.client.withModelFallback(
+        const response = await this.client.withModelFallback(
             candidates,
             async targetModel => {
                 const url = auth.type === 'vertex'
@@ -154,10 +164,19 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
                 } satisfies SubagentResponse;
             },
             {
-                // The answering model is reported as modelUsed; it is not made the default for later subagent calls.
+                // The answering model is reported (modelUsed, modelProvenance); it is not made the default for later calls.
+                onFallback: (model, reason) => { skipped.push(`${model} unavailable: ${reason}`); },
                 exhaustedMessage: 'Failed to execute subagent with available models'
             }
         );
+        const modelProvenance: ModelAnswerProvenance = {
+            requestedModel: candidates[0],
+            modelUsed: response.modelUsed,
+            ...(response.modelUsed !== candidates[0] && skipped.length > 0 ? { fallbackReason: skipped.join('; ') } : {}),
+            credential: auth.type,
+            ...(credentialNote ? { credentialNote } : {})
+        };
+        return { ...response, modelProvenance };
     }
 
     /** Autonomous multi-step 3D planning agent workflow (PocoLibre/blender-mcp paradigm). */

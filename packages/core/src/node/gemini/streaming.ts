@@ -198,6 +198,18 @@ export type StreamAuth =
     | { type: 'vertex'; token: string; projectId: string }
     | { type: 'api-key'; apiKey: string };
 
+/**
+ * One line for a helper call (e.g. skill preprocessing) that was not answered by its requested model or by the
+ * service account, naming what answered instead and why; undefined when it ran as requested.
+ */
+export function describeHelperProvenance(role: string, p: ModelAnswerProvenance | undefined): string | undefined {
+    if (!p) return undefined;
+    const parts: string[] = [];
+    if (p.modelUsed !== p.requestedModel) parts.push(`answered by ${p.modelUsed} — ${p.fallbackReason || `${p.requestedModel} unavailable`}`);
+    if (p.credentialNote) parts.push(`answered with the Gemini API key — ${p.credentialNote}`);
+    return parts.length > 0 ? `${role} ${parts.join('; ')}` : undefined;
+}
+
 /** Adds which model and credential answered to the turn's closing events (`done`, `error`). */
 function withProvenance(onEvent: StreamEventSink, provenance: ModelAnswerProvenance): StreamEventSink {
     return event => onEvent(event.type === 'done' || event.type === 'error' ? { ...event, modelProvenance: provenance } : event);
@@ -280,6 +292,9 @@ export class StreamingEngine {
             return this.executeVertexAgentInteraction(request.agent, streamAuth.projectId, streamAuth.token, request, onEvent, signal);
         }
 
+        // Helper calls of this turn that did not run on their requested model or on the service account (shown on the reply).
+        const helperNotes: string[] = [];
+
         // Run subagent preprocessing if requested and there are complex multi-skills attached
         if (request.enableSubagentPreprocess && request.attachedSkills && request.attachedSkills.length > 1) {
             try {
@@ -298,6 +313,11 @@ export class StreamingEngine {
                     text: subagentRes.result,
                     subagentResult: subagentRes
                 });
+                const note = describeHelperProvenance('Skill preprocessing', subagentRes.modelProvenance);
+                if (note) {
+                    helperNotes.push(note);
+                    onEvent({ type: 'status', text: note });
+                }
             } catch (err) {
                 // Preprocessing is advisory; the turn goes on without it, and says so.
                 onEvent({ type: 'subagent_done', text: `Skill preprocessing failed (${summarizeModelError(err)}); the main model answers without it.` });
@@ -318,7 +338,8 @@ export class StreamingEngine {
                 ? { fallbackReason: skipped.map(s => `${s.model} unavailable: ${s.reason}`).join('; ') }
                 : {}),
             credential: auth.type,
-            ...(credentialNote ? { credentialNote } : {})
+            ...(credentialNote ? { credentialNote } : {}),
+            ...(helperNotes.length > 0 ? { helperNotes } : {})
         });
         const response = await this.client.withModelFallback(
             candidates,
@@ -326,7 +347,7 @@ export class StreamingEngine {
             {
                 onFallback: (model, reason, nextModel) => {
                     skipped.push({ model, reason });
-                    onEvent({ type: 'status', text: `${model} is not available (${reason}); answering with ${nextModel}.`, modelUsed: nextModel });
+                    onEvent({ type: 'status', text: `${model} is not available (${reason}); trying ${nextModel}.` });
                 },
                 // Partial output may already have been streamed; never replay a turn.
                 retryTransient: false,

@@ -86,8 +86,21 @@ describe('server: which model and credential answered', () => {
         expect(response.modelProvenance).toEqual(expected);
         const done = events.find(e => e.type === 'done');
         expect(done?.modelProvenance).toEqual(expected);
-        const notice = events.find(e => e.type === 'status' && e.text?.includes('answering with gemini-3.8-flash'));
+        // While it happens the status line says the next model is being tried, not that it answered.
+        const notice = events.find(e => e.type === 'status' && e.text?.includes('trying gemini-3.8-flash'));
         expect(notice?.text).toContain('gemini-4-argon is not available');
+        expect(events.some(e => e.type === 'status' && /answering with/.test(e.text || ''))).toBe(false);
+    });
+
+    it('when no model in the list is available, the error names every model tried and why', async () => {
+        const { service } = serviceWith({});
+        // Every model id answers 404.
+        (globalThis as any).fetch = async () => ({ ok: false, status: 404, text: async () => JSON.stringify({ error: { code: 404, message: 'model not found' } }), json: async () => ({}), body: null });
+        const tried = (service as any).client.getModelCandidates('gemini-x') as string[];
+        const err = await service.streamGenerate({ prompt: 'hi', model: 'gemini-x', mode: 'ask' } as any, () => {}).then(() => null, e => e as Error);
+        expect(err).toBeInstanceOf(Error);
+        expect(err!.message).toContain(`none of the ${tried.length} models tried is available`);
+        for (const model of tried) expect(err!.message).toContain(`${model} (404: model not found)`);
     });
 
     it('starts every turn from the requested model again (no sticky default after a fallback)', async () => {
@@ -130,6 +143,40 @@ describe('server: which model and credential answered', () => {
         expect(res.modelUsed).toBe('gemini-3.1-flash-lite');
         expect(urls.map(u => /models\/([^:]+):/.exec(u)?.[1])).toEqual(['gemini-3.1-flash-lite-preview', 'gemini-3.1-flash-lite']);
         expect(service.preferredSubagentModel).toBe(before);
+        // And it says so: which model answered, which was skipped and why, on which credential.
+        expect(res.modelProvenance).toEqual({
+            requestedModel: 'gemini-3.1-flash-lite-preview',
+            modelUsed: 'gemini-3.1-flash-lite',
+            fallbackReason: expect.stringMatching(/^gemini-3\.1-flash-lite-preview unavailable: 404: /),
+            credential: 'vertex'
+        });
+    });
+
+    it('a subagent answered by the API key after a token failure says so', async () => {
+        process.env.GEMINI_API_KEY = 'test-key-not-real';
+        const { service, urls } = serviceWith({ 'gemini-3.1-flash-lite': () => ({ ok: true, status: 200, body: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'plan' }] } }] }) }) }, { tokenFails: true });
+        const res = await service.executeSubagentTask({ taskType: 'preprocess', prompt: 'p', model: 'gemini-3.1-flash-lite' } as any);
+        expect(urls[0]).toContain('generativelanguage.googleapis.com');
+        expect(res.modelProvenance).toMatchObject({ credential: 'api-key', credentialNote: expect.stringContaining('could not get an access token (invalid_grant') });
+    });
+
+    it('skill preprocessing that fell back is named on the turn\'s reply, not only in a passing status line', async () => {
+        const { service } = serviceWith({
+            'gemini-3.1-flash-lite-preview': () => ({ ok: false, status: 404, body: NOT_FOUND }),
+            'gemini-3.1-flash-lite': () => ({ ok: true, status: 200, body: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'use skill A first' }] } }] }) }),
+            'gemini-3.8-flash': () => ({ ok: true, status: 200, body: sse('Done.') })
+        });
+        (service as any).preferredSubagentModel = 'gemini-3.1-flash-lite-preview';
+        const events: GeminiStreamEvent[] = [];
+        const response = await service.streamGenerate({
+            prompt: 'Plan it', model: 'gemini-3.8-flash', mode: 'ask', enableSubagentPreprocess: true,
+            attachedSkills: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]
+        } as any, e => events.push(e));
+        expect(response.modelProvenance?.modelUsed).toBe('gemini-3.8-flash');
+        expect(response.modelProvenance?.helperNotes).toEqual([expect.stringMatching(/^Skill preprocessing answered by gemini-3\.1-flash-lite — gemini-3\.1-flash-lite-preview unavailable: 404/)]);
+        expect(events.some(e => e.type === 'status' && e.text?.startsWith('Skill preprocessing answered by gemini-3.1-flash-lite'))).toBe(true);
+        const notice = describeModelProvenance(response.modelProvenance!).notice;
+        expect(notice).toContain('Skill preprocessing answered by gemini-3.1-flash-lite');
     });
 
     it('non-streaming requests (history summary, quick edit, FIM) say which credential answered', async () => {
@@ -149,6 +196,22 @@ describe('server: which model and credential answered', () => {
         // Vertex answers: it says so.
         const { service: vertexOk } = serviceWith({ 'gemini-3.8-flash': ok });
         expect(await (vertexOk as any).client.generateContent({ model: 'gemini-3.8-flash', prompt: 'summarize' })).toEqual({ text: 'summary', credential: 'vertex' });
+
+        // Quick edit and FIM go through the same request: the API key answer is labelled, a Vertex error is a failure.
+        // Quick edit asks the configured chat model, FIM the configured subagent model.
+        const defaults = new GeminiService() as any;
+        const editModels = [defaults.preferredModel, defaults.preferredSubagentModel];
+        const answerAll = Object.fromEntries(editModels.map(m => [m, ok]));
+        const { service: keyEdit } = serviceWith(answerAll, { tokenFails: true });
+        const edit = await keyEdit.quickEditCode({ originalCode: 'let a = 1;', instruction: 'rename a to b', language: 'typescript', fileName: 'a.ts' });
+        expect(edit).toMatchObject({ success: true, proposedCode: 'summary', credential: 'api-key', credentialNote: expect.stringContaining('could not get an access token') });
+        const fim = await keyEdit.completeFim({ prefix: 'let a = ', suffix: ';', language: 'typescript', fileName: 'a.ts' });
+        expect(fim).toMatchObject({ success: true, credential: 'api-key', credentialNote: expect.stringContaining('could not get an access token') });
+        const bad = () => ({ ok: false, status: 400, body: 'INVALID_ARGUMENT: bad payload' });
+        const { service: vertexBad } = serviceWith(Object.fromEntries(editModels.map(m => [m, bad])));
+        const failedEdit = await vertexBad.quickEditCode({ originalCode: 'let a = 1;', instruction: 'rename a to b', language: 'typescript', fileName: 'a.ts' });
+        expect(failedEdit).toMatchObject({ success: false, proposedCode: 'let a = 1;', error: expect.stringContaining('Vertex AI error (400): INVALID_ARGUMENT') });
+        expect(failedEdit.proposedCode).not.toContain('Auto-documented');
     });
 
     it('withModelFallback reports each skipped model; a non-404 error is not a fallback', async () => {

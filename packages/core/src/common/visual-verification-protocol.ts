@@ -133,6 +133,8 @@ export interface VisualAuditResult {
     iteration?: number;
     autoRepaired?: boolean;
     modelUsed?: string;
+    /** The credential the vision model was called with: 'vertex' (service account) or 'api-key' (Gemini API key). */
+    credential?: 'vertex' | 'api-key';
     targetArtifactId?: string;
 }
 
@@ -145,6 +147,8 @@ export interface VisualAuditUnavailable {
     error: string;
     /** The vision model that was asked. */
     modelUsed?: string;
+    /** The credential it was asked with, when the call got that far. */
+    credential?: 'vertex' | 'api-key';
     targetArtifactId?: string;
     timestamp?: string;
 }

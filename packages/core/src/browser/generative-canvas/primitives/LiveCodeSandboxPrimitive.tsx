@@ -1434,6 +1434,8 @@ export default function App() {
     const [isQuickEditOpen, setIsQuickEditOpen] = React.useState<boolean>(false);
     const [quickEditPrompt, setQuickEditPrompt] = React.useState<string>('');
     const [isQuickEditing, setIsQuickEditing] = React.useState<boolean>(false);
+    // Why a quick edit produced no diff, or which credential answered when it was not the service account.
+    const [quickEditStatus, setQuickEditStatus] = React.useState<{ tone: 'error' | 'note'; text: string } | null>(null);
     const [quickEditDiff, setQuickEditDiff] = React.useState<{ originalCode: string; proposedCode: string } | null>(null);
     const [fileAudioState, setFileAudioState] = React.useState<'idle' | 'loading' | 'playing' | 'error'>('idle');
 
@@ -2339,14 +2341,17 @@ export default function App() {
                 fileName: activeFile.name || 'source.tsx'
             });
 
-            if (res && res.proposedCode) {
+            if (res?.success && res.proposedCode) {
                 setQuickEditDiff({ originalCode, proposedCode: res.proposedCode });
+                setQuickEditStatus(res.credentialNote ? { tone: 'note', text: `Answered with the Gemini API key — ${res.credentialNote}` } : null);
             } else {
-                setQuickEditDiff({ originalCode, proposedCode: originalCode });
+                // No diff to review: say why instead of showing the unchanged file as a proposal.
+                setQuickEditDiff(null);
+                setQuickEditStatus({ tone: 'error', text: res?.error || 'The edit returned no code.' });
             }
         } catch (err) {
-            console.error('Quick edit failed:', err);
-            setQuickEditDiff({ originalCode, proposedCode: originalCode });
+            setQuickEditDiff(null);
+            setQuickEditStatus({ tone: 'error', text: `The edit failed: ${err instanceof Error ? err.message : String(err)}` });
         } finally {
             setIsQuickEditing(false);
         }
@@ -2356,12 +2361,14 @@ export default function App() {
         if (!quickEditDiff || !activeFile) return;
         handleCodeChange(quickEditDiff.proposedCode);
         setQuickEditDiff(null);
+        setQuickEditStatus(null);
         setIsQuickEditOpen(false);
         setQuickEditPrompt('');
     };
 
     const handleRejectQuickEdit = () => {
         setQuickEditDiff(null);
+        setQuickEditStatus(null);
         setIsQuickEditOpen(false);
         setQuickEditPrompt('');
     };
@@ -3143,6 +3150,11 @@ export default function App() {
                                     {quickEditDiff && (
                                         <div className="sb-quick-edit-diff-summary animate-fadeIn">
                                             <span className="text-[11px] text-emerald-400 font-mono font-medium">● 1 proposed code patch ready for review (⌘Y to Accept, ⌘N to Reject)</span>
+                                        </div>
+                                    )}
+                                    {quickEditStatus && (
+                                        <div className="sb-quick-edit-diff-summary animate-fadeIn" role={quickEditStatus.tone === 'error' ? 'alert' : 'note'} data-testid="sb-quick-edit-status">
+                                            <span className={`text-[11px] font-mono font-medium ${quickEditStatus.tone === 'error' ? 'text-red-400' : 'text-amber-300'}`}>{quickEditStatus.text}</span>
                                         </div>
                                     )}
                                 </div>

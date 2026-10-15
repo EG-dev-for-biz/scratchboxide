@@ -385,6 +385,12 @@ export class GeminiClient {
         return this.genAiClient;
     }
 
+    /** Which credential the client last returned by getGenAIClient uses (undefined before there is one). */
+    genAIClientCredential(): 'vertex' | 'api-key' | undefined {
+        if (!this.genAiClient || !this.genAiClientKey) return undefined;
+        return this.genAiClientKey.startsWith('vertex:') ? 'vertex' : 'api-key';
+    }
+
     /** Real-time connection status, including model inventory and masked identity. */
     async getStatus(): Promise<GeminiStatus> {
         if (!this.auth || !this.cachedServiceAccountPath) {
@@ -633,6 +639,7 @@ export class GeminiClient {
         options: ModelFallbackOptions = {}
     ): Promise<T> {
         const { onSuccess, onFallback, exhaustedMessage = 'Failed to generate with available AI models', retryTransient = true } = options;
+        const unavailable: string[] = [];
         let lastError: unknown;
         for (let i = 0; i < candidates.length; i++) {
             const model = candidates[i];
@@ -645,13 +652,19 @@ export class GeminiClient {
             } catch (err: unknown) {
                 lastError = err;
                 if (isModelNotFoundError(err) && (options.canFallback?.(err) ?? true)) {
-                    if (i + 1 < candidates.length) onFallback?.(model, summarizeModelError(err), candidates[i + 1]);
+                    const reason = summarizeModelError(err);
+                    unavailable.push(`${model} (${reason})`);
+                    if (i + 1 < candidates.length) onFallback?.(model, reason, candidates[i + 1]);
                     continue;
                 }
                 throw err;
             }
         }
-        throw lastError ?? new Error(exhaustedMessage);
+        if (unavailable.length === 0) throw lastError ?? new Error(exhaustedMessage);
+        // Every candidate was unavailable: name each one and why, not just the last raw response.
+        const error = new Error(`${exhaustedMessage}: none of the ${unavailable.length} model${unavailable.length === 1 ? '' : 's'} tried is available: ${unavailable.join('; ')}`);
+        (error as Error & { cause?: unknown }).cause = lastError;
+        throw error;
     }
 
     async withTransientRetry<T>(fn: () => Promise<T>): Promise<T> {

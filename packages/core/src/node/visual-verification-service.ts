@@ -49,6 +49,8 @@ function sceneContentKey(scene: Scene3DData): string {
 /** The part of GeminiClient the vision check uses: the same Vertex-global-or-API-key client as chat. */
 export interface VisionModelClient {
     getGenAIClient(): Promise<Pick<GoogleGenAI, 'models'> | undefined>;
+    /** Which credential that client uses, recorded on the outcome. */
+    genAIClientCredential?(): 'vertex' | 'api-key' | undefined;
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -157,10 +159,12 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
      */
     public async verifyVisual(request: VisualVerificationRequest): Promise<VisualVerificationOutcome> {
         const model = request.model || DEFAULT_GEMINI_VISION_MODEL;
+        let credential: 'vertex' | 'api-key' | undefined;
         const unavailable = (error: string): VisualAuditUnavailable => ({
             status: 'unavailable',
             error,
             modelUsed: model,
+            ...(credential ? { credential } : {}),
             targetArtifactId: request.context?.artifactId,
             timestamp: new Date().toLocaleTimeString()
         });
@@ -179,6 +183,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
         if (!genai) {
             return unavailable('No Google Cloud service account or Gemini API key is configured for the vision model.');
         }
+        credential = this.client.genAIClientCredential?.();
 
         const { systemInstruction, userPrompt, inlineData } = this.buildMultimodalPrompt(request);
         let text: string;
@@ -225,6 +230,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
             timestamp: new Date().toLocaleTimeString(),
             iteration: request.context?.iteration || 1,
             modelUsed: model,
+            ...(credential ? { credential } : {}),
             targetArtifactId: request.context?.artifactId
         };
     }

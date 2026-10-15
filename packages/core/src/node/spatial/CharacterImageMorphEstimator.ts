@@ -18,6 +18,9 @@ import {
 import { CharacterSilhouetteSolver } from './CharacterSilhouetteSolver';
 import { GeminiClient, DEFAULT_GEMINI_MODEL } from '../gemini/gemini-client';
 
+/** The single-view proportions the model must state; none is filled in for it. */
+const REQUIRED_RATIOS = ['headsTall', 'shoulderToHipRatio', 'waistCinchRatio', 'bustVolumeScore', 'legToTorsoRatio', 'muscularityScore', 'genderDimorphism'] as const;
+
 export class CharacterImageMorphEstimator {
     private geminiClient: GeminiClient;
 
@@ -33,7 +36,7 @@ export class CharacterImageMorphEstimator {
         request: CharacterMorphRequest
     ): Promise<CharacterMorphResponse> {
         if (!request.images || request.images.length === 0) {
-            return this.buildFallbackResponse(request, 'No images provided; initialized to baseline drawing figure');
+            return { success: false, error: 'No character images were provided, so there is nothing to measure.' };
         }
 
         try {
@@ -45,33 +48,36 @@ export class CharacterImageMorphEstimator {
             // 2. Synthesize multimodal prompt for Gemini Vision
             const prompt = this.buildPrompt(request);
 
-            // 3. Attempt multimodal inference via GeminiClient
-            const responseText = await this.invokeVisionModel(prompt, processedImages);
-
-            if (!responseText) {
-                return this.buildFallbackResponse(request, 'Vision model returned empty payload; falling back to heuristic prior');
+            // 3. Multimodal inference via GeminiClient (same credential rule as chat)
+            const answer = await this.invokeVisionModel(prompt, processedImages);
+            if (!answer.text) {
+                return { success: false, error: `${DEFAULT_GEMINI_MODEL} returned an empty reply.` };
             }
 
             // 4. Parse structured anatomical deduction
-            const parsed = this.parseVisionJson(responseText);
+            const parsed = this.parseVisionJson(answer.text);
             if (!parsed) {
-                return this.buildFallbackResponse(request, 'Failed to parse JSON from vision model; falling back to heuristic prior');
+                return { success: false, error: `${DEFAULT_GEMINI_MODEL} did not return the proportions JSON.` };
             }
 
-            // 5. Multi-view fusion if view breakdown exists
+            // 5. Multi-view fusion if view breakdown exists; otherwise the model's own single-view ratios, all of them.
             let ratios: CharacterAnatomicalRatios;
             if (parsed.views && Array.isArray(parsed.views) && parsed.views.length > 0) {
                 ratios = CharacterSilhouetteSolver.fuseMultiViewObservations(parsed.views);
             } else {
+                const missing = REQUIRED_RATIOS.filter(k => typeof parsed[k] !== 'number' || !Number.isFinite(parsed[k]));
+                if (missing.length > 0) {
+                    return { success: false, error: `${DEFAULT_GEMINI_MODEL}'s reply lacks ${missing.join(', ')}, so no proportions were measured.` };
+                }
                 ratios = {
-                    headsTall: parsed.headsTall ?? 7.5,
-                    shoulderToHipRatio: parsed.shoulderToHipRatio ?? 1.05,
-                    waistCinchRatio: parsed.waistCinchRatio ?? 0.72,
-                    bustVolumeScore: parsed.bustVolumeScore ?? 0.20,
-                    legToTorsoRatio: parsed.legToTorsoRatio ?? 1.02,
-                    muscularityScore: parsed.muscularityScore ?? 0.0,
-                    genderDimorphism: parsed.genderDimorphism ?? 0.0,
-                    headWidthToHeightRatio: parsed.headWidthToHeightRatio ?? 0.74
+                    headsTall: parsed.headsTall,
+                    shoulderToHipRatio: parsed.shoulderToHipRatio,
+                    waistCinchRatio: parsed.waistCinchRatio,
+                    bustVolumeScore: parsed.bustVolumeScore,
+                    legToTorsoRatio: parsed.legToTorsoRatio,
+                    muscularityScore: parsed.muscularityScore,
+                    genderDimorphism: parsed.genderDimorphism,
+                    ...(typeof parsed.headWidthToHeightRatio === 'number' ? { headWidthToHeightRatio: parsed.headWidthToHeightRatio } : {})
                 };
             }
 
@@ -82,12 +88,15 @@ export class CharacterImageMorphEstimator {
                 success: true,
                 ratios,
                 betas,
-                confidence: parsed.confidence ?? 0.88,
-                explanation: parsed.explanation ?? 'Extracted character silhouette landmarks and proportions.',
-                matchedArchetype: parsed.matchedArchetype ?? (ratios.genderDimorphism > 0 ? 'Athletic Drawing Figure' : 'Stylized Feminine Drawing Figure')
+                ...(typeof parsed.confidence === 'number' ? { confidence: parsed.confidence } : {}),
+                ...(typeof parsed.explanation === 'string' ? { explanation: parsed.explanation } : {}),
+                ...(typeof parsed.matchedArchetype === 'string' ? { matchedArchetype: parsed.matchedArchetype } : {}),
+                modelUsed: DEFAULT_GEMINI_MODEL,
+                credential: answer.credential,
+                ...(answer.credentialNote ? { credentialNote: answer.credentialNote } : {})
             };
         } catch (err: any) {
-            return this.buildFallbackResponse(request, `Inference fallback triggered: ${err?.message || String(err)}`);
+            return { success: false, error: `The character proportions could not be measured: ${err?.message || String(err)}` };
         }
     }
 
@@ -153,38 +162,33 @@ Respond STRICTLY with valid JSON in this exact structure:
 }`;
     }
 
+    /** The vision model's reply text and the credential that answered; a failed request throws its error. */
     private async invokeVisionModel(
         prompt: string,
         images: Array<{ base64: string; mimeType: string }>
-    ): Promise<string | null> {
-        try {
-            const contents: any[] = [
-                {
-                    role: 'user',
-                    parts: [
-                        { text: prompt },
-                        ...images.map(img => ({
-                            inlineData: {
-                                mimeType: img.mimeType,
-                                data: img.base64
-                            }
-                        }))
-                    ]
-                }
-            ];
+    ): Promise<{ text: string; credential: 'vertex' | 'api-key'; credentialNote?: string }> {
+        const contents: any[] = [
+            {
+                role: 'user',
+                parts: [
+                    { text: prompt },
+                    ...images.map(img => ({
+                        inlineData: {
+                            mimeType: img.mimeType,
+                            data: img.base64
+                        }
+                    }))
+                ]
+            }
+        ];
 
-            const result = await this.geminiClient.fetchVertexOrAistudio(
-                DEFAULT_GEMINI_MODEL,
-                contents,
-                undefined,
-                { temperature: 0.1, maxOutputTokens: 1024 }
-            );
-
-            const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-            return text || null;
-        } catch {
-            return null;
-        }
+        const { json, credential, credentialNote } = await this.geminiClient.requestGenerateContent(
+            DEFAULT_GEMINI_MODEL,
+            contents,
+            undefined,
+            { temperature: 0.1, maxOutputTokens: 1024 }
+        );
+        return { text: json?.candidates?.[0]?.content?.parts?.[0]?.text || '', credential, ...(credentialNote ? { credentialNote } : {}) };
     }
 
     private parseVisionJson(text: string): any | null {
@@ -200,79 +204,5 @@ Respond STRICTLY with valid JSON in this exact structure:
         } catch {
             return null;
         }
-    }
-
-    /**
-     * High-fidelity heuristic fallback when offline or when vision model credentials are absent.
-     * Accurately maps archetypes into canonical drawing figure proportions.
-     */
-    public buildFallbackResponse(
-        request: CharacterMorphRequest,
-        reason: string
-    ): CharacterMorphResponse {
-        const isFemale = request.genderHint === 'female';
-        const isMale = request.genderHint === 'male';
-        const isChibi = request.styleHint === 'chibi';
-        const isAnime = request.styleHint === 'anime';
-
-        let ratios: CharacterAnatomicalRatios;
-
-        if (isFemale) {
-            ratios = {
-                headsTall: isAnime ? 7.2 : 7.3,
-                shoulderToHipRatio: 0.94,
-                waistCinchRatio: 0.65,
-                bustVolumeScore: 0.62,
-                legToTorsoRatio: isAnime ? 1.18 : 1.05,
-                muscularityScore: -0.20,
-                genderDimorphism: -0.85,
-                headWidthToHeightRatio: 0.72
-            };
-        } else if (isMale) {
-            ratios = {
-                headsTall: 7.6,
-                shoulderToHipRatio: 1.24,
-                waistCinchRatio: 0.82,
-                bustVolumeScore: 0.12,
-                legToTorsoRatio: 1.04,
-                muscularityScore: 0.50,
-                genderDimorphism: 0.85,
-                headWidthToHeightRatio: 0.76
-            };
-        } else if (isChibi) {
-            ratios = {
-                headsTall: 4.5,
-                shoulderToHipRatio: 1.02,
-                waistCinchRatio: 0.85,
-                bustVolumeScore: 0.05,
-                legToTorsoRatio: 0.90,
-                muscularityScore: -0.50,
-                genderDimorphism: 0.0,
-                headWidthToHeightRatio: 0.92
-            };
-        } else {
-            // Neutral standard drawing figure
-            ratios = {
-                headsTall: 7.5,
-                shoulderToHipRatio: 1.08,
-                waistCinchRatio: 0.74,
-                bustVolumeScore: 0.20,
-                legToTorsoRatio: 1.02,
-                muscularityScore: 0.10,
-                genderDimorphism: 0.0,
-                headWidthToHeightRatio: 0.74
-            };
-        }
-
-        const betas = CharacterSilhouetteSolver.solveBetasFromRatios(ratios, request.heightMeters);
-
-        return {
-            success: true,
-            ratios,
-            betas,
-            confidence: 0.92,
-            explanation: `Solved via anatomical drawing figure prior (${reason}).`,
-            matchedArchetype: isFemale ? 'Standard Drawing Figure (Feminine)' : (isMale ? 'Standard Drawing Figure (Masculine)' : 'Standard Drawing Figure (Neutral)')
-        };
     }
 }

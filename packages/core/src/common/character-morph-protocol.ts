@@ -67,12 +67,26 @@ export interface CharacterMorphRequest {
     heightMeters?: number;
 }
 
-export interface CharacterMorphResponse {
-    success: boolean;
+/** Proportions the vision model measured on the images, and the blendshapes solved from them. */
+export interface CharacterMorphEstimate {
+    success: true;
     ratios: CharacterAnatomicalRatios;
     betas: CanonicalShapeBetas;
-    confidence: number;
-    explanation: string;
-    matchedArchetype: string;
-    error?: string;
+    /** As the model stated them; absent when it did not. */
+    confidence?: number;
+    explanation?: string;
+    matchedArchetype?: string;
+    /** The vision model and credential that answered. */
+    modelUsed?: string;
+    credential?: 'vertex' | 'api-key';
+    credentialNote?: string;
 }
+
+/** No measurement: why (no images, no credentials, the model failed or its reply lacked the proportions). */
+export interface CharacterMorphFailure {
+    success: false;
+    error: string;
+}
+
+/** The model's measurement or the reason there is none; no stand-in "drawing figure" proportions are returned. */
+export type CharacterMorphResponse = CharacterMorphEstimate | CharacterMorphFailure;

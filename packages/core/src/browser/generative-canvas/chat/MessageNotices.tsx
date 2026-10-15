@@ -33,6 +33,7 @@ export function describeModelProvenance(p: ModelAnswerProvenance): ProvenanceDes
     if (p.credentialNote) {
         notices.push(`Answered with the ${CREDENTIAL_LABEL['api-key']} — ${p.credentialNote}`);
     }
+    for (const note of p.helperNotes || []) notices.push(note);
     return {
         label: `Answered by ${p.modelUsed} · ${CREDENTIAL_LABEL[p.credential]}`,
         notice: notices.length > 0 ? notices.join('. ') : undefined
@@ -47,9 +48,11 @@ export interface VisualCheckDescription {
 /** The background vision check as one line: its score and critique, or why it could not run. */
 export function describeVisualCheck(outcome: VisualVerificationOutcome): VisualCheckDescription {
     if (isVisualAuditUnavailable(outcome)) {
-        return { tone: 'unavailable', text: `Visual check unavailable: ${outcome.error}` };
+        const via = outcome.credential ? ` (${outcome.modelUsed ? `${outcome.modelUsed} · ` : ''}${CREDENTIAL_LABEL[outcome.credential]})` : '';
+        return { tone: 'unavailable', text: `Visual check unavailable${via}: ${outcome.error}` };
     }
-    const by = outcome.modelUsed ? ` (${outcome.modelUsed})` : '';
+    const answeredBy = [outcome.modelUsed, outcome.credential ? CREDENTIAL_LABEL[outcome.credential] : undefined].filter(Boolean).join(' · ');
+    const by = answeredBy ? ` (${answeredBy})` : '';
     const critique = outcome.critique?.trim() ? ` — ${outcome.critique.trim()}` : '';
     return { tone: outcome.pass ? 'pass' : 'fail', text: `Visual check${by}: ${outcome.fidelityScore}/100${critique}` };
 }
