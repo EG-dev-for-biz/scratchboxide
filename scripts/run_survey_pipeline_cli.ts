@@ -13,6 +13,7 @@ import * as fs from 'fs-extra';
 import { resolveSurveyPreset } from '../packages/core/src/node/spatial/survey-router';
 import { SurveySplatPipelineService } from '../packages/core/src/node/spatial/SurveySplatPipelineService';
 import { createDefaultStationImageGenerator } from '../packages/core/src/node/spatial/BeautifyStationService';
+import { MissingInputError } from '../packages/core/src/common/errors/pipeline-errors';
 
 async function main() {
     const args = process.argv.slice(2);
@@ -83,6 +84,21 @@ async function main() {
         process.exit(1);
     }
 
+    // The survey renders the place's own clay tiles, which the job must name: no GLB is picked by place name.
+    if (!preset.glbPath) {
+        const message = new MissingInputError('survey rerun-pipeline', 'glbPath', 'extract the location first (google_3d_tiles_get_clay) and pass its GLB in the job').message;
+        console.error('[SurveyPipeline]', message);
+        updateJob('error', 1.0, message, null, message);
+        process.exit(1);
+    }
+    const glbPath = path.resolve(workspaceRoot, preset.glbPath);
+    if (!fs.existsSync(glbPath)) {
+        const message = new MissingInputError('survey rerun-pipeline', 'glbPath', `${glbPath} does not exist`).message;
+        console.error('[SurveyPipeline]', message);
+        updateJob('error', 1.0, message, null, message);
+        process.exit(1);
+    }
+
     updateJob('running', 0.05, `Initializing survey pipeline for ${preset.beautify.locationName}...`);
 
     const svc = new SurveySplatPipelineService({ generator: createDefaultStationImageGenerator({ workspaceRoot }) });
@@ -92,7 +108,7 @@ async function main() {
     console.log(`[SurveyPipeline] OutDir: ${outDir}, Stations: ${preset.stations.length}, Sigma: ${preset.sigmaScale}, Voxel: ${preset.voxelSizeMeters}m`);
 
     const res = await svc.run({
-        glbPath: path.resolve(workspaceRoot, preset.glbPath),
+        glbPath,
         anchor: preset.anchor,
         stations: preset.stations,
         outDir,

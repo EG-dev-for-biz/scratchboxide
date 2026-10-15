@@ -41,6 +41,13 @@ describe('Calibrated3DGSReconstructionService: 1:1 Metric Matrix Lock 3DGS Recon
         expect(Calibrated3DGSReconstructionService.resolveVoxelSize(undefined, undefined)).toBe(0.05);
     });
 
+    it('needs the model\'s location (or its own stations) before any work: no default place', async () => {
+        // The rig used to be planned at the Colosseum's coordinates for any model without an anchor.
+        const outDir = path.join(OUT_DIR, 'no_anchor');
+        await expect(service.reconstruct({ glbPath: GLB_PATH, outDir, cameraBudget: 4 })).rejects.toThrow(/needs anchor \{ lat, lng, elevationMeters \} or customStations/);
+        expect(fs.existsSync(outDir)).toBe(false);
+    });
+
     it('validates 1:1 pinhole optical congruence and zero-drift center alignment', () => {
         const dummyPoses: ColmapCameraPose[] = [
             {

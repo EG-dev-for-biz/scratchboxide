@@ -118,7 +118,10 @@ export async function resolveSurveyPreset(
     }
 
     const locName = rawLoc || anchor.formattedAddress || `${anchor.lat.toFixed(6)}, ${anchor.lng.toFixed(6)}`;
-    const sanitizedName = locName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    // The default output folder is keyed by the resolved coordinates as well as the name, so two places described
+    // alike ("Park Avenue" in New York and in Winter Park) never write into each other's tileset.
+    const sanitizedName = locName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'location';
+    const placeKey = `${anchor.lat.toFixed(5)}_${anchor.lng.toFixed(5)}`;
     const radius = args?.cropRadius ?? 75.0;
 
     const stations = args?.stations && args.stations.length ? args.stations : engine.synthesize(anchor, {
@@ -135,7 +138,7 @@ export async function resolveSurveyPreset(
 
     return {
         ...(args?.glbPath ? { glbPath: String(args.glbPath) } : {}),
-        outDir: args?.outDir || `public/tilesets/${sanitizedName}`,
+        outDir: args?.outDir || `public/tilesets/${sanitizedName}_${placeKey}`,
         anchor,
         stations,
         beautify: {

@@ -13,6 +13,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { cameraBasis } from '../../common/spatial/SurveySynthesisEngine';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 import { AdaptiveSurveyRigService, type AdaptiveSurveyRigOptions, type AdaptiveSurveyRigResult } from './AdaptiveSurveyRigService';
 import { HeadlessMeshSilhouetteRenderer, type RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 import { OrientedBoundingBoxSolver, type DualBoundingBoxResult } from './OrientedBoundingBoxSolver';
@@ -30,7 +31,10 @@ export interface Calibrated3DGSReconstructionOptions {
     glbPath: string;
     /** Output directory for plates, depth buffers, PLY, and SPLAT artifacts */
     outDir: string;
-    /** Geodetic coordinate anchor */
+    /**
+     * Where the model's origin is on Earth (lat, lng, ground elevation in metres above sea level). Required unless
+     * customStations are given: planned stations carry WGS-84 coordinates, and no default place is used.
+     */
     anchor?: GeodeticAnchor;
     /** Survey mode: 'facade-perimeter', 'multitier-complete', 'nooks-and-crannies', 'interior-cavity' */
     surveyMode?: 'facade-perimeter' | 'multitier-complete' | 'nooks-and-crannies' | 'interior-cavity';
@@ -246,6 +250,14 @@ export class Calibrated3DGSReconstructionService {
     ): Promise<Calibrated3DGSReconstructionResult> {
         const t0 = Date.now();
         const report = (p: number, s: string) => onProgress?.(p, s);
+
+        // Checked before any work: planning a rig places its stations on Earth from the anchor.
+        const hasStations = !!(options.customStations && options.customStations.length > 0);
+        const a = options.anchor;
+        if (!hasStations && !(a && Number.isFinite(a.lat) && Number.isFinite(a.lng) && Number.isFinite(a.elevationMeters))) {
+            throw new MissingInputError('calibrated_3dgs_reconstruction', 'anchor { lat, lng, elevationMeters } or customStations',
+                'the planned stations carry WGS-84 coordinates, so the model\'s location is needed; no default place is used');
+        }
 
         report(0.05, 'Ensuring native baker compilation');
         const baker = await this.ensureBaker();

@@ -21,6 +21,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
+import { execFile } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
 import { Google3DTileBlockoutPipelineService, getGoogle3DTilesClay } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
@@ -468,6 +469,38 @@ describe('execute_3d_python_script: reports only the model the script actually w
             fs.rmSync(dir, { recursive: true, force: true });
         }
     }, 120000);
+});
+
+describe('survey rerun CLI: the job names its clay GLB or fails with why', () => {
+    const repoRoot = path.resolve(__dirname, '../../..');
+    const runCli = (jobFile: string) => new Promise<{ code: number | null }>((resolve) => {
+        execFile(path.join(repoRoot, 'node_modules/.bin/vite-node'), [path.join(repoRoot, 'scripts/run_survey_pipeline_cli.ts'), '--job-file', jobFile],
+            { cwd: repoRoot, timeout: 120000 }, (err) => resolve({ code: err ? (typeof (err as any).code === 'number' ? (err as any).code : 1) : 0 }));
+    });
+
+    it('a job without a glbPath (or with a missing one) ends with a MissingInputError, not a TypeError', async () => {
+        // The CLI used to path.resolve(root, preset.glbPath) with no GLB and crash with "paths[1] must be of type string".
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-survey-cli-'));
+        try {
+            const anchor = { lat: 41.8902, lng: 12.4922, elevationMeters: 22 };
+            const cases: Array<[Record<string, unknown>, RegExp]> = [
+                [{ anchor, location: 'Colosseum, Rome' }, /survey rerun-pipeline needs glbPath: extract the location first/],
+                [{ anchor, location: 'Colosseum, Rome', glbPath: path.join(dir, 'missing.glb') }, /survey rerun-pipeline needs glbPath: .*missing\.glb does not exist/]
+            ];
+            for (const [request, expected] of cases) {
+                const jobFile = path.join(dir, `job_${Math.random().toString(36).slice(2)}.json`);
+                fs.writeFileSync(jobFile, JSON.stringify({ id: 'test', status: 'running', request }));
+                const { code } = await runCli(jobFile);
+                const job = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
+                expect(code).not.toBe(0);
+                expect(job.status).toBe('error');
+                expect(job.error).toMatch(expected);
+                expect(job.error).not.toMatch(/paths\[1\]|TypeError/);
+            }
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }, 240000);
 });
 
 describe('GeospatialTileExtractionBridge: every call extracts fresh tiles', () => {
