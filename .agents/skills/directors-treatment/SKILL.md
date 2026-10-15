@@ -141,18 +141,6 @@ Then embed the generated artifact into the treatment markdown:
 ```
 Comprehensive prompt guide: [Nano Banana Storyboard Guide](./references/nano_banana_storyboard_guide.md).
 
-### Presentation Deck Compilation:
-To convert any completed treatment into a live, editable 21:9 Google Slides or interactive HTML presentation deck, use `markdown-to-google-slides`:
-```bash
-node /Users/eligreen/.gemini/config/skills/markdown-to-google-slides/scripts/md_to_slides_compiler.mjs <treatment.md> \
-  --ratio 21:9 \
-  --font-preset high-fashion \
-  --palette nordic-amber \
-  --chrome \
-  --upload-drive \
-  --html presentation.html
-```
-
 ---
 
 ## 6. Automated Verification & Linting
