@@ -255,11 +255,87 @@ function renderVideoBranch(options) {
     });
 }
 
+// ── Request path & origin hardening ─────────────────────────────────────────
+// Static files come from public/. The only repo-root paths served are the ones
+// public/ demos load by root-relative URL: the three / 3d-tiles-renderer import
+// maps, /public/... model URLs and /docs/screenshots proof images. Everything
+// else at the repo root (secrets.json, .env, service-account.json, source) is not.
+const REPO_ROOT_STATIC_DIRS = ['node_modules/three', 'node_modules/3d-tiles-renderer', 'public', 'docs/screenshots'];
+const STATIC_ROOTS = [PUBLIC_DIR, ...REPO_ROOT_STATIC_DIRS.map((dir) => path.join(REPO_ROOT, dir))];
+const SURVEY_JOB_ID_PATTERN = /^rerun-[a-z0-9]+-[a-z0-9]+$/;
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+/** Separator-aware containment: true when `candidate` is `root` or inside it. */
+function isWithinDir(root, candidate) {
+    const rel = path.relative(root, candidate);
+    return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
+}
+
+/** Resolve a user-supplied relative path strictly inside `root`; returns null on escape. */
+function resolveInside(root, userPath) {
+    if (typeof userPath !== 'string' || !userPath || userPath.includes('\0')) return null;
+    const resolved = path.resolve(root, userPath.replace(/^[\\/]+/, ''));
+    return isWithinDir(root, resolved) ? resolved : null;
+}
+
+/** True for a regular file whose real path (symlinks followed) lies inside a static root. */
+function isServableFile(candidate) {
+    let real;
+    try {
+        if (!fs.statSync(candidate).isFile()) return false;
+        real = fs.realpathSync(candidate);
+    } catch {
+        return false;
+    }
+    return STATIC_ROOTS.some((root) => {
+        try { return isWithinDir(fs.realpathSync(root), real); } catch { return false; }
+    });
+}
+
+/** Map a request path onto a servable file, or null. Dotfiles and `..` segments are never served. */
+function resolveStaticFile(reqPath) {
+    if (reqPath.split(/[\\/]/).some((segment) => segment.startsWith('.'))) return null;
+    const publicPath = resolveInside(PUBLIC_DIR, reqPath);
+    if (!publicPath) return null;
+
+    const relPath = reqPath.replace(/^[\\/]+/, '');
+    const rootDir = REPO_ROOT_STATIC_DIRS.find((dir) => relPath.startsWith(dir + '/'));
+    const baseName = path.basename(publicPath);
+    const htmlName = baseName.endsWith('.html') ? baseName : baseName + '.html';
+    const candidates = [
+        publicPath,
+        rootDir ? resolveInside(path.join(REPO_ROOT, rootDir), relPath.slice(rootDir.length + 1)) : null,
+        publicPath.endsWith('.html') ? null : publicPath + '.html',
+        path.join(PUBLIC_DIR, 'demos/showcase', baseName),
+        path.join(PUBLIC_DIR, 'demos/showcase', htmlName),
+        path.join(PUBLIC_DIR, 'demos/experiments', baseName),
+        path.join(PUBLIC_DIR, 'demos/experiments', htmlName),
+        path.join(PUBLIC_DIR, 'demos', baseName),
+        path.join(PUBLIC_DIR, 'demos', htmlName)
+    ];
+    return candidates.find((candidate) => candidate && isServableFile(candidate)) || null;
+}
+
+/** Only this server's own loopback origins (e.g. a localhost:<port> page calling 127.0.0.1:<port>). */
+function isAllowedOrigin(origin) {
+    let parsed;
+    try { parsed = new URL(String(origin).toLowerCase()); } catch { return false; }
+    if (parsed.protocol !== 'http:') return false;
+    const port = parsed.port ? Number(parsed.port) : 80;
+    const address = server.address();
+    return LOOPBACK_HOSTNAMES.has(parsed.hostname) && !!address && port === address.port;
+}
+
 const server = http.createServer(async (req, res) => {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    // CORS: echo the origin only for this server's own loopback origins; any other
+    // origin gets no CORS headers, so its pages cannot read responses.
+    const origin = req.headers.origin;
+    res.setHeader('Vary', 'Origin');
+    if (origin && isAllowedOrigin(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    }
 
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -268,7 +344,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     const urlParts = req.url.split('?');
-    const reqPath = decodeURI(urlParts[0]);
+    let reqPath;
+    try {
+        reqPath = decodeURI(urlParts[0]);
+    } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('400 Malformed URL');
+        return;
+    }
 
     // Health check endpoint
     if (reqPath === '/api/geobox/health') {
@@ -858,7 +941,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && reqPath.startsWith('/api/3d/survey/jobs/')) {
         const jobId = reqPath.slice('/api/3d/survey/jobs/'.length);
         const jobFile = path.join(PUBLIC_DIR, 'tilesets', 'jobs', `${jobId}.json`);
-        if (fs.existsSync(jobFile)) {
+        if (SURVEY_JOB_ID_PATTERN.test(jobId) && fs.existsSync(jobFile)) {
             try {
                 const jobData = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -876,34 +959,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Static File Serving
-    let filePath = path.join(PUBLIC_DIR, reqPath === '/' || reqPath === '' ? 'index.html' : reqPath);
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-        const rootPath = path.join(REPO_ROOT, reqPath);
-        if (fs.existsSync(rootPath) && fs.statSync(rootPath).isFile()) {
-            filePath = rootPath;
-        } else {
-            const withHtml = filePath.endsWith('.html') ? filePath : filePath + '.html';
-            if (fs.existsSync(withHtml) && fs.statSync(withHtml).isFile()) {
-                filePath = withHtml;
-            } else {
-                const baseName = path.basename(reqPath);
-                const htmlName = baseName.endsWith('.html') ? baseName : baseName + '.html';
-                const candidates = [
-                    path.join(PUBLIC_DIR, 'demos/showcase', baseName),
-                    path.join(PUBLIC_DIR, 'demos/showcase', htmlName),
-                    path.join(PUBLIC_DIR, 'demos/experiments', baseName),
-                    path.join(PUBLIC_DIR, 'demos/experiments', htmlName),
-                    path.join(PUBLIC_DIR, 'demos', baseName),
-                    path.join(PUBLIC_DIR, 'demos', htmlName)
-                ];
-                for (const cand of candidates) {
-                    if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
-                        filePath = cand;
-                        break;
-                    }
-                }
-            }
-        }
+    const filePath = resolveStaticFile(reqPath === '/' || reqPath === '' ? 'index.html' : reqPath);
+    if (!filePath) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('404 Not Found: ' + reqPath);
+        return;
     }
 
     fs.stat(filePath, (err, stats) => {
@@ -943,9 +1003,11 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-    console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://127.0.0.1:${PORT}/`);
-    console.log(`  - Hub: http://127.0.0.1:${PORT}/index.html`);
-    console.log(`  - Showcase: http://127.0.0.1:${PORT}/model_showcase.html?model=geobox`);
-    console.log(`  - GeoBox Demo: http://127.0.0.1:${PORT}/geobox_demo.html`);
-    console.log(`  - API Resection: POST http://127.0.0.1:${PORT}/api/geobox/resect`);
+    // PORT=0 binds an ephemeral port; report the one actually bound.
+    const port = server.address().port;
+    console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://127.0.0.1:${port}/`);
+    console.log(`  - Hub: http://127.0.0.1:${port}/index.html`);
+    console.log(`  - Showcase: http://127.0.0.1:${port}/model_showcase.html?model=geobox`);
+    console.log(`  - GeoBox Demo: http://127.0.0.1:${port}/geobox_demo.html`);
+    console.log(`  - API Resection: POST http://127.0.0.1:${port}/api/geobox/resect`);
 });
