@@ -497,8 +497,22 @@ describe('tile_vegetation strip where no level paving surrounds the trees: a hil
         const x = await stripAndCheck('hill.glb', { halfSize: 30, spacing: 0.75, trees: HILL_TREES, building: HILL_BUILDING, slope: SLOPE, anchor: ANCHOR }, px => SLOPE * px);
         expectGroundRebuilt(x, HILL_TREES);
         expect(x.cs.every((c: any) => c.supportSource === 'surrounding_surface')).toBe(true);
+        // and the trees grow back standing on the slope
+        const planted = await svc.plant({ crownsPath: x.r.crownsJson, triangleBudget: 6000, seed: x.r.tileSha256.slice(0, 16) });
+        expect(planted.stats.trees).toBe(HILL_TREES.length);
+        const trees = readGlbTriangles(fs.readFileSync(planted.treesGlb));
+        for (const n of trees.nodeRanges) {
+            let lowest = Infinity, lowestX = 0;
+            for (let i = n.firstTriangle * 3; i < (n.firstTriangle + n.triangleCount) * 3; i++) {
+                const v = trees.indices[i];
+                if (trees.positions[v * 3 + 1] < lowest) { lowest = trees.positions[v * 3 + 1]; lowestX = trees.positions[v * 3]; }
+            }
+            expect(Math.abs(lowest - SLOPE * lowestX)).toBeLessThan(0.6); // the trunk base meets the ground (trunk radius on a 20 degree slope)
+        }
         fs.mkdirSync(SHOTS, { recursive: true });
-        fs.writeFileSync(path.join(SHOTS, 'synthetic_hillside_devegetated_aerial.png'), renderClayPng([{ positions: x.after.positions, indices: x.after.indices }], { kind: 'aerial', width: 960, height: 640, bearingDeg: 160, elevationDeg: 30 }));
+        const layers = [{ positions: x.after.positions, indices: x.after.indices }, { positions: trees.positions, indices: trees.indices }];
+        fs.writeFileSync(path.join(SHOTS, 'synthetic_hillside_rebuilt_aerial.png'), renderClayPng(layers, { kind: 'aerial', width: 960, height: 640, bearingDeg: 200, elevationDeg: 35 }));
+        fs.writeFileSync(path.join(SHOTS, 'synthetic_hillside_raw_aerial.png'), renderClayPng([{ positions: x.before.positions, indices: x.before.indices }], { kind: 'aerial', width: 960, height: 640, bearingDeg: 200, elevationDeg: 35 }));
     });
 
     it('measures the trees on a level lawn (green, so no paving) against the lawn', async () => {
