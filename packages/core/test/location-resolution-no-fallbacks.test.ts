@@ -26,7 +26,7 @@ import * as path from 'path';
 import { Google3DTileBlockoutPipelineService, getGoogle3DTilesClay } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import { GoogleTileDistrictCrawler } from '../src/node/spatial/GoogleTileDistrictCrawler';
 import { GeospatialTileExtractionBridge } from '../src/node/spatial/GeospatialTileExtractionBridge';
-import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
+import { NativePythonRunnerService, findWrittenGlb } from '../src/node/3d-engine/native-python-runner-service';
 import { python3DHandlers, PYTHON_3D_TOOL_DECLARATIONS } from '../src/node/gemini/tools/python-3d-tools';
 import { LocationUnresolvedError, TileExtractionError } from '../src/common/errors/pipeline-errors';
 import { GoogleMapsService, PLACES_TEXT_SEARCH_FIELD_MASK, PLACES_TEXT_SEARCH_URL } from '../src/browser/generative-canvas/services/google-maps-service';
@@ -41,6 +41,30 @@ function placesFetch(place?: Record<string, unknown>) {
         return new Response(JSON.stringify(place ? { places: [place] } : {}), { status: 200, headers: { 'content-type': 'application/json' } });
     }) as typeof fetch;
     return { impl, calls };
+}
+
+/** A minimal binary glTF: one triangle (3 vertices), or no meshes at all when `empty`. */
+function triangleGlb(empty = false): Buffer {
+    const positions = Buffer.alloc(36);
+    [0, 0, 0, 1, 0, 0, 0, 1, 0].forEach((v, i) => positions.writeFloatLE(v, i * 4));
+    const gltf = empty
+        ? { asset: { version: '2.0' }, scenes: [{ nodes: [] }], scene: 0 }
+        : {
+            asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+            meshes: [{ name: 'tri', primitives: [{ attributes: { POSITION: 0 } }] }],
+            buffers: [{ byteLength: 36 }], bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }],
+            accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }]
+        };
+    let json = Buffer.from(JSON.stringify(gltf));
+    if (json.length % 4) json = Buffer.concat([json, Buffer.alloc(4 - (json.length % 4), 0x20)]);
+    const bin = empty ? Buffer.alloc(0) : positions;
+    const chunks = [Buffer.alloc(8), json, ...(bin.length ? [Buffer.alloc(8), bin] : [])];
+    chunks[0].writeUInt32LE(json.length, 0); chunks[0].writeUInt32LE(0x4e4f534a, 4);
+    if (bin.length) { chunks[2].writeUInt32LE(bin.length, 0); chunks[2].writeUInt32LE(0x004e4942, 4); }
+    const body = Buffer.concat(chunks);
+    const header = Buffer.alloc(12);
+    header.write('glTF', 0); header.writeUInt32LE(2, 4); header.writeUInt32LE(12 + body.length, 8);
+    return Buffer.concat([header, body]);
 }
 
 const savedEnv = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
@@ -158,7 +182,7 @@ describe('Places key sources and refusals', () => {
         delete process.env.MAP_TILES_API_KEY;
     });
 
-    it('a 403 PERMISSION_DENIED tells the user to enable "Places API (New)" for that key', async () => {
+    it('a 403 PERMISSION_DENIED without a reason lists every cause, Google\'s message included', async () => {
         const refused = (async () => new Response(JSON.stringify({
             error: {
                 code: 403,
@@ -169,8 +193,24 @@ describe('Places key sources and refusals', () => {
         const err = await service.resolveAddress('Flatiron Building, New York', 'restricted-key', refused).catch(e => e);
         expect(err).toBeInstanceOf(LocationUnresolvedError);
         expect(err.message).toMatch(/HTTP 403 PERMISSION_DENIED: Requests to this API places\.googleapis\.com/);
-        expect(err.message).toMatch(/enable "Places API \(New\)" for the key's Google Cloud project/);
-        expect(err.message).toMatch(/add "Places API \(New\)" to them/);
+        // No structured reason: every cause is listed, not only the API.
+        expect(err.message).toMatch(/"Places API \(New\)" \(places\.googleapis\.com\) is enabled/);
+        expect(err.message).toMatch(/billing is enabled/);
+        expect(err.message).toMatch(/application restrictions/);
+    });
+
+    it('a 403 with Google\'s reason gives that reason\'s fix (a referrer-restricted key is not told to enable the API)', async () => {
+        const refusal = (reason: string, message: string) => (async () => new Response(JSON.stringify({
+            error: { code: 403, message, status: 'PERMISSION_DENIED', details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason, domain: 'googleapis.com' }] }
+        }), { status: 403 })) as typeof fetch;
+        const referrer = await service.resolveAddress('Flatiron Building, New York', 'k', refusal('API_KEY_HTTP_REFERRER_BLOCKED', 'Requests from referer <empty> are blocked.')).catch(e => e);
+        expect(referrer.message).toMatch(/Requests from referer <empty> are blocked/);
+        expect(referrer.message).toMatch(/API_KEY_HTTP_REFERRER_BLOCKED.*only allows certain websites/);
+        expect(referrer.message).not.toMatch(/enable "Places API/);
+        const disabled = await service.resolveAddress('Flatiron Building, New York', 'k', refusal('SERVICE_DISABLED', 'Places API (New) has not been used in project 1 before or it is disabled.')).catch(e => e);
+        expect(disabled.message).toMatch(/enable "Places API \(New\)" \(places\.googleapis\.com\) in the key's Google Cloud project/);
+        const billing = await service.resolveAddress('Flatiron Building, New York', 'k', refusal('BILLING_DISABLED', 'This API method requires billing to be enabled.')).catch(e => e);
+        expect(billing.message).toMatch(/enable billing/);
     });
 });
 
@@ -200,6 +240,34 @@ describe('fetch3DObject: the leaf crawler or a typed failure, never the headless
         expect(err).toBeInstanceOf(TileExtractionError);
         expect(err.message).toMatch(/no Photorealistic 3D Tiles coverage at 40\.741100, -73\.989700/);
         expect(runSpy).not.toHaveBeenCalled();
+    });
+
+    it('two places Google names alike are written to different files (no overwrite by display name)', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-same-name-'));
+        const savedRoot = process.env.SCRATCHBOX_ROOT;
+        process.env.SCRATCHBOX_ROOT = root;
+        try {
+            vi.spyOn(GoogleTileDistrictCrawler.prototype, 'collectLeafTiles').mockResolvedValue({ leaves: [{ uri: 'leaf', box: [] } as any], session: null, requests: 1, excludedCoarseLeaves: 0 });
+            vi.spyOn(GoogleTileDistrictCrawler.prototype, 'downloadLeaves').mockResolvedValue([Buffer.from('leaf')]);
+            vi.spyOn(GoogleTileDistrictCrawler, 'parseLeafGlbPrimitives').mockReturnValue([]);
+            let call = 0;
+            vi.spyOn(GoogleTileDistrictCrawler, 'buildDistrictGlb').mockImplementation(() => ({
+                glb: Buffer.from(`glTF-district-${++call}`), originEllipsoidalHeightM: 10, vertexCount: 3, triangleCount: 1,
+                boundsLocal: { min: [0, 0, 0], max: [1, 1, 1] }, localToEcef: []
+            }) as any);
+            const ny = placesFetch({ displayName: { text: 'Park Avenue' }, formattedAddress: 'Park Ave, New York, NY, USA', location: { latitude: 40.743077, longitude: -73.983166 } });
+            const fl = placesFetch({ displayName: { text: 'Park Avenue' }, formattedAddress: 'Park Ave, Winter Park, FL 32789, USA', location: { latitude: 28.5975, longitude: -81.3509 } });
+            const first = await getGoogle3DTilesClay('Park Avenue, New York', { apiKey: 'k', fetchImpl: ny.impl });
+            const second = await getGoogle3DTilesClay('Park Avenue, Winter Park, Florida', { apiKey: 'k', fetchImpl: fl.impl });
+            expect(first.glbPath).not.toBe(second.glbPath);
+            expect(path.basename(first.glbPath)).toBe('park_avenue_40.74308_-73.98317_r250_clay.glb');
+            expect(path.basename(second.glbPath)).toBe('park_avenue_28.59750_-81.35090_r250_clay.glb');
+            expect(fs.readFileSync(first.glbPath).toString()).toBe('glTF-district-1');
+            expect(fs.readFileSync(second.glbPath).toString()).toBe('glTF-district-2');
+        } finally {
+            if (savedRoot === undefined) delete process.env.SCRATCHBOX_ROOT; else process.env.SCRATCHBOX_ROOT = savedRoot;
+            fs.rmSync(root, { recursive: true, force: true });
+        }
     });
 
     it('without a Maps key it throws instead of switching to the blockout runner', async () => {
@@ -262,7 +330,7 @@ describe('execute_3d_python_script: a requested place is extracted or the call f
 
     it('never detects a location from the description', async () => {
         const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
-        vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 1 } as any);
+        vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 1, glbBase64: triangleGlb().toString('base64') } as any);
         const outcome = await python3DHandlers.execute_3d_python_script(
             { script, description: 'Race car staged in Central Park, New York at 40.7829, -73.9654', stageIntoActiveScene: true },
             { request: { canvasState: { activeArtifact: { type: '3d-scene', data: { geoAnchor: { lat: 41.89, lng: 12.49 }, objects: [{ id: 'old-tiles', content: { metadata: { role: 'environment', source: 'google_3d_tiles_clay' } } }] } } } } }
@@ -276,6 +344,80 @@ describe('execute_3d_python_script: a requested place is extracted or the call f
         expect(data.geoAnchor).toBeUndefined();
         expect(data.groundTileMode).toBeUndefined();
         expect(data.objects.some((o: any) => o.id === 'old-tiles')).toBe(false);
+    });
+});
+
+describe('execute_3d_python_script: reports only the model the script actually wrote', () => {
+    const script = 'import scratchbox as sb\nprint("done")';
+
+    it('a script that writes no GLB fails with no artifact (it used to report "Successfully generated" with 0 objects)', async () => {
+        vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: 'done', stderr: '', exitCode: 0, executionTimeMs: 5 } as any);
+        const outcome = await python3DHandlers.execute_3d_python_script({ script, description: 'A cliff village' });
+        expect(outcome.status).toBe('failed');
+        const payload = outcome.resultPayload as any;
+        expect(payload.artifact).toBeUndefined();
+        expect(payload.glbGenerated).toBe(false);
+        expect(outcome.summaryResult).toMatch(/wrote no GLB/);
+        expect(outcome.summaryResult).not.toMatch(/Successfully generated/);
+    });
+
+    it('a GLB with no geometry fails too', async () => {
+        vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 5, glbBase64: triangleGlb(true).toString('base64') } as any);
+        const outcome = await python3DHandlers.execute_3d_python_script({ script, description: 'Nothing' });
+        expect(outcome.status).toBe('failed');
+        expect(outcome.summaryResult).toMatch(/has no geometry/);
+    });
+
+    it('a GLB with geometry completes and reports its vertex count', async () => {
+        vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 5, glbBase64: triangleGlb().toString('base64') } as any);
+        const outcome = await python3DHandlers.execute_3d_python_script({ script, description: 'Triangle' });
+        expect(outcome.status).toBe('completed');
+        expect((outcome.resultPayload as any).vertexCount).toBe(3);
+        expect(outcome.summaryResult).toMatch(/3 vertices/);
+    });
+
+    it('blank optional coordinates ([], {}, "", [null, null], null) run the script unstaged', async () => {
+        const extractSpy = vi.spyOn(GeospatialTileExtractionBridge.prototype, 'ingestAndExtract');
+        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0, executionTimeMs: 1, glbBase64: triangleGlb().toString('base64') } as any);
+        for (const coordinates of [[], {}, '', '   ', [null, null], null, { lat: null, lng: null }]) {
+            const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates, description: 'Car' });
+            expect(outcome.status, JSON.stringify(coordinates)).toBe('completed');
+        }
+        expect(runSpy).toHaveBeenCalledTimes(7);
+        expect(extractSpy).not.toHaveBeenCalled();
+    });
+
+    it('partial or malformed coordinates fail with a precise error and the script is not run', async () => {
+        const runSpy = vi.spyOn(NativePythonRunnerService.prototype, 'runScript');
+        for (const coordinates of [[40.7], ['a', 'b'], [1, 2, 3, 4], { lat: 40.7 }, 'not coordinates']) {
+            const outcome = await python3DHandlers.execute_3d_python_script({ script, coordinates, description: 'Car' });
+            expect(outcome.status, JSON.stringify(coordinates)).toBe('failed');
+            expect(outcome.summaryResult).toMatch(/coordinates must be \[latitude, longitude\]/);
+            expect(outcome.summaryResult).not.toMatch(/NaN/);
+        }
+        expect(runSpy).not.toHaveBeenCalled();
+    });
+
+    it('describes sb.geospatial.load_location() as paths only, not as the place\'s geometry', () => {
+        const decl = PYTHON_3D_TOOL_DECLARATIONS.find(d => d.name === 'execute_3d_python_script')!;
+        expect(decl.description).toMatch(/does not get the tiles' geometry: sb\.geospatial\.load_location\(\) returns only/);
+        expect(decl.description).not.toMatch(/reads the real geometry of a place/);
+    });
+
+    it('the runner never reports a previous run\'s output.glb as this run\'s model', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-stale-glb-'));
+        try {
+            const stale = path.join(dir, 'output.glb');
+            fs.writeFileSync(stale, triangleGlb());
+            const old = new Date(Date.now() - 60_000);
+            fs.utimesSync(stale, old, old);
+            const startTime = Date.now();
+            expect(findWrittenGlb(path.join(dir, 'scene_1.glb'), path.join(dir, 'scene_1.py'), dir, startTime)).toBeUndefined();
+            fs.writeFileSync(stale, triangleGlb()); // rewritten by this run
+            expect(findWrittenGlb(path.join(dir, 'scene_1.glb'), path.join(dir, 'scene_1.py'), dir, startTime)).toBe(stale);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 });
 
