@@ -527,11 +527,6 @@ export async function ensureStationPng(image: Buffer): Promise<Buffer> {
     }
 }
 
-/** True when a Gemini API key is set in the environment (stored or Vertex credentials are resolved when a generator runs). */
-export function hasStationImageCredentials(): boolean {
-    return !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
-}
-
 /**
  * Resolves the image model's credentials the way the default generator will (a Gemini API key from the environment
  * or the one saved in Settings, else Vertex AI credentials), without calling any model, and throws MissingInputError

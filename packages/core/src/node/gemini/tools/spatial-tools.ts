@@ -1636,7 +1636,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 mood: { type: 'STRING', description: 'Diurnal lighting mood ("dawn", "golden-hour", "midday", "dusk", "night").' },
                 cameraCount: { type: 'NUMBER', description: 'Number of survey camera stations (default: 6-12).' },
                 outDir: { type: 'STRING', description: 'Output directory for splat and tileset files.' },
-                forceRebake: { type: 'BOOLEAN', description: 'Force re-baking even if cached splats exist.' },
+                forceRebake: { type: 'BOOLEAN', description: 'Default true: the image model paints every station image. false reuses station images (and the splats baked from them) already in outDir once each passes geometry QC against the mesh again; a station without a usable image is still painted by the image model.' },
                 draft: { type: 'BOOLEAN', description: 'Fast draft mode (Nano Banana Lite, 1K resolution, empty style suffix for later prompt customization).' },
                 styleSuffix: { type: 'STRING', description: 'Optional style suffix to append to prompt. Leave empty to allow prompt entry later.' }
             },

@@ -241,8 +241,9 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     // The real Google 3D Tiles capture, passed explicitly: the service never picks a GLB by name.
     const service = new Location3DGaussianSplatService({ workspaceRoot });
 
-    // No generator and no image-model credentials: with forceRebake: false the service builds no image generator,
-    // so every station must bake from its cached plate. A station without one fails the run (success: false).
+    // No generator and no image-model credentials: with forceRebake: false the default image model resolves its
+    // credentials only when a station needs a new image, so every station here bakes from its cached plate and no
+    // credential is asked for. A station without a usable plate would fail the run with the credential error.
     const result = await withoutStationImageCredentials(() => service.generate({
       location: 'Red Rocks Amphitheatre',
       glbPath: path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb'),

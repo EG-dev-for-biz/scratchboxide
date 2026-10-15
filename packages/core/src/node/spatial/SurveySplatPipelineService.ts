@@ -14,7 +14,7 @@ import { promisify } from 'util';
 import { SurveySynthesisEngine, cameraBasis } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH } from './SurveyStationRenderService';
-import { BeautifyStationService, createDefaultStationImageGenerator, describeStationImageSource, hasStationImageCredentials, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { BeautifyStationService, createDefaultStationImageGenerator, describeStationImageSource, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { Splat3DTilesService } from './Splat3DTilesService';
 import { SplatService } from '../3d-engine/splat-service';
@@ -164,10 +164,11 @@ export class SurveySplatPipelineService {
     private compiler = new NativeCppCompilerService();
     private bakerPath = path.resolve(process.cwd(), 'build/station_to_splats');
 
-    constructor(private deps?: { generator?: StationImageGenerator }) {
-        if (!this.deps?.generator && hasStationImageCredentials()) {
-            this.deps = { ...this.deps, generator: createDefaultStationImageGenerator() };
-        }
+    /** The caller's generator, else the default image model, which resolves its credentials only when a station needs a new image. */
+    private readonly generator: StationImageGenerator;
+
+    constructor(deps?: { generator?: StationImageGenerator }) {
+        this.generator = deps?.generator ?? createDefaultStationImageGenerator();
     }
 
     async ensureBaker(signal?: AbortSignal): Promise<string> {
@@ -205,7 +206,9 @@ export class SurveySplatPipelineService {
             const mode = req.mode ?? 'chained';
             const width = req.renderWidth ?? 1920;
             const baker = await this.ensureBaker(signal);
-            const beautifier = this.deps?.generator ? new BeautifyStationService(renderer, this.deps.generator) : null;
+            const beautifier = new BeautifyStationService(renderer, this.generator);
+            // Whether this run asked the generator for any image; a run that only reused plates names no generator.
+            let generatedAny = false;
 
             const reports: SurveySplatStationReport[] = [];
             const bakedStations: { splatPath: string; station: ColmapCameraPose }[] = [];
@@ -269,25 +272,15 @@ export class SurveySplatPipelineService {
                         };
                         reuseNote = `Reused the beautified plate already on disk at ${beautifiedPath} after it passed geometry QC again (${pctOf(verified.qc)}); no image was generated.`;
                     } else {
-                        // Moved aside with the splat baked from it, so no later run takes it for an accepted plate.
+                        // Moved aside with the splat baked from it, so no later run takes it for an accepted plate;
+                        // the station is painted afresh below.
                         await fs.move(beautifiedPath, rejectedPath, { overwrite: true });
                         await Promise.all([fs.remove(splatPath), fs.remove(posePath)]);
-                        if (!beautifier) {
-                            reports.push({
-                                stationId: st.id, accepted: false, attempts: 0, usedReference: false, splatCount: 0,
-                                imagePath: rejectedPath, blockoutPath, qc: verified.qc, prompt: `Photorealistic view of station ${st.id}`,
-                                positionLocalENU: st.positionLocalENU, forwardVector: st.forwardVector, name: st.name,
-                                imageSource: `The beautified plate on disk failed geometry QC (${pctOf(verified.qc)}) and was moved to ${rejectedPath}; no image generator was supplied to make a new one.`
-                            });
-                            continue;
-                        }
                     }
                 }
 
                 if (!res) {
-                    if (!beautifier) {
-                        throw new Error(`Cannot beautify station ${st.id}: no StationImageGenerator was supplied and no cached plate exists on disk at ${beautifiedPath}`);
-                    }
+                    generatedAny = true;
                     report(0.05 + 0.7 * (i / stations.length), `Beautifying station ${st.id} (${i + 1}/${stations.length})`);
                     const stationRenderMode = req.renderMode ?? (req.renderProvider === 'pathtracer' ? 'albedo' : 'clay');
                     res = await beautifier.beautify(st, req.beautify, {
@@ -384,7 +377,7 @@ export class SurveySplatPipelineService {
                 ] as [number, number, number]
             };
             const meta = {
-                generator: this.deps?.generator?.name || 'cached-beautified-plates',
+                generator: generatedAny ? this.generator.name : 'cached-beautified-plates',
                 modelsUsed: Array.from(new Set(reports.map(r => r.modelUsed).filter((m): m is string => !!m))),
                 mode, anchor: req.anchor, glbPath: req.glbPath,
                 eyeHeight: stations[0]?.cameraHeightAboveGround ?? 1.7,

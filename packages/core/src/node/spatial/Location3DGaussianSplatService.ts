@@ -14,7 +14,6 @@ import { GeneratorFailedError, MissingInputError, TileExtractionError } from '..
 import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngine';
 import {
     createDefaultStationImageGenerator,
-    hasStationImageCredentials,
     requireStationImageCredentials,
     type StationImageGenerator
 } from './BeautifyStationService';
@@ -222,13 +221,13 @@ export class Location3DGaussianSplatService {
         // 2. Resolve the image generator (Nano Banana / Google media generation). There is no stand-in: an injected
         //    generator is the only other source, and every result says which model made the station images.
         let generator = req.generator;
-        if (!generator && (req.forceRebake !== false || hasStationImageCredentials())) {
-            // Every plate is painted unless cached plates may be reused, so then the image model is required: its
-            // credentials (an environment or saved API key, or Vertex AI) are resolved here, and a missing one fails
-            // before any station is rendered. With forceRebake: false and no key in the environment no generator is
-            // built: cached plates are reused after geometry QC, and a station without one fails the pipeline, naming
-            // the station and the missing plate.
-            await requireStationImageCredentials('location_generate_3dgs');
+        if (!generator) {
+            // When every plate is painted (forceRebake not false), the image model's credentials (an environment or
+            // saved API key, or Vertex AI) are resolved here, and a missing one fails before any station is rendered.
+            // With forceRebake: false the generator is still built but resolves its credentials only when a station
+            // needs a new image: cached plates that pass geometry QC are reused without asking for keys, and a station
+            // without a usable plate is painted, or fails with the credential error.
+            if (req.forceRebake !== false) await requireStationImageCredentials('location_generate_3dgs');
             const isDraftGenerator = req.draft === true || req.fidelity === 'draft';
             generator = createDefaultStationImageGenerator({
                 workspaceRoot: root,
