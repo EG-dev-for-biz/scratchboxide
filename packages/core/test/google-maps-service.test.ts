@@ -226,6 +226,8 @@ async function runGoogleMapsServiceTests() {
     assert.strictEqual(tilesConfig.center.lat, 37.7900, '3D Tiles center lat matches input');
     assert.strictEqual(tilesConfig.center.lng, -122.4000, '3D Tiles center lng matches input');
     assert.strictEqual(tilesConfig.center.elevation, 15.2, '3D Tiles center elevation matches input');
+    const noElevation = service.getPhotorealistic3DTilesConfig({ lat: 37.79, lng: -122.4 });
+    assert.strictEqual(noElevation.center.elevation, undefined, 'an unknown elevation stays unknown (it used to become 0 m)');
     assert.strictEqual(tilesConfig.apiKey, testKey, '3D Tiles apiKey matches configured key');
     assert.ok(tilesConfig.defaultCamera.range > 0, '3D Tiles default camera range is positive');
 

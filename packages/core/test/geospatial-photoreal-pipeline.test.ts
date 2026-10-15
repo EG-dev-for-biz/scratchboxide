@@ -21,6 +21,10 @@ test('Google3DTileService never synthesizes a tile: the viewport ingest fails vi
   expect(tileModule.generateGeospatialCpp3DSource).toBeUndefined();
   expect(tileModule.GeospatialPhotorealPipeline).toBeUndefined();
   expect((service as any).ingestTileRegionSync).toBeUndefined();
+  // They turned any box into a spired setback tower and reported constants as measurements (6400 "carved" window
+  // bays, a 0.22 m -> 0.003 m planar deviation, 114.6° -> 90° corners) whatever the input.
+  expect((service as any).improveTileExtrusion).toBeUndefined();
+  expect((service as any).cleanTileMeshAndApplyPbrTextures).toBeUndefined();
 });
 
 test('GoogleMapsService: Multi-source geospatial endpoints (Aerial View, Solar, Street View)', async () => {
@@ -80,76 +84,3 @@ test('GoogleMapsService: Multi-source geospatial endpoints (Aerial View, Solar, 
     fetchImpl: (async () => new Response(JSON.stringify({ error: { message: 'Requested entity was not found.' } }), { status: 404 })) as typeof fetch
   })).rejects.toThrow(/Solar API gave no building insights.*not found/);
 });
-
-test('Google3DTileService: improveTileExtrusion converts raw tile block into photoreal mesh', () => {
-  const service = Google3DTileService.getInstance();
-
-  const rawExtrusion = {
-    width: 129.2,
-    depth: 59.7,
-    height: 381.0,
-    landmarkName: 'Empire State Building'
-  };
-
-  const result = service.improveTileExtrusion(rawExtrusion, {
-    recessDepthMeters: 0.28,
-    entranceArchHeightMeters: 12.4,
-    generateSpire: true
-  });
-
-  expect(result.rawGeometry).toBeDefined();
-  expect(result.improvedGeometry).toBeDefined();
-
-  // Verify dramatic geometric density and architectural improvements
-  expect(result.metrics.rawVertexCount).toBeLessThan(100);
-  expect(result.metrics.improvedVertexCount).toBeGreaterThan(100);
-  expect(result.metrics.carvedWindowBays).toBe(6400);
-  expect(result.metrics.facadeRecessDepthMeters).toBe(0.28);
-  expect(result.metrics.plinthHeightMeters).toBe(1.8);
-  expect(result.metrics.entranceArchHeightMeters).toBe(12.4);
-  expect(result.metrics.pbrMaterialSetsAssigned).toBe(8);
-  expect(result.metrics.spireApexElevMeters).toBeGreaterThan(381.0);
-});
-
-test('Google3DTileService: cleanTileMeshAndApplyPbrTextures eliminates artifacts and applies 2K PBR', async () => {
-  const service = Google3DTileService.getInstance();
-  const THREE = await import('three');
-
-  // Create a simulated raw photogrammetric tile mesh with sensor noise
-  const rawGeom = new THREE.BoxGeometry(129.2, 381.0, 57.0, 10, 20, 10);
-  const pos = rawGeom.getAttribute('position') as THREE.BufferAttribute;
-
-  // Add simulated sensor rippling (+/- 0.22m)
-  for (let i = 0; i < pos.count; i++) {
-    const y = pos.getY(i);
-    const ripple = Math.sin(y * 0.3) * 0.22;
-    pos.setX(i, pos.getX(i) + ripple);
-  }
-  pos.needsUpdate = true;
-  rawGeom.computeVertexNormals();
-
-  const cleanupResult = service.cleanTileMeshAndApplyPbrTextures(rawGeom, {
-    groundDatumY: 0.0,
-    plinthHeightMeters: 1.8,
-    facadeUvScale: 1.0
-  });
-
-  expect(cleanupResult.cleanedGeometry).toBeDefined();
-  expect(cleanupResult.pbrTexturedGeometry).toBeDefined();
-
-  // Verify metric and cleanup results
-  expect(cleanupResult.metrics.groundLeveled).toBe(true);
-  expect(cleanupResult.metrics.cornersSharpened).toBe(true);
-  expect(cleanupResult.metrics.facadesPlanarized).toBe(true);
-  expect(cleanupResult.metrics.initialPlanarDeviationMeters).toBeCloseTo(0.22, 2);
-  expect(cleanupResult.metrics.finalPlanarDeviationMeters).toBeLessThan(0.01);
-  expect(cleanupResult.metrics.initialCornerAngleDeg).toBeCloseTo(114.6, 1);
-  expect(cleanupResult.metrics.finalCornerAngleDeg).toBe(90.0);
-  expect(cleanupResult.metrics.plinthHeightMeters).toBe(1.8);
-
-  // Verify metric UV unwrapping
-  const uvs = cleanupResult.pbrTexturedGeometry.getAttribute('uv');
-  expect(uvs).toBeDefined();
-  expect(uvs.count).toBe(rawGeom.getAttribute('position').count);
-});
-

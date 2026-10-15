@@ -357,7 +357,6 @@ Over 60 real-time operators executed via `DirectDispatchOperatorEngine` in `pack
 - `sb_repair_mesh`: Manifold healing and duplicate vertex welding.
 - `sb_reshape_mesh`: Native C++ Astro engine deformation hook.
 - `sb_add_mesh`: Injects standard primitives (box, cylinder, sphere, torus).
-- `sb_import_3d_tile`: Ingests and mounts 3D tile submeshes.
 
 ### Particle & Physical Simulation Operators
 - `sb_spawn_particle_emitter`: Spawns GPU particle systems.

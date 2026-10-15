@@ -717,10 +717,11 @@ export class GoogleMapsService {
         return {
             rootTilesetUrl: `https://tile.googleapis.com/v1/3dtiles/root.json?key=${encodeURIComponent(key || '')}`,
             apiKey: key,
+            // The elevation only when the caller knows it: 0 m is not a default ground height.
             center: {
                 lat: center.lat,
                 lng: center.lng,
-                elevation: center.elevation || 0
+                ...(typeof center.elevation === 'number' && Number.isFinite(center.elevation) ? { elevation: center.elevation } : {})
             },
             defaultCamera: {
                 heading: 0,
