@@ -21,6 +21,7 @@ import { StudioSettingsTab, UserMemoryCategory } from '../canvas-types';
 import { GeminiClient } from '../gemini-client';
 import { GoogleDriveService } from '../google-drive-service';
 import { GoogleMapsService } from '../services/google-maps-service';
+import { syncSavedMapsKeyToServer } from './maps-key-sync';
 import { UserMemoriesClient } from '../user-memories-client';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 import { SettingsSetters, SettingsState } from './settingsReducer';
@@ -97,11 +98,20 @@ export function useSettingsHandlers(deps: UseSettingsHandlersDeps) {
         const unsubscribeGdrive = GoogleDriveService.getInstance().subscribe(state => {
             setGdriveState(state);
         });
+        // The input starts from the saved key; later state changes (a test lookup, a status update) must not
+        // overwrite what the user is typing.
+        setMapsKeyInput(GoogleMapsService.getInstance().getApiKey());
         const unsubscribeMaps = GoogleMapsService.getInstance().subscribe(state => {
             setMapsState(state);
-            setMapsKeyInput(state.apiKey);
+        });
+        // This runs when the studio mounts (the modal is mounted closed). A key Settings saved before the server kept
+        // one lives only in this window: send it, so chat place lookups and 3D Tiles use it too.
+        let disposed = false;
+        syncSavedMapsKeyToServer(GoogleMapsService.getInstance().getStoredSettingsKey()).then(problem => {
+            if (problem && !disposed) setMapsFeedback({ message: problem, error: true });
         });
         return () => {
+            disposed = true;
             unsubscribeGdrive();
             unsubscribeMaps();
         };
@@ -162,22 +172,46 @@ export function useSettingsHandlers(deps: UseSettingsHandlersDeps) {
         }
     };
 
-    const handleSaveMapsKey = () => {
+    const handleSaveMapsKey = async () => {
         const trimmed = mapsKeyInput.trim();
         GoogleMapsService.getInstance().setApiKey(trimmed);
-        if (trimmed) {
-            setMapsFeedback({ message: 'Google Maps API key saved successfully.' });
-        } else {
-            setMapsFeedback({ message: 'Google Maps API key cleared. Running in procedural fallback mode.' });
+        // The chat tools that look places up and fetch 3D Tiles run on the server: the key must reach it too.
+        let serverError: string | undefined;
+        let serverHasKey = false;
+        try {
+            const res = await fetch('/api/geo/maps-key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ apiKey: trimmed })
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                serverError = body?.error || `HTTP ${res.status}`;
+            } else {
+                serverHasKey = body?.configured === true;
+            }
+        } catch (err: any) {
+            serverError = err?.message || String(err);
         }
-        setTimeout(() => setMapsFeedback(null), 3500);
+        if (serverError) {
+            setMapsFeedback({ message: `${trimmed ? 'Saved' : 'Cleared'} in this window only: the server did not take the change (${serverError}), so chat place lookups and 3D Tiles do not follow it.`, error: true });
+        } else if (trimmed) {
+            setMapsFeedback({ message: 'Google Maps API key saved (Settings and the chat tools use it).' });
+        } else if (serverHasKey) {
+            setMapsFeedback({ message: 'Settings key cleared. The chat tools now use the Maps key from the server\'s environment or secrets file.' });
+        } else {
+            setMapsFeedback({ message: 'Google Maps API key cleared. Place lookups (Places API (New)) and Google 3D Tiles need a key.' });
+        }
+        setTimeout(() => setMapsFeedback(null), serverError ? 8000 : 3500);
     };
 
     const handleTestMapsKey = async () => {
         setIsTestingMapsKey(true);
         setMapsFeedback(null);
         try {
-            const res = await GoogleMapsService.getInstance().geocode('San Francisco Ferry Building');
+            // Tests the key in the input box (not necessarily the saved one).
+            const typedKey = mapsKeyInput.trim();
+            const res = await GoogleMapsService.getInstance().geocode('San Francisco Ferry Building', typedKey ? { apiKey: typedKey } : {});
             if (res && typeof res.lat === 'number') {
                 setMapsFeedback({ message: `✓ Validated! Resolved "${res.formattedAddress}" (${res.lat.toFixed(4)}°, ${res.lng.toFixed(4)}°)` });
             } else {

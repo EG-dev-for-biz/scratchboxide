@@ -368,7 +368,9 @@ describe('Universal COLMAP Vector Reference Pipeline (Zero Presets)', () => {
       expect(result.clayObject!.meshStats.vertexCount).toBeGreaterThan(0);
       expect(result.clayObject!.meshStats.triangleCount).toBeGreaterThan(0);
       expect(result.clayObject!.quality.errorTarget).toBe(0.5);
-      expect(result.clayObject!.quality.resolution).toBe('4K (3840x2160)');
+      // offlineMock is the test-only synthetic tile: its quality report says so instead of claiming 4K Google tiles.
+      expect(result.clayObject!.quality.source).toMatch(/offline mock/);
+      expect(result.clayObject!.quality.resolution).toBeUndefined();
       expect(result.exportedFilePaths?.clayGlb).toBeDefined();
       expect(fs.existsSync(result.clayObject!.glbPath)).toBe(true);
 

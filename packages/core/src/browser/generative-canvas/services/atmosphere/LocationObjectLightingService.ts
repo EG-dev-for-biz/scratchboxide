@@ -11,6 +11,8 @@ import * as THREE from 'three';
 import { kelvinToRGB } from './kelvin';
 import { calculateNOAASolarPosition, getSunVectorFromAngles } from './solar-position';
 import { classifyDiurnalPhase } from './diurnal-lighting';
+import { MissingInputError } from '../../../../common/errors/pipeline-errors';
+import { assertUsableCoordinates } from '../../../../common/coordinate/parse-coordinates';
 
 export type StoneType = 'travertine' | 'limestone' | 'sandstone' | 'granite' | 'terracotta' | 'marble' | 'concrete' | 'neutral' | 'asphalt' | 'brick' | 'glass_metal';
 
@@ -95,6 +97,9 @@ export interface LocationObjectAtmosphereResult {
     landmarkContext?: {
         name: string;
         coordinates?: { lat: number; lng: number };
+        /** The instant the sun was computed for; isoDateAssumed when the request gave none. */
+        isoDate?: string;
+        isoDateAssumed?: boolean;
     };
 }
 
@@ -223,37 +228,17 @@ export class LocationObjectLightingService {
         const stoneType: StoneType = request.stoneType || 'travertine';
         const stoneAlbedo = STONE_ALBEDO_PROFILES[stoneType] || STONE_ALBEDO_PROFILES.travertine;
 
-        // Resolve geographic coordinates & solar ephemeris if supplied
-        let lat = request.latitude;
-        let lng = request.longitude;
-        let isoDate = request.isoDate || '2026-06-21T18:45:00Z'; // Civil twilight dusk default
-
-        if (lat === undefined || lng === undefined) {
-            if (request.landmarkName) {
-                // Check for coordinate regex in landmarkName
-                const coordMatch = request.landmarkName.match(/([-+]?\d{1,2}\.\d+)[,\s]+([-+]?\d{1,3}\.\d+)/);
-                if (coordMatch) {
-                    lat = parseFloat(coordMatch[1]);
-                    lng = parseFloat(coordMatch[2]);
-                } else {
-                    const lower = request.landmarkName.toLowerCase();
-                    if (lower.includes('colosseum') || lower.includes('rome')) {
-                        lat = 41.8902; lng = 12.4922;
-                    } else if (lower.includes('eiffel') || lower.includes('paris')) {
-                        lat = 48.8584; lng = 2.2945;
-                    } else if (lower.includes('sydney') || lower.includes('opera')) {
-                        lat = -33.8568; lng = 151.2153;
-                    } else if (lower.includes('brandenburg') || lower.includes('berlin')) {
-                        lat = 52.5163; lng = 13.3777;
-                    } else if (lower.includes('statue') || lower.includes('liberty')) {
-                        lat = 40.6892; lng = -74.0445;
-                    }
-                }
-            }
+        // The sun is computed for the coordinates given. A place name is never matched against a table or scanned
+        // for numbers here, and there is no default latitude: resolve the place first (the tool handlers do this
+        // with Google Places) or pass latitude/longitude.
+        const lat = request.latitude;
+        const lng = request.longitude;
+        if (typeof lat !== 'number' || typeof lng !== 'number') {
+            throw new MissingInputError('geobox_harmonize_location_lighting', 'latitude and longitude', `the sun position needs the place's coordinates${request.landmarkName ? ` (resolve "${request.landmarkName}" first)` : ''}; no default location is used`);
         }
-        // Neutral temperate mid-latitude if unspecified, avoiding Rome preset trap
-        if (lat === undefined) lat = 45.0;
-        if (lng === undefined) lng = 0.0;
+        assertUsableCoordinates(lat, lng, `${lat}, ${lng}`);
+        const isoDateGiven = !!request.isoDate;
+        const isoDate = request.isoDate || '2026-06-21T18:45:00Z'; // Civil twilight dusk default (reported as assumed)
 
         const dateObj = new Date(isoDate);
         const ephemeris = calculateNOAASolarPosition(dateObj, lat, lng);
@@ -263,9 +248,8 @@ export class LocationObjectLightingService {
         // Determine preset
         let preset = request.preset;
         if (!preset) {
-            if (request.imagePath && /dusk|twilight|evening|sunset/i.test(request.imagePath)) {
-                preset = 'civil_twilight_dusk';
-            } else if (ephemeris.elevationDeg < 0 && ephemeris.elevationDeg > -6.0) {
+            // From the computed sun only (words in the image's file name do not pick a preset).
+            if (ephemeris.elevationDeg < 0 && ephemeris.elevationDeg > -6.0) {
                 preset = 'civil_twilight_dusk';
             } else if (ephemeris.elevationDeg <= -6.0) {
                 preset = 'blue_hour';
@@ -412,8 +396,10 @@ export class LocationObjectLightingService {
                 fragmentShaderChunk: LOCATION_DELIGHT_FRAGMENT_CHUNK
             },
             landmarkContext: {
-                name: request.landmarkName || 'Colosseum, Rome',
-                coordinates: { lat, lng }
+                name: request.landmarkName || `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+                coordinates: { lat, lng },
+                isoDate,
+                isoDateAssumed: !isoDateGiven
             }
         };
     }

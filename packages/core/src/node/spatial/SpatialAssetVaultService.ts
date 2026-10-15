@@ -153,30 +153,9 @@ export class SpatialAssetVaultService {
    * Seed static photorealistic assets into the vault.
    */
   private seedDefaultPresetCaches(): void {
-    // 1. San Francisco Financial District real-world baseline
-    this.storeAsset(
-      'earth/main',
-      { lat: 37.7940, lng: -122.4010, alt: 15.0 },
-      {
-        type: 'map-3d-tile',
-        durableUri: 'https://tile.googleapis.com/v1/3dtiles/root.json',
-        metadata: { title: 'Google Photorealistic 3D Tiles SF' }
-      },
-      500.0
-    );
-
-    // 2. Cyberpunk restyled baked splat
-    this.storeAsset(
-      'earth/cyberpunk',
-      { lat: 37.7940, lng: -122.4010, alt: 15.0 },
-      {
-        type: 'gaussian-splat',
-        durableUri: 'vault://splats/sf_fin_district_cyberpunk.spz',
-        metadata: { pointCount: 1500000, title: 'Baked Cyberpunk Volumetric Radiance Field' }
-      },
-      150.0
-    );
-
+    // No location presets: a place's tiles are stored only when they were ingested for that place (a seeded
+    // "Google Photorealistic 3D Tiles SF" record and an SF cyberpunk splat that was never baked used to answer
+    // any query inside San Francisco).
     // 3. Trained 4DGS Humanoid Characters (Cloud Run Trained)
     this.storeAsset(
       'humanoids/2785536',

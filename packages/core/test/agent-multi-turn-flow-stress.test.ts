@@ -95,12 +95,12 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         const blockoutRes = await registry.dispatch('google_3d_tiles_clay_blockout_runner', {
             query: '41.890210, 12.492231',
             trajectoryPreset: 'cinematic_arc',
-            mockExecution: true,
+            mockExecution: true, // ignored: the model cannot switch the runner to placeholder output
             // The mock tile GLB defaults to public/models; keep it in the test workspace
             outputGlbPath: path.join(testDir, 'clay_blockout.glb')
         }, mockContext);
-        expect(blockoutRes.exec.status).toBe('completed');
-        expect((blockoutRes.resultPayload as any).videoRef).toBe('<VIDEO_REF_0>');
+        // Without a Maps key the real runner cannot measure the ground, so it fails instead of a placeholder video.
+        expect(blockoutRes.exec.status).toBe('failed');
 
         // Step 2: UTDRA Geometric Classification & Probe
         const probeRes = await registry.dispatch('utdra_probe_tile', {

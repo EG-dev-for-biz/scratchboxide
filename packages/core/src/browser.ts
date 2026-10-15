@@ -67,7 +67,6 @@ export {
     AtmosphereImageEstimationService,
     fitPlanckianKelvinTemperature,
     computeSkyAtmosphereMetrics,
-    WELL_KNOWN_ATMOSPHERE_LANDMARKS,
     LocationObjectLightingService,
     harmonizeLocationObjectAtmosphere,
     generateCanonicalAmbulatoryFixtures,

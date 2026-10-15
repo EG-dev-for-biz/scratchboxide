@@ -133,12 +133,14 @@ const aligned = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(
     { targetOverlapScore: 99.0, subpixelTolerancePx: 0.10 }
 );
 
-// 5. High-level multimodal resection
+// 5. Camera resection from stated pose evidence (the photo's pixels are not analysed here)
 const resection = await resectImageLocation({
     imagePath: 'public/test_images/my_photo.jpg',
-    promptHint: 'Urban intersection and commercial storefront',
-    optimizeTo100Percent: true
+    targetLandmarkName: 'Flatiron Building, New York', // resolved with Google Places
+    headingDeg: 210, pitchDeg: 8, standoffDistanceMeters: 180,
+    sensorFocalMm: 26.0
 });
+console.log(resection.poseSource, resection.imageAnalysed); // which evidence was used; always false
 ```
 
 ---
@@ -195,15 +197,17 @@ Executes closed-loop iterative sub-pixel edge alignment optimization by dynamica
 ```
 
 ### 4. `geobox_resect_image_location` (or `spatial_resect_image_location`)
-Resects 6-DOF camera optical center $(\text{lat}_{\text{cam}}, \text{lng}_{\text{cam}}, \text{alt}_{\text{cam}})$, 3-axis attitude, standoff distance, FOV, 100% sub-pixel edge alignment, and Google Maps 3D Platform tiles configuration from an input photograph or video:
+Computes the camera optical center $(\text{lat}_{\text{cam}}, \text{lng}_{\text{cam}}, \text{alt}_{\text{cam}})$, attitude, standoff distance, FOV, view frustum and Google Maps 3D Platform tiles camera configuration for a photograph or video frame from pose evidence you supply. It does not analyse the photo's pixels and runs no edge alignment (use `geobox_optimize_edge_alignment` for that, which reports the correlation it measured). What the photo shows comes from `targetCoords`, or from `targetLandmarkName` (else `promptHint`) resolved with Google Places. The pose needs one of: 2D-3D point correspondences (`points2D`/`points3D` with `imageWidthPx`/`imageHeightPx`), the camera position (`cameraOpticalCenter` or `knownCoords`, with `alt`), or `headingDeg` with `pitchDeg` and `standoffDistanceMeters`. Missing evidence is an error, and the result's `poseSource` names the evidence used:
 ```json
 {
   "name": "geobox_resect_image_location",
   "parameters": {
     "imagePath": "public/test_images/urban_scene.jpg",
-    "promptHint": "Urban street corner storefront",
-    "sensorFocalMm": 26.0,
-    "optimizeTo100Percent": true
+    "targetLandmarkName": "Flatiron Building, New York",
+    "headingDeg": 210,
+    "pitchDeg": 8,
+    "standoffDistanceMeters": 180,
+    "sensorFocalMm": 26.0
   }
 }
 ```

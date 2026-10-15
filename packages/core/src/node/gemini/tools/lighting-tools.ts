@@ -26,6 +26,21 @@ function asNumber(val: unknown, fallback: number): number {
     return typeof val === 'number' && !isNaN(val) ? val : fallback;
 }
 
+function asVec3(val: unknown): [number, number, number] | undefined {
+    return Array.isArray(val) && val.length === 3 && val.every(v => typeof v === 'number' && Number.isFinite(v))
+        ? [val[0], val[1], val[2]]
+        : undefined;
+}
+
+/** { lat, lng, alt } as declared, or { lat, lng, altitudeMeters }; undefined when not given. */
+function asGeodetic(val: unknown): { lat: number; lng: number; altitudeMeters?: number } | undefined {
+    if (!val || typeof val !== 'object') return undefined;
+    const v = val as Record<string, unknown>;
+    if (typeof v.lat !== 'number' || typeof v.lng !== 'number') return undefined;
+    const alt = typeof v.alt === 'number' ? v.alt : typeof v.altitudeMeters === 'number' ? v.altitudeMeters : undefined;
+    return { lat: v.lat, lng: v.lng, ...(alt !== undefined ? { altitudeMeters: alt } : {}) };
+}
+
 export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'lighting_estimate_from_photo',
@@ -198,7 +213,7 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'lighting_match_image_to_location',
-        description: 'Matches both physical scene lighting (sun angle, Kelvin temperature, sky ambient) and 6-DOF camera pose from a provided image AFTER a 3D location match has been established.',
+        description: 'Matches physical scene lighting (sun angle, Kelvin temperature, sky ambient) to a reference photograph taken at a location. The location is geodeticCoords, or locationName resolved with Google Places. The camera pose is not estimated from the photograph: pass cameraPosition and cameraTarget when they are known (for example from geobox_resect_camera_pose); without them the lighting is reported in the camera\'s own frame.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -219,9 +234,19 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     },
                     description: 'Optional geodetic coordinates of the matched location.'
                 },
-                autoAlignCamera: {
-                    type: 'BOOLEAN',
-                    description: 'Whether to resect and align camera pose to the image (default: true).'
+                cameraPosition: {
+                    type: 'ARRAY',
+                    items: { type: 'NUMBER' },
+                    description: 'Optional camera position [x, y, z] in the scene (metres, Y up, -Z north).'
+                },
+                cameraTarget: {
+                    type: 'ARRAY',
+                    items: { type: 'NUMBER' },
+                    description: 'Optional point [x, y, z] the camera looks at; required with cameraPosition.'
+                },
+                fovDeg: {
+                    type: 'NUMBER',
+                    description: 'Optional camera field of view in degrees (default 54) when cameraPosition is given.'
                 },
                 stoneType: {
                     type: 'STRING',
@@ -386,8 +411,10 @@ export const lightingHandlers: Record<string, ToolHandler> = {
         const result = await matchImageAndLightingToLocation({
             imagePath,
             locationName: asString(args.locationName) || undefined,
-            geodeticCoords: args.geodeticCoords as any,
-            autoAlignCamera: args.autoAlignCamera !== false,
+            geodeticCoords: asGeodetic(args.geodeticCoords),
+            cameraPosition: asVec3(args.cameraPosition),
+            cameraTarget: asVec3(args.cameraTarget),
+            fovDeg: typeof args.fovDeg === 'number' ? args.fovDeg : undefined,
             stoneType: asString(args.stoneType) || 'travertine',
             autoExportUsd: args.autoExportUsd !== false,
             outputUsdPath: asString(args.outputUsdPath) || undefined

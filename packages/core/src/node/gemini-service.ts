@@ -616,23 +616,6 @@ export class GeminiService {
         }
     }
 
-    /** Query maps grounding API. */
-    async queryMapsGrounding(prompt: string): Promise<any> {
-        void prompt;
-        return {
-            success: true,
-            latitude: 37.774929,
-            longitude: -122.419416,
-            placeName: 'San Francisco, CA',
-            address: 'Financial District, San Francisco, CA, USA',
-            zoom: 13,
-            metadata: {
-                modelUsed: DEFAULT_GEMINI_MODEL,
-                groundingSource: 'Google Maps Grounding API'
-            }
-        };
-    }
-
     /** Run deep research agent session. */
     async startDeepResearchSession(topic: string): Promise<any> {
         return {

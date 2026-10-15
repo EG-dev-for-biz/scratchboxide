@@ -15,6 +15,7 @@ import {
     GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE,
     STATIC_MAPS_NO_LABELS_STYLES
 } from '../src/browser/generative-canvas/services/google-maps-service';
+import { LocationUnresolvedError, MissingInputError } from '../src/common/errors/pipeline-errors';
 
 async function runGoogleMapsServiceTests() {
     console.log('🧪 Running Google Maps Client & Geospatial Intelligence Test Suite...\n');
@@ -48,18 +49,60 @@ async function runGoogleMapsServiceTests() {
     // -------------------------------------------------------------
     console.log('  Testing Geocoding & Landmark Spatial Resolution...');
     
+    // Place names are one Google Places API (New) Text Search call (injected fetch here); there is no landmark table.
+    const calls: Array<{ url: string; init: any }> = [];
+    const placesFetch = (async (url: any, init?: any) => {
+        calls.push({ url: String(url), init });
+        const q = JSON.parse(init?.body || '{}').textQuery as string;
+        const place = /ferry/i.test(q)
+            ? { displayName: { text: 'Ferry Building' }, formattedAddress: '1 Ferry Building, San Francisco, CA 94111, USA', location: { latitude: 37.7955, longitude: -122.3937 }, types: ['tourist_attraction'], viewport: { low: { latitude: 37.794, longitude: -122.395 }, high: { latitude: 37.797, longitude: -122.392 } } }
+            : { displayName: { text: 'Independence Hall' }, formattedAddress: '520 Chestnut St, Philadelphia, PA 19106, USA', location: { latitude: 39.9489, longitude: -75.15 } };
+        return new Response(JSON.stringify({ places: [place] }), { status: 200 });
+    }) as typeof fetch;
+
     // Landmark 1: San Francisco / Ferry Building
-    const sfResult = await service.geocode('San Francisco Ferry Building');
+    const sfResult = await service.geocode('San Francisco Ferry Building', { fetchImpl: placesFetch });
     assert.ok(sfResult, 'Geocode result should not be null');
     assert.ok(typeof sfResult.lat === 'number' && typeof sfResult.lng === 'number', 'Coordinates must be valid numbers');
     assert.ok(sfResult.lat > 37.7 && sfResult.lat < 37.9, `SF latitude should be around 37.79, got ${sfResult.lat}`);
     assert.ok(sfResult.lng < -122.3 && sfResult.lng > -122.5, `SF longitude should be around -122.4, got ${sfResult.lng}`);
-    assert.ok(sfResult.formattedAddress.length > 0, 'Formatted address must not be empty');
+    assert.strictEqual(sfResult.formattedAddress, '1 Ferry Building, San Francisco, CA 94111, USA');
+    assert.strictEqual(sfResult.name, 'Ferry Building');
+    assert.strictEqual(sfResult.locationType, 'PLACES_TEXT_SEARCH');
+    assert.deepStrictEqual(sfResult.types, ['tourist_attraction']);
+    assert.strictEqual(sfResult.bounds?.north, 37.797);
+
+    // The request shape: POST places:searchText with the configured key and the field mask
+    assert.strictEqual(calls[0].url, 'https://places.googleapis.com/v1/places:searchText');
+    assert.strictEqual(calls[0].init.method, 'POST');
+    assert.strictEqual(calls[0].init.headers['X-Goog-Api-Key'], testKey);
+    assert.strictEqual(calls[0].init.headers['X-Goog-FieldMask'], 'places.displayName,places.formattedAddress,places.location,places.viewport,places.types');
+    assert.strictEqual(JSON.parse(calls[0].init.body).textQuery, 'San Francisco Ferry Building');
 
     // Landmark 2: Independence Hall Philadelphia (1776 theme)
-    const phillyResult = await service.geocode('Independence Hall, Philadelphia');
+    const phillyResult = await service.geocode('Independence Hall, Philadelphia', { fetchImpl: placesFetch });
     assert.ok(phillyResult.lat > 39.9 && phillyResult.lat < 40.0, `Philadelphia latitude should be ~39.94, got ${phillyResult.lat}`);
     assert.ok(phillyResult.lng < -75.1 && phillyResult.lng > -75.2, `Philadelphia longitude should be ~-75.15, got ${phillyResult.lng}`);
+
+    // Failures throw LocationUnresolvedError: an HTTP error, no result, or no key
+    const denied = (async () => new Response(JSON.stringify({ error: { code: 403, message: 'Places API (New) has not been used in project 1 before or it is disabled.' } }), { status: 403 })) as typeof fetch;
+    await assert.rejects(service.geocode('Ferry Building', { fetchImpl: denied }), (err: any) => err instanceof LocationUnresolvedError && /HTTP 403.*disabled/.test(err.message));
+    const empty = (async () => new Response('{}', { status: 200 })) as typeof fetch;
+    await assert.rejects(service.geocode('zzqx nowhere', { fetchImpl: empty }), (err: any) => err instanceof LocationUnresolvedError && /no place/.test(err.message));
+    const callsBefore = calls.length;
+    const savedEnv = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    delete process.env.MAP_TILES_API_KEY;
+    service.setApiKey('');
+    try {
+        await assert.rejects(service.geocode('Ferry Building', { fetchImpl: placesFetch }), LocationUnresolvedError);
+        assert.strictEqual(calls.length, callsBefore, 'no request is made without a key');
+    } finally {
+        service.setApiKey(testKey);
+        if (savedEnv.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = savedEnv.g;
+        if (savedEnv.m !== undefined) process.env.MAP_TILES_API_KEY = savedEnv.m;
+    }
+    await assert.rejects(service.geocode('0, 0', { fetchImpl: placesFetch }), LocationUnresolvedError);
 
     // Direct Coordinate String parsing
     const coordStringResult = await service.geocode('37.7749, -122.4194');
@@ -108,11 +151,21 @@ async function runGoogleMapsServiceTests() {
     assert.ok(staticUrl.includes('path='), 'URL must contain flight path spline parameter');
     assert.ok(staticUrl.includes(`key=${testKey}`), 'URL must include API key');
 
-    // Test fallback when no API key is provided
+    // Without a key there is no drawn stand-in map, and there is no default map location
+    const savedMapsEnv = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    delete process.env.MAP_TILES_API_KEY;
     service.setApiKey('');
-    const fallbackStaticUrl = service.getStaticMapUrl({ center: { lat: 37.77, lng: -122.41 }, zoom: 14 });
-    assert.ok(fallbackStaticUrl.startsWith('data:image/svg+xml') || fallbackStaticUrl.includes('staticmap'), 'Fallback static map returns valid SVG data URI or static map structure');
-    service.setApiKey(testKey);
+    try {
+        const keylessUrl = service.getStaticMapUrl({ center: { lat: 37.77, lng: -122.41 }, zoom: 14 });
+        assert.ok(keylessUrl.startsWith('https://maps.googleapis.com/maps/api/staticmap?'), 'a keyless request still targets the Static Maps API (no drawn stand-in map)');
+        assert.ok(!keylessUrl.startsWith('data:') && !keylessUrl.includes('key='), 'no SVG placeholder and no key parameter');
+    } finally {
+        service.setApiKey(testKey);
+        if (savedMapsEnv.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = savedMapsEnv.g;
+        if (savedMapsEnv.m !== undefined) process.env.MAP_TILES_API_KEY = savedMapsEnv.m;
+    }
+    assert.throws(() => service.getStaticMapUrl({ zoom: 14 }), MissingInputError);
 
     console.log('  ✓ Test 3 Passed: Google Static Maps URL generator encodes pins, splines, zooms, and map types.');
 
@@ -151,6 +204,12 @@ async function runGoogleMapsServiceTests() {
     assert.ok(directionsEmbedUrl.includes('origin=37.792'), 'Directions Embed includes origin coords');
     assert.ok(directionsEmbedUrl.includes('destination=37.798'), 'Directions Embed includes destination coords');
 
+    // No embed mode has a default location
+    assert.throws(() => service.getEmbedMapUrl({ mode: 'view', zoom: 15 }), MissingInputError);
+    assert.throws(() => service.getEmbedMapUrl({ mode: 'place' }), MissingInputError);
+    assert.throws(() => service.getEmbedMapUrl({ mode: 'streetview' }), MissingInputError);
+    assert.throws(() => service.getEmbedMapUrl({ mode: 'directions', origin: 'Ferry Building, San Francisco' }), MissingInputError);
+
     console.log('  ✓ Test 4 Passed: Google Maps Embed URL generator supports place, view, and directions modes.');
 
     // -------------------------------------------------------------
@@ -167,6 +226,8 @@ async function runGoogleMapsServiceTests() {
     assert.strictEqual(tilesConfig.center.lat, 37.7900, '3D Tiles center lat matches input');
     assert.strictEqual(tilesConfig.center.lng, -122.4000, '3D Tiles center lng matches input');
     assert.strictEqual(tilesConfig.center.elevation, 15.2, '3D Tiles center elevation matches input');
+    const noElevation = service.getPhotorealistic3DTilesConfig({ lat: 37.79, lng: -122.4 });
+    assert.strictEqual(noElevation.center.elevation, undefined, 'an unknown elevation stays unknown (it used to become 0 m)');
     assert.strictEqual(tilesConfig.apiKey, testKey, '3D Tiles apiKey matches configured key');
     assert.ok(tilesConfig.defaultCamera.range > 0, '3D Tiles default camera range is positive');
 

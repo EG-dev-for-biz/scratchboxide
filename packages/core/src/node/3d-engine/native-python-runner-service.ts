@@ -76,6 +76,45 @@ export interface PythonExecutionResult {
     errorDetails?: string;
 }
 
+/** A file's identity at one moment: undefined when it does not exist. */
+export interface GlbFileStamp {
+    mtimeMs: number;
+    ctimeMs: number;
+    size: number;
+    ino: number;
+}
+
+export function stampGlbFile(filePath: string): GlbFileStamp | undefined {
+    try {
+        const st = fs.statSync(filePath);
+        return { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, ino: st.ino };
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * The GLB file a run is expected to write: OUTPUT_GLB_PATH (unique per runScript call), else <script>.glb next to
+ * the script. There is no shared fallback name such as output.glb in the working directory, which another run may
+ * have written.
+ */
+export function expectedGlbFile(outputGlbPath: string | undefined, scriptPath: string): string {
+    return outputGlbPath || path.join(path.dirname(scriptPath), `${path.basename(scriptPath, '.py')}.glb`);
+}
+
+/**
+ * The expected GLB when this run wrote it: the file exists and did not exist, or differed, when `before` was taken
+ * right before the script started. A previous run's file at that path is never reported as this run's model.
+ */
+export function findWrittenGlb(expected: string, before: GlbFileStamp | undefined): string | undefined {
+    const after = stampGlbFile(expected);
+    if (!after) return undefined;
+    if (!before) return expected;
+    const changed = after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs
+        || after.size !== before.size || after.ino !== before.ino;
+    return changed ? expected : undefined;
+}
+
 /**
  * NativePythonRunnerService
  *
@@ -342,14 +381,18 @@ export class NativePythonRunnerService {
         ].filter(Boolean).join(path.delimiter);
 
         // Scripts are model-authored: start from the scrubbed sandbox env (no API keys/credentials).
+        const glbFile = expectedGlbFile(options.outputGlbPath, scriptPath);
         const env = buildPythonChildEnv(options.env, {
             PYTHONPATH: pythonPaths,
             PYTHONUNBUFFERED: '1',
-            SCRATCHBOX_HUMAN_ASSETS_DIR: path.resolve(repoRoot, 'packages/core/assets/models')
+            SCRATCHBOX_HUMAN_ASSETS_DIR: path.resolve(repoRoot, 'packages/core/assets/models'),
+            // sb.io writes here when a script names no path, instead of a shared output.glb in the working directory.
+            OUTPUT_GLB_PATH: glbFile
         });
 
         // Argument array, no shell: args may carry model- or user-supplied text.
         const argv = [scriptPath, ...(options.args || []).map(String)];
+        const glbBefore = stampGlbFile(glbFile);
 
         try {
             const { stdout, stderr } = await execFileAsync(this.pythonExecutable, argv, {
@@ -363,21 +406,10 @@ export class NativePythonRunnerService {
             let glbPath: string | undefined;
             let glbBase64: string | undefined;
 
-            if (options.outputGlbPath && fs.existsSync(options.outputGlbPath)) {
-                glbPath = options.outputGlbPath;
-                glbBase64 = fs.readFileSync(glbPath).toString('base64');
-            } else {
-                // Check if a .glb with the script name was written
-                const scriptBaseGlb = path.join(cwd, `${path.basename(scriptPath, '.py')}.glb`);
-                const genericGlb = path.join(cwd, 'output.glb');
-
-                if (fs.existsSync(scriptBaseGlb)) {
-                    glbPath = scriptBaseGlb;
-                    glbBase64 = fs.readFileSync(glbPath).toString('base64');
-                } else if (fs.existsSync(genericGlb)) {
-                    glbPath = genericGlb;
-                    glbBase64 = fs.readFileSync(genericGlb).toString('base64');
-                }
+            const written = findWrittenGlb(glbFile, glbBefore);
+            if (written) {
+                glbPath = written;
+                glbBase64 = fs.readFileSync(written).toString('base64');
             }
 
             return {
@@ -459,13 +491,16 @@ export class NativePythonRunnerService {
             process.env.PYTHONPATH
         ].filter(Boolean).join(path.delimiter);
 
+        const glbFile = expectedGlbFile(options.outputGlbPath, scriptPath);
         const env = buildPythonChildEnv(options.env, {
             PYTHONPATH: pythonPaths,
-            PYTHONUNBUFFERED: '1'
+            PYTHONUNBUFFERED: '1',
+            OUTPUT_GLB_PATH: glbFile
         });
 
         // Argument array, no shell: args may carry model- or user-supplied text.
         const argv = [scriptPath, ...(options.args || []).map(String)];
+        const glbBefore = stampGlbFile(glbFile);
 
         try {
             const stdout = execFileSync(this.pythonExecutable, argv, {
@@ -480,20 +515,10 @@ export class NativePythonRunnerService {
             let glbPath: string | undefined;
             let glbBase64: string | undefined;
 
-            if (options.outputGlbPath && fs.existsSync(options.outputGlbPath)) {
-                glbPath = options.outputGlbPath;
-                glbBase64 = fs.readFileSync(glbPath).toString('base64');
-            } else {
-                const scriptBaseGlb = path.join(cwd, `${path.basename(scriptPath, '.py')}.glb`);
-                const genericGlb = path.join(cwd, 'output.glb');
-
-                if (fs.existsSync(scriptBaseGlb)) {
-                    glbPath = scriptBaseGlb;
-                    glbBase64 = fs.readFileSync(glbPath).toString('base64');
-                } else if (fs.existsSync(genericGlb)) {
-                    glbPath = genericGlb;
-                    glbBase64 = fs.readFileSync(genericGlb).toString('base64');
-                }
+            const written = findWrittenGlb(glbFile, glbBefore);
+            if (written) {
+                glbPath = written;
+                glbBase64 = fs.readFileSync(written).toString('base64');
             }
 
             return {

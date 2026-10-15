@@ -9,6 +9,7 @@
 
 import * as path from 'path';
 import * as fs from 'fs-extra';
+import { MissingInputError } from '../packages/core/src/common/errors/pipeline-errors';
 import { SurveySplatPipelineService } from '../packages/core/src/node/spatial/SurveySplatPipelineService';
 import { resolveSurveyPreset } from '../packages/core/src/node/spatial/survey-router';
 import { createArchitecturalStationGenerator } from '../packages/core/src/node/spatial/BeautifyStationService';
@@ -17,8 +18,14 @@ async function main() {
     console.log('🏛️ Rebaking Colosseum Survey 3DGS centered at monument centroid [-43.42, 24.0, 62.54]...');
 
     const workspaceRoot = process.cwd();
-    const preset = resolveSurveyPreset({
+    // The Colosseum's clay tiles, extracted beforehand (google_3d_tiles_get_clay): no GLB is picked by name.
+    const glbPath = process.argv[2];
+    if (!glbPath || !fs.existsSync(path.resolve(workspaceRoot, glbPath))) {
+        throw new MissingInputError('rebake_colosseum_survey_3dgs', 'the clay GLB path as the first argument', glbPath ? `${glbPath} does not exist` : 'extract the Colosseum first with google_3d_tiles_get_clay');
+    }
+    const preset = await resolveSurveyPreset({
         location: 'Rome Colosseum',
+        glbPath,
         surveyPattern: 'geographic-3dtiles-survey',
         cameraCount: 24,
         forceRebake: true
@@ -34,7 +41,7 @@ async function main() {
     const service = new SurveySplatPipelineService({ generator });
 
     const result = await service.run({
-        glbPath: preset.glbPath,
+        glbPath: path.resolve(workspaceRoot, glbPath),
         anchor: preset.anchor,
         stations: preset.stations,
         outDir: preset.outDir,

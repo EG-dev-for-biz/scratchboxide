@@ -342,7 +342,8 @@ describe('GeoBoxPrecisionPipeline', () => {
         expect(tileResult.mesh.vertexCount).toBeGreaterThan(0);
         expect(tileResult.mesh.triangleCount).toBeGreaterThan(0);
         expect(tileResult.quality.errorTarget).toBeLessThanOrEqual(0.5);
-        expect(tileResult.quality.resolution).toBe('4K (3840x2160)');
+        // A mock result reports itself as a placeholder, not as 4K Google tiles.
+        expect(tileResult.quality.source).toMatch(/offline mock/);
         expect(fs.existsSync(tileResult.glbPath)).toBe(true);
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });

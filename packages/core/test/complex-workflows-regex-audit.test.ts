@@ -15,8 +15,8 @@ import {
     resolveTaskCapability
 } from '../src/node/agent/task-capability-resolver';
 import {
-    detectRealWorldLocationIntent
-} from '../src/browser/generative-canvas/services/Google3DTileService';
+    parseCoordinateText
+} from '../src/common/coordinate/parse-coordinates';
 import {
     parseContextMentions,
     findTriggerMatch
@@ -27,29 +27,18 @@ import {
 
 describe('Complex Workflows Prompt & Regex Audit', () => {
 
-    describe('2. Real-World Geodetic Coordinates & Landmarks Prompt Triggers', () => {
-        it('extracts explicit latitude and longitude coordinates', () => {
-            const prompt = 'Ingest 3D tiles around lat 41.8902, lng 12.4922 with maximum leaf LOD';
-            const location = detectRealWorldLocationIntent(prompt);
-            expect(location).toBeDefined();
-            expect(location?.isRealWorld).toBe(true);
-            expect(location?.lat).toBeCloseTo(41.8902, 3);
-            expect(location?.lng).toBeCloseTo(12.4922, 3);
+    describe('2. Real-World Locations Are Not Parsed Out Of Prompts', () => {
+        // Places are resolved by the location tools with Google Places; only text that is entirely a
+        // coordinate pair is read as coordinates, so prose that happens to contain numbers never is.
+        it('reads text that is entirely a coordinate pair', () => {
+            expect(parseCoordinateText('41.8902, 12.4922')).toEqual({ lat: 41.8902, lng: 12.4922 });
+            expect(parseCoordinateText('lat: 41.8902, lng: 12.4922')).toEqual({ lat: 41.8902, lng: 12.4922 });
         });
 
-        it('extracts iconic landmarks by name from prompt', () => {
-            const prompt = 'Reconstruct the Roman Colosseum in photorealistic 3D tiles';
-            const location = detectRealWorldLocationIntent(prompt);
-            expect(location).toBeDefined();
-            expect(location?.isRealWorld).toBe(true);
-            expect(location?.landmarkName?.toLowerCase()).toContain('colosseum');
-        });
-
-        it('extracts metropolitan cities by name from prompt', () => {
-            const prompt = 'Build a 3D tile model of Paris around the Eiffel Tower';
-            const location = detectRealWorldLocationIntent(prompt);
-            expect(location).toBeDefined();
-            expect(location?.isRealWorld).toBe(true);
+        it('does not pull coordinates or landmarks out of a sentence', () => {
+            expect(parseCoordinateText('Ingest 3D tiles around lat 41.8902, lng 12.4922 with maximum leaf LOD')).toBeUndefined();
+            expect(parseCoordinateText('Reconstruct the Roman Colosseum in photorealistic 3D tiles')).toBeUndefined();
+            expect(parseCoordinateText('Pier 39, 2 Beach St, San Francisco')).toBeUndefined();
         });
     });
 
@@ -60,9 +49,8 @@ describe('Complex Workflows Prompt & Regex Audit', () => {
             expect(isVibeToolRequest('vibe-code a pre-viz director tool')).toBe(true);
         });
 
-        it('does not falsely classify generic non-geo words like transfer as SF real-world locations', () => {
-            const loc = detectRealWorldLocationIntent('Create a runnable prototype calculator for orbital delta-v transfer');
-            expect(loc).toBeUndefined();
+        it('does not read a prompt with no coordinates as a location', () => {
+            expect(parseCoordinateText('Create a runnable prototype calculator for orbital delta-v transfer')).toBeUndefined();
         });
     });
 

@@ -142,13 +142,9 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
                     lighting: 'studio_soft',
                     ground: true
                 },
-                geoAnchor: parsed.geoAnchor || {
-                    lat: 37.7749,
-                    lng: -122.4194,
-                    elevation: 15.0,
-                    active: true,
-                    landmarkName: 'San Francisco Hub'
-                },
+                // Only the file's own anchor: a scene without one is not placed on Earth (it used to land in
+                // San Francisco at 15 m and stream those tiles).
+                geoAnchor: parsed.geoAnchor,
                 droneRoute: parsed.droneRoute,
                 wasmPhysics: parsed.wasmPhysics,
                 timeline: parsed.timeline,
@@ -209,13 +205,6 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
                     lighting: 'directional_sun',
                     ground: true
                 },
-                geoAnchor: {
-                    lat: 37.7749,
-                    lng: -122.4194,
-                    elevation: 10.0,
-                    active: true,
-                    landmarkName: 'San Francisco Base'
-                },
                 customMeshes: [
                     {
                         id: 'mesh-root-anchor',
@@ -240,8 +229,7 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
                         },
                         space: {
                             position: { x: 0, y: 0, zIndex: 0 },
-                            spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 },
-                            geoAnchor: { lat: 37.7749, lng: -122.4194, alt: 10.0 }
+                            spatial3d: { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0 }
                         },
                         time: {
                             startMs: 0,

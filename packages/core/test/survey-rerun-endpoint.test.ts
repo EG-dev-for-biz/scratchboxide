@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as http from 'http';
 import { SurveyApi, createNodeHttpHandler, resolveSurveyPreset } from '../src/node/spatial/survey-router';
+import { LocationUnresolvedError, MissingInputError } from '../src/common/errors/pipeline-errors';
 
 describe('Survey Splat Pipeline Rerun Endpoint & Presets', () => {
     let server: http.Server;
@@ -42,34 +43,40 @@ describe('Survey Splat Pipeline Rerun Endpoint & Presets', () => {
 
     afterAll(() => server?.close());
 
-    it('resolveSurveyPreset accurately resolves Colosseum, ESB, and GAP presets', () => {
+    it('resolveSurveyPreset has no location presets: names are geocoded, unresolvable ones throw, and no GLB is picked by name', async () => {
         const root = process.cwd();
-        const colosseum = resolveSurveyPreset({ location: 'colosseum' }, root);
-        expect(colosseum.beautify.locationName).toMatch(/Colosseum/i);
-        expect(colosseum.stations.length).toBe(24);
-        expect(colosseum.sigmaScale).toBe(0.5);
-        expect(colosseum.voxelSizeMeters).toBe(0.05);
+        const geocodeCalls: any[] = [];
+        const lookup = {
+            geocode: async (q: any) => {
+                geocodeCalls.push(q);
+                if (typeof q === 'string' && /colosseum/i.test(q)) {
+                    return { lat: 41.8902, lng: 12.4922, formattedAddress: 'Colosseum, Piazza del Colosseo, 1, 00184 Roma RM, Italy' };
+                }
+                throw new LocationUnresolvedError(String(q), 'Google Places found no place for this text');
+            },
+            elevation: async () => 22.5
+        };
 
-        const colosseum112 = resolveSurveyPreset({ location: 'colosseum', surveyPreset: 'watertight-112' }, root);
-        expect(colosseum112.stations.length).toBe(112);
-        expect(colosseum112.stations.some((s: any) => s.name?.includes('TIER_4_ARENA'))).toBe(true);
-        expect(colosseum112.stations.some((s: any) => s.name?.includes('TIER_5_CAVEA'))).toBe(true);
+        // A place name is geocoded (here: injected Places result) and the ground height comes from the Elevation API
+        const colosseum = await resolveSurveyPreset({ location: 'colosseum' }, root, lookup);
+        expect(colosseum.anchor.lat).toBeCloseTo(41.8902, 4);
+        expect(colosseum.anchor.elevationMeters).toBe(22.5);
+        expect(colosseum.anchor.formattedAddress).toContain('Piazza del Colosseo');
+        expect(colosseum.stations.length).toBe(16);
+        // No GLB is chosen from public/models by name: the caller passes the extracted GLB
+        expect(colosseum.glbPath).toBeUndefined();
+        expect(geocodeCalls).toEqual(['colosseum']);
 
-        const colosseum40 = resolveSurveyPreset({ location: 'colosseum', surveyPreset: 'interior-pilot-40' }, root);
-        expect(colosseum40.stations.length).toBe(40);
-        expect(colosseum40.stations.some((s: any) => s.name?.includes('TIER_4_ARENA'))).toBe(true);
+        // An unresolvable place throws instead of continuing at (0, 0)
+        await expect(resolveSurveyPreset({ location: 'esb_clay' }, root, lookup)).rejects.toBeInstanceOf(LocationUnresolvedError);
+        await expect(resolveSurveyPreset({ anchor: { lat: 0, lng: 0, elevationMeters: 0 } }, root, lookup)).rejects.toBeInstanceOf(LocationUnresolvedError);
+        await expect(resolveSurveyPreset({}, root, lookup)).rejects.toBeInstanceOf(MissingInputError);
 
-        const esb = resolveSurveyPreset({ location: 'esb_clay' }, root);
-        expect(esb.beautify.locationName).toMatch(/Empire State/i);
-        expect(esb.stations.length).toBe(24);
-        expect(esb.sigmaScale).toBe(0.8);
-        expect(esb.voxelSizeMeters).toBe(0.15);
-
-        const gap = resolveSurveyPreset({ location: 'gap_clay' }, root);
-        expect(gap.beautify.locationName).toMatch(/Grand Army/i);
-        expect(gap.stations.length).toBe(18);
-        expect(gap.sigmaScale).toBe(0.5);
-        expect(gap.voxelSizeMeters).toBe(0.08);
+        // Explicit anchor + GLB pass straight through
+        const explicit = await resolveSurveyPreset({ anchor: { lat: 40.7648, lng: -73.9733, elevationMeters: 20 }, glbPath: 'public/models/gap_clay.glb', cameraCount: 6 }, root, lookup);
+        expect(explicit.anchor.lat).toBe(40.7648);
+        expect(explicit.glbPath).toBe('public/models/gap_clay.glb');
+        expect(explicit.stations.length).toBe(6);
     });
 
     it('POST /rerun-pipeline enqueues job and returns job ID', async () => {

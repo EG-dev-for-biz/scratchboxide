@@ -8,6 +8,24 @@
  ********************************************************************************/
 
 import * as fs from 'fs';
+import { decodeImageToRgba } from '../image-codec-ffmpeg';
+
+/** Point-samples an RGBA8 image down so its longer side is at most maxSide (analysis only). */
+export function downsampleRgba(rgba: Uint8Array, width: number, height: number, maxSide: number): { pixels: Uint8Array; width: number; height: number } {
+    const factor = Math.max(1, Math.ceil(Math.max(width, height) / maxSide));
+    if (factor === 1) return { pixels: new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength), width, height };
+    const w = Math.max(1, Math.floor(width / factor));
+    const h = Math.max(1, Math.floor(height / factor));
+    const out = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const src = ((y * factor) * width + x * factor) * 4;
+            const dst = (y * w + x) * 4;
+            out[dst] = rgba[src]; out[dst + 1] = rgba[src + 1]; out[dst + 2] = rgba[src + 2]; out[dst + 3] = rgba[src + 3];
+        }
+    }
+    return { pixels: out, width: w, height: h };
+}
 import {
     PhotometricLightConfig,
     PhotometricLightingRigData,
@@ -57,20 +75,10 @@ export class InverseLightingEstimatorService {
             throw new Error(`InverseLightingEstimatorService: Image file not found at '${options.imagePath}'.`);
         }
 
-        // Lightweight JPEG/PNG pixel reading or mock raster buffer extraction
-        const buffer = fs.readFileSync(options.imagePath);
-        // Fallback synthetic pixel extractor for testing / pure Node.js environments
-        const width = 128;
-        const height = 128;
-        const pixels = new Uint8Array(width * height * 4);
-        for (let i = 0; i < pixels.length; i += 4) {
-            const byteIdx = (i / 4) % buffer.length;
-            pixels[i] = buffer[byteIdx] || 180;
-            pixels[i + 1] = buffer[(byteIdx + 1) % buffer.length] || 170;
-            pixels[i + 2] = buffer[(byteIdx + 2) % buffer.length] || 160;
-            pixels[i + 3] = 255;
-        }
-
+        // The photo's own pixels (decoded JPEG / PNG / WebP; a file that does not decode is an error). The compressed
+        // file bytes used to be read as if they were pixels, so the "lighting" was noise from the encoding.
+        const decoded = await decodeImageToRgba(fs.readFileSync(options.imagePath));
+        const { pixels, width, height } = downsampleRgba(decoded.rgba, decoded.width, decoded.height, 512);
         return this.decomposePixels(pixels, width, height, options);
     }
 

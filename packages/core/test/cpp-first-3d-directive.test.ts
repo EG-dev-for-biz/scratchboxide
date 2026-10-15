@@ -48,16 +48,12 @@ describe('C/C++ First 3D Engine Architecture Directive', () => {
         expect(generalCpp).toContain('quantum_monolith');
     });
 
-    it('2. should synthesize a native generator for a hero-object prompt and record attached C++20 generators in the operator stack', () => {
-        // Hero-object prompts ("build ... jet fighter") no longer route to the closed 'flight' preset:
-        // 013d47c sends them to the ADA hero synthesizer (Python adaptive_object.py, 70-20-10 form
-        // hierarchy, 18% clay void), and f6f522f lists jet/aircraft among hero objects.
+    it('2. never answers a hero-object prompt with the keyword hero-object template, and records attached C++20 generators in the operator stack', () => {
+        // Single objects are built by build_3d_object_from_reference (reference image -> vision spec -> native
+        // build); the template synthesizer no longer stands in for that with its keyword hero-object template.
         const scene = synthesizeContextual3DScene('Build a supersonic tactical jet fighter');
-        expect(scene.pythonGenerator).toBeDefined();
-        expect(scene.pythonGenerator?.enabled).toBe(true);
-        expect(scene.pythonGenerator?.sourceCode).toContain('import scratchbox as sb');
-        expect(scene.pythonGenerator?.sourceCode).toContain('70-20-10 Geometric Form Hierarchy');
-        expect(scene.renderMode).toBe('clay');
+        expect(scene.title).not.toMatch(/ADA Hero Asset/);
+        expect(scene.worldBranch ?? '').not.toMatch(/ada-hero/);
 
         // A scene that carries a C++20 generator gets it registered as sb_set_cpp_generator.
         const flightScene = initializeSceneOperatorStack({

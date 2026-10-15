@@ -116,41 +116,15 @@ int main() {
         }
     });
 
-    it('should synthesize real-world landmark with C++ generator, compile with staged assets, and stream GLB chunks', async () => {
-        const scene = synthesizeContextual3DScene('Create a 3d model of Ferry Building San Francisco in warm terracotta');
-        expect(scene.geoAnchor).toBeDefined();
-        expect(scene.geoAnchor?.landmarkName).toContain('Ferry Building');
-        expect(scene.cppGenerator).toBeDefined();
-        expect(scene.cppGenerator?.enabled).toBe(true);
-        expect(scene.cppGenerator?.sourceCode).toBeDefined();
-        expect(scene.cppGenerator?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
-        expect(scene.cppGenerator?.sourceCode).toContain('TileIngestor');
-
-        // Compile and execute the generated C++ code with staged assets
-        const res = await compiler.compileSource(scene.cppGenerator!.sourceCode, {
-            name: 'test_ferry_building_' + Date.now(),
-            optimization: '-O3',
-            assets: [
-                {
-                    name: 'geo_anchor.json',
-                    content: JSON.stringify(scene.geoAnchor),
-                    encoding: 'utf-8'
-                }
-            ]
-        });
-
-        if (!res.success) {
-            expect.fail('Compilation Failed: ' + (res.compilerOutput || 'Unknown error'));
+    it('never places a template scene on Earth from prompt words, and has no landmark tower generator', async () => {
+        // A place named in a prompt is not looked up in a table: the template scene gets no anchor.
+        expect(synthesizeContextual3DScene('Create a 3d model of Ferry Building San Francisco in warm terracotta').geoAnchor).toBeUndefined();
+        // Every battle prompt used to be anchored at Lexington Battle Green, MA, at an invented 68 m.
+        for (const prompt of ['build a 3d scene of the battle of gettysburg', 'build a 3d scene of the battle of waterloo', 'a siege in 1776']) {
+            expect(synthesizeContextual3DScene(prompt).geoAnchor, prompt).toBeUndefined();
         }
-        expect(res.binaryPath).toBeDefined();
-
-        if (res.binaryPath) {
-            const execRes = await compiler.executeBinary(res.binaryPath);
-            expect(execRes.exitCode).toBe(0);
-            expect(execRes.stdout).toContain('GEOSPATIAL_BUILD_SUCCESS');
-            expect(execRes.chunks.length).toBeGreaterThan(0);
-            expect(execRes.glbBase64).toBeDefined();
-            fs.unlinkSync(res.binaryPath);
-        }
+        // The generator that wrote a 32 m stepped tower named after any landmark is gone.
+        const synthesizer: Record<string, unknown> = await import('../src/browser/generative-canvas/procedural-3d-synthesizer');
+        expect(synthesizer.generateGeospatialCpp3DSource).toBeUndefined();
     });
 });

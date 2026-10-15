@@ -17,6 +17,9 @@ import {
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import { OrientedBoundingBoxSolver } from '../src/node/spatial/OrientedBoundingBoxSolver';
 
+/** The Colosseum test model's own location (given explicitly; the rig has no default place). */
+const COLOSSEUM_ANCHOR = { lat: 41.8902, lng: 12.4922, elevationMeters: 22.0 };
+
 describe('AdaptiveSurveyRigService: Scene-Conformal Survey Rig Synthesis', () => {
     it('plans an adaptive rig for a synthetic rectangular structure', () => {
         // Create synthetic box: 40m x 20m x 30m sitting on ground at Y = 10m
@@ -38,7 +41,10 @@ describe('AdaptiveSurveyRigService: Scene-Conformal Survey Rig Synthesis', () =>
             indices: new Uint32Array(indices)
         };
 
+        // The rig's WGS-84 coordinates come from the model's own anchor (no default place).
+        expect(() => AdaptiveSurveyRigService.planRig(mesh, { cameraBudget: 12 })).toThrow(/needs anchor/);
         const result = AdaptiveSurveyRigService.planRig(mesh, {
+            anchor: { lat: 45.4345, lng: 12.3371, elevationMeters: 2.0 },
             cameraBudget: 12,
             mode: 'facade-perimeter',
             focalLengthMm: 35
@@ -65,6 +71,7 @@ describe('AdaptiveSurveyRigService: Scene-Conformal Survey Rig Synthesis', () =>
         }
 
         const result = AdaptiveSurveyRigService.planRig(glbPath, {
+            anchor: COLOSSEUM_ANCHOR,
             cameraBudget: 40,
             mode: 'multitier-complete',
             focalLengthMm: 35,
@@ -135,6 +142,7 @@ describe('AdaptiveSurveyRigService: Scene-Conformal Survey Rig Synthesis', () =>
         if (!fs.existsSync(glbPath)) return;
 
         const result = AdaptiveSurveyRigService.planRig(glbPath, {
+            anchor: COLOSSEUM_ANCHOR,
             cameraBudget: 40,
             mode: 'multitier-complete',
             focusCentroid: [-43.42, 24.0, 62.54],

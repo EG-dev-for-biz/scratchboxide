@@ -272,7 +272,9 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
             expect(res.resultPayload).toBeDefined();
             expect(res.resultPayload.success).toBe(true);
             expect(res.resultPayload.lightingRig).toBeDefined();
-            expect(res.summaryResult).toContain('Successfully matched both image camera pose and physical lighting');
+            // The photo is not resected here: the summary says the camera pose was not estimated.
+            expect(res.summaryResult).toContain('Matched physical lighting to reference');
+            expect(res.summaryResult).toContain('Camera pose: not estimated');
         });
     });
 });

@@ -148,7 +148,7 @@ describe('Sophisticated 3D Tile Recoloring Engine v2 - API & Tool Suite', () => 
       expect(recolorTool?.parameters.properties.generatePbrRoughness).toBeDefined();
     });
 
-    it('executes via tool registry dispatch in mock mode', async () => {
+    it('the tool ignores mockExecution: a missing input file fails instead of a placeholder "recolored successfully"', async () => {
       const registry = createDefaultToolRegistry();
       const result = await registry.dispatch('google_3d_tiles_recolor_glb', {
         inputGlbPath: '/models/colosseum.glb',
@@ -160,15 +160,8 @@ describe('Sophisticated 3D Tile Recoloring Engine v2 - API & Tool Suite', () => 
         mockExecution: true
       }, {} as any);
 
-      expect(result.exec.status).toBe('completed');
-      expect(result.resultPayload).toBeDefined();
-      const payload = result.resultPayload as any;
-      expect(payload.success).toBe(true);
-      expect(payload.textureCount).toBe(1);
-      expect(payload.driftMm).toBe(0.000);
-      expect(payload.normalMapCount).toBe(1);
-      expect(payload.roughnessMapCount).toBe(1);
-      expect(result.exec.summaryResult).toContain('recolored successfully');
+      expect(result.exec.status).toBe('failed');
+      expect(result.exec.summaryResult).not.toContain('recolored successfully');
     });
   });
 

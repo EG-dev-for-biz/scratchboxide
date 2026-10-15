@@ -67,9 +67,10 @@ export interface GoogleMapTiles3DConfig {
     range: number;
     fov: number;
     mode: 'satellite' | 'hybrid' | 'roadmap';
-    photometric_match_score: number;
-    match_confidence: string;
-    precision_tolerance_mm: number;
+    /** Only when a photometric match against the image was actually measured. */
+    photometric_match_score?: number;
+    match_confidence?: string;
+    precision_tolerance_mm?: number;
 }
 
 export interface VideoMetadata {

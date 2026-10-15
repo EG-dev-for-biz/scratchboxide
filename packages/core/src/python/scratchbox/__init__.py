@@ -1279,20 +1279,13 @@ def create_ivy(
 class _GeospatialModule:
     @staticmethod
     def load_location(query: Optional[str] = None):
-        glb_path = os.environ.get("SCRATCHBOX_LOCATION_GLB")
-        manifest_path = os.environ.get("SCRATCHBOX_LOCATION_MANIFEST")
-        query_val = query or os.environ.get("SCRATCHBOX_LOCATION_QUERY", "")
-
-        class LocationData:
-            def __init__(self, glb_p, manifest_p, q):
-                self.query = q
-                self.glb_path = glb_p
-                self.manifest_path = manifest_p
-                self.raw_mesh = None
-                self.terrain_mesh = None
-                self.buildings_mesh = None
-
-        return LocationData(glb_path, manifest_path, query_val)
+        """Scripts are not staged on real places, so there is no place to load. A place comes from the
+        google_3d_tiles_get_clay tool, and one object standing at a place from build_3d_object_from_reference."""
+        raise RuntimeError(
+            "sb.geospatial.load_location(): scripts are not staged on real places. Get the place with "
+            "google_3d_tiles_get_clay, or build one object standing there with build_3d_object_from_reference "
+            "and its location; a script builds only what it constructs itself."
+        )
 
 geospatial = _GeospatialModule()
 

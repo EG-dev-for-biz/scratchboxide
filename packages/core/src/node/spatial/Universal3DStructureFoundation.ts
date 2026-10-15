@@ -1146,12 +1146,10 @@ export class Universal3DStructureFoundation {
   /**
    * Adapter 5: RFC 7946 GeoJSON (WGS-84 GIS projection)
    */
-  public toGeoJson(): Record<string, any> {
-    const anchor = this.anchor || {
-      lat: 41.8902,
-      lng: 12.4922,
-      elevationMeters: 50.0
-    };
+  public toGeoJson(): Record<string, any> | undefined {
+    // GeoJSON is geodetic: without the structure's own anchor there is nothing to write (no default place).
+    const anchor = this.anchor;
+    if (!anchor) return undefined;
 
     const ltp = new LocalTangentPlane({
       lat: anchor.lat,
@@ -2597,7 +2595,7 @@ projects/${this.name}/
       'nerfstudio',
       'video_blockout',
       'collision_hull',
-      'geojson',
+      ...(geoJson ? ['geojson' as const] : []),
       'manifest'
     ];
     if (this.animations.length > 0 || cameraSolveTrack) {
@@ -2722,7 +2720,7 @@ projects/${this.name}/
       }
     }
 
-    if (formats.includes('geojson')) {
+    if (formats.includes('geojson') && result.geoJson) {
       const geoPath = path.join(outputDir, `${this.name}_spatial.geojson`);
       fs.writeFileSync(geoPath, JSON.stringify(result.geoJson, null, 2), 'utf8');
       filesWritten.geoJson = geoPath;

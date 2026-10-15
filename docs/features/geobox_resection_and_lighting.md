@@ -9,7 +9,7 @@
 
 This document chronicles the design, mathematical formulation, visual evolution, and production deployment of two tightly integrated capabilities in Scratchbox IDE:
 
-1. **GeoBox Precision 6-DOF Image Location Resection**: Determines the exact physical 3D optical center $(\text{lat}_{\text{cam}}, \text{lng}_{\text{cam}}, \text{alt}_{\text{cam}})$ of any photographer's camera, 3-axis viewing attitude (Heading, Pitch, Roll), standoff distance, viewing frustum cone, and achieves **100.0% sub-pixel edge alignment** ($< 0.1\text{px}$ residual error) against real-world Google Photorealistic 3D Tiles.
+1. **GeoBox Precision 6-DOF Image Location Resection**: Determines the exact physical 3D optical center $(\text{lat}_{\text{cam}}, \text{lng}_{\text{cam}}, \text{alt}_{\text{cam}})$ of any photographer's camera, 3-axis viewing attitude (Heading, Pitch, Roll), standoff distance, and viewing frustum cone from the pose evidence it is given (2D-3D point correspondences, a stated camera position, or a stated heading, pitch and standoff distance). Resection does not analyse the photo's pixels; edge alignment against a 3D model is a separate step that reports the correlation it measured.
 2. **Location 3D Object De-Lighting, Atmosphere & Architectural Illumination**: Solves the fundamental flaw of daytime-baked photogrammetric 3D tiles when rendered in evening, dusk, or golden hour scenes. Uses analytical GLSL de-lighting shaders (non-linear shadow lift and highlight compression), stone albedo color calibration (Roman travertine, limestone, sandstone, etc.), civil twilight atmospheric irradiance, and 12-portal incandescent window backlighting.
 
 Both features have progressed from experimental visual scripts into **first-class production TypeScript codebase APIs**, **in-app Gemini Agent Tools**, **Task Capability Resolver routing**, **compiler directives (`AGENTS.md`)**, and **autonomous agent skills (`.agents/skills/`)** backed by a 100% passing test suite and zero compiler errors.
@@ -21,7 +21,7 @@ Both features have progressed from experimental visual scripts into **first-clas
 | Subsystem | Component / Module | Interface / Tool | Test Coverage | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | **6-DOF Camera Resection** | `GeoBoxPrecisionResectionService` | `resectImageLocation()` | 100% (Vitest) | **Production Active** |
-| **Sub-Pixel Edge Alignment** | `SubPixelEdgeOptimizer` | Iterative 100% Overlap Gate | 100% (Vitest) | **Production Active** |
+| **Edge Alignment** | `SubPixelEdgeAlignmentOptimizer` | `geobox_optimize_edge_alignment` (reports the measured overlap) | Vitest | **Production Active** |
 | **Photogrammetric De-Lighting** | `LocationObjectLightingService` | `applyPhotogrammetricDelightShader()` | 100% (Vitest) | **Production Active** |
 | **Atmospheric Lighting & Skies** | `AtmosphereService` / `LocationLighting` | `applyLocationAtmosphereLighting()` | 100% (Vitest) | **Production Active** |
 | **Architectural Portal Fixtures** | `LocationObjectLightingService` | `applyArchitecturalPortalLights()` | 100% (Vitest) | **Production Active** |
@@ -44,7 +44,7 @@ timeline
     section 1. 6-DOF Resection
         Coarse Landmark Centroid : Grounded ~5km radius
         Photogrammetric Resection : 6-DOF Camera Optical Center (1.92m mean error)
-        Global Benchmark : 10 Real Internet Photos 100% Certified
+        Benchmark Photos : 10 reference photos with surveyed poses (test fixtures)
     section 2. User Interaction
         Arbitrary Photo Ingestion : EXIF metrology, Drag & Drop, URL Fetching
         Zero-Preset Refactor : Eradicated 3,000 lines of static preset cards
@@ -144,11 +144,11 @@ $$\text{lat}_{\text{cam}} = L_{\text{lat}} + \frac{\Delta Y}{R_{\text{earth}}}, 
 
 ### 2. Sub-Pixel Edge Alignment Optimization
 
-To guarantee sub-pixel alignment, candidate wireframe contours $E_{\text{mesh}}(\theta)$ are rasterized and correlated against the image Canny edge field $E_{\text{img}}$:
+To align a model to a photograph, candidate wireframe contours $E_{\text{mesh}}(\theta)$ are rasterized and correlated against the image Canny edge field $E_{\text{img}}$:
 
 $$\mathcal{L}_{\text{overlap}}(\theta) = 1.0 - \frac{\sum_{(x,y)} E_{\text{img}}(x,y) \cdot E_{\text{mesh}}(x,y; \theta)}{\sum_{(x,y)} E_{\text{mesh}}(x,y; \theta)}$$
 
-Levenberg-Marquardt gradient descent iteratively adjusts $(\alpha, \phi, d)$ until $\mathcal{L}_{\text{overlap}} \le 0.001$, yielding **100.0% overlap** and $< 0.1\text{px}$ residual displacement.
+The pose is adjusted iteratively to reduce $\mathcal{L}_{\text{overlap}}$. The search reports the overlap and residual it reached and why it stopped; a poor match is reported as poor, never as converged.
 
 ### 3. GLSL Photogrammetric De-Lighting Shader
 
@@ -223,18 +223,14 @@ import { resectImageLocation, ImageLocationResectionResult } from '@scratchbox/c
 
 const result: ImageLocationResectionResult = await resectImageLocation({
   imagePath: 'public/test_images/colosseum_rome.jpg',
-  promptHint: 'Colosseum Rome dusk vantage point',
+  targetLandmarkName: 'Colosseum, Rome',   // resolved with Google Places
+  headingDeg: 70, pitchDeg: 6, standoffDistanceMeters: 125, // the pose evidence (or points2D/points3D, or the camera position)
   sensorFocalMm: 26.0,
-  optimizeTo100Percent: true,
 });
 
-// Access exact camera optical center
-console.log(result.cameraOpticalCenter);
-// { lat: 41.8908, lng: 12.4922, elevationMslMeters: 48.5, standoffDistanceMeters: 125.0 }
-
-// Access 100% sub-pixel edge alignment
-console.log(result.edgeAlignment);
-// { overlapScorePct: 100.0, subPixelResidualPx: 0.08, converged: true }
+console.log(result.cameraOpticalCenter); // the camera position computed from that evidence
+console.log(result.poseSource);          // which evidence was used
+console.log(result.imageAnalysed);       // false: the photo's pixels are not analysed
 ```
 
 ### 2. Location 3D Object Atmosphere Harmonization
@@ -270,7 +266,7 @@ LocationObjectLightingService.applyArchitecturalPortalLights(scene, harmonizatio
 
 | Tool Name | Tool Group | Parameters | Returns |
 | :--- | :--- | :--- | :--- |
-| **`geobox_resect_image_location`** | `geobox_precision` | `imagePath` (req), `promptHint`, `targetLandmarkName`, `sensorFocalMm`, `optimizeTo100Percent` | `cameraOpticalCenter`, `vantageAttitude`, `frustum`, `edgeAlignment`, `tiles3dConfig`, `glbPath` |
+| **`geobox_resect_image_location`** | `geobox_precision` | `targetCoords` or `targetLandmarkName`/`promptHint`; pose evidence (`points2D`+`points3D`+image size, `cameraOpticalCenter`/`knownCoords` with `alt`, or `headingDeg`+`pitchDeg`+`standoffDistanceMeters`); `sensorFocalMm` | `cameraOpticalCenter`, `cameraAttitude`, `poseSource`, `frustum`, `googleMapTiles3DConfig` |
 | **`geobox_harmonize_location_lighting`** | `geobox_precision` | `landmarkName`, `preset`, `stoneType`, `shadowLift`, `highlightCompress`, `enableArchitecturalBacklighting` | `delightUniforms`, `sceneLighting`, `architecturalFixtures`, `atmospherePreset` |
 | **`atmosphere_harmonize_location_3d`** | `nature_atmosphere` | `preset`, `stoneType`, `shadowLift`, `highlightCompress`, `enableArchitecturalBacklighting` | `delightUniforms`, `sceneLighting`, `architecturalFixtures`, `atmospherePreset` |
 
@@ -285,7 +281,7 @@ LocationObjectLightingService.applyArchitecturalPortalLights(scene, harmonizatio
    * Result: **12 passed of 12 tests (100% pass rate in 8.65s)**.
    * Tests coverage:
      - Standalone `resectImageLocation()` and service class method.
-     - Standoff distance, optical center, attitude, and 100.0% edge overlap.
+     - Standoff distance, optical center and attitude from stated pose evidence.
      - Calibrated civil twilight baseline calculation and alternative presets.
      - 7 stone albedo profiles.
      - Three.js material shader injection and scene light attachment.

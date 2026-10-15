@@ -7,7 +7,6 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { GoogleVectorMappingService } from './google-vector-mapping-service';
 
 export interface SolarLatLng {
   latitude: number;
@@ -276,15 +275,15 @@ export class GoogleSolarService {
   }
 
   /**
-   * Convert geodetic roof segments into local 3D East-North-Up (ENU) coordinates
-   * rotated to align with the Manhattan street grid (29.0 degrees clockwise).
+   * Convert geodetic roof segments into local 3D East-North-Up (ENU) coordinates around the given anchor and
+   * ground elevation (no default place), optionally rotated by a street-grid bearing (default 0: true north).
    */
   public extractRoofSegmentsENU(
     segments: RoofSegmentStats[],
-    anchorLat: number = 40.7484405,
-    anchorLng: number = -73.9856644,
-    groundElevationMeters: number = 18.53,
-    gridBearingDegrees: number = 29.0
+    anchorLat: number,
+    anchorLng: number,
+    groundElevationMeters: number,
+    gridBearingDegrees: number = 0
   ): RoofFacet3D[] {
     const rad = (-gridBearingDegrees * Math.PI) / 180.0;
     const cosB = Math.cos(rad);
@@ -343,132 +342,7 @@ export class GoogleSolarService {
     });
   }
 
-  /**
-   * Derives building insights (rooftop segments, pitch, azimuth, elevation, solar potential)
-   * natively from Google Map Tile data (Photorealistic 3D Tiles) and Google Vector Tiles (parcels/buildings).
-   * Strictly adheres to the zero Google Solar API directive.
-   */
-  public async getBuildingInsights(
-    lat: number,
-    lng: number,
-    requiredQuality: string = 'HIGH'
-  ): Promise<BuildingInsightsResponse | null> {
-    const cached = this.getCachedBuildingInsights(lat, lng, requiredQuality);
-    if (cached) return cached;
-
-    // Resolve building footprint from Google Vector Tile data
-    const vectorLookup = GoogleVectorMappingService.findClosestRoadOrParcel(lat, lng);
-    const parcel = vectorLookup.parcel;
-
-    let roofArea = 1250.0;
-    let groundArea = 1250.0;
-    let baseElev = 15.0;
-    let height = 45.0;
-    let buildingName = `building_solar_${lat.toFixed(4)}_${lng.toFixed(4)}`;
-
-    if (parcel) {
-      buildingName = parcel.name;
-      baseElev = parcel.baseElevation;
-      height = parcel.heightMeters;
-      if (parcel.polygonLocalENU && parcel.polygonLocalENU.length >= 3) {
-        let areaSum = 0;
-        const pts = parcel.polygonLocalENU;
-        for (let i = 0; i < pts.length; i++) {
-          const j = (i + 1) % pts.length;
-          areaSum += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
-        }
-        groundArea = Math.max(100.0, Math.abs(areaSum) / 2.0);
-        roofArea = groundArea;
-      }
-    }
-
-    const roofHeightASL = baseElev + height;
-    const roofSegmentStats: RoofSegmentStats[] = [
-      {
-        pitchDegrees: 0,
-        azimuthDegrees: 180,
-        planeHeightAtCenterMeters: Number(roofHeightASL.toFixed(2)),
-        center: { latitude: lat, longitude: lng },
-        boundingBox: {
-          sw: { latitude: lat - 0.0002, longitude: lng - 0.0002 },
-          ne: { latitude: lat + 0.0002, longitude: lng + 0.0002 }
-        },
-        stats: {
-          areaMeters2: Number(roofArea.toFixed(1)),
-          groundAreaMeters2: Number(groundArea.toFixed(1)),
-          sunshineQuantiles: [850, 1080, 1260, 1420]
-        }
-      }
-    ];
-
-    // If multi-tier skyscraper from vector tiles, add setback tiers
-    if (height > 80) {
-      const setbackArea = Number((roofArea * 0.4).toFixed(1));
-      roofSegmentStats.push({
-        pitchDegrees: 0,
-        azimuthDegrees: 180,
-        planeHeightAtCenterMeters: Number((baseElev + height * 0.65).toFixed(2)),
-        center: { latitude: lat + 0.0001, longitude: lng + 0.0001 },
-        boundingBox: {
-          sw: { latitude: lat - 0.0001, longitude: lng - 0.0001 },
-          ne: { latitude: lat + 0.0001, longitude: lng + 0.0001 }
-        },
-        stats: {
-          areaMeters2: setbackArea,
-          groundAreaMeters2: setbackArea,
-          sunshineQuantiles: [750, 950, 1150, 1300]
-        }
-      });
-    }
-
-    const maxArrayArea = Math.round(roofArea * 0.75);
-    const maxPanels = Math.floor(maxArrayArea / 1.75);
-    const latRad = (Math.abs(lat) * Math.PI) / 180.0;
-    const sunshineHours = Math.round(1450 + 250 * Math.cos(latRad));
-
-    const response: BuildingInsightsResponse = {
-      name: buildingName,
-      center: { latitude: lat, longitude: lng },
-      imageryDate: { year: 2026, month: 1, day: 1 },
-      postalCode: '10001',
-      administrativeArea: 'New York',
-      regionCode: 'US',
-      solarPotential: {
-        maxArrayPanelsCount: maxPanels,
-        maxArrayAreaMeters2: maxArrayArea,
-        maxSunshineHoursPerYear: sunshineHours,
-        carbonOffsetFactorKgPerMwh: 415.0,
-        wholeRoofStats: {
-          areaMeters2: Number(roofArea.toFixed(1)),
-          groundAreaMeters2: Number(groundArea.toFixed(1)),
-          sunshineQuantiles: [850, 1080, 1260, 1420]
-        },
-        roofSegmentStats
-      }
-    };
-
-    this.setCacheEntry(lat, lng, response, requiredQuality);
-    return response;
-  }
-
-  /**
-   * Returns data layers referencing Google Map Tile data (Photorealistic 3D Tiles & 2D Photo Tiles).
-   * Strictly adheres to the zero Google Solar API directive.
-   */
-  public async getDataLayers(
-    lat: number,
-    lng: number,
-    radiusMeters: number = 100,
-    requiredQuality: string = 'HIGH'
-  ): Promise<DataLayersResponse | null> {
-    const key = this.apiKey ? `?key=${encodeURIComponent(this.apiKey)}` : '';
-    return {
-      imageryDate: { year: 2026, month: 1, day: 1 },
-      imageryProcessedDate: { year: 2026, month: 1, day: 1 },
-      dsmUrl: `https://tile.googleapis.com/v1/3dtiles/root.json${key}`,
-      rgbUrl: `https://tile.googleapis.com/v1/createSession${key}`,
-      maskUrl: `google_vector_tiles_mask_${lat.toFixed(4)}_${lng.toFixed(4)}`,
-      imageryQuality: requiredQuality
-    };
-  }
+  // getBuildingInsights and getDataLayers are gone: they made up a building for any coordinate (a 1250 m2 roof,
+  // invented sunshine quantiles, postal code 10001, "New York") from a Midtown Manhattan table. The real Solar API
+  // answer is GoogleMapsService.fetchBuildingSolarInsights.
 }

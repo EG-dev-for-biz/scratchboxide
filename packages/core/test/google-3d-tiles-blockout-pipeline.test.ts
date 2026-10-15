@@ -30,6 +30,7 @@ import {
 } from '../src/browser/generative-canvas/services/video/omniVideoPromptService';
 import { MediaAssetRef } from '../src/common/media-generation-protocol';
 import { REPO_ROOT, requireAsset, withReason } from './helpers/requirements';
+import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
 
 // Gitignored 72-frame / 24 fps ESB flight path that the trajectory, runner, pipeline and clearance-audit
 // checks (Tests 2, 3, 4, 6, 7) are written against.
@@ -136,35 +137,43 @@ async function runBlockoutPipelineTests() {
   // =========================================================================
   console.log('Testing 8: Zero-Preset & No-Fallback Geocoding Resolution...');
   {
-    // A: Explicit coordinate string (Midtown Manhattan specification)
-    const midtownCoordString = 'Midtown Manhattan, coordinates: 40.748400, -73.985700';
-    const midtownAnchor = await geocode3DTilesAddress(midtownCoordString);
+    // A: Text that is entirely a coordinate pair is used as given; no elevation is invented
+    const midtownAnchor = await geocode3DTilesAddress('40.748400, -73.985700');
     assert.strictEqual(midtownAnchor.lat, 40.7484, 'Latitude must match Midtown coordinate 40.748400');
     assert.strictEqual(midtownAnchor.lng, -73.9857, 'Longitude must match Midtown coordinate -73.985700');
-    assert.strictEqual(midtownAnchor.elevation, 15.0, 'Elevation must default to 15m');
-    assert.ok(midtownAnchor.landmarkName?.includes('Midtown Manhattan'), 'Landmark name preserved');
+    assert.strictEqual(midtownAnchor.elevation, undefined, 'No elevation was stated, so none is reported');
+    assert.strictEqual(midtownAnchor.formattedAddress, '40.748400, -73.985700');
 
-    // B: Explicit coordinate object
+    // B: Explicit coordinate object keeps its stated elevation
     const tokyoObj = await service.resolveAddress({ lat: 35.6586, lng: 139.7454, elevation: 25.0 });
     assert.strictEqual(tokyoObj.lat, 35.6586, 'Latitude must match');
     assert.strictEqual(tokyoObj.lng, 139.7454, 'Longitude must match');
     assert.strictEqual(tokyoObj.elevation, 25.0, 'Elevation must match');
 
-    // C: Coordinate string with name
-    const eiffelCoordString = 'Eiffel Tower, coordinates: 48.8584, 2.2945';
-    const eiffelAnchor = await service.resolveAddress(eiffelCoordString);
+    // C: Hemisphere notation
+    const eiffelAnchor = await service.resolveAddress('48.8584° N, 2.2945° E');
     assert.strictEqual(eiffelAnchor.lat, 48.8584, 'Eiffel Tower lat must match');
     assert.strictEqual(eiffelAnchor.lng, 2.2945, 'Eiffel Tower lng must match');
 
-    // D: Strict Zero-Preset & No-Fallback Verification:
-    // Without coordinates or an active API key, arbitrary strings MUST throw an error
-    await assert.rejects(
-      async () => {
-        await service.resolveAddress('Unknown Custom NonPreset Plaza');
-      },
-      /Cannot resolve geodetic coordinates.*Zero presets and no procedural fallbacks/,
-      'Must throw error when coordinates or API key are missing (zero presets, no procedural fallback)'
-    );
+    // D: Anything else is a place name for Google Places; without a Maps key it throws (no table, no regex)
+    const savedKeys = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    delete process.env.MAP_TILES_API_KEY;
+    try {
+      for (const query of ['Unknown Custom NonPreset Plaza', 'Midtown Manhattan, coordinates: 40.748400, -73.985700', 'Pier 39, 2 Beach St, San Francisco']) {
+        await assert.rejects(
+          service.resolveAddress(query),
+          (err: any) => err instanceof LocationUnresolvedError && err.query === query && /no Google Maps API key/.test(err.message),
+          `"${query}" must not be resolved without Google Places`
+        );
+      }
+    } finally {
+      if (savedKeys.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = savedKeys.g;
+      if (savedKeys.m !== undefined) process.env.MAP_TILES_API_KEY = savedKeys.m;
+    }
+    await assert.rejects(service.resolveAddress('0, 0'), LocationUnresolvedError, '(0, 0) is rejected');
+    await assert.rejects(service.resolveAddress({ lat: 0, lng: 0 }), LocationUnresolvedError, '{ lat: 0, lng: 0 } is rejected');
+    await assert.rejects(service.resolveAddress('95, 10'), LocationUnresolvedError, 'out-of-range latitude is rejected');
 
     console.log('  ✓ Test 8 Passed: Zero presets, no procedural fallback, strict coordinate extraction & validation verified');
   }
@@ -226,7 +235,7 @@ async function runBlockoutPipelineTests() {
     const fullTextureGlb = path.join(tmpDir, 'full_texture.glb');
     const fullTextureManifest = path.join(tmpDir, 'full_texture_manifest.json');
     const fullTextureResult = await runGoogle3DTilesPipeline({
-      address: 'Midtown Manhattan, coordinates: 40.748400, -73.985700',
+      address: '40.748400, -73.985700',
       mode: 'full-texture',
       lodQuality: {
         errorTarget: 0.5,
@@ -257,7 +266,7 @@ async function runBlockoutPipelineTests() {
     const greyBoxGlb = path.join(tmpDir, 'greybox.glb');
     const greyBoxManifest = path.join(tmpDir, 'greybox_manifest.json');
     const greyBoxResult = await runGoogle3DTilesPipeline({
-      address: 'Tokyo Tower, coordinates: 35.6586, 139.7454',
+      address: '35.6586, 139.7454',
       mode: 'greybox',
       lodQuality: {
         errorTarget: 0.5,
@@ -297,7 +306,7 @@ async function runBlockoutPipelineTests() {
     // A: Dedicated Full Texture API
     const fullTextureGlbPath = path.join(tmpDir, 'textured_area.glb');
     const textureRes = await getGoogle3DTilesFullTexture(
-      'Midtown Manhattan, coordinates: 40.748400, -73.985700',
+      '40.748400, -73.985700',
       {
         offlineMock: true,
         outputGlbPath: fullTextureGlbPath
@@ -315,10 +324,11 @@ async function runBlockoutPipelineTests() {
     assert.ok(textureRes.mesh.vertexCount > 0, 'Vertex count must be > 0');
     assert.ok(textureRes.mesh.triangleCount > 0, 'Triangle count must be > 0');
     assert.strictEqual(textureRes.quality.errorTarget, 0.5);
-    assert.strictEqual(textureRes.quality.resolution, '4K (3840x2160)');
-    assert.strictEqual(textureRes.quality.maxSettleWaitMs, 25000, 'Must default to 25000ms max settle wait');
-    assert.strictEqual(textureRes.quality.asynchronousSettle, true);
-    assert.deepStrictEqual(textureRes.quality.preWarmedWaypoints, [0, 18, 36, 54, 71]);
+    // offlineMock is a synthetic placeholder: the result says so and claims no 4K leaf-LOD tiles
+    assert.strictEqual(textureRes.mock, true);
+    assert.match(textureRes.quality.source || '', /offline mock/);
+    assert.strictEqual(textureRes.quality.leafLodSettled, false);
+    assert.strictEqual(textureRes.resolvedAddress, '40.748400, -73.985700');
     assert.ok(fs.existsSync(textureRes.render.videoPath), 'Render video must exist');
 
     // B: Dedicated Clay / Grey Box API
@@ -342,10 +352,8 @@ async function runBlockoutPipelineTests() {
     assert.ok(clayRes.mesh.vertexCount > 0);
     assert.ok(clayRes.mesh.triangleCount > 0);
     assert.strictEqual(clayRes.quality.errorTarget, 0.5);
-    assert.strictEqual(clayRes.quality.resolution, '4K (3840x2160)');
-    assert.strictEqual(clayRes.quality.maxSettleWaitMs, 25000, 'Must default to 25000ms max settle wait');
-    assert.strictEqual(clayRes.quality.asynchronousSettle, true);
-    assert.deepStrictEqual(clayRes.quality.preWarmedWaypoints, [0, 18, 36, 54, 71]);
+    assert.strictEqual(clayRes.mock, true);
+    assert.match(clayRes.quality.source || '', /offline mock/);
     assert.ok(fs.existsSync(clayRes.render.videoPath));
 
     await fs.remove(tmpDir);

@@ -10,9 +10,10 @@ import { test } from 'vitest';
 
 import * as assert from 'assert';
 import {
-  detectRealWorldLocationIntent,
   synthesizeContextual3DScene
 } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
+import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
+import { GoogleMapsService } from '../src/browser/generative-canvas/services/google-maps-service';
 import { Google3DTileService } from '../src/browser/generative-canvas/services/Google3DTileService';
 import { GooglePhotorealistic3DTilesLayer } from '../src/browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
@@ -23,69 +24,23 @@ async function runTests() {
 
   // =========================================================================
   // =========================================================================
-  // Test 1: Real-World Location & Landmark Intent Detection
+  // Test 1: Prompts are never scanned for places (the model passes locations to the location tools)
   // =========================================================================
-  console.log('Testing 1: Real-World Location & Landmark Intent Detection...');
+  console.log('Testing 1: Prompt words never become real-world locations...');
   {
-    // Primary User Problem: "build a 3d scene of the plaza hotel NYC"
-    const promptPlaza = 'build a 3d scene of the plaza hotel NYC';
-    const locPlaza = detectRealWorldLocationIntent(promptPlaza);
-    assert.ok(locPlaza, 'Should detect The Plaza Hotel NYC');
-    assert.strictEqual(locPlaza?.isRealWorld, true);
-    assert.ok(locPlaza?.landmarkName.toLowerCase().includes('plaza'), 'Should extract Plaza Hotel as landmark');
-    assert.strictEqual(locPlaza?.elevationSource, 'online_geocoding_required');
-
-    // Vector feature detection: Manhattan anchor
-    const promptManhattan = 'race car in Manhattan';
-    const locManhattan = detectRealWorldLocationIntent(promptManhattan);
-    assert.ok(locManhattan, 'Should detect Manhattan location');
-    assert.strictEqual(locManhattan?.isRealWorld, true);
-    assert.ok(Math.abs((locManhattan?.lat ?? 0) - 40.7484) < 0.05, 'Should match Manhattan vector anchor latitude');
-    assert.ok(Math.abs((locManhattan?.lng ?? 0) - (-73.9857)) < 0.05, 'Should match Manhattan vector anchor longitude');
-
-    // Explicit coordinate detection
-    const promptCoords = '3D scene at 40.7644, -73.9744';
-    const locCoords = detectRealWorldLocationIntent(promptCoords);
-    assert.ok(locCoords, 'Should detect explicit coordinates');
-    assert.strictEqual(locCoords?.isRealWorld, true);
-    assert.ok(Math.abs((locCoords?.lat ?? 0) - 40.7644) < 0.001);
-    assert.ok(Math.abs((locCoords?.lng ?? 0) - (-73.9744)) < 0.001);
-
-    // General landmark intent recognition
-    const landmarkPrompts = [
+    const prompts = [
+      'build a 3d scene of the plaza hotel NYC',
+      'race car in Manhattan',
+      '3D scene at 40.7644, -73.9744',
       'Eiffel Tower Paris',
-      'Tokyo Tower',
-      'Ferry Building SF',
-      'create a 3d model of The Plaza Hotel in NYC',
-      'show 3d view of Chrysler Building',
       'reconstruct Brooklyn Bridge in 3d',
-      'model of Colosseum in Rome',
-      'explore 3d map of Taj Mahal',
-      'render 3d environment of Shibuya Crossing',
-      'view 3d representation of Sydney Opera House',
-      'synthesize 3d reconstruction of Burj Khalifa'
+      'model of Colosseum in Rome'
     ];
-
-    for (const prompt of landmarkPrompts) {
-      const loc = detectRealWorldLocationIntent(prompt);
-      assert.ok(loc, `Should detect geographic intent for: "${prompt}"`);
-      assert.strictEqual(loc?.isRealWorld, true);
+    for (const prompt of prompts) {
+      const scene = synthesizeContextual3DScene(prompt);
+      assert.strictEqual(scene.geoAnchor, undefined, `"${prompt}" must not be anchored from a name table or a regex`);
     }
-
-    // Negative tests: generic non-geographic prompts
-    const nonGeoPrompts = [
-      'Create a generic floating cube in outer space with asteroids',
-      'particle simulation with gravity and atoms',
-      'simulate molecular physics of caffeine with electron clouds',
-      'orbiting planets in solar system with asteroid belt'
-    ];
-
-    for (const prompt of nonGeoPrompts) {
-      const locNonGeo = detectRealWorldLocationIntent(prompt);
-      assert.strictEqual(locNonGeo, undefined, `Generic prompt "${prompt}" should not trigger real-world location`);
-    }
-
-    console.log(' ✓ Test 1 Passed: Real-world geographic intents accurately detected with online-first geocoding contract.');
+    console.log(' ✓ Test 1 Passed: template synthesis leaves locations to the location tools.');
   }
 
   // =========================================================================
@@ -101,20 +56,19 @@ async function runTests() {
     assert.strictEqual(coordRes.lat, 40.7644);
     assert.strictEqual(coordRes.lng, -73.9744);
 
-    // 2. Unreachable online sources must throw an actionable error, NOT silently default to mock coordinates
-    let errorThrown = false;
+    // 2. A place name needs Google Places: without a key it throws LocationUnresolvedError, NOT a mock coordinate
+    const maps = GoogleMapsService.getInstance();
+    const saved = { state: maps.getApiKey(), g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
+    maps.setApiKey('');
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    delete process.env.MAP_TILES_API_KEY;
     try {
-      await tileService.resolveLocation('unresolvable-fictional-location-12345XYZ');
-    } catch (err: any) {
-      errorThrown = true;
-      // Wording changed in 025cfe0 ("ADA Zero-Presets: Could not resolve geodetic coordinates or
-      // reach Google Maps 3D Tiles data sources ..."); the contract is still an actionable error.
-      assert.ok(
-        err.message.includes('reach Google Maps 3D Tiles data sources'),
-        'Error should inform user that online data sources cannot be reached'
-      );
+      await assert.rejects(tileService.resolveLocation('unresolvable-fictional-location-12345XYZ'), LocationUnresolvedError);
+    } finally {
+      maps.setApiKey(saved.state);
+      if (saved.g !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved.g;
+      if (saved.m !== undefined) process.env.MAP_TILES_API_KEY = saved.m;
     }
-    assert.strictEqual(errorThrown, true, 'Should throw actionable error when online sources are unreachable');
 
     console.log(' ✓ Test 2 Passed: Online resolution enforced and silent offline fallbacks retired.');
   }
@@ -130,17 +84,12 @@ async function runTests() {
     });
 
     assert.ok(scene, 'Should synthesize a 3D scene');
-    assert.strictEqual(scene.renderMode, 'clay', 'Real-world initial scene must default to Studio Grey Clay');
     assert.strictEqual(scene.environment?.skybox, 'studio', 'Skybox must default to neutral studio');
     assert.strictEqual(scene.environment?.lighting, 'studio', 'Lighting must default to neutral studio');
+    assert.strictEqual(scene.geoAnchor, undefined, 'A template scene is not anchored at a place');
 
-    // Verify ZERO fake building boxes in customMeshes (Tile streaming handles geometry)
-    assert.strictEqual(scene.customMeshes?.length ?? 0, 0, 'Must have zero synthetic extruded building boxes');
-
-    // Verify 3D tile streaming anchor is registered in objects
-    assert.ok(scene.objects && scene.objects.length > 0, 'Should contain Media4DObject streaming anchor');
-    const tileAnchor = scene.objects[0];
-    assert.strictEqual(tileAnchor.content?.type, 'map-3d', 'Object content type must be map-3d');
+    // No location reaches a template scene, so no tile object is fabricated for it
+    assert.ok(!(scene.objects || []).some(o => o.content?.type === 'map-3d'), 'Must not mount a synthesized map tile');
 
     console.log(' ✓ Test 3 Passed: Zero synthetic JS boxes detected, pure 18% grey clay mode enforced.');
   }

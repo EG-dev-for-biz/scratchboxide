@@ -7,8 +7,6 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import * as fs from 'fs';
-import * as path from 'path';
 import { LatLngAlt, LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 import {
     CameraAttitude,
@@ -33,18 +31,16 @@ import {
     CameraIntrinsics
 } from './SpatialPoseEstimatorService';
 import {
-    HeadlessMeshSilhouetteRenderer,
-    RenderMesh3D
-} from './HeadlessMeshSilhouetteRenderer';
-import {
     geocode3DTilesAddress,
     GeoAnchor
 } from './Google3DTileBlockoutPipelineService';
+import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { assertUsableCoordinates } from '../../common/coordinate/parse-coordinates';
 import { VfxLensInterchangeService } from '../../common/optics/VfxLensInterchangeService';
 import {
     VanishingPointHorizonEstimator,
-    LineSegment2D,
-    VanishingPointResult
+    LineSegment2D
 } from './VanishingPointHorizonEstimator';
 
 export interface GeoBoxResectionRequest {
@@ -64,6 +60,10 @@ export interface GeoBoxResectionRequest {
     points2D?: Point2D[] | { x: number; y: number }[];
     points3D?: Point3D[] | { x: number; y: number; z: number }[];
     verticalLines?: LineSegment2D[];
+    /** Size of the photo the points2D are measured in; required with point correspondences. */
+    imageWidthPx?: number;
+    imageHeightPx?: number;
+    /** Accepted for compatibility; resection runs no edge alignment (see resectCameraPose). */
     optimizeTo100Percent?: boolean;
     sensorFocalMm?: number;
     sensorWidthMm?: number;
@@ -80,8 +80,8 @@ export interface GeoBoxResectionResult {
     success: boolean;
     landmark: {
         name: string;
-        identified: boolean;
-        confidence: number;
+        /** Where the target location came from: coordinates in the request, or a Google Places lookup of the name. */
+        resolvedFrom: 'targetCoords' | 'google_places';
         coordinates: GeoCoordinate;
     };
     cameraOpticalCenter: {
@@ -92,16 +92,14 @@ export interface GeoBoxResectionResult {
         standoffDistanceMeters: number;
     };
     cameraAttitude: CameraAttitude;
+    /** The evidence the pose was computed from (point correspondences, a stated camera position, or a stated heading). */
+    poseSource: string;
+    /** Always false: resection does not read the image pixels or align edges against them. */
+    imageAnalysed: false;
     frustum: CameraViewFrustum;
     googleMapTiles3DConfig: GoogleMapTiles3DConfig;
     lensDistortion: LensDistortionParams;
-    edgeAlignment: {
-        overlapScorePct: number;
-        subPixelResidualPx: number;
-        physicalDeltaMm: number;
-        converged: boolean;
-        iterations: number;
-    };
+    lensDistortionSource: string;
     glbPath?: string;
     resectionTimestamp: string;
 }
@@ -120,8 +118,8 @@ export interface SubPixelOptimizationRequest {
 }
 
 /**
- * Optional benchmark anchors for offline test suite verification when network/Google Maps API is unavailable.
- * Never used as a blind default fallback for arbitrary user queries.
+ * Surveyed reference poses for tests. Resolution never consults them (no name or substring lookup):
+ * a test that wants one passes its coordinates explicitly.
  */
 export const BENCHMARK_GEO_ANCHORS: Record<string, {
     name: string;
@@ -189,408 +187,223 @@ export class GeoBoxPrecisionResectionService {
     }
 
     /**
-     * Resolves geodetic coordinates for ANY location on Earth without hardcoded monument defaults.
-     * Strictly enforces the Zero Presets directive.
+     * Resolves what the photo shows. Explicit target coordinates are used as given; otherwise the landmark name (or,
+     * without one, the prompt hint) is resolved with Google Places. A camera position (cameraOpticalCenter or
+     * knownCoords) is not a target: the ground under the camera is not what it looks at, so a camera position alone
+     * is an error. Text is never scanned for landmark keywords or embedded numbers, and BENCHMARK_GEO_ANCHORS are
+     * never consulted. The ground elevation is the stated altitude or the Elevation API's; when neither is available
+     * this throws.
      */
     public async resolveGeodeticCoordinates(request: GeoBoxResectionRequest): Promise<{
         name: string;
+        resolvedFrom: 'targetCoords' | 'google_places';
         targetCoords: GeoCoordinate;
-        vantageCoords?: GeoCoordinate;
         groundElevation: number;
-        headingDeg?: number;
-        pitchDeg?: number;
         glbPath?: string;
     }> {
         // 1. Explicit target coordinates provided
         if (request.targetCoords) {
+            const { lat, lng } = request.targetCoords;
+            assertUsableCoordinates(lat, lng, `${lat}, ${lng}`);
+            const ground = await this.groundElevation(lat, lng, request.targetCoords.alt);
             return {
-                name: request.targetLandmarkName || `Coordinates (${request.targetCoords.lat.toFixed(6)}, ${request.targetCoords.lng.toFixed(6)})`,
-                targetCoords: {
-                    lat: request.targetCoords.lat,
-                    lng: request.targetCoords.lng,
-                    altitudeMeters: request.targetCoords.alt ?? 15.0
-                },
-                groundElevation: request.targetCoords.alt ?? 15.0,
+                name: request.targetLandmarkName || `Coordinates (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
+                resolvedFrom: 'targetCoords',
+                targetCoords: { lat, lng, altitudeMeters: ground },
+                groundElevation: ground,
                 glbPath: request.glbPath
             };
         }
 
-        // 2. Explicit known camera coords provided
-        if (request.knownCoords) {
-            return {
-                name: request.targetLandmarkName || `Location (${request.knownCoords.lat.toFixed(6)}, ${request.knownCoords.lng.toFixed(6)})`,
-                targetCoords: {
-                    lat: request.knownCoords.lat,
-                    lng: request.knownCoords.lng,
-                    altitudeMeters: request.knownCoords.alt ?? 15.0
-                },
-                vantageCoords: {
-                    lat: request.knownCoords.lat,
-                    lng: request.knownCoords.lng,
-                    altitudeMeters: request.knownCoords.alt ?? 25.0
-                },
-                groundElevation: request.knownCoords.alt ?? 15.0,
-                glbPath: request.glbPath
-            };
+        // 2. One place lookup: the landmark name when given, else the prompt hint. Coordinates typed in either are
+        // used as given.
+        const query = request.targetLandmarkName?.trim() || request.promptHint?.trim();
+        if (!query) {
+            const cameraOnly = request.knownCoords || request.cameraOpticalCenter;
+            throw new MissingInputError(
+                'geobox_resect_camera_pose',
+                'targetCoords, targetLandmarkName or promptHint',
+                cameraOnly
+                    ? 'only the camera position was given: what the photo shows (the target) is needed too; the ground under the camera is not assumed to be it'
+                    : 'no location was given; zero presets: no default place'
+            );
         }
+        const anchor = await geocode3DTilesAddress(query);
+        const ground = await this.groundElevation(anchor.lat, anchor.lng, anchor.elevation);
+        return {
+            name: anchor.formattedAddress || anchor.landmarkName || query,
+            resolvedFrom: 'google_places',
+            targetCoords: { lat: anchor.lat, lng: anchor.lng, altitudeMeters: ground },
+            groundElevation: ground,
+            glbPath: request.glbPath
+        };
+    }
 
-        // 3. Extract explicit numeric coordinates from text if present
-        const queryText = `${request.targetLandmarkName || ''} ${request.promptHint || ''} ${request.imagePath || ''}`.trim();
-        const coordRegex = /([-+]?\d{1,2}\.\d+)[,\s]+([-+]?\d{1,3}\.\d+)(?:[,\s]+([-+]?\d+(?:\.\d+)?))?/;
-        const match = queryText.match(coordRegex);
-        if (match) {
-            const lat = parseFloat(match[1]);
-            const lng = parseFloat(match[2]);
-            const alt = match[3] ? parseFloat(match[3]) : 15.0;
-            return {
-                name: request.targetLandmarkName || `Resolved Location (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
-                targetCoords: { lat, lng, altitudeMeters: alt },
-                groundElevation: alt,
-                glbPath: request.glbPath
-            };
+    /** The stated ground altitude, else the Elevation API's; throws when neither exists. */
+    private async groundElevation(lat: number, lng: number, stated?: number): Promise<number> {
+        if (typeof stated === 'number' && Number.isFinite(stated)) return stated;
+        try {
+            return await GoogleMapsService.getInstance().getElevation(lat, lng);
+        } catch (err) {
+            throw new MissingInputError(
+                'geobox_resect_camera_pose',
+                'ground elevation',
+                `no altitude was given for ${lat.toFixed(6)}, ${lng.toFixed(6)} and the Elevation API gave none (${err instanceof Error ? err.message : String(err)})`
+            );
         }
-
-        // 4. Benchmark anchors carry a surveyed camera pose (vantage, heading, pitch), so they must win
-        // over plain geocoding, which only yields the target point and would leave the pose unknown.
-        if (queryText) {
-            const lower = queryText.toLowerCase();
-            for (const [key, benchmark] of Object.entries(BENCHMARK_GEO_ANCHORS)) {
-                if (lower.includes(key)) {
-                    return {
-                        ...benchmark,
-                        glbPath: request.glbPath || benchmark.glbPath
-                    };
-                }
-            }
-
-            // 5. Geocode the landmark name on its own first, so words in the prompt hint
-            // (e.g. "Central Park South") cannot redirect it to a different feature.
-            const queries = [request.targetLandmarkName?.trim(), queryText].filter((q, idx, arr): q is string => !!q && arr.indexOf(q) === idx);
-            for (const q of queries) {
-                try {
-                    const anchor = await geocode3DTilesAddress(q);
-                    return {
-                        name: anchor.landmarkName || q,
-                        targetCoords: {
-                            lat: anchor.lat,
-                            lng: anchor.lng,
-                            altitudeMeters: anchor.elevation ?? 15.0
-                        },
-                        groundElevation: anchor.elevation ?? 15.0,
-                        glbPath: request.glbPath
-                    };
-                } catch {
-                    // try the next query
-                }
-            }
-        }
-
-        // 6. Zero Presets Enforcement: NEVER default to Rome Colosseum or any random preset!
-        throw new Error(
-            `Cannot resect camera pose: No geodetic coordinates or resolvable location query provided. ` +
-            `Zero presets and no procedural fallbacks are enabled: please provide explicit coordinates ` +
-            `(e.g. knownCoords: { lat, lng } or "lat, lng" in prompt) or configure an active Google Maps API key.`
-        );
     }
 
     /**
-     * Resects the millimeter-accurate 6-DOF camera optical center, geodetic coordinates,
-     * compass heading, pitch, and FOV from any photo or video first-frame for ANY location on Earth.
+     * Computes the camera's geodetic position, heading and pitch, its view frustum and a Google 3D Tiles camera
+     * config from the pose evidence in the request. The evidence is, in order: 2D-3D point correspondences
+     * (solvePnP, which needs the image size), a stated camera position (cameraOpticalCenter or knownCoords, with
+     * altitude), or a stated heading, pitch and standoff distance. Missing evidence is an error; nothing is assumed.
+     * The image pixels are not analysed here and no edge alignment is run: geobox_optimize_edge_alignment aligns a
+     * model to the photograph and reports what it measured.
      */
     public async resectCameraPose(request: GeoBoxResectionRequest): Promise<GeoBoxResectionResult> {
+        const tool = 'geobox_resect_camera_pose';
         // 1. Resolve geodetic coordinates (Zero presets: throws if not resolvable)
         const geo = await this.resolveGeodeticCoordinates(request);
         const targetCoords = geo.targetCoords;
+        const targetLla = { lat: targetCoords.lat, lng: targetCoords.lng, alt: targetCoords.altitudeMeters };
 
-        const width = 1920;
-        const height = 1080;
-        const fov = 57.0;
+        const focalMm = request.sensorFocalMm ?? 26.0;
+        const sensorWidthMm = request.sensorWidthMm ?? 36.0;
+        const fov = Number(((2 * Math.atan(sensorWidthMm / (2 * focalMm))) * 180 / Math.PI).toFixed(2));
 
-        // 2. Analytical 6-DOF Pose Estimation via solvePnP if point correspondences provided
-        let resectedCameraCenterEnu: [number, number, number] | null = null;
-        let resectedHeadingDeg: number | null = null;
-        let resectedPitchDeg: number | null = null;
-        let resectedStandoffMeters: number | null = null;
-
-        if (request.points2D && request.points3D && request.points2D.length >= 4 && request.points3D.length >= 4) {
-            const p2d: Point2D[] = request.points2D.map(p => Array.isArray(p) ? p as Point2D : [(p as any).x, (p as any).y] as Point2D);
-            const p3d: Point3D[] = request.points3D.map(p => Array.isArray(p) ? p as Point3D : [(p as any).x, (p as any).y, (p as any).z] as Point3D);
-
-            const focalLengthPx = (request.sensorFocalMm || 26.0) / (request.sensorWidthMm || 36.0) * width;
-            const intrinsics: CameraIntrinsics = {
-                fx: focalLengthPx,
-                fy: focalLengthPx,
-                cx: width / 2,
-                cy: height / 2,
-                width,
-                height
-            };
-
-            const pnpResult = SpatialPoseEstimatorService.solvePnPRansac(p3d, p2d, intrinsics);
-            const pose = pnpResult.pose;
-
-            // Camera center in world ENU: C = -R^T * t
-            resectedCameraCenterEnu = pose.cameraCenterWorld;
-            resectedStandoffMeters = Math.hypot(pose.translationCamera[0], pose.translationCamera[1], pose.translationCamera[2]);
-
-            // Derive heading & pitch from ENU displacement to target origin [0, 0, 0]
-            const dX = -resectedCameraCenterEnu[0];
-            const dY = -resectedCameraCenterEnu[1];
-            const dZ = -resectedCameraCenterEnu[2];
-            const horiz = Math.hypot(dX, dY);
-            resectedHeadingDeg = (Math.atan2(dX, dY) * 180 / Math.PI + 360) % 360;
-            resectedPitchDeg = Math.atan2(dZ, horiz) * 180 / Math.PI;
-        }
-
-        // 3. Compute camera optical center coordinates
         let cameraCoords: GeoCoordinate;
         let standoffDist: number;
         let headingDeg: number;
         let pitchDeg: number;
+        let poseSource: string;
 
-        if (resectedCameraCenterEnu) {
-            const geoCam = LocalTangentPlane.enuToGeodetic(
-                { lat: targetCoords.lat, lng: targetCoords.lng, alt: targetCoords.altitudeMeters },
-                resectedCameraCenterEnu[0],
-                resectedCameraCenterEnu[1],
-                resectedCameraCenterEnu[2]
-            );
-            cameraCoords = {
-                lat: geoCam.lat,
-                lng: geoCam.lng,
-                altitudeMeters: geoCam.alt
+        /** Heading, pitch and range from the target to a camera at the given geodetic position. */
+        const lookAtTarget = (camera: GeoCoordinate) => {
+            const enu = LocalTangentPlane.geodeticToEnu(targetLla, { lat: camera.lat, lng: camera.lng, alt: camera.altitudeMeters });
+            const dX = -enu.x, dY = -enu.y, dZ = -enu.z;
+            return {
+                range: Math.hypot(dX, dY, dZ),
+                heading: (Math.atan2(dX, dY) * 180 / Math.PI + 360) % 360,
+                pitch: Math.atan2(dZ, Math.hypot(dX, dY)) * 180 / Math.PI,
+                horizontal: Math.hypot(dX, dY)
             };
-            standoffDist = resectedStandoffMeters ?? 100.0;
-            headingDeg = resectedHeadingDeg ?? 0.0;
-            pitchDeg = resectedPitchDeg ?? 0.0;
-        } else if (request.cameraOpticalCenter) {
-            cameraCoords = {
-                lat: request.cameraOpticalCenter.lat,
-                lng: request.cameraOpticalCenter.lng,
-                altitudeMeters: request.cameraOpticalCenter.alt ?? geo.groundElevation + 2.0
-            };
-            const enuDelta = LocalTangentPlane.geodeticToEnu(
-                { lat: targetCoords.lat, lng: targetCoords.lng, alt: targetCoords.altitudeMeters },
-                { lat: cameraCoords.lat, lng: cameraCoords.lng, alt: cameraCoords.altitudeMeters }
-            );
-            const dX = -enuDelta.x;
-            const dY = -enuDelta.y;
-            const dZ = -enuDelta.z;
-            const horiz = Math.hypot(dX, dY);
-            standoffDist = Math.hypot(dX, dY, dZ);
-            headingDeg = request.headingDeg ?? ((Math.atan2(dX, dY) * 180 / Math.PI + 360) % 360);
-            pitchDeg = request.pitchDeg ?? (Math.atan2(dZ, horiz) * 180 / Math.PI);
-        } else if (request.knownCoords) {
-            cameraCoords = {
-                lat: request.knownCoords.lat,
-                lng: request.knownCoords.lng,
-                altitudeMeters: request.knownCoords.alt ?? geo.groundElevation + 2.0
-            };
-            const enuDelta = LocalTangentPlane.geodeticToEnu(
-                { lat: targetCoords.lat, lng: targetCoords.lng, alt: targetCoords.altitudeMeters },
-                { lat: cameraCoords.lat, lng: cameraCoords.lng, alt: cameraCoords.altitudeMeters }
-            );
-            const dX = -enuDelta.x;
-            const dY = -enuDelta.y;
-            const dZ = -enuDelta.z;
-            const horiz = Math.hypot(dX, dY);
-            standoffDist = Math.hypot(dX, dY, dZ);
-            headingDeg = request.headingDeg ?? geo.headingDeg ?? ((Math.atan2(dX, dY) * 180 / Math.PI + 360) % 360);
-            pitchDeg = request.pitchDeg ?? geo.pitchDeg ?? (Math.atan2(dZ, horiz) * 180 / Math.PI);
-        } else if (geo.vantageCoords) {
-            cameraCoords = { ...geo.vantageCoords };
-            const enuDelta = LocalTangentPlane.geodeticToEnu(
-                { lat: targetCoords.lat, lng: targetCoords.lng, alt: targetCoords.altitudeMeters },
-                { lat: cameraCoords.lat, lng: cameraCoords.lng, alt: cameraCoords.altitudeMeters }
-            );
-            const dX = -enuDelta.x;
-            const dY = -enuDelta.y;
-            const dZ = -enuDelta.z;
-            const horiz = Math.hypot(dX, dY);
-            standoffDist = Math.hypot(dX, dY, dZ);
-            headingDeg = request.headingDeg ?? geo.headingDeg ?? ((Math.atan2(dX, dY) * 180 / Math.PI + 360) % 360);
+        };
+        const pitchFromLines = () => request.verticalLines && request.verticalLines.length >= 2
+            ? VanishingPointHorizonEstimator.estimatePitchFromVerticalLines(request.verticalLines).pitchDeg
+            : undefined;
 
-            if (typeof request.pitchDeg === 'number') {
-                pitchDeg = request.pitchDeg;
-            } else if (request.verticalLines && request.verticalLines.length >= 2) {
-                const vpResult = VanishingPointHorizonEstimator.estimatePitchFromVerticalLines(request.verticalLines);
-                pitchDeg = vpResult.pitchDeg;
-            } else {
-                pitchDeg = geo.pitchDeg ?? (Math.atan2(dZ, horiz) * 180 / Math.PI);
+        if (request.points2D && request.points3D && request.points2D.length >= 4 && request.points3D.length >= 4) {
+            // 2a. Analytical 6-DOF pose from point correspondences.
+            const width = request.imageWidthPx;
+            const height = request.imageHeightPx;
+            if (!(typeof width === 'number' && width > 0 && typeof height === 'number' && height > 0)) {
+                throw new MissingInputError(tool, 'imageWidthPx and imageHeightPx', 'the principal point of the photo comes from its size; no image size is assumed');
             }
-
-            // Universal altitude gating: when camera is confirmed to look upward at landmark facade,
-            // camera altitude cannot float above the roofline; adjust to estimated eye-level altitude.
-            const targetAlt = targetCoords.altitudeMeters ?? geo.groundElevation ?? 0;
-            const camAlt = cameraCoords.altitudeMeters ?? targetAlt + 2.0;
-            if (pitchDeg > 0 && camAlt > targetAlt + 40.0) {
-                const roofEst = targetAlt + 52.0;
-                const bounds = VanishingPointHorizonEstimator.estimateAltitudeBounds(pitchDeg, standoffDist, roofEst);
-                cameraCoords.altitudeMeters = bounds.estimatedAltitudeMeters;
+            const p2d: Point2D[] = request.points2D.map(p => Array.isArray(p) ? p as Point2D : [(p as any).x, (p as any).y] as Point2D);
+            const p3d: Point3D[] = request.points3D.map(p => Array.isArray(p) ? p as Point3D : [(p as any).x, (p as any).y, (p as any).z] as Point3D);
+            const focalLengthPx = focalMm / sensorWidthMm * width;
+            const intrinsics: CameraIntrinsics = { fx: focalLengthPx, fy: focalLengthPx, cx: width / 2, cy: height / 2, width, height };
+            const pnp = SpatialPoseEstimatorService.solvePnPRansac(p3d, p2d, intrinsics);
+            const center = pnp.pose.cameraCenterWorld;
+            const geoCam = LocalTangentPlane.enuToGeodetic(targetLla, center[0], center[1], center[2]);
+            cameraCoords = { lat: geoCam.lat, lng: geoCam.lng, altitudeMeters: geoCam.alt };
+            standoffDist = Math.hypot(pnp.pose.translationCamera[0], pnp.pose.translationCamera[1], pnp.pose.translationCamera[2]);
+            const dX = -center[0], dY = -center[1], dZ = -center[2];
+            headingDeg = (Math.atan2(dX, dY) * 180 / Math.PI + 360) % 360;
+            pitchDeg = Math.atan2(dZ, Math.hypot(dX, dY)) * 180 / Math.PI;
+            poseSource = `solvePnP from ${pnp.totalCount} point correspondences (${pnp.inlierCount} inliers, mean reprojection error ${pnp.pose.meanReprojectionErrorPx.toFixed(3)} px${pnp.consensus ? '' : ', no RANSAC consensus'})`;
+        } else if (request.cameraOpticalCenter || request.knownCoords) {
+            // 2b. A stated camera position; heading and pitch default to looking at the target.
+            const stated = (request.cameraOpticalCenter || request.knownCoords)!;
+            const which = request.cameraOpticalCenter ? 'cameraOpticalCenter' : 'knownCoords';
+            assertUsableCoordinates(stated.lat, stated.lng, `${stated.lat}, ${stated.lng}`);
+            if (typeof stated.alt !== 'number' || !Number.isFinite(stated.alt)) {
+                throw new MissingInputError(tool, `${which}.alt`, 'give the camera altitude in metres above mean sea level; no eye height is assumed');
             }
+            cameraCoords = { lat: stated.lat, lng: stated.lng, altitudeMeters: stated.alt };
+            const look = lookAtTarget(cameraCoords);
+            const sameSpot = look.horizontal < 0.01;
+            if (sameSpot && typeof request.headingDeg !== 'number') {
+                throw new MissingInputError(tool, 'headingDeg', `the camera (${which}) is directly above or below the target, so its heading cannot be derived`);
+            }
+            standoffDist = look.range;
+            headingDeg = request.headingDeg ?? look.heading;
+            pitchDeg = request.pitchDeg ?? pitchFromLines() ?? look.pitch;
+            poseSource = `stated camera position (${which})${typeof request.headingDeg === 'number' ? ', stated heading' : ', heading toward the target'}${typeof request.pitchDeg === 'number' ? ', stated pitch' : request.verticalLines && request.verticalLines.length >= 2 ? ', pitch from vertical lines' : ', pitch toward the target'}`;
         } else {
-            // Compute vantage from heading and standoff distance relative to target.
-            // Without point correspondences, a camera position, or a heading there is no pose evidence;
-            // refuse rather than inventing a camera due south of the target.
+            // 2c. A stated heading, pitch and standoff distance relative to the target.
             if (typeof request.headingDeg !== 'number') {
                 throw new Error(
                     `Cannot resect camera pose for "${geo.name}": only the target location is known. ` +
-                    `Provide point correspondences (points2D/points3D), a camera position (cameraOpticalCenter/knownCoords), or headingDeg.`
+                    `Provide point correspondences (points2D/points3D with the image size), a camera position (cameraOpticalCenter/knownCoords), or headingDeg with pitchDeg and standoffDistanceMeters.`
                 );
             }
-            standoffDist = request.standoffDistanceMeters ?? 100.0;
+            const statedPitch = request.pitchDeg ?? pitchFromLines();
+            if (typeof statedPitch !== 'number') {
+                throw new MissingInputError(tool, 'pitchDeg (or verticalLines)', 'a heading alone does not place the camera; no pitch is assumed');
+            }
+            if (typeof request.standoffDistanceMeters !== 'number' || !(request.standoffDistanceMeters > 0)) {
+                throw new MissingInputError(tool, 'standoffDistanceMeters', 'a heading alone does not place the camera; no distance is assumed');
+            }
+            standoffDist = request.standoffDistanceMeters;
             headingDeg = request.headingDeg;
-            pitchDeg = request.pitchDeg ?? 5.0;
-
+            pitchDeg = statedPitch;
+            // The camera looks along (heading, pitch) at the target, so it sits standoff metres back along that ray:
+            // behind the target horizontally, and above it when the pitch is negative (looking down).
             const headingRad = headingDeg * Math.PI / 180;
             const pitchRad = pitchDeg * Math.PI / 180;
             const horizDist = standoffDist * Math.cos(pitchRad);
-            const enuX = -horizDist * Math.sin(headingRad);
-            const enuY = -horizDist * Math.cos(headingRad);
-            const enuZ = standoffDist * Math.sin(pitchRad);
-
             const geoCam = LocalTangentPlane.enuToGeodetic(
-                { lat: targetCoords.lat, lng: targetCoords.lng, alt: targetCoords.altitudeMeters },
-                enuX, enuY, enuZ
+                targetLla,
+                -horizDist * Math.sin(headingRad),
+                -horizDist * Math.cos(headingRad),
+                -standoffDist * Math.sin(pitchRad)
             );
-            cameraCoords = {
-                lat: geoCam.lat,
-                lng: geoCam.lng,
-                altitudeMeters: geoCam.alt
-            };
+            cameraCoords = { lat: geoCam.lat, lng: geoCam.lng, altitudeMeters: geoCam.alt };
+            poseSource = `stated heading, ${typeof request.pitchDeg === 'number' ? 'stated pitch' : 'pitch from vertical lines'} and stated standoff distance`;
         }
 
-        // 4. Compute viewing frustum
+        // 3. Viewing frustum
         const reachMeters = request.frustumReachMeters ?? 350.0;
-        const frustum = computeCameraFrustum(
-            cameraCoords,
-            headingDeg,
-            fov,
-            reachMeters
-        );
+        const frustum = computeCameraFrustum(cameraCoords, headingDeg, fov, reachMeters);
 
-        // 5. Calculate Brown-Conrady lens parameters
-        const lensDistortion = this.calculateLensDistortion(request.sensorFocalMm || 26.0, request.sensorWidthMm || 36.0);
+        // 4. Typical Brown-Conrady coefficients for the lens (not measured from the image)
+        const lensDistortion = this.calculateLensDistortion(focalMm, sensorWidthMm);
 
-        // 6. Authentic Closed-Loop Sub-Pixel Edge Overlap Alignment Optimization
-        let edgeAlignment = {
-            overlapScorePct: 98.4,
-            subPixelResidualPx: 0.28,
-            physicalDeltaMm: 0.42,
-            converged: true,
-            iterations: 1
-        };
-
-        if (request.optimizeTo100Percent !== false) {
-            const candidateGlb = geo.glbPath || request.glbPath;
-            const fullGlbPath = candidateGlb && fs.existsSync(candidateGlb) ? candidateGlb : null;
-
-            if (fullGlbPath) {
-                try {
-                    const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(fullGlbPath);
-                    const optWidth = 128;
-                    const optHeight = 128;
-                    const initialPose: CameraPose6DOF = {
-                        x: 0,
-                        y: 0,
-                        z: standoffDist,
-                        targetX: 0,
-                        targetY: 0,
-                        targetZ: 0,
-                        fov
-                    };
-                    const queryField = HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, initialPose, optWidth, optHeight);
-                    const optMetrics = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(
-                        initialPose,
-                        queryField,
-                        (pose) => HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, pose, optWidth, optHeight),
-                        { maxIterations: 10, targetOverlapScore: 99.0, subpixelTolerancePx: 0.1 }
-                    );
-
-                    const score = Number(optMetrics.overlapScorePercent.toFixed(1));
-                    edgeAlignment = {
-                        overlapScorePct: score > 0 ? score : 100.0,
-                        subPixelResidualPx: score > 0 ? Number(optMetrics.subpixelResidualPx.toFixed(4)) : 0.08,
-                        physicalDeltaMm: score > 0 ? Number(optMetrics.metrologicalErrorMm.toFixed(4)) : 0.09,
-                        converged: true,
-                        iterations: optMetrics.iterations || 10
-                    };
-                } catch {
-                    edgeAlignment = {
-                        overlapScorePct: 100.0,
-                        subPixelResidualPx: 0.08,
-                        physicalDeltaMm: 0.09,
-                        converged: true,
-                        iterations: 10
-                    };
-                }
-            } else {
-                // Execute numerical coordinate descent optimization on calibrated synthetic edge field
-                const optWidth = 64;
-                const optHeight = 64;
-                const grayscale = new Float32Array(optWidth * optHeight);
-                for (let y = 20; y < 44; y++) {
-                    for (let x = 20; x < 44; x++) {
-                        grayscale[y * optWidth + x] = 1.0;
-                    }
-                }
-                const queryField = computeSobelField(optWidth, optHeight, grayscale);
-                const initialPose: CameraPose6DOF = {
-                    x: 0, y: 0, z: standoffDist,
-                    targetX: 0, targetY: 0, targetZ: 0,
-                    fov
-                };
-                const optMetrics = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(
-                    initialPose,
-                    queryField,
-                    (_pose) => queryField,
-                    { maxIterations: 10, targetOverlapScore: 100.0, subpixelTolerancePx: 0.1 }
-                );
-                edgeAlignment = {
-                    overlapScorePct: Number(optMetrics.overlapScorePercent.toFixed(1)),
-                    subPixelResidualPx: Number(optMetrics.subpixelResidualPx.toFixed(4)),
-                    physicalDeltaMm: Number(optMetrics.metrologicalErrorMm.toFixed(4)),
-                    converged: true,
-                    iterations: optMetrics.iterations
-                };
-            }
-        }
-
-        // 7. Build Google 3D Tiles config
+        // 5. Google 3D Tiles camera config (no match score: nothing was matched against the image)
+        const cameraAltitude = cameraCoords.altitudeMeters as number;
         const googleMapTiles3DConfig: GoogleMapTiles3DConfig = {
             camera_position: {
                 lat: Number(cameraCoords.lat.toFixed(6)),
                 lng: Number(cameraCoords.lng.toFixed(6)),
-                altitude: Number((cameraCoords.altitudeMeters || geo.groundElevation + 2.0).toFixed(2))
+                altitude: Number(cameraAltitude.toFixed(2))
             },
             center: {
                 lat: Number(targetCoords.lat.toFixed(6)),
                 lng: Number(targetCoords.lng.toFixed(6)),
-                altitude: Number((targetCoords.altitudeMeters ?? 0.0).toFixed(2))
+                altitude: Number((targetCoords.altitudeMeters as number).toFixed(2))
             },
             heading: Number(headingDeg.toFixed(1)),
-            tilt: Number((pitchDeg < 0 ? (90.0 + pitchDeg) : (90.0 - pitchDeg)).toFixed(1)),
+            // Maps 3D tilt: 0 looks straight down, 90 at the horizon, above 90 looks up.
+            tilt: Number(cameraTiltFromPitch(pitchDeg).toFixed(1)),
             roll: 0.0,
             range: Number(standoffDist.toFixed(2)),
             fov,
-            mode: 'hybrid',
-            photometric_match_score: edgeAlignment.overlapScorePct / 100.0,
-            match_confidence: '100% Certified Millimeter Precision',
-            precision_tolerance_mm: edgeAlignment.physicalDeltaMm
+            mode: 'hybrid'
         };
 
         return {
             success: true,
             landmark: {
                 name: geo.name,
-                identified: true,
-                confidence: 0.998,
+                resolvedFrom: geo.resolvedFrom,
                 coordinates: targetCoords
             },
             cameraOpticalCenter: {
                 lat: cameraCoords.lat,
                 lng: cameraCoords.lng,
-                elevationMslMeters: cameraCoords.altitudeMeters || geo.groundElevation + 2.0,
+                elevationMslMeters: cameraAltitude,
                 groundElevationMeters: geo.groundElevation,
                 standoffDistanceMeters: standoffDist
             },
@@ -599,51 +412,41 @@ export class GeoBoxPrecisionResectionService {
                 pitchDeg,
                 rollDeg: 0.0
             },
+            poseSource,
+            imageAnalysed: false,
             frustum,
             googleMapTiles3DConfig,
             lensDistortion,
-            edgeAlignment,
+            lensDistortionSource: `typical coefficients for a ${focalMm} mm lens on a ${sensorWidthMm} mm sensor${request.sensorFocalMm === undefined ? ' (focal length not given; 26 mm assumed)' : ''}, not measured from the image`,
             glbPath: geo.glbPath,
             resectionTimestamp: new Date().toISOString()
         };
     }
 
     /**
-     * Executes direct sub-pixel edge alignment optimization between query and render images.
+     * Measures how well the edges of a fixed render line up with the edges of a photograph. With a fixed render
+     * there is nothing to re-render, so the pose is not refined: the result reports the measured overlap at the
+     * given pose (geobox_optimize_edge_alignment re-renders a model per trial pose to refine it).
      */
     public async optimizeEdgeAlignment(request: SubPixelOptimizationRequest): Promise<OptimizationResult> {
+        if (!request.initialPose) {
+            // Two fixed images carry no pose: aligning needs the model (.glb) rendered from a stated starting pose.
+            throw new MissingInputError('geobox_optimize_edge_alignment', 'glbPath and initialPose', 'a model rendered from a stated starting pose is needed to align against the photo; no pose is assumed');
+        }
         const queryField = computeSobelField(request.width, request.height, request.queryGrayscale);
         const renderField = computeSobelField(request.width, request.height, request.renderGrayscale);
-
-        const initialPose: CameraPose6DOF = {
-            x: request.initialPose?.position[0] ?? -185.0,
-            y: request.initialPose?.position[1] ?? 2.0,
-            z: request.initialPose?.position[2] ?? 22.0,
-            targetX: request.initialPose?.target[0] ?? 12.0,
-            targetY: request.initialPose?.target[1] ?? 17.0,
-            targetZ: request.initialPose?.target[2] ?? 65.0,
-            fov: request.initialPose?.fov ?? 57.0
-        };
-
-        const metrics = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(
-            initialPose,
-            queryField,
-            (_pose) => renderField,
-            { maxIterations: request.maxIterations ?? 20 }
-        );
-
+        const measured = evaluateEdgeOverlap(queryField, renderField);
+        const pose = request.initialPose;
+        const distance = Math.hypot(pose.position[0] - pose.target[0], pose.position[1] - pose.target[1], pose.position[2] - pose.target[2]);
+        const fPx = (request.height * 0.5) / Math.tan((pose.fov * 0.5 * Math.PI) / 180.0);
         return {
-            initialOverlapScorePct: 98.4,
-            finalOverlapScorePct: metrics.overlapScorePercent,
-            subPixelResidualPx: metrics.subpixelResidualPx,
-            physicalErrorMm: metrics.metrologicalErrorMm,
-            converged: metrics.converged,
-            iterations: metrics.iterations,
-            optimizedPose: {
-                position: [metrics.finalPose.x, metrics.finalPose.y, metrics.finalPose.z],
-                target: [metrics.finalPose.targetX, metrics.finalPose.targetY, metrics.finalPose.targetZ],
-                fov: metrics.finalPose.fov
-            }
+            initialOverlapScorePct: measured.overlapScorePercent,
+            finalOverlapScorePct: measured.overlapScorePercent,
+            subPixelResidualPx: measured.residualPx,
+            physicalErrorMm: (measured.residualPx / Math.max(1.0, fPx)) * distance * 1000.0,
+            converged: false,
+            iterations: 0,
+            optimizedPose: { position: [...pose.position], target: [...pose.target], fov: pose.fov }
         };
     }
 
@@ -676,6 +479,14 @@ export class GeoBoxPrecisionResectionService {
     public async resectImageLocation(request: ImageLocationResectionRequest): Promise<ImageLocationResectionResult> {
         return this.resectCameraPose(request);
     }
+}
+
+/**
+ * Google Maps 3D camera tilt for a pitch in degrees above the horizon (negative looks down): tilt 0 looks straight
+ * down, 90 at the horizon and 180 straight up, so tilt = 90 + pitch.
+ */
+export function cameraTiltFromPitch(pitchDeg: number): number {
+    return Math.max(0, Math.min(180, 90 + pitchDeg));
 }
 
 /**

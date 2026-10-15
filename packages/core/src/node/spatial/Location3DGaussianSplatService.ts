@@ -17,12 +17,15 @@ import {
     type StationImageGenerator
 } from './BeautifyStationService';
 import { resolveSurveyPreset } from './survey-router';
-import { Google3DTileService } from '../../browser/generative-canvas/services/Google3DTileService';
+import { getGoogle3DTilesClay } from './Google3DTileBlockoutPipelineService';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 
 export interface Location3DGSRequest {
     location: string;
+    /** A clay GLB already extracted for this place (e.g. by google_3d_tiles_get_clay). Without it the place is extracted fresh. */
+    glbPath?: string;
     lat?: number;
     lng?: number;
     elevation?: number;
@@ -122,21 +125,14 @@ export class Location3DGaussianSplatService {
 
         progressReporter(0.02, `Resolving geodetic location for "${req.location}"...`);
 
-        // 1. Resolve geographic preset or synthesize from coordinates
-        const customAnchor: GeodeticAnchor | undefined = (req.lat !== undefined && req.lng !== undefined) ? {
-            lat: req.lat,
-            lng: req.lng,
-            elevationMeters: req.elevation || 0,
-            headingDeg: req.headingDeg || 0,
-            formattedAddress: req.location
-        } : undefined;
-
-        const preset = resolveSurveyPreset({
+        // 1. Resolve the location (coordinates, or a place name via Google Places) and plan the survey
+        const preset = await resolveSurveyPreset({
             location: req.location,
             lat: req.lat,
             lng: req.lng,
             elevationMeters: req.elevation,
-            anchor: customAnchor,
+            headingDeg: req.headingDeg,
+            glbPath: req.glbPath,
             cameraCount: req.cameraCount,
             sigmaScale: req.sigmaScale,
             voxelSizeMeters: req.voxelSizeMeters,
@@ -151,66 +147,24 @@ export class Location3DGaussianSplatService {
             exposureScale: req.exposureScale
         }, root);
 
-        let glbPath = path.isAbsolute(preset.glbPath) ? preset.glbPath : path.resolve(root, preset.glbPath);
         const anchor = preset.anchor;
-        const sanitizedName = (req.location || anchor.formattedAddress || 'location').toLowerCase().replace(/[^a-z0-9]+/g, '_');
-
-        // If target GLB is not on disk, synthesize authentic clay mesh or check fallback models
-        if (!fs.existsSync(glbPath)) {
-            const namedCandidates = [
-                path.resolve(root, `public/models/${sanitizedName}_grounded.glb`),
-                path.resolve(root, `public/models/${sanitizedName}_clay.glb`),
-                path.resolve(root, `public/models/${sanitizedName}.glb`)
-            ];
-            let found = false;
-            for (const cand of namedCandidates) {
-                if (fs.existsSync(cand)) {
-                    glbPath = cand;
-                    found = true;
-                    break;
-                }
+        // The survey renders the place's own clay tiles: a GLB the caller passed, else a fresh extraction at the
+        // resolved anchor. A failed extraction fails the call; no other model is picked by name or substituted.
+        let glbPath: string;
+        if (preset.glbPath) {
+            glbPath = path.isAbsolute(preset.glbPath) ? preset.glbPath : path.resolve(root, preset.glbPath);
+            if (!fs.existsSync(glbPath)) {
+                throw new MissingInputError('location_generate_3dgs', 'glbPath', `${glbPath} does not exist`);
             }
-
-            if (!found) {
-                // Dynamically synthesize authentic real-world 3D clay geometry for this location
-                try {
-                    const tileService = Google3DTileService.getInstance();
-                    const tileResult = tileService.ingestTileRegionSync({
-                        query: req.location || anchor.formattedAddress,
-                        lat: anchor.lat,
-                        lng: anchor.lng,
-                        elevation: anchor.elevationMeters,
-                        radiusMeters: preset.cropRadius || 75,
-                        clayPreset: 'studio-grey',
-                        detailLevel: 'high',
-                        generateGlb: true
-                    });
-                    if (tileResult.glbBuffer) {
-                        const targetGlb = path.resolve(root, `public/models/${sanitizedName}_clay.glb`);
-                        await fs.outputFile(targetGlb, Buffer.from(tileResult.glbBuffer));
-                        glbPath = targetGlb;
-                        found = true;
-                    }
-                } catch (tileErr) {
-                    console.warn('[Location3DGSService] Dynamic tile mesh synthesis warning:', tileErr);
-                }
-            }
-
-            if (!found) {
-                const fallbackCandidates = [
-                    path.resolve(root, 'public/models/survey_box_ground.glb'),
-                    path.resolve(root, 'build/test_survey_render/box_ground.glb'),
-                    path.resolve(root, 'public/models/colosseum_clay.glb'),
-                    path.resolve(root, 'public/models/esb_clay.glb'),
-                    path.resolve(root, 'public/models/gap_clay.glb')
-                ];
-                for (const cand of fallbackCandidates) {
-                    if (fs.existsSync(cand)) {
-                        glbPath = cand;
-                        break;
-                    }
-                }
-            }
+        } else {
+            progressReporter(0.04, `Extracting Google 3D Tiles in clay at ${anchor.formattedAddress}...`);
+            const extraction = await getGoogle3DTilesClay(
+                { lat: anchor.lat, lng: anchor.lng, elevation: anchor.elevationMeters, landmarkName: anchor.formattedAddress },
+                // Named by the resolved place and radius (not the request text), so two places described alike never
+                // overwrite each other's tiles.
+                { radiusMeters: preset.cropRadius || 75, outputDir: path.resolve(root, 'public/models') }
+            );
+            glbPath = extraction.glbPath;
         }
 
         let stations = preset.stations;
@@ -264,7 +218,6 @@ export class Location3DGaussianSplatService {
                 const isDraft = req.draft === true || req.fidelity === 'draft';
                 generator = createDefaultStationImageGenerator({
                     workspaceRoot: root,
-                    allowProceduralGenerator: true,
                     fidelity: isDraft ? 'draft' : (req.fidelity || 'production'),
                     imageSize: isDraft ? '1K' : '2K'
                 });

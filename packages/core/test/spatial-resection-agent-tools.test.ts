@@ -3,6 +3,21 @@ import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { buildSystemInstruction } from '../src/node/gemini/prompt-builder';
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
+import { KNOWN_RESECTION_LANDMARKS } from '../src/node/spatial/GeoBoxPrecisionResectionService';
+
+/** A surveyed reference pose passed explicitly; resolution never picks one from words in the prompt hint. */
+function fixturePose(key: keyof typeof KNOWN_RESECTION_LANDMARKS) {
+    const f = KNOWN_RESECTION_LANDMARKS[key];
+    return {
+        targetLandmarkName: f.name,
+        targetCoords: { lat: f.targetCoords.lat, lng: f.targetCoords.lng, alt: f.groundElevation },
+        cameraOpticalCenter: { lat: f.vantageCoords.lat, lng: f.vantageCoords.lng, alt: f.vantageCoords.altitudeMeters },
+        headingDeg: f.headingDeg,
+        pitchDeg: f.pitchDeg,
+        glbPath: f.glbPath
+    };
+}
+
 
 describe('Spatial 2D-to-3D Resection & Pose Estimation Agent Tools', () => {
     const registry = createDefaultToolRegistry();
@@ -155,17 +170,22 @@ describe('Spatial 2D-to-3D Resection & Pose Estimation Agent Tools', () => {
 
         it('should dispatch spatial_resect_image_location and geobox_resect_image_location', async () => {
             const response1 = await registry.dispatch('spatial_resect_image_location', {
+                ...fixturePose('colosseum'),
                 promptHint: 'Colosseum Rome dusk vantage point',
                 sensorFocalMm: 26.0,
                 optimizeTo100Percent: true
             }, {} as any);
 
             expect(response1.exec.status).toBe('completed');
-            expect(response1.exec.summaryResult).toContain('Resected 6-DOF camera pose');
+            expect(response1.exec.summaryResult).toContain('Camera pose for Colosseum');
             const payload1: any = response1.resultPayload;
-            expect(payload1.edgeAlignment.overlapScorePct).toBe(100.0);
+            // The pose evidence is reported; no edge overlap is claimed for a photo that was never read.
+            expect(payload1.edgeAlignment).toBeUndefined();
+            expect(payload1.imageAnalysed).toBe(false);
+            expect(payload1.poseSource).toMatch(/stated camera position/);
 
             const response2 = await registry.dispatch('geobox_resect_image_location', {
+                ...fixturePose('colosseum'),
                 promptHint: 'Colosseum Rome dusk vantage point'
             }, {} as any);
 

@@ -17,18 +17,21 @@ import { promisify } from 'util';
 import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
 import { DistrictTooLargeError, GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler';
 import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel';
-import { GoogleVectorMappingService } from '../../browser/generative-canvas/services/google-vector-mapping-service';
-import {
-  detectRealWorldLocationIntent,
-  Google3DTileService
-} from '../../browser/generative-canvas/services/Google3DTileService';
-import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
+import { GoogleMapsService, resolveMapsApiKey } from '../../browser/generative-canvas/services/google-maps-service';
 import type {
   PhysicalCameraConfig,
   SensorFormatPreset
 } from '../../common/optics/physical-camera-protocol';
+import { LocationUnresolvedError, MissingInputError, TileExtractionError } from '../../common/errors/pipeline-errors';
+import { assertUsableCoordinates, formatCoordinates, parseCoordinateText } from '../../common/coordinate/parse-coordinates';
 
 const execFileAsync = promisify(execFile);
+
+/** "Flatiron Building, 175 5th Ave, New York, NY 10010, USA": Google's name for the place plus its address. */
+function describePlace(name: string | undefined, formattedAddress: string): string {
+  if (!name || formattedAddress.toLowerCase().includes(name.toLowerCase())) return formattedAddress;
+  return `${name}, ${formattedAddress}`;
+}
 
 // WGS-84 Ellipsoid constants
 const WGS84_A = 6378137.0; // semi-major axis (meters)
@@ -39,8 +42,13 @@ const WGS84_E2 = (WGS84_A * WGS84_A - WGS84_B * WGS84_B) / (WGS84_A * WGS84_A); 
 export interface GeoAnchor {
   lat: number;
   lng: number;
+  /** Metres above sea level; undefined until stated by the caller, measured by the Elevation API or from the tiles. */
   elevation?: number;
+  /** Where `elevation` came from: 'explicit', 'google_elevation_api' or 'tiles_ground'. */
+  elevationSource?: string;
   landmarkName?: string;
+  /** Exactly what the location resolved to: Google's name and address for a place, or the coordinates. */
+  formattedAddress?: string;
 }
 
 export interface CameraPoseFrame {
@@ -135,7 +143,7 @@ export interface TileCollisionConfig {
 }
 
 export interface TileBlockoutPipelineRequest {
-  address?: string; // Arbitrary address, query, or coordinate string (e.g. "Midtown Manhattan, coordinates: 40.748400, -73.985700")
+  address?: string; // A place name or address (resolved with Google Places), or only "lat, lng" (e.g. "40.748400, -73.985700"); text mixing both is looked up as a name
   geoAnchor?: GeoAnchor;
   geoidHeight?: number;
   cameraPath?: CameraPathData | string; // Path to json or data object; auto-generated if omitted
@@ -210,8 +218,10 @@ export interface Google3DTile3DObjectResult {
   glbBuffer: Buffer;
   glbPath: string;
   mesh: Google3DTileMeshStats;
+  /** For a direct crawl, errorTarget is the largest geometric error (metres) among the leaf tiles in the GLB. */
   quality: Google3DTileQualityReport;
-  render: Google3DTileRenderOutput;
+  /** Present only when frames were rendered (the offline mock); a direct tile crawl renders nothing. */
+  render?: Google3DTileRenderOutput;
   manifest: Record<string, any>;
   /** True only when produced by the explicit `offlineMock` test mode (placeholder data, not real tiles). */
   mock?: boolean;
@@ -252,6 +262,10 @@ export interface Google3DTilesQueryOptions {
   enforceZeroBuildingClipping?: boolean;
   zenithAltitudeMeters?: number;
   maxLeaves?: number;
+  /** Injected for tests: used for the Places lookup and the tile requests. Defaults to the global fetch. */
+  fetchImpl?: typeof fetch;
+  /** Stops the extraction (fetch3DObject): pending Places and tile requests are aborted and no GLB is written. */
+  signal?: AbortSignal;
 }
 
 export interface TileClayBlockoutRunnerRequest {
@@ -307,6 +321,8 @@ export interface TileBlockoutPipelineResult {
   mock?: boolean;
   videoRef: '<VIDEO_REF_0>';
   outputVideoPath: string;
+  /** The WebM this run encoded; absent when the optional encode was skipped or failed. */
+  webmVideoPath?: string;
   glbBuffer?: Buffer;
   glbPath?: string;
   mesh?: Google3DTileMeshStats;
@@ -376,115 +392,79 @@ export class Google3DTileBlockoutPipelineService {
   }
 
   /**
-   * Resolves an arbitrary address string or geodetic coordinate pair
-   * into a validated GeoAnchor with latitude, longitude, and elevation.
+   * Resolves a coordinate pair or a place name to one location.
    *
-   * Zero-preset and no-fallback contract:
-   * 1. Coordinate objects ({ lat, lng, elevation? }) are validated and returned.
-   * 2. Coordinate strings (e.g. "40.748400, -73.985700", "Midtown Manhattan, coordinates: 40.748400, -73.985700") are parsed via regex.
-   * 3. Address strings are resolved via Google Maps Geocoding API if an API key is available.
-   * 4. If neither matches, an explicit Error is thrown. No presets or procedural fallbacks are permitted.
+   * 1. A { lat, lng, elevation? } object, or text that is entirely a coordinate pair, is used as given.
+   *    (0, 0) and out-of-range values are rejected.
+   * 2. Anything else is one Google Places API (New) Text Search call with the configured Maps key; the top
+   *    result is used and its formatted address is returned, so callers can show exactly what was resolved.
+   *
+   * There is no place table, no substring matching and no default location. Elevation is only what the
+   * caller stated: a place lookup leaves it undefined (fetch3DObject measures the ground from the tiles).
+   * Every failure throws LocationUnresolvedError.
    */
   public async resolveAddress(
     queryOrCoords?: string | GeoAnchor,
-    apiKey?: string
+    apiKey?: string,
+    fetchImpl?: typeof fetch
   ): Promise<GeoAnchor> {
     if (typeof queryOrCoords === 'object' && queryOrCoords !== null) {
-      if (typeof queryOrCoords.lat !== 'number' || typeof queryOrCoords.lng !== 'number' || isNaN(queryOrCoords.lat) || isNaN(queryOrCoords.lng)) {
-        throw new Error('Invalid GeoAnchor object: lat and lng must be valid numbers.');
+      const label = `${queryOrCoords.lat}, ${queryOrCoords.lng}`;
+      if (typeof queryOrCoords.lat !== 'number' || typeof queryOrCoords.lng !== 'number') {
+        throw new LocationUnresolvedError(label, 'lat and lng must be numbers');
       }
+      assertUsableCoordinates(queryOrCoords.lat, queryOrCoords.lng, label);
+      const lat = Number(queryOrCoords.lat.toFixed(6));
+      const lng = Number(queryOrCoords.lng.toFixed(6));
       return {
-        lat: Number(queryOrCoords.lat.toFixed(6)),
-        lng: Number(queryOrCoords.lng.toFixed(6)),
-        elevation: queryOrCoords.elevation ?? 15.0,
-        landmarkName: queryOrCoords.landmarkName || `Coordinates (${queryOrCoords.lat.toFixed(6)}, ${queryOrCoords.lng.toFixed(6)})`
+        lat,
+        lng,
+        ...(queryOrCoords.elevation !== undefined ? { elevation: queryOrCoords.elevation, elevationSource: 'explicit' } : {}),
+        landmarkName: queryOrCoords.landmarkName || formatCoordinates(lat, lng),
+        formattedAddress: queryOrCoords.formattedAddress || formatCoordinates(lat, lng)
       };
     }
 
     const rawQuery = (typeof queryOrCoords === 'string' ? queryOrCoords : '').trim();
     if (!rawQuery) {
-      throw new Error(
-        'Cannot resolve empty query. Please provide explicit coordinates (e.g. "40.748400, -73.985700" or { lat, lng }) or an address string.'
+      throw new LocationUnresolvedError('', 'the query is empty; give a place name, an address or "lat, lng"');
+    }
+
+    const coords = parseCoordinateText(rawQuery);
+    if (coords) {
+      return this.resolveAddress({ lat: coords.lat, lng: coords.lng, elevation: coords.elevation });
+    }
+
+    const key = resolveMapsApiKey(apiKey);
+    if (!key) {
+      throw new LocationUnresolvedError(
+        rawQuery,
+        'no Google Maps API key is configured, so the place cannot be looked up (add the key in Settings, or give coordinates as "lat, lng")'
       );
     }
+    const place = await GoogleMapsService.getInstance().geocode(rawQuery, { apiKey: key, fetchImpl });
+    return {
+      lat: Number(place.lat.toFixed(6)),
+      lng: Number(place.lng.toFixed(6)),
+      landmarkName: place.name || place.formattedAddress,
+      formattedAddress: describePlace(place.name, place.formattedAddress)
+    };
+  }
 
-    // 1. Direct coordinate pattern matching (e.g. "40.748400, -73.985700" or "...coordinates: 40.748400, -73.985700")
-    const coordRegex = /(?:coordinates?|coords?|lat(?:itude)?\s*[:=]?\s*)?[:=\s]*([-+]?\d{1,3}(?:\.\d+)?)\s*°?\s*([NS])?[\s,;:]+\s*(?:lng|lon(?:gitude)?\s*[:=]?\s*)?([-+]?\d{1,3}(?:\.\d+)?)\s*°?\s*([EW])?(?:[\s,;:]+(?:elevation|elev|alt(?:itude)?\s*[:=]?\s*)?([-+]?\d+(?:\.\d+)?))?/i;
-    const coordMatch = rawQuery.match(coordRegex);
-    if (coordMatch) {
-      let lat = parseFloat(coordMatch[1]);
-      const latHem = (coordMatch[2] || '').toUpperCase();
-      let lng = parseFloat(coordMatch[3]);
-      const lngHem = (coordMatch[4] || '').toUpperCase();
-      const elev = coordMatch[5] ? parseFloat(coordMatch[5]) : 15.0;
-
-      if (latHem === 'S') lat = -Math.abs(lat);
-      if (lngHem === 'W') lng = -Math.abs(lng);
-
-      if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-        let name = rawQuery.replace(coordRegex, '').replace(/[,\s:()]+$/, '').replace(/^[,\s:()]+/, '').trim();
-        if (!name) {
-          name = `Coordinates (${lat.toFixed(6)}, ${lng.toFixed(6)})`;
-        }
-        return {
-          lat: Number(lat.toFixed(6)),
-          lng: Number(lng.toFixed(6)),
-          elevation: isNaN(elev) ? 15.0 : elev,
-          landmarkName: name
-        };
-      }
+  /**
+   * Ground elevation (metres above sea level) at a coordinate from the Google Elevation API. Throws when it
+   * cannot be measured; callers that need one never substitute a default.
+   */
+  public async fetchGroundElevation(lat: number, lng: number, apiKey?: string, fetchImpl?: typeof fetch): Promise<number> {
+    const key = resolveMapsApiKey(apiKey);
+    if (!key) {
+      throw new MissingInputError('google_3d_tiles_clay_blockout_runner', 'geoAnchor.elevation', 'no Google Maps API key is configured, so the ground elevation cannot be looked up');
     }
-
-    // 2. Google Vector Tiles resolution (parcels, corridors, geodetic anchors)
-    const vectorAnchor = GoogleVectorMappingService.searchFeatures(rawQuery);
-    if (vectorAnchor) {
-      return {
-        lat: vectorAnchor.lat,
-        lng: vectorAnchor.lng,
-        elevation: vectorAnchor.elevation || 15.0,
-        landmarkName: vectorAnchor.formattedAddress || rawQuery
-      };
-    }
-
-    // 3. Google 3D Tiles location resolution & real-world intent detection
-    const locResolved = detectRealWorldLocationIntent(rawQuery) || Google3DTileService.getInstance().resolveLocationSync(rawQuery);
-    if (locResolved && locResolved.lat !== 0 && locResolved.lng !== 0) {
-      return {
-        lat: Number(locResolved.lat.toFixed(6)),
-        lng: Number(locResolved.lng.toFixed(6)),
-        elevation: locResolved.elevation || 15.0,
-        landmarkName: locResolved.landmarkName || rawQuery
-      };
-    }
-
-    // 4. GoogleMapsService landmark registry and geocoding
     try {
-      const syncMatch = GoogleMapsService.getInstance().resolveLandmarkSync(rawQuery);
-      if (syncMatch && syncMatch.lat !== 0 && syncMatch.lng !== 0) {
-        return {
-          lat: Number(syncMatch.lat.toFixed(6)),
-          lng: Number(syncMatch.lng.toFixed(6)),
-          elevation: syncMatch.elevation || 15.0,
-          landmarkName: syncMatch.name || syncMatch.formattedAddress || rawQuery
-        };
-      }
-      const geo = await GoogleMapsService.getInstance().geocode(rawQuery);
-      if (geo && geo.lat !== 0 && geo.lng !== 0) {
-        return {
-          lat: Number(geo.lat.toFixed(6)),
-          lng: Number(geo.lng.toFixed(6)),
-          elevation: geo.elevation || 15.0,
-          landmarkName: geo.formattedAddress || rawQuery
-        };
-      }
-    } catch (_) {}
-
-    // Zero presets and no procedural fallbacks are permitted
-    throw new Error(
-      `Cannot resolve geodetic coordinates for query "${rawQuery}". Zero presets and no procedural fallbacks are permitted: ` +
-      `Google Geocoding API is strictly disabled: please provide explicit coordinates ` +
-      `(e.g. "40.748400, -73.985700" or { lat, lng }), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
-    );
+      return await GoogleMapsService.getInstance().getElevation(lat, lng, { apiKey: key, fetchImpl });
+    } catch (err) {
+      throw new MissingInputError('google_3d_tiles_clay_blockout_runner', 'geoAnchor.elevation', err instanceof Error ? err.message : String(err));
+    }
   }
 
   /**
@@ -792,9 +772,12 @@ export class Google3DTileBlockoutPipelineService {
     matrixValues: number[];
     matrix4x4: number[][];
   } {
+    if (origin.elevation === undefined) {
+      throw new MissingInputError('buildLocalTransformMatrix', 'origin.elevation', `the ground height at ${formatCoordinates(origin.lat, origin.lng)} is unknown`);
+    }
     const latRad = origin.lat * (Math.PI / 180);
     const lngRad = origin.lng * (Math.PI / 180);
-    const altEllipsoid = (origin.elevation ?? 15.0) + geoidHeight;
+    const altEllipsoid = origin.elevation + geoidHeight;
 
     const sinLat = Math.sin(latRad);
     const cosLat = Math.cos(latRad);
@@ -984,18 +967,16 @@ export class Google3DTileBlockoutPipelineService {
     request: TileBlockoutPipelineRequest,
     cameraPathData: CameraPathData
   ): string {
-    const geo: GeoAnchor = request.geoAnchor || cameraPathData.origin || {
-      lat: 40.748400,
-      lng: -73.985700,
-      elevation: 15.0,
-      landmarkName: 'Midtown Manhattan, coordinates: 40.748400, -73.985700'
-    };
+    const geo: GeoAnchor | undefined = request.geoAnchor || cameraPathData.origin;
+    if (!geo) {
+      throw new MissingInputError('generateRunnerHtml', 'geoAnchor', 'neither the request nor the camera path names a location');
+    }
     // Tiles are in ellipsoid heights; the anchor elevation is above sea level. EGM96 undulation at the anchor
     // (was a fixed -30 m: right for New York, ~78 m off in Rome).
     const geoidHeight = request.geoidHeight ?? geoidUndulation(geo.lat, geo.lng);
     const { matrixValues } = this.buildLocalTransformMatrix(geo, geoidHeight);
 
-    const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || DEFAULT_GOOGLE_MAPS_TILES_API_KEY;
+    const apiKey = resolveMapsApiKey(request.apiKey);
 
     const atmo = request.atmosphere || {};
     const renderMode = atmo.renderMode || 'clay';
@@ -1666,16 +1647,11 @@ export class Google3DTileBlockoutPipelineService {
     // 1. Resolve GeoAnchor from address / query or explicit geoAnchor
     let geoAnchor: GeoAnchor;
     if (request.geoAnchor) {
-      geoAnchor = {
-        lat: request.geoAnchor.lat,
-        lng: request.geoAnchor.lng,
-        elevation: request.geoAnchor.elevation ?? 15.0,
-        landmarkName: request.geoAnchor.landmarkName
-      };
+      geoAnchor = await this.resolveAddress(request.geoAnchor, request.apiKey);
     } else if (request.address) {
       geoAnchor = await this.resolveAddress(request.address, request.apiKey);
     } else {
-      throw new Error('TileBlockoutPipelineRequest requires either an explicit "geoAnchor" or an "address" to resolve.');
+      throw new MissingInputError('google_3d_tiles_clay_blockout_runner', 'geoAnchor or address');
     }
 
     // 2. Resolve Camera Path or create default trajectory
@@ -1721,7 +1697,7 @@ export class Google3DTileBlockoutPipelineService {
     const defaultGlbName = isTexturedMode ? 'google_tiles_textured_area.glb' : 'google_tiles_clay_area.glb';
     const outputGlbPath = output.outputGlbPath
       ? (path.isAbsolute(output.outputGlbPath) ? output.outputGlbPath : path.join(process.cwd(), output.outputGlbPath))
-      : path.join(process.cwd(), 'public/models', defaultGlbName);
+      : path.join(defaultOutputRoot, 'public/models', defaultGlbName);
 
     const outputVideoPath = output.outputVideoPath
       ? (path.isAbsolute(output.outputVideoPath) ? output.outputVideoPath : path.join(process.cwd(), output.outputVideoPath))
@@ -1781,6 +1757,11 @@ export class Google3DTileBlockoutPipelineService {
       );
     }
 
+    // The runner places its tangent frame at the ground, so it needs the measured ground height.
+    if (geoAnchor.elevation === undefined) {
+      geoAnchor.elevation = await this.fetchGroundElevation(geoAnchor.lat, geoAnchor.lng, request.apiKey);
+      geoAnchor.elevationSource = 'google_elevation_api';
+    }
     const htmlContent = this.generateRunnerHtml(resolvedRequest, cameraPathData);
     // The runner HTML is served from memory under a unique per-run route; nothing is written to disk.
     const runnerFileName = `s4d_tile_blockout_runner_${Date.now()}_${Math.floor(Math.random() * 100000)}.html`;
@@ -1990,12 +1971,15 @@ export class Google3DTileBlockoutPipelineService {
                 throw new Error(`FFmpeg failed to transcode Frame 0 to PNG (${firstFramePngPath}): ${pngErr.message}\n${pngErr.stderr || ''}`);
               }
 
+              // Set only when this run's WebM encode succeeds, so an older file at that path is never reported.
+              let webmVideoPath: string | undefined;
               if (compileWebm) {
                 const webmPath = outputVideoPath.replace(/\.mp4$/, '.webm');
                 try {
                   await execFileAsync(this.ffmpegPath, [
                     '-y', '-framerate', String(fps), '-i', frameGlob, '-c:v', 'libvpx-vp9', '-b:v', '4M', webmPath
                   ], { maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60000 });
+                  webmVideoPath = webmPath;
                 } catch (e: any) {
                   // WebM is an optional secondary encode; the MP4 above is the canonical output.
                   console.warn(`[Google 3D Tiles] Optional WebM encode failed: ${e?.message || e}`);
@@ -2060,6 +2044,7 @@ export class Google3DTileBlockoutPipelineService {
                 mock: false,
                 videoRef: '<VIDEO_REF_0>',
                 outputVideoPath,
+                ...(webmVideoPath ? { webmVideoPath } : {}),
                 glbBuffer: uploadedGlbBuffer,
                 glbPath: outputGlbPath,
                 mesh: meshStats,
@@ -2071,7 +2056,7 @@ export class Google3DTileBlockoutPipelineService {
                 fps,
                 durationSec: cameraPathData.durationSec,
                 geoAnchor: resolvedRequest.geoAnchor!,
-                resolvedAddress: resolvedRequest.address,
+                resolvedAddress: resolvedRequest.geoAnchor!.formattedAddress ?? resolvedRequest.address,
                 collisionAudit: manifest.collisionAudit,
                 tileMetrics: manifest.tileMetrics,
                 manifest
@@ -2344,7 +2329,7 @@ export class Google3DTileBlockoutPipelineService {
       fps,
       durationSec: cameraPathData.durationSec,
       geoAnchor: request.geoAnchor!,
-      resolvedAddress: request.address,
+      resolvedAddress: request.geoAnchor!.formattedAddress ?? request.address,
       collisionAudit: manifest.collisionAudit,
       tileMetrics: manifest.tileMetrics,
       manifest
@@ -2428,219 +2413,227 @@ export class Google3DTileBlockoutPipelineService {
   }
 
   /**
-   * Fetches the queried area as a high-fidelity 3D object (.glb) rendered from Google 3D Tile data.
+   * Extracts the area around a place or coordinate from Google Photorealistic 3D Tiles as a binary glTF.
+   *
+   * The direct leaf crawler is the only engine. A crawl, download or parse failure throws TileExtractionError
+   * naming the stage, and a place without tile coverage throws instead of returning anything else; the headless
+   * blockout runner is its own tool (runTileClayBlockoutRunner) and never stands in for this. The ground height
+   * is measured from the tiles. `offlineMock` is a test-only option that returns a synthetic tile marked `mock`.
    */
   public async fetch3DObject(
     queryOrCoords: string | GeoAnchor,
     mode: 'full-texture' | 'clay',
     options?: Google3DTilesQueryOptions
   ): Promise<Google3DTile3DObjectResult> {
-    const geoAnchor = await this.resolveAddress(queryOrCoords, options?.apiKey);
-    const apiKey = options?.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || DEFAULT_GOOGLE_MAPS_TILES_API_KEY;
+    // A stop aborts every request this extraction makes and is checked between stages, so a stopped chat does not
+    // leave tile downloads or the GLB write running.
+    const signal = options?.signal;
+    const stopIfAborted = () => {
+      if (signal?.aborted) throw extractionStopped(signal);
+    };
+    const baseFetch = options?.fetchImpl ?? fetch;
+    const fetchImpl: typeof fetch | undefined = signal
+      ? (((input: any, init?: RequestInit) => baseFetch(input, { ...(init || {}), signal })) as typeof fetch)
+      : options?.fetchImpl;
 
-    // Harmonize ground truth elevation with Google DEM (EGM96)
-    if (apiKey && (geoAnchor.elevation === undefined || geoAnchor.elevation === 15.0 || geoAnchor.elevation === 0)) {
-      try {
-        const elevRes = await fetch(`https://maps.googleapis.com/maps/api/elevation/json?locations=${geoAnchor.lat},${geoAnchor.lng}&key=${apiKey}`);
-        if (elevRes.ok) {
-          const elevData = await elevRes.json();
-          if (elevData.results && elevData.results[0] && typeof elevData.results[0].elevation === 'number') {
-            geoAnchor.elevation = Number(elevData.results[0].elevation.toFixed(2));
-          }
-        }
-      } catch (err) {
-        // Fallback to existing anchor elevation
-      }
-    }
+    stopIfAborted();
+    const geoAnchor = await this.resolveAddress(queryOrCoords, options?.apiKey, fetchImpl);
+    const resolvedAddress = geoAnchor.formattedAddress ?? formatCoordinates(geoAnchor.lat, geoAnchor.lng);
+    stopIfAborted();
 
     const isTextured = mode === 'full-texture';
     const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
-    const canonicalModelsDir = path.resolve(repoRoot, 'public/models');
-    const sanitizedName = (geoAnchor.landmarkName || (typeof queryOrCoords === 'string' ? queryOrCoords : 'district')).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const defaultGlbName = `${sanitizedName}_${isTextured ? 'textured' : 'clay'}.glb`;
-    const defaultVideoName = isTextured ? 'google_tiles_textured_blockout_camera.mp4' : 'google_tiles_clay_blockout_camera.mp4';
-    const defaultManifestName = isTextured ? 'google_tiles_textured_manifest.json' : 'google_tiles_blockout_manifest.json';
-
-    const completeGlbName = `${sanitizedName}_${isTextured ? 'textured' : 'clay'}_complete.glb`;
-    const resolvedDefaultName = fs.existsSync(path.join(canonicalModelsDir, completeGlbName))
-      ? completeGlbName
-      : defaultGlbName;
+    // The caller's outputDir, else public/models. A mock run's placeholder GLB never lands next to real extractions,
+    // where later lookups would take it for one.
+    const canonicalModelsDir = options?.outputDir
+      ? path.resolve(options.outputDir)
+      : options?.offlineMock
+        ? path.join(offlineMockOutputRoot(), 'public/models')
+        : path.resolve(repoRoot, 'public/models');
+    const radiusMeters = options?.radiusMeters || 250;
+    // The default file is keyed by where and how much was extracted, not by the place's name: two places Google
+    // names alike ("Park Avenue" in New York and in Winter Park) must not overwrite each other's model.
+    const nameSlug = (geoAnchor.landmarkName || (typeof queryOrCoords === 'string' ? queryOrCoords : 'district')).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'district';
+    const placeKey = `${geoAnchor.lat.toFixed(5)}_${geoAnchor.lng.toFixed(5)}_r${Math.round(radiusMeters)}`;
+    const defaultGlbName = `${nameSlug}_${placeKey}_${isTextured ? 'textured' : 'clay'}.glb`;
 
     const outputGlbPath = options?.outputGlbPath
       ? (path.isAbsolute(options.outputGlbPath) ? options.outputGlbPath : path.resolve(canonicalModelsDir, path.basename(options.outputGlbPath)))
-      : path.join(canonicalModelsDir, resolvedDefaultName);
+      : path.join(canonicalModelsDir, defaultGlbName);
 
-    const outputVideoPath = options?.outputVideoPath
-      ? (path.isAbsolute(options.outputVideoPath) ? options.outputVideoPath : path.join(process.cwd(), options.outputVideoPath))
-      : path.join(options?.offlineMock ? offlineMockOutputRoot() : process.cwd(), 'public/videos', defaultVideoName);
-
-    const manifestPath = path.join(path.dirname(outputVideoPath), defaultManifestName);
-
-    // Fast-path: When 3D model (.glb) is requested without explicit video output requirement,
-    // crawl leaf tiles directly from Google Maps 3D Tiles API to guarantee authentic geometry in < 10s
-    if (!options?.offlineMock && apiKey) {
-      try {
-        const radiusMeters = options?.radiusMeters || 250;
-        const cacheDir = path.join(process.cwd(), '.scratchbox', 'tiles_cache', 'leaves');
-        const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir });
-        const anchor = {
-          lat: geoAnchor.lat,
-          lng: geoAnchor.lng,
-          heightGuessM: geoAnchor.elevation ?? 0
-        };
-        const { leaves, session } = await crawler.collectLeafTiles(anchor, radiusMeters);
-        if (leaves && leaves.length > 0) {
-          const maxLeaves = options?.maxLeaves || 524;
-          // Sort leaves by 3D distance from anchor in ECEF space so the central landmark is 100% contiguous and complete
-          const anchorFrame = GoogleTileDistrictCrawler.localFrame(anchor.lat, anchor.lng, anchor.heightGuessM);
-          const sortedLeaves = [...leaves].sort((a, b) => {
-            const distA = Math.hypot(a.box[0] - anchorFrame.origin[0], a.box[1] - anchorFrame.origin[1], a.box[2] - anchorFrame.origin[2]);
-            const distB = Math.hypot(b.box[0] - anchorFrame.origin[0], b.box[1] - anchorFrame.origin[1], b.box[2] - anchorFrame.origin[2]);
-            return distA - distB;
-          });
-          const leafSubset = sortedLeaves.length > maxLeaves ? sortedLeaves.slice(0, maxLeaves) : sortedLeaves;
-          // The cap drops the leaves whose centres lie farthest from the anchor, so the district is complete only out to
-          // the nearest dropped leaf's footprint. (A leaf without a box cannot be placed; it does not shorten the radius.)
-          const droppedLeaves = sortedLeaves.slice(leafSubset.length);
-          const truncated = droppedLeaves.length > 0;
-          const coveredRadiusMeters = truncated
-            ? Math.floor(droppedLeaves.reduce(
-              (r, leaf) => (leaf.box.length >= 12 ? Math.min(r, GoogleTileDistrictCrawler.footprintDistance(leaf.box, anchorFrame)) : r),
-              radiusMeters
-            ))
-            : radiusMeters;
-          const buffers = await crawler.downloadLeaves(leafSubset, session);
-          const parsed = buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b));
-          const district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, {
-            clay: mode === 'clay',
-            clayPreset: options?.clayPreset || 'studio-grey',
-            groundSearchRadiusM: Math.min(radiusMeters, 80)
-          });
-
-          fs.mkdirSync(path.dirname(outputGlbPath), { recursive: true });
-          fs.writeFileSync(outputGlbPath, district.glb);
-
-          const mesh: Google3DTileMeshStats = {
-            name: `Google3DTile_${mode}`,
-            vertexCount: district.vertexCount,
-            triangleCount: district.triangleCount,
-            submeshCount: parsed.length,
-            boundingBox: { min: district.boundsLocal.min, max: district.boundsLocal.max },
-            boundingSphere: {
-              center: [
-                (district.boundsLocal.min[0] + district.boundsLocal.max[0]) / 2,
-                (district.boundsLocal.min[1] + district.boundsLocal.max[1]) / 2,
-                (district.boundsLocal.min[2] + district.boundsLocal.max[2]) / 2
-              ],
-              radius: Math.hypot(
-                (district.boundsLocal.max[0] - district.boundsLocal.min[0]) / 2,
-                (district.boundsLocal.max[1] - district.boundsLocal.min[1]) / 2,
-                (district.boundsLocal.max[2] - district.boundsLocal.min[2]) / 2
-              )
-            }
-          };
-
-          return {
-            success: true,
-            mode,
-            geoAnchor,
-            resolvedAddress: geoAnchor.landmarkName || (typeof queryOrCoords === 'string' ? queryOrCoords : undefined),
-            glbBuffer: district.glb,
-            glbPath: outputGlbPath,
-            frame: { lat: anchor.lat, lng: anchor.lng, originEllipsoidalHeightM: district.originEllipsoidalHeightM, localToEcef: district.localToEcef },
-            requestedRadiusMeters: radiusMeters,
-            coveredRadiusMeters,
-            truncated,
-            leafTiles: { kept: leafSubset.length, selected: sortedLeaves.length },
-            mesh,
-            quality: {
-              source: 'Google Maps Platform Photorealistic 3D Tiles API',
-              errorTarget: options?.lodQuality?.errorTarget ?? 0.5,
-              resolution: '4K (3840x2160)',
-              maxSettleWaitMs: 0,
-              asynchronousSettle: false,
-              preWarmedWaypoints: [],
-              leafLodSettled: true
-            },
-            render: {
-              videoPath: '',
-              firstFramePath: '',
-              storyboardPaths: [],
-              fps: 24,
-              frameCount: 1,
-              durationSec: 0
-            },
-            manifest: {
-              resolvedAddress: geoAnchor.landmarkName || (typeof queryOrCoords === 'string' ? queryOrCoords : undefined),
-              geoAnchor,
-              mesh
-            }
-          };
-        }
-      } catch (crawlErr: any) {
-        // Too large a radius is the caller's to fix; the blockout runner would ignore the radius and could run for many
-        // minutes. Request and parsing failures still fall back to it.
-        if (crawlErr instanceof DistrictTooLargeError) throw crawlErr;
-        console.warn('[fetch3DObject] Direct leaf crawler encountered error, falling back to blockout runner:', crawlErr?.message || crawlErr);
-      }
+    if (options?.offlineMock) {
+      return this.fetchOfflineMock(geoAnchor, resolvedAddress, mode, outputGlbPath, options);
     }
 
-    const result = await this.run({
-      address: typeof queryOrCoords === 'string' ? queryOrCoords : undefined,
-      geoAnchor: typeof queryOrCoords !== 'string' ? queryOrCoords : undefined,
-      cameraPath: options?.cameraPath || this.createFullOrbitTrajectory(geoAnchor, { corridorRadiusMeters: options?.radiusMeters }),
-      mode: isTextured ? 'full-texture' : 'clay',
-      apiKey: options?.apiKey,
-      port: options?.port,
-      offlineMock: options?.offlineMock,
-      atomicBuildingIntegrity: options?.atomicBuildingIntegrity ?? true,
-      enforceZeroBuildingClipping: options?.enforceZeroBuildingClipping ?? true,
-      zenithAltitudeMeters: options?.zenithAltitudeMeters ?? 1800.0,
-      headlessChromePath: this.chromePath,
-      ffmpegPath: this.ffmpegPath,
-      lodQuality: {
-        errorTarget: options?.lodQuality?.errorTarget ?? 0.5,
-        resolutionWidth: options?.lodQuality?.resolutionWidth ?? 1280,
-        resolutionHeight: options?.lodQuality?.resolutionHeight ?? 720,
-        virtualSseWidth: options?.lodQuality?.virtualSseWidth ?? 3840,
-        virtualSseHeight: options?.lodQuality?.virtualSseHeight ?? 2160,
-        stableFramesThreshold: options?.lodQuality?.stableFramesThreshold ?? 15,
-        maxSettleWaitMs: options?.lodQuality?.maxSettleWaitMs ?? 25000
+    const apiKey = resolveMapsApiKey(options?.apiKey);
+    if (!apiKey) {
+      throw new TileExtractionError('crawl', 'no Google Maps API key is configured, so Photorealistic 3D Tiles cannot be downloaded (add the key in Settings)');
+    }
+
+    const cacheDir = path.join(process.cwd(), '.scratchbox', 'tiles_cache', 'leaves');
+    const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir, fetchImpl });
+    // Only seeds the local frame; the ground height is measured from the tile geometry below.
+    const anchor = {
+      lat: geoAnchor.lat,
+      lng: geoAnchor.lng,
+      heightGuessM: (geoAnchor.elevation ?? 0) + geoidUndulation(geoAnchor.lat, geoAnchor.lng)
+    };
+
+    let collected: Awaited<ReturnType<GoogleTileDistrictCrawler['collectLeafTiles']>>;
+    try {
+      collected = await crawler.collectLeafTiles(anchor, radiusMeters);
+    } catch (err) {
+      stopIfAborted();
+      // A radius that selects too many leaves is the caller's to fix; it keeps its own type.
+      if (err instanceof DistrictTooLargeError) throw err;
+      throw new TileExtractionError('crawl', err);
+    }
+    stopIfAborted();
+    const { leaves, session } = collected;
+    if (!leaves || leaves.length === 0) {
+      throw new TileExtractionError('crawl', `no Photorealistic 3D Tiles coverage at ${formatCoordinates(geoAnchor.lat, geoAnchor.lng)} (${resolvedAddress})`);
+    }
+
+    const maxLeaves = options?.maxLeaves || 524;
+    // Sort leaves by 3D distance from anchor in ECEF space so the central landmark is 100% contiguous and complete
+    const anchorFrame = GoogleTileDistrictCrawler.localFrame(anchor.lat, anchor.lng, anchor.heightGuessM);
+    const sortedLeaves = [...leaves].sort((a, b) => {
+      const distA = Math.hypot(a.box[0] - anchorFrame.origin[0], a.box[1] - anchorFrame.origin[1], a.box[2] - anchorFrame.origin[2]);
+      const distB = Math.hypot(b.box[0] - anchorFrame.origin[0], b.box[1] - anchorFrame.origin[1], b.box[2] - anchorFrame.origin[2]);
+      return distA - distB;
+    });
+    const leafSubset = sortedLeaves.length > maxLeaves ? sortedLeaves.slice(0, maxLeaves) : sortedLeaves;
+    // The cap drops the leaves whose centres lie farthest from the anchor, so the district is complete only out to
+    // the nearest dropped leaf's footprint. (A leaf without a box cannot be placed; it does not shorten the radius.)
+    const droppedLeaves = sortedLeaves.slice(leafSubset.length);
+    const truncated = droppedLeaves.length > 0;
+    const coveredRadiusMeters = truncated
+      ? Math.floor(droppedLeaves.reduce(
+        (r, leaf) => (leaf.box.length >= 12 ? Math.min(r, GoogleTileDistrictCrawler.footprintDistance(leaf.box, anchorFrame)) : r),
+        radiusMeters
+      ))
+      : radiusMeters;
+
+    let buffers: Buffer[];
+    try {
+      buffers = await crawler.downloadLeaves(leafSubset, session);
+    } catch (err) {
+      stopIfAborted();
+      throw new TileExtractionError('download', err);
+    }
+    stopIfAborted();
+
+    let parsed: ReturnType<typeof GoogleTileDistrictCrawler.parseLeafGlbPrimitives>;
+    let district: ReturnType<typeof GoogleTileDistrictCrawler.buildDistrictGlb>;
+    try {
+      parsed = buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b));
+      district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, {
+        clay: mode === 'clay',
+        clayPreset: options?.clayPreset || 'studio-grey',
+        groundSearchRadiusM: Math.min(radiusMeters, 80)
+      });
+    } catch (err) {
+      throw new TileExtractionError('parse', err);
+    }
+
+    fs.mkdirSync(path.dirname(outputGlbPath), { recursive: true });
+    fs.writeFileSync(outputGlbPath, district.glb);
+
+    // The street surface measured in the tiles, as height above sea level, when the caller stated none.
+    if (geoAnchor.elevation === undefined) {
+      geoAnchor.elevation = Number((district.originEllipsoidalHeightM - geoidUndulation(geoAnchor.lat, geoAnchor.lng)).toFixed(2));
+      geoAnchor.elevationSource = 'tiles_ground';
+    }
+
+    const mesh: Google3DTileMeshStats = {
+      name: `Google3DTile_${mode}`,
+      vertexCount: district.vertexCount,
+      triangleCount: district.triangleCount,
+      submeshCount: parsed.length,
+      boundingBox: { min: district.boundsLocal.min, max: district.boundsLocal.max },
+      boundingSphere: {
+        center: [
+          (district.boundsLocal.min[0] + district.boundsLocal.max[0]) / 2,
+          (district.boundsLocal.min[1] + district.boundsLocal.max[1]) / 2,
+          (district.boundsLocal.min[2] + district.boundsLocal.max[2]) / 2
+        ],
+        radius: Math.hypot(
+          (district.boundsLocal.max[0] - district.boundsLocal.min[0]) / 2,
+          (district.boundsLocal.max[1] - district.boundsLocal.min[1]) / 2,
+          (district.boundsLocal.max[2] - district.boundsLocal.min[2]) / 2
+        )
+      }
+    };
+
+    return {
+      success: true,
+      mode,
+      geoAnchor,
+      resolvedAddress,
+      glbBuffer: district.glb,
+      glbPath: outputGlbPath,
+      frame: { lat: anchor.lat, lng: anchor.lng, originEllipsoidalHeightM: district.originEllipsoidalHeightM, localToEcef: district.localToEcef },
+      requestedRadiusMeters: radiusMeters,
+      coveredRadiusMeters,
+      truncated,
+      leafTiles: { kept: leafSubset.length, selected: sortedLeaves.length },
+      mesh,
+      // What the crawl measured: it selects leaf tiles directly (no viewport, no screen-space error, no settle) and
+      // renders nothing, so there is no resolution, settle state or render block to report.
+      quality: {
+        source: 'Google Maps Platform Photorealistic 3D Tiles API (direct leaf-tile crawl)',
+        errorTarget: Math.max(...leafSubset.map(leaf => leaf.geometricError)),
+        asynchronousSettle: false
       },
+      manifest: {
+        resolvedAddress,
+        geoAnchor,
+        mesh
+      }
+    };
+  }
+
+  /** Test-only synthetic tile (`offlineMock`): every artifact is placeholder data and the result says `mock: true`. */
+  private async fetchOfflineMock(
+    geoAnchor: GeoAnchor,
+    resolvedAddress: string,
+    mode: 'full-texture' | 'clay',
+    outputGlbPath: string,
+    options: Google3DTilesQueryOptions
+  ): Promise<Google3DTile3DObjectResult> {
+    const isTextured = mode === 'full-texture';
+    const result = await this.run({
+      geoAnchor,
+      cameraPath: options.cameraPath || this.createFullOrbitTrajectory(geoAnchor, { corridorRadiusMeters: options.radiusMeters }),
+      mode,
+      offlineMock: true,
       atmosphere: {
         renderMode: isTextured ? 'textured' : 'clay',
-        clayPreset: options?.clayPreset ?? 'studio-grey'
+        clayPreset: options.clayPreset ?? 'studio-grey'
       },
       output: {
         outputGlbPath,
-        outputVideoPath,
-        manifestPath,
-        fps: options?.fps ?? 24
+        outputVideoPath: options.outputVideoPath,
+        fps: options.fps ?? 24
       }
     });
-
     if (!result.mesh || !result.glbBuffer || result.glbBuffer.length === 0) {
-      throw new Error(`[fetch3DObject] Blockout runner returned no 3D tile mesh for ${outputGlbPath}`);
+      throw new TileExtractionError('parse', `the offline mock produced no mesh for ${outputGlbPath}`);
     }
-    const mesh: Google3DTileMeshStats = result.mesh;
-
     return {
-      success: result.success,
-      mock: result.mock === true,
+      success: true,
+      mock: true,
       mode,
       geoAnchor,
-      resolvedAddress: result.resolvedAddress || (typeof queryOrCoords === 'string' ? queryOrCoords : undefined),
+      resolvedAddress,
       glbBuffer: result.glbBuffer,
       glbPath: result.glbPath || outputGlbPath,
-      mesh,
+      mesh: result.mesh,
       quality: {
-        source: 'Google Maps Platform Photorealistic 3D Tiles API',
-        errorTarget: options?.lodQuality?.errorTarget ?? 0.5,
-        resolution: '4K (3840x2160)',
-        maxSettleWaitMs: options?.lodQuality?.maxSettleWaitMs ?? 25000,
-        asynchronousSettle: true,
-        preWarmedWaypoints: [0, 18, 36, 54, 71],
-        leafLodSettled: (result.tileMetrics?.averageSettleTimeMs ?? 0) > 0
+        source: 'offline mock (synthetic placeholder, not Google tiles)',
+        errorTarget: options.lodQuality?.errorTarget ?? 0.5,
+        asynchronousSettle: false,
+        leafLodSettled: false
       },
       render: {
         videoPath: result.outputVideoPath,
@@ -2656,11 +2649,11 @@ export class Google3DTileBlockoutPipelineService {
 }
 
 /**
- * Convenience helper to resolve an arbitrary address or coordinates to a GeoAnchor.
+ * Resolves coordinates or a place name (one Google Places Text Search call) to a GeoAnchor; see resolveAddress.
  */
-export async function geocode3DTilesAddress(queryOrCoords?: string | GeoAnchor, apiKey?: string): Promise<GeoAnchor> {
+export async function geocode3DTilesAddress(queryOrCoords?: string | GeoAnchor, apiKey?: string, fetchImpl?: typeof fetch): Promise<GeoAnchor> {
   const service = new Google3DTileBlockoutPipelineService();
-  return service.resolveAddress(queryOrCoords, apiKey);
+  return service.resolveAddress(queryOrCoords, apiKey, fetchImpl);
 }
 
 /**
@@ -2693,6 +2686,13 @@ export async function runGoogle3DTilesPipeline(
     request.ffmpegPath
   );
   return service.run(request);
+}
+
+/** The error a stopped extraction rejects with: the signal's own reason, else an AbortError. */
+function extractionStopped(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : Object.assign(new Error('Google 3D Tiles extraction was stopped'), { name: 'AbortError' });
 }
 
 /** Per-call temp root for offline-mock placeholder outputs that were not given an explicit path. */
@@ -2818,7 +2818,7 @@ export async function runTileClayBlockoutRunner(
 
   const outputGlbPath = request.outputGlbPath
     ? (path.isAbsolute(request.outputGlbPath) ? request.outputGlbPath : path.join(process.cwd(), request.outputGlbPath))
-    : path.join(process.cwd(), defaultDir, 'models/google_tiles_clay_area.glb');
+    : path.join(placeholderRoot, defaultDir, 'models/google_tiles_clay_area.glb');
 
   const firstFramePngPath = request.firstFramePngPath
     ? (path.isAbsolute(request.firstFramePngPath) ? request.firstFramePngPath : path.join(process.cwd(), request.firstFramePngPath))
@@ -2854,8 +2854,8 @@ export async function runTileClayBlockoutRunner(
     ? service.loadCameraPath(cameraPath)
     : cameraPath;
 
-  const defaultWebm = outputVideoPath.replace(/\.mp4$/i, '.webm');
-  const webmVideoPath = fs.existsSync(defaultWebm) ? defaultWebm : undefined;
+  // Only the WebM this run encoded: a file left at the default path by an earlier run is not this run's video.
+  const webmVideoPath = result.webmVideoPath;
 
   if (!result.mesh) {
     throw new Error(`[runTileClayBlockoutRunner] Blockout runner returned no clay mesh statistics for ${outputGlbPath}`);

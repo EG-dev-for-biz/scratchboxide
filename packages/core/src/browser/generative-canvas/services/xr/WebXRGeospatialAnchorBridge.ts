@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { LocalTangentPlane, LatLngAlt, Vec3 } from '../../../../common/coordinate/LocalTangentPlane';
 import { GeoFrame } from '../../../../common/coordinate/GeoFrame';
+import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 import {
   GeoAnchorDeploymentContract,
   ARPlacementEntity,
@@ -32,7 +33,8 @@ export interface GeospatialAlignmentState {
   originGeoAnchor: {
     lat: number;
     lng: number;
-    alt: number;
+    /** Metres above mean sea level; absent when the origin was given without an altitude. */
+    alt?: number;
     geoidHeight?: number;
   };
   translationOffset: [number, number, number];
@@ -68,6 +70,10 @@ export interface ProjectedPlacement {
   distanceFromViewerMeters: number;
 }
 
+function finiteOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 /**
  * High-precision coordinate transformation and spatial tracking engine that bridges
  * WGS-84 geodetic coordinates, True North compass headings, and GeoAnchorDeploymentContract
@@ -76,7 +82,13 @@ export interface ProjectedPlacement {
 export class WebXRGeospatialAnchorBridge {
   private ltp: LocalTangentPlane;
   private geoFrame: GeoFrame;
+  /**
+   * The origin in the bridge's vertical frame. Its alt is the origin's altitude above mean sea level when the caller
+   * gave one; otherwise the frame is relative to the origin's level and alt is 0 there (see originAltitudeMsl).
+   */
   private originAnchor: GeoAnchor4D;
+  /** The origin's altitude above mean sea level as given, or undefined: never assumed. */
+  private originAltitudeMsl: number | undefined;
   private contract: GeoAnchorDeploymentContract | null = null;
 
   // Rigid 3D affine transform mapping ENU Tangent Plane (metric) -> WebXR metric space
@@ -94,27 +106,24 @@ export class WebXRGeospatialAnchorBridge {
   constructor(options: WebXRGeospatialBridgeOptions = {}) {
     if (options.contract) {
       this.contract = options.contract;
+      this.originAltitudeMsl = finiteOrUndefined(options.contract.spatialCluster.originGeodetic.altitudeMsl);
       this.originAnchor = {
         lat: options.contract.spatialCluster.originGeodetic.latitude,
         lng: options.contract.spatialCluster.originGeodetic.longitude,
-        alt: options.contract.spatialCluster.originGeodetic.altitudeMsl ?? 0,
+        alt: this.originAltitudeMsl ?? 0,
         geoidHeight: 0
       };
     } else if (options.origin) {
+      this.originAltitudeMsl = finiteOrUndefined(options.origin.alt);
       this.originAnchor = {
         lat: options.origin.lat,
         lng: options.origin.lng,
-        alt: options.origin.alt ?? 0,
+        alt: this.originAltitudeMsl ?? 0,
         geoidHeight: options.origin.geoidHeight ?? options.geoidHeight ?? 0
       };
     } else {
-      // Default to ESB coordinates as fallback origin
-      this.originAnchor = {
-        lat: 40.7484405,
-        lng: -73.9856644,
-        alt: 18.53,
-        geoidHeight: 0
-      };
+      // No default origin: WebXR content is placed relative to a real anchor the caller gives.
+      throw new MissingInputError('WebXRGeospatialAnchorBridge', 'origin or contract', 'no default geodetic origin is used');
     }
 
     this.ltp = new LocalTangentPlane(
@@ -167,7 +176,7 @@ export class WebXRGeospatialAnchorBridge {
     const devEnuVec = this.ltp.toLocal({
       lat: sensor.lat,
       lng: sensor.lng,
-      alt: sensor.alt ?? this.originAnchor.alt ?? 0
+      alt: this.frameAltitude(sensor.alt, 'the device altitude')
     });
     const pDevEnu = new THREE.Vector3(devEnuVec[0], devEnuVec[1], devEnuVec[2]);
 
@@ -233,7 +242,9 @@ export class WebXRGeospatialAnchorBridge {
         targetGeo = {
           lat: entity.targetGeodetic.latitude,
           lng: entity.targetGeodetic.longitude,
-          alt: entity.altitudeResolution.fallbackAltitudeWgs84 ?? ((this.originAnchor.alt ?? 0) + entity.altitudeResolution.offsetMeters)
+          alt: entity.altitudeResolution.fallbackAltitudeWgs84 !== undefined
+            ? this.frameAltitude(entity.altitudeResolution.fallbackAltitudeWgs84, `the altitude of '${targetEntityId}'`)
+            : this.frameOriginAltitude() + entity.altitudeResolution.offsetMeters
         };
       }
     }
@@ -293,32 +304,29 @@ export class WebXRGeospatialAnchorBridge {
   // ============================================================================
 
   /**
-   * Converts a WGS-84 geodetic coordinate (lat, lng, alt) to WebXR local-floor coordinates.
+   * Converts a WGS-84 geodetic coordinate (lat, lng, alt in metres above mean sea level) to WebXR local-floor
+   * coordinates. Without alt the point is level with the origin. An alt needs the origin's altitude: without it the
+   * point's height relative to the origin is unknown, and MissingInputError is thrown instead of assuming one.
    */
   public geodeticToWebXR(geo: { lat: number; lng: number; alt?: number }): THREE.Vector3 {
-    const enuVec = this.ltp.toLocal({
-      lat: geo.lat,
-      lng: geo.lng,
-      alt: geo.alt ?? this.originAnchor.alt ?? 0
-    });
-
-    const v = new THREE.Vector3(enuVec[0], enuVec[1], enuVec[2]);
-    v.applyMatrix4(this.alignmentMatrix);
-    return v;
+    return this.frameToWebXR(geo.lat, geo.lng, this.frameAltitude(geo.alt, 'the target altitude'));
   }
 
   /**
-   * Converts a WebXR local-floor coordinate back to WGS-84 geodetic coordinates (lat, lng, alt).
+   * Converts a WebXR local-floor coordinate back to WGS-84 geodetic coordinates. alt (metres above mean sea level) is
+   * reported only when the origin's altitude is known; heightAboveOriginMeters always is.
    */
-  public webXRToGeodetic(webXRPos: THREE.Vector3): { lat: number; lng: number; alt: number } {
+  public webXRToGeodetic(webXRPos: THREE.Vector3): { lat: number; lng: number; alt?: number; heightAboveOriginMeters: number } {
     const vEnu = webXRPos.clone().applyMatrix4(this.invAlignmentMatrix);
     const metricEnu: Vec3 = [vEnu.x, vEnu.y, vEnu.z];
     const res = this.ltp.toLatLng(metricEnu);
+    const frameAlt = res.alt ?? this.frameOriginAltitude();
 
     return {
       lat: res.lat,
       lng: res.lng,
-      alt: res.alt ?? (this.originAnchor.alt ?? 0)
+      ...(this.originAltitudeMsl !== undefined ? { alt: frameAlt } : {}),
+      heightAboveOriginMeters: frameAlt - this.frameOriginAltitude()
     };
   }
 
@@ -385,10 +393,11 @@ export class WebXRGeospatialAnchorBridge {
    */
   public loadContract(contract: GeoAnchorDeploymentContract): void {
     this.contract = contract;
+    this.originAltitudeMsl = finiteOrUndefined(contract.spatialCluster.originGeodetic.altitudeMsl);
     this.originAnchor = {
       lat: contract.spatialCluster.originGeodetic.latitude,
       lng: contract.spatialCluster.originGeodetic.longitude,
-      alt: contract.spatialCluster.originGeodetic.altitudeMsl ?? 0,
+      alt: this.originAltitudeMsl ?? 0,
       geoidHeight: 0
     };
 
@@ -413,14 +422,10 @@ export class WebXRGeospatialAnchorBridge {
     quaternion: THREE.Quaternion;
     scale: THREE.Vector3;
   } {
-    // Resolve altitude based on AltitudeResolutionMode
+    // Resolve altitude based on AltitudeResolutionMode (already in the bridge's vertical frame)
     const alt = this.resolvePlacementAltitude(placement);
 
-    const position = this.geodeticToWebXR({
-      lat: placement.targetGeodetic.latitude,
-      lng: placement.targetGeodetic.longitude,
-      alt
-    });
+    const position = this.frameToWebXR(placement.targetGeodetic.latitude, placement.targetGeodetic.longitude, alt);
 
     let quaternion: THREE.Quaternion;
     if (placement.orientation.rotationQuaternion) {
@@ -601,8 +606,8 @@ export class WebXRGeospatialAnchorBridge {
 
       for (let i = 0; i < corridor.coordinatesWGS84.length; i++) {
         const [lng, lat] = corridor.coordinatesWGS84[i];
-        const alt = (corridor as any).elevationASL ? (corridor as any).elevationASL[i] : (this.originAnchor.alt ?? 0);
-        const pos = this.geodeticToWebXR({ lat, lng, alt });
+        const elevationASL = (corridor as any).elevationASL;
+        const pos = this.geodeticToWebXR({ lat, lng, alt: elevationASL ? elevationASL[i] : undefined });
         points.push(pos);
       }
 
@@ -642,8 +647,7 @@ export class WebXRGeospatialAnchorBridge {
 
       for (let i = 0; i < coords.length; i++) {
         const [lng, lat] = coords[i];
-        const baseAlt = parcel.baseElevation ?? this.originAnchor.alt ?? 0;
-        const pos = this.geodeticToWebXR({ lat, lng, alt: baseAlt });
+        const pos = this.geodeticToWebXR({ lat, lng, alt: parcel.baseElevation });
         points2D.push(new THREE.Vector2(pos.x, pos.z));
         baseHeightXr = pos.y;
       }
@@ -688,7 +692,7 @@ export class WebXRGeospatialAnchorBridge {
       originGeoAnchor: {
         lat: this.originAnchor.lat,
         lng: this.originAnchor.lng,
-        alt: this.originAnchor.alt ?? 0,
+        ...(this.originAltitudeMsl !== undefined ? { alt: this.originAltitudeMsl } : {}),
         geoidHeight: this.originAnchor.geoidHeight
       },
       translationOffset: [
@@ -701,8 +705,10 @@ export class WebXRGeospatialAnchorBridge {
     };
   }
 
+  /** The origin as given: alt is present only when the caller gave the origin's altitude. */
   public getOriginAnchor(): GeoAnchor4D {
-    return { ...this.originAnchor };
+    const { alt: _frameAlt, ...rest } = this.originAnchor;
+    return { ...rest, ...(this.originAltitudeMsl !== undefined ? { alt: this.originAltitudeMsl } : {}) };
   }
 
   public getContract(): GeoAnchorDeploymentContract | null {
@@ -713,21 +719,47 @@ export class WebXRGeospatialAnchorBridge {
   // Internal Helpers
   // ============================================================================
 
+  /** A placement's altitude in the bridge's vertical frame: its stated WGS-84 altitude, else the origin's level, plus its offset. */
   private resolvePlacementAltitude(placement: ARPlacementEntity): number {
     const mode = placement.altitudeResolution.mode;
     const offset = placement.altitudeResolution.offsetMeters;
 
     if (mode === 'wgs84' && placement.altitudeResolution.fallbackAltitudeWgs84 !== undefined) {
-      return placement.altitudeResolution.fallbackAltitudeWgs84 + offset;
+      return this.frameAltitude(placement.altitudeResolution.fallbackAltitudeWgs84, `the altitude of '${placement.entityId}'`) + offset;
     }
 
-    if (mode === 'rooftop') {
-      // Elevated structure offset
-      return (this.originAnchor.alt ?? 0) + offset;
-    }
+    // Terrain, facade and rooftop placements: the origin's level plus the offset
+    return this.frameOriginAltitude() + offset;
+  }
 
-    // Default terrain / facade resolution
-    return (this.originAnchor.alt ?? 0) + offset;
+  /** The origin's altitude in the bridge's vertical frame (0 when the frame is relative to the origin's level). */
+  private frameOriginAltitude(): number {
+    return this.originAnchor.alt ?? 0;
+  }
+
+  /**
+   * An altitude in metres above mean sea level, in the bridge's vertical frame. None means level with the origin.
+   * Without the origin's altitude the frame is relative to the origin's level, so a sea-level altitude cannot be
+   * placed in it: MissingInputError, never an assumed origin altitude.
+   */
+  private frameAltitude(altitudeMsl: number | undefined | null, what: string): number {
+    if (typeof altitudeMsl !== 'number' || !Number.isFinite(altitudeMsl)) return this.frameOriginAltitude();
+    if (this.originAltitudeMsl === undefined) {
+      throw new MissingInputError(
+        'WebXRGeospatialAnchorBridge',
+        "the origin's altitude (alt / altitudeMsl)",
+        `${what} is ${altitudeMsl} m above sea level, but the origin was given without an altitude, so its height relative to the origin is unknown`
+      );
+    }
+    return altitudeMsl;
+  }
+
+  /** WebXR position of a point whose altitude is already in the bridge's vertical frame. */
+  private frameToWebXR(lat: number, lng: number, frameAlt: number): THREE.Vector3 {
+    const enuVec = this.ltp.toLocal({ lat, lng, alt: frameAlt });
+    const v = new THREE.Vector3(enuVec[0], enuVec[1], enuVec[2]);
+    v.applyMatrix4(this.alignmentMatrix);
+    return v;
   }
 
   private updateMatrices(): void {

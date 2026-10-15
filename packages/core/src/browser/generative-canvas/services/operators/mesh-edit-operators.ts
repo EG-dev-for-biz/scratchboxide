@@ -18,11 +18,6 @@ import {
     recomputeGeometryNormals
 } from '../mesh-sculpting-engine';
 import {
-    Google3DTileService,
-    generateGeospatialCpp3DSource
-} from '../Google3DTileService';
-import type { ClayPresetId } from '../TileClayProcessor';
-import {
     ArchieBuildingRefiner,
     type ArchieBuildingPalette
 } from '../spatial/ArchieBuildingRefiner';
@@ -1086,95 +1081,6 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             };
             scene.customMeshes.push(newMesh);
             return { objectId, mesh: newMesh };
-        }
-    },
-    {
-        name: 'sb_import_3d_tile',
-        category: 'mesh_edit',
-        description: 'Ingests a 3D Google Photorealistic Map Tile region as native clay geometry, integrating into Scene3DData and viewport.',
-        execute: (ctx, params: {
-            query?: string;
-            lat?: number;
-            lng?: number;
-            elevation?: number;
-            zoom?: number;
-            radiusMeters?: number;
-            clayPreset?: ClayPresetId;
-            customColor?: number | string;
-            detailLevel?: 'low' | 'medium' | 'high';
-            name?: string;
-            /** Provenance of a caller-supplied elevation; the tile service only knows it was handed coordinates. */
-            elevationSource?: string;
-            datum?: string;
-        }) => {
-            const service = Google3DTileService.getInstance();
-            const result = service.ingestTileRegionSync({
-                query: params.query,
-                lat: params.lat,
-                lng: params.lng,
-                elevation: params.elevation,
-                zoom: params.zoom,
-                radiusMeters: params.radiusMeters,
-                clayPreset: params.clayPreset,
-                customColor: params.customColor,
-                detailLevel: params.detailLevel,
-                name: params.name
-            });
-
-            const scene = ctx.getSceneData();
-            if (!scene.customMeshes) scene.customMeshes = [];
-            if (!scene.objects) scene.objects = [];
-
-            if (result.customMeshDefinition) {
-                scene.customMeshes.push(result.customMeshDefinition);
-            }
-            // result.buildingMeshes are procedural boxes, not Google buildings; the tile stream already shows the real ones.
-            scene.objects.push(result.media4DObject);
-
-            const castingRationale = `Direct 3D photorealistic map tile ingestion: ${result.geoAnchor.landmarkName}`;
-            scene.geoAnchor = {
-                lat: result.geoAnchor.lat,
-                lng: result.geoAnchor.lng,
-                elevation: result.geoAnchor.elevation,
-                elevationSource: params.elevationSource || (result.geoAnchor as any).elevationSource || 'google_elevation',
-                datum: params.datum || (result.geoAnchor as any).datum || 'MSL_EGM96',
-                active: true,
-                landmarkName: result.geoAnchor.landmarkName,
-                castingRationale,
-                castingArchetype: 'explicit_landmark'
-            };
-
-            scene.cppGenerator = {
-                enabled: true,
-                filename: 'world_generator.cpp',
-                sourceCode: generateGeospatialCpp3DSource({
-                    landmarkName: result.geoAnchor.landmarkName,
-                    lat: result.geoAnchor.lat,
-                    lng: result.geoAnchor.lng,
-                    elevation: result.geoAnchor.elevation,
-                    clayPreset: params.clayPreset,
-                    castingRationale
-                }),
-                vertexCount: result.stats.vertexCount,
-                triangleCount: result.stats.faceCount
-            };
-
-            const threeScene = ctx.getThreeScene();
-            if (threeScene) {
-                threeScene.add(result.mesh);
-            }
-
-            ctx.recordState(`Import 3D Map Tile (${result.geoAnchor.landmarkName || result.geoAnchor.lat.toFixed(3)})`);
-
-            return {
-                objectId: result.customMeshDefinition?.id || result.media4DObject.id,
-                name: result.customMeshDefinition?.name || result.media4DObject.id,
-                geoAnchor: result.geoAnchor,
-                bounds: result.bounds,
-                stats: result.stats,
-                vertexCount: result.stats.vertexCount,
-                buildingCount: result.stats.buildingCount
-            };
         }
     },
     {

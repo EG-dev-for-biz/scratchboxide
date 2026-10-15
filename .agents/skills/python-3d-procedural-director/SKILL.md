@@ -230,15 +230,8 @@ When NO real-world geographic location is described in the initial prompt:
 
 ### Explicit Location Staging Invariant
 When the user explicitly provides a real-world location (e.g., *"F1 car in Monaco"*, *"monument in Central Park"*):
-- Provide `location` or `coordinates` directly to `execute_3d_python_script`:
-  ```json
-  {
-    "script": "import scratchbox as sb\n...",
-    "location": "Monaco GP Circuit, Monte Carlo",
-    "coordinates": [43.7384, 7.4246]
-  }
-  ```
-- The engine automatically extracts leaf-LOD 3D tile massing and positions the hero model directly on the real-world surface.
+- Scripts are not staged on real places: `execute_3d_python_script` with `location` or `coordinates` fails without running the script, and `sb.geospatial.load_location()` raises.
+- Get the place with `google_3d_tiles_get_clay({ query: "<the place as the user wrote it>" })`, and build one object standing there with `build_3d_object_from_reference` and that `location` plus a `placement`.
 
 ---
 

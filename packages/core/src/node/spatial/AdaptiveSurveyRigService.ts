@@ -10,6 +10,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 import type {
     ColmapCameraPose,
     GeodeticAnchor
@@ -203,17 +204,13 @@ export class AdaptiveSurveyRigService {
         const tierConfigs = this.allocateTiers(budget, mode, groundDatumY, structureHeight, standoff, baseFocalLength, minClearance);
 
         // 5. Synthesize Camera Stations along the Oriented Envelope
-        const anchor: GeodeticAnchor = options.anchor ?? {
-            lat: 41.8902,
-            lng: 12.4922,
-            elevationMeters: groundDatumY,
-            headingDeg: (yawRad * 180) / Math.PI
-        };
-
-        const safeAnchor = {
-            ...anchor,
-            elevationMeters: anchor.elevationMeters ?? groundDatumY
-        };
+        // The stations' WGS-84 coordinates come from where the model actually is: no default place, and the GLB's own
+        // ground height is not an elevation above sea level.
+        const anchor = options.anchor;
+        if (!anchor || !Number.isFinite(anchor.lat) || !Number.isFinite(anchor.lng) || !Number.isFinite(anchor.elevationMeters)) {
+            throw new MissingInputError('plan_adaptive_survey_rig', 'anchor { lat, lng, elevationMeters }', 'the location of the model\'s origin, with its ground elevation in metres above sea level; no default place is used');
+        }
+        const safeAnchor = anchor;
         const ltp = new LocalTangentPlane({
             lat: safeAnchor.lat,
             lng: safeAnchor.lng,

@@ -415,6 +415,8 @@ describe('Agent Lighting Intelligence - Unit 6: Acceptance Examples AE1 - AE4', 
 
         const harmonization = harmonizeLocationObjectAtmosphere({
             landmarkName: 'Colosseum, Rome',
+            latitude: 41.8902,
+            longitude: 12.4922,
             preset: 'civil_twilight_dusk',
             stoneType: 'travertine',
             enableArchitecturalBacklighting: true

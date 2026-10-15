@@ -92,10 +92,11 @@ export class ColmapVectorPipelineService {
     const outDir = path.resolve(process.cwd(), options?.outputDir || 'public/data/colmap_vector_export');
     const prefix = options?.baseFileName || 'colmap_vector';
 
-    // Dedicated Studio Grey Clay 3D Object (.glb) Ingestion via getGoogle3DTilesClay
+    // Dedicated Studio Grey Clay 3D Object (.glb) Ingestion via getGoogle3DTilesClay. Requested unless
+    // clayOptions.enabled is false; a failed extraction fails the call instead of returning without the clay.
     let clayObject: ColmapClay3DObjectMetadata | undefined;
     if (request.clayOptions?.enabled !== false) {
-      try {
+      {
         if (!fs.existsSync(outDir)) {
           fs.mkdirSync(outDir, { recursive: true });
         }
@@ -145,8 +146,6 @@ export class ColmapVectorPipelineService {
             }
           }
         }
-      } catch (err: any) {
-        console.warn('[ColmapVectorPipelineService] Warning: getGoogle3DTilesClay query skipped or failed:', err?.message || err);
       }
     }
 

@@ -11341,8 +11341,17 @@ if __name__ == '__main__':
                 const useSh = document.getElementById('chk-pipeline-sh')?.checked ?? false;
                 const sigmaScale = parseFloat(document.getElementById('slider-sigma-scale')?.value || (locationKey === 'esb' ? '0.8' : '0.5'));
 
+                // The server has no place presets: name the place (resolved with Google Places) and pass the clay
+                // model and tileset folder this page shows for it.
+                const demoSurveyAssets = {
+                    colosseum: { location: 'Colosseum, Rome, Italy', glbPath: 'public/models/colosseum_grounded.glb' },
+                    esb: { location: 'Empire State Building, New York, NY', glbPath: 'public/models/esb_grounded.glb' },
+                    gap: { location: 'Grand Army Plaza, Manhattan, New York, NY', glbPath: 'public/models/gap_grounded.glb' }
+                };
                 const payload = {
-                    location: locationKey,
+                    location: demoSurveyAssets[locationKey].location,
+                    glbPath: demoSurveyAssets[locationKey].glbPath,
+                    outDir: `public/tilesets/${locationKey}`,
                     activeModel: state.activeModel,
                     forceRebake: true,
                     clean: clean && !reusePlates,

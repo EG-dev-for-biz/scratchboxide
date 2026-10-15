@@ -128,12 +128,20 @@ async function runGeospatialRoutingTests() {
     const { GoogleMapsService } = await import('../src/browser/generative-canvas/services/google-maps-service');
     const mapsService = GoogleMapsService.getInstance();
     
-    // Resolve landmark locations for dynamic 3D scene placement
-    const ferryBuilding = await mapsService.geocode('San Francisco Ferry Building');
-    const coitTower = await mapsService.geocode('Coit Tower, San Francisco');
+    // Resolve landmark locations for dynamic 3D scene placement: one Places Text Search call per name (injected here).
+    const placesFetch = (async (_url: any, init?: any) => {
+        const q = JSON.parse(init?.body || '{}').textQuery as string;
+        const place = /ferry/i.test(q)
+            ? { displayName: { text: 'Ferry Building' }, formattedAddress: '1 Ferry Building, San Francisco, CA 94111, USA', location: { latitude: 37.7955, longitude: -122.3937 } }
+            : { displayName: { text: 'Coit Tower' }, formattedAddress: '1 Telegraph Hill Blvd, San Francisco, CA 94133, USA', location: { latitude: 37.8024, longitude: -122.4058 } };
+        return new Response(JSON.stringify({ places: [place] }), { status: 200 });
+    }) as typeof fetch;
+    const ferryBuilding = await mapsService.geocode('San Francisco Ferry Building', { apiKey: 'test-key', fetchImpl: placesFetch });
+    const coitTower = await mapsService.geocode('Coit Tower, San Francisco', { apiKey: 'test-key', fetchImpl: placesFetch });
     
     assert.ok(ferryBuilding && ferryBuilding.lat && ferryBuilding.lng, 'Ferry building geocoding must succeed');
     assert.ok(coitTower && coitTower.lat && coitTower.lng, 'Coit Tower geocoding must succeed');
+    assert.strictEqual(coitTower.name, 'Coit Tower');
     
     const projFerry = projectCoords(ferryBuilding.lat, ferryBuilding.lng, refLat, refLng, elevation);
     const projCoit = projectCoords(coitTower.lat, coitTower.lng, refLat, refLng, elevation);

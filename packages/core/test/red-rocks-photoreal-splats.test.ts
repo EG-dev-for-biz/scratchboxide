@@ -15,6 +15,7 @@ import * as http from 'http';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { requireAsset, requireAssets, withReason } from './helpers/requirements';
+import { injectTileExtraction } from './helpers/inject-tile-extraction';
 import {
   PhotorealGaussianSplatMesh,
   type SplatData
@@ -215,15 +216,14 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
         await fs.copy(path.join(srcStations, name), path.join(outDir, 'stations', name));
       }
     }
-    if (redRocksGlb.ok) {
-      // Use the real Google 3D Tiles capture when this machine has it.
-      await fs.ensureDir(path.join(workspaceRoot, 'public/models'));
-      await fs.symlink(path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb'), path.join(workspaceRoot, 'public/models/red_rocks_amphitheatre.glb'));
-    }
+    // Use the real Google 3D Tiles capture when this machine has it (passed explicitly: the service never picks a
+    // GLB by name); otherwise the fresh extraction the service performs is injected (no network in tests).
+    const extraction = redRocksGlb.ok ? undefined : injectTileExtraction();
     const service = new Location3DGaussianSplatService({ workspaceRoot });
 
     const result = await service.generate({
       location: 'Red Rocks Amphitheatre',
+      ...(redRocksGlb.ok ? { glbPath: path.join(PUBLIC_DIR, 'models/red_rocks_amphitheatre.glb') } : {}),
       lat: 39.66555,
       lng: -105.20525,
       elevation: 1932.0,
@@ -245,5 +245,9 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(result.scene3DData.sceneType).toBe('gaussian_splat');
     expect(result.scene3DData.splatUrl).toContain('red_rocks/fused.splat');
     expect(result.scene3DData.splatTilesetUrl).toContain('red_rocks/tileset.json');
+    if (extraction) {
+      expect(extraction).toHaveBeenCalledTimes(1);
+      extraction.mockRestore();
+    }
   });
 });

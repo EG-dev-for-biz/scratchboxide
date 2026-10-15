@@ -43,7 +43,6 @@ const PUBLIC_METHODS_BEFORE_SPLIT = [
     'getVisualVerificationService',
     'markdownStringToSections',
     'pingMcpServer',
-    'queryMapsGrounding',
     'run3DVisualSelfCorrectionLoop',
     'saveCredentialsDirectly',
     'startDeepResearchSession',

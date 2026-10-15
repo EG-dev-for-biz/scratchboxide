@@ -9,6 +9,7 @@
 
 import { Universal4DSceneDocument } from '../../common/geospatial-4d-protocol';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 import { WorldBranchManager } from './WorldBranchManager';
 
 export interface SpatialAIConditioningPayload {
@@ -34,7 +35,11 @@ export class HeadlessSpatialAiBridge {
       throw new Error(`Target Entity ${targetEntityId} not found in 4D Scene Document`);
     }
 
-    const origin = entity.space.geoAnchor || { lat: 37.7940, lng: -122.4010, alt: 15.0 };
+    // The prompt is grounded on where the entity is: without its geoAnchor there is nothing to ground it on.
+    if (!entity.space.geoAnchor) {
+      throw new MissingInputError('synthesizeGroundedMultimodalPrompt', `a geoAnchor on entity ${targetEntityId}`, 'no default location is used');
+    }
+    const origin = entity.space.geoAnchor;
     const ltp = new LocalTangentPlane(origin);
 
     // Compute geographic positions and angles

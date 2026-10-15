@@ -16,7 +16,7 @@ This reference document provides the canonical API contracts, C++20 engine heade
    - Zero flat Three.js primitives (`new THREE.BoxGeometry`).
 3. **Mandatory First-Request Staging**:
    - **No location in prompt**: Construct Hero Objects in **18% Studio Grey Clay** (`sb.PbrMaterial.clay()`, roughness 0.85, metalness 0.0, color `[0.55, 0.57, 0.60]`) in a clean studio void (`environment: { skybox: 'studio', lighting: 'studio', ground: false }`).
-   - **Location in prompt**: Stage directly at authentic real-world coordinates via Google 3D Tiles Studio Grey Clay (`google_3d_tiles_get_clay` or `execute_3d_python_script({ location: "..." })`) or `stage_3d_vector_world`. Never generate synthetic asphalt boxes or procedural lollipop trees.
+   - **Location in prompt**: Stage at the real place via Google 3D Tiles Studio Grey Clay (`google_3d_tiles_get_clay` for the place, `build_3d_object_from_reference` with `location` and `placement` for one object standing there) or `stage_3d_vector_world`; `execute_3d_python_script` does not stage scripts on real places. Never generate synthetic asphalt boxes or procedural lollipop trees.
 
 ---
 

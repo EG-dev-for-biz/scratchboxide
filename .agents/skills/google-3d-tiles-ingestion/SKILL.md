@@ -66,8 +66,9 @@ The system provides two distinct, separate APIs to prevent mode confusion and cr
 1. **Zero Hardcoded Presets**: The pipeline never looks up addresses in a static landmark dictionary. Any location on Earth can be queried.
 2. **Zero Procedural Hash Fallback**: Queries without geodetic coordinates will never fall back to synthetic hash coordinates.
 3. **Geodetic Requirement**:
-   - Provide explicit geodetic coordinates: `"40.748400, -73.985700"` or `{ lat: 40.7484, lng: -73.9857 }`, OR supply an iconic landmark/district string resolvable against 3D Tile root anchors and Google 2D Roadmap Vector Tiles.
-   - If neither is provided, the API throws an explicit, actionable `Error`.
+   - Provide explicit geodetic coordinates, either as text that is only a coordinate pair (`"40.748400, -73.985700"`) or as `{ lat: 40.7484, lng: -73.9857 }`, OR a place name or address. A place name is resolved with one Google Places API (New) Text Search call (the Maps key from Settings, `GOOGLE_MAPS_API_KEY` or `MAP_TILES_API_KEY`), and the result reports the exact address it resolved.
+   - Do not mix the two in one string (`"Midtown, coordinates: 40.7484, -73.9857"`): such text is not a coordinate pair, so all of it is sent to Places as a place name.
+   - With no key, no Places result, or (0, 0) coordinates, the API throws `LocationUnresolvedError`; it never substitutes another place.
    - **Zero Uninvited Synthetic Ground Boxes**: When an authentic location is specified, agents MUST NEVER write Python code to stack flat asphalt boxes or lollipop trees in a void; let the geospatial engine extract authentic 3D massing or stage the vector world!
 
 ---
@@ -102,17 +103,8 @@ Ingest real-world geographic coordinates as a photorealistic, full-texture 3D GL
 ### 2. `google_3d_tiles_get_clay`
 Ingest real-world geographic coordinates as a studio grey clay 3D GLB object (`clayPreset: 'studio-grey'`), capturing authentic metropolitan massing without texture noise.
 
-### 3. `execute_3d_python_script({ location: "..." })`
-When generating a hero 3D asset described at a specific real-world location (e.g., *"race car in Monaco"* or *"basketball court in Venice Beach"*), passing `location` directly into `execute_3d_python_script` automatically stages the 3D clay tiles underneath the hero object and calculates camera auto-framing over the bounding box:
-```json
-{
-  "name": "execute_3d_python_script",
-  "args": {
-    "script": "import scratchbox as sb\n# Build 18% Studio Grey Clay hero vehicle\n...",
-    "location": "Circuit de Monaco, Monte Carlo"
-  }
-}
-```
+### 3. An object standing at a real place
+For one object at a real-world location (e.g., *"race car in Monaco"*), call `build_3d_object_from_reference` with that `location` and a `placement`; it stages the object on the place's clay tiles. `execute_3d_python_script` does not stage scripts on real places: a call with `location` or `coordinates` fails without running the script.
 
 ### 4. `stage_3d_vector_world`
 For street-level vehicle and urban corridor staging, stages Google 2D Roadmap Vector Tiles (zoom 16) into 3D geometry: extruded building prisms, 5-tier road cross-sections with beveled granite curbs, sidewalks, streetlamps, and roadside trees in 18% Studio Grey Clay.
@@ -130,7 +122,7 @@ import {
 
 // Full Texture Ingestion
 const texturedResult: Google3DTile3DObjectResult = await getGoogle3DTilesFullTexture(
-  'Midtown Manhattan, coordinates: 40.748400, -73.985700',
+  '40.748400, -73.985700',
   {
     outputGlbPath: 'public/models/midtown_textured.glb'
   }
@@ -176,7 +168,7 @@ import {
 } from '@scratchbox/core/node';
 
 const blockoutResult: TileClayBlockoutRunnerResult = await runTileClayBlockoutRunner({
-  query: 'Tokyo Tower, coordinates: 35.658600, 139.745400',
+  query: 'Tokyo Tower, Minato City, Tokyo',
   trajectoryPreset: 'canyon_push', // 'cinematic_arc' | 'orbit_360' | 'canyon_push'
   clayPreset: 'studio-grey',       // '#dcd6cd', roughness 0.82, metalness 0.02
   outputVideoPath: 'public/videos/google_tiles_clay_blockout_camera.mp4',

@@ -12,11 +12,26 @@ import {
 } from '../src/node';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
+import { KNOWN_RESECTION_LANDMARKS } from '../src/node/spatial/GeoBoxPrecisionResectionService';
+
+/** A surveyed reference pose passed explicitly; resolution never picks one from words in the prompt hint. */
+function fixturePose(key: keyof typeof KNOWN_RESECTION_LANDMARKS) {
+    const f = KNOWN_RESECTION_LANDMARKS[key];
+    return {
+        targetLandmarkName: f.name,
+        targetCoords: { lat: f.targetCoords.lat, lng: f.targetCoords.lng, alt: f.groundElevation },
+        cameraOpticalCenter: { lat: f.vantageCoords.lat, lng: f.vantageCoords.lng, alt: f.vantageCoords.altitudeMeters },
+        headingDeg: f.headingDeg,
+        pitchDeg: f.pitchDeg,
+        glbPath: f.glbPath
+    };
+}
 
 describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => {
     describe('1. Image Location Resection API', () => {
         it('should resect 6-DOF camera pose, geodetic coords, and 100% edge alignment via resectImageLocation', async () => {
             const result = await resectImageLocation({
+                ...fixturePose('colosseum'),
                 promptHint: 'Colosseum Rome dusk vantage point',
                 sensorFocalMm: 26.0,
                 optimizeTo100Percent: true
@@ -28,30 +43,30 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
             expect(result.cameraOpticalCenter.lng).toBeCloseTo(12.4922, 2);
             expect(result.cameraAttitude.headingDeg).toBe(108.0);
             expect(result.cameraAttitude.pitchDeg).toBe(6.0);
-            expect(result.frustum.horizontalFovDeg).toBeCloseTo(57.0, 1);
+            expect(result.frustum.horizontalFovDeg).toBeCloseTo(69.39, 1); // 26 mm on a 36 mm sensor
             expect(result.cameraOpticalCenter.standoffDistanceMeters).toBeGreaterThan(100);
-            expect(result.edgeAlignment.overlapScorePct).toBe(100.0);
-            expect(result.edgeAlignment.subPixelResidualPx).toBeLessThan(0.1);
-            expect(result.edgeAlignment.converged).toBe(true);
+            expect(result.imageAnalysed).toBe(false); // no edge overlap is claimed
+            expect((result as any).edgeAlignment).toBeUndefined();
             expect(result.lensDistortion.k1).toBeLessThan(0); // Barrel distortion
         });
 
         it('should resect camera pose via GeoBoxPrecisionResectionService instance method', async () => {
             const service = new GeoBoxPrecisionResectionService();
             const result = await service.resectImageLocation({
-                targetLandmarkName: 'Eiffel Tower',
+                ...fixturePose('eiffel'),
                 optimizeTo100Percent: true
             });
 
             expect(result.landmark.name).toContain('Eiffel Tower');
             expect(result.cameraOpticalCenter.lat).toBeCloseTo(48.857, 2);
-            expect(result.edgeAlignment.overlapScorePct).toBe(100.0);
+            expect(result.poseSource).toMatch(/stated camera position/);
         });
     });
 
     describe('2. Location 3D Object Lighting & Atmosphere API', () => {
         it('should calculate calibrated civil twilight dusk baseline matching ground-truth settings', () => {
             const result = harmonizeLocationObjectAtmosphere({
+                latitude: 41.8902, longitude: 12.4922,
                 landmarkName: 'Colosseum, Rome',
                 preset: 'civil_twilight_dusk',
                 stoneType: 'travertine',
@@ -98,12 +113,14 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
 
         it('should support alternative stone albedo profiles', () => {
             const marbleResult = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
+                latitude: 41.8902, longitude: 12.4922,
                 preset: 'civil_twilight_dusk',
                 stoneType: 'marble'
             });
             expect(marbleResult.delightUniforms.uStoneAlbedoTint).toEqual(STONE_ALBEDO_PROFILES.marble);
 
             const sandstoneResult = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
+                latitude: 41.8902, longitude: 12.4922,
                 preset: 'civil_twilight_dusk',
                 stoneType: 'sandstone'
             });
@@ -112,12 +129,14 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
 
         it('should support alternative lighting presets like golden_hour and blue_hour', () => {
             const golden = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
+                latitude: 41.8902, longitude: 12.4922,
                 preset: 'golden_hour'
             });
             expect(golden.sceneLighting.sunLight.intensity).toBe(1.20);
             expect(golden.delightUniforms.uShadowLift).toBe(0.40);
 
             const blueHour = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
+                latitude: 41.8902, longitude: 12.4922,
                 preset: 'blue_hour'
             });
             expect(blueHour.sceneLighting.ambientLight.color).toBe('#224477');
@@ -152,7 +171,7 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
 
         it('should create and attach atmospheric scene lights and portal fixtures to Three.js scene', () => {
             const scene = new THREE.Scene();
-            const config = harmonizeLocationObjectAtmosphere();
+            const config = harmonizeLocationObjectAtmosphere({ latitude: 41.8902, longitude: 12.4922 });
 
             const lights = LocationObjectLightingService.applyLocationAtmosphereLighting(scene, config.sceneLighting);
             expect(lights.ambient).toBeDefined();
@@ -172,23 +191,26 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
         it('should execute geobox_resect_image_location tool', async () => {
             const registry = createDefaultToolRegistry();
             const response = await registry.dispatch('geobox_resect_image_location', {
+                ...fixturePose('colosseum'),
                 promptHint: 'Colosseum, Rome dusk',
                 optimizeTo100Percent: true
             }, {} as any);
 
             expect(response.exec.status).toBe('completed');
-            expect(response.exec.summaryResult).toContain('Resected image location for Colosseum');
-            expect(response.exec.summaryResult).toContain('100.0% edge overlap');
+            expect(response.exec.summaryResult).toContain('Camera pose for Colosseum');
+            expect(response.exec.summaryResult).not.toContain('edge overlap');
 
             const payload: any = response.resultPayload;
             expect(payload.cameraOpticalCenter.lat).toBeCloseTo(41.8908, 3);
-            expect(payload.edgeAlignment.overlapScorePct).toBe(100.0);
+            expect(payload.edgeAlignment).toBeUndefined();
         });
 
         it('should execute geobox_harmonize_location_lighting tool', async () => {
             const registry = createDefaultToolRegistry();
             const response = await registry.dispatch('geobox_harmonize_location_lighting', {
                 landmarkName: 'Colosseum, Rome',
+                latitude: 41.8902,
+                longitude: 12.4922,
                 preset: 'civil_twilight_dusk',
                 stoneType: 'travertine'
             }, {} as any);
@@ -207,12 +229,19 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
         it('should execute atmosphere_harmonize_location_3d alias tool', async () => {
             const registry = createDefaultToolRegistry();
             const response = await registry.dispatch('atmosphere_harmonize_location_3d', {
-                preset: 'golden_hour'
+                preset: 'golden_hour',
+                latitude: 41.8902,
+                longitude: 12.4922
             }, {} as any);
 
             expect(response.exec.status).toBe('completed');
             const payload: any = response.resultPayload;
             expect(payload.preset).toBe('golden_hour');
+
+            // No place given: it fails instead of computing the sun for latitude 45, longitude 0.
+            const placeless = await registry.dispatch('atmosphere_harmonize_location_3d', { preset: 'golden_hour' }, {} as any);
+            expect(placeless.exec.status).toBe('failed');
+            expect(String((placeless.resultPayload as any).error)).toMatch(/latitude and longitude/);
         });
     });
 

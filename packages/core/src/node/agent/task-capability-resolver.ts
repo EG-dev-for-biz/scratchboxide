@@ -7,7 +7,6 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 
 export type TaskDomain = '3d' | 'vfx' | 'generative' | 'code' | 'general' | (string & {});
 
@@ -194,9 +193,10 @@ export class TaskCapabilityResolver {
         const isNeutralPerformerPrompt = /buildneutralperformerprompt|neutral[\s\w-]{0,40}(?:prompt|video|image|portrait|performer|avatar)|(?:performer|avatar|character|dancer|vocalist)[\s\w-]{0,40}(?:neutral|a[\s-]frame|prompt)|(?:prompt|video|image)[\s\w-]{0,40}(?:neutral|a[\s-]frame)|a[\s-]frame/i.test(lower);
 
         const hasSplatKeyword = /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(lower);
-        const hasRealWorldIntent = !!detectRealWorldLocationIntent(goal)?.isRealWorld ||
-            /(?:location|landmark|beautif|nano\s*banana|restyle|survey|real[- ]world|geographic|geodetic|place|city|district|plaza|building|street|monument|park|stadium|bridge|tower|colosseum|empire|pantheon|rome|manhattan|esb|eiffel|sydney|taj\s*mahal|central\s*park|times\s*square|acropolis|notre\s*dame|big\s*ben|paris|london|tokyo)/i.test(lower) ||
-            /(?:of|for|at|around|in)\s+[a-z0-9]/i.test(lower);
+        // Steered to the location pipeline only when the request says it is about a real place in general terms.
+        // Whether a named subject ("the Colosseum", "my cat") is a place is the model's call: no list of place names
+        // or building nouns, and no "splat of <anything>" pattern. location_generate_3dgs is offered either way.
+        const hasRealWorldIntent = /\b(?:locations?|landmarks?|real[- ]world|geographic(?:al)?|geodetic|surveys?|beautify|nano\s*banana|restyl\w*|google\s*3d\s*tiles?)\b/i.test(lower);
         const isLocationSplat = !isAnalyticalGroomSplat && hasSplatKeyword && hasRealWorldIntent;
 
         if (isWanMultiviewDiffusionExecution) {

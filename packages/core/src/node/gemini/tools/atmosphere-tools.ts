@@ -15,6 +15,7 @@ import {
     getSunVectorFromAngles,
     AtmosphereImageEstimationService
 } from '../../../browser/generative-canvas/services/atmosphere';
+import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import type { ToolDeclaration, ToolHandler } from './types';
 
 function asString(val: unknown): string {
@@ -280,8 +281,19 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
         const cameraHeadingDeg = typeof args.cameraHeadingDeg === 'number' ? args.cameraHeadingDeg : undefined;
         const cameraPitchDeg = typeof args.cameraPitchDeg === 'number' ? args.cameraPitchDeg : undefined;
 
+        // The photo's own pixels: decoded here (a missing or undecodable file is an error, never a guessed sky).
+        if (!imagePath) throw new MissingInputError('atmosphere_estimate_from_image', 'imagePath', 'give the photograph to estimate the atmosphere from');
+        const fsMod = await import('fs-extra');
+        if (!(await fsMod.pathExists(imagePath))) throw new MissingInputError('atmosphere_estimate_from_image', 'imagePath', `${imagePath} does not exist`);
+        const { decodeImageToRgba } = await import('../../image-codec-ffmpeg');
+        const { downsampleRgba } = await import('../../spatial/InverseLightingEstimatorService');
+        const decoded = await decodeImageToRgba(await fsMod.readFile(imagePath));
+        const sampled = downsampleRgba(decoded.rgba, decoded.width, decoded.height, 512);
         const result = await AtmosphereImageEstimationService.estimateFromImage({
             imagePath,
+            pixels: sampled.pixels,
+            width: sampled.width,
+            height: sampled.height,
             promptHint,
             knownCoords: (lat !== undefined && lng !== undefined) ? { lat, lng } : undefined,
             timestampIso: isoDate,

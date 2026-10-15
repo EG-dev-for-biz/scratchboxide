@@ -14,11 +14,17 @@ import {
   Entity4D,
   Universal4DSceneDocument
 } from '../src/common/geospatial-4d-protocol';
-import {
-  ESB_GOOGLE_GEODETIC_ANCHOR,
-  GoogleMidtownVectorMapping,
-  GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE
-} from '../src/browser/generative-canvas/services/google-vector-mapping-service';
+import { GoogleMidtownVectorMapping } from '../src/browser/generative-canvas/services/google-vector-mapping-service';
+import { GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE } from '../src/browser/generative-canvas/services/google-maps-service';
+
+/** A surveyed test anchor (Empire State Building): test data only; the service has no built-in places. */
+const ESB_GOOGLE_GEODETIC_ANCHOR = {
+  lat: 40.7484405,
+  lng: -73.9856644,
+  elevation: 18.53,
+  placeId: 'ChIJh9828XNZwokR_3A0K2N46j8',
+  formattedAddress: 'Empire State Building, 20 W 34th St, New York, NY 10001, USA'
+};
 
 describe('DeploymentManifestCompiler (ARCore Geospatial + Splats + Vectors)', () => {
   // Empire State Building Geodetic Anchor

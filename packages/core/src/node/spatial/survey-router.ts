@@ -15,8 +15,10 @@ import { AdaptiveSurveyRigService } from './AdaptiveSurveyRigService';
 import { SurveyStationRenderService } from './SurveyStationRenderService';
 import { BeautifyStationService, type StationImageGenerator } from './BeautifyStationService';
 import { SurveySplatPipelineService } from './SurveySplatPipelineService';
-import { Google3DTileService } from '../../browser/generative-canvas/services/Google3DTileService';
-import { extractLocationAndEraFromContext } from '../../browser/generative-canvas/services/location-beautify-service';
+import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
+import { geocode3DTilesAddress, type GeoAnchor } from './Google3DTileBlockoutPipelineService';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { assertUsableCoordinates } from '../../common/coordinate/parse-coordinates';
 
 /**
  * Framework-agnostic handlers for the Survey Synthesis API, mounted by the desktop server at
@@ -41,7 +43,8 @@ export interface SurveyJob {
 
 export interface SurveyApiDeps {
     /** Resolves a query/anchor to a clay GLB on disk (wraps getGoogle3DTilesClay). Optional so the API works offline. */
-    fetchClayGlb?: (query: string | GeodeticAnchor, options?: Record<string, any>) => Promise<{ glbPath: string; glbUrl?: string; mesh?: any; geoAnchor?: any; resolvedAddress?: string; quality?: any; mode?: string }>;
+    /** Real Google 3D Tiles extraction; `mock` is true when the extraction produced placeholder data instead. */
+    fetchClayGlb?: (query: string | (Pick<GeodeticAnchor, 'lat' | 'lng'> & Partial<GeodeticAnchor>), options?: Record<string, any>) => Promise<{ glbPath: string; glbUrl?: string; mesh?: any; geoAnchor?: any; resolvedAddress?: string; quality?: any; mode?: string; mock?: boolean }>;
     /** Root directory that glbPath arguments must live under (path traversal guard). */
     workspaceRoot?: string;
     /** Registered by later phases: beautify one station / whole batch to splat tiles. */
@@ -49,18 +52,30 @@ export interface SurveyApiDeps {
     beautifyToSplats?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
     rerunPipeline?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
 }
+/** Injected for tests; resolves coordinates or a place name (Google Places) to an anchor. */
+export type SurveyGeocoder = (query: string | GeoAnchor) => Promise<GeoAnchor>;
+/** Injected for tests; ground elevation (metres above sea level) from the Elevation API. */
+export type SurveyElevationLookup = (lat: number, lng: number) => Promise<number>;
 
 /**
- * Resolves preset geographic locations (Colosseum, Empire State, Grand Army Plaza)
- * into canonical anchors, foveated survey camera patterns, and bounding crop parameters
- * when shorthand location keys are provided from the demo workbench.
+ * Plans the survey for a location. There are no location presets and no default model:
+ * - the anchor comes from `anchor`, `lat`/`lng`, or `location` (coordinates, or a place name geocoded with
+ *   Google Places); an unresolvable location throws LocationUnresolvedError, never (0, 0);
+ * - the ground elevation is the anchor's own, else the Elevation API's, else MissingInputError;
+ * - `glbPath` is only what the caller passed (extract the place first with google_3d_tiles_get_clay); no GLB
+ *   on disk is picked by name.
+ * Survey parameters left unset get generic, location-independent values.
  */
-export function resolveSurveyPreset(args: any, workspaceRoot: string): {
-    glbPath: string;
+export async function resolveSurveyPreset(
+    args: any,
+    _workspaceRoot: string,
+    lookup: { geocode?: SurveyGeocoder; elevation?: SurveyElevationLookup } = {}
+): Promise<{
+    glbPath?: string;
     outDir: string;
     anchor: GeodeticAnchor;
     stations: ColmapCameraPose[];
-    beautify: { locationName: string; architecturalStyle?: string; moodPromptContext?: string; styleSuffix?: string };
+    beautify: { locationName: string; architecturalStyle?: string; stylePreset?: string; moodPromptContext?: string; styleSuffix?: string };
     cropRadius?: number;
     cropBox?: { min: [number, number, number]; max: [number, number, number] };
     sigmaScale?: number;
@@ -68,227 +83,46 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
     erodeSilhouettePx?: number;
     dropInconsistent?: boolean;
     colorConsistencyThresh?: number;
-} {
-    const loc = (args?.location || args?.activeModel || '').toLowerCase();
+}> {
+    const geocode = lookup.geocode ?? ((q: string | GeoAnchor) => geocode3DTilesAddress(q));
+    const elevationAt = lookup.elevation ?? ((lat: number, lng: number) => GoogleMapsService.getInstance().getElevation(lat, lng));
     const engine = new SurveySynthesisEngine();
+    const rawLoc: string = String(args?.location || args?.activeModel || '').trim();
 
-    if (loc.includes('colosseum')) {
-        const anchor: GeodeticAnchor = {
-            lat: 41.8902,
-            lng: 12.4922,
-            elevationMeters: 22.0,
-            headingDeg: 0,
-            formattedAddress: 'Colosseum, Rome'
-        };
-        const colosseumCenterENU: [number, number, number] = [-43.42, 24.0, 62.54];
-        const lookAt = args?.lookAtOffsetLocalENU || colosseumCenterENU;
-
-        const isGeoSurvey = args?.surveyPattern === 'geographic-3dtiles-survey';
-        const isCompleteAmphitheatre = args?.surveyPattern === 'amphitheatre-complete' ||
-            args?.surveyPreset === 'watertight-112' ||
-            args?.surveyPreset === 'interior-pilot-40' ||
-            (typeof args?.cameraCount === 'number' && args.cameraCount > 24);
-
-        const cameraCount = typeof args?.cameraCount === 'number'
-            ? args.cameraCount
-            : (args?.surveyPreset === 'watertight-112' ? 112 : (args?.surveyPreset === 'interior-pilot-40' ? 40 : 24));
-
-        const glb = fs.existsSync(path.resolve(workspaceRoot, 'public/models/colosseum_grounded.glb'))
-            ? 'public/models/colosseum_grounded.glb'
-            : 'public/models/colosseum_clay.glb';
-        const glbAbs = path.resolve(workspaceRoot, args?.glbPath || glb);
-
-        let stations: ColmapCameraPose[];
-        if (args?.stations && args.stations.length) {
-            stations = args.stations;
-        } else if (args?.useAdaptiveRig !== false && fs.existsSync(glbAbs) && (args?.surveyPattern === 'adaptive-scene-aware' || isCompleteAmphitheatre)) {
-            const adaptiveResult = AdaptiveSurveyRigService.planRig(glbAbs, {
-                anchor,
-                cameraBudget: cameraCount,
-                mode: 'multitier-complete',
-                focalLengthMm: 35,
-                targetResolutionMm: 2.5,
-                focusCentroid: lookAt,
-                cropRadius: args?.cropRadius ?? 120.0
-            });
-            stations = adaptiveResult.poses;
-        } else {
-            stations = isGeoSurvey
-                ? engine.synthesize(anchor, {
-                    type: 'geographic-3dtiles-survey',
-                    cameraCount,
-                    targetRadiusMeters: 130,
-                    focalLengthMm: 35,
-                    lookAtOffsetLocalENU: lookAt
-                })
-                : isCompleteAmphitheatre
-                ? engine.synthesize(anchor, {
-                    type: 'amphitheatre-complete',
-                    cameraCount,
-                    targetRadiusMeters: 150,
-                    aspectRatioXZ: 1.18,
-                    lookAtOffsetLocalENU: lookAt
-                })
-                : engine.synthesize(anchor, {
-                    type: 'foveated-multi-tier',
-                    cameraCount: 24,
-                    targetRadiusMeters: 150,
-                    tierRadiiMeters: [110, 130, 180],
-                    altitudeTiersMeters: [
-                        anchor.elevationMeters + 3.0,
-                        anchor.elevationMeters + 30.0,
-                        anchor.elevationMeters + 75.0
-                    ],
-                    lookAtOffsetLocalENU: lookAt,
-                    lookAtTiersOffsetLocalENU: [
-                        [lookAt[0], 6.0 + (lookAt[1] - 20.0), lookAt[2]],
-                        [lookAt[0], 28.0 + (lookAt[1] - 20.0), lookAt[2]],
-                        [lookAt[0], 20.0 + (lookAt[1] - 20.0), lookAt[2]]
-                    ]
-                });
+    let anchor: GeodeticAnchor;
+    if (args?.anchor) {
+        const a = args.anchor;
+        assertUsableCoordinates(Number(a.lat), Number(a.lng), `${a.lat}, ${a.lng}`);
+        anchor = { ...a, lat: Number(a.lat), lng: Number(a.lng), headingDeg: a.headingDeg ?? args?.headingDeg ?? 0 };
+    } else {
+        const target: string | GeoAnchor | undefined = args?.lat !== undefined && args?.lng !== undefined
+            ? { lat: Number(args.lat), lng: Number(args.lng), ...(args.elevationMeters !== undefined ? { elevation: Number(args.elevationMeters) } : {}) }
+            : rawLoc || undefined;
+        if (!target) {
+            throw new MissingInputError('survey', 'anchor, lat/lng or location');
         }
-        return {
-            glbPath: args?.glbPath || glb,
-            outDir: args?.outDir || 'public/tilesets/colosseum',
-            anchor: args?.anchor || anchor,
-            stations: args?.stations && args.stations.length ? args.stations : stations,
-            beautify: {
-                locationName: 'Rome Colosseum',
-                architecturalStyle: 'Ancient Roman travertine limestone amphitheatre with arched arcades, Corinthian columns, and authentic Roman masonry under warm Mediterranean sunlight',
-                ...(args?.beautify || {})
-            },
-            cropRadius: args?.cropRadius ?? 140.0,
-            cropBox: args?.cropBox || {
-                min: [lookAt[0] - 115.0, -0.5, lookAt[2] - 115.0],
-                max: [lookAt[0] + 115.0, 55.0, lookAt[2] + 115.0]
-            },
-            sigmaScale: args?.sigmaScale ?? 0.5,
-            voxelSizeMeters: args?.voxelSizeMeters ?? 0.05,
-            erodeSilhouettePx: args?.erodeSilhouettePx ?? 2,
-            dropInconsistent: args?.dropInconsistent ?? true,
-            colorConsistencyThresh: args?.colorConsistencyThresh ?? 40.0
-        };
-    } else if (loc.includes('esb') || loc.includes('empire')) {
-        const anchor: GeodeticAnchor = {
-            lat: 40.7484,
-            lng: -73.9857,
-            elevationMeters: 15.0,
-            headingDeg: 0,
-            formattedAddress: 'Empire State Building, New York'
-        };
-        const stations = engine.synthesize(anchor, {
-            type: 'orbital-multi-tier',
-            cameraCount: 24,
-            targetRadiusMeters: 120,
-            tierRadiiMeters: [80, 120, 160],
-            altitudeTiersMeters: [
-                anchor.elevationMeters + 5.0,
-                anchor.elevationMeters + 120.0,
-                anchor.elevationMeters + 350.0
-            ],
-            lookAtOffsetLocalENU: [0, 180, 0],
-            lookAtTiersOffsetLocalENU: [
-                [0, 20, 0],
-                [0, 150, 0],
-                [0, 320, 0]
-            ]
-        });
-        const glb = fs.existsSync(path.resolve(workspaceRoot, 'public/models/esb_grounded.glb'))
-            ? 'public/models/esb_grounded.glb'
-            : 'public/models/esb_clay.glb';
-        return {
-            glbPath: args?.glbPath || glb,
-            outDir: args?.outDir || 'public/tilesets/esb',
-            anchor: args?.anchor || anchor,
-            stations: args?.stations && args.stations.length ? args.stations : stations,
-            beautify: {
-                locationName: 'Empire State Building',
-                architecturalStyle: 'Art Deco limestone skyscraper with vertical piers, stainless steel crown spire, and Manhattan streetscape under crisp morning illumination',
-                ...(args?.beautify || {})
-            },
-            cropRadius: args?.cropRadius ?? 150.0,
-            sigmaScale: args?.sigmaScale ?? 0.8,
-            voxelSizeMeters: args?.voxelSizeMeters ?? 0.15
-        };
-    } else if (loc.includes('gap') || loc.includes('plaza') || loc.includes('grand')) {
-        const anchor: GeodeticAnchor = {
-            lat: 40.7648,
-            lng: -73.9733,
-            elevationMeters: 20.0,
-            headingDeg: 0,
-            formattedAddress: 'Grand Army Plaza, New York'
-        };
-        const stations = engine.synthesize(anchor, {
-            type: 'orbital-multi-tier',
-            cameraCount: 18,
-            targetRadiusMeters: 55,
-            tierRadiiMeters: [38, 55, 80],
-            altitudeTiersMeters: [
-                anchor.elevationMeters + 2.0,
-                anchor.elevationMeters + 10.0,
-                anchor.elevationMeters + 26.0
-            ],
-            lookAtOffsetLocalENU: [0, 10, 0],
-            lookAtTiersOffsetLocalENU: [
-                [0, 4, 0],
-                [0, 10, 0],
-                [0, 14, 0]
-            ]
-        });
-        const glb = fs.existsSync(path.resolve(workspaceRoot, 'public/models/gap_grounded.glb'))
-            ? 'public/models/gap_grounded.glb'
-            : 'public/models/gap_clay.glb';
-        return {
-            glbPath: args?.glbPath || glb,
-            outDir: args?.outDir || 'public/tilesets/gap',
-            anchor: args?.anchor || anchor,
-            stations: args?.stations && args.stations.length ? args.stations : stations,
-            beautify: {
-                locationName: 'Grand Army Plaza',
-                architecturalStyle: 'Beaux-Arts neoclassical plaza with Pulitzer Fountain, gilded bronze Pomona statue, limestone balustrades, and Manhattan Fifth Avenue context under late afternoon sun',
-                ...(args?.beautify || {})
-            },
-            cropRadius: args?.cropRadius ?? 90.0,
-            sigmaScale: args?.sigmaScale ?? 0.5,
-            voxelSizeMeters: args?.voxelSizeMeters ?? 0.08
+        const geo = await geocode(target);
+        anchor = {
+            lat: geo.lat,
+            lng: geo.lng,
+            elevationMeters: geo.elevation as number,
+            headingDeg: args?.headingDeg || 0,
+            formattedAddress: geo.formattedAddress || geo.landmarkName || rawLoc
         };
     }
+    if (typeof anchor.elevationMeters !== 'number' || !Number.isFinite(anchor.elevationMeters)) {
+        try {
+            anchor.elevationMeters = await elevationAt(anchor.lat, anchor.lng);
+        } catch (err) {
+            throw new MissingInputError('survey', 'anchor.elevationMeters', `the ground elevation at ${anchor.lat}, ${anchor.lng} is unknown and the Elevation API gave none (${err instanceof Error ? err.message : String(err)})`);
+        }
+    }
 
-    // Dynamic resolution for any real-world location (e.g. Sydney Opera House, Eiffel Tower, Taj Mahal, Pantheon, or coordinates)
-    const rawLoc = args?.location || args?.activeModel || '';
-    const resolvedGeo = Google3DTileService.getInstance().resolveLocationSync(
-        args?.anchor
-            ? args.anchor
-            : (args?.lat !== undefined && args?.lng !== undefined
-                ? { lat: args.lat, lng: args.lng, elevation: args.elevationMeters }
-                : (rawLoc || 'Survey Target'))
-    );
-
-    const anchor: GeodeticAnchor = args?.anchor || {
-        lat: resolvedGeo.lat,
-        lng: resolvedGeo.lng,
-        elevationMeters: resolvedGeo.elevation,
-        headingDeg: args?.headingDeg || 0,
-        formattedAddress: resolvedGeo.formattedAddress || resolvedGeo.landmarkName || rawLoc || 'Survey Target'
-    };
-
-    const locName = rawLoc || resolvedGeo.landmarkName || 'Survey Target';
-    const sanitizedName = locName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-
-    const cand1 = path.resolve(workspaceRoot, `public/models/${sanitizedName}_grounded.glb`);
-    const cand2 = path.resolve(workspaceRoot, `public/models/${sanitizedName}_clay.glb`);
-    const cand3 = path.resolve(workspaceRoot, `public/models/${sanitizedName}.glb`);
-    const defaultBox = path.resolve(workspaceRoot, 'public/models/survey_box_ground.glb');
-
-    const glb = args?.glbPath || (fs.existsSync(cand1)
-        ? `public/models/${sanitizedName}_grounded.glb`
-        : (fs.existsSync(cand2)
-            ? `public/models/${sanitizedName}_clay.glb`
-            : (fs.existsSync(cand3)
-                ? `public/models/${sanitizedName}.glb`
-                : (fs.existsSync(defaultBox) ? 'public/models/survey_box_ground.glb' : `public/models/${sanitizedName}_clay.glb`))));
-
-    const extractedEra = extractLocationAndEraFromContext(locName);
+    const locName = rawLoc || anchor.formattedAddress || `${anchor.lat.toFixed(6)}, ${anchor.lng.toFixed(6)}`;
+    // The default output folder is keyed by the resolved coordinates as well as the name, so two places described
+    // alike ("Park Avenue" in New York and in Winter Park) never write into each other's tileset.
+    const sanitizedName = locName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'location';
+    const placeKey = `${anchor.lat.toFixed(5)}_${anchor.lng.toFixed(5)}`;
     const radius = args?.cropRadius ?? 75.0;
 
     const stations = args?.stations && args.stations.length ? args.stations : engine.synthesize(anchor, {
@@ -304,14 +138,13 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
     });
 
     return {
-        glbPath: glb,
-        outDir: args?.outDir || `public/tilesets/${sanitizedName}`,
+        ...(args?.glbPath ? { glbPath: String(args.glbPath) } : {}),
+        outDir: args?.outDir || `public/tilesets/${sanitizedName}_${placeKey}`,
         anchor,
         stations,
         beautify: {
             locationName: locName,
-            architecturalStyle: extractedEra.eraContext || `${locName} architectural structure`,
-            stylePreset: extractedEra.stylePreset,
+            // No style or era is read off the place name (no keyword table): only what the caller passes in beautify.
             // In accordance with style neutrality directive: extra injections into the prompt
             // should only happen in {styleSuffix}, and remain empty unless explicitly prompted by the user.
             moodPromptContext: args?.beautify?.moodPromptContext || '',
@@ -351,11 +184,15 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
     };
 
     const runSurveyPipeline = async (args: any, report: (p: number, msg?: string) => void) => {
-        let preset: ReturnType<typeof resolveSurveyPreset> | null = null;
+        let preset: Awaited<ReturnType<typeof resolveSurveyPreset>> | null = null;
         if (!args?.glbPath || !Array.isArray(args?.stations) || args.stations.length === 0 || !args?.anchor) {
-            preset = resolveSurveyPreset(args, workspaceRoot);
+            preset = await resolveSurveyPreset(args, workspaceRoot);
         }
-        const glbPath = resolveGlb(args?.glbPath || preset!.glbPath);
+        const glbArg = args?.glbPath || preset?.glbPath;
+        if (!glbArg) {
+            throw new MissingInputError('beautify_to_splats', 'glbPath', 'extract the location first (google_3d_tiles_get_clay) and pass its GLB');
+        }
+        const glbPath = resolveGlb(glbArg);
         const anchor = args?.anchor || preset!.anchor;
         const stations = (args?.stations && args.stations.length) ? args.stations : preset!.stations;
         const outDir = path.resolve(workspaceRoot, args?.outDir || preset?.outDir || `public/tilesets/survey_${Date.now()}`);
@@ -446,12 +283,17 @@ export class SurveyApi {
         return r;
     }
 
+    /** The request's anchor; survey geometry needs its ground elevation, so that is required too (no 0 m default). */
     private static anchorFrom(body: any): GeodeticAnchor {
         const a = body?.anchor;
         if (!a || typeof a.lat !== 'number' || typeof a.lng !== 'number') {
-            throw new Error('anchor { lat, lng, elevationMeters?, headingDeg? } is required (zero presets: no default location)');
+            throw new Error('anchor { lat, lng, elevationMeters, headingDeg? } is required (zero presets: no default location)');
         }
-        return { lat: a.lat, lng: a.lng, elevationMeters: a.elevationMeters ?? 0, headingDeg: a.headingDeg ?? 0, formattedAddress: a.formattedAddress || `${a.lat.toFixed(6)}, ${a.lng.toFixed(6)}` };
+        assertUsableCoordinates(a.lat, a.lng, `${a.lat}, ${a.lng}`);
+        if (typeof a.elevationMeters !== 'number' || !Number.isFinite(a.elevationMeters)) {
+            throw new MissingInputError('survey', 'anchor.elevationMeters', 'the ground elevation in metres above sea level');
+        }
+        return { lat: a.lat, lng: a.lng, elevationMeters: a.elevationMeters, headingDeg: a.headingDeg ?? 0, formattedAddress: a.formattedAddress || `${a.lat.toFixed(6)}, ${a.lng.toFixed(6)}` };
     }
 
     private startJob(kind: string, run: (report: (p: number, msg?: string) => void) => Promise<any>): SurveyJob {
@@ -490,11 +332,12 @@ export class SurveyApi {
         };
     }
 
-    /** POST /plan-adaptive { glbPath, anchor?, cameraBudget?, mode?, focalLengthMm?, targetResolutionMm?, standoffMeters?, minGroundClearanceMeters? } */
+    /** POST /plan-adaptive { glbPath, anchor, cameraBudget?, mode?, focalLengthMm?, targetResolutionMm?, standoffMeters?, minGroundClearanceMeters? } */
     async planAdaptive(body: any) {
         if (!body?.glbPath) throw new Error('glbPath is required for adaptive survey rig planning');
         const absGlb = this.resolveGlb(body.glbPath);
-        const anchor = body?.anchor ? SurveyApi.anchorFrom(body) : undefined;
+        // Stations carry WGS-84 coordinates, so the model's location is required (no default place).
+        const anchor = SurveyApi.anchorFrom(body);
         const result = AdaptiveSurveyRigService.planRig(absGlb, {
             anchor,
             cameraBudget: body?.cameraBudget,
@@ -507,8 +350,7 @@ export class SurveyApi {
             renderHeight: body?.renderHeight,
             focusCentroid: body?.focusCentroid
         });
-        const safeAnchor = (result.poses[0] as any)?.metadata?.anchor || anchor || { lat: 0, lng: 0, elevationMeters: 0, headingDeg: 0 };
-        const geoJson = this.engine.toGeoJson(result.poses, safeAnchor);
+        const geoJson = this.engine.toGeoJson(result.poses, anchor);
         return {
             success: true,
             ...result,
@@ -544,9 +386,16 @@ export class SurveyApi {
     /** POST /clay { query | anchor, options? } -> clay GLB on disk */
     async clay(body: any) {
         if (!this.deps.fetchClayGlb) throw new Error('Clay ingestion is not configured on this server (getGoogle3DTilesClay unavailable)');
-        const query = body?.query || (body?.anchor ? SurveyApi.anchorFrom(body) : undefined);
+        // Extraction measures the ground from the tiles, so a clay request needs only the coordinates.
+        const a = body?.anchor;
+        const query = body?.query || (a && typeof a.lat === 'number' && typeof a.lng === 'number'
+            ? { lat: a.lat, lng: a.lng, ...(typeof a.elevationMeters === 'number' ? { elevationMeters: a.elevationMeters } : {}), formattedAddress: a.formattedAddress }
+            : undefined);
         if (!query) throw new Error('query or anchor is required');
+        // The extraction's offline test mode writes placeholder tiles; an API request gets real tiles or fails.
+        if (body?.options?.offlineMock) throw new Error('options.offlineMock is a test-only extraction mode and is not accepted by /clay');
         const res = await this.deps.fetchClayGlb(query, body?.options);
+        if (res.mock) throw new Error('Clay ingestion produced placeholder (mock) tiles, not Google 3D Tiles');
         return { success: true, glbPath: res.glbPath, glbUrl: res.glbUrl, mesh: res.mesh, geoAnchor: res.geoAnchor, resolvedAddress: res.resolvedAddress, quality: res.quality, mode: res.mode };
     }
 
