@@ -1286,7 +1286,40 @@ export async function runSandboxChatEdit(
     return { ok: true, content: res.proposedCode, reply: `Edited ${file.name}${answeredBy}${counts}.${credential}` };
 }
 
-export const LiveCodeSandboxPrimitive: React.FC<LiveCodeSandboxPrimitiveProps> = ({
+/** The sandbox's files after a model edit of one of them, or why the edit was not applied. */
+export type SandboxFileEditResult = { ok: true; files: CodeFileTab[] } | { ok: false; reason: string };
+
+/**
+ * Applies a model's edit of one file to the sandbox's files as they are now. The model edited the text the file had
+ * when the edit was asked for (baseContent): if the file has changed or gone since, the edit is not applied, rather
+ * than overwrite what the user typed meanwhile. Every other file keeps its current content.
+ */
+export function applyModelFileEdit(currentFiles: CodeFileTab[], fileId: string, baseContent: string, newContent: string): SandboxFileEditResult {
+    const target = currentFiles.find(f => f.id === fileId);
+    if (!target) return { ok: false, reason: 'the file was removed while the edit was running' };
+    if (target.content !== baseContent) {
+        return { ok: false, reason: `${target.name} changed after the edit was asked for, and the edit was made from the earlier text` };
+    }
+    return { ok: true, files: currentFiles.map(f => (f.id === fileId ? { ...f, content: newContent, isDirty: true } : f)) };
+}
+
+/**
+ * Where a sandbox chat edit lands once the model answers: the edited file in the sandbox's current files (other
+ * files keep what the user typed while the model worked), and the reply. An edit that can no longer be applied
+ * changes nothing and the reply says why.
+ */
+export function settleSandboxChatEdit(
+    currentFiles: CodeFileTab[],
+    target: Pick<CodeFileTab, 'id' | 'name' | 'content'> | undefined,
+    edit: SandboxChatEdit
+): { files: CodeFileTab[] | null; reply: string } {
+    if (!edit.ok || !target) return { files: null, reply: edit.reply };
+    const applied = applyModelFileEdit(currentFiles, target.id, target.content, edit.content);
+    if (!applied.ok) return { files: null, reply: `No change made to ${target.name}: ${applied.reason}. Ask again to edit the current text.` };
+    return { files: applied.files, reply: edit.reply };
+}
+
+const LiveCodeSandboxWorkspace: React.FC<LiveCodeSandboxPrimitiveProps> = ({
     data,
     onUpdate,
     onSave,
@@ -1298,67 +1331,8 @@ export const LiveCodeSandboxPrimitive: React.FC<LiveCodeSandboxPrimitiveProps> =
     hideTopbar = true,
     hideInternalChat = false
 }) => {
-    const rawFiles = Array.isArray(data?.files) ? data.files : [];
-    const defaultFiles: CodeFileTab[] = rawFiles.length > 0 ? rawFiles : [
-        {
-            id: 'file-app',
-            name: 'App.tsx',
-            path: 'src/App.tsx',
-            language: 'react',
-            content: `import React, { useState } from 'react';
-import { Sparkles, Play, CheckCircle2 } from 'lucide-react';
-import confetti from 'canvas-confetti';
-
-export default function App() {
-  const [count, setCount] = useState(0);
-
-  const handleCelebrate = () => {
-    setCount(prev => prev + 1);
-    confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
-    console.log('Celebration action triggered! Count:', count + 1);
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-zinc-950 text-zinc-100 selection:bg-blue-500 selection:text-white">
-      <div className="w-full max-w-md p-8 bg-zinc-900/80 backdrop-blur-xl border border-zinc-800/80 rounded-3xl shadow-2xl space-y-6 text-center">
-        <div className="inline-flex p-3 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 shadow-inner">
-          <Sparkles className="w-8 h-8 animate-pulse" />
-        </div>
-        <div className="space-y-2">
-          <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-zinc-100 via-zinc-200 to-zinc-400 bg-clip-text text-transparent">Scratchbox Live UI Sandbox</h1>
-          <p className="text-sm text-zinc-400">Interactive React 19 + Tailwind CSS playground with hot reload and live console streams.</p>
-        </div>
-        <div className="p-4 bg-zinc-950/60 rounded-2xl border border-zinc-800/50 flex items-center justify-around">
-          <div><div className="text-xs text-zinc-500 font-medium">Interactions</div><div className="text-3xl font-extrabold text-blue-400">{count}</div></div>
-          <div className="h-8 w-px bg-zinc-800"></div>
-          <div><div className="text-xs text-zinc-500 font-medium">Status</div><div className="text-sm font-semibold text-emerald-400 flex items-center gap-1 mt-1"><CheckCircle2 className="w-4 h-4" /> Live</div></div>
-        </div>
-        <button className="sb-btn sb-btn-primary w-full py-3.5 px-6 rounded-xl font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group" onClick={handleCelebrate}>
-          <Play className="w-4 h-4 fill-current transition-transform group-hover:translate-x-0.5" />
-          <span>Trigger Interactive Action</span>
-        </button>
-      </div>
-    </div>
-  );
-}`,
-            isEntry: true
-        },
-        {
-            id: 'file-css',
-            name: 'styles.css',
-            path: 'src/styles.css',
-            language: 'css',
-            content: `/* Custom Sandbox Styles */\nbody {\n  margin: 0;\n  padding: 0;\n}`
-        },
-        {
-            id: 'file-pkg',
-            name: 'package.json',
-            path: 'package.json',
-            language: 'json',
-            content: `{\n  "name": "scratchbox-ide-master",\n  "version": "1.67.100",\n  "private": true,\n  "dependencies": {\n    "react": "^18.3.1",\n    "react-dom": "^18.3.1",\n    "lucide-react": "^0.468.0",\n    "canvas-confetti": "^1.9.3"\n  }\n}`
-        }
-    ];
-
+    // The wrapper below mounts this only with the sandbox's own files; there is no app of its own to show instead.
+    const defaultFiles: CodeFileTab[] = Array.isArray(data?.files) ? data.files : [];
     const [files, setFiles] = React.useState<CodeFileTab[]>(defaultFiles);
     const [activeFileId, setActiveFileId] = React.useState<string>(data.activeFileId || files.find(f => f.isEntry)?.id || files[0]?.id || 'file-app');
     const activeFile = files.find(f => f.id === activeFileId) || files[0];
@@ -1443,12 +1417,17 @@ export default function App() {
     const [isQuickEditing, setIsQuickEditing] = React.useState<boolean>(false);
     // Why a quick edit produced no diff, or which credential answered when it was not the service account.
     const [quickEditStatus, setQuickEditStatus] = React.useState<{ tone: 'error' | 'note'; text: string } | null>(null);
-    const [quickEditDiff, setQuickEditDiff] = React.useState<{ originalCode: string; proposedCode: string } | null>(null);
+    // The file a proposed edit is for travels with it, so accepting it edits that file even after a tab switch.
+    const [quickEditDiff, setQuickEditDiff] = React.useState<{ fileId: string; fileName: string; originalCode: string; proposedCode: string } | null>(null);
     const [fileAudioState, setFileAudioState] = React.useState<'idle' | 'loading' | 'playing' | 'error'>('idle');
 
     const iframeRef = React.useRef<HTMLIFrameElement>(null);
     const dataRef = React.useRef(data);
     dataRef.current = data;
+    // Latest-value mirrors for handlers that finish after an await (a model edit), so they merge into the files and
+    // chat as they are then, not as they were when the request was sent.
+    const latestRef = React.useRef({ files, activeFileId, isAiChatOpen, chatMessages });
+    latestRef.current = { files, activeFileId, isAiChatOpen, chatMessages };
     const onPromptActionRef = React.useRef(onPromptAction);
     onPromptActionRef.current = onPromptAction;
     const onDebugWithAiRef = React.useRef(onDebugWithAi);
@@ -2103,27 +2082,35 @@ export default defineConfig({
 
         const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const userMsg: ChatMessage = { id: `vc-user-${Date.now()}`, sender: 'user', text: userText, timestamp: now() };
-        const updatedMessages = [...chatMessages, userMsg];
-        setChatMessages(updatedMessages);
+        setChatMessages(prev => [...prev, userMsg]);
 
         const target = activeFile;
         setIsVibecoding(true);
         const edit = await runSandboxChatEdit(target, userText);
         setIsVibecoding(false);
-        const assistantMsg: ChatMessage = { id: `vc-asst-${Date.now()}`, sender: 'assistant', text: edit.reply, timestamp: now() };
-        setChatMessages(prev => [...prev, assistantMsg]);
-        if (!edit.ok || !target) return;
 
-        const updatedFiles = files.map(f => (f.id === target.id ? { ...f, content: edit.content, isDirty: true } : f));
-        setFiles(updatedFiles);
+        // The model may take a while: the edit lands in the files as they are now, and other files keep what the
+        // user typed meanwhile (see settleSandboxChatEdit).
+        const latest = latestRef.current;
+        const settled = settleSandboxChatEdit(latest.files, target, edit);
+        const assistantMsg: ChatMessage = { id: `vc-asst-${Date.now()}`, sender: 'assistant', text: settled.reply, timestamp: now() };
+        const shown = latest.chatMessages.some(m => m.id === userMsg.id) ? latest.chatMessages : [...latest.chatMessages, userMsg];
+        const messages = [...shown, assistantMsg];
+        setChatMessages(messages);
+        if (!settled.files || !target) return;
+
+        const edited = settled.files.find(f => f.id === target.id);
+        if (edited) dirtyManagerRef.current.updateBuffer(target.id, edited.content);
+        setDirtyTabIds(dirtyManagerRef.current.getDirtyIds());
+        setFiles(settled.files);
         setRefreshKey(k => k + 1);
         if (onUpdate) {
             onUpdate({
-                ...data,
-                files: updatedFiles,
-                activeFileId,
-                isAiChatOpen,
-                chatMessages: [...updatedMessages, assistantMsg]
+                ...dataRef.current,
+                files: settled.files,
+                activeFileId: latest.activeFileId,
+                isAiChatOpen: latest.isAiChatOpen,
+                chatMessages: messages
             });
         }
     };
@@ -2144,11 +2131,12 @@ export default defineConfig({
 
     const handleExecuteQuickEdit = async (promptText: string) => {
         if (!promptText.trim() || isQuickEditing || !activeFile) return;
+        const target = activeFile;
         setIsQuickEditing(true);
         try {
-            const proposal = await proposeSandboxQuickEdit(activeFile, promptText.trim());
+            const proposal = await proposeSandboxQuickEdit(target, promptText.trim());
             if (proposal.kind === 'diff') {
-                setQuickEditDiff({ originalCode: proposal.originalCode, proposedCode: proposal.proposedCode });
+                setQuickEditDiff({ fileId: target.id, fileName: target.name, originalCode: proposal.originalCode, proposedCode: proposal.proposedCode });
                 setQuickEditStatus(proposal.note ? { tone: 'note', text: proposal.note } : null);
             } else {
                 // No diff to review: say why instead of showing the unchanged file as a proposal.
@@ -2160,10 +2148,25 @@ export default defineConfig({
         }
     };
 
+    // Accepting writes the proposal into the file it was made for (not whichever tab is open now), and only while that
+    // file still holds the text the model edited.
     const handleAcceptQuickEdit = () => {
-        if (!quickEditDiff || !activeFile) return;
-        handleCodeChange(quickEditDiff.proposedCode);
+        if (!quickEditDiff) return;
+        const latest = latestRef.current;
+        const applied = applyModelFileEdit(latest.files, quickEditDiff.fileId, quickEditDiff.originalCode, quickEditDiff.proposedCode);
         setQuickEditDiff(null);
+        if (!applied.ok) {
+            setQuickEditStatus({ tone: 'error', text: `The proposed edit of ${quickEditDiff.fileName} was not applied: ${applied.reason}.` });
+            return;
+        }
+        dirtyManagerRef.current.updateBuffer(quickEditDiff.fileId, quickEditDiff.proposedCode);
+        setDirtyTabIds(dirtyManagerRef.current.getDirtyIds());
+        const updatedFiles = applied.files.map(f => (f.id === quickEditDiff.fileId ? { ...f, isDirty: dirtyManagerRef.current.isDirty(f.id, f.content) } : f));
+        setFiles(updatedFiles);
+        if (autoRun) setRefreshKey(k => k + 1);
+        if (onUpdate) {
+            onUpdate({ ...dataRef.current, files: updatedFiles, activeFileId: latest.activeFileId, isAiChatOpen: latest.isAiChatOpen, chatMessages: latest.chatMessages });
+        }
         setQuickEditStatus(null);
         setIsQuickEditOpen(false);
         setQuickEditPrompt('');
@@ -2952,7 +2955,7 @@ export default defineConfig({
                                     </div>
                                     {quickEditDiff && (
                                         <div className="sb-quick-edit-diff-summary animate-fadeIn">
-                                            <span className="text-[11px] text-emerald-400 font-mono font-medium">● 1 proposed code patch ready for review (⌘Y to Accept, ⌘N to Reject)</span>
+                                            <span className="text-[11px] text-emerald-400 font-mono font-medium">● Proposed edit of {quickEditDiff.fileName} ready for review (⌘Y to Accept, ⌘N to Reject)</span>
                                         </div>
                                     )}
                                     {quickEditStatus && (
@@ -3775,3 +3778,40 @@ export default defineConfig({
         </div>
     );
 };
+
+/** Whether the sandbox's data holds any file. The sandbox has no app of its own to show when it holds none. */
+export function sandboxHasFiles(data: Partial<LiveCodeSandboxData> | undefined): boolean {
+    return Array.isArray(data?.files) && data!.files.length > 0;
+}
+
+/** A sandbox opened without any file says so; it used to show a built-in demo app as if the model had written it. */
+const SandboxEmptyState: React.FC<Pick<LiveCodeSandboxPrimitiveProps, 'data' | 'onUpdate'>> = ({ data, onUpdate }) => {
+    const title = typeof data?.title === 'string' && data.title.trim() ? data.title.trim() : '';
+    const startEmptyFile = () => onUpdate?.({
+        ...(data || { title: '' }),
+        files: [{ id: 'file-app', name: 'App.tsx', path: 'src/App.tsx', language: 'react', content: '', isEntry: true }],
+        activeFileId: 'file-app'
+    } as LiveCodeSandboxData);
+    return (
+        <div
+            className="sb-live-sandbox-empty"
+            role="status"
+            data-testid="sb-sandbox-empty"
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, width: '100%', height: '100%', minHeight: 240, padding: 32, textAlign: 'center', background: '#09090b', color: '#e4e4e7' }}
+        >
+            <div style={{ fontSize: 14, fontWeight: 600 }}>This sandbox has no files</div>
+            <div style={{ fontSize: 12, color: '#a1a1aa', maxWidth: 440, lineHeight: 1.5 }}>
+                {title ? `"${title}" was opened without any code, so there is nothing to run.` : 'It was opened without any code, so there is nothing to run.'} Ask for the app again, or start an empty file.
+            </div>
+            {onUpdate && (
+                <button type="button" className="sb-btn sb-btn-secondary sb-btn-xs" onClick={startEmptyFile}>
+                    New empty App.tsx
+                </button>
+            )}
+        </div>
+    );
+};
+
+export const LiveCodeSandboxPrimitive: React.FC<LiveCodeSandboxPrimitiveProps> = props => (
+    sandboxHasFiles(props.data) ? <LiveCodeSandboxWorkspace {...props} /> : <SandboxEmptyState data={props.data} onUpdate={props.onUpdate} />
+);

@@ -11,6 +11,11 @@ import { QuickEditRequest, QuickEditResponse } from '../common/gemini-protocol';
 import { GeminiClient } from './gemini/gemini-client';
 import { computeLineDiff } from '../browser/generative-canvas/multi-file-diff-engine';
 
+/** Output tokens for a whole-file quick edit: room for the rewritten file twice over, within 8k..64k. */
+export function quickEditOutputBudget(originalCode: string): number {
+    return Math.min(65536, Math.max(8192, Math.ceil(originalCode.length / 4) * 2 + 4096));
+}
+
 export class QuickEditService {
     constructor(private readonly client: GeminiClient) {}
 
@@ -78,10 +83,22 @@ export class QuickEditService {
                 systemInstruction,
                 {
                     temperature: 0.2,
-                    maxOutputTokens: 4096
+                    // The reply is the whole file, so the budget scales with it (about 4 characters a token, doubled
+                    // for the edit and any thinking) up to the models' output limit.
+                    maxOutputTokens: quickEditOutputBudget(originalCode)
                 }
             );
             const answeredWith = { modelUsed: model, credential, ...(credentialNote ? { credentialNote } : {}) };
+
+            // A reply the model did not finish (cut off at the token limit, blocked, ...) is not an edit: written into
+            // the file it would replace the rest of the file with nothing.
+            const finishReason = json?.candidates?.[0]?.finishReason;
+            if (finishReason && finishReason !== 'STOP') {
+                const why = finishReason === 'MAX_TOKENS'
+                    ? `${model} stopped at its output limit before finishing ${fileName}`
+                    : `${model} stopped before finishing the edit (finish reason: ${finishReason})`;
+                return { success: false, proposedCode: originalCode, additions: 0, deletions: 0, error: `${why}, so the file was not changed.`, ...answeredWith };
+            }
 
             const candidateText = (json?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || '').join('');
             const proposedCode = this.cleanGeneratedCode(candidateText);

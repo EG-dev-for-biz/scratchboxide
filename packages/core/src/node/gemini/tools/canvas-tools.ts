@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
-import { UNTITLED_DOCUMENT_TITLE, modelDocumentSections, normalizeModelVideoTimeline } from '../artifact-synthesis';
+import { UNTITLED_DOCUMENT_TITLE, modelDocumentSections, modelSandboxFiles, normalizeModelVideoTimeline } from '../artifact-synthesis';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { NativeCppCompilerService } from '../../3d-engine/native-compiler-service';
 import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
@@ -67,7 +67,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 payload: {
                     type: 'OBJECT',
-                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A mount starts a new canvas artifact, so the scene must declare something the viewport draws (objects whose content.durableUri is a .glb / .gltf model or a .splat / .spz splat, a script, a generator GLB as glbBase64, a splatUrl, a customScript or a geoAnchor {lat, lng} for live tiles); an object the viewport cannot draw, or a geoAnchor that is 0, 0, out of range or not numbers, fails the mount, and payload.customMeshes (client-side primitive meshes) are refused. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted.'
+                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A mount starts a new canvas artifact, so the scene must declare something the viewport draws (objects whose content.durableUri is a .glb / .gltf model or a .splat / .spz splat, a script, a generator GLB as glbBase64, a splatUrl, a customScript or a geoAnchor {lat, lng} for live tiles); an object the viewport cannot draw, or a geoAnchor that is 0, 0, out of range or not numbers, fails the mount, and payload.customMeshes (client-side primitive meshes) are refused. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted. For "live-code-sandbox", send payload.files as [{name, language, content}] holding the code of the app (one file isEntry: true); a sandbox with no file content is not mounted.'
                 }
             },
             required: ['primitiveType', 'title', 'payload']
@@ -270,6 +270,16 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             const docTitle = named(p.title) || named(args.title) || named(firstHeading) || UNTITLED_DOCUMENT_TITLE;
             payload = { ...p, title: docTitle, sections } as any;
             title = docTitle;
+        } else if (primitiveType === 'live-code-sandbox') {
+            // The app's own files or nothing: an empty sandbox is not mounted (the sandbox has no app of its own).
+            const files = modelSandboxFiles(payload);
+            if (files.length === 0) {
+                const error = 'The live-code-sandbox payload has no code: send payload.files as [{name, language, content}] with the files of the app (one marked isEntry: true). Nothing was mounted.';
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+            const p = payload as Record<string, any>;
+            const activeFileId = typeof p.activeFileId === 'string' && files.some(f => f.id === p.activeFileId) ? p.activeFileId : undefined;
+            payload = { ...p, title: (typeof p.title === 'string' && p.title.trim()) || title, files, activeFileId } as any;
         } else if (primitiveType === '3d-scene') {
             const p = payload as any;
 

@@ -16,6 +16,7 @@ import type {
     MarkdownSection,
     McpExecutionState,
     PrimitiveType,
+    SandboxLanguage,
     SandboxTemplate,
     Scene3DData
 } from '../../browser/generative-canvas/canvas-types';
@@ -679,6 +680,44 @@ export function modelDocumentSections(raw: unknown): MarkdownSection[] {
     return markdown ? markdownStringToSections(markdown) : [];
 }
 
+/** The editor language a file name implies, for a file the model sent without one. */
+function sandboxLanguageFor(name: string): SandboxLanguage {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    const byExt: Record<string, SandboxLanguage> = {
+        tsx: 'react', jsx: 'react', ts: 'typescript', js: 'javascript', mjs: 'javascript', css: 'css', html: 'html', htm: 'html',
+        json: 'json', py: 'python', md: 'markdown', yaml: 'yaml', yml: 'yaml', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', c: 'c', h: 'c', wasm: 'wasm'
+    };
+    return byExt[ext] || 'typescript';
+}
+
+/**
+ * The files of a sandbox the model sent: `files` as [{name, language, content}] (or a {name: content} map), keeping
+ * each file that has a name and code; an id or language it left out is filled from the position and the file name.
+ * Empty when it sent no code: such a sandbox is not mounted, since the sandbox has no app of its own to run instead.
+ */
+export function modelSandboxFiles(raw: unknown): CodeFileTab[] {
+    if (!raw || typeof raw !== 'object') return [];
+    const sent = (raw as Record<string, unknown>).files;
+    const entries: Array<Record<string, any>> = Array.isArray(sent)
+        ? sent.filter((f): f is Record<string, any> => !!f && typeof f === 'object')
+        : sent && typeof sent === 'object'
+            ? Object.entries(sent as Record<string, unknown>).map(([filePath, content]) => ({ name: filePath.split('/').pop(), path: filePath, content }))
+            : [];
+    const files: CodeFileTab[] = [];
+    entries.forEach((f, i) => {
+        const name = typeof f.name === 'string' && f.name.trim() ? f.name.trim() : typeof f.path === 'string' && f.path.trim() ? f.path.trim().split('/').pop()! : '';
+        if (!name || typeof f.content !== 'string' || !f.content.trim()) return;
+        files.push({
+            ...f,
+            id: typeof f.id === 'string' && f.id ? f.id : `file-${i + 1}`,
+            name,
+            language: typeof f.language === 'string' && f.language ? f.language : sandboxLanguageFor(name),
+            content: f.content
+        } as CodeFileTab);
+    });
+    return files;
+}
+
 /**
  * The model's document, with its sections' field aliases normalised (heading `title` -> `content`, ...) and Google
  * Search grounding citations appended. No heading, callout title, subtitle or section is written for it.
@@ -882,8 +921,8 @@ export function parseOrSynthesizeArtifact(
             }
         }
 
-        // ... or the model's code for a sandbox ...
-        if (tagType === 'live-code-sandbox' && tagPayload.trim() && (!parsedTagData || !parsedTagData.files)) {
+        // ... or the model's code for a sandbox (a body that is not JSON; JSON without files is not code) ...
+        if (tagType === 'live-code-sandbox' && tagPayload.trim() && !parsedTagData) {
             const codeMatch = tagPayload.match(/```(?:tsx|jsx|react|typescript|ts|javascript|js|html)?\s*\n([\s\S]*?)```/) || [null, tagPayload];
             const rawCode = (codeMatch[1] || tagPayload).trim();
             const template: SandboxTemplate = rawCode.includes('def ') || rawCode.includes('import numpy') ? 'python' : 'react';
@@ -926,6 +965,13 @@ export function parseOrSynthesizeArtifact(
             return modelArtifact(tagType, raw, tagSent, '');
         }
 
+        // A sandbox with no file holding code is not mounted; the sandbox has no app of its own to show instead.
+        if (tagType === 'live-code-sandbox') {
+            const files = modelSandboxFiles(parsedTagData);
+            if (files.length === 0) return undefined;
+            return modelArtifact(tagType, { ...parsedTagData, files }, tagSent, '');
+        }
+
         // The tag must name a canvas primitive and carry content; an unknown type or an empty body is not mounted.
         if (parsedTagData && tagType) {
             return modelArtifact(tagType, parsedTagData, tagSent, '');
@@ -948,7 +994,14 @@ export function parseOrSynthesizeArtifact(
     }
     const type = normalizePrimitiveType(parsed?.type);
     if (!parsed || typeof parsed !== 'object' || !type || parsed.data === undefined || parsed.data === null) return undefined;
-    return modelArtifact(type, parsed.data, {
+    let data = parsed.data;
+    if (type === 'live-code-sandbox') {
+        // As for the tag: a sandbox envelope with no file holding code is not mounted.
+        const files = modelSandboxFiles(data);
+        if (files.length === 0) return undefined;
+        data = { ...data, files };
+    }
+    return modelArtifact(type, data, {
         title: parsed.title,
         summary: parsed.summary,
         version: parsed.version,
