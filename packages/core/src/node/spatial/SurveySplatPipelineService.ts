@@ -464,8 +464,13 @@ export class SurveySplatPipelineService {
         const shDegreeArg = (req.shDegree !== undefined && req.shDegree > 0) ? `--sh-degree ${req.shDegree}` : '';
         const exposureScaleArg = (req.exposureScale !== undefined) ? `--exposure-scale ${req.exposureScale}` : '';
         const cmd = `"${baker}" --rgb "${base}.rgb" --depth "${base}.depth.f32" --width ${width} --height ${height} --pose "${base}.pose.json" --out-splat "${outSplat}" --stride ${req.bakeStride ?? 1} --station-altitude ${alt} ${sigmaScaleArg} ${minCosIncidenceArg} ${dropFoliageArg} ${foliageModeArg} ${erodeSilhouetteArg} ${hybridArg} ${neuralDepthArg} ${neuralWeightArg} ${maxDeltaZArg} ${twoDgsArg} ${shDegreeArg} ${exposureScaleArg} --exclude-underside --json`;
-        const { stdout } = await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024, signal: req.signal });
-        await fs.remove(`${base}.rgb`); await fs.remove(`${base}.depth.f32`);
+        let stdout: string;
+        try {
+            ({ stdout } = await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024, signal: req.signal }));
+        } finally {
+            // The raw inputs go whether the baker finished, failed or was stopped.
+            await fs.remove(`${base}.rgb`); await fs.remove(`${base}.depth.f32`);
+        }
         let splatCount = 0;
         try {
             const parsed = JSON.parse(stdout.trim());

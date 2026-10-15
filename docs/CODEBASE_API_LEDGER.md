@@ -220,7 +220,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `survey_render_station`: Headless renders station blockouts.
 - `survey_beautify_station`: AI-beautifies station render.
 - `survey_beautify_to_splats`: Directly reconstructs beautified stations into splats.
-- `survey_beautify_to_texture`: Inverse projects beautified views to texture atlas (NOAA de-lighting only with the stations' anchor coordinates and a given isoDate; the result says whether it ran).
+- `survey_beautify_to_texture`: Inverse projects beautified views into the mesh's own UV atlas (a mesh without TEXCOORD_0 is refused before any station image is generated; NOAA de-lighting only with the stations' anchor coordinates and a given isoDate; the result says whether it ran).
 
 ### 4. Panoramas & Zenith Reconstruction (`spatial-tools.ts`)
 - `panorama_heal_seam`: Heals the 360 wrap-around seam with an image model (fails when no model answers; refuses an answer that would be enlarged more than `maxModelUpscale`, default 2x).
@@ -298,8 +298,8 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `vfx_composite_patch`: Composites generative patches into plates.
 - `vfx_composite_timeline`: Headless timeline track compositor.
 - `vfx_mediapipe_track_video_motion`: Tracks video motion trajectories.
-- `vfx_video_auto_reframe`: Dynamic 9:16 portrait re-framing.
-- `vfx_visual_critic_audit`: Evaluates media against 8-Dimension Visual Fidelity Rubric.
+- `vfx_video_auto_reframe`: Re-frames to any aspect ratio with one static crop at the tracked person's average position (no dry run).
+- `vfx_visual_critic_audit`: A Gemini vision model scores the 8-Dimension Visual Fidelity Rubric from an FFmpeg contact sheet, with MediaPipe limb-length stability as measured evidence; passes only when every dimension passes, and fails (no score) when the sheet, the tracking or the vision model fails.
 
 ### 12. Algorithmic UVs, PBR & Color Transfer (`algorithmic-uv-tools.ts` & `nano-banana-tools.ts`)
 - `algorithmic_uv_unwrap_rewrap`: Algorithmic UV unwrapping and repack.
