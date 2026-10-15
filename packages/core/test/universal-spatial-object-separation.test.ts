@@ -149,6 +149,34 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     expect(JSON.stringify(out)).toContain('google_3d_tiles_get_clay measures');
   });
 
+  it('names no vehicles, and no building use, style or landmark identity, from geometry alone', async () => {
+    // a car-sized box near the ground is as often a kiosk, a planter or a lump of the scan's drape as a car; a tall
+    // envelope is not "Art Deco residential"; and the structure at the anchor is whatever the caller says it is
+    const scene = Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'detailed', autoDetectSemanticCategories: true });
+    expect(scene.objects.length).toBeGreaterThan(0);
+    for (const obj of scene.objects) {
+      expect(obj.category).not.toBe('vehicle');
+      expect(obj.routingRecommendation).not.toBe('sb-vehicle');
+      expect((obj as any).vehicleMetadata).toBeUndefined();
+      expect(`${obj.name} ${obj.trellisPrompt}`).not.toMatch(/sedan|suv|van\b|car\b|parked|art deco|residential|townhouse|washington|monument|neoclassical/i);
+    }
+    const buildings = scene.objects.filter(o => o.category === 'architecture');
+    expect(buildings.length).toBeGreaterThan(0);
+    for (const b of buildings) expect(b.trellisPrompt).toMatch(/^Building envelope, [\d.]+ m x [\d.]+ m footprint, [\d.]+ m tall$/);
+    // no structure is cut out at the origin and called the landmark unless the caller says where it stands
+    expect(scene.objects.filter(o => o.category === 'landmark')).toEqual([]);
+    // given where it stands, it is named only as the caller names it (or not at all), with its measured size
+    const bounds = { minX: -60, maxX: 60, minZ: -60, maxZ: 60 };
+    const unnamed = Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'detailed', autoDetectSemanticCategories: true, focalInterestBounds: bounds });
+    const anchorStructure = unnamed.objects.find(o => o.category === 'landmark');
+    expect(anchorStructure?.name).toBe('Structure at the anchor');
+    expect(anchorStructure?.trellisPrompt).toMatch(/^Structure at the anchor \([\d.]+ m x [\d.]+ m, [\d.]+ m tall\)$/);
+    const named = Universal3DObjectSeparationService.separate3DMesh(colosseumModelPath, { granularity: 'detailed', autoDetectSemanticCategories: true, focalInterestBounds: bounds, landmarkName: 'Colosseum', architecturalStyle: 'Roman amphitheatre' });
+    const landmark = named.objects.find(o => o.category === 'landmark');
+    expect(landmark?.name).toBe('Colosseum');
+    expect(landmark?.trellisPrompt).toMatch(/^Colosseum, Roman amphitheatre \(/);
+  });
+
   it('synthesizes canonical Scene3DData with Media4DObject contracts', async () => {
     const service = new Universal3DObjectSeparationService();
 
@@ -202,14 +230,17 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     }
   });
 
-  it.skipIf(!archHq.ok)(withReason('performs high-resolution semantic separation on HQ Leaf 3D Tile (Landmarks, Vehicles, Trees, Architecture)', archHq), async () => {
+  it.skipIf(!archHq.ok)(withReason('performs high-resolution separation on HQ Leaf 3D Tile: the landmark named as the caller names it, architecture, and no trees or vehicles named from geometry', archHq), async () => {
     const hqPath = path.join(REPO_ROOT, ARCH_HQ);
 
     const scene = Universal3DObjectSeparationService.separate3DMesh(hqPath, {
       granularity: 'detailed',
       autoDetectSemanticCategories: true,
       landmarkName: 'Washington Square Arch',
-      landmarkType: 'triumphal_arch'
+      landmarkType: 'triumphal_arch',
+      architecturalStyle: 'Neoclassical triumphal arch',
+      // where the caller says the arch stands (the separation guesses no landmark box of its own)
+      focalInterestBounds: { minX: -16.5, maxX: 16.5, minZ: -8.5, maxZ: 8.5 }
     });
 
     expect(scene).toBeDefined();
@@ -228,17 +259,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     expect(arch.routingRecommendation).toBe('sb-archi');
     expect(arch.vertexCount).toBeGreaterThan(1500);
 
-    // 2. Ground-Level Vehicle Verification
-    const vehicles = scene.objects.filter(o => o.category === 'vehicle');
-    expect(vehicles.length).toBeGreaterThanOrEqual(12);
-    for (const v of vehicles) {
-      expect(v.vehicleMetadata).toBeDefined();
-      expect(['sedan', 'suv', 'van_truck', 'compact']).toContain(v.vehicleMetadata?.vehicleType);
-      expect(v.vehicleMetadata?.lengthMeters).toBeGreaterThanOrEqual(2.5);
-      expect(v.vehicleMetadata?.lengthMeters).toBeLessThanOrEqual(8.5);
-      expect(v.vehicleMetadata?.headingDeg).toBeDefined();
-      expect(v.routingRecommendation).toBe('sb-vehicle');
-    }
+    // 2. No vehicles from geometry alone: a car-sized box near the ground is as often a kiosk or a lump of drape
+    expect(scene.objects.filter(o => o.category === 'vehicle')).toHaveLength(0);
 
     // 3. No trees from geometry alone (no species either)
     expect(scene.objects.filter(o => o.category === 'foliage_trees')).toHaveLength(0);
@@ -254,11 +276,11 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
 
     expect(scene).toBeDefined();
 
-    // 1. Verify BoundingBoxComparisonService metrology on Vehicles
-    const vehicles = scene.objects.filter(o => o.category === 'vehicle');
-    expect(vehicles.length).toBeGreaterThanOrEqual(12);
+    // 1. Verify BoundingBoxComparisonService metrology on the separated building envelopes
+    const buildings = scene.objects.filter(o => o.category === 'architecture');
+    expect(buildings.length).toBeGreaterThanOrEqual(2);
 
-    for (const v of vehicles) {
+    for (const v of buildings) {
       const obb = v.orientedBoundingBox;
       expect(obb).toBeDefined();
 
@@ -288,8 +310,8 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       expect(metrology.tightnessGainPercent).toBeGreaterThanOrEqual(0);
     }
 
-    // 2. Verify GoogleTileAlignmentOptimizer docking contracts on Vehicle #1
-    const targetCar = vehicles[0]!;
+    // 2. Verify GoogleTileAlignmentOptimizer docking contracts on the first building envelope
+    const targetCar = buildings[0]!;
     const generativeVanBounds = {
       min: [-1.05, 0, -2.5] as [number, number, number],
       max: [1.05, 2.4, 2.5] as [number, number, number],
@@ -318,7 +340,7 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       {
         preserveAspectRatio: true,
         groundSnap: true,
-        initialYawDeg: targetCar.vehicleMetadata?.headingDeg || 0
+        initialYawDeg: targetCar.orientedBoundingBox.yawDeg || 0
       }
     );
 
