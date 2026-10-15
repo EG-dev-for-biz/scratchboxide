@@ -218,8 +218,10 @@ export interface Google3DTile3DObjectResult {
   glbBuffer: Buffer;
   glbPath: string;
   mesh: Google3DTileMeshStats;
+  /** For a direct crawl, errorTarget is the largest geometric error (metres) among the leaf tiles in the GLB. */
   quality: Google3DTileQualityReport;
-  render: Google3DTileRenderOutput;
+  /** Present only when frames were rendered (the offline mock); a direct tile crawl renders nothing. */
+  render?: Google3DTileRenderOutput;
   manifest: Record<string, any>;
   /** True only when produced by the explicit `offlineMock` test mode (placeholder data, not real tiles). */
   mock?: boolean;
@@ -317,6 +319,8 @@ export interface TileBlockoutPipelineResult {
   mock?: boolean;
   videoRef: '<VIDEO_REF_0>';
   outputVideoPath: string;
+  /** The WebM this run encoded; absent when the optional encode was skipped or failed. */
+  webmVideoPath?: string;
   glbBuffer?: Buffer;
   glbPath?: string;
   mesh?: Google3DTileMeshStats;
@@ -1965,12 +1969,15 @@ export class Google3DTileBlockoutPipelineService {
                 throw new Error(`FFmpeg failed to transcode Frame 0 to PNG (${firstFramePngPath}): ${pngErr.message}\n${pngErr.stderr || ''}`);
               }
 
+              // Set only when this run's WebM encode succeeds, so an older file at that path is never reported.
+              let webmVideoPath: string | undefined;
               if (compileWebm) {
                 const webmPath = outputVideoPath.replace(/\.mp4$/, '.webm');
                 try {
                   await execFileAsync(this.ffmpegPath, [
                     '-y', '-framerate', String(fps), '-i', frameGlob, '-c:v', 'libvpx-vp9', '-b:v', '4M', webmPath
                   ], { maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60000 });
+                  webmVideoPath = webmPath;
                 } catch (e: any) {
                   // WebM is an optional secondary encode; the MP4 above is the canonical output.
                   console.warn(`[Google 3D Tiles] Optional WebM encode failed: ${e?.message || e}`);
@@ -2035,6 +2042,7 @@ export class Google3DTileBlockoutPipelineService {
                 mock: false,
                 videoRef: '<VIDEO_REF_0>',
                 outputVideoPath,
+                ...(webmVideoPath ? { webmVideoPath } : {}),
                 glbBuffer: uploadedGlbBuffer,
                 glbPath: outputGlbPath,
                 mesh: meshStats,
@@ -2551,22 +2559,12 @@ export class Google3DTileBlockoutPipelineService {
       truncated,
       leafTiles: { kept: leafSubset.length, selected: sortedLeaves.length },
       mesh,
+      // What the crawl measured: it selects leaf tiles directly (no viewport, no screen-space error, no settle) and
+      // renders nothing, so there is no resolution, settle state or render block to report.
       quality: {
-        source: 'Google Maps Platform Photorealistic 3D Tiles API',
-        errorTarget: options?.lodQuality?.errorTarget ?? 0.5,
-        resolution: '4K (3840x2160)',
-        maxSettleWaitMs: 0,
-        asynchronousSettle: false,
-        preWarmedWaypoints: [],
-        leafLodSettled: true
-      },
-      render: {
-        videoPath: '',
-        firstFramePath: '',
-        storyboardPaths: [],
-        fps: 24,
-        frameCount: 1,
-        durationSec: 0
+        source: 'Google Maps Platform Photorealistic 3D Tiles API (direct leaf-tile crawl)',
+        errorTarget: Math.max(...leafSubset.map(leaf => leaf.geometricError)),
+        asynchronousSettle: false
       },
       manifest: {
         resolvedAddress,
@@ -2830,8 +2828,8 @@ export async function runTileClayBlockoutRunner(
     ? service.loadCameraPath(cameraPath)
     : cameraPath;
 
-  const defaultWebm = outputVideoPath.replace(/\.mp4$/i, '.webm');
-  const webmVideoPath = fs.existsSync(defaultWebm) ? defaultWebm : undefined;
+  // Only the WebM this run encoded: a file left at the default path by an earlier run is not this run's video.
+  const webmVideoPath = result.webmVideoPath;
 
   if (!result.mesh) {
     throw new Error(`[runTileClayBlockoutRunner] Blockout runner returned no clay mesh statistics for ${outputGlbPath}`);

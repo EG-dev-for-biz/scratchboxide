@@ -24,7 +24,7 @@ import * as fs from 'fs';
 import { execFile } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
-import { Google3DTileBlockoutPipelineService, getGoogle3DTilesClay } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
+import { Google3DTileBlockoutPipelineService, getGoogle3DTilesClay, runTileClayBlockoutRunner } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import { GoogleTileDistrictCrawler } from '../src/node/spatial/GoogleTileDistrictCrawler';
 import { GeospatialTileExtractionBridge } from '../src/node/spatial/GeospatialTileExtractionBridge';
 import { NativePythonRunnerService, expectedGlbFile, findWrittenGlb, stampGlbFile } from '../src/node/3d-engine/native-python-runner-service';
@@ -268,6 +268,48 @@ describe('fetch3DObject: the leaf crawler or a typed failure, never the headless
         } finally {
             if (savedRoot === undefined) delete process.env.SCRATCHBOX_ROOT; else process.env.SCRATCHBOX_ROOT = savedRoot;
             fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('a crawl reports what it measured: no 4K resolution, settle state or rendered frame it never had', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-crawl-quality-'));
+        try {
+            vi.spyOn(GoogleTileDistrictCrawler.prototype, 'collectLeafTiles').mockResolvedValue({
+                leaves: [{ id: 'a', path: 'a', geometricError: 0.4, box: [] }, { id: 'b', path: 'b', geometricError: 1.2, box: [] }] as any,
+                session: null, requests: 1, excludedCoarseLeaves: 0
+            });
+            vi.spyOn(GoogleTileDistrictCrawler.prototype, 'downloadLeaves').mockResolvedValue([Buffer.from('a'), Buffer.from('b')]);
+            vi.spyOn(GoogleTileDistrictCrawler, 'parseLeafGlbPrimitives').mockReturnValue([]);
+            vi.spyOn(GoogleTileDistrictCrawler, 'buildDistrictGlb').mockImplementation(() => ({
+                glb: Buffer.from('glTF-district'), originEllipsoidalHeightM: 10, vertexCount: 3, triangleCount: 1,
+                boundsLocal: { min: [0, 0, 0], max: [1, 1, 1] }, localToEcef: []
+            }) as any);
+            const result = await getGoogle3DTilesClay({ ...anchor, elevation: 12 }, { apiKey: 'k', outputDir: root });
+            expect(path.dirname(result.glbPath)).toBe(root);
+            expect(result.quality.errorTarget).toBe(1.2); // the largest geometric error among the tiles in the GLB
+            expect(result.quality.resolution).toBeUndefined();
+            expect(result.quality.leafLodSettled).toBeUndefined();
+            expect(result.render).toBeUndefined(); // it used to claim one rendered frame at 24 fps
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('the blockout runner reports only a WebM this run encoded, not one left by an earlier run', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-blockout-webm-'));
+        try {
+            const outputVideoPath = path.join(dir, 'blockout.mp4');
+            fs.writeFileSync(path.join(dir, 'blockout.webm'), 'an earlier run');
+            const mesh = { name: 'm', vertexCount: 3, triangleCount: 1, submeshCount: 1, boundingBox: { min: [0, 0, 0], max: [1, 1, 1] }, boundingSphere: { center: [0, 0, 0], radius: 1 } };
+            const runResult = { success: true, videoRef: '<VIDEO_REF_0>', outputVideoPath, glbPath: path.join(dir, 'clay.glb'), mesh, firstFramePath: '', firstFramePngPath: '', storyboardPaths: [], manifestPath: '', frameCount: 72, fps: 24, durationSec: 3, geoAnchor: { ...anchor, elevation: 12 }, tileMetrics: { totalFramesCaptured: 72, averageSettleTimeMs: 0, errorTarget: 0.5, renderMode: 'clay' } };
+            vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'run').mockResolvedValue(runResult as any);
+            const failedEncode = await runTileClayBlockoutRunner({ query: { ...anchor, elevation: 12 }, outputVideoPath });
+            expect(failedEncode.webmVideoPath).toBeUndefined();
+            vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'run').mockResolvedValue({ ...runResult, webmVideoPath: path.join(dir, 'blockout.webm') } as any);
+            const encoded = await runTileClayBlockoutRunner({ query: { ...anchor, elevation: 12 }, outputVideoPath });
+            expect(encoded.webmVideoPath).toBe(path.join(dir, 'blockout.webm'));
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
         }
     });
 
