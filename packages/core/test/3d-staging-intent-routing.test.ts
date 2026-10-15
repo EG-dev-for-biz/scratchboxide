@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { resolveDomainToolPacks } from '../src/node/gemini/domain-tool-packs';
 import { synthesizeRawContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
-import { synthesizeAdaptiveHeroObjectContract } from '../src/common/spatial/adaptive-hero-synthesizer';
 import { Google3DTileService } from '../src/browser/generative-canvas/services/Google3DTileService';
 import { Google3DTileBlockoutPipelineService } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import { LocationUnresolvedError } from '../src/common/errors/pipeline-errors';
@@ -86,27 +85,6 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(tileObject).toBeUndefined();
         });
 
-        it('synthesizes adaptive hero GT racer with 70-20-10 form hierarchy and upright wheels', () => {
-            const prompt = 'High-speed car race around Washington Square Park Arch with chicane';
-            const heroContract = synthesizeAdaptiveHeroObjectContract(prompt);
-
-            // 70% Primary Edifice: Aerodynamic GT proportions
-            expect(heroContract.boundingScaleMeters[2]).toBeGreaterThanOrEqual(4.5); // Length >= 4.5m
-            expect(heroContract.boundingScaleMeters[1]).toBeLessThanOrEqual(1.3);    // Low-slung height <= 1.3m
-            expect(heroContract.primaryHull.stations.length).toBeGreaterThanOrEqual(7);
-
-            // 20% Secondary Articulated Assemblies: Aerodynamics & Grounding
-            expect(heroContract.aerodynamics).toBeDefined();
-            expect(heroContract.aerodynamics?.some(a => a.id.includes('wing'))).toBe(true);
-            expect(heroContract.grounding?.[0].type).toBe('MULTILINK_WHEEL');
-            expect(heroContract.grounding?.[0].camberAngleDeg).toBeLessThan(0); // Negative camber
-
-            // 10% Tertiary Micro-Detail & Differential Operators: 4 upright forged wheel rims
-            const wheelRims = (heroContract.revolvedHarmonics || []).filter(h => h.id.startsWith('wheel_rim'));
-            expect(wheelRims.length).toBe(4);
-            expect(heroContract.materialAttributes?.renderMode).toBe('clay');
-        });
-
         it('resolves a place name only with Google Places: without a Maps key it throws LocationUnresolvedError', async () => {
             const service = new Google3DTileBlockoutPipelineService();
             const saved = { g: process.env.GOOGLE_MAPS_API_KEY, m: process.env.MAP_TILES_API_KEY };
@@ -165,27 +143,6 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(payload.artifact).toBeUndefined();
             expect(payload.geoAnchor).toBeUndefined();
             expect(payload.error).toContain('google_3d_tiles_get_clay');
-        });
-
-        it('respects ContinuousPhysicalParameters overrides in synthesizeAdaptiveHeroObjectContract (Alien Planet Test)', () => {
-            // An entity the developer never conceived of with continuous parameter overrides
-            const novelPrompt = 'Bioluminescent geothermal mycelium forest spire';
-            const heroContract = synthesizeAdaptiveHeroObjectContract(novelPrompt, {
-                parameterOverrides: {
-                    scaleLength: 7.5,
-                    scaleWidth: 3.8,
-                    scaleHeight: 12.0,
-                    superellipseExponent: 3.5,
-                    appendageCount: 8
-                }
-            });
-
-            // Overrides must directly govern continuous dimensions
-            expect(heroContract.boundingScaleMeters[0]).toBeCloseTo(3.8, 1);  // Width
-            expect(heroContract.boundingScaleMeters[1]).toBeCloseTo(12.0, 1); // Height
-            expect(heroContract.boundingScaleMeters[2]).toBeCloseTo(7.5, 1);  // Length
-            expect(heroContract.primaryHull.stations[0].superellipseExponent).toBeCloseTo(3.5, 1);
-            expect(heroContract.revolvedHarmonics?.length).toBeGreaterThanOrEqual(1);
         });
     });
 });

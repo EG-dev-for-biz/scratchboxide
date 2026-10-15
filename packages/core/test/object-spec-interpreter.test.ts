@@ -326,17 +326,4 @@ describe('sb.object_spec interpreter', () => {
         expect(res.stderr).toContain('SpecError');
         expect(res.stderr).toContain('controlPoints[0] must be [0, 0, 0]');
     }, 180_000);
-
-    it('the keyword hero synthesizer says plainly that a named seed shape is no longer built, instead of a raw TypeError', async () => {
-        // What the remaining AdaptiveHeroObjectSynthesizer callers emit: a replication whose seed is a shape name.
-        const res = await NativePythonRunnerService.getInstance().runScript([
-            'from scratchbox.adaptive_object import AdaptiveHeroObjectSynthesizer',
-            'AdaptiveHeroObjectSynthesizer().synthesize({"name": "x", "metricReplications": [',
-            '  {"distributionMode": "POLAR_RING", "guidePoints": [[0, 0, 0.5]], "pitchMeters": 0.16, "seedGeometry": {"shape": "CYLINDRICAL_FASTENER", "dimensions": [0.016, 0.008, 0.016]}}]})'
-        ].join('\n'), { outputDir: OUT_DIR });
-        expect(res.success).toBe(false);
-        expect(res.stderr).toContain("ValueError: AdaptiveHeroObjectSynthesizer cannot build metricReplications[0]: its seedGeometry {'shape': 'CYLINDRICAL_FASTENER'");
-        expect(res.stderr).toContain('named seed shapes are no longer built');
-        expect(res.stderr).not.toContain('TypeError');
-    }, 180_000);
 });

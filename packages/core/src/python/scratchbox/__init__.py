@@ -1393,7 +1393,6 @@ if _native is not None and hasattr(_native, "io"):
         io.export_glb = export_glb
 
 from .adaptive_object import (
-    AdaptiveHeroObjectSynthesizer,
     create_panelized_loft,
     create_hydraulic_actuator,
     create_louver_bay,
@@ -1431,7 +1430,6 @@ validation = _ValidationModule()
 from . import object_spec
 
 __all__ = [
-    "AdaptiveHeroObjectSynthesizer",
     "create_panelized_loft",
     "create_hydraulic_actuator",
     "create_louver_bay",

@@ -12,7 +12,6 @@ import os
 import sys
 import scratchbox as sb
 from scratchbox.adaptive_object import (
-    AdaptiveHeroObjectSynthesizer,
     sweep_curve_profile,
     revolve_harmonic_solid,
     replicate_metric_array,
@@ -95,75 +94,6 @@ def test_pillar11_operators():
     print(f"  [3B] Louver Bay Replicator: {louver_bay.vertex_count} vertices, {louver_bay.triangle_count} tris")
     assert louver_bay.vertex_count > 0
 
-    # 4. Synthesizer Integration Test
-    contract = {
-        "id": "speculative_cryo_drone",
-        "name": "CryoSpeculativeHarvester",
-        "boundingScaleMeters": [3.0, 1.5, 4.0],
-        "primaryHull": {
-            "stations": [
-                {"position": -1.8, "center": [0.0, 0.0], "radii": [0.3, 0.2], "superellipseExponent": 2.2},
-                {"position": 0.0, "center": [0.0, 0.1], "radii": [1.1, 0.6], "superellipseExponent": 2.6},
-                {"position": 1.8, "center": [0.0, 0.05], "radii": [0.5, 0.3], "superellipseExponent": 2.0},
-            ],
-            "symmetry": "BILATERAL_X",
-            "bowCap": "SUPER_ELLIPTIC",
-            "sternCap": "DIFFUSER"
-        },
-        # Direct Pillar 11 Operators (No taxonomic tools!)
-        "curveSweeps": [
-            {
-                "id": "collector_limb_left",
-                "path": [(-0.8, 0.0, 0.5), (-1.2, -0.2, 1.2), (-1.4, -0.4, 2.0)],
-                "profile": "BEVELED_RECT",
-                "profileDimensions": [0.07, 0.04],
-                "scaleTaper": [1.0, 0.4],
-                "twistDeg": 30.0
-            },
-            {
-                "id": "collector_limb_right",
-                "path": [(0.8, 0.0, 0.5), (1.2, -0.2, 1.2), (1.4, -0.4, 2.0)],
-                "profile": "BEVELED_RECT",
-                "profileDimensions": [0.07, 0.04],
-                "scaleTaper": [1.0, 0.4],
-                "twistDeg": -30.0
-            }
-        ],
-        "revolvedHarmonics": [
-            {
-                "id": "rotary_excavation_flute",
-                "anchorPoint": [0.0, -0.3, 2.1],
-                "axis": [0.0, 0.0, 1.0],
-                "profileCurve": [(0.0, 0.12), (0.25, 0.12), (0.5, 0.0)],
-                "harmonicLobeCount": 3,
-                "harmonicDepthRatio": 0.4,
-                "helixPitchMeters": 0.3
-            },
-            {
-                "id": "optical_cavity_housing",
-                "anchorPoint": [0.0, 0.3, 1.6],
-                "axis": [0.0, 0.0, 1.0],
-                "profileCurve": [(0.0, 0.14), (0.1, 0.14), (0.15, 0.08), (0.18, 0.0)],
-                "harmonicLobeCount": 0
-            }
-        ],
-        "metricReplications": [
-            {
-                "id": "bow_fastener_circle",
-                "distributionMode": "POLAR_RING",
-                "guidePoints": [(0.0, 0.3, 1.55), (0.0, 0.0, 1.0), (0.0, 0.48, 1.55)],
-                "pitchMeters": 0.06,
-                "seedGeometry": sb.create_cylinder(radius=0.012, height=0.004)
-            }
-        ]
-    }
-
-    synthesizer = AdaptiveHeroObjectSynthesizer()
-    out_glb = "build/pillar11_test.glb"
-    res = synthesizer.export_glb(contract, out_glb)
-    print(f"  [4] Full Object Synthesized via Pillar 11:")
-    print(f"      Vertices: {res['vertexCount']}, Triangles: {res['triangleCount']}, Size: {res['fileSizeKb']:.1f} KB")
-    assert res['vertexCount'] > 500
     print("ALL PILLAR 11 OPERATOR TESTS PASSED SUCCESSFULLY!")
 
 if __name__ == "__main__":
