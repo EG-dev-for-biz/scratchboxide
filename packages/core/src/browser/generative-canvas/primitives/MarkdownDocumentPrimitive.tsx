@@ -20,13 +20,6 @@ import { DEFAULT_ACTIVE_USER_NAME,
     getActiveUserName
 } from '../canvas-types';
 import {
-    detectDocumentTheme,
-    generateMotivatedEditorialImageSection,
-    generateMotivatedVideoSection,
-    generateMotivatedSvgSection,
-    generateMotivatedCitationSection
-} from '../document-synthesis-engine';
-import {
     IconArrowDown,
     IconArrowUp,
     IconCallout,
@@ -74,6 +67,27 @@ export function sectionMediaFromJob(job: MediaGenerationJob, assetUrl: string, i
         attribution: modelUsed ? `Generated with ${modelUsed}` : undefined,
         mediaError: undefined
     };
+}
+
+/**
+ * A section the user inserts: empty, of the chosen type, opened for editing. No heading, paragraph, table rows,
+ * checklist items, code, citations (marked verified), diagram or media prompt is written into it from keywords.
+ */
+export function newEmptySection(id: string, type: MarkdownSection['type']): MarkdownSection {
+    switch (type) {
+        case 'heading': return { id, type, level: 2, content: '' };
+        case 'location-image': return newLocationSection(id);
+        case 'editorial-image':
+        case 'image':
+        case 'video':
+        case 'svg-diagram': return { id, type };
+        case 'citation': return { id, type, citationItems: [] };
+        case 'callout': return { id, type, calloutType: 'info', calloutTitle: '', content: '' };
+        case 'table': return { id, type, tableHeaders: ['', ''], tableRows: [['', '']] };
+        case 'checklist': return { id, type, checklistItems: [{ id: `${id}-item-1`, text: '', done: false }] };
+        case 'code': return { id, type, codeLanguage: 'typescript', content: '' };
+        default: return { id, type: 'paragraph', content: '' };
+    }
 }
 
 /** "37.7749° N, 122.4194° W": hemisphere letters follow the signs of the coordinates. */
@@ -781,111 +795,8 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
 
     const handleAddSection = (index: number, type: MarkdownSection['type']) => {
         const id = `sec-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        const theme = detectDocumentTheme(doc.title, doc.sections?.map(s => s.content || '').join(' '));
-        let newSec: MarkdownSection;
-
-        switch (type) {
-            case 'heading': {
-                let defaultHeading = '2. Architecture & Strategic Analysis';
-                if (theme === '1776-revolution') {
-                    defaultHeading = 'Historical Turning Point & Strategic Significance';
-                } else if (theme === 'auth-zerotrust-security') {
-                    defaultHeading = 'Cryptographic Verification & Token Protocol';
-                } else if (theme === 'ai-machine-learning') {
-                    defaultHeading = 'Neural Attention & Multi-Modal Processing';
-                }
-                newSec = { id, type: 'heading', level: 2, content: defaultHeading };
-                break;
-            }
-            case 'paragraph': {
-                let defaultParagraph = 'Add your detailed thoughts, specifications, or findings here...';
-                if (theme === '1776-revolution') {
-                    defaultParagraph = 'The enduring impact of these foundational events continues to shape modern constitutional governance and civil liberties.';
-                } else if (theme === 'auth-zerotrust-security') {
-                    defaultParagraph = 'The Zero-Trust verification framework enforces sub-millisecond cryptographic attestation on every inbound API transaction.';
-                }
-                newSec = { id, type: 'paragraph', content: defaultParagraph };
-                break;
-            }
-            case 'location-image':
-                newSec = newLocationSection(id);
-                break;
-            case 'editorial-image':
-            case 'image':
-                newSec = generateMotivatedEditorialImageSection(theme, undefined, doc.title);
-                newSec.id = id;
-                break;
-            case 'video':
-                newSec = generateMotivatedVideoSection(theme, undefined, doc.title);
-                newSec.id = id;
-                break;
-            case 'svg-diagram':
-                newSec = generateMotivatedSvgSection(theme, undefined, doc.title);
-                newSec.id = id;
-                break;
-            case 'citation':
-                newSec = generateMotivatedCitationSection(theme, undefined);
-                newSec.id = id;
-                break;
-            case 'callout':
-                newSec = {
-                    id,
-                    type: 'callout',
-                    calloutType: 'tip',
-                    calloutTitle: theme === '1776-revolution' ? 'Historical Context & Primary Insight' : 'Core Architecture Guardrail',
-                    content: theme === '1776-revolution'
-                        ? 'Enlightenment political theory provided the essential moral and philosophical justification for colonial independence.'
-                        : 'All edge communication channels enforce mTLS 1.3 encryption with strict capability-based authorization policies.'
-                };
-                break;
-            case 'table':
-                newSec = {
-                    id,
-                    type: 'table',
-                    tableHeaders: theme === '1776-revolution'
-                        ? ['Event / Milestone', 'Date', 'Key Revolutionary Figures', 'Strategic Outcome']
-                        : ['Capability / Component', 'Specification', 'Target Latency', 'Status'],
-                    tableRows: theme === '1776-revolution'
-                        ? [
-                            ['Common Sense Published', 'Jan 1776', 'Thomas Paine', 'Galvanized widespread public mandate for separation'],
-                            ['Declaration Ratified', 'July 4, 1776', 'Jefferson, Adams, Franklin', 'Inaugurated sovereign democratic nationhood'],
-                            ['Delaware Crossing & Trenton', 'Dec 25–26, 1776', 'George Washington, Col. Glover', 'Surprise tactical victory revitalizing army morale']
-                        ]
-                        : [
-                            ['Real-Time Canvas', 'Built-in Visual Stage', '< 16ms (60fps)', 'Active'],
-                            ['Multi-Modal Media Blocks', 'Location, Video, SVG, Citations', '< 30ms TTFT', 'Supported']
-                        ]
-                };
-                break;
-            case 'checklist':
-                newSec = {
-                    id,
-                    type: 'checklist',
-                    checklistItems: theme === '1776-revolution'
-                        ? [
-                            { id: `chk-${Date.now()}-1`, text: 'Unanimous adoption of the Declaration of Independence by Continental Congress', done: true },
-                            { id: `chk-${Date.now()}-2`, text: 'Establishment of diplomatic alliances and international recognitions', done: true },
-                            { id: `chk-${Date.now()}-3`, text: 'Drafting of individual state constitutional charters and civic protections', done: false }
-                        ]
-                        : [
-                            { id: `chk-${Date.now()}-1`, text: 'Initial design review & HIG alignment', done: true },
-                            { id: `chk-${Date.now()}-2`, text: 'Implement visual multi-modal media blocks', done: true },
-                            { id: `chk-${Date.now()}-3`, text: 'Verify CSV data drag-and-drop & charts', done: false }
-                        ]
-                };
-                break;
-            case 'code':
-                newSec = {
-                    id,
-                    type: 'code',
-                    content: theme === 'auth-zerotrust-security'
-                        ? '// Asymmetric Ed25519 JWT validation\nexport async function verifyToken(jwt: string, jwks: any): Promise<any> {\n  return jwtVerify(jwt, jwks.getKey(), { algorithms: ["EdDSA"] });\n}'
-                        : '// Live code snippet\nfunction calculateVelocity(sprintPoints: number[]) {\n  return sprintPoints.reduce((a, b) => a + b, 0) / sprintPoints.length;\n}'
-                };
-                break;
-            default:
-                newSec = { id, type: 'paragraph', content: 'New content block' };
-        }
+        // The new section opens empty in edit mode; nothing is written into it from the document's keywords.
+        const newSec = newEmptySection(id, type);
 
         const sections = [...(doc.sections || [])];
         sections.splice(index, 0, newSec);
@@ -2095,7 +2006,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                         className="sb-svg-title-text"
                                         onClick={() => { if (!readOnly) setEditingSectionId(section.id); }}
                                     >
-                                        {section.diagramTitle || 'Interactive Diagram'}
+                                        {section.diagramTitle || 'Untitled diagram'}
                                     </span>
                                 )}
                             </div>
@@ -2168,9 +2079,12 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                 <span className="sb-citations-title-text">Primary Sources &amp; References</span>
                                 <span className="sb-citations-count-pill">{section.citationItems?.length || 0} Sources</span>
                             </div>
-                            <span className="sb-citations-verified-badge">
-                                ✓ Verified Sources
-                            </span>
+                            {/* Only sources that carry verification (e.g. Google Search grounding) are called verified. */}
+                            {(section.citationItems?.length || 0) > 0 && section.citationItems!.every(c => c.verified) && (
+                                <span className="sb-citations-verified-badge">
+                                    ✓ Verified Sources
+                                </span>
+                            )}
                         </div>
 
                         <div className="sb-doc-citations-grid">

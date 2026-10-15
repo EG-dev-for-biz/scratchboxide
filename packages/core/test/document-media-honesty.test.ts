@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MarkdownDocumentPrimitive, SectionMediaNotice, formatCoordinates, newLocationSection, sectionMediaFailure, sectionMediaFromJob } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
+import { MarkdownDocumentPrimitive, SectionMediaNotice, formatCoordinates, newEmptySection, newLocationSection, sectionMediaFailure, sectionMediaFromJob } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
 import { synthesizeContextualNanoBananaPrompt } from '../src/browser/generative-canvas/nano-banana-service';
 import * as nanoBanana from '../src/browser/generative-canvas/nano-banana-service';
 import { generateMotivatedEditorialImageSection, generateMotivatedVideoSection } from '../src/browser/generative-canvas/document-synthesis-engine';
@@ -89,6 +89,25 @@ describe('document image sections', () => {
         expect(html).not.toContain('San Francisco');
         expect(html).not.toContain('Historical Landmark');
         expect(html).not.toMatch(/<img[^>]+sb-location-image-element/);
+    });
+
+    it('an inserted section is empty: nothing is written into it from the document\'s keywords', () => {
+        const types = ['heading', 'paragraph', 'editorial-image', 'video', 'svg-diagram', 'citation', 'callout', 'table', 'checklist', 'code', 'location-image'] as const;
+        const sections = types.map((t, i) => newEmptySection(`s${i}`, t));
+        for (const sec of sections) {
+            const text = JSON.stringify(sec);
+            expect(text, sec.type).not.toMatch(/1776|Zero-Trust|Attention Is All You Need|Strategic|Architecture|Revolution|unsplash|verified/i);
+        }
+        expect(sections.find(s => s.type === 'citation')?.citationItems).toEqual([]);
+        // A 1776 document still gets empty inserts (the theme detector no longer picks canned text).
+        const html = renderToStaticMarkup(React.createElement(MarkdownDocumentPrimitive, { data: { title: 'The importance of 1776', sections } }));
+        expect(html).not.toMatch(/Historical Turning Point|Common Sense Published|Delaware Crossing|Verified Sources|Enlightenment political theory/);
+    });
+
+    it('a citation list is called verified only when every source carries verification', () => {
+        const render = (items: any[]) => renderToStaticMarkup(React.createElement(MarkdownDocumentPrimitive, { data: { title: 'Refs', sections: [{ id: 'c', type: 'citation', citationItems: items } as any] } }));
+        expect(render([{ id: 'a', sourceTitle: 'Model-cited paper', url: 'https://example.org/a' }])).not.toContain('Verified Sources');
+        expect(render([{ id: 'g', sourceTitle: 'Grounded page', url: 'https://example.org/g', verified: true }])).toContain('Verified Sources');
     });
 
     it('location coordinates name the hemisphere their sign puts them in', () => {
