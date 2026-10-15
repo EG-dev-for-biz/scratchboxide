@@ -81,10 +81,13 @@ console.log(`${carved.telemetry.removedTriangles} triangles removed`);
 
 ---
 
-## 5. Atomic building integrity
+## 5. Non-Negotiable Directives: Atomic Building Integrity & Zero Roof Slicing
 
-1. Buildings are indivisible: never slice through a building or carve a span box that contains building walls you
-   mean to keep.
-2. Elevation slicing is for pruning below the ground (`cutoffY` at or below the foundation level). A cut above the
-   ground removes the lower parts of every building.
-3. Check `removedTriangles` and the measured bounds after every edit, and tell the user what was removed.
+1. **Atomic Structural Integrity**: Buildings are indivisible. Never slice through a building, and never give the
+   carver a span box that contains building walls you mean to keep (it removes every near-vertical triangle inside).
+2. **Zero Roof Shearing ($Y_{\max} = +\infty$)**: Elevation slicing (`utdra_slice_elevation`) is for pruning below the
+   ground (`cutoffY` at or below the foundation level, $Y \le Y_{\text{ground}}$). It keeps everything above the cut, so
+   it never cuts down through roofs, crowns or spires; a cut above the ground removes the lower parts of every building.
+3. **Crown & Spire Preservation**: no UTDRA tool removes geometry above the cut plane or outside the span box, so
+   crowns, antennae and finials stay whole. Check the measured bounds and `removedTriangles` after every edit, and
+   tell the user what was removed.
