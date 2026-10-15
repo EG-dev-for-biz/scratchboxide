@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { NoSceneBuiltError } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
 import { describe, it, expect } from 'vitest';
 import * as assert from 'assert';
 import {
@@ -51,9 +52,9 @@ describe('C/C++ First 3D Engine Architecture Directive', () => {
     it('2. never answers a hero-object prompt with the keyword hero-object template, and records attached C++20 generators in the operator stack', () => {
         // Single objects are built by build_3d_object_from_reference (reference image -> vision spec -> native
         // build); the template synthesizer no longer stands in for that with its keyword hero-object template.
-        const scene = synthesizeContextual3DScene('Build a supersonic tactical jet fighter');
-        expect(scene.title).not.toMatch(/ADA Hero Asset/);
-        expect(scene.worldBranch ?? '').not.toMatch(/ada-hero/);
+        // No template builds an aircraft either (the flight template drew only an internal:plane the viewport cannot
+        // load), so the prompt builds no scene at all.
+        expect(() => synthesizeContextual3DScene('Build a supersonic tactical jet fighter')).toThrow(NoSceneBuiltError);
 
         // A scene that carries a C++20 generator gets it registered as sb_set_cpp_generator.
         const flightScene = initializeSceneOperatorStack({

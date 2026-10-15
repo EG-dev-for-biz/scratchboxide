@@ -13,12 +13,17 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Adaptive3DSceneSynthesizer } from '../src/node/spatial/Adaptive3DSceneSynthesizer';
 import { SceneCriticRefinementService } from '../src/node/spatial/SceneCriticRefinementService';
 import { AdaptiveSceneChunkPlanner } from '../src/node/spatial/AdaptiveSceneChunkPlanner';
 
 const synthesizer = new Adaptive3DSceneSynthesizer();
-const baseContract = () => synthesizer.synthesizeContractFromPrompt('a stone observatory on a ridge above a pine forest');
+// The synthesizer no longer infers a contract from prompt words (synthesizeContractFromPrompt is gone); a contract is
+// the model's, so the base contract here is a recorded one.
+const fixtures = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/adaptive-3d-scene-contracts.json'), 'utf8'));
+const baseContract = () => JSON.parse(JSON.stringify(fixtures.outpost));
 
 describe('adaptive scene: untrusted model input', () => {
     it('critic corrections cannot reach the prototype chain or add keys', () => {
