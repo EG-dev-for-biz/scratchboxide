@@ -81,7 +81,7 @@ export interface GeoBoxResectionResult {
     landmark: {
         name: string;
         /** Where the target location came from: coordinates in the request, or a Google Places lookup of the name. */
-        resolvedFrom: 'targetCoords' | 'knownCoords' | 'google_places';
+        resolvedFrom: 'targetCoords' | 'google_places';
         coordinates: GeoCoordinate;
     };
     cameraOpticalCenter: {
@@ -187,14 +187,16 @@ export class GeoBoxPrecisionResectionService {
     }
 
     /**
-     * Resolves where the photo was taken. Explicit target or camera coordinates are used as given; otherwise the
-     * landmark name (or, without one, the prompt hint) is resolved with Google Places. Text is never scanned for
-     * landmark keywords or embedded numbers, and BENCHMARK_GEO_ANCHORS are never consulted. The ground elevation
-     * is the stated altitude or the Elevation API's; when neither is available this throws.
+     * Resolves what the photo shows. Explicit target coordinates are used as given; otherwise the landmark name (or,
+     * without one, the prompt hint) is resolved with Google Places. A camera position (cameraOpticalCenter or
+     * knownCoords) is not a target: the ground under the camera is not what it looks at, so a camera position alone
+     * is an error. Text is never scanned for landmark keywords or embedded numbers, and BENCHMARK_GEO_ANCHORS are
+     * never consulted. The ground elevation is the stated altitude or the Elevation API's; when neither is available
+     * this throws.
      */
     public async resolveGeodeticCoordinates(request: GeoBoxResectionRequest): Promise<{
         name: string;
-        resolvedFrom: 'targetCoords' | 'knownCoords' | 'google_places';
+        resolvedFrom: 'targetCoords' | 'google_places';
         targetCoords: GeoCoordinate;
         groundElevation: number;
         glbPath?: string;
@@ -213,29 +215,17 @@ export class GeoBoxPrecisionResectionService {
             };
         }
 
-        // 2. Only the camera position is known: the location is the camera's own (the camera's altitude, heading and
-        // pitch must then be stated; resectCameraPose checks them).
-        if (request.knownCoords && !request.targetLandmarkName?.trim()) {
-            const { lat, lng } = request.knownCoords;
-            assertUsableCoordinates(lat, lng, `${lat}, ${lng}`);
-            const ground = await this.groundElevation(lat, lng);
-            return {
-                name: `Location (${lat.toFixed(6)}, ${lng.toFixed(6)})`,
-                resolvedFrom: 'knownCoords',
-                targetCoords: { lat, lng, altitudeMeters: ground },
-                groundElevation: ground,
-                glbPath: request.glbPath
-            };
-        }
-
-        // 3. One place lookup: the landmark name when given, else (with no camera position either) the prompt hint.
-        // Coordinates typed in either are used as given.
+        // 2. One place lookup: the landmark name when given, else the prompt hint. Coordinates typed in either are
+        // used as given.
         const query = request.targetLandmarkName?.trim() || request.promptHint?.trim();
         if (!query) {
+            const cameraOnly = request.knownCoords || request.cameraOpticalCenter;
             throw new MissingInputError(
                 'geobox_resect_camera_pose',
-                'targetCoords, knownCoords, targetLandmarkName or promptHint',
-                'no location was given; zero presets: no default place'
+                'targetCoords, targetLandmarkName or promptHint',
+                cameraOnly
+                    ? 'only the camera position was given: what the photo shows (the target) is needed too; the ground under the camera is not assumed to be it'
+                    : 'no location was given; zero presets: no default place'
             );
         }
         const anchor = await geocode3DTilesAddress(query);
@@ -359,6 +349,8 @@ export class GeoBoxPrecisionResectionService {
             standoffDist = request.standoffDistanceMeters;
             headingDeg = request.headingDeg;
             pitchDeg = statedPitch;
+            // The camera looks along (heading, pitch) at the target, so it sits standoff metres back along that ray:
+            // behind the target horizontally, and above it when the pitch is negative (looking down).
             const headingRad = headingDeg * Math.PI / 180;
             const pitchRad = pitchDeg * Math.PI / 180;
             const horizDist = standoffDist * Math.cos(pitchRad);
@@ -366,7 +358,7 @@ export class GeoBoxPrecisionResectionService {
                 targetLla,
                 -horizDist * Math.sin(headingRad),
                 -horizDist * Math.cos(headingRad),
-                standoffDist * Math.sin(pitchRad)
+                -standoffDist * Math.sin(pitchRad)
             );
             cameraCoords = { lat: geoCam.lat, lng: geoCam.lng, altitudeMeters: geoCam.alt };
             poseSource = `stated heading, ${typeof request.pitchDeg === 'number' ? 'stated pitch' : 'pitch from vertical lines'} and stated standoff distance`;
@@ -393,7 +385,8 @@ export class GeoBoxPrecisionResectionService {
                 altitude: Number((targetCoords.altitudeMeters as number).toFixed(2))
             },
             heading: Number(headingDeg.toFixed(1)),
-            tilt: Number((pitchDeg < 0 ? (90.0 + pitchDeg) : (90.0 - pitchDeg)).toFixed(1)),
+            // Maps 3D tilt: 0 looks straight down, 90 at the horizon, above 90 looks up.
+            tilt: Number(cameraTiltFromPitch(pitchDeg).toFixed(1)),
             roll: 0.0,
             range: Number(standoffDist.toFixed(2)),
             fov,
@@ -486,6 +479,14 @@ export class GeoBoxPrecisionResectionService {
     public async resectImageLocation(request: ImageLocationResectionRequest): Promise<ImageLocationResectionResult> {
         return this.resectCameraPose(request);
     }
+}
+
+/**
+ * Google Maps 3D camera tilt for a pitch in degrees above the horizon (negative looks down): tilt 0 looks straight
+ * down, 90 at the horizon and 180 straight up, so tilt = 90 + pitch.
+ */
+export function cameraTiltFromPitch(pitchDeg: number): number {
+    return Math.max(0, Math.min(180, 90 + pitchDeg));
 }
 
 /**

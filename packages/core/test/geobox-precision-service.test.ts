@@ -184,7 +184,7 @@ describe('GeoBoxPrecisionResectionService API', () => {
             .toThrow(MissingInputError);
         await expect(new GeoBoxPrecisionResectionService().resectCameraPose({}))
             .rejects
-            .toThrow(/targetCoords, knownCoords, targetLandmarkName or promptHint/);
+            .toThrow(/targetCoords, targetLandmarkName or promptHint/);
     });
 
     it('never picks a surveyed fixture from words in the prompt hint; without a Maps key the place lookup fails', async () => {
@@ -286,6 +286,43 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
         // Looking east means the camera sits west of the target.
         expect(result.cameraOpticalCenter.lng).toBeLessThan(139.7454);
         expect(result.cameraOpticalCenter.lat).toBeCloseTo(35.6586, 4);
+    });
+
+    it('a stated pitch places the camera on the ray it looks along: looking down puts it above the target', async () => {
+        const target = { lat: 40.7411, lng: -73.9897, alt: 20 };
+        // Pitch is degrees above the horizon: -30 looks down, so the camera is 100 m back along the ray and 50 m up.
+        const down = await new GeoBoxPrecisionResectionService().resectCameraPose({ targetCoords: target, headingDeg: 0, pitchDeg: -30, standoffDistanceMeters: 100 });
+        expect(down.cameraOpticalCenter.elevationMslMeters).toBeCloseTo(70, 1);
+        expect(down.cameraOpticalCenter.lat).toBeLessThan(target.lat); // heading north: the camera is south of the target
+        expect(down.cameraAttitude.pitchDeg).toBe(-30);
+        expect(down.googleMapTiles3DConfig.tilt).toBe(60);
+        // +18 looks up: the camera is below the target, and the tilt is above the horizon (not the same as -18).
+        const up = await new GeoBoxPrecisionResectionService().resectCameraPose({ targetCoords: target, headingDeg: 0, pitchDeg: 18, standoffDistanceMeters: 100 });
+        expect(up.cameraOpticalCenter.elevationMslMeters).toBeCloseTo(20 - 100 * Math.sin(18 * Math.PI / 180), 1);
+        expect(up.googleMapTiles3DConfig.tilt).toBe(108);
+        // The reported pitch matches the computed camera-to-target ray.
+        for (const r of [down, up]) {
+            const rise = target.alt - r.cameraOpticalCenter.elevationMslMeters;
+            expect(Math.asin(rise / r.cameraOpticalCenter.standoffDistanceMeters) * 180 / Math.PI).toBeCloseTo(r.cameraAttitude.pitchDeg, 3);
+        }
+    });
+
+    it('a camera position alone is not a target: knownCoords needs what the photo shows, like cameraOpticalCenter', async () => {
+        // knownCoords used to make the ground under the camera the target and report a straight-down pitch.
+        for (const camera of [{ knownCoords: { lat: 40.7411, lng: -73.9897, alt: 60 } }, { cameraOpticalCenter: { lat: 40.7411, lng: -73.9897, alt: 60 } }]) {
+            const request = { ...camera, headingDeg: 90 };
+            await expect(new GeoBoxPrecisionResectionService().resectCameraPose(request)).rejects.toThrow(MissingInputError);
+            await expect(new GeoBoxPrecisionResectionService().resectCameraPose(request)).rejects.toThrow(/only the camera position was given/);
+        }
+        // With a stated target the camera position is used and the pitch is toward that target.
+        const result = await new GeoBoxPrecisionResectionService().resectCameraPose({
+            knownCoords: { lat: 40.7405, lng: -73.9900, alt: 60 },
+            targetCoords: { lat: 40.7411, lng: -73.9897, alt: 12 }
+        });
+        expect(result.landmark.resolvedFrom).toBe('targetCoords');
+        expect(result.cameraAttitude.pitchDeg).toBeLessThan(0);
+        expect(result.cameraAttitude.pitchDeg).toBeGreaterThan(-60);
+        expect(result.poseSource).toBe('stated camera position (knownCoords), heading toward the target, pitch toward the target');
     });
 
     it('resolves native capability for geobox camera resectioning and edge overlap tasks', () => {
