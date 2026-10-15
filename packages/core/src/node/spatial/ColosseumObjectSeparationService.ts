@@ -392,21 +392,6 @@ For each object, output its 2D bounding box normalized [ymin, xmin, ymax, xmax] 
         dims: [18.0, 1.2, 10.0],
         yaw: 15.0
       },
-      'det-umbrella-pine-tree': {
-        enu: [95.0, 14.0, 45.0],
-        dims: [11.0, 15.0, 11.0],
-        yaw: 0.0
-      },
-      'det-umbrella-pine-tree-2': {
-        enu: [82.0, 13.0, 52.0],
-        dims: [9.5, 13.5, 9.5],
-        yaw: 42.0
-      },
-      'det-cypress-tree-1': {
-        enu: [-210.0, 10.0, 90.0],
-        dims: [3.5, 12.0, 3.5],
-        yaw: 0.0
-      },
       'det-church-campanile': {
         enu: [-235.0, 12.0, 115.0],
         dims: [12.0, 32.0, 14.0],
@@ -421,11 +406,11 @@ For each object, output its 2D bounding box normalized [ymin, xmin, ymax, xmax] 
     };
 
     for (const det of detections) {
-      const mapping = detectionMapping[det.id] || {
-        enu: [0, 0, 0],
-        dims: [10, 10, 10],
-        yaw: 0
-      };
+      // A detection with no measured placement is not placed: it is not given a 10 m box at the origin.
+      const mapping = detectionMapping[det.id];
+      if (!mapping) {
+        throw new Error(`No measured placement for detection "${det.id}" (${det.label}); it cannot be placed in the scene.`);
+      }
 
       const halfW = mapping.dims[0] / 2;
       const halfH = mapping.dims[1];

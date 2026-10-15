@@ -494,11 +494,13 @@ export class Universal3DObjectSeparationService {
     const groundDatumY = overallBox.min[1];
     const totalHeight = overallBox.dimensions[1];
 
-    // Groups
+    // Groups by bounding-box shape. A box shows size and height, not what a thing is, so each group is named for its
+    // geometry: no monument, ruin or style is read from a size (a midtown block came back as a "classical monument"
+    // and "ancient ruins").
     const terrainIndices: number[] = [];
-    const monumentIndices: number[] = [];
+    const tallIndices: number[] = [];
     const architectureIndices: number[] = [];
-    const ruinIndices: number[] = [];
+    const lowIndices: number[] = [];
 
     for (const sm of submeshes) {
       const idx = sm.submeshIndex;
@@ -507,46 +509,45 @@ export class Universal3DObjectSeparationService {
       const relativeElevation = (centerY - groundDatumY) / (totalHeight || 1);
       const horizontalFootprint = Math.max(w, d);
 
-      // Heuristic 1: Terrain - broad horizontal footprint, low height, grounds near bottom
+      // Broad, low and near the bottom: ground surfaces
       if (h < 6.0 && horizontalFootprint > overallBox.dimensions[0] * 0.25) {
         terrainIndices.push(idx);
       }
       // (No vegetation heuristic: a bounding box cannot tell a crown from a kiosk or a rooftop unit. Trees are measured
       // from the photo tiles by tile_vegetation, through google_3d_tiles_get_clay.)
-      // Heuristic 3: Ruin - low crumbling structure
+      // Low and near the ground
       else if (h >= 1.0 && h <= 8.0 && relativeElevation < 0.25) {
-        ruinIndices.push(idx);
+        lowIndices.push(idx);
       }
-      // Heuristic 4: Monument - tall prominent structure
+      // Tall and wide
       else if (h > 15.0 && (w > 20 || d > 20)) {
-        monumentIndices.push(idx);
+        tallIndices.push(idx);
       }
-      // Default: Architecture / urban envelope
       else {
         architectureIndices.push(idx);
       }
     }
 
-    // Only categories the heuristics actually found are reported: a submesh is never moved into a category (terrain,
-    // monument) just so that category exists, and an empty category is not given the whole model's box.
+    // Only groups the shapes actually filled are reported: a submesh is never moved into a group just so that group
+    // exists, and an empty group is not given the whole model's box.
     const clustersConfig = [
       {
-        id: 'sep-monument-core',
-        name: 'Primary Architectural Monument Facade',
-        category: 'monument' as UniversalSpatialCategory,
-        indices: monumentIndices,
+        id: 'sep-tall-structures',
+        name: 'Tall structures (over 15 m high, over 20 m across)',
+        category: 'architecture' as UniversalSpatialCategory,
+        indices: tallIndices,
         colorHex: '#3b82f6',
-        prompt: 'Watertight architectural monument facade with classical masonry and relief details',
+        prompt: 'Structure geometry from the scan, over 15 m high and over 20 m across',
         roughness: 0.85,
         metalness: 0.02
       },
       {
         id: 'sep-terrain-ground',
-        name: 'Terrain Ground Apron & Plaza Datum',
+        name: 'Broad low surfaces (ground)',
         category: 'terrain' as UniversalSpatialCategory,
         indices: terrainIndices,
         colorHex: '#64748b',
-        prompt: 'Pedestrian ground pavement and geological apron datum with tactile surface materials',
+        prompt: 'Broad low ground surface geometry from the scan',
         roughness: 0.90,
         metalness: 0.05
       }
@@ -554,25 +555,25 @@ export class Universal3DObjectSeparationService {
 
     if (architectureIndices.length > 0) {
       clustersConfig.push({
-        id: 'sep-urban-facade',
-        name: 'Adjacent Urban Architecture & Building Envelope',
+        id: 'sep-other-structures',
+        name: 'Other structures',
         category: 'architecture' as UniversalSpatialCategory,
         indices: architectureIndices,
         colorHex: '#fbbf24',
-        prompt: 'Photorealistic urban architectural facade with smoothed planar surfaces and plinth',
+        prompt: 'Structure geometry from the scan',
         roughness: 0.82,
         metalness: 0.03
       });
     }
 
-    if (ruinIndices.length > 0) {
+    if (lowIndices.length > 0) {
       clustersConfig.push({
-        id: 'sep-archaeology-ruin',
-        name: 'Archaeological Foundations & Substructure Ruins',
-        category: 'ruin' as UniversalSpatialCategory,
-        indices: ruinIndices,
+        id: 'sep-low-structures',
+        name: 'Low structures near the ground (1 to 8 m high)',
+        category: 'architecture' as UniversalSpatialCategory,
+        indices: lowIndices,
         colorHex: '#f97316',
-        prompt: 'Ancient masonry brick and stone foundation ruins with weathered historic textures',
+        prompt: 'Structure geometry from the scan, 1 to 8 m high near the ground',
         roughness: 0.94,
         metalness: 0.01
       });

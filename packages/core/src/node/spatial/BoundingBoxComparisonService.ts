@@ -244,7 +244,8 @@ export class BoundingBoxComparisonService {
 
   /**
    * Returns canonical benchmark entities demonstrating AABB vs OBB across
-   * synthetic geometry, real-world monuments, arcades, and botanical vegetation.
+   * synthetic geometry, real-world monuments and arcades. (A hand-written Oppian Hill stone pine was removed: trees
+   * come only from the measurement of a location's photo tiles.)
    */
   public static getDefaultBenchmarks(): BoundingBoxBenchmarkEntity[] {
     return [
@@ -345,39 +346,6 @@ export class BoundingBoxComparisonService {
           center: [0.0, 24.25, 0.0],
           size: [188.0, 48.5, 156.0],
           rotationsDeg: [0.0, 0.0, 0.0]
-        }
-      },
-      {
-        id: 'bench-umbrella-pine-oppian',
-        name: 'Oppian Hill Crest Mediterranean Umbrella Stone Pine (Pinus pinea)',
-        category: 'foliage_trees',
-        description: 'Botanical Mediterranean parasol pine. Rotated cantilevered canopy orientation reduces collision volume by 41.8% compared to axis-aligned box.',
-        aabb: {
-          min: [-72.4, 21.0, 142.1],
-          max: [-58.2, 37.5, 159.3],
-          dimensions: [14.2, 16.5, 17.2],
-          centroid: [-65.3, 29.25, 150.7],
-          volumeM3: 4029.96
-        },
-        obb: {
-          center: [-65.3, 29.25, 150.7],
-          dimensions: [11.8, 16.5, 12.1],
-          halfExtents: [5.9, 8.25, 6.05],
-          yawDeg: 28.4,
-          yawRad: 0.4957,
-          quaternion: [0, 0.2453, 0, 0.9694],
-          rotationMatrix3x3: [
-            [0.8796, 0, 0.4756],
-            [0, 1, 0],
-            [-0.4756, 0, 0.8796]
-          ],
-          volumeM3: 2355.87,
-          tightnessGainPercent: 41.5
-        },
-        gemini3DBox: {
-          center: [-65.3, 29.25, 150.7],
-          size: [11.8, 16.5, 12.1],
-          rotationsDeg: [0.0, 28.4, 0.0]
         }
       }
     ];
@@ -805,7 +773,6 @@ export class BoundingBoxComparisonService {
     <button class="btn" id="btn-bench-0" onclick="selectBenchmark(0)">Synthetic 45° Box</button>
     <button class="btn active" id="btn-bench-1" onclick="selectBenchmark(1)">Arch of Constantine</button>
     <button class="btn" id="btn-bench-2" onclick="selectBenchmark(2)">Colosseum Arcade</button>
-    <button class="btn" id="btn-bench-3" onclick="selectBenchmark(3)">Umbrella Stone Pine</button>
   </div>
 
   <!-- Legend -->

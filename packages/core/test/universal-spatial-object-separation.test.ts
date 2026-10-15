@@ -101,20 +101,26 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
     });
 
     // Only categories the geometry supports are reported; nothing is moved into a category so that it exists. This
-    // model's submeshes measure as monument, architecture and ruin; none is broad and low enough for terrain. Nothing
-    // is called vegetation: a bounding box cannot tell a crown from a kiosk.
+    // model's submeshes measure as tall, low and other structures; none is broad and low enough for terrain. A box
+    // shows size, not what a thing is: nothing is called a monument, a ruin or vegetation.
     const categories = new Set(scene.objects.map(o => o.category));
-    expect(categories.has('monument') || categories.has('colosseum_architecture')).toBe(true);
+    expect(categories.has('architecture')).toBe(true);
+    expect(categories.has('monument')).toBe(false);
+    expect(categories.has('ruin')).toBe(false);
     expect(categories.has('terrain')).toBe(false);
     expect(categories.has('foliage')).toBe(false);
     expect(categories.has('foliage_trees')).toBe(false);
-    for (const obj of scene.objects) expect(obj.submeshIndices.length).toBeGreaterThan(0);
+    for (const obj of scene.objects) {
+      expect(obj.submeshIndices.length).toBeGreaterThan(0);
+      expect(obj.name).not.toMatch(/monument|ruin|archaeolog|classical|ancient/i);
+      expect(obj.trellisPrompt).not.toMatch(/monument|ruin|archaeolog|classical|ancient/i);
+    }
 
-    // Verify monument routing metadata
-    const monumentObjs = scene.objects.filter(o => o.category === 'monument' || o.category === 'colosseum_architecture');
-    expect(monumentObjs.length).toBeGreaterThan(0);
-    for (const mon of monumentObjs) {
-      expect(['sb-archi', 'archie-building'].includes(mon.routingRecommendation!)).toBe(true);
+    // Verify structure routing metadata
+    const structures = scene.objects.filter(o => o.category === 'architecture');
+    expect(structures.length).toBeGreaterThan(0);
+    for (const s of structures) {
+      expect(s.routingRecommendation).toBe('archie-building');
     }
 
     // Verify terrain routing metadata (when terrain is detected)

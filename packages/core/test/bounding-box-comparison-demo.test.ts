@@ -145,12 +145,13 @@ describe('BoundingBoxComparisonService (AABB vs OBB Comparison)', () => {
 
   it('builds a benchmark comparison collection containing diverse architectural and natural entities', () => {
     const benchmarks = BoundingBoxComparisonService.getDefaultBenchmarks();
-    expect(benchmarks.length).toBeGreaterThanOrEqual(4);
+    expect(benchmarks.length).toBeGreaterThanOrEqual(3);
 
     const names = benchmarks.map(b => b.name);
     expect(names.some(n => n.includes('Constantine'))).toBe(true);
     expect(names.some(n => n.includes('Colosseum'))).toBe(true);
-    expect(names.some(n => n.includes('Pine') || n.includes('Tree'))).toBe(true);
+    // no hand-written tree among them: trees come only from a location's measured photo tiles
+    expect(names.some(n => n.includes('Pine') || n.includes('Tree'))).toBe(false);
     expect(names.some(n => n.includes('45°') || n.includes('Rotated'))).toBe(true);
 
     for (const b of benchmarks) {
@@ -170,7 +171,7 @@ describe('BoundingBoxComparisonService (AABB vs OBB Comparison)', () => {
 
     const manifest = BoundingBoxComparisonService.generateBenchmarkManifest();
     expect(manifest.version).toBe('1.0.0');
-    expect(manifest.comparisons.length).toBeGreaterThanOrEqual(4);
+    expect(manifest.comparisons.length).toBeGreaterThanOrEqual(3);
     expect(manifest.summary.averageTightnessGainPercent).toBeGreaterThan(20);
   });
 
