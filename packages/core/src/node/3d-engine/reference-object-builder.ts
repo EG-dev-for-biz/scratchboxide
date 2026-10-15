@@ -48,7 +48,7 @@ import { GeminiClient, errorMessage, isModelNotFoundError } from '../gemini/gemi
 import { NativePythonRunnerService, type PythonExecutionOptions, type PythonExecutionResult } from './native-python-runner-service';
 import {
     analyzePartConnectivityAsync,
-    glbToNamedTriangleSoups,
+    glbToNamedTriangleSoupsAsync,
     mergeTriangleSoups,
     type ContactGraph,
     type FloatingPart,
@@ -791,7 +791,13 @@ export async function measureBuild(
     options: { signal?: AbortSignal } = {}
 ): Promise<Omit<ObjectBuildChecks, 'differences'> & { soup: TriangleSoup; partBounds: PartBounds }> {
     throwIfAborted(options.signal, 'checks');
-    const named = glbToNamedTriangleSoups(glb);
+    let named: Map<string, TriangleSoup> | null;
+    try {
+        named = await glbToNamedTriangleSoupsAsync(glb, { signal: options.signal });
+    } catch (err) {
+        throwIfAborted(options.signal, 'checks');
+        throw err;
+    }
     const meshes = named ? [...named].filter(([, s]) => s.indices.length > 0) : [];
     if (meshes.length === 0) {
         throw new ReferenceObjectBuildError('checks', 'The built GLB could not be read back for checking.');

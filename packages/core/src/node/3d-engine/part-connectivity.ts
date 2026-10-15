@@ -92,110 +92,182 @@ function nodeMatrix(node: any): Mat4 {
 
 const COMPONENT_BYTES: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
 
-function readAccessor(gltf: any, bin: Buffer, index: number): { values: number[]; components: number } {
+/**
+ * Values read, or vertices transformed, between yield points inside one accessor or primitive of the GLB reader; it
+ * also yields after every primitive, since a tile can hold hundreds of small ones.
+ */
+const READ_PER_YIELD = 1 << 13;
+
+/** An accessor's values as numbers, read through a DataView (sparse accessors and normalisation are not applied). */
+function* readAccessor(gltf: any, bin: DataView, index: number): Generator<void, { values: Float64Array; components: number }, void> {
     const acc = gltf.accessors[index];
     const view = gltf.bufferViews[acc.bufferView];
     const components = ({ SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 } as Record<string, number>)[acc.type] || 1;
     const bytes = COMPONENT_BYTES[acc.componentType];
     const stride = view.byteStride || components * bytes;
     const base = (view.byteOffset || 0) + (acc.byteOffset || 0);
-    const values: number[] = new Array(acc.count * components);
+    const get: (offset: number) => number =
+        acc.componentType === 5126 ? o => bin.getFloat32(o, true)
+            : acc.componentType === 5125 ? o => bin.getUint32(o, true)
+                : acc.componentType === 5123 ? o => bin.getUint16(o, true)
+                    : acc.componentType === 5121 ? o => bin.getUint8(o)
+                        : acc.componentType === 5122 ? o => bin.getInt16(o, true)
+                            : o => bin.getInt8(o);
+    const values = new Float64Array(acc.count * components);
     for (let i = 0; i < acc.count; i++) {
-        for (let c = 0; c < components; c++) {
-            const o = base + i * stride + c * bytes;
-            switch (acc.componentType) {
-                case 5126: values[i * components + c] = bin.readFloatLE(o); break;
-                case 5125: values[i * components + c] = bin.readUInt32LE(o); break;
-                case 5123: values[i * components + c] = bin.readUInt16LE(o); break;
-                case 5121: values[i * components + c] = bin.readUInt8(o); break;
-                case 5122: values[i * components + c] = bin.readInt16LE(o); break;
-                default: values[i * components + c] = bin.readInt8(o);
-            }
-        }
+        const o = base + i * stride;
+        for (let c = 0; c < components; c++) values[i * components + c] = get(o + c * bytes);
+        if (i % READ_PER_YIELD === READ_PER_YIELD - 1) yield;
     }
     return { values, components };
 }
 
+/** One soup being assembled: each primitive's arrays, joined once at the end. */
 interface SoupSink {
-    positions: number[];
-    indices: number[];
+    positions: Float32Array[];
+    indices: Uint32Array[];
     /** Left out when only geometry is wanted. */
-    colors?: number[];
+    colors?: Float32Array[];
+    vertexCount: number;
 }
+
+const newSink = (colors: boolean): SoupSink => ({ positions: [], indices: [], ...(colors ? { colors: [] } : {}), vertexCount: 0 });
 
 /**
  * Walks the GLB's default scene and appends each mesh primitive, in world space, to the sink `sinkFor` picks
- * for its node (named by the node, else its mesh). Returns false when the buffer is not a GLB.
+ * for its node (named by the node, else its mesh). Returns false when the buffer is not a GLB. Yields about every
+ * READ_PER_YIELD values, so a large model can be read in slices.
  */
-function walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink): boolean {
+function* walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink): Generator<void, boolean, void> {
     if (glb.length < 28 || glb.toString('utf8', 0, 4) !== 'glTF') return false;
     const jsonLength = glb.readUInt32LE(12);
     const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
     const binStart = 20 + jsonLength + 8;
-    const bin = glb.subarray(binStart);
+    const bin = new DataView(glb.buffer, glb.byteOffset + binStart, Math.max(0, glb.length - binStart));
 
-    const emitMesh = (meshIndex: number, world: Mat4, sink: SoupSink) => {
-        const { positions, indices, colors } = sink;
+    function* emitMesh(meshIndex: number, world: Mat4, sink: SoupSink): Generator<void, void, void> {
         for (const prim of gltf.meshes[meshIndex]?.primitives || []) {
             if (prim.mode !== undefined && prim.mode !== 4) continue; // triangles only
             if (typeof prim.attributes?.POSITION !== 'number') continue;
-            const pos = readAccessor(gltf, bin, prim.attributes.POSITION).values;
-            const offset = positions.length / 3;
-            if (colors) {
+            const pos = (yield* readAccessor(gltf, bin, prim.attributes.POSITION)).values;
+            const vertexCount = pos.length / 3;
+            const offset = sink.vertexCount;
+            if (sink.colors) {
                 const base: number[] = gltf.materials?.[prim.material]?.pbrMetallicRoughness?.baseColorFactor || [0.8, 0.8, 0.8, 1];
                 const colorAcc = typeof prim.attributes?.COLOR_0 === 'number' ? prim.attributes.COLOR_0 : undefined;
-                const vc = colorAcc !== undefined ? readAccessor(gltf, bin, colorAcc) : undefined;
+                const vc = colorAcc !== undefined ? yield* readAccessor(gltf, bin, colorAcc) : undefined;
                 const vcScale = colorAcc !== undefined ? ({ 5121: 255, 5123: 65535 } as Record<number, number>)[gltf.accessors[colorAcc].componentType] || 1 : 1;
-                for (let v = 0; v < pos.length / 3; v++) {
-                    for (let c = 0; c < 3; c++) {
-                        colors.push(base[c] * (vc ? vc.values[v * vc.components + c] / vcScale : 1));
-                    }
+                const colors = new Float32Array(vertexCount * 3);
+                for (let v = 0; v < vertexCount; v++) {
+                    for (let c = 0; c < 3; c++) colors[v * 3 + c] = base[c] * (vc ? vc.values[v * vc.components + c] / vcScale : 1);
+                    if (v % READ_PER_YIELD === READ_PER_YIELD - 1) yield;
                 }
+                sink.colors.push(colors);
             }
+            const positions = new Float32Array(vertexCount * 3);
             for (let i = 0; i < pos.length; i += 3) {
-                const [x, y, z] = [pos[i], pos[i + 1], pos[i + 2]];
-                positions.push(
-                    world[0] * x + world[4] * y + world[8] * z + world[12],
-                    world[1] * x + world[5] * y + world[9] * z + world[13],
-                    world[2] * x + world[6] * y + world[10] * z + world[14]
-                );
+                const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+                positions[i] = world[0] * x + world[4] * y + world[8] * z + world[12];
+                positions[i + 1] = world[1] * x + world[5] * y + world[9] * z + world[13];
+                positions[i + 2] = world[2] * x + world[6] * y + world[10] * z + world[14];
+                if (i % (READ_PER_YIELD * 3) === READ_PER_YIELD * 3 - 3) yield;
             }
-            const idx = typeof prim.indices === 'number'
-                ? readAccessor(gltf, bin, prim.indices).values
-                : Array.from({ length: pos.length / 3 }, (_, i) => i);
-            for (const v of idx) indices.push(v + offset);
+            sink.positions.push(positions);
+            let indices: Uint32Array;
+            if (typeof prim.indices === 'number') {
+                const idx = (yield* readAccessor(gltf, bin, prim.indices)).values;
+                indices = new Uint32Array(idx.length);
+                for (let i = 0; i < idx.length; i++) {
+                    indices[i] = idx[i] + offset;
+                    if (i % READ_PER_YIELD === READ_PER_YIELD - 1) yield;
+                }
+            } else {
+                indices = new Uint32Array(vertexCount);
+                for (let i = 0; i < vertexCount; i++) indices[i] = i + offset;
+            }
+            sink.indices.push(indices);
+            sink.vertexCount += vertexCount;
+            yield;
         }
-    };
+    }
     const meshName = (meshIndex: number) => String(gltf.meshes?.[meshIndex]?.name ?? `mesh_${meshIndex}`);
-    const visit = (nodeIndex: number, parent: Mat4) => {
+    function* visit(nodeIndex: number, parent: Mat4): Generator<void, void, void> {
         const node = gltf.nodes?.[nodeIndex];
         if (!node) return;
         const world = multiply(parent, nodeMatrix(node));
-        if (typeof node.mesh === 'number') emitMesh(node.mesh, world, sinkFor(typeof node.name === 'string' && node.name ? node.name : meshName(node.mesh)));
-        for (const child of node.children || []) visit(child, world);
-    };
+        if (typeof node.mesh === 'number') yield* emitMesh(node.mesh, world, sinkFor(typeof node.name === 'string' && node.name ? node.name : meshName(node.mesh)));
+        for (const child of node.children || []) yield* visit(child, world);
+    }
 
     const sceneIndex = typeof gltf.scene === 'number' ? gltf.scene : 0;
     const roots: number[] = gltf.scenes?.[sceneIndex]?.nodes
         ?? (gltf.nodes ? gltf.nodes.map((_: any, i: number) => i) : []);
     if (roots.length) {
-        roots.forEach(r => visit(r, IDENTITY));
+        for (const r of roots) yield* visit(r, IDENTITY);
     } else {
-        (gltf.meshes || []).forEach((_: any, i: number) => emitMesh(i, IDENTITY, sinkFor(meshName(i))));
+        for (let i = 0; i < (gltf.meshes || []).length; i++) yield* emitMesh(i, IDENTITY, sinkFor(meshName(i)));
     }
     return true;
 }
 
+function concat<T extends Float32Array | Uint32Array>(chunks: T[], make: (length: number) => T): T {
+    const out = make(chunks.reduce((n, c) => n + c.length, 0));
+    let at = 0;
+    for (const c of chunks) { out.set(c, at); at += c.length; }
+    return out;
+}
+
 function toSoup(sink: SoupSink): TriangleSoup {
-    const soup: TriangleSoup = { positions: Float32Array.from(sink.positions), indices: Uint32Array.from(sink.indices) };
-    if (sink.colors) soup.colors = Float32Array.from(sink.colors);
+    const soup: TriangleSoup = { positions: concat(sink.positions, n => new Float32Array(n)), indices: concat(sink.indices, n => new Uint32Array(n)) };
+    if (sink.colors) soup.colors = concat(sink.colors, n => new Float32Array(n));
     return soup;
+}
+
+/** Runs a sliced computation straight through. */
+export function runToEnd<T>(steps: Generator<void, T, void>): T {
+    for (;;) {
+        const step = steps.next();
+        if (step.done) return step.value;
+    }
+}
+
+/**
+ * Runs a sliced computation, giving the event loop back every `sliceMs` (about 20 ms) so a server stays responsive,
+ * and stopping with `abortError()` as soon as `signal` is aborted.
+ */
+export async function runInSlices<T>(
+    steps: Generator<void, T, void>,
+    options: { signal?: AbortSignal; sliceMs?: number; abortError?: () => Error } = {}
+): Promise<T> {
+    const sliceMs = options.sliceMs ?? 20;
+    let sliceStart = Date.now();
+    for (;;) {
+        if (options.signal?.aborted) throw options.abortError?.() ?? new Error('Stopped.');
+        const step = steps.next();
+        if (step.done) return step.value;
+        if (Date.now() - sliceStart >= sliceMs) {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            sliceStart = Date.now();
+        }
+    }
+}
+
+function* soupSteps(glb: Buffer, colors: boolean): Generator<void, TriangleSoup | null, void> {
+    const sink = newSink(colors);
+    return (yield* walkGlbTriangles(glb, () => sink)) ? toSoup(sink) : null;
 }
 
 /** The GLB as one world-space soup; `colors: false` skips reading vertex colours when only geometry is needed. */
 export function glbToTriangleSoup(glb: Buffer, options: { colors?: boolean } = {}): TriangleSoup | null {
-    const sink: SoupSink = { positions: [], indices: [], ...(options.colors === false ? {} : { colors: [] }) };
-    return walkGlbTriangles(glb, () => sink) ? toSoup(sink) : null;
+    return runToEnd(soupSteps(glb, options.colors !== false));
+}
+
+/** The same, read in slices of about `sliceMs` so a large model does not hold up the event loop. */
+export function glbToTriangleSoupAsync(
+    glb: Buffer,
+    options: { colors?: boolean; signal?: AbortSignal; sliceMs?: number; abortError?: () => Error } = {}
+): Promise<TriangleSoup | null> {
+    return runInSlices(soupSteps(glb, options.colors !== false), options);
 }
 
 /**
@@ -203,10 +275,22 @@ export function glbToTriangleSoup(glb: Buffer, options: { colors?: boolean } = {
  * a name are merged. Null when the buffer is not a GLB.
  */
 export function glbToNamedTriangleSoups(glb: Buffer): Map<string, TriangleSoup> | null {
+    return runToEnd(namedSoupSteps(glb));
+}
+
+/** The same, read in slices of about `sliceMs`. */
+export function glbToNamedTriangleSoupsAsync(
+    glb: Buffer,
+    options: { signal?: AbortSignal; sliceMs?: number; abortError?: () => Error } = {}
+): Promise<Map<string, TriangleSoup> | null> {
+    return runInSlices(namedSoupSteps(glb), options);
+}
+
+function* namedSoupSteps(glb: Buffer): Generator<void, Map<string, TriangleSoup> | null, void> {
     const sinks = new Map<string, SoupSink>();
-    const ok = walkGlbTriangles(glb, name => {
+    const ok = yield* walkGlbTriangles(glb, name => {
         let sink = sinks.get(name);
-        if (!sink) sinks.set(name, sink = { positions: [], indices: [], colors: [] });
+        if (!sink) sinks.set(name, sink = newSink(true));
         return sink;
     });
     if (!ok) return null;
@@ -389,33 +473,18 @@ const WORK_PER_YIELD = 20_000;
 
 /** Synchronous analysis (scripts' structural check, tests). Large models are better measured with the async form. */
 export function analyzePartConnectivity(soup: TriangleSoup, options: PartConnectivityOptions = {}): PartConnectivityReport {
-    const steps = analysisSteps(soup, options);
-    for (;;) {
-        const step = steps.next();
-        if (step.done) return step.value;
-    }
+    return runToEnd(analysisSteps(soup, options));
 }
 
 /**
  * The same analysis, giving the event loop back every `sliceMs` (about 20 ms) so a server stays responsive while a
  * large model is measured, and stopping with ConnectivityAnalysisAbortedError as soon as `signal` is aborted.
  */
-export async function analyzePartConnectivityAsync(
+export function analyzePartConnectivityAsync(
     soup: TriangleSoup,
     options: PartConnectivityOptions & { signal?: AbortSignal; sliceMs?: number } = {}
 ): Promise<PartConnectivityReport> {
-    const sliceMs = options.sliceMs ?? 20;
-    const steps = analysisSteps(soup, options);
-    let sliceStart = Date.now();
-    for (;;) {
-        if (options.signal?.aborted) throw new ConnectivityAnalysisAbortedError();
-        const step = steps.next();
-        if (step.done) return step.value;
-        if (Date.now() - sliceStart >= sliceMs) {
-            await new Promise<void>(resolve => setImmediate(resolve));
-            sliceStart = Date.now();
-        }
-    }
+    return runInSlices(analysisSteps(soup, options), { ...options, abortError: () => new ConnectivityAnalysisAbortedError() });
 }
 
 /**
