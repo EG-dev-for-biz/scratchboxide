@@ -70,8 +70,7 @@ Probes and telemetrically classifies a 3D tile without mutating geometry.
 {
   "name": "utdra_probe_tile",
   "args": {
-    "inputGlbPath": "public/models/midtown_manhattan_raw.glb",
-    "benchmark": "urban"
+    "inputGlbPath": "public/models/midtown_manhattan_raw.glb"
   }
 }
 ```

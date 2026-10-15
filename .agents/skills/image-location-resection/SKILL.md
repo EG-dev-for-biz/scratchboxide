@@ -2,7 +2,7 @@
 name: image-location-resection
 description: >-
   Resect exact 6-DOF camera optical center, 3-axis attitude (heading, pitch, roll), standoff distance,
-  horizontal/vertical FOV, and 100% sub-pixel edge alignment from any photograph or video into real-world
+  horizontal/vertical FOV, and closed-loop edge alignment against a given 3D model from any photograph or video into real-world
   geodetic coordinates and Google Photorealistic 3D Tiles using analytical solvePnP, 2D-to-3D visual feature matching,
   and pure Node.js headless closed-loop rasterization.
 ---
@@ -48,7 +48,7 @@ The **Image Location Resection Skill** enables AI agents to determine the exact 
                │
                ▼
 [Closed-Loop Sub-Pixel Edge Alignment Optimizer]
- (Coordinate Descent Dynamic Re-render Loop, > 97% Overlap, < 0.1 px Residual)
+ (Coordinate Descent Re-render Loop; reports the edge correlation it reached)
                │
                ▼
 [WGS-84 Geodetic Resection & Google 3D Tiles Configuration]
@@ -84,7 +84,7 @@ Randomly samples 4 minimal correspondences, computes closed-form candidate poses
 SubPixelEdgeAlignmentOptimizer couples directly to `HeadlessMeshSilhouetteRenderer`:
 At each perturbation step in 6-DOF parameter space $(\Delta x, \Delta y, \Delta z, \Delta \text{yaw}, \Delta \text{pitch}, \Delta \text{roll}, \Delta \text{fov})$, the software rasterizer dynamically computes the candidate wireframe Sobel edge field $\mathbf{S}_{\text{render}}$ and evaluates Normalized Cross-Correlation (NCC) against the photograph edge field $\mathbf{S}_{\text{target}}$:
 $$\operatorname{Score} = \frac{\sum_{(x,y)} \mathbf{S}_{\text{target}}(x,y) \cdot \mathbf{S}_{\text{render}}(x,y)}{\sqrt{\sum \mathbf{S}_{\text{target}}^2 \cdot \sum \mathbf{S}_{\text{render}}^2}}$$
-Iteratively converging until overlap exceeds $97\%$ and residual error drops below $0.1\text{ px}$ ($< 1\text{ mm}$ physical tolerance).
+The search stops when the correlation reaches its target, when no step improves it, or at its iteration or time limit, and reports the correlation it reached and why it stopped. A poor match stays poor: no overlap or residual is certified that was not measured.
 
 ---
 
@@ -98,6 +98,7 @@ import {
     VisualFeatureMatcherService,
     HeadlessMeshSilhouetteRenderer,
     SubPixelEdgeAlignmentOptimizer,
+    computeSobelField,
     GeoBoxPrecisionResectionService,
     resectImageLocation
 } from '@scratchbox/core';
@@ -124,14 +125,15 @@ console.log(result.pose.cameraCenterWorld); // [x, y, z] metric ENU
 console.log(result.pose.attitude);          // { headingDeg, pitchDeg, rollDeg }
 console.log(result.pose.meanReprojectionErrorPx); // < 0.05 px
 
-// 4. Closed-loop dynamic sub-pixel edge alignment
-const targetField = HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, targetPose, 160, 120);
-const aligned = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(
+// 4. Closed-loop edge alignment against the photograph (not against a render of a known pose)
+const photoField = computeSobelField(160, 120, photoGray160x120);
+const aligned = await SubPixelEdgeAlignmentOptimizer.optimizePoseAsync(
     initialPose,
-    targetField,
+    photoField,
     (pose) => HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, pose, 160, 120),
-    { targetOverlapScore: 99.0, subpixelTolerancePx: 0.10 }
+    { targetOverlapScore: 95, subpixelTolerancePx: Infinity, timeBudgetMs: 60_000, signal }
 );
+console.log(aligned.overlapScorePercent, aligned.stoppedBy); // the correlation reached, and why it stopped
 
 // 5. High-level multimodal resection
 const resection = await resectImageLocation({
@@ -191,7 +193,8 @@ strong photo edge:
     "glbPath": "public/models/storefront_block_raw_tiles.glb",
     "initialPose": { "x": 2, "y": 11, "z": -38, "targetX": 0, "targetY": 10, "targetZ": 0, "fov": 46 },
     "maxIterations": 25,
-    "targetEdgeCorrelation": 95
+    "targetEdgeCorrelation": 95,
+    "timeBudgetSeconds": 120
   }
 }
 ```

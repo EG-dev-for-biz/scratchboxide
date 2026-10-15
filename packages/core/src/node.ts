@@ -511,6 +511,8 @@ export {
     type CameraPose6DOF,
     type EdgeAlignmentMetrics,
     type OptimizationOptions,
+    type AsyncOptimizationOptions,
+    type AsyncEdgeAlignmentMetrics,
     computeSobelField,
     evaluateEdgeOverlap
 } from './node/spatial/SubPixelEdgeAlignmentOptimizer';

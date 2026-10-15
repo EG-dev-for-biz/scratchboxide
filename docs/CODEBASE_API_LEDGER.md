@@ -223,8 +223,8 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `survey_beautify_to_texture`: Inverse projects beautified views to texture atlas.
 
 ### 4. Panoramas & Zenith Reconstruction (`spatial-tools.ts`)
-- `panorama_heal_seam`: Eliminates horizontal $360^\circ$ seam lines.
-- `panorama_inpaint`: Inpaints ground tripod occlusions.
+- `panorama_heal_seam`: Heals the 360 wrap-around seam with an image model (fails when no model answers; refuses an answer that would be enlarged more than `maxModelUpscale`, default 2x).
+- `panorama_inpaint`: Inpaints ground tripod occlusions with an image model (same answer checks as the seam heal).
 - `panorama_generate_360`: Generates complete spherical panoramas.
 - `panorama_generate_4k`: Synthesizes 4K monumental environments.
 - `panorama_reproject_zenith`: Solves zenith polar distortion.
@@ -232,7 +232,8 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `panorama_generate_perspectives`: Extracts multiple rectilinear cameras.
 - `panorama_audit_quality`: Evaluates seams, resolution, and dynamic range.
 - `location_generate_3dgs`: End-to-end location 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tiles synthesis with implicit Nano Banana restyling.
-- `panorama_to_3dgs`: Projects equirectangular panorama into spherical Gaussian splats.
+- `panorama_to_3dgs`: Projects an equirectangular panorama into Gaussian splats using Depth Anything V2 Metric depth (the depth sidecar fails rather than invent depth or an eye height).
+- `single_image_to_3dgs`: Lifts a photo into Gaussian splats along pinhole rays at the depth the Depth Anything V2 Metric sidecar measures; fails when the model cannot run, and says when the field of view was assumed.
 - `splat_to_3dtiles`: Converts Gaussian splat cloud (.splat or .spz) into OGC 3D Tiles 1.1 tileset.
 - `survey_beautify_to_splats`: Runs full survey synthesis to beautified splat tileset.
 
@@ -254,7 +255,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `geobox_optimize_edge_alignment`: Same as `spatial_closed_loop_edge_align`.
 - `spatial_solve_pnp`: Analytical DLT + Levenberg-Marquardt pose solver.
 - `spatial_match_features_2d_3d`: 2D-to-3D keypoint matcher.
-- `spatial_closed_loop_edge_align` / `geobox_closed_loop_edge_align`: Refines a camera pose so a given model (`glbPath`) lines up with a given photograph (`imagePath`), from a required `initialPose`; reports edge correlation before/after and the mean edge distance in pixels.
+- `spatial_closed_loop_edge_align` / `geobox_closed_loop_edge_align`: Refines a camera pose so a given model (`glbPath`) lines up with a given photograph (`imagePath`), from a required `initialPose`; reports edge correlation before/after, the mean edge distance in pixels, the renders made and why it stopped. It yields between renders, stops on the chat's Stop, and has bounded limits (`maxIterations` 1-50, `analysisMaxSide` 32-640, `timeBudgetSeconds` 5-240, default 120).
 - `spatial_resect_image_location`: High-level resection alias.
 - `optics_configure_lens_distortion`: Configures Brown-Conrady coefficients.
 - `optics_export_lens_distortion`: Exports lens profiles to OpenCV/Nuke format.
@@ -268,7 +269,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `avatar_4dgs_list`: Catalogs registered 4D avatars.
 - `avatar_4dgs_get`: Fetches avatar manifest and skeleton.
 - `avatar_4dgs_animate`: Drives avatar with novel motion frames.
-- `avatar_4dgs_retarget`: Retargets motion from external video plates.
+- `avatar_4dgs_retarget`: Retargets a recorded motion track (the JSON `vfx_mediapipe_track_video_motion` writes to `outputJsonPath`) onto an avatar and writes the avatar motion JSON; fails without a track.
 - `performer_4d_create_from_video`: End-to-end video-to-4D performer pipeline.
 
 ### 9. Atmospheric Scattering & Solar Ephemeris (`atmosphere-tools.ts`)
@@ -279,7 +280,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `atmosphere_harmonize_location_3d`: Harmonizes 3D objects with physical skies.
 
 ### 10. Native C++20 Mesh Reshaping (`mesh-shaping-tools.ts`)
-- `mesh_apply_deformers`: Applies explicit taper, twist, bend, shear, bulge, sculpt, FFD lattice, subdivide, repair and weathering operations to a given GLB; positions and sizes are fractions of the mesh's measured bounding box. (`mesh_reshape_via_prompt` and its keyword parser, and the tile restructure tools with their closed style/primitive taxonomy, are removed.)
+- `mesh_apply_deformers`: Applies explicit taper, twist, bend, shear, bulge, sculpt, FFD lattice, subdivide, repair and weathering operations to a given GLB; positions and sizes are fractions of the mesh's measured bounding box. A GLB with node transforms, instanced meshes or textures is refused, because the native reader uses raw vertex positions and the writer carries no textures (the UTDRA tools refuse such tiles too). (`mesh_reshape_via_prompt` and its keyword parser, and the tile restructure tools with their closed style/primitive taxonomy, are removed.)
 
 ### 11. VFX, Video & Prompt Formatting (`vfx-video-tools.ts`)
 - `build_beautify_prompt`: Verbatim AI Beautify prompt template.

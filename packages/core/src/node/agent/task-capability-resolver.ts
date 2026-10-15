@@ -419,7 +419,7 @@ export class TaskCapabilityResolver {
                 nativeCapabilities.push('DomainClassifier (9 Macro-Geographic Domains)');
                 nativeCapabilities.push('Sutherland-Hodgman Non-Destructive Slicer & Multi-Level Void Carver');
                 nativeCapabilities.push('C++20 Native Pipeline (run_utdra_pipeline)');
-                rationale = 'Native C++20 UTDRA / ULDRA pipeline probes macro-domains, rectifies architectural shafts, carves underpass voids beneath bridges, and performs elevation slicing with 100% geometric manifold preservation.';
+                rationale = 'Native C++20 UTDRA / ULDRA pipeline probes macro-domains, rectifies architectural shafts, carves underpass voids beneath bridges, and slices at an elevation, on the tile it is given (it reports the triangles and bounds it measured).';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'utdra_decompose_tile or UniversalTileDecompositionService',
@@ -529,11 +529,11 @@ export class TaskCapabilityResolver {
                 nativeCapabilities.push('Spatial Pose Estimator (SpatialPoseEstimatorService.solvePnP, solvePnPRansac)');
                 nativeCapabilities.push('Visual Feature Matcher (VisualFeatureMatcherService, Harris/FAST, 128-D descriptors, Lowe ratio)');
                 nativeCapabilities.push('Headless Mesh Silhouette & Edge Renderer (HeadlessMeshSilhouetteRenderer, binary .glb loading)');
-                nativeCapabilities.push('Closed-Loop Sub-Pixel Edge Alignment Optimizer (SubPixelEdgeAlignmentOptimizer, 100% overlap, < 0.1px)');
+                nativeCapabilities.push('Closed-Loop Edge Alignment (SubPixelEdgeAlignmentOptimizer: refines a camera pose against a given photo and model, reports the edge correlation it measured)');
                 nativeCapabilities.push('GeoBox Precision Resection Service (GeoBoxPrecisionResectionService)');
                 nativeCapabilities.push('Brown-Conrady Lens Calibration (k1, k2, p1, p2, chromatic aberration)');
                 nativeCapabilities.push('spatial_solve_pnp, spatial_match_features_2d_3d, spatial_closed_loop_edge_align, geobox_resect_image_location Tools');
-                rationale = 'Native Spatial Pose Estimation and GeoBox resection pipeline calculates exact analytical 6-DOF camera poses via solvePnP/DLT/Levenberg-Marquardt from 2D-to-3D feature matches, with pure Node.js headless silhouette rasterization and closed-loop edge optimization converging to 100% overlap and sub-pixel residuals (< 0.1 px).';
+                rationale = 'Native Spatial Pose Estimation and GeoBox resection pipeline calculates exact analytical 6-DOF camera poses via solvePnP/DLT/Levenberg-Marquardt from 2D-to-3D feature matches, with pure Node.js headless silhouette rasterization and closed-loop edge alignment that refines the pose against the photo and reports the edge correlation it measured (it certifies no overlap it did not reach).';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'GeoBoxPrecisionResectionService / SpatialPoseEstimatorService (spatial_solve_pnp / geobox_resect_image_location)',

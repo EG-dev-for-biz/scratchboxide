@@ -2135,13 +2135,16 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         });
 
         const fs = await import('fs-extra');
-        const imagePath = `public/models/ai_rendered_frame_${Date.now()}.png`;
-        await fs.ensureDir('public/models');
+        // Written into the workspace (the server's cwd is not the workspace in the desktop app).
+        const fileName = `ai_rendered_frame_${Date.now()}.png`;
+        const imagePath = path.join(ctx.workspaceRoot || process.cwd(), 'public', 'models', fileName);
+        await fs.ensureDir(path.dirname(imagePath));
         await fs.writeFile(imagePath, result.image);
 
         return {
             resultPayload: {
                 imagePath,
+                imageUrl: `/models/${fileName}`,
                 width: result.width,
                 height: result.height,
                 stylePrompt: prompt,

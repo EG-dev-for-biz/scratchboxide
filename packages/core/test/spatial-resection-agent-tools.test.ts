@@ -286,7 +286,7 @@ describe('Spatial 2D-to-3D Resection & Pose Estimation Agent Tools', () => {
 
             expect(res.tier1Assessment.canSolveNatively).toBe(true);
             expect(res.tier1Assessment.nativeCapabilitiesUsed).toContain(
-                'Closed-Loop Sub-Pixel Edge Alignment Optimizer (SubPixelEdgeAlignmentOptimizer, 100% overlap, < 0.1px)'
+                'Closed-Loop Edge Alignment (SubPixelEdgeAlignmentOptimizer: refines a camera pose against a given photo and model, reports the edge correlation it measured)'
             );
         });
     });
