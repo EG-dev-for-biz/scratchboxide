@@ -352,12 +352,13 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             const res = await registry.dispatch('google_3d_tiles_clay_blockout_runner', {
                 query: '41.890210, 12.492231',
                 trajectoryPreset: 'cinematic_arc',
-                mockExecution: true,
+                mockExecution: true, // ignored: the model cannot switch the runner to placeholder output
                 // The mock tile GLB defaults to public/models; keep it in the test workspace
                 outputGlbPath: path.join(testDir, 'clay_blockout.glb')
             }, mockContext);
-            expect(res.exec.status).toBe('completed');
-            expect((res.resultPayload as any).videoRef).toBe('<VIDEO_REF_0>');
+            // No Maps key here: the real runner fails (it cannot measure the ground) instead of a placeholder video.
+            expect(res.exec.status).toBe('failed');
+            expect(String((res.resultPayload as any).error)).toMatch(/Maps API key|elevation/);
         });
     });
 

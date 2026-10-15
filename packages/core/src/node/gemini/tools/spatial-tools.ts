@@ -10,6 +10,7 @@
 import * as path from 'path';
 import * as THREE from 'three';
 import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, runTileClayBlockoutRunner, geocode3DTilesAddress, type Google3DTile3DObjectResult } from '../../spatial/Google3DTileBlockoutPipelineService';
+import { readCoordinateArgs } from '../../../common/coordinate/parse-coordinates';
 import { recolor3DTilesGlb } from '../../spatial/GlbTextureRecolorService';
 import {
     healPanoramaSeam,
@@ -77,7 +78,6 @@ import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisSer
 import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
 import { Splat3DTilesService } from '../../spatial/Splat3DTilesService';
 import { SurveyApi } from '../../spatial/survey-router';
-import { readCoordinateArgs } from '../../../common/coordinate/parse-coordinates';
 import {
     ArchieBuildingRefiner,
     type ArchieBuildingPalette

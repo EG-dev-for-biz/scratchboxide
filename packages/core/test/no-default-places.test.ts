@@ -115,6 +115,15 @@ describe('location lighting: the sun is computed where the place is', () => {
 describe('vector world and survey tools need the place: no Empire State Building or 0 m defaults', () => {
     const registry = createDefaultToolRegistry();
 
+    it('the 3D Tiles tools no longer show a place name mixed with coordinates as a query example', () => {
+        // The strict parser looks such text up as a name, so the stated coordinates would be replaced by Places' match.
+        for (const tool of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay', 'google_3d_tiles_clay_blockout_runner']) {
+            const query = String((registry.get(tool)!.declaration.parameters!.properties as any).query.description);
+            expect(query, tool).not.toMatch(/Midtown Manhattan, coordinates/);
+            expect(query, tool).toMatch(/When the user gave coordinates, pass just the coordinates/);
+        }
+    });
+
     it('stage_3d_vector_world and query_spatial_vector_data fail without coordinates', async () => {
         for (const tool of ['stage_3d_vector_world', 'query_spatial_vector_data']) {
             const missing = await registry.dispatch(tool, {}, {} as any);

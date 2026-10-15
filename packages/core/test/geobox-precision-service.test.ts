@@ -232,7 +232,7 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
         expect((outcome.resultPayload as any).edgeAlignment).toBeUndefined();
     });
 
-    it('dispatches geobox_optimize_edge_alignment via tool registry', async () => {
+    it('geobox_optimize_edge_alignment needs the model and starting pose: it no longer aligns two synthetic squares', async () => {
         const registry = createDefaultToolRegistry();
         const outcome = await registry.dispatch(
             'geobox_optimize_edge_alignment',
@@ -243,9 +243,8 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
             {} as any
         );
 
-        // Without a model and a starting pose there is nothing to align: no 100% from two synthetic squares.
         expect(outcome.exec.status).toBe('failed');
-        expect(String((outcome.resultPayload as any).error)).toMatch(/needs (glbPath|initialPose)/);
+        expect(String((outcome.resultPayload as any).error)).toContain('needs glbPath');
     });
 
     it('refuses to invent a camera pose when only the target location is known', async () => {

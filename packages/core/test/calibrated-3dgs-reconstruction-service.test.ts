@@ -89,6 +89,8 @@ describe('Calibrated3DGSReconstructionService: 1:1 Metric Matrix Lock 3DGS Recon
         const progressLog: string[] = [];
         const options: Calibrated3DGSReconstructionOptions = {
             glbPath: GLB_PATH,
+            // The stations' WGS-84 coordinates need the model's own location (no default place).
+            anchor: { lat: 41.8902, lng: 12.4922, elevationMeters: 22 },
             outDir: OUT_DIR,
             cameraBudget: 4,
             densityPreset: 'draft',
@@ -162,6 +164,8 @@ describe('Calibrated3DGSReconstructionService: 1:1 Metric Matrix Lock 3DGS Recon
 
         const options: Calibrated3DGSReconstructionOptions = {
             glbPath: GLB_PATH,
+            // The stations' WGS-84 coordinates need the model's own location (no default place).
+            anchor: { lat: 41.8902, lng: 12.4922, elevationMeters: 22 },
             outDir: outDirCurv,
             cameraBudget: 4,
             densityPreset: 'draft',

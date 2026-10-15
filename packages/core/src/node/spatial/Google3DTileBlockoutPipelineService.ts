@@ -143,7 +143,7 @@ export interface TileCollisionConfig {
 }
 
 export interface TileBlockoutPipelineRequest {
-  address?: string; // Arbitrary address, query, or coordinate string (e.g. "Midtown Manhattan, coordinates: 40.748400, -73.985700")
+  address?: string; // A place name or address (resolved with Google Places), or only "lat, lng" (e.g. "40.748400, -73.985700"); text mixing both is looked up as a name
   geoAnchor?: GeoAnchor;
   geoidHeight?: number;
   cameraPath?: CameraPathData | string; // Path to json or data object; auto-generated if omitted

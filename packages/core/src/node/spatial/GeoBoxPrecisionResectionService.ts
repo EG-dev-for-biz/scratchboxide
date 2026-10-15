@@ -437,7 +437,8 @@ export class GeoBoxPrecisionResectionService {
      */
     public async optimizeEdgeAlignment(request: SubPixelOptimizationRequest): Promise<OptimizationResult> {
         if (!request.initialPose) {
-            throw new MissingInputError('geobox_optimize_edge_alignment', 'initialPose', 'give the pose the render was made from; no pose is assumed');
+            // Two fixed images carry no pose: aligning needs the model (.glb) rendered from a stated starting pose.
+            throw new MissingInputError('geobox_optimize_edge_alignment', 'glbPath and initialPose', 'a model rendered from a stated starting pose is needed to align against the photo; no pose is assumed');
         }
         const queryField = computeSobelField(request.width, request.height, request.queryGrayscale);
         const renderField = computeSobelField(request.width, request.height, request.renderGrayscale);
