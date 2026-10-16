@@ -49,7 +49,7 @@ export function saveClayShot(name: string, files: ShotLayer[], view: Partial<Cla
         return { positions: t.positions, indices: Uint32Array.from(keep), color: f.color };
     });
     const b = bounds(layers);
-    const span = Math.max(b.x1 - b.x0, b.z1 - b.z0, (b.y1 - b.y0) * 1.1) * (view.kind === 'top' ? 1.1 : 2.1);
+    const span = Math.max(b.x1 - b.x0, b.z1 - b.z0, (b.y1 - b.y0) * 1.1) * (view.kind === 'top' ? 1.1 : 1.7);
     const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
     const png = renderClayPng(layers, { kind: 'aerial', width: size[0], height: size[1], bearingDeg: 210, elevationDeg: 22, region: [cx - span / 2, cz - span / 2, cx + span / 2, cz + span / 2], ...view });
     fs.mkdirSync(SHOT_DIR, { recursive: true });

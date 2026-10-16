@@ -367,6 +367,30 @@ describe.skipIf(!arch)('scan_fit on the real Washington Square Arch' + (arch ? '
         expect(plans[0]).toBeGreaterThan(plans[plans.length - 1]);
     });
 
+    it('measures the piers (3.79 m each, either side of the opening) and the keystone that stands proud of the soffit\'s crown', () => {
+        const f = result.value;
+        const body = f.primitives.find(p => p.fitParams.length === 7)!;
+        // the elevation of the body: its feet are the vertices at the ground, in order: pier start, opening's left, opening's right, pier end
+        const profile = (body.spec as any).sweep.profile.outer as Array<[number, number]>;
+        const feet = profile.filter(q => q[1] < 0.05).map(q => q[0]).sort((a, b) => a - b);
+        expect(feet.length).toBeGreaterThanOrEqual(4);
+        const [sMin, sL, sR, sMax] = [feet[0], feet[1], feet[feet.length - 2], feet[feet.length - 1]];
+        expect(Math.abs((sL - sMin) - 3.79)).toBeLessThan(0.05);
+        expect(Math.abs((sMax - sR) - 3.79)).toBeLessThan(0.05);
+        expect(sR - sL).toBeCloseTo(param(body, 0), 2);
+        // the keystone: a box measured proud of the face, about 1.1 m wide and 0.9 m tall, 0.44 m out (design: within 3 cm), at the crown's height
+        const crownY = param(body, 1) + param(body, 2);
+        const boxes = f.primitives.filter(p => p.fitParams.length === 6 && p.fitParams[1].value > 5);
+        const keystone = boxes.find(b => Math.abs(b.fitParams[1].value - (crownY - 0.2)) < 1.5 || (b.fitParams[1].value < crownY && b.fitParams[4].value > crownY - 1));
+        expect(keystone, `a box at the crown (y ${crownY.toFixed(2)}) among ${boxes.map(b => b.fitParams.map(x => x.value.toFixed(2)).join(' ')).join(' | ')}`).toBeDefined();
+        const [x0, y0, z0, x1, y1, z1] = keystone!.fitParams.map(x => x.value);
+        expect(Math.abs((x1 - x0) - 1.1)).toBeLessThan(0.15);
+        expect(Math.abs((y1 - y0) - 0.9)).toBeLessThan(0.15);
+        expect(Math.abs(Math.abs(z1 - z0) - 0.44)).toBeLessThan(0.05);
+        expect(keystone!.provenance.label).toBe('fitted');
+        expect(keystone!.fit.rmsM).toBeLessThan(0.1);
+    });
+
     it('reports the faces the scan does not back as such, with their area', () => {
         const f = result.value;
         const unobserved = f.surfaces.filter(s => s.visibleFraction > 0.3 && s.supportFraction < 0.5);
