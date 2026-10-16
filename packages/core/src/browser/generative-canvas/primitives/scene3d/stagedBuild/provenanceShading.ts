@@ -242,7 +242,7 @@ function bandTest(variable: string, b: VertexBand): string {
     return b.maxM === undefined ? `${variable} >= ${glslFloat(b.minM)}` : `${variable} >= ${glslFloat(b.minM)} && ${variable} < ${glslFloat(b.maxM)}`;
 }
 
-/** Vertex-shader code that sets `sbClass` from the attributes, generated from the contract bands. */
+/** Vertex-shader code that classifies the vertex from its attributes (generated from the contract bands) and passes on its class colour and pattern. */
 export function vertexClassGlsl(): string {
     const proudBase = 2;
     const dispBase = proudBase + PROUD_BLOCK_BANDS.length;
@@ -254,7 +254,9 @@ export function vertexClassGlsl(): string {
     if (uSbHasRelief > 0.5 && abs(_relief_height) >= ${glslFloat(RELIEF_HEIGHT_CARVED_MIN_M)}) { sbClass = 1.0; sbClassified = true; }
     if (!sbClassified && uSbHasProud > 0.5) { ${proud} }
     if (!sbClassified && uSbHasRectify > 0.5) { float sbDispAbs = abs(_rectify_displacement); ${disp} }
-    vSbClass = sbClass;`;
+    int sbCls = int(sbClass + 0.5);
+    vSbColor = uSbClassColor[sbCls];
+    vSbPattern = uSbClassPattern[sbCls];`;
 }
 
 /** Linear-RGB uniform values for each class, with the node's own colour in slot 0. */

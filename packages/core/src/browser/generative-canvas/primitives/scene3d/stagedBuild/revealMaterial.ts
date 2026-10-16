@@ -29,6 +29,8 @@ import { DEGRADED_OUTLINE_COLOR, PROVENANCE_BACKGROUND, VERTEX_ATTRIBUTE, STRIPE
 
 /** Stamp on every material the guard installs; its value says which variant. */
 const STAMP = 'sbStagedPatch';
+/** Whether a staged material carries the reveal's discards (see FRAGMENT_DISCARD). */
+const REVEAL_VARIANT = 'sbStagedReveal';
 /** Mirrors ORIGINAL_KEY in clayRenderMode.ts (as disposeObject.ts does): the authored material stashed under clay. */
 const CLAY_ORIGINAL_MATERIAL_KEY = 'sbClayOriginalMaterial';
 const CLAY_FLAG = 'sbClay';
@@ -120,7 +122,12 @@ attribute float ${VERTEX_ATTRIBUTE.rectifyDisplacement};
 uniform float uSbHasRelief;
 uniform float uSbHasProud;
 uniform float uSbHasRectify;
-flat varying float vSbClass;
+uniform vec3 uSbClassColor[SB_CLASSES];
+uniform vec2 uSbClassPattern[SB_CLASSES];
+// Smooth, not flat: ANGLE's Metal backend emulates GL's provoking vertex for flat varyings, at a heavy per-draw cost.
+// The class is looked up here, so a triangle across two bands blends their colours instead.
+varying vec3 vSbColor;
+varying vec2 vSbPattern;
 #endif
 `;
 
@@ -147,9 +154,8 @@ uniform vec3 uSbBackground;
 uniform vec3 uSbMarkColor;
 varying float vSbRevealK;
 #ifdef SB_PROVENANCE
-uniform vec3 uSbClassColor[SB_CLASSES];
-uniform vec2 uSbClassPattern[SB_CLASSES];
-flat varying float vSbClass;
+varying vec3 vSbColor;
+varying vec2 vSbPattern;
 #endif
 float sbDither(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 bool sbStripe(vec2 p, float period, float coverage, float dir) { return mod(p.x + dir * p.y, period) < coverage * period; }
@@ -159,18 +165,24 @@ bool sbDot(vec2 p, float period, float coverage) {
 }
 `;
 
+/**
+ * Only materials of a node that is revealing (or fading under a replacement) carry `discard`: a shader that may discard
+ * defeats the GPU's hidden-surface removal (early depth test, and Apple's tile-based HSR), which on a dense canopy costs
+ * an order of magnitude in fragment work. Steady looks (provenance of a revealed layer, a highlight) compile without it.
+ */
 const FRAGMENT_DISCARD = `
+#ifdef SB_REVEAL
     if (uSbProgress <= 0.0 || (uSbProgress < 1.0 && vSbRevealK >= uSbProgress)) discard;
     {
         float sbH = sbDither(gl_FragCoord.xy);
         if (sbH >= uSbFade || sbH < 1.0 - uSbPresence) discard;
     }
+#endif
 `;
 
 const FRAGMENT_PROVENANCE_COLOR = `
 #ifdef SB_PROVENANCE
-    int sbCls = int(vSbClass + 0.5);
-    vec4 diffuseColor = vec4( uSbClassColor[sbCls], opacity );
+    vec4 diffuseColor = vec4( vSbColor, opacity );
 #else
     vec4 diffuseColor = vec4( diffuse, opacity );
 #endif
@@ -191,7 +203,7 @@ const FRAGMENT_END = `
     {
         vec2 sbP = gl_FragCoord.xy / max(uSbPxScale, 1e-3);
 #ifdef SB_PROVENANCE
-        vec2 sbPat = uSbClassPattern[int(vSbClass + 0.5)];
+        vec2 sbPat = vec2(floor(vSbPattern.x + 0.5), vSbPattern.y);
         bool sbGap = false;
         if (sbPat.x > 0.5 && sbPat.x < 1.5) sbGap = sbStripe(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, 1.0);
         else if (sbPat.x > 1.5 && sbPat.x < 2.5) sbGap = sbStripe(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, 1.0) || sbStripe(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, -1.0);
@@ -240,7 +252,7 @@ function makeUniforms(): StagedUniforms {
  *    classes and the patterns; lines keep their vertex colours (fit error) or take the node colour.
  * All staged materials of a variant share one program.
  */
-export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base: THREE.Material, kind: StagedMaterialKind, classCount: number): THREE.Material {
+export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base: THREE.Material, kind: StagedMaterialKind, classCount: number, withReveal = true): THREE.Material {
     const geometry = mesh.geometry as THREE.BufferGeometry;
     const isLine = (mesh as THREE.LineSegments).isLine === true;
     let mat: THREE.Material;
@@ -255,19 +267,17 @@ export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base
     }
     const uniforms = makeUniforms();
     const provenanceClasses = kind === 'provenance' && !isLine ? Math.max(1, classCount) : 0;
+    const defs = (mat as THREE.Material & { defines?: Record<string, unknown> });
     if (provenanceClasses > 0) {
         uniforms.uSbClassColor = { value: Array.from({ length: provenanceClasses }, () => new THREE.Color(0xffffff)) };
         uniforms.uSbClassPattern = { value: Array.from({ length: provenanceClasses }, () => new THREE.Vector2(0, 0)) };
-        (mat as THREE.Material & { defines?: Record<string, unknown> }).defines = {
-            ...((mat as THREE.Material & { defines?: Record<string, unknown> }).defines ?? {}),
-            SB_PROVENANCE: '',
-            SB_CLASSES: provenanceClasses
-        };
+        defs.defines = { ...(defs.defines ?? {}), SB_PROVENANCE: '', SB_CLASSES: provenanceClasses };
     }
+    if (withReveal) defs.defines = { ...(defs.defines ?? {}), SB_REVEAL: '' };
     mat.onBeforeCompile = shader => injectShader(shader, uniforms);
-    const cacheKey = `sb-staged-v2:${kind}:${provenanceClasses}`;
+    const cacheKey = `sb-staged-v2:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}`;
     mat.customProgramCacheKey = () => cacheKey;
-    mat.userData = { ...(kind === 'reveal' ? mat.userData : {}), [STAMP]: kind, ...(kind === 'reveal' && base.userData?.[CLAY_FLAG] ? { [CLAY_FLAG]: true } : {}) };
+    mat.userData = { ...(kind === 'reveal' ? mat.userData : {}), [STAMP]: kind, [REVEAL_VARIANT]: withReveal, ...(kind === 'reveal' && base.userData?.[CLAY_FLAG] ? { [CLAY_FLAG]: true } : {}) };
     mat.needsUpdate = true;
     BASE.set(mat, base);
     UNIFORMS.set(mat, uniforms);
@@ -309,9 +319,28 @@ function setUniforms(mat: THREE.Material, mesh: THREE.Object3D, look: MeshStaged
     }
 }
 
-/** The staged materials of one guard, with the base each replaced, so every one can be put back. */
+/**
+ * A look that is the same for many meshes and changes nothing per frame (provenance shading of a revealed layer) shares
+ * one material per key: every tree of a district then draws with one material instead of a thousand, which keeps the
+ * per-draw uniform uploads (and the frame time) at or below the plain clay scene's. Revealing nodes keep their own.
+ */
+function shareKey(mesh: THREE.Mesh | THREE.LineSegments, base: THREE.Material, look: MeshStagedLook, classCount: number): string | undefined {
+    if (look.reveal || !look.provenance) return undefined;
+    const g = mesh.geometry as THREE.BufferGeometry;
+    const p = look.provenance;
+    const flags = [REVEAL_ATTRIBUTE, DISP_ATTRIBUTE, VERTEX_ATTRIBUTE.reliefHeight, VERTEX_ATTRIBUTE.proudBlock, VERTEX_ATTRIBUTE.rectifyDisplacement, 'color']
+        .map(a => (g.getAttribute(a) ? 1 : 0)).join('');
+    const classes = p.classColors.map((c, i) => `${c.getHexString()}:${p.classPatterns[i]?.x ?? 0}:${(p.classPatterns[i]?.y ?? 0).toFixed(3)}`).join(',');
+    return `${(mesh as THREE.LineSegments).isLine ? 'line' : 'mesh'}|${(base as THREE.MeshStandardMaterial).side ?? 0}|${flags}|${classCount}|${p.nodeColor}|${look.mark ? 1 : 0}|${classes}`;
+}
+
+/** The staged materials of one guard, with the base each mesh wore, so every one can be put back. */
 export class StagedMaterialRegistry {
+    /** Mesh → the material it wore before (its clay or shaded material): what restore() puts back. */
     private readonly meshes = new Map<THREE.Object3D, THREE.Material>();
+    private readonly shared = new Map<string, { mat: THREE.Material; refs: number }>();
+    private readonly sharedKeyOf = new Map<THREE.Material, string>();
+    private readonly keyCache = new WeakMap<THREE.Object3D, { p: MeshStagedLook['provenance']; mark: boolean; base: THREE.Material; key: string | undefined }>();
     /** Bases this registry swapped out that the clay toggle later replaced: freed once nothing uses them. */
     private readonly orphanBases = new Set<THREE.Material>();
     /** Meshes this registry hid (unstarted nodes, superseded layers), so it only ever unhides its own. */
@@ -320,6 +349,7 @@ export class StagedMaterialRegistry {
     private readonly shadows = new Map<THREE.Object3D, boolean>();
 
     get size(): number { return this.meshes.size; }
+    get sharedMaterials(): number { return this.shared.size; }
 
     /**
      * Makes `mesh` look as `look` says. Returns true when a new material had to be built (the per-frame budget
@@ -327,33 +357,50 @@ export class StagedMaterialRegistry {
      */
     apply(mesh: THREE.Mesh | THREE.LineSegments, look: MeshStagedLook | null, opts: { allowCreate: boolean; pxScale: number; classCount: number }): boolean {
         this.fixClayStash(mesh);
-        const current = mesh.material as THREE.Material | THREE.Material[];
         if (!look || (!look.reveal && !look.provenance && !look.mark)) {
             this.restore(mesh);
             return false;
         }
+        const current = mesh.material as THREE.Material | THREE.Material[];
+        if (Array.isArray(current)) return false;
+        const base = isStagedMaterial(current) ? (this.meshes.get(mesh) ?? BASE.get(current) ?? current) : current;
         const wantKind: StagedMaterialKind = look.provenance ? 'provenance' : 'reveal';
-        let mat: THREE.Material | undefined = isStagedMaterial(current) && stagedKindOf(current) === wantKind ? current : undefined;
+        // The key depends only on the node's (cached) provenance look, the mark and the mesh: computed once per change.
+        const cachedKey = this.keyCache.get(mesh);
+        const key = !look.reveal && cachedKey && cachedKey.p === look.provenance && cachedKey.mark === !!look.mark && cachedKey.base === base
+            ? cachedKey.key
+            : shareKey(mesh, base, look, opts.classCount);
+        if (!look.reveal && look.provenance) this.keyCache.set(mesh, { p: look.provenance, mark: !!look.mark, base, key });
+        const withReveal = !!look.reveal;
+        const fits = isStagedMaterial(current) && stagedKindOf(current) === wantKind && this.sharedKeyOf.get(current) === key
+            && current.userData[REVEAL_VARIANT] === withReveal;
         let created = false;
+        let mat: THREE.Material | undefined = fits ? current : undefined;
         if (!mat) {
-            if (!opts.allowCreate) {
+            const entry = key ? this.shared.get(key) : undefined;
+            if (!entry && !opts.allowCreate) {
                 this.hide(mesh);
                 return false;
             }
-            if (Array.isArray(current)) return false;
-            let base = current;
-            if (isStagedMaterial(current)) {
-                base = BASE.get(current) ?? current;
-                current.dispose();
-            }
+            this.releaseStaged(mesh, current);
             const previousBase = this.meshes.get(mesh);
             if (previousBase && previousBase !== base) this.retireBase(previousBase, mesh);
-            mat = createStagedMaterial(mesh, base, wantKind, opts.classCount);
+            if (entry) {
+                entry.refs++;
+                mat = entry.mat;
+            } else {
+                mat = createStagedMaterial(mesh, base, wantKind, opts.classCount, withReveal);
+                created = true;
+                if (key) {
+                    this.shared.set(key, { mat, refs: 1 });
+                    this.sharedKeyOf.set(mat, key);
+                }
+            }
             mesh.material = mat;
             this.meshes.set(mesh, base);
-            created = true;
         }
-        setUniforms(mat, mesh, look, opts.pxScale);
+        // A shared material's uniforms are the same for every mesh wearing it: set them when it is made.
+        if (!key || created) setUniforms(mat, mesh, look, opts.pxScale);
         this.unhide(mesh);
         const revealing = !!look.reveal && (look.reveal.progress < 1 || look.reveal.fade < 1);
         if (revealing && mesh.castShadow) {
@@ -391,28 +438,13 @@ export class StagedMaterialRegistry {
         this.hide(mesh);
     }
 
-    /** Puts every original material back but keeps the meshes it hid hidden (superseded layers stay out of view). */
-    restoreMaterials(): void {
-        for (const mesh of [...this.meshes.keys()]) {
-            const hidden = this.hidden.has(mesh);
-            this.restore(mesh);
-            if (hidden) { mesh.visible = false; this.hidden.add(mesh); }
-        }
-        this.freeOrphans();
-    }
-
-    /** Unhides only meshes for which `keep` is false (used when the guard comes off with unstarted nodes hidden). */
-    unhideUnless(keep: (mesh: THREE.Object3D) => boolean): void {
-        for (const mesh of [...this.hidden]) if (!keep(mesh)) this.unhide(mesh);
-    }
-
-    /** Puts the original material back on `mesh` and frees the staged one. */
+    /** Puts the original material back on `mesh` and frees the staged one (a shared one when its last mesh leaves). */
     restore(mesh: THREE.Object3D): void {
         const m = mesh as THREE.Mesh;
         const current = m.material as THREE.Material | THREE.Material[];
         if (isStagedMaterial(current)) {
-            const base = BASE.get(current);
-            current.dispose();
+            const base = this.meshes.get(mesh) ?? BASE.get(current);
+            this.releaseStaged(mesh, current);
             if (base) m.material = base;
         }
         this.meshes.delete(mesh);
@@ -421,6 +453,16 @@ export class StagedMaterialRegistry {
             mesh.castShadow = this.shadows.get(mesh)!;
             this.shadows.delete(mesh);
         }
+    }
+
+    /** Puts every original material back but keeps the meshes it hid hidden (superseded layers stay out of view). */
+    restoreMaterials(): void {
+        for (const mesh of [...this.meshes.keys()]) {
+            const hidden = this.hidden.has(mesh);
+            this.restore(mesh);
+            if (hidden) { mesh.visible = false; this.hidden.add(mesh); }
+        }
+        this.freeOrphans();
     }
 
     /** Restores every mesh this registry touched (provenance off, run changed, unmount). */
@@ -432,17 +474,40 @@ export class StagedMaterialRegistry {
         this.freeOrphans();
     }
 
-    /** Forgets meshes whose model was released by the loader (their materials went with it). */
+    /** Forgets meshes whose model was released by the loader (their own materials went with it). */
     prune(isLive: (mesh: THREE.Object3D) => boolean): void {
         if (this.meshes.size === 0 && this.hidden.size === 0 && this.shadows.size === 0) return;
         for (const [mesh, base] of [...this.meshes]) {
             if (isLive(mesh)) continue;
             this.meshes.delete(mesh);
-            if (base !== (mesh as THREE.Mesh).material) base.dispose();
+            const current = (mesh as THREE.Mesh).material as THREE.Material;
+            const key = this.sharedKeyOf.get(current);
+            if (key) this.releaseShared(key);
+            if (base !== current) base.dispose();
         }
         for (const mesh of [...this.hidden]) if (!isLive(mesh)) this.hidden.delete(mesh);
         for (const mesh of [...this.shadows.keys()]) if (!isLive(mesh)) this.shadows.delete(mesh);
         this.freeOrphans();
+    }
+
+    /** Lets go of the staged material `mesh` wears: a shared one loses a reference, an own one is disposed. */
+    private releaseStaged(mesh: THREE.Object3D, current: THREE.Material | THREE.Material[]): void {
+        if (!isStagedMaterial(current)) return;
+        const key = this.sharedKeyOf.get(current);
+        if (key) this.releaseShared(key);
+        else current.dispose();
+        void mesh;
+    }
+
+    private releaseShared(key: string): void {
+        const entry = this.shared.get(key);
+        if (!entry) return;
+        entry.refs--;
+        if (entry.refs <= 0) {
+            this.shared.delete(key);
+            this.sharedKeyOf.delete(entry.mat);
+            entry.mat.dispose();
+        }
     }
 
     /**
@@ -452,8 +517,8 @@ export class StagedMaterialRegistry {
     private fixClayStash(mesh: THREE.Object3D): void {
         const stash = mesh.userData[CLAY_ORIGINAL_MATERIAL_KEY] as THREE.Material | undefined;
         if (stash && isStagedMaterial(stash)) {
-            const base = BASE.get(stash);
-            stash.dispose();
+            const base = this.meshes.get(mesh) ?? BASE.get(stash);
+            this.releaseStaged(mesh, stash);
             if (base) mesh.userData[CLAY_ORIGINAL_MATERIAL_KEY] = base;
             else delete mesh.userData[CLAY_ORIGINAL_MATERIAL_KEY];
         }
@@ -470,6 +535,14 @@ export class StagedMaterialRegistry {
         const inUse = new Set<THREE.Material>(this.meshes.values());
         for (const base of this.orphanBases) if (!inUse.has(base)) base.dispose();
         this.orphanBases.clear();
+    }
+
+    /** Keeps the shared materials' screen-pattern scale current (the pixel ratio can change). */
+    updateSharedPixelScale(pxScale: number): void {
+        for (const { mat } of this.shared.values()) {
+            const u = UNIFORMS.get(mat);
+            if (u) u.uSbPxScale.value = pxScale;
+        }
     }
 }
 

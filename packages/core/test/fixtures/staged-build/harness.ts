@@ -166,7 +166,49 @@ function boxes(): Record<string, { x: number; y: number; width: number; height: 
     };
 }
 
+/** Frame pacing and render cost, recorded while `frameLog.on` (real clock only). */
+const frameLog = { on: false, times: [] as number[], renderMs: [] as number[], gpuMs: [] as number[], triangles: [] as number[], calls: [] as number[] };
+function startFrameLog(): void {
+    frameLog.on = true;
+    frameLog.times = []; frameLog.renderMs = []; frameLog.gpuMs = []; frameLog.triangles = []; frameLog.calls = [];
+    const stack = w.__SB_3D_STACK__!;
+    const renderer = stack.renderer as THREE.WebGLRenderer & { __sbTimed?: boolean };
+    if (!renderer.__sbTimed) {
+        renderer.__sbTimed = true;
+        const gl = renderer.getContext() as WebGL2RenderingContext;
+        const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
+        const pending: WebGLQuery[] = [];
+        const original = renderer.render.bind(renderer);
+        renderer.render = (scene: THREE.Object3D, camera: THREE.Camera) => {
+            const t0 = performance.now();
+            let q: WebGLQuery | null = null;
+            if (ext && frameLog.on) { q = gl.createQuery(); if (q) gl.beginQuery(ext.TIME_ELAPSED_EXT, q); }
+            original(scene, camera);
+            if (q && ext) { gl.endQuery(ext.TIME_ELAPSED_EXT); pending.push(q); }
+            if (frameLog.on) {
+                frameLog.renderMs.push(performance.now() - t0);
+                frameLog.triangles.push(renderer.info.render.triangles);
+                frameLog.calls.push(renderer.info.render.calls);
+            }
+            while (ext && pending.length > 0 && gl.getQueryParameter(pending[0], gl.QUERY_RESULT_AVAILABLE)) {
+                const done = pending.shift()!;
+                if (!gl.getParameter(ext.GPU_DISJOINT_EXT)) frameLog.gpuMs.push(gl.getQueryParameter(done, gl.QUERY_RESULT) / 1e6);
+                gl.deleteQuery(done);
+            }
+        };
+    }
+    const tick = (t: number) => { if (!frameLog.on) return; frameLog.times.push(t); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+}
+
 w.sbHarness = {
+    startFrameLog,
+    stopFrameLog: () => { frameLog.on = false; return { times: frameLog.times, renderMs: frameLog.renderMs, gpuMs: frameLog.gpuMs, triangles: frameLog.triangles, calls: frameLog.calls }; },
+    gpuInfo: () => {
+        const gl = w.__SB_3D_STACK__!.renderer.getContext();
+        const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+        return { renderer: String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER)), timerQuery: !!gl.getExtension('EXT_disjoint_timer_query_webgl2') };
+    },
     /** A fresh viewport (unmounts the previous one), as a newly opened scene. */
     mount: (data: AnyData) => { reference = undefined; root?.unmount(); root = undefined; render(data); },
     update: (data: AnyData) => render(data),

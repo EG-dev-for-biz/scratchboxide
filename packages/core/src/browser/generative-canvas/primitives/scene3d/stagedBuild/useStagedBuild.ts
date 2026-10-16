@@ -93,6 +93,8 @@ interface NodeInfo {
     count: number;
     durationShare?: number;
     perVertex: boolean;
+    /** Smallest _REVEAL.x in the node: its first item appears once the node's progress passes itemStart × stagger. */
+    itemStart: number;
     window: { start: number; span: number };
     ids: StagedNodeExtras['sb']['ids'];
     replaces: string[];
@@ -158,6 +160,7 @@ export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: R
                 order: 0, count: 0,
                 durationShare: extras?.reveal.durationShare,
                 perVertex: false,
+                itemStart: 1,
                 window: { start: 0, span: 1 },
                 ids: extras?.ids ?? {},
                 replaces: extras?.replacesSurfaceIds ?? [],
@@ -168,7 +171,13 @@ export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: R
             order.push(node);
         }
         info.meshes.push(obj as THREE.Mesh);
-        if ((m.geometry as THREE.BufferGeometry | undefined)?.getAttribute(REVEAL_ATTRIBUTE)) info.perVertex = true;
+        const reveal = (m.geometry as THREE.BufferGeometry | undefined)?.getAttribute(REVEAL_ATTRIBUTE) as THREE.BufferAttribute | undefined;
+        if (reveal) {
+            info.perVertex = true;
+            for (let i = 0; i < reveal.count; i++) info.itemStart = Math.min(info.itemStart, reveal.getX(i));
+        } else {
+            info.itemStart = 0;
+        }
     });
     const nodes = order.map(n => byNode.get(n)!);
     const allExtras = nodes.length > 0 && nodes.every(n => n.extras);
@@ -231,7 +240,9 @@ export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): Mes
     if (f.phase === 'revealing') {
         const inOnly = !ctx.only || (n.ids.primitiveId !== undefined && ctx.only.has(n.ids.primitiveId));
         const p = inOnly ? nodeProgress(f.progress, n.window) : 1;
-        if (p <= 0) return 'hide';
+        // Nothing of the node shows yet (no item has started): skip drawing it at all, so a large layer is drawn in
+        // growing chunks instead of discarding every fragment of every node from the first frame.
+        if (p <= 0 || (n.perVertex && p < 1 && p <= n.itemStart * stagger)) return 'hide';
         reveal = n.perVertex ? { progress: p, stagger, fade: 1, presence, overSource: f.overSource } : { progress: 1, stagger, fade: p, presence, overSource: f.overSource };
     } else if (presence < 1) {
         reveal = { progress: 1, stagger, fade: 1, presence };
@@ -481,6 +492,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         }
         const registry = registryRef.current;
         const pxScale = renderer.getPixelRatio();
+        registry.updateSharedPixelScale(pxScale);
         let budget = MAX_NEW_MATERIALS_PER_FRAME;
         let drawn = 0;
         const highlightOn = L.highlight && L.highlight.untilMs > Date.now() ? L.highlight.id : undefined;
