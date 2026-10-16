@@ -309,18 +309,15 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('staged build end to e
         expect(fit.result.stages.find((s: any) => s.stage === 'remesh').status, 'the remesh stays committed when the fit fails').toBe('committed');
         expect(layerLabels(fit)).toContain('l2:remeshed');
 
-        const detail = await record({ query: 'Washington Square Arch', isolate: true, trees: false }, realDeps(fresh('arch_f_detail'), 'arch', { ornamentFails: true }));
+        const detail = await record({ query: 'Washington Square Arch', isolate: true, trees: false }, realDeps(fresh('arch_f_detail'), 'arch', { ornamentFails: true }, [], [], true));
         saveRun('arch_fail_detail', detail);
         console.log(table('arch fail detail', detail));
         console.log(`[e2e arch fail detail] ${detail.result.degradations.map((d: any) => `${d.stage}/${d.reasonCode}: ${d.reason}`).join(' | ')}`);
         expect(detail.result.stages.find((s: any) => s.stage === 'remesh').status).toBe('committed');
-        const fitStage = detail.result.stages.find((s: any) => s.stage === 'fit').status;
-        if (fitStage === 'committed') {
-            expect(detail.result.degradations.some((d: any) => d.stage === 'detail' && /forced failure: scan_fit ornament/.test(d.reason))).toBe(true);
-        } else {
-            // the fit was not accepted on this scan, so detail never had a face to put detail on: still reported, never invented
-            expect(detail.result.degradations.some((d: any) => d.stage === 'fit')).toBe(true);
-        }
+        // on the whole tile the fit is accepted, so the failure is the ornament build's: the fitted faces stay flat and it says why
+        expect(detail.result.stages.find((s: any) => s.stage === 'fit').status).toBe('committed');
+        expect(detail.result.degradations.some((d: any) => d.stage === 'detail' && d.provenanceAfter === 'fitted' && /forced failure: scan_fit ornament/.test(d.reason))).toBe(true);
+        expect((detail.result.artifact.data.stagedBuild.layers as any[]).some(l => l.layer === 'l4')).toBe(false);
     }, 1_800_000);
 });
 
@@ -359,8 +356,12 @@ describe.skipIf(!cp.requirement.ok || !cp.data?.plant || !stagedChrome.ok)('stag
         saveRun('park_fail_remesh', remesh);
         console.log(table('park fail remesh', remesh));
         expect(remesh.result.status).toBe('degraded');
-        expect(degraded(remesh, 'remesh')[0]).toMatchObject({ reasonCode: 'remesh_failed' });
-        expect(layerLabels(remesh).join(' ')).toContain('as-scanned');
+        // the rung below a failed remesh is the flattened raw scan; when that fails too (a 683,000-triangle district can outrun the fitter's time limit) it is the raw scan as downloaded: both are listed
+        const reasons = degraded(remesh, 'remesh').map((d: any) => d.reasonCode);
+        expect(reasons).toContain('remesh_failed');
+        expect(degraded(remesh, 'remesh').find((d: any) => d.reasonCode === 'remesh_failed').reason).toContain('forced failure: tile_refine');
+        expect(layerLabels(remesh).join(' ')).toMatch(/as-scanned|scan-flattened/);
+        expect(remesh.result.stages.find((s: any) => s.stage === 'trees').status).toBe('skipped');
     }, 3_600_000);
 });
 
