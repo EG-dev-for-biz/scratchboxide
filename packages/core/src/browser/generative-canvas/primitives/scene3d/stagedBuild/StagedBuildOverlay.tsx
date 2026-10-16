@@ -106,8 +106,9 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
     const [degradedOpen, setDegradedOpen] = React.useState(false);
     const [box, setBox] = React.useState<{ bottom: number; left: number; maxHeight: number | undefined; narrow: boolean }>({ bottom: props.bottomInsetPx, left: 12, maxHeight: undefined, narrow: false });
 
-    // Keep clear of the toolstrip, the HUD row and the scrubber: measure them in the viewport container. Below the
-    // toolstrip when there is room for the panel; otherwise beside it. Above the scrubber when they would overlap.
+    // Keep clear of the viewport's own chrome (toolstrip, HUD row, scrubber, the docked timeline wherever it is drawn):
+    // measure their boxes in the container, try docking below the toolstrip, then beside it, and take the column
+    // with the most room between the obstacles above and below it.
     React.useLayoutEffect(() => {
         const panel = panelRef.current;
         const container = panel?.parentElement;
@@ -115,31 +116,51 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
         const measure = () => {
             const c = container.getBoundingClientRect();
             const width = Math.min(320, panel.getBoundingClientRect().width || 320);
-            let bottom = props.bottomInsetPx;
-            let left = 12;
-            let top = HUD_CLEARANCE_PX;
-            const toolstrip = container.querySelector('.sb-3d-toolstrip') as HTMLElement | null;
-            const t = toolstrip?.getBoundingClientRect();
-            if (t && t.width > 0) {
-                const below = c.bottom - bottom - (t.bottom + 8);
-                if (below >= MIN_PANEL_HEIGHT_PX) top = t.bottom - c.top + 8;
-                else left = t.right - c.left + 8;
+            const rel = (el: Element | null) => {
+                const r = el?.getBoundingClientRect();
+                return r && r.width > 0 && r.height > 0 ? { left: r.left - c.left, right: r.right - c.left, top: r.top - c.top, bottom: r.bottom - c.top } : undefined;
+            };
+            const timeline = rel(container.querySelector('.sb-3d-docked-timeline'));
+            const obstacles = [
+                rel(container.querySelector('.sb-3d-toolstrip')),
+                rel(container.querySelector('.sb-3d-minimal-badge-container')),
+                rel(container.querySelector('.sb-3d-timeline-scrubber')),
+                timeline
+            ].filter((r): r is NonNullable<typeof r> => !!r);
+            // Without a measurable timeline box, the caller's inset says where it is.
+            const floor = timeline ? 16 : props.bottomInsetPx;
+            const toolstrip = rel(container.querySelector('.sb-3d-toolstrip'));
+            const lefts = [12, ...(toolstrip ? [toolstrip.right + 8] : [])];
+            let best: { left: number; top: number; bottomEdge: number } | undefined;
+            for (const left of lefts) {
+                const span = obstacles.filter(o => o.left < left + width && o.right > left);
+                const mid = c.height / 2;
+                let top = HUD_CLEARANCE_PX, bottomEdge = c.height - floor;
+                for (const o of span) {
+                    if ((o.top + o.bottom) / 2 < mid) top = Math.max(top, o.bottom + 8);
+                    else bottomEdge = Math.min(bottomEdge, o.top - 8);
+                }
+                if (span.some(o => o.top <= top && o.bottom >= bottomEdge)) continue;   // fully blocked
+                const room = bottomEdge - top;
+                if (!best || (room >= MIN_PANEL_HEIGHT_PX && best.bottomEdge - best.top < MIN_PANEL_HEIGHT_PX) || (room > best.bottomEdge - best.top && (best.bottomEdge - best.top) < MIN_PANEL_HEIGHT_PX)) {
+                    best = { left, top, bottomEdge };
+                }
+                if (room >= MIN_PANEL_HEIGHT_PX && best.left === left) break;
             }
-            const scrubber = container.querySelector('.sb-3d-timeline-scrubber') as HTMLElement | null;
-            const s = scrubber?.getBoundingClientRect();
-            if (s && s.width > 0 && s.left < c.left + left + width && s.right > c.left + left) {
-                const scrubberTop = c.bottom - s.top + 8;
-                if (c.bottom - s.bottom <= bottom + 8) bottom = Math.max(bottom, scrubberTop);
-            }
-            const maxHeight = Math.max(0, c.height - bottom - top);
+            const pick = best ?? { left: 12, top: HUD_CLEARANCE_PX, bottomEdge: c.height - floor };
+            const bottom = Math.max(0, c.height - pick.bottomEdge);
+            const maxHeight = Math.max(0, pick.bottomEdge - pick.top);
             const narrow = c.width < 560;
-            setBox(prev => (prev.bottom === bottom && prev.left === left && prev.maxHeight === maxHeight && prev.narrow === narrow ? prev : { bottom, left, maxHeight, narrow }));
+            setBox(prev => (prev.bottom === bottom && prev.left === pick.left && prev.maxHeight === maxHeight && prev.narrow === narrow ? prev : { bottom, left: pick.left, maxHeight, narrow }));
         };
         measure();
         const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : undefined;
         ro?.observe(container);
         ro?.observe(panel);
-        return () => ro?.disconnect();
+        // The chrome around it opens and closes (the timeline drawer): re-measure when the container's children change.
+        const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(measure) : undefined;
+        mo?.observe(container, { childList: true });
+        return () => { ro?.disconnect(); mo?.disconnect(); };
     }, [props.bottomInsetPx, collapsed, props.provenanceOn, degradedOpen]);
 
     const onKeyDown = (e: React.KeyboardEvent) => {

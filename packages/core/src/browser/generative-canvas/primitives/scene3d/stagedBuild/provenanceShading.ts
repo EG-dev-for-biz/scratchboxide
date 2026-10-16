@@ -42,7 +42,7 @@ import {
 } from '../../../../../common/spatial/staged-location-contracts';
 
 /** Colour of a label no legend lists. */
-export const UNKNOWN_LABEL_COLOR = '#9AA1AA';
+export const UNKNOWN_LABEL_COLOR = '#C9CDD3';
 /** Dot coverage at confidence 0 (and for unrated photo-inferred relief); solid at confidence 1. */
 export const MAX_DOT_COVERAGE = 0.6;
 /** Residual at which a fitted surface's RMS shading reaches full dot coverage (the outline scale's top). */

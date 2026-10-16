@@ -198,7 +198,7 @@ const FRAGMENT_END = `
         if (sbPat.y > 0.0 && sbDot(sbP + vec2(3.0), ${STRIPE_PERIOD_PX.toFixed(1)}, sbPat.y)) sbGap = true;
         if (sbGap) gl_FragColor.rgb = uSbBackground;
 #endif
-        if (uSbMark > 0.5 && sbStripe(sbP, 8.0, 0.3, -1.0)) gl_FragColor.rgb = uSbMarkColor;
+        if (uSbMark > 0.5 && sbStripe(sbP, 10.0, 0.2, -1.0)) gl_FragColor.rgb = uSbMarkColor;
     }
 `;
 

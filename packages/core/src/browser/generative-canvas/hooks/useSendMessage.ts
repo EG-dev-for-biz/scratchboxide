@@ -898,9 +898,11 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
         // Stop keeps what already streamed as the reply; no error or "server offline" notice is shown.
         const commitStoppedReply = () => {
             const latest = depsRef.current;
-            const stopped = buildStoppedReply(partialReplyFrom(ctx));
+            // A staged build streamed into this turn is kept as stopped, in the reply and on the canvas alike.
+            const artifact = markStagedRun(ctx.progress.artifact, 'stopped');
+            const stopped = buildStoppedReply({ ...partialReplyFrom(ctx), artifact });
             settleGlobalExecutions(latest, ctx.progress, USER_STOP);
-            commitAssistantMessage(latest, ctx, stopped, markStagedRun(ctx.progress.artifact, 'stopped'));
+            commitAssistantMessage(latest, ctx, stopped, artifact);
         };
         const onAbort = () => {
             if (!userStopsRef.current.has(signal)) {
