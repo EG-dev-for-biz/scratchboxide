@@ -465,6 +465,11 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         await page.step(4, STEP);
         await page.screenshot('state_trees_failed_provenance');
         const put = await page.eval<Array<{ node: string; label?: string; samples: Array<{ rgb: [number, number, number] }> }>>(`sbHarness.sampleNodes(${JSON.stringify(objectIdOf('l5x'))}, 30)`);
+        // The degraded part carries the vermillion hatch (a fifth of it, written after lighting: the exact colour).
+        const putRgb = put.flatMap(n => n.samples.map(s => s.rgb));
+        const hatched = putRgb.filter(([r, g, b]) => Math.abs(r - 0xd5) < 8 && Math.abs(g - 0x5e) < 8 && b < 8).length / Math.max(1, putRgb.length);
+        expect(hatched, `hatch share of the put-back trees: ${hatched.toFixed(3)}`).toBeGreaterThan(0.1);
+        expect(hatched).toBeLessThan(0.3);
         const hues = put.flatMap(n => n.samples.map(s => hue(s.rgb))).filter(h => h >= 0);
         const asScanned = hue([0xe6, 0x9f, 0x00]), vermillion = hue([0xd5, 0x5e, 0x00]);
         expect(hues.length).toBeGreaterThan(0);
