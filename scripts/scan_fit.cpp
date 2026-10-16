@@ -171,6 +171,7 @@ static void runFitCore(const Args& a, FitRun& run, double anchorX, double anchor
     scan_fit::Fitter fitter(run.params, Q);
     run.result = fitter.run(scanBytes);
     Q.inputTriangles = run.result.scan.triangles();
+    if (std::getenv("SCAN_FIT_DEBUG_DIR")) std::cerr << "DEBUG scan triangles " << run.result.scan.triangles() << " primitives " << run.result.prims.size() << " surfaces " << run.result.surfaces.size() << " footprint loops " << run.result.footprint.size() << "\n";
 }
 
 static int emitFit(const Args& a, FitRun& run, const std::string& dir) {

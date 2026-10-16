@@ -214,6 +214,7 @@ inline Scan subScan(const Scan& s, const std::vector<uint8_t>& keep) {
 }
 
 /** Connected components over edge adjacency: a label per triangle. */
+/** Connected pieces of a scan: triangles joined by a shared welded edge. A label per triangle and the count. */
 inline std::vector<int> components(const Scan& s, int* count = nullptr) {
     const size_t T = s.triangles();
     std::vector<int> lab(T, -1);

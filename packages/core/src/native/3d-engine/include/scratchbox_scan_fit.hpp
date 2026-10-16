@@ -91,6 +91,7 @@ struct Params {
     double componentDilateM{4.0};
     int visibilityRays{16}, visibilityEscapes{3};
     double planeAngleDeg{12}, planeDistM{0.04}, planeMinAreaM2{0.4}, planeMaxRmsM{0.04};
+    double wallMinAreaM2{0};     // facets and planes smaller than this do not vote for a footprint (0: every wall facet does: round columns are facets)
     double mergeAngleDeg{3}, mergeOffsetM{0.03};
     double sheetGapM{0.03};
     double ledgeMinAreaM2{1.5}, ledgeSpan{0.6};
@@ -220,6 +221,7 @@ struct Primitive {
     bool corrected{false};
     Residual fit;
     Solid solid;
+    std::vector<Solid> moreSolids;             // a replicated primitive: the others' solids
     std::vector<std::array<Vec3, 2>> creases;  // local frame
 };
 
@@ -359,15 +361,18 @@ public:
         lap("load_weld_select");
         groundAndFrame();
         lap("frame_ground");
+        selectStructure();
         visibility();
         lap("visibility");
         planes();
         lap("planes");
         sampleScan();
         bandsAndFootprints();
+        groupColumns();
         lap("bands_footprints_openings_columns");
         meshModel();
         lap("mesh");
+        if (R.surfaces.empty()) throw ScanFitError("no_structure", "no surface of the scan could be fitted: nothing in it stands as a structure");
         residualsToBoxes();
         lap("attachments_passthrough");
         metrics();
@@ -481,18 +486,20 @@ private:
         if (pick < 0 || (bestD < 1e29 && bestD > 30.0)) throw ScanFitError("no_structure", "no scan triangle stands within 30 m of the anchor");
         const int c0 = lab[static_cast<size_t>(pick)];
         double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30, a0 = 0;
-        for (size_t t = 0; t < all.triangles(); ++t) {
-            if (lab[t] != c0) continue;
-            a0 += all.area[t];
-            for (int j = 0; j < 3; ++j) { const Vec3& p = all.pos[all.tri[3 * t + j]]; x0 = std::min(x0, (double)p.x); x1 = std::max(x1, (double)p.x); z0 = std::min(z0, (double)p.z); z1 = std::max(z1, (double)p.z); }
-        }
-        if (a0 < 1.0) throw ScanFitError("no_structure", "the scan under the anchor holds under 1 m2 of surface");
-        const double g = P.componentDilateM;
         std::vector<double> cx0(nc, 1e30), cx1(nc, -1e30), cz0(nc, 1e30), cz1(nc, -1e30);
         for (size_t t = 0; t < all.triangles(); ++t) {
             const int c = lab[t];
-            for (int j = 0; j < 3; ++j) { const Vec3& p = all.pos[all.tri[3 * t + j]]; cx0[c] = std::min(cx0[c], (double)p.x); cx1[c] = std::max(cx1[c], (double)p.x); cz0[c] = std::min(cz0[c], (double)p.z); cz1[c] = std::max(cz1[c], (double)p.z); }
+            if (c == c0) a0 += all.area[t];
+            for (int j = 0; j < 3; ++j) {
+                const Vec3& p = all.pos[all.tri[3 * t + j]];
+                cx0[c] = std::min(cx0[c], (double)p.x); cx1[c] = std::max(cx1[c], (double)p.x); cz0[c] = std::min(cz0[c], (double)p.z); cz1[c] = std::max(cz1[c], (double)p.z);
+            }
         }
+        x0 = cx0[c0]; x1 = cx1[c0]; z0 = cz0[c0]; z1 = cz1[c0];
+        if (a0 < 1.0) throw ScanFitError("no_structure", "the scan under the anchor holds under 1 m2 of surface");
+        const double g = P.componentDilateM;
+        // the structure is the component under the anchor and the components that lie wholly inside its plan box grown by g (a
+        // detached pedestal), not the ground that runs on past it and not the neighbours beyond
         std::vector<uint8_t> keepComp(nc, 0);
         for (int c = 0; c < nc; ++c) keepComp[c] = c == c0 || (cx0[c] >= x0 - g && cx1[c] <= x1 + g && cz0[c] >= z0 - g && cz1[c] <= z1 + g);
         std::vector<uint8_t> keep(all.triangles(), 0);
@@ -591,11 +598,79 @@ private:
         R.frame = F;
         R.groundL.n = F.dirToLocal(gl.n);
         R.groundL.d = gl.d - gl.n.dot(F.o);
-        // local copies
+        localize();
+    }
+
+    /** The scan's vertices, normals and centroids in the local frame. */
+    void localize() {
+        const auto& s = R.scan;
+        const size_t T = s.triangles();
         lp.resize(s.pos.size());
-        for (size_t v = 0; v < s.pos.size(); ++v) lp[v] = F.toLocal(s.pos[v]);
+        for (size_t v = 0; v < s.pos.size(); ++v) lp[v] = R.frame.toLocal(s.pos[v]);
         ln.resize(T); lc.resize(T);
-        for (size_t t = 0; t < T; ++t) { ln[t] = F.dirToLocal(s.normal[t]); lc[t] = F.toLocal(s.centroid[t]); }
+        for (size_t t = 0; t < T; ++t) { ln[t] = R.frame.dirToLocal(s.normal[t]); lc[t] = R.frame.toLocal(s.centroid[t]); }
+    }
+
+    /**
+     * One structure out of a scan that holds several: the tall cells (3 m over the ground, on a 0.5 m grid) closed over
+     * 1 m, the connected group nearest the anchor (within 30 m of it), and its surroundings to 4 m, as tile_refine's own
+     * isolate chooses; whatever else stands (another building across a plaza) goes. An isolated scan loses nothing.
+     */
+    void selectStructure() {
+        const auto& s = R.scan;
+        const size_t T = s.triangles();
+        const double cell = 0.5, minH = 3.0, apron = 4.0;
+        double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
+        for (const auto& p : lp) { x0 = std::min(x0, (double)p.x); x1 = std::max(x1, (double)p.x); z0 = std::min(z0, (double)p.z); z1 = std::max(z1, (double)p.z); }
+        sg::Raster tall;
+        tall.init(x0 - 2, z0 - 2, x1 + 2, z1 + 2, cell);
+        if (static_cast<double>(tall.nx) * tall.nz > 4e6) return;
+        for (size_t t = 0; t < T; ++t) {
+            const Vec3 &a = lp[s.tri[3 * t]], &b = lp[s.tri[3 * t + 1]], &c = lp[s.tri[3 * t + 2]];
+            if (std::fabs(ln[t].y) > 0.97f && lc[t].y - groundAt(lc[t].x, lc[t].z) < 0.4) continue;  // ground
+            const double d = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+            const int i0 = std::max(0, tall.ix(std::min({a.x, b.x, c.x}))), i1 = std::min(tall.nx - 1, tall.ix(std::max({a.x, b.x, c.x})));
+            const int k0 = std::max(0, tall.iz(std::min({a.z, b.z, c.z}))), k1 = std::min(tall.nz - 1, tall.iz(std::max({a.z, b.z, c.z})));
+            if (std::fabs(d) < 1e-12) {
+                // a vertical face: its top edge marks the cells under it
+                if (std::max({a.y, b.y, c.y}) - groundAt(a.x, a.z) >= minH) sg::rasterSegment(tall, a.x, a.z, b.x, b.z), sg::rasterSegment(tall, b.x, b.z, c.x, c.z);
+                continue;
+            }
+            for (int k = k0; k <= k1; ++k) for (int i = i0; i <= i1; ++i) {
+                const double x = tall.cx(i), z = tall.cz(k);
+                const double w1 = ((x - a.x) * (c.z - a.z) - (c.x - a.x) * (z - a.z)) / d, w2 = ((b.x - a.x) * (z - a.z) - (x - a.x) * (b.z - a.z)) / d;
+                if (w1 < -1e-9 || w2 < -1e-9 || w1 + w2 > 1 + 1e-9) continue;
+                const double y = (1 - w1 - w2) * a.y + w1 * b.y + w2 * c.y;
+                if (y - groundAt(x, z) >= minH) tall.v[tall.id(i, k)] = 1;
+            }
+        }
+        const sg::Raster closed = sg::dilate(tall, 2);
+        int ncomp = 0;
+        const auto lab = sg::rasterComponents(closed, &ncomp);
+        // the tall cell nearest the anchor (the frame's origin)
+        double best = 1e30;
+        int seed = -1;
+        for (int k = 0; k < tall.nz; ++k) for (int i = 0; i < tall.nx; ++i) {
+            if (!tall.v[tall.id(i, k)]) continue;
+            const double d = std::hypot(tall.cx(i), tall.cz(k));
+            if (d < best) { best = d; seed = lab[tall.id(i, k)]; }
+        }
+        if (seed < 0 || best > 30.0 || ncomp <= 1) return;
+        sg::Raster region = tall;
+        std::fill(region.v.begin(), region.v.end(), 0);
+        for (size_t c = 0; c < region.v.size(); ++c) region.v[c] = lab[c] == seed ? 1 : 0;
+        region = sg::dilate(region, static_cast<int>(std::lround(apron / cell)));
+        std::vector<uint8_t> keep(T, 1);
+        size_t dropped = 0;
+        for (size_t t = 0; t < T; ++t) {
+            const bool ground = std::fabs(ln[t].y) > 0.97f && lc[t].y - groundAt(lc[t].x, lc[t].z) < 0.4;
+            const int i = tall.ix(lc[t].x), k = tall.iz(lc[t].z);
+            if (!ground && !(region.in(i, k) && region.v[region.id(i, k)])) { keep[t] = 0; ++dropped; }
+        }
+        if (dropped == 0) return;
+        R.notes.push_back("the scan holds " + std::to_string(ncomp) + " separate tall structures: the one nearest the anchor (" + sj::num(std::round(best * 10) / 10) + " m) is fitted, " + std::to_string(dropped) + " triangles of the others are left out");
+        R.scan = sg::subScan(s, keep);
+        localize();
     }
 
     // ---------------------------------------------------------------- 1b. exterior and ground triangles
@@ -640,7 +715,9 @@ private:
         triPlane.assign(T, -1);
         std::vector<uint8_t> pool(T, 0);
         std::vector<uint32_t> order;
-        for (uint32_t t = 0; t < T; ++t) if (ext[t] && !isGround[t]) order.push_back(t);
+        // exterior faces, and faces that look down: an overhang's underside has the ground in the way of its rays, yet it is a ledge
+        auto usable = [&](uint32_t t) { return (ext[t] || ln[t].y < -0.97f) && !isGround[t]; };
+        for (uint32_t t = 0; t < T; ++t) if (usable(t)) order.push_back(t);
         std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return s.area[a] > s.area[b] || (s.area[a] == s.area[b] && a < b); });
         const float cosA = static_cast<float>(std::cos(rad(P.planeAngleDeg)));
         std::vector<uint8_t> used(T, 0);
@@ -683,7 +760,7 @@ private:
                 const uint32_t t = queue[qi];
                 for (uint32_t e = s.adjStart[t]; e < s.adjStart[t + 1]; ++e) {
                     const uint32_t u = s.adj[e];
-                    if (used[u] || !ext[u] || isGround[u]) continue;
+                    if (used[u] || !usable(u)) continue;
                     if (ln[u].dot(r.pl.n) < cosA) continue;
                     bool near = true;
                     for (int j = 0; j < 3 && near; ++j) near = std::fabs(r.pl.dist(lp[s.tri[3 * u + j]])) < P.planeDistM;
@@ -852,6 +929,8 @@ private:
         const float cosAlign = static_cast<float>(std::cos(rad(12.0)));
         for (size_t t = 0; t < s.triangles(); ++t) {
             if (isGround[t] || sheetTri[t] || std::fabs(ln[t].y) > 0.75f) continue;
+            // a wall is a big flat face or part of a plane: curved clutter (a tree crown against the facade) is small facets that are not, and does not make a footprint
+            if (s.area[t] < P.wallMinAreaM2 && (triPlane[t] < 0 || regions[static_cast<size_t>(triPlane[t])].area < P.wallMinAreaM2)) continue;
             const double nl = std::hypot(ln[t].x, ln[t].z);
             if (nl < 1e-3) continue;
             const double nx = ln[t].x / nl, nz = ln[t].z / nl;
@@ -910,6 +989,12 @@ private:
         std::fill(o.v.begin(), o.v.end(), 0);
         std::vector<uint8_t> exits, enters;
         wallVotes(h, exits, enters);
+        if (std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            sg::Raster en = o, ex = o;
+            for (size_t c = 0; c < o.v.size(); ++c) { en.v[c] = enters[c] > 0; ex.v[c] = exits[c] >= 2; }
+            debugRaster("occ_enters_" + std::to_string(static_cast<int>(std::lround(h * 100))), en);
+            debugRaster("occ_exits2_" + std::to_string(static_cast<int>(std::lround(h * 100))), ex);
+        }
         for (size_t c = 0; c < o.v.size(); ++c) {
             if (exits[c] < 1 || enters[c] > 0) continue;
             const int i = static_cast<int>(c % static_cast<size_t>(o.nx)), k = static_cast<int>(c / static_cast<size_t>(o.nx));
@@ -1224,6 +1309,14 @@ private:
         for (size_t b = 0; b + 1 < breaks.size(); ++b) buildBand(breaks[b], breaks[b + 1], order, b == 0);
     }
 
+    /** With SCAN_FIT_DEBUG_DIR set, a raster as a PNG there (the footprint of each band: white is structure). */
+    void debugRaster(const std::string& name, const sg::Raster& r) const {
+        const char* dir = std::getenv("SCAN_FIT_DEBUG_DIR");
+        if (!dir) return;
+        const auto png = sg::rasterPng(r);
+        std::ofstream(std::string(dir) + "/" + name + ".png", std::ios::binary).write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+    }
+
     // ---------------------------------------------------------------- one band
     void buildBand(double y0, double y1, int& order, bool lowest) {
         const double H = y1 - y0;
@@ -1243,6 +1336,7 @@ private:
             const sg::Raster vt = outsideAt(y1 - std::min(0.25, 0.08 * H)), vb = outsideAt(y0 + std::min(0.25, 0.08 * H) + 0.05);
             for (size_t c = 0; c < F.v.size(); ++c) if (F.v[c] && (vt.v[c] || vb.v[c])) F.v[c] = 0;
         }
+        debugRaster("band_" + std::to_string(static_cast<int>(std::lround(y0 * 100))), F);
         // passages: cells solid at the band's top but empty through its middle, open to the outside on two sides
         if (H >= 2.0 && tryPassageBand(y0, y1, F, order, lowest)) return;
         for (const auto& [outerRaw, holesRaw] : loopsOf(F)) addLoopPrimitive(outerRaw, holesRaw, y0, y1, order, lowest);
@@ -1267,7 +1361,8 @@ private:
     // ---------------------------------------------------------------- primitives: prism (operator 1)
     int newPrimitive(const std::string& label) {
         Primitive p;
-        p.id = "p" + std::string(R.prims.size() < 10 ? "0" : "") + std::to_string(R.prims.size());
+        p.id = "p" + std::string(primSerial < 10 ? "0" : "") + std::to_string(primSerial);
+        ++primSerial;
         p.label = label;
         p.buildOrder = static_cast<int>(R.prims.size());
         R.prims.push_back(std::move(p));
@@ -1599,7 +1694,9 @@ private:
         }
         const double rectArea = (sMax - sMin) * (tMax - tMin);
         if (rectArea <= 0 || ss.size() * P.cellM * P.cellM < 0.85 * rectArea || inRect < 0.97 * ss.size()) {
-            R.notes.push_back("a passage through the band from " + sj::num(std::round(y0 * 100) / 100) + " m is not fitted: the band is not a rectangle along the passage axis");
+            debugRaster("passage_top", top);
+            R.notes.push_back("a passage through the band from " + sj::num(std::round(y0 * 100) / 100) + " m is not fitted: the band is not a rectangle along the passage axis (its top covers " +
+                              sj::num(std::round(ss.size() * P.cellM * P.cellM * 10) / 10) + " m2 of the " + sj::num(std::round(rectArea * 10) / 10) + " m2 rectangle, " + std::to_string(inRect) + " of " + std::to_string(ss.size()) + " cells inside it)");
             return false;
         }
         // supports and bays along s, from the middle occupancy within the rectangle's inner t range
@@ -2003,6 +2100,104 @@ private:
     std::vector<ColumnSpec> pendingColumns;
     struct PassageInfo { int prim; P2 sAx, tAx; double sMin, sMax, tMin, tMax, y0, y1; std::vector<Bay> bays; };
     std::vector<PassageInfo> passageInfo;
+    int primSerial{0};   // primitive ids are never reused, so grouping primitives leaves the others' ids as they were
+
+
+    /**
+     * Operator 3: three or more columns of one radius and height at an equal pitch along a line are one replicated primitive
+     * with the measured pitch and count (the seed is the first column's revolve). The others' surfaces are the primitive's.
+     */
+    void groupColumns() {
+        std::vector<int> cols;
+        for (size_t i = 0; i < R.prims.size(); ++i) if (R.prims[i].solid.kind == 2 && R.prims[i].accepted && R.prims[i].fitParams.size() >= 5) cols.push_back(static_cast<int>(i));
+        std::vector<uint8_t> used(R.prims.size(), 0);
+        std::vector<int> remap(R.prims.size());
+        std::iota(remap.begin(), remap.end(), 0);
+        std::vector<uint8_t> removed(R.prims.size(), 0);
+        auto centre = [&](int i) { return P2(R.prims[static_cast<size_t>(i)].fitParams[0], R.prims[static_cast<size_t>(i)].fitParams[1]); };
+        auto similar = [&](int a, int b) {
+            const auto &pa = R.prims[static_cast<size_t>(a)].fitParams, &pb = R.prims[static_cast<size_t>(b)].fitParams;
+            return std::fabs(pa[4] - pb[4]) <= 0.02 && std::fabs(pa[2] - pb[2]) <= 0.03 && std::fabs(pa[3] - pb[3]) <= 0.03;
+        };
+        for (;;) {
+            std::vector<int> best;
+            P2 bestDir;
+            double bestPitch = 0;
+            for (size_t ia = 0; ia < cols.size(); ++ia) for (size_t ib = ia + 1; ib < cols.size(); ++ib) {
+                const int a = cols[ia], b = cols[ib];
+                if (used[static_cast<size_t>(a)] || used[static_cast<size_t>(b)] || !similar(a, b)) continue;
+                const P2 d = centre(b) - centre(a);
+                const double pitch = d.len();
+                if (pitch < 0.5) continue;
+                const P2 u = d * (1.0 / pitch);
+                std::vector<std::pair<double, int>> on;
+                for (int c : cols) {
+                    if (used[static_cast<size_t>(c)] || !similar(a, c)) continue;
+                    const P2 q = centre(c) - centre(a);
+                    const double along = q.dot(u), across = std::fabs(q.cross(u));
+                    if (across > 0.03) continue;
+                    const double k = along / pitch;
+                    if (std::fabs(k - std::round(k)) * pitch > 0.03) continue;
+                    on.push_back({along, c});
+                }
+                std::sort(on.begin(), on.end());
+                if (on.size() > best.size()) { best.clear(); for (const auto& o : on) best.push_back(o.second); bestDir = u; bestPitch = pitch; }
+            }
+            if (best.size() < 3) break;
+            // equal spacing: every gap within 3 cm of the median
+            std::vector<double> gaps;
+            for (size_t i = 1; i < best.size(); ++i) gaps.push_back((centre(best[i]) - centre(best[i - 1])).len());
+            std::vector<double> sorted = gaps;
+            std::sort(sorted.begin(), sorted.end());
+            const double pitch = sorted[sorted.size() / 2];
+            bool equal = true;
+            for (double g : gaps) equal = equal && std::fabs(g - pitch) <= 0.03 + 0.0 * bestPitch;
+            for (int c : best) used[static_cast<size_t>(c)] = 1;
+            if (!equal) continue;
+            const int keep = best.front();
+            Primitive& K = R.prims[static_cast<size_t>(keep)];
+            const P2 c0 = centre(best.front()), c1 = centre(best.back());
+            const double span = (c1 - c0).len();
+            // the replicate: the first column's revolve at the start, repeated along the line by the pitch
+            const Vec3 a3(static_cast<float>(c0.x), static_cast<float>(K.fitParams[2]), static_cast<float>(c0.y)), b3(static_cast<float>(c1.x), static_cast<float>(K.fitParams[2]), static_cast<float>(c1.y));
+            sj::Object car;
+            car.raw("points", "[" + v3j(a3) + "," + v3j(b3) + "]").b("closed", false).n("lengthM", span);
+            sj::Object along;
+            along.raw("carrier", "{\"path\":" + car.text() + "}").n("pitchM", pitch).i("count", static_cast<long long>(best.size())).n("startOffsetM", 0);
+            K.specJson = "{\"operator\":\"replicate\",\"replicate\":{\"seed\":" + K.specJson + ",\"domain\":{\"along\":" + along.text() + "},\"alignToSurface\":false}}";
+            K.label = "columns at an equal pitch";
+            K.method = "scan_fit: " + std::to_string(best.size()) + " circular footprint runs of one radius and height at an equal pitch (" + sj::num(std::round(pitch * 1000) / 1000) + " m); r(z) from circles per 0.25 m; operator 3 over operator 2";
+            double rms = 0;
+            std::vector<std::pair<double, double>> dw;
+            for (size_t i = 1; i < best.size(); ++i) {
+                Primitive& O = R.prims[static_cast<size_t>(best[i])];
+                K.surfaces.insert(K.surfaces.end(), O.surfaces.begin(), O.surfaces.end());
+                for (int si : O.surfaces) R.surfaces[static_cast<size_t>(si)].prim = keep;
+                K.moreSolids.push_back(O.solid);
+                for (const auto& g : O.gates) K.gates.push_back({g.gate + " (" + O.id + ")", g.value, g.threshold, g.le, g.unit});
+                removed[static_cast<size_t>(best[i])] = 1;
+                remap[static_cast<size_t>(best[i])] = keep;
+            }
+            (void)rms; (void)dw;
+            const double rMean = K.fitParams[4], base = K.fitParams[2], top = K.fitParams[3];
+            K.fitParams = {pitch, static_cast<double>(best.size()), rMean, base, top};
+            K.fitParamMeta = {{"m", "pitch"}, {"count", "number of columns"}, {"m", "mean radius"}, {"m", "base height (local)"}, {"m", "top height (local)"}};
+        }
+        // drop the merged-away primitives, renumbering the build order, and point everything at the new indices
+        std::vector<int> newIndex(R.prims.size(), -1);
+        std::vector<Primitive> kept;
+        for (size_t i = 0; i < R.prims.size(); ++i) {
+            if (removed[i]) continue;
+            newIndex[i] = static_cast<int>(kept.size());
+            kept.push_back(std::move(R.prims[i]));
+            kept.back().buildOrder = static_cast<int>(kept.size()) - 1;
+        }
+        for (size_t i = 0; i < R.prims.size(); ++i) if (removed[i]) newIndex[i] = newIndex[static_cast<size_t>(remap[i])];
+        for (auto& su : R.surfaces) su.prim = newIndex[static_cast<size_t>(su.prim)];
+        for (auto& pi : passageInfo) pi.prim = newIndex[static_cast<size_t>(pi.prim)];
+        for (auto& c : columnPrims) c = newIndex[static_cast<size_t>(c)];
+        R.prims = std::move(kept);
+    }
 
     static Residual circleResidual(const std::vector<std::array<double, 3>>& pts, const sg::Circle& c) {
         std::vector<std::pair<double, double>> dw;
@@ -2070,7 +2265,11 @@ private:
     }
 
     bool insideFitted(const Vec3& p) const {
-        for (const auto& pr : R.prims) if (pr.body && pr.solid.contains(p)) return true;
+        for (const auto& pr : R.prims) {
+            if (!pr.body) continue;
+            if (pr.solid.contains(p)) return true;
+            for (const auto& so : pr.moreSolids) if (so.contains(p)) return true;
+        }
         return false;
     }
 

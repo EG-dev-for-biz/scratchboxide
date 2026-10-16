@@ -116,7 +116,10 @@ public:
         return *this;
     }
     Object& s(const std::string& key, const std::string& value) { return raw(key, str(value)); }
-    Object& n(const std::string& key, double value) { return raw(key, num(value)); }
+    Object& n(const std::string& key, double value) {
+        if (!std::isfinite(value)) throw StagedGlbError("the number '" + key + "' is not finite and cannot be written to JSON");
+        return raw(key, num(value));
+    }
     Object& i(const std::string& key, long long value) { return raw(key, integer(value)); }
     Object& b(const std::string& key, bool value) { return raw(key, boolean(value)); }
     Object& nul(const std::string& key) { return raw(key, "null"); }
