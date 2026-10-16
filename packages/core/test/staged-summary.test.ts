@@ -124,6 +124,10 @@ const ruleCase: Record<string, () => void> = {
         expect(noneText).not.toContain('Trees, grown to the measured crown:');
     },
     resolution: () => {
+        // a district measures no triangle edge or texel: it states the leaf error alone, never a 0.00 m edge
+        const district = summarizeStagedBuild(input({ sourceLimits: { leafGeometricErrorM: 2.0064, meshEdgeP50M: 0, meshResolvableM: 0.5016, texelM: 0, photoResolvableM: 0 } })).summary;
+        expect(district).toContain("The scan's leaf tiles have a geometric error of 2.0 m. Finer detail is photo-inferred.");
+        expect(district).not.toContain('median triangle edge');
         expect(summarizeStagedBuild(input()).summary).toContain('The scan resolves shapes of about 0.7 m (median triangle edge 0.69 m, leaf error 2.0 m); the photo texture resolves about 0.31 m (15 cm texels). Finer detail is photo-inferred.');
     },
     'remesh-changes': () => {

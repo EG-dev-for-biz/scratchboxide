@@ -46,8 +46,10 @@ function cacheEntries(stage: string, match: (dir: string) => boolean): string[] 
 
 export interface CentralParkRealData {
     textured: string;
-    strip: { devegetated: string; crowns: string; stats: string };
-    remesh: { clay: string; stats: string };
+    strip: { devegetated: string; crowns: string; stats: string; cacheKey: string };
+    remesh: { clay: string; stats: string; cacheKey: string; runMs: number };
+    /** The plant entry of that strip's crowns (trees-fix: 1,043 trees within the 1.5M cap), when an earlier real run left one. */
+    plant?: { trees: string; stats: string; cacheKey: string };
 }
 
 const CP_TEXTURED = 'public/models/central_park_40.78256_-73.96558_r250_textured.glb';
@@ -67,11 +69,53 @@ export function centralParkRealData(): { data?: CentralParkRealData; requirement
         try { return String(JSON.parse(fs.readFileSync(path.join(d, 'done.json'), 'utf8')).input).endsWith(path.join(path.basename(strip), 'devegetated.glb')); } catch { return false; }
     })[0];
     if (!remesh) return missing('the tile_refine entry of the devegetated Central Park tile');
+    const treeCrowns = (readJson(path.join(strip, 'crowns.json'))?.crowns ?? []).filter((c: { status: string }) => c.status === 'tree').length;
+    const plant = cacheEntries('tile_vegetation', d => fs.existsSync(path.join(d, 'trees.glb')) && readJson(path.join(d, 'stats.json'))?.trees === treeCrowns)[0];
     return {
         data: {
             textured,
-            strip: { devegetated: path.join(strip, 'devegetated.glb'), crowns: path.join(strip, 'crowns.json'), stats: path.join(strip, 'stats.json') },
-            remesh: { clay: path.join(remesh, 'clay.glb'), stats: path.join(remesh, 'stats.json') }
+            strip: { devegetated: path.join(strip, 'devegetated.glb'), crowns: path.join(strip, 'crowns.json'), stats: path.join(strip, 'stats.json'), cacheKey: path.basename(strip) },
+            remesh: { clay: path.join(remesh, 'clay.glb'), stats: path.join(remesh, 'stats.json'), cacheKey: path.basename(remesh), runMs: readJson(path.join(remesh, 'done.json'))?.runMs ?? 0 },
+            ...(plant ? { plant: { trees: path.join(plant, 'trees.glb'), stats: path.join(plant, 'stats.json'), cacheKey: path.basename(plant) } } : {})
+        },
+        requirement: { ok: true, reason: '' }
+    };
+}
+
+function readJson(file: string): any {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; }
+}
+
+export interface ArchRealData {
+    /** The r250 extraction of the Washington Square Arch (1.59M triangles). */
+    textured: string;
+    strip: { devegetated: string; crowns: string; cacheKey: string };
+    /** tile_refine's isolated outputs on that tile's devegetated copy. */
+    refine: { clay: string; rawClay: string; textured: string; stats: string; cacheKey: string; runMs: number };
+}
+
+const ARCH_TEXTURED = 'public/models/washington_square_arch_40.73122_-73.99709_r250_textured.glb';
+
+/** The arch: its r250 extraction, strip's entry, and tile_refine's isolated outputs, from earlier real runs. */
+export function archRealData(): { data?: ArchRealData; requirement: Requirement } {
+    const missing = (what: string): { requirement: Requirement } => ({ requirement: { ok: false, reason: `missing ${what} (gitignored real data from a Washington Square Arch r250 run; set SCRATCHBOX_STAGED_REAL_DATA to a checkout that has it)` } });
+    const textured = firstExisting(ARCH_TEXTURED);
+    if (!textured) return missing(ARCH_TEXTURED);
+    const strip = cacheEntries('tile_vegetation', d => fs.existsSync(path.join(d, 'crowns.json')) && readJson(path.join(d, 'stats.json'))?.triangles?.input === 1_592_881)[0];
+    if (!strip) return missing('a tile_vegetation strip entry of the arch extraction');
+    const refine = cacheEntries('tile_refine', d => {
+        const input = String(readJson(path.join(d, 'done.json'))?.input ?? '');
+        return input.endsWith(path.join(path.basename(strip), 'devegetated.glb')) && fs.existsSync(path.join(d, 'raw_clay.glb'));
+    })[0];
+    if (!refine) return missing('the isolated tile_refine entry of the arch');
+    return {
+        data: {
+            textured,
+            strip: { devegetated: path.join(strip, 'devegetated.glb'), crowns: path.join(strip, 'crowns.json'), cacheKey: path.basename(strip) },
+            refine: {
+                clay: path.join(refine, 'clay.glb'), rawClay: path.join(refine, 'raw_clay.glb'), textured: path.join(refine, 'textured.glb'), stats: path.join(refine, 'stats.json'),
+                cacheKey: path.basename(refine), runMs: readJson(path.join(refine, 'done.json'))?.runMs ?? 0
+            }
         },
         requirement: { ok: true, reason: '' }
     };

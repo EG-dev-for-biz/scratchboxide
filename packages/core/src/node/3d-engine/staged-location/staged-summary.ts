@@ -195,7 +195,8 @@ export function treesSentence(input: StagedSummaryInput): string {
 /** Rule "resolution": the scan's and the photo's resolution, kept apart. */
 export function resolutionSentence(input: StagedSummaryInput): string {
     const l = input.sourceLimits;
-    const scan = l.meshResolvableM > 0
+    // the median triangle edge is measured for an isolated structure only; a district states the leaf error alone
+    const scan = l.meshResolvableM > 0 && l.meshEdgeP50M > 0
         ? `The scan resolves shapes of about ${l.meshResolvableM.toFixed(1)} m (median triangle edge ${l.meshEdgeP50M.toFixed(2)} m, leaf error ${l.leafGeometricErrorM.toFixed(1)} m)`
         : `The scan's leaf tiles have a geometric error of ${l.leafGeometricErrorM.toFixed(1)} m`;
     const photo = l.photoResolvableM > 0 ? `; the photo texture resolves about ${l.photoResolvableM.toFixed(2)} m (${Math.round(l.texelM * 100)} cm texels)` : '';
