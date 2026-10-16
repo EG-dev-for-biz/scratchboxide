@@ -196,7 +196,7 @@ describe('the degrade ladder', () => {
 });
 
 /** scan_fit stand-in: the fixture StructureFit, with its GLBs and ortho written. */
-function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; rejected?: boolean } = {}) {
+function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; rejected?: boolean; fitDelayMs?: number; truncateBody?: boolean } = {}) {
     fs.mkdirSync(dir, { recursive: true });
     const calls = { fit: 0, refit: 0, ornament: 0 };
     const writeFit = (name: string, mutate?: (f: StructureFit) => void) => {
@@ -210,6 +210,8 @@ function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; 
         // the body can be photo-corrected in its height (param 0), inside what the scan allows
         f.primitives[0].correctable = [{ param: 0, key: 'height', value: 24.4, min: 24.0, max: 25.0, unit: 'm', description: 'body height', toleranceM: 0.31, residualCurve: [[24, 0.05], [24.4, 0.028], [25, 0.2]] }];
         if (opts.rejected) { f.accepted = false; f.gates[1] = { ...f.gates[1], value: 0.071, passed: false }; }
+        // the body's JSON chunk is intact (its counts read), its BIN chunk cut short (its triangles cannot be loaded)
+        if (opts.truncateBody) fs.truncateSync(f.outputs.fittedGlb, fs.statSync(f.outputs.fittedGlb).size - 48);
         mutate?.(f);
         f.outputs.reportJson = path.join(dir, `${name}_structure_fit.json`);
         fs.writeFileSync(f.outputs.reportJson, JSON.stringify(f));
@@ -219,6 +221,7 @@ function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; 
     const deps: ScanFitDeps = {
         fit: async () => {
             calls.fit++;
+            if (opts.fitDelayMs) await new Promise(r => setTimeout(r, opts.fitDelayMs));
             if (opts.fitFails) throw opts.fitFails;
             const f = writeFit('fit');
             return out(f, f.outputs.reportJson, '7c1e04aa');
@@ -269,6 +272,33 @@ const REPLY = {
     corrections: [{ prim: 'p00', param: 0, to: 24.8, conf: 80, why: 'the parapet sits higher in the ortho', ev: [[0, 270, 90, 500, 290]] }],
     emptySlots: [{ slot: 'S03', why: 'no image shows it' }]
 };
+
+/** Google captures a few tens of metres out on each side of the arch, and a grounding service that takes `delayMs` per image. */
+function streetViewStandIn(delayMs = 0) {
+    const place = { lat: 40.73122, lng: -73.99709 };
+    const origin = { ...place, heightMeters: 0 };
+    const panos = { PN: [0, -35], PE: [45, 0], PS: [0, 38], PW: [-45, 0] } as const;
+    const metadata = (async (url: string) => {
+        const [lat, lng] = new URL(url).searchParams.get('location')!.split(',').map(Number);
+        const hit = Object.entries(panos).find(([, [x, z]]) => { const g = scanToGeodetic(origin, x, 0, z); return Math.hypot((g.lat - lat) * 111_320, (g.lng - lng) * 84_400) < 12; });
+        const body = hit ? { status: 'OK', pano_id: hit[0], location: scanToGeodetic(origin, hit[1][0], 0, hit[1][1]), date: '2025-06', copyright: '© Google' } : { status: 'ZERO_RESULTS' };
+        return { ok: true, status: 200, statusText: 'OK', json: async () => body } as any;
+    }) as typeof fetch;
+    const requested: string[] = [];
+    const grounding = {
+        retrieveGroundingImage: async (req: any) => {
+            requested.push(req.panoId);
+            if (delayMs) await new Promise(r => setTimeout(r, delayMs));
+            const portrait = req.aspectRatio === 'RATIO_3X4';
+            const w = portrait ? 480 : 640, h = portrait ? 640 : 480;
+            const bytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]), crypto.randomBytes(2000), Buffer.from([0xff, 0xd9])]);
+            return { image: bytes, mimeType: 'image/jpeg', panoId: req.panoId, headingDegree: req.headingDegree, pitchDegree: req.pitchDegree, fovDegree: req.fovDegree };
+        }
+    };
+    return { deps: { mapsApiKey: 'maps-key', grounding, fetchImpl: metadata }, requested };
+}
+
+const sleepMs = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 describe('an isolated structure', () => {
     it('without the scan fitter: the remeshed structure stands, and the rebuild stages say why', async () => {
@@ -492,5 +522,189 @@ describe('Stop, the deadline and hard failures', () => {
         expect(err2).toBeInstanceOf(StagedLocationHardFailure);
         expect(err2.reasonCode).toBe('no_tile_coverage');
         void writeStagedGlbFile;
+    });
+});
+
+describe('the call settles before it returns or throws', () => {
+    it('a fit rejected while Street View is still fetching ends the fetch as not needed: no time limit, no detail claimed, and nothing changes after the result', async () => {
+        const sv = streetViewStandIn(500);
+        const calls: any[] = [];
+        const s = setup(ARCH, {}, {
+            scanFit: fakeScanFit(path.join(TMP, 'sf-late-rej'), { rejected: true, fitDelayMs: 250 }).deps,
+            vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
+        });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(sv.requested.length).toBeGreaterThan(0); // the fetch had started when the fit was rejected
+        const evidence = result.stages.find(x => x.stage === 'evidence')!;
+        expect(evidence).toMatchObject({ status: 'skipped', reason: 'there is no accepted fit to place detail on' });
+        expect(statusOf(s.events, 'evidence')).toEqual(['running', 'skipped']);
+        expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'fit_rejected']);
+        // none of the three false statements: a 60 s limit, a run deadline, detail read from the tile photos
+        const everything = JSON.stringify(result);
+        expect(everything).not.toMatch(/run_deadline|time limit|60 s|tile photos only|read from the tile photos/);
+        expect(result.stages.every(x => x.status !== 'pending' && x.status !== 'running' && x.status !== 'stopped')).toBe(true);
+        expect(calls).toEqual([]);
+        // the finish event is the last event of the run
+        const finish = s.events.find(x => x.e.stage === 'finish')!;
+        expect(Math.max(...s.events.map(x => x.e.seq))).toBe(finish.e.seq);
+        // the result is the record of the call: the fetch that was let go changes nothing in it afterwards
+        const frozen = JSON.stringify([result.stages, result.degradations, result.extraction, result.cache, result.digest, result.summary]);
+        const eventsAtReturn = s.events.length;
+        await sleepMs(700);
+        expect(JSON.stringify([result.stages, result.degradations, result.extraction, result.cache, result.digest, result.summary])).toBe(frozen);
+        expect(s.events.length).toBe(eventsAtReturn);
+    });
+
+    it('Stop during a slow fit, with the Street View fetch and the trees in flight, leaves nothing running and no unhandled rejection', async () => {
+        const unhandled: unknown[] = [];
+        const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+        process.on('unhandledRejection', onUnhandled);
+        try {
+            const sv = streetViewStandIn(300);
+            const s = setup(ARCH, { plantDelayMs: 250 }, {
+                scanFit: fakeScanFit(path.join(TMP, 'sf-stop-sv'), { fitDelayMs: 300 }).deps,
+                vision: { client: visionClient(REPLY), candidates: ['gemini-4-argon'] }, streetView: sv.deps
+            });
+            const stop = new AbortController();
+            const ctx = { emitStage: (e: StageEvent, a?: CanvasArtifact) => { s.events.push({ e, artifact: a }); if (e.stage === 'fit' && e.status === 'running') setTimeout(() => stop.abort(), 60); }, signal: stop.signal };
+            const err = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: true }, s.deps, ctx).catch(e => e);
+            expect(err.name).toBe('AbortError');
+            const streamed = s.events.length;
+            await sleepMs(800);
+            expect(unhandled).toEqual([]);
+            // nothing streamed or committed once the call had thrown (the trees stage did not finish behind it)
+            expect(s.events.length).toBe(streamed);
+            const statuses = Object.values(s.cache.readRunRecord<any>('a1b2c301').statuses);
+            expect(statuses.filter(x => x === 'running' || x === 'pending')).toEqual([]);
+        } finally {
+            process.off('unhandledRejection', onUnhandled);
+        }
+    });
+
+    it('an unexpected error between the rebuild stages degrades what has not run: the call returns, the trees finish first, and no stage is left open', async () => {
+        const sf = fakeScanFit(path.join(TMP, 'sf-glue'));
+        const s = setup(ARCH, { plantDelayMs: 300 }, { scanFit: sf.deps });
+        // tile_refine's isolated scan is gone by the time the rebuild reads it
+        let rawClay = '';
+        const realRefine = s.deps.refine;
+        s.deps.refine = { refine: async req => { const r = await realRefine.refine(req); rawClay = r.rawClayGlb!; return r; } };
+        const ctx = { emitStage: (e: StageEvent, a?: CanvasArtifact) => { s.events.push({ e, artifact: a }); if (e.stage === 'remesh' && e.status === 'committed') fs.rmSync(rawClay); } };
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: true }, s.deps, ctx);
+        expect(rawClay).toMatch(/\.glb$/);
+        expect(result.status).toBe('degraded');
+        const rec = result.degradations.find(d => d.reasonCode === 'rebuild_failed')!;
+        expect(rec).toMatchObject({ stage: 'fit', fellTo: 'the remeshed scan', transient: true, provenanceAfter: 'remeshed' });
+        expect(rec.reason).toMatch(/^the rebuild stopped on an unexpected error \(ENOENT/);
+        for (const st of ['fit', 'evidence', 'project', 'vision', 'correct', 'detail']) expect(result.stages.find(x => x.stage === st)!.status).toBe('skipped');
+        expect(sf.calls.fit).toBe(0);
+        // the trees branch ran to its end before the call returned
+        expect(result.stages.find(x => x.stage === 'trees')!.status).toBe('committed');
+        expect(result.trees!.count).toBe(1);
+        const statuses = Object.values(s.cache.readRunRecord<any>('a1b2c301').statuses);
+        expect(statuses.filter(x => x === 'running' || x === 'pending')).toEqual([]);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+    });
+
+    it('a cut-short fitted body (its triangles cannot be loaded) drops the Street View close-ups, not the call: the tile photos are read', async () => {
+        const sv = streetViewStandIn();
+        const calls: any[] = [];
+        const s = setup(ARCH, {}, {
+            scanFit: fakeScanFit(path.join(TMP, 'sf-cut'), { truncateBody: true }).deps,
+            vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
+        });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        const project = result.stages.find(x => x.stage === 'project')!;
+        expect(project.status).toBe('degraded');
+        const rec = result.degradations.find(d => d.reasonCode === 'evidence_not_prepared')!;
+        expect(rec).toMatchObject({ stage: 'project', fellTo: 'the tile photos that could be read', transient: false });
+        expect(rec.reason).toMatch(/^the images could not be prepared \(.+\); only the tile photos are read$/);
+        // the model was asked about the tile photo alone, and the detail was built from it
+        expect(result.ornament).toMatchObject({ evidence: { tileOrthos: 1, streetView: 0 }, elements: 1 });
+        expect(calls).toHaveLength(1);
+        expect(result.stages.find(x => x.stage === 'detail')!.status).toBe('committed');
+    });
+});
+
+describe('what the result says about the extraction, the correction and the gate', () => {
+    it('a photo-corrected layer is labelled inferred with the correction confidence, and every scene the build streams validates', async () => {
+        const s = setup(ARCH, {}, { scanFit: fakeScanFit(path.join(TMP, 'sf-prov')).deps, vision: { client: visionClient(REPLY), candidates: ['gemini-4-argon'] } });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(result.structureFit!.corrections.filter(c => c.check.accepted)).toHaveLength(1);
+        const scenes = s.events.filter(x => x.artifact).map(x => x.artifact as any);
+        expect(scenes.length).toBeGreaterThan(5);
+        for (const a of scenes) expect(validateContract('StagedBuildState', a.data.stagedBuild)).toEqual([]);
+        const byLayer = Object.fromEntries((result.artifact as any).data.stagedBuild.layers.map((l: any) => [l.layer, l]));
+        expect(byLayer.l3br.provenance).toMatchObject({ label: 'photo-corrected', measuredGeometry: false, confidence: 0.8 });
+        expect(byLayer.l3ar.provenance).toMatchObject({ label: 'photo-corrected', measuredGeometry: false, confidence: 0.8 });
+        // the fit that was not corrected stays measured
+        expect(byLayer.l3b.provenance).toMatchObject({ label: 'fitted', measuredGeometry: true });
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+    });
+
+    it('a leaf-tile cap that stops a district short is reported as the radius reached, in the headline and as a degradation', async () => {
+        const s = setup(PARK);
+        const real = s.deps.extract;
+        s.deps.extract = async req => ({ ...(await real(req)), coveredRadiusM: 33, truncated: true });
+        const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+        expect(result.extraction).toMatchObject({ requestedRadiusM: 60, radiusM: 33 });
+        expect(result.degradations.find(d => d.reasonCode === 'radius_truncated')).toMatchObject({
+            stage: 'tiles', transient: false, provenanceAfter: 'as-scanned',
+            part: { description: 'the outer ring of the extraction (33 to 60 m)' }, fellTo: 'the nearest 2 leaf tiles, which reach 33 m'
+        });
+        expect(result.stages.find(x => x.stage === 'tiles')!.status).toBe('degraded');
+        expect(result.summary).toContain('in clay from Google 3D Tiles within 33 m (60 m asked for; the leaf-tile cap stopped it short): the remeshed scan.');
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        // a district the tiles cover whole reports the radius asked for
+        const whole = setup(PARK);
+        const done = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, whole.deps, whole.ctx);
+        expect(done.result.extraction).toMatchObject({ requestedRadiusM: 60, radiusM: 60 });
+        expect(done.result.degradations.map(d => d.reasonCode)).not.toContain('radius_truncated');
+        expect(done.result.summary).toContain('within 60 m: the remeshed scan.');
+    });
+
+    it('a containment round that cannot be extracted keeps the district at the last radius, with the cause, instead of failing the call', async () => {
+        const WIDE: WorldSpec = { ground: 200, buildings: [[-70, 70, -6, 5, 22]], trees: [] };
+        const s = setup(WIDE);
+        const real = s.deps.extract;
+        let extractions = 0;
+        s.deps.extract = async req => { if (++extractions >= 2) throw new Error('ECONNRESET while fetching tiles'); return real(req); };
+        const { result } = await runStagedLocation({ query: 'Wide Hall', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(extractions).toBe(2);
+        expect(result.extraction).toMatchObject({ sizedTo: 'district-fallback', radiusM: 25 });
+        const rec = result.degradations.find(d => d.reasonCode === 'containment_failed')!;
+        expect(rec).toMatchObject({ stage: 'tiles', transient: true, fellTo: 'the remeshed district around it, without a rebuild', cause: { error: 'ECONNRESET while fetching tiles' } });
+        expect(rec.reason).toMatch(/failed \(ECONNRESET while fetching tiles\); showing the district at 25 m around it without a rebuild$/);
+        expect(rec.retry!.args).toEqual({ retryRunId: 'a1b2c301', retryStage: 'tiles' });
+        // the district was remeshed without a rebuild
+        expect(s.native.refineCalls[0].isolate).toBeUndefined();
+        expect(result.stages.find(x => x.stage === 'remesh')!.status).toBe('committed');
+    });
+
+    it('SB-Veggie trees grown to measured crowns are exempt from the vertex floor on the crowns measured, and the gate passes', async () => {
+        const s = setup(ARCH);
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: true }, s.deps, s.ctx);
+        expect(result.trees!.count).toBe(1);
+        expect(result.complexityGate.violations).toEqual([]);
+        expect(result.complexityGate.passed).toBe(true);
+        expect(result.complexityGate.exemptions.some(e => /^vertex floor: SB-Veggie trees grown to 1 measured crown \(/.test(e))).toBe(true);
+        expect(result.summary).toMatch(/Exempt from the vertex floor, as measured geometry: .*SB-Veggie trees grown to 1 measured crown/);
+        // a district with its trees too
+        const d = setup(PARK);
+        const park = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true }, d.deps, d.ctx);
+        expect(park.result.complexityGate.passed).toBe(true);
+        expect(park.result.complexityGate.exemptions.some(e => e.includes('grown to 3 measured crowns'))).toBe(true);
+    });
+
+    it('the headline names the layer on screen when the tiles stage degraded and the remesh never started', async () => {
+        const s = setup(ARCH);
+        // the time limit passes once the tiles have committed: the remesh is stopped before it starts
+        let skew = 0;
+        s.deps.now = () => Date.now() + skew;
+        const ctx = { emitStage: (e: StageEvent, a?: CanvasArtifact) => { s.events.push({ e, artifact: a }); if (e.stage === 'tiles' && e.status === 'degraded') skew = 3_600_000; } };
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, ctx);
+        expect(result.stages.find(x => x.stage === 'tiles')!.status).toBe('degraded');
+        expect(result.stages.find(x => x.stage === 'remesh')!.status).toBe('stopped');
+        expect(result.summary).toMatch(/extracted 25\.0 m around the structure: the scan as downloaded\./);
+        expect(result.digest).toMatch(/^Staged build degraded: resolve committed;/);
     });
 });

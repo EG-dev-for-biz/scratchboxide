@@ -36,6 +36,7 @@ import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-t
 import { GeometricComplexityGate, type ComplexityExemption, type GeometricMeshSummary } from '../../../common/spatial/GeometricComplexityGate';
 import {
     DEFAULT_PROVENANCE_LEGEND,
+    NON_MEASURED_PROVENANCE_LABELS,
     PROVENANCE,
     SCAN_FIT_ERROR_TRANSIENT,
     STAGED_VISION_MODEL_DEFAULT,
@@ -79,7 +80,7 @@ import {
 import { describeRemeshProvenance, readRemeshProvenance } from './remesh-provenance';
 import { putBackScannedTrees } from './scanned-trees';
 import {
-    footprintIoU, grownOutline, isolatedStructureCells, sizeExtraction, ISOLATE_IOU_MIN, type StructurePickResult
+    footprintIoU, grownOutline, isolatedStructureCells, sizeExtraction, ISOLATE_IOU_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
 } from './extraction-sizing';
 import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, selectViews, type EvidenceImage, type StreetViewEvidenceDeps
@@ -250,6 +251,11 @@ function abortError(): Error {
     return Object.assign(new Error('Stopped by the chat before it finished'), { name: 'AbortError' });
 }
 
+/** Stop, as the chat raises it; and a hard failure: the two errors that end the whole call. Anything else is a failed part. */
+function isAbort(err: unknown): boolean {
+    return (err as Error)?.name === 'AbortError' || err instanceof StagedLocationHardFailure;
+}
+
 function slug(text: string): string {
     return text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'place';
 }
@@ -271,6 +277,8 @@ class StagedRun {
     private seq = 0;
     private version = 1;
     private legendNotes: Partial<Record<string, string>> = {};
+    /** Set once the call has returned or thrown: work a stage abandoned (a Stop, a time limit) can no longer change or stream anything. */
+    private closed = false;
 
     constructor(
         readonly runId: string,
@@ -304,7 +312,13 @@ class StagedRun {
         return this.state.stages.find(s => s.stage === id)!;
     }
 
+    /** Ends the run's record: later calls from abandoned work change nothing and stream nothing. */
+    close(): void {
+        this.closed = true;
+    }
+
     note(label: ProvenanceLabel, description: string): void {
+        if (this.closed) return;
         this.legendNotes[label] = description;
     }
 
@@ -325,6 +339,7 @@ class StagedRun {
 
     /** Updates a stage's summary and streams it (with the scene on a commit, degrade or finish). */
     emit(id: StageId, status: StageStatus, extra: { source?: string; reason?: string; layers?: StagedLayer[]; degradations?: DegradationRecord[]; model?: VisionModelUse; message?: string; progress?: number } = {}, withArtifact = false): void {
+        if (this.closed) return;
         const s = this.summary(id);
         s.status = status;
         if (extra.source !== undefined) s.source = extra.source;
@@ -357,6 +372,7 @@ class StagedRun {
 
     /** The finish event: the final scene, without touching any stage's summary. */
     emitFinish(status: StageStatus, source: string): void {
+        if (this.closed) return;
         const artifact = this.artifact(source);
         const end = this.now();
         this.ctx.emitStage?.({
@@ -366,6 +382,7 @@ class StagedRun {
     }
 
     commit(layer: StagedLayer, meta: StagedLayerObjectMeta): void {
+        if (this.closed) return;
         const i = this.state.layers.findIndex(l => l.objectId === layer.objectId);
         if (i >= 0) this.state.layers[i] = layer; else this.state.layers.push(layer);
         this.layerMeta[layer.objectId] = meta;
@@ -373,10 +390,12 @@ class StagedRun {
 
     /** Makes `objectId` the one layer objects stand on. */
     setGround(objectId: string): void {
+        if (this.closed) return;
         for (const [id, meta] of Object.entries(this.layerMeta)) meta.isGround = id === objectId;
     }
 
     degrade(record: DegradationRecord): DegradationRecord {
+        if (this.closed) return record;
         if (!this.state.degradations.some(d => d.id === record.id)) this.state.degradations.push(record);
         return record;
     }
@@ -405,7 +424,8 @@ interface StageIO {
     progress(message: string, fraction?: number): void;
 }
 
-type Why = 'stop' | 'deadline' | 'budget';
+/** Why a stage's work was ended: Stop, the run's time limit, its own time limit, or the run no longer needs it. */
+type Why = 'stop' | 'deadline' | 'budget' | 'cancelled';
 
 interface StageDef<T> {
     id: StageId;
@@ -463,11 +483,8 @@ class Runner {
             io.dispose();
             const why = io.why();
             if (why === 'stop' || this.ctx.signal?.aborted) throw abortError();
-            if (why === 'deadline') {
-                const reason = `stopped at the time limit during ${STAGES[id].title.toLowerCase()}`;
-                this.run.emit(id, 'stopped', { reason });
-                return { status: 'stopped', source: '', reason };
-            }
+            if (why === 'cancelled') return this.cancelled(id, extraSignal);
+            if (why === 'deadline') return this.stoppedAtDeadline(id);
             const hard = def.hardFail?.(err);
             if (hard) {
                 this.run.emit(id, 'failed', { reason: hard.message });
@@ -480,7 +497,10 @@ class Runner {
                 const out = await this.race(def.degrade(failure, rung.io), rung);
                 return this.finish(id, out);
             } catch (rungErr) {
-                if (rung.why() === 'stop' || this.ctx.signal?.aborted) throw abortError();
+                const w = rung.why();
+                if (w === 'stop' || this.ctx.signal?.aborted) throw abortError();
+                if (w === 'cancelled') return this.cancelled(id, extraSignal);
+                if (w === 'deadline') return this.stoppedAtDeadline(id);
                 throw rungErr;
             } finally {
                 rung.dispose();
@@ -488,6 +508,23 @@ class Runner {
         } finally {
             io.dispose();
         }
+    }
+
+    private stoppedAtDeadline(id: StageId): { status: 'stopped'; source: string; reason: string } {
+        const reason = `stopped at the time limit during ${STAGES[id].title.toLowerCase()}`;
+        this.run.emit(id, 'stopped', { reason });
+        return { status: 'stopped', source: '', reason };
+    }
+
+    /**
+     * A stage the run ended because nothing downstream can use it (the Street View fetch, once the fit failed). It is
+     * skipped, with the reason it was ended for. It hit no time limit and fell to nothing, so it records no degradation.
+     */
+    private cancelled(id: StageId, extraSignal: AbortSignal | undefined): { status: 'skipped'; source: string; reason: string } {
+        const why = extraSignal?.reason;
+        const reason = typeof why === 'string' && why ? why : 'the run no longer needs it';
+        this.run.emit(id, 'skipped', { reason });
+        return { status: 'skipped', source: '', reason };
     }
 
     private finish<T>(id: StageId, out: StageResult<T>): StageResult<T> {
@@ -508,14 +545,17 @@ class Runner {
     private io(budgetMs: number, extraSignal?: AbortSignal): { io: StageIO; why(): Why | undefined; dispose(): void; aborted: Promise<never> } {
         const controller = new AbortController();
         let why: Why | undefined;
-        const fire = (w: Why) => { if (!why) { why = w; controller.abort(w === 'stop' ? abortError() : Object.assign(new Error(w === 'deadline' ? 'the run reached its time limit' : 'the stage reached its time limit'), { name: 'TimeoutError' })); } };
+        const endedBy = (w: Why): Error => w === 'stop' ? abortError()
+            : w === 'cancelled' ? Object.assign(new Error('the stage is not needed any more'), { name: 'CancelledError' })
+            : Object.assign(new Error(w === 'deadline' ? 'the run reached its time limit' : 'the stage reached its time limit'), { name: 'TimeoutError' });
+        const fire = (w: Why) => { if (!why) { why = w; controller.abort(endedBy(w)); } };
         const onStop = () => fire('stop');
         this.ctx.signal?.addEventListener('abort', onStop, { once: true });
         if (this.ctx.signal?.aborted) fire('stop');
-        // a stage the run no longer needs (the evidence, once the fit failed) is ended like a budget: one rung down
-        const onExtra = () => fire('budget');
+        // a stage the run no longer needs (the evidence, once the fit failed) is ended as not needed: it is not a time limit
+        const onExtra = () => fire('cancelled');
         extraSignal?.addEventListener('abort', onExtra, { once: true });
-        if (extraSignal?.aborted) fire('budget');
+        if (extraSignal?.aborted) fire('cancelled');
         const budgetTimer = setTimeout(() => fire('budget'), budgetMs);
         const deadlineTimer = setTimeout(() => fire('deadline'), Math.max(0, this.deadlineAt - this.now()));
         const aborted = new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true }));
@@ -657,6 +697,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         cache.writeRunRecord(runId, rec);
     };
     let placeValue: ResolvedPlace | undefined;
+    // every stage promise the call starts is settled before it returns or throws, so none runs on, or rejects unseen, after it
+    const siblings: Array<Promise<unknown>> = [];
 
     try {
         // ---------------- resolve ----------------
@@ -707,16 +749,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const sizing = await sizeExtraction<StagedExtraction>({
                         extract: async radiusM => { const x = await extractCached(radiusM, io); last = x; return x.extraction; },
                         ...(deps.vegetation.canopy ? { canopy: async (tile: string) => (await deps.vegetation.canopy!({ tilePath: tile, signal: io.signal })).mask } : {}),
-                        onProgress: m => io.progress(m)
+                        onProgress: m => io.progress(m), signal: io.signal
                     });
                     value = { extraction: sizing.extraction, key: last!.key, sizedTo: sizing.sizedTo, structure: sizing.structure, ground: sizing.ground, scan: sizing.scan, unmaskedTop: sizing.unmaskedTop, rounds: sizing.rounds, cached: last!.cached, builtAtMs: last!.builtAtMs };
                     for (const n of sizing.notes) {
                         const masked = n.reasonCode === 'canopy_not_masked';
+                        const districtLost = n.reasonCode === 'district_extract_failed';
                         run.degrade(record('tiles', n.reasonCode, {
-                            part: { description: masked ? 'the structure pick' : 'the isolated structure' },
-                            intended: masked ? 'a structure picked with the tree canopy masked out' : 'one structure, extracted whole and rebuilt',
-                            fellTo: masked ? 'the structure picked on the unmasked surface model' : n.reasonCode === 'no_structure_at_anchor' ? 'the remeshed area around the place, without a rebuild' : 'the remeshed district around it, without a rebuild',
-                            provenanceAfter: masked ? PROVENANCE.asScanned : PROVENANCE.remeshed, reason: n.reason, cause: n.error, transient: false, runId, now: now()
+                            part: { description: masked ? 'the structure pick' : districtLost ? 'the district around the place' : 'the isolated structure' },
+                            intended: masked ? 'a structure picked with the tree canopy masked out' : districtLost ? `the ${Math.round(NO_STRUCTURE_DISTRICT_RADIUS_M)} m district around the place` : 'one structure, extracted whole and rebuilt',
+                            fellTo: masked ? 'the structure picked on the unmasked surface model'
+                                : districtLost ? 'the smaller area already extracted, remeshed without a rebuild'
+                                : n.reasonCode === 'no_structure_at_anchor' ? 'the remeshed area around the place, without a rebuild'
+                                : 'the remeshed district around it, without a rebuild',
+                            provenanceAfter: masked ? PROVENANCE.asScanned : PROVENANCE.remeshed, reason: n.reason, cause: n.error, transient: !!n.error && (districtLost || n.reasonCode === 'containment_failed'), runId, now: now()
                         }));
                     }
                 } else {
@@ -753,6 +799,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (st) {
                     run.state.structure = { seed: [st.seed.x, st.seed.z], geocodeToStructureM: st.geocodeToStructureM, footprintAreaM2: st.areaM2, extractionRadiusM: e.radiusM, containmentRounds: value.rounds };
                 }
+                // the cap on leaf tiles can stop a large request short: the scan reaches less far than asked, and says so
+                if (e.truncated && e.coveredRadiusM < e.radiusM - 0.5) {
+                    const asked = Math.round(e.radiusM), covered = Math.round(e.coveredRadiusM);
+                    run.degrade(record('tiles', 'radius_truncated', {
+                        part: { description: `the outer ring of the extraction (${covered} to ${asked} m)` }, intended: `every leaf tile within ${asked} m of the place`,
+                        fellTo: `the nearest ${e.leafTiles} leaf tiles, which reach ${covered} m`, provenanceAfter: PROVENANCE.asScanned,
+                        reason: `more leaf tiles lie within ${asked} m than the build keeps (the nearest ${e.leafTiles}), so the scan reaches ${covered} m, not the ${asked} m asked for`,
+                        transient: false, runId, now: now()
+                    }));
+                }
                 const degradations = run.state.degradations.filter(d => d.stage === 'tiles');
                 return {
                     status: degradations.length ? 'degraded' : 'committed', value,
@@ -773,8 +829,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         const rebuildPossible = isolateMode && !!deps.scanFit;
         let evidencePromise: Promise<{ images: EvidenceImage[]; status: string }> | undefined;
-        // ended (one rung down: tile orthos only) when the fit fails, so no image is fetched for nothing
+        // ended (skipped, as not needed) when the fit fails, so no image is fetched for nothing
         const evidenceStop = new AbortController();
+
         if (rebuildPossible && visionAvailable) {
             evidencePromise = runner.stage<{ images: EvidenceImage[] }>({
                 id: 'evidence',
@@ -783,10 +840,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const missing = missingCredentials(sv);
                     if (missing) {
                         return {
-                            status: 'degraded', value: { images: [] }, source: 'tile orthos only', reason: missing,
+                            status: 'degraded', value: { images: [] }, source: 'no Street View images', reason: missing,
                             degradations: [run.degrade(record('evidence', 'no_street_view', {
-                                part: { description: 'Street View close-ups of the structure' }, intended: `up to 4 Street View images (© Google)`, fellTo: 'detail read from the tile photos only',
-                                provenanceAfter: PROVENANCE.photoInferred, reason: `${missing}; the detail is read from the tile photos only`, transient: false, runId, now: now()
+                                part: { description: 'Street View close-ups of the structure' }, intended: `up to 4 Street View images (© Google)`, fellTo: 'no Street View images',
+                                provenanceAfter: PROVENANCE.photoInferred, reason: missing, transient: false, runId, now: now()
                             }))]
                         };
                     }
@@ -797,36 +854,40 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const views = selectViews(found.panos, facades, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
                     if (!views.length) {
                         return {
-                            status: 'degraded', value: { images: [] }, source: 'tile orthos only', reason: 'no Google Street View panorama looks at the facades',
+                            status: 'degraded', value: { images: [] }, source: 'no Street View images', reason: 'no Google Street View panorama looks at the facades',
                             degradations: [run.degrade(record('evidence', 'no_street_view', {
-                                part: { description: 'Street View close-ups of the structure' }, intended: 'up to 4 Street View images (© Google)', fellTo: 'detail read from the tile photos only',
-                                provenanceAfter: PROVENANCE.photoInferred, reason: `no Google-captured Street View panorama within 12-60 m looks at the facades (${found.panos.length} found nearby); the detail is read from the tile photos only`, transient: false, runId, now: now()
+                                part: { description: 'Street View close-ups of the structure' }, intended: 'up to 4 Street View images (© Google)', fellTo: 'no Street View images',
+                                provenanceAfter: PROVENANCE.photoInferred, reason: `no Google-captured Street View panorama within 12-60 m looks at the facades (${found.panos.length} found nearby)`, transient: false, runId, now: now()
                             }))]
                         };
                     }
                     io.progress(`fetching ${views.length} Street View images through the grounding API`);
                     const got = await fetchViews(views, sv, io.signal);
+                    // ended while the images were coming (the fit failed, Stop, a time limit): they are dropped, and nothing here changes the run
+                    if (io.signal.aborted) throw io.signal.reason;
                     const degradations = got.failures.map(f => run.degrade(record('evidence', 'image_not_fetched', {
-                        part: { description: `Street View image of pano ${f.view.panoId} (heading ${f.view.headingDeg}°)` }, intended: 'one Street View close-up', fellTo: 'the other images and the tile orthos',
+                        part: { description: `Street View image of pano ${f.view.panoId} (heading ${f.view.headingDeg}°)` }, intended: 'one Street View close-up', fellTo: 'the other Street View images',
                         provenanceAfter: PROVENANCE.photoInferred, reason: `the image could not be fetched: ${f.error}`, cause: f.error, transient: f.transient, runId, now: now(), suffix: f.view.panoId
                     })));
                     if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
                     const status = got.images.length ? (degradations.length ? 'degraded' : 'committed') : 'degraded';
                     return {
                         status, value: { images: got.images }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
-                        ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch; the detail is read from the tile photos only' }),
+                        ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
                         degradations
                     };
                 },
                 degrade: async err => ({
-                    status: 'degraded', value: { images: [] }, source: 'tile orthos only', reason: `no Street View close-ups: ${errorMessage(err)}`,
+                    status: 'degraded', value: { images: [] }, source: 'no Street View images', reason: `no Street View close-ups: ${errorMessage(err)}`,
                     degradations: [run.degrade(record('evidence', 'no_street_view', {
-                        part: { description: 'Street View close-ups of the structure' }, intended: 'up to 4 Street View images (© Google)', fellTo: 'detail read from the tile photos only',
-                        provenanceAfter: PROVENANCE.photoInferred, reason: `no Street View close-ups (${errorMessage(err)}); the detail is read from the tile photos only`, cause: err,
-                        transient: !evidenceStop.signal.aborted, runId, now: now()
+                        part: { description: 'Street View close-ups of the structure' }, intended: 'up to 4 Street View images (© Google)', fellTo: 'no Street View images',
+                        provenanceAfter: PROVENANCE.photoInferred, reason: `no Street View close-ups (${errorMessage(err)})`, cause: err, transient: true, runId, now: now()
                     }))]
                 })
             }, evidenceStop.signal).then(r => ({ images: r.value?.images ?? [], status: r.status }));
+            // a Stop rejects it; whoever awaits it sees that, and nobody else is left holding a rejection nobody handles
+            evidencePromise.catch(() => undefined);
+            siblings.push(evidencePromise);
         }
 
         // ---------------- trees-measure ----------------
@@ -978,7 +1039,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const isolateOk = isolateMode && !!remeshed?.rawClayGlb && !run.state.degradations.some(d => d.reasonCode === 'isolate_mismatch');
 
         // ---------------- trees (plant) ‖ the rebuild ----------------
-        const treesPromise = (async (): Promise<{ trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } }> => {
+        const treesRun = async (): Promise<{ trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } }> => {
             if (!request.trees) { runner.skip('trees', 'trees were not asked for'); return {}; }
             if (!strip) { runner.skip('trees', 'the trees were not measured, so the scan keeps its own'); return {}; }
             if (!remeshed) {
@@ -1049,8 +1110,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 degrade: async err => {
                     // the scanned trees go back, as they were downloaded, labelled as scanned (user decision)
                     const reason = errorMessage(err);
-                    const putKey = stageKey('trees-putback/v1', strip!.cacheKey, sha256File(extraction.texturedGlb).slice(0, 16), isolateMode ? remeshed.cacheKey : 'district');
                     try {
+                        const putKey = stageKey('trees-putback/v1', strip!.cacheKey, sha256File(extraction.texturedGlb).slice(0, 16), isolateMode ? remeshed.cacheKey : 'district');
                         const bounds = isolateMode ? glbBounds(remeshed.clayGlb) : undefined;
                         const entry = await cache.run('trees', putKey, async dir => {
                             const r = putBackScannedTrees({
@@ -1095,14 +1156,29 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
             });
             return { trees: summaryTrees, putBack };
-        })();
+        };
+        // anything unexpected in the glue around the tree stage degrades it like a failed stage; it never fails the call or runs on after it
+        const treesPromise = treesRun().catch((err): { trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } } => {
+            if (isAbort(err)) throw err;
+            const why = `the tree stage stopped on an unexpected error (${errorMessage(err)})`;
+            const rec = run.degrade(record('trees', 'trees_failed', {
+                part: { description: 'the measured trees' }, intended: 'trees grown to the measured crown', fellTo: 'nothing: the ground where they stood stays closed',
+                provenanceAfter: PROVENANCE.remeshed, reason: why, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
+            }));
+            const st = run.summary('trees').status;
+            if (st === 'pending' || st === 'running') run.emit('trees', 'degraded', { source: 'no trees', reason: why, degradations: [rec] }, true);
+            return {};
+        });
+        siblings.push(treesPromise);
 
         // ---------------- the rebuild (isolated structure) ----------------
         type Rebuild = { fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
-        const rebuildPromise = (async (): Promise<Rebuild> => {
-            const out: Rebuild = { droppedNotResolvable: 0 };
+        const rebuildOut: Rebuild = { droppedNotResolvable: 0 };
+        const rebuildRun = async (): Promise<Rebuild> => {
+            const out = rebuildOut;
             const skipRest = (reason: string, from: StageId[] = ['fit', 'evidence', 'project', 'vision', 'correct', 'detail']) => {
-                if (from.includes('evidence')) evidenceStop.abort();
+                // the Street View fetch may still be running: it is ended as not needed, saying why
+                if (from.includes('evidence')) evidenceStop.abort(reason);
                 for (const id of from) runner.skip(id, reason);
             };
             if (!request.isolate) { skipRest('not an isolated structure'); return out; }
@@ -1200,45 +1276,70 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 return out;
             }
             const evidence = evidencePromise ? await evidencePromise : { images: [], status: 'skipped' };
-            const occluder = loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]);
-            const inputs: EvidenceInput[] = [];
-            for (const o of fit.outputs.orthos) {
-                if (!fs.existsSync(o.path)) continue;
-                const bytes = fs.readFileSync(o.path);
-                const ref = orthoRef(o, inputs.length, fit, bytes);
-                inputs.push({ ref, bytes, mimeType: 'image/png', caption: orthoCaption(ref, fit) });
-            }
-            const projected = await runner.stage<EvidenceImageRef[]>({
+            // the evidence the reading gets: the fit's facade orthos of the tile photos, then the Street View close-ups with the slots projected into them
+            type Projected = { inputs: EvidenceInput[]; refs: EvidenceImageRef[] };
+            const readOrthos = (): EvidenceInput[] => {
+                const found: EvidenceInput[] = [];
+                for (const o of fit.outputs.orthos) {
+                    if (!fs.existsSync(o.path)) continue;
+                    const bytes = fs.readFileSync(o.path);
+                    const ref = orthoRef(o, found.length, fit, bytes);
+                    found.push({ ref, bytes, mimeType: 'image/png', caption: orthoCaption(ref, fit) });
+                }
+                return found;
+            };
+            const projected = await runner.stage<Projected>({
                 id: 'project',
                 run: async () => {
-                    if (!evidence.images.length) return { status: 'skipped', source: '', reason: 'no Street View image to project the slots into' };
+                    const orthos = readOrthos();
+                    if (!evidence.images.length) return { status: 'skipped', value: { inputs: orthos, refs: [] }, source: '', reason: 'no Street View image to project the slots into' };
+                    const occluder = loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]);
                     const refs = evidence.images.map((img, k) => {
                         const slotsShown = projectSlots(fit, { eye: img.view.eye, headingDeg: img.view.headingDeg, pitchDeg: img.view.pitchDeg, fovDeg: img.view.fovDeg, widthPx: img.widthPx, heightPx: img.heightPx }, occluder);
                         const ref: EvidenceImageRef = {
-                            id: img.id, index: inputs.length + k, kind: 'streetview-grounding', widthPx: img.widthPx, heightPx: img.heightPx, sha256: img.sha256, nativeSampleM: img.nativeSampleM,
+                            id: img.id, index: orthos.length + k, kind: 'streetview-grounding', widthPx: img.widthPx, heightPx: img.heightPx, sha256: img.sha256, nativeSampleM: img.nativeSampleM,
                             panoId: img.view.panoId, ...(img.view.date ? { captureDate: img.view.date } : {}), copyright: img.view.copyright ?? '© Google',
                             headingDeg: img.view.headingDeg, pitchDeg: img.view.pitchDeg, fovDeg: img.view.fovDeg, distanceM: img.view.distanceM,
                             pose: nominalPose(img.view.eye), slotsShown
                         };
                         return ref;
                     });
-                    return { status: 'committed', value: refs, source: `${refs.reduce((s, r) => s + r.slotsShown.length, 0)} slot outlines in ${refs.length} Street View images (nominal pose, ±2 m)` };
+                    return {
+                        status: 'committed', value: { inputs: orthos, refs }, source: `${refs.reduce((n, r) => n + r.slotsShown.length, 0)} slot outlines in ${refs.length} Street View images (nominal pose, ±2 m)`
+                    };
+                },
+                // the images could not be prepared: the model gets whichever tile photos can still be read, and no Street View close-up
+                degrade: async err => {
+                    let inputs: EvidenceInput[] = [];
+                    try { inputs = readOrthos(); } catch { /* no tile photo either: nothing is read */ }
+                    const rest = inputs.length ? 'the tile photos that could be read' : 'no image';
+                    return {
+                        status: 'degraded', value: { inputs, refs: [] }, source: 'no Street View close-ups used', reason: `the images could not be prepared (${errorMessage(err)})`,
+                        degradations: [run.degrade(record('project', 'evidence_not_prepared', {
+                            part: { description: 'the images shown to the vision model' }, intended: 'the facade views of the tile photos and the Street View close-ups, with the fitted slots outlined',
+                            fellTo: rest, provenanceAfter: PROVENANCE.photoInferred, reason: `the images could not be prepared (${errorMessage(err)}); ${inputs.length ? 'only the tile photos are read' : 'nothing is read'}`,
+                            cause: err, transient: false, runId, now: now()
+                        }))]
+                    };
                 }
             });
             if (projected.status === 'skipped') run.summary('project').reason = projected.reason;
+            const inputs: EvidenceInput[] = [...(projected.value?.inputs ?? [])];
             evidence.images.forEach((img, k) => {
-                const ref = projected.value?.[k];
+                const ref = projected.value?.refs[k];
                 if (ref) inputs.push({ ref, bytes: img.bytes, mimeType: img.mimeType, caption: streetViewCaption(ref) });
             });
             out.evidenceCounts = { tileOrthos: inputs.filter(i => i.ref.kind === 'tile-ortho').length, streetView: inputs.filter(i => i.ref.kind === 'streetview-grounding').length };
-            const fitSha = sha256File(fit.outputs.reportJson);
             const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-            const visionKey = stageKey('ornament-vision/v2', ORNAMENT_PROMPT_VERSION, visionAvailable.candidates, ORNAMENT_THINKING_BUDGET, fitSha, inputs.map(i => i.ref.id), inputs.map(i => i.ref.sha256));
-            run.keys.vision = visionKey;
+            let fitSha = '';
+            let visionKey = '';
             const read = await runner.stage<OrnamentSpec>({
                 id: 'vision',
                 run: async io => {
                     if (!inputs.length) return { status: 'skipped', source: '', reason: 'no image shows the structure' };
+                    fitSha = sha256File(fit.outputs.reportJson);
+                    visionKey = stageKey('ornament-vision/v2', ORNAMENT_PROMPT_VERSION, visionAvailable.candidates, ORNAMENT_THINKING_BUDGET, fitSha, inputs.map(i => i.ref.id), inputs.map(i => i.ref.sha256));
+                    run.keys.vision = visionKey;
                     const hit = !bypass('vision') ? cache.get<{ spec: OrnamentSpec; supportTestRequired: string[] }>('vision', visionKey) : undefined;
                     if (hit) {
                         run.cacheStatus.vision = 'hit';
@@ -1314,7 +1415,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }
                         const ids = [...new Set(out.spec!.corrections.map(c => c.primitiveId))];
                         if (!ids.length) return { status: 'committed', source: 'no correction stayed within the scan tolerance; the fitted values are kept' };
-                        const layers = commitFitLayers(run, r, stageKey('scan_fit/refit/v1', r.key), base, cache, placeValue!.formattedAddress, ids);
+                        const confidence = Math.min(...out.spec!.corrections.map(c => c.confidence));
+                        const layers = commitFitLayers(run, r, stageKey('scan_fit/refit/v1', r.key), base, cache, placeValue!.formattedAddress, { ids, confidence });
                         currentFit = r;
                         return { status: 'committed', value: r, source: `${ids.length} primitive${ids.length === 1 ? '' : 's'} photo-corrected inside the scan tolerance`, layers };
                     },
@@ -1360,9 +1462,30 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
             if (detailed.value) out.detail = detailed.value;
             return out;
-        })();
+        };
+        // an unexpected error in the glue between the rebuild's stages degrades what has not run, like any failed stage
+        const rebuildPromise = rebuildRun().catch((err): Rebuild => {
+            if (isAbort(err)) throw err;
+            const why = `the rebuild stopped on an unexpected error (${errorMessage(err)})`;
+            evidenceStop.abort(why);
+            const open = (['fit', 'evidence', 'project', 'vision', 'correct', 'detail'] as StageId[]).filter(id => run.summary(id).status === 'pending');
+            const standing = run.state.layers.some(l => l.layer === 'l3b' || l.layer === 'l3br');
+            const rec = run.degrade(record(open[0] ?? 'fit', 'rebuild_failed', {
+                part: { description: standing ? 'the rest of the rebuild' : 'the structure' }, intended: standing ? 'photo-read detail on the fitted structure' : 'a scan-fitted rebuild',
+                fellTo: standing ? 'the fitted faces as built so far' : 'the remeshed scan', provenanceAfter: standing ? PROVENANCE.fitted : PROVENANCE.remeshed,
+                reason: why, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
+            }));
+            open.forEach((id, k) => runner.skip(id, why, k === 0 ? [rec] : []));
+            return rebuildOut;
+        });
+        siblings.push(rebuildPromise);
 
-        const [treesOut, rebuild] = await Promise.all([treesPromise, rebuildPromise]);
+        // both branches, and the Street View fetch, are settled before the call goes on: none runs, or rejects unseen, after it
+        const settled = await Promise.allSettled([treesPromise, rebuildPromise, ...(evidencePromise ? [evidencePromise] : [])]);
+        const failure = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+        if (failure) throw failure.reason;
+        const treesOut = (settled[0] as PromiseFulfilledResult<Awaited<typeof treesPromise>>).value;
+        const rebuild = (settled[1] as PromiseFulfilledResult<Awaited<typeof rebuildPromise>>).value;
         persist();
 
         // ---------------- finish ----------------
@@ -1371,28 +1494,44 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, now, persist
         });
     } catch (err) {
+        // the Street View fetch and the two branches are ended with the call: none is left running, or rejecting unseen, behind it
+        await Promise.allSettled(siblings);
         if ((err as Error)?.name === 'AbortError') {
             run.state.runState = 'stopped';
             for (const s of run.state.stages) if (s.status === 'running' || s.status === 'pending') s.status = 'stopped';
-            persist();
-        } else if (err instanceof StagedLocationHardFailure) {
+        } else {
+            // a hard failure, or an error nothing could degrade: the run is recorded failed, whatever it left open is stopped
             run.state.runState = 'failed';
-            persist();
+            if (!(err instanceof StagedLocationHardFailure)) {
+                for (const s of run.state.stages) if (s.status === 'running' || s.status === 'pending') { s.status = 'stopped'; s.reason = s.reason ?? `the call failed: ${errorMessage(err)}`; }
+            }
         }
+        persist();
+        run.close();
         throw err;
     }
 }
 
 /** Publishes a fit's (or refit's) layers: outlines, the fitted body (one node per surface) and the pass-through scan. */
-function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base: string, cache: StageCache, address: string, correctedIds: string[] | undefined): StagedLayer[] {
+function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base: string, cache: StageCache, address: string, corrected: { ids: string[]; confidence: number } | undefined): StagedLayer[] {
     const fit = r.value;
-    const refit = !!correctedIds;
+    const refit = !!corrected;
+    const correctedIds = corrected?.ids;
     const out: StagedLayer[] = [];
     const prior = (layer: string) => run.state.layers.filter(l => l.layer === layer).pop();
     const remesh = run.state.layers.find(l => l.layer === 'l2');
-    const fitRecord = (label: ProvenanceLabel): ProvenanceRecord => ({
-        label, measuredGeometry: true, method: 'scan_fit: the four operators fitted to the isolated scan', sources: [{ kind: 'stage-output', id: `fit:${key.slice(0, 8)}` }], residual: fit.metrics.scanToFit
-    });
+    const fitRecord = (label: ProvenanceLabel): ProvenanceRecord => {
+        const sources = [{ kind: 'stage-output' as const, id: `fit:${key.slice(0, 8)}` }];
+        // a value the photos moved is read from the photos, not measured in the scan: it says so, with the correction's confidence
+        if (corrected && NON_MEASURED_PROVENANCE_LABELS.includes(label)) {
+            return {
+                label, measuredGeometry: false, confidence: corrected.confidence, residual: fit.metrics.scanToFit, sources,
+                method: `scan_fit refit: ${corrected.ids.length} primitive${corrected.ids.length === 1 ? '' : 's'} moved to a value read from the photos, kept only inside the scan tolerance`,
+                note: `only ${corrected.ids.join(', ')} ${corrected.ids.length === 1 ? 'is' : 'are'} photo-corrected; the residual is the whole fit's against the scan`
+            };
+        }
+        return { label, measuredGeometry: true, method: 'scan_fit: the four operators fitted to the isolated scan', sources, residual: fit.metrics.scanToFit };
+    };
     const unobserved = fit.surfaces.filter(s => s.supportFraction < 0.5);
     const labels: ProvenanceLabel[] = [PROVENANCE.fitted, ...(unobserved.length ? [PROVENANCE.fittedUnobserved] : []), ...(refit ? [PROVENANCE.photoCorrected] : [])];
     const add = (layerName: string, file: string | undefined, label: ProvenanceLabel, labelsHere: ProvenanceLabel[], reveal: Partial<StagedLayer['reveal']>, supersedes: string[], revealAfter: string[]) => {
@@ -1413,7 +1552,7 @@ function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base:
         add('l3c', fit.outputs.passThroughGlb, PROVENANCE.asScanned, [PROVENANCE.asScanned], { crossfadeFrom: remesh ? [remesh.objectId] : [] }, [], remesh ? [remesh.objectId] : []);
     } else {
         const a = prior('l3a'), b = prior('l3b');
-        add('l3ar', fit.outputs.outlinesGlb, PROVENANCE.fitted, [PROVENANCE.fitted, PROVENANCE.photoCorrected], { crossfadeFrom: a ? [a.objectId] : [], only: { primitiveIds: correctedIds! } }, a ? [a.objectId] : [], a ? [a.objectId] : []);
+        add('l3ar', fit.outputs.outlinesGlb, PROVENANCE.photoCorrected, [PROVENANCE.fitted, PROVENANCE.photoCorrected], { crossfadeFrom: a ? [a.objectId] : [], only: { primitiveIds: correctedIds! } }, a ? [a.objectId] : [], a ? [a.objectId] : []);
         add('l3br', fit.outputs.fittedGlb, PROVENANCE.photoCorrected, labels, { crossfadeFrom: b ? [b.objectId] : [], only: { primitiveIds: correctedIds! } }, b ? [b.objectId] : [], b ? [b.objectId] : []);
     }
     return out;
@@ -1456,7 +1595,18 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     if (scanNames.length) exemptions.push({ scanDerived: { submeshes: scanNames, label: PROVENANCE.remeshed, leafGeometricErrorM: f.extraction.leafGeometricErrorM } });
     const fitResult = f.rebuild.refit ?? f.rebuild.fit;
     const rebuildNames = visible.filter(l => ['l3a', 'l3b', 'l3c', 'l3ar', 'l3br', 'l4'].includes(l.layer)).map(l => l.objectId);
-    if (fitResult && rebuildNames.length) exemptions.push({ measuredRebuild: { submeshes: rebuildNames, structureFit: fitResult.value, structureFitSha256: sha256File(fitResult.value.outputs.reportJson) } });
+    const refusedHere: string[] = [];
+    if (fitResult && rebuildNames.length) {
+        // the gate quotes the StructureFit's sha: a report that can no longer be read earns no exemption, and the layers are counted
+        try {
+            exemptions.push({ measuredRebuild: { submeshes: rebuildNames, structureFit: fitResult.value, structureFitSha256: sha256File(fitResult.value.outputs.reportJson) } });
+        } catch (err) {
+            refusedHere.push(`measured rebuild ${rebuildNames.join(', ')}: its StructureFit report could not be read (${errorMessage(err)})`);
+        }
+    }
+    // SB-Veggie trees grown inside the crowns the strip measured: the count of trees is the scan's, so the layer is judged by that and not padded
+    const grownTrees = visible.filter(l => l.layer === 'l5').map(l => l.objectId);
+    if (grownTrees.length && f.trees && f.trees.count > 0) exemptions.push({ measuredCrowns: { submeshes: grownTrees, crowns: f.trees.count } });
     const gate = GeometricComplexityGate.evaluate({
         totalVertices: submeshes.reduce((s, m) => s + m.vertexCount, 0), totalTriangles: submeshes.reduce((s, m) => s + m.triangleCount, 0), submeshes, engineKernel: 'scratchbox-native'
     }, { exemptions });
@@ -1487,12 +1637,15 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         place: { query: f.request.query, resolvedAddress: f.place.formattedAddress, lat: f.place.lat, lng: f.place.lng, ...(typeof f.extraction.geoAnchor.elevation === 'number' ? { elevationM: f.extraction.geoAnchor.elevation } : {}) },
         ...(run.state.structure ? { structure: run.state.structure } : {}),
         extraction: {
-            ...(f.request.isolate ? {} : { requestedRadiusM: f.request.radiusM ?? 250 }), radiusM: f.extraction.radiusM, sizedTo: f.sizedTo, leafTiles: f.extraction.leafTiles,
+            ...(f.request.isolate ? {} : { requestedRadiusM: f.request.radiusM ?? 250 }),
+            // the radius the tiles really reach: the leaf-tile cap can stop a large request short of the one asked for
+            radiusM: f.extraction.truncated ? Math.min(f.extraction.radiusM, f.extraction.coveredRadiusM) : f.extraction.radiusM, sizedTo: f.sizedTo, leafTiles: f.extraction.leafTiles,
             cached: run.cacheStatus.tiles === 'hit', ...(run.cacheStatus.tiles === 'hit' ? { ageDays: round((now() - (run.summary('tiles').timings.builtAtMs ?? now())) / 86_400_000, 1) } : {}),
             geometricErrorM: f.extraction.leafGeometricErrorM, texelM: sourceLimits.texelM, attribution: run.state.attribution
         },
-        stages: run.state.stages,
-        degradations: run.state.degradations,
+        // copies: the result is the record of this call, and stays so
+        stages: JSON.parse(JSON.stringify(run.state.stages)) as StageSummary[],
+        degradations: JSON.parse(JSON.stringify(run.state.degradations)) as DegradationRecord[],
         provenance: [...provenance.values()],
         ...(remeshLayer?.vertexProvenance ? { remeshVertexProvenance: remeshLayer.vertexProvenance } : {}),
         ...(fit ? {
@@ -1515,12 +1668,13 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         complexityGate: { passed: gate.passed, totalVertices: gate.totalVertices, totalTriangles: gate.totalTriangles, violations: gate.violations, exemptions: gate.exemptions },
         sourceLimits,
         timingsMs: { total: now() - run.startedAt, firstVisual: (run.firstVisualAt ?? now()) - run.startedAt, byStage },
-        cache: run.cacheStatus
+        cache: { ...run.cacheStatus }
     };
     const summaryInput: StagedSummaryInput = {
         ...base, runId: run.runId,
         ...(remeshLayer?.provenance.note ? { remeshNote: remeshLayer.provenance.note } : {}),
         ...(f.putBack ? { treesPutBack: f.putBack } : {}),
+        ...(gate.exemptionsRefused.length || refusedHere.length ? { exemptionsRefused: [...refusedHere, ...gate.exemptionsRefused] } : {}),
         droppedNotResolvable: f.rebuild.droppedNotResolvable
     };
     const { digest, summary } = summarizeStagedBuild(summaryInput);
@@ -1529,6 +1683,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     // the finish event carries the final scene
     run.emitFinish(status === 'complete' ? 'committed' : 'degraded', digest);
     f.persist();
+    run.close();
     return {
         result,
         compat: {
