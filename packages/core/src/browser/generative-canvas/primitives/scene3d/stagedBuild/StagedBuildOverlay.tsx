@@ -270,18 +270,22 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                     </button>
                     {degradedOpen ? (
                         <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }} data-testid="sb-staged-degraded-list">
-                            {degradations.map(d => (
-                                <li key={d.id}>
-                                    <button type="button" style={{ ...BUTTON, width: '100%', ...(props.highlightedId === d.id ? { borderColor: '#D55E00' } : {}) }}
-                                        aria-pressed={props.highlightedId === d.id}
-                                        aria-label={`${d.part.description} fell to ${d.fellTo}: ${d.reason}${props.placements?.get(d.id)?.scope === 'none' ? ' It has no separate part to highlight in the viewport.' : ' Highlight it in the viewport.'}`}
-                                        onClick={() => props.onHighlight(d)}>
-                                        <div>{`${d.part.description} → ${d.fellTo}`}</div>
-                                        <div style={{ color: MUTED }}>{d.reason}</div>
-                                        {placementSentence(state, props.placements?.get(d.id)) ? <div style={{ color: MUTED }} data-testid="sb-staged-degraded-where">{placementSentence(state, props.placements?.get(d.id))}</div> : null}
-                                    </button>
-                                </li>
-                            ))}
+                            {degradations.map(d => {
+                                const note = props.placements?.get(d.id);
+                                const where = placementSentence(state, note);
+                                return (
+                                    <li key={d.id}>
+                                        <button type="button" style={{ ...BUTTON, width: '100%', ...(props.highlightedId === d.id ? { borderColor: '#D55E00' } : {}) }}
+                                            aria-pressed={props.highlightedId === d.id}
+                                            aria-label={`${d.part.description} fell to ${d.fellTo}: ${d.reason}${note?.scope === 'none' ? ' It has no separate part to highlight in the viewport.' : ' Highlight it in the viewport.'}`}
+                                            onClick={() => props.onHighlight(d)}>
+                                            <div>{`${d.part.description} → ${d.fellTo}`}</div>
+                                            <div style={{ color: MUTED }}>{d.reason}</div>
+                                            {where ? <div style={{ color: MUTED }} data-testid="sb-staged-degraded-where">{where}</div> : null}
+                                        </button>
+                                    </li>
+                                );
+                            })}
                         </ul>
                     ) : null}
                 </div>

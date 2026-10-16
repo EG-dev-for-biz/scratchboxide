@@ -392,67 +392,73 @@ describe.skipIf(!stagedChrome.ok)('the real viewport (Scene3DPrimitive, its load
     });
 
     test('finding 3: degraded parts are shaded where the data places them, and the list says when there is nothing to shade', async () => {
-        const run = 'beef0003';
-        // The detail layer, one element node of which says it is the part that degraded (NATIVE writes one such node per degraded slot).
-        const L4 = 'stg-b3d1e9c1-l4d';
-        const detail = patchGlbJson(fixture.glbs.l4, json => {
-            for (const n of json.nodes ?? []) if (n.name === 'e003-panel') n.extras.sb.ids.degradationId = 'd-el-e014';
-        });
-        page.serve('l4d.glb', detail);
-        const l4 = L('l4', { objectId: L4, url: '/models/l4d.glb' });
-        const records = [
-            degradation('d-el-e014', { stage: 'detail', part: { description: 'element e014 on slot S11', elementId: 'e014' } }),
-            degradation('d-crown-99', { stage: 'trees', part: { description: 'the tree at crown 99', crownId: 99 }, provenanceAfter: PROVENANCE.asScanned, fellTo: 'that tree kept as scanned', reason: 'its crown could not be regrown' }),
-            degradation('d-vision', { stage: 'vision', part: { description: 'facade detail of the structure' }, provenanceAfter: PROVENANCE.fitted, fellTo: 'the flat fitted face', reason: 'the vision model returned 503' })
-        ];
-        const st = runOf(run, fixtureState([L('l1'), L('l2'), L('l3a'), L('l3b'), l4], { runState: 'finished', degradations: records, stageStatus: { detail: 'degraded', trees: 'degraded', vision: 'degraded' } }));
-        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(st))})`);
-        await page.waitFor('sbHarness.ready()');
-        for (const id of [objectIdOf('l3b'), L4]) await page.waitFor(`sbHarness.attached(${JSON.stringify(id)})`, 30_000, `${id} attached`);
-        await advanceTo(page, L4, 1);
-        await page.step(30, STEP);
+        // The highlight lasts HIGHLIGHT_MS of wall time; the page's Date is frozen so a slow machine cannot end it between a click and a pixel read.
+        await page.eval(`(() => { const w = window; w.__realDateNow = Date.now; const t = Date.now(); Date.now = () => t; })()`);
+        try {
+            const run = 'beef0003';
+            // The detail layer, one element node of which says it is the part that degraded (NATIVE writes one such node per degraded slot).
+            const L4 = 'stg-b3d1e9c1-l4d';
+            const detail = patchGlbJson(fixture.glbs.l4, json => {
+                for (const n of json.nodes ?? []) if (n.name === 'e003-panel') n.extras.sb.ids.degradationId = 'd-el-e014';
+            });
+            page.serve('l4d.glb', detail);
+            const l4 = L('l4', { objectId: L4, url: '/models/l4d.glb' });
+            const records = [
+                degradation('d-el-e014', { stage: 'detail', part: { description: 'element e014 on slot S11', elementId: 'e014' } }),
+                degradation('d-crown-99', { stage: 'trees', part: { description: 'the tree at crown 99', crownId: 99 }, provenanceAfter: PROVENANCE.asScanned, fellTo: 'that tree kept as scanned', reason: 'its crown could not be regrown' }),
+                degradation('d-vision', { stage: 'vision', part: { description: 'facade detail of the structure' }, provenanceAfter: PROVENANCE.fitted, fellTo: 'the flat fitted face', reason: 'the vision model returned 503' })
+            ];
+            const st = runOf(run, fixtureState([L('l1'), L('l2'), L('l3a'), L('l3b'), l4], { runState: 'finished', degradations: records, stageStatus: { detail: 'degraded', trees: 'degraded', vision: 'degraded' } }));
+            await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(st))})`);
+            await page.waitFor('sbHarness.ready()');
+            for (const id of [objectIdOf('l3b'), L4]) await page.waitFor(`sbHarness.attached(${JSON.stringify(id)})`, 30_000, `${id} attached`);
+            await advanceTo(page, L4, 1);
+            await page.step(30, STEP);
 
-        // Every record is in the list; the ones that shade the whole layer or nothing say so.
-        await page.eval(`sbHarness.click('[data-testid="sb-staged-degraded-toggle"]')`);
-        await page.step(4, STEP);
-        const list = await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-degraded-list"]')`);
-        expect(list).toContain('No separate part to highlight in the viewport.');
-        expect(list).toMatch(/Highlights the whole of Scan-fitted rebuild/);
-        expect(list.match(/Highlights|No separate/g)!.length, 'the exact part (a node names it) needs no note').toBe(2);
-        await page.screenshot('review_degraded_list_placements');
+            // Every record is in the list; the ones that shade the whole layer or nothing say so.
+            await page.eval(`sbHarness.click('[data-testid="sb-staged-degraded-toggle"]')`);
+            await page.step(4, STEP);
+            const list = await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-degraded-list"]')`);
+            expect(list).toContain('No separate part to highlight in the viewport.');
+            expect(list).toMatch(/Highlights the whole of Scan-fitted rebuild/);
+            expect(list.match(/Highlights|No separate/g)!.length, 'the exact part (a node names it) needs no note').toBe(2);
+            await page.screenshot('review_degraded_list_placements');
 
-        const hatchShare = async (id: string) => {
-            const nodes = await page.eval<Array<{ node: string; samples: Array<{ rgb: [number, number, number] }> }>>(`sbHarness.sampleNodes(${JSON.stringify(id)}, 60)`);
-            const out: Record<string, number> = {};
-            for (const n of nodes) out[n.node] = n.samples.filter(s => Math.abs(s.rgb[0] - 0xd5) < 10 && Math.abs(s.rgb[1] - 0x5e) < 10 && s.rgb[2] < 12).length / Math.max(1, n.samples.length);
-            return out;
-        };
-        // Click the element's entry: the node that names it is hatched, the other elements are not.
-        const entry = (label: string) => `(() => { const b = [...document.querySelectorAll('[data-testid="sb-staged-degraded-list"] button')].find(x => x.textContent.includes(${JSON.stringify(label)})); b && b.click(); })()`;
-        await page.eval(entry('element e014'));
-        await page.step(6, STEP);
-        const hi = await hatchShare(L4);
-        await page.screenshot('review_degraded_highlight_from_list');
-        expect(Object.keys(hi).sort()).toEqual(['e001-coffers', 'e002-archivolt', 'e003-panel']);
-        expect(hi['e003-panel'], `the named node is hatched: ${JSON.stringify(hi)}`).toBeGreaterThan(0.1);
-        expect(hi['e001-coffers']).toBeLessThan(0.03);
-        expect(hi['e002-archivolt']).toBeLessThan(0.03);
-        // The tree entry has no node: clicking it shades nothing, and nothing else gets shaded for it.
-        await page.eval(entry('crown 99'));
-        await page.step(6, STEP);
-        const none = await hatchShare(L4);
-        expect(Math.max(...Object.values(none)), `nothing is shaded for a part no node carries: ${JSON.stringify(none)}`).toBeLessThan(0.03);
+            const hatchShare = async (id: string) => {
+                const nodes = await page.eval<Array<{ node: string; samples: Array<{ rgb: [number, number, number] }> }>>(`sbHarness.sampleNodes(${JSON.stringify(id)}, 60)`);
+                const out: Record<string, number> = {};
+                for (const n of nodes) out[n.node] = n.samples.filter(s => Math.abs(s.rgb[0] - 0xd5) < 10 && Math.abs(s.rgb[1] - 0x5e) < 10 && s.rgb[2] < 12).length / Math.max(1, n.samples.length);
+                return out;
+            };
+            // Click the element's entry: the node that names it is hatched, the other elements are not.
+            const entry = (label: string) => `(() => { const b = [...document.querySelectorAll('[data-testid="sb-staged-degraded-list"] button')].find(x => x.textContent.includes(${JSON.stringify(label)})); b && b.click(); })()`;
+            await page.eval(entry('element e014'));
+            await page.step(6, STEP);
+            const hi = await hatchShare(L4);
+            await page.screenshot('review_degraded_highlight_from_list');
+            expect(Object.keys(hi).sort()).toEqual(['e001-coffers', 'e002-archivolt', 'e003-panel']);
+            expect(hi['e003-panel'], `the named node is hatched: ${JSON.stringify(hi)}`).toBeGreaterThan(0.1);
+            expect(hi['e001-coffers']).toBeLessThan(0.03);
+            expect(hi['e002-archivolt']).toBeLessThan(0.03);
+            // The tree entry has no node: clicking it shades nothing, and nothing else gets shaded for it.
+            await page.eval(entry('crown 99'));
+            await page.step(6, STEP);
+            const none = await hatchShare(L4);
+            expect(Math.max(...Object.values(none)), `nothing is shaded for a part no node carries: ${JSON.stringify(none)}`).toBeLessThan(0.03);
 
-        // Provenance on: the exact part and the fitted body (the vision record's whole layer) are marked; the rest are not.
-        await page.eval(`sbHarness.click('[data-testid="sb-staged-provenance-toggle"]')`);
-        await page.step(8, STEP);
-        await page.screenshot('review_degraded_provenance_marks');
-        const prov = await hatchShare(L4);
-        expect(prov['e003-panel'], JSON.stringify(prov)).toBeGreaterThan(0.1);
-        expect(prov['e001-coffers']).toBeLessThan(0.03);
-        const body = await hatchShare(objectIdOf('l3b'));
-        const bodyMean = Object.values(body).reduce((a, b) => a + b, 0) / Math.max(1, Object.keys(body).length);
-        expect(bodyMean, `the fitted faces carry the hatch of the vision record: ${JSON.stringify(body)}`).toBeGreaterThan(0.08);
+            // Provenance on: the exact part and the fitted body (the vision record's whole layer) are marked; the rest are not.
+            await page.eval(`sbHarness.click('[data-testid="sb-staged-provenance-toggle"]')`);
+            await page.step(8, STEP);
+            await page.screenshot('review_degraded_provenance_marks');
+            const prov = await hatchShare(L4);
+            expect(prov['e003-panel'], JSON.stringify(prov)).toBeGreaterThan(0.1);
+            expect(prov['e001-coffers']).toBeLessThan(0.03);
+            const body = await hatchShare(objectIdOf('l3b'));
+            const bodyMean = Object.values(body).reduce((a, b) => a + b, 0) / Math.max(1, Object.keys(body).length);
+            expect(bodyMean, `the fitted faces carry the hatch of the vision record: ${JSON.stringify(body)}`).toBeGreaterThan(0.08);
+        } finally {
+            await page.eval(`Date.now = window.__realDateNow`);
+        }
     });
 
     test('finding 5 on screen: the finished sentence and the stage chips give the reasons', async () => {
