@@ -64,11 +64,11 @@ struct SbVeggieBlade {
 
 /** How a tree grows and carries its leaves. All continuous; defaults are the neutral values the canonical template was drawn with. */
 struct SbVeggieMorphology {
-    float apicalDominance{0.5f};       // 0..1: how far the leader outgrows the laterals
-    float branchAngleMeanRad{0.9f};    // mean angle of laterals from the leader
-    float branchAngleSpreadRad{0.25f}; // spread (standard deviation) of that angle
-    float crownAspect{1.0f};           // crown height / crown width (1 = the canonical template)
-    float internodeLengthM{0.4f};      // distance between successive nodes along a shoot
+    float apicalDominance{0.5f};       // 0..1: how far the leader outgrows the laterals (a grown tree: the momentum of a branch along its heading, 0.76 x this)
+    float branchAngleMeanRad{0.80795f};// mean angle of laterals from the leader (atan2(0.68, 0.65): the direction scaffold limbs have always sprouted in)
+    float branchAngleSpreadRad{0.2f};  // spread of that angle: between crowns and (half of it) between the limbs of one
+    float crownAspect{1.0f};           // crown height / crown width (1 = the canonical template; a grown tree has the aspect of its measured crown)
+    float internodeLengthM{0.0f};      // distance between successive nodes along a shoot (0: the grower derives it from the tree's height)
     float leafDistributionExponent{0.58f}; // along a shoot, a leaf sits at ((i + 0.5) / n)^exponent of the reach: below 1 it crowds towards the tip
     float divergenceAngleRad{2.39996f};    // angle between successive leaves around the shoot (the golden angle, 137.5 degrees, by default)
     SbVeggieBlade blade;
@@ -1012,7 +1012,7 @@ public:
      */
     static size_t append(const SbVeggieBlade& b, const SbVeggieBladePlacement& pl, float cupping,
                          std::vector<SbVeggieBladeVertex>& verts, std::vector<uint32_t>& indices, bool withPetiole = true) {
-        const int R = std::max(1, b.rows);
+        const int R = std::max(0, b.rows);
         const float L = pl.lengthM;
         const float W = std::max(1e-4f, b.widthRatio) * L;
         auto ovate = [&](float t) { return std::pow(std::max(1e-4f, t), b.outlineA) * std::pow(std::max(1e-4f, 1.0f - t), b.outlineB); };
@@ -1027,26 +1027,39 @@ public:
         };
         const Vec3 origin = pl.petioleTip;
         std::vector<Vec3> P;
+        std::vector<uint32_t> tri;
         P.push_back(origin);
-        for (int k = 1; k <= R; ++k) {
-            const float t = static_cast<float>(k) / (R + 1);
-            const float h = halfWidth(t);
-            const float edge = cup * (h / (0.5f * W)) * (h / (0.5f * W));
-            const Vec3 along = origin + pl.tangent * (L * t) - pl.normal * (droop * t * t);
-            P.push_back(along - pl.bitangent * h + pl.normal * edge);
-            P.push_back(along - pl.normal * (sink * (1.0f - 0.5f * t)));
-            P.push_back(along + pl.bitangent * h + pl.normal * edge);
+        if (R == 0) {
+            // no interior rows: a kite, the widest point at the outline's own widest t, folded along the midrib by the cupping
+            float tMax = 0.45f, best = 0.0f;
+            for (int k = 1; k < 100; ++k) { const float v = ovate(k / 100.0f); if (v > best) { best = v; tMax = k / 100.0f; } }
+            const float h = halfWidth(tMax);
+            const Vec3 along = origin + pl.tangent * (L * tMax) - pl.normal * (droop * tMax * tMax);
+            P.push_back(along - pl.bitangent * h + pl.normal * cup);
+            P.push_back(along + pl.bitangent * h + pl.normal * cup);
+            P.push_back(origin + pl.tangent * L - pl.normal * droop);
+            tri = {0u, 1u, 2u, 1u, 3u, 2u};
+        } else {
+            for (int k = 1; k <= R; ++k) {
+                const float t = static_cast<float>(k) / (R + 1);
+                const float h = halfWidth(t);
+                const float edge = cup * (h / (0.5f * W)) * (h / (0.5f * W));
+                const Vec3 along = origin + pl.tangent * (L * t) - pl.normal * (droop * t * t);
+                P.push_back(along - pl.bitangent * h + pl.normal * edge);
+                P.push_back(along - pl.normal * (sink * (1.0f - 0.5f * t)));
+                P.push_back(along + pl.bitangent * h + pl.normal * edge);
+            }
+            P.push_back(origin + pl.tangent * L - pl.normal * droop);
+            const uint32_t T = static_cast<uint32_t>(P.size() - 1);
+            auto Lk = [&](int k) { return static_cast<uint32_t>(1 + 3 * (k - 1)); };
+            tri = {0u, Lk(1), Lk(1) + 1, 0u, Lk(1) + 1, Lk(1) + 2};
+            for (int k = 1; k < R; ++k) {
+                const uint32_t l0 = Lk(k), m0 = l0 + 1, r0 = l0 + 2, l1 = Lk(k + 1), m1 = l1 + 1, r1 = l1 + 2;
+                tri.insert(tri.end(), {l0, l1, m1, l0, m1, m0, m0, m1, r1, m0, r1, r0});
+            }
+            const uint32_t lr = Lk(R), mr = lr + 1, rr = lr + 2;
+            tri.insert(tri.end(), {mr, lr, T, mr, T, rr});
         }
-        P.push_back(origin + pl.tangent * L - pl.normal * droop);
-        const uint32_t T = static_cast<uint32_t>(P.size() - 1);
-        auto Lk = [&](int k) { return static_cast<uint32_t>(1 + 3 * (k - 1)); };
-        std::vector<uint32_t> tri{0u, Lk(1), Lk(1) + 1, 0u, Lk(1) + 1, Lk(1) + 2};
-        for (int k = 1; k < R; ++k) {
-            const uint32_t l0 = Lk(k), m0 = l0 + 1, r0 = l0 + 2, l1 = Lk(k + 1), m1 = l1 + 1, r1 = l1 + 2;
-            tri.insert(tri.end(), {l0, l1, m1, l0, m1, m0, m0, m1, r1, m0, r1, r0});
-        }
-        const uint32_t lr = Lk(R), mr = lr + 1, rr = lr + 2;
-        tri.insert(tri.end(), {mr, lr, T, mr, T, rr});
         // smooth normals of the upper side (area weighted), oriented to the blade's upper side
         std::vector<Vec3> N(P.size(), Vec3(0, 0, 0));
         for (size_t i = 0; i + 2 < tri.size(); i += 3) {
@@ -1061,6 +1074,7 @@ public:
         auto uvOf = [&](size_t q) {
             if (q == 0) return Vec2(0.5f, 0.0f);
             if (q == P.size() - 1) return Vec2(0.5f, 1.0f);
+            if (R == 0) return Vec2(q == 1 ? 0.0f : 1.0f, 0.45f);
             const int row = static_cast<int>((q - 1) / 3) + 1, col = static_cast<int>((q - 1) % 3);
             return Vec2(0.5f * col, row / tv);
         };
@@ -1080,13 +1094,13 @@ public:
         for (size_t i = 0; i + 2 < tri.size(); i += 3) indices.insert(indices.end(), {underBase + tri[i], underBase + tri[i + 2], underBase + tri[i + 1]});
         const size_t bladeTriangles = tri.size() / 3 * 2;
         if (withPetiole && b.petioleRatio > 0.0f) {
+            // the petiole: one triangle, as wide as a stalk at the twig and a point at the blade
             const Vec3 w = pl.bitangent * (0.5f * W * 0.045f * 2.0f);
             const uint32_t pb = static_cast<uint32_t>(verts.size());
             verts.push_back(SbVeggieBladeVertex{pl.petioleBase - w, pl.normal, Vec2(0.5f, 0.01f), false, true});
             verts.push_back(SbVeggieBladeVertex{pl.petioleBase + w, pl.normal, Vec2(0.5f, 0.01f), false, true});
-            verts.push_back(SbVeggieBladeVertex{pl.petioleTip + w, pl.normal, Vec2(0.5f, 0.05f), false, true});
-            verts.push_back(SbVeggieBladeVertex{pl.petioleTip - w, pl.normal, Vec2(0.5f, 0.05f), false, true});
-            indices.insert(indices.end(), {pb, pb + 1, pb + 2, pb, pb + 2, pb + 3});
+            verts.push_back(SbVeggieBladeVertex{pl.petioleTip, pl.normal, Vec2(0.5f, 0.05f), false, true});
+            indices.insert(indices.end(), {pb, pb + 1, pb + 2});
         }
         return bladeTriangles;
     }
@@ -1110,6 +1124,7 @@ struct SbVeggieClusterMesh {
     std::vector<Vec3> positions, normals;
     std::vector<uint32_t> indices;     // the leaf cards first (blades and petioles), the sub-shoot tubes after
     size_t leafIndexCount{0};
+    std::vector<uint32_t> bladeFrontIndices; // the blades' upper-side triangles alone (no underside, no petioles): the surface a leaf measurement needs
     int leaves{0};
     float reach{0.0f};                 // farthest vertex from the attachment point
     std::vector<Vec3> support;         // extreme points in a Fibonacci sphere of directions: the cluster's hull, for fitting it into a crown
@@ -1169,7 +1184,9 @@ public:
             pl.tangent = rachis;
             pl.normal = normal;
             pl.lengthM = L;
-            appendLeaf(cp, mo, pl, verts, idx);
+            const size_t before = idx.size();
+            const size_t bladeTris = appendLeaf(cp, mo, pl, verts, idx);
+            out.bladeFrontIndices.insert(out.bladeFrontIndices.end(), idx.begin() + static_cast<std::ptrdiff_t>(before), idx.begin() + static_cast<std::ptrdiff_t>(before + bladeTris / 2 * 3));
         }
         out.leaves = n;
         for (const auto& v : verts) { out.positions.push_back(v.position); out.normals.push_back(v.normal); }
@@ -1223,11 +1240,11 @@ public:
     }
 
 private:
-    static void appendLeaf(const SbVeggieClusterParams& cp, const SbVeggieMorphology& mo, const SbVeggieBladePlacement& pl,
+    static size_t appendLeaf(const SbVeggieClusterParams& cp, const SbVeggieMorphology& mo, const SbVeggieBladePlacement& pl,
                            std::vector<SbVeggieBladeVertex>& verts, std::vector<uint32_t>& idx) {
         SbVeggieBlade b = mo.blade;
         if (!cp.petioles) b.petioleRatio = 0.0f;
-        SbVeggieBladeBuilder::append(b, pl, cp.cupping, verts, idx, cp.petioles);
+        return SbVeggieBladeBuilder::append(b, pl, cp.cupping, verts, idx, cp.petioles);
     }
 };
 

@@ -1044,6 +1044,10 @@ struct SpaceColonizationConfig {
     float inwardTurnResistance{0.65f};   // Attenuation of attraction vectors pulling back toward the trunk/canopy axis
     float cantileverDroop{0.12f};        // Gravitational downward droop for distal cantilevered branches
     int scaffoldBranchCount{3};          // Number of primary scaffold limbs sprouted at crown break
+    float scaffoldAngleFromLeaderRad{0.80795f}; // Mean angle of a scaffold limb from the leader (atan2(0.68, 0.65): the outward : up direction it always had)
+    float scaffoldAngleSpreadRad{0.0f};  // Spread of that angle between limbs (uniform, +/-); 0 draws nothing from the random stream
+    float trunkLeanShare{0.28f};         // Share of the way to trunkLeanToward (or crownCenter) the trunk has leaned by the crown's height
+    Vec3 trunkLeanToward{std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f}; // When finite, the trunk leans towards this point (a measured apex) instead of crownCenter
 
     // Triangle budget (continuous). 0 = unbounded (the meshing above). When > 0 the grown skeleton is meshed so wood
     // plus foliage stay at or below this many triangles: branch tubes get a side count that scales with radius,
@@ -1143,6 +1147,9 @@ struct TreeBudgetReport {
  */
 struct MeshGrowth {
     std::vector<float> wood, foliage;
+    /** A wood segment the budget's pruning dropped (the thinner twigs): the skeleton nodes it joins and their meshed radii (m). */
+    struct PrunedSegment { int a{0}, b{0}; float radiusA{0}, radiusB{0}; };
+    std::vector<PrunedSegment> pruned;
 };
 
 /** How colonisation went (growSkeleton). `stop` is a diagnostic label; nothing branches on it. */
@@ -1234,7 +1241,8 @@ public:
             if (cfg.crownCenter.y > cfg.rootAnchor.y + 0.5f) {
                 tLean = std::clamp((nextY - cfg.rootAnchor.y) / (cfg.crownCenter.y - cfg.rootAnchor.y), 0.0f, 1.0f);
             }
-            Vec3 leanOffset = (cfg.crownCenter - cfg.rootAnchor) * (tLean * 0.28f);
+            const Vec3 leanTo = std::isfinite(cfg.trunkLeanToward.x) ? cfg.trunkLeanToward : cfg.crownCenter;
+            Vec3 leanOffset = (leanTo - cfg.rootAnchor) * (tLean * cfg.trunkLeanShare);
             Vec3 targetPos = cfg.rootAnchor + Vec3(leanOffset.x, nextY - cfg.rootAnchor.y, leanOffset.z);
             Vec3 stepDir = (targetPos - nodes.back().position).normalized();
 
@@ -1310,7 +1318,9 @@ public:
             for (int k = 0; k < cfg.scaffoldBranchCount; ++k) {
                 float angle = (static_cast<float>(k) / static_cast<float>(cfg.scaffoldBranchCount)) * math::TWO_PI + dist0To1(rng) * 0.35f;
                 // Scaffold limb diverges upward and outward at ~50 degrees elevation
-                Vec3 scaffoldDir(std::cos(angle) * 0.68f, 0.65f, std::sin(angle) * 0.68f);
+                float fromLeader = cfg.scaffoldAngleFromLeaderRad;
+                if (cfg.scaffoldAngleSpreadRad > 0.0f) fromLeader += (dist0To1(rng) * 2.0f - 1.0f) * cfg.scaffoldAngleSpreadRad;
+                Vec3 scaffoldDir(std::cos(angle) * std::sin(fromLeader), std::cos(fromLeader), std::sin(angle) * std::sin(fromLeader));
                 scaffoldDir = scaffoldDir.normalized();
                 ColonizationNode scaffoldNode;
                 scaffoldNode.id = static_cast<int>(nodes.size());
@@ -1591,6 +1601,9 @@ public:
         }
         return leafy;
     }
+
+    /** The skeleton radius the meshing scales to cfg.baseRadius: the trunk's, above its root flare. */
+    static float trunkRadiusReference(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g) { return trunkReferenceRadius(cfg, g); }
 
     static std::pair<geometry::Mesh, geometry::Mesh> generateTreeComponents(const SpaceColonizationConfig& cfg, TreeBudgetReport* report = nullptr) {
         geometry::Mesh woodMesh("Tree_Wood");
@@ -2089,7 +2102,7 @@ private:
         const size_t N = g.size();
         rep = TreeBudgetReport{};
         rep.skeletonNodes = N;
-        if (growth) { growth->wood.clear(); growth->foliage.clear(); }
+        if (growth) { growth->wood.clear(); growth->foliage.clear(); growth->pruned.clear(); }
         if (N < 2) return;
         // a node's place in the growth: its id (creation order) over max(1, nodes - 1)
         const float growthDen = static_cast<float>(std::max<size_t>(1, N - 1));
@@ -2192,7 +2205,10 @@ private:
             rMin = hi;
         }
         for (const auto& s : segs) {
-            if (!s.trunk && rad(s.a) < rMin) continue;
+            if (!s.trunk && rad(s.a) < rMin) {
+                if (growth) growth->pruned.push_back({s.a, s.b, rad(s.a), rad(s.b)});
+                continue;
+            }
             const size_t before = wood.vertices.size();
             appendBranchCylinder(wood, node(s.a).position, node(s.b).position, rad(s.a), rad(s.b), cfg.woodColor, sides(rad(s.a), sidesMax));
             if (growth) {

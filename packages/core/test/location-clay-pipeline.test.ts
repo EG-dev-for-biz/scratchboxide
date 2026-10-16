@@ -20,7 +20,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { runLocationClayPipeline, describeLocationClay, describeTreeOutcome, locationPublishBase, glbMeshCounts, type LocationClayDeps } from '../src/node/3d-engine/location-clay-pipeline';
 import { TileExtractionError } from '../src/common/errors/pipeline-errors';
-import { SCENE_TREE_TRIANGLE_CAP, TileVegetationService, type TileVegetationPlantRequest, type TileVegetationStripRequest } from '../src/node/3d-engine/tile-vegetation-service';
+import { SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME, SCENE_TREE_TRIANGLE_CAP, TileVegetationService, type TileVegetationPlantRequest, type TileVegetationStripRequest } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService, type TileRefineRequest, type TileRefineResult } from '../src/node/3d-engine/tile-refine-service';
 import { buildSyntheticTile, type SyntheticTileSpec } from './helpers/synthetic-textured-tile';
 import { readGlbTriangles } from './helpers/clay-glb-render';
@@ -104,7 +104,10 @@ describe('runLocationClayPipeline', () => {
         expect(r.trees!.inferred).toMatchObject({ crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016 });
         const published = path.join(root, 'public', 'models', 'district_sbveggie_trees.glb');
         const trees = readGlbTriangles(fs.readFileSync(published));
-        expect(trees.indices.length / 3).toBe(r.trees!.triangles);
+        // the budgeted tiers: every tree's blob leaf masses and wood within its budget; the file's far level shares the wood the near levels hold whole
+        expect(trees.indices.length / 3).toBe(trees.nodeRanges.reduce((n, t) => n + t.extras.lod.woodTriangles + t.extras.foliageTriangles, 0));
+        expect(r.trees!.drawnPerFrame!.maxTriangles).toBeLessThanOrEqual(SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
+        expect(r.trees!.levelTriangles!.level1).toBeLessThan(r.trees!.levelTriangles!.level0);
         expect(trees.nodeRanges).toHaveLength(3);
         expect(r.timingsMs.vegetation).toBeGreaterThanOrEqual(0);
         expect(r.timingsMs.planting).toBeGreaterThanOrEqual(0);
@@ -195,7 +198,7 @@ describe('runLocationClayPipeline', () => {
         // height, the two lower crowns have no measured surface above it, so no tree can be grown into them
         const stub = refineStub();
         const kept: LocationClayDeps = {
-            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.99 } }), plant: req => vegetation.plant(req) },
+            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.99, crownBaseSpread: 0 } }), plant: req => vegetation.plant(req) },
             refine: stub.refine
         };
         const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: true, flavour: 'clay', publishBase: 'kept_scanned' }, kept);
@@ -221,7 +224,7 @@ describe('runLocationClayPipeline', () => {
     it('returns the tiles with every tree as scanned, and says so, when none can be regrown', async () => {
         const stub = refineStub();
         const none: LocationClayDeps = {
-            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.9999 } }), plant: req => vegetation.plant(req) },
+            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.9999, crownBaseSpread: 0 } }), plant: req => vegetation.plant(req) },
             refine: stub.refine
         };
         const before = publishedTrees();
@@ -328,7 +331,7 @@ describe('runLocationClayPipeline', () => {
         const shifted = path.join(root, 'shifted_district_kept.glb');
         fs.writeFileSync(shifted, buildSyntheticTile({ ...SPEC, trees: SPEC.trees.map(t => ({ ...t, x: t.x + 12, z: t.z + 10 })), building: undefined }));
         const kept: LocationClayDeps = {
-            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.99 } }), plant: req => vegetation.plant(req) },
+            vegetation: { strip: (req: TileVegetationStripRequest) => vegetation.strip({ ...req, params: { crownBaseRatio: 0.99, crownBaseSpread: 0 } }), plant: req => vegetation.plant(req) },
             refine: refineStub({ clayGlb: patch }).refine
         };
         const r = await runLocationClayPipeline({ rawTilePath: shifted, workspaceRoot: root, isolate: true, trees: true, flavour: 'clay', publishBase: 'iso_kept' }, kept);

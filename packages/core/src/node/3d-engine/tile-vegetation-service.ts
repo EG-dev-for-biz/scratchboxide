@@ -82,6 +82,10 @@ export interface TileVegetationStripParams {
     crownBaseRatio?: number;
     trunkRadiusPerHeight?: number;
     shellDepth?: number;
+    /** Seeded per crown: its crown base ratio varies by +/- this (0.10), the scaffold limbs' mean angle by +/- branchAngleSpread (0.20 rad), and the trunk leans trunkLean (0.45) of the way to the measured apex's offset. */
+    crownBaseSpread?: number;
+    branchAngleSpread?: number;
+    trunkLean?: number;
     /** Share of a crown's measured surface the regrown leaves must reach for it to be removed and rebuilt (0.9). */
     minSurfaceReached?: number;
     /** Share of a crown's measured surface that may hang more than supportStep below its support before that support is not its ground (0.1). */
@@ -114,7 +118,31 @@ export interface TileVegetationPlantParams {
     trunkRadiusPerHeight?: number;
     woodShare?: number;
     shellDepth?: number;
+    crownBaseSpread?: number;
+    branchAngleSpread?: number;
+    trunkLean?: number;
     minSurfaceReached?: number;
+    /** 1 (default): every tree is written at three levels (near: instanced leaf clusters, mid: fewer larger leaves, far: blob masses); 0: the far level alone. */
+    lod?: number;
+    /** 0 bare .. 1 full summer (default 1): scales leaf density at every level. */
+    psiSeason?: number;
+    /** Blade length = clamp(leafSizeRatio x crown height, leafMin, leafMax) metres (0.0065, 0.08, 0.14). */
+    leafSizeRatio?: number;
+    leafMin?: number;
+    leafMax?: number;
+    /** Leaves in the densest cluster (90) and the cluster's reach in blade lengths (7). */
+    leavesPerCluster?: number;
+    clusterRadiusPerLeaf?: number;
+    /** Leaf density falls as exp(-d / (shellDepthPerHeight x crown height)) with d the depth below the measured canopy surface (0.10). */
+    shellDepthPerHeight?: number;
+    /** Distance between leaf clusters / cluster reach (0.65). */
+    stationSpacing?: number;
+    /** Distances (m from the camera) at which a viewport changes a tree's level: level 0 up to lodNearPerHeight x its height (2, at most lodNearMax 60 m), level 1 up to lodFarPerHeight x its height (6, at most lodFarMax 200 m), dithered over lodFade (6 m). */
+    lodNearPerHeight?: number;
+    lodFarPerHeight?: number;
+    lodNearMax?: number;
+    lodFarMax?: number;
+    lodFade?: number;
     supportTolerance?: number;
     /** With groundMeshPath: a trunk base further than this from the mounted model at its stem is reported (0.5 m). */
     groundTolerance?: number;
@@ -134,6 +162,16 @@ export interface TileVegetationPlantParams {
  * 250 m radius of dense park holds (1,043 in Central Park).
  */
 export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
+
+/**
+ * What the trees may draw, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which bounds the far level's
+ * blob masses and the wood every level shares). Trees are written at three levels, and a viewport draws one per tree
+ * by its distance, so a frame draws far fewer triangles than the file holds: at most this many in a park view, in
+ * total and per level. stats.lodFrames measures it on the written trees (camera poses on a grid over the location, an
+ * 80 degree view, every tree within 8 m).
+ */
+export const SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME = 10_000_000;
+export const SCENE_TREE_DRAWN_TRIANGLES_PER_LEVEL = { level0: 5_000_000, level1: 4_000_000, level2: 3_000_000 } as const;
 
 export interface TileVegetationStripRequest {
     /** Photo-textured tile GLB, relative to the workspace root or absolute inside it. */
