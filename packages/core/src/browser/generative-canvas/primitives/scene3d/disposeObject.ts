@@ -82,6 +82,7 @@ function ownsItsDisposal(obj: THREE.Object3D): boolean {
  */
 export function releaseObject3D(root: THREE.Object3D | null | undefined): void {
     if (!root) return;
+    (root.userData?.sbTreeLod as { dispose(): void } | undefined)?.dispose();
     root.parent?.remove(root);
     if (ownsItsDisposal(root)) root.dispose();
     else disposeObject3DDeep(root);
