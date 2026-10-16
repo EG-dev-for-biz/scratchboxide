@@ -155,7 +155,7 @@ export function smallestRevealX(a: THREE.BufferAttribute | THREE.InterleavedBuff
         const step = Math.max(1, a.itemSize);
         let m = Infinity;
         for (let i = 0; i < arr.length; i += step) if (arr[i] < m) m = arr[i];
-        return Number.isFinite(m) ? (a.normalized ? THREE.MathUtils.denormalize(m, arr) : m) : 1;
+        return Number.isFinite(m) ? (a.normalized ? THREE.MathUtils.denormalize(m, arr as Parameters<typeof THREE.MathUtils.denormalize>[1]) : m) : 1;
     }
     let m = Infinity;
     for (let i = 0; i < a.count; i++) m = Math.min(m, a.getX(i));
