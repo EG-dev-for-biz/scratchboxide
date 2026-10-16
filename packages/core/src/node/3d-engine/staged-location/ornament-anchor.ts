@@ -39,6 +39,17 @@ export interface AnchorNote {
     note: string;
 }
 
+/**
+ * A reading whose count × pitch disagrees with the measured span by more than the tolerance is asked about once (the re-read). When
+ * the re-read still disagrees, the measured span wins if the reading is within reach of it: the pitch is set to span ÷ count and the
+ * element is labelled photo-corrected with the error it carried. Beyond this ratio the reading cannot be the same thing (a row read as
+ * 72 m on a 10.5 m span), and it is rejected.
+ */
+export const PLAUSIBLE_SPAN_RATIO = { min: 0.4, max: 2.5 } as const;
+export function plausibleSpan(readM: number, measuredM: number): boolean {
+    return measuredM > 0 && readM / measuredM >= PLAUSIBLE_SPAN_RATIO.min && readM / measuredM <= PLAUSIBLE_SPAN_RATIO.max;
+}
+
 export interface AnchorResult { notes: AnchorNote[]; problems: Map<number, string[]> }
 
 const mm = (m: number) => `${Math.round(m * 1000)} mm`;
@@ -61,7 +72,8 @@ export function anchorElements(
     expanded: ExpandedElement[],
     fit: Pick<StructureFit, 'slots'>,
     located: LocatedElement[],
-    toleranceM = PHOTO_CORRECTION_TOLERANCE_M
+    toleranceM = PHOTO_CORRECTION_TOLERANCE_M,
+    final = false
 ): AnchorResult {
     const notes: AnchorNote[] = [];
     const problems = new Map<number, string[]>();
@@ -92,12 +104,14 @@ export function anchorElements(
                 const runLen = b - a;
                 const error = Math.abs(along.count * along.pitchM - runLen);
                 const src = `run from ${run.placeSource}, good to ±${run.locationUncertaintyM} m`;
-                if (error <= toleranceM) {
+                const readSpan = along.count * along.pitchM;
+                const snapAnyway = error > toleranceM && final && plausibleSpan(readSpan, runLen);
+                if (error <= toleranceM || snapAnyway) {
                     const before = `${along.count} × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m`;
                     along.pitchM = r3(runLen / along.count);
                     along.startOffsetM = 0;
                     if (t0Slot) t0Slot.t0 = r3(a / L);
-                    if (error > 1e-4 || extended) note(x, { kind: 'run-snapped', errorM: r3(error + run.locationUncertaintyM), before, after: `${along.count} × ${mm(along.pitchM)} = ${r3(runLen)} m, from ${a.toFixed(2)} m`, note: `count × pitch was ${r3(error)} m off the ${r3(runLen)} m ${src}; snapped (within ${toleranceM} m); the error carried includes the ±${run.locationUncertaintyM} m of the run's own place${extended}` });
+                    if (error > 1e-4 || extended) note(x, { kind: snapAnyway ? 'pitch-snapped' : 'run-snapped', errorM: r3(error + run.locationUncertaintyM), before, after: `${along.count} × ${mm(along.pitchM)} = ${r3(runLen)} m, from ${a.toFixed(2)} m`, note: snapAnyway ? `count × pitch was ${r3(error)} m off the ${r3(runLen)} m ${src} and the re-read agreed with the first reading; the measured span was kept (the pitch is now span ÷ count) and the error is carried in this label${extended}` : `count × pitch was ${r3(error)} m off the ${r3(runLen)} m ${src}; snapped (within ${toleranceM} m); the error carried includes the ±${run.locationUncertaintyM} m of the run's own place${extended}` });
                 } else {
                     problem(x, `anchor: the crop was read as ${along.count} repeats × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m, while the ${src} spans ${r3(runLen)} m on ${slot.id}, ${r3(error)} m apart (more than ${toleranceM} m). Look at the image again and re-read the repeat count and the pitch as they appear; do not adjust them to match the span, which is only approximate`);
                 }
@@ -107,7 +121,12 @@ export function anchorElements(
                     // a cross-check only: it can raise the discrepancy for a re-read, it never changes a number
                     const runLen = run.runAlongM![1] - run.runAlongM![0];
                     const gap = Math.abs(along.count * along.pitchM - runLen);
-                    if (gap > toleranceM + run.locationUncertaintyM) problem(x, `anchor: the crop was read as ${along.count} repeats × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m, while the survey's box puts the run at about ${r3(runLen)} m (±${run.locationUncertaintyM} m, from ${run.placeSource}), ${r3(gap)} m apart. Look at the image again and re-read the repeat count and the pitch as they appear; do not adjust them to match that span, which is only approximate`);
+                    if (!final && gap > toleranceM + run.locationUncertaintyM) problem(x, `anchor: the crop was read as ${along.count} repeats × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m, while the survey's box puts the run at about ${r3(runLen)} m (±${run.locationUncertaintyM} m, from ${run.placeSource}), ${r3(gap)} m apart. Look at the image again and re-read the repeat count and the pitch as they appear; do not adjust them to match that span, which is only approximate`);
+                }
+                if (along.count * along.pitchM > PLAUSIBLE_SPAN_RATIO.max * L) {
+                    // not a measurement error: a row several times the whole edge it lives on is a miscount, and clipping it would make up a row
+                    problem(x, `anchor: the crop was read as ${along.count} repeats × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m, but the whole edge ${slot.id} is ${r3(L)} m long. Look at the image again and re-count the repeats and re-read the pitch as they appear`);
+                    continue;
                 }
                 const start = (t0Slot?.t0 ?? 0) * L + along.startOffsetM;
                 const end = start + (along.count - 1) * along.pitchM;
@@ -136,8 +155,8 @@ export function anchorElements(
                     const len = Math.max(0, Math.min(hi, name === 'u' ? b.u1 : b.v1) - Math.max(lo, name === 'u' ? b.u0 : b.v0));
                     if (len < 0.05 || count < 2) return undefined;
                     const error = Math.abs(count * pitch - len);
-                    if (error <= toleranceM) {
-                        if (error > 1e-4) note(x, { kind: 'run-snapped', errorM: r3(error), before: `${count} × ${mm(pitch)} along ${name}`, after: `${count} × ${mm(len / count)}`, note: `count × pitch along ${name} was ${r3(error)} m off the ${r3(len)} m run the survey located on the fitted face; snapped (within ${toleranceM} m)` });
+                    if (error <= toleranceM || (final && plausibleSpan(count * pitch, len))) {
+                        if (error > 1e-4) note(x, { kind: error <= toleranceM ? 'run-snapped' : 'pitch-snapped', errorM: r3(error), before: `${count} × ${mm(pitch)} along ${name}`, after: `${count} × ${mm(len / count)}`, note: error <= toleranceM ? `count × pitch along ${name} was ${r3(error)} m off the ${r3(len)} m run the survey located on the fitted face; snapped (within ${toleranceM} m)` : `count × pitch along ${name} was ${r3(error)} m off the ${r3(len)} m run located on the fitted face and the re-read agreed with the first reading; the measured run was kept and the error is carried in this label` });
                         return r3(len / count);
                     }
                     problem(x, `anchor: ${count} repeats × ${mm(pitch)} along ${name} = ${r3(count * pitch)} m, but the run located on ${slot.id} spans ${r3(len)} m (${r3(error)} m apart, more than ${toleranceM} m): recount or re-measure`);
@@ -186,7 +205,8 @@ export function anchorElements(
         if (mine.length) {
             x.element.checks.anchor = { errorM: Math.max(...mine.map(n => n.errorM)), toleranceM, changes: mine.map(n => n.note) };
             x.element.provenance.label = PROVENANCE.photoCorrected;
-            x.element.provenance.note = `${x.element.provenance.note ? `${x.element.provenance.note}; ` : ''}photo-corrected inside the scan tolerance: ${mine.map(n => n.note).join('; ')}`;
+            const beyond = mine.some(n => n.errorM > toleranceM);
+            x.element.provenance.note = `${x.element.provenance.note ? `${x.element.provenance.note}; ` : ''}${beyond ? `photo-corrected to the measured span (the reading was off by more than the ${toleranceM} m tolerance, and the error is labelled)` : 'photo-corrected inside the scan tolerance'}: ${mine.map(n => n.note).join('; ')}`;
         }
     }
     return { notes, problems };

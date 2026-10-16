@@ -434,7 +434,7 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
 
     const expanded: ExpandedElement[] = expandElements(reply.elements, fit, evidence, method);
     // anchor the model's estimates to the scan's geometry before the slot rules: within the tolerance they are snapped, beyond it they are problems
-    const anchored = anchorElements(expanded, fit, located);
+    const anchored = anchorElements(expanded, fit, located, undefined, final);
     result.anchored = anchored.notes;
     for (const [i, ps] of anchored.problems) for (const p of ps) add(i, p);
     // rules 5-8 per element
