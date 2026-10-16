@@ -60,15 +60,30 @@ export function isRunSettled(state: StagedBuildState, pageLoadedAtMs: number): b
 const STATUS_RANK: Record<StageStatus, number> = { pending: 0, running: 1, committed: 2, degraded: 2, skipped: 2, failed: 2, stopped: 2 };
 
 /**
- * Merges one streamed StageEvent into the state the viewport shows. A stage runs once per run, so its lifecycle only
- * moves forward: an event applies to its stage when its status is at least as far along as the state's (a running
- * event refreshes progress; a stale running event never undoes a commit). Layers and degradations are upserted by
- * id; the scene objects themselves arrive with the artifact on commit.
+ * Merges one streamed StageEvent into the state the viewport shows.
+ *
+ * The scene artifact is the authority for everything it already holds. `authority` is that artifact's state (default:
+ * the state being merged into); the events stored for a run were all streamed before or after it, and an older event
+ * must never overwrite what a newer artifact says. So:
+ *  - a stage's lifecycle only moves forward: an event applies when its status is further along than the state's, or
+ *    when both are still non-terminal (a running event refreshes progress). A terminal stage is never rewritten by an
+ *    event of the same rank, and a stale running event never undoes a commit;
+ *  - a layer or a degradation the authority already holds keeps its copy (a commit event's older copy of a layer would
+ *    otherwise un-retire a layer the finish artifact retired), and an event's patch removes only layers the authority
+ *    does not hold;
+ *  - layers and degradations the authority does not hold yet (an event that leads its own artifact) are upserted by id;
+ *    the scene objects themselves arrive with the artifact.
  */
-export function mergeStageEvent(state: StagedBuildState, event: StageEvent): StagedBuildState {
+export function mergeStageEvent(state: StagedBuildState, event: StageEvent, authority: StagedBuildState = state): StagedBuildState {
     if (event.runId !== state.runId) return state;
     const existing = state.stages.find(s => s.stage === event.stage);
-    if (existing && STATUS_RANK[event.status] < STATUS_RANK[existing.status]) return state;
+    if (existing) {
+        const behind = STATUS_RANK[event.status] < STATUS_RANK[existing.status];
+        const sameTerminal = STATUS_RANK[event.status] === STATUS_RANK[existing.status] && isStageTerminal(existing.status);
+        if (behind || sameTerminal) return state;
+    }
+    const heldLayers = new Set(authority.layers.map(l => l.objectId));
+    const heldDegradations = new Set(authority.degradations.map(d => d.id));
     const degradationIds = [...new Set([...(existing?.degradationIds ?? []), ...event.degradations.map(d => d.id)])];
     const layerIds = [...new Set([...(existing?.layerIds ?? []), ...(event.layers ?? []).map(l => l.objectId), ...(event.patch?.upsertObjects ?? [])])];
     const summary = {
@@ -88,12 +103,14 @@ export function mergeStageEvent(state: StagedBuildState, event: StageEvent): Sta
         : [...state.stages, { ...summary, ...reason }];
     const layers = [...state.layers];
     for (const l of event.layers ?? []) {
+        if (heldLayers.has(l.objectId)) continue;
         const i = layers.findIndex(x => x.objectId === l.objectId);
         if (i >= 0) layers[i] = l; else layers.push(l);
     }
-    const removed = new Set(event.patch?.removeObjects ?? []);
+    const removed = new Set((event.patch?.removeObjects ?? []).filter(id => !heldLayers.has(id)));
     const degradations = [...state.degradations];
     for (const d of event.degradations) {
+        if (heldDegradations.has(d.id)) continue;
         const i = degradations.findIndex(x => x.id === d.id);
         if (i >= 0) degradations[i] = d; else degradations.push(d);
     }
@@ -102,7 +119,7 @@ export function mergeStageEvent(state: StagedBuildState, event: StageEvent): Sta
         stages,
         layers: layers.filter(l => !removed.has(l.objectId)),
         degradations,
-        ...(event.model ? { visionModel: event.model } : {})
+        ...(event.model && !authority.visionModel ? { visionModel: event.model } : {})
     };
 }
 
@@ -123,10 +140,11 @@ export function publishStageEvent(event: StageEvent | undefined): void {
     const list = latestByRun.get(event.runId) ?? [];
     // seq is strictly increasing per run: a repeated seq is the same event delivered twice.
     if (list.some(e => e.seq === event.seq)) return;
-    list.push(event);
-    list.sort((a, b) => a.seq - b.seq);
+    // A new array every time: a viewport holding the previous list in React state sees a different reference and
+    // re-renders for every event, not only the first (an array pushed to in place is the same value to React).
+    const next = [...list, event].sort((a, b) => a.seq - b.seq);
     latestByRun.delete(event.runId);
-    latestByRun.set(event.runId, list);
+    latestByRun.set(event.runId, next);
     while (latestByRun.size > MAX_RUNS_KEPT) latestByRun.delete(latestByRun.keys().next().value as string);
     listeners.forEach(l => l(event));
 }
@@ -141,9 +159,12 @@ export function stageEventsFor(runId: string): readonly StageEvent[] {
     return latestByRun.get(runId) ?? [];
 }
 
-/** Applies every streamed event of the run to the state (the artifact's state, then what streamed after it). */
+/**
+ * Applies every streamed event of the run to the state, in seq order. The state is the scene artifact, which is the
+ * authority for what it holds (mergeStageEvent): an older event fills in only what the artifact does not know yet.
+ */
 export function withStreamedEvents(state: StagedBuildState, events: readonly StageEvent[]): StagedBuildState {
-    return events.reduce((acc, e) => mergeStageEvent(acc, e), state);
+    return events.reduce((acc, e) => mergeStageEvent(acc, e, state), state);
 }
 
 /** The latest progress line per running stage, from the streamed events. */

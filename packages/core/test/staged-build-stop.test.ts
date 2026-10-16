@@ -187,7 +187,7 @@ describe.skipIf(!stagedChrome.ok)('the stopped artifact in the real viewport', (
             serveFixture(page, fixture.glbs, objectIdOf, fixture.sidecar);
             const running = fixtureState([LL('l1'), LL('l2')], { running: ['fit'] });
             await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(running))})`);
-            for (const l of ['l1', 'l2']) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`);
+            for (const l of ['l1', 'l2'] as const) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`);
             // Mid-reveal of the remesh crossfade, then Stop arrives as a data update.
             for (let i = 0; i < 400; i++) {
                 const f = await page.eval<{ phase: string } | null>(`sbHarness.layer(${JSON.stringify(objectIdOf('l2'))})`);

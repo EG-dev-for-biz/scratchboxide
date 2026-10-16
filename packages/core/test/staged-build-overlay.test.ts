@@ -107,9 +107,9 @@ describe('overlay words and accessibility', () => {
     });
 
     test('a failed run keeps what it built and names the stage that failed', () => {
-        const st = fixtureState([L('l1')], { runState: 'failed', stageStatus: { remesh: 'failed' } });
+        const st = fixtureState([L('l1')], { runState: 'failed', stageStatus: { remesh: 'failed' }, stageReason: { remesh: 'tile_refine exited with code 134' } });
         const html = markup(props(st));
-        expect(html).toContain('Failed. Google 3D Tiles stay in the scene. Not built: Remeshed scan.');
+        expect(html).toContain('Failed. Google 3D Tiles stay in the scene. Not built: Remeshed scan (tile_refine exited with code 134).');
         expect(html).toContain('✕ Remeshed scan failed');
     });
 

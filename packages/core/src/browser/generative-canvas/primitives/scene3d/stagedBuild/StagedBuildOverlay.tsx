@@ -23,6 +23,13 @@ import type { LayerRevealFrame } from './revealScheduler';
 import type { LegendRow } from './provenanceShading';
 import type { StageProgress } from './stagedBuildState';
 
+/** Where a degraded part is in the viewport (degradationPlacement.ts): an exact part, a whole layer, or nothing drawn. */
+export interface DegradationPlacementNote {
+    scope: 'part' | 'layer' | 'none';
+    /** Layers the shaded nodes are in. */
+    layerIds: string[];
+}
+
 export interface StagedBuildOverlayProps {
     state: StagedBuildState;
     /** The run is shown as interrupted (turn ended, or a saved running state from before this page loaded). */
@@ -42,6 +49,8 @@ export interface StagedBuildOverlayProps {
     onRetry: (record: DegradationRecord) => void;
     onHighlight: (record: DegradationRecord) => void;
     highlightedId?: string;
+    /** Where each degraded part is, by record id; absent while layers are still loading. */
+    placements?: ReadonlyMap<string, DegradationPlacementNote>;
     /** Bottom inset: 16 px, or above the docked timeline when it is open. */
     bottomInsetPx: number;
     /** Why reveals currently show their end state at once (frame time, hidden document). */
@@ -179,7 +188,7 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
             .sort((a, b) => (b.timings.endedAtMs ?? b.timings.startedAtMs) - (a.timings.endedAtMs ?? a.timings.startedAtMs))[0];
     })();
     const liveProgress = current ? props.progress.get(current.stage) : undefined;
-    const chips = state.stages.filter(s => s.layerIds.length > 0 || s.order >= 0 || s.status === 'degraded' || s.status === 'failed');
+    const chips = state.stages.filter(s => s.layerIds.length > 0 || s.order >= 0 || s.status === 'degraded' || s.status === 'failed' || s.status === 'skipped' || s.status === 'stopped');
     const notes = props.layers.flatMap(l => [
         ...(l.outOfOrder ? [l.outOfOrder] : []),
         ...(l.phase === 'held' && l.heldBy.length > 0 ? [`${titleForLayer(state, l)} waits for ${l.heldBy.map(id => titleForId(state, id)).join(', ')} to reveal`] : []),
@@ -189,7 +198,8 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
     const skippedLine = props.skipNote ? `reveal skipped (${props.skipNote})` : undefined;
     const vm = state.visionModel;
     const degradations = state.degradations;
-    const retryable = degradations.filter(d => d.retry && d.transient);
+    // A retry is a new chat message, which aborts a turn that is still streaming: offered only once the run is over.
+    const retryable = runOver ? degradations.filter(d => d.retry && d.transient) : [];
     const live = <div role="status" aria-live="polite" style={HIDDEN}>{props.announcement}</div>;
 
     const compact = collapsed || box.narrow;
@@ -229,10 +239,12 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                 {chips.map(s => {
                     const t = stageTime(s, props.wallNowMs);
                     const cached = s.timings.cached ? `cached (built ${builtDate(s.timings.builtAtMs)})` : '';
-                    const label = `${s.title}: ${s.status}${t !== undefined ? `, ${(t / 1000).toFixed(1)} seconds` : ''}${cached ? `, ${cached}` : ''}`;
+                    const why = stageReason(state, s);
+                    const label = `${s.title}: ${s.status}${t !== undefined ? `, ${(t / 1000).toFixed(1)} seconds` : ''}${cached ? `, ${cached}` : ''}${why ? `. ${why}` : ''}`;
                     return (
-                        <li key={s.stage} aria-label={label} data-stage-status={s.status} style={{ padding: '2px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' }}>
+                        <li key={s.stage} aria-label={label} data-stage-status={s.status} style={{ padding: '2px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', ...(why ? { flex: '1 1 100%' } : {}) }}>
                             <span aria-hidden="true">{`${GLYPH[s.status]} ${s.title} ${s.status}${t !== undefined ? ` · ${seconds(t)}` : ''}${cached ? ` · ${cached}` : ''}`}</span>
+                            {why ? <div aria-hidden="true" data-testid="sb-staged-stage-reason" style={{ color: MUTED }}>{why}</div> : null}
                         </li>
                     );
                 })}
@@ -261,10 +273,11 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                                 <li key={d.id}>
                                     <button type="button" style={{ ...BUTTON, width: '100%', ...(props.highlightedId === d.id ? { borderColor: '#D55E00' } : {}) }}
                                         aria-pressed={props.highlightedId === d.id}
-                                        aria-label={`${d.part.description} fell to ${d.fellTo}: ${d.reason} Highlight it in the viewport.`}
+                                        aria-label={`${d.part.description} fell to ${d.fellTo}: ${d.reason}${props.placements?.get(d.id)?.scope === 'none' ? ' It has no separate part to highlight in the viewport.' : ' Highlight it in the viewport.'}`}
                                         onClick={() => props.onHighlight(d)}>
                                         <div>{`${d.part.description} → ${d.fellTo}`}</div>
                                         <div style={{ color: MUTED }}>{d.reason}</div>
+                                        {placementSentence(state, props.placements?.get(d.id)) ? <div style={{ color: MUTED }} data-testid="sb-staged-degraded-where">{placementSentence(state, props.placements?.get(d.id))}</div> : null}
                                     </button>
                                 </li>
                             ))}
@@ -343,13 +356,46 @@ function visionSentence(vm: NonNullable<StagedBuildState['visionModel']>): strin
     return base + fallback;
 }
 
+/** Why a stage did not commit in full, in one sentence: its own reason, else the first of its degradation records'. */
+function stageReason(state: StagedBuildState, s: StageSummary): string | undefined {
+    if (s.status !== 'degraded' && s.status !== 'failed' && s.status !== 'skipped' && s.status !== 'stopped') return undefined;
+    if (s.reason) return s.reason;
+    return state.degradations.find(d => s.degradationIds.includes(d.id))?.reason;
+}
+
+/** What the highlight does for a degraded part, when that is not simply "shades the part". */
+function placementSentence(state: StagedBuildState, note: DegradationPlacementNote | undefined): string {
+    if (!note || note.scope === 'part') return '';
+    if (note.scope === 'none') return 'No separate part to highlight in the viewport.';
+    const names = [...new Set(note.layerIds.map(id => state.layers.find(l => l.objectId === id)).filter((l): l is StagedLayer => !!l).map(l => layerName(state, l)))];
+    return names.length > 0 ? `Highlights the whole of ${names.join(', ')}.` : '';
+}
+
+/**
+ * The end-of-run sentence: what is in the scene, what fell to simpler real data and why, what was skipped and why, and
+ * what was not built and why. A degraded stage's output is not listed as built.
+ */
 function runSentence(state: StagedBuildState, interrupted: boolean): string {
-    const committed = state.stages.filter(s => s.status === 'committed' || s.status === 'degraded').map(s => s.title);
-    const stopped = state.stages.filter(s => s.status === 'stopped' || s.status === 'failed').map(s => s.title);
     const head = interrupted ? 'Interrupted' : state.runState === 'stopped' ? 'Stopped' : state.runState === 'failed' ? 'Failed' : 'Finished';
-    if (state.runState === 'finished' && !interrupted) return `Finished: ${committed.join(', ')} in the scene.`;
-    const kept = committed.length > 0 ? ` ${committed.join(', ')} stay in the scene.` : '';
-    const notBuilt = stopped.length > 0 ? ` Not built: ${stopped.join(', ')}.` : '';
-    const retry = state.retry ? ` Retry with retryRunId ${state.retry.retryRunId}.` : '';
-    return `${head}.${kept}${notBuilt}${retry}`;
+    const by = (...statuses: StageStatus[]) => state.stages.filter(s => statuses.includes(s.status));
+    const list = (stages: StageSummary[]) => {
+        const items = stages.map(s => { const why = stageReason(state, s); return why ? `${s.title} (${why})` : s.title; });
+        return items.join(stages.some(s => stageReason(state, s)) ? '; ' : ', ');
+    };
+    const committed = by('committed');
+    const inScene = committed.filter(s => s.layerIds.length > 0);
+    const alsoDone = committed.filter(s => s.layerIds.length === 0);
+    const degraded = by('degraded');
+    const skipped = by('skipped');
+    const unbuilt = by('stopped', 'failed');
+    const finishedClean = state.runState === 'finished' && !interrupted;
+    const scene = inScene.length > 0 ? (finishedClean ? `Finished: ${list(inScene)} in the scene.` : `${head}. ${list(inScene)} stay in the scene.`) : `${head}.`;
+    return [
+        scene,
+        alsoDone.length > 0 ? `Also done: ${list(alsoDone)}.` : '',
+        degraded.length > 0 ? `Fell to simpler real data: ${list(degraded)}.` : '',
+        skipped.length > 0 ? `Skipped: ${list(skipped)}.` : '',
+        unbuilt.length > 0 ? `Not built: ${list(unbuilt)}.` : '',
+        state.retry && (state.retry.stages.length > 0 || !finishedClean) ? `Retry with retryRunId ${state.retry.retryRunId}.` : ''
+    ].filter(Boolean).join(' ');
 }

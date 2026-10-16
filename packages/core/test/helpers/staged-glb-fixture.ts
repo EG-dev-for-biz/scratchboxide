@@ -731,14 +731,14 @@ const TITLES: Record<string, [string, string, number]> = {
 };
 
 /** A StagedBuildState with the given committed layers; stages after the last committed one are running or pending. */
-export function fixtureState(layers: StagedLayer[], opts: { runState?: StagedBuildState['runState']; updatedAtMs?: number; running?: string[]; degradations?: DegradationRecord[]; stageStatus?: Record<string, StageSummary['status']>; visionModel?: StagedBuildState['visionModel'] } = {}): StagedBuildState {
+export function fixtureState(layers: StagedLayer[], opts: { runState?: StagedBuildState['runState']; updatedAtMs?: number; running?: string[]; degradations?: DegradationRecord[]; stageStatus?: Record<string, StageSummary['status']>; stageReason?: Record<string, string>; visionModel?: StagedBuildState['visionModel'] } = {}): StagedBuildState {
     const t0 = (opts.updatedAtMs ?? Date.now()) - 20_000;
     const stages: StageSummary[] = Object.entries(TITLES).map(([stage, [title, source, order]], i) => {
         const own = layers.filter(l => l.stage === stage);
         const status: StageSummary['status'] = opts.stageStatus?.[stage] ?? (own.length > 0 ? 'committed' : opts.running?.includes(stage) ? 'running' : 'pending');
         return {
             stage, order, title, source, status,
-            ...(status === 'degraded' || status === 'failed' ? { reason: (opts.degradations ?? []).find(d => d.stage === stage)?.reason ?? 'degraded' } : {}),
+            ...(opts.stageReason?.[stage] ? { reason: opts.stageReason[stage] } : status === 'degraded' || status === 'failed' ? { reason: (opts.degradations ?? []).find(d => d.stage === stage)?.reason ?? `${title} ${status}` } : {}),
             layerIds: own.map(l => l.objectId),
             timings: { startedAtMs: t0 + i * 1500, ...(status === 'running' || status === 'pending' ? {} : { endedAtMs: t0 + i * 1500 + 1200, ms: 1200 }), cached: false },
             degradationIds: (opts.degradations ?? []).filter(d => d.stage === stage).map(d => d.id)

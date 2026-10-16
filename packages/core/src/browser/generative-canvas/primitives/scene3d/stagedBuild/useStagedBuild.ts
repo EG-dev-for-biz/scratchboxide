@@ -37,7 +37,8 @@ import type {
     StagedNodeExtras
 } from '../../../../../common/spatial/staged-location-contracts';
 import type { RendererStack } from '../types';
-import { StagedBuildOverlay } from './StagedBuildOverlay';
+import { StagedBuildOverlay, type DegradationPlacementNote } from './StagedBuildOverlay';
+import { placeDegradations, type Placement, type PlacementRoot } from './degradationPlacement';
 import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState, type LayerRevealFrame, type RevealFrame, type RevealSchedule } from './revealScheduler';
 import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook } from './revealMaterial';
 import { classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
@@ -109,8 +110,14 @@ interface RootInfo {
     objectId: string;
     root: THREE.Object3D;
     key: string;
+    /** The structure this layer is one of (root extras), when it is one structure's. */
+    buildingId?: string;
+    /** Changes whenever the layer's nodes are rebuilt (a new model root, new ranks): what placement was computed for. */
+    serial: number;
     nodes: NodeInfo[];
 }
+
+let rootSerial = 0;
 
 interface Sidecar { status: 'loading' | 'ok' | 'failed'; ranks?: Record<string, number> }
 
@@ -129,19 +136,6 @@ function nodeOf(mesh: THREE.Object3D, root: THREE.Object3D): THREE.Object3D {
 function readExtras(o: THREE.Object3D): StagedNodeExtras['sb'] | undefined {
     const sb = (o.userData as { sb?: StagedNodeExtras['sb'] })?.sb;
     return sb && sb.schema === 'scratchbox.staged-node/2' ? sb : undefined;
-}
-
-/** Whether a degradation's part names this node: by layer, by its ids, or by the building its layer belongs to. */
-function partMatches(d: DegradationRecord, layer: StagedLayer, n: NodeInfo, rootBuilding: string | undefined): boolean {
-    const p = d.part;
-    if (p.objectId) return p.objectId === layer.objectId;
-    const ids = n.ids;
-    const pairs: Array<[unknown, unknown]> = [[p.primitiveId, ids.primitiveId], [p.surfaceId, ids.surfaceId], [p.slotId, ids.slotId], [p.elementId, ids.elementId], [p.crownId, ids.crownId]];
-    const named = pairs.filter(([want]) => want !== undefined);
-    if (named.length > 0) return named.every(([want, have]) => want === have);
-    // Only a building named: the parts of that building that now carry the rung's label (the flat fitted faces).
-    if (p.buildingId) return rootBuilding === p.buildingId && n.provenance.label === d.provenanceAfter;
-    return false;
 }
 
 /**
@@ -163,7 +157,7 @@ export function smallestRevealX(a: THREE.BufferAttribute | THREE.InterleavedBuff
 }
 
 /** Nodes and meshes of one loaded layer, in their real build order (extras), download order (sidecar) or file order. */
-export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: Record<string, number> | undefined, degradations: DegradationRecord[]): RootInfo {
+export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: Record<string, number> | undefined): RootInfo {
     const byNode = new Map<THREE.Object3D, NodeInfo>();
     const order: THREE.Object3D[] = [];
     root.traverse(obj => {
@@ -218,9 +212,8 @@ export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: R
         n.window = only && n.ids.primitiveId !== undefined && only.has(n.ids.primitiveId)
             ? { start: 0, span: 1 }
             : nodeRevealWindow({ order: n.order, count: n.count, stagger: layer.reveal.stagger, durationShare: n.durationShare, perVertex: n.perVertex });
-        n.degradationIds = degradations.filter(d => partMatches(d, layer, n, rootBuilding)).map(d => d.id);
     }
-    return { objectId: layer.objectId, root, key: '', nodes };
+    return { objectId: layer.objectId, root, key: '', serial: ++rootSerial, ...(rootBuilding !== undefined ? { buildingId: rootBuilding } : {}), nodes };
 }
 
 function prefersReducedMotion(): boolean {
@@ -348,7 +341,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         for (const s of effective.stages) {
             const prev = lastStatuses.current.get(s.stage);
             if (prev !== undefined && prev !== s.status && s.status !== 'pending') {
-                said.push(`${s.title} ${s.status}${s.reason && (s.status === 'degraded' || s.status === 'failed') ? `: ${s.reason}` : ''}`);
+                said.push(`${s.title} ${s.status}${s.reason && s.status !== 'committed' && s.status !== 'running' ? `: ${s.reason}` : ''}`);
             }
             lastStatuses.current.set(s.stage, s.status);
         }
@@ -391,6 +384,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     const statsRef = React.useRef({ lastFrameAt: 0, slowRun: 0, skipReason: undefined as string | undefined, frames: 0 });
     const backgroundRef = React.useRef<{ saved: THREE.Scene['background']; scene: THREE.Scene } | undefined>(undefined);
     const legendRef = React.useRef<Legend | undefined>(undefined);
+    /** Where each degraded part is on the loaded nodes (degradationPlacement.ts), recomputed when the nodes or the records change. */
+    const placementRef = React.useRef({ sig: '', placements: new Map<string, Placement<NodeInfo>>(), version: 0 });
     const storeRef = React.useRef<OverlayStore | null>(null);
     if (!storeRef.current) {
         const store: OverlayStore = { version: 0, listeners: new Set(), notify: () => { store.version++; store.listeners.forEach(l => l()); } };
@@ -406,6 +401,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         rootsRef.current.clear();
         statsRef.current = { lastFrameAt: 0, slowRun: 0, skipReason: undefined, frames: 0 };
         registryRef.current.restoreAll();
+        placementRef.current = { sig: '', placements: new Map(), version: placementRef.current.version + 1 };
         setProvenanceOn(false);
         setShowReplaced(false);
         setHighlight(undefined);
@@ -435,16 +431,16 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         return entry;
     }, []);
 
-    const rootInfoFor = React.useCallback((layer: StagedLayer, root: THREE.Object3D, st: StagedBuildState): RootInfo => {
+    const rootInfoFor = React.useCallback((layer: StagedLayer, root: THREE.Object3D): RootInfo => {
         const ranks = layer.reveal.orderUrl ? sidecarsRef.current.get(layer.reveal.orderUrl)?.ranks : undefined;
-        const key = `${layer.reveal.stagger}|${ranks ? 'r' : ''}|${st.degradations.map(d => d.id).join(',')}|${layer.provenance.label}`;
+        const key = `${layer.reveal.stagger}|${ranks ? 'r' : ''}|${layer.provenance.label}`;
         const cached = rootsRef.current.get(layer.objectId);
         if (cached && cached.root === root && cached.key === key) return cached;
         if (cached && cached.root !== root) {
             const old = new Set<THREE.Object3D>(cached.nodes.flatMap(n => n.meshes));
             registryRef.current.prune(m => !old.has(m));
         }
-        const info = buildRootInfo(layer, root, ranks, st.degradations);
+        const info = buildRootInfo(layer, root, ranks);
         info.key = key;
         rootsRef.current.set(layer.objectId, info);
         return info;
@@ -507,7 +503,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         for (const f of frame.layers) {
             const root = objectRootsRef.current.get(f.objectId);
             if (!root || !root.parent) continue;
-            const info = rootInfoFor(f.layer, root, st);
+            const info = rootInfoFor(f.layer, root);
             infos.push([f, info]);
             if (f.phase !== 'revealing' && f.phase !== 'revealed') continue;
             for (const n of info.nodes) {
@@ -515,6 +511,16 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 const q = f.phase === 'revealed' ? 1 : nodeProgress(f.progress, n.window);
                 for (const sid of n.replaces) replacedPresence.set(sid, Math.min(replacedPresence.get(sid) ?? 1, 1 - q));
             }
+        }
+        // Where each degraded part is: placed on the loaded nodes by the most specific thing they share, again when the
+        // loaded nodes, what is showing or the records change.
+        const placeKey = `${st.degradations.map(d => d.id).join(',')}#${infos.map(([f, i]) => `${f.objectId}:${i.serial}:${f.hidden || f.phase === 'retired' ? 0 : 1}`).join(',')}`;
+        if (placementRef.current.sig !== placeKey) {
+            const roots: Array<PlacementRoot<NodeInfo>> = infos.map(([f, i]) => ({ layer: f.layer, buildingId: i.buildingId, showing: !f.hidden && f.phase !== 'retired', nodes: i.nodes }));
+            for (const [, i] of infos) for (const n of i.nodes) n.degradationIds = [];
+            const placements = placeDegradations(roots, st.degradations);
+            for (const [id, pl] of placements) for (const n of pl.nodes) n.degradationIds.push(id);
+            placementRef.current = { sig: placeKey, placements, version: placementRef.current.version + 1 };
         }
         const registry = registryRef.current;
         registry.beginFrame();
@@ -591,7 +597,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 if (L.replaying) setReplaying(false);
             }
             const now = performance.now();
-            const sig = f ? f.layers.map(x => `${x.objectId}:${x.phase}:${x.hidden ? 1 : 0}`).join('|') : '';
+            const sig = (f ? f.layers.map(x => `${x.objectId}:${x.phase}:${x.hidden ? 1 : 0}`).join('|') : '') + `#${placementRef.current.version}`;
             const running = L.state?.runState === 'running' && !isInterrupted(L.state, pageLoadedAtMs);
             if (!highlightOn && lastHighlightOn) lastSig = '';
             lastHighlightOn = highlightOn;
@@ -623,6 +629,11 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         if (!st) return null;
         const labels = provenanceOn ? [...rootsRef.current.values()].flatMap(i => i.nodes.map(n => n.provenance.label)) : [];
         const lg = legendFor(st, labels);
+        // Where each record is, once every layer that is going to show has loaded (before that, a part may only be unplaced yet).
+        const placements = new Map<string, DegradationPlacementNote>();
+        if (frame && !frame.pending && frame.layers.length > 0) {
+            for (const [id, pl] of placementRef.current.placements) placements.set(id, { scope: pl.scope, layerIds: pl.layerIds });
+        }
         const hasOutlines = [...rootsRef.current.values()].some(i => i.nodes.some(n => n.meshes.some(m => (m as THREE.LineSegments).isLine && !!(m.geometry as THREE.BufferGeometry).getAttribute('color'))));
         return React.createElement(StagedBuildOverlay, {
             state: st,
@@ -645,6 +656,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             },
             onHighlight: (d: DegradationRecord) => setHighlight(h => (h?.id === d.id && h.untilMs > Date.now() ? undefined : { id: d.id, untilMs: Date.now() + HIGHLIGHT_MS })),
             highlightedId: highlight && highlight.untilMs > Date.now() ? highlight.id : undefined,
+            placements,
             bottomInsetPx,
             skipNote
         });
