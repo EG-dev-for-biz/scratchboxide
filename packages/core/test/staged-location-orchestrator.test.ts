@@ -544,7 +544,7 @@ describe('Stop, the deadline and hard failures', () => {
 });
 
 describe('the call settles before it returns or throws', () => {
-    it('a fit rejected while Street View is still fetching ends the fetch as not needed: no time limit, no detail claimed, and nothing changes after the result', async () => {
+    it('a rejected fit fetches no Street View image (nothing is billed for it): evidence is skipped, no time limit, no detail claimed, and nothing changes after the result', async () => {
         const sv = streetViewStandIn(500);
         const calls: any[] = [];
         const s = setup(ARCH, {}, {
@@ -552,10 +552,10 @@ describe('the call settles before it returns or throws', () => {
             vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
         });
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
-        expect(sv.requested.length).toBeGreaterThan(0); // the fetch had started when the fit was rejected
+        expect(sv.requested).toEqual([]); // the fetch starts when the fit is accepted: a rejected fit never started it
         const evidence = result.stages.find(x => x.stage === 'evidence')!;
         expect(evidence).toMatchObject({ status: 'skipped', reason: 'there is no accepted fit to place detail on' });
-        expect(statusOf(s.events, 'evidence')).toEqual(['running', 'skipped']);
+        expect(statusOf(s.events, 'evidence')).toEqual(['skipped']);
         expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'fit_rejected']);
         // none of the three false statements: a 60 s limit, a run deadline, detail read from the tile photos
         const everything = JSON.stringify(result);
@@ -575,7 +575,7 @@ describe('the call settles before it returns or throws', () => {
         expect(s.events.length).toBe(eventsAtReturn);
     });
 
-    it('Street View is credited only where an image was read: a fit rejected after the images came back credits none', async () => {
+    it('Street View is credited only where an image was read: a rejected fit fetched none and credits none', async () => {
         const sv = streetViewStandIn();
         const calls: any[] = [];
         const s = setup(ARCH, {}, {
@@ -583,8 +583,8 @@ describe('the call settles before it returns or throws', () => {
             vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
         });
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
-        expect(sv.requested.sort()).toEqual(['PE', 'PN', 'PS', 'PW']); // the images were fetched while the fit ran
-        expect(result.stages.find(x => x.stage === 'evidence')!.status).toBe('committed');
+        expect(sv.requested).toEqual([]); // no image was fetched for a fit that was then rejected
+        expect(result.stages.find(x => x.stage === 'evidence')!.status).toBe('skipped');
         expect(calls).toEqual([]); // and none reached the model
         expect(result.extraction.attribution).toEqual(['Map data ©Google']);
         expect((result.artifact as any).data.stagedBuild.attribution).toEqual(['Map data ©Google']);
@@ -671,8 +671,11 @@ describe('what the result says about the extraction, the correction and the gate
         const byLayer = Object.fromEntries((result.artifact as any).data.stagedBuild.layers.map((l: any) => [l.layer, l]));
         expect(byLayer.l3br.provenance).toMatchObject({ label: 'photo-corrected', measuredGeometry: false, confidence: 0.8 });
         expect(byLayer.l3ar.provenance).toMatchObject({ label: 'photo-corrected', measuredGeometry: false, confidence: 0.8 });
-        // the fit that was not corrected stays measured
-        expect(byLayer.l3b.provenance).toMatchObject({ label: 'fitted', measuredGeometry: true });
+        // the fit that was not corrected is measured except for the faces it placed where the scan has no samples, and says so
+        const unobservedM2 = result.structureFit!.unobservedFaceAreaM2;
+        expect(byLayer.l3b.provenance.measuredGeometry).toBe(unobservedM2 === 0);
+        if (unobservedM2 > 0) expect(byLayer.l3b.provenance.confidence).toBeLessThan(1);
+        expect(byLayer.l3b.provenance.label).toBe('fitted');
         expect(validateContract('StagedLocationResult', result)).toEqual([]);
         // screenshot: the corrected faces in the photo-corrected colour over the fitted body and the pass-through scan
         saveSceneShot(s.root, result, 'orchestrator_photo_corrected_layers', [-30, -30, 30, 30]);

@@ -825,14 +825,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const structure = request.isolate && t.sizedTo === 'structure' ? t.structure : undefined;
         const isolateMode = !!structure;
 
-        // ---------------- evidence (starts now, overlapping strip, remesh and fit) ----------------
+        // ---------------- evidence (starts when the fit is accepted: a rejected fit has nothing to place a photo on, and no image is fetched for it) ----------------
         const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         const rebuildPossible = isolateMode && !!deps.scanFit;
-        let evidencePromise: Promise<{ images: EvidenceImage[]; status: string }> | undefined;
-        // ended (skipped, as not needed) when the fit fails, so no image is fetched for nothing
+        let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; status: string }> | undefined;
+        // ended (skipped, as not needed) when the run ends before the evidence does
         const evidenceStop = new AbortController();
 
-        if (rebuildPossible && visionAvailable) {
+        const startEvidence = (): void => {
             evidencePromise = runner.stage<{ images: EvidenceImage[] }>({
                 id: 'evidence',
                 run: async io => {
@@ -888,7 +888,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             // a Stop rejects it; whoever awaits it sees that, and nobody else is left holding a rejection nobody handles
             evidencePromise.catch(() => undefined);
             siblings.push(evidencePromise);
-        }
+        };
 
         // ---------------- trees-measure ----------------
         let strip: TileVegetationStripResult | undefined;
@@ -942,16 +942,21 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if ((prov.summary.relief?.carvedVertices ?? 0) > 0) labels.push(PROVENANCE.photoInferred);
                 run.note(PROVENANCE.remeshed, `tile_refine remesh: ${note || 'no change beyond the remesh itself'}`);
                 const l1 = run.state.layers.find(l => l.layer === 'l1')!;
+                const remeshCounts = layerCounts(r.clayGlb);
+                // the layer is measured only where the scan is: vertices carved by photo relief are inferred, and the record says so
+                const carved = prov.summary.relief?.carvedVertices ?? 0;
+                const reliefShare = carved > 0 && remeshCounts.vertices > 0 ? Math.min(1, carved / remeshCounts.vertices) : 0;
                 const layer: StagedLayer = {
                     objectId: layerObjectId(r.cacheKey, 'l2'), stage: 'remesh', layer: 'l2', order: STAGES.remesh.order, url: pub.url, bytes: pub.bytes,
                     provenance: {
-                        label: PROVENANCE.remeshed, measuredGeometry: true,
+                        label: PROVENANCE.remeshed, measuredGeometry: carved === 0,
+                        ...(carved > 0 ? { confidence: round(1 - reliefShare, 4), inferred: { reliefCarvedVertices: carved, reliefMaxAbsHeightM: prov.summary.relief!.maxAbsHeightM } } : {}),
                         method: `tile_refine: hidden shells culled, facades rectified and flattened, cracks closed${(request.relief ?? TILE_REFINE_RELIEF_DEFAULT) ? ', photometric relief (inferred, gated)' : ''}`,
                         sources: [{ kind: 'stage-output', id: `remesh:${key8}` }], ...(note ? { note } : {})
                     },
                     provenanceLabels: labels, vertexProvenance: prov.summary, supersedes: [l1.objectId], revealAfter: [],
                     reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [l1.objectId] },
-                    cached: r.cached, builtAtMs: remembered.builtAtMs, counts: layerCounts(r.clayGlb)
+                    cached: r.cached, builtAtMs: remembered.builtAtMs, counts: remeshCounts
                 };
                 run.commit(layer, {
                     source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress,
@@ -1080,8 +1085,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         layers.push({
                             objectId: layerObjectId(planted.cacheKey, 'l5'), stage: 'trees', layer: 'l5', order: STAGES.trees.order, url, bytes: remembered.published[0].bytes,
                             provenance: {
-                                label: PROVENANCE.grownToMeasuredCrown, measuredGeometry: true,
-                                method: 'SB-Veggie space colonisation grown inside each crown measured in the photo tiles (stem, extent and height measured)',
+                                // the stem, extent and height are measured; the branching inside the crown is grown, so the geometry is not measurement (unrated)
+                                label: PROVENANCE.grownToMeasuredCrown, measuredGeometry: false, confidence: 0,
+                                method: 'SB-Veggie space colonisation grown inside each crown measured in the photo tiles (stem, extent and height measured; the branching is procedural)',
                                 sources: [{ kind: 'stage-output', id: `trees-measure:${strip!.cacheKey.slice(0, 8)}` }],
                                 inferred: Object.fromEntries(Object.entries(planted.stats.inferred ?? {}).filter(([, v]) => typeof v === 'number')) as Record<string, number>
                             },
@@ -1255,6 +1261,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             out.fit = fitted.value;
             const fit = fitted.value.value;
             persist();
+            if (rebuildPossible && visionAvailable) startEvidence();
 
             // evidence, projection, vision
             if (!visionAvailable) {
@@ -1541,6 +1548,16 @@ function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base:
                 note: `only ${corrected.ids.join(', ')} ${corrected.ids.length === 1 ? 'is' : 'are'} photo-corrected; the residual is the whole fit's against the scan`
             };
         }
+        // faces the fit placed where the scan has no samples are not measurement: the share of the fitted area the scan supports is the confidence
+        const totalArea = fit.surfaces.reduce((a, x) => a + x.areaM2, 0);
+        const unobservedArea = fit.surfaces.filter(x => x.supportFraction < 0.5).reduce((a, x) => a + x.areaM2, 0);
+        if (label === PROVENANCE.fitted && unobservedArea > 0 && totalArea > 0) {
+            return {
+                label, measuredGeometry: false, confidence: round(1 - unobservedArea / totalArea, 4), residual: fit.metrics.scanToFit, sources,
+                method: 'scan_fit: the four operators fitted to the isolated scan',
+                note: `${round(unobservedArea, 1)} m² of ${round(totalArea, 1)} m² of fitted faces are placed where the scan has no samples (fitted-unobserved)`
+            };
+        }
         return { label, measuredGeometry: true, method: 'scan_fit: the four operators fitted to the isolated scan', sources, residual: fit.metrics.scanToFit };
     };
     const unobserved = fit.surfaces.filter(s => s.supportFraction < 0.5);
@@ -1683,10 +1700,15 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         timingsMs: { total: now() - run.startedAt, firstVisual: (run.firstVisualAt ?? now()) - run.startedAt, byStage },
         cache: { ...run.cacheStatus }
     };
+    // layers the floor exempted as measured that are partly inferred or grown: said beside the exemption, not only in the provenance toggle
+    const exemptIds = new Set([...scanNames, ...rebuildNames, ...grownTrees]);
+    const exemptInferred = visible.filter(l => exemptIds.has(l.objectId) && !l.provenance.measuredGeometry)
+        .map(l => `${l.objectId} (${l.provenance.label}) is ${round((1 - (l.provenance.confidence ?? 0)) * 100, 1)}% inferred or grown, not measured`);
     const summaryInput: StagedSummaryInput = {
         ...base, runId: run.runId,
         ...(remeshLayer?.provenance.note ? { remeshNote: remeshLayer.provenance.note } : {}),
         ...(f.putBack ? { treesPutBack: f.putBack } : {}),
+        ...(exemptInferred.length ? { exemptInferred } : {}),
         ...(gate.exemptionsRefused.length || refusedHere.length ? { exemptionsRefused: [...refusedHere, ...gate.exemptionsRefused] } : {}),
         droppedNotResolvable: f.rebuild.droppedNotResolvable
     };

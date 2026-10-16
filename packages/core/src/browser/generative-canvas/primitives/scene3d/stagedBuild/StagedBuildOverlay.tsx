@@ -242,10 +242,13 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                     const t = stageTime(s, props.wallNowMs);
                     const cached = s.timings.cached ? `cached (built ${builtDate(s.timings.builtAtMs)})` : '';
                     const why = stageReason(state, s);
-                    const label = `${s.title}: ${s.status}${t !== undefined ? `, ${(t / 1000).toFixed(1)} seconds` : ''}${cached ? `, ${cached}` : ''}${why ? `. ${why}` : ''}`;
+                    // a committed stage can still hold geometry that is not measurement: the chip says so beside the status
+                    const inferredHere = s.status === 'committed' ? state.layers.filter(l => l.stage === s.stage && !l.retired && l.provenance.measuredGeometry === false) : [];
+                    const inferredText = inferredHere.length ? `includes inferred or grown geometry (${[...new Set(inferredHere.map(l => String(l.provenance.label)))].join(', ')})` : '';
+                    const label = `${s.title}: ${s.status}${inferredText ? `, ${inferredText}` : ''}${t !== undefined ? `, ${(t / 1000).toFixed(1)} seconds` : ''}${cached ? `, ${cached}` : ''}${why ? `. ${why}` : ''}`;
                     return (
                         <li key={s.stage} aria-label={label} data-stage-status={s.status} style={{ padding: '2px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', ...(why ? { flex: '1 1 100%' } : {}) }}>
-                            <span aria-hidden="true">{`${GLYPH[s.status]} ${s.title} ${s.status}${t !== undefined ? ` · ${seconds(t)}` : ''}${cached ? ` · ${cached}` : ''}`}</span>
+                            <span aria-hidden="true">{`${GLYPH[s.status]} ${s.title} ${s.status}${inferredText ? ' · inferred' : ''}${t !== undefined ? ` · ${seconds(t)}` : ''}${cached ? ` · ${cached}` : ''}`}</span>
                             {why ? <div aria-hidden="true" data-testid="sb-staged-stage-reason" style={{ color: MUTED }}>{why}</div> : null}
                         </li>
                     );

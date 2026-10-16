@@ -35,6 +35,8 @@ export interface StagedSummaryInput extends Omit<StagedLocationResult, 'digest' 
     droppedNotResolvable?: number;
     /** Vertex-floor exemptions the gate asked for and refused, with why: their layers were counted against the floor. */
     exemptionsRefused?: string[];
+    /** Exempted layers that are partly inferred or grown rather than measured, with the share. */
+    exemptInferred?: string[];
 }
 
 /** "1,234". */
@@ -232,20 +234,26 @@ export function timingsSentence(input: StagedSummaryInput): string {
     return `Built in ${s1(input.timingsMs.total)} (${per.join(', ')} s)${cache}${engine}.`;
 }
 
+/** Rule "stop", from the stages alone: the finished result and the stopped scene's state both phrase it this way. */
+export function stopText(stages: ReadonlyArray<Pick<StageSummary, 'title' | 'status' | 'timings'>>, runId: string): string {
+    const done = stages.filter(s => s.status === 'committed' || s.status === 'degraded');
+    const last = [...done].sort((a, b) => (a.timings.endedAtMs ?? 0) - (b.timings.endedAtMs ?? 0)).pop();
+    const notBuilt = stages.filter(s => s.status === 'stopped' || s.status === 'pending').map(s => s.title.toLowerCase());
+    const list = notBuilt.length > 1 ? `${notBuilt.slice(0, -1).join(', ')} and ${notBuilt[notBuilt.length - 1]}` : notBuilt[0];
+    return `Stopped after ${last ? `the ${last.title.toLowerCase()}` : 'the start'}; ${list ? `${list} ${notBuilt.length === 1 ? 'was' : 'were'} not built, and ` : ''}the finished stages stay in the scene. Retry with retryRunId ${runId}.`;
+}
+
 /** Rule "stop". */
 export function stopSentence(input: StagedSummaryInput): string {
     if (input.status !== 'stopped') return '';
-    const done = input.stages.filter(s => s.status === 'committed' || s.status === 'degraded');
-    const last = done.sort((a, b) => (a.timings.endedAtMs ?? 0) - (b.timings.endedAtMs ?? 0)).pop();
-    const notBuilt = input.stages.filter(s => s.status === 'stopped' || s.status === 'pending').map(s => s.title.toLowerCase());
-    const list = notBuilt.length > 1 ? `${notBuilt.slice(0, -1).join(', ')} and ${notBuilt[notBuilt.length - 1]}` : notBuilt[0];
-    return `Stopped after ${last ? `the ${last.title.toLowerCase()}` : 'the start'}; ${list ? `${list} ${notBuilt.length === 1 ? 'was' : 'were'} not built, and ` : ''}the finished stages stay in the scene. Retry with retryRunId ${input.runId}.`;
+    return stopText(input.stages, input.runId);
 }
 
 /** Rule "gate-exemptions". */
 export function gateSentence(input: StagedSummaryInput): string {
     const g = input.complexityGate;
-    const exempt = g.exemptions.length ? `Exempt from the vertex floor, as measured geometry: ${g.exemptions.join('; ')}.` : '';
+    const inferred = input.exemptInferred?.length ? ` Not all of it is measurement: ${input.exemptInferred.join('; ')}.` : '';
+    const exempt = g.exemptions.length ? `Exempt from the vertex floor, as measured geometry: ${g.exemptions.join('; ')}.${inferred}` : '';
     // the verdict is reported, never thrown: a staged build degrades rather than fails the gate
     const verdict = g.passed ? '' : `The geometric complexity gate did not pass (${g.violations.map(v => v.replace(/\.$/, '')).join('; ')}).`;
     const refused = input.exemptionsRefused?.length ? `Not exempt from the vertex floor: ${input.exemptionsRefused.join('; ')}.` : '';
@@ -287,12 +295,16 @@ export function stagedBuildContext(sceneData: { stagedBuild?: StagedBuildState }
     const max = STAGED_SUMMARY_LIMITS.contextLineMaxChars;
     const stages = Object.fromEntries(sb.stages.map(s => [s.stage, s.status]));
     const vm = sb.visionModel;
+    // a Stop (or a dropped connection) leaves no result: the state itself names what was not built and how to resume it
+    const stopped = sb.runState === 'stopped' || sb.runState === 'interrupted';
+    const stoppedStages = stopped ? sb.stages.filter(s => s.status === 'stopped').map(s => s.stage) : [];
     const line = (degradations: Array<{ stage: string; reasonCode: string; transient: boolean }>, more: number) => `[Staged location build: ${JSON.stringify({
         runState: sb.runState,
         stages,
         degradations,
         ...(more ? { moreDegradations: more } : {}),
-        ...(sb.retry ? { retry: sb.retry } : {}),
+        ...(sb.retry ? { retry: sb.retry } : stoppedStages.length ? { retry: { retryRunId: sb.runId, stages: stoppedStages } } : {}),
+        ...(stopped ? { stop: stopText(sb.stages, sb.runId) } : {}),
         ...(vm ? { visionModel: { used: vm.used, thinking: vm.thinking, outcome: vm.outcome } } : {})
     })}]\n`;
     const all = sb.degradations.map(d => ({ stage: d.stage, reasonCode: d.reasonCode, transient: d.transient }));

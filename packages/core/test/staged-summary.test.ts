@@ -197,6 +197,22 @@ describe('staged-summary', () => {
     });
 });
 
+describe('after a Stop the next turn can resume', () => {
+    it('the context line of a stopped scene names what was not built and a retry handle for the first stopped stage', () => {
+        const sb = stagedBuildState();
+        sb.retry = undefined;
+        sb.runState = 'stopped';
+        sb.stages = sb.stages.map(st => (st.stage === 'vision' || st.stage === 'trees' ? { ...st, status: 'stopped' as const } : st));
+        const json = JSON.parse(stagedBuildContext({ stagedBuild: sb }).slice('[Staged location build: '.length, -2));
+        expect(json.runState).toBe('stopped');
+        expect(json.retry).toEqual({ retryRunId: RUN_ID, stages: ['vision', 'trees'] });
+        expect(json.stop).toMatch(/^Stopped after the .+; .+ (was|were) not built, and the finished stages stay in the scene\. Retry with retryRunId /);
+        expect(json.stop).toContain(RUN_ID);
+        // a finished run says nothing of a stop
+        expect(JSON.parse(stagedBuildContext({ stagedBuild: stagedBuildState() }).slice('[Staged location build: '.length, -2)).stop).toBeUndefined();
+    });
+});
+
 describe('the headline follows the layers on screen, not the stage status alone', () => {
     const stage = (id: string, status: StageSummaryStatus, layerIds: string[] = []) =>
         ({ stage: id, order: 0, title: id, source: '', status, layerIds, timings: { startedAtMs: 0, cached: false }, degradationIds: [] }) as StagedSummaryInput['stages'][number];
