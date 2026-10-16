@@ -59,7 +59,7 @@ describe('the ring of views', () => {
                 generateContentStream: async (params: any) => {
                     asked.push(params);
                     const reply = { matches: [
-                        { element: 'e0', views: [{ image: 1, box: [200, 100, 260, 900], confidence: 80 }, { image: 2, box: null, confidence: 0 }, { image: 3, box: [220, 20, 270, 980], confidence: 30 }] },
+                        { element: 'e0', views: [{ image: 1, box: [200, 100, 260, 900], confidence: 80 }, { image: 3, box: null, confidence: 0 }, { image: 2, box: [220, 20, 270, 980], confidence: 30 }] },
                         { element: 'e2', views: [{ image: 1, box: [400, 120, 500, 320], confidence: 90 }] },
                         { element: 'zzz', views: [{ image: 1, box: [1, 2, 3, 4], confidence: 90 }] }
                     ] };
