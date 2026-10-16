@@ -167,14 +167,14 @@ class Scene {
      * The ground apron: a band of up-facing quads `m` metres wide along every edge of a footprint, its inner corners the
      * footprint's own vertices, so the ground and the walls that stand on it are one welded mesh.
      */
-    apron(poly: P2[], m = 4): void {
+    apron(poly: P2[], m = 4, pieces = 1): void {
         for (let i = 0; i < poly.length; i++) {
             const a = poly[i], b = poly[(i + 1) % poly.length];
             const dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz) || 1;
             let n: P2 = [-dz / l, dx / l];
             const mid: P2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
             if (pointInPolygon([mid[0] + n[0] * 0.05, mid[1] + n[1] * 0.05], poly)) n = [-n[0], -n[1]];
-            this.polygon([a, b, [b[0] + n[0] * m, b[1] + n[1] * m], [a[0] + n[0] * m, a[1] + n[1] * m]], 0, true);
+            this.polygon([a, b, [b[0] + n[0] * m, b[1] + n[1] * m], [a[0] + n[0] * m, a[1] + n[1] * m]], 0, true, pieces);
         }
     }
 
@@ -365,6 +365,27 @@ export function treeTouching(dir: string, yawDeg = 0): SyntheticScan {
     const glb = path.join(dir, 'synthetic_tree.glb');
     sc.save(glb);
     return { name: 'block with a tree crown against it', glb, anchor: [0, 0], truth: { areaM2: 14 * 10, heightM: 10 } };
+}
+
+/**
+ * A block with scan-melt fragments standing on its apron: three thin upright shards, 0.9 m tall and 0.5 m wide, 2 m from the wall,
+ * their feet on the apron's own (welded) vertices, 0.11 m2 each (a tile's melt leaves nothing as large as the 0.25 m2 under which no attachment is built), so they belong to the scan's one mesh as they do in a tile. Nothing the fit
+ * builds explains them (they are not part of the block), and they are too small to be a structure of their own.
+ */
+export function blockWithFragments(dir: string): SyntheticScan & { fragments: Array<{ lo: V3; hi: V3 }> } {
+    const B: P2[] = [[-7, -5], [7, -5], [7, 5], [-7, 5]];
+    const sc = new Scene(71, 0);
+    sc.prism(B, 0, 10);
+    sc.apron(B, 2, 28);
+    const fragments: Array<{ lo: V3; hi: V3 }> = [];
+    for (const x0 of [-4, 0, 4]) {
+        // the apron's outer edge on the +z side is at z = 7, its vertices half a metre apart: a shard stands on two of them
+        sc.add([[x0, 0, 7], [x0 + 0.5, 0, 7], [x0 + 0.25, 0.9, 7]], [0, 1, 2]);
+        fragments.push({ lo: [x0, 0, 7], hi: [x0 + 0.5, 0.9, 7] });
+    }
+    const glb = path.join(dir, 'synthetic_fragments.glb');
+    sc.save(glb);
+    return { name: 'block with scan-melt fragments on its apron', glb, anchor: [0, 0], truth: { areaM2: 14 * 10, heightM: 10, fragments: 3 }, fragments };
 }
 
 /**

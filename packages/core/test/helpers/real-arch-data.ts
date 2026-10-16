@@ -93,3 +93,27 @@ export function findPublicModel(part: string, suffix: string): string | undefine
     }
     return undefined;
 }
+
+/**
+ * The Washington Square Arch as the staged pipeline isolates it at 25 m (tile_refine's isolate: 158 m2 footprint, ground at
+ * -0.54 m, 22.53 m tall), the scan the fitter rejected for a shard 4.2 m from the fit. SCRATCHBOX_ARCH_SIZED_DIR (raw_clay.glb and
+ * clay.glb) names it directly; else the tile_refine cache entry is looked for in this checkout, the main one and its worktrees.
+ */
+export function findSizedArchData(): { rawClay: string; remeshClay: string; from: string } | undefined {
+    const env = process.env.SCRATCHBOX_ARCH_SIZED_DIR;
+    if (env && ['raw_clay.glb', 'clay.glb'].every(f => fs.existsSync(path.join(env, f)))) return { rawClay: path.join(env, 'raw_clay.glb'), remeshClay: path.join(env, 'clay.glb'), from: env };
+    for (const root of roots()) {
+        const cache = path.join(root, '.scratchbox/cache/tile_refine');
+        if (!fs.existsSync(cache)) continue;
+        for (const d of fs.readdirSync(cache)) {
+            const dir = path.join(cache, d);
+            const stats = path.join(dir, 'stats.json');
+            if (!fs.existsSync(stats) || !['raw_clay.glb', 'clay.glb'].every(f => fs.existsSync(path.join(dir, f)))) continue;
+            try {
+                const i = JSON.parse(fs.readFileSync(stats, 'utf8')).isolate;
+                if (i?.enabled && Math.abs(i.footprintArea_m2 - 158) < 5 && Math.abs(i.height_m - 22.534) < 0.01 && Math.abs(i.groundY + 0.5417) < 0.01) return { rawClay: path.join(dir, 'raw_clay.glb'), remeshClay: path.join(dir, 'clay.glb'), from: dir };
+            } catch { /* not a tile_refine entry */ }
+        }
+    }
+    return undefined;
+}

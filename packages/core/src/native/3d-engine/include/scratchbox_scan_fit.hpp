@@ -107,6 +107,10 @@ struct Params {
     double boxSupportMin{0.5};
     double metricDensity{25};
     double inlierBandM{0.07};
+    // leftovers: scan nothing in the fit explains (not buried in a rebuilt solid, not already kept as scanned). A connected
+    // fragment up to this area is kept as scanned, exactly (error 0), as long as all fragments together stay under the share of
+    // the structure's visible surface; a larger unexplained region is a wrong or missing fit and stays in the Hausdorff.
+    double fragmentMaxAreaM2{4.0}, fragmentMaxShare{0.05};
     double backedBandM{0.25};   // the rebuild's surface within this of the scan is backed by it
     // global gates
     double gateCoverage{0.85}, gateScanToFitM{0.06}, gateFitToScanM{0.06}, gateHausdorffM{0.6}, gatePassShare{0.35}, gateUnobservedShare{0.35};
@@ -2465,6 +2469,66 @@ private:
     std::vector<float> dS;  // per sample: distance to the fitted body (before boxes)
     std::vector<uint8_t> inPass;
 
+    /**
+     * Whatever the rebuild and the attachments leave unexplained, and is small, stays as the scan has it. A sample is a
+     * leftover when it is not ground or clutter, not already kept as scanned, not buried inside a rebuilt solid, and farther from
+     * every fitted surface than the backed band (25 cm: the rebuild's own test of whether a fitted face has scan behind it).
+     * Within that band the sample has a fitted face to be measured against, and its error is what the rms and Hausdorff gates
+     * judge; beyond it nothing fitted answers for it at all.
+     * Leftovers are grouped into connected fragments (a 0.25 m voxel grid, 26-connected); a fragment of at most
+     * fragmentMaxAreaM2 is kept as scanned, the smallest first, while the fragments kept stay within fragmentMaxShare of the
+     * structure's visible surface. Kept as scanned they are exact (they are the scan), count in the pass share and the coverage,
+     * and leave the Hausdorff, which measures the fitted parts. A region larger than a fragment, or past the share, is not
+     * explained by the fit: it stays in the Hausdorff and rejects the fit.
+     */
+    void keepLeftoverFragments(std::vector<std::vector<uint32_t>>& passSlabs, std::vector<std::string>& passWhy, std::vector<std::map<std::string, double>>& passTest) {
+        if (ftri.empty()) return;
+        std::vector<uint8_t> taken(S.size(), 0);
+        for (const auto& sl : passSlabs) for (uint32_t k : sl) taken[k] = 1;
+        std::vector<float> dd(S.size(), 0);
+        sg::parallelFor(S.size(), [&](size_t i) { dd[i] = static_cast<float>(distToFitted(S[i].p)); });
+        double visArea = 0;
+        std::vector<uint32_t> left;
+        for (size_t i = 0; i < S.size(); ++i) {
+            if (sGround[i]) continue;
+            visArea += S[i].w;
+            if (taken[i] || dd[i] <= P.backedBandM || insideFitted(S[i].p)) continue;
+            left.push_back(static_cast<uint32_t>(i));
+        }
+        if (left.empty()) return;
+        const float vox = 0.25f;
+        std::map<std::array<int, 3>, std::vector<uint32_t>> vg;
+        for (uint32_t i : left) vg[{(int)std::floor(S[i].p.x / vox), (int)std::floor(S[i].p.y / vox), (int)std::floor(S[i].p.z / vox)}].push_back(i);
+        std::set<std::array<int, 3>> seen;
+        struct Frag { std::vector<uint32_t> idx; double area{0}, dmin{1e30}, dmax{0}; };
+        std::vector<Frag> frags;
+        for (const auto& [key, _] : vg) {
+            if (seen.count(key)) continue;
+            Frag fr;
+            std::vector<std::array<int, 3>> st{key};
+            seen.insert(key);
+            while (!st.empty()) {
+                const auto k = st.back();
+                st.pop_back();
+                for (uint32_t i : vg[k]) { fr.idx.push_back(i); fr.area += S[i].w; fr.dmin = std::min(fr.dmin, (double)dd[i]); fr.dmax = std::max(fr.dmax, (double)dd[i]); }
+                for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) for (int dz = -1; dz <= 1; ++dz) {
+                    const std::array<int, 3> q{k[0] + dx, k[1] + dy, k[2] + dz};
+                    if (vg.count(q) && !seen.count(q)) { seen.insert(q); st.push_back(q); }
+                }
+            }
+            frags.push_back(std::move(fr));
+        }
+        std::sort(frags.begin(), frags.end(), [](const Frag& a, const Frag& b) { return a.area < b.area; });
+        double kept = 0;
+        for (auto& fr : frags) {
+            if (fr.area > P.fragmentMaxAreaM2 || kept + fr.area > P.fragmentMaxShare * visArea) break;
+            kept += fr.area;
+            passSlabs.push_back(fr.idx);
+            passWhy.push_back("a fragment no primitive explains (" + sj::num(std::round(fr.area * 100) / 100) + " m2, " + sj::num(std::round(fr.dmin * 100) / 100) + " to " + sj::num(std::round(fr.dmax * 100) / 100) + " m from the fit): kept as scanned");
+            passTest.push_back({{"areaM2", fr.area}, {"minDistanceM", fr.dmin}, {"maxDistanceM", fr.dmax}});
+        }
+    }
+
     void residualsToBoxes() {
         dS.assign(S.size(), 0);
         sg::parallelFor(S.size(), [&](size_t i) { dS[i] = static_cast<float>(distToFitted(S[i].p)); });
@@ -2711,6 +2775,8 @@ private:
             for (int f = 0; f < 6; ++f) for (int k = 0; k < 4; ++k) pr.creases.push_back({c[fq[f][k]], c[fq[f][(k + 1) % 4]]});
             ++boxOrder;
         }
+        meshModel();
+        keepLeftoverFragments(passSlabs, passWhy, passTest);
         // pass-through: the scan triangles carrying the slabs' samples, kept as scanned
         for (size_t i = 0; i < passSlabs.size(); ++i) {
             PassRegion pr;
@@ -2728,7 +2794,6 @@ private:
             pr.test = passTest[i];
             R.pass.push_back(std::move(pr));
         }
-        meshModel();
     }
     std::map<int, uint8_t> boxFaceContact, boxFaceMeasured;
 
