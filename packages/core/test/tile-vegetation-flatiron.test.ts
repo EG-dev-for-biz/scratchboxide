@@ -429,6 +429,27 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         if (fs.existsSync(REPORT)) fs.writeFileSync(REPORT, JSON.stringify({ ...JSON.parse(fs.readFileSync(REPORT, 'utf8')), roofTree229: { supportY: c.supportY, supportSource: c.supportSource, groundAtStemY: c.groundAtStemY, plantedBaseY: base, evidence: surfaces } }, null, 2));
     });
 
+    it('does not move a tree that really stands on a roof: every rooftop trunk stays on the roof the scan shows under its crown, on whichever extraction of the park is read', () => {
+        // a roof is a support well above the street: here 12 m over the lowest quartile of the trees' supports
+        const ys = trees.map((c: any) => c.supportY as number).sort((a: number, b: number) => a - b);
+        const street = ys[Math.floor(ys.length / 4)];
+        const roofTrees = trees.filter((c: any) => c.supportY > street + 12);
+        expect(roofTrees.length, 'a tree standing on a roof in this extraction').toBeGreaterThan(0);
+        const grown = readGlbTriangles(fs.readFileSync(path.join(root, 'public', pipeline.trees!.url!)));
+        for (const c of roofTrees) {
+            // the crown's own footprint shows the roof under it (or the surface under its stem is the roof): it was not stood on the street
+            expect(c.supportMovedM, `crown ${c.id} was moved`).toBeUndefined();
+            expect(Math.abs(c.groundAtStemY - c.supportY), `crown ${c.id}`).toBeLessThanOrEqual(0.5);
+            expect(pipeline.trees!.offGround.some(k => k.crownId === c.id), `crown ${c.id} off the mounted clay`).toBe(false);
+            const range = grown.nodeRanges.find(r => r.extras?.crownId === c.id)!;
+            let base = Infinity;
+            for (let f = range.firstTriangle; f < range.firstTriangle + range.triangleCount; f++) {
+                for (let j = 0; j < 3; j++) base = Math.min(base, grown.positions[grown.indices[3 * f + j] * 3 + 1]);
+            }
+            expect(Math.abs(base - c.supportY), `crown ${c.id}'s planted base`).toBeLessThanOrEqual(0.6);
+        }
+    });
+
     it('stands every trunk on the ground rebuilt under its stem, and the mounted clay holds every one', () => {
         for (const c of trees) expect(Math.abs(c.groundAtStemY - c.supportY)).toBeLessThanOrEqual(0.5);
         expect(pipeline.trees!.offGround).toEqual([]);

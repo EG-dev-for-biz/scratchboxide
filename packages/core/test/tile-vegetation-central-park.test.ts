@@ -36,6 +36,7 @@ import { TileRefineService } from '../src/node/3d-engine/tile-refine-service';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../src/node/3d-engine/location-clay-pipeline';
 import { parseGlb, readAccessor, readGlbTriangles, renderClayPng, type GlbTriangles } from './helpers/clay-glb-render';
 import { validateContract } from '../src/common/spatial/staged-location-contracts';
+import { readStagedGlb } from './helpers/staged-glb-read';
 import { crownSurfaceAboveBase, foliageReach, readTreeFoliage } from './helpers/foliage-reach';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
@@ -413,6 +414,77 @@ describe.skipIf(!haveTile)('tile vegetation on the Central Park photo extraction
             if (c.keptSkirt) expect(entry.closedSide).toEqual({ areaM2: c.keptSkirt.areaM2, topY: c.keptSkirt.topY, bottomY: c.keptSkirt.bottomY });
         }
     });
+
+    it('puts the scanned trees back as scanned: the removed-trees layer is each removed crown\'s own triangles, labelled as scanned, and a failed tree stage mounts it over the devegetated tile', () => {
+        const g = readStagedGlb(strip.removedTreesGlb);
+        expect(validateContract('StagedGlbRootExtras', g.root)).toEqual([]);
+        expect(g.root.sb.stage).toBe('trees');
+        const items = g.nodes.filter(n => n.sb);
+        // one node per removed crown: the regrown ones and the ones cut by the extraction's edge (removed, not regrown); none is kept as scanned
+        const removedCrowns = crownsDoc.crowns.filter((c: any) => c.status === 'tree' || c.status === 'cut_at_boundary_removed');
+        expect(removedCrowns.length).toBeGreaterThan(1000);
+        expect(removedCrowns.some((c: any) => c.status === 'cut_at_boundary_removed')).toBe(true);
+        expect(items).toHaveLength(removedCrowns.length);
+        expect(new Set(items.map(n => n.sb.ids.crownId))).toEqual(new Set(removedCrowns.map((c: any) => c.id)));
+        let tris = 0;
+        for (const n of items) {
+            expect(n.sb.provenance.label).toBe('as-scanned');
+            expect(n.sb.provenance.measuredGeometry).toBe(true);
+            tris += n.sb.counts.triangles;
+        }
+        expect(validateContract('StagedNodeExtras', items[0].extras)).toEqual([]);
+        // all that the removal took (the strip's own count), and nothing else
+        expect(tris).toBe(strip.stats.triangles.removed);
+        expect(tris).toBeGreaterThan(100_000);
+        // verbatim: a sample of them are the raw tile's own triangles, to the writer's 1 cm quantisation
+        const layer = readGlbTriangles(fs.readFileSync(strip.removedTreesGlb));
+        expect(layer.indices.length / 3).toBe(tris);
+        const raw = readGlbTriangles(fs.readFileSync(path.join(root, 'central_park.glb')));
+        const step = Math.floor(tris / 3000), cell = 0.1;
+        const centroid = (t: GlbTriangles, f: number): [number, number, number] => {
+            let x = 0, y = 0, z = 0;
+            for (let j = 0; j < 3; j++) { const v = t.indices[3 * f + j]; x += t.positions[3 * v] / 3; y += t.positions[3 * v + 1] / 3; z += t.positions[3 * v + 2] / 3; }
+            return [x, y, z];
+        };
+        const grid = new Map<string, number[]>();
+        const sample: number[] = [];
+        for (let f = 0; f < tris; f += step) {
+            sample.push(f);
+            const c = centroid(layer, f);
+            const k = `${Math.floor(c[0] / cell)},${Math.floor(c[1] / cell)},${Math.floor(c[2] / cell)}`;
+            (grid.get(k) ?? grid.set(k, []).get(k)!).push(sample.length - 1);
+        }
+        const found = new Uint8Array(sample.length);
+        const sorted = (t: GlbTriangles, f: number) => [0, 1, 2].map(j => { const v = t.indices[3 * f + j]; return [t.positions[3 * v], t.positions[3 * v + 1], t.positions[3 * v + 2]]; });
+        for (let f = 0; f < raw.indices.length / 3; f++) {
+            const c = centroid(raw, f);
+            for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let d = -1; d <= 1; d++) {
+                const list = grid.get(`${Math.floor(c[0] / cell) + a},${Math.floor(c[1] / cell) + b},${Math.floor(c[2] / cell) + d}`);
+                if (!list) continue;
+                for (const i of list) {
+                    if (found[i]) continue;
+                    const q = centroid(layer, sample[i]);
+                    if (Math.hypot(q[0] - c[0], q[1] - c[1], q[2] - c[2]) > 0.02) continue;
+                    // every corner of the layer's triangle is a corner of this raw triangle, within 1.5 cm
+                    const rawCorners = sorted(raw, f), layerCorners = sorted(layer, sample[i]);
+                    if (layerCorners.every(p => rawCorners.some(r => Math.hypot(p[0] - r[0], p[1] - r[1], p[2] - r[2]) < 0.015))) found[i] = 1;
+                }
+            }
+        }
+        const missing = sample.filter((_, i) => !found[i]).length;
+        expect(missing, `${missing} of ${sample.length} sampled triangles of the removed-trees layer are not in the raw tile`).toBe(0);
+        // put back over the devegetated tile, the park is as scanned where its trees were: the picture
+        const devegetated = readGlbTriangles(fs.readFileSync(strip.devegetatedGlb));
+        const putBack = [{ positions: devegetated.positions, indices: devegetated.indices }, { positions: layer.positions, indices: layer.indices, color: [0.85, 0.55, 0.25] as [number, number, number] }];
+        fs.mkdirSync(SHOTS, { recursive: true });
+        const png = renderClayPng(putBack, { kind: 'aerial', width: 1600, height: 1000, bearingDeg: 200, elevationDeg: 35 });
+        fs.writeFileSync(path.join(SHOTS, 'central_park_scanned_trees_put_back.png'), png);
+        expect(png.length).toBeGreaterThan(20_000);
+        const staged = path.resolve(REPO, 'test-results/screenshots/staged');
+        fs.mkdirSync(staged, { recursive: true });
+        fs.writeFileSync(path.join(staged, 'central_park_scanned_trees_put_back.png'), png);
+        report.scannedTreesPutBack = { nodes: items.length, triangles: tris, sampled: sample.length, notInRawTile: missing };
+    }, 600_000);
 
     it('writes top-down and aerial clay screenshots of the rebuilt park', () => {
         const t = pipeline.trees!;
