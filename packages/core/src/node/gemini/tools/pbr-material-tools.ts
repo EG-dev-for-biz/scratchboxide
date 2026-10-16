@@ -701,12 +701,14 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             format,
             executionTimeMs: elapsedMs,
             cCompilerTimeMs: pbrResult.executionTimeMs,
+            synthesizer: pbrResult.synthesizer,
+            ...(pbrResult.reason ? { synthesizerReason: pbrResult.reason } : {}),
             outputDirectory: outDir,
             files: writtenFiles
         };
 
         const tierName = args.resolution || `${width}x${height}`;
-        const summary = `Synthesized ${tierName} (${width}x${height}) PBR material [${archetypeKey}] in ${elapsedMs}ms (C++20 kernel: ${pbrResult.executionTimeMs}ms). Format: ${format}. Conduction: ${descriptor.conduction.toFixed(2)}, Roughness: ${descriptor.roughnessBaseline.toFixed(2)}, Fissure: ${descriptor.fissureScale?.toFixed(1) ?? '8.0'}. Files written to: ${outDir}.`;
+        const summary = `Synthesized ${tierName} (${width}x${height}) PBR material [${archetypeKey}] in ${elapsedMs}ms (${pbrResult.synthesizer === 'native-cpp20' ? 'C++20 kernel' : `in-process TypeScript synthesizer, NOT the C++20 kernel: ${pbrResult.reason ?? 'no reason given'}`}: ${pbrResult.executionTimeMs}ms). Format: ${format}. Conduction: ${descriptor.conduction.toFixed(2)}, Roughness: ${descriptor.roughnessBaseline.toFixed(2)}, Fissure: ${descriptor.fissureScale?.toFixed(1) ?? '8.0'}. Files written to: ${outDir}.`;
 
         return {
             resultPayload: payload,

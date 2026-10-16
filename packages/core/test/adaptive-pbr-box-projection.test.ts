@@ -512,6 +512,33 @@ describe('MaterialX and USDZ outputs reference files that exist', () => {
     });
 });
 
+describe('recipe_hybrid refuses meshes it would corrupt or cannot read', () => {
+    const recipe = (glb: Buffer) => AdaptiveUvOrchestrator.applyAdaptivePbr({ inputGlbBuffer: glb, strategy: 'recipe_hybrid' });
+
+    it('a mesh without TEXCOORD_0 (every untextured mesh) is a typed error naming the missing attribute', async () => {
+        const glb = buildSceneGlb([{ name: 'tube', primitives: [{ mesh: cylinderMesh(0.5, 1, 12, 3) }] }], [{ name: 'tube', mesh: 0 }]);
+        const err: any = await recipe(glb).catch(e => e);
+        expect(err).toBeInstanceOf(AdaptivePbrInputError);
+        expect(err.message).toMatch(/mesh #0 "tube" has no TEXCOORD_0/);
+        expect(err.message).toContain('height_blended_triplanar');
+    });
+
+    it('a mesh with two primitives is refused, not written with dangling accessor indices', async () => {
+        const glb = buildSceneGlb([{ name: 'pair', primitives: [{ mesh: uvCubeMesh(1) }, { mesh: uvCubeMesh(0.5) }] }], [{ name: 'pair', mesh: 0 }]);
+        const err: any = await recipe(glb).catch(e => e);
+        expect(err).toBeInstanceOf(AdaptivePbrInputError);
+        expect(err.message).toMatch(/exactly one primitive per mesh; mesh #0 "pair" has 2/);
+    });
+
+    it('a single textured primitive still gets its recipe attributes, and the method is named', async () => {
+        const glb = buildSceneGlb([{ primitives: [{ mesh: uvCubeMesh(1) }] }], [{ name: 'cube', mesh: 0 }]);
+        const res = await recipe(glb);
+        expect(res.appliedMethod).toMatchObject({ method: 'recipe_hybrid_vertex_attributes', differsFromStrategy: false });
+        const prim = readTexturedScene(res.glbBuffer!).primitives[0];
+        expect(prim.attributeKeys).toEqual(expect.arrayContaining(['_SBEDGEH', '_SBNBRA', '_SBMASK']));
+    });
+});
+
 describe('pbr_synthesize_material on a mesh (the tool, end to end)', () => {
     const mesh = path.join(work, 'tool_input.glb');
     beforeAll(() => fs.writeFileSync(mesh, twoPartScene()));
