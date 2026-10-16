@@ -241,6 +241,44 @@ async function render(label: string, root: string, run: Run): Promise<string[]> 
     return shots;
 }
 
+/**
+ * Frame time of the finished scene in the real viewport on a real clock (not stepped): the committed layers of the run
+ * mounted whole, the reveal allowed to finish, then the frames the viewport draws over a few seconds. The park carries
+ * about 1.4 M triangles of tree, remesh and ground; a viewport that cannot hold it shows here and not in a screenshot.
+ */
+async function measureFrames(label: string, root: string, run: Run, ms = 3000): Promise<{ frames: number; p50: number; p95: number; max: number; trianglesDrawn: number; layerTriangles: number }> {
+    const page = await openStagedPage({ manualFrames: false, width: 1280, height: 800 });
+    try {
+        const art = run.result.artifact as any;
+        const state = art.data.stagedBuild;
+        const live = (state.layers as any[]).filter(l => !l.retired);
+        for (const l of live) {
+            const file = path.join(root, 'public', 'models', path.basename(l.url));
+            if (!fs.existsSync(file)) throw new Error(`layer file missing: ${file}`);
+            page.serve(path.basename(l.url), fs.readFileSync(file));
+        }
+        const data = stagedSceneData(state, { camera: art.data.camera });
+        await page.eval(`sbHarness.mount(${JSON.stringify({ ...data, objects: [] })})`);
+        await page.waitFor('sbHarness.ready()');
+        await page.eval(`sbHarness.update(${JSON.stringify(data)})`);
+        for (const l of live) await page.waitFor(`sbHarness.attached(${JSON.stringify(l.objectId)})`, 120_000, l.objectId);
+        // the reveal runs on the real clock: wait for it to end, so the frames below are the scene at rest
+        await new Promise(r => setTimeout(r, 4000));
+        await page.eval('sbHarness.startFrameLog()');
+        await new Promise(r => setTimeout(r, ms));
+        const log = await page.eval<{ times: number[]; triangles: number[] }>('sbHarness.stopFrameLog()');
+        const dts = log.times.slice(1).map((t, i) => t - log.times[i]).sort((a, b) => a - b);
+        const at = (q: number) => dts[Math.min(dts.length - 1, Math.floor(q * (dts.length - 1)))];
+        const out = {
+            frames: dts.length, p50: +at(0.5).toFixed(1), p95: +at(0.95).toFixed(1), max: +dts[dts.length - 1].toFixed(1),
+            trianglesDrawn: Math.max(0, ...log.triangles), layerTriangles: live.reduce((a, l) => a + l.counts.triangles, 0)
+        };
+        fs.writeFileSync(path.join(STAGED_RESULTS_DIR, `e2e_${label}_frames.json`), JSON.stringify(out, null, 2));
+        await page.screenshot(`e2e_${label}_frametime_scene`);
+        return out;
+    } finally { await page.close(); }
+}
+
 const fresh = (name: string) => { const root = path.join(WORK, name); fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(root, { recursive: true }); return root; };
 const degraded = (run: Run, stage: string) => run.result.degradations.filter((d: any) => d.stage === stage);
 const layerLabels = (run: Run) => (run.result.artifact.data.stagedBuild.layers as any[]).filter(l => !l.retired).map(l => `${l.layer}:${l.provenance.label}`);
@@ -332,6 +370,13 @@ describe.skipIf(!cp.requirement.ok || !cp.data?.plant || !stagedChrome.ok)('stag
         saveRun('park_cold', cold);
         expect(cold.result.stages.find((s: any) => s.stage === 'tiles').status).toBe('committed');
         await render('park', root, cold);
+        // the finished park (trees, remesh, ground) on a real clock: the viewport holds it, in frames
+        const f = await measureFrames('park', root, cold);
+        console.log(`[e2e park frames] ${f.layerTriangles.toLocaleString('en-US')} layer triangles, ${f.trianglesDrawn.toLocaleString('en-US')} drawn; ${f.frames} frames, p50 ${f.p50} ms, p95 ${f.p95} ms, max ${f.max} ms`);
+        expect(f.frames).toBeGreaterThan(20);
+        expect(f.trianglesDrawn).toBeGreaterThan(0);
+        expect(f.p50).toBeLessThan(40);
+        expect(f.p95).toBeLessThan(100);
     }, 1_800_000);
 
     it('warm: every built stage comes from cache', async () => {
