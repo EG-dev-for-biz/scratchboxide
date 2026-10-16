@@ -16,6 +16,8 @@
 
 import { describe, expect, test } from 'vitest';
 import { STAGED_SUMMARY_LIMITS, validateContract, type StageEvent, type StagedBuildState, type StagedLayer } from '../src/common/spatial/staged-location-contracts';
+import * as THREE from 'three';
+import { smallestRevealX } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/useStagedBuild';
 import {
     MAX_CONCURRENT_REVEALS,
     OUT_OF_ORDER_WAIT_MS,
@@ -374,5 +376,18 @@ describe('the build state on the renderer side', () => {
         settleStagedRunInSession(setters, art, 'interrupted', 8);   // nothing still running: no change
         expect(sessions).toBe(before);
         expect(STAGED_SUMMARY_LIMITS.digestMaxChars).toBe(200);
+    });
+});
+
+describe('smallestRevealX', () => {
+    test('reads the smallest _REVEAL.x of normalised u16, float and interleaved attributes (one pass over the raw array)', () => {
+        // x = 1, 0.5, 0.1 (the y channel is larger and must not leak in).
+        const u16 = new THREE.BufferAttribute(new Uint16Array([65535, 65535, 32768, 65535, 6554, 65535]), 2, true);
+        expect(smallestRevealX(u16)).toBeCloseTo(6554 / 65535, 6);
+        expect(smallestRevealX(new THREE.BufferAttribute(new Float32Array([0.7, 0, 0.2, 1, 0.9, 0]), 2))).toBeCloseTo(0.2, 6);
+        const interleaved = new THREE.InterleavedBufferAttribute(new THREE.InterleavedBuffer(new Float32Array([0.9, 0, 5, 0.4, 1, 5]), 3), 2, 0);
+        expect(smallestRevealX(interleaved)).toBeCloseTo(0.4, 6);
+        // Nothing to read: the item starts at the end, so the node is never held back by it.
+        expect(smallestRevealX(new THREE.BufferAttribute(new Uint16Array(0), 2, true))).toBe(1);
     });
 });

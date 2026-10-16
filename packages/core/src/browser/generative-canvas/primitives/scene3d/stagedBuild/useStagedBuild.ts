@@ -142,6 +142,24 @@ function partMatches(d: DegradationRecord, layer: StagedLayer, n: NodeInfo, root
     return false;
 }
 
+/**
+ * The smallest `_REVEAL.x` of a mesh: its first item starts once the node's progress passes this × stagger. A layer of a
+ * million vertices is read from the raw typed array in one pass (BufferAttribute.getX converts and bounds-checks every
+ * call, which was the one multi-millisecond step when a district's trees attach); an interleaved attribute is read item by item.
+ */
+export function smallestRevealX(a: THREE.BufferAttribute | THREE.InterleavedBufferAttribute): number {
+    if ((a as THREE.BufferAttribute).isBufferAttribute) {
+        const arr = (a as THREE.BufferAttribute).array;
+        const step = Math.max(1, a.itemSize);
+        let m = Infinity;
+        for (let i = 0; i < arr.length; i += step) if (arr[i] < m) m = arr[i];
+        return Number.isFinite(m) ? (a.normalized ? THREE.MathUtils.denormalize(m, arr) : m) : 1;
+    }
+    let m = Infinity;
+    for (let i = 0; i < a.count; i++) m = Math.min(m, a.getX(i));
+    return Number.isFinite(m) ? m : 1;
+}
+
 /** Nodes and meshes of one loaded layer, in their real build order (extras), download order (sidecar) or file order. */
 export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: Record<string, number> | undefined, degradations: DegradationRecord[]): RootInfo {
     const byNode = new Map<THREE.Object3D, NodeInfo>();
@@ -174,7 +192,7 @@ export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: R
         const reveal = (m.geometry as THREE.BufferGeometry | undefined)?.getAttribute(REVEAL_ATTRIBUTE) as THREE.BufferAttribute | undefined;
         if (reveal) {
             info.perVertex = true;
-            for (let i = 0; i < reveal.count; i++) info.itemStart = Math.min(info.itemStart, reveal.getX(i));
+            info.itemStart = Math.min(info.itemStart, smallestRevealX(reveal));
         } else {
             info.itemStart = 0;
         }
