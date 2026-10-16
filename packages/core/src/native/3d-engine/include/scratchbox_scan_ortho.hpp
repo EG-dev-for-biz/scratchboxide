@@ -76,6 +76,7 @@ struct Image {
     std::vector<std::string> slotsDrawn;
     std::vector<uint8_t> png;
     std::string sha256;
+    texture::ImageBuffer pixels;          // RGBA, alpha 0 where the photo was not reached
     double coveredShare{0};               // the share of the surface's pixels the photo reached
 };
 
@@ -147,7 +148,7 @@ public:
         scan_geom::parallelFor(T, [&](size_t t) { texel_[t] = texelOf(static_cast<uint32_t>(t)); });
     }
 
-    Image render(const Request& rq, double gsdM = 0.05, int maxSidePx = 1600) const {
+    Image render(const Request& rq, double gsdM = 0.05, int maxSidePx = 1600, bool encode = true) const {
         const Chart& C = rq.chart;
         double u0, u1, v0, v1;
         Vec3 e2;
@@ -241,8 +242,11 @@ public:
             detail::text(pic, std::clamp(static_cast<int>(lx) + 3, 0, std::max(0, W - 6 * static_cast<int>(s.id.size()) - 1)), std::clamp(static_cast<int>(ly) + 3, 0, std::max(0, H - 8)), s.id, col, dark);
             img.slotsDrawn.push_back(s.id);
         }
-        img.png = texture::encodePng(pic);
-        img.sha256 = scan_geom::sha256Hex(img.png.data(), img.png.size());
+        if (encode) {
+            img.png = texture::encodePng(pic);
+            img.sha256 = scan_geom::sha256Hex(img.png.data(), img.png.size());
+        }
+        img.pixels = std::move(pic);
         return img;
     }
 

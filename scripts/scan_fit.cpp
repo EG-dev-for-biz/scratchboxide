@@ -27,6 +27,7 @@
  *       scripts/scan_fit.cpp -o build/3d-native/scan_fit -lz
  */
 
+#include "scratchbox_ornament.hpp"
 #include "scratchbox_scan_fit.hpp"
 
 #include <cstdlib>
@@ -263,6 +264,40 @@ static int runRefit(const Args& a) {
     return emitFit(a, run, a.str("out-dir"));
 }
 
+static std::string readText(const std::string& path) {
+    const auto b = readBytes(path);
+    return std::string(b.begin(), b.end());
+}
+
+static int runOrnament(const Args& a) {
+    for (const char* req : {"fit", "spec", "out-dir"}) if (!a.has(req)) throw CliError("bad_request", std::string("ornament needs --") + req);
+    const std::string fitPath = a.str("fit");
+    const std::string fittedPath = a.has("fitted") ? a.str("fitted") : fitPath.substr(0, fitPath.find_last_of('/') + 1) + "fitted.glb";
+    progress(0.05, "reading the fit and the spec");
+    const std::string fitText = readText(fitPath), specText = readText(a.str("spec"));
+    const auto fitted = readBytes(fittedPath);
+    gltf::GltfScene textured;
+    if (a.has("textured")) {
+        progress(0.1, "reading the textured extraction");
+        textured = gltf::GlbSceneReader::readFile(a.str("textured"));
+        if (!textured.ok) throw CliError("input_unreadable", "cannot read the textured extraction: " + textured.error);
+    }
+    progress(0.2, "building the detail");
+    ornament::Output out;
+    try {
+        out = ornament::buildOrnament(fitText, fitted, specText, a.has("textured") ? &textured : nullptr, a.str("stage-key", "ornament"));
+    } catch (const ornament::OrnamentError& e) {
+        throw CliError(e.code(), e.what());
+    }
+    const std::string dir = a.str("out-dir");
+    makeDir(dir);
+    writeBytes(dir + "/detail.glb", out.glb.data(), out.glb.size());
+    writeText(dir + "/build_report.json", out.reportJson);
+    progress(1.0, "done");
+    std::cout << "{\"ok\":true,\"built\":" << out.built << ",\"dropped\":" << out.dropped << ",\"vertices\":" << out.vertices << ",\"triangles\":" << out.triangles << "}\n";
+    return 0;
+}
+
 static int runFlatten(const Args& a) {
     for (const char* req : {"input", "out", "stats"}) if (!a.has(req)) throw CliError("bad_request", std::string("flatten needs --") + req);
     const double band = a.num("band", 0.10);
@@ -299,6 +334,7 @@ int main(int argc, char** argv) {
         if (cmd == "fit") return runFit(a);
         if (cmd == "refit") return runRefit(a);
         if (cmd == "flatten") return runFlatten(a);
+        if (cmd == "ornament") return runOrnament(a);
         usage();
         throw CliError("bad_request", "unknown subcommand '" + cmd + "'");
     } catch (const CliError& e) {

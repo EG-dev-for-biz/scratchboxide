@@ -2574,11 +2574,12 @@ private:
                         const auto& s = R.surfaces[static_cast<size_t>(si)];
                         if (s.kind == ChartKind::Cylinder && std::fabs(s.radius - b.circ.r) < 1e-6) { sl.surfaceIds.push_back(s.id); break; }
                     }
-                    // the measured section a profile on this edge must stay inside: out of the face (u) up to the face's
-                    // clearance, along the face away from the opening (v) up to the spandrel's least width
+                    // the measured section a profile on this edge must stay inside, in the section frame every edge slot has: u out of
+                    // the first surface (the face), v in that surface's plane across the crease toward the second (here the opening);
+                    // a profile on the spandrel (the face's own side) is at negative v, up to the spandrel's least width
                     const double spandrel = std::max(0.2, std::min(b.sL - pinfo.sMin, pinfo.sMax - b.sR) * 0.5);
                     const double up = std::max(0.2, std::min(spandrel, pinfo.y1 - b.yTop));
-                    sl.envelope = {{-0.05, 0}, {0.6, 0}, {0.6, up}, {-0.05, up}};
+                    sl.envelope = {{-0.05, -up}, {0.6, -up}, {0.6, 0.05}, {-0.05, 0.05}};
                     sl.sizeU = b.circ.r * std::fabs(aL - aR);
                     sl.sizeV = up;
                     sl.maxProud = 0.6; sl.maxRecess = 0.05; sl.minFeature = minFeature;
@@ -2721,8 +2722,8 @@ inline std::vector<scan_ortho::Request> orthoRequests(const FitResult& R) {
             const double z = d.dot(s.axisDir), x = d.dot(s.thetaZeroDir), y = d.dot(e2);
             double th = std::atan2(y, x);
             const double lo = s.th0 * sg::kPi / 180.0;
-            while (th < lo - 1e-9) th += 2 * sg::kPi;
-            while (th > lo + 2 * sg::kPi) th -= 2 * sg::kPi;
+            while (th < lo - 1e-4) th += 2 * sg::kPi;
+            while (th > lo + 2 * sg::kPi - 1e-4) th -= 2 * sg::kPi;
             return P2(s.radius * th, z);
         };
         for (const auto& sl : R.slots) {
