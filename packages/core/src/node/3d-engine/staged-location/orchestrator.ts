@@ -37,6 +37,7 @@ import { GeometricComplexityGate, type ComplexityExemption, type GeometricMeshSu
 import {
     DEFAULT_PROVENANCE_LEGEND,
     NON_MEASURED_PROVENANCE_LABELS,
+    PHOTO_CORRECTION_TOLERANCE_M,
     PROVENANCE,
     SCAN_FIT_ERROR_TRANSIENT,
     STAGED_VISION_MODEL_DEFAULT,
@@ -44,6 +45,7 @@ import {
     type CanopyMask,
     type DegradationRecord,
     type EvidenceImageRef,
+    type FigureRecord,
     type OrnamentSpec,
     type StructureFit,
     type PrimitiveCorrection,
@@ -91,6 +93,14 @@ import { describeSurvey, runFaceSurvey, surveyFaceTargets, SURVEY_IMAGE_TIMEOUT_
 import { describeLocated, planDetailFromSurvey, type DetailPlan } from './survey-detail';
 import type { AnchorNote } from './ornament-anchor';
 import { EVIDENCE_DISCOVERY_ALLOWANCE_MS } from './streetview-evidence';
+import {
+    constrainFigure, detectFigureBlobs, figureNode, figureProvenance, figureRecord, FIGURE_VISION_TIMEOUT_MS, planFigureViews, readFigures, smoothLump, SMOOTHED_SCAN_LABEL, TAUBIN,
+    type FigureBlob, type FigureImage, type FigureView
+} from './figures';
+import { parseGlbNodes, readGlbNodes } from './glb-nodes';
+import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
+import { buildObjectFromSpec } from '../reference-object-builder';
+import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
 import { nominalPose, projectSlots } from './slot-projection';
 import {
     orthoCaption, orthoRef, plannedThinking, readOrnament, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
@@ -119,6 +129,7 @@ export const STAGES = {
     vision: { order: -1, title: 'Reading the photos', budgetMs: 2 * ORNAMENT_VISION_TIMEOUT_MS + 10_000 },
     correct: { order: 3, title: 'Photo corrections', budgetMs: 30_000 },
     detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 20_000 },
+    figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
     trees: { order: 5, title: 'Trees', budgetMs: 300_000 }
 } as const;
 export type StageId = keyof typeof STAGES;
@@ -204,6 +215,8 @@ export interface StagedLocationDeps {
     streetView?: StreetViewEvidenceDeps;
     /** The vision model client and the models to try (the staged default first); or why there is none. */
     vision?: { client: VisionGenAIClient; candidates: string[] } | { unavailable: string };
+    /** Builds a figure spec natively and returns its GLB (metres, +Y up, front +Z, origin at the centre of its base); the reference object builder's native build by default. */
+    figureBuilder?: (spec: ObjectBuildSpec, signal?: AbortSignal) => Promise<{ glb: Buffer }>;
     now?: () => number;
     newRunId?: () => string;
     sleep?: (ms: number) => Promise<void>;
@@ -972,6 +985,188 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             siblings.push(evidencePromise);
         };
 
+        // ---------------- figures (compact scanned blobs on a fitted pedestal: read from a close-up, built inside the blob's bounds) ----------------
+        let figuresPromise: Promise<unknown> | undefined;
+        const startFigures = (fit: StructureFit, out: { figures?: FigureRecord[] }): void => {
+            const surveyDone = surveyPromise ? surveyPromise.catch(() => undefined) : Promise.resolve(undefined);
+            figuresPromise = surveyDone.then(surveyOut => runner.stage<{ records: FigureRecord[] }>({
+                id: 'figures',
+                run: async io => {
+                    const passFile = fit.outputs.passThroughGlb;
+                    if (!passFile || !fs.existsSync(passFile)) return { status: 'skipped', source: '', reason: 'the fit kept no part of the scan as scanned' };
+                    const nodes = readGlbNodes(passFile);
+                    const detection = detectFigureBlobs(fit, nodes, surveyOut?.result);
+                    if (!detection.figures.length) return { status: 'skipped', source: '', reason: `no compact scanned blob stands on a fitted pedestal (${detection.rejected.length} kept region${detection.rejected.length === 1 ? '' : 's'} checked)` };
+                    io.progress(`${detection.figures.length} scanned figure${detection.figures.length === 1 ? '' : 's'} found standing on fitted pedestals`);
+                    const fitSha = sha256File(fit.outputs.reportJson);
+                    const key = stageKey('figures/v1', fitSha, detection.figures.map(b => [b.regionId, b.min, b.max]));
+                    const rungs = new Map<string, { reason: string; reasonCode: string; transient: boolean }>();
+                    const built = new Map<string, { node: StagedGlbNode; record: FigureRecord }>();
+                    let cost = { images: 0, visionCalls: 0, seconds: 0 };
+                    const started = now();
+                    const fail = (b: FigureBlob, reasonCode: string, reason: string, transient = false) => { rungs.set(b.regionId, { reasonCode, reason, transient }); };
+
+                    // the crops and the one reading
+                    const sv = deps.streetView ?? {};
+                    const missing = missingCredentials(sv);
+                    const chainSource = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+                    let images: FigureImage[] = [];
+                    let model: VisionModelUse | undefined;
+                    if (missing || !chainSource) {
+                        for (const b of detection.figures) fail(b, missing ? 'no_street_view' : 'vision_unavailable', missing ?? (deps.vision && 'unavailable' in deps.vision ? deps.vision.unavailable : 'no vision model is configured'));
+                    } else {
+                        const found = await discoverOnce();
+                        const plan = planFigureViews(detection.figures, found.panos, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                        for (const sk of plan.skipped) fail(detection.figures.find(b => b.regionId === sk.regionId)!, 'no_view_of_figure', sk.reason);
+                        if (plan.views.length) {
+                            io.progress(`fetching ${plan.views.length} figure crop${plan.views.length === 1 ? '' : 's'} through the grounding API`);
+                            const got = await fetchViews(plan.views, sv, io.signal);
+                            if (io.signal.aborted) throw io.signal.reason;
+                            images = got.images.map((im, index) => ({ index, blob: detection.figures.find(b => b.regionId === (im.view as FigureView).regionId)!, view: im.view as FigureView, bytes: im.bytes, mimeType: im.mimeType, widthPx: im.widthPx, heightPx: im.heightPx }));
+                            for (const f of got.failures) fail(detection.figures.find(b => b.regionId === (f.view as FigureView).regionId)!, 'figure_image_failed', `its Street View crop did not arrive (${f.error})`, f.transient);
+                            cost.images = got.images.length;
+                        }
+                        if (images.length) {
+                            const chain = new VisionModelChain<string>({ client: chainSource.client, candidates: chainSource.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                            try {
+                                const read = await readFigures({ images, chain, signal: io.signal, onProgress: m => io.progress(m) });
+                                model = read.model;
+                                cost.visionCalls = 1;
+                                const builder = deps.figureBuilder ?? (async (spec: ObjectBuildSpec, signal?: AbortSignal) => ({ glb: (await buildObjectFromSpec(spec, { signal })).glb }));
+                                let order = 0;
+                                for (const im of images) {
+                                    const reading = read.parsed.readings.get(im.index);
+                                    if (!reading) {
+                                        const why = read.parsed.problems.get(im.index);
+                                        fail(im.blob, 'figure_not_read', why ? `its spec could not be built (${why.join('; ')})` : 'the reading gave no figure for its crop');
+                                        continue;
+                                    }
+                                    try {
+                                        const glb = await builder(reading.spec, io.signal);
+                                        const nodesBuilt = parseGlbNodes(glb.glb);
+                                        const merged = { positions: Float32Array.from(nodesBuilt.flatMap(n => Array.from(n.positions))), indices: undefined as Uint32Array | undefined };
+                                        // one node per part: stitch indices with offsets
+                                        let offset = 0; const idx: number[] = [];
+                                        for (const n of nodesBuilt) { const ii = n.indices ?? Uint32Array.from({ length: n.positions.length / 3 }, (_, k) => k); for (const v of ii) idx.push(v + offset); offset += n.positions.length / 3; }
+                                        merged.indices = Uint32Array.from(idx);
+                                        const fitted = constrainFigure(merged, im.blob, im.view.eye);
+                                        const node = figureNode({
+                                            id: `fig-${im.blob.regionId}`, positions: fitted.positions, indices: fitted.indices, order: order++, count: images.length, regionId: im.blob.regionId,
+                                            provenance: figureProvenance('photo-inferred', {
+                                                confidence: reading.confidence / 100, sourceId: `sv:${im.view.panoId}:${im.view.headingDeg}:${im.view.pitchDeg}:${im.view.fovDeg}`,
+                                                method: `ObjectBuildSpec read from one Street View crop by ${model.used}, built natively and fitted to the scan blob's bounds (scale ${fitted.scale.join(' × ')}, yaw ${fitted.yawDeg}°)`,
+                                                note: `bounded by the scanned lump ${im.blob.acrossM} × ${im.blob.alongM} × ${im.blob.heightM} m on the pedestal ${im.blob.pedestal.surfaceId}${im.blob.corroboratedBy ? `; the survey saw "${im.blob.corroboratedBy.kind}" there` : ''}`
+                                            })
+                                        });
+                                        built.set(im.blob.regionId, { node, record: figureRecord(im.blob, 'photo-inferred', { panoId: im.view.panoId, confidence: reading.confidence / 100 }) });
+                                    } catch (err) {
+                                        if (isAbort(err) || io.signal.aborted) throw err;
+                                        fail(im.blob, 'figure_not_built', `its spec could not be built inside the scan's bounds (${errorMessage(err)})`);
+                                    }
+                                }
+                            } catch (err) {
+                                if (isAbort(err) || io.signal.aborted) throw err;
+                                const used = err instanceof VisionStageError ? err.model : undefined;
+                                if (used) { model = used; cost.visionCalls = 1; }
+                                for (const im of images) fail(im.blob, 'figures_unreadable', `the vision model gave no usable reading (${errorMessage(err)})`, err instanceof VisionStageError ? err.transient : true);
+                            }
+                        }
+                    }
+                    cost.seconds = round((now() - started) / 1000, 1);
+                    run.summary('figures').cost = cost;
+                    if (cost.images) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+
+                    // the rung under: the scanned lump, smoothed inside the scan's own tolerance
+                    const tolerance = Math.max(0.02, Math.min(fit.sourceLimits.meshResolvableM, PHOTO_CORRECTION_TOLERANCE_M));
+                    const smoothed: Array<{ node: StagedGlbNode; record: FigureRecord }> = [];
+                    const untouched: FigureBlob[] = [];
+                    let order = built.size;
+                    for (const b of detection.figures) {
+                        if (built.has(b.regionId)) continue;
+                        const why = rungs.get(b.regionId) ?? { reason: 'it was not read', reasonCode: 'figure_not_read', transient: false };
+                        try {
+                            const lump = smoothLump(nodes.find(n => n.name === b.regionId)!, tolerance);
+                            smoothed.push({
+                                node: figureNode({
+                                    id: `fig-${b.regionId}`, positions: lump.positions, indices: lump.indices, order: order++, count: detection.figures.length, regionId: b.regionId,
+                                    provenance: figureProvenance('smoothed-scan', { sourceId: `fit:${key.slice(0, 8)}:${b.regionId}`, method: `the scanned lump smoothed (Taubin ${TAUBIN.lambda}|${TAUBIN.mu}, ${TAUBIN.iterations} iterations), no vertex moved more than ${tolerance.toFixed(2)} m`, note: `${why.reason}; max move ${lump.maxMoveM} m` })
+                                }),
+                                record: figureRecord(b, 'smoothed-scan', { reason: why.reason })
+                            });
+                        } catch (err) {
+                            untouched.push(b);
+                            fail(b, 'figure_not_smoothed', `${why.reason}; and the lump could not be smoothed (${errorMessage(err)}), so it stays as scanned`);
+                        }
+                    }
+                    const degradations = [...smoothed.map(x => x.record.id.replace('fig-', '')), ...untouched.map(b => b.regionId)].map(regionId => {
+                        const b = detection.figures.find(x => x.regionId === regionId)!;
+                        const r = rungs.get(regionId) ?? { reason: 'it was not read', reasonCode: 'figure_not_read', transient: false };
+                        const kept = untouched.includes(b);
+                        return run.degrade(record('figures', kept ? 'figure_not_smoothed' : 'figure_smoothed', {
+                            part: { description: `the scanned figure ${regionId} on pedestal ${b.pedestal.surfaceId}` }, intended: 'a photo-inferred figure built inside the scan blob\'s bounds',
+                            fellTo: kept ? 'the scanned lump as scanned' : 'the scanned lump, smoothed inside the scan tolerance', provenanceAfter: kept ? PROVENANCE.asScanned : SMOOTHED_SCAN_LABEL,
+                            reason: `${r.reason}; ${kept ? 'it stays as scanned' : 'it is the scan smoothed, labelled smoothed scan'}`, ...(model ? { model } : {}), transient: r.transient, runId, now: now(), suffix: regionId
+                        }));
+                    });
+
+                    // the layers: the pass-through scan without the figure regions (replacing the layer that held them, which stays viewable), and the figures
+                    const replaced = new Set([...built.keys(), ...smoothed.map(x => x.record.id.replace('fig-', ''))]);
+                    const l3c = run.state.layers.filter(l => l.layer === 'l3c').pop();
+                    const layers: StagedLayer[] = [];
+                    const dir = path.join(cache.dir, 'figures', key.slice(0, 8));
+                    fs.mkdirSync(dir, { recursive: true });
+                    const rootExtras = { sb: { schema: 'scratchbox.staged-glb/2', stage: 'figures', stageKey: key, buildingId: fit.buildingId, frame: 'tile frame: x east, y up, z south (metres)' } };
+                    const figureNodes = [...built.values(), ...smoothed].sort((a, b) => a.node.name!.localeCompare(b.node.name!));
+                    let restId: string | undefined;
+                    if (replaced.size && l3c) {
+                        const rest = nodes.filter(n => !replaced.has(n.name));
+                        const file = path.join(dir, 'passthrough_without_figures.glb');
+                        writeStagedGlbFile(file, rest.map(n => ({ name: n.name, positions: n.positions, ...(n.indices ? { indices: n.indices } : {}), extras: n.extras })), { rootExtras, copyright: 'Google' });
+                        const pub = cache.publishFile(file, `${base}_l3cf_${key.slice(0, 8)}.glb`);
+                        restId = layerObjectId(key, 'l3cf');
+                        layers.push({
+                            objectId: restId, stage: 'figures', layer: 'l3cf', order: STAGES.fit.order, url: pub.url, bytes: pub.bytes, provenance: l3c.provenance, provenanceLabels: l3c.provenanceLabels,
+                            supersedes: [l3c.objectId], revealAfter: [l3c.objectId], reveal: { durationMs: 400, stagger: 1, crossfadeFrom: [l3c.objectId] }, cached: false, builtAtMs: now(),
+                            counts: { vertices: rest.reduce((n, x) => n + x.positions.length / 3, 0), triangles: rest.reduce((n, x) => n + (x.indices ? x.indices.length : x.positions.length / 3) / 3, 0) }
+                        });
+                    }
+                    if (figureNodes.length) {
+                        const file = path.join(dir, 'figures.glb');
+                        writeStagedGlbFile(file, figureNodes.map(x => x.node), { rootExtras, copyright: 'Google' });
+                        const pub = cache.publishFile(file, `${base}_l4f_${key.slice(0, 8)}.glb`);
+                        const anyPhoto = built.size > 0;
+                        const confidences = [...built.values()].map(x => x.record.confidence ?? 0);
+                        layers.push({
+                            objectId: layerObjectId(key, 'l4f'), stage: 'figures', layer: 'l4f', order: STAGES.figures.order, url: pub.url, bytes: pub.bytes,
+                            provenance: anyPhoto
+                                ? { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: Math.min(...confidences), method: 'figures read from Street View crops (ObjectBuildSpec), built natively inside the scan blob\'s bounds', sources: [{ kind: 'stage-output', id: `fit:${fitSha.slice(0, 8)}` }] }
+                                : { label: SMOOTHED_SCAN_LABEL, measuredGeometry: true, method: 'the scanned lumps, smoothed inside the scan tolerance', sources: [{ kind: 'stage-output', id: `fit:${fitSha.slice(0, 8)}` }] },
+                            provenanceLabels: [...(anyPhoto ? [PROVENANCE.photoInferred] : []), ...(smoothed.length ? [SMOOTHED_SCAN_LABEL] : [])],
+                            supersedes: [], revealAfter: restId ? [restId] : l3c ? [l3c.objectId] : [], reveal: { durationMs: 1200, stagger: 0.7, crossfadeFrom: [] }, cached: false, builtAtMs: now(),
+                            counts: { vertices: figureNodes.reduce((n, x) => n + x.node.positions.length / 3, 0), triangles: figureNodes.reduce((n, x) => n + (x.node.indices ? x.node.indices.length : x.node.positions.length / 3) / 3, 0) }
+                        });
+                    }
+                    for (const l of layers) run.commit(l, { source: 'scan_fit', resolvedAddress: placeValue!.formattedAddress });
+                    const records = [...built.values(), ...smoothed].map(x => x.record).concat(untouched.map(b => figureRecord(b, 'as-scanned', { reason: rungs.get(b.regionId)?.reason })));
+                    out.figures = records;
+                    return {
+                        status: degradations.length ? 'degraded' : 'committed', value: { records }, layers,
+                        source: `${built.size} figure${built.size === 1 ? '' : 's'} photo-inferred${smoothed.length ? `, ${smoothed.length} smoothed scan` : ''}${untouched.length ? `, ${untouched.length} as scanned` : ''} (${cost.images} image${cost.images === 1 ? '' : 's'}, ${cost.visionCalls} vision call, ${cost.seconds.toFixed(1)} s)`,
+                        ...(model ? { model } : {}), degradations
+                    };
+                },
+                degrade: async err => ({
+                    status: 'degraded', source: 'the scanned figures stay as scanned', reason: `the figures stage failed (${errorMessage(err)}); the scanned lumps stay as they are`,
+                    degradations: [run.degrade(record('figures', 'figures_failed', {
+                        part: { description: 'the scanned figures' }, intended: 'photo-inferred figures built inside the scan blobs', fellTo: 'the scanned lumps as scanned', provenanceAfter: PROVENANCE.asScanned,
+                        reason: `the figures stage failed (${errorMessage(err)}); the scanned lumps stay as scanned`, cause: err, transient: true, runId, now: now()
+                    }))]
+                })
+            }, evidenceStop.signal));
+            (figuresPromise as Promise<unknown>).catch(() => undefined);
+            siblings.push(figuresPromise as Promise<unknown>);
+        };
+
         // ---------------- trees-measure ----------------
         let strip: TileVegetationStripResult | undefined;
         if (request.trees) {
@@ -1260,11 +1455,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         siblings.push(treesPromise);
 
         // ---------------- the rebuild (isolated structure) ----------------
-        type Rebuild = { anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
+        type Rebuild = { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
         const rebuildOut: Rebuild = { droppedNotResolvable: 0 };
         const rebuildRun = async (): Promise<Rebuild> => {
             const out = rebuildOut;
-            const skipRest = (reason: string, from: StageId[] = ['fit', 'evidence', 'project', 'vision', 'correct', 'detail']) => {
+            const skipRest = (reason: string, from: StageId[] = ['fit', 'evidence', 'project', 'vision', 'correct', 'detail', 'figures']) => {
                 // the Street View fetch may still be running: it is ended as not needed, saying why
                 if (from.includes('evidence')) evidenceStop.abort(reason);
                 for (const id of from) runner.skip(id, reason);
@@ -1281,7 +1476,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     provenanceAfter: PROVENANCE.remeshed, reason: `${reason}, so the remeshed scan stands as the structure`, transient: false, runId, now: now()
                 }));
                 runner.skip('fit', reason, [rec]);
-                skipRest('there is no fitted structure to place detail on', ['evidence', 'project', 'vision', 'correct', 'detail']);
+                skipRest('there is no fitted structure to place detail on', ['evidence', 'project', 'vision', 'correct', 'detail', 'figures']);
                 return out;
             }
             // fit
@@ -1337,13 +1532,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
             });
             if (fitted.status !== 'committed' || !fitted.value) {
-                skipRest('there is no accepted fit to place detail on', ['evidence', 'project', 'vision', 'correct', 'detail']);
+                skipRest('there is no accepted fit to place detail on', ['evidence', 'project', 'vision', 'correct', 'detail', 'figures']);
                 return out;
             }
             out.fit = fitted.value;
             const fit = fitted.value.value;
             persist();
             if (rebuildPossible && visionAvailable) startEvidence(fit);
+            if (rebuildPossible) startFigures(fit, out);
 
             // evidence, projection, vision
             if (!visionAvailable) {
@@ -1573,7 +1769,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             if (isAbort(err)) throw err;
             const why = `the rebuild stopped on an unexpected error (${errorMessage(err)})`;
             evidenceStop.abort(why);
-            const open = (['fit', 'evidence', 'project', 'vision', 'correct', 'detail'] as StageId[]).filter(id => run.summary(id).status === 'pending');
+            const open = (['fit', 'evidence', 'project', 'vision', 'correct', 'detail', 'figures'] as StageId[]).filter(id => run.summary(id).status === 'pending');
             const standing = run.state.layers.some(l => l.layer === 'l3b' || l.layer === 'l3br');
             const rec = run.degrade(record(open[0] ?? 'fit', 'rebuild_failed', {
                 part: { description: standing ? 'the rest of the rebuild' : 'the structure' }, intended: standing ? 'photo-read detail on the fitted structure' : 'a scan-fitted rebuild',
@@ -1586,7 +1782,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         siblings.push(rebuildPromise);
 
         // both branches, and the Street View fetch, are settled before the call goes on: none runs, or rejects unseen, after it
-        const settled = await Promise.allSettled([treesPromise, rebuildPromise, ...(evidencePromise ? [evidencePromise] : []), ...(surveyPromise ? [surveyPromise] : [])]);
+        const settled = await Promise.allSettled([treesPromise, rebuildPromise, ...(evidencePromise ? [evidencePromise] : []), ...(surveyPromise ? [surveyPromise] : []), ...(figuresPromise ? [figuresPromise] : [])]);
         const failure = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failure) throw failure.reason;
         const treesOut = (settled[0] as PromiseFulfilledResult<Awaited<typeof treesPromise>>).value;
@@ -1684,7 +1880,7 @@ interface FinishInput {
     groundLayerId?: string;
     trees?: LocationClayTrees;
     putBack?: { triangles: number; crowns: number; reason: string };
-    rebuild: { anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
+    rebuild: { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
     strip?: TileVegetationStripResult;
     now: () => number;
     persist: () => void;
@@ -1709,7 +1905,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     const scanNames = visible.filter(l => [PROVENANCE.asScanned, PROVENANCE.scanFlattened, PROVENANCE.remeshed].includes(l.provenance.label as never) && l.layer !== 'l3c').map(l => l.objectId);
     if (scanNames.length) exemptions.push({ scanDerived: { submeshes: scanNames, label: PROVENANCE.remeshed, leafGeometricErrorM: f.extraction.leafGeometricErrorM } });
     const fitResult = f.rebuild.refit ?? f.rebuild.fit;
-    const rebuildNames = visible.filter(l => ['l3a', 'l3b', 'l3c', 'l3ar', 'l3br', 'l4'].includes(l.layer)).map(l => l.objectId);
+    const rebuildNames = visible.filter(l => ['l3a', 'l3b', 'l3c', 'l3ar', 'l3br', 'l4', 'l3cf', 'l4f'].includes(l.layer)).map(l => l.objectId);
     const refusedHere: string[] = [];
     if (fitResult && rebuildNames.length) {
         // the gate quotes the StructureFit's sha: a report that can no longer be read earns no exemption, and the layers are counted
@@ -1790,6 +1986,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         } : {}),
         ...(run.state.materialHints ? { materialHints: run.state.materialHints } : {}),
         ...(photoCost ? { photoCost } : {}),
+        ...(f.rebuild.figures?.length ? { figures: f.rebuild.figures } : {}),
         ...(f.trees ? { trees: f.trees } : {}),
         complexityGate: { passed: gate.passed, totalVertices: gate.totalVertices, totalTriangles: gate.totalTriangles, violations: gate.violations, exemptions: gate.exemptions },
         sourceLimits,

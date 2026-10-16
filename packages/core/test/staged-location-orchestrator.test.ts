@@ -32,7 +32,9 @@ import { readGlbTriangles, renderClayPng } from './helpers/clay-glb-render';
 import { STAGED_SCREENSHOT_DIR } from './helpers/staged-real-data';
 import { scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { spyOnFsWrites } from './helpers/fs-write-spy';
-import { bandJpeg, GREY, SKY, STONE, surveyReply } from './helpers/photo-ornament-fixtures';
+import { parseGlbNodes } from '../src/node/3d-engine/staged-location/glb-nodes';
+import { writeStagedGlb, writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
+import { bandJpeg, figureGlb, figuresReply, GREY, lumpMesh, SKY, STONE, surveyReply } from './helpers/photo-ornament-fixtures';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-staged-orch-')));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -197,7 +199,7 @@ describe('the degrade ladder', () => {
 });
 
 /** scan_fit stand-in: the fixture StructureFit, with its GLBs and ortho written. */
-function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; rejected?: boolean; fitDelayMs?: number; truncateBody?: boolean } = {}) {
+function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; rejected?: boolean; fitDelayMs?: number; truncateBody?: boolean; figureBlob?: boolean } = {}) {
     fs.mkdirSync(dir, { recursive: true });
     const calls = { fit: 0, refit: 0, ornament: 0 };
     const writeFit = (name: string, mutate?: (f: StructureFit) => void) => {
@@ -213,6 +215,19 @@ function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; 
         if (opts.rejected) { f.accepted = false; f.gates[1] = { ...f.gates[1], value: 0.071, passed: false }; }
         // the body's JSON chunk is intact (its counts read), its BIN chunk cut short (its triangles cannot be loaded)
         if (opts.truncateBody) fs.truncateSync(f.outputs.fittedGlb, fs.statSync(f.outputs.fittedGlb).size - 48);
+        if (opts.figureBlob) {
+            // a scanned statue-sized lump standing on a fitted pedestal top (y 1.4) near the north face, beside a low ground-level region
+            const statue = lumpMesh(-4, 1.4, -7.5, 0.9, 2.4, 0.7, 0.08, 5);
+            const low = lumpMesh(9, 0, -7, 2.2, 1.4, 1.8, 0, 6);
+            const bb = (m: { positions: Float32Array }) => { const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]; for (let i = 0; i < m.positions.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], m.positions[i + k]); hi[k] = Math.max(hi[k], m.positions[i + k]); } return { lo: lo as [number, number, number], hi: hi as [number, number, number] }; };
+            f.surfaces.push({ ...f.surfaces[0], id: 's90', chart: { plane: { origin: [-5.5, 1.4, -9], u: [1, 0, 0], v: [0, 0, 1], normal: [0, 1, 0], extentUv: [[0, 0], [3, 3]] } } });
+            f.passThrough.regions = [
+                { id: 'r0', triangles: low.indices.length / 3, areaM2: 6, aabbMin: bb(low).lo, aabbMax: bb(low).hi, reason: 'not box-like' },
+                { id: 'r2', triangles: statue.indices.length / 3, areaM2: 4, aabbMin: bb(statue).lo, aabbMax: bb(statue).hi, reason: 'not box-like' }
+            ];
+            const sbExtras = (id: string) => ({ regionId: id, sb: { schema: 'scratchbox.staged-node/2', stage: 'fit', provenance: { label: 'as-scanned', measuredGeometry: true, method: 'scan_fit: kept as scanned', sources: [] }, buildOrder: 0, buildCount: 2, revealKind: 'crossfade', reveal: { attribute: null, displacement: null, durationShare: 0.5 }, ids: {}, counts: { vertices: 1, triangles: 1 } } });
+            writeStagedGlbFile(f.outputs.passThroughGlb!, [{ name: 'r0', positions: low.positions, indices: low.indices, extras: sbExtras('r0') }, { name: 'r2', positions: statue.positions, indices: statue.indices, extras: sbExtras('r2') }]);
+        }
         mutate?.(f);
         f.outputs.reportJson = path.join(dir, `${name}_structure_fit.json`);
         fs.writeFileSync(f.outputs.reportJson, JSON.stringify(f));
@@ -255,6 +270,8 @@ function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; 
 
 /** What the pass-1 survey call answers in the test running now (undefined: the default survey reply). */
 const surveyBehaviour: { reply?: object | Error } = {};
+/** What the figures call answers (undefined: a spec for every image); the calls it received. */
+const figureBehaviour: { reply?: object | Error; calls: any[] } = { calls: [] };
 
 /** A vision client answering with one roundel on the north spandrel and a correction of the body's height. */
 function visionClient(reply: object | Error, record: any[] = [], surveyRecord: any[] = []): VisionGenAIClient {
@@ -267,6 +284,13 @@ function visionClient(reply: object | Error, record: any[] = [], surveyRecord: a
                     surveyRecord.push(params);
                     if (surveyBehaviour.reply instanceof Error) throw surveyBehaviour.reply;
                     const text = JSON.stringify(surveyBehaviour.reply ?? surveyReply());
+                    return (async function* () { yield { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }], modelVersion: `${params.model}-001` } as any; })();
+                }
+                if (/reading standing figures/.test(JSON.stringify(params.contents?.[0]?.parts?.filter((x: any) => x.text).map((x: any) => x.text) ?? []))) {
+                    figureBehaviour.calls.push(params);
+                    if (figureBehaviour.reply instanceof Error) throw figureBehaviour.reply;
+                    const nImages = params.contents[0].parts.filter((x: any) => x.inlineData).length;
+                    const text = JSON.stringify(figureBehaviour.reply ?? figuresReply(Array.from({ length: nImages }, (_, i) => i)));
                     return (async function* () { yield { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }], modelVersion: `${params.model}-001` } as any; })();
                 }
                 record.push(params);
@@ -583,6 +607,84 @@ describe('pass 1: the draft survey', () => {
         expect(result.stages.find(x => x.stage === 'survey')).toMatchObject({ status: 'degraded' });
         expect(result.degradations.find(d => d.stage === 'survey')).toMatchObject({ reasonCode: 'no_street_view', reason: expect.stringContaining('Street View not configured') });
         expect(surveyCalls).toEqual([]);
+    });
+});
+
+describe('figures: scanned blobs on a fitted pedestal', () => {
+    const run = async (name: string, deps: Record<string, unknown> = {}) => {
+        figureBehaviour.calls.length = 0;
+        const sv = streetViewStandIn();
+        const calls: any[] = [];
+        const s = setup(ARCH, {}, {
+            scanFit: fakeScanFit(path.join(TMP, name), { figureBlob: true }).deps,
+            vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps,
+            figureBuilder: async () => ({ glb: figureGlb() }), ...deps
+        });
+        const out = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        return { ...out, s, sv, calls };
+    };
+
+    it('reads the figure from one crop in one call, builds it inside the blob\'s bounds, and commits it as a photo-inferred layer that replaces the lump (which stays viewable)', async () => {
+        const { result, s, sv } = await run('sf-fig-ok');
+        const stage = result.stages.find(x => x.stage === 'figures')!;
+        expect(stage).toMatchObject({ title: 'Figures', status: 'committed', cost: { images: 1, visionCalls: 1 } });
+        expect(figureBehaviour.calls.length).toBe(1);
+        // the one crop: a narrow view from a pano, besides the 4 wide survey views and the ornament crops
+        expect(sv.surveyRequested.length).toBe(4);
+        expect(result.figures).toEqual([expect.objectContaining({ id: 'fig-r2', outcome: 'photo-inferred', panoId: expect.any(String), confidence: 0.7 })]);
+        const state = (result.artifact as any).data.stagedBuild;
+        const fig = state.layers.find((l: any) => l.layer === 'l4f');
+        const rest = state.layers.find((l: any) => l.layer === 'l3cf');
+        const lump = state.layers.find((l: any) => l.layer === 'l3c');
+        expect(fig.provenance).toMatchObject({ label: 'photo-inferred', measuredGeometry: false });
+        expect(fig.provenance.confidence).toBeCloseTo(0.7, 2);
+        // the replaced layer is kept loaded (superseded, not removed), and the figures come after it
+        expect(rest.supersedes).toEqual([lump.objectId]);
+        expect(lump.retired).not.toBe(true);
+        expect(fig.revealAfter).toEqual([rest.objectId]);
+        // the files: the recut pass-through lacks the figure's region, the figures file holds its node with per-node provenance
+        const urlFile = (url: string) => path.join(s.cache.modelsDir, path.basename(url));
+        const figNodes = parseGlbNodes(fs.readFileSync(urlFile(fig.url)));
+        expect(figNodes.map(n => n.name)).toEqual(['fig-r2']);
+        expect((figNodes[0].extras as any).sb.provenance.label).toBe('photo-inferred');
+        const restNodes = parseGlbNodes(fs.readFileSync(urlFile(rest.url)));
+        expect(restNodes.map(n => n.name)).toEqual(['r0']);
+        // bounded by the blob: base on the pedestal, height of the lump
+        let lo = Infinity, hi = -Infinity;
+        for (let i = 1; i < figNodes[0].positions.length; i += 3) { lo = Math.min(lo, figNodes[0].positions[i]); hi = Math.max(hi, figNodes[0].positions[i]); }
+        expect(lo).toBeCloseTo(1.4, 2); expect(hi - lo).toBeCloseTo(2.4, 1);
+        expect(result.photoCost!.byStage.figures).toEqual({ images: 1, visionCalls: 1, seconds: expect.any(Number) });
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+    });
+
+    it('falls one rung when the reading fails: the scanned lump smoothed inside the scan tolerance, labelled smoothed scan, with the reason', async () => {
+        figureBehaviour.reply = { figures: [] };
+        try {
+            const { result } = await run('sf-fig-rung');
+            expect(result.stages.find(x => x.stage === 'figures')!.status).toBe('degraded');
+            const d = result.degradations.find(x => x.reasonCode === 'figure_smoothed')!;
+            expect(d).toMatchObject({ stage: 'figures', fellTo: 'the scanned lump, smoothed inside the scan tolerance', provenanceAfter: 'smoothed-scan' });
+            expect(d.reason).toMatch(/the reading gave no figure for its crop/);
+            expect(result.figures).toEqual([expect.objectContaining({ id: 'fig-r2', outcome: 'smoothed-scan' })]);
+            const fig = (result.artifact as any).data.stagedBuild.layers.find((l: any) => l.layer === 'l4f');
+            expect(fig.provenance.label).toBe('smoothed-scan');
+            expect(fig.provenance.measuredGeometry).toBe(true);
+        } finally { figureBehaviour.reply = undefined; }
+    });
+
+    it('a spec that disagrees with the scan\'s bounds by more than a factor of two is not built: the same rung, with that reason', async () => {
+        const { result } = await run('sf-fig-big', { figureBuilder: async () => ({ glb: (() => { const m = lumpMesh(0, 0, 0, 0.6, 9.0, 0.4, 0, 3); return writeStagedGlb([{ name: 'body', positions: m.positions, indices: m.indices }]); })() }) });
+        expect(result.degradations.find(x => x.reasonCode === 'figure_smoothed')!.reason).toMatch(/spec disagrees with the scan/);
+        expect(result.figures![0].outcome).toBe('smoothed-scan');
+    });
+
+    it('no figure stands on a pedestal in the ordinary fit: the stage is skipped with the measured reason, nothing is fetched for it', async () => {
+        figureBehaviour.calls.length = 0;
+        const sv = streetViewStandIn();
+        const s = setup(ARCH, {}, { scanFit: fakeScanFit(path.join(TMP, 'sf-fig-none')).deps, vision: { client: visionClient(REPLY, []), candidates: ['gemini-4-argon'] }, streetView: sv.deps });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(result.stages.find(x => x.stage === 'figures')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/no compact scanned blob stands on a fitted pedestal/) });
+        expect(figureBehaviour.calls).toEqual([]);
     });
 });
 

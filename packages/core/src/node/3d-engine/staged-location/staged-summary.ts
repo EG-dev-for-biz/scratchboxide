@@ -192,6 +192,19 @@ export function anchoringSentence(input: StagedSummaryInput): string {
     return parts.join(' ');
 }
 
+/** The figures: how many were read from a photo and built inside the scan blob, how many fell to the smoothed scan, and why. */
+export function figuresSentence(input: StagedSummaryInput): string {
+    const f = input.figures;
+    if (!f?.length) return '';
+    const photo = f.filter(x => x.outcome === 'photo-inferred').length;
+    const smooth = f.filter(x => x.outcome === 'smoothed-scan');
+    const asScanned = f.filter(x => x.outcome === 'as-scanned').length;
+    const parts = [`${n(photo)} scanned figure${photo === 1 ? ' was' : 's were'} rebuilt from a Street View crop inside the scan blob's bounds (photo-inferred)`];
+    if (smooth.length) parts.push(`${n(smooth.length)} fell to the scanned lump smoothed inside the scan tolerance (smoothed scan)`);
+    if (asScanned) parts.push(`${n(asScanned)} stayed as scanned`);
+    return `${parts.join('; ')}.`;
+}
+
 /** Rule "corrections": one sentence each, accepted ones only (a rejected correction changes nothing). */
 export function correctionSentences(input: StagedSummaryInput): string[] {
     return (input.structureFit?.corrections ?? []).filter(c => c.check.accepted).map(c =>
@@ -291,6 +304,7 @@ export function summarizeStagedBuild(input: StagedSummaryInput): { digest: strin
         evidenceSentence(input),
         photoInferredSentence(input),
         anchoringSentence(input),
+        figuresSentence(input),
         ...correctionSentences(input),
         ...degradationSentences(input),
         treesSentence(input),

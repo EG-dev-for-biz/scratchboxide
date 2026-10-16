@@ -89,3 +89,53 @@ export function routedVisionClient(replies: { survey?: object | Error; ornament?
         }
     };
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// figures: a synthetic statue blob, its figure spec (the fake reading) and the figure the fake native build returns
+// ----------------------------------------------------------------------------------------------------------------
+import { writeStagedGlb } from '../../src/node/3d-engine/staged-location/staged-glb-writer';
+
+export interface Mesh { positions: Float32Array; indices: Uint32Array }
+
+/** A rough lump: a stack of ellipsoids (body, shoulders, head) of the given base, size and noise, welded (shared vertices). */
+export function lumpMesh(cx: number, baseY: number, cz: number, width: number, height: number, depth: number, noise = 0.06, seed = 1): Mesh {
+    const rings = 14, segs = 16;
+    const pos: number[] = [];
+    let s = seed;
+    const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647 - 0.5; };
+    for (let i = 0; i <= rings; i++) {
+        const t = i / rings;                       // 0 base .. 1 top
+        // a column that is wide at the base, narrow at the waist, wide at the shoulders, a small head
+        const prof = t < 0.55 ? 0.75 + 0.25 * Math.cos(t * 6) : t < 0.8 ? 0.95 - (t - 0.55) * 1.2 : Math.sqrt(Math.max(0, 1 - Math.pow((t - 0.9) / 0.1, 2))) * 0.45;
+        for (let j = 0; j < segs; j++) {
+            const a = (j / segs) * Math.PI * 2;
+            const r = Math.max(0.02, prof) * (1 + noise * 2 * rnd());
+            pos.push(cx + Math.cos(a) * r * width / 2, baseY + t * height, cz + Math.sin(a) * r * depth / 2);
+        }
+    }
+    const idx: number[] = [];
+    for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) {
+        const a = i * segs + j, b = i * segs + (j + 1) % segs, c = (i + 1) * segs + j, d = (i + 1) * segs + (j + 1) % segs;
+        idx.push(a, c, b, b, c, d);
+    }
+    return { positions: Float32Array.from(pos), indices: Uint32Array.from(idx) };
+}
+
+/** A valid ObjectBuildSpec of a standing figure (one revolved body), the shape a fake reading returns. */
+export function figureSpec(): any {
+    return {
+        subject: 'a standing figure on a base', observations: ['slender, arms at the sides'], boundingMeters: [0.6, 2.0, 0.4], expectedBodies: 1,
+        parts: [{ id: 'body', label: 'body', revolve: { axisOrigin: [0, 0, 0], axisDirection: [0, 1, 0], meridian: [[0, 0], [0, 0.3], [0.8, 0.25], [1.5, 0.3], [1.8, 0.12], [2.0, 0]], smoothing: 0.3, lobeCount: 0, lobeDepthRatio: 0, helixPitchMeters: 0 } }]
+    };
+}
+
+/** The figure a fake native build returns for any spec: a clean 0.6 x 2.0 x 0.4 m figure, front +Z, origin at the centre of its base. */
+export function figureGlb(): Buffer {
+    const m = lumpMesh(0, 0, 0, 0.6, 2.0, 0.4, 0, 3);
+    return writeStagedGlb([{ name: 'body', positions: m.positions, indices: m.indices }]);
+}
+
+/** A reply to the figures prompt: a spec for each image index given. */
+export function figuresReply(images: number[], confidence = 70): object {
+    return { figures: images.map(image => ({ image, confidence, spec: figureSpec() })) };
+}

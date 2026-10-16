@@ -117,6 +117,8 @@ export const PROVENANCE = {
     photoCorrected: 'photo-corrected',
     /** Detail read from photos, with a confidence, kept only if its evidence shows and resolves it. */
     photoInferred: 'photo-inferred',
+    /** A scanned lump smoothed (Taubin) with no vertex moved further than the scan's own tolerance: the rung under a figure read from a photo. Nothing added. */
+    smoothedScan: 'smoothed-scan',
     /** SB-Veggie trees: stem, crown extent and height measured from the tiles, branching grown inside that crown. */
     grownToMeasuredCrown: 'grown to the measured crown'
 } as const;
@@ -184,6 +186,7 @@ export const DEFAULT_PROVENANCE_LEGEND: ReadonlyArray<Omit<ProvenanceLegendEntry
     { label: PROVENANCE.fittedUnobserved, color: '#0072B2', pattern: 'stripes' },
     { label: PROVENANCE.photoCorrected, color: '#F0E442', pattern: 'solid' },
     { label: PROVENANCE.photoInferred, color: '#CC79A7', pattern: 'dots' },
+    { label: PROVENANCE.smoothedScan, color: '#E69F00', pattern: 'dots' },
     { label: PROVENANCE.grownToMeasuredCrown, color: '#009E73', pattern: 'solid' }
 ];
 
@@ -897,6 +900,8 @@ export const STAGED_DEGRADE_LADDER: readonly DegradeRung[] = [
     { stage: 'evidence', failure: 'Street View is not configured, has no Google pano, or every fetch fails', fellTo: 'detail read from the tile photos only', provenanceAfter: PROVENANCE.photoInferred, reasonCode: 'no_street_view' },
     { stage: 'vision', failure: 'the model chain is exhausted, the reply is invalid twice, or the call times out', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reasonCode: 'vision_unavailable' },
     { stage: 'vision', failure: 'an element is not shown or not resolved by the image it cites', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reasonCode: 'not_resolvable_in_evidence' },
+    { stage: 'figures', failure: 'a figure has no Google pano that sees it, its crop does not arrive, or the vision model gives no usable spec', fellTo: 'the scanned lump smoothed inside the scan tolerance, labelled smoothed scan', provenanceAfter: PROVENANCE.smoothedScan, reasonCode: 'figure_smoothed' },
+    { stage: 'figures', failure: 'the lump cannot be smoothed either, or the figures stage fails', fellTo: 'the scanned lump as scanned', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'figure_not_smoothed' },
     { stage: 'detail', failure: 'the ornament build fails, or drops an element', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reasonCode: 'detail_failed' },
     { stage: 'trees', failure: 'a measured crown cannot regrow', fellTo: 'that tree kept as scanned', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'not_regrowable' },
     { stage: 'trees', failure: 'the tree stage fails', fellTo: 'the scanned trees put back', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'trees_failed' }
