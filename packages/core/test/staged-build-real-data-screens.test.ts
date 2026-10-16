@@ -215,6 +215,9 @@ describe.skipIf(!stagedChrome.ok || !cpReady)('Central Park: the real remesh and
             const legend = await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-legend"]')`);
             expect(legend).toContain('reshaped: moved more than 5 cm');
             expect(legend).toContain('grown to the measured crown');
+            // The real remesh lists only `remeshed`, yet its kept-as-scanned blocks are as-scanned: orange, never the unknown grey.
+            const swatch = await page.eval<string | null>(`(() => { const li = [...document.querySelectorAll('[data-testid="sb-staged-legend"] li')].find(x => x.textContent.includes('a proud block tile_refine kept as scanned')); const s = li && li.querySelector('span'); return s ? getComputedStyle(s).backgroundColor : null; })()`);
+            expect(swatch, 'the kept-as-scanned legend swatch').toBe('rgb(230, 159, 0)');
         } finally {
             await page.close();
         }
