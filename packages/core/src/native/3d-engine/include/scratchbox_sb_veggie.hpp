@@ -1664,7 +1664,6 @@ private:
 
                 // Leaf card scale jitter (+/- 20% organic variance)
                 float scaleJitter = 0.85f + 0.30f * std::sin(i * 1.7f + a * 3.1f);
-                float leafWidth = baseLeafSize * scaleJitter;
                 float leafHeight = baseLeafSize * scaleJitter * 1.15f;
 
                 // ================================================================

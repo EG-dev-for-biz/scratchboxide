@@ -580,6 +580,11 @@ export function describeTrees(t: LocationClayTrees, isolate: boolean): string {
             : ` The rebuilt trees (space colonisation, studio clay) fill ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
         if (t.reachingBoundary) s += ` (${t.reachingBoundary} of them ${t.reachingBoundary === 1 ? 'runs' : 'run'} to the extraction's edge and ${t.reachingBoundary === 1 ? 'was' : 'were'} rebuilt up to it)`;
         s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
+        // every tree is written at three levels of detail; the leaves are placed on the grown branching, not measured
+        if (t.drawnPerFrame) {
+            s += ` Each tree has three levels of detail (leaf clusters near, fewer larger leaves mid, blob masses far; the leaves are placed on the grown branching, only the crown it grows into is measured)`
+                + `; a park view draws ${(t.drawnPerFrame.medianTriangles / 1e6).toFixed(1)} million triangles of trees at the median and at most ${(t.drawnPerFrame.maxTriangles / 1e6).toFixed(1)} million.`;
+        }
     } else if (t.measured === 0 && t.notOnStructure > 0) {
         s += ` The photo tiles show ${plural(t.notOnStructure, 'measured tree')} in the extracted district, none standing on the isolated structure, so no trees were added to it.`;
     } else if (t.measured > 0) {

@@ -520,6 +520,7 @@ struct GrowthParams {
     uint64_t seed{0};                   // mixed with each crown id
     // Seeded per crown (a hash of seed and crown id: the same crown grows the same tree, no two alike):
     double crownBaseSpread{0.10};       // the crown base ratio varies by +/- this, so trunks do not all fork at the same relative height
+    int attempts{4};                    // trees tried (the seed varied) for a crown the first does not fill
     double trunkLeanShare{0.45};        // the trunk has leaned this share of the way to the measured apex's offset by the crown's height
     // How the tree grows and carries its leaves (continuous; no tree classes): apicalDominance sets a branch's momentum, the
     // branch angle's mean and spread the scaffold limbs' angle from the leader (the spread by +/- between crowns, by +/- half of
@@ -607,9 +608,9 @@ inline std::string fixed(double v, int digits) {
  * the crown base, and reach the apex height to within reachRadius. That is the skeleton; what its meshed leaves reach
  * within a budget is measured on the mesh (meshCrown), and strip removes a tree only when both do.
  */
-inline CrownGrowth growCrown(const CrownShape& c, const GrowthParams& G, double sampleSpacing) {
+inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, double sampleSpacing, int attempt) {
     CrownGrowth g;
-    g.seed = detail::crownSeed(G.seed, c.id);
+    g.seed = detail::crownSeed(G.seed ^ (static_cast<uint64_t>(attempt) * 0x9E3779B97F4A7C15ull), c.id);
     const double support = c.supportY;
     const double H = std::max(0.5, static_cast<double>(c.apex.y) - support);
     g.heightAboveSupport = H;
@@ -746,6 +747,21 @@ inline CrownGrowth growCrown(const CrownShape& c, const GrowthParams& G, double 
                     detail::fixed(H, 1) + " m";
     }
     return g;
+}
+
+/**
+ * Grows the tree of a crown: the seeded growth of growCrownAttempt, and when it does not fill the measured crown, up to
+ * GrowthParams::attempts - 1 more with the seed varied (a different tree of the same crown, still a pure function of the
+ * crown, the seed and the parameters, so strip and plant grow the same one). The first that fills the crown is the tree; when
+ * none does, the one that reached most of it, whose failure says why.
+ */
+inline CrownGrowth growCrown(const CrownShape& c, const GrowthParams& G, double sampleSpacing) {
+    CrownGrowth best = growCrownAttempt(c, G, sampleSpacing, 0);
+    for (int attempt = 1; attempt < std::max(1, G.attempts) && !best.ok() && best.failureCode != "no_crown_above_base"; ++attempt) {
+        CrownGrowth next = growCrownAttempt(c, G, sampleSpacing, attempt);
+        if (next.ok() || next.surfaceShare() > best.surfaceShare()) best = std::move(next);
+    }
+    return best;
 }
 
 /** A crown as crowns.json carries it (plant). */
@@ -4070,7 +4086,7 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
        << ",\"supportY\":" << json::num(c["supportY"].num) << ",\"supportSource\":" << json::write(c["supportSource"])
        << ",\"heightAboveSupportM\":" << json::num(tr.heightAboveSupport) << ",\"crownAreaM2\":" << json::num(c["areaM2"].num)
        << ",\"sectorRadiiM\":" << json::write(c["sectorRadii"]);
-    ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::num(P.growth.crownBaseRatio)
+    ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::numPrecise(tr.crownBaseRatio)
        << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(P.growth.trunkRadiusPerHeight) << "}"
        // measured on the delivered leaf masses (this mesh): the share of the crown's surface samples above its crown
        // base inside one or within reachM of one, and how far their top lies below the apex; grownSurfaceReached is

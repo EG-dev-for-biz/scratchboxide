@@ -472,7 +472,7 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         const byId = new Map<number, any>(crownsDoc.crowns.map((c: any) => [c.id, c]));
         for (const f of readTreeFoliage(fs.readFileSync(treesFile))) {
             const c = byId.get(f.crownId);
-            const d = foliageReach(f, f.extras.foliageClumps, crownSurfaceAboveBase(c, crownsDoc.growth.crownBaseRatio), f.extras.reachM);
+            const d = foliageReach(f, f.extras.foliageClumps, crownSurfaceAboveBase(c, f.extras.inferred.crownBaseRatio), f.extras.reachM);
             expect(d.share).toBeGreaterThanOrEqual(0.9);
             expect(d.topY + f.extras.reachM).toBeGreaterThanOrEqual(c.apex[1]);
         }

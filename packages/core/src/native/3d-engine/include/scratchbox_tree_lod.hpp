@@ -163,6 +163,7 @@ struct LodParams {
     int twigSides{6};
     std::array<double, 3> twigTapers{0.3, 0.6, 0.85};
     double twigMinRadiusM{0.004};        // a drawn twig is at least this thick
+    double twigMergeTolerance{2.5};      // consecutive pruned segments of a chain are one tube while the nodes between lie within this many radii of the line
     sv::SbVeggieMorphology morphology;
 };
 
@@ -568,16 +569,35 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     // ---- twigs: the segments the pruning dropped, one instance of the unit tube each ----
     T.twigs.assign(lib.twigs.size(), {});
     std::vector<float> twigRadii;
-    for (const auto& seg : growth.pruned) {
-        const Vec3 a = sk[static_cast<size_t>(seg.a)].position, b = sk[static_cast<size_t>(seg.b)].position, d = b - a;
+    // consecutive pruned segments of one chain (each starts where the one before ends) are drawn as one tube while the nodes
+    // between lie within a radius of the straight line: the simplification the budgeted meshing applies to a branch
+    // (a fraction of a radius) is finer than a twig of a few centimetres needs
+    const auto& pr = growth.pruned;
+    for (size_t k = 0; k < pr.size();) {
+        size_t e = k;
+        while (e + 1 < pr.size() && pr[e + 1].a == pr[e].b) {
+            const Vec3 A = sk[static_cast<size_t>(pr[k].a)].position, B = sk[static_cast<size_t>(pr[e + 1].b)].position, AB = B - A;
+            const float len2 = std::max(1e-12f, AB.lengthSquared());
+            float worst = 0;
+            for (size_t m = k; m <= e; ++m) {
+                const Vec3 Pm = sk[static_cast<size_t>(pr[m].b)].position;
+                const float tt = std::clamp((Pm - A).dot(AB) / len2, 0.0f, 1.0f);
+                worst = std::max(worst, (Pm - (A + AB * tt)).length());
+            }
+            if (worst > static_cast<float>(P.twigMergeTolerance) * pr[k].radiusA) break;
+            ++e;
+        }
+        const Vec3 a = sk[static_cast<size_t>(pr[k].a)].position, b = sk[static_cast<size_t>(pr[e].b)].position, d = b - a;
         const float len = d.length();
-        if (len < 1e-4f) continue;
-        const float r = std::max(seg.radiusA, static_cast<float>(P.twigMinRadiusM));
-        const double ratio = std::clamp(static_cast<double>(seg.radiusB) / std::max(1e-6, static_cast<double>(seg.radiusA)), 0.0, 1.0);
-        size_t k = 0;
-        for (size_t j = 1; j < P.twigTapers.size(); ++j) if (std::abs(P.twigTapers[j] - ratio) < std::abs(P.twigTapers[k] - ratio)) k = j;
-        T.twigs[k].push_back(Instance{a, frameAlong(d / len, Vec3(0, 1, 0)), Vec3(r, r, len), static_cast<float>(seg.a) / growthDen});
-        twigRadii.push_back(r);
+        if (len >= 1e-4f) {
+            const float r = std::max(pr[k].radiusA, static_cast<float>(P.twigMinRadiusM));
+            const double ratio = std::clamp(static_cast<double>(pr[e].radiusB) / std::max(1e-6, static_cast<double>(pr[k].radiusA)), 0.0, 1.0);
+            size_t v = 0;
+            for (size_t j = 1; j < P.twigTapers.size(); ++j) if (std::abs(P.twigTapers[j] - ratio) < std::abs(P.twigTapers[v] - ratio)) v = j;
+            T.twigs[v].push_back(Instance{a, frameAlong(d / len, Vec3(0, 1, 0)), Vec3(r, r, len), static_cast<float>(pr[k].a) / growthDen});
+            twigRadii.push_back(r);
+        }
+        k = e + 1;
     }
     T.twigTriangles = T.twigCount() * lib.twigTriangles();
     if (!twigRadii.empty()) {
@@ -621,7 +641,6 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         if (ta != tb) return ta;
         return rank[a] > rank[b];
     });
-    detail::PointGrid taken;
     std::vector<Vec3> takenPts;  // stations, for the spacing test
     std::unordered_map<uint64_t, std::vector<uint32_t>> takenCells;
     auto gkey = [&](const Vec3& p, int dx, int dy, int dz) {
