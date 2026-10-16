@@ -371,7 +371,8 @@ export class AdaptiveUvOrchestrator {
     // 1. Dispatch to strategy-specific pipeline
     if (appliedStrategy === 'recipe_hybrid') {
       this.rejectFormatsThisMethodDoesNotProduce(boxProjectionOnlyFormats, 'recipe_hybrid');
-      noteIgnored('solarDelighting', 'carrierSpinePoints', 'carrierReferenceNormal', 'continuousDescriptor', 'materialArchetype', 'partMaterials', 'tileSizeMeters', 'resolution', 'resolutionPx', 'gutterPaddingPx');
+      this.rejectMaterialChoicesThisMethodCannotHonor(request, 'recipe_hybrid');
+      noteIgnored('solarDelighting', 'carrierSpinePoints', 'carrierReferenceNormal', 'resolution', 'resolutionPx', 'gutterPaddingPx');
       const { HybridRecipePbrService } = await import('./hybrid-recipe-pbr-service');
       const recipeRes = await HybridRecipePbrService.processGlb(rawBuffer, {
         outputMode: request.recipeOutputMode || 'webgl-recipe'
@@ -384,7 +385,8 @@ export class AdaptiveUvOrchestrator {
       };
     } else if (appliedStrategy === 'elevation_stratified_conformal') {
       this.rejectFormatsThisMethodDoesNotProduce(boxProjectionOnlyFormats, 'elevation_stratified_conformal');
-      noteIgnored('carrierSpinePoints', 'carrierReferenceNormal', 'continuousDescriptor', 'materialArchetype', 'partMaterials', 'tileSizeMeters', 'resolution', 'resolutionPx', 'gutterPaddingPx', 'recipeOutputMode');
+      this.rejectMaterialChoicesThisMethodCannotHonor(request, 'elevation_stratified_conformal');
+      noteIgnored('carrierSpinePoints', 'carrierReferenceNormal', 'resolution', 'resolutionPx', 'gutterPaddingPx', 'recipeOutputMode');
       const { AlgorithmicUvEngine } = await import('../spatial/AlgorithmicUvEngine');
       const solar = request.solarDelighting;
       if (solar) {
@@ -562,6 +564,24 @@ export class AdaptiveUvOrchestrator {
       executionTimeMs: Date.now() - t0,
       algorithmicUv
     };
+  }
+
+  /**
+   * Which material goes where is chosen by these fields; only the box-projection method synthesizes a material and places
+   * it. A method that works from the asset's own images or geometry cannot honour them, and says so instead of ignoring them.
+   */
+  private static rejectMaterialChoicesThisMethodCannotHonor(request: AdaptivePbrRequest, strategy: string): void {
+    const choices: Array<keyof AdaptivePbrRequest> = ['partMaterials', 'materialArchetype', 'continuousDescriptor', 'tileSizeMeters', 'preserveExistingUvs', 'preserveVertexColors'];
+    const given = choices.filter(name => {
+      const v = request[name];
+      return v !== undefined && v !== null && v !== false && !(Array.isArray(v) && v.length === 0);
+    });
+    if (given.length) {
+      throw new AdaptivePbrInputError(
+        `${given.join(', ')} choose the material or how it is mapped; strategy '${strategy}' works from the asset's own images or geometry and does not synthesize or place a material, so it cannot honour them. Use strategy 'height_blended_triplanar' or 'carrier_conformal_sheet' to texture this mesh with a synthesized material (it replaces the mesh's current textures).`,
+        { given, strategy }
+      );
+    }
   }
 
   /** MaterialX / USDZ are produced from synthesized texture sets, which only the box-projection method has. */

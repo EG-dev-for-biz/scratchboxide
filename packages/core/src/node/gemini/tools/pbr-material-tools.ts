@@ -204,20 +204,20 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 uvStrategy: {
                     type: 'STRING',
-                    description: 'Explicit UV wrapping strategy override: "auto", "carrier_conformal_sheet", "elevation_stratified_conformal", "height_blended_triplanar", or "recipe_hybrid".',
+                    description: 'Strategy override, default "auto" (the topology probe recommends one). What each really does with targetMeshPath: "height_blended_triplanar" and "carrier_conformal_sheet" synthesize the material and apply it by per-triangle box projection (the result names method box_projection_uv; the triplanar blend / conformal sheet themselves are not run). "recipe_hybrid" keeps the mesh\'s own UVs and textures and adds per-vertex recipe attributes (one primitive per mesh, TEXCOORD_0 required). "elevation_stratified_conformal" decomposes the mesh\'s embedded baseColor images into albedo / normal / ORM. The last two do not synthesize a material, so archetype, descriptor, partMaterials, tileSizeMeters and the preserve flags are refused for them rather than ignored.',
                     enum: ['auto', 'carrier_conformal_sheet', 'elevation_stratified_conformal', 'height_blended_triplanar', 'recipe_hybrid']
                 },
                 solarCoordinates: {
                     type: 'OBJECT',
-                    description: 'For solar inverse de-lighting: { latitude: number, longitude: number, timestampIso: string }, the place and UTC time whose sun lit the source imagery (all three are required; the current time is not assumed).'
+                    description: 'For solar inverse de-lighting, used only by "elevation_stratified_conformal" (others list it under ignoredOptions): { latitude: number, longitude: number, timestampIso: string }, the place and UTC time whose sun lit the source imagery (all three are required; the current time is not assumed).'
                 },
                 carrierSpinePoints: {
                     type: 'ARRAY',
-                    description: 'Ordered 3D skeletal spine points [[x, y, z], ...] for organic SO(3) Frenet-Serret carrier-frame conformal unfolding.'
+                    description: 'Ordered 3D skeletal spine points [[x, y, z], ...] for a carrier-frame conformal unfolding. No strategy implements that unfolding, so the result lists this under ignoredOptions when given.'
                 },
                 seamPaddingPx: {
                     type: 'NUMBER',
-                    description: 'Gutter dilation padding in pixels around UV island borders (default: 8 for organic, 16 for high-rise facades, 0 for triplanar).'
+                    description: 'Gutter dilation padding in pixels around UV island borders. Box projection has no UV islands, so it does not use this; the result lists it under ignoredOptions when given.'
                 }
             }
         }
@@ -337,7 +337,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
                 domain,
                 strategy: uvStrategy,
                 outputPath: outPath,
-                resolutionPx: width,
+                resolutionPx: args.resolution !== undefined || args.width !== undefined || args.height !== undefined ? width : undefined,
                 seed: asNumber(args.seed),
                 materialArchetype: archetype,
                 continuousDescriptor: args.descriptor as any,

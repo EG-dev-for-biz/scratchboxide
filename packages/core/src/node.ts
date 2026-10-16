@@ -1178,8 +1178,21 @@ export {
   type TopologyProbeResult,
   type AdaptiveSolarDelightingConfig,
   type AdaptivePbrRequest,
-  type AdaptiveUvPbrResult
+  type AdaptiveUvPbrResult,
+  type AdaptivePbrAppliedMethod,
+  type AdaptiveBoxProjectionSummary,
+  type PartMaterialAssignment
 } from './node/3d-engine/adaptive-uv-orchestrator';
+
+export {
+  AdaptivePbrError,
+  AdaptivePbrInputError,
+  AdaptivePbrPartSelectionError,
+  AdaptivePbrMaterialSpecError,
+  AdaptivePbrBudgetError,
+  AdaptivePbrTextureSynthesisError,
+  AdaptivePbrOutputError
+} from './node/3d-engine/adaptive-pbr-errors';
 
 export {
   HybridRecipePbrService,

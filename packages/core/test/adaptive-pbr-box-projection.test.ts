@@ -530,6 +530,20 @@ describe('recipe_hybrid refuses meshes it would corrupt or cannot read', () => {
         expect(err.message).toMatch(/exactly one primitive per mesh; mesh #0 "pair" has 2/);
     });
 
+    it('material choices it cannot honour are an error, not silently ignored; tuning hints are listed as unused', async () => {
+        const glb = buildSceneGlb([{ primitives: [{ mesh: uvCubeMesh(1) }] }], [{ name: 'cube', mesh: 0 }]);
+        for (const choice of [{ partMaterials: [{ nodes: ['cube'], materialArchetype: 'polished_brass' }] }, { materialArchetype: 'polished_brass' }, { continuousDescriptor: { albedoLinear: [1, 0, 0], conduction: 0, roughnessBaseline: 0.5 } }, { tileSizeMeters: 0.3 }, { preserveExistingUvs: true }]) {
+            for (const strategy of ['recipe_hybrid', 'elevation_stratified_conformal']) {
+                const err: any = await AdaptiveUvOrchestrator.applyAdaptivePbr({ inputGlbBuffer: glb, strategy, ...choice } as any).catch(e => e);
+                expect(err, `${strategy} ${Object.keys(choice)}`).toBeInstanceOf(AdaptivePbrInputError);
+                expect(err.message).toContain(`strategy '${strategy}'`);
+                expect(err.message).toContain('height_blended_triplanar');
+            }
+        }
+        const res = await AdaptiveUvOrchestrator.applyAdaptivePbr({ inputGlbBuffer: glb, strategy: 'recipe_hybrid', resolution: '4K', gutterPaddingPx: 8, preserveExistingUvs: false });
+        expect(res.ignoredOptions).toEqual(['resolution', 'gutterPaddingPx']);
+    });
+
     it('a single textured primitive still gets its recipe attributes, and the method is named', async () => {
         const glb = buildSceneGlb([{ primitives: [{ mesh: uvCubeMesh(1) }] }], [{ name: 'cube', mesh: 0 }]);
         const res = await recipe(glb);
