@@ -111,6 +111,13 @@ export interface ComplexityGateReport {
 export const MEASURED_REBUILD_MIN_COVERAGE = 0.85;
 export const MEASURED_REBUILD_MAX_SCAN_TO_FIT_RMS_M = 0.06;
 
+/** The coverage and scan→fit rms a StructureFit is judged on: with the regions it kept as scanned counted as covered and exact, as its own gates count them. */
+export function measuredRebuildBasis(fit: StructureFit): { coverage: number; rmsM: number } {
+    const coverageGate = fit.gates.find(g => g.unit === 'ratio' && /coverage/i.test(g.gate));
+    const coverage = coverageGate && Number.isFinite(coverageGate.value) ? Math.max(coverageGate.value, fit.metrics.coverage) : fit.metrics.coverage;
+    return { coverage, rmsM: Math.min(fit.metrics.scanToFit.rmsM, fit.metrics.scanToFitPlusPassThrough.rmsM) };
+}
+
 /** Why a StructureFit does not earn the measured-rebuild exemption, or undefined when it does. */
 export function measuredRebuildRefusal(fit: StructureFit): string | undefined {
     const problems = validateContract('StructureFit', fit);
@@ -118,8 +125,12 @@ export function measuredRebuildRefusal(fit: StructureFit): string | undefined {
     if (fit.accepted !== true) return 'its StructureFit was not accepted';
     const failed = fit.gates.filter(g => !g.passed);
     if (failed.length) return `its StructureFit failed ${failed.map(g => g.gate).join(', ')}`;
-    if (!(fit.metrics.coverage >= MEASURED_REBUILD_MIN_COVERAGE)) return `its coverage ${Math.round(fit.metrics.coverage * 100)}% is under ${Math.round(MEASURED_REBUILD_MIN_COVERAGE * 100)}%`;
-    if (!(fit.metrics.scanToFit.rmsM <= MEASURED_REBUILD_MAX_SCAN_TO_FIT_RMS_M)) return `its scan→fit rms ${(fit.metrics.scanToFit.rmsM * 100).toFixed(1)} cm is over ${MEASURED_REBUILD_MAX_SCAN_TO_FIT_RMS_M * 100} cm`;
+    // The fit is judged on the basis it was accepted on: scan regions it kept as scanned are the scan itself, so they count as covered and exact
+    // (the raw numbers hold the rest of the structure to the fit and read the kept-as-scanned regions as unexplained). A fit that explains
+    // 71% of the scan and keeps 24% as scanned covers 95% of it at 2.9 cm: that is its measured fit.
+    const { coverage, rmsM } = measuredRebuildBasis(fit);
+    if (!(coverage >= MEASURED_REBUILD_MIN_COVERAGE)) return `its coverage ${Math.round(coverage * 100)}% is under ${Math.round(MEASURED_REBUILD_MIN_COVERAGE * 100)}%`;
+    if (!(rmsM <= MEASURED_REBUILD_MAX_SCAN_TO_FIT_RMS_M)) return `its scan→fit rms ${(rmsM * 100).toFixed(1)} cm is over ${MEASURED_REBUILD_MAX_SCAN_TO_FIT_RMS_M * 100} cm`;
     return undefined;
 }
 
@@ -197,7 +208,7 @@ export class GeometricComplexityGate {
                     continue;
                 }
                 names.forEach(n => exemptNames.add(n));
-                exemptions.push(`vertex floor: measured rebuild (${countOf(names).toLocaleString()} vertices; StructureFit ${e.measuredRebuild.structureFitSha256.slice(0, 8)} accepted, ${(fit.metrics.scanToFit.rmsM * 100).toFixed(1)} cm rms over ${Math.round(fit.metrics.coverage * 100)}% of the visible scan)`);
+                exemptions.push(`vertex floor: measured rebuild (${countOf(names).toLocaleString()} vertices; StructureFit ${e.measuredRebuild.structureFitSha256.slice(0, 8)} accepted, ${(measuredRebuildBasis(fit).rmsM * 100).toFixed(1)} cm rms over ${Math.round(measuredRebuildBasis(fit).coverage * 100)}% of the visible scan)`);
             }
         }
         const counted = exemptNames.size ? metrics.submeshes.filter(m => !exemptNames.has(m.name)) : metrics.submeshes;

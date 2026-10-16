@@ -1967,7 +1967,11 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     }
     const remeshLayer = run.state.layers.find(l => l.layer === 'l2' && l.stage === 'remesh' && l.provenance.label === PROVENANCE.remeshed);
     const byStage = Object.fromEntries(run.state.stages.filter(s => s.timings.ms !== undefined).map(s => [s.stage, s.timings.ms!]));
-    const confidences = ornament?.elements.map(e => e.confidence).sort((a, b) => a - b) ?? [];
+    // what is said to have been built is what the detail build built and committed as a layer, not what the reading kept
+    const detailLayerMounted = visible.some(l => l.layer === 'l4');
+    const builtIds = new Set(detailLayerMounted ? (f.rebuild.detail?.value.built ?? []).map(b => b.elementId) : []);
+    const builtElements = ornament?.elements.filter(e => builtIds.has(e.id)) ?? [];
+    const confidences = builtElements.map(e => e.confidence).sort((a, b) => a - b);
     const costed = run.state.stages.filter(x => x.cost);
     const photoCost = costed.length ? {
         total: { images: costed.reduce((n, x) => n + x.cost!.images, 0), visionCalls: costed.reduce((n, x) => n + x.cost!.visionCalls, 0), seconds: round(costed.reduce((n, x) => n + x.cost!.seconds, 0), 1) },
@@ -2000,7 +2004,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         } : {}),
         ...(ornament ? {
             ornament: {
-                elements: ornament.elements.length, slotsFilled: new Set(ornament.elements.map(e => e.slotId)).size, slotsEmpty: ornament.emptySlots.length,
+                elements: builtElements.length, read: ornament.elements.length, slotsFilled: new Set(builtElements.map(e => e.slotId)).size, slotsEmpty: ornament.emptySlots.length,
                 confidence: { min: confidences[0] ?? 0, median: confidences[Math.floor(confidences.length / 2)] ?? 0, max: confidences[confidences.length - 1] ?? 0 },
                 evidence: f.rebuild.evidenceCounts ?? { tileOrthos: 0, streetView: 0 }, model: ornament.model, revisionPass: ornament.revision.passes === 1,
                 ...(f.rebuild.anchored?.length ? { anchoring: f.rebuild.anchored.map(n => ({ elementId: n.elementId, slotId: n.slotId, kind: n.kind, errorM: n.errorM, toleranceM: n.toleranceM, note: n.note })) } : {}),

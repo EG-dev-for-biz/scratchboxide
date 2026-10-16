@@ -937,7 +937,10 @@ export interface StagedLocationResult {
         gates: GateResult[]; corrections: PrimitiveCorrection[]; reportPath: string;
     };
     ornament?: {
+        /** The elements BUILT and committed to the detail layer (what is visible); 0 when the detail build did not commit a layer. */
         elements: number; slotsFilled: number; slotsEmpty: number;
+        /** The elements the reading kept after its checks, whether or not they were then built. */
+        read?: number;
         confidence: { min: number; median: number; max: number };
         /** streetView ≤ MAX_STREET_VIEW_IMAGES_PER_BUILDING. */
         evidence: { tileOrthos: number; streetView: number };
@@ -1648,7 +1651,7 @@ const DEFINITIONS = {
             gates: arr(ref('gate')), corrections: arr(ref('correction')), reportPath: STR
         }),
         ornament: obj(['elements', 'slotsFilled', 'slotsEmpty', 'confidence', 'evidence', 'model', 'revisionPass', 'dropped', 'specPath'], {
-            elements: NONNEG_INT, slotsFilled: NONNEG_INT, slotsEmpty: NONNEG_INT,
+            elements: NONNEG_INT, slotsFilled: NONNEG_INT, slotsEmpty: NONNEG_INT, read: NONNEG_INT,
             confidence: obj(['min', 'median', 'max'], { min: ref('unit'), median: ref('unit'), max: ref('unit') }),
             evidence: obj(['tileOrthos', 'streetView'], { tileOrthos: NONNEG_INT, streetView: { type: 'integer', minimum: 0, maximum: MAX_STREET_VIEW_IMAGES_PER_BUILDING } }),
             model: ref('visionModelUse'), revisionPass: BOOL, dropped: NONNEG_INT, specPath: STR,

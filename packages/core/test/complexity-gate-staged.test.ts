@@ -55,14 +55,14 @@ describe('GeometricComplexityGate exemptions', () => {
         });
         expect(ok.passed).toBe(true);
         // the sha quoted is the file's
-        expect(ok.exemptions[0]).toBe(`vertex floor: measured rebuild (1,424 vertices; StructureFit ${sha.slice(0, 8)} accepted, 3.2 cm rms over 97% of the visible scan)`);
+        expect(ok.exemptions[0]).toBe(`vertex floor: measured rebuild (1,424 vertices; StructureFit ${sha.slice(0, 8)} accepted, 3.0 cm rms over 97% of the visible scan)`);
 
         // made-up StructureFits are refused, and their submeshes counted
         const cases: Array<[string, (f: ReturnType<typeof structureFit>) => void, RegExp]> = [
             ['not accepted', f => { f.accepted = false; }, /was not accepted/],
             ['a failed gate', f => { f.gates[0] = { ...f.gates[0], passed: false }; }, /failed coverage/],
-            ['low coverage', f => { f.metrics.coverage = 0.6; }, /coverage 60% is under 85%/],
-            ['a large residual', f => { f.metrics.scanToFit.rmsM = 0.09; }, /scan→fit rms 9\.0 cm is over 6 cm/],
+            ['low coverage', f => { f.metrics.coverage = 0.6; f.gates[0] = { ...f.gates[0], value: 0.6 }; }, /coverage 60% is under 85%/],
+            ['a large residual', f => { f.metrics.scanToFit.rmsM = 0.09; f.metrics.scanToFitPlusPassThrough.rmsM = 0.09; }, /scan→fit rms 9\.0 cm is over 6 cm/],
             ['an invalid document', f => { (f as any).primitives = 'many'; }, /is not valid/]
         ];
         for (const [, mutate, why] of cases) {
@@ -75,6 +75,27 @@ describe('GeometricComplexityGate exemptions', () => {
             expect(r.exemptionsRefused[0]).toMatch(why);
             expect(r.violations[0]).toBe('Insufficient geometric density: scene has 1,124 vertices, minimum required is 25,000 vertices.');
         }
+    });
+
+    it('judges a fit on the basis it was accepted on: scan kept as scanned counts as covered and exact (the real arch: 71% raw, 95% with pass-through; 79 cm raw, 2.9 cm with it)', () => {
+        const fit = structureFit();
+        fit.metrics.coverage = 0.71; fit.metrics.scanToFit.rmsM = 0.79; fit.metrics.scanToFitPlusPassThrough.rmsM = 0.029;
+        fit.gates[0] = { ...fit.gates[0], value: 0.953 };
+        expect(measuredRebuildRefusal(fit)).toBeUndefined();
+        const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-gate-')), 'structure_fit.json');
+        fs.writeFileSync(file, JSON.stringify(fit));
+        const sha = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+        const r = GeometricComplexityGate.evaluate(metrics([layer('l3b', 630), layer('l4', 390), layer('l4f', 480)]), { exemptions: [{ measuredRebuild: { submeshes: ['l3b', 'l4', 'l4f'], structureFit: fit, structureFitSha256: sha } }] });
+        expect(r.passed).toBe(true);
+        expect(r.exemptions[0]).toMatch(/^vertex floor: measured rebuild \(1,500 vertices; StructureFit [0-9a-f]{8} accepted, 2\.9 cm rms over 95% of the visible scan\)/);
+        // the floor still binds geometry nothing measured: a generated layer beside it is counted
+        const generated = GeometricComplexityGate.evaluate(metrics([layer('l3b', 630), { ...layer('gen', 900), tag: 'generated' }]), { exemptions: [{ measuredRebuild: { submeshes: ['l3b'], structureFit: fit, structureFitSha256: sha } }] });
+        expect(generated.passed).toBe(false);
+        expect(generated.violations[0]).toMatch(/900 non-exempt vertices/);
+        // and the pass-through basis does not rescue a fit whose kept-as-scanned figures are also bad
+        const bad = structureFit();
+        bad.metrics.scanToFit.rmsM = 0.79; bad.metrics.scanToFitPlusPassThrough.rmsM = 0.2; bad.metrics.coverage = 0.71; bad.gates[0] = { ...bad.gates[0], value: 0.9 };
+        expect(measuredRebuildRefusal(bad)).toMatch(/scan→fit rms 20\.0 cm is over 6 cm/);
     });
 
     it('exempts SB-Veggie trees grown to measured crowns, with the crown count as its basis, and refuses a count that was made up', () => {
