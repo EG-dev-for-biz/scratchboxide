@@ -51,8 +51,8 @@ export function saveClayShot(name: string, files: ShotLayer[], view: Partial<Cla
     const img = decodePng(png);
     let covered = 0;
     for (let i = 0; i < img.width * img.height; i++) {
-        const o = i * img.channels;
-        if (Math.abs(img.data[o] - 236) > 3 || Math.abs(img.data[o + 1] - 237) > 3 || Math.abs(img.data[o + 2] - 240) > 3) covered++;
+        const o = i * 4; // DecodedImage.rgba is 4 bytes per pixel
+        if (Math.abs(img.rgba[o] - 236) > 3 || Math.abs(img.rgba[o + 1] - 237) > 3 || Math.abs(img.rgba[o + 2] - 240) > 3) covered++;
     }
     return { path: out, covered: covered / (img.width * img.height), width: img.width, height: img.height };
 }

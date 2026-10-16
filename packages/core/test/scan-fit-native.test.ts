@@ -79,8 +79,9 @@ describe('scan_fit on synthetic scans with known truth', () => {
         expect(Math.abs(param(body, 2) - 3.0)).toBeLessThan(0.12);       // rise
         expect(Math.abs(param(body, 4) - 5.0)).toBeLessThan(0.06);       // depth along the passage
         expect(Math.abs(param(body, 6) - 0.375)).toBeLessThan(0.02);     // rise over span
-        // the plan: 14.4 x 5 less the opening (8 x 5): two piers of 3.2 x 5
-        expect(f.footprint.areaM2).toBeCloseTo(32, 0);
+        // the plan: 14.4 x 5. The passage is open at both ends, so it is no hole in it: the roof over the opening is in the footprint
+        expect(f.footprint.areaM2).toBeCloseTo(72, 0);
+        expect(f.footprint.holes ?? []).toHaveLength(0);
         // photos may move the arch's rise/span within the scan's own residual curve: it includes a semicircle (0.5) here
         const c = body.correctable.find(x => x.param === 6)!;
         expect(c.min).toBeLessThanOrEqual(0.375);
@@ -264,19 +265,40 @@ describe('scan_fit flatten', () => {
         const after = readGlbTriangles(fs.readFileSync(r.glb));
         // nothing added or removed
         expect(after.indices.length).toBe(before.indices.length);
-        // the building's +x wall (x = 7): its interior vertices (those that only the wall's triangles share) are on one plane afterwards
-        const xs: number[] = [], xb: number[] = [];
-        for (let v = 0; v < after.positions.length / 3; v++) {
-            const x = after.positions[3 * v], y = after.positions[3 * v + 1];
-            if (Math.abs(x - 7) < 0.1 && y > 0.5 && y < 9.5 && Math.abs(after.positions[3 * v + 2]) < 4.5) xs.push(x);
-        }
+        // the building's -x wall (x = -7), away from the tree crown: its interior vertices (every triangle at one is that wall's) must all
+        // end on one plane; an edge vertex, shared with another plane, stays where it was. The same vertices before and after.
+        const wall: number[] = [];
         for (let v = 0; v < before.positions.length / 3; v++) {
-            const x = before.positions[3 * v], y = before.positions[3 * v + 1];
-            if (Math.abs(x - 7) < 0.1 && y > 0.5 && y < 9.5 && Math.abs(before.positions[3 * v + 2]) < 4.5) xb.push(x);
+            const x = before.positions[3 * v], y = before.positions[3 * v + 1], z = Math.abs(before.positions[3 * v + 2]);
+            if (Math.abs(x + 7) < 0.1 && y > 0.3 && y < 9.8 && z < 4.8) wall.push(v);
         }
-        expect(xs.length).toBeGreaterThan(3);
-        expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(0.001);
-        expect(Math.max(...xb) - Math.min(...xb)).toBeGreaterThan(0.01);   // the scan's noise, which the move removed
+        expect(wall.length).toBeGreaterThan(3);
+        // each one's counterpart after the flatten: the nearest vertex, which can be at most one band away
+        const nearest = (v: number) => {
+            let best = -1, bd = Infinity;
+            for (let w = 0; w < after.positions.length / 3; w++) {
+                const d = Math.hypot(after.positions[3 * w] - before.positions[3 * v], after.positions[3 * w + 1] - before.positions[3 * v + 1], after.positions[3 * w + 2] - before.positions[3 * v + 2]);
+                if (d < bd) { bd = d; best = w; }
+            }
+            expect(bd).toBeLessThanOrEqual(0.1 + 1e-6);
+            return best;
+        };
+        // all of them on one plane to within a millimetre afterwards (x = a + b y + c z by least squares: the wall faces -x), where the scan's
+        // own noise left them centimetres off it
+        const planeResidual = (get: (v: number) => [number, number, number]): number => {
+            const P = wall.map(get);
+            const n = P.length;
+            const sums = { y: 0, z: 0, yy: 0, yz: 0, zz: 0, x: 0, xy: 0, xz: 0 };
+            for (const [x, y, z] of P) { sums.y += y; sums.z += z; sums.yy += y * y; sums.yz += y * z; sums.zz += z * z; sums.x += x; sums.xy += x * y; sums.xz += x * z; }
+            const A = [[n, sums.y, sums.z], [sums.y, sums.yy, sums.yz], [sums.z, sums.yz, sums.zz]], rhs = [sums.x, sums.xy, sums.xz];
+            const det3 = (m: number[][]) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+            const D = det3(A);
+            const col = (c: number) => det3(A.map((row, r) => row.map((val, k) => (k === c ? rhs[r] : val))));
+            const [a, b, c] = [col(0) / D, col(1) / D, col(2) / D];
+            return Math.max(...P.map(([x, y, z]) => Math.abs(x - (a + b * y + c * z))));
+        };
+        expect(planeResidual(v => [before.positions[3 * v], before.positions[3 * v + 1], before.positions[3 * v + 2]])).toBeGreaterThan(0.01);
+        expect(planeResidual(v => { const w = nearest(v); return [after.positions[3 * w], after.positions[3 * w + 1], after.positions[3 * w + 2]]; })).toBeLessThan(0.001);
         // isolating by a footprint keeps whole triangles within the footprint grown by 4 m and drops the rest
         const iso = await svc.flatten({ inputGlb: rel(scenes.plaza.glb), footprint: [[8, -8], [26, -8], [26, 8], [8, 8]], bandM: 0.1 });
         expect(iso.value.isolate!.droppedTriangles).toBeGreaterThan(100);
@@ -317,7 +339,7 @@ describe.skipIf(!arch)('scan_fit on the real Washington Square Arch' + (arch ? '
         expect(f.passThrough.areaM2).toBeLessThan(200);
     });
 
-    it('measures the arch: span 9.73 m, rise over span, a segmental opening, and a semicircle the scan rejects', () => {
+    it('measures the arch: span 9.73 m, rise over span, a segmental opening; the scan alone cannot rule out a semicircle, so the photo may correct it', () => {
         const f = result.value;
         const body = f.primitives.find(p => p.fitParams.length === 7)!;
         expect(Math.abs(param(body, 0) - 9.73)).toBeLessThan(0.06);        // span
@@ -326,11 +348,16 @@ describe.skipIf(!arch)('scan_fit on the real Washington Square Arch' + (arch ? '
         // the circle through the soffit is not a semicircle: rise/span 0.34 against 0.5
         expect(param(body, 6)).toBeGreaterThan(0.3);
         expect(param(body, 6)).toBeLessThan(0.4);
+        const c = body.correctable.find(x => x.param === 6)!;
         const semi = body.alternatives.find(a => /semicircle/.test(a.why))!;
         expect(semi).toBeDefined();
-        expect(semi.fit.rmsM).toBeGreaterThan(0.2);                         // the semicircle's rms against the soffit
+        // the semicircle fits the soffit worse than the fitted circle (the scan's residual is lowest at the fit), yet by centimetres:
+        // the tile's soffit (a 0.69 m mesh) cannot rule it out, so the scan does not forbid a photo from correcting to it
+        const best = Math.min(...c.residualCurve.map(r => r[1]));
+        expect(semi.fit.rmsM).toBeGreaterThan(best + 0.01);
+        expect(semi.fit.rmsM).toBeLessThan(0.31);
+        expect(Math.abs(c.residualCurve.reduce((a, r) => (r[1] < a[1] ? r : a), c.residualCurve[0])[0] - param(body, 6))).toBeLessThanOrEqual(0.05);
         // the photo may move rise/span within what the scan tolerates (0.31 m): 0.5 is inside it
-        const c = body.correctable.find(x => x.param === 6)!;
         expect(c.toleranceM).toBeLessThanOrEqual(0.31 + 1e-9);
         expect(c.min).toBeLessThan(param(body, 6));
         expect(c.max).toBeGreaterThanOrEqual(0.5);

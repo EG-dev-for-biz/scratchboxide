@@ -261,7 +261,7 @@ struct FitResult {
     sg::Plane groundL;     // local frame
     double groundTiltDeg{0}, groundRms{0}, baseY{0};
     std::vector<Loop> footprint;   // the lowest band's outer loops (local)
-    double footprintArea{0};
+    std::vector<std::vector<Loop>> footprintHoles;   // the holes of each outer loop, in the same order
     SourceLimits limits;
     std::vector<Primitive> prims;
     std::vector<Surface> surfaces;
@@ -399,11 +399,44 @@ public:
         lap("frame_ground");
         visibility();
         lap("visibility");
-        planes();
+        // a noisy wall grows as several regions: coplanar within half a band, they are the one wall (and the band is the move's limit)
+        planes(0.5 * bandM, 0.5 * bandM);
         lap("planes");
         Flattened F;
         const auto& s = R.scan;
-        F.planes = static_cast<int>(regions.size());
+        // The growing leaves out a triangle that noise puts past its plane gate, and splits a noisy wall into regions whose own
+        // planes differ by more than the merge allows (a small region's tilt is poorly determined). Within a band, they are one wall:
+        // a smaller region whose every corner lies within half a band of a larger plane with a near normal moves its triangles
+        // there, and so does a triangle left out whose three corners do.
+        {
+            const float cosA = static_cast<float>(std::cos(rad(P.planeAngleDeg)));
+            const size_t larger = std::min<size_t>(regions.size(), 96);
+            const double reach = 0.5 * bandM;
+            for (size_t j = 1; j < regions.size(); ++j) {
+                if (regions[j].sheet) continue;
+                for (size_t i = 0; i < std::min(j, larger); ++i) {
+                    if (regions[i].sheet || regions[j].pl.n.dot(regions[i].pl.n) < cosA) continue;
+                    bool within = true;
+                    for (size_t k = 0; k < regions[j].tris.size() && within; ++k)
+                        for (int c = 0; c < 3 && within; ++c) within = std::fabs(regions[i].pl.dist(lp[s.tri[3 * regions[j].tris[k] + c]])) <= reach;
+                    if (!within) continue;
+                    for (uint32_t t : regions[j].tris) triPlane[t] = static_cast<int>(i);
+                    break;
+                }
+            }
+            for (size_t t = 0; t < s.triangles(); ++t) {
+                if (triPlane[t] >= 0 || isGround[t] || !(ext[t] || ln[t].y < -0.97f)) continue;
+                for (size_t i = 0; i < larger; ++i) {
+                    if (regions[i].sheet || ln[t].dot(regions[i].pl.n) < cosA) continue;
+                    bool within = true;
+                    for (int c = 0; c < 3 && within; ++c) within = std::fabs(regions[i].pl.dist(lp[s.tri[3 * t + c]])) <= reach;
+                    if (within) { triPlane[t] = static_cast<int>(i); break; }
+                }
+            }
+            std::set<int> used;
+            for (size_t t = 0; t < s.triangles(); ++t) if (triPlane[t] >= 0) used.insert(triPlane[t]);
+            F.planes = static_cast<int>(used.size());
+        }
         F.moved = s.pos;
         F.isMoved.assign(s.pos.size(), 0);
         std::vector<int> owner(s.pos.size(), -2);  // the plane every triangle at a vertex belongs to, -2 none seen, -1 mixed
@@ -448,6 +481,7 @@ private:
     struct Region { sg::Plane pl; std::vector<uint32_t> tris; double area{0}, rms{0}; Vec3 lo, hi, c; bool sheet{false}; };
     std::vector<Region> regions;
     double structX0{0}, structX1{0}, structZ0{0}, structZ1{0}, structTop{0};
+    double tipX0{0}, tipX1{0}, tipZ0{0}, tipZ1{0};   // the same box grown to the corners' tips (at most a metre)
     double frameShare{1};          // the share of the vertical faces' area along the frame's axes
     std::vector<sg::Sample> S;     // exterior structure samples (local)
     std::vector<uint8_t> sGround;  // per sample: ground or clutter
@@ -694,22 +728,33 @@ private:
             if ((hgt < 0.40 && ln[t].y > 0.85f) || hgt < -0.25) isGround[t] = 1;
         }
         // the structure's plan extent (exterior, not ground)
-        std::vector<double> xs, zs;
+        // The extent is that of the triangle centroids with the outermost 1 % on each side let go (a stray spike, a scrap of
+        // apron), grown to the vertices' own extent by at most one metre: an acute corner has few triangles, and the percentile
+        // of their centroids alone clips its tip, but whatever lies further out than a metre is not the corner.
+        std::vector<double> xs, zs, vxs, vzs;
         structTop = -1e30;
         for (size_t t = 0; t < T; ++t) {
             if (isGround[t]) continue;
             xs.push_back(lc[t].x); zs.push_back(lc[t].z);
-            for (int j = 0; j < 3; ++j) structTop = std::max(structTop, (double)lp[R.scan.tri[3 * t + j]].y);
+            for (int j = 0; j < 3; ++j) {
+                const Vec3& q = lp[R.scan.tri[3 * t + j]];
+                vxs.push_back(q.x); vzs.push_back(q.z);
+                structTop = std::max(structTop, static_cast<double>(q.y));
+            }
         }
         if (xs.empty()) throw ScanFitError("no_structure", "the scan under the anchor is all ground");
-        std::sort(xs.begin(), xs.end());
-        std::sort(zs.begin(), zs.end());
-        structX0 = xs[static_cast<size_t>(0.01 * (xs.size() - 1))]; structX1 = xs[static_cast<size_t>(0.99 * (xs.size() - 1))];
-        structZ0 = zs[static_cast<size_t>(0.01 * (zs.size() - 1))]; structZ1 = zs[static_cast<size_t>(0.99 * (zs.size() - 1))];
+        for (auto* a : {&xs, &zs, &vxs, &vzs}) std::sort(a->begin(), a->end());
+        auto pct = [](const std::vector<double>& a, double q) { return a[static_cast<size_t>(q * (a.size() - 1))]; };
+        const double reach = 1.0;
+        structX0 = pct(xs, 0.01); structX1 = pct(xs, 0.99);
+        structZ0 = pct(zs, 0.01); structZ1 = pct(zs, 0.99);
+        tipX0 = std::max(pct(vxs, 0.002), structX0 - reach); tipX1 = std::min(pct(vxs, 0.998), structX1 + reach);
+        tipZ0 = std::max(pct(vzs, 0.002), structZ0 - reach); tipZ1 = std::min(pct(vzs, 0.998), structZ1 + reach);
     }
 
     // ---------------------------------------------------------------- 3. planes
-    void planes() {
+    /** `mergeOffsetM` and `mergeMaxRmsM`: how far apart coplanar regions may lie, and how thick a merged one may be (0: the fit's own). */
+    void planes(double mergeOffsetM = 0, double mergeMaxRmsM = 0) {
         const auto& s = R.scan;
         const size_t T = s.triangles();
         triPlane.assign(T, -1);
@@ -810,20 +855,21 @@ private:
         }
         // merge coplanar planes
         const float cosM = static_cast<float>(std::cos(rad(P.mergeAngleDeg)));
+        const double offM = std::max(P.mergeOffsetM, mergeOffsetM), maxRmsM = std::max(P.planeMaxRmsM, mergeMaxRmsM);
         bool merged = true;
         while (merged) {
             merged = false;
             for (size_t a = 0; a < regions.size() && !merged; ++a) {
                 for (size_t b = a + 1; b < regions.size() && !merged; ++b) {
                     if (regions[a].pl.n.dot(regions[b].pl.n) < cosM) continue;
-                    if (std::fabs(regions[a].pl.dist(regions[b].c)) > P.mergeOffsetM || std::fabs(regions[b].pl.dist(regions[a].c)) > P.mergeOffsetM) continue;
+                    if (std::fabs(regions[a].pl.dist(regions[b].c)) > offM || std::fabs(regions[b].pl.dist(regions[a].c)) > offM) continue;
                     Region m;
                     m.tris = regions[a].tris;
                     m.tris.insert(m.tris.end(), regions[b].tris.begin(), regions[b].tris.end());
                     std::sort(m.tris.begin(), m.tris.end());
                     m.pl = fitRegion(m.tris, regions[a].pl.n);
                     stats(m);
-                    if (m.rms > P.planeMaxRmsM) continue;
+                    if (m.rms > maxRmsM) continue;
                     regions[a] = std::move(m);
                     regions.erase(regions.begin() + static_cast<long>(b));
                     merged = true;
@@ -1003,7 +1049,7 @@ private:
         for (size_t c = 0; c < o.v.size(); ++c) {
             if (exits[c] < 1 || enters[c] > 0) continue;
             const int i = static_cast<int>(c % static_cast<size_t>(o.nx)), k = static_cast<int>(c / static_cast<size_t>(o.nx));
-            if (o.cx(i) < structX0 || o.cx(i) > structX1 || o.cz(k) < structZ0 || o.cz(k) > structZ1) continue;
+            if (o.cx(i) < tipX0 || o.cx(i) > tipX1 || o.cz(k) < tipZ0 || o.cz(k) > tipZ1) continue;
             // one ray leaving a solid needs the scan to stand over the cell (a roof, a ceiling, a cap); two do not
             const auto& L = layers[c];
             if (exits[c] < 2 && (L.empty() || L.back().y < h + 0.01f)) continue;
@@ -1359,7 +1405,7 @@ private:
         Loop outer = fitLoop(outerRaw.pts, y0, y1, false);
         std::vector<Loop> holes;
         for (const auto& h : holesRaw) holes.push_back(fitLoop(h.pts, y0, y1, true));
-        if (lowest) { R.footprint.push_back(outer); R.footprintArea += std::fabs(sg::signedArea(tessellate(outer, P.sagittaM))); }
+        if (lowest) { R.footprint.push_back(outer); R.footprintHoles.push_back(holes); }
         addPrism(outer, holes, y0, y1, order);
     }
 
@@ -1841,10 +1887,8 @@ private:
             // the band's plan: its rectangle along the passage axis, less the bays (the passage is open at both ends, so it is no hole)
             Loop L;
             for (const auto& q : {std::pair<double, double>{sMin, tMin}, {sMax, tMin}, {sMax, tMax}, {sMin, tMax}}) { L.pts.push_back(sAx * q.first + tAx * q.second); L.bulge.push_back(0); }
-            double open = 0;
-            for (const auto& b : bays) open += (b.sR - b.sL) * (tMax - tMin);
             R.footprint.push_back(L);
-            R.footprintArea += (sMax - sMin) * (tMax - tMin) - open;
+            R.footprintHoles.emplace_back();
         }
         return true;
     }
@@ -3115,16 +3159,32 @@ inline std::string structureFitJson(const FitResult& R, const FitRequest& Q, con
         o.raw("ground", g.text());
     }
     {
+        // the plan the structure covers: its largest outer loop at the lowest band, less that loop's holes. A passage is open at
+        // both ends, so it is no hole: an arch's footprint is its whole plan, the roof over the opening included.
+        const auto toTile = [&](const Loop& L) {
+            std::vector<P2> pts;
+            for (const auto& p : tessellate(L, 0.005)) { const Vec3 w = R.frame.toWorld(Vec3(static_cast<float>(p.x), 0, static_cast<float>(p.y))); pts.push_back(P2(w.x, w.z)); }
+            return pts;
+        };
         std::vector<P2> outer;
+        std::vector<std::vector<P2>> holes;
         double area = 0;
+        size_t big = 0;
+        double bigArea = -1;
+        for (size_t i = 0; i < R.footprint.size(); ++i) {
+            const double a = std::fabs(sg::signedArea(toTile(R.footprint[i])));
+            if (a > bigArea) { bigArea = a; big = i; }
+        }
         if (!R.footprint.empty()) {
-            const auto t = tessellate(R.footprint[0], 0.005);
-            for (const auto& p : t) { const Vec3 w = R.frame.toWorld(Vec3(static_cast<float>(p.x), 0, static_cast<float>(p.y))); outer.push_back(P2(w.x, w.z)); }
-            area = std::fabs(sg::signedArea(outer));
+            outer = toTile(R.footprint[big]);
+            area = bigArea;
+            for (const auto& h : R.footprintHoles[big]) { holes.push_back(toTile(h)); area -= std::fabs(sg::signedArea(holes.back())); }
         }
         if (outer.size() < 3) outer = {P2(Q.anchorX, Q.anchorZ), P2(Q.anchorX + 0.01, Q.anchorZ), P2(Q.anchorX, Q.anchorZ + 0.01)};
         sj::Object f;
-        f.raw("outer", polyJ(outer)).n("areaM2", area);
+        f.raw("outer", polyJ(outer));
+        if (!holes.empty()) { std::string hs = "["; for (size_t i = 0; i < holes.size(); ++i) hs += (i ? "," : "") + polyJ(holes[i]); hs += "]"; f.raw("holes", hs); }
+        f.n("areaM2", std::max(0.0, area));
         o.raw("footprint", f.text());
     }
     {
