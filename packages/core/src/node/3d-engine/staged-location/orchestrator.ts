@@ -1280,7 +1280,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             type Projected = { inputs: EvidenceInput[]; refs: EvidenceImageRef[] };
             const readOrthos = (): EvidenceInput[] => {
                 const found: EvidenceInput[] = [];
-                for (const o of fit.outputs.orthos) {
+                // design §5.1: one per fitted surface at least 30% visible and 4 m² large, the 6 largest, largest first (the fitter
+                // renders every visible face; the reading has 16 image slots and its attention is for the faces that carry detail)
+                const surfaceOf = new Map(fit.surfaces.map(s => [s.id, s]));
+                const chosen = fit.outputs.orthos
+                    .map(o => ({ o, s: surfaceOf.get(o.surfaceId) }))
+                    .filter((x): x is { o: typeof x.o; s: NonNullable<typeof x.s> } => !!x.s && x.s.visibleFraction >= 0.3 && x.s.areaM2 >= 4)
+                    .sort((a, b) => b.s.areaM2 - a.s.areaM2)
+                    .slice(0, 6);
+                for (const { o } of chosen) {
                     if (!fs.existsSync(o.path)) continue;
                     const bytes = fs.readFileSync(o.path);
                     const ref = orthoRef(o, found.length, fit, bytes);
@@ -1445,12 +1453,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         provenanceLabels: [PROVENANCE.photoInferred], supersedes: [], revealAfter: bodyId ? [bodyId] : [],
                         reveal: { durationMs: 1200, stagger: 0.5, crossfadeFrom: [] }, cached: r.cached, builtAtMs: r.builtAtMs, counts: r.value.counts
                     };
-                    run.commit(layer, { source: 'scan_fit', resolvedAddress: placeValue!.formattedAddress });
+                    // every element dropped by the evidence checks: nothing was built, so there is no photo-inferred layer to show (an empty
+                    // layer labelled photo-inferred would claim detail that is not there)
+                    const built = r.value.built.length > 0;
+                    if (built) run.commit(layer, { source: 'scan_fit', resolvedAddress: placeValue!.formattedAddress });
                     const degradations = r.value.dropped.map(d => run.degrade(record('detail', 'detail_failed', {
                         part: { description: `photo-read element ${d.elementId} in slot ${d.slotId}`, slotId: d.slotId, elementId: d.elementId }, intended: 'photo-inferred detail', fellTo: 'the flat fitted face',
                         provenanceAfter: PROVENANCE.fitted, reason: d.checks.map(c => c.message).join('; '), transient: false, runId, now: now(), suffix: d.elementId
                     })));
-                    return { status: degradations.length ? 'degraded' : 'committed', value: r, source: `${r.value.built.length} photo-inferred elements built`, layers: [layer], degradations, cached: r.cached };
+                    return { status: degradations.length ? 'degraded' : 'committed', value: r, source: `${r.value.built.length} photo-inferred elements built`, layers: built ? [layer] : [], degradations, cached: r.cached };
                 },
                 degrade: async err => ({
                     status: 'degraded', source: 'no detail', reason: `the ornament build failed (${errorMessage(err)}); the fitted faces stay flat`,
