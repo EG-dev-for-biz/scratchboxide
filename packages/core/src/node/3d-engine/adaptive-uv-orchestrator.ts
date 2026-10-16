@@ -11,6 +11,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ContinuousMaterialDescriptor } from '../../common/adaptive-material-types';
 import type { AlgorithmicUvOptions, AlgorithmicUvResult, TextureImageReport } from '../spatial/AlgorithmicUvEngine';
+import { AdaptivePbrInputError, AdaptivePbrOutputError } from './adaptive-pbr-errors';
+import type {
+  BoxProjectionGroupReport,
+  BoxProjectionTextureSetReport,
+  PartMaterialAssignment
+} from './adaptive-box-projection-pbr';
+import type { BoxProjectionReport } from './glb-box-projection';
+
+export type { PartMaterialAssignment } from './adaptive-box-projection-pbr';
 
 export type AdaptiveUvStrategy =
   | 'auto'
@@ -88,10 +97,48 @@ export interface AdaptivePbrRequest {
   recipeOutputMode?: 'webgl-recipe' | 'standard-khronos' | 'both';
   materialName?: string;
   gutterPaddingPx?: number;
+  /** Square texture size per set in pixels; overrides `resolution`. Capped (see BOX_PROJECTION_CAPS). */
+  resolutionPx?: number;
+  /** Noise seed of the synthesized textures (default 42). */
+  seed?: number;
+  /**
+   * Different materials for different parts (box-projection method only). Parts no entry names take the request-level
+   * material. Names are exact node/mesh names as the scene lists them; an unknown name fails with the real names.
+   */
+  partMaterials?: PartMaterialAssignment[];
+  /** Edge length of one texture tile in metres, for every part that does not give its own. Default: derived per group, and labelled so. */
+  tileSizeMeters?: number;
+  /** Keep a primitive's own TEXCOORD_0 and write the box UVs to the next free TEXCOORD_n (default: replace TEXCOORD_0). */
+  preserveExistingUvs?: boolean;
+  /** Keep COLOR_n on the projected primitives (default: drop it, since it multiplies the new base colour). */
+  preserveVertexColors?: boolean;
+}
+
+/** What actually ran, which can differ from the strategy that was recommended or requested. */
+export interface AdaptivePbrAppliedMethod {
+  method: 'box_projection_uv' | 'recipe_hybrid_vertex_attributes' | 'algorithmic_uv_engine_pbr_decomposition' | (string & {});
+  /** True when `method` is not an implementation of `appliedStrategy` (the strategy was only used to route). */
+  differsFromStrategy: boolean;
+  note: string;
+}
+
+/** The box-projection run in full, JSON-safe. */
+export interface AdaptiveBoxProjectionSummary {
+  report: BoxProjectionReport;
+  groups: BoxProjectionGroupReport[];
+  textureSets: BoxProjectionTextureSetReport[];
+  caps: { maxDistinctTextureSets: number; maxResolutionPx: number; maxTotalTexels: number };
+  /** Everything decided here that the request did not specify. */
+  inferred: string[];
 }
 
 export interface AdaptiveUvPbrResult {
+  /** The strategy that was requested, or that the topology probe recommended: it routes the call, see `appliedMethod` for what ran. */
   appliedStrategy: Exclude<AdaptiveUvStrategy, 'auto'>;
+  appliedMethod: AdaptivePbrAppliedMethod;
+  /** Request fields that were given and that the method which ran does not use. */
+  ignoredOptions: string[];
+  boxProjection?: AdaptiveBoxProjectionSummary;
   domainClassification: 'organic' | 'nonorganic';
   topology: TopologyProbeResult;
   seamStrategy: SeamAdjustmentStrategy;
@@ -275,14 +322,29 @@ export class AdaptiveUvOrchestrator {
   }
 
   /**
-   * Universal entry point: executes scenario-adaptive PBR and UV wrapping on any 3D asset,
-   * automatically configuring the optimal UV layout, seam placement, and seam mitigation filters.
+   * Universal entry point: executes scenario-adaptive PBR and UV wrapping on any 3D asset.
+   *
+   * `appliedStrategy` is the strategy that was requested or recommended; `appliedMethod` is what ran. The
+   * 'height_blended_triplanar' and 'carrier_conformal_sheet' strategies are shader / unwrap techniques that this
+   * pipeline does not implement: they are run as a per-triangle box projection onto REPEAT-sampled textures, and
+   * the result says so. A call either returns a GLB that carries the synthesized textures or throws a typed
+   * AdaptivePbrError; it never returns the input as if it had been textured.
    */
   public static async applyAdaptivePbr(request: AdaptivePbrRequest): Promise<AdaptiveUvPbrResult> {
     const t0 = Date.now();
-    const rawBuffer = request.inputGlbBuffer || (request.inputGlbPath ? fs.readFileSync(request.inputGlbPath) : null);
+    let rawBuffer: Buffer | null = request.inputGlbBuffer || null;
+    if (!rawBuffer && request.inputGlbPath) {
+      try {
+        rawBuffer = fs.readFileSync(request.inputGlbPath);
+      } catch (err) {
+        throw new AdaptivePbrInputError(`Cannot read the input mesh ${request.inputGlbPath}: ${(err as Error).message}`, { inputGlbPath: request.inputGlbPath });
+      }
+    }
     if (!rawBuffer) {
-      throw new Error('AdaptiveUvOrchestrator requires either inputGlbPath or inputGlbBuffer.');
+      throw new AdaptivePbrInputError('AdaptiveUvOrchestrator requires either inputGlbPath or inputGlbBuffer.');
+    }
+    if (rawBuffer.length < 20 || rawBuffer.readUInt32LE(0) !== 0x46546c67) {
+      throw new AdaptivePbrInputError(`The input is not a binary glTF (GLB): ${request.inputGlbPath ?? 'buffer'} does not start with the "glTF" magic.`);
     }
 
     const topology = this.probeTopology(rawBuffer, request.domain);
@@ -296,18 +358,33 @@ export class AdaptiveUvOrchestrator {
     let materialxXml: string | undefined;
     let usdzBuffer: Buffer | undefined;
     let algorithmicUv: AlgorithmicUvResult | undefined;
+    let boxProjection: AdaptiveBoxProjectionSummary | undefined;
+    let appliedMethod: AdaptivePbrAppliedMethod;
+    const ignoredOptions: string[] = [];
+    const given = (name: keyof AdaptivePbrRequest) => request[name] !== undefined && request[name] !== null;
+    const noteIgnored = (...names: Array<keyof AdaptivePbrRequest>) => names.forEach(n => { if (given(n)) ignoredOptions.push(n); });
 
-    const baseDir = request.outputPath ? path.dirname(request.outputPath) : process.cwd();
+    const baseDir = request.outputPath ? path.dirname(request.outputPath) : undefined;
     const baseName = request.outputPath ? path.basename(request.outputPath, path.extname(request.outputPath)) : 'pbr_asset';
+    const boxProjectionOnlyFormats = formats.filter(f => f === 'materialx' || f === 'usdz');
 
     // 1. Dispatch to strategy-specific pipeline
     if (appliedStrategy === 'recipe_hybrid') {
+      this.rejectFormatsThisMethodDoesNotProduce(boxProjectionOnlyFormats, 'recipe_hybrid');
+      noteIgnored('solarDelighting', 'carrierSpinePoints', 'carrierReferenceNormal', 'continuousDescriptor', 'materialArchetype', 'partMaterials', 'tileSizeMeters', 'resolution', 'resolutionPx', 'gutterPaddingPx');
       const { HybridRecipePbrService } = await import('./hybrid-recipe-pbr-service');
       const recipeRes = await HybridRecipePbrService.processGlb(rawBuffer, {
         outputMode: request.recipeOutputMode || 'webgl-recipe'
       });
       finalGlbBuffer = recipeRes.recipeGlbBuffer;
+      appliedMethod = {
+        method: 'recipe_hybrid_vertex_attributes',
+        differsFromStrategy: false,
+        note: 'Per-vertex recipe attributes (_SBEDGEH, _SBNBRA, _SBMASK) and shared detail maps are written into the GLB for a recipe-aware shader; it adds no PBR material of its own.'
+      };
     } else if (appliedStrategy === 'elevation_stratified_conformal') {
+      this.rejectFormatsThisMethodDoesNotProduce(boxProjectionOnlyFormats, 'elevation_stratified_conformal');
+      noteIgnored('carrierSpinePoints', 'carrierReferenceNormal', 'continuousDescriptor', 'materialArchetype', 'partMaterials', 'tileSizeMeters', 'resolution', 'resolutionPx', 'gutterPaddingPx', 'recipeOutputMode');
       const { AlgorithmicUvEngine } = await import('../spatial/AlgorithmicUvEngine');
       const solar = request.solarDelighting;
       if (solar) {
@@ -366,68 +443,115 @@ export class AdaptiveUvOrchestrator {
       }
       algorithmicUv = uvResult;
       finalGlbBuffer = uvResult.outputGlbBuffer;
+      appliedMethod = {
+        method: 'algorithmic_uv_engine_pbr_decomposition',
+        differsFromStrategy: false,
+        note: `Decomposed ${uvResult.imagesProcessed} embedded baseColor image(s) into albedo / normal / ORM maps by AlgorithmicUvEngine.`
+      };
     } else {
-      // Triplanar or Carrier Conformal Sheet
-      const resMap: Record<string, number> = { '1K': 1024, '2K': 2048, '4K': 4096, '8K': 8192, '12K': 12288 };
-      const px = resMap[request.resolution || '2K'] || 2048;
-
-      const { NativeMaterialPbrService } = await import('./native-material-pbr-service');
-      const nativePbr = new NativeMaterialPbrService();
-      const pbrTextures = await nativePbr.synthesizePbrTextureSet({
-        descriptor: request.continuousDescriptor,
-        archetype: request.materialArchetype || (topology.domainClassification === 'organic' ? 'SKIN_EPIDERMIS_CALIBRATED' : 'INDIANA_LIMESTONE_HONED'),
-        width: px,
-        height: px,
-        saveRawBuffers: true
-      });
-
-      finalGlbBuffer = rawBuffer;
-
-      // 2. Generate MaterialX if requested
-      if (formats.includes('materialx')) {
-        const { MaterialXService } = await import('./materialx-service');
-        const albedoFile = `${baseName}_Albedo.png`;
-        const normalFile = `${baseName}_Normal.png`;
-        const ormFile = `${baseName}_ORM.png`;
-        const mtlxPath = path.join(baseDir, `${baseName}.mtlx`);
-
-        materialxXml = MaterialXService.exportMaterialX({
-          materialName: request.materialName || baseName,
-          descriptor: request.continuousDescriptor,
-          outputPath: mtlxPath,
-          textures: {
-            albedoFileName: albedoFile,
-            normalFileName: normalFile,
-            ormFileName: ormFile
-          }
-        }).xmlContent;
-        outputFiles['materialx'] = mtlxPath;
+      // 'height_blended_triplanar' and 'carrier_conformal_sheet': box projection onto synthesized, REPEAT-sampled textures
+      noteIgnored('gutterPaddingPx', 'carrierSpinePoints', 'carrierReferenceNormal', 'solarDelighting', 'recipeOutputMode');
+      let resolutionPx: number;
+      if (request.resolutionPx !== undefined) {
+        resolutionPx = request.resolutionPx;
+      } else {
+        const { resolutionTierToPx } = await import('./adaptive-box-projection-pbr');
+        resolutionPx = resolutionTierToPx(request.resolution || '2K');
       }
+      const { runBoxProjectionPbr } = await import('./adaptive-box-projection-pbr');
+      const run = await runBoxProjectionPbr({
+        glb: rawBuffer,
+        materialArchetype: request.materialArchetype,
+        descriptor: request.continuousDescriptor,
+        resolutionPx,
+        seed: request.seed,
+        tileSizeMeters: request.tileSizeMeters,
+        partMaterials: request.partMaterials,
+        preserveExistingUvs: request.preserveExistingUvs,
+        preserveVertexColors: request.preserveVertexColors
+      });
+      finalGlbBuffer = run.glbBuffer;
+      boxProjection = {
+        report: run.report,
+        groups: run.groups,
+        textureSets: run.textureSets,
+        caps: { maxDistinctTextureSets: run.caps.maxDistinctTextureSets, maxResolutionPx: run.caps.maxResolutionPx, maxTotalTexels: run.caps.maxTotalTexels },
+        inferred: run.inferred
+      };
+      const tiles = run.groups.map(g => `${g.tileSize.meters.toPrecision(3)} m`);
+      appliedMethod = {
+        method: 'box_projection_uv',
+        differsFromStrategy: true,
+        note: `${appliedStrategy === 'height_blended_triplanar' ? 'A height-blended triplanar shader' : 'A carrier-frame conformal sheet'} is not implemented here, so the textures were applied by per-triangle dominant-axis box projection in world metres (tile ${tiles.join(' / ')}, ${resolutionPx}px per set, ${run.textureSets.length} set(s), ${Math.round(resolutionPx / run.groups[0].tileSize.meters)} texels per metre on the first group). Where a smooth surface changes its dominant axis the texture direction changes; there is no blend across that edge.`
+      };
 
-      // 3. Generate USDZ if requested
-      if (formats.includes('usdz')) {
+      // MaterialX / USDZ describe the material (not the mesh); one per texture set, with the PNGs they reference beside them
+      if (boxProjectionOnlyFormats.length) {
+        if (!request.outputPath || !baseDir) {
+          throw new AdaptivePbrOutputError(`Formats ${boxProjectionOnlyFormats.join(', ')} write files next to the output and need outputPath.`);
+        }
+        const { MaterialXService } = await import('./materialx-service');
         const { UsdzPacker } = await import('./usdz-packer');
-        const usdzRes = UsdzPacker.packMaterialUsdz({
-          materialName: request.materialName || baseName,
-          descriptor: request.continuousDescriptor,
-          albedoPng: pbrTextures.albedoRgb,
-          normalPng: pbrTextures.normalRgb,
-          ormPng: pbrTextures.ormRgb,
-          outputPath: path.join(baseDir, `${baseName}.usdz`)
+        run.texturePngs.forEach((set, i) => {
+          const single = run.texturePngs.length === 1;
+          const prefix = single ? baseName : `${baseName}_${set.label}`;
+          const suffix = (kind: string) => (single ? kind : `${kind}_${set.label}`);
+          const albedoFile = `${prefix}_Albedo.png`;
+          const normalFile = `${prefix}_Normal.png`;
+          const ormFile = `${prefix}_ORM.png`;
+          this.writeOutputFile(path.join(baseDir, albedoFile), set.albedo);
+          this.writeOutputFile(path.join(baseDir, normalFile), set.normal);
+          this.writeOutputFile(path.join(baseDir, ormFile), set.orm);
+          outputFiles[suffix('albedo')] = path.join(baseDir, albedoFile);
+          outputFiles[suffix('normal')] = path.join(baseDir, normalFile);
+          outputFiles[suffix('orm')] = path.join(baseDir, ormFile);
+          const descriptor = set.descriptor as ContinuousMaterialDescriptor;
+          if (formats.includes('materialx')) {
+            const mtlxPath = path.join(baseDir, `${prefix}.mtlx`);
+            try {
+              const mtlx = MaterialXService.exportMaterialX({
+                materialName: single ? (request.materialName || baseName) : `${request.materialName || baseName}_${set.label}`,
+                descriptor,
+                outputPath: mtlxPath,
+                textures: { albedoFileName: albedoFile, normalFileName: normalFile, ormFileName: ormFile }
+              });
+              if (i === 0) materialxXml = mtlx.xmlContent;
+            } catch (err) {
+              throw new AdaptivePbrOutputError(`Could not write ${mtlxPath}: ${(err as Error).message}`, { path: mtlxPath });
+            }
+            outputFiles[suffix('materialx')] = mtlxPath;
+          }
+          if (formats.includes('usdz')) {
+            const usdzPath = path.join(baseDir, `${prefix}.usdz`);
+            try {
+              const usdz = UsdzPacker.packMaterialUsdz({
+                materialName: single ? (request.materialName || baseName) : `${request.materialName || baseName}_${set.label}`,
+                descriptor,
+                albedoPng: set.albedo,
+                normalPng: set.normal,
+                ormPng: set.orm,
+                outputPath: usdzPath
+              });
+              if (i === 0) usdzBuffer = usdz.usdzBuffer;
+            } catch (err) {
+              throw new AdaptivePbrOutputError(`Could not write ${usdzPath}: ${(err as Error).message}`, { path: usdzPath });
+            }
+            outputFiles[suffix('usdz')] = usdzPath;
+          }
         });
-        usdzBuffer = usdzRes.usdzBuffer;
-        outputFiles['usdz'] = path.join(baseDir, `${baseName}.usdz`);
       }
     }
 
     if (finalGlbBuffer && request.outputPath) {
-      fs.mkdirSync(baseDir, { recursive: true });
-      fs.writeFileSync(request.outputPath, finalGlbBuffer);
+      this.writeOutputFile(request.outputPath, finalGlbBuffer);
       outputFiles['glb'] = request.outputPath;
     }
 
     return {
       appliedStrategy,
+      appliedMethod,
+      ignoredOptions,
+      boxProjection,
       domainClassification: topology.domainClassification,
       topology,
       seamStrategy: topology.seamStrategy,
@@ -438,5 +562,24 @@ export class AdaptiveUvOrchestrator {
       executionTimeMs: Date.now() - t0,
       algorithmicUv
     };
+  }
+
+  /** MaterialX / USDZ are produced from synthesized texture sets, which only the box-projection method has. */
+  private static rejectFormatsThisMethodDoesNotProduce(formats: string[], strategy: string): void {
+    if (formats.length) {
+      throw new AdaptivePbrOutputError(
+        `Format ${formats.join(', ')} is exported from synthesized texture sets, which strategy '${strategy}' does not create. Ask for 'glb', or use 'height_blended_triplanar' / 'carrier_conformal_sheet'.`,
+        { formats, strategy }
+      );
+    }
+  }
+
+  private static writeOutputFile(file: string, data: Buffer): void {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, data);
+    } catch (err) {
+      throw new AdaptivePbrOutputError(`Could not write ${file}: ${(err as Error).message}`, { path: file });
+    }
   }
 }
