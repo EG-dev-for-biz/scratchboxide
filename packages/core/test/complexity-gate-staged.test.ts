@@ -77,6 +77,24 @@ describe('GeometricComplexityGate exemptions', () => {
         }
     });
 
+    it('exempts SB-Veggie trees grown to measured crowns, with the crown count as its basis, and refuses a count that was made up', () => {
+        // an isolated arch: the scan and 3 trees (3,418 vertices) grown to the crowns measured in it
+        const m = metrics([layer('stg-90e96133-l2', 3107), { ...layer('stg-788091ab-l5', 3418), tag: 'grown to the measured crown' }]);
+        const scan = { scanDerived: { submeshes: ['stg-90e96133-l2'], label: 'remeshed' as const, leafGeometricErrorM: 2.0064 } };
+        const without = GeometricComplexityGate.evaluate(m, { exemptions: [scan] });
+        expect(without.passed).toBe(false);
+        expect(without.violations[0]).toBe('Insufficient geometric density: scene has 3,418 non-exempt vertices, minimum required is 25,000 vertices.');
+        const ok = GeometricComplexityGate.evaluate(m, { exemptions: [scan, { measuredCrowns: { submeshes: ['stg-788091ab-l5'], crowns: 3 } }] });
+        expect(ok.passed).toBe(true);
+        expect(ok.exemptions[1]).toBe("vertex floor: SB-Veggie trees grown to 3 measured crowns (3,418 vertices; each tree's position, extent and height come from the tile scan)");
+        for (const crowns of [0, -2, 1.5, NaN]) {
+            const bad = GeometricComplexityGate.evaluate(m, { exemptions: [scan, { measuredCrowns: { submeshes: ['stg-788091ab-l5'], crowns } }] });
+            expect(bad.passed).toBe(false);
+            expect(bad.exemptions).toHaveLength(1);
+            expect(bad.exemptionsRefused[0]).toMatch(/^measured crowns stg-788091ab-l5: .* is not a whole number of at least 1$/);
+        }
+    });
+
     it('counts only the submeshes no exemption covers, and keeps the banned-primitive and kernel checks', () => {
         const m = metrics([layer('stg-90e96133-l2', 3107), { name: 'statue', vertexCount: 900, triangleCount: 1700, tag: 'generated' } as any]);
         const r = GeometricComplexityGate.evaluate(m, { exemptions: [{ scanDerived: { submeshes: ['stg-90e96133-l2'], label: 'remeshed', leafGeometricErrorM: 2 } }] });

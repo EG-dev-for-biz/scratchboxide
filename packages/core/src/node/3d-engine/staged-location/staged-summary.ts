@@ -33,6 +33,8 @@ export interface StagedSummaryInput extends Omit<StagedLocationResult, 'digest' 
     treesPutBack?: { triangles: number; crowns: number; reason: string };
     /** Elements dropped because their evidence does not show or resolve them (rules 9-12). */
     droppedNotResolvable?: number;
+    /** Vertex-floor exemptions the gate asked for and refused, with why: their layers were counted against the floor. */
+    exemptionsRefused?: string[];
 }
 
 /** "1,234". */
@@ -45,8 +47,14 @@ function stage(input: Pick<StagedSummaryInput, 'stages'>, id: string): StageSumm
     return input.stages.find(s => s.stage === id);
 }
 
-function committed(input: Pick<StagedSummaryInput, 'stages'>, id: string): boolean {
-    return stage(input, id)?.status === 'committed';
+/**
+ * A stage's layer is on screen: the stage committed, or degraded and still left a layer. A degraded stage is a simpler
+ * version of the same data (a remeshed scan, a flattened scan, trees with a crown kept as scanned), not an absent one,
+ * so what the headline says is mounted follows the layers and never the status alone.
+ */
+function mounted(input: Pick<StagedSummaryInput, 'stages'>, id: string): boolean {
+    const s = stage(input, id);
+    return !!s && (s.status === 'committed' || s.status === 'degraded') && s.layerIds.length > 0;
 }
 
 function thinkingWords(model: VisionModelUse): string {
@@ -82,7 +90,9 @@ function codeDegradation(d: DegradationRecord): string {
 export function stagedDigest(input: StagedSummaryInput): string {
     const max = STAGED_SUMMARY_LIMITS.digestMaxChars;
     const done = input.stages.filter(s => s.status === 'committed').map(s => s.stage);
-    const head = `Staged build ${input.status}: ${done.length ? `${done.join(', ')} committed` : 'nothing committed'}`;
+    // a degraded stage that left a layer is on screen even when no stage committed whole
+    const shown = input.stages.filter(s => s.status === 'degraded' && mounted(input, s.stage)).map(s => s.stage);
+    const head = `Staged build ${input.status}: ${done.length ? `${done.join(', ')} committed` : shown.length ? `${shown.join(', ')} mounted, degraded` : 'nothing committed'}`;
     const retryStages = [...new Set(input.degradations.filter(d => d.transient && d.retry).map(d => d.retry!.args.retryStage))];
     const stopped = input.stages.filter(s => s.status === 'stopped').map(s => s.stage);
     const retry = `retry retryRunId ${input.runId}${retryStages.length ? ` stage ${retryStages[0]}` : stopped.length ? ` stage ${stopped[0]}` : ''}.`;
@@ -113,21 +123,23 @@ export function mountedSentence(input: StagedSummaryInput): string {
     if (p.resolvedAddress && p.resolvedAddress !== p.query) paren.push(p.resolvedAddress);
     if (input.structure) paren.push(`${m1(input.structure.geocodeToStructureM)} from the geocoded point`);
     const name = paren.length ? `${p.query} (${paren.join(', ')})` : p.query;
+    // a district the leaf-tile cap cut short says how far it reached and how far was asked
+    const asked = input.extraction.requestedRadiusM;
+    const capped = asked !== undefined && input.extraction.radiusM < asked - 0.5;
     const extent = input.extraction.sizedTo === 'structure'
         ? `, extracted ${m1(input.extraction.radiusM)} around the structure`
-        : ` within ${n(input.extraction.radiusM)} m`;
+        : capped ? ` within ${n(input.extraction.radiusM)} m (${n(asked!)} m asked for; the leaf-tile cap stopped it short)` : ` within ${n(input.extraction.radiusM)} m`;
     const layers: string[] = [];
-    const remesh = stage(input, 'remesh');
-    if (remesh?.status === 'committed') layers.push('the remeshed scan');
-    else if (input.degradations.some(d => d.stage === 'remesh' && d.provenanceAfter === 'scan-flattened')) layers.push('the scan with its facades flattened');
-    else if (committed(input, 'tiles')) layers.push('the scan as downloaded');
+    if (mounted(input, 'remesh')) {
+        layers.push(input.degradations.some(d => d.stage === 'remesh' && d.provenanceAfter === 'scan-flattened') ? 'the scan with its facades flattened' : 'the remeshed scan');
+    } else if (mounted(input, 'tiles')) layers.push('the scan as downloaded');
     const fit = input.structureFit;
-    if (fit?.accepted && committed(input, 'fit')) {
+    if (fit?.accepted && mounted(input, 'fit')) {
         const unobserved = fit.unobservedFaceAreaM2 > 0 ? `; ${fit.unobservedFaceAreaM2.toFixed(1)} m² of faces placed by the fit without scan samples` : '';
         layers.push(`a scan-fitted rebuild of ${n(fit.primitives)} primitives (${cm(fit.scanToFitRmsM)} rms to the scan, ${Math.round(fit.coverage * 100)}% of the visible surface${unobserved})`);
     }
-    if (input.ornament && input.ornament.elements > 0 && committed(input, 'detail')) layers.push(`${n(input.ornament.elements)} photo-inferred details`);
-    if (input.trees && input.trees.count > 0 && committed(input, 'trees')) layers.push(`${n(input.trees.count)} trees grown to the measured crown`);
+    if (input.ornament && input.ornament.elements > 0 && mounted(input, 'detail')) layers.push(`${n(input.ornament.elements)} photo-inferred details`);
+    if (input.trees && input.trees.count > 0 && !input.treesPutBack && mounted(input, 'trees')) layers.push(`${n(input.trees.count)} trees grown to the measured crown`);
     if (input.treesPutBack) layers.push('the scanned trees put back as scanned');
     const list = layers.length > 1 ? `${layers.slice(0, -1).join(', ')} and ${layers[layers.length - 1]}` : layers[0] ?? 'nothing yet';
     return `${name} in clay from Google 3D Tiles${extent}: ${list}.`;
@@ -205,7 +217,7 @@ export function resolutionSentence(input: StagedSummaryInput): string {
 
 /** Rule "remesh-changes". */
 export function remeshChangesSentence(input: StagedSummaryInput): string {
-    return input.remeshNote && committed(input, 'remesh') ? `What the remesh changed that the scan did not hold: ${input.remeshNote.replace(/\.$/, '')}.` : '';
+    return input.remeshNote && mounted(input, 'remesh') ? `What the remesh changed that the scan did not hold: ${input.remeshNote.replace(/\.$/, '')}.` : '';
 }
 
 /** Rule "timings-and-cache". */
@@ -233,8 +245,11 @@ export function stopSentence(input: StagedSummaryInput): string {
 /** Rule "gate-exemptions". */
 export function gateSentence(input: StagedSummaryInput): string {
     const g = input.complexityGate;
-    if (!g.exemptions.length) return '';
-    return `Exempt from the vertex floor, as measured geometry: ${g.exemptions.join('; ')}.`;
+    const exempt = g.exemptions.length ? `Exempt from the vertex floor, as measured geometry: ${g.exemptions.join('; ')}.` : '';
+    // the verdict is reported, never thrown: a staged build degrades rather than fails the gate
+    const verdict = g.passed ? '' : `The geometric complexity gate did not pass (${g.violations.map(v => v.replace(/\.$/, '')).join('; ')}).`;
+    const refused = input.exemptionsRefused?.length ? `Not exempt from the vertex floor: ${input.exemptionsRefused.join('; ')}.` : '';
+    return [exempt, refused, verdict].filter(Boolean).join(' ');
 }
 
 function upperFirst(s: string): string { return s ? s[0].toUpperCase() + s.slice(1) : s; }

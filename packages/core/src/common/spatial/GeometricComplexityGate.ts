@@ -86,7 +86,13 @@ export type ComplexityExemption =
     /** Google 3D Tiles as scanned, flattened or remeshed: the tiles' own density at their leaf error. */
     | { scanDerived: { submeshes: string[]; label: ProvenanceLabel; leafGeometricErrorM: number } }
     /** A scan-fitted rebuild (fitted body, outlines, pass-through, its detail), exempt only on a valid, accepted StructureFit. */
-    | { measuredRebuild: { submeshes: string[]; structureFit: StructureFit; structureFitSha256: string } };
+    | { measuredRebuild: { submeshes: string[]; structureFit: StructureFit; structureFitSha256: string } }
+    /**
+     * SB-Veggie trees grown inside crowns measured in the tile scan: each tree's position, extent and height are the
+     * scan's, so the layer's vertex count follows the crowns measured and is never padded. Exempt only for a positive
+     * whole number of crowns, which the caller reads from the strip's crown list.
+     */
+    | { measuredCrowns: { submeshes: string[]; crowns: number } };
 
 export interface ComplexityGateReport {
     passed: boolean;
@@ -171,6 +177,16 @@ export class GeometricComplexityGate {
                 if (!names.length) continue;
                 names.forEach(n => exemptNames.add(n));
                 exemptions.push(`vertex floor: scan-derived layer (${countOf(names).toLocaleString()} vertices, the tiles' own density at leaf error ${e.scanDerived.leafGeometricErrorM.toFixed(1)} m, ${e.scanDerived.label})`);
+            } else if ('measuredCrowns' in e) {
+                const names = e.measuredCrowns.submeshes.filter(n => byName.has(n));
+                if (!names.length) continue;
+                const crowns = e.measuredCrowns.crowns;
+                if (!Number.isInteger(crowns) || crowns < 1) {
+                    exemptionsRefused.push(`measured crowns ${names.join(', ')}: ${Number.isFinite(crowns) ? crowns : 'no'} measured crowns is not a whole number of at least 1`);
+                    continue;
+                }
+                names.forEach(n => exemptNames.add(n));
+                exemptions.push(`vertex floor: SB-Veggie trees grown to ${crowns.toLocaleString()} measured crown${crowns === 1 ? '' : 's'} (${countOf(names).toLocaleString()} vertices; each tree's position, extent and height come from the tile scan)`);
             } else {
                 const names = e.measuredRebuild.submeshes.filter(n => byName.has(n));
                 if (!names.length) continue;

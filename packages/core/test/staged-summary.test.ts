@@ -196,3 +196,62 @@ describe('staged-summary', () => {
         void ornamentSpec;
     });
 });
+
+describe('the headline follows the layers on screen, not the stage status alone', () => {
+    const stage = (id: string, status: StageSummaryStatus, layerIds: string[] = []) =>
+        ({ stage: id, order: 0, title: id, source: '', status, layerIds, timings: { startedAtMs: 0, cached: false }, degradationIds: [] }) as StagedSummaryInput['stages'][number];
+    type StageSummaryStatus = StagedSummaryInput['stages'][number]['status'];
+    const treesOf = (count: number) => ({
+        outcome: `${count} of 3 trees rebuilt as SB-Veggie`, measured: 3, count, notRegrowable: 3 - count, keptAsScanned: [], shortOfCrown: [], offGround: [],
+        cutAtBoundary: 0, belowMinHeight: 0, cutRemoved: 0, cutCanopyRemovedM2: 0, canopyTakenWithTreesM2: 0, treeCanopyAreaM2: 120, filledCanopyAreaM2: 120, reachingBoundary: 0,
+        triangles: 9000, triangleBudget: 1_500_000, canopyAreaM2: 150, strip: { removedTriangles: 900, skirtAreaM2: {}, skirtMaxHeightM: {} }
+    }) as any;
+    const district = (stages: StagedSummaryInput['stages'], over: Partial<StagedSummaryInput> = {}) => {
+        const i = input({ structure: undefined, structureFit: undefined, ornament: undefined, extraction: { ...input().extraction, sizedTo: 'request', radiusM: 60 }, stages, degradations: [], ...over });
+        i.place = { ...i.place, query: 'Central Park', resolvedAddress: 'Central Park' };
+        return i;
+    };
+    const headline = (i: StagedSummaryInput) => summarizeStagedBuild(i).summary.split('\n')[0].split('. ')[0];
+
+    it('names trees that are mounted while one crown is kept as scanned (the trees stage degraded)', () => {
+        const i = district([stage('tiles', 'committed', ['l1']), stage('remesh', 'committed', ['l2']), stage('trees', 'degraded', ['l5'])], { trees: treesOf(2) });
+        expect(headline(i)).toBe('Central Park in clay from Google 3D Tiles within 60 m: the remeshed scan and 2 trees grown to the measured crown');
+        // a tree stage that left no layer (every crown kept as scanned) names none
+        expect(headline(district([stage('tiles', 'committed', ['l1']), stage('remesh', 'committed', ['l2']), stage('trees', 'degraded')], { trees: treesOf(0) })))
+            .toBe('Central Park in clay from Google 3D Tiles within 60 m: the remeshed scan');
+        // and the scanned trees put back are not called grown
+        const putBack = district([stage('tiles', 'committed', ['l1']), stage('remesh', 'committed', ['l2']), stage('trees', 'degraded', ['l5x'])], { trees: treesOf(2), treesPutBack: { triangles: 100, crowns: 3, reason: 'plant failed' } });
+        expect(headline(putBack)).toBe('Central Park in clay from Google 3D Tiles within 60 m: the remeshed scan and the scanned trees put back as scanned');
+    });
+
+    it('names the scan as downloaded while the tiles stage is degraded and the remesh did not run, and the digest says what is mounted', () => {
+        const i = district([stage('tiles', 'degraded', ['l1']), stage('remesh', 'stopped')]);
+        expect(headline(i)).toBe('Central Park in clay from Google 3D Tiles within 60 m: the scan as downloaded');
+        expect(stagedDigest(i)).toMatch(/^Staged build degraded: tiles mounted, degraded;/);
+        expect(stagedDigest(district([stage('tiles', 'stopped'), stage('remesh', 'stopped')]))).toMatch(/^Staged build degraded: nothing committed;/);
+        expect(headline(district([stage('tiles', 'stopped')]))).toBe('Central Park in clay from Google 3D Tiles within 60 m: nothing yet');
+    });
+
+    it('names a remeshed or flattened scan from a degraded remesh stage, and details from a degraded detail stage', () => {
+        const mismatch: DegradationRecord = { ...input().degradations[1], id: 'd-remesh-isolate_mismatch', stage: 'remesh', reasonCode: 'isolate_mismatch', provenanceAfter: 'remeshed' };
+        expect(headline(district([stage('tiles', 'committed', ['l1']), stage('remesh', 'degraded', ['l2'])], { degradations: [mismatch] })))
+            .toBe('Central Park in clay from Google 3D Tiles within 60 m: the remeshed scan');
+        const flattened: DegradationRecord = { ...mismatch, id: 'd-remesh-remesh_failed', reasonCode: 'remesh_failed', provenanceAfter: 'scan-flattened' };
+        expect(headline(district([stage('tiles', 'committed', ['l1']), stage('remesh', 'degraded', ['l2'])], { degradations: [flattened] })))
+            .toBe('Central Park in clay from Google 3D Tiles within 60 m: the scan with its facades flattened');
+        const detail = withDetail();
+        detail.stages = detail.stages.map(s => s.stage === 'detail' ? { ...s, status: 'degraded' as const } : s);
+        expect(summarizeStagedBuild(detail).summary).toContain('and 14 photo-inferred details');
+    });
+
+    it('states a gate that did not pass and the exemption it refused, instead of leaving the verdict out', () => {
+        const failing = input({
+            complexityGate: { passed: false, totalVertices: 78, totalTriangles: 26, exemptions: [], violations: ['Insufficient geometric density: scene has 78 non-exempt vertices, minimum required is 25,000 vertices.'] },
+            exemptionsRefused: ['measured crowns stg-788091ab-l5: 0 measured crowns is not a whole number of at least 1']
+        });
+        const s = summarizeStagedBuild(failing).summary;
+        expect(s).toContain('Not exempt from the vertex floor: measured crowns stg-788091ab-l5: 0 measured crowns is not a whole number of at least 1.');
+        expect(s).toContain('The geometric complexity gate did not pass (Insufficient geometric density: scene has 78 non-exempt vertices, minimum required is 25,000 vertices).');
+        expect(summarizeStagedBuild(input()).summary).not.toContain('did not pass');
+    });
+});

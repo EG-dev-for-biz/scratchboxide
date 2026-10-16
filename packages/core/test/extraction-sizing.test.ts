@@ -196,6 +196,42 @@ describe('the containment loop', () => {
         expect(r.notes[0].error).toBe('canopy subcommand exited 1');
     });
 
+    it('a containment round that fails to extract leaves the district at the last radius that came back, not a hard failure', async () => {
+        const world = [...groundGrid(200), ...building(-2, 60, -10, 10, 15)];
+        const ex = worldExtractor(world, 'wide-fail');
+        const r = await sizeExtraction({ extract: async (radius, round) => { if (round >= 2) throw new Error('ECONNRESET while fetching tiles'); return ex.extract(radius); } });
+        expect(r.sizedTo).toBe('district-fallback');
+        expect(r.structure).toBeUndefined();
+        expect(ex.calls).toEqual([25]);
+        expect(r.radiusM).toBe(25);
+        expect(r.extraction.radiusM).toBe(25);
+        expect(r.rounds).toBe(1);
+        const note = r.notes.find(n => n.reasonCode === 'containment_failed')!;
+        expect(note.error).toBe('ECONNRESET while fetching tiles');
+        expect(note.reason).toMatch(/^extracting \d+ m to contain the structure failed \(ECONNRESET while fetching tiles\); showing the district at 25 m around it without a rebuild$/);
+    });
+
+    it('the first extraction failing is thrown (there is no real data), and so is a failure caused by Stop', async () => {
+        await expect(sizeExtraction({ extract: async () => { throw new Error('no tiles here'); } })).rejects.toThrow('no tiles here');
+        const stop = new AbortController();
+        const world = [...groundGrid(200), ...building(-2, 60, -10, 10, 15)];
+        const ex = worldExtractor(world, 'wide-stop');
+        await expect(sizeExtraction({
+            signal: stop.signal,
+            extract: async (radius, round) => { if (round >= 2) { stop.abort(); throw new Error('aborted'); } return ex.extract(radius); }
+        })).rejects.toThrow('aborted');
+    });
+
+    it('with no structure at the place and the 60 m district failing to extract, the area already extracted stands', async () => {
+        const ex = worldExtractor([...groundGrid(100), ...crown(0, 0, 3, 0.4)], 'park-fail');
+        const r = await sizeExtraction({ extract: async (radius, round) => { if (round >= 2) throw new Error('socket hang up'); return ex.extract(radius); } });
+        expect(r.sizedTo).toBe('district-fallback');
+        expect(r.radiusM).toBe(25);
+        expect(r.extraction.radiusM).toBe(25);
+        expect(r.notes.map(n => n.reasonCode)).toEqual(['canopy_not_masked', 'no_structure_at_anchor', 'district_extract_failed']);
+        expect(r.notes[2]).toMatchObject({ error: 'socket hang up', reason: 'extracting the 60 m district failed (socket hang up); showing the 25 m already extracted around the place' });
+    });
+
     it('sizes the next radius from the footprint and grows the outline for the strip ROI', () => {
         expect(containmentRadius({ bounds: { minX: -10, maxX: 30, minZ: -5, maxZ: 5 } })).toBe(Math.ceil(Math.hypot(30, 5) + Math.max(8, 0.25 * Math.hypot(40, 10))));
         const grown = grownOutline([[0, 0], [10, 0], [10, 10], [0, 10]], 12);

@@ -237,10 +237,12 @@ export interface SizingDeps<E extends SizingExtraction> {
     /** tile_vegetation's canopy classifier on a textured extraction; absent when the engine lacks it. */
     canopy?(texturedGlb: string): Promise<CanopyMask>;
     onProgress?(message: string): void;
+    /** A Stop or a time limit: an extraction that fails because of it is never turned into a district fallback. */
+    signal?: AbortSignal;
 }
 
 export interface SizingNote {
-    reasonCode: 'canopy_not_masked' | 'no_structure_at_anchor' | 'containment_failed' | (string & {});
+    reasonCode: 'canopy_not_masked' | 'no_structure_at_anchor' | 'containment_failed' | 'district_extract_failed' | (string & {});
     reason: string;
     error?: string;
 }
@@ -266,10 +268,26 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
     const timings: Record<string, number> = {};
     let radius = PROBE_RADIUS_M;
     let canopyAvailable = !!deps.canopy;
+    /** The last extraction that succeeded: real data the call can fall back to when a later, larger one fails. */
+    let held: { extraction: E; radius: number; round: number } | undefined;
     for (let round = 1; ; round++) {
         let t = now();
         deps.onProgress?.(round === 1 ? `Extracting a ${radius} m probe around the place` : `Extracting ${radius} m to contain the whole structure (round ${round})`);
-        const extraction = await deps.extract(radius, round);
+        let extraction: E;
+        try {
+            extraction = await deps.extract(radius, round);
+        } catch (err) {
+            // the first extraction has nothing to fall back to (no tile coverage); a larger one that fails leaves the district
+            // at the last radius that did come back, which is real data
+            if (!held || deps.signal?.aborted) throw err;
+            notes.push({
+                reasonCode: 'containment_failed',
+                reason: `extracting ${radius} m to contain the structure failed (${(err as Error).message}); showing the district at ${held.radius} m around it without a rebuild`,
+                error: (err as Error).message
+            });
+            return { extraction: held.extraction, radiusM: held.radius, rounds: held.round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+        }
+        held = { extraction, radius, round };
         timings[`extract_r${radius}`] = now() - t;
         t = now();
         const scan = loadScanMesh(extraction.texturedGlb);
@@ -294,8 +312,20 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
         const structure = pickStructure(scan, ground, { canopyCellsMasked: canopyCells });
         if (!structure) {
             notes.push({ reasonCode: 'no_structure_at_anchor', reason: `no structure ${STRUCTURE_MIN_HEIGHT_M} m or taller stands within ${STRUCTURE_SEED_SEARCH_M} m of the place; showing the area around it` });
-            const district = radius === NO_STRUCTURE_DISTRICT_RADIUS_M ? extraction : await deps.extract(NO_STRUCTURE_DISTRICT_RADIUS_M, round + 1);
-            return { extraction: district, radiusM: NO_STRUCTURE_DISTRICT_RADIUS_M, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+            if (radius === NO_STRUCTURE_DISTRICT_RADIUS_M) return { extraction, radiusM: radius, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+            try {
+                const district = await deps.extract(NO_STRUCTURE_DISTRICT_RADIUS_M, round + 1);
+                return { extraction: district, radiusM: NO_STRUCTURE_DISTRICT_RADIUS_M, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+            } catch (err) {
+                if (deps.signal?.aborted) throw err;
+                // the wider area did not come back: the area already extracted stands in, whole, as it was downloaded
+                notes.push({
+                    reasonCode: 'district_extract_failed',
+                    reason: `extracting the ${NO_STRUCTURE_DISTRICT_RADIUS_M} m district failed (${(err as Error).message}); showing the ${radius} m already extracted around the place`,
+                    error: (err as Error).message
+                });
+                return { extraction, radiusM: radius, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+            }
         }
         if (!touchesEdge(structure, ground)) {
             return { extraction, radiusM: radius, rounds: round, sizedTo: 'structure', structure, ground, scan, unmaskedTop: unmasked.top, notes, timingsMs: timings };
