@@ -212,6 +212,66 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         expect(hues.filter(h => hueDistance(h, photoHue) < 22).length + hues.filter(h => hueDistance(h, remeshHue) < 22).length).toBeGreaterThanOrEqual(hues.length * 0.8);
     });
 
+    test('an entity nobody planned for: an unlisted stage, layer code, kind and label reveal and shade with no code change', async () => {
+        // The trees GLB with its stage, reveal kind and provenance label replaced by words no code or legend knows.
+        const buf = fixture.glbs.l5;
+        const jl = buf.readUInt32LE(12);
+        const json = JSON.parse(buf.toString('utf8', 20, 20 + jl));
+        const bin = buf.subarray(20 + jl + 8, 20 + jl + 8 + buf.readUInt32LE(20 + jl));
+        let changed = 0;
+        for (const n of json.nodes ?? []) {
+            const sb = n.extras?.sb;
+            if (!sb) continue;
+            sb.stage = 'geothermal-spore-towers'; sb.revealKind = 'bloom'; sb.provenance.label = 'methane-geyser-inferred';
+            changed++;
+        }
+        expect(changed, 'the fixture trees carry staged node extras').toBeGreaterThan(0);
+        let j = Buffer.from(JSON.stringify(json));
+        j = Buffer.concat([j, Buffer.alloc((4 - (j.length % 4)) % 4, 0x20)]);
+        const head = Buffer.alloc(12); head.writeUInt32LE(0x46546c67, 0); head.writeUInt32LE(2, 4); head.writeUInt32LE(12 + 8 + j.length + 8 + bin.length, 8);
+        const jh = Buffer.alloc(8); jh.writeUInt32LE(j.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
+        const bh = Buffer.alloc(8); bh.writeUInt32LE(bin.length, 0); bh.writeUInt32LE(0x004e4942, 4);
+        const alien = Buffer.concat([head, jh, j, bh, bin]);
+
+        const id = objectIdOf('l5');
+        const st = fixtureState([L('l5', { revealAfter: [], url: '/models/alien.glb' })], { runState: 'running' });
+        const label = 'methane-geyser-inferred', stage = 'geothermal-spore-towers';
+        st.layers = st.layers.map(l => ({ ...l, stage, layer: 'l9', provenance: { ...l.provenance, label }, provenanceLabels: [label] }));
+        st.stages = st.stages.map(x => (x.stage === 'trees' ? { ...x, stage, title: 'Geothermal spore towers', source: 'grown from the crown measured in the scan' } : x));
+        page.serve('alien.glb', alien);
+        await page.eval(`sbHarness.mount(${JSON.stringify({ ...stagedSceneData(st), objects: [] })})`);
+        await page.waitFor('sbHarness.ready()');
+        await page.step(6, STEP);
+        await page.eval('sbHarness.setReference()');
+        await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(st))})`);
+        await page.waitFor(`sbHarness.attached(${JSON.stringify(id)})`, 30_000, 'alien layer attached');
+        expect(await coverage(page), 'nothing on the first frame after attach').toBe(0);
+        const cov: number[] = [];
+        for (const p of [0.25, 0.5, 1]) {
+            for (let i = 0; i < 400; i++) {
+                const f = await page.eval<{ phase: string; progress: number } | null>(`sbHarness.layer(${JSON.stringify(id)})`);
+                if (f && (f.phase === 'revealed' || (f.phase === 'revealing' && f.progress >= p))) break;
+                await page.step(1, STEP);
+            }
+            cov.push(await coverage(page));
+            await page.screenshot(`alien_entity_grow_${String(Math.round(p * 100)).padStart(3, '0')}`);
+        }
+        expect(cov[0], `coverage ${cov.join(' → ')}`).toBeGreaterThan(0);
+        expect(cov[0]).toBeLessThan(cov[2] * 0.9);
+        expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-current"]')`)).toContain('Geothermal spore towers');
+
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-provenance-toggle"]')`);
+        await page.step(4, STEP);
+        await page.screenshot('alien_entity_provenance');
+        const legend = await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-legend"]')`);
+        expect(legend, 'an unlisted label gets its own legend row').toContain(label);
+        const nodes = await page.eval<Array<{ samples: Array<{ rgb: [number, number, number] }> }>>(`sbHarness.sampleNodes(${JSON.stringify(id)}, 40)`);
+        const rgbs = nodes.flatMap(n => n.samples.map(x => x.rgb));
+        expect(rgbs.length).toBeGreaterThan(20);
+        const neutral = rgbs.filter(([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) < 28).length;
+        expect(neutral / rgbs.length, 'an unlisted label is shaded neutral grey').toBeGreaterThanOrEqual(0.9);
+    });
+
     test('a retired layer is out of the scene; Show replaced layers and Replay build bring it back, and both release it again', async () => {
         // The district case: L1 is superseded by the remesh and, being large, left out of the scene at finish (retired).
         const st = fixtureState([L('l1'), L('l2')], { runState: 'finished' });
