@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -29,6 +30,8 @@ import { budgetError, fakeNative, writeTris, building, groundGrid, type WorldSpe
 import { structureFit } from './helpers/staged-location-fixtures';
 import { readGlbTriangles, renderClayPng } from './helpers/clay-glb-render';
 import { STAGED_SCREENSHOT_DIR } from './helpers/staged-real-data';
+import { scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
+import { spyOnFsWrites } from './helpers/fs-write-spy';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-staged-orch-')));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -322,6 +325,82 @@ describe('an isolated structure', () => {
         // trees and the rebuild ran side by side after the remesh
         const t = (st: string) => result.stages.find(x => x.stage === st)!.timings;
         expect(t('trees').startedAtMs).toBeLessThan(t('detail').endedAtMs!);
+    });
+
+    it('reads Street View close-ups through the grounding service only: four images, their bytes unchanged into the vision request, never written anywhere', async () => {
+        const sf = fakeScanFit(path.join(TMP, 'sf-sv'));
+        const place = { lat: 40.73122, lng: -73.99709 };
+        const origin = { ...place, heightMeters: 0 };
+        // Google captures a few tens of metres out on each side of the arch (the free metadata endpoint)
+        const panos = { PN: [0, -35], PE: [45, 0], PS: [0, 38], PW: [-45, 0] } as const;
+        const metadata = (async (url: string) => {
+            const [lat, lng] = new URL(url).searchParams.get('location')!.split(',').map(Number);
+            const hit = Object.entries(panos).find(([, [x, z]]) => { const g = scanToGeodetic(origin, x, 0, z); return Math.hypot((g.lat - lat) * 111_320, (g.lng - lng) * 84_400) < 12; });
+            const body = hit ? { status: 'OK', pano_id: hit[0], location: scanToGeodetic(origin, hit[1][0], 0, hit[1][1]), date: '2025-06', copyright: '© Google' } : { status: 'ZERO_RESULTS' };
+            return { ok: true, status: 200, statusText: 'OK', json: async () => body } as any;
+        }) as typeof fetch;
+        // distinctive, undecodable JPEGs: SOI, an SOF0 header giving the size, a random payload
+        const sent = new Map<string, Buffer>();
+        const requested: string[] = [];
+        const grounding = {
+            retrieveGroundingImage: async (req: any) => {
+                requested.push(req.panoId);
+                const portrait = req.aspectRatio === 'RATIO_3X4';
+                const w = portrait ? 480 : 640, h = portrait ? 640 : 480;
+                const bytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]), crypto.randomBytes(4000), Buffer.from([0xff, 0xd9])]);
+                sent.set(req.panoId, bytes);
+                return { image: bytes, mimeType: 'image/jpeg', panoId: req.panoId, headingDegree: req.headingDegree, pitchDegree: req.pitchDegree, fovDegree: req.fovDegree };
+            }
+        };
+        const spy = spyOnFsWrites();
+        const written = spy.writes;
+        // control: the spy sees a write made through this file's own `import * as fs`, bytes and all
+        const canary = crypto.randomBytes(64);
+        fs.writeFileSync(path.join(TMP, 'canary.bin'), canary);
+        expect(written.filter(w => w.api === 'writeFileSync' && w.data?.equals(canary))).toHaveLength(1);
+        written.length = 0;
+        try {
+            const calls: any[] = [];
+            const s = setup(ARCH, {}, {
+                scanFit: sf.deps, vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] },
+                streetView: { mapsApiKey: 'maps-key', grounding, fetchImpl: metadata }
+            });
+            const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+            spy.restore();
+            // four images, one per facade, each fetched through the grounding service and no other route
+            expect(requested.sort()).toEqual(['PE', 'PN', 'PS', 'PW']);
+            expect(result.ornament!.evidence).toEqual({ tileOrthos: 1, streetView: 4 });
+            expect(result.extraction.attribution).toContain('Street View ©Google');
+            // the vision request carries exactly the bytes the service returned
+            const parts: any[] = calls[0].contents[0].parts;
+            const inline = parts.filter(p => p.inlineData && p.inlineData.mimeType === 'image/jpeg').map(p => Buffer.from(p.inlineData.data, 'base64'));
+            expect(inline).toHaveLength(4);
+            for (const b of inline) expect([...sent.values()].some(o => o.equals(b))).toBe(true);
+            // no write anywhere (the spies saw them all) held an image, or named a JPEG
+            const marks = [...sent.values()].map(b => b.subarray(30, 90));
+            expect(written.length).toBeGreaterThan(0); // the spies were live: the build wrote its own files
+            expect(written.filter(w => w.data && marks.some(m => w.data!.includes(m)))).toEqual([]);
+            expect(written.filter(w => /\.jpe?g$/i.test(w.target))).toEqual([]);
+            // and no file left anywhere in the workspace holds an image, raw or as base64 (the vision cache keeps ids and boxes)
+            const holders: string[] = [];
+            const walk = (dir: string) => {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name);
+                    if (e.isDirectory()) { walk(p); continue; }
+                    const b = fs.readFileSync(p);
+                    const text = b.toString('latin1');
+                    if (marks.some(m => b.includes(m) || text.includes(m.toString('base64').slice(0, 40)))) holders.push(p);
+                }
+            };
+            walk(s.root);
+            expect(holders).toEqual([]);
+            // the pano ids are kept (a policy-permitted cache), the metadata cache holds nothing else
+            const metaFile = path.join(s.root, '.scratchbox', 'cache', 'staged_location', 'streetview', 'metadata.json');
+            expect(fs.existsSync(metaFile)).toBe(true);
+            for (const rec of Object.values(JSON.parse(fs.readFileSync(metaFile, 'utf8'))) as any[]) expect(Object.keys(rec).every(k => ['status', 'panoId', 'lat', 'lng', 'date', 'copyright'].includes(k))).toBe(true);
+        } finally {
+            spy.restore();
+        }
     });
 
     it('a vision failure keeps the flat fitted faces, names the model and thinking tried, and a retry reads afresh', async () => {
