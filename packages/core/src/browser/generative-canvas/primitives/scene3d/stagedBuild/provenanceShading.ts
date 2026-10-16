@@ -173,8 +173,15 @@ export function resolveLegend(state: StagedBuildState | undefined, extraLabels: 
     return out;
 }
 
+const DEFAULT_STYLES = new Map<ProvenanceLabel, LegendStyle>(DEFAULT_PROVENANCE_LEGEND.map(e => [e.label, { ...e, description: '', known: true }] as const));
+
+/**
+ * The style of a label: the run's legend, then the contract defaults, then neutral grey. A per-vertex class can name a
+ * label no layer carries (tile_refine's kept-as-scanned blocks inside a remesh layer that lists only `remeshed`); it
+ * still takes the label's own colour, never the unknown grey.
+ */
 export function styleFor(label: ProvenanceLabel, legend: Map<ProvenanceLabel, LegendStyle>): LegendStyle {
-    return legend.get(label) ?? { label, color: UNKNOWN_LABEL_COLOR, pattern: 'solid', description: '', known: false };
+    return legend.get(label) ?? DEFAULT_STYLES.get(label) ?? { label, color: UNKNOWN_LABEL_COLOR, pattern: 'solid', description: '', known: false };
 }
 
 /**

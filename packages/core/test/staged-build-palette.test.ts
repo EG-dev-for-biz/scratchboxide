@@ -25,13 +25,16 @@ import { DEFAULT_PROVENANCE_LEGEND, DEGRADED_OUTLINE_COLOR, PROVENANCE, PROVENAN
 import {
     CVD_MATRICES,
     UNKNOWN_LABEL_COLOR,
+    classUniforms,
     contrastRatio,
     deltaE76,
     hexToRgb01,
+    legendRows,
     linearToLab,
     resolveLegend,
     shadingClasses,
-    simulateCvdLinear
+    simulateCvdLinear,
+    styleFor
 } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/provenanceShading';
 import { stagedBuildState } from './helpers/staged-location-fixtures';
 import { saveHtmlScreenshot, htmlScreenshotChrome } from './helpers/html-screenshot';
@@ -83,6 +86,29 @@ describe('provenance palette', () => {
         expect(bands.map(b => b.label)).toEqual(RECTIFY_DISPLACEMENT_BANDS.map(() => PROVENANCE.remeshed));
         expect(new Set(bands.map(b => b.patternCode)).size).toBe(RECTIFY_DISPLACEMENT_BANDS.length);
         expect(bands[0].patternCode, 'untouched (< 1 cm) is solid').toBe(0);
+    });
+
+    test('a per-vertex class takes its own label colour even when no layer of the run lists that label', () => {
+        // A remesh layer lists only `remeshed`, yet tile_refine's kept-as-scanned blocks inside it are as-scanned.
+        const state: StagedBuildState = { ...stagedBuildState(), provenanceLegend: [], degradations: [], layers: stagedBuildState().layers.filter(l => l.provenance.label === PROVENANCE.remeshed).map(l => ({ ...l, provenanceLabels: [PROVENANCE.remeshed] })) };
+        expect(state.layers.length, 'the fixture has a remesh layer').toBeGreaterThan(0);
+        const legend = resolveLegend(state);
+        expect(legend.has(PROVENANCE.asScanned), 'the run lists no as-scanned label').toBe(false);
+        const classes = shadingClasses(legend);
+        const { colors } = classUniforms(classes, legend, '#56B4E9', 0, 0);
+        const hexOf = (key: string) => '#' + colors[classes.findIndex(c => c.key === key)].getHexString().toUpperCase();
+        expect(hexOf('block-kept-as-scanned'), 'kept as scanned is the as-scanned orange, not the unknown grey').toBe('#E69F00');
+        expect(hexOf('relief-inferred')).toBe('#CC79A7');
+        expect(hexOf('block-snapped')).toBe('#56B4E9');
+        expect(styleFor(PROVENANCE.asScanned, legend)).toMatchObject({ color: '#E69F00', known: true });
+        expect(styleFor('a label nobody listed', legend)).toMatchObject({ color: UNKNOWN_LABEL_COLOR, known: false });
+        const withBlocks: StagedBuildState = {
+            ...state,
+            layers: state.layers.map(l => ({ ...l, vertexProvenance: { schema: 'scratchbox.vertex-provenance/1' as const, attributes: ['_PROUD_BLOCK'], vertices: 100, proudBlocks: { keptAsScannedVertices: 13, snappedVertices: 7 } } }))
+        };
+        const rows = legendRows(withBlocks, resolveLegend(withBlocks));
+        expect(rows.find(r => r.key === 'band:block-kept-as-scanned')).toMatchObject({ color: '#E69F00', count: 13 });
+        expect(rows.some(r => r.unknown), 'no legend row is marked unknown').toBe(false);
     });
 
     test('every colour keeps 3:1 against the provenance background; overlay text 4.5:1 against its panel', () => {
