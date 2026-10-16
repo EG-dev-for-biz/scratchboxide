@@ -142,6 +142,53 @@ describe.skipIf(!stagedChrome.ok)('staged reveal through the real loader', () =>
         for (let i = 1; i < seen.length; i++) if (i !== 10 && i !== 22) expect(seen[i], `frame ${i}`).toBeGreaterThanOrEqual(seen[i - 1] * 0.995);
     });
 
+    test('toggling provenance mid-reveal keeps the reveal: every drawn mesh is patched, no frame reaches full coverage', async () => {
+        // The remesh alone (no crossfade source), fading in as one unit over 1.5 s: a patched provenance material must keep fading.
+        const SOLO = { revealAfter: [], supersedes: [], reveal: { durationMs: 1500, stagger: 0, crossfadeFrom: [] } };
+        const TOGGLE = '[data-testid="sb-staged-provenance-toggle"]';
+        const running = fixtureState([L('l2', SOLO)], { runState: 'running' });
+        const stopped = fixtureState([L('l2', SOLO)], { runState: 'stopped' });
+        const empty = { ...stagedSceneData(running), objects: [] };
+        // The reference is the provenance background with no trees, so coverage can be read with provenance on.
+        const reference = async () => {
+            await page.eval('sbHarness.unmount()');
+            await page.eval(`sbHarness.mount(${JSON.stringify(empty)})`);
+            await page.waitFor('sbHarness.ready()');
+            await page.eval(`sbHarness.click('${TOGGLE}')`);
+            await page.step(4, STEP);
+            await page.eval('sbHarness.setReference()');
+        };
+        // Full coverage with provenance on: the run stopped, so the trees show their end state at once.
+        await reference();
+        await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(stopped))})`);
+        await untilAttached(page, objectIdOf('l2'));
+        await page.step(6, STEP);
+        const full = await coverage(page);
+        expect(full).toBeGreaterThan(500);
+
+        // The running reveal, provenance switched on at frame 8 and off at frame 28.
+        await reference();
+        await page.eval(`sbHarness.click('${TOGGLE}')`);
+        await page.step(4, STEP);
+        await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(running))})`);
+        await untilAttached(page, objectIdOf('l2'));
+        const on: number[] = [];
+        for (let i = 0; i < 40; i++) {
+            if (i === 8 || i === 28) await page.eval(`sbHarness.click('${TOGGLE}')`);
+            await page.step(1, STEP);
+            if (i >= 10 && i < 28) {
+                on.push(await coverage(page));
+                const unpatched = (await page.eval<Array<{ visible: boolean; staged: string | null }>>(`sbHarness.meshStates(${JSON.stringify(objectIdOf('l2'))})`)).filter(m => m.visible && m.staged === null);
+                expect(unpatched.length, `frame ${i}: drawn meshes without the staged material`).toBe(0);
+            }
+            if (i === 18) await page.screenshot('loader_path_provenance_toggled_mid_reveal');
+        }
+        expect(Math.max(...on), `frames ${on.join(',')}`).toBeLessThan(full * 0.9);
+        expect(on[0], 'the reveal has started').toBeGreaterThan(0);
+        for (let i = 1; i < on.length; i++) expect(on[i], `frame ${i + 10}`).toBeGreaterThanOrEqual(on[i - 1] * 0.995);
+        expect(await page.eval<string | null>('sbHarness.background()'), 'provenance off again: the background is back').not.toBe('#1c2026');
+    });
+
     test('after a user orbit the camera stays put across the next three layer attaches; streamed events name the stage', async () => {
         await page.eval('sbHarness.unmount()');
         let state = fixtureState([L('l1')], { running: ['remesh'] });
